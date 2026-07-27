@@ -38,11 +38,13 @@ from src.webui.routes.pages import register_pages
 from src.webui.routes.bot import register_bot
 from src.webui.routes.plugins import register_plugins
 from src.webui.routes.system import register_system
+from src.webui.routes.updater import register_updater
+from src.webui.services import updater as updater_svc
 
 logger = logging.getLogger("trpg")
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
 
-DEFAULT_NARRATIVE_MAX_TOKENS = 2048
+DEFAULT_NARRATIVE_MAX_TOKENS = 1536
 GENERATION_DEFAULTS_VERSION = 2
 
 DATA_DIR = Path(os.getenv("TRPG_DATA_DIR", str(Path(__file__).parent / "data")))
@@ -467,6 +469,7 @@ async def on_startup(app: web.Application) -> None:
         })
     app["plugin_host"] = plugin_host
     app["api"] = _make_api(subsystems, plugin_host)
+    app["updater"] = updater_svc.UpdaterService(DATA_DIR, ROOT, plugin_host.mirrors if plugin_host else None)
     await plugin_host.start_enabled()
     recovered = await subsystems.registry.recover_all()
     if recovered:
@@ -647,7 +650,7 @@ def _share_player_user_id(request: web.Request) -> str:
         tail = parts[3]
         if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context"}:
             return uid or request.get("user_id", "")
-        if request.method == "POST" and tail in {"players", "action"}:
+        if request.method == "POST" and tail in {"players", "action", "sse-ticket"}:
             return uid or request.get("user_id", "")
         if request.method == "PUT" and tail == "character":
             return uid or request.get("user_id", "")
@@ -975,6 +978,7 @@ def register_routes(application: web.Application) -> None:
     register_bot(application)
     register_plugins(application)
     register_system(application)
+    register_updater(application)
     # worlds / lorebook
     register_worlds(application)
     # rules
