@@ -85,7 +85,7 @@ const {
   page, totalPages, paginatedMarketplace, goToPage,
   canUpdateFromStore, loadMarketplace, loadMirrors, installMarketPlugin,
   updateInstalledPlugin, uninstallPlugin, addMirror, saveMirror,
-  deleteMirror, testMirror, openUrl, isNewerVersion,
+  deleteMirror, testMirror, openUrl, isNewerVersion, marketItemHasNewerVersion,
 } = usePluginMarketplace(busy, refreshPluginSurfaces, typeFilter, onUninstalled)
 const {
   plugins, filteredPlugins, expandedPluginNames, loading, installFile, overwriteInstall,
@@ -290,7 +290,7 @@ onMounted(async () => {
                 <template #icon><NIcon :component="RefreshOutline" /></template>
                 {{ t('restartPlugin') }}
               </NButton>
-              <NButton v-if="canUpdateFromStore(p.id)" secondary :loading="busy === `${p.id}:update`" @click="updateInstalledPlugin(p)">
+              <NButton v-if="canUpdateFromStore(p.id, p.version)" secondary :loading="busy === `${p.id}:update`" @click="updateInstalledPlugin(p)">
                 <template #icon><NIcon :component="CloudDownloadOutline" /></template>
                 {{ t('updateFromStore') }}
               </NButton>
@@ -354,7 +354,7 @@ onMounted(async () => {
               <NTag v-else-if="item.update_policy === 'notify'" type="warning" size="small">{{ t('pluginUpdateNotify') }}</NTag>
               <NTag v-else-if="item.update_policy === 'approval-required'" type="error" size="small">{{ t('pluginUpdateApprovalRequired') }}</NTag>
               <NTag v-if="item.installed" type="success" size="small">{{ t('installedVersion', { version: item.installed_version || '' }) }}</NTag>
-              <NTag v-if="item.installed && isNewerVersion(item.version, item.installed_version)" type="warning" size="small">{{ t('newVersionAvailable', { version: item.version || '' }) }}</NTag>
+              <NTag v-if="item.installed && marketItemHasNewerVersion(item)" type="warning" size="small">{{ t('newVersionAvailable', { version: item.latest?.version || item.version || '' }) }}</NTag>
               <NTag v-for="tag in item.tags || []" :key="tag" size="small">{{ tag }}</NTag>
             </div>
             <p v-if="item.permissions?.length" class="muted market-permissions">
@@ -363,7 +363,8 @@ onMounted(async () => {
             <p v-if="item.support?.summary" class="muted market-permissions">{{ item.support.summary }}</p>
             <p v-if="item.verification_error" class="market-warning">{{ item.verification_error }}</p>
             <div class="market-actions">
-              <NButton type="primary" :disabled="item.installable === false" :loading="busy === `market:${item.id}`" @click="installMarketPlugin(item)">
+              <NButton v-if="item.installed && !marketItemHasNewerVersion(item)" secondary disabled>{{ t('installed') }}</NButton>
+              <NButton v-else type="primary" :disabled="item.installable === false" :loading="busy === `market:${item.id}`" @click="installMarketPlugin(item)">
                 <template #icon><NIcon :component="CloudDownloadOutline" /></template>
                 {{ item.installed ? t('update') : t('install') }}
               </NButton>

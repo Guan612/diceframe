@@ -17,7 +17,11 @@ const input = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 const allOpen = ref(false)
 const choices = computed(() => builtinPortraits(props.ruleId))
-const resolvedId = computed(() => resolveBuiltinPortrait(props.modelValue, props.ruleId, props.seed || props.name).id)
+const resolvedId = computed(() => {
+  // 未显式选择头像时不高亮任何选项（也不自动分配兜底）。
+  if (!props.modelValue) return ''
+  return resolveBuiltinPortrait(props.modelValue, props.ruleId, props.seed || props.name).id
+})
 
 const RULE_LABEL_KEYS: Record<string, MessageKey> = {
   dnd5e: 'ruleNameDnd5e',

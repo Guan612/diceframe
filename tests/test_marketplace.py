@@ -141,6 +141,27 @@ def test_streaming_download_timeout_has_no_total_deadline():
     assert timeout.sock_read == 60
 
 
+def test_normalize_market_item_passes_through_latest_field():
+    item = _market_item(latest={
+        "version": "1.2.0",
+        "release_tag": "v1.2.0",
+        "release_url": "https://github.com/example/demo/releases/tag/v1.2.0",
+        "commit_sha": "a" * 40,
+        "published_at": "2026-08-01T00:00:00Z",
+        "requires_approval": False,
+    })
+
+    assert item["latest"]["version"] == "1.2.0"
+    assert item["latest"]["release_tag"] == "v1.2.0"
+    assert item["latest"]["requires_approval"] is False
+
+
+def test_normalize_market_item_returns_empty_latest_when_missing():
+    item = _market_item()
+
+    assert item["latest"] == {}
+
+
 @pytest.mark.asyncio
 async def test_streaming_download_uses_the_download_timeout(monkeypatch, tmp_path):
     captured = {}

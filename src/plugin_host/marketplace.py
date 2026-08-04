@@ -168,6 +168,25 @@ def _string_list(value: Any) -> list[str]:
     return sorted({str(item).strip() for item in value if str(item).strip()})
 
 
+def _latest_field(item: Any) -> dict[str, Any]:
+    """透传索引同步写入的最新 Release 信息；无则返回空对象。
+
+    latest.version 是插件仓库最新正式 Release 的真实版本（由索引每晚同步
+    刷新），用于与本地已装版本比较，判断是否真的有新版可更新。
+    """
+    latest = item.get("latest") if isinstance(item, dict) else None
+    if not isinstance(latest, dict):
+        return {}
+    return {
+        "version": str(latest.get("version") or ""),
+        "release_tag": str(latest.get("release_tag") or ""),
+        "release_url": str(latest.get("release_url") or ""),
+        "commit_sha": str(latest.get("commit_sha") or ""),
+        "published_at": str(latest.get("published_at") or ""),
+        "requires_approval": bool(latest.get("requires_approval")),
+    }
+
+
 def _normalize_market_item(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
@@ -234,5 +253,6 @@ def _normalize_market_item(item: Any) -> dict[str, Any] | None:
         "capabilities": _string_list(manifest.get("capabilities") or item.get("capabilities")),
         "docs": str(manifest.get("docs") or item.get("docs") or urls.get("documentation") or ""),
         "homepage": str(item.get("homepage") or urls.get("homepage") or repository_url),
+        "latest": _latest_field(item),
         "manifest": manifest,
     }

@@ -525,7 +525,10 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
     <div v-if="game" class="card-grid">
       <article v-for="p in data?.players || []" :key="p.user_id" class="char-card">
         <div class="character-card-summary">
-          <PortraitImage :portrait="p.character_sheet?.portrait" :rule-id="ruleId" :seed="p.user_id" :name="p.character_name" :size="56" />
+          <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openEdit(p)">
+            <PortraitImage :portrait="p.character_sheet?.portrait" :rule-id="ruleId" :seed="p.user_id" :name="p.character_name" :size="56" />
+            <span>{{ t('clickToChangeAvatar') }}</span>
+          </button>
           <div>
           <h2>{{ p.character_name }}</h2>
           <p class="muted">
@@ -588,7 +591,10 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
       <article v-for="c in data?.cards || []" :key="c.card_id || c.id" class="char-card">
         <div class="character-card-summary">
           <input type="checkbox" :checked="selectedCardIds.has(cardId(c))" @change="toggleCardSelect(cardId(c))" class="card-select" :title="t('selectCard')">
-          <PortraitImage :portrait="c.portrait" :rule-id="c.rule_id" :seed="cardId(c) || c.character_name" :name="c.character_name" :size="56" />
+          <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openCardEdit(c)">
+            <PortraitImage :portrait="c.portrait" :rule-id="c.rule_id" :seed="cardId(c) || c.character_name" :name="c.character_name" :size="56" />
+            <span>{{ t('clickToChangeAvatar') }}</span>
+          </button>
           <div>
           <h2>{{ c.character_name }}</h2>
           <p class="muted card-rule"><span class="badge" :title="cardRuleLabel(c)">{{ cardRuleLabel(c) }}</span></p>

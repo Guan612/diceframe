@@ -15,6 +15,20 @@ const RELOAD_DELAY_SECONDS = 5
 const isDownloading = computed(() => DOWNLOAD_STATES.has(updateStatus.value?.state || 'idle'))
 const isUpdateBusy = computed(() => ACTIVE_STATES.has(updateStatus.value?.state || 'idle'))
 
+// 从更新弹窗的“去设置”进入时是否自动开始下载。仅在可写的 source/portable
+// 安装、确有新版、且无进行中/已完成任务时触发；docker/development/只读
+// 模式下 kind 为 null，不触发。
+export function shouldAutoDownloadUpdate(
+  kind: 'source' | 'portable' | null,
+  state: string | undefined,
+  focus: string,
+  updateAvailable: boolean,
+): boolean {
+  if (!kind || focus !== 'update') return false
+  if (state && state !== 'idle' && state !== 'failed') return false
+  return updateAvailable
+}
+
 export function updateStateForVersion(
   status: Pick<UpdateStatusResponse, 'state' | 'version'> | null,
   targetVersion?: string,

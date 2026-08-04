@@ -1878,3 +1878,31 @@ async def test_advance_group_sends_merged_card_and_marks_web_sync(tmp_path, monk
     assert any("HP" in ln for ln in lines)
     # 标记 last_round，web sync 不会重复发这次推进
     assert adapter._web_sync_last_round.get("web|game|bot") == 3
+
+def test_pid_is_alive_verifies_proc_identity(monkeypatch):
+    import src.bots.qq.main as main_module
+
+    monkeypatch.setattr(main_module.os, "name", "posix")
+    monkeypatch.setattr(main_module, "_linux_proc_state", lambda pid: "S")
+    monkeypatch.setattr(main_module, "_linux_proc_cmdline", lambda pid: "/usr/local/bin/python -m src.bots.qq.main")
+    assert main_module._pid_is_alive(123) is True
+
+    # 僵尸进程：锁属于已退出实例，可清理
+    monkeypatch.setattr(main_module, "_linux_proc_state", lambda pid: "Z")
+    assert main_module._pid_is_alive(123) is False
+
+    # 进程不存在
+    monkeypatch.setattr(main_module, "_linux_proc_state", lambda pid: "")
+    assert main_module._pid_is_alive(123) is False
+
+    # PID 被无关进程复用：cmdline 不匹配，视为未持有锁
+    monkeypatch.setattr(main_module, "_linux_proc_state", lambda pid: "S")
+    monkeypatch.setattr(main_module, "_linux_proc_cmdline", lambda pid: "/usr/bin/python -m http.server")
+    assert main_module._pid_is_alive(123) is False
+
+    # 进程存在但 /proc 不可读：保守视为存活，避免误删有效锁
+    def deny_read(pid: int) -> str:
+        raise PermissionError()
+
+    monkeypatch.setattr(main_module, "_linux_proc_state", deny_read)
+    assert main_module._pid_is_alive(123) is True

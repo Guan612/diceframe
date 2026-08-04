@@ -4,6 +4,8 @@ import io
 import json
 import textwrap
 import zipfile
+
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -1648,12 +1650,11 @@ async def test_auto_update_runs_only_for_plugins_marked_automatic(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_rescan_discovers_manually_copied_plugins(tmp_path, monkeypatch):
+async def test_rescan_discovers_manually_copied_plugins(tmp_path):
     plugins = tmp_path / "plugins"
     host = PluginHost(plugins, tmp_path / "data")
     host.discover()
     write_plugin(plugins, "copied-pack", plugin_type="content-pack", entrypoint=False)
-    monkeypatch.setattr(host, "auto_update_safe_plugins", lambda: _async_value([]))
 
     found = await host.rescan()
 
@@ -1661,5 +1662,71 @@ async def test_rescan_discovers_manually_copied_plugins(tmp_path, monkeypatch):
     assert host.public_detail("copied-pack")["plugin_type"] == "content-pack"
 
 
-async def _async_value(value):
-    return value
+@pytest.mark.asyncio
+async def test_start_enabled_does_not_trigger_auto_update(tmp_path, monkeypatch):
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "safe-pack", plugin_type="content-pack", entrypoint=False)
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    ran = []
+
+    async def fake_auto_update():
+        ran.append(True)
+        return []
+
+    monkeypatch.setattr(host, "auto_update_safe_plugins", fake_auto_update)
+    await host.start_enabled()
+    assert ran == []
+    assert host._auto_update_task is None
+
+
+@pytest.mark.asyncio
+async def test_marketplace_listing_triggers_background_auto_update(tmp_path, monkeypatch):
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "safe-pack", plugin_type="content-pack", entrypoint=False)
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    ran = []
+
+    class FakeMarketplace:
+        async def list_plugins(self):
+            return {"ok": True, "plugins": [], "total": 0, "source": {}}
+
+    host.marketplace = FakeMarketplace()
+
+    async def fake_auto_update():
+        ran.append(True)
+        return []
+
+    monkeypatch.setattr(host, "auto_update_safe_plugins", fake_auto_update)
+    result = await host.marketplace_plugins()
+    assert result["ok"] is True
+    assert ran == []
+    await asyncio.sleep(0)
+    assert ran == [True]
+    assert host._auto_update_task is not None and host._auto_update_task.done()
+
+@pytest.mark.asyncio
+async def test_monitor_backs_off_on_rapid_crash(tmp_path, monkeypatch):
+    import src.plugin_host.host as host_module
+
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "example")
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    runtime = host.plugins["example"]
+    runtime.config["enabled"] = True
+    monkeypatch.setattr(host_module, "_RESTART_BASE_DELAY", 0.01)
+    monkeypatch.setattr(host_module, "_RESTART_MAX_DELAY", 0.04)
+    monkeypatch.setattr(host_module, "_RESTART_STABLE_SECONDS", 999.0)
+
+    await host.start("example")
+    assert runtime.restart_delay_sec == pytest.approx(0.01)
+    first_monitor = runtime.monitor_task
+    await asyncio.wait_for(first_monitor, timeout=10)
+    assert runtime.restart_delay_sec == pytest.approx(0.02)
+    second_monitor = runtime.monitor_task
+    await asyncio.wait_for(second_monitor, timeout=10)
+    assert runtime.restart_delay_sec == pytest.approx(0.04)
+    await host.stop("example")
+    await asyncio.sleep(0.05)

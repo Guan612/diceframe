@@ -489,7 +489,7 @@ runtime.run()
 
 官方社区索引仓库为 `https://github.com/diceframe/diceframe-plugins`。作者通过 Issue 模板提交插件 ID 和公开仓库地址；机器人读取最新正式 GitHub Release，自动检查后在投稿 Issue 中给出收录结果。
 
-DiceFrame 安装时重新解析最新 Release，并下载它所指向的完整 Git commit 源码快照，而不是会变化的 `main` 分支。声明型插件在权限不扩大时自动更新；带入口的进程型插件只提示更新；权限或运行方式变化会暂停更新并要求重新审核。
+DiceFrame 安装时重新解析最新 Release，并下载它所指向的完整 Git commit 源码快照，而不是会变化的 `main` 分支。声明型插件在权限不扩大时，打开插件商店时自动检查并更新；带入口的进程型插件只提示更新；权限或运行方式变化会暂停更新并要求重新审核。
 
 `trust_level` 只表示来源：`official` 是 DiceFrame 官方维护，`community` 是社区投稿。任何等级都不等于安全担保，进程型插件仍能以当前用户权限运行代码。完整流程见 [插件索引与审核规则](PLUGIN_REGISTRY_CN.md)。
 

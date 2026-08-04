@@ -52,6 +52,7 @@ const cards = ref<CharacterCard[]>([])
 const showWizard = ref(false), showPicker = ref(false)
 const editIdx = ref<number | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
+const dfInput = ref<HTMLInputElement | null>(null)
 
 const step = ref<Step>(1)
 const activeRule = computed(() => mode.value === 'ai' ? (aiGeneratedRule.value?.rule_id || aiRule.value) : rule.value)
@@ -154,25 +155,33 @@ function onPickerPick(c: CharacterCard) {
     toast.success(t('addedFromLibrary'))
   }
 }
-async function onStImport(e: Event) {
+async function importCardFile(file: File) {
+  const r = await importTavernCard(file, { target: 'character_card' })
+  const card = r.card
+  if (!card) throw new Error(t('importFailed'))
+  cards.value.push(card)
+  characters.value.push(ensureCharacter({
+    character_name: card.character_name,
+    background: card.background || '',
+    identity: card.identity || {},
+    attributes: card.attributes || {},
+    skills: card.skills || [],
+    portrait: card.portrait,
+  }))
+  toast.success(t('importedCharacter', { name: card.character_name }))
+}
+function onStImport(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
-  try {
-    const r = await importTavernCard(file, { target: 'character_card' })
-    const card = r.card
-    if (!card) throw new Error(t('importFailed'))
-    cards.value.push(card)
-    characters.value.push(ensureCharacter({
-      character_name: card.character_name,
-      background: card.background || '',
-      identity: card.identity || {},
-      attributes: card.attributes || {},
-      skills: card.skills || [],
-      portrait: card.portrait,
-    }))
-    toast.success(t('importedCharacter', { name: card.character_name }))
-  } catch (err: unknown) { toast.error(errorMessage(err)) }
+  importCardFile(file).catch(err => toast.error(errorMessage(err)))
+  input.value = ''
+}
+function onImportDfCard(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  importCardFile(file).catch(err => toast.error(errorMessage(err)))
   input.value = ''
 }
 function removeCharacter(idx: number) {
@@ -361,7 +370,9 @@ async function create() {
       <div class="char-add">
         <button class="primary" @click="openWizard(null)">{{ t('newCharacter') }}</button>
         <button @click="showPicker = true">{{ t('pickFromLibrary') }}</button>
+        <button @click="dfInput?.click()">{{ t('importDiceframeCard') }}</button>
         <button @click="fileInput?.click()">{{ t('importStCard') }}</button>
+        <input ref="dfInput" type="file" accept=".json,application/json" hidden @change="onImportDfCard">
         <input ref="fileInput" type="file" accept=".png,.json" hidden @change="onStImport">
       </div>
     </div>

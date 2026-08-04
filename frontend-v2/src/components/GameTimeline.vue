@@ -9,10 +9,10 @@ import { api } from '@/api/client'
 import { parseGMText, type LoreKeywords } from '@/utils/renderer'
 import { useLocale } from '@/composables/useLocale'
 import PortraitImage from '@/components/PortraitImage.vue'
+import { speakingKey, ttsSupported, ttsToggle } from '@/utils/tts'
 
 const props = defineProps<{ log: LogEntry[]; live: PublicAction[]; players: Player[]; round: number; lore?: LoreKeywords; gameKey?: string; ruleId?: string; processing?: boolean; isGm?: boolean; liveNarration?: string; pendingChecks?: CheckResult[]; currentUserId?: string; luckBusyId?: string }>()
 const emit = defineEmits<{ refresh: []; luck: [check: CheckResult, spend: boolean] }>()
-const { t } = useLocale()
 
 const box = ref<HTMLElement | null>(null), hasNew = ref(false), awayFromBottom = ref(false)
 const swipeError = ref("")
@@ -130,6 +130,27 @@ watch(() => props.gameKey, () => {
   hasNew.value = false
   awayFromBottom.value = false
 })
+
+// --- 本地朗读（文字转语音） ---
+const { t, isEnglish } = useLocale()
+const ttsVoiceLang = computed(() => (isEnglish.value ? 'en-US' : 'zh-CN'))
+const autoSpeakKey = 'trpg_auto_speak_gm'
+function autoSpeakEnabled(): boolean {
+  try { return localStorage.getItem(autoSpeakKey) === '1' } catch { return false }
+}
+// 新 GM 叙事到达时若开启自动朗读，则朗读该段。仅在有新内容且用户开启时触发。
+const lastAutoSpoken = ref('')
+watch(() => rounds.value, (latest) => {
+  if (!autoSpeakEnabled() || !ttsSupported()) return
+  const newest = latest[latest.length - 1]
+  if (!newest?.gm) return
+  const text = newest.gm.paragraphs.join(' ')
+  const sig = newest.round + ':' + text
+  if (sig === lastAutoSpoken.value) return
+  lastAutoSpoken.value = sig
+  ttsToggle(text, `gm:${newest.round}`, { lang: ttsVoiceLang.value })
+}, { deep: true })
+
 </script>
 
 <template>
@@ -144,7 +165,14 @@ watch(() => props.gameKey, () => {
         <div v-for="a in actions(item.entry)" :key="a.uid + a.text" class="message player message-with-avatar" :style="{ borderLeftColor: playerColor(a.uid) }">
           <PortraitImage :portrait="portrait(a.uid)" :rule-id="ruleId" :seed="a.uid" :name="name(a.uid)" :size="42" />
           <div class="message-copy">
-            <strong :style="{ color: playerColor(a.uid) }">{{ name(a.uid) }}</strong>
+            <strong :style="{ color: playerColor(a.uid) }">{{ name(a.uid) }}<button
+              v-if="ttsSupported()"
+              type="button"
+              class="tts-button"
+              :class="{ active: speakingKey === 'act:' + a.uid + a.text }"
+              :title="speakingKey === 'act:' + a.uid + a.text ? t('ttsStop') : t('ttsSpeak')"
+              @click="ttsToggle(a.text, 'act:' + a.uid + a.text, { lang: ttsVoiceLang })"
+            >{{ speakingKey === 'act:' + a.uid + a.text ? '⏸' : '🔊' }}</button></strong>
             <p>{{ a.text }}</p>
             <span v-if="a.dice" class="dice-tag">🎲 {{ a.dice.system }}={{ a.dice.value }}</span>
           </div>
@@ -163,7 +191,14 @@ watch(() => props.gameKey, () => {
         <div v-if="item.gm" class="message gm message-with-avatar">
           <span class="narrator-avatar" aria-hidden="true">GM</span>
           <div class="message-copy">
-          <strong>{{ t('gmRound', { round: item.round }) }}</strong>
+          <strong>{{ t('gmRound', { round: item.round }) }}<button
+            v-if="ttsSupported()"
+            type="button"
+            class="tts-button"
+            :class="{ active: speakingKey === 'gm:' + item.round }"
+            :title="speakingKey === 'gm:' + item.round ? t('ttsStop') : t('ttsSpeakGm')"
+            @click="ttsToggle(item.gm.paragraphs.join(' '), 'gm:' + item.round, { lang: ttsVoiceLang })"
+          >{{ speakingKey === 'gm:' + item.round ? '⏸' : '🔊' }}</button></strong>
           <p v-for="(p, i) in item.gm.paragraphs" :key="'p' + i" class="chat-gm" v-html="p"></p>
           <div v-if="item.gm.states.length" class="state-card-list">
             <div v-for="(s, i) in item.gm.states" :key="'s' + i" class="state-card" :class="s.cls">

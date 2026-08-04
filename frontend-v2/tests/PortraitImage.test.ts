@@ -1,0 +1,35 @@
+import { describe, expect, it, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import PortraitImage from '../src/components/PortraitImage.vue'
+
+vi.mock('../src/api/avatars', () => ({
+  uploadedAvatarUrl: vi.fn(async () => 'blob:mock-avatar'),
+}))
+
+describe('PortraitImage', () => {
+  it('renders an empty placeholder instead of an auto-assigned portrait when none chosen', () => {
+    const wrapper = mount(PortraitImage, {
+      props: { name: '爱丽丝', size: 64 },
+    })
+    expect(wrapper.find('.portrait-empty').exists()).toBe(true)
+    expect(wrapper.find('.portrait-empty').text()).toBe('爱丽')
+    expect(wrapper.find('.portrait-builtin').exists()).toBe(false)
+  })
+
+  it('renders the builtin image for a valid explicit builtin portrait', () => {
+    const wrapper = mount(PortraitImage, {
+      props: { name: '鲍勃', size: 64, portrait: { kind: 'builtin', id: 'dnd5e:0' }, ruleId: 'dnd5e' },
+    })
+    expect(wrapper.find('.portrait-builtin').exists()).toBe(true)
+    expect(wrapper.find('.portrait-empty').exists()).toBe(false)
+    expect(wrapper.find('.portrait-builtin').attributes('style')).toContain('dnd5e.webp')
+  })
+
+  it('renders an empty placeholder for an invalid builtin id instead of falling back to auto-assignment', () => {
+    const wrapper = mount(PortraitImage, {
+      props: { name: '卡罗尔', size: 64, portrait: { kind: 'builtin', id: 'dnd5e:999' }, ruleId: 'dnd5e' },
+    })
+    expect(wrapper.find('.portrait-empty').exists()).toBe(true)
+    expect(wrapper.find('.portrait-builtin').exists()).toBe(false)
+  })
+})
