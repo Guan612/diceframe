@@ -62,6 +62,9 @@ _ALLOWED_CONTROLS = {"switch", "text", "secret", "number", "select", "string-lis
 _RESTART_BASE_DELAY = 3.0
 _RESTART_MAX_DELAY = 300.0
 _RESTART_STABLE_SECONDS = 10.0
+# 插件自动更新总开关。默认关闭：商店只提醒有新版，用户手动点更新。
+# 保留自动更新的实现骨架，将来要恢复时把此值改为 True 即可。
+_PLUGIN_AUTO_UPDATE_ENABLED = False
 _PLUGIN_TYPES = set(PLUGIN_TYPE_SUPPORT)
 _ALLOWED_PERMISSIONS = PERMISSION_DETAILS
 
@@ -495,7 +498,7 @@ class PluginHost:
                     metadata = self._load_marketplace_metadata(item["id"])
                     item["installed_commit_sha"] = metadata.get("commit_sha", "")
                     item["installed_update_policy"] = metadata.get("update_policy", "")
-        if self._auto_update_task is None or self._auto_update_task.done():
+        if _PLUGIN_AUTO_UPDATE_ENABLED and (self._auto_update_task is None or self._auto_update_task.done()):
             self._auto_update_task = asyncio.create_task(self._auto_update_in_background())
         return listing
 

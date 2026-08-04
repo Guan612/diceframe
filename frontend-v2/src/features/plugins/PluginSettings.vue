@@ -350,9 +350,7 @@ onMounted(async () => {
               <NTag v-else-if="item.risk_level === 'declarative'" type="success" size="small">{{ t('pluginRiskDeclarative') }}</NTag>
               <NTag v-else-if="item.risk_level === 'unrestricted-process'" type="error" size="small">{{ t('pluginRiskProcess') }}</NTag>
               <NTag v-if="item.commit_sha" type="info" size="small">{{ t('pluginSourcePinned') }}</NTag>
-              <NTag v-if="item.update_policy === 'automatic'" type="success" size="small">{{ t('pluginUpdateAutomatic') }}</NTag>
-              <NTag v-else-if="item.update_policy === 'notify'" type="warning" size="small">{{ t('pluginUpdateNotify') }}</NTag>
-              <NTag v-else-if="item.update_policy === 'approval-required'" type="error" size="small">{{ t('pluginUpdateApprovalRequired') }}</NTag>
+              <NTag v-if="item.update_policy === 'approval-required'" type="error" size="small">{{ t('pluginUpdateApprovalRequired') }}</NTag>
               <NTag v-if="item.installed" type="success" size="small">{{ t('installedVersion', { version: item.installed_version || '' }) }}</NTag>
               <NTag v-if="item.installed && marketItemHasNewerVersion(item)" type="warning" size="small">{{ t('newVersionAvailable', { version: item.latest?.version || item.version || '' }) }}</NTag>
               <NTag v-for="tag in item.tags || []" :key="tag" size="small">{{ tag }}</NTag>

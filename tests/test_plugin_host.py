@@ -1681,7 +1681,9 @@ async def test_start_enabled_does_not_trigger_auto_update(tmp_path, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_marketplace_listing_triggers_background_auto_update(tmp_path, monkeypatch):
+async def test_marketplace_listing_does_not_auto_update_by_default(tmp_path, monkeypatch):
+    import src.plugin_host.host as host_module
+
     plugins = tmp_path / "plugins"
     write_plugin(plugins, "safe-pack", plugin_type="content-pack", entrypoint=False)
     host = PluginHost(plugins, tmp_path / "data")
@@ -1699,6 +1701,37 @@ async def test_marketplace_listing_triggers_background_auto_update(tmp_path, mon
         return []
 
     monkeypatch.setattr(host, "auto_update_safe_plugins", fake_auto_update)
+    assert host_module._PLUGIN_AUTO_UPDATE_ENABLED is False
+    result = await host.marketplace_plugins()
+    assert result["ok"] is True
+    assert ran == []
+    await asyncio.sleep(0)
+    assert ran == []
+    assert host._auto_update_task is None
+
+
+@pytest.mark.asyncio
+async def test_marketplace_listing_triggers_auto_update_when_enabled(tmp_path, monkeypatch):
+    import src.plugin_host.host as host_module
+
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "safe-pack", plugin_type="content-pack", entrypoint=False)
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    ran = []
+
+    class FakeMarketplace:
+        async def list_plugins(self):
+            return {"ok": True, "plugins": [], "total": 0, "source": {}}
+
+    host.marketplace = FakeMarketplace()
+
+    async def fake_auto_update():
+        ran.append(True)
+        return []
+
+    monkeypatch.setattr(host, "auto_update_safe_plugins", fake_auto_update)
+    monkeypatch.setattr(host_module, "_PLUGIN_AUTO_UPDATE_ENABLED", True)
     result = await host.marketplace_plugins()
     assert result["ok"] is True
     assert ran == []
