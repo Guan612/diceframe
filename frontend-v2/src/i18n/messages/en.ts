@@ -679,8 +679,6 @@ export const en = {
   pluginRiskDeclarative: 'Declarative · lower risk',
   pluginRiskProcess: 'External process · high privilege',
   pluginSourcePinned: 'Pinned Git commit',
-  pluginUpdateAutomatic: 'Auto-update',
-  pluginUpdateNotify: 'Notify only',
   pluginUpdateApprovalRequired: 'Needs review',
   confirmProcessPluginInstall: '“{name}” launches a third-party process with the files and network available to your operating-system account. Install only if you trust the publisher. Continue?',
   confirmProcessPluginUpdate: '“{name}” is a high-privilege process plugin and is never silently updated. Continue only after trusting its latest Release. Update now?',

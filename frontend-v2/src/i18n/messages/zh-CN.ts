@@ -679,8 +679,6 @@ export const zhCN = {
   pluginRiskDeclarative: '声明型·低风险',
   pluginRiskProcess: '外部进程·高权限',
   pluginSourcePinned: '固定 Git 提交',
-  pluginUpdateAutomatic: '自动更新',
-  pluginUpdateNotify: '仅提醒',
   pluginUpdateApprovalRequired: '待审核',
   confirmProcessPluginInstall: '“{name}”会启动第三方进程，并拥有当前系统用户可访问的文件和网络权限。仅在信任作者时安装。继续吗？',
   confirmProcessPluginUpdate: '“{name}”是高权限进程插件，不会静默更新。确认你信任其最新 Release 后再继续。现在更新吗？',
