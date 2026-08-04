@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +59,9 @@ _ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _BRIDGE_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _MAX_BRIDGE_IMAGE_BYTES = 10 * 1024 * 1024
 _ALLOWED_CONTROLS = {"switch", "text", "secret", "number", "select", "string-list"}
+_RESTART_BASE_DELAY = 3.0
+_RESTART_MAX_DELAY = 300.0
+_RESTART_STABLE_SECONDS = 10.0
 _PLUGIN_TYPES = set(PLUGIN_TYPE_SUPPORT)
 _ALLOWED_PERMISSIONS = PERMISSION_DETAILS
 
@@ -89,6 +93,8 @@ class PluginRuntime:
     bridge_extensions: list[dict[str, Any]] = field(default_factory=list)
     status: str = "disabled"
     error: str = ""
+    started_at: float = 0.0
+    restart_delay_sec: float = 3.0
 
 
 async def _rename_dir_with_retry(src: Path, dst: Path, *, attempts: int = 3, delay: float = 0.3) -> None:
@@ -115,6 +121,8 @@ class PluginHost:
         self.contributions = ContributionRegistry()
         self.content = PluginContentCatalog(self.contributions, self.plugins_dir, self.logger)
         self._api_tokens: dict[str, str] = {}
+        self._install_locks: dict[str, asyncio.Lock] = {}
+        self._auto_update_task: asyncio.Task[Any] | None = None
 
     def discover(self) -> list[dict[str, Any]]:
         self.plugins.clear()
@@ -487,9 +495,21 @@ class PluginHost:
                     metadata = self._load_marketplace_metadata(item["id"])
                     item["installed_commit_sha"] = metadata.get("commit_sha", "")
                     item["installed_update_policy"] = metadata.get("update_policy", "")
+        if self._auto_update_task is None or self._auto_update_task.done():
+            self._auto_update_task = asyncio.create_task(self._auto_update_in_background())
         return listing
 
+    def _install_lock(self, plugin_id: str) -> asyncio.Lock:
+        lock = self._install_locks.get(plugin_id)
+        if lock is None:
+            lock = self._install_locks[plugin_id] = asyncio.Lock()
+        return lock
+
     async def install_from_marketplace(self, plugin_id: str, *, overwrite: bool = False) -> dict[str, Any]:
+        async with self._install_lock(plugin_id):
+            return await self._install_from_marketplace_unlocked(plugin_id, overwrite=overwrite)
+
+    async def _install_from_marketplace_unlocked(self, plugin_id: str, *, overwrite: bool = False) -> dict[str, Any]:
         package = await self.marketplace.package_for_plugin(plugin_id)
         if not package.get("ok"):
             raise ValueError(str(package.get("error") or "插件市场安装失败"))
@@ -579,10 +599,23 @@ class PluginHost:
         return {"id": plugin_id, "uninstalled": True, "data_deleted": bool(delete_data)}
 
     async def start_enabled(self) -> None:
-        await self.auto_update_safe_plugins()
         for plugin_id, runtime in self.plugins.items():
             if runtime.config.get("enabled") and runtime.status != "failed":
                 await self.start(plugin_id)
+
+    async def _auto_update_in_background(self) -> None:
+        try:
+            results = await self.auto_update_safe_plugins()
+            updated = [item for item in results if item.get("updated")]
+            self.logger.info(
+                "插件商店自动更新完成：%d 个已更新，%d 个已最新",
+                len(updated),
+                len(results) - len(updated),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.logger.exception("插件商店自动更新失败")
 
     async def update_config(self, plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         runtime = self._require(plugin_id)
@@ -611,8 +644,10 @@ class PluginHost:
         await self.restart(plugin_id)
         return self.public_detail(plugin_id)
 
-    async def start(self, plugin_id: str) -> None:
+    async def start(self, plugin_id: str, *, reset_backoff: bool = True) -> None:
         runtime = self._require(plugin_id)
+        if reset_backoff:
+            runtime.restart_delay_sec = _RESTART_BASE_DELAY
         if not runtime.config.get("enabled"):
             runtime.status = "disabled"
             return
@@ -666,6 +701,7 @@ class PluginHost:
                     runtime.tools = validate_tool_descriptors(initialized)
                 else:
                     runtime.bridge_extensions = validate_bridge_extension_descriptors(initialized)
+            runtime.started_at = time.monotonic()
             runtime.status = "running"
             self.logger.info("插件 %s 已启动，PID=%s", plugin_id, runtime.process.pid)
             runtime.monitor_task = asyncio.create_task(self._monitor_process(plugin_id, runtime.process))
@@ -778,6 +814,8 @@ class PluginHost:
         await self.start(plugin_id)
 
     async def cleanup(self) -> None:
+        if self._auto_update_task and not self._auto_update_task.done():
+            self._auto_update_task.cancel()
         for plugin_id in list(self.plugins):
             await self.stop(plugin_id)
 
@@ -786,6 +824,7 @@ class PluginHost:
         discovered = self.discover()
         await self.start_enabled()
         return discovered
+
 
     async def _monitor_process(self, plugin_id: str, process: asyncio.subprocess.Process) -> None:
         try:
@@ -798,6 +837,7 @@ class PluginHost:
         runtime = self.plugins.get(plugin_id)
         if not runtime or runtime.process is not process:
             return
+        alive_sec = time.monotonic() - runtime.started_at if runtime.started_at else 0.0
         if runtime.status == "stopping" or not runtime.config.get("enabled"):
             return
         runtime.status = "failed"
@@ -806,10 +846,15 @@ class PluginHost:
         runtime.rpc_client = None
         runtime.tools = []
         runtime.bridge_extensions = []
-        self.logger.warning("插件 %s 意外退出，3 秒后尝试自动重启，code=%s", plugin_id, code)
-        await asyncio.sleep(3)
+        if alive_sec >= _RESTART_STABLE_SECONDS:
+            runtime.restart_delay_sec = _RESTART_BASE_DELAY
+        delay = runtime.restart_delay_sec
+        if alive_sec < _RESTART_STABLE_SECONDS:
+            runtime.restart_delay_sec = min(runtime.restart_delay_sec * 2, _RESTART_MAX_DELAY)
+        self.logger.warning("插件 %s 意外退出，%.0f 秒后尝试自动重启，code=%s", plugin_id, delay, code)
+        await asyncio.sleep(delay)
         if self.plugins.get(plugin_id) is runtime and runtime.config.get("enabled") and runtime.status == "failed":
-            await self.start(plugin_id)
+            await self.start(plugin_id, reset_backoff=False)
 
     def migrate_config(self, plugin_id: str, legacy: dict[str, Any]) -> None:
         runtime = self._require(plugin_id)

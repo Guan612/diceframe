@@ -7,6 +7,7 @@ import contextlib
 import logging
 import os
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from src.bots.bridge_core.client import DiceFrameClient
@@ -100,6 +101,12 @@ def _read_lock_pid(path) -> int:
 
 
 def _pid_is_alive(pid: int) -> bool:
+    """判断 PID 是否仍是本插件进程。
+
+    仅凭 os.kill(pid, 0) 会把僵尸进程、以及 PID 被复用的无关进程误判为存活，
+    导致残留锁文件永远清不掉、插件无限重启。这里在 Linux 下校验 /proc 中的
+    进程身份，只有 cmdline 确实是 QQ 插件进程才算持有锁。
+    """
     if pid <= 0 or pid == os.getpid():
         return False
     if os.name == "nt":
@@ -114,12 +121,44 @@ def _pid_is_alive(pid: int) -> bool:
         except Exception:
             return False
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
+        state = _linux_proc_state(pid)
+        cmdline = _linux_proc_cmdline(pid)
     except PermissionError:
+        # 进程存在但不可读，保守视为存活，避免误删有效锁
         return True
+    if not state or state == "Z":
+        # 进程不存在或已是僵尸：锁属于已退出实例，可清理
+        return False
+    if not cmdline:
+        return False
+    return "src.bots.qq.main" in cmdline or "qq/main.py" in cmdline
+
+
+def _linux_proc_state(pid: int) -> str:
+    """读取 /proc/<pid>/stat 中的进程状态；进程不存在时返回空串。"""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except FileNotFoundError:
+        return ""
+    except PermissionError:
+        raise
+    except OSError:
+        return ""
+    rparen = stat.rfind(")")
+    return stat[rparen + 2 : rparen + 3] if rparen != -1 else ""
+
+
+def _linux_proc_cmdline(pid: int) -> str:
+    """读取 /proc/<pid>/cmdline（以空格连接参数）；不可读时返回空串。"""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except FileNotFoundError:
+        return ""
+    except PermissionError:
+        raise
+    except OSError:
+        return ""
+    return raw.replace(b"\x00", b" ").decode("utf-8", "replace").strip()
 
 
 async def _watch_parent_process(parent_pid: int, transport: Any, interval_sec: float = 2.0) -> None:

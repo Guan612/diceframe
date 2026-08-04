@@ -11,8 +11,9 @@ import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useUpdateCheck } from '@/composables/useUpdateCheck'
-import { updateStateForVersion, useUpdater } from '@/composables/useUpdater'
+import { shouldAutoDownloadUpdate, updateStateForVersion, useUpdater } from '@/composables/useUpdater'
 import { useLocale } from '@/composables/useLocale'
+import { ttsRate, setTtsRate } from '@/utils/tts'
 import { api, errorMessage } from '@/api/client'
 import type { MessageKey } from '@/i18n'
 import type { SecretKey } from '@/stores/useSettingsStore'
@@ -65,6 +66,23 @@ function syncRouteTarget() {
       document.getElementById('settings-update')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }
+}
+
+// 自动朗读 GM 叙事开关：纯前端偏好，存 localStorage，与 GameTimeline 共用 key。
+const autoSpeakKey = 'trpg_auto_speak_gm'
+const autoSpeak = ref(false)
+try { autoSpeak.value = localStorage.getItem(autoSpeakKey) === '1' } catch { /* localStorage 不可用时保持默认关 */ }
+function setAutoSpeak(value: boolean) {
+  autoSpeak.value = value
+  try { localStorage.setItem(autoSpeakKey, value ? '1' : '0') } catch { /* localStorage 不可用时仅内存态生效 */ }
+}
+
+// 朗读语速偏好：读 tts 模块的 localStorage 值。
+const ttsRateValue = ref(ttsRate())
+function setTtsRateValue(value: number | null) {
+  if (value == null) return
+  ttsRateValue.value = value
+  setTtsRate(value)
 }
 
 const testing = ref(false)
@@ -185,6 +203,38 @@ onMounted(() => {
   syncRouteTarget()
 })
 watch(() => [route.query.section, route.query.focus], syncRouteTarget)
+
+// 从更新弹窗的“去设置”进入：跳转后自动开始下载，用户无需再点一次下载按钮。
+// 仅在 mode ∈ {source, portable}、确有新版、且无进行中/已完成任务时触发一次；
+// docker/development/只读模式下 requiredUpdateKind 为 null，不触发。
+let autoDownloadAttempted = false
+watch(
+  () => [requiredUpdateKind.value, updateStatus.value?.state, route.query.focus],
+  async () => {
+    if (autoDownloadAttempted) return
+    const kind = requiredUpdateKind.value
+    const ready = shouldAutoDownloadUpdate(
+      kind,
+      updateStatus.value?.state,
+      queryValue(route.query.focus),
+      Boolean(updateInfo.value?.update_available),
+    )
+    if (!ready) return
+    autoDownloadAttempted = true
+    // updateInfo 在设置页不自动加载，先补一次版本检查确认确有新版再下载。
+    if (!updateInfo.value?.update_available) {
+      try {
+        const result = await checkForUpdates(true)
+        if (!result?.update_available) return
+      } catch {
+        return
+      }
+    }
+    // ready 为 true 时 kind 必非空（shouldAutoDownloadUpdate 的守卫）。
+    void downloadUpdatePackage(kind!)
+  },
+  { immediate: true },
+)
 watch(section, () => {
   const sc = document.querySelector('.n-layout-scroll-container') as HTMLElement | null
   sc?.scrollTo({ top: 0 })
@@ -645,14 +695,30 @@ function redownloadUpdatePackage() {
           </div>
 
           <div v-show="section === 'advanced'" class="settings-pane">
-            <h3>{{ t('generationParams') }}</h3>
-            <div v-for="item in tokenFields" :key="item.key" class="form-row">
-              <label>{{ t(item.labelKey) }}</label>
-              <NInputNumber :value="Number(store.config[item.key] ?? 0)" @update:value="setNum(item.key, $event)" style="width:100%" />
-            </div>
-            <div class="actions-row">
-              <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
-            </div>
+            <section class="settings-group-card">
+              <h4>{{ t('ttsSettings') }}</h4>
+              <div class="form-row">
+                <label>{{ t('ttsAutoSpeak') }}</label>
+                <div class="switch-inline">
+                  <NSwitch :value="autoSpeak" @update:value="setAutoSpeak" />
+                  <span>{{ t('enabled') }}</span>
+                </div>
+              </div>
+              <div class="form-row">
+                <label>{{ t('ttsRate') }}</label>
+                <NInputNumber :value="ttsRateValue" :min="0.5" :max="2" :step="0.1" @update:value="setTtsRateValue" style="width:140px" />
+              </div>
+            </section>
+            <section class="settings-group-card">
+              <h4>{{ t('generationParams') }}</h4>
+              <div v-for="item in tokenFields" :key="item.key" class="form-row">
+                <label>{{ t(item.labelKey) }}</label>
+                <NInputNumber :value="Number(store.config[item.key] ?? 0)" @update:value="setNum(item.key, $event)" style="width:100%" />
+              </div>
+              <div class="actions-row">
+                <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
+              </div>
+            </section>
           </div>
 
           <div v-show="section === 'about'" class="settings-pane about">

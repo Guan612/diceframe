@@ -304,7 +304,7 @@ The community index is [diceframe/diceframe-plugins](https://github.com/dicefram
 }
 ```
 
-When installing, DiceFrame resolves the repository's latest stable GitHub Release to an exact commit, downloads GitHub's source archive for that commit, and validates the manifest again. Declarative plugins can update automatically when their permissions and runtime type do not expand. Process plugins notify the user and require confirmation. Any permission or runtime expansion is approval-required. `official`, `verified`, and `community` describe source/review status, not a security guarantee. See [PLUGIN_REGISTRY_EN.md](PLUGIN_REGISTRY_EN.md).
+When installing, DiceFrame resolves the repository's latest stable GitHub Release to an exact commit, downloads GitHub's source archive for that commit, and validates the manifest again. Declarative plugins are checked and updated automatically when the user opens the plugin store, as long as their permissions and runtime type do not expand. Process plugins notify the user and require confirmation. Any permission or runtime expansion is approval-required. `official`, `verified`, and `community` describe source/review status, not a security guarantee. See [PLUGIN_REGISTRY_EN.md](PLUGIN_REGISTRY_EN.md).
 
 ### 8.1 Content Guidelines
 
@@ -335,7 +335,7 @@ DiceFrame does not pre-screen every community item; maintainers delist violating
 - Store install: resolve the latest stable GitHub Release to an exact commit, extract to a temporary directory, validate, then move to `plugins/<id>/`.
 - Local install: select a `.dfplugin` file created by `scripts/package_plugin.py`.
 - Overwrite: explicit only; stop the old process before replacement.
-- Update: resolve and validate the latest stable Release again. Safe declarative updates may run automatically; process or permission-expanding updates require confirmation.
+- Update: resolve and validate the latest stable Release again. Safe declarative updates are checked when the store is opened and may run automatically; process or permission-expanding updates require confirmation.
 - Uninstall: stop and remove plugin source while preserving plugin data by default.
 - Reinstalling the same ID reuses preserved data.
 

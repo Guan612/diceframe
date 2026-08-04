@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { CharacterPortrait } from '@/api/types'
 import { uploadedAvatarUrl } from '@/api/avatars'
-import { initials, resolveBuiltinPortrait } from '@/utils/portraits'
+import { builtinPortraits, initials, resolveBuiltinPortrait } from '@/utils/portraits'
 
 const props = withDefaults(defineProps<{
   portrait?: CharacterPortrait
@@ -14,6 +14,15 @@ const props = withDefaults(defineProps<{
 
 const uploadUrl = ref('')
 const uploadFailed = ref(false)
+// 内置头像只有显式选择且 id 有效才显示；未选择时不按名字/规则自动分配。
+const hasValidBuiltin = computed(() => {
+  const portrait = props.portrait
+  if (!portrait || portrait.kind !== 'builtin') return false
+  const [storedRule, rawIndex] = String(portrait.id || '').split(':')
+  const options = builtinPortraits(storedRule)
+  const index = Number(rawIndex)
+  return Number.isInteger(index) && index >= 0 && index < options.length
+})
 const builtin = computed(() => resolveBuiltinPortrait(props.portrait, props.ruleId, props.seed || props.name))
 const isUpload = computed(() => props.portrait?.kind === 'upload' && !!props.portrait.asset_id && !uploadFailed.value)
 const boxStyle = computed(() => ({ width: `${props.size}px`, height: `${props.size}px` }))
@@ -37,8 +46,9 @@ watch(
 </script>
 
 <template>
-  <span class="portrait-image" :style="boxStyle" :title="name" role="img" :aria-label="name || 'avatar'">
+  <span class="portrait-image" :class="{ 'portrait-empty': !hasValidBuiltin && !isUpload }" :style="boxStyle" :title="name" role="img" :aria-label="name || 'avatar'">
     <img v-if="isUpload && uploadUrl" :src="uploadUrl" alt="" @error="uploadFailed = true">
-    <span v-else class="portrait-builtin" :style="builtinStyle"><i>{{ initials(name) }}</i></span>
+    <span v-else-if="hasValidBuiltin" class="portrait-builtin" :style="builtinStyle"><i>{{ initials(name) }}</i></span>
+    <span v-else class="portrait-empty-text">{{ initials(name) }}</span>
   </span>
 </template>

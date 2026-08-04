@@ -800,6 +800,14 @@ export interface PluginMarketplaceItem {
   verified?: boolean
   installable?: boolean
   verification_error?: string
+  latest?: {
+    version?: string
+    release_tag?: string
+    release_url?: string
+    commit_sha?: string
+    published_at?: string
+    requires_approval?: boolean
+  }
   manifest?: Record<string, unknown>
 }
 

@@ -25,6 +25,16 @@ export function isNewerPluginVersion(latest?: string, current?: string): boolean
   return false
 }
 
+// 商店条目是否真有新版可更新。优先用索引同步的真实 latest.version；
+// 没有 latest（索引未升级或同步失败）时回退到条目 version（收录时静态版本）。
+export function marketItemHasNewerVersion(item: PluginMarketplaceItem | undefined, installedVersion?: string): boolean {
+  if (!item) return false
+  const latestVersion = item.latest?.version || item.version
+  const current = installedVersion ?? item.installed_version
+  if (!latestVersion || !current) return false
+  return isNewerPluginVersion(latestVersion, current)
+}
+
 export function usePluginMarketplace(
   busy: Ref<string>,
   refreshSurfaces: () => Promise<void>,
@@ -86,9 +96,11 @@ export function usePluginMarketplace(
   // 筛选/排序/关键字变化时回到第 1 页
   watch([marketKeyword, typeFilter, sortMode], () => { page.value = 1 })
 
-  function canUpdateFromStore(pluginId: string) {
+  function canUpdateFromStore(pluginId: string, installedVersion?: string) {
     const item = marketplace.value.find(candidate => candidate.id === pluginId)
-    return Boolean(item && item.distribution !== 'bundled' && item.installable !== false)
+    if (!item || item.distribution === 'bundled' || item.installable === false) return false
+    // 只在该插件真有新版可更新时才显示"从商店更新"。
+    return marketItemHasNewerVersion(item, installedVersion)
   }
 
   async function loadMarketplace() {
@@ -257,5 +269,6 @@ export function usePluginMarketplace(
     testMirror,
     openUrl,
     isNewerVersion: isNewerPluginVersion,
+    marketItemHasNewerVersion,
   }
 }
