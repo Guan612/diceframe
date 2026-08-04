@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
+import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -165,6 +168,9 @@ class GameInstance:
     log: list[RoundLogEntry] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     key_facts: list = field(default_factory=list)
+
+    # 运行时跟踪：chatlog.jsonl 已持久化的 log 条数（不入存档，仅用于增量追加）
+    last_saved_log_count: int = 0
 
     # 统计
     total_llm_calls: int = 0
@@ -1306,11 +1312,12 @@ class GameRegistry:
         return path
 
     async def save(self, instance: GameInstance) -> None:
-        """写入存档: tmp -> backup rename -> tmp rename。"""
+        """写入存档: 完整 log 追加进 chatlog.jsonl（增量），核心态写 state.json。"""
         sp = self._save_path(instance.game_key)
         sp.parent.mkdir(parents=True, exist_ok=True)
         backup = sp.with_name("state.backup.json")
 
+        self._append_chatlog(instance)
         data = instance.to_dict()
         tmp = sp.with_name("state.tmp.json")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
@@ -1318,6 +1325,52 @@ class GameRegistry:
         if sp.exists():
             sp.replace(backup)
         tmp.replace(sp)
+
+    @staticmethod
+    def _chatlog_path(sp: Path) -> Path:
+        return sp.with_name("chatlog.jsonl")
+
+    def _append_chatlog(self, instance: GameInstance) -> None:
+        """把自上次保存以来的新 log 增量追加进 chatlog.jsonl。
+
+        历史完整保存在 jsonl（逐行追加，O(1)），核心态 state.json 只留最近上下文，
+        避免上万回合时每次全量重写大文件。增量通过 last_saved_log_count 跟踪。
+        rollback 会使 log 缩短：此时截断 chatlog 末尾的死条目，保持文件与内存一致。
+        swipe 不改 log 长度，chatlog 末尾会残留旧版本，由 _restore_chatlog 用 core_log
+        对齐修正——save 时无需为 swipe 重写整个文件。
+        """
+        sp = self._save_path(instance.game_key)
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        chatlog = self._chatlog_path(sp)
+        if instance.last_saved_log_count > len(instance.log):
+            # log 缩短（rollback 弹出了末尾条目）：截断 chatlog 到当前长度，丢弃死条目
+            self._truncate_chatlog(chatlog, len(instance.log))
+            instance.last_saved_log_count = len(instance.log)
+        if instance.last_saved_log_count >= len(instance.log):
+            return
+        new_entries = instance.log[instance.last_saved_log_count:]
+        if not new_entries:
+            return
+        lines = "\n".join(
+            json.dumps(entry, ensure_ascii=False) for entry in new_entries
+        ) + "\n"
+        # 追加写入（O(1)，不重写历史）
+        with open(chatlog, "a", encoding="utf-8") as fh:
+            fh.write(lines)
+        instance.last_saved_log_count = len(instance.log)
+
+    @staticmethod
+    def _truncate_chatlog(chatlog: Path, keep: int) -> None:
+        """截断 chatlog.jsonl 到前 keep 行（rollback 后清理死条目）。"""
+        if not chatlog.exists():
+            return
+        lines = [l for l in chatlog.read_text(encoding="utf-8").splitlines() if l.strip()]
+        if len(lines) <= keep:
+            return
+        kept = lines[:keep]
+        tmp = chatlog.with_name("chatlog.tmp.jsonl")
+        tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+        tmp.replace(chatlog)
 
     async def load(self, game_key: tuple) -> GameInstance | None:
         """加载存档，优先 state.json，回退到 backup。兼容旧版 , 分隔存档目录。"""
@@ -1365,9 +1418,60 @@ class GameRegistry:
                 fallback="backup_state",
                 repair_hint="建议检查 data/saves 目录权限、磁盘空间和 state.json 格式。",
             )
+        self._restore_chatlog(instance, sp)
         self.register(instance)
         logger.info("存档已加载: %s, round=%d", game_key, instance.round_number)
         return instance
+
+    def _restore_chatlog(self, instance: GameInstance, sp: Path) -> None:
+        """把 chatlog.jsonl 的完整历史拼回 instance.log；老存档自动迁移。
+
+        core_log（state.json 的 log[-100:]）是权威的最近窗口：save 时它直接来自内存
+        log，一定反映 rollback/swipe 后的最新状态。chatlog 是 append-only 的完整历史，
+        但 rollback 会留下死条目、swipe 会留下旧版本——二者都在 chatlog 末尾。因此以
+        core_log[0] 为锚点对齐：找到它在 chatlog 中的位置，保留之前的更早历史作前缀，
+        末尾用 core_log 替换（丢弃其后的死条目/旧版）。
+        """
+        chatlog = self._chatlog_path(sp)
+        core_log = list(instance.log)
+        history: list = []
+        if chatlog.exists():
+            try:
+                for line in chatlog.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        history.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        logger.warning("chatlog.jsonl 含无效行，已跳过: %s", chatlog)
+            except OSError:
+                logger.exception("读取 chatlog.jsonl 失败: %s", chatlog)
+        if not history and core_log:
+            # 老存档自动迁移：把核心态里的 log 写入 chatlog.jsonl
+            self._append_chatlog(instance)
+            history = list(core_log)
+        elif core_log and history:
+            # 以 core_log[0] 为锚点对齐：chatlog 中锚点之前的更早历史保留，之后用 core_log
+            # 替换。这丢弃了 chatlog 末尾因 rollback 残留的死条目、因 swipe 残留的旧版本。
+            first_core = core_log[0]
+            anchor = -1
+            for i in range(len(history) - 1, -1, -1):
+                if history[i] == first_core:
+                    anchor = i
+                    break
+            if anchor >= 0:
+                history = history[:anchor] + core_log
+            else:
+                # core_log[0] 不在 chatlog（swipe 改写了窗口边界轮且被非推进 save 写入
+                # state.json，chatlog 仍是原版）：保留 chatlog 中早于 core_log 窗口的更早
+                # 历史（按条数取前缀），末尾用 core_log 权威覆盖，避免丢失 r1..r(N-100)。
+                prefix = len(history) - len(core_log)
+                history = (history[:prefix] if prefix > 0 else []) + core_log
+        elif core_log:
+            history = core_log
+        instance.log = history
+        instance.last_saved_log_count = len(history)
 
     async def recover_all(self) -> list[GameInstance]:
         """启动时恢复未完成对局；待幸运选择保持可处理，其余对局暂停。"""
@@ -1403,6 +1507,54 @@ class GameRegistry:
 
         logger.info("存档恢复完成: %d 个对局", len(recovered))
         return recovered
+
+    async def import_save_zip(self, payload: bytes, *, platform: str = "web", account_id: str = "web_bot") -> dict:
+        """导入导出的存档 zip（state.json + 可选 chatlog.jsonl），作为新对局恢复。
+
+        自动生成唯一新 game_key，不覆盖现有对局。关键点：
+        - state.json 内的 game_key 改写为新值，否则 load 后 instance.game_key 仍是导出方
+          原值，register 会把导入实例串到原始对局的内存槽（本机导出再导入即覆盖原对局）。
+        - 写盘后立即 load+register，使新对局在 list_games 中可见，不必等重启 recover_all。
+        安全校验：仅接受 state.json / chatlog.jsonl 顶层文件，防路径穿越。
+        返回 game_key 为 list（由路由层用公开 | 分隔符字符串化）。
+        """
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+                names = set(zf.namelist())
+                if "state.json" not in names:
+                    return {"ok": False, "error": "存档包缺少 state.json"}
+                state_data = zf.read("state.json")
+                try:
+                    state_json = json.loads(state_data.decode("utf-8-sig"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    return {"ok": False, "error": "state.json 不是有效 JSON"}
+                if not isinstance(state_json, dict) or "game_key" not in state_json:
+                    return {"ok": False, "error": "state.json 缺少 game_key"}
+                # 仅接受顶层已知文件，防止解压路径穿越/任意写入
+                allowed = {"state.json", "chatlog.jsonl"}
+                if any(name for name in names if name not in allowed or "/" in name or "\\" in name or ".." in name):
+                    return {"ok": False, "error": "存档包包含非法文件"}
+                chatlog_data = zf.read("chatlog.jsonl") if "chatlog.jsonl" in names else b""
+        except zipfile.BadZipFile:
+            return {"ok": False, "error": "存档包不是有效的 zip"}
+        except Exception as exc:
+            logger.exception("导入存档解析失败")
+            return {"ok": False, "error": f"存档包解析失败：{exc}"}
+
+        # 生成唯一新 game_key：import_<毫秒时间戳>
+        new_key = (platform, f"import_{int(time.time() * 1000)}", account_id)
+        sp = self._save_path(new_key)
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        # 改写 game_key 为新值再落盘，使存档目录、instance.game_key、公开 game_key 三者一致
+        state_json["game_key"] = list(new_key)
+        sp.write_text(json.dumps(state_json, ensure_ascii=False, indent=2), encoding="utf-8")
+        if chatlog_data:
+            sp.with_name("chatlog.jsonl").write_bytes(chatlog_data)
+        # 立即加载并注册进内存，否则 list_games（只遍历内存）看不到导入的对局
+        instance = await self.load(new_key)
+        rounds = instance.round_number if instance else -1
+        logger.info("已导入存档为新对局: %s (round=%d)", sp.parent.name, rounds)
+        return {"ok": True, "game_key": list(new_key)}
 
     async def save_all_active(self) -> None:
         for instance in self.list_active():

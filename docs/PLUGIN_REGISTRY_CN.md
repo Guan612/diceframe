@@ -32,6 +32,14 @@ DiceFrame 采用“作者维护源码仓库、官方只维护公开索引”的�
 
 自动检查不会执行插件入口，也不能证明代码没有恶意行为。
 
+## 内容审核
+
+自动检查只覆盖结构与代码安全，不预审内容。所有插件内容文本（世界书、角色、规则、NPC、道具等）须符合《内容规范》（见插件开发指南 8.1 节）。维护者人工审核时会检查法律红线、社区准则与版权；收到举报查实后将下架违规插件。
+
+## 受欢迎度
+
+商店展示的星数取自插件 GitHub 仓库的 star 计数，由索引仓库的同步任务每日刷新。星数反映仓库受欢迎度，供玩家参考，不等于 DiceFrame 的质量背书。
+
 ## 风险与更新策略
 
 | 等级 | 含义 | 更新方式 |
@@ -40,6 +48,8 @@ DiceFrame 采用“作者维护源码仓库、官方只维护公开索引”的�
 | `unrestricted-process` | 启动 Python、Node、EXE 或其他进程 | 只提示更新，用户确认后安装 |
 | `bundled` | DiceFrame 组织维护并随主程序发布 | 跟随 DiceFrame 更新 |
 | `approval-required` | 新版本扩大权限或改变运行方式 | 暂停安装和更新，重新审核 |
+
+`declarative` 与 `unrestricted-process` 由插件类型 descriptor（`src/plugin_host/support.py` 的 `process_mode`）决定：无进程入口的声明型类型为 `declarative`，带进程的为 `unrestricted-process`；`bundled` 和 `approval-required` 是发布策略层叠加。新增类型自动按其 descriptor 归类，无需逐类型手改审核规则。
 
 第三方进程插件以当前操作系统用户权限运行。环境变量过滤和权限声明不是操作系统沙箱，因此商店必须明确显示高权限警告。
 
@@ -69,11 +79,7 @@ DiceFrame 安装或检查更新时直接解析最新 Release，并下载该 Rele
 
 本地 `.dfplugin` 不等于官方收录。安装器仍会检查路径穿越、符号链接、重复路径、文件数量、大小、manifest 和配置 Schema。
 
-## Token 解耦
-
-DiceFrame 为每个需要 `diceframe.http` 的进程插件自动生成独立内部 Token，并仅注入该插件进程。QQ / NapCat 等内置插件不需要用户填写 DiceFrame Bot Token。设置页中的全局 Bot API Token只供用户主动连接的外部程序使用；重新生成它不会影响内置插件。
-
 ## 收录声明
 
-收录表示插件满足索引格式和审核规则，不构成 DiceFrame 对安全性、功能质量、持续维护或适用性的保证。插件页面应同时展示仓库、风险等级、权限和更新策略。
+收录表示插件满足索引格式和审核规则，不构成 DiceFrame 对安全性、功能质量、持续维护或适用性的保证。插件页面应同时展示仓库、风险等级、权限和更新策略。违反内容规范的插件将被下架。
 

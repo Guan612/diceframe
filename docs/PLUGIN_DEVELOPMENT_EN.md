@@ -96,7 +96,7 @@ The output is placed in `dist/plugins/`. The packager applies host validation an
 - `contributes` declares resource paths or globs that register while enabled.
 - `capabilities` describes factual business capabilities.
 - `permissions` requests known host capabilities and is shown in settings.
-- `docs` points to documentation inside the package.
+- `docs` points to documentation inside the package (e.g. `README_CN.md`). It is rendered in the plugin settings "Guide" tab using lightweight Markdown (headings, lists, bold, inline code). Write it in the language of your users and explain what the plugin does, how to enable it, and how to use it. The tab is hidden when this field is absent.
 
 Known types are `channel-adapter`, `bot-extension`, `content-pack`, `theme`, `map-pack`, `import-export`, `provider`, and `tool`.
 
@@ -142,6 +142,8 @@ The restricted schema uses an object root with `properties`. Supported field typ
 ```
 
 ## 7. Plugin Types
+
+> The authoritative list of plugin types (support level, runtime mode, inferred permissions, required permission, content contribution mapping) is driven by a single source: the `PLUGIN_TYPE_SUPPORT` descriptor table in `src/plugin_host/support.py`. Adding a type only requires editing that table — the host, policy, registry, and frontend follow automatically. This section is a per-type author guide; some reserved types are not yet wired to a runtime.
 
 ### 7.1 Channel Adapters
 
@@ -303,6 +305,30 @@ The community index is [diceframe/diceframe-plugins](https://github.com/dicefram
 ```
 
 When installing, DiceFrame resolves the repository's latest stable GitHub Release to an exact commit, downloads GitHub's source archive for that commit, and validates the manifest again. Declarative plugins can update automatically when their permissions and runtime type do not expand. Process plugins notify the user and require confirmation. Any permission or runtime expansion is approval-required. `official`, `verified`, and `community` describe source/review status, not a security guarantee. See [PLUGIN_REGISTRY_EN.md](PLUGIN_REGISTRY_EN.md).
+
+### 8.1 Content Guidelines
+
+Content packs are distributed to a public community. Authors must keep content lawful, healthy, and respectful of others' rights. The lines below apply to every plugin text: lorebook, characters, rules, NPCs, items, and so on.
+
+**Hard lines (violation rejects or delists)**
+
+- No political content.
+- No pornography, sexualization of minors, or gambling promotion; no excessive gore, terrorism, or incitement to crime.
+- No copyright or trademark infringement: cite sources for others' work; derivative works must state they are unofficial and that copyright belongs to the original creator.
+- No defamation or insult of real people; no leaking others' private information.
+
+**Community standards**
+
+- No hate or discrimination (race, gender, religion, region, etc.) and no extremism.
+- Descriptions must match real capabilities; do not present "reserved" or "partial" support as complete.
+- No unrelated promotion, advertising, or off-topic traffic diversion.
+
+**Derivative works**
+
+- State the original work in README and description; mark as unofficial derivative; copyright stays with the original creator.
+- Delist immediately if the original creator objects to derivatives.
+
+DiceFrame does not pre-screen every community item; maintainers delist violating plugins when found or upon a verified report.
 
 ## 9. Install, Update, and Uninstall Semantics
 

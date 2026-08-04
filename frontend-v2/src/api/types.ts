@@ -308,6 +308,11 @@ export interface CharacterImportResponse {
   ok?: boolean
   error?: string
   card?: CharacterCard
+  imported_as?: 'character_card' | 'npc'
+  npc_name?: string
+  world_id?: string
+  lorebook_entries?: number
+  nsfw_warning?: boolean
 }
 
 export interface RuleAttribute {
@@ -773,6 +778,7 @@ export interface PluginMarketplaceItem {
   release_tag?: string
   release_url?: string
   branch?: string
+  stars?: number
   distribution?: 'repository' | 'bundled' | string
   risk_level?: 'declarative' | 'unrestricted-process' | 'bundled' | 'unknown' | string
   update_policy?: 'automatic' | 'notify' | 'application' | 'approval-required' | 'blocked' | string

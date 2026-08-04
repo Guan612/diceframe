@@ -16,6 +16,7 @@ from src.webui.routes._common import (
     _get_api,
     _require_confirmed_request,
 )
+from src.webui.services._common import _GAME_KEY_SEP
 
 logger = logging.getLogger("trpg")
 
@@ -411,7 +412,7 @@ async def api_payment_resolve(request: web.Request) -> web.Response:
 
 
 async def api_export_game(request: web.Request) -> web.Response:
-    """导出单存档为 JSON 文件下载。"""
+    """导出单存档为 zip（含 state.json + chatlog.jsonl 完整历史）。"""
     api = _get_api(request)
     gk = api._parse_key(request.match_info["game_key"])
     registry = request.app["subsystems"].registry
@@ -422,30 +423,74 @@ async def api_export_game(request: web.Request) -> web.Response:
     if not session_uid or session_uid != inst.gm_uid:
         return web.json_response({"error": "仅 GM 可导出游戏"}, status=403)
 
+    import io
     import re
+    import zipfile
     from datetime import datetime
     save_path = registry._save_path(gk)
     state_path = save_path if save_path.exists() else save_path.with_name("state.backup.json")
     if not state_path.exists():
         return web.json_response({"error": "存档文件不存在"}, status=404)
-    try:
-        body = state_path.read_bytes()
-    except Exception as exc:
-        logger.exception("读取存档失败: %s", state_path)
-        return web.json_response({"error": "读取失败，请查看服务器日志"}, status=500)
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        try:
+            zf.writestr("state.json", state_path.read_bytes())
+            chatlog = save_path.with_name("chatlog.jsonl")
+            if chatlog.exists():
+                zf.writestr("chatlog.jsonl", chatlog.read_bytes())
+        except Exception as exc:
+            logger.exception("读取存档失败: %s", state_path)
+            return web.json_response({"error": "读取失败，请查看服务器日志"}, status=500)
+    body = buffer.getvalue()
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = re.sub(r"[^\w一-鿿-]+", "_", inst.world_name or "save").strip("_") or "save"
-    filename = f"save_{safe_name}_{ts}.json"
-    ascii_fallback = re.sub(r"[^\x21-\x7e]", "_", filename) or f"save_{ts}.json"
+    filename = f"save_{safe_name}_{ts}.zip"
+    ascii_fallback = re.sub(r"[^\x21-\x7e]", "_", filename) or f"save_{ts}.zip"
     return web.Response(
         body=body,
-        content_type="application/json",
+        content_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{quote(filename)}',
             "Content-Length": str(len(body)),
         },
     )
+
+
+async def api_import_game(request: web.Request) -> web.Response:
+    """导入存档 zip 为新对局（owner 级操作，需确认头）。"""
+    denied = _require_confirmed_request(request)
+    if denied is not None:
+        return denied
+    api = _get_api(request)
+    if request.content_type != "multipart/form-data":
+        return web.json_response({"ok": False, "error": "存档导入需要 multipart/form-data"}, status=400)
+    if request.content_length and request.content_length > 50 * 1024 * 1024:
+        return web.json_response({"ok": False, "error": "存档包不能超过 50 MB"}, status=413)
+    try:
+        reader = await request.multipart()
+        payload = b""
+        async for part in reader:
+            if part.name not in {"file", "save"}:
+                continue
+            chunks: list[bytes] = []
+            while True:
+                chunk = await part.read_chunk()
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            payload = b"".join(chunks)
+        if not payload:
+            return web.json_response({"ok": False, "error": "缺少存档 zip 文件"}, status=400)
+        result = await request.app["subsystems"].registry.import_save_zip(payload)
+    except Exception as exc:
+        logger.exception("导入存档失败")
+        return web.json_response({"ok": False, "error": f"导入存档失败：{exc}"}, status=400)
+    # engine 层返回 game_key 为 list（平台|target|account 三段），转成公开 | 分隔字符串
+    if result.get("ok") and result.get("game_key"):
+        result["game_key"] = _GAME_KEY_SEP.join(str(x) for x in result["game_key"])
+    return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
 async def api_char_update(request: web.Request) -> web.Response:
@@ -595,10 +640,14 @@ async def api_swipe(request: web.Request) -> web.Response:
         return denied
     if request.method == "PUT":
         nar = await api._handler.generate_swipe(inst, round_num)
+        # swipe 改写了内存 log（gm_response/swipes），落盘否则重启即丢
+        await api._reg.save(inst)
         return web.json_response({"ok": True, "narration": nar})
     else:
         idx = body.get("swipe_index", 0)
         ok = await inst.switch_swipe(round_num, idx)
+        if ok:
+            await api._reg.save(inst)
         return web.json_response({"ok": ok})
 
 
@@ -681,6 +730,7 @@ async def api_delete_game(request: web.Request) -> web.Response:
 
 def register_games(app: web.Application) -> None:
     app.router.add_get("/api/games", api_games)
+    app.router.add_post("/api/games/import", api_import_game)
     app.router.add_get("/api/games/{game_key}", api_detail)
     app.router.add_post("/api/games/{game_key}/claim-gm", api_claim_gm_session)
     app.router.add_get("/api/games/{game_key}/multiplayer", api_multiplayer_status)

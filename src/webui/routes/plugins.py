@@ -8,6 +8,9 @@ from src.webui.routes._common import _get_api, _require_confirmed_request
 async def api_plugins(request: web.Request) -> web.Response:
     return web.json_response(_get_api(request).list_plugins())
 
+async def api_plugin_types(request: web.Request) -> web.Response:
+    return web.json_response(_get_api(request).list_plugin_types())
+
 async def api_plugins_rescan(request: web.Request) -> web.Response:
     denied=_require_confirmed_request(request)
     if denied is not None: return denied
@@ -17,6 +20,13 @@ async def api_plugins_rescan(request: web.Request) -> web.Response:
 async def api_plugin_detail(request: web.Request) -> web.Response:
     try: return web.json_response(_get_api(request).plugin_detail(request.match_info["plugin_id"]))
     except KeyError as exc: return web.json_response({"ok":False,"error":str(exc)},status=404)
+
+async def api_plugin_docs(request: web.Request) -> web.Response:
+    try:
+        result = _get_api(request).read_plugin_docs(request.match_info["plugin_id"])
+    except KeyError as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=404)
+    return web.json_response(result, status=200 if result.get("ok") else 404)
 
 async def api_plugin_config(request: web.Request) -> web.Response:
     denied=_require_confirmed_request(request)
@@ -137,6 +147,50 @@ async def api_plugin_content_import(request: web.Request) -> web.Response:
         return web.json_response({"ok":False,"error":str(exc)},status=400)
     return web.json_response(result,status=200 if result.get("ok") else 400)
 
+async def api_plugin_content_import_all(request: web.Request) -> web.Response:
+    denied=_require_confirmed_request(request)
+    if denied is not None: return denied
+    try:
+        body = await request.json()
+        result = _get_api(request).import_all_plugin_content(
+            body.get("plugin_id", ""),
+            body.get("target_world_id", body.get("world_id", "")),
+        )
+    except ValueError as exc:
+        return web.json_response({"ok":False,"error":str(exc)},status=400)
+    return web.json_response(result,status=200 if result.get("ok") else 400)
+
+async def api_plugin_export(request: web.Request) -> web.Response:
+    denied=_require_confirmed_request(request)
+    if denied is not None: return denied
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok":False,"error":"请求体必须是 JSON 对象"},status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"ok":False,"error":"请求体必须是 JSON 对象"},status=400)
+    try:
+        result = _get_api(request).export_content_pack(
+            body.get("plugin_id", ""),
+            body.get("name", ""),
+            body.get("version", "0.1.0"),
+            body.get("description", ""),
+            body.get("world_id", ""),
+            body.get("card_ids") or [],
+            body.get("rule_id", ""),
+            bool(body.get("flat")),
+        )
+    except ValueError as exc:
+        return web.json_response({"ok":False,"error":str(exc)},status=400)
+    if not result.get("ok"):
+        return web.json_response(result, status=400)
+    filename = str(result.get("filename") or "content-pack.dfplugin")
+    return web.Response(
+        body=result["payload"],
+        content_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
 async def api_plugin_asset(request: web.Request) -> web.StreamResponse:
     try:
         path = _get_api(request).plugin_asset_path(request.match_info["plugin_id"], request.match_info["path"])
@@ -243,6 +297,7 @@ async def api_plugin_clear_card_cache(request: web.Request) -> web.Response:
 
 def register_plugins(app: web.Application) -> None:
     app.router.add_get("/api/plugins",api_plugins)
+    app.router.add_get("/api/plugins/types",api_plugin_types)
     app.router.add_post("/api/plugins/rescan",api_plugins_rescan)
     app.router.add_post("/api/plugins/install",api_plugin_install)
     app.router.add_get("/api/plugins/marketplace",api_plugin_marketplace)
@@ -252,6 +307,8 @@ def register_plugins(app: web.Application) -> None:
     app.router.add_post("/api/plugins/tools/{plugin_id}/{tool_name}",api_plugin_tool_invoke)
     app.router.add_get("/api/plugins/content",api_plugin_content)
     app.router.add_post("/api/plugins/content/import",api_plugin_content_import)
+    app.router.add_post("/api/plugins/content/import-all",api_plugin_content_import_all)
+    app.router.add_post("/api/plugins/export",api_plugin_export)
     app.router.add_get("/api/plugins/assets/{plugin_id}/{path:.*}",api_plugin_asset)
     app.router.add_post("/api/plugins/marketplace/install",api_plugin_marketplace_install)
     app.router.add_get("/api/plugins/mirrors",api_plugin_mirrors)
@@ -260,6 +317,7 @@ def register_plugins(app: web.Application) -> None:
     app.router.add_put("/api/plugins/mirrors/{mirror_id}",api_plugin_mirror_update)
     app.router.add_delete("/api/plugins/mirrors/{mirror_id}",api_plugin_mirror_delete)
     app.router.add_get("/api/plugins/{plugin_id}",api_plugin_detail)
+    app.router.add_get("/api/plugins/{plugin_id}/docs",api_plugin_docs)
     app.router.add_put("/api/plugins/{plugin_id}/config",api_plugin_config)
     app.router.add_delete("/api/plugins/{plugin_id}",api_plugin_uninstall)
     app.router.add_post("/api/plugins/{plugin_id}/update",api_plugin_marketplace_update)

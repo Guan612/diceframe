@@ -137,7 +137,12 @@ class GameHandler:
             language=language,
         )
         if plugin_template:
-            await self._factory.init_world_from_template(world_id, plugin_template)
+            # 非 UI 建图路径（bot/种子码/API）可能尚未触发 list_worlds 同步，
+            # 这里先幂等 sync 一遍，保证插件世界书已带标记灌入；再用带标记的 id
+            # 覆盖 init_world_from_template 的无标记初始化，避免产生无法按插件清理的副本。
+            if self._plugin_host and self.lorebook_store:
+                self._plugin_host.sync_lorebooks(self.lorebook_store)
+            logger.info("插件世界模板，已同步世界书并跳过重复初始化: %s", world_id)
         return instance
 
     def _load_world_template(self, world_id: str) -> dict | None:

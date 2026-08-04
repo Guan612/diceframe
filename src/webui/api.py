@@ -113,11 +113,17 @@ class WebAPI:
     def list_plugins(self) -> dict[str, Any]:
         return plugins.list_plugins(self)
 
+    def list_plugin_types(self) -> dict[str, Any]:
+        return plugins.list_plugin_types(self)
+
     async def rescan_plugins(self) -> dict[str, Any]:
         return await plugins.rescan_plugins(self)
 
     def plugin_detail(self, plugin_id: str) -> dict[str, Any]:
         return plugins.plugin_detail(self, plugin_id)
+
+    def read_plugin_docs(self, plugin_id: str) -> dict[str, Any]:
+        return plugins.read_plugin_docs(self, plugin_id)
 
     async def update_plugin_config(self, plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         return await plugins.update_plugin_config(self, plugin_id, changes)
@@ -179,6 +185,14 @@ class WebAPI:
     def list_plugin_content(self, kind: str = "", world_id: str = "", rule_id: str = "") -> dict[str, Any]:
         return plugins.list_plugin_content(self, kind, world_id, rule_id)
 
+    def sync_plugin_lorebooks(self) -> dict[str, Any]:
+        """同步已启用插件的世界模板世界书到世界书库（幂等）。"""
+        return plugins.sync_plugin_lorebooks(self)
+
+    def cleanup_plugin_lorebook(self, plugin_id: str) -> dict[str, Any]:
+        """删除某插件灌入的、未被用户改动的世界书条目。"""
+        return plugins.cleanup_plugin_lorebook(self, plugin_id)
+
     def import_plugin_content(
         self,
         kind: str,
@@ -188,6 +202,24 @@ class WebAPI:
         overwrite: bool = False,
     ) -> dict[str, Any]:
         return plugins.import_plugin_content(self, kind, resource_id, plugin_id, target_world_id, overwrite)
+
+    def import_all_plugin_content(self, plugin_id: str, target_world_id: str = "") -> dict[str, Any]:
+        return plugins.import_all_plugin_content(self, plugin_id, target_world_id)
+
+    def export_content_pack(
+        self,
+        plugin_id: str,
+        name: str,
+        version: str,
+        description: str,
+        world_id: str = "",
+        card_ids: list[str] | None = None,
+        rule_id: str = "",
+        flat: bool = False,
+    ) -> dict[str, Any]:
+        return plugins.export_content_pack(
+            self, plugin_id, name, version, description, world_id, card_ids, rule_id, flat
+        )
 
     def plugin_asset_path(self, plugin_id: str, relative_path: str) -> Path:
         return plugins.plugin_asset_path(self, plugin_id, relative_path)
@@ -355,12 +387,22 @@ class WebAPI:
     def delete_character_card(self, card_id: str) -> dict[str, Any]:
         return character_cards.delete_character_card(self, card_id)
 
-    async def import_character_card(self, file_data: str = "", file_name: str = "card.json") -> dict[str, Any]:
-        return await character_cards.import_character_card(self, file_data, file_name)
+    async def import_character_card(self, file_data: str = "", file_name: str = "card.json",
+                                    target: str = "character_card", world_id: str = "") -> dict[str, Any]:
+        return await character_cards.import_character_card(self, file_data, file_name, target, world_id)
+
+    def export_character_cards(self, card_ids: list[str]) -> dict[str, Any]:
+        return character_cards.export_character_cards(self, card_ids)
 
     # ---- 世界编辑器 ----
 
     def list_worlds(self) -> dict[str, Any]:
+        # 确保已启用插件的世界模板世界书已同步（幂等）
+        if self._plugins:
+            try:
+                plugins.sync_plugin_lorebooks(self)
+            except Exception:
+                logger.warning("list_worlds 同步插件世界书失败，已跳过", exc_info=True)
         return worlds.list_worlds(self)
 
     def create_world(self, name: str, description: str = "", language: str = "") -> dict[str, Any]:
@@ -460,6 +502,12 @@ class WebAPI:
     # ---- 世界模板 ----
 
     def list_world_templates(self) -> dict[str, Any]:
+        # 确保已启用插件的世界模板世界书已同步（幂等）
+        if self._plugins:
+            try:
+                plugins.sync_plugin_lorebooks(self)
+            except Exception:
+                logger.warning("list_world_templates 同步插件世界书失败，已跳过", exc_info=True)
         return worlds.list_world_templates(self)
 
     def cleanup_orphan_game_templates(self, world_id: str = "") -> int:
