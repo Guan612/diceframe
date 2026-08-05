@@ -503,7 +503,7 @@ async def on_startup(app: web.Application) -> None:
     _ensure_bot_token()
     subsystems = _build_subsystems()
     app["subsystems"] = subsystems
-    plugin_host = PluginHost(ROOT / "plugins", DATA_DIR / "plugins", base_env={
+    plugin_host = PluginHost(DATA_DIR / "plugin-packages", DATA_DIR / "plugins", builtin_dir=ROOT / "plugins", base_env={
         "TRPG_API_BASE": f"http://127.0.0.1:{PORT}",
     })
     plugin_host.discover()

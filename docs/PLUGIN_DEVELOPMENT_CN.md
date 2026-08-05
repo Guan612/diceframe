@@ -36,7 +36,7 @@ DiceFrame 插件不只面向机器人接入。长期目标是让社区可以通�
 
 ## 3. 插件边界
 
-- 插件以 `plugins/<plugin-id>/` 为安装单位。
+- 插件以 `data/plugin-packages/<plugin-id>/` 为安装单位（用户安装）；内置/示例插件位于 `plugins/<plugin-id>/`。
 - 插件安装包必须只包含一个 `plugin.json`。
 - 插件不得直接读取或修改 DiceFrame 的 `data/` 存档；需要能力时应补正式 HTTP API 或类型专用注册流程。
 - 插件禁止 `import src.webui`；缺少能力时按 `routes -> api -> services -> core` 补正式接口。
@@ -56,7 +56,7 @@ DiceFrame 插件不只面向机器人接入。长期目标是让社区可以通�
   README_CN.md
 ```
 
-安装后的统一结构是 `plugins/<plugin-id>/`。开源插件把上述文件直接放在独立 GitHub 仓库根目录，通过正式 GitHub Release 分发；作者不需要上传 ZIP，也不需要计算 SHA-256。
+安装后的统一结构是 `data/plugin-packages/<plugin-id>/`（用户安装）；本地开发可直接放仓库 `plugins/<plugin-id>/`。开源插件把上述文件直接放在独立 GitHub 仓库根目录，通过正式 GitHub Release 分发；作者不需要上传 ZIP，也不需要计算 SHA-256。
 
 私下、网盘或离线分享使用 `.dfplugin` 文件。它是受限 ZIP 容器，内部只允许以下两种结构：
 
@@ -100,7 +100,7 @@ README_CN.md
 python scripts\package_plugin.py plugins\my-content-pack --overwrite
 ```
 
-生成的 `.dfplugin` 位于 `dist/plugins/`，可在 WebUI “设置 -> 插件 -> 安装插件”中安装测试。开发时也可以把目录放到 `plugins/<id>/`，然后点击“重新扫描本地目录”。
+生成的 `.dfplugin` 位于 `dist/plugins/`，可在 WebUI “设置 -> 插件 -> 安装插件”中安装测试。开发时也可以把目录放到仓库的 `plugins/<id>/`，然后点击“重新扫描本地目录”。
 
 打包脚本会复用宿主的 manifest、schema、权限和贡献资源校验，并拒绝 `__pycache__`、日志、数据库、符号链接和不安全路径。
 
@@ -519,10 +519,10 @@ DiceFrame 不对社区内容逐一预审；维护者发现或收到举报查实�
 
 ## 9. 安装、更新与卸载语义
 
-- 安装：宿主解压到临时目录，校验后移动到 `plugins/<id>/`。
+- 安装：宿主解压到临时目录，校验后移动到 `data/plugin-packages/<id>/`。
 - 覆盖安装：必须显式覆盖；宿主会先停止旧插件，再替换目录。
 - 更新：商店解析作者仓库最新正式 Release；声明型插件可自动覆盖，进程型插件必须由用户确认。
-- 卸载：先停止插件，再删除 `plugins/<id>/`。默认保留 `data/plugins/<id>/`。
+- 卸载：先停止插件，再删除 `data/plugin-packages/<id>/`。默认保留 `data/plugins/<id>/`。
 - 重装同 ID 插件会自动复用保留的配置数据。
 
 ## 10. 发布检查

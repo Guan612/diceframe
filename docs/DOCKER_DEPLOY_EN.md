@@ -9,7 +9,7 @@ pip install -r requirements.txt
 python web_server.py
 ```
 
-The container stores runtime data in `/app/data`; Compose maps it to `./data` in the project directory. Saves, settings, access credentials, and plugin runtime data remain on the host when the image is rebuilt. The plugin source directory `/app/plugins` is also mapped to `./plugins`, so installed plugins survive image upgrades or container rebuilds.
+The container stores runtime data in `/app/data`; Compose maps it to `./data` in the project directory. Saves, settings, access credentials, and plugin runtime data remain on the host when the image is rebuilt. User-installed plugin source code lives under `/app/data/plugin-packages/` and is preserved with the data volume across image upgrades or container rebuilds; `/app/plugins` holds only built-in and example plugins and is updated with the image.
 
 ## Quick Start
 
@@ -93,5 +93,4 @@ or change the Compose volume:
 ```yaml
 volumes:
   - ./data-docker:/app/data
-  - ./plugins-docker:/app/plugins
 ```

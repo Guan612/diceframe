@@ -1762,4 +1762,40 @@ async def test_monitor_backs_off_on_rapid_crash(tmp_path, monkeypatch):
     await asyncio.wait_for(second_monitor, timeout=10)
     assert runtime.restart_delay_sec == pytest.approx(0.04)
     await host.stop("example")
+
+
+# ---------- 双目录合并模型 ----------
+
+def test_discover_merges_builtin_and_user_dirs(tmp_path):
+    builtin = tmp_path / "builtin"
+    user = tmp_path / "user"
+    write_plugin(builtin, "alpha")
+    write_plugin(user, "beta")
+    host = PluginHost(user, tmp_path / "data", builtin_dir=builtin)
+    found = host.discover()
+    assert {p["id"] for p in found} == {"alpha", "beta"}
+    assert host.plugins["alpha"].source == "builtin"
+    assert host.plugins["beta"].source == "user"
+
+
+def test_user_dir_overrides_builtin_on_name_conflict(tmp_path):
+    builtin = tmp_path / "builtin"
+    user = tmp_path / "user"
+    write_plugin(builtin, "shared", manifest_extra={"version": "1"})
+    write_plugin(user, "shared", manifest_extra={"version": "2"})
+    host = PluginHost(user, tmp_path / "data", builtin_dir=builtin)
+    host.discover()
+    assert host.plugins["shared"].manifest["version"] == "2"
+    assert host.plugins["shared"].source == "user"
+
+
+@pytest.mark.asyncio
+async def test_builtin_plugin_cannot_be_uninstalled(tmp_path):
+    builtin = tmp_path / "builtin"
+    user = tmp_path / "user"
+    write_plugin(builtin, "built-in")
+    host = PluginHost(user, tmp_path / "data", builtin_dir=builtin)
+    host.discover()
+    with pytest.raises(ValueError, match="内置插件不可卸载"):
+        await host.uninstall("built-in")
     await asyncio.sleep(0.05)

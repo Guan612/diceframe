@@ -209,6 +209,7 @@ data/
 - `data/saves/`：游戏存档
 - `data/templates/`：运行时规则和世界模板；用户自定义内容会保存在这里，升级时不会被内置模板覆盖
 - `data/plugins/`：插件运行数据
+- `data/plugin-packages/`：用户安装的插件源码（跨版本保留）
 - `data/bot/cards/`：群聊图片卡片缓存
 
 请妥善保管这些文件。备份、迁移服务器或发给别人排查问题时，先确认里面没有 API Key、访问口令、真实群号、私人聊天记录或不想公开的存档。
@@ -230,7 +231,7 @@ data/
 │   ├── rules/             # JSON 规则系统
 │   ├── webui/             # HTTP API、routes、services
 │   └── bots/bridge_core/  # 通用聊天底座（各平台适配器复用）
-├── plugins/               # 商店插件安装目录（如 qq-napcat）
+├── plugins/               # 内置/示例插件（随版本分发；用户安装的插件在 data/plugin-packages/）
 ├── prompts/               # GM 系统提示词
 ├── templates/             # 内置规则和世界模板
 └── docs/                  # 用户手册、部署、更新与插件文档

@@ -67,7 +67,7 @@ Another review is required for repository or ID changes, ownership transfer, per
 
 ## Installation formats
 
-- Public plugins from the store: install the repository source snapshot referenced by a GitHub Release into `plugins/<id>/`.
+- Public plugins from the store: install the repository source snapshot referenced by a GitHub Release into `data/plugin-packages/<id>/`.
 - Private, file-sharing, or offline distribution: use one `.dfplugin` file. It is a constrained ZIP container with a fixed `.dfplugin` extension.
 - Local development: place the directory at `plugins/<id>/`, then choose “Rescan local folder” in settings.
 

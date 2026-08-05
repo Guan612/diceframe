@@ -9,7 +9,7 @@ pip install -r requirements.txt
 python web_server.py
 ```
 
-Docker 里固定把运行数据放在 `/app/data`，compose 会映射到项目根目录的 `./data`。存档、配置、访问令牌、插件运行数据都留在宿主机，不会被镜像重建清掉。插件源码目录 `/app/plugins` 也映射到 `./plugins`，升级或重建容器后已安装的插件不会丢失。
+Docker 里固定把运行数据放在 `/app/data`，compose 会映射到项目根目录的 `./data`。存档、配置、访问令牌、插件运行数据都留在宿主机，不会被镜像重建清掉。用户安装的插件源码也落在 `/app/data/plugin-packages/`，随 data 卷保留，升级或重建容器后不会丢失；`/app/plugins` 仅内置示例，随镜像更新。
 
 ## 快速启动
 
@@ -101,5 +101,4 @@ TRPG_DATA_DIR=./data-docker docker compose up
 ```yaml
 volumes:
   - ./data-docker:/app/data
-  - ./plugins-docker:/app/plugins
 ```

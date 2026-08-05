@@ -73,7 +73,7 @@ DiceFrame 安装或检查更新时直接解析最新 Release，并下载该 Rele
 
 ## 安装格式
 
-- 官方商店中的开源插件：安装 GitHub Release 指向的仓库源码快照，最终落到 `plugins/<id>/`。
+- 官方商店中的开源插件：安装 GitHub Release 指向的仓库源码快照，最终落到 `data/plugin-packages/<id>/`。
 - 私下、网盘或离线分享：作者生成一个 `.dfplugin` 文件。它是受限 ZIP 容器，但扩展名固定为 `.dfplugin`。
 - 本地开发：把插件目录放到 `plugins/<id>/`，在设置页点击“重新扫描本地目录”。
 
