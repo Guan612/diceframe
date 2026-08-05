@@ -229,8 +229,8 @@ data/
 │   ├── memory/            # 长期记忆、摘要、embedding
 │   ├── rules/             # JSON 规则系统
 │   ├── webui/             # HTTP API、routes、services
-│   └── bots/qq/           # QQ / NapCat 适配层
-├── plugins/qq-napcat/     # 插件 manifest 和配置 schema
+│   └── bots/bridge_core/  # 通用聊天底座（各平台适配器复用）
+├── plugins/               # 商店插件安装目录（如 qq-napcat）
 ├── prompts/               # GM 系统提示词
 ├── templates/             # 内置规则和世界模板
 └── docs/                  # 用户手册、部署、更新与插件文档
