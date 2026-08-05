@@ -290,6 +290,9 @@ class WebAPI:
     def bot_extension_asset_path(self, plugin_id: str, relative_path: str) -> Path:
         return bot_extensions.asset_path(self, plugin_id, relative_path)
 
+    def bot_bridge_card_path(self, name: str) -> Path:
+        return bot_extensions.bridge_card_path(self, name)
+
     def multiplayer_status(self, game_key: str) -> dict[str, Any]:
         return games.multiplayer_status(self, game_key)
 

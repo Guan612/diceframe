@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import json
+import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.webui.api import WebAPI
 
+from src.bots.bridge_core.card_renderer import BRAND_FOOTER, render_card_png
+
+logger = logging.getLogger("trpg")
+
 BRIDGE_EXTENSION_PROTOCOL_VERSION = 1
 BRIDGE_EXTENSION_STAGES = ("before_message", "after_result", "render")
 MAX_BRIDGE_PAYLOAD_BYTES = 192 * 1024
+_BRIDGE_CARD_NAME_RE = re.compile(r"^card_[0-9a-f]{8,64}\.png$")
 
 
 def capabilities(api: "WebAPI") -> dict[str, Any]:
@@ -48,7 +55,66 @@ async def apply(
             "applied": [],
         }
     result = await api._plugins.apply_bridge_extensions(stage, payload)
+    outputs = result.get("outputs") if isinstance(result.get("outputs"), list) else []
+    if outputs:
+        result["outputs"] = _materialize_cards(api, outputs)
     return {"ok": True, **result}
+
+
+def bridge_card_dir(api: "WebAPI") -> Path:
+    """卡片渲染输出目录（data/bot/cards），与清缓存按钮一致。"""
+    data_dir = Path(api._plugins.data_dir).resolve()
+    return (data_dir / "bot" / "cards").resolve()
+
+
+def _materialize_cards(api: "WebAPI", outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """把服务端收到的 card 输出渲染成 PNG，转成可下载的 image 输出。
+
+    渲染失败（如 PIL 缺失）时保留原 card 输出并记 warning，让渠道走自己的降级路径。
+    """
+    materialized: list[dict[str, Any]] = []
+    for output in outputs:
+        if not isinstance(output, dict) or output.get("type") != "card":
+            materialized.append(output)
+            continue
+        title = str(output.get("title") or "").strip()
+        subtitle = str(output.get("subtitle") or "").strip()
+        lines = output.get("lines") if isinstance(output.get("lines"), list) else []
+        try:
+            png = render_card_png(
+                bridge_card_dir(api),
+                title=title,
+                subtitle=subtitle,
+                lines=lines,
+                footer=BRAND_FOOTER,
+            )
+        except Exception as exc:
+            logger.warning("Bot Bridge 卡片渲染失败，保留原 card 输出: %s", exc)
+            materialized.append(output)
+            continue
+        fallback = str(output.get("fallback_text") or "").strip()
+        if not fallback:
+            fallback = "\n".join([title, subtitle, *[str(x) for x in lines]]).strip()
+        materialized.append({
+            "type": "image",
+            "asset_url": f"/api/bot/bridge-cards/{png.name}",
+            "alt": title,
+            "fallback_text": fallback,
+        })
+    return materialized
+
+
+def bridge_card_path(api: "WebAPI", name: str) -> Path:
+    """解析卡片渲染输出文件路径；非法或不存在时抛异常。"""
+    if not _BRIDGE_CARD_NAME_RE.match(str(name or "")):
+        raise ValueError("卡片文件名非法")
+    root = bridge_card_dir(api)
+    target = (root / str(name)).resolve()
+    if root not in target.parents:
+        raise ValueError("卡片文件路径非法")
+    if not target.is_file():
+        raise KeyError("卡片文件不存在")
+    return target
 
 
 def asset_path(api: "WebAPI", plugin_id: str, relative_path: str) -> Path:
