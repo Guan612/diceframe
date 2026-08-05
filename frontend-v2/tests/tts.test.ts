@@ -36,7 +36,7 @@ vi.stubGlobal('localStorage', {
   clear: () => { memStore.clear() },
 })
 
-import { setTtsRate, speakingKey, ttsRate, ttsSpeak, ttsStop, ttsSupported, ttsToggle } from '../src/utils/tts'
+import { setTtsRate, speakingKey, stripHtml, ttsRate, ttsSpeak, ttsStop, ttsSupported, ttsToggle } from '../src/utils/tts'
 
 describe('tts utils', () => {
   beforeEach(() => {
@@ -54,6 +54,18 @@ describe('tts utils', () => {
     expect(ttsSupported()).toBe(true)
   })
 
+  it('strips HTML tags and decodes entities for narration reading', () => {
+    expect(stripHtml('<span class="kw-quote">古堡</span>的大门')).toBe('古堡的大门')
+    expect(stripHtml('他说 &quot;来吧&quot; &amp; 出发')).toBe('他说 "来吧" & 出发')
+    expect(stripHtml('无标签纯文本')).toBe('无标签纯文本')
+  })
+
+  it('reads stripped plain text, not HTML markup', () => {
+    ttsSpeak('<span class="kw-quote">火焰</span>升腾', 'gm:html')
+    const utterance = mocks.speak.mock.calls[0][0]
+    expect(utterance.text).toBe('火焰升腾')
+  })
+
   it('uses the persisted rate preference when no explicit rate is passed', () => {
     setTtsRate(1.5)
     expect(ttsRate()).toBe(1.5)
@@ -69,9 +81,9 @@ describe('tts utils', () => {
     expect(utterance.rate).toBe(2)
   })
 
-  it('clamps the persisted rate into the 0.5–2.0 range', () => {
-    setTtsRate(5)
-    expect(ttsRate()).toBe(2)
+  it('clamps the persisted rate into the 0.5–5.0 range', () => {
+    setTtsRate(8)
+    expect(ttsRate()).toBe(5)
     setTtsRate(0.1)
     expect(ttsRate()).toBe(0.5)
   })

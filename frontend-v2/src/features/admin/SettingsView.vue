@@ -706,7 +706,7 @@ function redownloadUpdatePackage() {
               </div>
               <div class="form-row">
                 <label>{{ t('ttsRate') }}</label>
-                <NInputNumber :value="ttsRateValue" :min="0.5" :max="2" :step="0.1" @update:value="setTtsRateValue" style="width:140px" />
+                <NInputNumber :value="ttsRateValue" :min="0.5" :max="5" :step="0.1" @update:value="setTtsRateValue" style="width:140px" />
               </div>
             </section>
             <section class="settings-group-card">

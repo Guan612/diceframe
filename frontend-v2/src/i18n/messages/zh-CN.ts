@@ -496,7 +496,7 @@ export const zhCN = {
   generationParams: '生成参数',
   ttsSettings: '语音朗读',
   ttsAutoSpeak: '新 GM 叙事自动朗读',
-  ttsRate: '朗读语速（0.5–2.0）',
+  ttsRate: '朗读语速（0.5–5.0）',
   aboutDiceFrame: '关于 DiceFrame',
   aboutIntro1: 'DiceFrame 是一张可以自己开起来的 AI 跑团桌。你只要给出一个想玩的世界，AI 就能当 GM 带大家进入故事；玩家在浏览器或群聊里说“我想做什么”，剧情、骰子、角色状态和前情都会被一起整理好。',
   aboutIntro2: '它适合熟人小团、临时脑洞、长期连载，也适合一个人先试跑世界。你可以玩奇幻、克苏鲁、赛博朋克、武侠仙侠，也可以把规则和世界书换成自己的味道。',
