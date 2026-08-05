@@ -301,6 +301,8 @@ export const zhCN = {
   inventory: '背包',
   keyItems: '关键物品',
   mapTitle: '场景地图',
+  mapRecenter: '回到当前场景',
+  mapRecenterTitle: '滚轮缩放、拖拽平移；点击此按钮回到当前场景（★）',
   noMapData: '暂无地图数据。',
   mapAssetsLoaded: '已加载 {count} 个地图包素材。',
   diceRolling: '掷骰中...',

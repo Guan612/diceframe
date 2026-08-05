@@ -301,6 +301,8 @@ export const en = {
   inventory: 'Inventory',
   keyItems: 'Key Items',
   mapTitle: 'Scene Map',
+  mapRecenter: 'Back to current scene',
+  mapRecenterTitle: 'Scroll to zoom, drag to pan; click to return to the current scene (★)',
   noMapData: 'No map data yet.',
   mapAssetsLoaded: 'Loaded {count} map-pack assets.',
   diceRolling: 'Rolling...',
