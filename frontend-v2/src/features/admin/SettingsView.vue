@@ -235,15 +235,9 @@ watch(
   async () => {
     if (autoDownloadAttempted) return
     const kind = requiredUpdateKind.value
-    const ready = shouldAutoDownloadUpdate(
-      kind,
-      updateStatus.value?.state,
-      queryValue(route.query.focus),
-      Boolean(updateInfo.value?.update_available),
-    )
-    if (!ready) return
-    autoDownloadAttempted = true
-    // updateInfo 在设置页不自动加载，先补一次版本检查确认确有新版再下载。
+    // 设置页不自动加载版本检查，先补查一次确认确有新版再决定是否下载。
+    // 补查必须在守卫判断之前：否则 updateInfo 为 null（启动后首次检查失败、又未经过
+    // 弹窗）时，shouldAutoDownloadUpdate 的 update_available 恒为 false，永远进不来。
     if (!updateInfo.value?.update_available) {
       try {
         const result = await checkForUpdates(true)
@@ -252,6 +246,14 @@ watch(
         return
       }
     }
+    const ready = shouldAutoDownloadUpdate(
+      kind,
+      updateStatus.value?.state,
+      queryValue(route.query.focus),
+      Boolean(updateInfo.value?.update_available),
+    )
+    if (!ready) return
+    autoDownloadAttempted = true
     // ready 为 true 时 kind 必非空（shouldAutoDownloadUpdate 的守卫）。
     void downloadUpdatePackage(kind!)
   },

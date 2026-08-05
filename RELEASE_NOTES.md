@@ -1,8 +1,8 @@
-# DiceFrame v1.9.7
+# DiceFrame v1.9.8
 
 ## 中文
 
-这个版本带来地图、卡片、更新频道与插件稳定性改进：地图在几百个地点时自动铺开不再堆成一圈，支持缩放平移和回到当前场景；卡片渲染成为通用能力，外部聊天机器人也能发送卡片；设置页可切换预览版/正式版更新频道，并显示已安装插件的版本与更新提示；升级主程序后，已安装的插件不再丢失，会自动保留并继续使用。
+这个版本带来地图、卡片、更新频道与插件稳定性改进：地图在几百个地点时自动铺开不再堆成一圈，支持缩放平移和回到当前场景；卡片渲染成为通用能力，外部聊天机器人也能发送卡片；设置页可切换预览版/正式版更新频道，并显示已安装插件的版本与更新提示；升级主程序后，已安装的插件不再丢失，会自动保留并继续使用。同时修复了更新提示的跳转问题：从"有新版本"弹窗进入设置页时，更新包会自动开始下载，无需再手动点击。
 
 ### 新功能
 
@@ -16,16 +16,17 @@
 ### 修复
 
 - 修复从商店安装的 QQ/NapCat 插件在剥离内置后的主程序上无法启动的问题。
+- 修复从更新弹窗跳转到设置页后，新版本更新包不自动开始下载的问题。
 
 ### 下载指南
 
-- **普通 Windows 用户**：下载 `DiceFrame-v1.9.7-windows-portable.zip`。
-- **源码运行用户**：下载 `DiceFrame-v1.9.7-windows.zip`。
+- **普通 Windows 用户**：下载 `DiceFrame-v1.9.8-windows-portable.zip`。
+- **源码运行用户**：下载 `DiceFrame-v1.9.8-windows.zip`。
 - `.sha256` 是更新校验文件，普通用户不需要手动下载。
 
 ## English
 
-This release improves maps, cards, update channels, and plugin stability: maps with hundreds of locations now spread out automatically instead of piling into a circle, with zoom, pan, and a return-to-current-scene action; card rendering becomes a shared capability so external chat bots can send cards too; the settings page lets you switch between preview and stable update channels and shows installed plugin versions and update hints; and plugins installed from the store are now preserved across program upgrades instead of being lost.
+This release improves maps, cards, update channels, and plugin stability: maps with hundreds of locations now spread out automatically instead of piling into a circle, with zoom, pan, and a return-to-current-scene action; card rendering becomes a shared capability so external chat bots can send cards too; the settings page lets you switch between preview and stable update channels and shows installed plugin versions and update hints; and plugins installed from the store are now preserved across program upgrades instead of being lost. It also fixes an update-prompt navigation issue so the update package starts downloading automatically when you open the settings page from the "new version available" dialog.
 
 ### New Features
 
@@ -39,9 +40,10 @@ This release improves maps, cards, update channels, and plugin stability: maps w
 ### Fixes
 
 - Fixed store-installed QQ/NapCat plugin failing to start on main programs that removed the built-in copy.
+- Fixed the update package not starting to download automatically after navigating from the update dialog to the settings page.
 
 ### Download Guide
 
-- **Regular Windows users**: download `DiceFrame-v1.9.7-windows-portable.zip`.
-- **Source-run users**: download `DiceFrame-v1.9.7-windows.zip`.
+- **Regular Windows users**: download `DiceFrame-v1.9.8-windows-portable.zip`.
+- **Source-run users**: download `DiceFrame-v1.9.8-windows.zip`.
 - `.sha256` files are update checksums; regular users do not need to download them manually.
