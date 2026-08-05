@@ -148,7 +148,7 @@ data/
 
 This may include API keys, access tokens, saves, plugin data, logs, and private campaign content. Treat it as your own table notebook: back it up if you need it, and check it before sharing it with anyone.
 
-Custom worlds and rules are stored under `data/templates/`, so copying the complete `data/` directory also carries them to a new installation.
+Custom worlds and rules are stored under `data/templates/`, so copying the complete `data/` directory also carries them to a new installation. User-installed plugin source code is stored under `data/plugin-packages/` and is preserved across application version switches.
 
 ## License
 

@@ -27,7 +27,7 @@ DiceFrame's plugin model covers channel adapters, content packs, themes, maps, i
 
 ## 3. Plugin Boundaries
 
-- Each installed plugin occupies `plugins/<plugin-id>/` and each package contains exactly one `plugin.json`.
+- Each user-installed plugin occupies `data/plugin-packages/<plugin-id>/` and each built-in or example plugin occupies `plugins/<plugin-id>/`; each package contains exactly one `plugin.json`.
 - Plugins do not read or modify DiceFrame's general `data/` storage directly and must not import `src.webui`.
 - Missing capabilities should use a formal HTTP API or a type-specific registration mechanism.
 - Normal settings live in `data/plugins/<id>/config.json`; secrets live in `secrets.json` and are masked by public APIs.
@@ -332,11 +332,11 @@ DiceFrame does not pre-screen every community item; maintainers delist violating
 
 ## 9. Install, Update, and Uninstall Semantics
 
-- Store install: resolve the latest stable GitHub Release to an exact commit, extract to a temporary directory, validate, then move to `plugins/<id>/`.
+- Store install: resolve the latest stable GitHub Release to an exact commit, extract to a temporary directory, validate, then move to `data/plugin-packages/<id>/`. Local development can place source directly at `plugins/<id>/` in the repository.
 - Local install: select a `.dfplugin` file created by `scripts/package_plugin.py`.
 - Overwrite: explicit only; stop the old process before replacement.
 - Update: resolve and validate the latest stable Release again. Safe declarative updates are checked when the store is opened and may run automatically; process or permission-expanding updates require confirmation.
-- Uninstall: stop and remove plugin source while preserving plugin data by default.
+- Uninstall: stop and remove `data/plugin-packages/<id>/` (user-installed source) while preserving `data/plugins/<id>/` runtime data by default.
 - Reinstalling the same ID reuses preserved data.
 
 ## 10. Release Checklist

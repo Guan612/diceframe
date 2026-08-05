@@ -98,6 +98,7 @@ class PluginRuntime:
     error: str = ""
     started_at: float = 0.0
     restart_delay_sec: float = 3.0
+    source: str = "user"
 
 
 async def _rename_dir_with_retry(src: Path, dst: Path, *, attempts: int = 3, delay: float = 0.3) -> None:
@@ -113,7 +114,8 @@ async def _rename_dir_with_retry(src: Path, dst: Path, *, attempts: int = 3, del
 
 
 class PluginHost:
-    def __init__(self, plugins_dir: Path, data_dir: Path, *, base_env: dict[str, str] | None = None) -> None:
+    def __init__(self, plugins_dir: Path, data_dir: Path, *, builtin_dir: Path | None = None, base_env: dict[str, str] | None = None) -> None:
+        self.builtin_dir = builtin_dir
         self.plugins_dir = plugins_dir
         self.data_dir = data_dir
         self.base_env = base_env or {}
@@ -122,32 +124,38 @@ class PluginHost:
         self.mirrors = MirrorManager(self.data_dir / "_marketplace" / "mirrors.json")
         self.marketplace = PluginMarketplace(self.mirrors)
         self.contributions = ContributionRegistry()
-        self.content = PluginContentCatalog(self.contributions, self.plugins_dir, self.logger)
+        self.content = PluginContentCatalog(self.contributions, self.logger)
         self._api_tokens: dict[str, str] = {}
         self._install_locks: dict[str, asyncio.Lock] = {}
         self._auto_update_task: asyncio.Task[Any] | None = None
 
     def discover(self) -> list[dict[str, Any]]:
         self.plugins.clear()
+        # 先内置再用户目录，用户目录同名覆盖内置；runtime.source 记录来源。
+        for source, base_dir in (("builtin", self.builtin_dir), ("user", self.plugins_dir)):
+            if base_dir is None or not base_dir.exists():
+                continue
+            for manifest_path in sorted(base_dir.glob("*/plugin.json")):
+                try:
+                    plugin_id, runtime = self._load_runtime(manifest_path.parent)
+                    runtime.config, runtime.secrets = self._load_config(plugin_id, runtime.schema)
+                    runtime.source = source
+                    runtime.status = self._status_for_enabled(runtime)
+                    self.plugins[plugin_id] = runtime
+                except Exception as exc:
+                    self.logger.exception("插件加载失败: %s", manifest_path)
+                    fallback_id = manifest_path.parent.name
+                    if fallback_id not in self.plugins:
+                        self.plugins[fallback_id] = PluginRuntime(
+                            {"id": fallback_id, "name": fallback_id, "version": "?", "description": "插件清单无效"},
+                            {"type": "object", "properties": {}}, manifest_path.parent,
+                            status="failed", error=str(exc), source=source,
+                        )
+        # 统一按最终 runtime 状态注册贡献，避免内置/用户同名时贡献不一致。
         self.contributions.clear()
-        if not self.plugins_dir.exists():
-            return []
-        for manifest_path in sorted(self.plugins_dir.glob("*/plugin.json")):
-            try:
-                plugin_id, runtime = self._load_runtime(manifest_path.parent)
-                runtime.config, runtime.secrets = self._load_config(plugin_id, runtime.schema)
-                runtime.status = self._status_for_enabled(runtime)
-                self.plugins[plugin_id] = runtime
-                if runtime.status == "active":
-                    self._register_contributions(plugin_id, runtime)
-            except Exception as exc:
-                self.logger.exception("插件加载失败: %s", manifest_path)
-                fallback_id = manifest_path.parent.name
-                self.plugins[fallback_id] = PluginRuntime(
-                    {"id": fallback_id, "name": fallback_id, "version": "?", "description": "插件清单无效"},
-                    {"type": "object", "properties": {}}, manifest_path.parent,
-                    status="failed", error=str(exc),
-                )
+        for plugin_id, runtime in self.plugins.items():
+            if runtime.status == "active":
+                self._register_contributions(plugin_id, runtime)
         return self.list_public()
 
     def list_public(self) -> list[dict[str, Any]]:
@@ -374,7 +382,8 @@ class PluginHost:
         return self.content.get_content_resource(kind, key, plugin_id=plugin_id)
 
     def public_asset_path(self, plugin_id: str, relative_path: str) -> Path:
-        return self.content.public_asset_path(plugin_id, relative_path)
+        runtime = self._require(plugin_id)
+        return self.content.public_asset_path(plugin_id, relative_path, runtime.directory)
 
     def read_docs(self, plugin_id: str) -> dict[str, Any]:
         """读取插件 README/说明文档内容（manifest docs 指向的 .md 文件）。
@@ -586,6 +595,8 @@ class PluginHost:
 
     async def uninstall(self, plugin_id: str, *, delete_data: bool = False) -> dict[str, Any]:
         runtime = self._require(plugin_id)
+        if runtime.source == "builtin":
+            raise ValueError("内置插件不可卸载")
         await self.stop(plugin_id)
         plugin_dir = runtime.directory.resolve()
         self._ensure_inside(self.plugins_dir, plugin_dir)

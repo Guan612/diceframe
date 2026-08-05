@@ -603,6 +603,41 @@ def test_restart_state_fails_when_signal_is_missing(tmp_path):
     assert "握手" in svc.get_status()["error"]
 
 
+# ---------- 插件源码跨版本迁移 ----------
+
+def test_migrate_user_plugin_packages_copies_non_builtin(tmp_path):
+    src = tmp_path / "plugins"
+    packages = tmp_path / "data" / "plugin-packages"
+    (src / "user-tool").mkdir(parents=True)
+    (src / "user-tool" / "plugin.json").write_text("{}", encoding="utf-8")
+    (src / "examples").mkdir(parents=True)
+    (src / "examples" / "paper-theme").mkdir()
+    (src / "examples" / "paper-theme" / "plugin.json").write_text("{}", encoding="utf-8")
+    (src / ".stale").mkdir()
+
+    updater._migrate_user_plugin_packages(src, packages)
+
+    assert (packages / "user-tool").is_dir()
+    assert (src / "user-tool").exists()  # 复制，源保留
+    assert (src / "examples").exists()  # 内置白名单保留
+    assert (src / ".stale").exists()  # 隐藏目录保留
+
+
+def test_migrate_user_plugin_packages_skips_existing_target(tmp_path):
+    src = tmp_path / "plugins"
+    packages = tmp_path / "data" / "plugin-packages"
+    (src / "user-tool").mkdir(parents=True)
+    (src / "user-tool" / "plugin.json").write_text("{}", encoding="utf-8")
+    packages.mkdir(parents=True)
+    (packages / "user-tool").mkdir()
+    (packages / "user-tool" / "plugin.json").write_text('{"existing": true}', encoding="utf-8")
+
+    updater._migrate_user_plugin_packages(src, packages)
+
+    assert (src / "user-tool").exists()
+    assert json.loads((packages / "user-tool" / "plugin.json").read_text()) == {"existing": True}
+
+
 # ---------- mock helpers ----------
 
 async def _async_fetch(data):

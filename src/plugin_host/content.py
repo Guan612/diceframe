@@ -30,11 +30,9 @@ class PluginContentCatalog:
     def __init__(
         self,
         registry: ContributionRegistry,
-        plugins_dir: Path,
         logger: logging.Logger,
     ) -> None:
         self.registry = registry
-        self.plugins_dir = plugins_dir
         self.logger = logger
 
     def contribution_path(self, kind: str, key: str) -> Path | None:
@@ -121,9 +119,9 @@ class PluginContentCatalog:
             None,
         )
 
-    def public_asset_path(self, plugin_id: str, relative_path: str) -> Path:
+    def public_asset_path(self, plugin_id: str, relative_path: str, plugin_directory: Path) -> Path:
         normalized = relative_path.replace("\\", "/").strip("/")
-        root = (self.plugins_dir / plugin_id).resolve()
+        root = plugin_directory.resolve()
         target = (root / normalized).resolve()
         self._ensure_inside(root, target)
         if not target.exists() or not target.is_file() or target.is_symlink():

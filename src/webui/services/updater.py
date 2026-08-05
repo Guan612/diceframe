@@ -49,6 +49,31 @@ _PROTECTED_SOURCE_ENTRIES = {
     "dist",
     "logs",
 }
+_BUILTIN_PLUGIN_DIRS = {"examples"}
+
+
+def _migrate_user_plugin_packages(
+    source_plugins_dir: Path, packages_dir: Path
+) -> None:
+    """把旧 plugins/ 里非内置的插件复制到 data/plugin-packages/，跨版本保留。
+
+    用复制而非移动：apply 可能失败回滚，复制保留旧版本目录的插件，回滚到
+    旧版本后用户插件仍可用；移动会让旧版本读不到用户插件。跳过 examples
+    内置示例与无效目录；目标已存在则跳过（幂等）。
+    """
+    if not source_plugins_dir.is_dir():
+        return
+    packages_dir.mkdir(parents=True, exist_ok=True)
+    for child in sorted(source_plugins_dir.iterdir()):
+        name = child.name
+        if name.startswith(".") or name in _BUILTIN_PLUGIN_DIRS:
+            continue
+        if not child.is_dir() or not (child / "plugin.json").is_file():
+            continue
+        dest = packages_dir / name
+        if dest.exists():
+            continue
+        shutil.copytree(child, dest)
 
 
 class UpdateRolledBackError(RuntimeError):
@@ -551,6 +576,12 @@ class UpdaterService:
                 shutil.rmtree(candidate_temp, ignore_errors=True)
             shutil.rmtree(extract_dir, ignore_errors=True)
 
+        if current_pointer:
+            _migrate_user_plugin_packages(
+                current_pointer / "app" / "plugins",
+                self._dir.parent / "plugin-packages",
+            )
+
         return {
             "schema": 1,
             "expected_version": version.strip().lstrip("vV"),
@@ -593,6 +624,11 @@ class UpdaterService:
                 and (package_root / "static-v2" / "index.html").is_file()
             ):
                 raise ValueError("完整源码更新包结构无效")
+
+            _migrate_user_plugin_packages(
+                self._root / "plugins",
+                self._dir.parent / "plugin-packages",
+            )
 
             entries = [
                 entry
