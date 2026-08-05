@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   ghcr:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-')
     runs-on: ubuntu-latest
 
     steps:

@@ -73,9 +73,21 @@ async def api_bridge_plugin_asset(request: web.Request) -> web.StreamResponse:
     return response
 
 
+async def api_bridge_card_asset(request: web.Request) -> web.StreamResponse:
+    try:
+        path = _get_api(request).bot_bridge_card_path(request.match_info["name"])
+    except (KeyError, ValueError):
+        raise web.HTTPNotFound(text="Bot Bridge 图片不存在")
+    response = web.FileResponse(path)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 def register_bot(app: web.Application) -> None:
     app.router.add_get("/api/bot/ping", api_bot_ping)
     app.router.add_post("/api/bot/bind-game", api_bind_game)
     app.router.add_post("/api/bot/bridge/extensions", api_apply_bridge_extensions)
     app.router.add_get("/api/bot/plugin-assets/{plugin_id}/{relative_path:.+}", api_bridge_plugin_asset)
+    app.router.add_get("/api/bot/bridge-cards/{name}", api_bridge_card_asset)
     app.router.add_post("/api/games/{game_key}/bot-bind-token", api_get_bind_token)

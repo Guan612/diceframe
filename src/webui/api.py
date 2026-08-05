@@ -224,7 +224,7 @@ class WebAPI:
     def plugin_asset_path(self, plugin_id: str, relative_path: str) -> Path:
         return plugins.plugin_asset_path(self, plugin_id, relative_path)
 
-    async def check_updates(self, include_prerelease: bool = False) -> dict[str, Any]:
+    async def check_updates(self, include_prerelease: bool | None = None) -> dict[str, Any]:
         return await system.check_updates(self, include_prerelease)
 
     def _load_world_template(self, world_id: str) -> dict[str, Any] | None:
@@ -289,6 +289,9 @@ class WebAPI:
 
     def bot_extension_asset_path(self, plugin_id: str, relative_path: str) -> Path:
         return bot_extensions.asset_path(self, plugin_id, relative_path)
+
+    def bot_bridge_card_path(self, name: str) -> Path:
+        return bot_extensions.bridge_card_path(self, name)
 
     def multiplayer_status(self, game_key: str) -> dict[str, Any]:
         return games.multiplayer_status(self, game_key)

@@ -115,7 +115,12 @@ details:not([open])>:not(summary){display:none}
 .player-actions{display:flex;gap:4px;flex-basis:100%}
 .player-actions button{padding:3px 8px;font-size:12px}
 .map-graph.panel{padding-top:9px}
-.map-svg{width:100%;height:240px;display:block}
+.map-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.map-head h2{margin:0}
+.map-recenter{font-size:11px;padding:2px 8px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--text);cursor:pointer;white-space:nowrap}
+.map-recenter:hover{border-color:var(--gold-2);color:var(--gold-2)}
+.map-svg{width:100%;height:240px;display:block;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}
+.map-svg:active{cursor:grabbing}
 .map-edge{stroke:var(--line);stroke-width:.4}
 .map-node circle{fill:var(--gold);cursor:pointer;transition:r .2s}
 .map-node.current circle{fill:var(--gold-2)}

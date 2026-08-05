@@ -41,7 +41,7 @@ class DiceFrameClient:
 
     async def download_bridge_asset(self, asset_url: str, target_dir: Path) -> Path:
         asset_url = str(asset_url or "").strip()
-        if not asset_url.startswith("/api/bot/plugin-assets/"):
+        if not asset_url.startswith(("/api/bot/plugin-assets/", "/api/bot/bridge-cards/")):
             raise DiceFrameHTTPError("Bot Bridge 图片地址无效")
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=self.timeout_sec)

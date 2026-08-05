@@ -8,8 +8,9 @@ from src.webui.routes._common import _get_api
 
 
 async def api_update_check(request: web.Request) -> web.Response:
-    include_prerelease = request.query.get("prerelease", "").lower() in {"1", "true", "yes"}
-    return web.json_response(await _get_api(request).check_updates(include_prerelease))
+    raw = request.query.get("prerelease")
+    override = raw.strip().lower() in {"1", "true", "yes"} if raw is not None else None
+    return web.json_response(await _get_api(request).check_updates(override))
 
 
 def register_system(app: web.Application) -> None:

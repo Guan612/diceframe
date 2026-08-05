@@ -233,6 +233,7 @@ STATE = {
     "text_gen_max_tokens": TEXT_GEN_MAX_TOKENS,
     "access_token": ACCESS_TOKEN,
     "bot_token": BOT_TOKEN,
+    "update_channel": saved.get("update_channel", "stable"),
     "qq_bot_enabled": bool(saved.get("qq_bot_enabled", False)),
     "qq_bot_running": False,
     "napcat_host": NAPCAT_HOST,
@@ -423,7 +424,7 @@ def _build_subsystems(
 
 def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None = None) -> WebAPI:
     runtime_config = STATE if config is None else config
-    return WebAPI(
+    api = WebAPI(
         registry=subsystems.registry, lorebook=subsystems.lorebook_store,
         memory=subsystems.memory_store, rules_dir=RULES_DIR,
         handler=subsystems.handler, llm_client=subsystems.llm_client,
@@ -432,6 +433,9 @@ def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None 
         text_gen_max_tokens=int(runtime_config.get("text_gen_max_tokens", 1024)),
         plugin_host=plugin_host,
     )
+    # 配置状态引用就地更新，始终指向最新值（更新频道等运行时配置）
+    api._config_state = STATE
+    return api
 
 
 async def _periodic_save(app: web.Application):

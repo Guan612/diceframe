@@ -17,19 +17,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger("trpg")
 
 GITHUB_API = "https://api.github.com"
-_VERSION_RE = re.compile(r"^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?\s*$", re.IGNORECASE)
+_VERSION_RE = re.compile(r"^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?([-+].*)?\s*$", re.IGNORECASE)
 
 
 class NoReleaseError(RuntimeError):
     """Raised when the repository exists but has no public releases yet."""
 
 
-def _version_tuple(value: str) -> tuple[int, int, int] | None:
+def _version_tuple(value: str) -> tuple[int, int, int, int] | None:
     match = _VERSION_RE.match(value or "")
     if not match:
         return None
-    major, minor, patch = match.groups()
-    return int(major), int(minor or 0), int(patch or 0)
+    major, minor, patch, suffix = match.groups()
+    # 第四位：预发布后缀（如 -beta.1）为 0，正式版为 1，保证同号正式版 > 预览版
+    prerelease = 0 if suffix else 1
+    return int(major), int(minor or 0), int(patch or 0), prerelease
 
 
 def is_newer_version(latest: str, current: str) -> bool:
@@ -40,7 +42,7 @@ def is_newer_version(latest: str, current: str) -> bool:
     return latest_tuple > current_tuple
 
 
-async def check_updates(api: "WebAPI", include_prerelease: bool = False) -> dict[str, Any]:
+async def check_updates(api: "WebAPI", include_prerelease: bool | None = None) -> dict[str, Any]:
     repo = str(os.getenv("TRPG_UPDATE_REPOSITORY") or DEFAULT_UPDATE_REPOSITORY).strip()
     if not repo or "/" not in repo:
         return {
@@ -50,6 +52,11 @@ async def check_updates(api: "WebAPI", include_prerelease: bool = False) -> dict
             "repository": repo,
             "update_available": False,
         }
+
+    if include_prerelease is None:
+        config_state = getattr(api, "_config_state", None) or {}
+        include_prerelease = str(config_state.get("update_channel") or "stable") == "preview"
+    channel = "preview" if include_prerelease else "stable"
 
     check_source: dict[str, Any] = {"mode": "github-api", "mirror_name": "GitHub API"}
     try:
@@ -63,6 +70,7 @@ async def check_updates(api: "WebAPI", include_prerelease: bool = False) -> dict
             "repository": repo,
             "update_available": False,
             "no_release": True,
+            "channel": channel,
             "releases_url": f"https://github.com/{repo}/releases",
             "source_url": f"https://github.com/{repo}",
             "install_hint": _install_hint(repo),
@@ -103,6 +111,7 @@ async def check_updates(api: "WebAPI", include_prerelease: bool = False) -> dict
         "repository": repo,
         "update_available": is_newer_version(latest_version, __version__),
         "no_release": False,
+        "channel": channel,
         "latest": latest,
         "release_url": latest["html_url"],
         "releases_url": f"https://github.com/{repo}/releases",

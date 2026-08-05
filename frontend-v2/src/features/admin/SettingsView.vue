@@ -35,8 +35,30 @@ const route = useRoute()
 const toast = useToast()
 const { confirm } = useConfirm()
 const { updateInfo, updateChecking, checkForUpdates } = useUpdateCheck()
-const { updateStatus, reloadCountdown, downloadPercent, startDownload, applyUpdate, refreshStatus } = useUpdater()
+const { updateStatus, reloadCountdown, downloadPercent, startDownload, applyUpdate, refreshStatus, isUpdateBusy } = useUpdater()
 const { t } = useLocale()
+
+const updateChannel = computed(() => store.config?.update_channel === 'preview' ? 'preview' : 'stable')
+async function toggleUpdateChannel(enabled: boolean) {
+  if (enabled) {
+    const ok = await confirm({
+      title: t('updateChannel'),
+      content: t('previewChannelConfirm'),
+      positiveText: t('previewChannelEnable'),
+      negativeText: t('cancel'),
+      type: 'warning',
+    })
+    if (!ok) return
+  }
+  try {
+    await api('/config', { method: 'POST', body: JSON.stringify({ update_channel: enabled ? 'preview' : 'stable' }) })
+    await store.load()
+    const result = await checkForUpdates(true)   // 强制重查，替换单例缓存
+    if (!result?.ok) toast.error(result?.error || t('updateCheckFailed'))
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  }
+}
 
 const section = ref<SectionId>('api')
 const sections: SettingsSection[] = [
@@ -731,7 +753,7 @@ function redownloadUpdatePackage() {
               </div>
               <div class="update-meta">
                 <span>{{ t('currentVersion') }}: {{ updateInfo?.current_version || t('clickCheckVersion') }}</span>
-                <span v-if="updateInfo?.latest">{{ t('latestVersion') }}: {{ updateInfo.latest.tag_name || updateInfo.latest.version }}</span>
+                <span v-if="updateInfo?.latest">{{ t('latestVersion') }}: {{ updateInfo.latest.tag_name || updateInfo.latest.version }}<NTag v-if="updateInfo?.latest?.prerelease" size="small" type="warning">{{ t('prereleaseTag') }}</NTag></span>
                 <span v-if="updateInfo?.latest?.published_at">{{ t('publishedAt') }}: {{ updateInfo.latest.published_at.slice(0, 10) }}</span>
               </div>
               <p v-if="updateInfo?.error" class="muted">{{ t('checkFailed') }}: {{ updateInfo.error }}</p>
@@ -791,6 +813,12 @@ function redownloadUpdatePackage() {
                 <NButton :loading="updateChecking" @click="checkUpdate">{{ t('checkUpdate') }}</NButton>
                 <NButton :disabled="!updateInfo?.release_url && !updateInfo?.releases_url && !updateInfo?.source_url" @click="openUpdateUrl">{{ t('openReleasePage') }}</NButton>
               </div>
+              <div class="setting-row">
+                <NSwitch :value="updateChannel === 'preview'" :disabled="isUpdateBusy" @update:value="toggleUpdateChannel" />
+                <span>{{ t('updateChannel') }}</span>
+                <NTag v-if="updateChannel === 'preview'" size="small" type="warning">{{ t('previewChannel') }}</NTag>
+              </div>
+              <p class="setting-hint">{{ t('updateChannelHint') }}</p>
             </section>
             <section class="about-card">
               <h3>{{ t('aboutDiceFrame') }}</h3>
