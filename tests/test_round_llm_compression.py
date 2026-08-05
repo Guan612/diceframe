@@ -40,6 +40,37 @@ class CompressionLLM:
         )
 
 
+class EnglishCompressionLLM:
+    default = "compression-test"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def call(self, system_prompt: str, user_message: str, **kwargs) -> LLMResponse:
+        self.calls.append({"system_prompt": system_prompt, "user_message": user_message, "kwargs": kwargs})
+        if "Compress the following TRPG GM narration" in user_message:
+            content = "Alaric lowers his voice, pointing to the silver needle and the list of offerings as both pointing to the hidden archive of the White Horse Temple. The night wind dies; a new name is surfacing on the silk scroll."
+        else:
+            long_text = "Alaric unrolls the silk scroll. " * 100
+            content = (
+                f"{long_text}\n---\n"
+                "KEY_ITEM:u1:Silver Needle\n"
+                "QUICK_ACTIONS:Sneak into the archive|Follow the needle's trail\n"
+                "MEMORY:The silver needle can trace the caster"
+            )
+        return LLMResponse(
+            content=content,
+            narration=content.split("---", 1)[0].strip(),
+            state_update=None,
+            memory_delta=None,
+            info_asymmetry=None,
+            plot_update=None,
+            total_tokens=10,
+            is_narration_only=False,
+            provider_used="compression-test",
+        )
+
+
 @pytest.mark.asyncio
 async def test_long_narration_is_compressed_without_reparsing_tags():
     llm = CompressionLLM()
@@ -62,3 +93,52 @@ async def test_long_narration_is_compressed_without_reparsing_tags():
     assert data["state_update"]["loot"][0]["item"] == "摄魂银针"
     assert data["quick_actions"] == ["潜入藏经阁", "追踪银针黑气"]
     assert "KEY_ITEM:u1:摄魂银针" in response.content
+
+
+@pytest.mark.asyncio
+async def test_long_english_narration_compresses_to_english_target():
+    """英文叙事用英文压缩目标（~900 字符 ≈ 150 词），不是中文的 260 字符。"""
+    llm = EnglishCompressionLLM()
+    instance = GameInstance(game_key=("web", "compression-en", "bot"))
+    instance.language = "en"
+
+    response, data = await call_llm_with_tag_retry(
+        llm,
+        instance,
+        "You are a test GM.",
+        "context",
+        "hp_based",
+        "",
+        1024,
+    )
+
+    assert len(llm.calls) == 2
+    # 压缩 prompt 携带英文目标（~150 words），而非中文的 260 字符
+    assert "~150 words" in llm.calls[1]["user_message"]
+    assert "White Horse Temple" in response.narration
+    assert data["state_update"]["loot"][0]["item"] == "Silver Needle"
+    assert data["quick_actions"] == ["Sneak into the archive", "Follow the needle's trail"]
+    assert "KEY_ITEM:u1:Silver Needle" in response.content
+
+
+@pytest.mark.asyncio
+async def test_unregistered_language_falls_back_to_chinese_limits():
+    """未登记压缩配置的语言回退中文目标（future-proof：加语言只需登记字典条目）。"""
+    llm = CompressionLLM()
+    instance = GameInstance(game_key=("web", "compression-ja", "bot"))
+    instance.language = "ja"  # 尚未登记的语言
+
+    response, data = await call_llm_with_tag_retry(
+        llm,
+        instance,
+        "你是测试 GM。",
+        "上下文",
+        "hp_based",
+        "",
+        1024,
+    )
+
+    assert len(llm.calls) == 2
+    # 回退中文目标：压缩后叙事 < 260 字符，且走中文压缩 prompt
+    assert "请压缩以下 TRPG GM 正文" in llm.calls[1]["user_message"]
+    assert len(response.narration) < 260
