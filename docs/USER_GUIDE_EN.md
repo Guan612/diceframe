@@ -92,15 +92,15 @@ In multiplayer, the player who is paying confirms the purchase. The purchase com
 
 ## Chat Bot
 
-DiceFrame can connect a Web game to QQ group chat through the built-in QQ/NapCat plugin. The adapter uses HTTP APIs and does not read saves directly.
+DiceFrame can connect a Web game to QQ group chat through the QQ/NapCat plugin, installed from the plugin store. The adapter uses HTTP APIs and does not read saves directly.
 
-1. Open plugin settings in the WebUI.
+1. Install QQ / NapCat from Settings → Plugins → Plugin Store.
 2. Enter the NapCat WebSocket address, port, and token.
 3. Enable QQ / NapCat.
 4. Copy the Bot binding command from the game page.
 5. Send it to the target group.
 
-The built-in plugin receives its DiceFrame Bot API Token automatically. For an external bridge such as MaiBot, copy the DiceFrame URL and token from Settings → Bot API into that bridge. Regenerating the token invalidates the old value.
+The plugin receives its DiceFrame Bot API Token automatically. For an external bridge such as MaiBot, copy the DiceFrame URL and token from Settings → Bot API into that bridge. Regenerating the token invalidates the old value.
 
 The Bot follows the current game's language for help, status, recap, map, payment, character-creation, and error messages. The examples below use the English commands; Chinese games retain the corresponding Chinese commands.
 

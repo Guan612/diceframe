@@ -58,13 +58,13 @@ Settings only notifies Docker/NAS installations about a new version; it does not
 
 ## QQ / NapCat
 
-The Docker deployment uses the same built-in plugin host. When enabled, QQ/NapCat runs as a child process inside the main service container.
+The QQ/NapCat plugin is installed from the plugin store instead of being bundled. When enabled, it runs as a child process inside the main service container.
 
 1. Start the WebUI with `docker compose up -d`.
-2. Enable QQ / NapCat on the WebUI plugin page.
+2. Install QQ / NapCat from the plugin store, then enable it on the plugin page.
 3. If NapCat runs outside the container, use a host or NAS address reachable from the container for `NAPCAT_HOST` and `NAPCAT_PORT`.
 
-The built-in QQ plugin does not require a manually entered DiceFrame Bot API Token. DiceFrame generates and persists it. An external MaiBot bridge copies the value from Settings → Bot API.
+The QQ/NapCat plugin does not require a manually entered DiceFrame Bot API Token. DiceFrame generates and persists it. An external MaiBot bridge copies the value from Settings → Bot API.
 
 Optional initial values:
 

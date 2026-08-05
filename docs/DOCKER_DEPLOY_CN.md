@@ -64,15 +64,15 @@ docker compose build --no-cache
 
 ## QQ / NapCat
 
-Docker 版主服务仍然使用内置插件宿主。启用 QQ 插件时，Bot 作为主服务容器内的子进程运行，和 PC 版的插件生命周期一致。
+QQ / NapCat 插件从插件商店安装，不再内置。启用时，Bot 作为主服务容器内的子进程运行，和 PC 版的插件生命周期一致。
 
 推荐流程：
 
 1. 先启动 WebUI：`docker compose up -d`
-2. 在 WebUI 插件页启用 `QQ / NapCat`
+2. 在 WebUI 插件商店安装 `QQ / NapCat`，然后在插件页启用
 3. 如果 NapCat 不在容器内，填写宿主机或 NAS 上可从容器访问的 `NAPCAT_HOST` / `NAPCAT_PORT`
 
-内置 QQ 插件不需要填写 DiceFrame Bot API Token，服务会自动生成并持久化。外部 MaiBot Bridge 可在 WebUI 的“设置 → Bot API”复制 Token。
+QQ / NapCat 插件不需要填写 DiceFrame Bot API Token，服务会自动生成并持久化。外部 MaiBot Bridge 可在 WebUI 的“设置 → Bot API”复制 Token。
 
 也可以在首次启动前写入 `.env`：
 
