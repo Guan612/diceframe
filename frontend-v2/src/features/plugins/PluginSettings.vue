@@ -193,7 +193,11 @@ onMounted(async () => {
           <NCollapseItem v-for="p in filteredPlugins" :key="p.id" :name="p.id" class="plugin-collapsible">
             <template #header>
               <div class="plugin-head">
-                <h3>{{ p.name }}</h3>
+                <h3>
+                  {{ p.name }}
+                  <NTag v-if="p.version" size="small" class="plugin-version">{{ t('installedVersion', { version: p.version }) }}</NTag>
+                  <NTag v-if="canUpdateFromStore(p.id, p.version)" type="warning" size="small">{{ t('updateAvailable') }}</NTag>
+                </h3>
                 <p class="muted">{{ p.description }}</p>
               </div>
             </template>

@@ -906,6 +906,7 @@ export interface AppConfig {
   access_password?: SecretField
   bot_token?: SecretField
   bot_token_source?: 'env' | 'generated'
+  update_channel?: 'stable' | 'preview'
   [key: string]: unknown
 }
 
@@ -953,6 +954,7 @@ export interface UpdateCheckResponse {
   repository?:string
   update_available:boolean
   no_release?:boolean
+  channel?:string
   latest?:UpdateRelease
   release_url?:string
   releases_url?:string

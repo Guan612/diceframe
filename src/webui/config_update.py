@@ -34,6 +34,7 @@ CONFIG_KEYS = (
     "napcat_reply_delay_max_sec", "napcat_command_dedup_window_sec", "napcat_connection_id",
     "napcat_chat_filter_enabled", "napcat_show_dropped_logs", "napcat_group_list_mode", "napcat_group_list",
     "napcat_private_list_mode", "napcat_private_list", "napcat_blocked_users", "napcat_block_official_bots",
+    "update_channel",
 )
 MODEL_RUNTIME_CONFIG_KEYS = frozenset({
     "api_key", "base_url", "model", "api_format",
@@ -131,6 +132,8 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
             elif key in {"napcat_group_list", "napcat_private_list", "napcat_blocked_users"}:
                 values = raw if isinstance(raw, list) else []
                 candidate[key] = list(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
+            elif key == "update_channel":
+                candidate[key] = "preview" if str(raw).strip() == "preview" else "stable"
             elif key == "napcat_port":
                 port = int(raw)
                 if not 1 <= port <= 65535:

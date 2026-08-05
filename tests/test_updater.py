@@ -169,6 +169,45 @@ def _api_with_update_result(result: dict) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
+async def test_download_update_respects_channel_and_accepts_prerelease_latest(tmp_path):
+    """download_update 无参调用 check_updates（默认读频道），preview 返回的 prerelease latest 被接受。"""
+    content = b"beta content"
+    digest = hashlib.sha256(content).hexdigest()
+    mirrors = SimpleNamespace()
+
+    async def fake_fetch(url, *, binary=False, max_bytes=None):
+        return FetchResult(ok=True, data=f"{digest}  {ZIP_NAME}", mirror_name="m")
+
+    async def fake_download(url, target, *, max_bytes=None, on_progress=None):
+        target.write_bytes(content)
+        return FetchResult(ok=True, mirror_name="m")
+
+    mirrors.fetch_github_url = fake_fetch
+    mirrors.download_to_file = fake_download
+
+    latest = {"version": "1.7.0-beta.1", "assets": [_asset(ZIP_NAME), _asset(ZIP_NAME + ".sha256")]}
+
+    # 捕获 check_updates 是否被无参调用（尊重频道，而非显式传 prerelease）
+    calls: list[tuple] = []
+
+    async def check_updates(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"ok": True, "latest": latest, "channel": "preview"}
+
+    api = SimpleNamespace(check_updates=check_updates)
+
+    svc = _make_service(tmp_path, mirrors)
+    result = await svc.download_update(api, "source")
+    assert result["ok"] is True
+    await svc._task
+    status = svc.get_status()
+    assert status["state"] == "staged"
+    assert status["version"] == "1.7.0-beta.1"
+    # check_updates 应以默认（无参）调用，让服务端读频道
+    assert calls and calls[0] == ((), {})
+
+
+@pytest.mark.asyncio
 async def test_download_update_success_flow(tmp_path):
     content = b"fake zip content"
     digest = hashlib.sha256(content).hexdigest()
