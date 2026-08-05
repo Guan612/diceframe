@@ -750,6 +750,14 @@ class PluginHost:
                 str(host_root),
                 str(runtime.directory.parent.parent.resolve()),
             ))
+        else:
+            # 非 RPC 插件（如 channel-adapter）通过 python -m 运行，cwd 是主程序根，
+            # 能 import 主程序的 src/。拆离成独立仓库后，插件代码在 plugins/<id>/src/，
+            # 需要把插件目录加进 PYTHONPATH 才能被入口找到；保留主程序根以访问 bridge_core。
+            env["PYTHONPATH"] = os.pathsep.join((
+                str(Path(__file__).resolve().parents[2]),
+                str(runtime.directory.resolve()),
+            ))
         for key, field_schema in runtime.schema.get("properties", {}).items():
             env_name = str((field_schema.get("ui") or {}).get("env") or "")
             if not env_name:

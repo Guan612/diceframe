@@ -6,9 +6,9 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.bots.qq.card_renderer import cleanup_card_cache
 from src.plugin_host.content import safe_id_part
 from src.plugin_host.support import list_plugin_types as _support_plugin_types, plugin_type_descriptor
+from src.webui.services.card_cache import cleanup_card_cache
 
 if TYPE_CHECKING:
     from src.webui.api import WebAPI
