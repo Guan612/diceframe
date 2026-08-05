@@ -1906,3 +1906,29 @@ def test_pid_is_alive_verifies_proc_identity(monkeypatch):
 
     monkeypatch.setattr(main_module, "_linux_proc_state", deny_read)
     assert main_module._pid_is_alive(123) is True
+
+
+def test_pid_exists_treats_unrelated_process_as_alive(monkeypatch):
+    """父进程监控用 _pid_exists：PID 1 这类非 QQ 插件进程也应判定存活。"""
+    import src.bots.qq.main as main_module
+
+    monkeypatch.setattr(main_module.os, "name", "posix")
+    monkeypatch.setattr(main_module, "_linux_proc_state", lambda pid: "S")
+    # cmdline 与 QQ 插件无关（如容器 PID 1 的 web_server.py），仍应视为存活
+    assert main_module._pid_exists(1) is True
+
+    # 僵尸 / 不存在：判定已退出
+    monkeypatch.setattr(main_module, "_linux_proc_state", lambda pid: "Z")
+    assert main_module._pid_exists(1) is False
+    monkeypatch.setattr(main_module, "_linux_proc_state", lambda pid: "")
+    assert main_module._pid_exists(1) is False
+
+    # /proc 不可读：保守视为存活
+    def deny_read(pid: int) -> str:
+        raise PermissionError()
+
+    monkeypatch.setattr(main_module, "_linux_proc_state", deny_read)
+    assert main_module._pid_exists(1) is True
+
+    # 非法 PID
+    assert main_module._pid_exists(0) is False

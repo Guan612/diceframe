@@ -30,4 +30,5 @@ services:
       NAPCAT_TOKEN: "${NAPCAT_TOKEN:-}"
     volumes:
       - ./data:/app/data
+      - ./plugins:/app/plugins
     restart: unless-stopped

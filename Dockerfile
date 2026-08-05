@@ -32,6 +32,6 @@ COPY --from=frontend-build /build/static-v2 ./static-v2
 RUN mkdir -p /app/data
 
 EXPOSE 9876
-VOLUME ["/app/data"]
+VOLUME ["/app/data", "/app/plugins"]
 
 CMD ["python", "web_server.py"]

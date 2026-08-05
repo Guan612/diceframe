@@ -100,6 +100,34 @@ def _read_lock_pid(path) -> int:
         return 0
 
 
+def _pid_exists(pid: int) -> bool:
+    """纯存活检测：只判断 PID 是否在运行，不校验进程身份。
+
+    用于父进程监控（TRPG 主进程）——主进程不是 QQ 插件，不能用
+    _pid_is_alive 的 cmdline 校验，否则会把容器 PID 1 之类的主进程
+    误判为"已退出"导致插件无限重启。
+    """
+    if pid <= 0 or pid == os.getpid():
+        return False
+    if os.name == "nt":
+        try:
+            output = subprocess.check_output(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            return str(pid) in output
+        except Exception:
+            return False
+    try:
+        state = _linux_proc_state(pid)
+    except PermissionError:
+        # 进程存在但不可读，保守视为存活
+        return True
+    return bool(state) and state != "Z"
+
+
 def _pid_is_alive(pid: int) -> bool:
     """判断 PID 是否仍是本插件进程。
 
@@ -166,7 +194,7 @@ async def _watch_parent_process(parent_pid: int, transport: Any, interval_sec: f
         return
     while True:
         await asyncio.sleep(interval_sec)
-        if not _pid_is_alive(parent_pid):
+        if not _pid_exists(parent_pid):
             logging.getLogger("trpg.qq.main").warning(
                 "检测到 TRPG 主进程已退出，群聊插件自动停止: parent_pid=%s", parent_pid
             )

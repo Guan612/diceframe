@@ -496,7 +496,7 @@ export const en = {
   generationParams: 'Generation Parameters',
   ttsSettings: 'Text-to-Speech',
   ttsAutoSpeak: 'Auto-read new GM narration',
-  ttsRate: 'Speech rate (0.5–2.0)',
+  ttsRate: 'Speech rate (0.5–5.0)',
   aboutDiceFrame: 'About DiceFrame',
   aboutIntro1: 'DiceFrame is a self-hosted AI tabletop. Give it a world you want to play in, and the AI can act as GM; players say what they want to do in a browser or chat group, while story, dice, character state, and recaps are organized together.',
   aboutIntro2: 'It works for small friend groups, quick ideas, long-running campaigns, or solo world tests. Play fantasy, cosmic horror, cyberpunk, wuxia, or swap in your own rules and lorebooks.',
