@@ -11,7 +11,7 @@ from src.commands.tag_json import safe_parse_json
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
-from src.engine.language import is_english
+from src.engine.language import is_english, normalize_language
 from src.llm.client import OutputTruncatedError, length_retry_budgets
 from src.llm.parser import (
     find_protocol_suffix_start,
@@ -22,9 +22,14 @@ from src.llm.parser import (
 from src.llm.protocol import leaked_protocol_line_start, strip_protocol_markup_from_public_line
 
 logger = logging.getLogger("trpg")
-_NARRATION_SOFT_LIMIT_CHARS = 260
-_NARRATION_COMPRESS_TRIGGER_CHARS = 500
-_NARRATION_COMBAT_TARGET_CHARS = 400
+# 叙事压缩目标，按语言归一后的 key（normalize_language 返回值）取配置。
+# 中文按字符数（普通 260 / 战斗 400），英文按词数换算成字符（普通 ≈150 词、
+# 战斗 ≈200 词，触发线设在超过提示词上限才压）。新增语言时在此加一行配置，
+# 并同步补充该语言的压缩 prompt 文案；未登记的语言回退中文配置。
+_NARRATION_LIMITS = {
+    "zh-CN": {"trigger": 500, "soft": 260, "combat": 400},
+    "en": {"trigger": 1200, "soft": 900, "combat": 1100},
+}
 _NARRATION_COMPRESS_MIN_TOKENS = 1024
 _NARRATION_COMPRESS_MAX_TOKENS = 2048
 
@@ -132,21 +137,21 @@ async def _compress_long_narration(
     max_tokens: int,
 ) -> None:
     narration = str(response.narration or "").strip()
-    if _narration_len(narration) <= _NARRATION_COMPRESS_TRIGGER_CHARS:
+    lang = normalize_language(getattr(response, "language", ""))
+    limits = _NARRATION_LIMITS.get(lang, _NARRATION_LIMITS["zh-CN"])
+    is_en = lang == "en"
+    if _narration_len(narration) <= limits["trigger"]:
         return
     combat_words = ("战斗", "攻击", "砍", "刺", "射", "突袭", "格挡", "防御", "回避")
-    target = (
-        _NARRATION_COMBAT_TARGET_CHARS
-        if combat_model != "none" and any(word in actions_text for word in combat_words)
-        else _NARRATION_SOFT_LIMIT_CHARS
-    )
-    if is_english(getattr(response, "language", "")):
+    is_combat = combat_model != "none" and any(word in actions_text for word in combat_words)
+    target = limits["combat"] if is_combat else limits["soft"]
+    if is_en:
         prompt = (
             "Compress the following TRPG GM narration. Output only the compressed "
             "narration, without --- or any state tags.\n"
             "Requirements: keep established facts, NPC names, key clues, check/combat "
             "results, and the immediate pressure for the players; do not add new lore "
-            f"or change outcomes. Keep it under about {target} characters and at most 2 paragraphs.\n\n"
+            f"or change outcomes. Keep it under about {target} characters (~{target // 6} words) and at most 2 paragraphs.\n\n"
             f"Original narration:\n{narration}"
         )
     else:
