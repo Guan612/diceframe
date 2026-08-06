@@ -15,9 +15,9 @@
 
 ### 修复
 
-- 修复便携版插件无法启动的问题（嵌入式 Python 环境已正确加载插件源码），商店与内置插件均可正常启用。
+- 修复便携版插件无法启动的问题，商店与内置插件均可正常启用。
 - 修复从更新弹窗跳转到设置页后，新版本更新包不自动开始下载的问题。
-- 修复从 1.9.5 及更早的旧布局便携版升级时，已安装的用户插件没有自动迁移到数据目录的问题。
+- 修复从 1.9.5 及更早的便携版升级时，已安装的用户插件没有自动迁移到数据目录的问题。
 
 ### 下载指南
 
@@ -40,9 +40,9 @@ This release improves maps, cards, update channels, and plugin stability: maps w
 
 ### Fixes
 
-- Fixed plugins failing to start in portable builds (embedded Python now loads plugin source correctly); both store-installed and built-in plugins can be enabled.
+- Fixed plugins failing to start in portable builds; both store-installed and built-in plugins can be enabled.
 - Fixed the update package not starting to download automatically after navigating from the update dialog to the settings page.
-- Fixed user-installed plugins not migrating to the data directory when upgrading from 1.9.5 and earlier portable builds with the legacy layout.
+- Fixed user-installed plugins not migrating to the data directory when upgrading from 1.9.5 and earlier portable builds.
 
 ### Download Guide
 
