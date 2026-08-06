@@ -4,18 +4,20 @@ from __future__ import annotations
 
 
 DEFAULT_LANGUAGE = "zh-CN"
-SUPPORTED_LANGUAGES = {"zh-CN", "en"}
+SUPPORTED_LANGUAGES = {"zh-CN", "en", "ja"}
 
 # 本地化字段后缀登记：中文（zh-*）无后缀（直接用原字段）；
 # 新增语言在此登记后缀后，{key}_{suffix} 式字段即可被 localized_field 查到。
 # 字段可选，缺失时回退原字段，不强制维护。
-_LANG_FIELD_SUFFIXES = {"en": "en"}
+_LANG_FIELD_SUFFIXES = {"en": "en", "ja": "ja"}
 
 
 def normalize_language(value: object) -> str:
     text = str(value or "").strip().lower().replace("_", "-")
     if text in {"en", "en-us", "en-gb", "english"}:
         return "en"
+    if text in {"ja", "jp", "japanese", "日本語"}:
+        return "ja"
     if text in {"zh", "zh-cn", "cn", "chinese", "简体中文", "中文"}:
         return "zh-CN"
     return DEFAULT_LANGUAGE
@@ -52,7 +54,12 @@ def field_suffixes() -> set[str]:
 
 
 def language_name(value: object) -> str:
-    return "English" if is_english(value) else "简体中文"
+    lang = normalize_language(value)
+    if lang == "en":
+        return "English"
+    if lang == "ja":
+        return "日本語"
+    return "简体中文"
 
 
 def gm_language_instruction(value: object) -> str:

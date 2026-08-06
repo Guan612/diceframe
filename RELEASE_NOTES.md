@@ -7,7 +7,8 @@
 ### 新功能
 
 - 插件内容包现在可以自定义判定触发词：创作者能在规则模板里声明自己的"触发词 → 检定意图"词表，或继承主程序的通用词库，决定哪些自然语言词触发什么检定、用什么属性/技能。
-- 判定触发词表改为按语言组织，为后续新增语言（如日语）做准备，新增语言只需补充词表，不会影响其他语言场景。
+- 判定触发词表改为按语言组织，为后续新增语言做准备；新增语言只需补充词表，不会影响其他语言场景。
+- 新增日语语言支持：可识别 `ja` / `日本語`，规则与内容可拆分日语字段。
 
 ### 下载指南
 
@@ -22,7 +23,8 @@ This is a preview release for testing plugin rule vocabulary improvements. Stabl
 ### New Features
 
 - Plugin content packs can now customize check triggers: creators can declare their own "trigger word to check intent" vocabulary in a rule template, or inherit the main program's generic vocabulary, deciding which natural-language phrases trigger which check and which attribute/skill to use.
-- Check trigger vocabularies are now organized by language, preparing for future languages (such as Japanese); adding a language only requires adding vocabulary entries and does not affect other languages.
+- Check trigger vocabularies are now organized by language, preparing for future languages; adding a language only requires adding vocabulary entries and does not affect other languages.
+- Added Japanese language support: recognizes `ja` / `日本語`, and rules and content can have Japanese fields.
 
 ### Download Guide
 
