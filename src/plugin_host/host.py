@@ -749,6 +749,7 @@ class PluginHost:
         env.update({
             "DICEFRAME_PLUGIN_ID": plugin_id,
             "DICEFRAME_PLUGIN_DIR": str(runtime.directory.resolve()),
+            "DICEFRAME_APP_ROOT": str(Path(__file__).resolve().parents[2]),
             "DICEFRAME_PLUGIN_DATA_DIR": str(plugin_data_dir),
             "TRPG_PARENT_PID": str(os.getpid()),
             "DICEFRAME_PLUGIN_PROTOCOL": str(PLUGIN_PROTOCOL_VERSION),

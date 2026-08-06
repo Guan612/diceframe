@@ -170,6 +170,20 @@ def patch_pth(runtime_dir: Path) -> None:
     if not has_import_site:
         out.append("import site")
     pth.write_text("\n".join(out) + "\n", encoding="utf-8")
+    # 嵌入式 Python 忽略 PYTHONPATH（_pth 固定 sys.path），插件子进程靠 PYTHONPATH
+    # 找主程序 src/ 与插件目录会失败。写 sitecustomize 从环境变量补路径：
+    # host.py 给插件进程传 DICEFRAME_APP_ROOT（主程序根）与 DICEFRAME_PLUGIN_DIR（插件目录）。
+    site_packages = runtime_dir / "Lib" / "site-packages"
+    site_packages.mkdir(parents=True, exist_ok=True)
+    (site_packages / "sitecustomize.py").write_text(
+        "import os, sys\n"
+        "app = os.environ.get(\"DICEFRAME_APP_ROOT\", \"\")\n"
+        "plug = os.environ.get(\"DICEFRAME_PLUGIN_DIR\", \"\")\n"
+        "for p in (app, plug):\n"
+        "    if p and p not in sys.path:\n"
+        "        sys.path.insert(0, p)\n",
+        encoding="utf-8",
+    )
 
 
 def cleanup_runtime(runtime_dir: Path) -> None:

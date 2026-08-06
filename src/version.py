@@ -3,5 +3,5 @@
 from __future__ import annotations
 
 APP_NAME = "DiceFrame"
-__version__ = "1.9.9"
+__version__ = "1.9.10"
 DEFAULT_UPDATE_REPOSITORY = "diceframe/diceframe"

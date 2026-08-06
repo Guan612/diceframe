@@ -1,8 +1,8 @@
-# DiceFrame v1.9.9
+# DiceFrame v1.9.10
 
 ## 中文
 
-这个版本带来地图、卡片、更新频道与插件稳定性改进：地图在几百个地点时自动铺开不再堆成一圈，支持缩放平移和回到当前场景；卡片渲染成为通用能力，外部聊天机器人也能发送卡片；设置页可切换预览版/正式版更新频道，并显示已安装插件的版本与更新提示；升级主程序后，已安装的插件不再丢失，会自动保留并继续使用；QQ/NapCat 插件内置，开箱即用。同时修复了更新提示跳转和旧版本升级迁移的问题。
+这个版本带来地图、卡片、更新频道与插件稳定性改进：地图在几百个地点时自动铺开不再堆成一圈，支持缩放平移和回到当前场景；卡片渲染成为通用能力，外部聊天机器人也能发送卡片；设置页可切换预览版/正式版更新频道，并显示已安装插件的版本与更新提示；升级主程序后，已安装的插件不再丢失，会自动保留并继续使用；QQ/NapCat 插件内置，开箱即用。同时修复了便携版插件无法启动、更新提示跳转和旧版本升级迁移的问题。
 
 ### 新功能
 
@@ -15,19 +15,19 @@
 
 ### 修复
 
-- 修复从商店安装的 QQ/NapCat 插件在剥离内置后的主程序上无法启动的问题。
+- 修复便携版插件无法启动的问题（嵌入式 Python 环境已正确加载插件源码），商店与内置插件均可正常启用。
 - 修复从更新弹窗跳转到设置页后，新版本更新包不自动开始下载的问题。
 - 修复从 1.9.5 及更早的旧布局便携版升级时，已安装的用户插件没有自动迁移到数据目录的问题。
 
 ### 下载指南
 
-- **普通 Windows 用户**：下载 `DiceFrame-v1.9.9-windows-portable.zip`。
-- **源码运行用户**：下载 `DiceFrame-v1.9.9-windows.zip`。
+- **普通 Windows 用户**：下载 `DiceFrame-v1.9.10-windows-portable.zip`。
+- **源码运行用户**：下载 `DiceFrame-v1.9.10-windows.zip`。
 - `.sha256` 是更新校验文件，普通用户不需要手动下载。
 
 ## English
 
-This release improves maps, cards, update channels, and plugin stability: maps with hundreds of locations now spread out automatically instead of piling into a circle, with zoom, pan, and a return-to-current-scene action; card rendering becomes a shared capability so external chat bots can send cards too; the settings page lets you switch between preview and stable update channels and shows installed plugin versions and update hints; plugins installed from the store are preserved across program upgrades; and the QQ/NapCat plugin is built in and works out of the box. It also fixes update-prompt navigation and plugin migration from older builds.
+This release improves maps, cards, update channels, and plugin stability: maps with hundreds of locations now spread out automatically instead of piling into a circle, with zoom, pan, and a return-to-current-scene action; card rendering becomes a shared capability so external chat bots can send cards too; the settings page lets you switch between preview and stable update channels and shows installed plugin versions and update hints; plugins installed from the store are preserved across program upgrades; and the QQ/NapCat plugin is built in and works out of the box. It also fixes portable-build plugin startup, update-prompt navigation, and plugin migration from older builds.
 
 ### New Features
 
@@ -40,12 +40,12 @@ This release improves maps, cards, update channels, and plugin stability: maps w
 
 ### Fixes
 
-- Fixed store-installed QQ/NapCat plugin failing to start on main programs that removed the built-in copy.
+- Fixed plugins failing to start in portable builds (embedded Python now loads plugin source correctly); both store-installed and built-in plugins can be enabled.
 - Fixed the update package not starting to download automatically after navigating from the update dialog to the settings page.
 - Fixed user-installed plugins not migrating to the data directory when upgrading from 1.9.5 and earlier portable builds with the legacy layout.
 
 ### Download Guide
 
-- **Regular Windows users**: download `DiceFrame-v1.9.9-windows-portable.zip`.
-- **Source-run users**: download `DiceFrame-v1.9.9-windows.zip`.
+- **Regular Windows users**: download `DiceFrame-v1.9.10-windows-portable.zip`.
+- **Source-run users**: download `DiceFrame-v1.9.10-windows.zip`.
 - `.sha256` files are update checksums; regular users do not need to download them manually.
