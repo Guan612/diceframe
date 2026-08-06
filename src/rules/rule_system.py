@@ -62,7 +62,12 @@ def _resolve_rule_template(path: Path, seen: set[Path] | None = None) -> dict:
     if not parent_path.suffix:
         parent_path = parent_path.with_suffix(".json")
     if not parent_path.is_absolute():
-        parent_path = path.parent / parent_path
+        # 优先相对当前规则目录；找不到时回退主程序 templates/rules/，让插件规则
+        # 也能继承主程序词库（如 intents_base），实现"按需继承"而非全局强绑。
+        candidates = [path.parent / parent_path]
+        builtin_rules = Path(__file__).resolve().parents[2] / "templates" / "rules"
+        candidates.append(builtin_rules / parent_path.name)
+        parent_path = next((c for c in candidates if c.exists()), candidates[0])
     if not parent_path.exists():
         raise FileNotFoundError(f"规则模板基类不存在: {parent_path}")
 

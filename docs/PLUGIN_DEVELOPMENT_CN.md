@@ -347,6 +347,56 @@ content/
 - 规则模板按语言拆分文件：`<rule_id>.json`（中文版，纯中文）+ `<rule_id>_en.json`（英文版，纯英文全文）。`rule_id` 保持不变（是引用键，`world.default_rule` 指向它，不随语言变，区别于世界模板的 `world_id`）。`RuleSystem.path_for(rules_dir, rule_id, language)` 按游戏语言选文件（`_en.json` 不存在则回退中文版）。规则列表与详情会配对合并各语言文件，前端按界面语言显示对应字段。自定义规则可不拆，保持单文件并在字段后加 `_en` 后缀（如 `attr_hint_en`）做英文显示。新增语言：在 `engine/language.py` 的 `_LANG_FIELD_SUFFIXES` 登记后缀，加 `<rule_id>_<suffix>.json`，加载/展示自动生效。
 - 规则字段、枚举、协议标签和内部难度键保持稳定，例如 `rule_id`、`dice_system`、`combat_model`、`mechanics`、`difficulty_instructions` 的键、GM 标签 `HP/GOLD/QUICK_ACTIONS` 等不随内容语言改名。
 
+#### 7.2.1 骰子触发定制（intents 词表）
+
+内容包可以完全自定义"哪些自然语言词触发什么检定"。规则模板里的 `intents` 表定义意图（意图 = 一类检定，如潜行、调查、施法）及各自的触发词。
+
+**触发优先级**（从规则词表到全局兜底）：
+
+1. 规则模板自带 `intents`：用规则自己的词表，完全自控。
+2. 规则模板 `extends: "intents_base"`（或插件目录内的词表基类）：继承主程序/基类的词库，子规则可覆盖个别意图。
+3. 两者都没有：回退到全局通用词表（`templates/rules/fallback_intents.json`），只提供有限的通用触发。
+
+**`intents` 字段结构**：
+
+```json
+{
+  "intents": {
+    "defaults": {
+      "applies_to_dice_systems": ["d20", "d100"],
+      "zh_match": "substring",
+      "en_match": "word",
+      "case_sensitive": false,
+      "prefer_longest": true
+    },
+    "stealth": {
+      "aliases": {
+        "zh-CN": ["潜行", "潜入", "隐匿", "悄悄"],
+        "en": ["sneak", "stealth", "hide", "creep"]
+      },
+      "skill_candidates": {
+        "zh-CN": ["潜行", "隐匿"],
+        "en": ["stealth", "dexterity"]
+      },
+      "default_attribute": "dex",
+      "priority": 10
+    }
+  }
+}
+```
+
+- `aliases`：触发词，按语言分键（`zh-CN` / `en` / 未来语言）。玩家行动包含任一别名即命中该意图。
+- `skill_candidates`：命中后候选技能，按角色卡技能名匹配。
+- `default_attribute`：命中后默认用哪个属性检定（`str` / `dex` / `int` / `wis` / `cha` 等）。
+- `priority`：多个意图同时命中时，数值小者优先（先匹配者胜）。
+- `applies_to_dice_systems`：该意图适用于哪些骰制（`d20` / `d100`）。不匹配当前局骰制的意图会被跳过，防止 COC 触发只属于 DND 的意图（反之亦然）。
+
+**`dice_system` 决定骰子本身**：`intents` 只决定"触发哪个检定、用什么属性/技能"，骰子算法（d20 还是 d100、成功线、大成功/大失败）由规则模板顶层的 `dice_system` 和 `mechanics` 决定。
+
+**继承主程序词库**：插件规则的 `extends` 支持继承主程序 `templates/rules/` 下的词表（如 `intents_base`），只需写 `"extends": "intents_base"`。继承是"按需"的——不需要词库的规则可以不继承，用全局兜底即可。
+
+**多语言扩展**：词表是数据驱动的，加语言只需给 `aliases` / `skill_candidates` 增加对应语言键（如 `ja`），并保证 `engine/language.py` 登记了该语言后缀。新增语言不会污染其他语言场景。
+
 ### 7.3 主题插件
 
 适用于 CSS 变量、色板、背景、图标和界面风格。主题插件通常是声明型插件。

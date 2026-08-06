@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import uuid
+from pathlib import Path
 from typing import Any
 
 from src.engine.dice import roll
@@ -11,49 +14,48 @@ from src.engine.game_instance import GameInstance
 from src.engine.language import is_english
 from src.rules.rule_system import RuleSystem
 
+logger = logging.getLogger("trpg")
 
-_INTENT_SPECS: tuple[tuple[str, tuple[str, ...], tuple[str, ...], str], ...] = (
-    (
-        "stealth",
-        ("潜行", "潜入", "隐匿", "隐藏", "悄悄", "偷偷", "蹑手蹑脚", "无声", "绕后"),
-        ("潜行", "隐匿", "潜伏", "躲藏"),
-        "dex",
-    ),
-    (
-        "investigate",
-        ("调查", "探查", "检查", "搜查", "搜索", "观察", "侦查", "寻找", "找线索", "辨认", "识别", "追踪"),
-        ("侦查", "调查", "观察", "搜索", "图书馆使用", "追踪"),
-        "int",
-    ),
-    (
-        "perception",
-        ("聆听", "倾听", "察觉", "感知", "留意", "环顾"),
-        ("侦查", "聆听", "察觉", "感知"),
-        "wis",
-    ),
-    (
-        "social",
-        ("说服", "交涉", "谈判", "欺骗", "威吓", "威胁", "套话", "表演"),
-        ("说服", "话术", "魅惑", "威吓", "欺骗", "表演"),
-        "cha",
-    ),
-    (
-        "athletics",
-        ("攀爬", "攀登", "跳跃", "游泳", "冲刺", "奔跑", "推开", "拉开", "撬开", "撞开", "搬起", "举起"),
-        ("攀爬", "游泳", "跳跃", "运动", "体能"),
-        "str",
-    ),
-    (
-        "combat",
-        ("攻击", "射击", "开枪", "挥砍", "砍", "刺", "踢", "突袭", "格挡", "闪避", "施法", "吟唱"),
-        ("射击", "手枪", "步枪", "格斗", "斗殴", "剑术", "法术"),
-        "dex",
-    ),
-)
 
-_GENERIC_CHECK_WORDS = (
-    "检定", "判定", "掷骰", "roll", "check",
-)
+def _load_fallback_intents() -> dict:
+    """加载全局兜底词表（数据驱动，支持多语言）。
+
+    供没有自带 intents 词表的规则使用。放 templates/rules/fallback_intents.json：
+    - intents: {intent_id: {aliases: {lang: [...]}, skill_candidates, default_attribute}}
+    - generic_check_words: {lang: [...]} 通用检定词
+    """
+    path = Path(__file__).resolve().parents[2] / "templates" / "rules" / "fallback_intents.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("通用检定兜底词表加载失败: %s", exc)
+        return {}
+
+
+_FALLBACK_INTENTS: dict = _load_fallback_intents()
+
+
+def _fallback_intent_specs(language: str) -> list[tuple[str, tuple[str, ...], tuple[str, ...], str]]:
+    """兜底意图表（数据驱动），结构同旧 _INTENT_SPECS：[(intent, aliases, skills, attr)]。"""
+    result: list[tuple[str, tuple[str, ...], tuple[str, ...], str]] = []
+    intents = _FALLBACK_INTENTS.get("intents") or {}
+    lang = "zh-CN" if not is_english(language) else "en"
+    for intent, block in intents.items():
+        aliases = block.get("aliases") or {}
+        skills = block.get("skill_candidates") or {}
+        alias_list = tuple(aliases.get(lang) or aliases.get("zh-CN") or ())
+        skill_list = tuple(skills.get(lang) or skills.get("zh-CN") or ())
+        if not alias_list:
+            continue
+        result.append((intent, alias_list, skill_list, str(block.get("default_attribute") or "")))
+    return result
+
+
+def _fallback_generic_words(language: str) -> tuple[str, ...]:
+    """兜底通用检定词（按语言取，回退中文）。"""
+    words = _FALLBACK_INTENTS.get("generic_check_words") or {}
+    lang = "zh-CN" if not is_english(language) else "en"
+    return tuple(words.get(lang) or words.get("zh-CN") or ())
 
 
 def _normalized(text: object) -> str:
@@ -127,14 +129,14 @@ def build_check_request(
     candidates: tuple[str, ...] = ()
     attribute = selected_attribute
 
-    # 意图识别：优先规则词表（数据驱动），规则未带词表时回退到内置 _INTENT_SPECS。
+    # 意图识别：优先规则词表（数据驱动），规则未带词表时回退到全局兜底词表。
     intent = rule.find_intent(action.get("text"), instance.language, dice_system) if rule else ""
     if intent:
         candidates = rule.intent_skill_candidates(intent, instance.language) if rule else ()
         if not attribute:
             attribute = rule.intent_default_attribute(intent) if rule else ""
     else:
-        for intent_name, aliases, skill_candidates, attr_key in _INTENT_SPECS:
+        for intent_name, aliases, skill_candidates, attr_key in _fallback_intent_specs(instance.language):
             if any(_normalized(alias) in text for alias in aliases):
                 intent = intent_name
                 candidates = skill_candidates
@@ -149,7 +151,7 @@ def build_check_request(
 
     explicit_check = bool(selected_skill or selected_attribute)
     # 通用检定词：优先用规则词表的 generic 意图（整词边界，避免 'roll' 命中
-    # 'scroll'）；规则没词表时回退内置 _GENERIC_CHECK_WORDS（子串）。
+    # 'scroll'）；规则没词表时回退全局兜底词（按语言子串）。
     generic_check = False
     if not explicit_check:
         if rule and "generic" in rule.intents:
@@ -157,7 +159,7 @@ def build_check_request(
                 action.get("text"), instance.language, dice_system
             ) == "generic"
         else:
-            generic_check = any(word in text for word in _GENERIC_CHECK_WORDS)
+            generic_check = any(word in text for word in _fallback_generic_words(instance.language))
     if not (explicit_check or intent or direct_skill or generic_check):
         return None
 
