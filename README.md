@@ -49,7 +49,7 @@ QQ 交流群：1060613588
 
 普通 Windows 用户建议直接下载便携版：
 
-[前往 Releases 下载](https://github.com/diceframe/diceframe/releases)
+[前往 Releases 下载最新版](https://github.com/diceframe/diceframe/releases/latest)
 
 下载最新的 `DiceFrame-vX.Y.Z-windows-portable.zip`，解压后运行 `DiceFrame.exe`。首次打开后，在浏览器设置页填写 API 地址、模型名和 API Key。
 
