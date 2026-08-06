@@ -658,11 +658,12 @@ class PluginHost:
         await self.restart(plugin_id)
         return self.public_detail(plugin_id)
 
-    async def start(self, plugin_id: str, *, reset_backoff: bool = True) -> None:
+    async def start(self, plugin_id: str, *, reset_backoff: bool = True, require_enabled: bool = True) -> None:
         runtime = self._require(plugin_id)
         if reset_backoff:
             runtime.restart_delay_sec = _RESTART_BASE_DELAY
-        if not runtime.config.get("enabled"):
+        # 启动时只拉起 enabled 的插件；前端开关用 require_enabled=False 强制启动进程。
+        if require_enabled and not runtime.config.get("enabled"):
             runtime.status = "disabled"
             return
         if runtime.process and runtime.process.returncode is None:

@@ -155,9 +155,11 @@ async def update_plugin_config(api: "WebAPI", plugin_id: str, changes: dict[str,
 
 async def control_plugin(api: "WebAPI", plugin_id: str, action: str) -> dict[str, Any]:
     if not api._plugins: return {"ok": False, "error": "插件宿主未启用"}
+    # 前端进程开关要求强制启动/停止，不受 config.enabled 拦截（enabled 是"开机自启"概念）。
+    start_kwargs = {"require_enabled": False} if action in ("start", "restart") else {}
     method = {"start": api._plugins.start, "stop": api._plugins.stop, "restart": api._plugins.restart}.get(action)
     if not method: return {"ok": False, "error": "插件操作无效"}
-    await method(plugin_id)
+    await method(plugin_id, **start_kwargs)
     if action in ("start", "restart"):
         sync_plugin_lorebooks(api)
     return {"ok": True, **api._plugins.public_detail(plugin_id)}
