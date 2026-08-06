@@ -227,6 +227,56 @@ Supported contributions are `rules`, `world_templates`, `character_templates`, `
 
 Use stable IDs and avoid built-in IDs. Content is never imported automatically. Worlds and catalog records declare `language`; world text is not automatically translated. Rules use `<rule_id>.json` for Chinese and `<rule_id>_en.json` for English, with Chinese fallback. Protocol fields and GM tags remain language-neutral.
 
+#### 7.2.1 Customizing dice triggers (intents)
+
+A content pack can fully control which natural-language phrases trigger which check. The `intents` table in a rule template defines intents (a class of check, such as stealth, investigate, or casting) and their trigger words.
+
+**Trigger precedence** (rule vocabulary first, global fallback last):
+
+1. Rule template defines its own `intents`: fully self-contained.
+2. Rule template `extends: "intents_base"` (or a vocabulary base inside the plugin): inherits the main program/base vocabulary; a child rule can override individual intents.
+3. Neither: falls back to the global generic vocabulary (`templates/rules/fallback_intents.json`) with limited triggers.
+
+**`intents` field structure**:
+
+```json
+{
+  "intents": {
+    "defaults": {
+      "applies_to_dice_systems": ["d20", "d100"],
+      "zh_match": "substring",
+      "en_match": "word",
+      "case_sensitive": false,
+      "prefer_longest": true
+    },
+    "stealth": {
+      "aliases": {
+        "zh-CN": ["潜行", "潜入", "隐匿", "悄悄"],
+        "en": ["sneak", "stealth", "hide", "creep"]
+      },
+      "skill_candidates": {
+        "zh-CN": ["潜行", "隐匿"],
+        "en": ["stealth", "dexterity"]
+      },
+      "default_attribute": "dex",
+      "priority": 10
+    }
+  }
+}
+```
+
+- `aliases`: trigger words, keyed by language (`zh-CN` / `en` / future languages). An action containing any alias matches that intent.
+- `skill_candidates`: candidate skills matched against the character sheet when the intent hits.
+- `default_attribute`: the default attribute for the check (`str` / `dex` / `int` / `wis` / `cha`, etc.).
+- `priority`: when several intents match, lower value wins (first match by sort order).
+- `applies_to_dice_systems`: which dice systems this intent applies to (`d20` / `d100`). Intents that do not match the current game's dice system are skipped, preventing COC from triggering intents meant only for DND and vice versa.
+
+**`dice_system` controls the dice itself**: `intents` only decide which check triggers and which attribute/skill to use; the dice algorithm (d20 vs d100, success thresholds, criticals) is set by the rule template's top-level `dice_system` and `mechanics`.
+
+**Inheriting the main vocabulary**: a plugin rule's `extends` can reference vocabulary under the main program's `templates/rules/` (for example `intents_base`) by writing `"extends": "intents_base"`. Inheritance is opt-in — rules that do not need the vocabulary can omit it and rely on the global fallback.
+
+**Multi-language extension**: vocabularies are data-driven. Adding a language only requires adding keys (such as `ja`) to `aliases` / `skill_candidates` and registering the language suffix in `engine/language.py`. New languages do not pollute other languages.
+
 ### 7.3 Themes
 
 Themes register JSON through `contributes.theme` or `contributes.themes`. The frontend applies filtered CSS custom properties and stores the selected theme in the current browser. Variable names begin with `--`; suspicious values containing `url(`, semicolons, or braces are ignored. Scripts, components, layouts, and arbitrary CSS are unsupported.
