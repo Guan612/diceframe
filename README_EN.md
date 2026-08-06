@@ -121,7 +121,7 @@ More player-facing help is in [docs/USER_GUIDE_EN.md](docs/USER_GUIDE_EN.md).
 
 ## Plugins and Chat Adapters
 
-Install the QQ/NapCat plugin from the plugin store. It receives its DiceFrame Bot API Token automatically; users configure only the NapCat connection. External bridges such as MaiBot copy the service URL and token from Settings → Bot API.
+The built-in QQ/NapCat plugin receives its DiceFrame Bot API Token automatically; users configure only the NapCat connection. External bridges such as MaiBot copy the service URL and token from Settings → Bot API.
 
 The Bot follows the bound game's language for help and primary operation messages, with native Chinese and English commands available.
 

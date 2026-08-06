@@ -144,17 +144,17 @@ Windows 下也可以双击 `web_ui.bat` 启动；它会检查依赖，并在缺�
 
 ## QQ / NapCat
 
-推荐的群聊方式是使用 QQ / NapCat 插件，从插件商店安装即可。
+推荐的群聊方式是内置 QQ / NapCat 插件。
 
 基本流程：
 
-1. 在 WebUI 设置页进入"插件 → 插件商店"，安装 `QQ / NapCat` 插件。
+1. 在 WebUI 设置页打开插件配置。
 2. 配置 NapCat 的 WebSocket 地址、端口和 token。
 3. 启用 `QQ / NapCat` 插件。
 4. 在游戏页复制 Bot 绑定命令。
 5. 到群里发送绑定命令，把网页游戏和群聊关联起来。
 
-DiceFrame Bot API Token 由宿主自动生成并注入，QQ / NapCat 无需填写。外部 MaiBot Bridge 等适配器可在“设置 → Bot API”复制服务地址和 Token。
+DiceFrame Bot API Token 由宿主自动生成并注入，内置 QQ / NapCat 无需填写。外部 MaiBot Bridge 等适配器可在“设置 → Bot API”复制服务地址和 Token。
 
 Bot 会跟随绑定对局的语言显示帮助和主要操作提示；中文与英文对局都可直接使用对应语言的命令。
 
