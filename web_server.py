@@ -499,6 +499,17 @@ async def on_startup(app: web.Application) -> None:
     plugin_host = PluginHost(DATA_DIR / "plugin-packages", DATA_DIR / "plugins", builtin_dir=ROOT / "plugins", base_env={
         "TRPG_API_BASE": f"http://127.0.0.1:{PORT}",
     })
+    # 启动时补迁：旧布局便携版根 app/plugins/ 里可能还有用户插件（更新器迁移由旧版本
+    # 执行，覆盖不到本次升级），新版本首次启动时由自己补搬一次到 data/plugin-packages/。
+    install_root = os.getenv("TRPG_INSTALL_ROOT", "").strip()
+    if install_root:
+        from src.webui.services.updater import _migrate_user_plugin_packages
+        install_root_path = Path(install_root)
+        # 根目录旧布局 + versions 下各版本都可能残留用户插件（旧机制装进版本目录）
+        sources = [install_root_path / "app" / "plugins"]
+        sources.extend(install_root_path.glob("versions/*/app/plugins"))
+        for source in sources:
+            _migrate_user_plugin_packages(source, DATA_DIR / "plugin-packages")
     plugin_host.discover()
     if "qq-napcat" in plugin_host.plugins:
         plugin_host.migrate_config("qq-napcat", {
