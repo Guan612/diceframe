@@ -31,7 +31,7 @@ It brings the Web UI, character sheets, lorebooks, dice checks, state changes, c
 
 ### Windows Portable
 
-Download the latest `DiceFrame-vX.Y.Z-windows-portable.zip` from [Releases](https://github.com/diceframe/diceframe/releases), extract it, and run `DiceFrame.exe`. Enter the model base URL, model name, and API key in Settings.
+Download the latest `DiceFrame-vX.Y.Z-windows-portable.zip` from [Releases](https://github.com/diceframe/diceframe/releases/latest), extract it, and run `DiceFrame.exe`. Enter the model base URL, model name, and API key in Settings.
 
 Windows portable builds can check for and apply updates from Settings.
 
