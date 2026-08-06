@@ -49,7 +49,7 @@ _PROTECTED_SOURCE_ENTRIES = {
     "dist",
     "logs",
 }
-_BUILTIN_PLUGIN_DIRS = {"examples"}
+_BUILTIN_PLUGIN_DIRS = {"examples", "qq-napcat"}
 
 
 def _migrate_user_plugin_packages(
@@ -576,9 +576,15 @@ class UpdaterService:
                 shutil.rmtree(candidate_temp, ignore_errors=True)
             shutil.rmtree(extract_dir, ignore_errors=True)
 
+        # 迁移旧 plugins/ 里的用户插件：同时覆盖 versions 布局的 active 版本
+        # 与根目录旧布局（1.9.5 及更早的便携版），旧布局用户插件在根 app/ 下。
+        sources = []
         if current_pointer:
+            sources.append(current_pointer / "app" / "plugins")
+        sources.append(install_root / "app" / "plugins")
+        for source in sources:
             _migrate_user_plugin_packages(
-                current_pointer / "app" / "plugins",
+                source,
                 self._dir.parent / "plugin-packages",
             )
 

@@ -145,11 +145,11 @@ GM 叙事后，系统会显示“状态变动”。这里记录的是这轮真�
 
 ## 群聊 Bot
 
-DiceFrame 可以通过 QQ / NapCat 插件把网页对局接到群聊里，插件从商店安装即可。Bot 只通过 Web 服务的 HTTP API 工作，不直接读写存档。
+DiceFrame 可以通过 QQ / NapCat 插件把网页对局接到群聊里。Bot 只通过 Web 服务的 HTTP API 工作，不直接读写存档。
 
 基本流程：
 
-1. 在 WebUI 设置页进入"插件 → 插件商店"，安装 `QQ / NapCat` 插件。
+1. 在 WebUI 设置页打开插件配置。
 2. 配置 NapCat 的 WebSocket 地址、端口和 token。
 3. 启用 `QQ / NapCat` 插件。
 4. 在游戏页复制 Bot 绑定命令。
@@ -157,7 +157,7 @@ DiceFrame 可以通过 QQ / NapCat 插件把网页对局接到群聊里，插件
 
 绑定成功后，群聊就和当前网页游戏关联起来了。
 
-QQ / NapCat 不需要填写 DiceFrame Bot API Token，宿主会自动生成并注入。使用 MaiBot 等外部桥接时，到“设置 → Bot API”复制 DiceFrame 服务地址和 Token，再填写到外部插件；重新生成 Token 后需要同步更新外部插件。
+内置 QQ / NapCat 不需要填写 DiceFrame Bot API Token，宿主会自动生成并注入。使用 MaiBot 等外部桥接时，到“设置 → Bot API”复制 DiceFrame 服务地址和 Token，再填写到外部插件；重新生成 Token 后需要同步更新外部插件。
 
 Bot 会跟随当前对局的语言显示帮助、状态、前情、地图、支付和错误提示。中文对局使用下面的中文命令；英文对局可以直接发送 `help`、`join`、`status`、`recap`、`map`、`roll`、`pay`、`advance`、`away`、`back` 等英文命令。
 

@@ -6,6 +6,10 @@ target-version = "py311"
 # mandatory gate focused on correctness while those are paid down separately.
 select = ["E9", "F63", "F7", "F82"]
 
+[tool.pytest.ini_options]
+# 插件自带测试依赖插件源码在 PYTHONPATH，主程序 CI 不提供；插件测试归插件仓库自跑。
+norecursedirs = ["plugins"]
+
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true

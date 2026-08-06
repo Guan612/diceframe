@@ -139,10 +139,10 @@ saved = _load_json_object(CONFIG_FILE, "主配置")
 secrets = _load_json_object(SECRETS_FILE, "敏感配置")
 _generation_defaults_migrated = _migrate_generation_defaults(saved)
 
-# env > secrets.json > config.json（用于迁移）
+# env > secrets.json（敏感配置只存 secrets.json）
 API_KEY = (os.getenv("TRPG_LLM_API_KEY")
            or secrets.get("api_key")
-           or saved.get("api_key", ""))
+           or "")
 BASE_URL = (os.getenv("TRPG_LLM_BASE_URL")
             or saved.get("base_url", "https://api.deepseek.com/v1"))
 MODEL = (os.getenv("TRPG_LLM_MODEL")
@@ -157,9 +157,9 @@ EMB_MODEL = (os.getenv("TRPG_EMBEDDING_MODEL")
              or saved.get("embedding_model", "nomic-embed-text"))
 EMB_API_KEY = (os.getenv("TRPG_EMBEDDING_API_KEY")
                or secrets.get("embedding_api_key")
-               or saved.get("embedding_api_key", ""))
-FALLBACK1_API_KEY = secrets.get("fallback1_api_key") or saved.get("fallback1_api_key", "")
-FALLBACK2_API_KEY = secrets.get("fallback2_api_key") or saved.get("fallback2_api_key", "")
+               or "")
+FALLBACK1_API_KEY = secrets.get("fallback1_api_key") or ""
+FALLBACK2_API_KEY = secrets.get("fallback2_api_key") or ""
 ACCESS_TOKEN = next((
     password for password in (
         normalize_access_password(os.getenv("TRPG_ACCESS_TOKEN")),
@@ -201,14 +201,7 @@ PROXY_URL = (os.getenv("TRPG_PROXY_URL")
              or _CONFIG_PROXY_URL
              or _ENV_PROXY_URL)
 
-# 自动迁移：config.json 中的 api_key 迁移到 secrets.json
 _migrated = _generation_defaults_migrated
-if saved.get("api_key") and not secrets.get("api_key"):
-    secrets["api_key"] = saved.pop("api_key")
-    _migrated = True
-if saved.get("embedding_api_key") and not secrets.get("embedding_api_key"):
-    secrets["embedding_api_key"] = saved.pop("embedding_api_key")
-    _migrated = True
 
 STATE = {
     "generation_defaults_version": GENERATION_DEFAULTS_VERSION,
@@ -380,7 +373,7 @@ def _generate_initial_access_password() -> None:
 
 if _migrated:
     save_config()
-    logger.warning("已自动迁移 API Key 到 secrets.json，config.json 中密钥已移除")
+    logger.warning("已迁移 generation 默认值到新版本配置")
 
 
 def _build_subsystems(
@@ -506,6 +499,17 @@ async def on_startup(app: web.Application) -> None:
     plugin_host = PluginHost(DATA_DIR / "plugin-packages", DATA_DIR / "plugins", builtin_dir=ROOT / "plugins", base_env={
         "TRPG_API_BASE": f"http://127.0.0.1:{PORT}",
     })
+    # 启动时补迁：旧布局便携版根 app/plugins/ 里可能还有用户插件（更新器迁移由旧版本
+    # 执行，覆盖不到本次升级），新版本首次启动时由自己补搬一次到 data/plugin-packages/。
+    install_root = os.getenv("TRPG_INSTALL_ROOT", "").strip()
+    if install_root:
+        from src.webui.services.updater import _migrate_user_plugin_packages
+        install_root_path = Path(install_root)
+        # 根目录旧布局 + versions 下各版本都可能残留用户插件（旧机制装进版本目录）
+        sources = [install_root_path / "app" / "plugins"]
+        sources.extend(install_root_path.glob("versions/*/app/plugins"))
+        for source in sources:
+            _migrate_user_plugin_packages(source, DATA_DIR / "plugin-packages")
     plugin_host.discover()
     if "qq-napcat" in plugin_host.plugins:
         plugin_host.migrate_config("qq-napcat", {

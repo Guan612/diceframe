@@ -817,7 +817,7 @@ function redownloadUpdatePackage() {
               </div>
               <div class="setting-row">
                 <NSwitch :value="updateChannel === 'preview'" :disabled="isUpdateBusy" @update:value="toggleUpdateChannel" />
-                <span>{{ t('updateChannel') }}</span>
+                <span style="margin-left: 8px;">{{ t('updateChannel') }}</span>
                 <NTag v-if="updateChannel === 'preview'" size="small" type="warning">{{ t('previewChannel') }}</NTag>
               </div>
               <p class="setting-hint">{{ t('updateChannelHint') }}</p>
