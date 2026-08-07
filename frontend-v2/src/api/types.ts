@@ -677,6 +677,9 @@ export interface PluginInfo {
   capabilities?: string[]
   permissions?: string[]
   permission_details?: Array<{ id: string; description?: string }>
+  min_app_version?: string
+  needs_core_update?: boolean
+  tool_ui?: string
   tools?: PluginToolDescriptor[]
   contributions?: PluginContribution[]
   docs?: string
@@ -689,6 +692,7 @@ export interface PluginToolDescriptor {
   title?: string
   description?: string
   input_schema: JsonObject
+  tool_ui?: string
 }
 
 export interface PluginToolsResponse {
@@ -787,6 +791,9 @@ export interface PluginMarketplaceItem {
   tags?: string[]
   capabilities?: string[]
   permissions?: string[]
+  tool_ui?: string
+  min_app_version?: string
+  needs_core_update?: boolean
   docs?: string
   homepage?: string
   installed?: boolean
@@ -992,6 +999,24 @@ export interface UpdateDownloadResponse {
   version?:string
   asset?:string
   no_release?:boolean
+}
+
+export interface TunnelProvider {
+  plugin_id: string
+  name: string
+  running: boolean
+  min_app_version?: string
+  needs_core_update?: boolean
+}
+
+export interface TunnelStatus {
+  ok: boolean
+  active: boolean
+  url?: string
+  published_at?: number
+  public_base_url?: string
+  providers: TunnelProvider[]
+  error?: string
 }
 export interface UpdateApplyResponse {
   ok:boolean

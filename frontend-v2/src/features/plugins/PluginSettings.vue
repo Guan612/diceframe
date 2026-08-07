@@ -22,6 +22,7 @@ import { usePluginTools } from './usePluginTools'
 import { usePluginExport } from './usePluginExport'
 import { usePluginTypes } from './usePluginTypes'
 import { usePluginUninstallCleanup } from './usePluginUninstallCleanup'
+import TunnelCard from './TunnelCard.vue'
 
 const { t } = useLocale()
 const { pluginThemes, pluginThemeId, loadPluginThemes, applyPluginTheme, clearPluginTheme } = useTheme()
@@ -85,7 +86,7 @@ const {
   page, totalPages, paginatedMarketplace, goToPage,
   canUpdateFromStore, loadMarketplace, loadMirrors, installMarketPlugin,
   updateInstalledPlugin, uninstallPlugin, addMirror, saveMirror,
-  deleteMirror, testMirror, openUrl, isNewerVersion, marketItemHasNewerVersion,
+  deleteMirror, testMirror, openUrl, marketItemHasNewerVersion,
 } = usePluginMarketplace(busy, refreshPluginSurfaces, typeFilter, onUninstalled)
 const {
   plugins, filteredPlugins, expandedPluginNames, loading, installFile, overwriteInstall,
@@ -105,6 +106,20 @@ const themeOptions = computed(() => pluginThemes.value.map(theme => ({
 function permissionDescription(p: PluginInfo, permission: string): string {
   return p.permission_details?.find(item => item.id === permission)?.description || permission
 }
+
+// 工具页专用 UI registry：tool_ui 值 -> 渲染组件。未来进程插件声明新的 tool_ui
+// 值并在此注册组件即可获得专用卡，无需改工具页分发逻辑。
+const toolUiRegistry: Record<string, Component> = {
+  'tunnel-card': TunnelCard,
+}
+// 声明了专用工具 UI 且 registry 有对应组件的已装插件：工具 Tab 渲染专用卡而非裸工具表单。
+const toolUiPlugins = computed(() =>
+  plugins.value.filter(p => p.tool_ui && toolUiRegistry[p.tool_ui]),
+)
+// 裸工具网格：过滤掉由专用 UI 卡覆盖的插件的工具（如 cloudflare-tunnel 的 tunnel_*）。
+const plainTools = computed(() =>
+  tools.value.filter(tool => !(tool.tool_ui && toolUiRegistry[tool.tool_ui])),
+)
 
 function selectedThemeDescription(): string {
   const theme = pluginThemes.value.find(item => item.id === pluginThemeId.value)
@@ -197,6 +212,7 @@ onMounted(async () => {
                   {{ p.name }}
                   <NTag v-if="p.version" size="small" class="plugin-version">{{ t('installedVersion', { version: p.version }) }}</NTag>
                   <NTag v-if="canUpdateFromStore(p.id, p.version)" type="warning" size="small">{{ t('updateAvailable') }}</NTag>
+                  <NTag v-if="p.needs_core_update" type="warning" size="small">{{ t('pluginNeedsCoreUpdate', { version: p.min_app_version || '' }) }}</NTag>
                 </h3>
                 <p class="muted">{{ p.description }}</p>
               </div>
@@ -364,6 +380,7 @@ onMounted(async () => {
             </p>
             <p v-if="item.support?.summary" class="muted market-permissions">{{ item.support.summary }}</p>
             <p v-if="item.verification_error" class="market-warning">{{ item.verification_error }}</p>
+            <p v-else-if="item.needs_core_update" class="market-warning">{{ t('pluginNeedsCoreUpdate', { version: item.min_app_version || '' }) }}</p>
             <div class="market-actions">
               <NButton v-if="item.installed && !marketItemHasNewerVersion(item)" secondary disabled>{{ t('installed') }}</NButton>
               <NButton v-else type="primary" :disabled="item.installable === false" :loading="busy === `market:${item.id}`" @click="installMarketPlugin(item)">
@@ -417,8 +434,18 @@ onMounted(async () => {
         </NButton>
       </section>
       <NSpin :show="toolsLoading">
-        <div v-if="tools.length" class="tool-grid">
-          <article v-for="tool in tools" :key="toolKey(tool)" class="tool-card">
+        <template v-if="toolUiPlugins.length">
+          <h4 class="tool-section-title">{{ t('pluginToolsDedicated') }}</h4>
+          <component
+            v-for="p in toolUiPlugins"
+            :key="p.id"
+            :is="toolUiRegistry[p.tool_ui!]"
+          />
+        </template>
+        <template v-if="plainTools.length">
+          <h4 class="tool-section-title">{{ t('pluginToolsManualTitle') }}</h4>
+          <div class="tool-grid">
+            <article v-for="tool in plainTools" :key="toolKey(tool)" class="tool-card">
             <div class="tool-heading">
               <div>
                 <h3>{{ tool.title || tool.name }}</h3>
@@ -446,8 +473,9 @@ onMounted(async () => {
             </NButton>
             <pre v-if="toolResults[toolKey(tool)]" class="tool-result">{{ toolResults[toolKey(tool)] }}</pre>
           </article>
-        </div>
-        <p v-else class="muted">{{ t('noRunningPluginTools') }}</p>
+          </div>
+        </template>
+        <p v-if="!toolUiPlugins.length && !plainTools.length" class="muted">{{ t('noRunningPluginTools') }}</p>
       </NSpin>
     </NTabPane>
 
@@ -880,6 +908,15 @@ onMounted(async () => {
 
 .toolbar-row {
   margin-bottom: 14px;
+}
+
+.tool-section-title {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary, #7f8a99);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 
 .type-filter-row {
