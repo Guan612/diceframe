@@ -115,3 +115,38 @@ def test_publish_takes_over_after_publisher_uninstalled(tmp_path, monkeypatch):
     assert result["public_base_url"] == "https://xyz.trycloudflare.com"
     released = tunnel.release_tunnel_url(api, "other")
     assert released["restored"] == "http://127.0.0.1:18000"
+
+
+def test_config_save_failure_restores_in_memory_state(tunnel_env):
+    original = dict(tunnel_env._config_state)
+    tunnel_env._save_config = lambda: (_ for _ in ()).throw(OSError("disk full"))
+
+    with pytest.raises(OSError, match="disk full"):
+        tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+
+    assert tunnel_env._config_state == original
+    assert not (Path(os.environ["TRPG_DATA_DIR"]) / "tunnel_state.json").exists()
+
+
+def test_publish_state_failure_rolls_back_config(tunnel_env, monkeypatch):
+    original_url = tunnel_env._config_state["public_base_url"]
+    monkeypatch.setattr(tunnel, "_write_state", lambda _state: (_ for _ in ()).throw(OSError("state full")))
+
+    with pytest.raises(OSError, match="state full"):
+        tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+
+    assert tunnel_env._config_state["public_base_url"] == original_url
+    config = json.loads((Path(os.environ["TRPG_DATA_DIR"]) / "config.json").read_text(encoding="utf-8"))
+    assert config["public_base_url"] == original_url
+
+
+def test_release_state_failure_keeps_published_config(tunnel_env, monkeypatch):
+    tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    monkeypatch.setattr(tunnel, "_write_state", lambda _state: (_ for _ in ()).throw(OSError("state full")))
+
+    with pytest.raises(OSError, match="state full"):
+        tunnel.release_tunnel_url(tunnel_env, "cloudflare-tunnel")
+
+    assert tunnel_env._config_state["public_base_url"] == "https://abc.trycloudflare.com"
+    config = json.loads((Path(os.environ["TRPG_DATA_DIR"]) / "config.json").read_text(encoding="utf-8"))
+    assert config["public_base_url"] == "https://abc.trycloudflare.com"

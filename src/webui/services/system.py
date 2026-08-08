@@ -17,29 +17,56 @@ if TYPE_CHECKING:
 logger = logging.getLogger("trpg")
 
 GITHUB_API = "https://api.github.com"
-_VERSION_RE = re.compile(r"^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?([-+].*)?\s*$", re.IGNORECASE)
+_VERSION_RE = re.compile(
+    r"^\s*[vV]?(\d+)(?:\.(\d+))?(?:\.(\d+))?"
+    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\s*$"
+)
 
 
 class NoReleaseError(RuntimeError):
     """Raised when the repository exists but has no public releases yet."""
 
 
-def _version_tuple(value: str) -> tuple[int, int, int, int] | None:
+def _parse_version(value: str) -> tuple[tuple[int, int, int], tuple[str, ...] | None] | None:
     match = _VERSION_RE.match(value or "")
     if not match:
         return None
-    major, minor, patch, suffix = match.groups()
-    # 第四位：预发布后缀（如 -beta.1）为 0，正式版为 1，保证同号正式版 > 预览版
-    prerelease = 0 if suffix else 1
-    return int(major), int(minor or 0), int(patch or 0), prerelease
+    major, minor, patch, prerelease = match.groups()
+    return (
+        (int(major), int(minor or 0), int(patch or 0)),
+        tuple(prerelease.split(".")) if prerelease else None,
+    )
+
+
+def _compare_prerelease(left: tuple[str, ...] | None, right: tuple[str, ...] | None) -> int:
+    if left is None or right is None:
+        if left is right:
+            return 0
+        return 1 if left is None else -1
+    for left_part, right_part in zip(left, right):
+        if left_part == right_part:
+            continue
+        left_numeric = left_part.isdigit()
+        right_numeric = right_part.isdigit()
+        if left_numeric and right_numeric:
+            return 1 if int(left_part) > int(right_part) else -1
+        if left_numeric != right_numeric:
+            return -1 if left_numeric else 1
+        return 1 if left_part > right_part else -1
+    return (len(left) > len(right)) - (len(left) < len(right))
 
 
 def is_newer_version(latest: str, current: str) -> bool:
-    latest_tuple = _version_tuple(latest)
-    current_tuple = _version_tuple(current)
-    if latest_tuple is None or current_tuple is None:
+    latest_version = _parse_version(latest)
+    current_version = _parse_version(current)
+    if latest_version is None or current_version is None:
         return False
-    return latest_tuple > current_tuple
+    latest_core, latest_prerelease = latest_version
+    current_core, current_prerelease = current_version
+    if latest_core != current_core:
+        return latest_core > current_core
+    return _compare_prerelease(latest_prerelease, current_prerelease) > 0
 
 
 async def check_updates(api: "WebAPI", include_prerelease: bool | None = None) -> dict[str, Any]:

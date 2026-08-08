@@ -14,13 +14,39 @@ export function isNewerPluginVersion(latest?: string, current?: string): boolean
   const latestText = String(latest || '').trim()
   const currentText = String(current || '').trim()
   if (!latestText || !currentText) return false
-  const latestParts = latestText.replace(/^v/i, '').split('.').map(Number)
-  const currentParts = currentText.replace(/^v/i, '').split('.').map(Number)
-  for (let index = 0; index < Math.max(latestParts.length, currentParts.length); index++) {
-    const latestPart = latestParts[index] || 0
-    const currentPart = currentParts[index] || 0
+  const versionPattern = /^[vV]?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+  const parse = (value: string) => {
+    const match = versionPattern.exec(value)
+    if (!match) return null
+    return {
+      core: [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)],
+      prerelease: match[4] ? match[4].split('.') : null,
+    }
+  }
+  const latestVersion = parse(latestText)
+  const currentVersion = parse(currentText)
+  if (!latestVersion || !currentVersion) return false
+  for (let index = 0; index < latestVersion.core.length; index++) {
+    const latestPart = latestVersion.core[index]
+    const currentPart = currentVersion.core[index]
     if (latestPart > currentPart) return true
     if (latestPart < currentPart) return false
+  }
+  const latestPrerelease = latestVersion.prerelease
+  const currentPrerelease = currentVersion.prerelease
+  if (!latestPrerelease || !currentPrerelease) {
+    return latestPrerelease === null && currentPrerelease !== null
+  }
+  for (let index = 0; index < Math.max(latestPrerelease.length, currentPrerelease.length); index++) {
+    const latestPart = latestPrerelease[index]
+    const currentPart = currentPrerelease[index]
+    if (latestPart === undefined || currentPart === undefined) return currentPart === undefined
+    if (latestPart === currentPart) continue
+    const latestNumeric = /^\d+$/.test(latestPart)
+    const currentNumeric = /^\d+$/.test(currentPart)
+    if (latestNumeric && currentNumeric) return Number(latestPart) > Number(currentPart)
+    if (latestNumeric !== currentNumeric) return !latestNumeric
+    return latestPart > currentPart
   }
   return false
 }

@@ -29,6 +29,11 @@ from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 
 logger = logging.getLogger("trpg")
 
+MAX_SAVE_PACKAGE_BYTES = 50 * 1024 * 1024
+MAX_SAVE_STATE_BYTES = 16 * 1024 * 1024
+MAX_SAVE_CHATLOG_BYTES = 128 * 1024 * 1024
+MAX_SAVE_UNPACKED_BYTES = 128 * 1024 * 1024
+
 
 # ---------- 游戏状态枚举 ------------------------------------
 
@@ -1518,11 +1523,32 @@ class GameRegistry:
         安全校验：仅接受 state.json / chatlog.jsonl 顶层文件，防路径穿越。
         返回 game_key 为 list（由路由层用公开 | 分隔符字符串化）。
         """
+        if len(payload) > MAX_SAVE_PACKAGE_BYTES:
+            return {"ok": False, "error": "存档包不能超过 50 MB"}
         try:
             with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-                names = set(zf.namelist())
+                infos = zf.infolist()
+                raw_names = [info.filename for info in infos]
+                names = set(raw_names)
+                if len(raw_names) != len(names):
+                    return {"ok": False, "error": "存档包包含重复文件"}
                 if "state.json" not in names:
                     return {"ok": False, "error": "存档包缺少 state.json"}
+                # 先信任 ZIP 中央目录做资源预检，再解压成内存，防止高压缩比存档耗尽内存。
+                limits = {
+                    "state.json": MAX_SAVE_STATE_BYTES,
+                    "chatlog.jsonl": MAX_SAVE_CHATLOG_BYTES,
+                }
+                unpacked_size = 0
+                for info in infos:
+                    if info.flag_bits & 0x1:
+                        return {"ok": False, "error": "存档包不支持加密文件"}
+                    limit = limits.get(info.filename, 0)
+                    if info.file_size > limit:
+                        return {"ok": False, "error": f"{info.filename} 解压后过大"}
+                    unpacked_size += info.file_size
+                if unpacked_size > MAX_SAVE_UNPACKED_BYTES:
+                    return {"ok": False, "error": "存档包解压后过大"}
                 state_data = zf.read("state.json")
                 try:
                     state_json = json.loads(state_data.decode("utf-8-sig"))

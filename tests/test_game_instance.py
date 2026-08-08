@@ -504,6 +504,46 @@ class TestGameRegistry:
         result = await reg.import_save_zip(buffer.getvalue())
         assert result["ok"] is False
 
+    async def test_import_save_zip_rejects_oversized_unpacked_state(self, tmp_path, monkeypatch):
+        import io
+        import json as _json
+        import zipfile
+        import src.engine.game_instance as game_instance
+        from src.engine.game_instance import GameRegistry
+        monkeypatch.setattr(game_instance, "MAX_SAVE_STATE_BYTES", 32)
+        reg = GameRegistry(tmp_path / "saves")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("state.json", _json.dumps({"game_key": ["web", "orig", "bot"], "padding": "x" * 1000}))
+
+        result = await reg.import_save_zip(buffer.getvalue())
+
+        assert result == {"ok": False, "error": "state.json 解压后过大"}
+
+    async def test_import_save_zip_enforces_package_limit_without_http_route(self, tmp_path, monkeypatch):
+        import src.engine.game_instance as game_instance
+        from src.engine.game_instance import GameRegistry
+
+        monkeypatch.setattr(game_instance, "MAX_SAVE_PACKAGE_BYTES", 4)
+        result = await GameRegistry(tmp_path / "saves").import_save_zip(b"12345")
+
+        assert result == {"ok": False, "error": "存档包不能超过 50 MB"}
+
+    async def test_import_save_zip_rejects_duplicate_members(self, tmp_path):
+        import io
+        import zipfile
+        from src.engine.game_instance import GameRegistry
+        reg = GameRegistry(tmp_path / "saves")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("state.json", "{}")
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                zf.writestr("state.json", "{}")
+
+        result = await reg.import_save_zip(buffer.getvalue())
+
+        assert result == {"ok": False, "error": "存档包包含重复文件"}
+
 
 def test_webapi_parse_key_rejects_path_traversal():
     from src.webui.api import WebAPI

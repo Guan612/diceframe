@@ -7,6 +7,7 @@ logs, local settings, tests, caches, and secrets are intentionally excluded.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shutil
@@ -169,6 +170,18 @@ def copy_tree(src: Path, dst: Path) -> None:
 
 
 CLOUDFLARED_VERSION = "2026.7.3"
+CLOUDFLARED_SHA256 = {
+    "cloudflared-windows-amd64.exe": "8635da433b6df8194746e88ed9d2589566c20e38bfc2a80e431a348b7c765841",
+    "cloudflared-linux-amd64": "9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17",
+}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def download_cloudflared(package_dir: Path) -> None:
@@ -186,14 +199,24 @@ def download_cloudflared(package_dir: Path) -> None:
         asset = "cloudflared-linux-amd64"
         target = target_dir / "cloudflared"
     url = f"https://github.com/cloudflare/cloudflared/releases/download/{CLOUDFLARED_VERSION}/{asset}"
+    temporary = target.with_suffix(target.suffix + ".download")
     try:
         print(f"Downloading cloudflared {CLOUDFLARED_VERSION} ...")
-        urllib.request.urlretrieve(url, target)
+        urllib.request.urlretrieve(url, temporary)
+        expected = CLOUDFLARED_SHA256[asset]
+        actual = _sha256_file(temporary)
+        if actual.lower() != expected.lower():
+            raise RuntimeError(f"cloudflared sha256 mismatch: expected {expected}, got {actual}")
+        temporary.replace(target)
         if os.name != "nt":
             target.chmod(0o755)
         print(f"cloudflared saved to {target}")
     except Exception as exc:  # noqa: BLE001
+        temporary.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
         print(f"Warning: cloudflared download failed, plugin will fetch at runtime: {exc}")
+
+
 def prepare_package_tree(package_dir: Path, *, include_cloudflared: bool = True) -> None:
     if package_dir.exists():
         shutil.rmtree(package_dir)

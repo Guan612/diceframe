@@ -1596,8 +1596,46 @@ async def test_install_rejects_package_over_compressed_size_limit(tmp_path, monk
     monkeypatch.setitem(PluginHost.install_from_zip.__globals__, "MAX_PLUGIN_PACKAGE_BYTES", 10)
     host = PluginHost(tmp_path / "plugins", tmp_path / "data")
 
-    with pytest.raises(ValueError, match="不能超过 20 MB"):
+    with pytest.raises(ValueError, match="不能超过 1 MB"):
         await host.install_from_zip(b"x" * 11)
+
+
+@pytest.mark.asyncio
+async def test_overwrite_restarts_plugin_that_was_running(tmp_path):
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "demo-plugin", manifest_extra={
+        "entrypoint": ["{python}", "-c", "import time; time.sleep(60)"],
+    })
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    await host.start("demo-plugin", require_enabled=False)
+    assert host.public_detail("demo-plugin")["running"] is True
+
+    package = tmp_path / "demo.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("demo-plugin/plugin.json", json.dumps({
+            "schema_version": 1,
+            "id": "demo-plugin",
+            "name": "Demo",
+            "version": "2",
+            "description": "updated",
+            "plugin_type": "channel-adapter",
+            "entrypoint": ["{python}", "-c", "import time; time.sleep(60)"],
+            "config_schema": "config.schema.json",
+        }))
+        archive.writestr("demo-plugin/config.schema.json", json.dumps({
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "default": False, "ui": {"control": "switch"}},
+            },
+        }))
+
+    updated = await host.install_from_zip(package.read_bytes(), overwrite=True)
+
+    assert updated["version"] == "2"
+    assert updated["enabled"] is True
+    assert updated["running"] is True
+    await host.stop("demo-plugin")
 
 
 @pytest.mark.asyncio

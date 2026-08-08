@@ -465,9 +465,11 @@ class PluginHost:
         if not payload:
             raise ValueError("插件包为空")
         if len(payload) > MAX_PLUGIN_PACKAGE_BYTES:
-            raise ValueError("插件包不能超过 20 MB")
+            limit_mb = (MAX_PLUGIN_PACKAGE_BYTES + 1024 * 1024 - 1) // (1024 * 1024)
+            raise ValueError(f"插件包不能超过 {limit_mb} MB")
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        was_running = False
         with tempfile.TemporaryDirectory(prefix="plugin-install-", dir=str(self.data_dir)) as temp_name:
             temp_dir = Path(temp_name)
             self._extract_zip(payload, temp_dir)
@@ -488,6 +490,8 @@ class PluginHost:
             try:
                 if target_dir.exists():
                     if plugin_id in self.plugins:
+                        current = self.plugins[plugin_id]
+                        was_running = bool(current.process and current.process.returncode is None)
                         await self.stop(plugin_id, keep_enabled=True)
                     await _rename_dir_with_retry(target_dir, backup_dir)
                 await _rename_dir_with_retry(staging_dir, target_dir)
@@ -500,9 +504,14 @@ class PluginHost:
                     await _rename_dir_with_retry(backup_dir, target_dir)
                 if staging_dir.exists():
                     shutil.rmtree(staging_dir, ignore_errors=True)
+                self.discover()
+                if was_running and plugin_id in self.plugins:
+                    await self.start(plugin_id)
                 raise
 
         self.discover()
+        if was_running:
+            await self.start(plugin_id)
         return self.public_detail(plugin_id)
 
     async def marketplace_plugins(self) -> dict[str, Any]:

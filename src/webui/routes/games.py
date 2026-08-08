@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
+from src.engine.game_instance import MAX_SAVE_PACKAGE_BYTES
 from src.webui.api import can_modify_character
 from src.webui.routes._common import (
     MAX_ACTION_CHARS,
@@ -19,6 +20,29 @@ from src.webui.routes._common import (
 from src.webui.services._common import _GAME_KEY_SEP
 
 logger = logging.getLogger("trpg")
+
+
+class _SavePackageTooLarge(ValueError):
+    pass
+
+
+async def _read_save_upload(reader) -> bytes:
+    payload = bytearray()
+    found = False
+    async for part in reader:
+        if part.name not in {"file", "save"}:
+            continue
+        if found:
+            raise ValueError("只能上传一个存档文件")
+        found = True
+        while True:
+            chunk = await part.read_chunk()
+            if not chunk:
+                break
+            if len(payload) + len(chunk) > MAX_SAVE_PACKAGE_BYTES:
+                raise _SavePackageTooLarge
+            payload.extend(chunk)
+    return bytes(payload)
 
 
 def _narration_callbacks(request: web.Request, game_key: str):
@@ -466,24 +490,16 @@ async def api_import_game(request: web.Request) -> web.Response:
     api = _get_api(request)
     if request.content_type != "multipart/form-data":
         return web.json_response({"ok": False, "error": "存档导入需要 multipart/form-data"}, status=400)
-    if request.content_length and request.content_length > 50 * 1024 * 1024:
+    if request.content_length and request.content_length > MAX_SAVE_PACKAGE_BYTES:
         return web.json_response({"ok": False, "error": "存档包不能超过 50 MB"}, status=413)
     try:
         reader = await request.multipart()
-        payload = b""
-        async for part in reader:
-            if part.name not in {"file", "save"}:
-                continue
-            chunks: list[bytes] = []
-            while True:
-                chunk = await part.read_chunk()
-                if not chunk:
-                    break
-                chunks.append(chunk)
-            payload = b"".join(chunks)
+        payload = await _read_save_upload(reader)
         if not payload:
             return web.json_response({"ok": False, "error": "缺少存档 zip 文件"}, status=400)
         result = await request.app["subsystems"].registry.import_save_zip(payload)
+    except _SavePackageTooLarge:
+        return web.json_response({"ok": False, "error": "存档包不能超过 50 MB"}, status=413)
     except Exception as exc:
         logger.exception("导入存档失败")
         return web.json_response({"ok": False, "error": f"导入存档失败：{exc}"}, status=400)
