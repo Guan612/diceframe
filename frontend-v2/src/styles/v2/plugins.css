@@ -1,0 +1,163 @@
+/* Plugins: a first-class workspace with a stable header and dense catalogue. */
+.plugin-workspace {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.plugin-surface-tabs,
+.plugin-surface-tabs > .n-tabs-pane-wrapper,
+.plugin-surface-tabs > .n-tabs-pane-wrapper > .n-tab-pane,
+.plugin-workspace .n-spin-container,
+.plugin-workspace .n-spin-content {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.plugin-surface-tabs > .n-tabs-nav {
+  margin: 12px 0 14px;
+  padding: 5px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-control-bg) 82%, transparent);
+}
+
+.plugin-surface-tabs > .n-tabs-nav .n-tabs-tab {
+  min-height: 35px;
+  padding: 6px 14px;
+  border-radius: calc(var(--df-radius-md) - 3px);
+  color: var(--df-text-muted);
+  transition: color .16s ease, background-color .16s ease;
+}
+
+.plugin-surface-tabs > .n-tabs-nav .n-tabs-tab:hover,
+.plugin-surface-tabs > .n-tabs-nav .n-tabs-tab--active {
+  color: var(--df-interactive-strong);
+  background: color-mix(in srgb, var(--df-interactive) 12%, var(--df-surface-2));
+}
+
+.plugin-surface-tabs > .n-tabs-nav .n-tabs-bar {
+  display: none;
+}
+
+.plugin-surface-tabs > .n-tab-pane {
+  padding-top: 16px;
+}
+
+.plugin-workspace .toolbar-row,
+.plugin-workspace .plugin-install,
+.plugin-workspace .theme-plugin-panel {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 72%, transparent);
+}
+
+.plugin-workspace.plugin-workspace .toolbar-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 160px auto;
+  gap: 9px;
+  margin-bottom: 10px;
+  padding: 10px;
+}
+
+.plugin-workspace .toolbar-row > * {
+  min-width: 0;
+}
+
+.plugin-workspace .plugin-install {
+  display: grid;
+  grid-template-columns: minmax(190px, .65fr) minmax(0, 1.35fr);
+  gap: 18px;
+  padding: 15px;
+}
+
+.plugin-workspace .install-controls {
+  justify-content: flex-end;
+}
+
+.plugin-workspace .type-filter-row {
+  gap: 7px;
+  margin-bottom: 11px;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--df-border-soft) 76%, transparent);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 54%, transparent);
+}
+
+.plugin-workspace.plugin-workspace .market-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 13px;
+  align-items: stretch;
+}
+
+.plugin-workspace .market-card {
+  position: relative;
+  display: flex;
+  min-height: 250px;
+  overflow: hidden;
+  flex-direction: column;
+  height: 100%;
+  padding: 15px;
+  border-color: color-mix(in srgb, var(--df-accent) 24%, var(--df-border-soft));
+  background:
+    radial-gradient(circle at 88% 5%, color-mix(in srgb, var(--df-interactive) 11%, transparent), transparent 26%),
+    linear-gradient(145deg, var(--df-surface-2), var(--df-surface-1));
+}
+
+.plugin-workspace .market-card::after {
+  position: absolute;
+  right: -35px;
+  bottom: -48px;
+  width: 115px;
+  height: 115px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 50%;
+  content: "";
+  opacity: .22;
+}
+
+.plugin-workspace .market-title-icon {
+  box-sizing: content-box;
+  flex: 0 0 auto;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--df-interactive) 30%, var(--df-border-soft));
+  border-radius: 8px;
+  color: var(--df-interactive-strong);
+  background: color-mix(in srgb, var(--df-interactive) 8%, var(--df-control-bg));
+}
+
+.plugin-workspace .market-title {
+  grid-template-columns: 50px minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: start;
+}
+
+.plugin-workspace .market-desc {
+  min-height: 3.2em;
+  line-height: 1.6;
+}
+
+.plugin-workspace .market-actions {
+  position: relative;
+  z-index: 1;
+  margin-top: auto;
+}
+
+.plugin-workspace .plugin-collapsible {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin-bottom: 8px;
+  overflow: hidden;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 78%, transparent);
+}
