@@ -32,6 +32,8 @@ import ToolsTab from './tabs/ToolsTab.vue'
 import ThemesTab from './tabs/ThemesTab.vue'
 import InstalledTab from './tabs/InstalledTab.vue'
 import MarketplaceTab from './tabs/MarketplaceTab.vue'
+import HubDetailModal from './modals/HubDetailModal.vue'
+import ExportPackModal from './modals/ExportPackModal.vue'
 
 const { t } = useLocale()
 const {
@@ -387,133 +389,45 @@ onMounted(async () => {
   </NTabs>
   </section>
 
-  <NModal v-model:show="hubDetailOpen" preset="card" class="hub-detail-modal" :title="hubDetail?.name || t('hubPluginDetails')">
-    <NSpin :show="hubDetailLoading">
-      <template v-if="hubDetail">
-        <p class="muted">{{ hubDetail.id }} · {{ hubDetail.version || t('unknownVersion') }}</p>
-        <p>{{ hubDetail.description || t('noDescription') }}</p>
-        <div class="hub-stats">
-          <span>{{ t('hubDownloads') }} <strong>{{ hubDetail.stats?.downloads_total || 0 }}</strong></span>
-          <span>{{ t('hubLikes') }} <strong>{{ hubDetail.stats?.likes || 0 }}</strong></span>
-          <span>{{ t('hubRating') }} <strong>{{ hubDetail.stats?.rating_average || 0 }}</strong></span>
-        </div>
-        <NAlert v-if="hubDetail.security?.install_allowed === false" type="error" :title="t('hubInstallBlocked')">
-          {{ (hubDetail.security.blocking_reasons || []).join(t('listSeparator')) }}
-        </NAlert>
-        <div class="hub-interactions">
-          <NButton :loading="busy === `hub-like:${hubDetail.id}`" @click="toggleHubLike">
-            {{ hubDetail.liked ? t('hubUnlike') : t('hubLike') }}
-          </NButton>
-          <span>{{ t('hubYourRating') }}</span>
-          <NRate :value="hubRating || 0" :disabled="busy === `hub-rating:${hubDetail.id}`" @update:value="saveHubRating" />
-          <NButton v-if="hubRating" text @click="saveHubRating(null)">{{ t('hubClearRating') }}</NButton>
-        </div>
-        <section v-if="safeHubReadmeHtml" class="hub-readme safe-markdown" v-html="safeHubReadmeHtml" />
-        <p v-else-if="!hubDetailLoading" class="muted">{{ t('hubReadmeUnavailable') }}</p>
-      </template>
-    </NSpin>
-  </NModal>
+  <HubDetailModal
+    v-model:show="hubDetailOpen"
+    :hub-detail="hubDetail"
+    :hub-detail-loading="hubDetailLoading"
+    :hub-rating="hubRating"
+    :busy="busy"
+    :safe-hub-readme-html="safeHubReadmeHtml"
+    :toggle-hub-like="toggleHubLike"
+    :save-hub-rating="saveHubRating"
+  />
 
-  <NModal
+  <ExportPackModal
     v-model:show="showExportModal"
-    preset="card"
-    class="export-pack-modal"
-    :title="t('exportPackTitle')"
-    :bordered="false"
-    style="width: min(800px, calc(100vw - 24px)); max-height: calc(100dvh - 28px);"
-  >
-    <p class="muted export-pack-help">{{ t('exportPackHelp') }}</p>
-    <NSpin :show="authorLoading">
-      <div class="export-pack-scroll">
-        <section class="export-pack-section">
-          <h3>{{ t('exportPackBasicInfo') }}</h3>
-          <div class="export-pack-meta-grid">
-            <div class="field">
-              <label class="input-label">
-                <span class="field-title">{{ t('packId') }}</span>
-                <NInput v-model:value="packId" placeholder="my-cool-pack" />
-              </label>
-            </div>
-            <div class="field">
-              <label class="input-label">
-                <span class="field-title">{{ t('packName') }}</span>
-                <NInput v-model:value="packName" />
-              </label>
-            </div>
-            <div class="field export-version-field">
-              <label class="input-label">
-                <span class="field-title">{{ t('packVersion') }}</span>
-                <NInput v-model:value="packVersion" />
-              </label>
-            </div>
-            <div class="field export-description-field">
-              <label class="input-label">
-                <span class="field-title">{{ t('packDescription') }}</span>
-                <NInput v-model:value="packDescription" type="textarea" :autosize="{ minRows: 1, maxRows: 2 }" />
-              </label>
-            </div>
-          </div>
-        </section>
-
-        <section class="export-pack-section">
-          <h3>{{ t('exportPackContentSelection') }}</h3>
-          <div class="export-content-grid">
-            <div class="export-content-column">
-              <label class="input-label">
-                <span class="field-title">{{ t('selectWorld') }}</span>
-                <NSelect v-model:value="selectedWorldId" :options="authorWorldOptions" clearable />
-              </label>
-              <label class="compact-file-field" :class="{ disabled: !selectedWorldId || !includeSceneImages }">
-                <span>{{ t('worldSceneImage') }}</span>
-                <input type="file" accept="image/jpeg,image/png,image/webp" :disabled="!selectedWorldId || !includeSceneImages" @change="setExportSceneImage('world', $event)">
-                <small class="muted">{{ t('worldSceneImageHint') }}</small>
-              </label>
-            </div>
-            <div class="export-content-column">
-              <label class="input-label">
-                <span class="field-title">{{ t('selectRule') }}</span>
-                <NSelect v-model:value="selectedRuleId" :options="authorRuleOptions" clearable />
-              </label>
-              <label class="compact-file-field" :class="{ disabled: !selectedRuleId || !includeSceneImages }">
-                <span>{{ t('ruleSceneImage') }}</span>
-                <input type="file" accept="image/jpeg,image/png,image/webp" :disabled="!selectedRuleId || !includeSceneImages" @change="setExportSceneImage('rule', $event)">
-                <small class="muted">{{ t('ruleSceneImageHint') }}</small>
-              </label>
-            </div>
-            <label class="input-label export-card-select">
-              <span class="field-title">{{ t('selectCards') }}</span>
-              <NSelect v-model:value="selectedCardIds" :options="authorCardOptions" multiple clearable />
-            </label>
-          </div>
-        </section>
-
-        <section class="export-pack-section export-resource-section">
-          <h3>{{ t('exportPackPortableAssets') }}</h3>
-          <div class="export-resource-options">
-            <label class="export-resource-option" :title="t('includeContentPackPortraitsHint')">
-              <NCheckbox v-model:checked="includePortraits">{{ t('includeContentPackPortraits') }}</NCheckbox>
-            </label>
-            <label class="export-resource-option" :title="t('includeContentPackSceneImagesHint')">
-              <NCheckbox v-model:checked="includeSceneImages">{{ t('includeContentPackSceneImages') }}</NCheckbox>
-            </label>
-          </div>
-        </section>
-      </div>
-      <footer class="export-pack-footer">
-        <p class="muted hint">{{ t('exportPackFormatsHint') }}</p>
-        <div class="actions-row">
-          <NButton type="primary" :loading="busy === 'export-pack'" @click="exportPack(false)">
-            <template #icon><NIcon :component="CloudDownloadOutline" /></template>
-            {{ t('exportPack') }}
-          </NButton>
-          <NButton :loading="busy === 'export-pack'" :title="t('exportRepoSourceHint')" @click="exportPack(true)">
-            <template #icon><NIcon :component="CreateOutline" /></template>
-            {{ t('exportRepoSource') }}
-          </NButton>
-        </div>
-      </footer>
-    </NSpin>
-  </NModal>
+    :author-loading="authorLoading"
+    :pack-id="packId"
+    :pack-name="packName"
+    :pack-version="packVersion"
+    :pack-description="packDescription"
+    :selected-world-id="selectedWorldId"
+    :selected-rule-id="selectedRuleId"
+    :selected-card-ids="selectedCardIds"
+    :include-portraits="includePortraits"
+    :include-scene-images="includeSceneImages"
+    :author-world-options="authorWorldOptions"
+    :author-rule-options="authorRuleOptions"
+    :author-card-options="authorCardOptions"
+    :busy="busy"
+    :set-pack-id="(v: string) => packId = v"
+    :set-pack-name="(v: string) => packName = v"
+    :set-pack-version="(v: string) => packVersion = v"
+    :set-pack-description="(v: string) => packDescription = v"
+    :set-selected-world-id="(v: string | null) => selectedWorldId = v || ''"
+    :set-selected-rule-id="(v: string | null) => selectedRuleId = v || ''"
+    :set-selected-card-ids="(v: (string | number)[] | null) => selectedCardIds = (v || []) as string[]"
+    :set-include-portraits="(v: boolean) => includePortraits = v"
+    :set-include-scene-images="(v: boolean) => includeSceneImages = v"
+    :set-export-scene-image="setExportSceneImage"
+    :export-pack="exportPack"
+  />
 </template>
 
 <style scoped>
