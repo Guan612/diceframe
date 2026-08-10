@@ -29,6 +29,7 @@ import PluginToolGroup from './PluginToolGroup.vue'
 import MirrorsTab from './tabs/MirrorsTab.vue'
 import ContentTab from './tabs/ContentTab.vue'
 import ToolsTab from './tabs/ToolsTab.vue'
+import ThemesTab from './tabs/ThemesTab.vue'
 
 const { t } = useLocale()
 const {
@@ -489,48 +490,20 @@ onMounted(async () => {
     </NTabPane>
 
     <NTabPane name="themes" :tab="t('themes')">
-      <section class="theme-plugin-panel builtin-theme-panel">
-        <div>
-          <h3>{{ t('builtinThemes') }}</h3>
-          <p class="muted">{{ t('builtinThemesHelp') }}</p>
-        </div>
-        <div class="builtin-theme-grid">
-          <button
-            v-for="item in builtinSkins"
-            :key="item.id"
-            type="button"
-            class="builtin-theme-card"
-            :class="{ active: skin === item.id && !pluginThemeId }"
-            :aria-pressed="skin === item.id && !pluginThemeId"
-            @click="selectBuiltinSkin(item.id)"
-          >
-            <span class="theme-swatches" aria-hidden="true">
-              <i v-for="color in item.swatches" :key="color" :style="{ backgroundColor: color }" />
-            </span>
-            <strong>{{ t(skinNameKeys[item.id]) }}</strong>
-            <small>{{ t(skinDescriptionKeys[item.id]) }}</small>
-          </button>
-        </div>
-      </section>
-      <section class="theme-plugin-panel">
-        <div>
-          <h3>{{ t('pluginThemes') }}</h3>
-          <p class="muted">{{ t('pluginThemesHelp') }}</p>
-        </div>
-        <div class="theme-plugin-controls">
-          <NSelect
-            :value="pluginThemeId || null"
-            :options="themeOptions"
-            :placeholder="t('selectEnabledThemePlugin')"
-            clearable
-            @update:value="selectPluginTheme"
-          />
-          <NButton :disabled="!pluginThemeId" @click="clearPluginTheme">{{ t('clear') }}</NButton>
-          <NButton @click="loadPluginThemes">{{ t('refresh') }}</NButton>
-        </div>
-        <p v-if="selectedThemeDescription()" class="muted">{{ selectedThemeDescription() }}</p>
-        <p v-if="!pluginThemes.length" class="muted">{{ t('noEnabledThemePlugins') }}</p>
-      </section>
+      <ThemesTab
+        :builtin-skins="builtinSkins"
+        :skin="skin"
+        :plugin-theme-id="pluginThemeId"
+        :plugin-themes="pluginThemes"
+        :theme-options="themeOptions"
+        :skin-name-keys="skinNameKeys"
+        :skin-description-keys="skinDescriptionKeys"
+        :load-plugin-themes="loadPluginThemes"
+        :select-builtin-skin="selectBuiltinSkin"
+        :select-plugin-theme="selectPluginTheme"
+        :clear-plugin-theme="clearPluginTheme"
+        :selected-theme-description="selectedThemeDescription"
+      />
     </NTabPane>
 
     <NTabPane name="tools" :tab="t('pluginToolsTab')">
