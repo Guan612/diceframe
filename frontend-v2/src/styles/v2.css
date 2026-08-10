@@ -121,6 +121,7 @@ button.success,
 
 .n-input .n-input__placeholder,
 .n-base-close{min-height:0}
+.n-button--error-type{background-image:linear-gradient(180deg,#c75649,#8f2f2a)!important;border-color:rgba(255,222,194,.2)!important;color:#fff!important}
 
 .n-base-selection .n-base-selection-placeholder {
   color: var(--df-text-muted) !important;
