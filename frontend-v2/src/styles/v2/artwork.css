@@ -1,0 +1,128 @@
+/* Project-owned artwork adds the illustrated depth of the new visual direction.
+   Theme tokens remain the dominant color layer, so every built-in skin can tint
+   the same safe, local assets without exposing CSS or arbitrary remote URLs. */
+body {
+  background-color: var(--df-canvas);
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--df-canvas-glow) 78%, transparent), var(--df-canvas) 96%),
+    radial-gradient(circle at 48% -10%, color-mix(in srgb, var(--df-interactive) 12%, transparent), transparent 42%),
+    var(--df-bg-atmosphere-image);
+  background-repeat: no-repeat;
+  background-position: center top;
+  background-size: cover;
+}
+
+body.light {
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--df-canvas-glow) 92%, transparent), color-mix(in srgb, var(--df-canvas) 96%, transparent)),
+    radial-gradient(circle at 48% -10%, color-mix(in srgb, var(--df-interactive) 10%, transparent), transparent 42%),
+    var(--df-bg-atmosphere-image);
+}
+
+.app-workspace {
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--df-canvas) 28%, transparent) 62%, color-mix(in srgb, var(--df-canvas) 66%, transparent));
+}
+
+.login-page {
+  background-color: var(--df-canvas);
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--df-canvas) 18%, transparent), color-mix(in srgb, var(--df-canvas) 78%, transparent)),
+    radial-gradient(ellipse at 50% 20%, color-mix(in srgb, var(--df-interactive) 10%, transparent), transparent 48%),
+    var(--df-bg-atmosphere-image);
+  background-position: center;
+  background-size: cover;
+}
+
+body.light .login-page {
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--df-canvas-glow) 60%, transparent), color-mix(in srgb, var(--df-canvas) 90%, transparent)),
+    var(--df-bg-atmosphere-image);
+}
+
+.game-card-cover::before {
+  background-image:
+    linear-gradient(90deg, color-mix(in srgb, var(--df-canvas) 58%, transparent), transparent 46%),
+    linear-gradient(180deg, transparent 30%, color-mix(in srgb, var(--df-canvas) 88%, transparent)),
+    var(--df-bg-scene-image);
+  background-position: center;
+  background-size: cover;
+  filter: saturate(.86) contrast(1.04);
+  transform: scale(1.015);
+}
+
+.game-card-cover::after {
+  inset: 0;
+  width: auto;
+  height: auto;
+  border: 0;
+  clip-path: none;
+  background:
+    linear-gradient(105deg, color-mix(in srgb, var(--df-canvas) 34%, transparent), transparent 55%);
+  opacity: .9;
+}
+
+.cover-sigil {
+  border-color: color-mix(in srgb, var(--df-accent-strong) 64%, transparent);
+  background: color-mix(in srgb, var(--df-canvas) 62%, transparent);
+  opacity: .78;
+  backdrop-filter: blur(4px);
+}
+
+.log-campaign-card {
+  background-image:
+    linear-gradient(180deg, transparent 8%, color-mix(in srgb, var(--df-surface-2) 92%, transparent) 64%),
+    linear-gradient(90deg, color-mix(in srgb, var(--df-canvas) 32%, transparent), transparent),
+    var(--df-bg-ruins-image);
+  background-position: 68% center;
+  background-size: cover;
+}
+
+.settings-nav {
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--df-surface-1) 72%, transparent), var(--df-surface-1) 42%),
+    var(--df-bg-atmosphere-image);
+  background-position: 72% center;
+  background-size: auto 100%;
+}
+
+.play-main {
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--df-canvas) 72%, transparent), color-mix(in srgb, var(--df-canvas) 94%, transparent)),
+    var(--df-bg-atmosphere-image);
+  background-position: center;
+  background-size: cover;
+}
+
+body.light .play-main {
+  background-image:
+    linear-gradient(180deg, color-mix(in srgb, var(--df-canvas) 90%, transparent), color-mix(in srgb, var(--df-canvas-glow) 96%, transparent)),
+    var(--df-bg-atmosphere-image);
+}
+
+@media (max-width: 800px) {
+  body {
+    background-position: 64% top;
+    background-size: auto 100dvh;
+  }
+
+  .login-page {
+    background-position: 70% center;
+  }
+
+  .game-card-cover::before {
+    background-position: 68% center;
+  }
+
+  .settings-nav {
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    background-image: linear-gradient(90deg, color-mix(in srgb, var(--df-surface-1) 86%, transparent), var(--df-surface-1));
+  }
+
+  .settings-nav .nav-item {
+    flex: 0 0 auto;
+    min-height: 40px;
+  }
+}

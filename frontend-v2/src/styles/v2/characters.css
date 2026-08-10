@@ -303,3 +303,12 @@
   .current-character-actions { grid-template-columns: minmax(0, 1fr); }
   .character-library-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+.characters-page .npc-mini-card {
+  flex-direction: row;
+}
+
+.characters-page .npc-mini-card h2,
+.characters-page .current-character-card h2 {
+  min-height: 0;
+}
