@@ -31,6 +31,7 @@ import ContentTab from './tabs/ContentTab.vue'
 import ToolsTab from './tabs/ToolsTab.vue'
 import ThemesTab from './tabs/ThemesTab.vue'
 import InstalledTab from './tabs/InstalledTab.vue'
+import MarketplaceTab from './tabs/MarketplaceTab.vue'
 
 const { t } = useLocale()
 const {
@@ -292,95 +293,33 @@ onMounted(async () => {
     </NTabPane>
 
     <NTabPane name="marketplace" :tab="t('pluginMarketplaceTab')">
-      <NAlert
-        v-if="hubPreferences?.available && !hubPreferences.choice_made"
-        type="info"
-        :title="t('hubTelemetryChoiceTitle')"
-        class="hub-choice-alert"
-      >
-        <p>{{ t('hubTelemetryChoiceSummary') }}</p>
-        <div class="hub-choice-actions">
-          <NButton type="primary" :loading="busy === 'hub-telemetry'" @click="setHubTelemetry(true)">
-            {{ t('hubTelemetryEnable') }}
-          </NButton>
-          <NButton :disabled="busy === 'hub-telemetry'" @click="setHubTelemetry(false)">
-            {{ t('hubTelemetryKeepOff') }}
-          </NButton>
-        </div>
-      </NAlert>
-      <section class="toolbar-row">
-        <NInput v-model:value="marketKeyword" :placeholder="t('pluginSearchPlaceholder')" clearable />
-        <NSelect v-model:value="sortMode" class="market-sort-select" :options="sortOptions" :placeholder="t('pluginSort')" />
-        <NButton :loading="marketLoading" @click="loadMarketplace">
-          <template #icon><NIcon :component="RefreshOutline" /></template>
-          {{ t('refresh') }}
-        </NButton>
-      </section>
-      <div class="type-filter-row">
-        <NButton size="tiny" :type="typeFilter === '' ? 'primary' : 'default'" @click="typeFilter = ''">{{ t('pluginFilterAll') }}</NButton>
-        <NButton v-for="opt in pluginTypeFilters" :key="opt.value" size="tiny" :type="typeFilter === opt.value ? 'primary' : 'default'" @click="typeFilter = opt.value">{{ t(opt.labelKey) }}</NButton>
-      </div>
-      <p v-if="marketplaceSource?.mirror_name" class="muted source-line">
-        {{ t('source') }}: {{ marketplaceSource.mirror_name }}, {{ marketplaceSource.elapsed_ms || 0 }} ms
-      </p>
-      <NSpin :show="marketLoading">
-        <div class="market-grid">
-          <article v-for="item in paginatedMarketplace" :key="item.id" class="market-card">
-            <div class="market-title">
-              <NIcon :component="pluginTypeIcon(item.plugin_type)" :size="26" class="market-title-icon" />
-              <div class="market-title-text">
-                <h3>{{ item.name }}</h3>
-                <p class="muted">{{ item.id }} · {{ item.version || t('unknownVersion') }}</p>
-                <p v-if="item.author" class="muted market-author">{{ t('author') }}: {{ item.author }}</p>
-              </div>
-              <NTag v-if="item.stars" size="small" class="stars-tag" :title="t('pluginStars', { count: item.stars })">
-                <template #icon><NIcon :component="Star" /></template>
-                {{ item.stars }}
-              </NTag>
-            </div>
-            <p class="market-desc" :title="item.description">{{ item.description || t('noDescription') }}</p>
-            <div class="tag-row">
-              <NTag v-if="item.plugin_type" size="small">{{ pluginTypeLabel(item.plugin_type) }}</NTag>
-              <NTag v-if="item.support?.level === 'partial'" type="warning" size="small">{{ t('pluginSupportPartial') }}</NTag>
-              <NTag v-if="item.support?.level === 'reserved'" type="error" size="small">{{ t('pluginSupportReserved') }}</NTag>
-              <NTag v-if="item.trust_level === 'official'" type="success" size="small">{{ t('pluginTrustOfficial') }}</NTag>
-              <NTag v-else-if="item.trust_level === 'verified'" type="info" size="small">{{ t('pluginTrustVerified') }}</NTag>
-              <NTag v-else size="small">{{ t('pluginTrustCommunity') }}</NTag>
-              <NTag v-if="item.distribution === 'bundled'" type="success" size="small">{{ t('pluginBundled') }}</NTag>
-              <NTag v-else-if="item.risk_level === 'declarative'" type="success" size="small">{{ t('pluginRiskDeclarative') }}</NTag>
-              <NTag v-else-if="item.risk_level === 'unrestricted-process'" type="error" size="small">{{ t('pluginRiskProcess') }}</NTag>
-              <NTag v-if="item.commit_sha" type="info" size="small">{{ t('pluginSourcePinned') }}</NTag>
-              <NTag v-if="item.update_policy === 'approval-required'" type="error" size="small">{{ t('pluginUpdateApprovalRequired') }}</NTag>
-              <NTag v-if="item.installed" type="success" size="small">{{ t('installedVersion', { version: item.installed_version || '' }) }}</NTag>
-              <NTag v-if="item.installed && marketItemHasNewerVersion(item)" type="warning" size="small">{{ t('newVersionAvailable', { version: item.latest?.version || item.version || '' }) }}</NTag>
-              <NTag v-for="tag in item.tags || []" :key="tag" size="small">{{ tag }}</NTag>
-            </div>
-            <p v-if="item.permissions?.length" class="muted market-permissions">
-              {{ t('permissions') }}: {{ item.permissions.slice(0, 4).join(t('listSeparator')) }}{{ item.permissions.length > 4 ? t('andMore') : '' }}
-            </p>
-            <p v-if="item.support?.summary" class="muted market-permissions">{{ item.support.summary }}</p>
-            <p v-if="item.verification_error" class="market-warning">{{ item.verification_error }}</p>
-            <p v-else-if="item.needs_core_update" class="market-warning">{{ t('pluginNeedsCoreUpdate', { version: item.min_app_version || '' }) }}</p>
-            <div class="market-actions">
-              <NButton v-if="item.installed && !marketItemHasNewerVersion(item)" secondary disabled>{{ t('installed') }}</NButton>
-              <NButton v-else type="primary" :disabled="item.installable === false" :loading="busy === `market:${item.id}`" @click="installMarketPlugin(item)">
-                <template #icon><NIcon :component="CloudDownloadOutline" /></template>
-                {{ item.installed ? t('update') : t('install') }}
-              </NButton>
-              <NButton secondary :disabled="!item.repository_url && !item.homepage" @click="openUrl(item.repository_url || item.homepage)">
-                {{ t('openRepository') }}
-              </NButton>
-              <NButton v-if="marketplaceSource?.hub" secondary @click="openHubDetail(item)">
-                {{ t('hubPluginDetails') }}
-              </NButton>
-            </div>
-          </article>
-        </div>
-        <div v-if="totalPages > 1" class="market-pagination">
-          <NPagination :page="page" :page-count="totalPages" @update:page="goToPage" />
-        </div>
-        <p v-if="!filteredMarketplace.length" class="muted">{{ t('marketplaceNoMatches') }}</p>
-      </NSpin>
+      <MarketplaceTab
+        :hub-preferences="hubPreferences"
+        :market-keyword="marketKeyword"
+        :sort-mode="sortMode"
+        :market-loading="marketLoading"
+        :marketplace-source="marketplaceSource"
+        :filtered-marketplace="filteredMarketplace"
+        :paginated-marketplace="paginatedMarketplace"
+        :total-pages="totalPages"
+        :page="page"
+        :type-filter="typeFilter"
+        :plugin-type-filters="pluginTypeFilters"
+        :sort-options="sortOptions"
+        :busy="busy"
+        :plugin-type-icon="pluginTypeIcon"
+        :plugin-type-label="pluginTypeLabel"
+        :market-item-has-newer-version="marketItemHasNewerVersion"
+        :set-hub-telemetry="setHubTelemetry"
+        :load-marketplace="loadMarketplace"
+        :install-market-plugin="installMarketPlugin"
+        :open-url="openUrl"
+        :open-hub-detail="openHubDetail"
+        :go-to-page="goToPage"
+        @update:market-keyword="(v: string) => marketKeyword = v"
+        @update:sort-mode="(v: string) => sortMode = v"
+        @update:type-filter="(v: string) => typeFilter = v"
+      />
     </NTabPane>
 
     <NTabPane name="themes" :tab="t('themes')">
