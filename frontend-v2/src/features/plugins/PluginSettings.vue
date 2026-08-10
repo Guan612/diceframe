@@ -2,18 +2,20 @@
 import { computed, onMounted, ref } from 'vue'
 import type { Component } from 'vue'
 import {
-  NButton, NCheckbox, NCollapse, NCollapseItem, NIcon, NInput, NInputNumber,
-  NModal, NPagination, NSelect, NSpin, NSwitch, NTabPane, NTabs, NTag,
+  NAlert, NButton, NCheckbox, NCollapse, NCollapseItem, NIcon, NInput, NInputNumber,
+  NModal, NPagination, NRate, NSelect, NSpin, NSwitch, NTabPane, NTabs, NTag,
 } from 'naive-ui'
+import DOMPurify from 'dompurify'
 import {
   AddOutline, ChatbubblesOutline, ChevronDown, ChevronUp, CloudDownloadOutline,
   ColorPaletteOutline, ConstructOutline, CreateOutline, CubeOutline,
   ExtensionPuzzleOutline, MapOutline, RefreshOutline, Star, TrashOutline,
 } from '@vicons/ionicons5'
-import { useTheme } from '@/composables/useTheme'
+import { useTheme, type SkinName } from '@/composables/useTheme'
 import { useLocale } from '@/composables/useLocale'
-import type { PluginInfo } from '@/api/types'
+import type { CharacterPortrait, PluginInfo, PluginToolDescriptor } from '@/api/types'
 import NapcatGuide from '@/components/plugins/NapcatGuide.vue'
+import PortraitImage from '@/components/PortraitImage.vue'
 import { pluginApi } from '@/api/plugins'
 import { usePluginContent } from './usePluginContent'
 import { useInstalledPlugins } from './useInstalledPlugins'
@@ -23,9 +25,13 @@ import { usePluginExport } from './usePluginExport'
 import { usePluginTypes } from './usePluginTypes'
 import { usePluginUninstallCleanup } from './usePluginUninstallCleanup'
 import TunnelCard from './TunnelCard.vue'
+import PluginToolGroup from './PluginToolGroup.vue'
 
 const { t } = useLocale()
-const { pluginThemes, pluginThemeId, loadPluginThemes, applyPluginTheme, clearPluginTheme } = useTheme()
+const {
+  skin, builtinSkins, applySkin,
+  pluginThemes, pluginThemeId, loadPluginThemes, applyPluginTheme, clearPluginTheme,
+} = useTheme()
 const busy = ref('')
 // 插件类型筛选（已装 + 商店共用同一筛选值）：筛选条由后端类型表驱动
 const typeFilter = ref('')
@@ -50,15 +56,21 @@ const sortOptions = [
 ]
 const {
   tools, toolInputs, toolResults, toolsLoading,
-  toolKey, loadTools, setToolInput, invokeTool,
+  loadTools, setToolInput, invokeTool,
 } = usePluginTools(busy)
 const {
   loading: authorLoading,
   packId, packName, packVersion, packDescription,
   selectedWorldId, selectedRuleId, selectedCardIds,
+  includePortraits, includeSceneImages, worldSceneImageFile, ruleSceneImageFile,
   worldOptions: authorWorldOptions, ruleOptions: authorRuleOptions, cardOptions: authorCardOptions,
   loadAuthorData, exportPack,
 } = usePluginExport(busy)
+function setExportSceneImage(kind: 'world' | 'rule', event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0] || null
+  if (kind === 'world') worldSceneImageFile.value = file
+  else ruleSceneImageFile.value = file
+}
 const showExportModal = ref(false)
 let authorLoaded = false
 async function openExportModal() {
@@ -73,6 +85,13 @@ const {
   loadContentResources, loadWorlds, contentTitle, contentSubtitle, importContent, importAllContent,
 } = usePluginContent(busy)
 
+function contentPortrait(item: Record<string, unknown>): CharacterPortrait | undefined {
+  const portrait = item.portrait
+  return portrait && typeof portrait === 'object' && 'kind' in portrait
+    ? portrait as CharacterPortrait
+    : undefined
+}
+
 async function refreshPluginSurfaces() {
   await load()
   await Promise.all([loadMarketplace(), loadPluginThemes(), loadContentResources()])
@@ -83,11 +102,14 @@ const { onUninstalled } = usePluginUninstallCleanup()
 const {
   mirrors, mirrorTests, marketplaceSource, marketKeyword,
   marketLoading, mirrorLoading, newMirror, sortMode, filteredMarketplace,
+  hubPreferences, hubDetail, hubReadmeHtml, hubDetailOpen, hubDetailLoading, hubRating,
   page, totalPages, paginatedMarketplace, goToPage,
-  canUpdateFromStore, loadMarketplace, loadMirrors, installMarketPlugin,
+  canUpdateFromStore, loadMarketplace, loadHubPreferences, setHubTelemetry,
+  loadMirrors, installMarketPlugin, openHubDetail, toggleHubLike, saveHubRating,
   updateInstalledPlugin, uninstallPlugin, addMirror, saveMirror,
   deleteMirror, testMirror, openUrl, marketItemHasNewerVersion,
 } = usePluginMarketplace(busy, refreshPluginSurfaces, typeFilter, onUninstalled)
+const safeHubReadmeHtml = computed(() => DOMPurify.sanitize(hubReadmeHtml.value))
 const {
   plugins, filteredPlugins, expandedPluginNames, loading, installFile, overwriteInstall,
   load, ordered, value, textValue, selectValue, numberValue, set,
@@ -112,14 +134,32 @@ function permissionDescription(p: PluginInfo, permission: string): string {
 const toolUiRegistry: Record<string, Component> = {
   'tunnel-card': TunnelCard,
 }
-// 声明了专用工具 UI 且 registry 有对应组件的已装插件：工具 Tab 渲染专用卡而非裸工具表单。
-const toolUiPlugins = computed(() =>
-  plugins.value.filter(p => p.tool_ui && toolUiRegistry[p.tool_ui]),
-)
-// 裸工具网格：过滤掉由专用 UI 卡覆盖的插件的工具（如 cloudflare-tunnel 的 tunnel_*）。
-const plainTools = computed(() =>
-  tools.value.filter(tool => !(tool.tool_ui && toolUiRegistry[tool.tool_ui])),
-)
+interface PluginToolGroupState {
+  plugin: PluginInfo
+  tools: PluginToolDescriptor[]
+  renderer: Component | null
+}
+
+// 工具页统一按插件分组。专用 UI 和通用 JSON 工具共享同一层插件模块外壳，
+// 避免未来新增插件时把多个插件的状态和操作混在一起。
+const toolGroups = computed<PluginToolGroupState[]>(() => {
+  const toolsByPlugin = new Map<string, PluginToolDescriptor[]>()
+  for (const tool of tools.value) {
+    const group = toolsByPlugin.get(tool.plugin_id) || []
+    group.push(tool)
+    toolsByPlugin.set(tool.plugin_id, group)
+  }
+  return plugins.value.flatMap((plugin) => {
+    const pluginTools = toolsByPlugin.get(plugin.id) || []
+    const toolUi = plugin.tool_ui || pluginTools.find(tool => tool.tool_ui)?.tool_ui || ''
+    if (!pluginTools.length && !toolUi) return []
+    return [{
+      plugin,
+      tools: pluginTools,
+      renderer: toolUiRegistry[toolUi] || null,
+    }]
+  })
+})
 
 function selectedThemeDescription(): string {
   const theme = pluginThemes.value.find(item => item.id === pluginThemeId.value)
@@ -128,6 +168,22 @@ function selectedThemeDescription(): string {
 function selectPluginTheme(value: string | null) {
   applyPluginTheme(value)
 }
+function selectBuiltinSkin(value: SkinName) {
+  clearPluginTheme()
+  applySkin(value)
+}
+const skinNameKeys = {
+  midnight: 'skinMidnight',
+  royal: 'skinRoyal',
+  jade: 'skinJade',
+  crimson: 'skinCrimson',
+} as const satisfies Record<SkinName, string>
+const skinDescriptionKeys = {
+  midnight: 'skinMidnightHelp',
+  royal: 'skinRoyalHelp',
+  jade: 'skinJadeHelp',
+  crimson: 'skinCrimsonHelp',
+} as const satisfies Record<SkinName, string>
 const pluginDocs = ref<Record<string, { content: string; name: string }>>({})
 const pluginDocsLoading = ref<Record<string, boolean>>({})
 
@@ -170,14 +226,24 @@ function renderDocsMarkdown(markdown: string): string {
 
 onMounted(async () => {
   await load()
-  await Promise.all([loadMarketplace(), loadMirrors(), loadContentResources(), loadWorlds(), loadTypes()])
+  await Promise.all([
+    loadMarketplace(), loadHubPreferences(), loadMirrors(), loadContentResources(), loadWorlds(), loadTypes(),
+  ])
 })
 </script>
 
 <template>
-  <NTabs type="line" animated>
+  <section class="plugin-workspace">
+    <header class="view-title archive-hero">
+      <div>
+        <span class="section-kicker">{{ t('pluginsKicker') }}</span>
+        <h1>{{ t('settingsSectionPlugins') }}</h1>
+        <p class="muted">{{ t('pluginWorkspaceSubtitle') }}</p>
+      </div>
+    </header>
+  <NTabs type="line" animated class="plugin-surface-tabs">
     <NTabPane name="installed" :tab="t('pluginsInstalledTab')">
-      <NSpin :show="loading">
+      <NSpin :show="loading && !plugins.length">
         <section class="plugin-install">
           <div>
             <h3>{{ t('installPluginTitle') }}</h3>
@@ -328,6 +394,22 @@ onMounted(async () => {
     </NTabPane>
 
     <NTabPane name="marketplace" :tab="t('pluginMarketplaceTab')">
+      <NAlert
+        v-if="hubPreferences?.available && !hubPreferences.choice_made"
+        type="info"
+        :title="t('hubTelemetryChoiceTitle')"
+        class="hub-choice-alert"
+      >
+        <p>{{ t('hubTelemetryChoiceSummary') }}</p>
+        <div class="hub-choice-actions">
+          <NButton type="primary" :loading="busy === 'hub-telemetry'" @click="setHubTelemetry(true)">
+            {{ t('hubTelemetryEnable') }}
+          </NButton>
+          <NButton :disabled="busy === 'hub-telemetry'" @click="setHubTelemetry(false)">
+            {{ t('hubTelemetryKeepOff') }}
+          </NButton>
+        </div>
+      </NAlert>
       <section class="toolbar-row">
         <NInput v-model:value="marketKeyword" :placeholder="t('pluginSearchPlaceholder')" clearable />
         <NSelect v-model:value="sortMode" class="market-sort-select" :options="sortOptions" :placeholder="t('pluginSort')" />
@@ -390,6 +472,9 @@ onMounted(async () => {
               <NButton secondary :disabled="!item.repository_url && !item.homepage" @click="openUrl(item.repository_url || item.homepage)">
                 {{ t('openRepository') }}
               </NButton>
+              <NButton v-if="marketplaceSource?.hub" secondary @click="openHubDetail(item)">
+                {{ t('hubPluginDetails') }}
+              </NButton>
             </div>
           </article>
         </div>
@@ -401,6 +486,29 @@ onMounted(async () => {
     </NTabPane>
 
     <NTabPane name="themes" :tab="t('themes')">
+      <section class="theme-plugin-panel builtin-theme-panel">
+        <div>
+          <h3>{{ t('builtinThemes') }}</h3>
+          <p class="muted">{{ t('builtinThemesHelp') }}</p>
+        </div>
+        <div class="builtin-theme-grid">
+          <button
+            v-for="item in builtinSkins"
+            :key="item.id"
+            type="button"
+            class="builtin-theme-card"
+            :class="{ active: skin === item.id && !pluginThemeId }"
+            :aria-pressed="skin === item.id && !pluginThemeId"
+            @click="selectBuiltinSkin(item.id)"
+          >
+            <span class="theme-swatches" aria-hidden="true">
+              <i v-for="color in item.swatches" :key="color" :style="{ backgroundColor: color }" />
+            </span>
+            <strong>{{ t(skinNameKeys[item.id]) }}</strong>
+            <small>{{ t(skinDescriptionKeys[item.id]) }}</small>
+          </button>
+        </div>
+      </section>
       <section class="theme-plugin-panel">
         <div>
           <h3>{{ t('pluginThemes') }}</h3>
@@ -434,53 +542,26 @@ onMounted(async () => {
         </NButton>
       </section>
       <NSpin :show="toolsLoading">
-        <template v-if="toolUiPlugins.length">
-          <h4 class="tool-section-title">{{ t('pluginToolsDedicated') }}</h4>
-          <component
-            v-for="p in toolUiPlugins"
-            :key="p.id"
-            :is="toolUiRegistry[p.tool_ui!]"
+        <div v-if="toolGroups.length" class="plugin-tool-groups">
+          <PluginToolGroup
+            v-for="group in toolGroups"
+            :key="group.plugin.id"
+            :plugin="group.plugin"
+            :tools="group.tools"
+            :renderer="group.renderer"
+            :tool-inputs="toolInputs"
+            :tool-results="toolResults"
+            :busy="busy"
+            @update-tool-input="setToolInput"
+            @invoke="invokeTool"
           />
-        </template>
-        <template v-if="plainTools.length">
-          <h4 class="tool-section-title">{{ t('pluginToolsManualTitle') }}</h4>
-          <div class="tool-grid">
-            <article v-for="tool in plainTools" :key="toolKey(tool)" class="tool-card">
-            <div class="tool-heading">
-              <div>
-                <h3>{{ tool.title || tool.name }}</h3>
-                <p class="muted">{{ tool.plugin_name }} · {{ tool.name }}</p>
-              </div>
-              <NTag size="small">{{ tool.plugin_id }}</NTag>
-            </div>
-            <p>{{ tool.description || t('noDescription') }}</p>
-            <details>
-              <summary>{{ t('pluginToolInputSchema') }}</summary>
-              <pre>{{ JSON.stringify(tool.input_schema, null, 2) }}</pre>
-            </details>
-            <label class="input-label">
-              <span class="field-title">{{ t('pluginToolArguments') }}</span>
-              <NInput
-                type="textarea"
-                :rows="5"
-                :value="toolInputs[toolKey(tool)] || '{}'"
-                :placeholder="t('pluginToolArgumentsPlaceholder')"
-                @update:value="setToolInput(tool, $event)"
-              />
-            </label>
-            <NButton type="primary" :loading="busy === `tool:${toolKey(tool)}`" @click="invokeTool(tool)">
-              {{ t('pluginToolInvoke') }}
-            </NButton>
-            <pre v-if="toolResults[toolKey(tool)]" class="tool-result">{{ toolResults[toolKey(tool)] }}</pre>
-          </article>
-          </div>
-        </template>
-        <p v-if="!toolUiPlugins.length && !plainTools.length" class="muted">{{ t('noRunningPluginTools') }}</p>
+        </div>
+        <p v-else class="muted">{{ t('noRunningPluginTools') }}</p>
       </NSpin>
     </NTabPane>
 
     <NTabPane name="content" :tab="t('contentPacks')">
-      <section class="toolbar-row">
+      <section class="toolbar-row content-pack-toolbar">
         <NSelect
           v-model:value="contentTargetWorldId"
           :options="worldOptions"
@@ -529,6 +610,14 @@ onMounted(async () => {
                     :key="`${group.key}:${item.plugin_id}:${item.id || item.name || item.character_name}`"
                     class="content-item"
                   >
+                    <PortraitImage
+                      v-if="contentPortrait(item)"
+                      :portrait="contentPortrait(item)"
+                      :rule-id="String(item.rule_id || '')"
+                      :seed="String(item.id || item.name || item.character_name || '')"
+                      :name="contentTitle(item)"
+                      :size="54"
+                    />
                     <div class="content-item-main">
                       <strong>{{ contentTitle(item) }}</strong>
                       <p class="muted">{{ contentSubtitle(item) || t('noDescription') }}</p>
@@ -616,65 +705,133 @@ onMounted(async () => {
       </NSpin>
     </NTabPane>
   </NTabs>
+  </section>
 
-  <NModal v-model:show="showExportModal" preset="card" :title="t('exportPackTitle')" :bordered="false" style="max-width: 720px;">
-    <p class="muted">{{ t('exportPackHelp') }}</p>
+  <NModal v-model:show="hubDetailOpen" preset="card" class="hub-detail-modal" :title="hubDetail?.name || t('hubPluginDetails')">
+    <NSpin :show="hubDetailLoading">
+      <template v-if="hubDetail">
+        <p class="muted">{{ hubDetail.id }} · {{ hubDetail.version || t('unknownVersion') }}</p>
+        <p>{{ hubDetail.description || t('noDescription') }}</p>
+        <div class="hub-stats">
+          <span>{{ t('hubDownloads') }} <strong>{{ hubDetail.stats?.downloads_total || 0 }}</strong></span>
+          <span>{{ t('hubLikes') }} <strong>{{ hubDetail.stats?.likes || 0 }}</strong></span>
+          <span>{{ t('hubRating') }} <strong>{{ hubDetail.stats?.rating_average || 0 }}</strong></span>
+        </div>
+        <NAlert v-if="hubDetail.security?.install_allowed === false" type="error" :title="t('hubInstallBlocked')">
+          {{ (hubDetail.security.blocking_reasons || []).join(t('listSeparator')) }}
+        </NAlert>
+        <div class="hub-interactions">
+          <NButton :loading="busy === `hub-like:${hubDetail.id}`" @click="toggleHubLike">
+            {{ hubDetail.liked ? t('hubUnlike') : t('hubLike') }}
+          </NButton>
+          <span>{{ t('hubYourRating') }}</span>
+          <NRate :value="hubRating || 0" :disabled="busy === `hub-rating:${hubDetail.id}`" @update:value="saveHubRating" />
+          <NButton v-if="hubRating" text @click="saveHubRating(null)">{{ t('hubClearRating') }}</NButton>
+        </div>
+        <section v-if="safeHubReadmeHtml" class="hub-readme safe-markdown" v-html="safeHubReadmeHtml" />
+        <p v-else-if="!hubDetailLoading" class="muted">{{ t('hubReadmeUnavailable') }}</p>
+      </template>
+    </NSpin>
+  </NModal>
+
+  <NModal
+    v-model:show="showExportModal"
+    preset="card"
+    class="export-pack-modal"
+    :title="t('exportPackTitle')"
+    :bordered="false"
+    style="width: min(800px, calc(100vw - 24px)); max-height: calc(100dvh - 28px);"
+  >
+    <p class="muted export-pack-help">{{ t('exportPackHelp') }}</p>
     <NSpin :show="authorLoading">
-      <div class="plugin-form-grid">
-        <div class="field">
-          <label class="input-label">
-            <span class="field-title">{{ t('packId') }}</span>
-            <NInput v-model:value="packId" placeholder="my-cool-pack" />
-          </label>
-        </div>
-        <div class="field">
-          <label class="input-label">
-            <span class="field-title">{{ t('packName') }}</span>
-            <NInput v-model:value="packName" />
-          </label>
-        </div>
-        <div class="field">
-          <label class="input-label">
-            <span class="field-title">{{ t('packVersion') }}</span>
-            <NInput v-model:value="packVersion" />
-          </label>
-        </div>
-        <div class="field field-wide">
-          <label class="input-label">
-            <span class="field-title">{{ t('packDescription') }}</span>
-            <NInput v-model:value="packDescription" type="textarea" :rows="2" />
-          </label>
-        </div>
-        <div class="field field-wide">
-          <label class="input-label">
-            <span class="field-title">{{ t('selectWorld') }}</span>
-            <NSelect v-model:value="selectedWorldId" :options="authorWorldOptions" clearable />
-          </label>
-        </div>
-        <div class="field field-wide">
-          <label class="input-label">
-            <span class="field-title">{{ t('selectRule') }}</span>
-            <NSelect v-model:value="selectedRuleId" :options="authorRuleOptions" clearable />
-          </label>
-        </div>
-        <div class="field field-wide">
-          <label class="input-label">
-            <span class="field-title">{{ t('selectCards') }}</span>
-            <NSelect v-model:value="selectedCardIds" :options="authorCardOptions" multiple clearable />
-          </label>
-        </div>
+      <div class="export-pack-scroll">
+        <section class="export-pack-section">
+          <h3>{{ t('exportPackBasicInfo') }}</h3>
+          <div class="export-pack-meta-grid">
+            <div class="field">
+              <label class="input-label">
+                <span class="field-title">{{ t('packId') }}</span>
+                <NInput v-model:value="packId" placeholder="my-cool-pack" />
+              </label>
+            </div>
+            <div class="field">
+              <label class="input-label">
+                <span class="field-title">{{ t('packName') }}</span>
+                <NInput v-model:value="packName" />
+              </label>
+            </div>
+            <div class="field export-version-field">
+              <label class="input-label">
+                <span class="field-title">{{ t('packVersion') }}</span>
+                <NInput v-model:value="packVersion" />
+              </label>
+            </div>
+            <div class="field export-description-field">
+              <label class="input-label">
+                <span class="field-title">{{ t('packDescription') }}</span>
+                <NInput v-model:value="packDescription" type="textarea" :autosize="{ minRows: 1, maxRows: 2 }" />
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="export-pack-section">
+          <h3>{{ t('exportPackContentSelection') }}</h3>
+          <div class="export-content-grid">
+            <div class="export-content-column">
+              <label class="input-label">
+                <span class="field-title">{{ t('selectWorld') }}</span>
+                <NSelect v-model:value="selectedWorldId" :options="authorWorldOptions" clearable />
+              </label>
+              <label class="compact-file-field" :class="{ disabled: !selectedWorldId || !includeSceneImages }">
+                <span>{{ t('worldSceneImage') }}</span>
+                <input type="file" accept="image/jpeg,image/png,image/webp" :disabled="!selectedWorldId || !includeSceneImages" @change="setExportSceneImage('world', $event)">
+                <small class="muted">{{ t('worldSceneImageHint') }}</small>
+              </label>
+            </div>
+            <div class="export-content-column">
+              <label class="input-label">
+                <span class="field-title">{{ t('selectRule') }}</span>
+                <NSelect v-model:value="selectedRuleId" :options="authorRuleOptions" clearable />
+              </label>
+              <label class="compact-file-field" :class="{ disabled: !selectedRuleId || !includeSceneImages }">
+                <span>{{ t('ruleSceneImage') }}</span>
+                <input type="file" accept="image/jpeg,image/png,image/webp" :disabled="!selectedRuleId || !includeSceneImages" @change="setExportSceneImage('rule', $event)">
+                <small class="muted">{{ t('ruleSceneImageHint') }}</small>
+              </label>
+            </div>
+            <label class="input-label export-card-select">
+              <span class="field-title">{{ t('selectCards') }}</span>
+              <NSelect v-model:value="selectedCardIds" :options="authorCardOptions" multiple clearable />
+            </label>
+          </div>
+        </section>
+
+        <section class="export-pack-section export-resource-section">
+          <h3>{{ t('exportPackPortableAssets') }}</h3>
+          <div class="export-resource-options">
+            <label class="export-resource-option" :title="t('includeContentPackPortraitsHint')">
+              <NCheckbox v-model:checked="includePortraits">{{ t('includeContentPackPortraits') }}</NCheckbox>
+            </label>
+            <label class="export-resource-option" :title="t('includeContentPackSceneImagesHint')">
+              <NCheckbox v-model:checked="includeSceneImages">{{ t('includeContentPackSceneImages') }}</NCheckbox>
+            </label>
+          </div>
+        </section>
       </div>
-      <div class="actions-row">
-        <NButton type="primary" :loading="busy === 'export-pack'" @click="exportPack(false)">
-          <template #icon><NIcon :component="CloudDownloadOutline" /></template>
-          {{ t('exportPack') }}
-        </NButton>
-        <NButton :loading="busy === 'export-pack'" :title="t('exportRepoSourceHint')" @click="exportPack(true)">
-          <template #icon><NIcon :component="CreateOutline" /></template>
-          {{ t('exportRepoSource') }}
-        </NButton>
-      </div>
-      <p class="muted hint">{{ t('exportPackFormatsHint') }}</p>
+      <footer class="export-pack-footer">
+        <p class="muted hint">{{ t('exportPackFormatsHint') }}</p>
+        <div class="actions-row">
+          <NButton type="primary" :loading="busy === 'export-pack'" @click="exportPack(false)">
+            <template #icon><NIcon :component="CloudDownloadOutline" /></template>
+            {{ t('exportPack') }}
+          </NButton>
+          <NButton :loading="busy === 'export-pack'" :title="t('exportRepoSourceHint')" @click="exportPack(true)">
+            <template #icon><NIcon :component="CreateOutline" /></template>
+            {{ t('exportRepoSource') }}
+          </NButton>
+        </div>
+      </footer>
     </NSpin>
   </NModal>
 </template>
@@ -690,9 +847,9 @@ onMounted(async () => {
 .mirror-form,
 .mirror-row,
 .market-card {
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--df-border-soft);
   border-radius: 8px;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: linear-gradient(180deg, var(--df-surface-1), var(--df-surface-2));
 }
 
 .plugin-install {
@@ -710,9 +867,59 @@ onMounted(async () => {
   padding: 16px;
 }
 
+.builtin-theme-panel {
+  margin-bottom: 14px;
+}
+
+.builtin-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.builtin-theme-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 11px;
+  text-align: left;
+  background: var(--df-control-bg);
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  color: var(--df-text);
+}
+
+.builtin-theme-card:hover,
+.builtin-theme-card.active {
+  border-color: var(--df-interactive);
+  box-shadow: 0 0 0 2px var(--df-focus);
+}
+
+.builtin-theme-card strong {
+  color: var(--df-accent-strong);
+}
+
+.builtin-theme-card small {
+  color: var(--df-text-muted);
+  line-height: 1.45;
+}
+
+.theme-swatches {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  height: 34px;
+  overflow: hidden;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-sm);
+}
+
+.theme-swatches i {
+  display: block;
+}
+
 .theme-plugin-panel h3 {
   margin: 0;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
 }
 
 .theme-plugin-panel p {
@@ -730,8 +937,27 @@ onMounted(async () => {
   margin-top: 4px;
 }
 
+.content-collapse :deep(.n-collapse-item) {
+  margin-bottom: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 28%, var(--df-border-soft));
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 84%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--df-text) 4%, transparent);
+}
+
+.content-collapse :deep(.n-collapse-item:last-child) {
+  margin-bottom: 0;
+}
+
 .content-collapse :deep(.n-collapse-item__header) {
   padding: 10px 12px;
+  border-bottom: 1px solid transparent;
+  background: color-mix(in srgb, var(--df-surface-raised) 76%, transparent);
+}
+
+.content-collapse :deep(.n-collapse-item--active > .n-collapse-item__header) {
+  border-bottom-color: var(--df-border-soft);
 }
 
 .content-collapse :deep(.n-collapse-item__header-main) {
@@ -763,33 +989,33 @@ onMounted(async () => {
 
 .content-plugin-head h3 {
   margin: 0;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
   font-size: 15px;
 }
 
 .content-plugin-body {
   display: grid;
   gap: 12px;
-  padding-top: 4px;
+  padding: 12px;
 }
 
 .content-group {
   min-width: 0;
   padding: 12px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--df-border-soft);
   border-radius: 8px;
-  background: var(--panel-soft);
+  background: var(--df-surface-3);
 }
 
 .content-group h3 {
   margin: 0 0 10px;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
   font-size: 15px;
 }
 
 .content-group h4 {
   margin: 0 0 8px;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
   font-size: 14px;
 }
 
@@ -802,12 +1028,21 @@ onMounted(async () => {
 .content-item {
   min-width: 0;
   padding: 10px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--df-border-soft);
   border-radius: 6px;
-  background: rgba(255, 255, 255, .03);
+  background: color-mix(in srgb, var(--df-text) 3%, transparent);
   display: grid;
   gap: 10px;
   align-content: start;
+}
+
+.content-item:has(> .portrait-image) {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.content-item:has(> .portrait-image) > .n-button {
+  grid-column: 1 / -1;
 }
 
 .content-item strong,
@@ -824,55 +1059,173 @@ onMounted(async () => {
   line-height: 1.45;
 }
 
-.tool-grid {
+.plugin-tool-groups {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 410px), 1fr));
+  gap: 16px;
+  align-items: start;
 }
 
-.tool-card {
-  min-width: 0;
+.portrait-export-option {
   display: grid;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  gap: 5px;
 }
 
-.tool-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
+:global(.export-pack-modal .n-card__content) {
+  overflow: hidden;
+  padding-top: 8px;
 }
 
-.tool-heading h3,
-.tool-heading p,
-.tool-card > p {
+:global(.export-pack-modal .n-card-header__close),
+:global(.export-pack-modal .n-base-close) {
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 50%;
+  color: var(--df-text-secondary);
+  background: color-mix(in srgb, var(--df-control-bg) 90%, transparent);
+  box-shadow: none;
+}
+
+:global(.export-pack-modal .n-base-close:hover) {
+  border-color: var(--df-interactive);
+  color: var(--df-text);
+  background: color-mix(in srgb, var(--df-interactive) 13%, var(--df-control-bg));
+}
+
+:global(.export-pack-modal .n-base-close .n-base-icon) {
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+}
+
+.export-pack-help {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.export-pack-scroll {
+  display: grid;
+  max-height: calc(100dvh - 238px);
+  overflow-y: auto;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.export-pack-section {
+  padding: 11px 12px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 76%, transparent);
+}
+
+.export-pack-section h3 {
+  margin: 0 0 9px;
+  color: var(--df-accent-strong);
+  font-size: 13px;
+}
+
+.export-pack-section .field {
   margin: 0;
 }
 
-.tool-card details summary {
-  cursor: pointer;
-  color: var(--gold-2);
+.export-pack-section label {
+  margin: 0;
 }
 
-.tool-card pre {
-  max-height: 220px;
-  overflow: auto;
-  margin: 8px 0 0;
-  padding: 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 6px;
-  background: var(--ink);
-  color: var(--text);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.export-pack-meta-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(96px, .45fr);
+  gap: 9px 12px;
 }
 
-.tool-result {
-  border-color: var(--gold) !important;
+.export-description-field {
+  grid-column: 1 / -1;
+}
+
+.export-content-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.export-content-column {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.compact-file-field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px dashed var(--df-border-soft);
+  border-radius: var(--df-radius-sm);
+  background: color-mix(in srgb, var(--df-control-bg) 72%, transparent);
+  font-size: 12px;
+}
+
+.compact-file-field.disabled {
+  opacity: .55;
+}
+
+.compact-file-field input {
+  max-width: 100%;
+  color: var(--df-text-secondary);
+  font-size: 11px;
+}
+
+.compact-file-field small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-card-select {
+  grid-column: 1 / -1;
+}
+
+.export-resource-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.export-resource-option {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 8px 9px;
+  border-radius: var(--df-radius-sm);
+  background: color-mix(in srgb, var(--df-control-bg) 68%, transparent);
+}
+
+.export-pack-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--df-border-soft);
+}
+
+.export-pack-footer .hint,
+.export-pack-footer .actions-row {
+  margin: 0;
+}
+
+.export-pack-footer .hint {
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .content-world-select {
@@ -881,7 +1234,7 @@ onMounted(async () => {
 
 .plugin-install h3 {
   margin: 0;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
 }
 
 .plugin-install p {
@@ -902,21 +1255,16 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
+.plugin-extra {
+  margin-right: 18px;
+}
+
 .install-controls {
   justify-content: flex-end;
 }
 
 .toolbar-row {
   margin-bottom: 14px;
-}
-
-.tool-section-title {
-  margin: 14px 0 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary, #7f8a99);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
 }
 
 .type-filter-row {
@@ -957,9 +1305,9 @@ onMounted(async () => {
   gap: 8px;
   margin-bottom: 14px;
   padding: 12px;
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--df-border-soft);
   border-radius: 6px;
-  background: var(--panel-soft);
+  background: var(--df-surface-3);
 }
 
 .plugin-docs {
@@ -975,19 +1323,19 @@ onMounted(async () => {
 .plugin-docs-content h2 {
   font-size: 18px;
   margin: 0 0 10px;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
 }
 
 .plugin-docs-content h3 {
   font-size: 15px;
   margin: 16px 0 8px;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
 }
 
 .plugin-docs-content h4 {
   font-size: 14px;
   margin: 12px 0 6px;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
 }
 
 .plugin-docs-content p {
@@ -1004,7 +1352,7 @@ onMounted(async () => {
 }
 
 .plugin-docs-content code {
-  background: rgba(255, 255, 255, .08);
+  background: color-mix(in srgb, var(--df-text) 8%, transparent);
   border-radius: 4px;
   padding: 1px 5px;
   font-size: 13px;
@@ -1012,7 +1360,7 @@ onMounted(async () => {
 
 .permission-panel h4 {
   margin: 0;
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
   font-size: 14px;
 }
 
@@ -1038,8 +1386,8 @@ onMounted(async () => {
   grid-column: 1 / -1;
   margin: 10px 0 -2px;
   padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, .08);
-  color: var(--gold-2, #d99b45);
+  border-top: 1px solid var(--df-border-soft);
+  color: var(--df-accent-strong);
   font-size: 14px;
 }
 
@@ -1072,7 +1420,7 @@ onMounted(async () => {
 
 .field-title {
   font-size: 13px;
-  color: var(--text, #d7d1c5);
+  color: var(--df-text);
 }
 
 .field small {
@@ -1093,21 +1441,22 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .market-card {
   display: flex;
   flex-direction: column;
+  height: 100%;
   padding: 16px;
   min-width: 0;
 }
 
 .market-title {
   display: grid;
-  grid-template-columns: 28px 1fr auto;
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: 50px minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: start;
 }
 
 .market-title-text {
@@ -1119,7 +1468,7 @@ onMounted(async () => {
 }
 
 .market-title-icon {
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
 }
 
 .market-title p,
@@ -1131,7 +1480,7 @@ onMounted(async () => {
   min-height: 42px;
   max-height: 3.2em;
   overflow: hidden;
-  color: var(--text);
+  color: var(--df-text);
   line-height: 1.55;
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -1144,7 +1493,7 @@ onMounted(async () => {
 }
 
 .market-warning {
-  color: var(--red-2);
+  color: var(--df-danger-strong);
   margin: -4px 0 10px;
 }
 
@@ -1164,7 +1513,7 @@ onMounted(async () => {
 }
 
 .stars-tag :deep(.n-icon) {
-  color: var(--gold-2, #d99b45);
+  color: var(--df-accent-strong);
 }
 
 .mirror-form {
@@ -1221,7 +1570,7 @@ onMounted(async () => {
 }
 
 .mirror-test {
-  color: var(--gold-2);
+  color: var(--df-accent-strong);
 }
 
 .mirror-actions {
@@ -1259,6 +1608,10 @@ onMounted(async () => {
 }
 
 @media (max-width: 980px) {
+  .builtin-theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .mirror-form {
     grid-template-columns: 1fr;
     grid-template-areas:
@@ -1297,5 +1650,80 @@ onMounted(async () => {
   .plugin-form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+@media (max-width: 560px) {
+  .builtin-theme-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .export-pack-scroll {
+    max-height: calc(100dvh - 320px);
+  }
+
+  .export-content-grid,
+  .export-resource-options,
+  .export-pack-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .export-pack-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .export-description-field,
+  .export-card-select,
+  .export-version-field {
+    grid-column: auto;
+  }
+
+  .export-pack-footer .actions-row {
+    justify-content: stretch;
+  }
+
+  .export-pack-footer .actions-row > * {
+    flex: 1;
+  }
+}
+.hub-choice-alert {
+  margin-bottom: 14px;
+}
+
+.hub-choice-alert p {
+  margin: 0 0 10px;
+}
+
+.hub-choice-actions,
+.hub-interactions,
+.hub-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.hub-stats {
+  margin: 14px 0;
+}
+
+.hub-stats span {
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--df-surface-2);
+}
+
+.hub-interactions {
+  margin: 16px 0;
+}
+
+.hub-readme {
+  max-height: 48vh;
+  overflow: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--df-border-soft);
+}
+
+:global(.hub-detail-modal) {
+  width: min(760px, calc(100vw - 28px));
 }
 </style>

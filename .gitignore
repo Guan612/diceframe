@@ -19,6 +19,8 @@ Thumbs.db
 static-v2/assets/
 static-v2/index.html
 static-v2/avatars/
+static-v2/ui/
+src/webui/assistant_knowledge_index.json
 
 # 运行日志
 *.log

@@ -24,10 +24,17 @@ if str(ROOT) not in sys.path:
 
 from src.template_catalog import is_user_template_file
 
+import build_assistant_knowledge
+
 DIST_DIR = ROOT / "dist"
 BUILD_ROOT = DIST_DIR / "_release_build"
 EXPECTED_BUILTIN_AVATAR_ATLASES = 12
 MAX_BUILTIN_AVATAR_COMPRESSED_BYTES = 4 * 1024 * 1024
+BUILTIN_BACKGROUND_FILES = {
+    "dark-fantasy-atmosphere.jpg",
+    "campaign-mountain-city.jpg",
+    "campaign-moonlit-ruins.jpg",
+}
 
 ROOT_FILES = [
     ".env.example",
@@ -234,6 +241,8 @@ def prepare_package_tree(package_dir: Path, *, include_cloudflared: bool = True)
     for rel in FRONTEND_DIRS:
         copy_tree(ROOT / "frontend-v2" / rel, frontend_dir / rel)
 
+    build_assistant_knowledge.build(package_dir / "src" / "webui" / "assistant_knowledge_index.json")
+
     if include_cloudflared:
         download_cloudflared(package_dir)
 
@@ -284,6 +293,7 @@ def validate_zip(output_zip: Path) -> None:
     if not any("/static-v2/assets/" in name and name.endswith(".js") for name in names):
         raise RuntimeError("Release zip is missing built frontend assets")
     validate_avatar_payload(infos, require_source=True)
+    validate_background_payload(infos, require_source=True)
 
 
 def validate_avatar_payload(infos: list[zipfile.ZipInfo], *, require_source: bool) -> None:
@@ -306,6 +316,31 @@ def validate_avatar_payload(infos: list[zipfile.ZipInfo], *, require_source: boo
         raise RuntimeError(
             f"Built-in portrait payload is too large: {compressed_size} bytes; optimize assets before publishing"
         )
+
+
+def validate_background_payload(infos: list[zipfile.ZipInfo], *, require_source: bool) -> None:
+    normalized = [info.filename.replace("\\", "/") for info in infos]
+    built = {
+        name.rsplit("/", 1)[-1]
+        for name in normalized
+        if "/static-v2/ui/" in name
+    }
+    missing_built = BUILTIN_BACKGROUND_FILES - built
+    if missing_built:
+        raise RuntimeError(
+            "Release zip is missing built-in UI backgrounds: " + ", ".join(sorted(missing_built))
+        )
+    if require_source:
+        source = {
+            name.rsplit("/", 1)[-1]
+            for name in normalized
+            if "/frontend-v2/public/ui/" in name
+        }
+        missing_source = BUILTIN_BACKGROUND_FILES - source
+        if missing_source:
+            raise RuntimeError(
+                "Source release is missing built-in UI backgrounds: " + ", ".join(sorted(missing_source))
+            )
 
 
 def parse_args() -> argparse.Namespace:

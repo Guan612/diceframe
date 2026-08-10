@@ -185,6 +185,7 @@ async function deleteRule(rule: RuleSummary) {
   <section class="view archive-page rules-page">
     <header class="view-title archive-hero">
       <div>
+        <span class="section-kicker">{{ t('rulesKicker') }}</span>
         <h1>{{ t('ruleSystem') }}</h1>
         <p class="muted">{{ t('ruleSystemSubtitle') }}</p>
       </div>
@@ -203,7 +204,7 @@ async function deleteRule(rule: RuleSummary) {
     <div class="card-grid">
       <article v-for="r in data?.rules || []" :key="r.rule_id" class="rule-card">
         <div>
-          <h2>{{ localizedField<string>(r, 'rule_name') || r.rule_id }}<small v-if="r.custom" class="badge badge-active">{{ t('custom') }}</small><small v-else class="badge">{{ t('builtin') }}</small></h2>
+          <h2><span>{{ localizedField<string>(r, 'rule_name') || r.rule_id }}</span><small v-if="r.custom" class="badge badge-active">{{ t('custom') }}</small><small v-else class="badge">{{ t('builtin') }}</small></h2>
           <div class="rule-meta-row">
             <span><strong>{{ t('dice') }}</strong>{{ r.dice_system || '-' }}</span>
             <span><strong>{{ t('combat') }}</strong>{{ r.combat_model || '-' }}</span>

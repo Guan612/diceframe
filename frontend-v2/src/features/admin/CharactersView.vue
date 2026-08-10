@@ -39,10 +39,10 @@ interface CharacterEditForm {
   keyText: string
   fields: IdentityField[]
   identityValues: Record<string, string>
-  portrait?: CharacterPortrait
+  portrait?: CharacterPortrait | null
 }
 interface LevelUpState { player: import('@/api/types').Player; levelUpPoints: number }
-interface NpcPortraitEdit { npcId: string; name: string; portrait?: CharacterPortrait }
+interface NpcPortraitEdit { npcId: string; name: string; portrait?: CharacterPortrait | null }
 interface CardEditForm {
   card_id: string
   character_name: string
@@ -51,7 +51,7 @@ interface CardEditForm {
   skills: CharacterSkill[]
   background: string
   gold: number
-  portrait?: CharacterPortrait
+  portrait?: CharacterPortrait | null
   rule_id?: string
 }
 interface CharacterCardPatch extends JsonObject {
@@ -61,7 +61,7 @@ interface CharacterCardPatch extends JsonObject {
   skills: CharacterSkill[]
   background: string
   gold: number
-  portrait?: CharacterPortrait
+  portrait?: CharacterPortrait | null
 }
 interface UpdateCharacterPayload extends JsonObject {
   character_name: string
@@ -79,7 +79,7 @@ interface UpdateCharacterPayload extends JsonObject {
   equipment?: CharacterItem[]
   inventory?: CharacterItem[]
   key_items?: CharacterItem[]
-  portrait?: CharacterPortrait
+  portrait?: CharacterPortrait | null
 }
 
 const toast = useToast()
@@ -95,6 +95,20 @@ const editLevelUp = ref<LevelUpState | null>(null)
 const editCard = ref<CardEditForm | null>(null)
 const editNpcPortrait = ref<NpcPortraitEdit | null>(null)
 const showWizard = ref(false)
+const characterSearch = ref('')
+const characterSort = ref<'name' | 'rule'>('name')
+const libraryView = ref<'grid' | 'list'>('grid')
+const filteredCards = computed(() => {
+  const keyword = characterSearch.value.trim().toLocaleLowerCase()
+  const cards = [...(data.value?.cards || [])]
+  const filtered = keyword
+    ? cards.filter(card => [card.character_name, card.race, card.class, card.rule_name, card.rule_id].some(value => String(value || '').toLocaleLowerCase().includes(keyword)))
+    : cards
+  return filtered.sort((a, b) => {
+    if (characterSort.value === 'rule') return cardRuleLabel(a).localeCompare(cardRuleLabel(b))
+    return String(a.character_name || '').localeCompare(String(b.character_name || ''))
+  })
+})
 
 const rules = ref<RuleSummary[]>([])
 const ruleMeta = ref<RuleMeta>({})
@@ -156,6 +170,12 @@ function npcSummary(card: CharacterCard): string {
     card.status ? `${t('statusPrefix')} ${card.status}` : '',
     card.first_seen_round ? `${t('firstSeenRound')} ${card.first_seen_round}` : '',
   ].filter(Boolean).join(' · ')
+}
+
+function hpPercent(player: import('@/api/types').Player): number {
+  const current = Number(player.character_sheet?.hp || 0)
+  const maximum = Math.max(1, Number(player.character_sheet?.max_hp || 1))
+  return Math.max(0, Math.min(100, (current / maximum) * 100))
 }
 
 watch([ruleId, locale], async ([id]) => {
@@ -370,7 +390,7 @@ async function saveCharacter() {
       hp: hpCurrent,
       max_hp: hpMax,
       resources: { hp: { current: hpCurrent, max: hpMax, min: 0 } },
-      portrait: e.portrait ? { ...e.portrait } : undefined,
+      portrait: e.portrait ? { ...e.portrait } : null,
     }
     e.fields.forEach((f: IdentityField) => setIdentityUpdate(updates, f, e.identityValues[f.key]))
     updates.identity = updates.identity || {}
@@ -444,7 +464,7 @@ async function saveCardEdit() {
       skills: e.skills.filter(s => s.name?.trim()).map(s => ({ name: s.name.trim(), value: Number(s.value) || 0 })),
       background: e.background.trim(),
       gold: parseInt(String(e.gold)) || 0,
-      portrait: e.portrait ? { ...e.portrait } : undefined,
+      portrait: e.portrait ? { ...e.portrait } : null,
     }
     const r = await api<{ ok?: boolean; error?: string }>(`/character-cards/${encodeURIComponent(e.card_id)}`, { method: 'PUT', body: JSON.stringify(patch) })
     if (!r.ok) throw new Error(r.error || t('saveFailed'))
@@ -503,6 +523,7 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
   <section class="view archive-page characters-page">
     <header class="view-title archive-hero">
       <div>
+        <span class="section-kicker">{{ t('charactersKicker') }}</span>
         <h1>{{ t('characterManagement') }}</h1>
         <p v-if="game">{{ t('currentSave') }}: {{ game }}</p>
         <p v-else class="muted">{{ t('noSaveSelectedHint') }}</p>
@@ -521,51 +542,65 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
 
     <p v-if="error" class="error-banner">{{ error }}</p>
 
-    <h2 v-if="game" class="field-group">{{ t('currentGameCharacters') }}</h2>
-    <div v-if="game" class="card-grid">
-      <article v-for="p in data?.players || []" :key="p.user_id" class="char-card">
-        <div class="character-card-summary">
+    <section v-if="game" class="character-section current-character-section">
+      <header class="character-section-head"><h2>{{ t('currentGameCharacters') }}</h2><span>{{ data?.players?.length || 0 }}</span></header>
+      <div class="current-character-grid">
+      <article v-for="p in data?.players || []" :key="p.user_id" class="char-card current-character-card">
+        <div class="current-character-identity">
           <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openEdit(p)">
-            <PortraitImage :portrait="p.character_sheet?.portrait" :rule-id="ruleId" :seed="p.user_id" :name="p.character_name" :size="56" />
+            <PortraitImage :portrait="p.character_sheet?.portrait" :rule-id="ruleId" :seed="p.user_id" :name="p.character_name" :size="96" />
             <span>{{ t('clickToChangeAvatar') }}</span>
           </button>
-          <div>
-          <h2>{{ p.character_name }}</h2>
-          <p class="muted">
-            {{ p.user_id }} · HP {{ p.character_sheet?.hp }}/{{ p.character_sheet?.max_hp }}
-            <span v-if="levelUpPoints(p) > 0" class="warn"> · {{ t('pointsToAllocate', { points: levelUpPoints(p) }) }}</span>
-          </p>
+          <div class="current-character-copy">
+            <div class="character-name-line"><h2>{{ p.character_name }}</h2><span class="badge badge-active">{{ t('playerSlot') }}</span></div>
+            <div class="character-identity-chips">
+              <span>{{ p.user_id }}</span>
+              <span>{{ t('level') }} {{ p.character_sheet?.level || 1 }}</span>
+              <span v-if="p.character_sheet?.race">{{ p.character_sheet.race }}</span>
+              <span v-if="p.character_sheet?.class">{{ p.character_sheet.class }}</span>
+            </div>
+            <div class="character-resource-line">
+              <span>HP</span>
+              <div class="character-resource-track"><i :style="{ width: `${hpPercent(p)}%` }" /></div>
+              <strong>{{ p.character_sheet?.hp }}/{{ p.character_sheet?.max_hp }}</strong>
+            </div>
+            <p v-if="levelUpPoints(p) > 0" class="warn character-level-notice">
+              {{ t('pointsToAllocate', { points: levelUpPoints(p) }) }}
+            </p>
           </div>
         </div>
-        <div class="actions">
-          <button @click="openEdit(p)">{{ t('edit') }}</button>
+        <div class="actions current-character-actions">
+          <button class="success" @click="openEdit(p)">{{ t('edit') }}</button>
           <button v-if="levelUpPoints(p) > 0" class="primary" @click="openLevelUp(p)">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints(p) }) }}</button>
           <button @click="saveToCard(p)">{{ t('saveToSharedLibrary') }}</button>
           <button class="danger" @click="deleteCharacter(p)">{{ t('remove') }}</button>
         </div>
       </article>
       <p v-if="!data?.players?.length" class="muted">{{ t('noCharacters') }}</p>
-    </div>
+      </div>
+    </section>
 
-    <h2 class="field-group" v-if="data?.npcs?.length">{{ t('currentGameNpcs') }}</h2>
-    <div class="card-grid" v-if="data?.npcs?.length">
-      <article v-for="n in data.npcs" :key="npcKey(n)" class="char-card">
-        <div class="character-card-summary">
+    <section v-if="data?.npcs?.length" class="character-section npc-section">
+      <header class="character-section-head"><h2>{{ t('currentGameNpcs') }}</h2><span>{{ data.npcs.length }}</span></header>
+      <div class="npc-strip">
+        <article v-for="n in data.npcs" :key="npcKey(n)" class="char-card npc-mini-card">
           <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openNpcPortrait(n)">
-            <PortraitImage v-if="n.portrait" :portrait="n.portrait" :rule-id="ruleId" :seed="npcKey(n)" :name="String(n.character_name || n.name || '')" :size="56" />
+            <PortraitImage v-if="n.portrait" :portrait="n.portrait" :rule-id="ruleId" :seed="npcKey(n)" :name="String(n.character_name || n.name || '')" :size="54" />
             <span v-else class="portrait-image npc-portrait-empty" aria-hidden="true">＋</span>
             <span>{{ t('clickToChangeAvatar') }}</span>
           </button>
           <div>
-          <h2>{{ n.character_name || n.name || t('unnamed') }}<small v-if="n.tier === 'core'" class="muted"> · {{ t('core') }}</small></h2>
-          <p class="muted">{{ npcSummary(n) }}</p>
-          <p v-if="n.note || n.description" class="muted">{{ String(n.note || n.description).slice(0, 120) }}</p>
+            <h2>{{ n.character_name || n.name || t('unnamed') }}<small v-if="n.tier === 'core'" class="badge">{{ t('core') }}</small></h2>
+            <p class="muted">{{ npcSummary(n) }}</p>
           </div>
-        </div>
-      </article>
-    </div>
+        </article>
+      </div>
+    </section>
 
-    <h2 class="field-group" style="display:flex;align-items:center;justify-content:space-between"><span>{{ t('sharedCharacterLibrary') }}</span><span class="actions"><button class="primary" :disabled="busy || !selectedCardIds.size" @click="exportSelected">{{ t('exportSelected') }}</button><button class="success" :disabled="busy" @click="diceframeInput?.click()">{{ t('importDiceframeCard') }}</button><button :disabled="busy" @click="openTavernImport">{{ t('importTavernCard') }}</button></span></h2>
+    <section class="character-section shared-character-section">
+      <header class="character-section-head shared-character-head">
+        <div><h2>{{ t('sharedCharacterLibrary') }}</h2><span>{{ data?.cards?.length || 0 }}</span></div>
+      </header>
     <input ref="tavernInput" type="file" accept=".json,application/json" @change="onImportTavern" hidden>
     <input ref="diceframeInput" type="file" accept=".json,application/json" @change="onImportDiceframe" hidden>
     <Modal v-if="tavernImportOpen" :title="t('importTavernCard')" @close="tavernImportOpen = false">
@@ -587,12 +622,18 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
         <button class="primary" :disabled="tavernTarget === 'npc' && !tavernWorldId" @click="confirmTavernChoice">{{ t('chooseFile') }}</button>
       </template>
     </Modal>
-    <div class="card-grid">
-      <article v-for="c in data?.cards || []" :key="c.card_id || c.id" class="char-card">
+      <div class="character-library-toolbar">
+        <input v-model="characterSearch" :placeholder="t('characterLibrarySearch')">
+        <select v-model="characterSort"><option value="name">{{ t('characterSortName') }}</option><option value="rule">{{ t('characterSortRule') }}</option></select>
+        <div class="character-view-switch"><button :class="{ active: libraryView === 'grid' }" @click="libraryView = 'grid'">▦</button><button :class="{ active: libraryView === 'list' }" @click="libraryView = 'list'">☷</button></div>
+        <div class="actions character-import-actions"><button class="danger" :disabled="busy || !selectedCardIds.size" @click="exportSelected">{{ t('exportSelected') }}</button><button class="success" :disabled="busy" @click="diceframeInput?.click()">{{ t('importDiceframeCard') }}</button><button :disabled="busy" @click="openTavernImport">{{ t('importTavernCard') }}</button></div>
+      </div>
+    <div class="card-grid character-library-grid" :class="`view-${libraryView}`">
+      <article v-for="c in filteredCards" :key="c.card_id || c.id" class="char-card library-character-card">
         <div class="character-card-summary">
           <input type="checkbox" :checked="selectedCardIds.has(cardId(c))" @change="toggleCardSelect(cardId(c))" class="card-select" :title="t('selectCard')">
           <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openCardEdit(c)">
-            <PortraitImage :portrait="c.portrait" :rule-id="c.rule_id" :seed="cardId(c) || c.character_name" :name="c.character_name" :size="56" />
+            <PortraitImage :portrait="c.portrait" :rule-id="c.rule_id" :seed="cardId(c) || c.character_name" :name="c.character_name" :size="64" />
             <span>{{ t('clickToChangeAvatar') }}</span>
           </button>
           <div>
@@ -608,8 +649,9 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
           <button class="danger" @click="deleteCard(c)">{{ t('delete') }}</button>
         </div>
       </article>
-      <p v-if="!data?.cards?.length" class="muted">{{ t('noSharedCards') }}</p>
+      <p v-if="!filteredCards.length" class="muted">{{ data?.cards?.length ? t('characterLibraryNoMatches') : t('noSharedCards') }}</p>
     </div>
+    </section>
 
     <Modal v-if="edit" :title="t('editCharacter')" @close="edit = null">
       <label>{{ t('characterName') }}<input v-model="edit.character_name"></label>
