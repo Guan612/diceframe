@@ -28,6 +28,7 @@ import TunnelCard from './TunnelCard.vue'
 import PluginToolGroup from './PluginToolGroup.vue'
 import MirrorsTab from './tabs/MirrorsTab.vue'
 import ContentTab from './tabs/ContentTab.vue'
+import ToolsTab from './tabs/ToolsTab.vue'
 
 const { t } = useLocale()
 const {
@@ -533,33 +534,17 @@ onMounted(async () => {
     </NTabPane>
 
     <NTabPane name="tools" :tab="t('pluginToolsTab')">
-      <section class="toolbar-row">
-        <div>
-          <h3>{{ t('pluginToolsTitle') }}</h3>
-          <p class="muted">{{ t('pluginToolsHelp') }}</p>
-        </div>
-        <NButton :loading="toolsLoading" @click="loadTools">
-          <template #icon><NIcon :component="RefreshOutline" /></template>
-          {{ t('refresh') }}
-        </NButton>
-      </section>
-      <NSpin :show="toolsLoading">
-        <div v-if="toolGroups.length" class="plugin-tool-groups">
-          <PluginToolGroup
-            v-for="group in toolGroups"
-            :key="group.plugin.id"
-            :plugin="group.plugin"
-            :tools="group.tools"
-            :renderer="group.renderer"
-            :tool-inputs="toolInputs"
-            :tool-results="toolResults"
-            :busy="busy"
-            @update-tool-input="setToolInput"
-            @invoke="invokeTool"
-          />
-        </div>
-        <p v-else class="muted">{{ t('noRunningPluginTools') }}</p>
-      </NSpin>
+      <ToolsTab
+        :plugins="plugins"
+        :tools="tools"
+        :tool-inputs="toolInputs"
+        :tool-results="toolResults"
+        :tools-loading="toolsLoading"
+        :busy="busy"
+        :load-tools="loadTools"
+        :set-tool-input="setToolInput"
+        :invoke-tool="invokeTool"
+      />
     </NTabPane>
 
     <NTabPane name="content" :tab="t('contentPacks')">
