@@ -394,3 +394,28 @@ def test_tag_parse_success_resets_streak():
     })
     assert inst._tag_fail_streak == 0
     assert response.is_narration_only is False
+
+
+def test_three_round_failure_sequence_records_health_event():
+    """P3-C：连续 3 轮标签失败 → streak 累积 + health_event 记录 + 叙事末尾提示。"""
+    from types import SimpleNamespace
+    from src.commands.round_llm import apply_parsed_data_to_response
+
+    inst = GameInstance(("web", "fail_seq", "bot"))
+    for round_no in range(3):
+        response = SimpleNamespace(
+            narration=f"第{round_no + 1}轮叙事。",
+            content=f"第{round_no + 1}轮叙事。",
+            state_update=None, memory_delta=None, info_asymmetry=None, plot_update=None,
+            is_narration_only=False,
+        )
+        apply_parsed_data_to_response(inst, response, {})
+        if round_no < 2:
+            assert "系统提示" not in response.narration  # 前两轮无提示
+        else:
+            assert "系统提示" in response.narration       # 第三轮追加提示
+
+    assert inst._tag_fail_streak == 3
+    codes = [e.get("code") for e in inst.health_events]
+    assert "TAG_PARSE_STREAK" in codes
+    assert "NARRATION_ONLY_FALLBACK" in codes

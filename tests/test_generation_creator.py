@@ -74,3 +74,13 @@ async def test_equipment_quality_downgraded_to_common():
     c = _char(equipment=[{"name": "神剑", "type": "weapon", "damage": 8, "quality": "legendary"}])
     result = await generate_character(_GenLLM(c), "生成角色", language="zh-CN")
     assert result["equipment"][0]["quality"] == "common"
+
+
+def test_unique_world_id_avoids_collision(tmp_path):
+    """P3-F：同名世界已存在时加数字后缀，不覆盖旧存档。"""
+    from src.generation.creator import _unique_world_id
+    (tmp_path / "ai_world.json").write_text("{}", encoding="utf-8")
+    assert _unique_world_id("ai_world", tmp_path) == "ai_world_2"
+    (tmp_path / "ai_world_2.json").write_text("{}", encoding="utf-8")
+    assert _unique_world_id("ai_world", tmp_path) == "ai_world_3"
+    assert _unique_world_id("ai_fresh", tmp_path) == "ai_fresh"

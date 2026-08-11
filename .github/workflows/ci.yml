@@ -36,6 +36,14 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Lint with ruff
+        run: python -m ruff check src/
+
+      - name: Type check with mypy
+        # 按 pyproject [tool.mypy].files 限定范围（当前 5 个已通过文件），
+        # 不加路径参数。全量 src/ 有历史类型债，用 files 白名单渐进扩展。
+        run: python -m mypy
+
       - name: Run backend tests
         run: python -m pytest -q
 

@@ -431,6 +431,20 @@ async def _call_json_with_repair(
     return data
 
 
+def _unique_world_id(world_id: str, worlds_dir) -> str:
+    """同名世界已存在时加数字后缀，避免覆盖前一次生成的存档（P3-F）。"""
+    from pathlib import Path
+    if not worlds_dir:
+        return world_id
+    base = world_id
+    candidate = world_id
+    suffix = 2
+    while (Path(worlds_dir) / f"{candidate}.json").exists():
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate
+
+
 async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fantasy",
                           worlds_dir=None, lorebook_store=None,
                           max_tokens: int = 2048,
@@ -457,6 +471,7 @@ async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fanta
         return {"ok": False, "error": "AI 返回内容解析失败，请重试"}
 
     world_id = "ai_" + data.get("world_name", prompt[:8]).replace(" ", "_")
+    world_id = _unique_world_id(world_id, worlds_dir)
     world_prefix = world_id.replace("ai_", "")
     data["world_id"] = world_id
     data["language"] = language
