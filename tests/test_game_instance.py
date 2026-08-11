@@ -914,3 +914,12 @@ def test_normal_allows_revive():
     cs = inst.players["p1"]["character_sheet"]
     assert cs["deceased"] is False
     assert cs["hp"] > 0
+
+
+def test_ja_language_roundtrip():
+    """P3-A Phase4：language=ja 存档 round-trip 不丢（to_dict→from_dict）。"""
+    inst = GameInstance(("web", "ja_rt", "bot"))
+    inst.language = "ja"
+    data = inst.to_dict()
+    restored = GameInstance.from_dict(data)
+    assert restored.language == "ja"
