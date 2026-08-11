@@ -234,12 +234,14 @@ test('about, header and content-pack controls use the final layout contract', as
     const about = document.querySelector<HTMLElement>('.about-card')!.getBoundingClientRect()
     const sponsor = document.querySelector<HTMLElement>('.about-card .sponsor-cta')!.getBoundingClientRect()
     const star = document.querySelector<HTMLElement>('.about-card .star-cta')!.getBoundingClientRect()
-    return { aboutLeft: about.left, aboutRight: about.right, aboutBottom: about.bottom, sponsorLeft: sponsor.left, sponsorRight: sponsor.right, sponsorTop: sponsor.top, starBottom: star.bottom }
+    return { aboutLeft: about.left, aboutRight: about.right, aboutBottom: about.bottom, sponsorLeft: sponsor.left, sponsorRight: sponsor.right, sponsorTop: sponsor.top, sponsorBottom: sponsor.bottom, starTop: star.top, starRight: star.right }
   })
   expect(aboutGeometry.sponsorLeft).toBeGreaterThan(aboutGeometry.aboutLeft)
   expect(aboutGeometry.sponsorRight).toBeLessThan(aboutGeometry.aboutRight)
-  expect(aboutGeometry.sponsorTop).toBeGreaterThanOrEqual(aboutGeometry.starBottom)
-  expect(aboutGeometry.aboutBottom).toBeGreaterThan(aboutGeometry.sponsorTop)
+  // Star 与 Sponsor 并排一行：同一水平带（顶部对齐），Sponsor 在 Star 右侧
+  expect(Math.abs(aboutGeometry.sponsorTop - aboutGeometry.starTop)).toBeLessThanOrEqual(2)
+  expect(aboutGeometry.sponsorLeft).toBeGreaterThan(aboutGeometry.starRight)
+  expect(aboutGeometry.aboutBottom).toBeGreaterThan(aboutGeometry.sponsorBottom)
 
   await expect(page.locator('.operator-avatar')).toHaveCount(0)
 
