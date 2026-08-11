@@ -582,123 +582,22 @@ class GameInstance:
         rule=None,
         allow_gm: bool = False,
     ) -> dict:
-        """原子处理一次幸运选择，重复请求不会重复扣除资源。"""
-        async with self._lock:
-            target = next(
-                (check for check in self.last_checks if str(check.get("check_id") or "") == check_id),
-                None,
-            )
-            if not target:
-                return {"ok": False, "code": "CHECK_NOT_FOUND", "error": "检定不存在或已过期"}
-            owner_uid = str(target.get("actor_uid") or "")
-            if actor_uid != owner_uid and not (allow_gm and actor_uid == self.gm_uid):
-                return {"ok": False, "code": "LUCK_FORBIDDEN", "error": "只能处理自己的幸运选择"}
-
-            desired = "spent" if spend else "declined"
-            current_decision = str(target.get("luck_decision") or "")
-            if current_decision and current_decision != "pending":
-                if current_decision == desired:
-                    return {
-                        "ok": True,
-                        "already_resolved": True,
-                        "check_result": dict(target),
-                    }
-                return {"ok": False, "code": "LUCK_ALREADY_RESOLVED", "error": "该检定的幸运选择已经处理"}
-            if self.state != GameState.ACTIVE_JUDGMENT or not self.round_checks_prepared:
-                return {"ok": False, "code": "LUCK_NOT_PENDING", "error": "当前没有等待处理的幸运选择"}
-            if current_decision != "pending":
-                return {"ok": False, "code": "LUCK_NOT_AVAILABLE", "error": "该检定不能消耗幸运"}
-
-            if spend:
-                if str(target.get("dice") or "").lower() != "d100" or str(target.get("verdict") or "") != "失败":
-                    return {"ok": False, "code": "LUCK_NOT_AVAILABLE", "error": "该检定不能消耗幸运"}
-                roll_value = int(target.get("roll", 0) or 0)
-                threshold = int(target.get("threshold", 0) or 0)
-                cost = roll_value - threshold
-                if cost <= 0:
-                    return {"ok": False, "code": "LUCK_NOT_AVAILABLE", "error": "该检定不需要消耗幸运"}
-                character_sheet = self.get_character_sheet(owner_uid)
-                resource = get_resource(character_sheet, "luck")
-                current_luck = int((resource or {}).get("current", character_sheet.get("luck", 0)) or 0)
-                if current_luck < cost:
-                    return {
-                        "ok": False,
-                        "code": "LUCK_INSUFFICIENT",
-                        "error": f"幸运不足：需要 {cost} 点，当前只有 {current_luck} 点",
-                    }
-                remaining = apply_resource_delta(character_sheet, "luck", -cost, rule)
-                target["original_verdict"] = target.get("verdict")
-                target["verdict"] = "成功"
-                target["luck_spent"] = cost
-                target["luck_remaining"] = remaining
-
-            target["luck_decision"] = desired
-            target["luck_spend_available"] = False
-            target["luck_resolved_at"] = datetime.now(timezone.utc).isoformat()
-            self._cancel_luck_timer(str(target.get("check_id") or ""))
-            if self.last_check and str(self.last_check.get("check_id") or "") == check_id:
-                self.last_check = dict(target)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return {"ok": True, "check_result": dict(target)}
+        """原子处理一次幸运选择（逻辑见 src/engine/luck_resolver.py，P2-G Step 1）。"""
+        return await luck_resolver.resolve_luck_decision(
+            self, check_id, actor_uid, spend, rule=rule, allow_gm=allow_gm,
+        )
 
     async def decline_pending_luck(self) -> list[dict]:
-        """GM 强制推进时将所有未选择的幸运检定按失败继续。"""
-        async with self._lock:
-            declined: list[dict] = []
-            now = datetime.now(timezone.utc).isoformat()
-            for check in self.last_checks:
-                if check.get("luck_decision") != "pending":
-                    continue
-                check["luck_decision"] = "declined"
-                check["luck_spend_available"] = False
-                check["luck_resolved_at"] = now
-                self._cancel_luck_timer(str(check.get("check_id") or ""))
-                declined.append(dict(check))
-            if declined:
-                if self.last_check:
-                    last_id = str(self.last_check.get("check_id") or "")
-                    replacement = next(
-                        (check for check in self.last_checks if str(check.get("check_id") or "") == last_id),
-                        None,
-                    )
-                    if replacement:
-                        self.last_check = dict(replacement)
-                self.last_activity = now
-            return declined
+        """GM 强制推进时将所有未选择的幸运检定按失败继续（逻辑见 luck_resolver）。"""
+        return await luck_resolver.decline_pending_luck(self)
 
     async def system_decline_luck(self, check_id: str) -> dict:
-        """幸运超时定时器触发：按失败继续单条幸运检定（系统发起，不需 actor）。
-
-        玩家已手动决定时返回 LUCK_ALREADY_RESOLVED，不重复改判。
-        返回 declined_all=True 表示这是最后一条 pending，调用方应重新推进回合。
-        """
-        async with self._lock:
-            target = next(
-                (c for c in self.last_checks if str(c.get("check_id") or "") == check_id),
-                None,
-            )
-            if not target:
-                return {"ok": False, "code": "CHECK_NOT_FOUND", "error": "检定不存在或已过期"}
-            if str(target.get("luck_decision") or "") != "pending":
-                return {"ok": False, "code": "LUCK_ALREADY_RESOLVED", "error": "该检定的幸运选择已经处理"}
-            target["luck_decision"] = "declined"
-            target["luck_spend_available"] = False
-            target["luck_timeout"] = True
-            target["luck_resolved_at"] = datetime.now(timezone.utc).isoformat()
-            if self.last_check and str(self.last_check.get("check_id") or "") == check_id:
-                self.last_check = dict(target)
-            self.last_activity = target["luck_resolved_at"]
-            declined_all = not any(
-                c.get("luck_decision") == "pending"
-                for c in self.last_checks
-            )
-            return {"ok": True, "check_result": dict(target), "declined_all": declined_all}
+        """幸运超时定时器触发：按失败继续单条幸运检定（逻辑见 luck_resolver）。"""
+        return await luck_resolver.system_decline_luck(self, check_id)
 
     def _cancel_luck_timer(self, check_id: str) -> None:
-        """取消并移除某条检定的幸运超时定时器（若已挂）。手动决议先于超时到达时调用。"""
-        task = self._luck_timers.pop(check_id, None)
-        if task and not task.done():
-            task.cancel()
+        """取消并移除某条检定的幸运超时定时器（逻辑见 luck_resolver）。"""
+        luck_resolver._cancel_luck_timer(self, check_id)
 
     def all_alive_ready(self) -> bool:
         """多人模式下，所有未暂离的存活角色都提交行动后才自动推进。"""
@@ -1700,3 +1599,8 @@ class GameRegistry:
                     fallback="memory_only",
                     repair_hint="检查 data/saves 权限、磁盘空间和 JSON 文件是否被占用。",
                 )
+
+
+# 底部导入避免循环依赖：luck_resolver 顶部 import 本模块的 GameState/GameInstance，
+# 本模块的薄委托方法在调用时才解析 luck_resolver 名字（此时该模块已加载）。
+from src.engine import luck_resolver  # noqa: E402
