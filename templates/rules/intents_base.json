@@ -35,11 +35,22 @@
           "keep a low profile", "lie low", "stay low", "under cover",
           "cover of darkness", "out of sight", "avoid notice", "avoid detection",
           "escape notice"
+        ],
+        "ja": [
+          "こっそり近づく", "忍び込む", "隠れる", "身を隠す", "気配を消す",
+          "こそこそ動く", "音を立てずに進む", "影に紛れる", "尾行する", "こっそりする",
+          "隠密", "隠密行動", "潜入する", "忍び寄る", "忍び足", "しのび足", "息を潜める",
+          "足音を忍ばせる", "物陰に潜む", "潜む", "潜伏する", "密かに近づく",
+          "ひっそり動く", "静かに進む", "音を立てない", "見つからないように進む",
+          "バレないように動く", "後をつける", "付け回す", "壁際を進む", "壁に張り付く",
+          "姿を隠す", "背を低くする", "かがんで進む", "音もなく近づく", "こっそり抜ける",
+          "気付かれないように", "見つからないようにする"
         ]
       },
       "skill_candidates": {
         "zh-CN": ["潜行", "隐匿", "潜伏", "躲藏"],
-        "en": ["stealth", "sleight of hand", "dexterity"]
+        "en": ["stealth", "sleight of hand", "dexterity"],
+        "ja": ["忍び足", "忍び歩き", "隠密", "ステルス", "隠れ身", "軽業"]
       },
       "default_attribute": "dex",
       "priority": 10
@@ -77,11 +88,22 @@
           "investigate the room", "search the room", "check the room",
           "examine the room", "case the place", "follow the money",
           "follow the paper trail", "audit", "do the math"
+        ],
+        "ja": [
+          "調査する", "調べる", "探索する", "捜査する", "現場を調べる", "部屋を調べる",
+          "手がかりを探す", "手掛かりを探す", "証拠を探す", "証拠を集める", "検死する",
+          "遺体を調べる", "検証する", "確認する", "照合する", "推理する", "推論する",
+          "推測する", "分析する", "解析する", "読み解く", "解読する", "調べ上げる",
+          "追及する", "追跡する", "捜索する", "物色する", "ひっくり返す",
+          "手がかりを見つける", "資料を調べる", "読み漁る", "突き止める", "突き詰める",
+          "明らかにする", "究明する", "読み取る", "考える", "じっくり考える", "頭を使う",
+          "考察する", "謎を解く", "鑑定する", "事件を調べる"
         ]
       },
       "skill_candidates": {
         "zh-CN": ["侦查", "调查", "搜索", "图书馆使用", "追踪", "开锁"],
-        "en": ["investigation", "perception", "library use", "research", "search"]
+        "en": ["investigation", "perception", "library use", "research", "search"],
+        "ja": ["捜査", "図書館", "図書館使用", "追跡", "目星", "調査", "探索", "鑑定"]
       },
       "default_attribute": "int",
       "priority": 20
@@ -118,11 +140,21 @@
           "on guard", "be on the lookout", "watchful", "attentive", "pay attention",
           "pick up on", "gut feeling", "hunch", "sixth sense", "intuition",
           "sweep the room", "sweep the area", "scan the room", "listen for footsteps"
+        ],
+        "ja": [
+          "観察する", "見る", "見てみる", "見回す", "見渡す", "見張る", "注意深く見る",
+          "じっと見る", "目を凝らす", "目をこらす", "眺める", "見つめる", "目を配る",
+          "周囲を見る", "周囲を確認する", "あたりを見回す", "きょろきょろする",
+          "うかがう", "様子をうかがう", "覗く", "覗き込む", "気配を感じる",
+          "気配を察する", "察知する", "気づく", "気がつく", "見つける", "発見する",
+          "聞く", "聞き耳を立てる", "耳を澄ます", "感じ取る", "感づく", "直感",
+          "第六感", "匂いを嗅ぐ", "警戒する", "注視する"
         ]
       },
       "skill_candidates": {
         "zh-CN": ["侦查", "聆听", "察觉", "感知", "观察"],
-        "en": ["perception", "investigation", "spot hidden", "listen"]
+        "en": ["perception", "investigation", "spot hidden", "listen"],
+        "ja": ["目星", "聞き耳", "知覚", "察知", "探索", "気配察知"]
       },
       "default_attribute": "wis",
       "priority": 30
@@ -170,11 +202,22 @@
           "call in a favor", "win their trust", "bribe", "bribery", "buy off",
           "pay off", "blackmail", "extort", "shake down", "grift", "network",
           "backroom deal"
+        ],
+        "ja": [
+          "説得する", "説き伏せる", "説得", "納得させる", "話し合う", "交渉する",
+          "交渉", "値切る", "駆け引きする", "口説く", "騙す", "嘘をつく",
+          "はったりをかます", "ごまかす", "欺く", "偽る", "偽装する", "装う",
+          "演技する", "演じる", "脅す", "脅迫する", "恫喝する", "威圧する",
+          "問い詰める", "詰問する", "尋問する", "聞き出す", "言いくるめる",
+          "持ち上げる", "お世辞を言う", "懇願する", "頼み込む", "賄賂を渡す",
+          "買収する", "恐喝する", "なだめる", "慰める", "仲介する", "世間話する",
+          "雑談する", "機嫌を取る", "甘い言葉をかける"
         ]
       },
       "skill_candidates": {
         "zh-CN": ["说服", "话术", "魅惑", "威吓", "欺骗", "表演", "心理学"],
-        "en": ["persuasion", "intimidation", "deception", "performance", "insight", "charm"]
+        "en": ["persuasion", "intimidation", "deception", "performance", "insight", "charm"],
+        "ja": ["説得", "威圧", "欺瞞", "芸能", "演技", "心理学", "値切り", "言いくるめ"]
       },
       "default_attribute": "cha",
       "priority": 40
@@ -215,11 +258,22 @@
           "wiggle through", "shimmy", "hand over hand", "pull-up", "chin-up", "grip",
           "handhold", "foothold", "leverage", "swing across", "zipline", "acrobatics",
           "parkour", "free run", "leap of faith"
+        ],
+        "ja": [
+          "登る", "よじ登る", "登攀する", "跳ぶ", "跳び上がる", "ジャンプする",
+          "飛び越える", "跳び越す", "駆け上がる", "駆け下りる", "走る", "全力で走る",
+          "疾走する", "ダッシュする", "泳ぐ", "泳いで渡る", "潜る", "川を渡る",
+          "押す", "押し開ける", "押し退ける", "引く", "引っ張る", "持ち上げる",
+          "持ち運ぶ", "担ぐ", "背負う", "抱える", "ぶち破る", "こじ開ける", "蹴破る",
+          "逃げる", "振りほどく", "振り切る", "追いかける", "掴む", "掴まる",
+          "しがみつく", "ぶら下がる", "支える", "踏ん張る", "バランスを取る",
+          "体勢を保つ", "綱渡り"
         ]
       },
       "skill_candidates": {
         "zh-CN": ["攀爬", "游泳", "跳跃", "运动", "体能"],
-        "en": ["athletics", "acrobatics"]
+        "en": ["athletics", "acrobatics"],
+        "ja": ["運動", "登攀", "水泳", "跳躍", "体力"]
       },
       "default_attribute": "str",
       "priority": 50
@@ -279,11 +333,21 @@
           "mow down", "carve through", "cut down", "lay waste", "join the fray",
           "enter combat", "engage the enemy", "tangle with", "go after",
           "strike back", "hit back", "fight your way", "cut your way", "shoot your way"
+        ],
+        "ja": [
+          "攻撃する", "攻撃", "切りかかる", "斬る", "斬りつける", "刺す", "突き刺す",
+          "殴る", "殴りかかる", "叩く", "撃つ", "射撃する", "発砲する", "狙いを定める",
+          "狙う", "引き金を引く", "突撃する", "突っ込む", "飛びかかる", "襲いかかる",
+          "奇襲する", "不意打ちする", "矢を放つ", "弓を引く", "投げる", "投擲する",
+          "呪文を唱える", "詠唱する", "魔法を放つ", "召喚する", "防御する", "受け止める",
+          "受け流す", "避ける", "かわす", "回避する", "戦う", "格闘する", "組み付く",
+          "殺す", "倒す", "薙ぎ払う", "剣を抜く", "抜刀する", "反撃する"
         ]
       },
       "skill_candidates": {
         "zh-CN": ["射击", "手枪", "步枪", "格斗", "斗殴", "剑术", "法术", "闪避"],
-        "en": ["attack", "shooting", "firearms", "melee", "combat", "spellcasting", "dodge"]
+        "en": ["attack", "shooting", "firearms", "melee", "combat", "spellcasting", "dodge"],
+        "ja": ["射撃", "近接戦闘", "格闘", "武道", "回避", "白兵戦", "剣術"]
       },
       "default_attribute": "dex",
       "priority": 60
@@ -299,11 +363,20 @@
           "test", "save", "saving throw", "ability check", "skill check", "attempt",
           "give it a shot", "give it a go", "take a shot", "try your luck",
           "test your luck", "show your skill", "show what you've got"
+        ],
+        "ja": [
+          "ダイスロール", "ロールする", "判定", "判定する", "能力値判定", "技能判定",
+          "セービングスロー", "セーヴ", "セーブ", "サイコロを振る", "ダイスを振る",
+          "ダイスを転がす", "サイコロを転がす", "ダイスを投げる", "振ってみる",
+          "テストする", "試す", "試してみる", "挑戦する", "やってみる", "運試し",
+          "運を試す", "挑む", "挑戦", "腕を試す", "腕試し", "判定ロール",
+          "能力チェック", "技能チェック", "成功判定", "勝負する", "試行する"
         ]
       },
       "skill_candidates": {
         "zh-CN": [],
-        "en": []
+        "en": [],
+        "ja": []
       },
       "default_attribute": null,
       "priority": 99
