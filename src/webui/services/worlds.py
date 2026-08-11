@@ -199,6 +199,8 @@ def list_world_templates(api: "WebAPI") -> dict[str, Any]:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 world_id = data.get("world_id", f.stem)
+                if data.get("deprecated"):
+                    continue
                 if "_blank_" in str(world_id) and not data.get("starter_lorebook", []):
                     continue
                 templates.append(_world_template_summary(data, f.stem))
@@ -263,6 +265,7 @@ def _world_template_summary(data: dict[str, Any], fallback_id: str) -> dict[str,
         "language": data.get("language", ""),
         "suggested_difficulty": data.get("suggested_difficulty", "标准"),
         "default_rule": data.get("default_rule", "freeform_fantasy"),
+        "scene_image": data.get("scene_image"),
         "lorebook_count": len(data.get("starter_lorebook", [])),
     }
 
@@ -275,6 +278,7 @@ def _plugin_world_templates(api: "WebAPI") -> list[dict[str, Any]]:
     for item in plugin_host.contributions.list("world_template"):
         try:
             data = json.loads(item.path.read_text(encoding="utf-8"))
+            data = plugin_host.expose_scene_image(data, item.plugin_id)
             summary = _world_template_summary(data, item.path.stem)
             summary["plugin_id"] = item.plugin_id
             summary["plugin_name"] = item.plugin_name

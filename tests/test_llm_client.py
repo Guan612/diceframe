@@ -96,6 +96,33 @@ class _CompleteOpenAIResponse(_FakeResponse):
         }
 
 
+class _ToolOpenAIResponse(_FakeResponse):
+    async def json(self):
+        return {
+            "choices": [{
+                "message": {
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "dice_checks",
+                            "arguments": json.dumps({"checks": [{"player": "p1", "attribute": "str", "target": 12}]}),
+                        },
+                    }],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"total_tokens": 29},
+        }
+
+
+class _ToolOpenAISession(_FakeSession):
+    def post(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return _ToolOpenAIResponse()
+
+
 class _LengthThenCompleteSession(_FakeSession):
     def post(self, url, **kwargs):
         self.calls.append({"url": url, **kwargs})
@@ -240,6 +267,44 @@ async def test_length_retry_reports_initial_and_successful_token_budgets(monkeyp
     assert response.narration == "完整正文。"
     assert response.token_budget_initial == 512
     assert response.token_budget_used == 1024
+
+
+@pytest.mark.asyncio
+async def test_call_tools_uses_native_openai_function_calling(monkeypatch):
+    session = _ToolOpenAISession()
+    provider = ProviderConfig(
+        provider_name="tool-model",
+        base_url="https://api.example.com",
+        api_key="test-key",
+        model_name="tool-test",
+    )
+    client = LLMClient(providers=[provider], default=provider.provider_name)
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "dice_checks",
+            "description": "plan checks",
+            "parameters": {"type": "object", "properties": {"checks": {"type": "array"}}},
+        },
+    }
+    result = await client.call_tools("system", "actions", tools=[tool])
+    assert result.native_tools is True
+    assert result.total_tokens == 29
+    assert result.tool_calls == [{
+        "name": "dice_checks",
+        "arguments": {"checks": [{"player": "p1", "attribute": "str", "target": 12}]},
+    }]
+    body = session.calls[0]["json"]
+    assert body["tools"] == [tool]
+    assert body["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "dice_checks"},
+    }
 
 
 class _FakeStreamContent:

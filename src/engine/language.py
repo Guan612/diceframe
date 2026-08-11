@@ -4,6 +4,8 @@ from __future__ import annotations
 
 
 DEFAULT_LANGUAGE = "zh-CN"
+# 三语支持：zh-CN / en / ja。ja 已全链路实现（localized_text n-way 分叉 +
+# *_ja 规则模板/词表/prompt + 前端 ja 消息，见 P3-A）。
 SUPPORTED_LANGUAGES = {"zh-CN", "en", "ja"}
 
 # 本地化字段后缀登记：中文（zh-*）无后缀（直接用原字段）；
@@ -25,6 +27,16 @@ def normalize_language(value: object) -> str:
 
 def is_english(value: object) -> bool:
     return normalize_language(value) == "en"
+
+
+def localized_text(language: object, texts: dict[str, str], fallback: str = "") -> str:
+    """按语言查表取文案（P3-A n-way 重构的核心 helper）。
+
+    texts = {"zh-CN": "...", "en": "...", "ja": "..."}；未命中当前语言时回退
+    zh-CN，再回退 fallback。逐步替代 `if english: A else B` 的二元分叉。
+    """
+    lang = normalize_language(language)
+    return texts.get(lang) or texts.get("zh-CN") or fallback
 
 
 def lang_suffix(language: object) -> str:
@@ -68,7 +80,8 @@ def gm_language_instruction(value: object) -> str:
     The protocol tags stay uppercase and unchanged so existing parsers remain
     stable across languages.
     """
-    if is_english(value):
+    lang = normalize_language(value)
+    if lang == "en":
         return (
             "## Output Language\n"
             "- Player-facing GM narration, scene descriptions, private messages, "
@@ -78,6 +91,16 @@ def gm_language_instruction(value: object) -> str:
             "must remain exactly in the required uppercase format.\n"
             "- Do not translate character IDs, tag names, JSON keys, or dice "
             "notation. Translate only prose meant for players."
+        )
+    if lang == "ja":
+        return (
+            "## 出力言語\n"
+            "- プレイヤー向けの GM 本文・シーン描写・プライベートメッセージ・"
+            "QUICK_ACTIONS の選択肢は自然な日本語で書くこと。\n"
+            "- 構造プロトコルは変えない：`---` 区切りと HP、GOLD、LOOT、SCENE、"
+            "PRIVATE、QUICK_ACTIONS、NONE などのタグは既存の大文字形式のまま。\n"
+            "- キャラクターID・タグ名・JSONキー・ダイス表記は翻訳しない。"
+            "プレイヤー向けの散文だけ翻訳する。"
         )
     return (
         "## 输出语言\n"

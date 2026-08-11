@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Callable
 from uuid import uuid4
@@ -20,6 +21,10 @@ from src.commands.state_items import (
     classify_item,
     grant_classified_item,
 )
+
+logger = logging.getLogger("trpg")
+
+_MAX_LOOT_PER_ROUND = 20
 
 
 class StateUpdateApplier:
@@ -52,7 +57,16 @@ class StateUpdateApplier:
         # 战利品 - 按规则 JSON 的 item_categories 智能分类；规则未定义时用内置回退
         rule_cats = self._item_cats.load_categories(instance)
 
-        for loot in update.get("loot", []):
+        loot_entries = update.get("loot", [])
+        if len(loot_entries) > _MAX_LOOT_PER_ROUND:
+            logger.warning(
+                "单轮战利品（LOOT/KEY_ITEM）共 %d 条，超过上限 %d，已保留前 %d 条",
+                len(loot_entries),
+                _MAX_LOOT_PER_ROUND,
+                _MAX_LOOT_PER_ROUND,
+            )
+            loot_entries = loot_entries[:_MAX_LOOT_PER_ROUND]
+        for loot in loot_entries:
             uid = loot.get("player", "")
             item_name = loot.get("item", "")
             if uid not in instance.players:

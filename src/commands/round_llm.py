@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from src.commands.round_helpers import should_multi_step, validate_dice_constraint
@@ -11,7 +12,7 @@ from src.commands.tag_json import safe_parse_json
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
-from src.engine.language import is_english, normalize_language
+from src.engine.language import localized_text, normalize_language
 from src.llm.client import OutputTruncatedError, length_retry_budgets
 from src.llm.parser import (
     find_protocol_suffix_start,
@@ -161,10 +162,13 @@ async def _compress_long_narration(
             f"总字数控制在 {target} 字以内，最多 2 段；不要新增设定，不要改变结果。\n\n"
             f"原正文：\n{narration}"
         )
-    compress_system = (
-        "You are a narration compressor. Output only the compressed narration text, no preamble, no ---, no state tags, no meta commentary about the task."
-        if is_english(getattr(response, "language", ""))
-        else "你是叙事压缩器，只输出压缩后的正文，不要前言、不要 ---、不要状态标签、不要对任务的元说明。"
+    compress_system = localized_text(
+        getattr(response, "language", ""),
+        {
+            "en": "You are a narration compressor. Output only the compressed narration text, no preamble, no ---, no state tags, no meta commentary about the task.",
+            "zh-CN": "你是叙事压缩器，只输出压缩后的正文，不要前言、不要 ---、不要状态标签、不要对任务的元说明。",
+            "ja": "あなたはナレーション圧縮器です。圧縮後のナレーション本文のみを出力し、前置き・---・状態タグ・タスクに対するメタ解説を出力しないでください。",
+        },
     )
     try:
         compression_max_tokens = max(
@@ -178,7 +182,13 @@ async def _compress_long_narration(
             max_tokens=compression_max_tokens,
         )
     except Exception:
-        logger.warning("超长叙事二次压缩失败，保留原文", exc_info=True)
+        # P2-C：压缩失败按目标长度硬截断，避免超长叙事进 log/context 推高下一轮
+        # 截断概率（长→压缩失败→更长的反馈环）。
+        logger.warning("超长叙事二次压缩失败，按 %d 字硬截断", target, exc_info=True)
+        truncated = narration[:target].rstrip()
+        if truncated and truncated != narration:
+            response.narration = sanitize_narration(truncated + "…")
+            response.content = _replace_narration_in_content(str(response.content or ""), response.narration)
         return
     new_narration = str(compressed.narration or compressed.content or "").split("---", 1)[0].strip()
     if not new_narration:
@@ -199,7 +209,10 @@ async def append_multistep_analysis(
     analysis_max_tokens: int,
 ) -> str:
     """WebUI 多步推理：先分析局势，再把分析摘要追加到上下文。"""
+    started = time.perf_counter()
     if not should_multi_step(instance, actions_text):
+        # 供验收日志证明：本轮没有额外局势分析调用。
+        logger.info("局势分析: 未触发，跳过 (round=%d)", instance.round_number)
         return context
 
     try:
@@ -211,11 +224,13 @@ async def append_multistep_analysis(
             max_tokens=analysis_max_tokens,
         )
         analysis_text = analyze_res.content
-        logger.info("多步推理: 分析完成 (round=%d, len=%d)",
-                    instance.round_number, len(analysis_text))
+        logger.info("局势分析: 完成 (round=%d, len=%d, 耗时=%dms)",
+                    instance.round_number,
+                    len(analysis_text),
+                    int((time.perf_counter() - started) * 1000))
         return context + "\n\n【局势分析（内部参考）】\n" + analysis_text[:400]
     except Exception:
-        logger.exception("多步推理分析失败，降级为单次调用 (round=%d)", instance.round_number)
+        logger.exception("局势分析: 失败，降级为单次调用 (round=%d)", instance.round_number)
         return context
 
 
@@ -231,6 +246,7 @@ async def _call_stream_with_length_retry(
     """流式调用被截断时，按 1×、2×、4× 的预算独立重试。"""
     budgets = length_retry_budgets(narrative_max_tokens)
     for budget_index, current_max_tokens in enumerate(budgets):
+        attempt_started = time.perf_counter()
         filt = _NarrationDeltaFilter(on_delta)
         try:
             response = await llm_client.call_stream(
@@ -254,10 +270,11 @@ async def _call_stream_with_length_retry(
                 raise
             bumped = budgets[budget_index + 1]
             logger.info(
-                "流式输出被截断，提高 max_tokens 重试: %d -> %d (round=%d)",
+                "叙事重试: 流式输出被截断，提高 max_tokens %d -> %d (round=%d, 本次耗时=%dms)",
                 current_max_tokens,
                 bumped,
                 instance.round_number,
+                int((time.perf_counter() - attempt_started) * 1000),
             )
             if on_reset:
                 await on_reset()
@@ -289,7 +306,9 @@ async def call_llm_with_tag_retry(
     dice_retry = 0
     retry_kind = ""
     protocol_retry_used = False
+    started = time.perf_counter()
     while True:
+        attempt_started = time.perf_counter()
         retry_context = context
         if retry_kind == "protocol":
             retry_context = append_protocol_repair_instruction(
@@ -297,10 +316,14 @@ async def call_llm_with_tag_retry(
                 getattr(instance, "language", "zh-CN"),
             )
         elif retry_kind == "dice":
-            if is_english(getattr(instance, "language", "")):
-                retry_context = context + "\n\nPrevious response contradicted the required dice/check result. Rewrite the narration and strictly follow the check outcome."
-            else:
-                retry_context = context + "\n\n⚠️ 上一轮回复与【系统检定·必须遵循】矛盾，请严格遵循检定结果重新叙述。"
+            retry_context = context + "\n\n" + localized_text(
+                getattr(instance, "language", ""),
+                {
+                    "en": "Previous response contradicted the required dice/check result. Rewrite the narration and strictly follow the check outcome.",
+                    "zh-CN": "⚠️ 上一轮回复与【系统检定·必须遵循】矛盾，请严格遵循检定结果重新叙述。",
+                    "ja": "⚠️ 前の応答が【システム判定・必須遵守】の判定結果に矛盾しています。判定結果を厳守してナレーションを書き直してください。",
+                },
+            )
         if stream:
             response = await _call_stream_with_length_retry(
                 llm_client,
@@ -327,7 +350,11 @@ async def call_llm_with_tag_retry(
         if malformed_protocol and not protocol_retry_used:
             protocol_retry_used = True
             retry_kind = "protocol"
-            logger.warning("检测到模型协议标签泄漏，按严格格式重试一次 (round=%d)", instance.round_number)
+            logger.warning(
+                "叙事重试: 检测到模型协议标签泄漏，按严格格式重试 (round=%d, 本次耗时=%dms)",
+                instance.round_number,
+                int((time.perf_counter() - attempt_started) * 1000),
+            )
             if on_reset:
                 await on_reset()
             continue
@@ -368,13 +395,19 @@ async def call_llm_with_tag_retry(
         dice_retry += 1
         retry_kind = "dice"
         logger.warning(
-            "骰子约束矛盾，重试 (%d/1, round=%d)",
+            "叙事重试: 骰子约束矛盾，第%d次重试 (round=%d, 本次耗时=%dms)",
             dice_retry,
             instance.round_number,
+            int((time.perf_counter() - attempt_started) * 1000),
         )
         if on_reset:
             await on_reset()
 
+    logger.info(
+        "GM 叙事: 完成 (round=%d, 总耗时=%dms)",
+        instance.round_number,
+        int((time.perf_counter() - started) * 1000),
+    )
     await _compress_long_narration(
         llm_client, gm_prompt, response, actions_text, combat_model, narrative_max_tokens
     )
@@ -387,6 +420,7 @@ def apply_parsed_data_to_response(instance: GameInstance, response: Any, data: d
     """把解析出的标签数据落到 response 对象，供后续状态应用阶段使用。"""
     if data.get("state_update") or data.get("plot_update"):
         response.is_narration_only = False
+        instance.set_tag_failure_streak(0)  # 成功解析即清零，防止 streak 累积误触发提示
         response.state_update = data["state_update"]
         response.memory_delta = data["memory_delta"]
         response.info_asymmetry = data["info_asymmetry"]
@@ -421,6 +455,25 @@ def apply_parsed_data_to_response(instance: GameInstance, response: Any, data: d
                 fallback="narration_only",
                 repair_hint="建议暂停并检查模型、prompt 标签格式，或重新生成本轮。",
             )
+            # P2-B：连续失败时给玩家可见提示，避免"叙事里受伤但 HP 没扣"的
+            # 状态漂移无声无息（health_event 仅 GM 可见）。追加到叙事末尾，玩家必见。
+            _sync_notice = localized_text(
+                getattr(instance, "language", ""),
+                {
+                    "en": "⚠️ System: state sync has failed for several rounds; HP/resources/items "
+                          "may be out of date. Ask the GM to check, or regenerate this round.",
+                    "zh-CN": "⚠️ 系统提示：连续多轮状态同步失败，HP/资源/物品可能未更新。"
+                              "请告知 GM 检查，或重新生成本轮。",
+                    "ja": "⚠️ システム通知：複数ラウンドにわたり状態同期に失敗しています。"
+                          "HP/資源/アイテムが最新でない可能性があります。GM に確認を依頼するか、"
+                          "このラウンドを再生成してください。",
+                },
+            )
+            narration_text = str(response.narration or "").strip()
+            if narration_text:
+                response.narration = narration_text + "\n" + _sync_notice
+            elif response.content:
+                response.content = str(response.content).rstrip() + "\n" + _sync_notice
         else:
             logger.warning("标签解析失败，本轮仅保留叙事 (round=%d, streak=%d)", instance.round_number, streak)
             record_health_event(

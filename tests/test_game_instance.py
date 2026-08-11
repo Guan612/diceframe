@@ -268,6 +268,24 @@ class TestGameInstance:
         assert view["away_players"] == ["洛恩"]
         assert "不主动做重大决定" in view["attendance_note"]
 
+    async def test_to_llm_view_includes_inventory_and_key_items(self):
+        inst = GameInstance(game_key=("qq", "123", "bot1"))
+        inst.players["u1"] = {
+            "character_name": "艾琳",
+            "character_sheet": {
+                "inventory": [{"name": "火把", "qty": 1}],
+                "key_items": [{"name": "旧钥匙", "category": "key_item"}],
+                "equipment": [{"name": "铁剑"}],
+            },
+        }
+
+        view = inst.to_llm_view()
+
+        sheet = view["players"]["u1"]["character_sheet"]
+        assert sheet["inventory"] == [{"name": "火把", "qty": 1}]
+        assert sheet["key_items"] == [{"name": "旧钥匙", "category": "key_item"}]
+        assert sheet["equipment"] == [{"name": "铁剑"}]
+
 
 @pytest.mark.asyncio
 class TestGameRegistry:
@@ -492,6 +510,39 @@ class TestGameRegistry:
         public_key = "|".join(str(x) for x in result["game_key"])
         assert WebAPI._parse_key(public_key) == tuple(result["game_key"])
 
+    async def test_import_save_zip_materializes_portable_scene_image(self, tmp_path):
+        import io
+        import json as _json
+        import zipfile
+        from src.engine.game_instance import GameRegistry
+
+        state = {
+            "game_key": ["web", "orig", "bot"],
+            "world_id": "w1", "world_name": "Orig", "state": "paused",
+            "players": {}, "npcs": {}, "round_number": 1, "log": [],
+            "summary": {}, "key_facts": [],
+            "scene_image": {"kind": "save_asset", "path": "scene-image.asset"},
+        }
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("state.json", _json.dumps(state))
+            zf.writestr("scene-image.asset", b"portable-scene")
+        imported_payloads = []
+
+        result = await GameRegistry(tmp_path / "saves").import_save_zip(
+            buffer.getvalue(),
+            scene_image_importer=lambda raw: (
+                imported_payloads.append(raw)
+                or {"ok": True, "scene_image": {"kind": "upload", "asset_id": "local-scene"}}
+            ),
+        )
+
+        assert result["ok"] is True
+        assert imported_payloads == [b"portable-scene"]
+        registry = GameRegistry(tmp_path / "saves")
+        restored = await registry.load(tuple(result["game_key"]))
+        assert restored.scene_image == {"kind": "upload", "asset_id": "local-scene"}
+
     async def test_import_save_zip_rejects_missing_state(self, tmp_path):
         """存档包缺 state.json 报错。"""
         import io
@@ -503,6 +554,46 @@ class TestGameRegistry:
             zf.writestr("readme.txt", "hi")
         result = await reg.import_save_zip(buffer.getvalue())
         assert result["ok"] is False
+
+    async def test_import_save_zip_rejects_oversized_unpacked_state(self, tmp_path, monkeypatch):
+        import io
+        import json as _json
+        import zipfile
+        import src.engine.game_instance as game_instance
+        from src.engine.game_instance import GameRegistry
+        monkeypatch.setattr(game_instance, "MAX_SAVE_STATE_BYTES", 32)
+        reg = GameRegistry(tmp_path / "saves")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("state.json", _json.dumps({"game_key": ["web", "orig", "bot"], "padding": "x" * 1000}))
+
+        result = await reg.import_save_zip(buffer.getvalue())
+
+        assert result == {"ok": False, "error": "state.json 解压后过大"}
+
+    async def test_import_save_zip_enforces_package_limit_without_http_route(self, tmp_path, monkeypatch):
+        import src.engine.game_instance as game_instance
+        from src.engine.game_instance import GameRegistry
+
+        monkeypatch.setattr(game_instance, "MAX_SAVE_PACKAGE_BYTES", 4)
+        result = await GameRegistry(tmp_path / "saves").import_save_zip(b"12345")
+
+        assert result == {"ok": False, "error": "存档包不能超过 50 MB"}
+
+    async def test_import_save_zip_rejects_duplicate_members(self, tmp_path):
+        import io
+        import zipfile
+        from src.engine.game_instance import GameRegistry
+        reg = GameRegistry(tmp_path / "saves")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            zf.writestr("state.json", "{}")
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                zf.writestr("state.json", "{}")
+
+        result = await reg.import_save_zip(buffer.getvalue())
+
+        assert result == {"ok": False, "error": "存档包包含重复文件"}
 
 
 def test_webapi_parse_key_rejects_path_traversal():
@@ -604,6 +695,171 @@ async def test_recovery_keeps_pending_luck_decision_actionable(tmp_path):
 
     assert restored[0].state == GameState.ACTIVE_JUDGMENT
     assert restored[0].pending_luck_checks()[0]["check_id"] == "check-1"
+    # P2-F：恢复后标记待决定，供前端提示（定时器不跨重启）
+    assert restored[0].pending_luck_after_recovery is True
+
+
+@pytest.mark.asyncio
+async def test_recovery_pauses_game_without_pending_luck(tmp_path):
+    """无待幸运决定的局恢复后进入 PAUSED，且不标记待决定。"""
+    registry = GameRegistry(tmp_path / "saves")
+    inst = GameInstance(("web", "luck_paused", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.round_checks_prepared = True
+    inst.last_checks = [{
+        "check_id": "check-1",
+        "actor_uid": "p1",
+        "luck_decision": "spent",
+    }]
+    registry.register(inst)
+    await registry.save(inst)
+
+    restored_registry = GameRegistry(tmp_path / "saves")
+    restored = await restored_registry.recover_all()
+
+    assert restored[0].state == GameState.PAUSED
+    assert restored[0].pending_luck_after_recovery is False
+
+
+@pytest.mark.asyncio
+async def test_system_decline_luck_times_out_single_check():
+    """超时只 decline 触发的那条检定，并正确报告是否清空。"""
+    inst = GameInstance(("web", "luck_timeout", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.round_checks_prepared = True
+    inst.last_checks = [
+        {"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"},
+        {"check_id": "b", "actor_uid": "p2", "luck_decision": "pending"},
+    ]
+
+    # 超时第一条：还有 b 待决，declined_all 应为 False
+    res = await inst.system_decline_luck("a")
+    assert res["ok"] is True
+    assert res["declined_all"] is False
+    assert inst.last_checks[0]["luck_decision"] == "declined"
+    assert inst.last_checks[0]["luck_timeout"] is True
+    assert inst.last_checks[1]["luck_decision"] == "pending"
+
+    # 超时最后一条：declined_all 应为 True
+    res2 = await inst.system_decline_luck("b")
+    assert res2["ok"] is True
+    assert res2["declined_all"] is True
+    assert inst.pending_luck_checks() == []
+
+
+@pytest.mark.asyncio
+async def test_system_decline_luck_skips_already_resolved():
+    """玩家已手动决定时，超时回调不重复改判。"""
+    inst = GameInstance(("web", "luck_resolved", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.round_checks_prepared = True
+    inst.last_checks = [
+        {"check_id": "a", "actor_uid": "p1", "luck_decision": "spent"},
+    ]
+    res = await inst.system_decline_luck("a")
+    assert res["ok"] is False
+    assert res["code"] == "LUCK_ALREADY_RESOLVED"
+    assert inst.last_checks[0]["luck_decision"] == "spent"
+
+
+@pytest.mark.asyncio
+async def test_system_decline_luck_missing_check():
+    inst = GameInstance(("web", "luck_missing", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.round_checks_prepared = True
+    inst.last_checks = []
+    res = await inst.system_decline_luck("ghost")
+    assert res["ok"] is False
+    assert res["code"] == "CHECK_NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_resolve_luck_decision_cancels_timer():
+    """手动决议先于超时到达时，对应定时器被取消。"""
+    inst = GameInstance(("web", "luck_cancel", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.gm_uid = "gm"
+    inst.round_checks_prepared = True
+    inst.players["p1"] = {"character_name": "调查员", "character_sheet": {"luck": 50}}
+    inst.last_checks = [{
+        "check_id": "a", "actor_uid": "p1", "dice": "d100",
+        "verdict": "失败", "roll": 45, "threshold": 40,
+        "luck_decision": "pending", "luck_spend_available": True,
+    }]
+    # 模拟已挂起的超时定时器
+    fake_task = asyncio.ensure_future(asyncio.sleep(100))
+    inst._luck_timers["a"] = fake_task
+
+    await inst.resolve_luck_decision("a", "p1", spend=True, allow_gm=False)
+    await asyncio.sleep(0)  # 让事件循环处理取消
+
+    assert fake_task.cancelled() is True
+    assert "a" not in inst._luck_timers
+    assert inst.last_checks[0]["luck_decision"] == "spent"
+
+
+@pytest.mark.asyncio
+async def test_luck_timeout_schedules_and_resumes_round():
+    """调度器为 pending 检定挂任务；_luck_timeout 触发后 decline 并重新推进回合。"""
+    from src.commands.round_processor import RoundProcessor
+
+    inst = GameInstance(("web", "luck_timer", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.round_checks_prepared = True
+    inst.luck_timeout_seconds = 1
+    inst.last_checks = [{"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"}]
+
+    class FakeRegistry:
+        def get(self, key):
+            return inst
+        async def save(self, instance):
+            pass
+
+    processor = RoundProcessor(
+        FakeRegistry(), None, None, None, None, None, None, None, None,
+        None, None, None, None, 1, 1, 1,
+    )
+    resumed = []
+
+    async def fake_process_round(instance, **kw):
+        resumed.append(instance.game_key)
+        return "narration", None
+    processor.process_round = fake_process_round  # type: ignore
+
+    # 1) 调度：为 pending 检定挂上未完成的定时器任务
+    processor._schedule_luck_timeouts(inst)
+    task = inst._luck_timers.get("a")
+    assert task is not None and not task.done()
+    inst._cancel_luck_timer("a")  # 同步 pop + cancel，模拟手动决议先到达
+    assert "a" not in inst._luck_timers
+    try:
+        await task  # 等取消落地
+    except asyncio.CancelledError:
+        pass
+
+    # 2) 触发：timeout=0 使 sleep(0) 立即返回，验证 decline + 重新推进
+    await processor._luck_timeout(inst.game_key, "a", 0)
+    assert inst.last_checks[0]["luck_decision"] == "declined"
+    assert inst.last_checks[0]["luck_timeout"] is True
+    assert resumed == [inst.game_key]
+
+
+@pytest.mark.asyncio
+async def test_luck_timeout_disabled_when_zero():
+    """luck_timeout_seconds=0 时不挂定时器（异步局无限等待）。"""
+    from src.commands.round_processor import RoundProcessor
+
+    inst = GameInstance(("web", "luck_disabled", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.round_checks_prepared = True
+    inst.luck_timeout_seconds = 0
+    inst.last_checks = [{"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"}]
+
+    class FakeRegistry:
+        def get(self, key):
+            return inst
+        async def save(self, instance):
+            pass
+
+    processor = RoundProcessor(
+        FakeRegistry(), None, None, None, None, None, None, None, None,
+        None, None, None, None, 1, 1, 1,
+    )
+    processor._schedule_luck_timeouts(inst)
+    assert inst._luck_timers == {}
 
 
 @pytest.mark.asyncio
@@ -619,3 +875,51 @@ async def test_finished_round_keeps_an_independent_start_snapshot_for_rollback()
 
     assert inst.round_start_snapshot == {}
     assert inst.log[-1]["round_start_snapshot"]["p1"]["luck"] == 30
+
+
+@pytest.mark.asyncio
+async def test_configure_session_luck_timeout_validation():
+    """P1-D：configure_session 校验幸运超时范围并落字段。"""
+    inst = GameInstance(("web", "luck_cfg", "bot"))
+    inst.configure_session(luck_timeout_seconds=120)
+    assert inst.luck_timeout_seconds == 120
+    inst.configure_session(luck_timeout_seconds=0)
+    assert inst.luck_timeout_seconds == 0
+    with pytest.raises(ValueError):
+        inst.configure_session(luck_timeout_seconds=9999)
+    with pytest.raises(ValueError):
+        inst.configure_session(luck_timeout_seconds=-1)
+    # 不传则不改变已有值
+    inst.configure_session()
+    assert inst.luck_timeout_seconds == 0
+
+
+def test_hardcore_blocks_revive():
+    """P2-O：硬核难度禁止复活，角色保持死亡。"""
+    from src.commands.round_effects import apply_revive_commands
+    inst = GameInstance(("web", "revive_hard", "bot"))
+    inst.difficulty = "硬核"
+    inst.players["p1"] = {"character_name": "勇者", "character_sheet": {"hp": 0, "deceased": True, "max_hp": 50}}
+    apply_revive_commands(inst, {"revive_commands": [{"uid": "p1", "method": "法术"}]})
+    assert inst.players["p1"]["character_sheet"]["deceased"] is True
+
+
+def test_normal_allows_revive():
+    """P2-O：标准难度可正常复活。"""
+    from src.commands.round_effects import apply_revive_commands
+    inst = GameInstance(("web", "revive_ok", "bot"))
+    inst.difficulty = "标准"
+    inst.players["p1"] = {"character_name": "勇者", "character_sheet": {"hp": 0, "deceased": True, "max_hp": 50}}
+    apply_revive_commands(inst, {"revive_commands": [{"uid": "p1", "method": "法术"}]})
+    cs = inst.players["p1"]["character_sheet"]
+    assert cs["deceased"] is False
+    assert cs["hp"] > 0
+
+
+def test_ja_language_roundtrip():
+    """P3-A Phase4：language=ja 存档 round-trip 不丢（to_dict→from_dict）。"""
+    inst = GameInstance(("web", "ja_rt", "bot"))
+    inst.language = "ja"
+    data = inst.to_dict()
+    restored = GameInstance.from_dict(data)
+    assert restored.language == "ja"

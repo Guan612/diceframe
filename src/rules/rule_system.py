@@ -78,6 +78,11 @@ def _resolve_rule_template(path: Path, seen: set[Path] | None = None) -> dict:
     return merged
 
 
+# 表达式最大嵌套深度：规则模板公式来自 JSON（正常可信），但用户自定义世界模板
+# 可塞深层嵌套表达式触发 RecursionError 崩进程，限制深度防 DoS（见执行报告 P2-A）。
+_MAX_EXPR_DEPTH = 50
+
+
 def _safe_eval(expr: str, variables: dict[str, int]) -> int:
     """安全求值数学表达式，仅支持 + - * / // 和变量引用。"""
     try:
@@ -88,7 +93,9 @@ def _safe_eval(expr: str, variables: dict[str, int]) -> int:
         raise ValueError(f"表达式求值失败: {expr}") from exc
 
 
-def _eval_node(node: ast.AST, variables: dict[str, int]) -> int:
+def _eval_node(node: ast.AST, variables: dict[str, int], depth: int = 0) -> int:
+    if depth > _MAX_EXPR_DEPTH:
+        raise ValueError("表达式嵌套过深")
     if isinstance(node, ast.Constant):
         return int(node.value)
     if isinstance(node, ast.Name):
@@ -97,20 +104,20 @@ def _eval_node(node: ast.AST, variables: dict[str, int]) -> int:
         op_func = _SAFE_OPS.get(type(node.op))
         if op_func is None:
             raise ValueError(f"不支持的运算符: {type(node.op).__name__}")
-        left = _eval_node(node.left, variables)
-        right = _eval_node(node.right, variables)
+        left = _eval_node(node.left, variables, depth + 1)
+        right = _eval_node(node.right, variables, depth + 1)
         return int(op_func(left, right))
     if isinstance(node, ast.UnaryOp):
         op_func = _SAFE_OPS.get(type(node.op))
         if op_func is None:
             raise ValueError(f"不支持的一元运算符: {type(node.op).__name__}")
-        return int(op_func(_eval_node(node.operand, variables)))
+        return int(op_func(_eval_node(node.operand, variables, depth + 1)))
     if isinstance(node, ast.Call):
         func_name = node.func.id if isinstance(node.func, ast.Name) else "unknown"
         func = {"max": max, "min": min, "abs": abs, "int": int}.get(func_name)
         if func is None:
             raise ValueError(f"不支持的函数: {func_name}")
-        args = [_eval_node(arg, variables) for arg in node.args]
+        args = [_eval_node(arg, variables, depth + 1) for arg in node.args]
         return int(func(*args))
     raise ValueError(f"不支持的表达式节点: {type(node).__name__}")
 
@@ -290,6 +297,26 @@ class RuleSystem:
     @property
     def dice_system(self) -> str:
         return self.template.get("dice_system", "d20")
+
+    @property
+    def check_mechanic(self) -> dict:
+        """规则无关的检定元数据，供系统执行器与阶段 1 裁判共用。"""
+        declared = self.template.get("check_mechanic")
+        if isinstance(declared, dict) and declared:
+            return dict(declared)
+        if self.dice_system == "d100":
+            return {
+                "dice": "d100",
+                "comparison": "roll_lte_target",
+                "critical": {"success_max": 5, "failure_min": 96},
+            }
+        if self.dice_system == "none":
+            return {"dice": "none", "comparison": "none", "critical": {}}
+        return {
+            "dice": "d20",
+            "comparison": "roll_plus_modifier_gte_target",
+            "critical": {"success": 20, "failure": 1},
+        }
 
     @property
     def combat_model(self) -> str:
@@ -545,7 +572,7 @@ class RuleSystem:
             if self.max_skill_value and value > self.max_skill_value:
                 errors.append(f"技能 {name} {value}/{self.max_skill_value}，超出单技能上限")
             if self.skill_point_spend_mode == "above_base":
-                skill_spent += max(0, value - int(self.skill_base_values.get(name, 0)))
+                skill_spent += max(0, value - self._skill_base_value(name))
             else:
                 skill_spent += value
         if self.skill_point_total and skill_spent > self.skill_point_total:
@@ -562,6 +589,14 @@ class RuleSystem:
         if valid_classes and class_name and class_name not in valid_classes:
             logger.warning("职业 %r 不在规则建议列表 %s 内，放行自定义职业", class_name, valid_classes)
         return errors
+
+    def _skill_base_value(self, name: str) -> int:
+        """技能基础值：优先 skill_base_values；否则若属于某职业技能池按 0（池内无基础值），
+        自定义技能按房规兜底 5，防 above_base 模式下凭空全算超基导致超模建卡（P2-E）。"""
+        if name in self.skill_base_values:
+            return int(self.skill_base_values[name])
+        in_pool = any(name in pool for pool in self.skill_pools.values())
+        return 5 if not in_pool else 0
 
 
     @classmethod
@@ -635,6 +670,8 @@ def list_available_rules(rules_dir: str | Path) -> list[dict]:
                 "combat_model": template.get("combat_model", "hp_based"),
                 "attr_count": len(template.get("attributes", [])),
                 "custom": bool(template.get("custom", False)),
+                "source_rule_id": template.get("source_rule_id", ""),
+                "scene_image": template.get("scene_image"),
                 "file": str(f),
             })
         except Exception:

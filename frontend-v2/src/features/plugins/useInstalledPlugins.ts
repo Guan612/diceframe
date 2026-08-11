@@ -1,6 +1,7 @@
 import { computed, ref, type Ref } from 'vue'
 import { errorMessage } from '@/api/client'
 import { pluginApi } from '@/api/plugins'
+import { useConfirm } from '@/composables/useConfirm'
 import { useLocale } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
 import type { PluginField, PluginInfo } from '@/api/types'
@@ -13,6 +14,7 @@ export function useInstalledPlugins(
 ) {
   const toast = useToast()
   const { t } = useLocale()
+  const { confirm } = useConfirm()
   const plugins = ref<PluginInfo[]>([])
   const expandedPluginNames = ref<string[]>([])
   const loading = ref(false)
@@ -139,7 +141,13 @@ export function useInstalledPlugins(
   }
 
   async function clearCardCache(plugin: PluginInfo) {
-    if (!window.confirm(t('confirmClearCardCache'))) return
+    const ok = await confirm({
+      title: t('confirmClearCardCacheTitle'),
+      content: t('confirmClearCardCache'),
+      positiveText: t('confirmDelete'),
+      type: 'error',
+    })
+    if (!ok) return
     busy.value = `${plugin.id}:card-cache`
     try {
       const response = await pluginApi.clearCardCache(plugin.id)

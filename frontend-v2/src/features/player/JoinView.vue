@@ -9,6 +9,7 @@ import { useLocale, type Locale } from '@/composables/useLocale'
 import { useConfirm } from '@/composables/useConfirm'
 import { characterCardNeedsConversion, characterCardRuleName } from '@/utils/characterCards'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
+import BrandLogo from '@/components/BrandLogo.vue'
 
 interface JoinSkill { name: string; value: string | number }
 interface JoinForm {
@@ -20,7 +21,7 @@ interface JoinForm {
   attributes: Record<string, number>
   skills: JoinSkill[]
   identity?: Record<string, unknown>
-  portrait?: CharacterPortrait
+  portrait?: CharacterPortrait | null
   [key: string]: unknown
 }
 
@@ -194,10 +195,13 @@ async function create() {
 <template>
   <main class="join-page">
     <header class="join-hud">
-      <div>
-        <span class="section-kicker">{{ t('playerSlot') }}</span>
-        <h1>{{ detail.world_name || t('joinGame') }}</h1>
-        <p>{{ detail.scene || t('createCharacterStartAdventure') }}</p>
+      <div class="join-title-block">
+        <BrandLogo :size="36" />
+        <div class="join-title-copy">
+          <span class="section-kicker">{{ t('playerSlot') }}</span>
+          <h1>{{ detail.world_name || t('joinGame') }}</h1>
+          <p>{{ detail.scene || t('createCharacterStartAdventure') }}</p>
+        </div>
       </div>
       <div class="join-actions">
         <label class="locale-select">

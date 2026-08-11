@@ -65,10 +65,17 @@ async def v2_static_file(request: web.Request) -> web.FileResponse:
 
 
 _CHARSET_SUFFIXES = (".js", ".mjs", ".css", ".json", ".html", ".htm", ".svg", ".xml", ".txt")
+_STATIC_CONTENT_TYPES = {
+    ".avif": "image/avif",
+    ".webp": "image/webp",
+    ".woff2": "font/woff2",
+}
 
 
 def _guess_content_type(path: Path) -> str:
-    mime, _ = mimetypes.guess_type(path.name)
+    mime = _STATIC_CONTENT_TYPES.get(path.suffix.lower())
+    if not mime:
+        mime, _ = mimetypes.guess_type(path.name)
     if not mime:
         mime = "application/octet-stream"
     if path.suffix.lower() in _CHARSET_SUFFIXES:

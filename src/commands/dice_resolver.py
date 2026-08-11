@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import re
 
-from src.engine.dice import DiceResult, check_coc, check_d20_advantage, check_d100, coc_success_level
+from src.engine.dice import DiceResult, check_coc, check_d20_advantage, check_d100, coc_success_level, roll
 from src.engine.game_instance import GameInstance
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.rules.rule_system import RuleSystem
 
 
@@ -21,6 +21,7 @@ def _verdict_text(verdict: str, english: bool) -> str:
         "大成功": "Critical Success",
         "极难成功": "Extreme Success",
         "困难成功": "Hard Success",
+        "普通成功": "Regular Success",
         "成功": "Success",
         "失败": "Failure",
         "大失败": "Critical Failure",
@@ -68,7 +69,7 @@ class DiceResolver:
             matched_skill = self._match_skill(skills, text)
 
         if dice_system == "d100":
-            return self._resolve_coc_value(instance, uid, attrs, matched_skill, roll_value, request)
+            return self._resolve_coc_value(instance, uid, attrs, matched_skill, roll_value, rolls, request)
 
         attr_key = str(request.get("attribute") or action.get("selected_attribute") or "")
         if not attr_key:
@@ -87,9 +88,40 @@ class DiceResolver:
             skill_bonus = rule.skill_bonus(skill_value)
             bonus_label = f"技能「{skill_name}」{skill_value} → 加值 +{skill_bonus}"
 
-        dc = rule.dc_for_difficulty(instance.difficulty, "normal") if rule else 10
-        modifier = attr_mod + skill_bonus
+        requested_target = request.get("target")
+        dc = (
+            max(1, min(40, int(requested_target)))
+            if requested_target is not None
+            else (rule.dc_for_difficulty(instance.difficulty, "normal") if rule else 10)
+        )
+        circumstance_modifier = max(-20, min(20, int(request.get("circumstance_modifier", 0) or 0)))
+        modifier = attr_mod + skill_bonus + circumstance_modifier
         total = roll_value + modifier
+        opponent_ref = str(request.get("opponent") or "")
+        opponent_name = ""
+        opponent_roll = request.get("opponent_roll")
+        opponent_modifier = int(request.get("opponent_modifier", 0) or 0)
+        opponent_total = request.get("opponent_total")
+        if opponent_ref:
+            opponent_attrs: dict = {}
+            if opponent_ref.startswith("npc:"):
+                npc_id = opponent_ref.split(":", 1)[1]
+                npc = instance.npcs.get(npc_id, {})
+                opponent_name = str(npc.get("name") or npc.get("character_name") or npc_id)
+                opponent_attrs = npc.get("attributes", {}) if isinstance(npc.get("attributes"), dict) else {}
+            elif opponent_ref in instance.players:
+                opponent_name = str(instance.players[opponent_ref].get("character_name") or opponent_ref)
+                opponent_attrs = instance.get_character_sheet(opponent_ref).get("attributes", {})
+            if opponent_name:
+                if opponent_roll is None:
+                    opponent_value = int(opponent_attrs.get(attr_key, 10) or 10)
+                    opponent_modifier = rule.attribute_modifier(opponent_value) if rule else (opponent_value - 10) // 2
+                    opponent_roll = roll("d20").natural
+                    opponent_total = int(opponent_roll) + opponent_modifier
+                    request["opponent_roll"] = opponent_roll
+                    request["opponent_modifier"] = opponent_modifier
+                    request["opponent_total"] = opponent_total
+                dc = int(opponent_total)
         if roll_value == 20:
             verdict = "大成功"
         elif roll_value == 1:
@@ -124,28 +156,49 @@ class DiceResolver:
             "advantage_mode": mode,
             "advantage_note": note or None,
             "modifier": modifier,
-            "modifier_breakdown": bonus_label or None,
+            "modifier_breakdown": "；".join(filter(None, [
+                bonus_label,
+                f"情境修正 {circumstance_modifier:+d}" if circumstance_modifier else "",
+            ])) or None,
             "total": total,
             "dc": dc,
             "difficulty": instance.difficulty,
+            "kind": str(request.get("kind") or "check"),
+            "opponent": str(request.get("opponent") or ""),
+            "opponent_name": opponent_name,
+            "opponent_roll": opponent_roll,
+            "opponent_modifier": opponent_modifier if opponent_name else None,
+            "opponent_total": opponent_total,
+            "assist": list(request.get("assist") or []),
+            "planner_source": str(request.get("planner_source") or "legacy"),
             "verdict": verdict,
             "is_critical": verdict == "大成功",
             "is_fumble": verdict == "大失败",
         }
         self._record_check(instance, check)
-        english = is_english(instance.language)
-        if english:
-            return (
-                "\n[System Check - Must Follow]\n"
-                f"Check: {roll_label} + {attr_label} {modifier:+d} = {total} vs DC {dc}\n"
-                f"Result: {_verdict_text(verdict, True)}\n"
-                "Requirement: narrate this server-resolved result without changing the roll or outcome.\n"
-            )
-        return (
-            "\n【系统检定·必须遵循】\n"
-            f"检定: {roll_label} + 属性「{attr_label}」总修正 {modifier:+d} = {total} vs DC {dc}\n"
-            f"结果: {verdict}\n"
-            "要求: 这是服务端已结算结果，只按结果叙事，不得重掷或改判。\n"
+        return localized_text(
+            instance.language,
+            {
+                "en": (
+                    "\n[System Check - Must Follow]\n"
+                    f"Check: {roll_label} + {attr_label} {modifier:+d} = {total} vs DC {dc}\n"
+                    f"Result: {_verdict_text(verdict, True)}\n"
+                    "Requirement: narrate this server-resolved result without changing the roll or outcome.\n"
+                ),
+                "zh-CN": (
+                    "\n【系统检定·必须遵循】\n"
+                    f"检定: {roll_label} + 属性「{attr_label}」总修正 {modifier:+d} = {total} vs DC {dc}\n"
+                    f"结果: {verdict}\n"
+                    "要求: 这是服务端已结算结果，只按结果叙事，不得重掷或改判。\n"
+                ),
+                "ja": (
+                    "\n【システム判定・必ず従うこと】\n"
+                    f"判定: {roll_label} + 属性「{attr_label}」合計修正 {modifier:+d} = {total} vs DC {dc}\n"
+                    f"結果: {verdict}\n"
+                    "要求: これはサーバー側で確定した結果。この結果に沿って叙述し、"
+                    "振り直しや改変をしてはならない。\n"
+                ),
+            },
         )
 
     def _resolve_coc_value(
@@ -155,6 +208,7 @@ class DiceResolver:
         attrs: dict,
         matched_skill: dict | None,
         roll_value: int,
+        rolls: list[int],
         request: dict,
     ) -> str:
         cs = instance.get_character_sheet(uid)
@@ -170,6 +224,7 @@ class DiceResolver:
             skill_name = ""
             attribute_label = attr_key
             label = f"属性「{attr_key}」={threshold}%"
+        threshold += max(-20, min(20, int(request.get("circumstance_modifier", 0) or 0)))
         threshold = max(1, min(99, threshold))
         verdict = coc_success_level(roll_value, threshold)
         luck = int(cs.get("luck", 0) or 0)
@@ -183,37 +238,57 @@ class DiceResolver:
             "attribute": attribute_label,
             "skill": skill_name,
             "roll": roll_value,
-            "rolls": [roll_value],
+            "rolls": rolls or [roll_value],
             "threshold": threshold,
             "hard_threshold": threshold // 2,
             "extreme_threshold": threshold // 5,
             "verdict": verdict,
+            "kind": str(request.get("kind") or "check"),
+            "opponent": str(request.get("opponent") or ""),
+            "assist": list(request.get("assist") or []),
+            "planner_source": str(request.get("planner_source") or "legacy"),
             "luck_spend_available": 0 < luck_cost <= luck,
             "luck_cost": luck_cost if 0 < luck_cost <= luck else None,
             "is_critical": verdict == "大成功",
             "is_fumble": verdict == "大失败",
         }
         self._record_check(instance, check)
-        english = is_english(instance.language)
-        luck_hint = ""
-        if check["luck_spend_available"]:
-            luck_hint = (
-                f"\nLuck option: spend {luck_cost} Luck for a regular success."
-                if english else f"\n幸运选项: 可消耗 {luck_cost} 点幸运变为普通成功。"
+        luck_hint = (
+            localized_text(
+                instance.language,
+                {
+                    "en": f"\nLuck option: spend {luck_cost} Luck for a regular success.",
+                    "zh-CN": f"\n幸运选项: 可消耗 {luck_cost} 点幸运变为普通成功。",
+                    "ja": f"\n幸運オプション: {luck_cost} 点の幸運を消費して普通成功にできる。",
+                },
             )
-        if english:
-            return (
-                "\n[System Check - Must Follow]\n"
-                f"Check: d100={roll_value} vs {label}\n"
-                f"Result: {_verdict_text(verdict, True)}{luck_hint}\n"
-                "Requirement: narrate this server-resolved result without changing the roll or outcome.\n"
-            )
-        return (
-            "\n【系统检定·必须遵循】\n"
-            f"检定: d100={roll_value} vs {label}\n"
-            f"成功等级阈值: 普通≤{threshold}，困难≤{threshold // 2}，极难≤{threshold // 5}\n"
-            f"结果: {verdict}{luck_hint}\n"
-            "要求: 这是服务端已结算结果，只按结果叙事，不得重掷或改判。\n"
+            if check["luck_spend_available"] else ""
+        )
+        return localized_text(
+            instance.language,
+            {
+                "en": (
+                    "\n[System Check - Must Follow]\n"
+                    f"Check: d100={roll_value} vs {label}\n"
+                    f"Result: {_verdict_text(verdict, True)}{luck_hint}\n"
+                    "Requirement: narrate this server-resolved result without changing the roll or outcome.\n"
+                ),
+                "zh-CN": (
+                    "\n【系统检定·必须遵循】\n"
+                    f"检定: d100={roll_value} vs {label}\n"
+                    f"成功等级阈值: 普通≤{threshold}，困难≤{threshold // 2}，极难≤{threshold // 5}\n"
+                    f"结果: {verdict}{luck_hint}\n"
+                    "要求: 这是服务端已结算结果，只按结果叙事，不得重掷或改判。\n"
+                ),
+                "ja": (
+                    "\n【システム判定・必ず従うこと】\n"
+                    f"判定: d100={roll_value} vs {label}\n"
+                    f"成功レベル閾値: 普通≤{threshold}、困難≤{threshold // 2}、極難≤{threshold // 5}\n"
+                    f"結果: {verdict}{luck_hint}\n"
+                    "要求: これはサーバー側で確定した結果。この結果に沿って叙述し、"
+                    "振り直しや改変をしてはならない。\n"
+                ),
+            },
         )
 
     @staticmethod
@@ -276,21 +351,31 @@ class DiceResolver:
             "is_fumble": "大失败" in verdict,
         }
         instance.record_check(check)
-        english = is_english(instance.language)
-        if english:
-            return (
-                f"\n[System Check - Must Follow]\n"
-                f"Check: d100={result.natural} vs {label}\n"
-                f"Result: {_verdict_text(verdict, True)}\n"
-                f"Requirement: GM narration must strictly reflect this roll. Critical success (<=5) gives an extra narrative benefit; "
-                f"critical failure (>=96) creates a serious consequence; success/failure is judged by GM against DC.\n"
-            )
-        return (
-            f"\n【系统检定·必须遵循】\n"
-            f"检定: d100={result.natural} vs {label}\n"
-            f"结果: {verdict}\n"
-            f"要求: GM叙事必须严格体现此掷骰结果。大成功(≤5)=额外叙事奖励，"
-            f"大失败(≥96)=严重后果，成功/失败由 GM 按 DC 具体判定。\n"
+        return localized_text(
+            instance.language,
+            {
+                "en": (
+                    f"\n[System Check - Must Follow]\n"
+                    f"Check: d100={result.natural} vs {label}\n"
+                    f"Result: {_verdict_text(verdict, True)}\n"
+                    f"Requirement: GM narration must strictly reflect this roll. Critical success (<=5) gives an extra narrative benefit; "
+                    f"critical failure (>=96) creates a serious consequence; success/failure is judged by GM against DC.\n"
+                ),
+                "zh-CN": (
+                    f"\n【系统检定·必须遵循】\n"
+                    f"检定: d100={result.natural} vs {label}\n"
+                    f"结果: {verdict}\n"
+                    f"要求: GM叙事必须严格体现此掷骰结果。大成功(≤5)=额外叙事奖励，"
+                    f"大失败(≥96)=严重后果，成功/失败由 GM 按 DC 具体判定。\n"
+                ),
+                "ja": (
+                    f"\n【システム判定・必ず従うこと】\n"
+                    f"判定: d100={result.natural} vs {label}\n"
+                    f"結果: {verdict}\n"
+                    f"要求: GM の叙述はこの出目を厳密に反映すること。大成功(≤5)=追加の叙述的恩恵、"
+                    f"大失敗(≥96)=深刻な結果。成功/失敗は GM が DC に照らして判断する。\n"
+                ),
+            },
         )
 
     def roll_rule_check(self, instance: GameInstance, actions_text: str, rule: RuleSystem) -> str:
@@ -371,25 +456,37 @@ class DiceResolver:
             "is_fumble": "大失败" in verdict,
         }
         instance.record_check(check)
-        english = is_english(instance.language)
-        if english:
-            return (
-                f"\n[System Check - Must Follow]\n"
-                f"Mechanic: {rule.mechanics} / {rule.ruleset_level}\n"
-                f"Check: {roll_label} + attribute {attr_label} modifier {attr_mod:+d}"
-                f"{(' + ' + bonus_label) if bonus_label else ''} = {result.total} vs DC {dc}\n"
-                f"Result: {_verdict_text(verdict, True)}\n"
-                f"Requirement: GM narration must strictly reflect this check. Critical success means an extra benefit; "
-                f"critical failure means a serious consequence; ordinary success/failure follows the total vs DC.\n"
-            )
-        return (
-            f"\n【系统检定·必须遵循】\n"
-            f"机制: {rule.mechanics} / {rule.ruleset_level}\n"
-            f"检定: {roll_label} + 属性「{attr_label}」修正 {attr_mod:+d}"
-            f"{(' + ' + bonus_label) if bonus_label else ''} = {result.total} vs DC {dc}\n"
-            f"结果: {verdict}\n"
-            f"要求: GM叙事必须严格体现此检定结果。大成功=额外收益，大失败=严重后果；"
-            f"普通成功/失败按上述总值与 DC 裁定。\n"
+        return localized_text(
+            instance.language,
+            {
+                "en": (
+                    f"\n[System Check - Must Follow]\n"
+                    f"Mechanic: {rule.mechanics} / {rule.ruleset_level}\n"
+                    f"Check: {roll_label} + attribute {attr_label} modifier {attr_mod:+d}"
+                    f"{(' + ' + bonus_label) if bonus_label else ''} = {result.total} vs DC {dc}\n"
+                    f"Result: {_verdict_text(verdict, True)}\n"
+                    f"Requirement: GM narration must strictly reflect this check. Critical success means an extra benefit; "
+                    f"critical failure means a serious consequence; ordinary success/failure follows the total vs DC.\n"
+                ),
+                "zh-CN": (
+                    f"\n【系统检定·必须遵循】\n"
+                    f"机制: {rule.mechanics} / {rule.ruleset_level}\n"
+                    f"检定: {roll_label} + 属性「{attr_label}」修正 {attr_mod:+d}"
+                    f"{(' + ' + bonus_label) if bonus_label else ''} = {result.total} vs DC {dc}\n"
+                    f"结果: {verdict}\n"
+                    f"要求: GM叙事必须严格体现此检定结果。大成功=额外收益，大失败=严重后果；"
+                    f"普通成功/失败按上述总值与 DC 裁定。\n"
+                ),
+                "ja": (
+                    f"\n【システム判定・必ず従うこと】\n"
+                    f"仕組み: {rule.mechanics} / {rule.ruleset_level}\n"
+                    f"判定: {roll_label} + 属性「{attr_label}」修正 {attr_mod:+d}"
+                    f"{(' + ' + bonus_label) if bonus_label else ''} = {result.total} vs DC {dc}\n"
+                    f"結果: {verdict}\n"
+                    f"要求: GM の叙述はこの判定結果を厳密に反映すること。大成功=追加の恩恵、"
+                    f"大失敗=深刻な結果。普通の成功/失敗は上記合計と DC に従う。\n"
+                ),
+            },
         )
 
     def roll_coc_check(
@@ -431,34 +528,48 @@ class DiceResolver:
         if verdict == "失败" and result.natural > threshold:
             gap = result.natural - threshold
             if 0 < gap <= luck:
-                luck_hint = f"\n幸运提示: 可消耗 {gap} 点幸运把本次失败补成普通成功。"
-
-        english = is_english(instance.language)
-        if english:
-            luck_hint_en = ""
-            if verdict == "失败" and result.natural > threshold:
-                gap = result.natural - threshold
-                if 0 < gap <= luck:
-                    luck_hint_en = f"\nLuck hint: spending {gap} Luck can turn this failure into a regular success."
-            return (
-                f"\n[System Check - Must Follow]\n"
-                f"Mechanic: coc7e_core / {getattr(instance, 'difficulty', '标准')}\n"
-                f"Check: d100={result.natural} vs {label}\n"
-                f"Success thresholds: regular <= {threshold}, hard <= {hard}, extreme <= {extreme}, "
-                f"critical success = 1, fumble = 96-100 when skill is below 50.\n"
-                f"Result: {_verdict_text(verdict, True)}{luck_hint_en}\n"
-                f"Requirement: GM narration must strictly reflect the CoC success level. Failure must not be narrated as success; "
-                f"a fumble must create a clear worsening.\n"
-            )
-        return (
-            f"\n【系统检定·必须遵循】\n"
-            f"机制: coc7e_core / {getattr(instance, 'difficulty', '标准')}\n"
-            f"检定: d100={result.natural} vs {label}\n"
-            f"成功等级阈值: 普通≤{threshold}，困难≤{hard}，极难≤{extreme}，"
-            f"大成功=1，大失败=96-100（技能低于50时）\n"
-            f"结果: {verdict}{luck_hint}\n"
-            f"要求: GM叙事必须严格体现 CoC 成功等级。失败不应写成成功，"
-            f"大失败必须带来明确恶化。\n"
+                luck_hint = localized_text(
+                    instance.language,
+                    {
+                        "en": f"\nLuck hint: spending {gap} Luck can turn this failure into a regular success.",
+                        "zh-CN": f"\n幸运提示: 可消耗 {gap} 点幸运把本次失败补成普通成功。",
+                        "ja": f"\n幸運ヒント: {gap} 点の幸運を消費して、この失敗を普通成功にできる。",
+                    },
+                )
+        return localized_text(
+            instance.language,
+            {
+                "en": (
+                    f"\n[System Check - Must Follow]\n"
+                    f"Mechanic: coc7e_core / {getattr(instance, 'difficulty', '标准')}\n"
+                    f"Check: d100={result.natural} vs {label}\n"
+                    f"Success thresholds: regular <= {threshold}, hard <= {hard}, extreme <= {extreme}, "
+                    f"critical success = 1, fumble = 96-100 when skill is below 50.\n"
+                    f"Result: {_verdict_text(verdict, True)}{luck_hint}\n"
+                    f"Requirement: GM narration must strictly reflect the CoC success level. Failure must not be narrated as success; "
+                    f"a fumble must create a clear worsening.\n"
+                ),
+                "zh-CN": (
+                    f"\n【系统检定·必须遵循】\n"
+                    f"机制: coc7e_core / {getattr(instance, 'difficulty', '标准')}\n"
+                    f"检定: d100={result.natural} vs {label}\n"
+                    f"成功等级阈值: 普通≤{threshold}，困难≤{hard}，极难≤{extreme}，"
+                    f"大成功=1，大失败=96-100（技能低于50时）\n"
+                    f"结果: {verdict}{luck_hint}\n"
+                    f"要求: GM叙事必须严格体现 CoC 成功等级。失败不应写成成功，"
+                    f"大失败必须带来明确恶化。\n"
+                ),
+                "ja": (
+                    f"\n【システム判定・必ず従うこと】\n"
+                    f"仕組み: coc7e_core / {getattr(instance, 'difficulty', '標準')}\n"
+                    f"判定: d100={result.natural} vs {label}\n"
+                    f"成功レベル閾値: 普通≤{threshold}、困難≤{hard}、極難≤{extreme}、"
+                    f"大成功=1、大失敗=96-100（技能が50未満の場合）\n"
+                    f"結果: {verdict}{luck_hint}\n"
+                    f"要求: GM の叙述は CoC の成功レベルを厳密に反映すること。失敗を成功として"
+                    f"叙述してはならない。大失敗は明確な悪化を伴わなければならない。\n"
+                ),
+            },
         )
 
     @staticmethod

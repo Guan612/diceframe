@@ -15,7 +15,7 @@ from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
 from src.engine.world_template import load_world_template
-from src.webui.services import avatars, bot_access, bot_extensions, character_cards, characters, generation, games, logs, maps, memory, tavern, turns, worlds, rules, plugins, system, tunnel
+from src.webui.services import avatars, bot_access, bot_extensions, character_cards, characters, content, generation, games, logs, maps, memory, tavern, turns, worlds, rules, plugins, scene_images, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -33,11 +33,81 @@ class WebAPI:
     所有返回值为 JSON 可序列化的字典。
     """
 
+    async def legal_document(self, document_name: str, language: str) -> dict[str, Any]:
+        return await legal.document(self, document_name, language)
+
+    async def fetch_public_content_text(
+        self,
+        path: str,
+        *,
+        force_refresh: bool = False,
+        allow_cached: bool = True,
+    ) -> str:
+        return await content.fetch_text(
+            self,
+            path,
+            force_refresh=force_refresh,
+            allow_cached=allow_cached,
+        )
+
+    def public_content_disk_age(self, path: str) -> float | None:
+        """公共内容磁盘缓存文件的年龄（秒）；无缓存返回 None。"""
+        return content.disk_cache_age_seconds(self, path)
+
+    async def fetch_public_content_json(
+        self,
+        path: str,
+        *,
+        force_refresh: bool = False,
+        allow_cached: bool = True,
+    ) -> dict[str, Any] | None:
+        return await content.fetch_json(
+            self,
+            path,
+            force_refresh=force_refresh,
+            allow_cached=allow_cached,
+        )
+
+    async def current_legal_documents(self) -> dict[str, Any]:
+        return await legal.current_documents(self)
+
+    def legal_acceptance_payload(
+        self,
+        documents: dict[str, Any],
+        language: str,
+    ) -> dict[str, dict[str, str]]:
+        return legal.acceptance_payload(documents, language)
+
+    def legal_accepted(
+        self,
+        state: dict[str, Any],
+        documents: dict[str, Any] | None = None,
+    ) -> bool:
+        return legal.accepted(state, documents)
+
+    def record_legal_acceptance(
+        self,
+        state: dict[str, Any],
+        *,
+        acceptance: dict[str, Any],
+        documents: dict[str, Any],
+        accepted_at: str,
+    ) -> None:
+        return legal.record_acceptance(
+            state,
+            acceptance=acceptance,
+            documents=documents,
+            accepted_at=accepted_at,
+        )
+
+    def legal_bundle_version(self, documents: dict[str, Any]) -> str:
+        return legal.bundle_version(documents)
+
     def __init__(self, registry: GameRegistry, lorebook: LorebookStore,
                  memory: MemoryStore, rules_dir: Path,
                  handler=None, llm_client=None, worlds_dir: Path | None = None,
                  character_gen_max_tokens: int = 2048,
-                 text_gen_max_tokens: int = 1024, plugin_host=None):
+                 text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None):
         self._reg = registry
         self._lore = lorebook
         self._mem = memory
@@ -47,11 +117,14 @@ class WebAPI:
         self._worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._avatars_dir = self._reg.save_dir.parent / "avatars"
+        self._scene_images_dir = self._reg.save_dir.parent / "scene-images"
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._hub = hub_client
         if self._plugins and self._handler and hasattr(self._handler, "set_plugin_host"):
             self._handler.set_plugin_host(self._plugins)
+
 
     # ---- 跨域共享辅助 ----
 
@@ -112,6 +185,43 @@ class WebAPI:
 
     def list_plugins(self) -> dict[str, Any]:
         return plugins.list_plugins(self)
+
+    async def get_official_announcement(self, language: str = "zh-CN") -> dict[str, Any]:
+        return await announcements.fetch_official_announcement(self, language)
+
+    async def hub_preferences(self, language: str = "zh-CN") -> dict[str, Any]:
+        return await hub.preferences(self, language)
+
+    async def update_hub_preferences(
+        self,
+        telemetry_enabled: bool,
+        legal_acceptance: dict[str, Any] | None = None,
+        language: str = "zh-CN",
+    ) -> dict[str, Any]:
+        return await hub.update_preferences(self, telemetry_enabled, legal_acceptance, language)
+
+    async def delete_hub_identity(self) -> dict[str, Any]:
+        return await hub.delete_identity(self)
+
+    async def hub_plugin_detail(self, plugin_id: str) -> dict[str, Any]:
+        return await hub.plugin_detail(self, plugin_id)
+
+    async def hub_plugin_readme(self, plugin_id: str) -> dict[str, Any]:
+        return await hub.plugin_readme(self, plugin_id)
+
+    async def hub_plugin_ratings(self, plugin_id: str) -> dict[str, Any]:
+        return await hub.plugin_ratings(self, plugin_id)
+
+    async def set_hub_plugin_like(self, plugin_id: str, liked: bool) -> dict[str, Any]:
+        return await hub.set_plugin_like(self, plugin_id, liked)
+
+    async def set_hub_plugin_rating(
+        self, plugin_id: str, stars: int | None, tags: list[str] | None = None
+    ) -> dict[str, Any]:
+        return await hub.set_plugin_rating(self, plugin_id, stars, tags)
+
+    async def assistant_chat(self, response, messages: list[dict], language: str = "zh-CN") -> None:
+        return await assistant.chat_stream(self, response, messages, language)
 
     def list_plugin_types(self) -> dict[str, Any]:
         return plugins.list_plugin_types(self)
@@ -231,9 +341,14 @@ class WebAPI:
         card_ids: list[str] | None = None,
         rule_id: str = "",
         flat: bool = False,
+        include_portraits: bool = True,
+        include_scene_images: bool = True,
+        world_scene_image: dict[str, Any] | None = None,
+        rule_scene_image: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return plugins.export_content_pack(
-            self, plugin_id, name, version, description, world_id, card_ids, rule_id, flat
+            self, plugin_id, name, version, description, world_id, card_ids, rule_id, flat,
+            include_portraits, include_scene_images, world_scene_image, rule_scene_image
         )
 
     def plugin_asset_path(self, plugin_id: str, relative_path: str) -> Path:
@@ -486,6 +601,31 @@ class WebAPI:
     def avatar_file(self, asset_id: str) -> Path | None:
         return avatars.avatar_file(self, asset_id)
 
+    def save_scene_image_upload(self, file_data: str, file_name: str = "") -> dict[str, Any]:
+        return scene_images.save_scene_image_upload(self, file_data, file_name)
+
+    def scene_image_file(self, asset_id: str) -> Path | None:
+        return scene_images.scene_image_file(self, asset_id)
+
+    def validate_scene_image_ref(self, reference: Any) -> dict[str, str]:
+        return scene_images.validate_scene_image_ref(self, reference)
+
+    def resolve_default_scene_image(self, world_id: str = "", rule_id: str = "") -> dict[str, str]:
+        return scene_images.resolve_default_scene_image(self, world_id, rule_id)
+
+    def materialize_scene_image(self, reference: Any) -> dict[str, str]:
+        return scene_images.materialize_scene_image(self, reference)
+
+    def resolve_scene_image_file(self, reference: Any) -> Path | None:
+        return scene_images.resolve_scene_image_file(self, reference)
+
+    def package_scene_image(
+        self,
+        reference: Any,
+        files: dict[str, str | bytes],
+    ) -> dict[str, str] | None:
+        return scene_images.package_scene_image(self, reference, files)
+
     # ---- 剧情日志 ----
 
     def get_log(
@@ -546,12 +686,13 @@ class WebAPI:
                            custom_world: bool = False,
                            gm_uid: str = "",
                            room_password: str = "",
-                           language: str = "") -> dict[str, Any]:
+                           language: str = "",
+                           scene_image: dict[str, Any] | None = None) -> dict[str, Any]:
         return await games.create_game(self, world_id, game_name, group_name, rule_id,
                                        solo, lorebook_world_id, difficulty, description,
                                        create_lorebook, blank_lorebook, source_world_id,
                                        players, custom_world, gm_uid, room_password,
-                                       language)
+                                       language, scene_image)
 
     # ---- 重开引用码 ----
 
@@ -567,8 +708,18 @@ class WebAPI:
     async def create_from_seed(self, seed_code: str, solo: bool = False,
                                players: list[dict] | None = None,
                                gm_uid: str = "",
-                               language: str = "") -> dict[str, Any]:
-        return await games.create_from_seed(self, seed_code, solo, players, gm_uid, language)
+                               language: str = "",
+                               scene_image: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await games.create_from_seed(self, seed_code, solo, players, gm_uid, language, scene_image)
+
+    async def update_scene_image(
+        self,
+        game_key: str,
+        reference: dict[str, Any] | None = None,
+        *,
+        use_default: bool = False,
+    ) -> dict[str, Any]:
+        return await games.update_scene_image(self, game_key, reference, use_default=use_default)
 
     # ---- AI 生成 ----
 

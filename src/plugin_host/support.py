@@ -34,6 +34,8 @@ _CONTENT_CONTRIBUTIONS = {
     "items": "item",
     "spells": "spell",
     "classes": "class",
+    "portraits": "portrait_asset",
+    "scene_images": "scene_image_asset",
 }
 _THEME_CONTRIBUTIONS = {"theme": "theme", "themes": "theme"}
 _MAP_CONTRIBUTIONS = {

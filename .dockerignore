@@ -2,6 +2,12 @@
 .codex/
 .claude/
 
+# 内部维护资料：不得进镜像/发布
+AGENTS.md
+CLAUDE.md
+**/AGENTS.md
+**/CLAUDE.md
+
 data/
 .tmp_audit_data/
 .pytest_cache/

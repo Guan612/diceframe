@@ -177,9 +177,13 @@ async def api_plugin_export(request: web.Request) -> web.Response:
             body.get("description", ""),
             body.get("world_id", ""),
             body.get("card_ids") or [],
-            body.get("rule_id", ""),
-            bool(body.get("flat")),
-        )
+              body.get("rule_id", ""),
+              bool(body.get("flat")),
+              bool(body.get("include_portraits", True)),
+              bool(body.get("include_scene_images", True)),
+              body.get("world_scene_image"),
+              body.get("rule_scene_image"),
+          )
     except ValueError as exc:
         return web.json_response({"ok":False,"error":str(exc)},status=400)
     if not result.get("ok"):

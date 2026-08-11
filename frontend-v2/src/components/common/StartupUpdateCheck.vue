@@ -9,11 +9,19 @@ import { useLocale } from '@/composables/useLocale'
 
 const route = useRoute()
 const router = useRouter()
+const emit = defineEmits<{ settled: [] }>()
 const { checkForUpdates } = useUpdateCheck()
 const { t } = useLocale()
 // Show at most once per process; cross-version dedupe is handled below.
 let notified = false
 let activeDialog: DialogReactive | null = null
+let settled = false
+
+function settle() {
+  if (settled) return
+  settled = true
+  emit('settled')
+}
 
 function shouldSkipCurrentRoute(): boolean {
   if (route.name === 'login' || route.name === 'join') return true
@@ -54,10 +62,15 @@ function showUpdateDialog(version: string, body: string) {
     closeOnEsc: true,
     positiveButtonProps: { type: 'primary' },
     negativeButtonProps: { secondary: true },
-    onPositiveClick: () => router.push({
-      name: 'settings',
-      query: { section: 'about', focus: 'update' },
-    }),
+    onPositiveClick: () => {
+      settle()
+      return router.push({
+        name: 'settings',
+        query: { section: 'about', focus: 'update' },
+      })
+    },
+    onNegativeClick: settle,
+    onClose: settle,
   }
   activeDialog = dialog.info(cfg)
 }
@@ -66,23 +79,30 @@ async function checkOnce() {
   if (shouldSkipCurrentRoute()) {
     activeDialog?.destroy()
     activeDialog = null
+    settle()
     return
   }
   try {
     const result = await checkForUpdates()
     if (!notified && result?.ok && result.update_available && result.latest) {
       const version = result.latest.tag_name || result.latest.version || t('newVersion')
-      if (alreadyNotified(result.latest.version || '')) return
+      if (alreadyNotified(result.latest.version || '')) {
+        settle()
+        return
+      }
       notified = true
       markNotified(result.latest.version || '')
       showUpdateDialog(
         version,
         String(result.latest.body || ''),
       )
+      return
     }
+    settle()
   } catch (e: unknown) {
     // Keep automatic check failures quiet for users, but leave a debug trail.
     console.warn('DiceFrame update check failed:', errorMessage(e))
+    settle()
   }
 }
 
@@ -90,3 +110,7 @@ onMounted(checkOnce)
 watch(() => [route.name, route.query.user, route.query.share], checkOnce)
 onBeforeUnmount(() => activeDialog?.destroy())
 </script>
+
+<template>
+  <span v-if="false" />
+</template>

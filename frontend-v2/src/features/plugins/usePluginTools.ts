@@ -1,6 +1,7 @@
 import { ref, type Ref } from 'vue'
 import { errorMessage } from '@/api/client'
 import { pluginApi } from '@/api/plugins'
+import { useConfirm } from '@/composables/useConfirm'
 import { useLocale } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
 import type { PluginToolDescriptor } from '@/api/types'
@@ -8,6 +9,7 @@ import type { PluginToolDescriptor } from '@/api/types'
 export function usePluginTools(busy: Ref<string>) {
   const toast = useToast()
   const { t } = useLocale()
+  const { confirm } = useConfirm()
   const tools = ref<PluginToolDescriptor[]>([])
   const toolInputs = ref<Record<string, string>>({})
   const toolResults = ref<Record<string, string>>({})
@@ -39,7 +41,13 @@ export function usePluginTools(busy: Ref<string>) {
 
   async function invokeTool(tool: PluginToolDescriptor) {
     const key = toolKey(tool)
-    if (!window.confirm(t('confirmPluginToolInvoke', { name: tool.title || tool.name, plugin: tool.plugin_name }))) return
+    const ok = await confirm({
+      title: t('confirmPluginToolInvokeTitle'),
+      content: t('confirmPluginToolInvoke', { name: tool.title || tool.name, plugin: tool.plugin_name }),
+      positiveText: t('pluginToolInvoke'),
+      type: 'warning',
+    })
+    if (!ok) return
     let argumentsValue: unknown
     try {
       argumentsValue = JSON.parse(toolInputs.value[key] || '{}')

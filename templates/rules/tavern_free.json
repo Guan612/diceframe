@@ -1,6 +1,7 @@
 {
   "rule_version": "1.1",
   "rule_id": "tavern_free",
+  "scene_image": {"kind": "builtin", "id": "tavern_free"},
   "rule_name": "酒馆自由模式",
   "description": "无骼子、无属性、纯叙事角色扮演模式，像酒馆跑团一样自由对话",
   "attributes": [],

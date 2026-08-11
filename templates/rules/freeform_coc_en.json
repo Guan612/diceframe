@@ -1,6 +1,7 @@
 {
   "rule_version": "1.2",
   "rule_id": "freeform_coc",
+  "scene_image": {"kind": "builtin", "id": "freeform_coc"},
   "language": "en",
   "rule_name": "CoC 7e Investigation Freeform",
   "description": "A lightweight Call of Cthulhu 7e-inspired investigation-horror rule using d100 percentile attributes, skills, SAN, luck, and pushed rolls; suited for narrative investigation, not a full rulebook recreation.",

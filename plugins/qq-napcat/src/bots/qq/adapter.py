@@ -39,6 +39,7 @@ from src.bots.bridge_core.presenters import (
     character_draft_text,
     character_public_lines,
     format_action_result,
+    format_check_result,
     luck_prompt_lines,
     format_character_attrs,
     format_character_items,
@@ -139,7 +140,6 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         self.store = store
         self.sender = sender
         self.self_id = ""
-        self.pending_dice: dict[str, str] = {}
         self.logger = logging.getLogger("trpg.qq.adapter")
         self.config = config
         config_data_path = getattr(config, "data_path", None)
@@ -304,7 +304,6 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         group_id, player = bindings[0]
         language = self._group_language(self.store.group(group_id))
         game_key, actor = player["game_key"], player["user_id"]
-        pending_key = QQSessionStore.player_key(group_id, platform_user_id)
         payment_decision = self._payment_decision(text)
         if payment_decision is not None:
             await self._resolve_payment_private(platform_user_id, game_key, actor, payment_decision, text)
@@ -344,18 +343,13 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
             )
             return
         if text.lower() in {"掷骰", "骰子", "roll"}:
-            pending = self.pending_dice.get(pending_key)
-            if not pending:
-                await self._send_private_text(platform_user_id, bridge_text(language, "当前没有等待确认的骰子。", "There is no roll waiting for confirmation."))
-                return
-            result = await self._action_with_private_thinking(platform_user_id, game_key, actor, pending, confirm=True)
-            self.pending_dice.pop(pending_key, None)
-            await self._send_private_card(
+            await self._send_private_text(
                 platform_user_id,
-                title="Action result" if bridge_is_english(language) else "行动结果",
-                subtitle=str(result.get("phase") or "done"),
-                lines=self._format_action_result(result, language).splitlines(),
-                fallback=self._format_action_result(result, language),
+                bridge_text(
+                    language,
+                    "不需要手动确认掷骰。请在群里直接描述行动；全员提交后，或 GM 手动推进时，系统会判断检定并只掷一次。",
+                    "Manual roll confirmation is not required. Describe the action in the group; after every active player submits, or when the GM advances, the server adjudicates and rolls once.",
+                ),
             )
             return
         luck = self._luck_decision(text)
@@ -372,20 +366,20 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                         "Private messages do not enter the campaign",
                         "status — view your character",
                         "recap — view the public recap",
-                        "roll — confirm a pending check",
+                        "checks are adjudicated and rolled automatically",
                         "sense — view private character information",
                         "pay — handle pending payments",
                         "Create characters in the group with @me create character / @me AI character",
                     ],
-                    fallback="Private commands: status, recap, roll, sense, and pay. Submit campaign actions in the group.",
+                    fallback="Private commands: status, recap, sense, and pay. Checks are automatic; submit campaign actions in the group.",
                 )
                 return
             await self._send_private_card(
                 platform_user_id,
                 title="DiceFrame 私聊帮助",
                 subtitle="功能入口，不提交正式行动",
-                lines=["私聊不会进入正式对局", "发送“状态”查看角色", "发送“前情”查看公开提要", "发送“掷骰”确认检定", "发送“感知”查看私密信息", "发送“支付”处理待付款", "车卡请回群聊发 @我 车卡 / @我 AI车卡"],
-                fallback="私聊不会进入正式对局。可发送“状态”“前情”“掷骰”“感知”“支付”。车卡请回群聊发 @我 车卡 / @我 AI车卡。",
+                lines=["私聊不会进入正式对局", "发送“状态”查看角色", "发送“前情”查看公开提要", "检定由系统自动判断并掷骰", "发送“感知”查看私密信息", "发送“支付”处理待付款", "车卡请回群聊发 @我 车卡 / @我 AI车卡"],
+                fallback="私聊不会进入正式对局。可发送“状态”“前情”“感知”“支付”；检定自动处理。车卡请回群聊发 @我 车卡 / @我 AI车卡。",
             )
             return
         if self._is_private_character_creation_request(text):
@@ -408,7 +402,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
             await self._send_private_text(
                 platform_user_id,
                 "Private messages are for utility commands and are not submitted as campaign actions.\n"
-                "Available: status / recap / sense / pay / roll.\n"
+                "Available: status / recap / sense / pay. Checks are automatic.\n"
                 "Create characters in the group with @me create character or @me AI character.\n"
                 "Submit actions in the group with @Bot, or use the web play page.",
             )
@@ -416,7 +410,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         await self._send_private_text(
             platform_user_id,
             "我在。私聊 Bot 只做功能操作，不会把对话送进正式对局。\n"
-            "可用：状态 / 前情 / 感知 / 支付 / 掷骰。\n"
+            "可用：状态 / 前情 / 感知 / 支付；检定由系统自动处理。\n"
             "车卡请回群聊发：@我 车卡；AI 辅助车卡发：@我 AI车卡。\n"
             "正式行动请在群聊 @Bot 发送，或到网页游玩界面提交。",
         )
@@ -451,7 +445,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                         "Next: players send “@me join Character Name”.",
                         f"Available: {self._roster_names({'roster': result.get('players', [])}, language)}",
                         "Start playing: @me I inspect the area.",
-                        "Common: @me status / recap / map / roll / help",
+                        "Common: @me status / recap / map / help",
                     ],
                     fallback=self._bind_success_text(result, language=language),
                     link_text=self._link_text("Web page", link, language),
@@ -466,7 +460,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                     "下一步：玩家发送“@我 加入 角色名”。",
                     f"可认领：{self._roster_names({'roster': result.get('players', [])})}",
                     "开始玩：@我 我调查四周。",
-                    "常用：@我 状态 / @我 前情 / @我 地图 / @我 掷骰 / @我 帮助",
+                    "常用：@我 状态 / @我 前情 / @我 地图 / @我 帮助",
                 ],
                 fallback=self._bind_success_text(result),
                 link_text=self._link_text("网页入口", link),
@@ -518,7 +512,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                         "Catch up: @me recap",
                         "Map: @me map",
                         "2. Act: @me I inspect the area",
-                        "3. When prompted: @me roll",
+                        "3. Checks are adjudicated and rolled automatically after everyone acts",
                         "GM: @me advance",
                         "Step away: @me away; return: @me back",
                         "Status: @me status",
@@ -539,7 +533,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                     "补前情：@我 前情",
                     "看地图：@我 地图",
                     "2. 描述行动：@我 我观察四周",
-                    "3. 需要检定时：@我 掷骰",
+                    "3. 全员行动齐后，系统自动判断检定并掷骰",
                     "GM 推进：@我 推进 / @我 下一轮",
                     "临时离开：@我 暂离；回来：@我 回来",
                     "随时查看：@我 状态",
@@ -557,7 +551,6 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
             return
         actor = player["user_id"]
         game_key = group["game_key"]
-        pending_key = QQSessionStore.player_key(group_id, platform_user_id)
         payment_decision = self._payment_decision(text)
 
         if text.lower() in {"加点", "属性", "attributes", "stats"}:
@@ -593,29 +586,14 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
             await self._resolve_luck_group(group_id, game_key, actor, text, spend=luck)
             return
         if text.lower() in {"掷骰", "骰子", "roll"}:
-            pending_text = self.pending_dice.get(pending_key)
-            if not pending_text:
-                detail = await self.api.game_detail(game_key, actor)
-                submitted = (detail.get("multiplayer") or {}).get("submitted_actions") or []
-                own_action = next(
-                    (
-                        item for item in submitted
-                        if item.get("user_id") == actor and item.get("dice_pending")
-                    ),
-                    None,
-                )
-                if own_action:
-                    pending_text = str(own_action.get("text") or "")
-            if not pending_text:
-                await self._send_group_text(group_id, bridge_text(language, "当前没有等待确认的骰子。", "There is no roll waiting for confirmation."))
-                return
-            self._group_action_inflight[game_key] = True
-            try:
-                result = await self._action_with_group_thinking(group_id, game_key, actor, pending_text, confirm=True)
-                self.pending_dice.pop(pending_key, None)
-                await self._send_action_result(group_id, game_key, actor, result)
-            finally:
-                self._group_action_inflight[game_key] = False
+            await self._send_group_text(
+                group_id,
+                bridge_text(
+                    language,
+                    "不需要手动确认掷骰：请直接描述行动。全员提交后，或 GM 手动推进时，系统会判断检定并只掷一次。",
+                    "Manual roll confirmation is not required. Describe your action; after every active player submits, or when the GM advances, the server adjudicates and rolls once.",
+                ),
+            )
             return
         if not text:
             await self._send_group_text(group_id, bridge_text(language, "请在 @我 后描述行动，或发送“帮助”。", "Describe an action after mentioning me, or send “help”."))
@@ -624,12 +602,6 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         self._group_action_inflight[game_key] = True
         try:
             result = await self._action_with_group_thinking(group_id, game_key, actor, text)
-            if result.get("phase") == "dice":
-                self.pending_dice[pending_key] = text
-                check_message = str(result.get("message") or ("This action requires a roll" if bridge_is_english(language) else "这次行动需要掷骰"))
-                suffix = " Reply with @me roll, or describe a different action." if bridge_is_english(language) else "。回复 @我 掷骰，或重新描述行动。"
-                await self._send_group_text(group_id, f"@{platform_user_id} {check_message}{suffix}")
-                return
             await self._send_action_result(group_id, game_key, actor, result)
         finally:
             self._group_action_inflight[game_key] = False
@@ -849,6 +821,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         narration = str(result.get("narration") or "").strip()
         quick_actions = result.get("quick_actions") if isinstance(result.get("quick_actions"), list) else []
         pending = result.get("pending_payments") if isinstance(result.get("pending_payments"), list) else []
+        checks = result.get("check_results") if isinstance(result.get("check_results"), list) else []
 
         if advanced:
             # 群行动触发推进：拉 game_detail 拿真实 recap（result.recap 是 last_state_update，无轮次字段，
@@ -879,6 +852,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                 narration,
                 state_changes,
                 roll=roll,
+                check_results=checks,
                 pending_payments=pending,
                 quick_actions=quick_actions,
             )
@@ -892,6 +866,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         lines: list = []
         if roll and roll.get("value") is not None:
             lines.append(f"🎲 {str(roll.get('dice_system', '')).upper()} = {roll.get('value')}")
+        lines.extend(format_check_result(check, language) for check in checks if isinstance(check, dict))
         if narration:
             lines.extend(narration.splitlines()[:8])
         pending_luck = result.get("pending_luck_decisions") if isinstance(result.get("pending_luck_decisions"), list) else []
@@ -925,6 +900,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         state_changes,
         *,
         roll: dict | None = None,
+        check_results: list[dict[str, Any]] | None = None,
         pending_payments=None,
         quick_actions: list[str] | None = None,
     ) -> None:
@@ -934,6 +910,8 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
         if roll and roll.get("value") is not None:
             ds = str(roll.get("dice_system") or "").upper()
             lines.append(f"🎲 {ds} = {roll.get('value')}")
+        if check_results:
+            lines.extend(format_check_result(check, language) for check in check_results if isinstance(check, dict))
         gm_response = str(gm_response or "").strip()
         if gm_response:
             paras = [p.strip() for p in re.split(r"\n\s*\n", gm_response) if p.strip()]

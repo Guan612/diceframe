@@ -9,9 +9,19 @@ export interface CharacterSkill { name: string; value?: number }
 export interface CharacterItem { name?: string; type?: string; damage?: number; slot?: string; quality?: string; qty?: number; effect?: string; category?: string; note?: string; [key: string]: unknown }
 
 export interface CharacterPortrait {
-  kind: 'builtin' | 'upload'
+  kind: 'builtin' | 'upload' | 'plugin'
   id?: string
   asset_id?: string
+  plugin_id?: string
+  path?: string
+}
+
+export interface SceneImageRef {
+  kind: 'builtin' | 'upload' | 'plugin' | 'asset'
+  id?: string
+  asset_id?: string
+  plugin_id?: string
+  path?: string
 }
 
 export interface CharacterSheet {
@@ -33,7 +43,7 @@ export interface CharacterSheet {
   equipment?: CharacterItem[]
   inventory?: CharacterItem[]
   key_items?: CharacterItem[]
-  portrait?: CharacterPortrait
+  portrait?: CharacterPortrait | null
   [key: string]: unknown
 }
 
@@ -71,6 +81,16 @@ export interface CheckRequest {
   attribute?: string
   advantage_mode?: string
   advantage_note?: string | null
+  target?: number
+  circumstance_modifier?: number
+  kind?: 'check' | 'save' | 'attack' | string
+  opponent?: string
+  opponent_name?: string
+  opponent_roll?: number
+  opponent_modifier?: number
+  opponent_total?: number
+  assist?: string[]
+  planner_source?: string
 }
 
 export interface CheckResult {
@@ -84,6 +104,7 @@ export interface CheckResult {
   roll?: number
   rolls?: number[]
   modifier?: number
+  modifier_breakdown?: string | null
   total?: number
   dc?: number
   threshold?: number
@@ -99,6 +120,16 @@ export interface CheckResult {
   luck_resolved_at?: string
   is_critical?: boolean
   is_fumble?: boolean
+  advantage_mode?: string
+  advantage_note?: string | null
+  kind?: 'check' | 'save' | 'attack' | string
+  opponent?: string
+  opponent_name?: string
+  opponent_roll?: number
+  opponent_modifier?: number
+  opponent_total?: number
+  assist?: string[]
+  planner_source?: string
 }
 
 export interface PublicAction {
@@ -145,6 +176,8 @@ export interface GameDetail {
   game_key: string
   world_name?: string
   world_id?: string
+  rule_id?: string
+  scene_image?: SceneImageRef
   gm_uid?: string
   scene?: string
   round_number?: number
@@ -157,6 +190,7 @@ export interface GameDetail {
   quick_actions?: string[]
   pending_payments?: PendingPayment[]
   pending_luck_decisions?: CheckResult[]
+  round_check_results?: CheckResult[]
   total_tokens?: number
   token_budget_bump?: TokenBudgetBump | null
   [key: string]: unknown
@@ -239,6 +273,8 @@ export interface GameSummary {
   game_key: string
   world_name?: string
   world_id?: string
+  rule_id?: string
+  scene_image?: SceneImageRef
   scene?: string
   state?: string
   language?: string
@@ -260,9 +296,15 @@ export interface GameMutationResponse {
   ok?: boolean
   error?: string
   game_key?: string
+  world_id?: string
   world_name?: string
+  narration?: string
+  players?: Player[]
+  round_number?: number
+  state?: string
   seed_code?: string
   language?: string
+  generated_password?: string
   [key: string]: unknown
 }
 
@@ -529,6 +571,7 @@ export interface WorldTemplateSummary {
   world_name?: string
   description?: string
   default_rule?: string
+  scene_image?: SceneImageRef
   language?: string
   [key: string]: unknown
 }
@@ -541,6 +584,7 @@ export interface WorldSummary {
   description?: string
   entry_count?: number
   language?: string
+  scene_image?: SceneImageRef
   [key: string]: unknown
 }
 
@@ -558,6 +602,7 @@ export interface WorldCandidate {
   description: string
   source: string
   default_rule: string
+  scene_image?: SceneImageRef
   entry_count?: number
 }
 
@@ -578,6 +623,8 @@ export interface RuleSummary {
   attr_count?: number
   custom?: boolean
   file?: string
+  source_rule_id?: string
+  scene_image?: SceneImageRef
   [key: string]: unknown
 }
 
@@ -600,6 +647,8 @@ export interface CharacterSchemaResponse {
 export interface RuleTemplate extends JsonObject {
   rule_id?: string
   rule_name?: string
+  source_rule_id?: string
+  scene_image?: SceneImageRef
   description?: string
   dice_system?: string
   combat_model?: string
@@ -615,7 +664,6 @@ export interface RuleTemplate extends JsonObject {
   skill_pool?: SkillSpec[]
   skills?: SkillSpec[]
   custom?: boolean
-  source_rule_id?: string
 }
 
 export interface RuleDetailResponse {
@@ -722,6 +770,7 @@ export interface PluginContribution {
 }
 
 export interface PluginTheme {
+  schema_version: 2
   id: string
   name: string
   description?: string
@@ -816,6 +865,30 @@ export interface PluginMarketplaceItem {
     requires_approval?: boolean
   }
   manifest?: Record<string, unknown>
+  stats?: {
+    downloads_total?: number
+    downloads_30d?: number
+    installs_total?: number
+    likes?: number
+    rating_count?: number
+    rating_average?: number
+    rating_score?: number
+  }
+  security?: {
+    install_allowed?: boolean
+    blocking_reasons?: string[]
+    warning_reasons?: string[]
+    [key: string]: unknown
+  }
+  readme?: {
+    available?: boolean
+    status?: string
+    content_hash?: string | null
+    synced_at?: string | null
+  }
+  liked?: boolean
+  own_rating?: { stars: number; tags: string[] } | null
+  generated_at?: string
 }
 
 export interface PluginMarketplaceResponse {
@@ -831,7 +904,49 @@ export interface PluginMarketplaceResponse {
     elapsed_ms?: number
     url?: string
     error?: string
+    hub?: boolean
+    stale?: boolean
   }
+}
+
+export interface HubPreferences {
+  ok: boolean
+  available: boolean
+  telemetry_enabled: boolean
+  choice_made: boolean
+  identity_created: boolean
+  legal_version: string
+  legal_accepted: boolean
+  legal_documents: Record<'terms' | 'privacy', {
+    version: string
+    updated_at: string
+    language: 'zh' | 'en'
+    sha256: string
+  }>
+}
+
+export interface HubPluginReadmeResponse {
+  ok: boolean
+  plugin_id: string
+  html: string
+  markdown?: string
+  content_hash?: string
+  synced_at?: string
+  source?: {
+    hub?: boolean
+    github?: boolean
+    cached?: boolean
+    stale?: boolean
+    error?: string
+  }
+}
+
+export interface HubRatingSummary {
+  ok: boolean
+  count: number
+  average: number
+  bayesian_score: number
+  distribution: Record<'1' | '2' | '3' | '4' | '5', number>
 }
 
 export interface PluginMirror {
@@ -1023,4 +1138,16 @@ export interface UpdateApplyResponse {
   error?:string
   state?:string
   version?:string
+}
+export interface ApplicationRestartResponse {
+  ok:boolean
+  error?:string
+  restarting?:boolean
+  boot_id:string
+}
+export interface ApplicationHealthResponse {
+  ok:boolean
+  version:string
+  pid:number
+  boot_id:string
 }

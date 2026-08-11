@@ -147,9 +147,14 @@ def update_character_card(api: "WebAPI", card_id: str, patch: dict[str, Any]) ->
         ):
             if key in patch:
                 updated[key] = patch[key]
-        for key in ("identity", "attributes", "skills", "equipment", "inventory", "key_items", "currency", "portrait"):
+        for key in ("identity", "attributes", "skills", "equipment", "inventory", "key_items", "currency"):
             if key in patch and isinstance(patch[key], (dict, list)):
                 updated[key] = patch[key]
+        if "portrait" in patch:
+            if patch["portrait"] is None:
+                updated.pop("portrait", None)
+            elif isinstance(patch["portrait"], dict):
+                updated["portrait"] = patch["portrait"]
         updated["schema_version"] = 2
         updated["id"] = card_id
         cards[idx] = updated

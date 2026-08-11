@@ -34,7 +34,7 @@ const { locale, t } = useLocale()
 const step = ref<1 | 2 | 3 | 4>(1)
 
 const characterName = ref('')
-const portrait = ref<CharacterPortrait | undefined>()
+const portrait = ref<CharacterPortrait | null>()
 const identityValues = ref<Record<string, string>>({})
 const identityFields = computed<IdentityField[]>(() =>
   identitySchema(props.ruleMeta).filter(f => f.key !== 'background')
@@ -95,7 +95,7 @@ watch(
 
 function resetFields() {
   characterName.value = ''
-  portrait.value = undefined
+  portrait.value = null
   identityValues.value = {}
   skills.value = []
   background.value = ''
@@ -173,7 +173,7 @@ function finish() {
 
   const character: CharacterSubmit = {
     character_name: characterName.value.trim(),
-    portrait: portrait.value ? { ...portrait.value } : undefined,
+    portrait: portrait.value ? { ...portrait.value } : null,
     identity,
     attributes: { ...attrs.value },
     skills: skills.value.filter(s => s.name?.trim()).map(s => ({ name: s.name.trim(), value: Number(s.value) || 0 })),

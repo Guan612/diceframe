@@ -12,5 +12,14 @@ describe('plugin marketplace version comparison', () => {
   it('does not offer updates for incomplete versions', () => {
     expect(isNewerPluginVersion('', '1.0.0')).toBe(false)
     expect(isNewerPluginVersion('1.0.0', undefined)).toBe(false)
+    expect(isNewerPluginVersion('nightly', '1.0.0')).toBe(false)
+  })
+
+  it('orders prerelease identifiers and ignores build metadata', () => {
+    expect(isNewerPluginVersion('1.9.12-beta.3', '1.9.12-beta.2')).toBe(true)
+    expect(isNewerPluginVersion('1.9.12-rc.1', '1.9.12-beta.9')).toBe(true)
+    expect(isNewerPluginVersion('1.9.12', '1.9.12-rc.1')).toBe(true)
+    expect(isNewerPluginVersion('1.9.12-beta.1', '1.9.12')).toBe(false)
+    expect(isNewerPluginVersion('1.9.12+build.2', '1.9.12+build.1')).toBe(false)
   })
 })

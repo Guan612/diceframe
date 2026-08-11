@@ -57,6 +57,15 @@ class TestSafeEval:
     def test_unary_negation(self):
         assert _safe_eval("-con", {"con": 10}) == -10
 
+    def test_depth_limit_blocks_deep_nesting(self):
+        """P2-A：深层嵌套二元表达式（自定义模板注入）应抛 ValueError，不崩进程。"""
+        deep = "1+(" * 60 + "1" + ")" * 60
+        with pytest.raises(ValueError):
+            _safe_eval(deep, {})
+        # 50 层以内仍可求值
+        ok = "1+(" * 30 + "1" + ")" * 30
+        assert _safe_eval(ok, {}) == 31
+
     def test_invalid_operator(self):
         with pytest.raises(ValueError):
             _safe_eval("10 ** 2", {})
@@ -273,3 +282,20 @@ def test_rule_abstraction_reads_explicit_schema(tmp_path):
     assert rule.identity_schema[0]["key"] == "role"
     assert rule.progression_schema["type"] == "milestone"
     assert rule.ui_schema["primary_resources"] == ["stress"]
+
+
+def test_skill_base_value_fallback_for_custom_skill():
+    """P2-E：自定义技能（不在 base 表）按兜底基础值 5，防止 above_base 全算超基超模。"""
+    rule = RuleSystem.load("templates/rules/freeform_coc.json")
+    # 表内技能用表值
+    assert rule._skill_base_value("侦查") == 25
+    # 不在表也不在职业池的自定义技能兜底 5
+    assert rule._skill_base_value("灵视术自定义") == 5
+    # 用自定义技能建卡不应因兜底导致超技能点（40-5=35 < 320）
+    errors = rule.validate_character({
+        "attributes": {"str": 50, "con": 50, "siz": 50, "dex": 50, "app": 50, "int": 50, "pow": 50, "edu": 50},
+        "skills": [{"name": "灵视术自定义", "value": 40}],
+        "class": "调查员",
+        "equipment": [],
+    })
+    assert errors == []

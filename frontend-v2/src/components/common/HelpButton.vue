@@ -10,7 +10,7 @@ const show = ref(false)
 </script>
 
 <template>
-  <NButton text class="help-btn" @click="show = true">
+  <NButton size="small" secondary class="help-btn" @click="show = true">
     <template #icon>
       <NIcon :component="HelpCircleOutline" />
     </template>
@@ -24,10 +24,11 @@ const show = ref(false)
 </template>
 
 <style scoped>
-.help-btn{font-size:13px;font-weight:400}
+.help-btn{min-height:30px;font-size:12px;font-weight:650;color:var(--df-interactive-strong)}
+.help-btn :deep(.n-button__icon){font-size:16px}
 .help-tutorial h4{margin:14px 0 4px}
 .help-tutorial h4:first-child{margin-top:0}
 .help-tutorial p{margin:4px 0;line-height:1.6}
 .help-tutorial ul{margin:6px 0;padding-left:20px;line-height:1.8}
-.help-tutorial code{background:rgba(216,173,82,.12);padding:1px 5px;border-radius:4px;font-family:var(--font-mono);font-size:12px}
+.help-tutorial code{background:color-mix(in srgb,var(--df-accent) 12%,transparent);padding:1px 5px;border-radius:4px;font-family:var(--df-font-mono);font-size:12px}
 </style>

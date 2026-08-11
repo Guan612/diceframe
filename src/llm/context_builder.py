@@ -7,7 +7,7 @@ import logging
 import os
 
 from src.engine.game_instance import GameInstance
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.llm.parser import sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -36,6 +36,34 @@ _BUDGET_SUMMARY = 0.08         # 最新摘要 + 关键事实
 _BUDGET_MEMORY = 0.06          # 长期记忆
 _BUDGET_HISTORY_MIN = 0.22     # 对话历史最小比例
 # 剩余 ~6% 用于玩家消息和分隔符
+
+_INVENTORY_STATE_LIMIT = 20
+_KEY_ITEMS_STATE_LIMIT = 12
+
+
+def _compact_state_view(state: dict) -> None:
+    """超预算时压缩玩家背包/关键物品为最近条目 + 计数，而不是整个丢弃。
+
+    只修改 state 的本地副本；角色卡与存档不受影响。装备保持完整。
+    """
+    for pdata in state.get("players", {}).values():
+        sheet = pdata.get("character_sheet", {})
+        inventory = sheet.get("inventory")
+        if isinstance(inventory, list) and inventory:
+            total = len(inventory)
+            shown = min(total, _INVENTORY_STATE_LIMIT)
+            if total > shown:
+                sheet["inventory"] = inventory[-shown:]
+            suffix = "" if total <= shown else "，其余未列出"
+            sheet["inventory_note"] = f"共 {total} 件，列出最近 {shown} 件{suffix}"
+        key_items = sheet.get("key_items")
+        if isinstance(key_items, list) and key_items:
+            total = len(key_items)
+            shown = min(total, _KEY_ITEMS_STATE_LIMIT)
+            if total > shown:
+                sheet["key_items"] = key_items[-shown:]
+            suffix = "" if total <= shown else "，其余未列出"
+            sheet["key_items_note"] = f"共 {total} 件，列出最近 {shown} 件{suffix}"
 
 
 def _detect_max_chars(provider_name: str = "") -> int:
@@ -79,7 +107,7 @@ def _is_key_round(entry: dict) -> bool:
         return True
     return False
 
-def _format_history(log: list[dict], max_chars: int, english: bool = False) -> str:
+def _format_history(log: list[dict], max_chars: int, language: str = "zh-CN") -> str:
     MIN_KEEP = 5
     if not log:
         return ""
@@ -101,7 +129,7 @@ def _format_history(log: list[dict], max_chars: int, english: bool = False) -> s
             if a.get("user_id") != "system"
         )
         gm_text = sanitize_narration(entry.get("gm_response", ""))
-        player_label = "Players" if english else "玩家"
+        player_label = localized_text(language, {"en": "Players", "zh-CN": "玩家", "ja": "プレイヤー"})
         return f"[Round {entry.get('round','?')}]\n{player_label}: {actions_text}\nGM: {gm_text}"
 
     def _entry_slim(entry: dict) -> str:
@@ -110,7 +138,7 @@ def _format_history(log: list[dict], max_chars: int, english: bool = False) -> s
             if a.get("user_id") != "system"
         )
         gm_text = sanitize_narration(entry.get("gm_response", ""))
-        player_label = "Players" if english else "玩家"
+        player_label = localized_text(language, {"en": "Players", "zh-CN": "玩家", "ja": "プレイヤー"})
         return f"[Round {entry.get('round','?')}] {player_label}: {actions_text} | GM: {gm_text[:80]}"
 
     for entry in keep_full:
@@ -163,7 +191,7 @@ async def build_context(
         完整的上下文字符串
     """
     max_total = _detect_max_chars(provider_name)
-    english = is_english(getattr(instance, "language", "zh-CN"))
+    language = getattr(instance, "language", "zh-CN")
     history_entries = instance.log if history_override is None else history_override
 
     # 按比例分配预算
@@ -182,13 +210,12 @@ async def build_context(
     # 1. 游戏状态（LLM 精简视图，含属性修正）
     state = instance.to_llm_view()
     state_json = json.dumps(state, ensure_ascii=False)
-    # 超预算时丢弃 inventory（最小关键字段），避免硬截断 JSON 破坏语法
+    # 超预算时压缩背包/关键物品为最近条目 + 计数，避免整段丢弃或硬截断 JSON
     if len(state_json) > budget_state:
-        for pdata in state.get("players", {}).values():
-            pdata.get("character_sheet", {}).pop("inventory", None)
+        _compact_state_view(state)
         state_json = json.dumps(state, ensure_ascii=False)
     state_json = _truncate(state_json, budget_state)
-    parts.append(("## Game State" if english else "【游戏状态】") + f"\n{state_json}")
+    parts.append(localized_text(language, {"en": "## Game State", "zh-CN": "【游戏状态】", "ja": "## ゲーム状態"}) + f"\n{state_json}")
 
     # 2. Lorebook 条目（核心 NPC/场景优先）
     lorebook_text = ""
@@ -197,7 +224,11 @@ async def build_context(
         visible = entry.get("visible_to", [])
         vis_hint = ""
         if visible:
-            vis_hint = f" [visible only to {','.join(visible)}]" if english else f" [仅{','.join(visible)}可见]"
+            vis_hint = localized_text(language, {
+                "en": f" [visible only to {','.join(visible)}]",
+                "zh-CN": f" [仅{','.join(visible)}可见]",
+                "ja": f" [{','.join(visible)}のみに表示]",
+            })
         entry_text = f"[{entry.get('type', 'other')}]{vis_hint} {entry.get('name', '')}: {entry.get('content', '')}"
         if len(lorebook_text) + len(entry_text) > budget_lorebook:
             trimmed.append(entry.get("name", entry.get("id", "?")))
@@ -207,7 +238,7 @@ async def build_context(
         logger.info("Lorebook 预算裁剪: 丢弃 %d 条 (%s), budget=%d",
                      len(trimmed), ", ".join(trimmed[:5]), budget_lorebook)
     if lorebook_text:
-        parts.append(("## World Knowledge" if english else "【世界观知识】") + f"\n{lorebook_text.strip()}")
+        parts.append(localized_text(language, {"en": "## World Knowledge", "zh-CN": "【世界观知识】", "ja": "## 世界知識"}) + f"\n{lorebook_text.strip()}")
 
     # 3. 摘要 + 关键事实
     summary = sanitize_narration(instance.summary.get("narrative", ""))
@@ -224,12 +255,20 @@ async def build_context(
             facts_text = _truncate("\n".join(facts_lines), budget_summary)
             summary_section_parts.append(facts_text)
     if summary_section_parts:
-        parts.append(("## Recent Events" if english else "【近期经历】") + "\n" + "\n".join(summary_section_parts))
+        parts.append(localized_text(language, {"en": "## Recent Events", "zh-CN": "【近期经历】", "ja": "## 最近の出来事"}) + "\n" + "\n".join(summary_section_parts))
 
     # D1: 已确认事项（防 GM 重复讨论）
     if instance.confirmed_items:
-        confirmed_text = ("; ".join(instance.confirmed_items[-20:]) if english else "、".join(instance.confirmed_items[-20:]))
-        heading = "## Confirmed Items\nIf players ask about the same thing again, move forward instead of re-explaining." if english else "【已确认事项】（玩家再问相同内容时直接推进，不要重复解释）"
+        confirmed_text = localized_text(language, {
+            "en": "; ".join(instance.confirmed_items[-20:]),
+            "zh-CN": "、".join(instance.confirmed_items[-20:]),
+            "ja": "、".join(instance.confirmed_items[-20:]),
+        })
+        heading = localized_text(language, {
+            "en": "## Confirmed Items\nIf players ask about the same thing again, move forward instead of re-explaining.",
+            "zh-CN": "【已确认事项】（玩家再问相同内容时直接推进，不要重复解释）",
+            "ja": "## 確認済み事項\nプレイヤーが同じことを再度尋ねても、再説明せず先へ進めること。",
+        })
         parts.append(f"{heading}\n{confirmed_text}")
 
     # 4. 长期记忆召回（召回源：玩家消息 + 最近 3 轮 GM 回复，提高命中率）
@@ -256,12 +295,12 @@ async def build_context(
     remaining = max(0, max_total - used_chars - len(player_message) - 200)
     history_budget = min(budget_history_base + max(0, remaining - budget_history_base), max_total // 2)
     history_budget = max(history_budget, budget_history_base)
-    history = _format_history(history_entries, history_budget, english)
+    history = _format_history(history_entries, history_budget, language)
     if history:
-        parts.append(("## Conversation History" if english else "【对话历史】") + f"\n{history}")
+        parts.append(localized_text(language, {"en": "## Conversation History", "zh-CN": "【对话历史】", "ja": "## 会話履歴"}) + f"\n{history}")
 
     # 6. 玩家刚说的话
-    parts.append(("## Player Message" if english else "【玩家发言】") + f"\n{player_message}")
+    parts.append(localized_text(language, {"en": "## Player Message", "zh-CN": "【玩家发言】", "ja": "## プレイヤーの発言"}) + f"\n{player_message}")
 
     context = "\n\n---\n\n".join(parts)
 

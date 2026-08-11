@@ -1,0 +1,541 @@
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+from aiohttp import web
+
+from src.hub_client import (
+    HubClient,
+    HubUnavailable,
+    _PLUGIN_DETAIL_TIMEOUT,
+    _platform_name,
+    _validated_base_url,
+)
+from src.plugin_host.marketplace import PluginMarketplace
+from src.plugin_host.mirrors import FetchResult, validate_public_http_url
+from src.webui.routes.hub import _ClientDisconnected, _await_hub_read
+from src.webui.services import legal
+from src.webui.services.hub import plugin_readme
+from src.webui.services.hub import preferences as hub_preferences
+from src.webui.services.hub import update_preferences as update_hub_preferences
+
+
+class _LegalApi:
+    _legal_documents: dict | None = None
+
+    async def current_legal_documents(self):
+        return self._legal_documents or legal.bundled_documents()
+
+    def legal_bundle_version(self, documents):
+        return legal.bundle_version(documents)
+
+    def legal_acceptance_payload(self, documents, language):
+        return legal.acceptance_payload(documents, language)
+
+    def legal_accepted(self, state, documents=None):
+        return legal.accepted(state, documents)
+
+    def record_legal_acceptance(self, state, **kwargs):
+        return legal.record_acceptance(state, **kwargs)
+
+
+async def _serve(routes: list[tuple[str, str, object]]):
+    app = web.Application()
+    for method, path, handler in routes:
+        app.router.add_route(method, path, handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    socket = site._server.sockets[0]
+    return runner, f"http://127.0.0.1:{socket.getsockname()[1]}"
+
+
+def test_hub_url_requires_https_except_loopback():
+    assert _validated_base_url("https://api.diceframe.com/") == "https://api.diceframe.com"
+    assert _validated_base_url("http://127.0.0.1:18080") == "http://127.0.0.1:18080"
+    with pytest.raises(ValueError):
+        _validated_base_url("http://example.com")
+    with pytest.raises(ValueError):
+        _validated_base_url("https://user:pass@example.com")
+
+
+@pytest.mark.asyncio
+async def test_hub_preferences_default_telemetry_off_until_active_consent(tmp_path):
+    class Client:
+        identity_file = tmp_path / "hub-installation.json"
+
+    class Api(_LegalApi):
+        _config_state = {}
+        _hub = Client()
+
+    documents = legal.bundled_documents()
+
+    Api._legal_documents = documents
+    result = await hub_preferences(Api())
+
+    assert result["telemetry_enabled"] is False
+    assert result["choice_made"] is False
+    assert result["legal_accepted"] is False
+
+
+@pytest.mark.asyncio
+async def test_first_start_records_legal_acceptance_without_requiring_hub():
+    class Api(_LegalApi):
+        _config_state = {}
+        _hub = None
+
+        def _save_config(self):
+            return None
+
+    documents = legal.bundled_documents()
+
+    Api._legal_documents = documents
+    api = Api()
+    result = await update_hub_preferences(api, False, legal.acceptance_payload(documents, "zh-CN"))
+
+    assert result["telemetry_enabled"] is False
+    assert result["choice_made"] is True
+    assert result["legal_accepted"] is True
+    assert api._config_state["legal_terms_accepted_version"] == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_telemetry_cannot_be_enabled_before_current_privacy_acceptance():
+    class Api(_LegalApi):
+        _config_state = {}
+        _hub = None
+
+        def _save_config(self):
+            return None
+
+    with pytest.raises(ValueError, match="隐私政策"):
+        await update_hub_preferences(Api(), True)
+
+
+@pytest.mark.asyncio
+async def test_catalog_is_public_and_uses_stale_disk_cache_offline(tmp_path):
+    async def plugins(_request):
+        return web.json_response(
+            {
+                "items": [{"id": "sample", "name": "Sample", "manifest": {}}],
+                "pages": 1,
+            }
+        )
+
+    runner, base_url = await _serve([("GET", "/v1/plugins", plugins)])
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        fresh = await client.catalog()
+        assert fresh["ok"] is True
+        assert fresh["items"][0]["id"] == "sample"
+        assert not client.identity_file.exists()
+        await runner.cleanup()
+
+        stale = await client.catalog()
+        assert stale["ok"] is True
+        assert stale["source"]["stale"] is True
+        assert stale["items"] == fresh["items"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_download_event_creates_identity_only_when_needed(tmp_path):
+    received: list[dict] = []
+
+    async def installation(request):
+        assert await request.json() == {
+            "app_version": __version__,
+            "platform": _platform_name(),
+            "telemetry_enabled": False,
+        }
+        return web.json_response(
+            {"installation_id": "install-1", "installation_token": "secret-token"},
+            status=201,
+        )
+
+    async def event(request):
+        assert request.headers["Authorization"] == "Bearer secret-token"
+        received.append(await request.json())
+        return web.json_response({"accepted": True, "counted": True}, status=202)
+
+    from src.version import __version__
+
+    routes = [
+        ("POST", "/v1/installations", installation),
+        ("POST", "/v1/plugins/sample/download-events", event),
+    ]
+    runner, base_url = await _serve(routes)
+    # 测试运行平台可能不是 Windows，断言动态平台；保持请求体其余字段严格。
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        assert not client.identity_file.exists()
+        await client.start()
+        assert client.queue_download_event(
+            "sample",
+            event_id="event_1234567890abcdef",
+            kind="install_succeeded",
+            plugin_version="1.0.0",
+            artifact_hash="a" * 64,
+        )
+        await asyncio.wait_for(client._event_queue.join(), timeout=2)
+        assert len(received) == 1
+        identity = json.loads(client.identity_file.read_text(encoding="utf-8"))
+        assert identity["installation_id"] == "install-1"
+        assert identity["installation_token"] == "secret-token"
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_interaction_writes_allow_identity_creation_beyond_catalog_read_timeout(tmp_path):
+    async def installation(_request):
+        await asyncio.sleep(2.1)
+        return web.json_response(
+            {"installation_id": "install-1", "installation_token": "secret-token"},
+            status=201,
+        )
+
+    async def like(request):
+        assert request.headers["Authorization"] == "Bearer secret-token"
+        return web.json_response({"liked": True})
+
+    runner, base_url = await _serve(
+        [
+            ("POST", "/v1/installations", installation),
+            ("PUT", "/v1/plugins/sample/like", like),
+        ]
+    )
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        assert await client.set_like("sample", True) == {"liked": True}
+        assert client.identity_file.exists()
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_plugin_detail_allows_a_slow_user_requested_read(tmp_path):
+    async def slow_detail(_request):
+        await asyncio.sleep(2.1)
+        return web.json_response({"id": "sample"})
+
+    runner, base_url = await _serve([("GET", "/v1/plugins/sample", slow_detail)])
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        assert _PLUGIN_DETAIL_TIMEOUT.total == 60
+        assert await client.plugin_detail("sample") == {"id": "sample"}
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_hub_read_is_cancelled_when_the_browser_disconnects():
+    cancelled = asyncio.Event()
+
+    class Transport:
+        checks = 0
+
+        def is_closing(self):
+            self.checks += 1
+            return self.checks > 1
+
+    class Request:
+        transport = Transport()
+
+    async def slow_read():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    with pytest.raises(_ClientDisconnected):
+        await _await_hub_read(Request(), slow_read())
+    assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_circuit_breaker_opens_after_three_failures(tmp_path):
+    calls = 0
+
+    async def unavailable(_request):
+        nonlocal calls
+        calls += 1
+        return web.json_response({"detail": "down"}, status=503)
+
+    runner, base_url = await _serve([("GET", "/v1/plugins/sample", unavailable)])
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        for _ in range(3):
+            with pytest.raises(HubUnavailable):
+                await client.plugin_detail("sample")
+        with pytest.raises(HubUnavailable, match="熔断"):
+            await client.plugin_detail("sample")
+        assert calls == 3
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_client_errors_do_not_open_global_circuit_breaker(tmp_path):
+    calls = 0
+
+    async def missing(_request):
+        nonlocal calls
+        calls += 1
+        return web.json_response({"detail": "missing"}, status=404)
+
+    runner, base_url = await _serve([("GET", "/v1/plugins/missing", missing)])
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        for _ in range(4):
+            with pytest.raises(HubUnavailable, match="404"):
+                await client.plugin_detail("missing")
+        assert calls == 4
+        assert client._failures == 0
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_disabling_telemetry_stops_local_heartbeat_even_offline(tmp_path):
+    client = HubClient(
+        tmp_path,
+        base_url="http://127.0.0.1:9",
+        telemetry_enabled=True,
+        telemetry_choice_made=True,
+    )
+    sleeper = asyncio.create_task(asyncio.sleep(3600))
+    client._heartbeat_task = sleeper
+
+    await client.set_telemetry(False)
+    await asyncio.sleep(0)
+
+    assert client.telemetry_enabled is False
+    assert client._heartbeat_task is None
+    assert sleeper.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_failed_remote_identity_delete_keeps_local_token_for_retry(tmp_path):
+    async def unavailable(_request):
+        return web.json_response({"detail": "down"}, status=503)
+
+    runner, base_url = await _serve([("DELETE", "/v1/installations/me", unavailable)])
+    client = HubClient(tmp_path, base_url=base_url)
+    client._atomic_write(
+        client.identity_file,
+        {"installation_id": "install-1", "installation_token": "secret-token"},
+    )
+    try:
+        with pytest.raises(HubUnavailable):
+            await client.delete_identity()
+        assert client.identity_file.exists()
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_marketplace_prefers_hub_and_normalizes_security(tmp_path):
+    class FakeHub:
+        async def catalog(self):
+            return {
+                "ok": True,
+                "items": [
+                    {
+                        "id": "sample",
+                        "name": "Sample",
+                        "version": "1.0.0",
+                        "permissions": ["network.client"],
+                        "approved_permissions": ["network.client"],
+                        "security": {"install_allowed": False, "blocking_reasons": ["blocked"]},
+                        "manifest": {"id": "sample", "plugin_type": "content-pack"},
+                    }
+                ],
+                "source": {"mirror_name": "DiceFrame Hub", "hub": True, "stale": False},
+            }
+
+    class FailingMirrors:
+        async def fetch_raw(self, *args, **kwargs):
+            raise AssertionError("Hub 成功时不应访问仓库索引")
+
+    result = await PluginMarketplace(FailingMirrors(), hub_client=FakeHub()).list_plugins()
+    assert result["ok"] is True
+    assert result["source"]["hub"] is True
+    assert result["plugins"][0]["installable"] is False
+    assert result["plugins"][0]["verification_error"] == "blocked"
+    assert result["plugins"][0]["approved_permissions"] == ["network.client"]
+
+
+class _FakeMirror:
+    def __init__(self, result: FetchResult | None = None):
+        self.result = result or FetchResult(ok=False, error="镜像不可用")
+
+    async def fetch_github_url(self, url, *, mirror_id="", binary=False, max_bytes=None):
+        return self.result
+
+
+class _FakeMarketplace:
+    def __init__(self, items):
+        self.items = items
+
+    async def list_plugins(self):
+        return {"plugins": self.items, "ok": True}
+
+
+class _FakePlugins:
+    def __init__(self, item=None, *, mirrors: _FakeMirror | None = None, items=None):
+        self.mirrors = mirrors or _FakeMirror()
+        self.marketplace = _FakeMarketplace([item] if item is not None else (items or []))
+
+
+class _FakeHubApi:
+    def __init__(self, hub_client, plugins):
+        self._hub = hub_client
+        self._plugins = plugins
+
+
+def _sample_item(repository_url: str = "https://github.com/example/sample") -> dict:
+    return {
+        "id": "sample",
+        "repository_url": repository_url,
+        "latest": {"commit_sha": "a" * 40},
+    }
+
+
+@pytest.mark.asyncio
+async def test_plugin_readme_hub_success_writes_disk_cache(tmp_path):
+    async def readme(_request):
+        return web.json_response({"html": "<p>hello</p>", "plugin_id": "sample"})
+
+    runner, base_url = await _serve([("GET", "/v1/plugins/sample/readme", readme)])
+    client = HubClient(tmp_path, base_url=base_url)
+    api = _FakeHubApi(client, _FakePlugins(item=_sample_item()))
+    try:
+        result = await plugin_readme(api, "sample")
+        assert result["ok"] is True
+        assert result["html"] == "<p>hello</p>"
+        assert result["source"]["hub"] is True
+        assert result["source"]["cached"] is False
+        assert result["source"]["stale"] is False
+
+        cached = client.read_readme_cache("sample")
+        assert cached is not None
+        assert cached["html"] == "<p>hello</p>"
+        assert cached["repository_url"] == "https://github.com/example/sample"
+        assert cached["commit_sha"] == "a" * 40
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_plugin_readme_hub_down_hits_stale_disk_cache(tmp_path):
+    async def readme(_request):
+        return web.json_response({"html": "<p>cached</p>"})
+
+    runner, base_url = await _serve([("GET", "/v1/plugins/sample/readme", readme)])
+    client = HubClient(tmp_path, base_url=base_url)
+    api = _FakeHubApi(client, _FakePlugins(item=_sample_item()))
+    try:
+        fresh = await plugin_readme(api, "sample")
+        assert fresh["ok"] is True
+        assert fresh["html"] == "<p>cached</p>"
+        await runner.cleanup()
+
+        # Hub 关闭后再次读取，命中磁盘缓存并标记 stale，不能冒充刚同步。
+        stale = await plugin_readme(api, "sample")
+        assert stale["ok"] is True
+        assert stale["html"] == "<p>cached</p>"
+        assert stale["source"]["cached"] is True
+        assert stale["source"]["stale"] is True
+        assert stale["source"]["error"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_plugin_readme_falls_back_to_author_github_raw(tmp_path):
+    mirror = _FakeMirror(FetchResult(ok=True, data="# Sample\nreadme from author"))
+    api = _FakeHubApi(
+        HubClient(tmp_path, base_url="http://127.0.0.1:9"),
+        _FakePlugins(item=_sample_item(), mirrors=mirror),
+    )
+    try:
+        result = await plugin_readme(api, "sample")
+        assert result["ok"] is True
+        assert result["html"] == ""
+        assert result["markdown"] == "# Sample\nreadme from author"
+        assert result["source"]["github"] is True
+        assert result["source"]["hub"] is False
+    finally:
+        await api._hub.close()
+
+
+@pytest.mark.asyncio
+async def test_plugin_readme_rejects_non_github_private_and_oversized(tmp_path):
+    client = HubClient(tmp_path, base_url="http://127.0.0.1:9")
+    try:
+        # 非 GitHub 仓库地址：解析阶段直接拒绝，不发起任何 GitHub 请求。
+        bad_api = _FakeHubApi(
+            client,
+            _FakePlugins(item=_sample_item(repository_url="https://example.com/plugin")),
+        )
+        result = await plugin_readme(bad_api, "sample")
+        assert result["ok"] is False
+        assert result["source"]["github"] is False
+
+        # 超大响应被镜像层拒绝后，兜底静默放弃。
+        oversized = _FakeMirror(
+            FetchResult(ok=False, error="下载内容超过限制：262144 bytes")
+        )
+        big_api = _FakeHubApi(
+            client,
+            _FakePlugins(item=_sample_item(), mirrors=oversized),
+        )
+        result = await plugin_readme(big_api, "sample")
+        assert result["ok"] is False
+        assert result["source"]["github"] is False
+
+        # 私网地址被 SSRF 防护拒绝。
+        with pytest.raises(ValueError):
+            validate_public_http_url("http://127.0.0.1:8000/secrets")
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_plugin_readme_cancelled_when_detail_modal_closes():
+    cancelled = asyncio.Event()
+
+    class Transport:
+        checks = 0
+
+        def is_closing(self):
+            self.checks += 1
+            return self.checks > 1
+
+    class Request:
+        transport = Transport()
+
+    async def slow_read():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    # README 路由使用同一取消机制（含 60 秒总时限包装）。
+    with pytest.raises(_ClientDisconnected):
+        await _await_hub_read(Request(), asyncio.wait_for(slow_read(), timeout=60))
+    assert cancelled.is_set()

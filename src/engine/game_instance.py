@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import logging
-import time
-import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from src.engine.contracts import (
     ActionRecord,
@@ -28,6 +25,11 @@ from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 
 logger = logging.getLogger("trpg")
+
+MAX_SAVE_PACKAGE_BYTES = 50 * 1024 * 1024
+MAX_SAVE_STATE_BYTES = 16 * 1024 * 1024
+MAX_SAVE_CHATLOG_BYTES = 128 * 1024 * 1024
+MAX_SAVE_UNPACKED_BYTES = 128 * 1024 * 1024
 
 
 # ---------- 游戏状态枚举 ------------------------------------
@@ -129,6 +131,8 @@ class GameInstance:
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
     world_id: str | None = None
+    rule_id: str = "freeform_fantasy"
+    scene_image: dict[str, str] = field(default_factory=dict)
     world_name: str = ""
     group_name: str = ""
     state: GameState = GameState.CREATED
@@ -237,6 +241,12 @@ class GameInstance:
     # 内部：process_round/generate_swipe 互斥锁，防并发处理同一实例
     _process_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _save_fail_count: int = field(default=0, repr=False)
+    # 幸运超时（秒）：每条 pending 幸运检定独立倒计时，到点按失败继续；0=禁用（异步局可设 0）
+    luck_timeout_seconds: int = 60
+    # 内部：每条 pending 幸运检定的超时定时器（check_id -> asyncio.Task），不序列化
+    _luck_timers: dict = field(default_factory=dict, repr=False)
+    # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
+    pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
     # D1: 已确认事项（CONFIRMED 标签累积），注入 LLM 上下文防重复讨论
     confirmed_items: list = field(default_factory=list)
@@ -286,6 +296,7 @@ class GameInstance:
         self,
         *,
         world_id: str | None,
+        rule_id: str,
         world_name: str,
         group_name: str,
         seed_code: str,
@@ -295,6 +306,7 @@ class GameInstance:
     ) -> None:
         """配置新局身份信息；调用方在并发路径中应持有 ``_lock``。"""
         self.world_id = world_id
+        self.rule_id = rule_id or "freeform_fantasy"
         self.world_name = world_name
         self.group_name = group_name
         self.seed_code = seed_code
@@ -309,8 +321,12 @@ class GameInstance:
         entry_point: str | None = None,
         room_password: str | None = None,
         gm_uid: str | None = None,
+        luck_timeout_seconds: int | None = None,
     ) -> None:
-        """集中更新入口与房间身份配置，保留旧存档字段。"""
+        """集中更新入口与房间身份配置，保留旧存档字段。
+
+        luck_timeout_seconds：每玩家幸运超时秒数（0=禁用，异步局建议 0）。
+        """
         if solo_mode is not None:
             self.solo_mode = bool(solo_mode)
         if entry_point is not None:
@@ -319,6 +335,14 @@ class GameInstance:
             self.room_password = room_password
         if gm_uid is not None:
             self.gm_uid = gm_uid
+        if luck_timeout_seconds is not None:
+            if not 0 <= int(luck_timeout_seconds) <= 3600:
+                raise ValueError("幸运超时需在 0..3600 秒之间（0=禁用）")
+            self.luck_timeout_seconds = int(luck_timeout_seconds)
+
+    def set_scene_image(self, reference: dict[str, str]) -> None:
+        """Set the portable adventure scene-image reference."""
+        self.scene_image = dict(reference or {})
 
     def replace_players(self, players: dict[str, PlayerData]) -> None:
         self.players = players
@@ -330,6 +354,9 @@ class GameInstance:
         self.bot_bind_token = token
 
     def set_room_password(self, password: str) -> None:
+        """设置房间密码；非空时要求至少 4 位。空串表示取消密码（开放房）。"""
+        if password and len(password) < 4:
+            raise ValueError("房间密码至少 4 位")
         self.room_password = password
         self.room_token = ""
 
@@ -552,87 +579,22 @@ class GameInstance:
         rule=None,
         allow_gm: bool = False,
     ) -> dict:
-        """原子处理一次幸运选择，重复请求不会重复扣除资源。"""
-        async with self._lock:
-            target = next(
-                (check for check in self.last_checks if str(check.get("check_id") or "") == check_id),
-                None,
-            )
-            if not target:
-                return {"ok": False, "code": "CHECK_NOT_FOUND", "error": "检定不存在或已过期"}
-            owner_uid = str(target.get("actor_uid") or "")
-            if actor_uid != owner_uid and not (allow_gm and actor_uid == self.gm_uid):
-                return {"ok": False, "code": "LUCK_FORBIDDEN", "error": "只能处理自己的幸运选择"}
-
-            desired = "spent" if spend else "declined"
-            current_decision = str(target.get("luck_decision") or "")
-            if current_decision and current_decision != "pending":
-                if current_decision == desired:
-                    return {
-                        "ok": True,
-                        "already_resolved": True,
-                        "check_result": dict(target),
-                    }
-                return {"ok": False, "code": "LUCK_ALREADY_RESOLVED", "error": "该检定的幸运选择已经处理"}
-            if self.state != GameState.ACTIVE_JUDGMENT or not self.round_checks_prepared:
-                return {"ok": False, "code": "LUCK_NOT_PENDING", "error": "当前没有等待处理的幸运选择"}
-            if current_decision != "pending":
-                return {"ok": False, "code": "LUCK_NOT_AVAILABLE", "error": "该检定不能消耗幸运"}
-
-            if spend:
-                if str(target.get("dice") or "").lower() != "d100" or str(target.get("verdict") or "") != "失败":
-                    return {"ok": False, "code": "LUCK_NOT_AVAILABLE", "error": "该检定不能消耗幸运"}
-                roll_value = int(target.get("roll", 0) or 0)
-                threshold = int(target.get("threshold", 0) or 0)
-                cost = roll_value - threshold
-                if cost <= 0:
-                    return {"ok": False, "code": "LUCK_NOT_AVAILABLE", "error": "该检定不需要消耗幸运"}
-                character_sheet = self.get_character_sheet(owner_uid)
-                resource = get_resource(character_sheet, "luck")
-                current_luck = int((resource or {}).get("current", character_sheet.get("luck", 0)) or 0)
-                if current_luck < cost:
-                    return {
-                        "ok": False,
-                        "code": "LUCK_INSUFFICIENT",
-                        "error": f"幸运不足：需要 {cost} 点，当前只有 {current_luck} 点",
-                    }
-                remaining = apply_resource_delta(character_sheet, "luck", -cost, rule)
-                target["original_verdict"] = target.get("verdict")
-                target["verdict"] = "成功"
-                target["luck_spent"] = cost
-                target["luck_remaining"] = remaining
-
-            target["luck_decision"] = desired
-            target["luck_spend_available"] = False
-            target["luck_resolved_at"] = datetime.now(timezone.utc).isoformat()
-            if self.last_check and str(self.last_check.get("check_id") or "") == check_id:
-                self.last_check = dict(target)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return {"ok": True, "check_result": dict(target)}
+        """原子处理一次幸运选择（逻辑见 src/engine/luck_resolver.py，P2-G Step 1）。"""
+        return await luck_resolver.resolve_luck_decision(
+            self, check_id, actor_uid, spend, rule=rule, allow_gm=allow_gm,
+        )
 
     async def decline_pending_luck(self) -> list[dict]:
-        """GM 强制推进时将所有未选择的幸运检定按失败继续。"""
-        async with self._lock:
-            declined: list[dict] = []
-            now = datetime.now(timezone.utc).isoformat()
-            for check in self.last_checks:
-                if check.get("luck_decision") != "pending":
-                    continue
-                check["luck_decision"] = "declined"
-                check["luck_spend_available"] = False
-                check["luck_resolved_at"] = now
-                declined.append(dict(check))
-            if declined:
-                if self.last_check:
-                    last_id = str(self.last_check.get("check_id") or "")
-                    replacement = next(
-                        (check for check in self.last_checks if str(check.get("check_id") or "") == last_id),
-                        None,
-                    )
-                    if replacement:
-                        self.last_check = dict(replacement)
-                self.last_activity = now
-            return declined
+        """GM 强制推进时将所有未选择的幸运检定按失败继续（逻辑见 luck_resolver）。"""
+        return await luck_resolver.decline_pending_luck(self)
+
+    async def system_decline_luck(self, check_id: str) -> dict:
+        """幸运超时定时器触发：按失败继续单条幸运检定（逻辑见 luck_resolver）。"""
+        return await luck_resolver.system_decline_luck(self, check_id)
+
+    def _cancel_luck_timer(self, check_id: str) -> None:
+        """取消并移除某条检定的幸运超时定时器（逻辑见 luck_resolver）。"""
+        luck_resolver._cancel_luck_timer(self, check_id)
 
     def all_alive_ready(self) -> bool:
         """多人模式下，所有未暂离的存活角色都提交行动后才自动推进。"""
@@ -1042,6 +1004,8 @@ class GameInstance:
         data = {
             "game_key": list(self.game_key),
             "world_id": self.world_id,
+            "rule_id": self.rule_id,
+            "scene_image": self.scene_image,
             "world_name": self.world_name,
             "group_name": self.group_name,
             "state": self.state.value,
@@ -1070,6 +1034,7 @@ class GameInstance:
             "seed_code": self.seed_code,
             "difficulty": self.difficulty,
             "language": normalize_language(self.language),
+            "luck_timeout_seconds": self.luck_timeout_seconds,
             "entry_point": self.entry_point,
             "max_players": self.max_players,
             "gm_uid": self.gm_uid,
@@ -1135,6 +1100,7 @@ class GameInstance:
                 ),
                 "skills": skills,
                 "inventory": cs.get("inventory", []),
+                "key_items": cs.get("key_items", []),
             }
             if cs.get("background"):
                 sheet["background"] = cs["background"]
@@ -1189,6 +1155,10 @@ class GameInstance:
         inst = cls(
             game_key=tuple(data["game_key"]),
             world_id=data.get("world_id"),
+            # Empty marks a pre-rule_id save. The WebUI service resolves it from
+            # the world template on first read and persists the migrated value.
+            rule_id=data.get("rule_id", ""),
+            scene_image=data.get("scene_image", {}),
             world_name=data.get("world_name", ""),
             group_name=data.get("group_name", ""),
             state=GameState(data["state"]),
@@ -1215,6 +1185,7 @@ class GameInstance:
             seed_code=data.get("seed_code", ""),
             difficulty=data.get("difficulty", "标准"),
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
+            luck_timeout_seconds=int(data.get("luck_timeout_seconds", 60) or 0),
             entry_point=data.get("entry_point", "web"),
             max_players=data.get("max_players", 6),
             gm_uid=data.get("gm_uid", ""),
@@ -1300,276 +1271,49 @@ class GameRegistry:
     _KEY_SEPARATOR = "#"
 
     def _save_path(self, game_key: tuple) -> Path:
-        parts = [str(x) for x in game_key]
-        if any(not part or "/" in part or "\\" in part or part in {".", ".."} for part in parts):
-            raise ValueError(f"非法 game_key 存档路径: {game_key}")
-        key_str = self._KEY_SEPARATOR.join(parts)
-        path = self.save_dir / key_str / "state.json"
-        base = self.save_dir.resolve()
-        parent = path.parent.resolve()
-        if base != parent and base not in parent.parents:
-            raise ValueError(f"非法 game_key 存档路径: {game_key}")
-        return path
+        """构造存档路径（逻辑见 src/engine/persistence.py，P2-G Step 2）。"""
+        return persistence._save_path(self, game_key)
 
     async def save(self, instance: GameInstance) -> None:
-        """写入存档: 完整 log 追加进 chatlog.jsonl（增量），核心态写 state.json。"""
-        sp = self._save_path(instance.game_key)
-        sp.parent.mkdir(parents=True, exist_ok=True)
-        backup = sp.with_name("state.backup.json")
+        """写入存档（逻辑见 persistence）。"""
+        await persistence.save(self, instance)
 
-        self._append_chatlog(instance)
-        data = instance.to_dict()
-        tmp = sp.with_name("state.tmp.json")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        if sp.exists():
-            sp.replace(backup)
-        tmp.replace(sp)
-
-    @staticmethod
-    def _chatlog_path(sp: Path) -> Path:
-        return sp.with_name("chatlog.jsonl")
-
-    def _append_chatlog(self, instance: GameInstance) -> None:
-        """把自上次保存以来的新 log 增量追加进 chatlog.jsonl。
-
-        历史完整保存在 jsonl（逐行追加，O(1)），核心态 state.json 只留最近上下文，
-        避免上万回合时每次全量重写大文件。增量通过 last_saved_log_count 跟踪。
-        rollback 会使 log 缩短：此时截断 chatlog 末尾的死条目，保持文件与内存一致。
-        swipe 不改 log 长度，chatlog 末尾会残留旧版本，由 _restore_chatlog 用 core_log
-        对齐修正——save 时无需为 swipe 重写整个文件。
-        """
-        sp = self._save_path(instance.game_key)
-        sp.parent.mkdir(parents=True, exist_ok=True)
-        chatlog = self._chatlog_path(sp)
-        if instance.last_saved_log_count > len(instance.log):
-            # log 缩短（rollback 弹出了末尾条目）：截断 chatlog 到当前长度，丢弃死条目
-            self._truncate_chatlog(chatlog, len(instance.log))
-            instance.last_saved_log_count = len(instance.log)
-        if instance.last_saved_log_count >= len(instance.log):
-            return
-        new_entries = instance.log[instance.last_saved_log_count:]
-        if not new_entries:
-            return
-        lines = "\n".join(
-            json.dumps(entry, ensure_ascii=False) for entry in new_entries
-        ) + "\n"
-        # 追加写入（O(1)，不重写历史）
-        with open(chatlog, "a", encoding="utf-8") as fh:
-            fh.write(lines)
-        instance.last_saved_log_count = len(instance.log)
-
-    @staticmethod
-    def _truncate_chatlog(chatlog: Path, keep: int) -> None:
-        """截断 chatlog.jsonl 到前 keep 行（rollback 后清理死条目）。"""
-        if not chatlog.exists():
-            return
-        lines = [l for l in chatlog.read_text(encoding="utf-8").splitlines() if l.strip()]
-        if len(lines) <= keep:
-            return
-        kept = lines[:keep]
-        tmp = chatlog.with_name("chatlog.tmp.jsonl")
-        tmp.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
-        tmp.replace(chatlog)
+    # P2-G Step 2：_chatlog_path / _append_chatlog / _truncate_chatlog 已迁到
+    # src/engine/persistence.py（仅 persistence 内部使用，无外部调用，不设委托）。
 
     async def load(self, game_key: tuple) -> GameInstance | None:
-        """加载存档，优先 state.json，回退到 backup。兼容旧版 , 分隔存档目录。"""
-        sp = self._save_path(game_key)
-        backup = sp.with_name("state.backup.json")
+        """加载存档（逻辑见 persistence）。"""
+        return await persistence.load(self, game_key)
 
-        if not sp.exists():
-            for old_sep in (",", "|"):
-                old_key_str = old_sep.join(str(x) for x in game_key)
-                old_sp = self.save_dir / old_key_str / "state.json"
-                old_backup = self.save_dir / old_key_str / "state.backup.json"
-                if old_sp.exists() or old_backup.exists():
-                    sp = old_sp
-                    backup = old_backup
-                    break
-
-        recovered_from_backup = False
-        if not sp.exists():
-            if not backup.exists():
-                return None
-            sp = backup
-            recovered_from_backup = True
-            logger.warning("主存档不存在，使用备份: %s", sp)
-
-        try:
-            data = json.loads(sp.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            logger.exception("存档 JSON 损坏: %s", sp)
-            if backup.exists() and sp != backup:
-                data = json.loads(backup.read_text(encoding="utf-8"))
-                recovered_from_backup = True
-            else:
-                return None
-
-        instance = GameInstance.from_dict(data)
-        if recovered_from_backup:
-            record_health_event(
-                instance,
-                component="save",
-                code="SAVE_RECOVERED_FROM_BACKUP",
-                severity="warning",
-                title="已从备份存档恢复",
-                message="主存档缺失或损坏，系统已加载 state.backup.json。",
-                impact="最近一次保存后的少量进度可能未恢复。",
-                fallback="backup_state",
-                repair_hint="建议检查 data/saves 目录权限、磁盘空间和 state.json 格式。",
-            )
-        self._restore_chatlog(instance, sp)
-        self.register(instance)
-        logger.info("存档已加载: %s, round=%d", game_key, instance.round_number)
-        return instance
-
-    def _restore_chatlog(self, instance: GameInstance, sp: Path) -> None:
-        """把 chatlog.jsonl 的完整历史拼回 instance.log；老存档自动迁移。
-
-        core_log（state.json 的 log[-100:]）是权威的最近窗口：save 时它直接来自内存
-        log，一定反映 rollback/swipe 后的最新状态。chatlog 是 append-only 的完整历史，
-        但 rollback 会留下死条目、swipe 会留下旧版本——二者都在 chatlog 末尾。因此以
-        core_log[0] 为锚点对齐：找到它在 chatlog 中的位置，保留之前的更早历史作前缀，
-        末尾用 core_log 替换（丢弃其后的死条目/旧版）。
-        """
-        chatlog = self._chatlog_path(sp)
-        core_log = list(instance.log)
-        history: list = []
-        if chatlog.exists():
-            try:
-                for line in chatlog.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        history.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        logger.warning("chatlog.jsonl 含无效行，已跳过: %s", chatlog)
-            except OSError:
-                logger.exception("读取 chatlog.jsonl 失败: %s", chatlog)
-        if not history and core_log:
-            # 老存档自动迁移：把核心态里的 log 写入 chatlog.jsonl
-            self._append_chatlog(instance)
-            history = list(core_log)
-        elif core_log and history:
-            # 以 core_log[0] 为锚点对齐：chatlog 中锚点之前的更早历史保留，之后用 core_log
-            # 替换。这丢弃了 chatlog 末尾因 rollback 残留的死条目、因 swipe 残留的旧版本。
-            first_core = core_log[0]
-            anchor = -1
-            for i in range(len(history) - 1, -1, -1):
-                if history[i] == first_core:
-                    anchor = i
-                    break
-            if anchor >= 0:
-                history = history[:anchor] + core_log
-            else:
-                # core_log[0] 不在 chatlog（swipe 改写了窗口边界轮且被非推进 save 写入
-                # state.json，chatlog 仍是原版）：保留 chatlog 中早于 core_log 窗口的更早
-                # 历史（按条数取前缀），末尾用 core_log 权威覆盖，避免丢失 r1..r(N-100)。
-                prefix = len(history) - len(core_log)
-                history = (history[:prefix] if prefix > 0 else []) + core_log
-        elif core_log:
-            history = core_log
-        instance.log = history
-        instance.last_saved_log_count = len(history)
+    # P2-G Step 2：_restore_chatlog 已迁到 persistence.py（仅内部使用，无外部调用）。
 
     async def recover_all(self) -> list[GameInstance]:
-        """启动时恢复未完成对局；待幸运选择保持可处理，其余对局暂停。"""
-        recovered: list[GameInstance] = []
-        if not self.save_dir.exists():
-            return recovered
+        """启动时恢复未完成对局（逻辑见 persistence）。"""
+        return await persistence.recover_all(self)
 
-        for entry in self.save_dir.iterdir():
-            if not entry.is_dir():
-                continue
-            if not (entry / "state.json").exists() and \
-               not (entry / "state.backup.json").exists():
-                continue
-            try:
-                parts = entry.name.split(self._KEY_SEPARATOR)
-                if len(parts) < 3:
-                    for old_sep in ("|", ","):
-                        parts = entry.name.split(old_sep)
-                        if len(parts) >= 3:
-                            break
-                game_key = tuple(parts[:3])
-                instance = await self.load(game_key)
-                if instance and instance.state != GameState.ENDED:
-                    if not (
-                        instance.state == GameState.ACTIVE_JUDGMENT
-                        and instance.round_checks_prepared
-                        and instance.pending_luck_checks()
-                    ):
-                        instance.state = GameState.PAUSED
-                    recovered.append(instance)
-            except Exception:
-                logger.exception("恢复存档失败: %s", entry.name)
-
-        logger.info("存档恢复完成: %d 个对局", len(recovered))
-        return recovered
-
-    async def import_save_zip(self, payload: bytes, *, platform: str = "web", account_id: str = "web_bot") -> dict:
-        """导入导出的存档 zip（state.json + 可选 chatlog.jsonl），作为新对局恢复。
-
-        自动生成唯一新 game_key，不覆盖现有对局。关键点：
-        - state.json 内的 game_key 改写为新值，否则 load 后 instance.game_key 仍是导出方
-          原值，register 会把导入实例串到原始对局的内存槽（本机导出再导入即覆盖原对局）。
-        - 写盘后立即 load+register，使新对局在 list_games 中可见，不必等重启 recover_all。
-        安全校验：仅接受 state.json / chatlog.jsonl 顶层文件，防路径穿越。
-        返回 game_key 为 list（由路由层用公开 | 分隔符字符串化）。
-        """
-        try:
-            with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-                names = set(zf.namelist())
-                if "state.json" not in names:
-                    return {"ok": False, "error": "存档包缺少 state.json"}
-                state_data = zf.read("state.json")
-                try:
-                    state_json = json.loads(state_data.decode("utf-8-sig"))
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    return {"ok": False, "error": "state.json 不是有效 JSON"}
-                if not isinstance(state_json, dict) or "game_key" not in state_json:
-                    return {"ok": False, "error": "state.json 缺少 game_key"}
-                # 仅接受顶层已知文件，防止解压路径穿越/任意写入
-                allowed = {"state.json", "chatlog.jsonl"}
-                if any(name for name in names if name not in allowed or "/" in name or "\\" in name or ".." in name):
-                    return {"ok": False, "error": "存档包包含非法文件"}
-                chatlog_data = zf.read("chatlog.jsonl") if "chatlog.jsonl" in names else b""
-        except zipfile.BadZipFile:
-            return {"ok": False, "error": "存档包不是有效的 zip"}
-        except Exception as exc:
-            logger.exception("导入存档解析失败")
-            return {"ok": False, "error": f"存档包解析失败：{exc}"}
-
-        # 生成唯一新 game_key：import_<毫秒时间戳>
-        new_key = (platform, f"import_{int(time.time() * 1000)}", account_id)
-        sp = self._save_path(new_key)
-        sp.parent.mkdir(parents=True, exist_ok=True)
-        # 改写 game_key 为新值再落盘，使存档目录、instance.game_key、公开 game_key 三者一致
-        state_json["game_key"] = list(new_key)
-        sp.write_text(json.dumps(state_json, ensure_ascii=False, indent=2), encoding="utf-8")
-        if chatlog_data:
-            sp.with_name("chatlog.jsonl").write_bytes(chatlog_data)
-        # 立即加载并注册进内存，否则 list_games（只遍历内存）看不到导入的对局
-        instance = await self.load(new_key)
-        rounds = instance.round_number if instance else -1
-        logger.info("已导入存档为新对局: %s (round=%d)", sp.parent.name, rounds)
-        return {"ok": True, "game_key": list(new_key)}
+    async def import_save_zip(
+        self,
+        payload: bytes,
+        *,
+        platform: str = "web",
+        account_id: str = "web_bot",
+        scene_image_importer: Callable[[bytes], dict[str, Any]] | None = None,
+    ) -> dict:
+        """导入导出的存档 zip（逻辑见 persistence）。"""
+        return await persistence.import_save_zip(
+            self,
+            payload,
+            platform=platform,
+            account_id=account_id,
+            scene_image_importer=scene_image_importer,
+        )
 
     async def save_all_active(self) -> None:
-        for instance in self.list_active():
-            try:
-                await self.save(instance)
-            except Exception:
-                logger.exception("保存失败: %s", instance.game_key)
-                record_health_event(
-                    instance,
-                    component="save",
-                    code="SAVE_FAILED",
-                    severity="error",
-                    title="存档失败",
-                    message="当前游戏仍在内存中，但服务器重启后可能丢失最近进度。",
-                    impact="重启后可能回到旧回合。",
-                    fallback="memory_only",
-                    repair_hint="检查 data/saves 权限、磁盘空间和 JSON 文件是否被占用。",
-                )
+        """保存所有活跃对局（逻辑见 persistence）。"""
+        await persistence.save_all_active(self)
+
+
+# 底部导入避免循环依赖：luck_resolver/persistence 顶部 import 本模块的
+# GameState/GameInstance/GameRegistry，本模块的薄委托方法在调用时才解析模块名
+#（此时对应模块已加载）。
+from src.engine import luck_resolver, persistence  # noqa: E402

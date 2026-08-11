@@ -1,0 +1,165 @@
+"""DiceFrame Hub 本地同源代理路由。"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Awaitable
+from contextlib import suppress
+from typing import Any
+
+from aiohttp import web
+
+from src.webui.routes._common import _get_api
+
+
+class _ClientDisconnected(RuntimeError):
+    """The browser closed an in-flight Hub detail request."""
+
+
+async def _await_hub_read(request: web.Request, operation: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+    """Cancel a slow upstream read shortly after the browser closes its modal."""
+    task = asyncio.ensure_future(operation)
+    try:
+        while not task.done():
+            transport = request.transport
+            if transport is None or transport.is_closing():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                raise _ClientDisconnected
+            await asyncio.wait({task}, timeout=0.2)
+        return await task
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+
+async def api_hub_preferences(request: web.Request) -> web.Response:
+    return web.json_response(await _get_api(request).hub_preferences(request.query.get("lang", "zh-CN")))
+
+
+async def api_hub_preferences_update(request: web.Request) -> web.Response:
+    data = await request.json()
+    if not isinstance(data.get("telemetry_enabled"), bool):
+        return web.json_response({"ok": False, "error": "telemetry_enabled 必须是布尔值"}, status=400)
+    legal_acceptance = data.get("legal_acceptance")
+    if legal_acceptance is not None and not isinstance(legal_acceptance, dict):
+        return web.json_response({"ok": False, "error": "legal_acceptance 必须是对象"}, status=400)
+    language = data.get("lang", "zh-CN")
+    if not isinstance(language, str):
+        return web.json_response({"ok": False, "error": "lang 必须是字符串"}, status=400)
+    try:
+        result = await _get_api(request).update_hub_preferences(
+            data["telemetry_enabled"],
+            legal_acceptance=legal_acceptance,
+            language=language,
+        )
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result)
+
+
+async def api_hub_identity_delete(request: web.Request) -> web.Response:
+    try:
+        result = await _get_api(request).delete_hub_identity()
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result)
+
+
+async def api_hub_plugin_detail(request: web.Request) -> web.Response:
+    try:
+        result = await _await_hub_read(
+            request,
+            _get_api(request).hub_plugin_detail(request.match_info["plugin_id"]),
+        )
+    except _ClientDisconnected:
+        return web.Response(status=499)
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result)
+
+
+async def api_hub_plugin_readme(request: web.Request) -> web.Response:
+    try:
+        # Hub 详情链路允许 60 秒，README 兜底同样受总时限约束，避免多层重试拖垮请求。
+        result = await _await_hub_read(
+            request,
+            asyncio.wait_for(
+                _get_api(request).hub_plugin_readme(request.match_info["plugin_id"]),
+                timeout=60,
+            ),
+        )
+    except _ClientDisconnected:
+        return web.Response(status=499)
+    except asyncio.TimeoutError:
+        return web.json_response(
+            {"ok": False, "html": "", "markdown": "", "error": "README 读取超时"},
+            status=504,
+        )
+    except Exception as exc:
+        return web.json_response(
+            {"ok": False, "html": "", "markdown": "", "error": str(exc)},
+            status=502,
+        )
+    return web.json_response(result)
+
+
+async def api_hub_plugin_ratings(request: web.Request) -> web.Response:
+    try:
+        result = await _await_hub_read(
+            request,
+            _get_api(request).hub_plugin_ratings(request.match_info["plugin_id"]),
+        )
+    except _ClientDisconnected:
+        return web.Response(status=499)
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result)
+
+
+async def api_hub_plugin_like(request: web.Request) -> web.Response:
+    try:
+        result = await _get_api(request).set_hub_plugin_like(
+            request.match_info["plugin_id"], request.method == "PUT"
+        )
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result)
+
+
+async def api_hub_plugin_rating(request: web.Request) -> web.Response:
+    try:
+        if request.method == "DELETE":
+            result = await _get_api(request).set_hub_plugin_rating(
+                request.match_info["plugin_id"], None
+            )
+        else:
+            data = await request.json()
+            stars = data.get("stars")
+            tags = data.get("tags", [])
+            if not isinstance(stars, int) or isinstance(stars, bool) or not 1 <= stars <= 5:
+                return web.json_response({"ok": False, "error": "stars 必须是 1 到 5 的整数"}, status=400)
+            if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+                return web.json_response({"ok": False, "error": "tags 必须是字符串数组"}, status=400)
+            result = await _get_api(request).set_hub_plugin_rating(
+                request.match_info["plugin_id"], stars, tags
+            )
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result)
+
+
+def register_hub(app: web.Application) -> None:
+    app.router.add_get("/api/hub/preferences", api_hub_preferences)
+    app.router.add_patch("/api/hub/preferences", api_hub_preferences_update)
+    app.router.add_delete("/api/hub/identity", api_hub_identity_delete)
+    app.router.add_get("/api/hub/plugins/{plugin_id}", api_hub_plugin_detail)
+    app.router.add_get("/api/hub/plugins/{plugin_id}/readme", api_hub_plugin_readme)
+    app.router.add_get("/api/hub/plugins/{plugin_id}/ratings", api_hub_plugin_ratings)
+    app.router.add_put("/api/hub/plugins/{plugin_id}/like", api_hub_plugin_like)
+    app.router.add_delete("/api/hub/plugins/{plugin_id}/like", api_hub_plugin_like)
+    app.router.add_put("/api/hub/plugins/{plugin_id}/rating", api_hub_plugin_rating)
+    app.router.add_delete("/api/hub/plugins/{plugin_id}/rating", api_hub_plugin_rating)

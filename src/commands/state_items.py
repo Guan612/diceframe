@@ -89,6 +89,9 @@ def grant_classified_item(
     category: str = "",
 ) -> None:
     """Grant one already-classified item to a character sheet."""
+    item_name = str(item_name or "").strip()
+    if not item_name:
+        return
     if category == "equipment":
         append_unique_equipment(character_sheet, item_name)
     elif category in ("key_item", "quest", "clue", "credential", "artifact"):

@@ -48,10 +48,15 @@ def apply_combat_command(instance: GameInstance, data: dict) -> None:
 
 def apply_revive_commands(instance: GameInstance, data: dict) -> None:
     revive_commands = data.get("revive_commands", [])
+    # P2-O：硬核难度禁止复活，落实"硬核=角色可永久死亡"的机制差异（不只靠 GM prompt 文案）。
+    hardcore = str(getattr(instance, "difficulty", "") or "") == "硬核"
     for cmd in revive_commands:
         uid = cmd["uid"]
         method = cmd.get("method", "法术")
         if uid not in instance.players:
+            continue
+        if hardcore:
+            logger.info("硬核局禁止复活，忽略: %s method=%s", uid, method)
             continue
         character_sheet = instance.get_character_sheet(uid)
         if not revive_character(character_sheet, method):

@@ -3,6 +3,7 @@
   "extends": "base_d20",
   "rule_version": "1.2",
   "rule_id": "freeform_cyberpunk",
+  "scene_image": {"kind": "builtin", "id": "freeform_cyberpunk"},
   "rule_name": "Cyberpunk d20 Freeform",
   "description": "A near-future high-tech low-life cyberpunk d20 lightweight rule; emphasizes cyberware, hacking, corporate oppression, gang conflict, heat tracking, and street survival; does not correspond to Cyberpunk 2020/RED official rules.",
   "attributes": [

@@ -116,6 +116,38 @@ def test_round_checks_pause_before_narration_when_luck_can_change_the_result():
     assert instance.last_check["threshold"] == 20
 
 
+def test_d100_resolver_ignores_model_target_and_uses_character_skill_value():
+    instance, rule = _coc_instance()
+    instance.action_queue = [{
+        "user_id": "p1",
+        "text": "仔细侦查房间",
+        "check_request": {
+            "check_id": "check-safe-threshold",
+            "required": True,
+            "actor_uid": "p1",
+            "dice_system": "d100",
+            "label": "侦查检定",
+            "skill": "侦查",
+            "attribute": "int",
+            "target": 99,
+        },
+        "dice_value": 50,
+        "dice_rolls": [50],
+        "dice_pending": False,
+    }]
+
+    build_dice_constraint_block(
+        instance,
+        collect_actions_text(instance),
+        rule,
+        "d100",
+        DiceResolver(),
+    )
+
+    assert instance.last_check["threshold"] == 45
+    assert instance.last_check["verdict"] == "失败"
+
+
 def test_d20_advantage_reuses_both_confirmed_rolls():
     instance = GameInstance(("web", "room", "bot"))
     instance.state = GameState.ACTIVE_ACTION
@@ -200,6 +232,118 @@ async def test_gm_resource_command_updates_luck_directly_without_public_action()
     assert instance.get_character_sheet("p1")["luck"] == 50
     assert instance.action_queue == []
     assert instance.gm_directives == []
+
+
+@pytest.mark.asyncio
+async def test_gm_revive_command_revives_dead_character():
+    instance, rule = _coc_instance()
+    instance.players["p1"]["character_sheet"].update({
+        "deceased": True, "hp": 0, "max_hp": 100, "death_round": 3,
+    })
+    api = _Api(instance, rule)
+
+    result = await gm_command(api, "web|room|bot", "复活冒险者")
+
+    assert result["ok"] is True
+    assert result["kind"] == "revive"
+    sheet = instance.get_character_sheet("p1")
+    assert sheet["deceased"] is False
+    assert sheet["hp"] == 50
+    assert "death_round" not in sheet
+    assert instance.action_queue == []
+    assert instance.gm_directives == []
+
+
+@pytest.mark.asyncio
+async def test_gm_revive_natural_method_deducts_xp():
+    instance, rule = _coc_instance()
+    instance.players["p1"]["character_sheet"].update({
+        "deceased": True, "hp": 0, "max_hp": 100, "xp": 100,
+    })
+    api = _Api(instance, rule)
+
+    result = await gm_command(api, "web|room|bot", "复活冒险者(自然)")
+
+    assert result["ok"] is True
+    sheet = instance.get_character_sheet("p1")
+    assert sheet["deceased"] is False
+    assert sheet["hp"] == 10
+    assert sheet["xp"] == 80
+
+
+@pytest.mark.asyncio
+async def test_gm_revive_generic_phrase_selects_only_dead_player() -> None:
+    instance, rule = _coc_instance()
+    instance.players["p1"]["character_sheet"].update({
+        "deceased": True, "hp": 0, "max_hp": 100,
+    })
+    instance.players["p2"] = {
+        "character_name": "学者",
+        "character_sheet": {"deceased": False, "hp": 20, "max_hp": 20},
+    }
+    api = _Api(instance, rule)
+
+    result = await gm_command(api, "web|room|bot", "复活名为冒险者的人")
+
+    assert result["ok"] is True
+    assert instance.get_character_sheet("p1")["deceased"] is False
+
+
+@pytest.mark.asyncio
+async def test_gm_revive_ambiguous_target_lists_available_character_names() -> None:
+    instance, rule = _coc_instance()
+    # p1 真名就叫"冒险者"且存活：点名"冒险者"应精确命中 p1（提示未死亡），
+    # 而不是被当泛称歧义。只有真名未匹配时才走泛称歧义列名单。
+    instance.players["p2"] = {
+        "character_name": "学者",
+        "character_sheet": {"deceased": False, "hp": 20, "max_hp": 20},
+    }
+    api = _Api(instance, rule)
+
+    # 真名匹配：精确指向存活角色，复活时提示"未死亡"
+    result = await gm_command(api, "web|room|bot", "复活名为冒险者的人")
+    assert result["ok"] is False
+    assert "未死亡" in result["error"]
+
+    # 无真名匹配 + 多玩家 → 泛称歧义列出可用名单
+    instance.players["p1"]["character_name"] = "由洛拉"
+    result2 = await gm_command(api, "web|room|bot", "复活名为冒险者的人")
+    assert result2["ok"] is False
+    assert "学者" in result2["error"] and "由洛拉" in result2["error"]
+
+
+@pytest.mark.asyncio
+async def test_gm_revive_accepts_natural_language_named_character_wrapper() -> None:
+    instance, rule = _coc_instance()
+    instance.players["p2"] = {
+        "character_name": "学者",
+        "character_sheet": {"deceased": True, "hp": 0, "max_hp": 20},
+    }
+    api = _Api(instance, rule)
+
+    result = await gm_command(api, "web|room|bot", "复活名为学者的人")
+
+    assert result["ok"] is True
+    assert instance.get_character_sheet("p2")["deceased"] is False
+
+
+@pytest.mark.asyncio
+async def test_gm_resource_heal_revives_dead_character():
+    instance, rule = _coc_instance()
+    instance.players["p1"]["character_sheet"].update({
+        "deceased": True, "hp": 0, "max_hp": 100, "death_round": 3,
+    })
+    api = _Api(instance, rule)
+
+    result = await gm_command(api, "web|room|bot", "给冒险者加生命值50")
+
+    assert result["ok"] is True
+    assert result["kind"] == "resource_update"
+    sheet = instance.get_character_sheet("p1")
+    assert sheet["deceased"] is False
+    assert sheet["hp"] == 50
+    assert "death_round" not in sheet
+    assert "已复活" in result["message"]
 
 
 @pytest.mark.asyncio

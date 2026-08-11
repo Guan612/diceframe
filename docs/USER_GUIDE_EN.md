@@ -44,9 +44,9 @@ Rules use `<rule_id>.json` for Chinese and `<rule_id>_en.json` for English. The 
 
 ## Turns and Actions
 
-Solo games normally progress after an action is submitted.
+Solo games progress after one action is submitted.
 
-In multiplayer, each active player may submit one action per round. DiceFrame advances when all active players have submitted, or when the GM forces progression. A player may revise the current action within the configured limit; only the final version is sent to the GM model.
+In multiplayer, each active player may submit one action per round. DiceFrame advances when every active player has submitted, or when the GM manually forces progression. There is no timeout: a slow or disconnected player remains in the waiting list until the GM decides. A player may revise the current action within the configured limit; only the final version is sent to the GM model.
 
 ## Multiplayer
 
@@ -61,15 +61,15 @@ The GM can view player status. Mark a temporarily absent player Away; that playe
 
 ## Dice Flow
 
-Some actions resolve directly; others require a check. When a check is needed, DiceFrame pauses before narration and asks for a roll:
+Some actions resolve directly; others require a check. Players describe actions naturally and never need to type “check” or click a roll button. After the action batch closes, a separate GM adjudication phase reads every action and calls `dice_checks` with existing players, attributes/skills, and targets. The server rolls exactly once and the narration phase must follow that fixed result:
 
 1. A player submits an action.
-2. DiceFrame requests a check.
-3. The player or GM rolls.
-4. The result is attached to the pending action.
-5. The GM model continues with the known result.
+2. A solo action advances immediately; multiplayer advances when everyone acts or the GM forces it.
+3. The adjudication phase decides which actions warrant checks.
+4. The server rolls once and shows reveal cards in action order.
+5. The GM narrates from those immutable results.
 
-The GM can handle or force progression when a player cannot complete the flow.
+CoC failures that can spend Luck still pause for the owning player or GM to decide. That decision never rerolls the die.
 
 ## Reading State Changes
 
@@ -110,10 +110,12 @@ Open Settings → Plugins → Plugin Store. The store is an index: authors retai
 
 - Supported means the integration exists now. Partial means only the listed subset works. Reserved types cannot be installed from the store.
 - Source pinned means installation resolves the latest stable GitHub Release to an exact commit and checks the plugin ID, version, and permissions again. It is not a code-safety guarantee.
+
+The store prefers DiceFrame Hub for catalog metadata, review state, aggregate statistics, likes, ratings, and a sanitized README. If Hub is offline, DiceFrame uses its disk cache or the public registry mirrors, and local play remains available. Plugin packages are still downloaded directly from the author's repository; Hub does not proxy package bodies. Browsing the public catalog creates no installation identity. A local token is created only when an install event, like, or rating needs one. First start requires active acceptance of the Terms and acknowledgment of the Privacy Policy. Anonymous usage statistics are separate and off by default; heartbeats begin only after active opt-in and confirmation. The choice can be disabled or cleared in the final DiceFrame Hub and privacy section under Settings → Advanced. Heartbeats contain only the DiceFrame version, coarse operating system, and time bucket—not games, characters, plugin lists, model settings, logs, or game content.
 - `official`, `verified`, and `community` describe source/review level, not absolute safety. Install process plugins only from trusted authors.
 - A disabled Install button is accompanied by a reason. Bundled plugins update with DiceFrame; entries without a public repository or stable Release cannot be installed.
 - After installation, review permissions, enter the plugin's own settings, and enable it. QQ/NapCat still needs no manually entered DiceFrame Bot Token.
-- Declarative plugins may update automatically when their runtime type and effective permissions do not expand. Process plugins only notify and require confirmation; permission or runtime expansion also requires confirmation.
+- The store checks for plugin updates and notifies users; installing or updating requires manual confirmation. Process plugins only notify and require confirmation; permission or runtime expansion also requires confirmation.
 - Privately shared plugins should use a `.dfplugin` file produced by the packaging script. Select it under Local Install. After manually copying a plugin directory, use Rescan Local Plugins.
 - Chat presentation extensions may add commands or replace status, map, and other replies with custom text, images, or cards. If an extension fails, DiceFrame keeps using its built-in presentation; the extension cannot rewrite authoritative character state, rolls, or payment results.
 
@@ -134,7 +136,6 @@ The examples below use `@bot` for mentioning the Bot:
 @bot pay
 @bot confirm pay
 @bot reject pay
-@bot roll
 @bot I inspect the runes on the wall
 @bot advance
 @bot away
@@ -150,7 +151,6 @@ The examples below use `@bot` for mentioning the Bot:
 - `status`: show the claimed character summary.
 - `sense`: request character-private information, normally by direct message.
 - `pay`: view pending payments; use `confirm pay` or `reject pay` to decide.
-- `roll`: confirm a pending check.
 - `advance`: let the GM or an authorized account advance.
 - `away` / `back`: leave temporarily or resume participation.
 
@@ -162,7 +162,7 @@ Players may mention the Bot and send a natural-language action:
 @bot I circle behind the guard and look for the key on his belt
 ```
 
-If a check is required, the Bot asks for `@bot roll`. Otherwise DiceFrame progresses and sends the GM narration and recorded state changes back to the group.
+Chat and Web use the same adjudication and full-table/manual progression flow. When a check is needed, the server rolls automatically and the Bot sends a compact line such as `🎲 Character · Strength Check d20=… vs DC … → Success`, followed by GM narration and recorded state changes.
 
 ## Private Information
 

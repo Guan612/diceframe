@@ -32,6 +32,7 @@ _AI_EXACT_PATHS = frozenset({
     "/api/generate-text",
     "/api/test-connection",
     "/api/test-embedding",
+    "/api/assistant/chat",
 })
 _AI_GAME_SUFFIXES = (
     "/action",

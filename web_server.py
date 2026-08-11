@@ -5,6 +5,7 @@ import json
 import hmac
 import logging
 import os
+import secrets as secrets_module
 import sys
 from datetime import datetime, timezone
 
@@ -13,6 +14,7 @@ from aiohttp import web
 sys.path.insert(0, str(Path(__file__).parent))
 from src.common_factory import TRPGSubsystems, create_trpg_subsystems
 from src.llm.client import ProviderConfig
+from src.hub_client import HubClient
 from src.network_proxy import effective_proxy_url, env_proxy_url, is_supported_proxy_url, mask_proxy_url
 from src.plugin_host import PluginHost
 from src.plugin_host.package_limits import MAX_PLUGIN_PACKAGE_BYTES
@@ -39,6 +41,7 @@ from src.webui.config_update import (
 from src.webui.routes._common import _get_api, _require_confirmed_request
 from src.webui.routes.character_cards import register_character_cards
 from src.webui.routes.avatars import register_avatars
+from src.webui.routes.scene_images import register_scene_images
 from src.webui.routes.rules import register_rules
 from src.webui.routes.worlds import register_worlds
 from src.webui.routes.generation import register_generation
@@ -50,10 +53,15 @@ from src.webui.routes.pages import add_response_security_headers, register_pages
 from src.webui.login_audit import LOGIN_AUDIT_KEY, LoginAuditStore
 from src.webui.routes.bot import register_bot
 from src.webui.routes.plugins import register_plugins
+from src.webui.routes.announcements import register_announcements
+from src.webui.routes.hub import register_hub
+from src.webui.routes.legal import register_legal
+from src.webui.routes.assistant import register_assistant
 from src.webui.routes.tunnel import register_tunnel
 from src.webui.routes.system import register_system
 from src.webui.routes.updater import register_updater
 from src.webui.services import updater as updater_svc
+from src.webui.services import legal as legal_svc
 
 logger = logging.getLogger("trpg")
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
@@ -147,7 +155,7 @@ API_KEY = (os.getenv("TRPG_LLM_API_KEY")
 BASE_URL = (os.getenv("TRPG_LLM_BASE_URL")
             or saved.get("base_url", "https://api.deepseek.com/v1"))
 MODEL = (os.getenv("TRPG_LLM_MODEL")
-         or saved.get("model", "deepseek-v4-pro"))
+         or saved.get("model", "deepseek-v4-flash"))
 API_FORMAT = (os.getenv("TRPG_LLM_API_FORMAT")
               or saved.get("api_format", "openai"))
 PORT = int(os.getenv("TRPG_WEB_PORT") or saved.get("web_port", 18000))
@@ -251,6 +259,10 @@ STATE = {
     "proxy_enabled": PROXY_ENABLED,
     "proxy_url": PROXY_URL,
     "public_base_url": str(saved.get("public_base_url", "")),
+    "hub_telemetry_enabled": bool(saved.get("hub_telemetry_enabled", False)),
+    "hub_telemetry_choice_made": bool(saved.get("hub_telemetry_choice_made", False)),
+    **legal_svc.persisted_acceptance_state(saved),
+    "legal_privacy_acknowledged_version": saved.get("legal_privacy_acknowledged_version", ""),
 }
 
 ROOT = Path(__file__).parent
@@ -416,7 +428,7 @@ def _build_subsystems(
     )
 
 
-def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None = None) -> WebAPI:
+def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None = None, hub_client=None) -> WebAPI:
     runtime_config = STATE if config is None else config
     api = WebAPI(
         registry=subsystems.registry, lorebook=subsystems.lorebook_store,
@@ -426,9 +438,11 @@ def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None 
         character_gen_max_tokens=int(runtime_config.get("character_gen_max_tokens", 4096)),
         text_gen_max_tokens=int(runtime_config.get("text_gen_max_tokens", 1024)),
         plugin_host=plugin_host,
+        hub_client=hub_client,
     )
     # 配置状态引用就地更新，始终指向最新值（更新频道等运行时配置）
     api._config_state = STATE
+    api._content_cache_dir = DATA_DIR / "content-cache"
     # 持久化回调：service 层更新 public_base_url 后走标准写盘路径（见 services/tunnel.py）
     api._save_config = save_config
     return api
@@ -499,6 +513,18 @@ async def on_startup(app: web.Application) -> None:
     _ensure_bot_token()
     subsystems = _build_subsystems()
     app["subsystems"] = subsystems
+    hub_client = None
+    try:
+        legal_accepted = legal_svc.accepted(STATE)
+        hub_client = HubClient(
+            DATA_DIR,
+            telemetry_enabled=bool(STATE.get("hub_telemetry_enabled")) and legal_accepted,
+            telemetry_choice_made=bool(STATE.get("hub_telemetry_choice_made")) and legal_accepted,
+        )
+        await hub_client.start()
+    except ValueError as exc:
+        logger.warning("DiceFrame Hub 配置无效，已停用 Hub 接入：%s", exc)
+    app["hub_client"] = hub_client
     async def _on_plugin_stopped(plugin_id: str) -> None:
         # 插件被真正停止/卸载时，若它是当前隧道 publisher 则恢复 public_base_url（§3.5）。
         api = app.get("api")
@@ -507,7 +533,7 @@ async def on_startup(app: web.Application) -> None:
 
     plugin_host = PluginHost(DATA_DIR / "plugin-packages", DATA_DIR / "plugins", builtin_dir=ROOT / "plugins", base_env={
         "TRPG_API_BASE": f"http://127.0.0.1:{PORT}",
-    }, on_plugin_stopped=_on_plugin_stopped)
+    }, on_plugin_stopped=_on_plugin_stopped, hub_client=hub_client)
     # 启动时补迁：旧布局便携版根 app/plugins/ 里可能还有用户插件（更新器迁移由旧版本
     # 执行，覆盖不到本次升级），新版本首次启动时由自己补搬一次到 data/plugin-packages/。
     install_root = os.getenv("TRPG_INSTALL_ROOT", "").strip()
@@ -536,7 +562,7 @@ async def on_startup(app: web.Application) -> None:
             "blocked_users": STATE.get("napcat_blocked_users"), "block_official_bots": STATE.get("napcat_block_official_bots"),
         })
     app["plugin_host"] = plugin_host
-    app["api"] = _make_api(subsystems, plugin_host)
+    app["api"] = _make_api(subsystems, plugin_host, hub_client=hub_client)
     app["updater"] = updater_svc.UpdaterService(DATA_DIR, ROOT, plugin_host.mirrors if plugin_host else None)
     recovered = await subsystems.registry.recover_all()
     if recovered:
@@ -553,6 +579,9 @@ async def on_cleanup(app: web.Application) -> None:
     plugin_host = app.get("plugin_host")
     if plugin_host:
         await plugin_host.cleanup()
+    hub_client = app.get("hub_client")
+    if hub_client:
+        await hub_client.close()
     embed_task = app.get("_embedding_backfill_task")
     if embed_task:
         embed_task.cancel()
@@ -664,6 +693,11 @@ async def auth_middleware(request: web.Request, handler):
     # /api/config 返回公开配置（敏感字段已 mask），玩家无 access_token 也可读取
     if request.method == "GET" and request.path == "/api/config":
         return await handler(request)
+    # /api/announcements 返回公开公告，登录页横幅与未登录访客可读取
+    if request.method == "GET" and request.path == "/api/announcements":
+        return await handler(request)
+    if request.method == "GET" and request.path.startswith("/api/legal/"):
+        return await handler(request)
     # 启动器在更新切换期间没有用户令牌，只读取版本和进程号。
     if request.method == "GET" and request.path == "/api/system/update/health":
         return await handler(request)
@@ -735,9 +769,9 @@ def _share_player_user_id(request: web.Request) -> str:
         return uid or request.get("user_id", "")
     if len(parts) >= 4:
         tail = parts[3]
-        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "avatars"}:
+        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "avatars", "scene-image"}:
             return uid or request.get("user_id", "")
-        if request.method == "POST" and tail in {"players", "action", "sse-ticket", "avatars"}:
+        if request.method == "POST" and tail in {"players", "action", "sse-ticket", "avatars", "scene-image"}:
             return uid or request.get("user_id", "")
         if request.method == "PUT" and tail == "character":
             return uid or request.get("user_id", "")
@@ -1051,6 +1085,11 @@ app[LOGIN_AUDIT_KEY] = LoginAuditStore(DATA_DIR)
 app["connection_pool"] = ConnectionPool()
 app["sse_tickets"] = SseTicketStore()
 app["static_v2_dir"] = STATIC_V2_DIR
+app["runtime_control"] = {
+        "boot_id": secrets_module.token_hex(8),
+    "restart_requested": False,
+    "restart_task": None,
+}
 
 def register_routes(application: web.Application) -> None:
     """集中注册所有路由，按域分组。"""
@@ -1062,6 +1101,10 @@ def register_routes(application: web.Application) -> None:
     register_games(application)
     register_bot(application)
     register_plugins(application)
+    register_announcements(application)
+    register_hub(application)
+    register_legal(application)
+    register_assistant(application)
     register_tunnel(application)
     register_system(application)
     register_updater(application)
@@ -1073,6 +1116,8 @@ def register_routes(application: web.Application) -> None:
     register_character_cards(application)
     # character portraits
     register_avatars(application)
+    # adventure scene images
+    register_scene_images(application)
     # config / test
     application.router.add_get("/api/config", api_config_get)
     application.router.add_post("/api/config", api_config_post)
@@ -1095,3 +1140,6 @@ if __name__ == "__main__":
     if not API_KEY:
         print("请在 WebUI 设置页填写 API Key")
     web.run_app(app, host=HOST, port=PORT)
+    if app["runtime_control"]["restart_requested"]:
+        logger.info("DiceFrame 清理完成，正在重新启动")
+        os.execv(sys.executable, [sys.executable, *sys.argv])

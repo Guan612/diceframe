@@ -83,13 +83,23 @@ def _valid_public_url(url: str) -> str:
 
 
 def _commit_public_base_url(api: "WebAPI", url: str) -> None:
-    """走标准配置更新路径：校验 -> 同步内存 STATE -> 持久化 config.json。"""
+    """走标准配置更新路径，写盘失败时恢复内存与原配置。"""
     prepared = prepare_config_update(api._config_state, {"public_base_url": url})
     if prepared.error:
         raise ValueError(prepared.error)
+    previous = dict(api._config_state)
     api._config_state.clear()
     api._config_state.update(prepared.state)
-    api._save_config()
+    try:
+        api._save_config()
+    except Exception:
+        api._config_state.clear()
+        api._config_state.update(previous)
+        try:
+            api._save_config()
+        except Exception:
+            logger.exception("公网 URL 配置回滚写盘失败")
+        raise
 
 
 def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any]:
@@ -111,6 +121,7 @@ def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any
             raise ValueError(f"隧道已由插件 {current_publisher} 发布，需先停止后再发布")
     if "prev_url" not in state:
         state["prev_url"] = str(api._config_state.get("public_base_url") or "")
+    previous_public_url = str(api._config_state.get("public_base_url") or "")
     _commit_public_base_url(api, normalized)
     state.update({
         "publisher_plugin_id": plugin_id,
@@ -118,7 +129,14 @@ def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any
         "published_at": time.time(),
     })
     _record_event(state, "publish", plugin_id, normalized)
-    _write_state(state)
+    try:
+        _write_state(state)
+    except Exception:
+        try:
+            _commit_public_base_url(api, previous_public_url)
+        except Exception as rollback_error:
+            raise RuntimeError("隧道状态写入失败，且公网 URL 回滚失败") from rollback_error
+        raise
     logger.info("隧道已发布: plugin=%s url=%s", plugin_id, normalized)
     return {"ok": True, "public_base_url": normalized}
 
@@ -129,10 +147,18 @@ def release_tunnel_url(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
     if state.get("publisher_plugin_id") != plugin_id:
         return {"ok": True, "released": False}
     prev = str(state.get("prev_url") or "")
+    previous_public_url = str(api._config_state.get("public_base_url") or "")
     _commit_public_base_url(api, prev)
     _record_event(state, "release", plugin_id)
     state = {"publisher_plugin_id": "", "url": "", "prev_url": "", "events": state.get("events", [])}
-    _write_state(state)
+    try:
+        _write_state(state)
+    except Exception:
+        try:
+            _commit_public_base_url(api, previous_public_url)
+        except Exception as rollback_error:
+            raise RuntimeError("隧道状态清理失败，且公网 URL 回滚失败") from rollback_error
+        raise
     logger.info("隧道已释放: plugin=%s", plugin_id)
     return {"ok": True, "released": True, "restored": prev}
 

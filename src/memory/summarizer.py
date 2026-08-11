@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 
 from src.engine.game_instance import GameInstance
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.llm.parser import sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -95,6 +95,47 @@ New game log:
 {log_text}
 """
 
+_SUMMARY_PROMPT_NEW_JA = """あなたはゲームログの要約担当です。以下のゲームログを読み、ナレーションの要約と重要な事実のリストを生成してください。
+
+出力形式（厳密なJSON）：
+```json
+{{
+  "narrative": "流暢なナレーションの要約。最近起こった出来事を日本語で説明し、200文字以内に収める。",
+  "key_facts": [
+    {{"type": "タイプ(location_discovered/npc_status/item_acquired/decision_madeなど)", "content": "事実の説明"}}
+  ]
+}}
+```
+
+ゲームログ：
+{log_text}
+"""
+
+_SUMMARY_PROMPT_ROLLING_JA = """あなたはゲームログの要約担当です。以下の過去の要約と新しいゲームログを読み、統合したナレーションの要約と重要な事実のリストを生成してください。
+
+要件：
+- 過去の要約の重要な情報は新しい要約へ引き継ぎ、重要な筋書きを失わないこと
+- 新しく起きた出来事は過去の要約へ自然に繋がるようにすること
+- ナレーションの要約は250文字以内に収めること
+- key_facts は過去の要約で依然として有効な事実を残し、新しい事実を追加すること
+
+出力形式（厳密なJSON）：
+```json
+{{
+  "narrative": "統合後のナレーションの要約",
+  "key_facts": [
+    {{"type": "タイプ(location_discovered/npc_status/item_acquired/decision_madeなど)", "content": "事実の説明"}}
+  ]
+}}
+```
+
+過去の要約：
+{previous_summary}
+
+新しいゲームログ：
+{log_text}
+"""
+
 
 def build_summary_input(instance: GameInstance, last_n_rounds: int = 10) -> str:
     """从最近的日志中构建摘要输入。"""
@@ -128,12 +169,20 @@ async def summarize(instance: GameInstance, llm_client, system_prompt: str,
         if instance.summary else ""
     )
     if prev_narrative:
-        template = _SUMMARY_PROMPT_ROLLING_EN if is_english(instance.language) else _SUMMARY_PROMPT_ROLLING
+        template = localized_text(instance.language, {
+            "en": _SUMMARY_PROMPT_ROLLING_EN,
+            "zh-CN": _SUMMARY_PROMPT_ROLLING,
+            "ja": _SUMMARY_PROMPT_ROLLING_JA,
+        })
         prompt = template.format(
             previous_summary=prev_narrative, log_text=log_text,
         )
     else:
-        template = _SUMMARY_PROMPT_NEW_EN if is_english(instance.language) else _SUMMARY_PROMPT_NEW
+        template = localized_text(instance.language, {
+            "en": _SUMMARY_PROMPT_NEW_EN,
+            "zh-CN": _SUMMARY_PROMPT_NEW,
+            "ja": _SUMMARY_PROMPT_NEW_JA,
+        })
         prompt = template.format(log_text=log_text)
 
     try:

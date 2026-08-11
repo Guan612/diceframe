@@ -638,6 +638,26 @@ async def test_apply_state_update_creates_pending_payment(web_api):
     )
 
 
+@pytest.mark.asyncio
+async def test_apply_state_update_caps_loot_per_round(web_api):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    result = await api.create_game(
+        "template_world", "模板世界",
+        players=[{"character_name": "艾琳"}],
+    )
+    inst = registry.get(api._parse_key(result["game_key"]))
+    uid = next(iter(inst.players))
+
+    api._handler._apply_state_update(inst, {
+        "loot": [{"player": uid, "item": f"物品{i}"} for i in range(25)],
+    })
+
+    inventory = inst.players[uid]["character_sheet"]["inventory"]
+    names = {item["name"] for item in inventory}
+    assert {f"物品{i}" for i in range(20)} <= names
+    assert not names & {f"物品{i}" for i in range(20, 25)}
+
+
 def test_character_card_library_does_not_include_active_game_players(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     inst = registry.get_or_create(("web", "active_game", "bot"))
@@ -1019,6 +1039,10 @@ async def test_character_wizard_update_changes_display_name_and_sheet(web_api):
     assert inst.players[uid]["character_sheet"]["portrait"] == {
         "kind": "builtin", "id": "freeform_fantasy:3",
     }
+
+    cleared = await api.update_character(created["game_key"], uid, {"portrait": None})
+    assert cleared["ok"] is True
+    assert "portrait" not in inst.players[uid]["character_sheet"]
 
 
 @pytest.mark.asyncio
@@ -1453,3 +1477,39 @@ async def test_rollback_round_pops_last_log_entry_and_reports_empty(web_api):
     empty = await api.rollback_round(gk)
     assert empty["ok"] is False
     assert "没有可撤回" in empty["error"]
+
+
+@pytest.mark.asyncio
+async def test_create_game_room_password_tristate(web_api):
+    """房间密码三态（P1-A）：None+多人→生成随机密码回显；显式空串→开放；单人局不生成；太短→拒绝。"""
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    players = [{
+        "character_name": "勇者", "class": "战士",
+        "attributes": {"str": 14, "dex": 10, "con": 12, "int": 10, "wis": 10, "cha": 10},
+    }]
+
+    # 1) 多人局未声明密码 → 生成随机密码回显
+    r = await api.create_game("template_world", "多人加密", players=list(players), solo=False, room_password=None)
+    assert r["ok"] is True
+    assert r.get("generated_password"), "多人局未声明应生成随机密码"
+    inst = registry.get(api._parse_key(r["game_key"]))
+    assert inst.room_password == r["generated_password"]
+
+    # 2) 显式空串 → 开放房，不回显
+    r2 = await api.create_game("template_world", "开放房", players=list(players), solo=False, room_password="")
+    assert r2["ok"] is True
+    assert r2.get("generated_password") is None
+    inst2 = registry.get(api._parse_key(r2["game_key"]))
+    assert inst2.room_password == ""
+
+    # 3) 单人局未声明 → 不生成（solo 自玩无需密码）
+    r3 = await api.create_game("template_world", "单人局", players=list(players), solo=True, room_password=None)
+    assert r3["ok"] is True
+    assert r3.get("generated_password") is None
+    inst3 = registry.get(api._parse_key(r3["game_key"]))
+    assert inst3.room_password == ""
+
+    # 4) 太短 → 拒绝
+    r4 = await api.create_game("template_world", "弱密码", players=list(players), solo=False, room_password="ab")
+    assert r4.get("ok") is False
+    assert "至少 4 位" in r4.get("error", "")

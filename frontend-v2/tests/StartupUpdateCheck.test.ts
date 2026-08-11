@@ -60,7 +60,7 @@ describe('StartupUpdateCheck', () => {
     await router.push({ name: 'overview' })
     await router.isReady()
 
-    mount(StartupUpdateCheck, {
+    const wrapper = mount(StartupUpdateCheck, {
       global: { plugins: [i18n, router] },
     })
     await flushPromises()
@@ -77,6 +77,26 @@ describe('StartupUpdateCheck', () => {
       section: 'about',
       focus: 'update',
     })
+    expect(wrapper.emitted('settled')).toHaveLength(1)
+  })
+
+  it('settles immediately when no update is available', async () => {
+    mocks.checkForUpdates.mockResolvedValue({ ok: true, update_available: false })
+    const emptyView = defineComponent({ template: '<div />' })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/overview', name: 'overview', component: emptyView }],
+    })
+    await router.push({ name: 'overview' })
+    await router.isReady()
+
+    const wrapper = mount(StartupUpdateCheck, {
+      global: { plugins: [i18n, router] },
+    })
+    await flushPromises()
+
+    expect(mocks.info).not.toHaveBeenCalled()
+    expect(wrapper.emitted('settled')).toHaveLength(1)
   })
 
   it('closes an existing update dialog after entering the login page', async () => {

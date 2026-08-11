@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { i18n } from '../src/i18n'
 import GameTimeline from '../src/components/GameTimeline.vue'
 
@@ -61,6 +61,7 @@ describe('GameTimeline',()=>{
   })
 
   it('offers the check owner a direct Luck decision before narration',async()=>{
+    vi.useFakeTimers()
     i18n.global.locale.value = 'zh-CN'
     const check = {
       check_id:'luck-1', actor_uid:'p1', actor_name:'艾琳', label:'考古学检定',
@@ -72,9 +73,11 @@ describe('GameTimeline',()=>{
       pendingChecks:[check],currentUserId:'p1',
     }})
 
+    await vi.advanceTimersByTimeAsync(720)
     expect(wrapper.text()).toContain('消耗 2 点幸运 → 普通成功')
     expect(wrapper.text()).toContain('保留失败')
     await wrapper.get('.dice-tag-button').trigger('click')
     expect(wrapper.emitted('luck')?.[0]).toEqual([check,true])
+    vi.useRealTimers()
   })
 })

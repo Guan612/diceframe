@@ -1,0 +1,184 @@
+/* Lorebook: persistent character context beside a dense reference desk. */
+.lorebook-shell {
+  display: grid;
+  grid-template-columns: 278px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+/* 无角色栏（未进入存档或未选角色）时单列，避免 grid 只剩 278px 左列大片空白 */
+.lorebook-shell.no-rail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.lorebook-character-rail {
+  position: sticky;
+  top: 86px;
+  max-height: calc(100dvh - 105px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 30%, var(--df-border-soft));
+  border-radius: var(--df-radius-lg);
+  background: linear-gradient(180deg, var(--df-surface-1), var(--df-surface-2));
+  box-shadow: var(--df-shadow);
+}
+
+.lorebook-rail-label {
+  display: block;
+  padding: 4px 5px 10px;
+  color: var(--df-accent-strong);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.lorebook-character-rail .character {
+  padding: 12px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background:
+    linear-gradient(180deg, transparent, var(--df-surface-1) 42%),
+    var(--df-bg-ruins-image) center top / 100% auto no-repeat;
+}
+
+.lorebook-character-rail .character-profile {
+  padding-top: 55px;
+}
+
+.lorebook-character-rail .portrait-image {
+  width: 78px !important;
+  height: 94px !important;
+  border-radius: 7px;
+}
+
+.lorebook-workspace {
+  min-width: 0;
+}
+
+.lorebook-page .lore-world-bar {
+  grid-template-columns: minmax(125px, .35fr) minmax(260px, 1.2fr) auto auto;
+}
+
+.lorebook-page .lore-tools {
+  grid-template-columns: auto minmax(260px, 1fr) auto auto auto;
+}
+
+.lorebook-page .lore-categories {
+  display: grid;
+  gap: 10px;
+}
+
+.lorebook-page .lore-category-section {
+  overflow: hidden;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-1) 72%, transparent);
+}
+
+.lorebook-page .lore-category-head {
+  position: relative;
+  top: auto;
+  border-bottom: 1px solid var(--df-border-soft);
+}
+
+/* Logs: save index at left and a proper chronological document at right. */
+.reference-logs-page .logs-workspace {
+  grid-template-columns: 248px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 0;
+  padding: 9px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-lg);
+  background: color-mix(in srgb, var(--df-surface-1) 82%, transparent);
+  box-shadow: var(--df-shadow);
+}
+
+.reference-logs-page .log-index {
+  top: 86px;
+  display: flex;
+  min-height: min(720px, calc(100dvh - 106px));
+  flex-direction: column;
+  padding: 8px;
+  border: 0;
+  border-right: 1px solid var(--df-border-soft);
+  border-radius: calc(var(--df-radius-lg) - 4px) 0 0 calc(var(--df-radius-lg) - 4px);
+  box-shadow: none;
+}
+
+.reference-logs-page .log-campaign-card {
+  min-height: 220px;
+  padding: 114px 14px 14px;
+}
+
+.reference-logs-page .log-index-tabs button {
+  min-height: 46px;
+}
+
+.log-export {
+  width: 100%;
+  margin-top: auto;
+  border-color: color-mix(in srgb, var(--df-accent) 40%, var(--df-border-soft));
+  color: var(--df-accent-strong);
+}
+
+.log-mobile-tabs,
+.log-mobile-export {
+  display: none;
+}
+
+.reference-logs-page .logs-document {
+  padding: 0 12px 18px 19px;
+  background: transparent;
+}
+
+.logs-document-head {
+  min-height: 110px;
+  padding: 12px 0 17px;
+}
+
+.logs-document-head h1 {
+  font-size: clamp(26px, 2.8vw, 39px);
+}
+
+.reference-logs-page .log-toolbar {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--df-border-soft);
+}
+
+.reference-logs-page .log-reader {
+  position: relative;
+  padding-left: 28px;
+}
+
+.reference-logs-page .log-reader::before {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 8px;
+  width: 1px;
+  content: "";
+  background: linear-gradient(180deg, transparent, var(--df-accent) 5%, var(--df-border-soft) 90%, transparent);
+}
+
+.reference-logs-page .log-reader article::before {
+  position: absolute;
+  z-index: 2;
+  top: 17px;
+  left: -26px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--df-accent-strong);
+  border-radius: 50%;
+  content: "";
+  background: var(--df-canvas);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--df-accent) 10%, transparent);
+}
+
+.reference-logs-page .log-reader article h2 {
+  padding: 11px 17px;
+  font-size: 13px;
+}
+
+.reference-logs-page .log-entry-body {
+  padding: 14px 18px 17px;
+}

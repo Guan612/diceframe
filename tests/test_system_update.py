@@ -20,6 +20,14 @@ def test_is_newer_version_orders_prerelease_before_release():
     assert is_newer_version("1.2.0", "1.2.0-beta.1")
 
 
+def test_is_newer_version_orders_prerelease_identifiers():
+    assert is_newer_version("1.9.12-beta.3", "1.9.12-beta.2")
+    assert is_newer_version("1.9.12-rc.1", "1.9.12-beta.9")
+    assert is_newer_version("1.9.12-beta.2.1", "1.9.12-beta.2")
+    assert not is_newer_version("1.9.12-beta.2", "1.9.12-beta.3")
+    assert not is_newer_version("1.9.12+build.2", "1.9.12+build.1")
+
+
 def test_is_newer_version_returns_false_for_unknown_formats():
     assert not is_newer_version("nightly", "0.1.0")
     assert not is_newer_version("0.2.0", "local-dev")

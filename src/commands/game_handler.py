@@ -123,7 +123,7 @@ class GameHandler:
 
     async def create_game(
         self, game_key: tuple, world_id: str, world_name: str,
-        group_name: str, rule_id: str = "freeform_fantasy",
+        group_name: str, rule_id: str = "",
         seed_code: str = "", difficulty: str = "标准",
         language: str = DEFAULT_LANGUAGE,
     ) -> GameInstance:
@@ -137,6 +137,7 @@ class GameHandler:
             language=language,
         )
         if plugin_template:
+            instance.rule_id = str(rule_id or plugin_template.get("default_rule") or "freeform_fantasy")
             # 非 UI 建图路径（bot/种子码/API）可能尚未触发 list_worlds 同步，
             # 这里先幂等 sync 一遍，保证插件世界书已带标记灌入；再用带标记的 id
             # 覆盖 init_world_from_template 的无标记初始化，避免产生无法按插件清理的副本。
@@ -196,6 +197,10 @@ class GameHandler:
     def prepare_round_checks(self, instance: GameInstance) -> list[dict]:
         """结算本轮结构化检定；若可消耗幸运，叙事会等待玩家选择。"""
         return self._round_processor.prepare_round_checks(instance)
+
+    async def prepare_round_checks_ai(self, instance: GameInstance) -> list[dict]:
+        """由模型工具规划并结算本轮检定。"""
+        return await self._round_processor.prepare_round_checks_ai(instance)
 
     async def _process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """兼容旧内部调用；实际逻辑已拆到 RoundProcessor。"""

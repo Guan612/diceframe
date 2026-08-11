@@ -4,6 +4,7 @@
   "race": "Human",
   "class": "Scout",
   "description": "A ready-to-import character template.",
+  "portrait": {"kind": "builtin", "id": "freeform_fantasy:0"},
   "attributes": {"str": 9, "dex": 15, "con": 11, "int": 12, "wis": 14, "cha": 10},
   "skills": [
     {"name": "Notice", "value": 3},

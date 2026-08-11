@@ -2,6 +2,9 @@
 
 import pytest
 from src.llm.context_builder import (
+    _INVENTORY_STATE_LIMIT,
+    _KEY_ITEMS_STATE_LIMIT,
+    _compact_state_view,
     _detect_max_chars, _estimate_tokens, _truncate, _format_history, build_context,
 )
 
@@ -45,6 +48,39 @@ class TestTruncate:
         result = _truncate("very long text that exceeds limits", 15)
         assert len(result) <= 15
         assert result.endswith("...")
+
+
+class TestCompactStateView:
+    def test_compacts_inventory_and_key_items_but_keeps_equipment(self):
+        state = {"players": {"u1": {"character_sheet": {
+            "equipment": [{"name": "铁剑"}],
+            "inventory": [{"name": f"物品{i}", "qty": 1} for i in range(30)],
+            "key_items": [{"name": f"钥匙{i}"} for i in range(20)],
+        }}}}
+
+        _compact_state_view(state)
+
+        sheet = state["players"]["u1"]["character_sheet"]
+        assert len(sheet["inventory"]) == _INVENTORY_STATE_LIMIT
+        assert sheet["inventory"][-1]["name"] == "物品29"
+        assert "其余未列出" in sheet["inventory_note"]
+        assert len(sheet["key_items"]) == _KEY_ITEMS_STATE_LIMIT
+        assert sheet["key_items"][-1]["name"] == "钥匙19"
+        assert "其余未列出" in sheet["key_items_note"]
+        assert sheet["equipment"] == [{"name": "铁剑"}]
+
+    def test_small_lists_are_counted_but_not_truncated(self):
+        state = {"players": {"u1": {"character_sheet": {
+            "inventory": [{"name": "火把", "qty": 1}],
+            "key_items": [],
+        }}}}
+
+        _compact_state_view(state)
+
+        sheet = state["players"]["u1"]["character_sheet"]
+        assert sheet["inventory"] == [{"name": "火把", "qty": 1}]
+        assert sheet["inventory_note"] == "共 1 件，列出最近 1 件"
+        assert "key_items_note" not in sheet
 
 
 class TestFormatHistory:

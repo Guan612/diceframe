@@ -10,7 +10,7 @@
 
 <p align="center"><a href="https://diceframe.com">官方网站</a></p>
 
-![DiceFrame WebUI preview](docs/assets/diceframe-readme-hero.png)
+![DiceFrame WebUI preview](docs/assets/diceframe-readme-hero.jpg)
 
 DiceFrame 是一个可以自己部署的 **ai跑团引擎**，支持 **DND/COC/自定义规则**，**多人 WebUI**。
 
@@ -20,7 +20,7 @@ DiceFrame 是一个可以自己部署的 **ai跑团引擎**，支持 **DND/COC/�
 
 - 一个人试跑世界观，看看一个设定能不能玩起来。
 - 小团在浏览器里联机，由一个人当 GM 管理入口和节奏。
-- 群聊里跑团，玩家用 `@bot` 提交行动、查状态、掷骰。
+- 群聊里跑团，玩家用 `@bot` 提交行动、查状态；需要检定时系统自动判断并掷骰。
 - 自己改规则、世界书和角色模板，做一套私人跑团工具。
 
 当前版本仍处于早期发布阶段。功能已经能跑，但接口、存档结构和文档还会继续整理。
@@ -28,8 +28,6 @@ DiceFrame 是一个可以自己部署的 **ai跑团引擎**，支持 **DND/COC/�
 ## 交流与反馈
 
 问题反馈和改进建议请优先通过 [GitHub Issues](https://github.com/diceframe/diceframe/issues) 提交，代码贡献欢迎发起 PR。
-
-QQ 交流群：1060613588
 
 ## 功能概览
 
@@ -39,7 +37,7 @@ QQ 交流群：1060613588
 - 世界书：NPC、地点、物品、事件、谜题、势力等条目，按关键词注入上下文。
 - 记忆与摘要：长团会压缩历史，也可以启用 embedding 做语义召回。
 - AI 生成：世界、规则、角色、世界书条目都可以由模型辅助生成。
-- QQ / [NapCat](https://github.com/NapNeko/NapCat) 插件：群聊绑定网页对局，支持行动、状态、前情、地图、感知、支付、掷骰。
+- QQ / [NapCat](https://github.com/NapNeko/NapCat) 插件：群聊绑定网页对局，支持行动、状态、前情、地图、感知、支付；检定由系统自动判断并掷骰。
 - 应用更新：便携版支持旁路安装、健康检查和失败回滚；源码、Git、Docker 按安装方式给出安全更新流程。
 - Docker：提供 Linux/Docker 部署入口，运行数据挂载到 `data/`。
 
@@ -131,7 +129,7 @@ Windows 下也可以双击 `web_ui.bat` 启动；它会检查依赖，并在缺�
 5. 选择规则和难度。
 6. 创建角色，或用 AI 生成一个角色草稿后再手动改。
 7. 进入“游玩”，输入角色行动。
-8. 如果行动需要检定，先掷骰，再让 GM 继续叙事。
+8. 行动需要检定时，系统会自动判断并只掷一次骰，随后 GM 继续叙事。
 
 多人模式下，GM 创建游戏后复制邀请链接给其他玩家。玩家加入并认领角色后，每轮提交自己的行动；所有活跃玩家都提交后，或 GM 强制推进后，进入下一段叙事。
 
@@ -172,12 +170,11 @@ Bot 会跟随绑定对局的语言显示帮助和主要操作提示；中文与�
 - `@bot 感知`：私聊查看角色专属感知。
 - `@bot 支付`：查看待确认支付列表。
 - `@bot 确认支付` / `@bot 拒绝支付`：处理付款。
-- `@bot 掷骰`：确认需要骰子的行动。
 - `@bot 推进`：GM 强制推进当前回合。
 - `@bot 暂离` / `@bot 回来`：临时下线不阻塞回合。
 - `@bot <自然语言行动>`：提交角色行动。
 
-Bot 不直接读写存档，只通过 Web 服务的 HTTP API 工作。插件商店从作者自己的 GitHub 仓库解析正式 Release；安全的声明式更新可自动安装，进程型或扩权更新需要确认。本地和私下分享使用 `.dfplugin`。插件开发说明见 [docs/PLUGIN_DEVELOPMENT_CN.md](docs/PLUGIN_DEVELOPMENT_CN.md)，投稿和审核边界见 [docs/PLUGIN_REGISTRY_CN.md](docs/PLUGIN_REGISTRY_CN.md)。示例插件在 `plugins/examples/`，包括内容包、主题、可调用工具和 Bot Bridge 命令/展示扩展；可用 `python scripts\package_plugin.py plugins\examples\bridge-customizer --overwrite` 打包测试。
+Bot 不直接读写存档，只通过 Web 服务的 HTTP API 工作。插件商店优先从 DiceFrame Hub 读取审核状态、统计与详情，Hub 不可用时自动降级到本地缓存和公开索引镜像；插件包仍直接从作者自己的 GitHub 正式 Release 固定到精确提交下载，Hub 不代理包体。商店检测到插件新版本时会提示，安装与更新均由用户手动确认；进程型或扩权更新始终需要确认。本地和私下分享使用 `.dfplugin`。匿名使用统计默认关闭，可在“设置 → 高级 → DiceFrame Hub 与隐私”中开启、关闭或清除假名化安装身份；游戏、角色、插件列表、模型配置和正文不会作为心跳发送。开发时可用 `DICEFRAME_HUB_URL=http://127.0.0.1:18080` 指向本机 Hub，非本机地址必须使用 HTTPS。插件开发说明见 [docs/PLUGIN_DEVELOPMENT_CN.md](docs/PLUGIN_DEVELOPMENT_CN.md)，投稿和审核边界见 [docs/PLUGIN_REGISTRY_CN.md](docs/PLUGIN_REGISTRY_CN.md)。示例插件在 `plugins/examples/`，包括内容包、主题、可调用工具和 Bot Bridge 命令/展示扩展；可用 `python scripts\package_plugin.py plugins\examples\bridge-customizer --overwrite` 打包测试。
 
 ## 文档
 

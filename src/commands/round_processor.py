@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any
@@ -20,6 +21,7 @@ from src.commands.round_effects import (
     store_private_messages,
     update_quick_actions,
 )
+from src.commands.check_planner import plan_round_checks
 from src.commands.round_llm import (
     append_multistep_analysis,
     apply_parsed_data_to_response,
@@ -84,7 +86,7 @@ class RoundProcessor:
         self._pending_summary_tasks: set = set()
 
     def prepare_round_checks(self, instance: GameInstance) -> list[dict]:
-        """在生成叙事前结算骰值，并标记需要玩家决定的幸运选项。"""
+        """离线兼容路径：模型工具不可用时按旧规则意图结算检定。"""
         if instance.round_checks_prepared:
             return list(instance.last_checks)
         if instance.state != GameState.ACTIVE_JUDGMENT:
@@ -107,19 +109,106 @@ class RoundProcessor:
         instance.complete_round_check_preparation()
         return list(instance.last_checks)
 
+    async def prepare_round_checks_ai(self, instance: GameInstance) -> list[dict]:
+        """阶段 1：由 GM 模型统一规划检定，再由服务端一次性掷骰结算。"""
+        if instance.round_checks_prepared:
+            return list(instance.last_checks)
+        if instance.state != GameState.ACTIVE_JUDGMENT:
+            return []
+        actions_text = collect_actions_text(instance)
+        rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
+        instance.reset_round_checks()
+        try:
+            plan_started = time.perf_counter()
+            planned, metadata = await plan_round_checks(instance, rule_ctx.rule, self.llm_client)
+            logger.info(
+                "检定规划: 完成 (round=%d, 耗时=%dms)",
+                instance.round_number,
+                int((time.perf_counter() - plan_started) * 1000),
+            )
+            if not metadata.get("available"):
+                logger.warning("模型工具不可用，进入离线检定兼容路径: %s", instance.game_key)
+                return self.prepare_round_checks(instance)
+            for action, request in planned:
+                action["check_request"] = request
+            if not metadata.get("skipped"):
+                instance.record_llm_usage(int(metadata.get("total_tokens", 0) or 0), calls=1)
+            errors = metadata.get("errors") or []
+            if errors:
+                logger.warning("部分 AI 检定参数被拒绝: %s", "; ".join(str(item) for item in errors))
+            build_dice_constraint_block(
+                instance,
+                actions_text,
+                rule_ctx.rule,
+                rule_ctx.dice_system,
+                self._dice,
+                planned_only=True,
+            )
+        except Exception:
+            logger.exception("AI 检定规划失败，进入离线检定兼容路径: %s", instance.game_key)
+            return self.prepare_round_checks(instance)
+        for check in instance.last_checks:
+            if not check.get("check_id"):
+                check["check_id"] = uuid.uuid4().hex
+            if check.get("luck_spend_available"):
+                check["luck_decision"] = "pending"
+        instance.complete_round_check_preparation()
+        return list(instance.last_checks)
+
     async def process_round(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         instance = self.registry.get(instance.game_key)
         if not instance or instance.state != GameState.ACTIVE_JUDGMENT:
             return "", None
-        self.prepare_round_checks(instance)
+        await self.prepare_round_checks_ai(instance)
         if instance.pending_luck_checks():
             logger.info("等待幸运选择，暂不生成叙事: %s", instance.game_key)
+            self._schedule_luck_timeouts(instance)
             return "", None
         if instance._process_lock.locked():
             logger.warning("process_round 已在处理中，跳过并发调用: %s", instance.game_key)
             return "", None
         async with instance._process_lock:
             return await self.process_round_impl(instance, on_delta=on_delta, on_reset=on_reset)
+
+    def _schedule_luck_timeouts(self, instance: GameInstance) -> None:
+        """为每条 pending 幸运检定挂独立超时；到点只 decline 该条，全清则重新推进回合。
+
+        每玩家每轮只有一条主检定，故 per-check 即 per-player。已在计时的不重复挂。
+        luck_timeout_seconds=0 时禁用（异步局可设 0 让幸运选择无限等待）。
+        """
+        timeout = int(getattr(instance, "luck_timeout_seconds", 60) or 0)
+        if timeout <= 0:
+            return
+        for check in instance.pending_luck_checks():
+            check_id = str(check.get("check_id") or "")
+            if not check_id:
+                continue
+            existing = instance._luck_timers.get(check_id)
+            if existing and not existing.done():
+                continue
+            task = asyncio.create_task(self._luck_timeout(instance.game_key, check_id, timeout))
+            instance._luck_timers[check_id] = task
+
+    async def _luck_timeout(self, game_key, check_id: str, timeout: int) -> None:
+        """单条幸运检定的超时回调：到点按失败继续，若是最后一条则重新生成叙事。"""
+        try:
+            await asyncio.sleep(timeout)
+            instance = self.registry.get(game_key)
+            if not instance:
+                return
+            result = await instance.system_decline_luck(check_id)
+            if not result.get("ok"):
+                return  # 玩家已手动决定，或检定已过期
+            await self.registry.save(instance)
+            if result.get("declined_all") and instance.state == GameState.ACTIVE_JUDGMENT:
+                logger.info("幸运超时全部决定，继续生成叙事: %s", game_key)
+                await self.process_round(instance)
+        except Exception:
+            logger.exception("幸运超时处理失败: %s check=%s", game_key, check_id)
+        finally:
+            inst = self.registry.get(game_key)
+            if inst is not None:
+                inst._luck_timers.pop(check_id, None)
 
     async def _summarize_background(self, instance: GameInstance, gm_prompt: Any, round_number: int) -> None:
         """后台执行摘要压缩，不阻塞回合返回。
@@ -144,6 +233,8 @@ class RoundProcessor:
 
     async def process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """实际的判定处理逻辑。"""
+        if not instance.round_checks_prepared:
+            await self.prepare_round_checks_ai(instance)
         # 只保留最近一轮的短期展示状态，避免旧提示或战斗结果常驻。
         instance.begin_round_processing()
 
@@ -164,12 +255,7 @@ class RoundProcessor:
         world_data = rule_ctx.world_data
         rule = rule_ctx.rule
 
-        if instance.round_checks_prepared:
-            dice_block = format_check_results_constraint(instance, list(instance.last_checks))
-        else:
-            instance.reset_round_checks()
-            dice_block = build_dice_constraint_block(instance, actions_text, rule, dice_system, self._dice)
-            instance.complete_round_check_preparation()
+        dice_block = format_check_results_constraint(instance, list(instance.last_checks))
         if dice_block:
             actions_text += dice_block
 

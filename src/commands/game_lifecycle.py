@@ -16,7 +16,7 @@ from src.commands.tag_json import extract_narration_from_response
 from src.commands.tag_summary import summarize_tags
 from src.engine.character_utils import reset_character_for_restart
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
-from src.engine.language import DEFAULT_LANGUAGE, is_english, normalize_language
+from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -62,6 +62,7 @@ class GameLifecycle:
         world_description = world_data.get("description", "")
         world_setting = world_data.get("world_setting", "")
         starter_scene = world_data.get("starter_scene", "")
+        sandbox_world = bool(world_data.get("sandbox"))
         player_lines = []
         for pdata in instance.players.values():
             cs = pdata.get("character_sheet", {})
@@ -71,20 +72,57 @@ class GameLifecycle:
                 f"；背景：{cs.get('background', '') or '未填写'}"
             )
         players_text = "\n".join(player_lines) if player_lines else "尚未创建角色"
-        if is_english(instance.language):
-            opening_instruction = (
-                "The game has just started. As GM, strictly follow the world setting, era, "
-                "location, and genre above. Describe the opening scene, introduce the "
-                "current environment, and make clear where the player characters are. "
-                "Do not switch to another genre, city, or era without cause.\n\n"
-                "Write about 120-180 English words for the opening scene and naturally "
-                "mention the player character names."
+        if sandbox_world:
+            opening_instruction = localized_text(
+                instance.language,
+                {
+                    "en": (
+                        "This is an intentionally blank freeform sandbox with no preset canon, era, "
+                        "location, factions, or NPCs. Use only the player character names and backgrounds "
+                        "to establish a minimal opening situation, and leave room for the players to define "
+                        "the world through play. Do not assume a tavern, medieval fantasy, or any other genre "
+                        "unless a character concept establishes it.\n\n"
+                        "Write a concise 100-150 word opening that offers an immediate choice."
+                    ),
+                    "zh-CN": (
+                        "这是一个有意保持空白的自由沙盒，没有预设时代、地点、阵营、NPC 或固定世界观。"
+                        "只根据玩家已经填写的角色姓名与背景建立最少的开场事实，并允许玩家在行动中继续定义世界。"
+                        "除非角色设定明确提到，否则不得默认套用酒馆、中世纪奇幻或其他固定题材。"
+                        "\n\n请用 100 至 150 字给出一个简洁、可立即行动的开场。"
+                    ),
+                    "ja": (
+                        "これは意図的に空白のフリーフォームサンドボックスで、事前設定された世界観・時代・"
+                        "場所・派閥・NPC はない。プレイヤーが入力したキャラクター名と背景だけを使って、"
+                        "最小限のオープニング状況を構築し、プレイを通じて世界を定義していく余地を残すこと。"
+                        "キャラクターコンセプトで明示されない限り、酒場や中世ファンタジーなどのジャンルを"
+                        "勝手に想定しない。\n\n簡潔な 100〜150 字の、すぐ行動できるオープニングを書くこと。"
+                    ),
+                },
             )
         else:
-            opening_instruction = (
-                "游戏刚刚开始，请作为 GM 严格沿用上面的世界设定、时代、地点和题材，"
-                "描述开场场景，介绍当前环境和玩家所在的位置。不得无端切换到其他题材、城市或时代。"
-                "\n\n请用 150 字左右描述开场场景，并自然点出玩家角色名。"
+            opening_instruction = localized_text(
+                instance.language,
+                {
+                    "en": (
+                        "The game has just started. As GM, strictly follow the world setting, era, "
+                        "location, and genre above. Describe the opening scene, introduce the "
+                        "current environment, and make clear where the player characters are. "
+                        "Do not switch to another genre, city, or era without cause.\n\n"
+                        "Write about 120-180 English words for the opening scene and naturally "
+                        "mention the player character names."
+                    ),
+                    "zh-CN": (
+                        "游戏刚刚开始，请作为 GM 严格沿用上面的世界设定、时代、地点和题材，"
+                        "描述开场场景，介绍当前环境和玩家所在的位置。不得无端切换到其他题材、城市或时代。"
+                        "\n\n请用 150 字左右描述开场场景，并自然点出玩家角色名。"
+                    ),
+                    "ja": (
+                        "ゲームは始まったばかり。GM として上記の世界設定・時代・場所・ジャンルを厳密に守り、"
+                        "オープニングシーンを描写し、現在の環境を紹介し、プレイヤーキャラクターの位置を明確にすること。"
+                        "理由なく別のジャンル・都市・時代に切り替えてはならない。\n\n"
+                        "120〜180 語程度のオープニングシーンを書き、プレイヤーキャラクター名を自然に言及すること。"
+                    ),
+                },
             )
         welcome_context = (
             f"{gm_prompt}\n\n"
@@ -132,7 +170,10 @@ class GameLifecycle:
         if start_data.get("quick_actions"):
             instance.set_quick_actions(start_data["quick_actions"])
         scene = (start_data.get("state_update") or {}).get("scene_change", "")
-        start_label = "Game Start" if is_english(getattr(instance, "language", "")) else "游戏开始"
+        start_label = localized_text(
+            getattr(instance, "language", ""),
+            {"en": "Game Start", "zh-CN": "游戏开始", "ja": "ゲーム開始"},
+        )
         instance.set_scene(scene or start_label)
         instance.record_llm_usage(response.total_tokens)
         instance.append_log_entry({
@@ -162,25 +203,37 @@ class GameLifecycle:
             for e in recent_log
         )
 
-        if is_english(instance.language):
-            resume_prompt = (
-                "You are the GM of a TRPG game that has just resumed from pause. "
-                "Write a brief 'Previously on...' continuation in English, under 80 words. "
-                "Summarize the latest events and naturally lead into the current scene.\n\n"
-                f"Recent log:\n{history_text}\n\n"
-                f"Current scene: {instance.scene}\n"
-                f"Alive players: {', '.join(instance.alive_players) if instance.alive_players else 'none'}\n\n"
-                "Output narration only, without a JSON block."
-            )
-        else:
-            resume_prompt = (
-                f"你是 TRPG 的 GM，游戏刚刚从暂停中恢复。请生成一段不超过100字的「上回说到」续接叙事，"
-                f"概括最近发生的事情并自然推进到当前场景。\n\n"
-                f"最近日志：\n{history_text}\n\n"
-                f"当前场景：{instance.scene}\n"
-                f"存活玩家：{', '.join(instance.alive_players) if instance.alive_players else '无'}\n\n"
-                f"请直接输出叙事文本（不要 JSON 块）。"
-            )
+        resume_prompt = localized_text(
+            instance.language,
+            {
+                "en": (
+                    "You are the GM of a TRPG game that has just resumed from pause. "
+                    "Write a brief 'Previously on...' continuation in English, under 80 words. "
+                    "Summarize the latest events and naturally lead into the current scene.\n\n"
+                    f"Recent log:\n{history_text}\n\n"
+                    f"Current scene: {instance.scene}\n"
+                    f"Alive players: {', '.join(instance.alive_players) if instance.alive_players else 'none'}\n\n"
+                    "Output narration only, without a JSON block."
+                ),
+                "zh-CN": (
+                    f"你是 TRPG 的 GM，游戏刚刚从暂停中恢复。请生成一段不超过100字的「上回说到」续接叙事，"
+                    f"概括最近发生的事情并自然推进到当前场景。\n\n"
+                    f"最近日志：\n{history_text}\n\n"
+                    f"当前场景：{instance.scene}\n"
+                    f"存活玩家：{', '.join(instance.alive_players) if instance.alive_players else '无'}\n\n"
+                    f"请直接输出叙事文本（不要 JSON 块）。"
+                ),
+                "ja": (
+                    "あなたは TRPG の GM。ゲームは一時停止から再開したばかり。"
+                    "「これまでのあらすじ」として、80 語以内の日本語の続きのナレーションを書くこと。"
+                    "直近の出来事をまとめ、現在のシーンへ自然につなぐこと。\n\n"
+                    f"最近のログ：\n{history_text}\n\n"
+                    f"現在のシーン：{instance.scene}\n"
+                    f"生存プレイヤー：{', '.join(instance.alive_players) if instance.alive_players else 'なし'}\n\n"
+                    "ナレーションのみを出力し、JSON ブロックを付けないこと。"
+                ),
+            },
+        )
 
         try:
             response = await self.llm_client.call(
@@ -192,10 +245,13 @@ class GameLifecycle:
             resume_narration = sanitize_narration(response.narration or response.content)
         except Exception:
             logger.exception("续接叙事生成失败")
-            resume_narration = (
-                f"The GM is back online. Current scene: {instance.scene}. Continue when ready."
-                if is_english(instance.language)
-                else f"GM 已重新上线。当前场景：{instance.scene}。输入 /go 继续冒险。"
+            resume_narration = localized_text(
+                instance.language,
+                {
+                    "en": f"The GM is back online. Current scene: {instance.scene}. Continue when ready.",
+                    "zh-CN": f"GM 已重新上线。当前场景：{instance.scene}。输入 /go 继续冒险。",
+                    "ja": f"GM は再起動した。現在のシーン：{instance.scene}。/go で冒険を続行。",
+                },
             )
 
         await instance.start_round()

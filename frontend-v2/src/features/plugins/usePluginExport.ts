@@ -4,6 +4,7 @@ import { pluginApi } from '@/api/plugins'
 import { useLocale } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
 import type { CharacterCard, RuleSummary, WorldListResponse } from '@/api/types'
+import { uploadSceneImage } from '@/api/sceneImages'
 
 export function usePluginExport(busy: Ref<string>) {
   const toast = useToast()
@@ -19,6 +20,10 @@ export function usePluginExport(busy: Ref<string>) {
   const selectedWorldId = ref('')
   const selectedRuleId = ref('')
   const selectedCardIds = ref<string[]>([])
+  const includePortraits = ref(true)
+  const includeSceneImages = ref(true)
+  const worldSceneImageFile = ref<File | null>(null)
+  const ruleSceneImageFile = ref<File | null>(null)
 
   const worldOptions = computed(() => (worlds.value || []).map(world => {
     const id = String(world?.id || world?.world_id || '')
@@ -66,6 +71,12 @@ export function usePluginExport(busy: Ref<string>) {
     }
     busy.value = 'export-pack'
     try {
+      const [worldSceneImage, ruleSceneImage] = includeSceneImages.value
+        ? await Promise.all([
+          selectedWorldId.value && worldSceneImageFile.value ? uploadSceneImage(worldSceneImageFile.value) : undefined,
+          selectedRuleId.value && ruleSceneImageFile.value ? uploadSceneImage(ruleSceneImageFile.value) : undefined,
+        ])
+        : [undefined, undefined]
       const response = await pluginApi.exportContent({
         plugin_id: packId.value.trim(),
         name: packName.value.trim(),
@@ -75,6 +86,10 @@ export function usePluginExport(busy: Ref<string>) {
         card_ids: selectedCardIds.value,
         rule_id: selectedRuleId.value,
         flat,
+        include_portraits: includePortraits.value,
+        include_scene_images: includeSceneImages.value,
+        world_scene_image: worldSceneImage,
+        rule_scene_image: ruleSceneImage,
       })
       const blob = await response.blob()
       const disposition = response.headers.get('Content-Disposition') || ''
@@ -98,6 +113,8 @@ export function usePluginExport(busy: Ref<string>) {
     worlds, cards, rules, loading,
     packId, packName, packVersion, packDescription,
     selectedWorldId, selectedRuleId, selectedCardIds,
+    includePortraits,
+    includeSceneImages, worldSceneImageFile, ruleSceneImageFile,
     worldOptions, ruleOptions, cardOptions,
     loadAuthorData, exportPack,
   }

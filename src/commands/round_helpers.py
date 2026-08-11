@@ -7,20 +7,44 @@ import re
 from src.engine.constants import COMBAT_INTENT_KEYWORDS
 from src.engine.game_instance import GameInstance
 
+_DECISION_KEYWORDS = ("是否", "选择", "赌上", "决定", "要么")
+
 
 def should_multi_step(instance: GameInstance, actions_text: str) -> bool:
-    """判断是否需要多步推理（仅 WebUI 模式）。"""
+    """判断是否需要多步推理（仅 WebUI 模式）。
+
+    多步分析只允许由“当前”确实存在的复杂条件触发；累计的历史 NPC 数
+    （instance.npcs 包含全部历史 NPC）不代表当前局势复杂，不能据此增加模型调用。
+    """
     if instance.entry_point != "web":
         return False
-    decision_keywords = ("是否", "选择", "赌上", "决定", "要么")
     if instance.puzzle_manager and instance.puzzle_manager.get_active_puzzles():
         return True
     if any(kw in actions_text for kw in COMBAT_INTENT_KEYWORDS):
         return True
-    if len(instance.npcs) >= 4:
+    if any(kw in actions_text for kw in _DECISION_KEYWORDS):
         return True
-    if any(kw in actions_text for kw in decision_keywords):
-        return True
+    return _current_scene_has_multiple_npcs(instance)
+
+
+def _current_scene_has_multiple_npcs(instance: GameInstance) -> bool:
+    """当前场景描述中出现 ≥2 名已注册 NPC 的名字时，视为当前场景多名活跃 NPC。
+
+    用当前场景文本而非累计 NPC 总数，避免历史 NPC 堆积触发多余的局势分析。
+    名字长度不足 2 的单字名称容易与场景文本误匹配，不予计数。
+    """
+    scene_text = str(getattr(instance, "scene", "") or "")
+    if not scene_text:
+        return False
+    present = 0
+    for key, npc in instance.npcs.items():
+        name = str(npc.get("character_name") or npc.get("name") or key or "").strip()
+        if len(name) < 2:
+            continue
+        if name in scene_text:
+            present += 1
+            if present >= 2:
+                return True
     return False
 
 

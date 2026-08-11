@@ -2,6 +2,7 @@
   "extends": "intents_base",
   "rule_version": "1.2",
   "rule_id": "freeform_coc",
+  "scene_image": {"kind": "builtin", "id": "freeform_coc"},
   "rule_name": "CoC 7e 调查恐怖轻量规则",
   "description": "以 Call of Cthulhu 7版为蓝本的调查恐怖轻量规则，使用 d100 百分制属性、技能、SAN、幸运和推动检定；适合叙事调查，不承诺完整规则书复刻。",
   "mechanics": "coc7e_core",

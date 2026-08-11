@@ -11,6 +11,7 @@ from src.engine.combat import AttackResult, resolve_attack
 from src.engine.constants import WEAPON_DAMAGE
 from src.engine.dice import roll_initiative
 from src.engine.game_instance import GameInstance
+from src.engine.language import localized_text
 
 logger = logging.getLogger("trpg")
 
@@ -118,20 +119,41 @@ class CombatResolver:
         if not results:
             return ""
 
-        lines = ["【系统战斗结算·必须遵循】"]
+        lines = [localized_text(instance.language, {
+            "zh-CN": "【系统战斗结算·必须遵循】",
+            "en": "[System Combat Resolution - Must Follow]",
+            "ja": "【システム戦闘結算・必ず従うこと】",
+        })]
         for attacker_name, weapon_name, result in results:
-            lines.append(f"{attacker_name}持{weapon_name}攻击{target_name}")
+            lines.append(localized_text(instance.language, {
+                "zh-CN": f"{attacker_name}持{weapon_name}攻击{target_name}",
+                "en": f"{attacker_name} attacks {target_name} with {weapon_name}",
+                "ja": f"{attacker_name}は{weapon_name}で{target_name}を攻撃した",
+            }))
             if combat_model == "hp_based" and result.dice:
-                lines.append(
-                    f"  d20={result.dice.natural} → "
-                    f"{'命中' if result.damage > 0 else '未命中'}, 伤害={result.damage}"
-                )
+                lines.append(localized_text(instance.language, {
+                    "zh-CN": f"  d20={result.dice.natural} → {'命中' if result.damage > 0 else '未命中'}, 伤害={result.damage}",
+                    "en": f"  d20={result.dice.natural} → {'hit' if result.damage > 0 else 'miss'}, damage={result.damage}",
+                    "ja": f"  d20={result.dice.natural} → {'命中' if result.damage > 0 else '外れ'}, ダメージ={result.damage}",
+                }))
             else:
-                lines.append(f"  伤害={result.damage}")
+                lines.append(localized_text(instance.language, {
+                    "zh-CN": f"  伤害={result.damage}",
+                    "en": f"  damage={result.damage}",
+                    "ja": f"  ダメージ={result.damage}",
+                }))
             if result.dice and result.dice.is_critical:
-                lines.append("  ⚡ 大成功！")
+                lines.append(localized_text(instance.language, {
+                    "zh-CN": "  ⚡ 大成功！",
+                    "en": "  ⚡ Critical!",
+                    "ja": "  ⚡ 大成功！",
+                }))
             if result.target_hp_after <= 0:
-                lines.append(f"  💀 {target_name} 倒地！")
+                lines.append(localized_text(instance.language, {
+                    "zh-CN": f"  💀 {target_name} 倒地！",
+                    "en": f"  💀 {target_name} is down!",
+                    "ja": f"  💀 {target_name} は倒れた！",
+                }))
 
         logger.info("多人战斗结算: %d attackers → %s", len(results), target_name)
         return "\n".join(lines)

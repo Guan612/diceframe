@@ -9,8 +9,8 @@ import { useToast } from '@/composables/useToast'
 import PortraitImage from '@/components/PortraitImage.vue'
 import Modal from '@/components/ui/Modal.vue'
 
-const props = defineProps<{ modelValue?: CharacterPortrait; ruleId?: string; seed?: string; name?: string }>()
-const emit = defineEmits<{ 'update:modelValue': [value: CharacterPortrait | undefined] }>()
+const props = defineProps<{ modelValue?: CharacterPortrait | null; ruleId?: string; seed?: string; name?: string }>()
+const emit = defineEmits<{ 'update:modelValue': [value: CharacterPortrait | null] }>()
 const { t } = useLocale()
 const toast = useToast()
 const input = ref<HTMLInputElement | null>(null)
@@ -104,7 +104,7 @@ async function onUpload(event: Event) {
         {{ uploading ? t('uploading') : t('uploadCustomAvatar') }}
       </button>
       <button type="button" class="portrait-all" @click="allOpen = true">{{ t('allAvatars') }}</button>
-      <button type="button" class="ghost portrait-auto" @click="emit('update:modelValue', undefined)">{{ t('useDefaultAvatar') }}</button>
+      <button type="button" class="ghost portrait-auto" @click="emit('update:modelValue', null)">{{ t('useDefaultAvatar') }}</button>
     </div>
     <input ref="input" hidden type="file" accept="image/png,image/jpeg,image/webp" @change="onUpload">
     <small class="form-hint">{{ t('avatarUploadHint') }}</small>

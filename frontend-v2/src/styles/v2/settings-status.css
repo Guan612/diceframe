@@ -1,0 +1,281 @@
+/* -------------------------------------------------------------------------
+   Reference-layout pass
+
+   These rules belong to the rebuilt page structures below. They deliberately
+   form a small page-level system instead of skinning the old generic cards.
+   ---------------------------------------------------------------------- */
+
+.reference-settings-page,
+.characters-page,
+.reference-logs-page,
+.lorebook-page,
+.reference-create-page {
+  width: min(1480px, 100%);
+}
+
+/* Settings: status deck + navigation rail + one continuous editor surface. */
+.settings-overview-grid {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.settings-page-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 96px;
+  padding: 8px 2px 17px;
+  border-bottom: 1px solid var(--df-border-soft);
+}
+
+.settings-page-heading h1 {
+  margin: 6px 0 5px;
+  font-size: clamp(28px, 3vw, 42px);
+  line-height: 1;
+}
+
+.settings-page-heading p {
+  margin: 0;
+  color: var(--df-text-muted);
+}
+
+.reference-settings-page .system-status-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+}
+
+.reference-settings-page .system-status-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: start;
+  gap: 11px;
+  min-height: 111px;
+  padding: 13px 14px;
+  border-color: color-mix(in srgb, var(--df-accent) 20%, var(--df-border-soft));
+  background:
+    radial-gradient(circle at 0 50%, color-mix(in srgb, var(--df-interactive) 7%, transparent), transparent 52%),
+    linear-gradient(145deg, var(--df-surface-2), var(--df-surface-1));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--df-text) 5%, transparent);
+}
+
+.system-status-tag.tone-success {
+  --n-color: color-mix(in srgb, var(--df-success) 13%, var(--df-surface-1)) !important;
+  --n-text-color: var(--df-success-strong) !important;
+  --n-border: 1px solid color-mix(in srgb, var(--df-success) 42%, var(--df-border-soft)) !important;
+}
+
+.system-status-tag.tone-warning {
+  --n-color: color-mix(in srgb, var(--df-warning) 13%, var(--df-surface-1)) !important;
+  --n-text-color: var(--df-warning) !important;
+  --n-border: 1px solid color-mix(in srgb, var(--df-warning) 42%, var(--df-border-soft)) !important;
+}
+
+.system-status-tag.tone-error {
+  --n-color: color-mix(in srgb, var(--df-danger) 13%, var(--df-surface-1)) !important;
+  --n-text-color: var(--df-danger-strong) !important;
+  --n-border: 1px solid color-mix(in srgb, var(--df-danger) 42%, var(--df-border-soft)) !important;
+}
+
+.system-status-tag.tone-info {
+  --n-color: color-mix(in srgb, var(--df-info) 13%, var(--df-surface-1)) !important;
+  --n-text-color: color-mix(in srgb, var(--df-info) 72%, var(--df-text)) !important;
+  --n-border: 1px solid color-mix(in srgb, var(--df-info) 42%, var(--df-border-soft)) !important;
+}
+
+.system-status-icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--df-interactive) 35%, var(--df-border-soft));
+  border-radius: 50%;
+  color: var(--df-interactive-strong);
+  background: color-mix(in srgb, var(--df-interactive) 8%, var(--df-control-bg));
+  font-size: 18px;
+}
+
+.system-status-copy,
+.system-status-copy p {
+  min-width: 0;
+}
+
+.reference-settings-page .system-status-copy {
+  display: grid;
+  grid-template-rows: 24px 56px;
+  gap: 5px;
+}
+
+.reference-settings-page .system-status-head {
+  min-height: 24px;
+  margin: 0;
+}
+
+.reference-settings-page .system-status-copy p {
+  display: -webkit-box;
+  min-height: 56px;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.reference-settings-page .settings-layout {
+  grid-template-columns: 218px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-lg);
+  background: color-mix(in srgb, var(--df-surface-1) 86%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--df-text) 4%, transparent);
+}
+
+.reference-settings-page .settings-nav {
+  top: 86px;
+  min-height: min(690px, calc(100dvh - 120px));
+  padding: 11px 8px 54px;
+  border: 0;
+  border-right: 1px solid var(--df-border-soft);
+  border-radius: calc(var(--df-radius-lg) - 4px) 0 0 calc(var(--df-radius-lg) - 4px);
+  box-shadow: none;
+}
+
+.reference-settings-page .settings-nav .nav-item {
+  position: relative;
+  min-height: 43px;
+  padding: 0 13px;
+  border-radius: 5px;
+}
+
+.reference-settings-page .settings-nav .nav-item.active {
+  border-color: color-mix(in srgb, var(--df-interactive) 45%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--df-interactive) 24%, var(--df-control-bg)), color-mix(in srgb, var(--df-interactive) 8%, transparent));
+  box-shadow: inset 3px 0 0 var(--df-accent-strong);
+}
+
+.reference-settings-page .settings-content {
+  min-width: 0;
+}
+
+.reference-settings-page .settings-pane {
+  min-height: min(690px, calc(100dvh - 120px));
+  padding: 18px 21px 22px;
+  border: 0;
+  border-radius: calc(var(--df-radius-lg) - 4px);
+  background:
+    radial-gradient(circle at 82% 0, color-mix(in srgb, var(--df-interactive) 5%, transparent), transparent 33%),
+    color-mix(in srgb, var(--df-surface-1) 72%, transparent);
+  box-shadow: none;
+}
+
+.advanced-settings-pane {
+  display: grid;
+  grid-template-columns: minmax(310px, .72fr) minmax(520px, 1.28fr);
+  align-content: start;
+  align-items: start;
+  gap: 15px;
+  padding: 14px !important;
+  overflow: visible;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.advanced-section + .advanced-section {
+  border-top: 1px solid color-mix(in srgb, var(--df-accent) 26%, var(--df-border-soft));
+}
+
+.advanced-section {
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 26%, var(--df-border-soft));
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-1) 86%, transparent);
+}
+
+.advanced-section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 23px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--df-border-soft) 72%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--df-accent) 8%, transparent), transparent);
+}
+
+.advanced-section-head > .n-icon {
+  flex: 0 0 auto;
+  color: var(--df-accent-strong);
+  font-size: 20px;
+}
+
+.advanced-section-head h3,
+.advanced-section-head p {
+  margin: 0;
+}
+
+.advanced-section-head h3 {
+  font-size: 17px;
+}
+
+.advanced-section-head p {
+  margin-top: 3px;
+  color: var(--df-text-muted);
+  font-size: 11px;
+}
+
+.advanced-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  min-height: 48px;
+  margin: 0;
+  padding: 9px 18px;
+  border-top: 1px solid color-mix(in srgb, var(--df-border-soft) 74%, transparent);
+  background: color-mix(in srgb, var(--df-surface-2) 44%, transparent);
+}
+
+.advanced-row:first-of-type {
+  border-radius: 0;
+}
+
+.advanced-row:last-of-type {
+  border-radius: 0;
+}
+
+.advanced-row > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+
+.advanced-row strong {
+  flex: 0 1 210px;
+  color: var(--df-text-secondary);
+  font-size: 13px;
+}
+
+.advanced-row small {
+  color: var(--df-text-muted);
+  font-size: 10px;
+}
+
+.advanced-number {
+  width: 150px;
+}
+
+.token-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--df-text-muted);
+  font-size: 11px;
+}
+
+.advanced-save-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 15px 23px;
+  border-top: 1px solid color-mix(in srgb, var(--df-border-soft) 70%, transparent);
+  background: color-mix(in srgb, var(--df-surface-2) 54%, transparent);
+}

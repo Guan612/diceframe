@@ -4,6 +4,7 @@ export interface BuiltinPortrait {
   id: string
   ruleId: string
   index: number
+  style: 'realistic' | 'anime'
   image: string
   position: string
 }
@@ -17,9 +18,16 @@ const SUPPORTED_RULES = new Set([
   'tavern_free',
 ])
 
-const ATLAS_POSITIONS = ['0% 0%', '100% 0%', '0% 100%', '100% 100%']
-const PORTRAITS_PER_ATLAS = ATLAS_POSITIONS.length
-const BUILTIN_ATLAS_COUNT = 2
+const RULE_PORTRAIT_FILES = [
+  'realistic-1.jpg',
+  'realistic-2.jpg',
+  'realistic-3.jpg',
+  'realistic-4.jpg',
+  'anime-1.jpg',
+  'anime-2.jpg',
+  'anime-3.jpg',
+  'anime-4.jpg',
+] as const
 
 export function builtinRule(ruleId?: string): string {
   const normalized = String(ruleId || '').replace(/_en$/, '')
@@ -37,17 +45,14 @@ function hash(value: string): number {
 
 export function builtinPortraits(ruleId?: string): BuiltinPortrait[] {
   const rule = builtinRule(ruleId)
-  return Array.from({ length: PORTRAITS_PER_ATLAS * BUILTIN_ATLAS_COUNT }, (_, index) => {
-    const atlasIndex = Math.floor(index / PORTRAITS_PER_ATLAS)
-    const atlasSuffix = atlasIndex === 0 ? '' : `_${atlasIndex + 1}`
-    return {
-      id: `${rule}:${index}`,
-      ruleId: rule,
-      index,
-      image: `${import.meta.env.BASE_URL}avatars/${rule}${atlasSuffix}.webp`,
-      position: ATLAS_POSITIONS[index % PORTRAITS_PER_ATLAS],
-    }
-  })
+  return RULE_PORTRAIT_FILES.map((image, index) => ({
+    id: `${rule}:${index}`,
+    ruleId: rule,
+    index,
+    style: index < 4 ? 'realistic' : 'anime',
+    image: `${import.meta.env.BASE_URL}avatars/v3/${rule}/${image}`,
+    position: '50% 26%',
+  }))
 }
 
 export function defaultBuiltinPortrait(ruleId?: string, seed?: string): BuiltinPortrait {
@@ -55,7 +60,7 @@ export function defaultBuiltinPortrait(ruleId?: string, seed?: string): BuiltinP
   return options[hash(`${builtinRule(ruleId)}|${seed || 'default'}`) % options.length]
 }
 
-export function resolveBuiltinPortrait(portrait?: CharacterPortrait, ruleId?: string, seed?: string): BuiltinPortrait {
+export function resolveBuiltinPortrait(portrait?: CharacterPortrait | null, ruleId?: string, seed?: string): BuiltinPortrait {
   if (portrait?.kind === 'builtin' && portrait.id) {
     const [storedRule, rawIndex] = portrait.id.split(':')
     const options = builtinPortraits(storedRule)

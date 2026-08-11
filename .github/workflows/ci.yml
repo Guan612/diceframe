@@ -36,6 +36,14 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Lint with ruff
+        run: python -m ruff check src/
+
+      - name: Type check with mypy
+        # 按 pyproject [tool.mypy].files 限定范围（当前 5 个已通过文件），
+        # 不加路径参数。全量 src/ 有历史类型债，用 files 白名单渐进扩展。
+        run: python -m mypy
+
       - name: Run backend tests
         run: python -m pytest -q
 
@@ -101,26 +109,6 @@ jobs:
           npm ci --prefix frontend-v2
           npm --prefix frontend-v2 exec playwright install --with-deps chromium
 
-      - name: Build frontend
-        run: npm run build --prefix frontend-v2
-
-      - name: Run clean-data browser smoke tests
+      - name: Run clean-data browser tests
         working-directory: frontend-v2
-        env:
-          TRPG_DATA_DIR: ${{ runner.temp }}/diceframe-e2e-data
-          DICEFRAME_E2E_DATA_DIR: ${{ runner.temp }}/diceframe-e2e-data
-        run: |
-          python ../web_server.py > "${RUNNER_TEMP}/diceframe-server.log" 2>&1 &
-          server_pid=$!
-          trap 'kill "${server_pid}" 2>/dev/null || true' EXIT
-          for attempt in {1..30}; do
-            if curl --silent --output /dev/null http://127.0.0.1:18000/api/health; then
-              break
-            fi
-            if [ "${attempt}" -eq 30 ]; then
-              cat "${RUNNER_TEMP}/diceframe-server.log"
-              exit 1
-            fi
-            sleep 1
-          done
-          npm run test:e2e -- e2e/shell.spec.ts e2e/responsive.spec.ts --project=desktop
+        run: npm run test:e2e

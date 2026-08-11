@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.llm.parser import has_malformed_protocol_leak
 
 
@@ -13,18 +13,23 @@ logger = logging.getLogger("trpg")
 
 
 def append_protocol_repair_instruction(context: str, language: str) -> str:
-    if is_english(language):
-        instruction = (
+    instruction = localized_text(language, {
+        "en": (
             "Your previous response exposed a state tag in the narration or omitted the `---` separator. "
             "Rewrite the complete response once. Keep player-facing narration before `---`; put plain-text, "
             "uppercase state tags only after `---`, one per line. Do not use Markdown around tags or put tags "
             "on the same line as narration."
-        )
-    else:
-        instruction = (
+        ),
+        "zh-CN": (
             "上一条回复把状态标签写进了正文，或遗漏了 `---` 分隔符。请完整重写一次：玩家可见正文放在 "
             "`---` 前；纯文本大写状态标签只能放在 `---` 后，每行一个；标签不得加 Markdown，也不得与正文同一行。"
-        )
+        ),
+        "ja": (
+            "前回の応答で本文中に状態タグを露出したか、`---` 区切りを欠落させていました。回答全体を一度だけ書き直してください："
+            "プレイヤー向けの本文は `---` の前に置き、プレーンテキストの大文字状態タグは `---` の後ろにのみ1行1つ置いてください。"
+            "タグにMarkdownを使わず、本文と同じ行にも置かないでください。"
+        ),
+    })
     return f"{context}\n\n⚠️ {instruction}"
 
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/client'
-import type { GameSummary, GamesResponse, LorebookResponse, LoreEntry, LoreGenerateResponse, WorldCreateResponse, WorldListResponse, WorldSummary } from '@/api/types'
+import type { CharacterListResponse, GameSummary, GamesResponse, LorebookResponse, LoreEntry, LoreGenerateResponse, Player, RuleMeta, WorldCreateResponse, WorldListResponse, WorldSummary } from '@/api/types'
 import { readCurrentGame } from '@/stores/gameContext'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -9,6 +9,7 @@ import { useLocale, type Locale } from '@/composables/useLocale'
 import type { MessageKey } from '@/i18n'
 import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
 import Modal from '@/components/ui/Modal.vue'
+import CharacterPanel from '@/components/CharacterPanel.vue'
 
 interface LoreEdit extends LoreEntry {
   tier?: string
@@ -44,6 +45,8 @@ const loreEdit = ref<LoreEdit | null>(null)
 const generatePrompt = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const showNewWorld = ref(false)
+const activePlayer = ref<Player | null>(null)
+const activeRuleMeta = ref<RuleMeta>({})
 const newWorld = ref({ name: '', description: '', language: locale.value })
 const entries = computed(() => data.value.entries || [])
 const languageWorlds = computed(() => filterByContentLanguage(worlds.value, worldLanguage.value))
@@ -66,7 +69,12 @@ async function loadWorlds() {
     const r = await api<WorldListResponse>('/worlds')
     worlds.value = r.worlds || []
     if (game.value) {
-      const games = await api<GamesResponse>('/games')
+      const [games, characters] = await Promise.all([
+        api<GamesResponse>('/games'),
+        api<CharacterListResponse>(`/games/${encodeURIComponent(game.value)}/characters`).catch(() => ({ players: [] } as CharacterListResponse)),
+      ])
+      activePlayer.value = characters.players?.[0] || null
+      activeRuleMeta.value = characters.rule_meta || {}
       const cur = (games.games || []).find((g: GameSummary) => g.game_key === game.value)
       if (cur?.world_id) {
         currentWorldId.value = cur.world_id
@@ -253,8 +261,15 @@ async function importLore(e: Event) {
 
 <template>
   <section class="view archive-page lorebook-page">
+    <div class="lorebook-shell" :class="{ 'no-rail': !(game && activePlayer) }">
+      <aside v-if="game && activePlayer" class="lorebook-character-rail">
+        <span class="lorebook-rail-label">{{ t('loreCurrentCharacter') }}</span>
+        <CharacterPanel :player="activePlayer" :rule-meta="activeRuleMeta" />
+      </aside>
+      <main class="lorebook-workspace">
     <header class="view-title archive-hero">
       <div>
+        <span class="section-kicker">{{ t('lorebookKicker') }}</span>
         <h1>{{ t('navLorebook') }}</h1>
         <p v-if="game">{{ t('currentSave') }}: {{ game }}</p>
         <p v-else class="muted">{{ t('standaloneLorebookHint') }}</p>
@@ -359,6 +374,11 @@ async function importLore(e: Event) {
       <p class="muted">{{ t('noLoreEntriesHint') }}</p>
     </section>
 
+    <section v-else-if="!currentWorldId && !busy && !showNewWorld" class="empty-panel">
+      <h2>{{ t('chooseWorldEllipsis') }}</h2>
+      <p class="muted">{{ t('standaloneLorebookHint') }}</p>
+    </section>
+
     <Modal v-if="loreEdit" :title="loreEdit.id ? t('editLoreEntry') : t('newLoreEntry')" @close="loreEdit = null">
       <label>{{ t('name') }}<input v-model="loreEdit.name"></label>
       <label>{{ t('type') }}<select v-model="loreEdit.type"><option v-for="tp in loreTypeOrder" :key="tp" :value="tp">{{ typeLabel(tp) }}</option></select></label>
@@ -376,5 +396,7 @@ async function importLore(e: Event) {
       <label>{{ t('groupWeight') }}<input type="number" v-model.number="loreEdit.group_weight"></label>
       <template #actions><button @click="loreEdit = null">{{ t('cancel') }}</button><button class="primary" @click="saveLore">{{ t('saveAction') }}</button></template>
     </Modal>
+      </main>
+    </div>
   </section>
 </template>

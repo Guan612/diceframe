@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { ChevronBack, ChevronForward } from '@vicons/ionicons5'
+import { ChevronBack, ChevronForward, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
 import { api, apiBlob, isNotFoundError } from '@/api/client'
 import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CheckResult, CommandResponse, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
@@ -23,6 +23,9 @@ import Modal from '@/components/ui/Modal.vue'
 import GmToolbar from '@/components/play/GmToolbar.vue'
 import MultiplayerPanel from '@/components/play/MultiplayerPanel.vue'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
+import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePicker.vue'
+import { ruleSceneUrl } from '@/composables/useBackgroundImages'
+import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
 
 defineOptions({ name: 'PlayView' })
 
@@ -38,16 +41,39 @@ const toast = useToast()
 const { confirm } = useConfirm()
 const { locale, setLocale, t } = useLocale()
 const help = ref(false), ruleMeta = ref<RuleMeta>({}), preview = ref(false), delegate = ref(false), cards = ref<CharacterCard[]>([]), showCards = ref(false), health = ref<HealthResponse>({ events: [] })
-const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref('')
+const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref('')
 const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === '1')
+const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
 const gmThinking = ref(false)
 const luckBusyId = ref('')
 const showPortraitEditor = ref(false)
-const portraitDraft = ref<CharacterPortrait | undefined>()
+const portraitDraft = ref<CharacterPortrait | null>()
 const portraitBusy = ref(false)
+const playSceneImageUrl = ref(ruleSceneUrl())
+const showSceneImageEditor = ref(false)
+const sceneImageDraft = ref<File | null>(null)
+const sceneImageDefaultUrl = ref(ruleSceneUrl())
+const sceneImageBusy = ref(false)
 function toggleSidebar() { sidebarCollapsed.value = !sidebarCollapsed.value; localStorage.setItem('play_sidebar_collapsed', sidebarCollapsed.value ? '1' : '0') }
 const railCollapsed = ref(false)
 function toggleRail() { railCollapsed.value = !railCollapsed.value; localStorage.setItem('play_rail_collapsed', railCollapsed.value ? '1' : '0') }
+function toggleSidebarPanel() {
+  if (mobilePanel.value === 'sidebar') { mobilePanel.value = ''; return }
+  toggleSidebar()
+}
+function toggleRailPanel() {
+  if (mobilePanel.value === 'controls') { mobilePanel.value = ''; return }
+  toggleRail()
+}
+function openMobilePanel(panel: 'sidebar' | 'controls') {
+  if (panel === 'sidebar' && sidebarCollapsed.value) toggleSidebar()
+  if (panel === 'controls' && railCollapsed.value) toggleRail()
+  mobilePanel.value = panel
+}
+function toggleMobilePanel(panel: 'sidebar' | 'controls') {
+  if (mobilePanel.value === panel) { mobilePanel.value = ''; return }
+  openMobilePanel(panel)
+}
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error || t('operationFailed')) }
 function joinNames(names: string[]) { return names.filter(Boolean).join(t('listSeparator')) }
 function onLocaleChange(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
@@ -59,6 +85,7 @@ const canEditOwnPortrait = computed(() => Boolean(
   && (!preview.value || delegate.value),
 ))
 const pendingLuckDecisions = computed(() => game.detail.value?.pending_luck_decisions || [])
+const revealChecks = computed(() => game.detail.value?.round_check_results || pendingLuckDecisions.value)
 const serverJudging = computed(() => game.detail.value?.state === 'active_judgment' && !pendingLuckDecisions.value.length)
 const showGmThinking = computed(() => gmThinking.value || serverJudging.value)
 const sceneTitle = computed(() => game.detail.value?.scene || t('unknownScene'))
@@ -125,7 +152,7 @@ const tableNotice = computed(() => {
 function openPortraitEditor() {
   if (!canEditOwnPortrait.value || !game.player.value) return
   const current = game.player.value.character_sheet?.portrait
-  portraitDraft.value = current ? { ...current } : undefined
+  portraitDraft.value = current ? { ...current } : null
   showPortraitEditor.value = true
 }
 
@@ -135,7 +162,7 @@ async function savePortrait() {
   try {
     await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, {
       method: 'PUT',
-      body: JSON.stringify({ portrait: portraitDraft.value ? { ...portraitDraft.value } : {} }),
+      body: JSON.stringify({ portrait: portraitDraft.value ? { ...portraitDraft.value } : null }),
     })
     await game.refresh(true)
     showPortraitEditor.value = false
@@ -143,6 +170,63 @@ async function savePortrait() {
   } catch (error: unknown) {
     toast.error(errorMessage(error))
   } finally { portraitBusy.value = false }
+}
+
+let sceneImageSequence = 0
+async function refreshPlaySceneImage() {
+  const gameKey = game.currentGame.value
+  const fallbackRule = String(game.detail.value?.rule_id || ruleMeta.value.rule_id || '')
+  if (!gameKey) return
+  const sequence = ++sceneImageSequence
+  const resolved = await resolveGameSceneImageUrl(gameKey, fallbackRule)
+  if (sequence !== sceneImageSequence) {
+    revokeSceneImageUrl(resolved)
+    return
+  }
+  const previous = playSceneImageUrl.value
+  playSceneImageUrl.value = resolved
+  if (previous !== resolved) revokeSceneImageUrl(previous)
+}
+
+async function openSceneImageEditor() {
+  if (!game.currentGame.value) return
+  sceneImageDraft.value = null
+  showSceneImageEditor.value = true
+  const previous = sceneImageDefaultUrl.value
+  sceneImageDefaultUrl.value = await resolveGameSceneImageUrl(
+    game.currentGame.value,
+    String(game.detail.value?.rule_id || ruleMeta.value.rule_id || ''),
+    true,
+  )
+  if (previous !== sceneImageDefaultUrl.value) revokeSceneImageUrl(previous)
+}
+
+function closeSceneImageEditor() {
+  showSceneImageEditor.value = false
+  sceneImageDraft.value = null
+}
+
+async function saveSceneImage() {
+  if (!game.currentGame.value) return
+  sceneImageBusy.value = true
+  try {
+    const payload: Record<string, unknown> = sceneImageDraft.value
+      ? { file_data: await fileToBase64(sceneImageDraft.value), file_name: sceneImageDraft.value.name }
+      : { use_default: true }
+    const result = await api<{ ok?: boolean; error?: string }>(
+      `/games/${encodeURIComponent(game.currentGame.value)}/scene-image`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    )
+    if (result.ok === false || result.error) throw new Error(result.error || t('operationFailed'))
+    await game.refresh(true)
+    await refreshPlaySceneImage()
+    closeSceneImageEditor()
+    toast.success(t('sceneImageSaved'))
+  } catch (error: unknown) {
+    toast.error(errorMessage(error))
+  } finally {
+    sceneImageBusy.value = false
+  }
 }
 
 async function onLuckDecision(check: CheckResult, spend: boolean) {
@@ -182,7 +266,8 @@ async function command(path: string, body: JsonObject = {}) {
     const r = await api<CommandResponse>(`/games/${encodeURIComponent(game.currentGame.value)}/${path}`, { method: 'POST', body: JSON.stringify(body) })
     if (r.error) { toast.error(r.error); return }
     if (r.forced_waiting?.length) toast.info(t('forcedWaitingToast', { names: r.forced_waiting.join(t('listSeparator')) }))
-    if (r.narration) toast.success(r.narration)
+    // 剧情正文已在时间线/对话区展示，不再用 toast 重复弹出全文
+    if (path !== 'advance' && r.narration) toast.success(r.narration)
     else toast.success(t('operationDone'))
     await game.refresh()
   } catch (e: unknown) { toast.error(errorMessage(e)) } finally { if (thinkingCommand) gmThinking.value = false }
@@ -195,12 +280,20 @@ function onAccess() { command('player-access', { open: game.detail.value?.player
 
 function onRoomPassword() {
   roomPasswordInput.value = ''
+  luckTimeoutInput.value = ''
   showRoomPassword.value = true
 }
 async function setRoomPassword() {
   try {
     const r = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/room-password`, { method: 'POST', body: JSON.stringify({ password: roomPasswordInput.value }) })
     if (r.error || r.ok === false) throw new Error(r.error || t('settingFailed'))
+    // 同弹窗一并设置幸运超时（仅在填写时）
+    const lt = String(luckTimeoutInput.value || '').trim()
+    if (lt !== '') {
+      const ltR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/luck-timeout`, { method: 'POST', body: JSON.stringify({ seconds: Number(lt) }) })
+      if (ltR.error || ltR.ok === false) throw new Error(ltR.error || t('settingFailed'))
+      toast.success(t('luckTimeoutSaved', { seconds: lt }))
+    }
     showRoomPassword.value = false
     toast.success(roomPasswordInput.value ? t('roomPasswordUpdated') : t('roomPasswordCleared'))
     await game.refresh()
@@ -395,7 +488,11 @@ async function loadPlayContext() {
       api<PlayerContextResponse>(`/games/${encodeURIComponent(game.currentGame.value)}/player-context`).catch(() => ({ preview: false })),
       healthRequest,
     ])
-    ruleMeta.value = { ...(chars.rule_meta || {}), rule_special_stats: chars.rule_special_stats || [] }
+    ruleMeta.value = {
+      ...(chars.rule_meta || {}),
+      attributes: (chars.rule_attrs || []).map(a => ({ key: a.key, name: a.name, name_en: a.name_en, min: a.min, max: a.max })),
+      rule_special_stats: chars.rule_special_stats || [],
+    }
     health.value = h
     preview.value = !!context.preview
     delegate.value = route.query.delegate === '1'
@@ -411,6 +508,11 @@ onMounted(() => {
 watch(() => game.currentGame.value, (next, prev) => {
   if (next && next !== prev) loadPlayContext()
 })
+watch(
+  [() => game.currentGame.value, () => JSON.stringify(game.detail.value?.scene_image || {})],
+  () => { refreshPlaySceneImage() },
+  { immediate: true },
+)
 watch(() => game.detail.value?.solo_mode, (solo, prev) => {
   if (solo === undefined || solo === prev) return
   if (solo) {
@@ -423,10 +525,15 @@ watch(() => game.detail.value?.solo_mode, (solo, prev) => {
 watch(showGmThinking, (thinking) => {
   if (!thinking && game.liveNarration.value) game.liveNarration.value = ''
 })
+onBeforeUnmount(() => {
+  sceneImageSequence += 1
+  revokeSceneImageUrl(playSceneImageUrl.value)
+  revokeSceneImageUrl(sceneImageDefaultUrl.value)
+})
 </script>
 
 <template>
-  <main v-if="game.currentGame.value" class="play-page">
+  <main v-if="game.currentGame.value" class="play-page" :style="sceneImageStyle(playSceneImageUrl)">
     <header class="topbar play-hud">
       <div class="play-hud-main">
         <button v-if="!isPlayer" class="icon play-back" :title="t('backToOverview')" @click="goBack">←</button>
@@ -451,9 +558,9 @@ watch(showGmThinking, (thinking) => {
             <option value="en">{{ t('english') }}</option>
           </select>
         </label>
-        <button @click="openCards">{{ t('characters') }}</button>
-        <button @click="help = true">{{ t('rule') }}</button>
-        <button @click="game.refresh()">{{ t('refresh') }}</button>
+        <button class="play-secondary-action" @click="openCards">{{ t('characters') }}</button>
+        <button class="play-secondary-action" @click="help = true">{{ t('rule') }}</button>
+        <button class="play-secondary-action play-refresh" @click="game.refresh()">{{ t('refresh') }}</button>
       </div>
     </header>
 
@@ -470,6 +577,7 @@ watch(showGmThinking, (thinking) => {
       :class="{ collapsed: sidebarCollapsed, 'no-console': !game.isGm.value && game.detail.value.solo_mode !== false, 'rail-collapsed': railCollapsed }"
     >
       <GameSidebar
+        :class="{ 'mobile-open': mobilePanel === 'sidebar' }"
         :detail="game.detail.value"
         :player="game.player.value"
         :private-messages="game.privateMessages.value"
@@ -478,7 +586,7 @@ watch(showGmThinking, (thinking) => {
         :collapsed="sidebarCollapsed"
         :portrait-editable="canEditOwnPortrait"
         @lore-click="onLoreClick"
-        @toggle-sidebar="toggleSidebar"
+        @toggle-sidebar="toggleSidebarPanel"
         @portrait-click="openPortraitEditor"
       />
 
@@ -492,6 +600,15 @@ watch(showGmThinking, (thinking) => {
         <template #actions>
           <button :disabled="portraitBusy" @click="showPortraitEditor = false">{{ t('cancel') }}</button>
           <button class="primary" :disabled="portraitBusy" @click="savePortrait">{{ portraitBusy ? t('savingAvatar') : t('saveAction') }}</button>
+        </template>
+      </Modal>
+
+      <Modal v-if="showSceneImageEditor" :title="t('sceneImageManage')" @close="closeSceneImageEditor">
+        <p class="muted">{{ t('sceneImageGmHint') }}</p>
+        <AdventureSceneImagePicker v-model="sceneImageDraft" :default-url="sceneImageDefaultUrl" />
+        <template #actions>
+          <button :disabled="sceneImageBusy" @click="closeSceneImageEditor">{{ t('cancel') }}</button>
+          <button class="primary" :disabled="sceneImageBusy" @click="saveSceneImage">{{ sceneImageBusy ? t('saving') : t('saveAction') }}</button>
         </template>
       </Modal>
 
@@ -521,6 +638,7 @@ watch(showGmThinking, (thinking) => {
           :is-gm="game.isGm.value"
           :live-narration="game.liveNarration.value"
           :pending-checks="pendingLuckDecisions"
+          :reveal-checks="revealChecks"
           :current-user-id="actorId"
           :luck-busy-id="luckBusyId"
           @refresh="game.refresh"
@@ -533,8 +651,12 @@ watch(showGmThinking, (thinking) => {
         <ActionComposer :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh" />
       </section>
 
-      <aside v-if="game.isGm.value || game.detail.value.solo_mode === false" class="play-control-rail" :class="{ collapsed: railCollapsed }">
-        <button class="rail-toggle" @click="toggleRail" :title="railCollapsed ? t('expandGmControls') : t('collapseGmControls')">
+      <aside
+        v-if="game.isGm.value || game.detail.value.solo_mode === false"
+        class="play-control-rail"
+        :class="{ collapsed: railCollapsed, 'mobile-open': mobilePanel === 'controls' }"
+      >
+        <button class="rail-toggle" @click="toggleRailPanel" :title="mobilePanel === 'controls' ? t('close') : railCollapsed ? t('expandGmControls') : t('collapseGmControls')">
           <NIcon :component="railCollapsed ? ChevronBack : ChevronForward" size="16" />
         </button>
         <GmToolbar
@@ -556,6 +678,7 @@ watch(showGmThinking, (thinking) => {
           @cards="openCards"
           @world-switch="openWorldSwitch"
           @room-password="onRoomPassword"
+          @scene-image="openSceneImageEditor"
         />
 
         <MultiplayerPanel
@@ -572,7 +695,28 @@ watch(showGmThinking, (thinking) => {
 
         <HealthPanel v-if="game.isGm.value" :health="health" :detail="game.detail.value" :is-gm="game.isGm.value" @resolve="resolveHealth" />
       </aside>
+      <button
+        v-if="mobilePanel"
+        class="play-drawer-backdrop"
+        :aria-label="t('close')"
+        @click="mobilePanel = ''"
+      />
     </div>
+    <button
+      class="mobile-drawer-trigger mobile-drawer-trigger-left"
+      :class="{ hidden: mobilePanel === 'sidebar' }"
+      :aria-label="t('mobileStatusLabel')"
+      :title="t('mobileStatusLabel')"
+      @click="toggleMobilePanel('sidebar')"
+    ><NIcon :component="StatsChartOutline" /></button>
+    <button
+      v-if="game.isGm.value || game.detail.value?.solo_mode === false"
+      class="mobile-drawer-trigger mobile-drawer-trigger-right"
+      :class="{ hidden: mobilePanel === 'controls' }"
+      :aria-label="t('mobileConsoleLabel')"
+      :title="t('mobileConsoleLabel')"
+      @click="toggleMobilePanel('controls')"
+    ><NIcon :component="TerminalOutline" /></button>
     <RuleHelp v-if="help" :meta="ruleMeta" @close="help = false" />
 
     <div v-if="showCards" class="modal" @click.self="showCards = false">
@@ -612,6 +756,7 @@ watch(showGmThinking, (thinking) => {
         <header><h2>{{ game.detail.value?.has_room_password ? t('editRoomPassword') : t('setRoomPassword') }}</h2><button @click="showRoomPassword = false">×</button></header>
         <p>{{ t('roomPasswordHelp') }}</p>
         <label>{{ t('newPassword') }}<input type="password" v-model="roomPasswordInput" :placeholder="t('emptyCancelsPassword')" @keyup.enter="setRoomPassword"></label>
+        <label>{{ t('luckTimeoutSeconds') }}<input type="number" v-model="luckTimeoutInput" :placeholder="t('luckTimeoutPlaceholder')" min="0" max="3600"></label>
         <div class="actions">
           <button @click="showRoomPassword = false">{{ t('cancel') }}</button>
           <button class="primary" @click="setRoomPassword">{{ t('saveAction') }}</button>

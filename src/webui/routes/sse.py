@@ -102,30 +102,16 @@ async def sse_stream_action(request: web.Request) -> web.StreamResponse:
             else:
                 await inst.resume()
 
-        check_request = api.check_request_for_action(
-            gk, user_id, text, selected_attribute, selected_skill, target_text
-        )
         await inst.add_action(
             user_id,
             text,
             selected_attribute,
             selected_skill,
             target_text,
-            dice_pending=bool(check_request),
-            dice_system=str((check_request or {}).get("dice_system") or ""),
-            check_request=check_request,
         )
-        if check_request:
-            data = json.dumps({
-                "phase": "dice",
-                "message": f"需要{check_request.get('label') or '掷骰判定'}",
-                "check_request": check_request,
-            }, ensure_ascii=False)
-            await response.write(f"data: {data}\n\n".encode())
-            await response.write(b"event: done\ndata: complete\n\n")
-            return response
         handler = request.app["subsystems"].handler
         if await inst.try_advance():
+            await handler.prepare_round_checks_ai(inst)
             narration, _ = await handler.process_round(inst)
             parts = narration.split("\n\n") if narration else [""]
             for i, part in enumerate(parts):
@@ -258,6 +244,11 @@ def _play_public_signature(inst, user_id: str) -> str:
             if payment.get("status") == "pending"
         ],
         "multiplayer": inst.multiplayer_status(),
+        "round_checks_prepared": bool(getattr(inst, "round_checks_prepared", False)),
+        "round_check_results": (
+            getattr(inst, "last_checks", [])
+            if inst.state == GameState.ACTIVE_JUDGMENT else []
+        ),
         "character_sheet": inst.get_character_sheet(user_id),
     }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)

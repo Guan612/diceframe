@@ -69,10 +69,10 @@ export function tr(key: string): string { return localizedLabel(undefined, LABEL
 export function attrDisplayName(attr: RuleAttr): string {
   const key = attr.key || ''
   if (attr.display_name) return attr.display_name
+  // 中文界面只显示中文名(力量),不拼括号英文,避免列表/侧栏过宽;
+  // 英文界面显示英文缩写(STR)。
   const name = isEnglish() ? (attr.name_en || ATTR_NAME_EN[key] || attr.name || key) : (attr.name || ATTR_NAME_ZH[key] || key)
-  const nameEn = attr.name_en || ATTR_NAME_EN[key] || (key ? key.toUpperCase() : '')
-  if (isEnglish()) return name
-  return nameEn ? `${name} (${nameEn})` : name
+  return name
 }
 
 export function suggestedAttributes(attrs: RuleAttr[], totalPoints?: number): Record<string, number> {

@@ -30,6 +30,30 @@ class ActionRecord(TypedDict, total=False):
     revision_count: int
 
 
+class CheckRequest(TypedDict, total=False):
+    check_id: str
+    required: bool
+    actor_uid: str
+    actor_name: str
+    dice_system: Literal["d20", "d100"]
+    label: str
+    intent: str
+    skill: str
+    attribute: str
+    target: int
+    circumstance_modifier: int
+    advantage_mode: Literal["", "advantage", "disadvantage"]
+    advantage_note: str | None
+    kind: Literal["check", "save", "attack"]
+    opponent: str
+    opponent_name: str
+    opponent_roll: int
+    opponent_modifier: int
+    opponent_total: int
+    assist: list[str]
+    planner_source: str
+
+
 class CheckResult(TypedDict, total=False):
     check_id: str
     label: str
@@ -48,6 +72,14 @@ class CheckResult(TypedDict, total=False):
     total: int
     dc: int
     difficulty: str
+    kind: Literal["check", "save", "attack"]
+    opponent: str
+    opponent_name: str
+    opponent_roll: int
+    opponent_modifier: int
+    opponent_total: int
+    assist: list[str]
+    planner_source: str
     verdict: str
     advantage_mode: str
     advantage_note: str | None

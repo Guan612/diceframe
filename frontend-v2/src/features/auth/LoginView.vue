@@ -14,7 +14,8 @@ function pickLocale(next: Locale) {
   firstVisit.value = false
 }
 function onLocaleChange(event: Event) {
-  setLocale((event.target as HTMLSelectElement).value as Locale)
+  const next = (event.target as HTMLSelectElement).value as Locale
+  setLocale(next)
 }
 const token = ref('')
 const busy = ref(false)
@@ -56,27 +57,49 @@ async function submit() {
           <option value="en">EN</option>
         </select>
       </label>
+      <div class="login-stage" aria-hidden="true"><i v-for="n in 12" :key="n" /></div>
       <section class="login-card">
-        <BrandLogo :size="56" :with-text="false" class="login-emblem" />
-        <h1>DiceFrame</h1>
-        <p class="muted">{{ t('loginHelp') }}</p>
+        <div class="login-card-corner corner-tl" aria-hidden="true" />
+        <div class="login-card-corner corner-tr" aria-hidden="true" />
+        <div class="login-card-corner corner-bl" aria-hidden="true" />
+        <div class="login-card-corner corner-br" aria-hidden="true" />
+        <header class="login-card-head">
+          <span class="login-emblem-wrap">
+            <svg class="login-emblem-geometry" viewBox="0 0 96 96" aria-hidden="true">
+              <path class="emblem-ray" d="M48 1V13M48 83V95M1 48H13M83 48H95" />
+              <path class="emblem-octagon" d="M31 8H65L88 31V65L65 88H31L8 65V31Z" />
+              <rect class="emblem-diamond" x="20" y="20" width="56" height="56" />
+            </svg>
+            <BrandLogo :size="62" :with-text="false" class="login-emblem" />
+          </span>
+          <h1>DiceFrame</h1>
+          <p class="muted">{{ t('loginHelp') }}</p>
+        </header>
         <form @submit.prevent="submit">
           <label>{{ t('accessPassword') }}<input v-model="token" type="password" autocomplete="current-password" autofocus placeholder="Access token"></label>
-          <button class="primary submit" :disabled="busy">{{ busy ? t('validating') : t('enter') }}</button>
+          <button class="primary submit" :disabled="busy"><span>{{ busy ? t('validating') : t('enter') }}</span></button>
         </form>
         <p v-if="error" class="error-banner">{{ error }}</p>
-        <p class="hint muted">{{ t('firstPasswordHintBefore') }} <code>data/access_token.txt</code>{{ t('firstPasswordHintAfter') }}</p>
-        <details class="forgot-password">
-          <summary>{{ t('forgotPassword') }}</summary>
-          <p>{{ t('resetPasswordHintBefore') }} <code>data/reset_access_password.txt</code>{{ t('resetPasswordHintAfter') }}</p>
-        </details>
+        <div class="login-help">
+          <p class="hint muted">{{ t('firstPasswordHintBefore') }} <code>data/access_token.txt</code>{{ t('firstPasswordHintAfter') }}</p>
+          <details class="forgot-password">
+            <summary>{{ t('forgotPassword') }}</summary>
+            <p>{{ t('resetPasswordHintBefore') }} <code>data/reset_access_password.txt</code>{{ t('resetPasswordHintAfter') }}</p>
+          </details>
+        </div>
       </section>
     </template>
+    <footer class="login-footer">
+      <span>DiceFrame · {{ t('projectTagline') }}</span>
+    </footer>
   </main>
 </template>
 
 <style scoped>
-.locale-switch { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); z-index: 10; }
+.login-page {
+  padding-bottom: 60px;
+}
+.locale-switch { position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%); z-index: 10; }
 .locale-switch select {
   padding: 4px 10px; border-radius: 6px;
   border: 1px solid rgba(128,128,128,0.4);
@@ -91,4 +114,28 @@ async function submit() {
   background: transparent; color: inherit; font-size: 15px; cursor: pointer;
 }
 .lang-btn:hover { background: rgba(128,128,128,0.12); }
+.login-footer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 16px calc(8px + env(safe-area-inset-bottom));
+  color: var(--df-text-muted);
+  font-size: 12px;
+  letter-spacing: .02em;
+}
+.login-footer a {
+  color: var(--df-accent-strong);
+  text-decoration: none;
+}
+.login-footer a:hover {
+  color: var(--df-interactive-strong);
+  text-decoration: underline;
+}
 </style>

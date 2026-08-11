@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import secrets
 import shutil
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from src.engine.character_utils import apply_resource_delta, get_resource
+from src.engine.character_utils import apply_resource_delta, get_resource, revive_character
 from src.engine.checks import build_check_request, roll_check_request
 from src.engine.game_instance import GameState
 from src.engine.dice import roll
@@ -51,6 +52,21 @@ _GM_RESOURCE_ALIASES = {
 }
 
 
+def _instance_rule_id(api: "WebAPI", inst: Any) -> str:
+    """Return the active rule and lazily migrate saves created before rule_id existed."""
+    rule_id = str(getattr(inst, "rule_id", "") or "").strip()
+    if rule_id:
+        return rule_id
+    try:
+        template = api._handler._load_world_template(str(inst.world_id or "")) if api._handler else None
+        rule_id = str((template or {}).get("default_rule") or "").strip()
+    except Exception:
+        logger.warning("读取旧对局的默认规则失败: %s", getattr(inst, "world_id", ""), exc_info=True)
+    rule_id = rule_id or "freeform_fantasy"
+    inst.rule_id = rule_id
+    return rule_id
+
+
 def list_games(api: "WebAPI") -> dict[str, Any]:
     active = []
     for inst in api._reg.list_all():
@@ -58,6 +74,8 @@ def list_games(api: "WebAPI") -> dict[str, Any]:
             "game_key": _GAME_KEY_SEP.join(inst.game_key),
             "world_id": inst.world_id,
             "world_name": inst.world_name,
+            "rule_id": _instance_rule_id(api, inst),
+            "scene_image": dict(getattr(inst, "scene_image", {}) or {}),
             "group_name": inst.group_name,
             "state": inst.state.value,
             "round_number": inst.round_number,
@@ -85,6 +103,8 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
     return {
         "game_key": _GAME_KEY_SEP.join(inst.game_key),
         "world_id": inst.world_id or "",
+        "rule_id": _instance_rule_id(api, inst),
+        "scene_image": dict(getattr(inst, "scene_image", {}) or {}),
         "world_name": inst.world_name, "group_name": inst.group_name,
         "state": inst.state.value, "round_number": inst.round_number,
         "player_count": len(inst.players), "scene": inst.scene,
@@ -102,6 +122,11 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
             if p.get("status") == "pending"
         ],
         "pending_luck_decisions": inst.pending_luck_checks(),
+        "round_check_results": (
+            [dict(item) for item in inst.last_checks]
+            if inst.state == GameState.ACTIVE_JUDGMENT and inst.round_checks_prepared
+            else []
+        ),
         "difficulty": inst.difficulty,
         "solo_mode": inst.solo_mode,
         "max_players": inst.max_players,
@@ -450,8 +475,27 @@ async def rollback_round(api: "WebAPI", game_key: str) -> dict[str, Any]:
     return {"ok": True, "message": f"已撤回到第 {round_number} 轮开始前的玩家状态"}
 
 
-def _resolve_gm_command_target(inst, raw_target: str) -> tuple[str, str] | tuple[None, str]:
+def _resolve_gm_command_target(
+    inst,
+    raw_target: str,
+    *,
+    prefer_deceased: bool = False,
+) -> tuple[str, str] | tuple[None, str]:
     target = re.sub(r"\s+", "", raw_target).strip("的")
+    for pattern in (
+        r"^(?:名为|名字是|名字叫|叫做|叫|角色名为)(.+?)(?:的)?(?:人|玩家|角色)?$",
+        r"^(?:玩家|角色)(?:名为|叫做|叫)(.+)$",
+    ):
+        wrapped = re.fullmatch(pattern, target, flags=re.IGNORECASE)
+        if wrapped:
+            target = wrapped.group(1).strip("的")
+            break
+    # 玩家真名精确匹配优先于泛称：角色名就叫"冒险者"时应命中该玩家，
+    # 而不是当泛指歧义报错（修复 GM 指令复活名为"冒险者"的角色被拒）。
+    for uid, player in inst.players.items():
+        name = str(player.get("character_name") or "")
+        if target in {str(uid), re.sub(r"\s+", "", name)}:
+            return str(uid), ""
     generic_targets = {
         "用户", "玩家", "冒险者", "角色", "当前玩家", "当前角色",
         "user", "player", "adventurer", "currentplayer", "currentcharacter",
@@ -460,12 +504,26 @@ def _resolve_gm_command_target(inst, raw_target: str) -> tuple[str, str] | tuple
         if len(inst.players) == 1:
             uid = next(iter(inst.players))
             return uid, ""
-        return None, "当前有多名玩家，请在 GM 指令中写明角色名"
-    for uid, player in inst.players.items():
-        name = str(player.get("character_name") or "")
-        if target in {str(uid), re.sub(r"\s+", "", name)}:
-            return str(uid), ""
-    return None, f"找不到角色：{raw_target}"
+        if prefer_deceased:
+            deceased = [
+                str(uid)
+                for uid in inst.players
+                if bool(inst.get_character_sheet(uid).get("deceased"))
+            ]
+            if len(deceased) == 1:
+                return deceased[0], ""
+        names = [
+            str(player.get("character_name") or uid)
+            for uid, player in inst.players.items()
+        ]
+        return None, (
+            "当前有多名玩家，请写明角色名（可用："
+            + "、".join(names)
+            + "），例如“复活" + names[0] + "”"
+        )
+    names = [str(player.get("character_name") or uid) for uid, player in inst.players.items()]
+    suffix = f"；可用角色：{'、'.join(names)}" if names else ""
+    return None, f"找不到角色：{raw_target}{suffix}"
 
 
 def _parse_gm_resource_change(inst, command: str, rule: RuleSystem | None) -> dict[str, Any] | None:
@@ -514,6 +572,11 @@ def _parse_gm_resource_change(inst, command: str, rule: RuleSystem | None) -> di
     )
     after = apply_resource_delta(character_sheet, resource_key, delta, rule)
     actual_delta = after - before
+    revived = False
+    if resource_key == "hp" and after > 0 and character_sheet.get("deceased"):
+        character_sheet["deceased"] = False
+        character_sheet.pop("death_round", None)
+        revived = True
     return {
         "uid": uid,
         "character_name": inst.players.get(uid, {}).get("character_name") or uid,
@@ -523,7 +586,45 @@ def _parse_gm_resource_change(inst, command: str, rule: RuleSystem | None) -> di
         "actual_delta": actual_delta,
         "before": before,
         "after": after,
+        "revived": revived,
     }
+
+
+def _normalize_revive_method(raw: str) -> str:
+    method = re.sub(r"\s+", "", raw or "").lower()
+    if method in {"法术", "魔法", "治疗术", "spell", "magic", "heal"}:
+        return "法术"
+    if method in {"npc", "npc治疗", "治疗者", "医师", "healer"}:
+        return "NPC"
+    if method in {"自然", "自然恢复", "natural", "rest"}:
+        return "自然"
+    return (raw or "法术").strip() or "法术"
+
+
+def _parse_gm_revive_command(inst, command: str) -> dict[str, Any] | None:
+    compact = re.sub(r"\s+", "", command)
+    match = re.fullmatch(
+        r"(?:复活|救活)(?P<target>.+?)(?:[:：(\-（](?P<method>[^:：()（）]+)[)）]?)?",
+        compact,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        match = re.fullmatch(
+            r"revive(?P<target>.+?)(?:[:(\-](?P<method>[^:()]+)\)?)?",
+            compact,
+            flags=re.IGNORECASE,
+        )
+    if not match:
+        return None
+    uid, error = _resolve_gm_command_target(
+        inst,
+        match.group("target"),
+        prefer_deceased=True,
+    )
+    if error:
+        return {"error": error}
+    method = _normalize_revive_method(match.groupdict().get("method") or "法术")
+    return {"uid": uid, "method": method}
 
 
 async def gm_command(api: "WebAPI", game_key: str, command: str, mode: str = "note") -> dict[str, Any]:
@@ -550,6 +651,7 @@ async def gm_command(api: "WebAPI", game_key: str, command: str, mode: str = "no
             message=(
                 f"{resource_change['character_name']} · {resource_change['resource_label']} "
                 f"{resource_change['before']} → {resource_change['after']}"
+                + ("，已复活" if resource_change["revived"] else "")
             ),
             impact="数值已由服务端直接写入角色卡，不依赖模型输出。",
             fallback="direct_state_update",
@@ -561,9 +663,36 @@ async def gm_command(api: "WebAPI", game_key: str, command: str, mode: str = "no
             "message": (
                 f"{resource_change['character_name']}的{resource_change['resource_label']}："
                 f"{resource_change['before']} → {resource_change['after']}"
+                + ("，已复活" if resource_change["revived"] else "")
             ),
             "kind": "resource_update",
             "resource_update": resource_change,
+        }
+
+    revive = _parse_gm_revive_command(inst, command)
+    if revive:
+        if revive.get("error"):
+            return {"ok": False, "error": revive["error"]}
+        character_sheet = inst.get_character_sheet(revive["uid"])
+        if not revive_character(character_sheet, revive["method"]):
+            return {"ok": False, "error": "该角色当前并未死亡"}
+        inst.set_character_sheet(revive["uid"], character_sheet)
+        await api._reg.save(inst)
+        name = inst.players[revive["uid"]].get("character_name") or revive["uid"]
+        record_health_event(
+            inst,
+            component="gm_control",
+            code="GM_REVIVE",
+            severity="info",
+            title="GM 复活",
+            message=f"{name} 已复活（{revive['method']}）",
+            impact="角色死亡状态已清除，HP 按复活方式恢复。",
+            fallback="direct_state_update",
+        )
+        return {
+            "ok": True,
+            "message": f"{name} 已复活（{revive['method']}）",
+            "kind": "revive",
         }
 
     target_round = int(inst.round_number or 0)
@@ -622,8 +751,9 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
                       players: list[dict] | None = None,
                       custom_world: bool = False,
                       gm_uid: str = "",
-                      room_password: str = "",
-                      language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+                      room_password: str | None = None,
+                      language: str = DEFAULT_LANGUAGE,
+                      scene_image: dict[str, Any] | None = None) -> dict[str, Any]:
     if not api._handler or not api._reg:
         return {"ok": False, "error": "系统未就绪"}
     if config_error := api._llm_configuration_error(language):
@@ -634,6 +764,12 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
         return {"ok": False, "error": "非法 source_world_id"}
     if not players:
         return {"ok": False, "error": "请至少创建或选择 1 名队伍角色"}
+
+    try:
+        default_scene_image = api.resolve_default_scene_image(source_world_id or world_id, rule_id)
+        selected_scene_image = api.materialize_scene_image(scene_image if scene_image else default_scene_image)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
     unique_id = f"{world_id}_{time.time_ns()}"
     game_key = ("web", unique_id, "web_bot")
@@ -687,6 +823,8 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
                     "default_rule": resolved_rule,
                     "starter_lorebook": [],
                 }
+                if not scene_image:
+                    min_template["scene_image"] = api.materialize_scene_image(default_scene_image)
                 if create_lorebook and not custom_world:
                     min_template["_diceframe_managed"] = "game"
                     min_template["_diceframe_owner_game"] = _GAME_KEY_SEP.join(game_key)
@@ -705,6 +843,20 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
         language=resolved_language,
     )
     instance.set_difficulty(difficulty)
+    instance.set_scene_image(selected_scene_image)
+    # 房间密码三态：字段缺失(None) 且 多人局 → 生成随机密码回显（安全默认，
+    # 防止 GM 以为设了密码实际开放）；显式空串 "" → 明确开放；非空 → 加密并校验长度。
+    generated_password: str | None = None
+    if room_password is None:
+        if not solo:
+            generated_password = secrets.token_urlsafe(6)
+            room_password = generated_password
+    elif room_password == "":
+        room_password = ""
+    else:
+        room_password = str(room_password)
+        if len(room_password) < 4:
+            return {"ok": False, "error": "房间密码至少 4 位"}
     instance.configure_session(
         solo_mode=solo,
         entry_point="web",
@@ -759,6 +911,7 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
         "game_key": _GAME_KEY_SEP.join(game_key),
         "world_id": instance.world_id,
         "world_name": world_name,
+        "generated_password": generated_password,
         "language": normalize_language(instance.language),
         "narration": narration,
         "players": created_players,
@@ -836,7 +989,8 @@ async def switch_world(api: "WebAPI", game_key: str, world_id: str) -> dict[str,
 async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
                            players: list[dict] | None = None,
                            gm_uid: str = "",
-                           language: str = "") -> dict[str, Any]:
+                           language: str = "",
+                           scene_image: dict[str, Any] | None = None) -> dict[str, Any]:
     if not api._handler or not api._reg:
         return {"ok": False, "error": "系统未就绪"}
     if config_error := api._llm_configuration_error(language):
@@ -853,6 +1007,17 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
     world_id = target_inst.world_id or "default_fantasy"
     world_name = target_inst.world_name
     resolved_language = normalize_language(language or getattr(target_inst, "language", DEFAULT_LANGUAGE))
+    try:
+        selected_scene_image = api.materialize_scene_image(
+            scene_image
+            if scene_image
+            else (
+                getattr(target_inst, "scene_image", None)
+                or api.resolve_default_scene_image(world_id, _instance_rule_id(api, target_inst))
+            )
+        )
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
 
     unique_id = f"{world_id}_{time.time_ns()}"
     game_key = ("web", unique_id, "web_bot")
@@ -864,6 +1029,7 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
         language=resolved_language,
     )
     instance.configure_session(solo_mode=solo)
+    instance.set_scene_image(selected_scene_image)
     created_players: list[dict[str, Any]] = []
     for idx, character in enumerate(players or []):
         if idx == 0 and gm_uid:
@@ -893,3 +1059,29 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
         "round_number": instance.round_number,
         "state": instance.state.value,
     }
+
+
+async def update_scene_image(
+    api: "WebAPI",
+    game_key: str,
+    reference: dict[str, Any] | None = None,
+    *,
+    use_default: bool = False,
+) -> dict[str, Any]:
+    inst = api._reg.get(api._parse_key(game_key))
+    if not inst:
+        return {"ok": False, "error": "游戏不存在"}
+    try:
+        selected = (
+            api.resolve_default_scene_image(str(inst.world_id or ""), _instance_rule_id(api, inst))
+            if use_default
+            else reference
+        )
+        if not selected:
+            return {"ok": False, "error": "请选择冒险头图或恢复内容默认"}
+        materialized = api.materialize_scene_image(selected)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    inst.set_scene_image(materialized)
+    await api._reg.save(inst)
+    return {"ok": True, "scene_image": materialized}
