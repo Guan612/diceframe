@@ -1,3 +1,5 @@
+import { i18n } from '@/i18n'
+
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string
@@ -92,7 +94,7 @@ function dispatchEvent(block: string, handlers: AssistantStreamHandlers): boolea
   const payload = parsePayload(data)
   if (event === 'error') {
     throw new AssistantStreamError(
-      typeof payload.error === 'string' ? payload.error : '助手处理出错',
+      typeof payload.error === 'string' ? payload.error : i18n.global.t('assistantError'),
       typeof payload.code === 'string' ? payload.code : 'ASSISTANT_FAILED',
     )
   }
@@ -131,5 +133,5 @@ async function responseError(resp: Response): Promise<string> {
   } catch {
     // Fall through to the stable UI message.
   }
-  return '助手请求失败'
+  return i18n.global.t('assistantRequestFailed')
 }

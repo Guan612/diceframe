@@ -56,3 +56,28 @@ class TestFormatRecalled:
         assert "老法师" in result
         assert "->" in result
         assert "0.9" not in result
+
+
+def test_like_coarse_filter_hits_old_entries(tmp_path):
+    """P2-H：LIKE 粗筛命中文本实体词相关的旧记忆（旧实现固定 LIMIT 500 会漏）。"""
+    from src.memory.delta import MemoryStore
+    from src.memory.recall import recall_by_text_improved
+
+    store = MemoryStore(tmp_path / "mem.db")
+    store.open()
+    # 一条很旧的匹配记忆（updated_at 远早于其他）
+    store._conn.execute(
+        "INSERT INTO memory_entries (game_key, entity, relation, value, status, updated_at) "
+        "VALUES ('g1', '古井', '藏着', '密室钥匙', 'active', '2000-01-01')"
+    )
+    # 550 条更新的无关记忆（超过旧实现的 LIMIT 500）
+    store._conn.executemany(
+        "INSERT INTO memory_entries (game_key, entity, relation, value, status) "
+        "VALUES (?, ?, '无关', ?, 'active')",
+        [("g1", f"npc{i}", f"v{i}") for i in range(550)],
+    )
+    store._conn.commit()
+
+    result = recall_by_text_improved(store, "g1", "我们查看了古井", limit=5)
+    assert any(e["entity"] == "古井" for e in result), "LIKE 粗筛应命中旧的相关记忆"
+    store.close()

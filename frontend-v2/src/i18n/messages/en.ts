@@ -252,6 +252,8 @@ export const en = {
   settingFailed: 'Setting failed',
   roomPasswordUpdated: 'Room password updated',
   roomPasswordCleared: 'Room password removed',
+  assistantError: 'Assistant processing failed',
+  assistantRequestFailed: 'Assistant request failed',
   luckTimeoutSeconds: 'Luck timeout (seconds, blank = unchanged)',
   luckTimeoutPlaceholder: '0 = disabled (async games); live games default 60',
   luckTimeoutSaved: 'Luck timeout set to {seconds}s',

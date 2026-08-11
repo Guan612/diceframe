@@ -296,7 +296,12 @@ export interface GameMutationResponse {
   ok?: boolean
   error?: string
   game_key?: string
+  world_id?: string
   world_name?: string
+  narration?: string
+  players?: Player[]
+  round_number?: number
+  state?: string
   seed_code?: string
   language?: string
   generated_password?: string

@@ -142,3 +142,30 @@ async def test_unregistered_language_falls_back_to_chinese_limits():
     # 回退中文目标：压缩后叙事 < 260 字符，且走中文压缩 prompt
     assert "请压缩以下 TRPG GM 正文" in llm.calls[1]["user_message"]
     assert len(response.narration) < 260
+
+
+@pytest.mark.asyncio
+async def test_compress_failure_truncates_hard():
+    """P2-C：压缩 LLM 失败时按目标长度硬截断，而非保留超长原文。"""
+    from types import SimpleNamespace
+    from src.commands.round_llm import _compress_long_narration
+
+    class FailingLLM:
+        default = "fail"
+
+        async def call(self, **kwargs):
+            raise RuntimeError("compress boom")
+
+    inst = GameInstance(("web", "compress_fail", "bot"))
+    long_text = "李玄清展开绢帛。" * 200
+    response = SimpleNamespace(
+        narration=long_text,
+        content=long_text,
+        state_update=None, memory_delta=None, info_asymmetry=None, plot_update=None,
+        is_narration_only=True,
+    )
+    await _compress_long_narration(FailingLLM(), "gm_prompt", response, "动作文本", "hp_based", 2048)
+
+    assert "…" in response.narration
+    assert len(response.narration) <= 261  # soft 260 + 省略号
+    assert response.narration != long_text

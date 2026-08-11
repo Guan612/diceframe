@@ -9,6 +9,19 @@ from src.engine.language import DEFAULT_LANGUAGE, is_english, localized_field, n
 
 logger = logging.getLogger("trpg")
 
+# P2-L：AI 生成后验清洗的禁用词/种族（中英双语）。英文名需 lower() 后查英文禁词，
+# 否则英文 "Invincible"/"Immortal" 等会绕过（prompt 双语禁了，后验只查中文是漏洞）。
+_BANNED_SKILL_TERMS = (
+    "无敌", "全能", "必杀", "秒杀", "绝对", "不死", "造物", "掌控",
+    "invincible", "omnipotent", "instant kill", "absolute", "immortal",
+    "creator", "god mode",
+)
+_BANNED_RACES = (
+    "半神", "古龙", "天使", "恶魔领主", "神", "魔神", "龙神", "不死族",
+    "demigod", "ancient dragon", "archangel", "demon lord", "god", "immortal",
+)
+_BANNED_RACES_LOWER = tuple(b.lower() for b in _BANNED_RACES)
+
 _WORLD_SYSTEM_PROMPT = """你是一个TRPG世界构建师。根据用户的一句话描述，生成一个完整的世界设定。
 
 输出格式（严格JSON，不要包含任何JSON之外的文本）：
@@ -674,12 +687,15 @@ async def generate_character(llm_client, prompt: str, game_key: str = "",
         hp = min(data.get("hp", 50), max_hp)
         set_hp(data, hp, max(hp, data.get("max_hp", hp)))
 
-    # 技能过滤禁用词
-    banned = ("无敌", "全能", "必杀", "秒杀", "绝对", "不死", "造物", "掌控")
+    # 技能过滤禁用词（P2-L：双语；英文名 lower 后查英文禁词，防英文绕过）
     raw_skills = data.get("skills", [])
+
+    def _skill_text(skill_obj):
+        return skill_obj if isinstance(skill_obj, str) else skill_obj.get("name", "")
+
     display_skills = [
         s for s in raw_skills
-        if not any(b in (s if isinstance(s, str) else s.get("name", "")) for b in banned)
+        if not any(b.lower() in _skill_text(s).lower() for b in _BANNED_SKILL_TERMS)
     ]
     data["skills"] = display_skills[:rule.max_skills if rule else 3]
 
@@ -688,11 +704,10 @@ async def generate_character(llm_client, prompt: str, game_key: str = "",
         if eq.get("quality") not in ("common",):
             eq["quality"] = "common"
 
-    # 种族清洗
-    banned_races = ("半神", "古龙", "天使", "恶魔领主", "神", "魔神", "龙神", "不死族")
-    race = data.get("race", "")
-    if any(b in race for b in banned_races):
-        data["race"] = "人类"
+    # 种族清洗（P2-L：双语；英文名同样拦截）
+    race = (data.get("race", "") or "").lower()
+    if any(b in race for b in _BANNED_RACES_LOWER):
+        data["race"] = "Human" if is_english(language) else "人类"
 
     # 初始化 special_stats
     if rule:

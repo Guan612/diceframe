@@ -344,3 +344,53 @@ async def test_call_llm_with_tag_retry_caps_at_one_retry():
     assert len(resets) == 1
     # 重试用尽后接受最后输出（仍是矛盾叙事，但不再重试）
     assert "没能" in response.narration
+
+
+def test_tag_failure_streak_appends_player_notice():
+    """P2-B：连续 3 轮标签解析失败时，叙事末尾追加玩家可见提示。"""
+    from types import SimpleNamespace
+    from src.commands.round_llm import apply_parsed_data_to_response
+
+    inst = GameInstance(("web", "tag_fail", "bot"))
+    inst.set_tag_failure_streak(2)
+    response = SimpleNamespace(
+        narration="调查员推开门。",
+        content="调查员推开门。",
+        state_update=None,
+        memory_delta=None,
+        info_asymmetry=None,
+        plot_update=None,
+        is_narration_only=False,
+    )
+    apply_parsed_data_to_response(inst, response, {})
+    assert response.is_narration_only is True
+    assert inst._tag_fail_streak == 3
+    assert "系统提示" in response.narration
+    assert "调查员推开门。" in response.narration
+    assert response.state_update == {}
+
+
+def test_tag_parse_success_resets_streak():
+    """标签解析成功时连续失败计数归零。"""
+    from types import SimpleNamespace
+    from src.commands.round_llm import apply_parsed_data_to_response
+
+    inst = GameInstance(("web", "tag_ok", "bot"))
+    inst.set_tag_failure_streak(2)
+    response = SimpleNamespace(
+        narration="成功解析。",
+        content="成功解析。",
+        state_update=None,
+        memory_delta=None,
+        info_asymmetry=None,
+        plot_update=None,
+        is_narration_only=False,
+    )
+    apply_parsed_data_to_response(inst, response, {
+        "state_update": {"players": {}},
+        "memory_delta": {"add": [], "update": [], "forget": []},
+        "info_asymmetry": {},
+        "plot_update": {"quests": [], "relations": [], "decisions": []},
+    })
+    assert inst._tag_fail_streak == 0
+    assert response.is_narration_only is False

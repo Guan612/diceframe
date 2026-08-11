@@ -248,6 +248,8 @@ class GameInstance:
     luck_timeout_seconds: int = 60
     # 内部：每条 pending 幸运检定的超时定时器（check_id -> asyncio.Task），不序列化
     _luck_timers: dict = field(default_factory=dict, repr=False)
+    # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
+    pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
     # D1: 已确认事项（CONFIRMED 标签累积），注入 LLM 上下文防重复讨论
     confirmed_items: list = field(default_factory=list)
@@ -1385,7 +1387,13 @@ class GameRegistry:
         return path
 
     async def save(self, instance: GameInstance) -> None:
-        """写入存档: 完整 log 追加进 chatlog.jsonl（增量），核心态写 state.json。"""
+        """写入存档: 完整 log 追加进 chatlog.jsonl（增量），核心态写 state.json。
+
+        锁权衡（P2-K）：本方法**不持 instance._lock** 写盘，避免 IO 期间阻塞回合
+        状态修改。to_dict() 是纯内存读、耗时微秒级，半更新窗口极窄，风险可接受。
+        若未来改高频写盘或发现状态撕裂，可仅对 to_dict() 段持锁（它不 await、无
+        死锁），但须确认所有 save 调用点不在 _lock 内（如 games.py/round_processor）。
+        """
         sp = self._save_path(instance.game_key)
         sp.parent.mkdir(parents=True, exist_ok=True)
         backup = sp.with_name("state.backup.json")
@@ -1568,12 +1576,17 @@ class GameRegistry:
                 game_key = tuple(parts[:3])
                 instance = await self.load(game_key)
                 if instance and instance.state != GameState.ENDED:
-                    if not (
+                    kept_luck_pending = (
                         instance.state == GameState.ACTIVE_JUDGMENT
                         and instance.round_checks_prepared
                         and instance.pending_luck_checks()
-                    ):
+                    )
+                    if not kept_luck_pending:
                         instance.state = GameState.PAUSED
+                    else:
+                        # P2-F：重启后待幸运决定的局保持可处理，标记供前端提示
+                        #（幸运超时定时器不跨重启；玩家手动决定或 GM decline 即可推进）。
+                        instance.pending_luck_after_recovery = True
                     recovered.append(instance)
             except Exception:
                 logger.exception("恢复存档失败: %s", entry.name)

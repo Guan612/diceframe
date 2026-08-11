@@ -179,7 +179,13 @@ async def _compress_long_narration(
             max_tokens=compression_max_tokens,
         )
     except Exception:
-        logger.warning("超长叙事二次压缩失败，保留原文", exc_info=True)
+        # P2-C：压缩失败按目标长度硬截断，避免超长叙事进 log/context 推高下一轮
+        # 截断概率（长→压缩失败→更长的反馈环）。
+        logger.warning("超长叙事二次压缩失败，按 %d 字硬截断", target, exc_info=True)
+        truncated = narration[:target].rstrip()
+        if truncated and truncated != narration:
+            response.narration = sanitize_narration(truncated + "…")
+            response.content = _replace_narration_in_content(str(response.content or ""), response.narration)
         return
     new_narration = str(compressed.narration or compressed.content or "").split("---", 1)[0].strip()
     if not new_narration:
@@ -407,6 +413,7 @@ def apply_parsed_data_to_response(instance: GameInstance, response: Any, data: d
     """把解析出的标签数据落到 response 对象，供后续状态应用阶段使用。"""
     if data.get("state_update") or data.get("plot_update"):
         response.is_narration_only = False
+        instance.set_tag_failure_streak(0)  # 成功解析即清零，防止 streak 累积误触发提示
         response.state_update = data["state_update"]
         response.memory_delta = data["memory_delta"]
         response.info_asymmetry = data["info_asymmetry"]
@@ -441,6 +448,20 @@ def apply_parsed_data_to_response(instance: GameInstance, response: Any, data: d
                 fallback="narration_only",
                 repair_hint="建议暂停并检查模型、prompt 标签格式，或重新生成本轮。",
             )
+            # P2-B：连续失败时给玩家可见提示，避免"叙事里受伤但 HP 没扣"的
+            # 状态漂移无声无息（health_event 仅 GM 可见）。追加到叙事末尾，玩家必见。
+            _sync_notice = (
+                "⚠️ 系统提示：连续多轮状态同步失败，HP/资源/物品可能未更新。"
+                "请告知 GM 检查，或重新生成本轮。"
+                if not is_english(getattr(instance, "language", ""))
+                else "⚠️ System: state sync has failed for several rounds; HP/resources/items "
+                "may be out of date. Ask the GM to check, or regenerate this round."
+            )
+            narration_text = str(response.narration or "").strip()
+            if narration_text:
+                response.narration = narration_text + "\n" + _sync_notice
+            elif response.content:
+                response.content = str(response.content).rstrip() + "\n" + _sync_notice
         else:
             logger.warning("标签解析失败，本轮仅保留叙事 (round=%d, streak=%d)", instance.round_number, streak)
             record_health_event(

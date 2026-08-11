@@ -695,6 +695,29 @@ async def test_recovery_keeps_pending_luck_decision_actionable(tmp_path):
 
     assert restored[0].state == GameState.ACTIVE_JUDGMENT
     assert restored[0].pending_luck_checks()[0]["check_id"] == "check-1"
+    # P2-F：恢复后标记待决定，供前端提示（定时器不跨重启）
+    assert restored[0].pending_luck_after_recovery is True
+
+
+@pytest.mark.asyncio
+async def test_recovery_pauses_game_without_pending_luck(tmp_path):
+    """无待幸运决定的局恢复后进入 PAUSED，且不标记待决定。"""
+    registry = GameRegistry(tmp_path / "saves")
+    inst = GameInstance(("web", "luck_paused", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.round_checks_prepared = True
+    inst.last_checks = [{
+        "check_id": "check-1",
+        "actor_uid": "p1",
+        "luck_decision": "spent",
+    }]
+    registry.register(inst)
+    await registry.save(inst)
+
+    restored_registry = GameRegistry(tmp_path / "saves")
+    restored = await restored_registry.recover_all()
+
+    assert restored[0].state == GameState.PAUSED
+    assert restored[0].pending_luck_after_recovery is False
 
 
 @pytest.mark.asyncio
@@ -869,3 +892,25 @@ async def test_configure_session_luck_timeout_validation():
     # 不传则不改变已有值
     inst.configure_session()
     assert inst.luck_timeout_seconds == 0
+
+
+def test_hardcore_blocks_revive():
+    """P2-O：硬核难度禁止复活，角色保持死亡。"""
+    from src.commands.round_effects import apply_revive_commands
+    inst = GameInstance(("web", "revive_hard", "bot"))
+    inst.difficulty = "硬核"
+    inst.players["p1"] = {"character_name": "勇者", "character_sheet": {"hp": 0, "deceased": True, "max_hp": 50}}
+    apply_revive_commands(inst, {"revive_commands": [{"uid": "p1", "method": "法术"}]})
+    assert inst.players["p1"]["character_sheet"]["deceased"] is True
+
+
+def test_normal_allows_revive():
+    """P2-O：标准难度可正常复活。"""
+    from src.commands.round_effects import apply_revive_commands
+    inst = GameInstance(("web", "revive_ok", "bot"))
+    inst.difficulty = "标准"
+    inst.players["p1"] = {"character_name": "勇者", "character_sheet": {"hp": 0, "deceased": True, "max_hp": 50}}
+    apply_revive_commands(inst, {"revive_commands": [{"uid": "p1", "method": "法术"}]})
+    cs = inst.players["p1"]["character_sheet"]
+    assert cs["deceased"] is False
+    assert cs["hp"] > 0

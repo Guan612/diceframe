@@ -252,6 +252,8 @@ export const zhCN = {
   settingFailed: '设置失败',
   roomPasswordUpdated: '房间密码已更新',
   roomPasswordCleared: '已取消房间密码',
+  assistantError: '助手处理出错',
+  assistantRequestFailed: '助手请求失败',
   luckTimeoutSeconds: '幸运超时（秒，留空不改）',
   luckTimeoutPlaceholder: '0=禁用（异步局建议），实时局默认60',
   luckTimeoutSaved: '幸运超时已设为 {seconds} 秒',
