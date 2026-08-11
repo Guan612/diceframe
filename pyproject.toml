@@ -20,6 +20,8 @@ follow_imports = "skip"
 check_untyped_defs = true
 files = [
     "src/engine/contracts.py",
+    "src/engine/luck_resolver.py",
+    "src/engine/persistence.py",
     "src/plugin_host/content.py",
     "src/plugin_host/descriptors.py",
     "src/webui/config_update.py",
