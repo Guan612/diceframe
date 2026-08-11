@@ -250,6 +250,7 @@ def validate_zip(output_zip: Path) -> None:
     if any("/app/frontend-v2/" in name for name in names):
         raise RuntimeError("Portable zip should not contain frontend source files")
     build_release.validate_avatar_payload(infos, require_source=False)
+    build_release.validate_background_payload(infos, require_source=False)
     if not any("/python/Lib/site-packages/aiohttp/" in name for name in names):
         raise RuntimeError("Portable zip is missing aiohttp")
     if not any("/python/Lib/site-packages/PIL/" in name for name in names):

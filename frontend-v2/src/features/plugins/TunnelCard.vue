@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { NButton, NInput, NTag, NIcon } from 'naive-ui'
+import { NAlert, NButton, NInput, NTag, NIcon } from 'naive-ui'
 import { CopyOutline } from '@vicons/ionicons5'
 import { useTunnel } from '@/composables/useTunnel'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useLocale } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
 import { copyToClipboard } from '@/utils/clipboard'
+import type { PluginInfo, PluginToolDescriptor } from '@/api/types'
+
+const props = defineProps<{
+  plugin: PluginInfo
+  tools: PluginToolDescriptor[]
+}>()
 
 const store = useSettingsStore()
 const { t } = useLocale()
@@ -18,6 +24,9 @@ const {
 } = useTunnel()
 
 const hasAccessPassword = computed(() => Boolean(store.config.access_password?.configured))
+const providers = computed(() => tunnelProviders.value.filter(provider => provider.plugin_id === props.plugin.id))
+const pluginActive = computed(() => providers.value.some(provider => provider.running))
+const isQuickTunnelPlugin = computed(() => props.plugin.id === 'cloudflare-tunnel')
 
 async function onTunnelEnable(pluginId: string) {
   if (!hasAccessPassword.value) { toast.error(t('tunnelNeedPassword')); return }
@@ -37,27 +46,30 @@ async function onCopyTunnelLink() {
 </script>
 
 <template>
-  <section class="settings-group-card">
+  <section class="tunnel-tool-panel">
+    <NAlert v-if="isQuickTunnelPlugin" type="warning" :show-icon="true" :bordered="false">
+      {{ t('quickTunnelRealtimeWarning') }}
+    </NAlert>
     <div v-if="!hasAccessPassword" class="form-row">
       <p class="form-hint">{{ t('tunnelNeedPassword') }}</p>
     </div>
-    <div v-if="!tunnelProviders.length" class="form-row">
+    <div v-if="!providers.length" class="form-row">
       <p class="form-hint">{{ t('tunnelNoProvider') }}</p>
     </div>
-    <div v-for="p in tunnelProviders" :key="p.plugin_id" class="form-row">
+    <div v-for="p in providers" :key="p.plugin_id" class="form-row">
       <label>{{ p.name }}</label>
       <div class="switch-inline">
         <NTag v-if="p.running" type="success" size="small">{{ t('tunnelActive') }}</NTag>
         <NTag v-else size="small">{{ t('tunnelIdle') }}</NTag>
         <NTag v-if="p.needs_core_update" type="warning" size="small">{{ t('pluginNeedsCoreUpdate', { version: p.min_app_version || '' }) }}</NTag>
-        <NButton v-if="!tunnelActive" type="primary" size="small" :loading="tunnelStarting" :disabled="!hasAccessPassword" @click="onTunnelEnable(p.plugin_id)">{{ t('tunnelEnable') }}</NButton>
+        <NButton v-if="!pluginActive" type="primary" size="small" :loading="tunnelStarting" :disabled="!hasAccessPassword || tunnelActive" @click="onTunnelEnable(p.plugin_id)">{{ t('tunnelEnable') }}</NButton>
         <NButton v-else size="small" :loading="tunnelStarting" @click="onTunnelStop(p.plugin_id)">{{ t('tunnelStop') }}</NButton>
       </div>
     </div>
     <div v-if="tunnelStarting && !tunnelActive" class="form-row">
       <p class="muted">{{ t('tunnelStarting') }}</p>
     </div>
-    <div v-if="tunnelActive && tunnelStatus?.url" class="form-row">
+    <div v-if="pluginActive && tunnelStatus?.url" class="form-row">
       <label>{{ t('tunnelActive') }}</label>
       <NInput :value="tunnelStatus.url" readonly />
       <div class="actions-row">
@@ -73,3 +85,10 @@ async function onCopyTunnelLink() {
     </div>
   </section>
 </template>
+
+<style scoped>
+.tunnel-tool-panel {
+  display: grid;
+  gap: 12px;
+}
+</style>

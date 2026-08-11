@@ -157,6 +157,167 @@ def test_import_all_plugin_content_imports_characters_and_entries(tmp_path):
     assert len(api._lore.entries) == 1
 
 
+def test_content_pack_portraits_preview_and_import_as_local_uploads(tmp_path):
+    from src.webui.services.plugins import import_all_plugin_content
+
+    plugins = tmp_path / "plugins"
+    write_plugin(
+        plugins,
+        "portrait-pack",
+        plugin_type="content-pack",
+        entrypoint=False,
+        manifest_extra={
+            "contributes": {
+                "characters": ["characters/*.json"],
+                "npcs": ["npc/*.json"],
+                "portraits": ["assets/portraits/*"],
+            }
+        },
+    )
+    pack = plugins / "portrait-pack"
+    (pack / "characters").mkdir()
+    (pack / "npc").mkdir()
+    portrait_dir = pack / "assets" / "portraits"
+    portrait_dir.mkdir(parents=True)
+    portrait_path = portrait_dir / "mira.png"
+    portrait_path.write_bytes(b"\x89PNG\r\n\x1a\nportrait-test")
+    portable_portrait = {"kind": "asset", "path": "assets/portraits/mira.png"}
+    (pack / "characters" / "hero.json").write_text(
+        json.dumps({
+            "id": "hero",
+            "character_name": "Hero",
+            "attributes": {},
+            "skills": [],
+            "portrait": portable_portrait,
+        }),
+        encoding="utf-8",
+    )
+    (pack / "npc" / "mira.json").write_text(
+        json.dumps({
+            "id": "mira",
+            "name": "Mira",
+            "description": "guide",
+            "portrait": portable_portrait,
+        }),
+        encoding="utf-8",
+    )
+    data_dir = tmp_path / "data"
+    config_dir = data_dir / "portrait-pack"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
+    host = PluginHost(plugins, data_dir)
+    host.discover()
+
+    resources = host.list_content_resources()
+    expected_runtime_portrait = {
+        "kind": "plugin",
+        "plugin_id": "portrait-pack",
+        "path": "assets/portraits/mira.png",
+    }
+    assert resources["character_template"][0]["portrait"] == expected_runtime_portrait
+    assert resources["npc"][0]["portrait"] == expected_runtime_portrait
+
+    class _Lore:
+        worlds = {"w1": {"id": "w1", "name": "World"}}
+
+        def __init__(self):
+            self.entries = {}
+
+        def get_world(self, world_id):
+            return self.worlds.get(world_id)
+
+        def get_entry(self, entry_id):
+            return self.entries.get(entry_id)
+
+        def update_entry(self, entry_id, entry):
+            self.entries[entry_id] = entry
+
+    class _Api:
+        def __init__(self):
+            self._plugins = host
+            self._lore = _Lore()
+            self.cards = []
+            self.saved_portraits = []
+
+        def plugin_asset_path(self, plugin_id, relative_path):
+            return host.public_asset_path(plugin_id, relative_path)
+
+        def save_avatar_upload(self, file_data, file_name=""):
+            self.saved_portraits.append((file_data, file_name))
+            return {"ok": True, "portrait": {"kind": "upload", "asset_id": f"local-{len(self.saved_portraits)}"}}
+
+        def avatar_file(self, asset_id):
+            return None
+
+        def save_character_card(self, card):
+            self.cards.append(card)
+            return {"ok": True}
+
+        def save_entry(self, entry):
+            self._lore.entries[entry["id"]] = entry
+            return {"ok": True}
+
+    api = _Api()
+    result = import_all_plugin_content(api, "portrait-pack", "w1")
+
+    assert result["ok"] is True
+    assert result["imported_count"] == 2
+    assert result["error_count"] == 0
+    assert api.cards[0]["portrait"] == {"kind": "upload", "asset_id": "local-1"}
+    assert next(iter(api._lore.entries.values()))["portrait"] == {
+        "kind": "upload",
+        "asset_id": "local-2",
+    }
+    assert [name for _, name in api.saved_portraits] == ["mira.png", "mira.png"]
+
+
+def test_content_pack_scene_image_assets_are_exposed_as_plugin_references(tmp_path):
+    plugins = tmp_path / "plugins"
+    write_plugin(
+        plugins,
+        "scene-pack",
+        plugin_type="content-pack",
+        entrypoint=False,
+        manifest_extra={"contributes": {
+            "world_templates": ["content/worlds/*.json"],
+            "scene_images": ["assets/scenes/*"],
+        }},
+    )
+    pack = plugins / "scene-pack"
+    (pack / "content" / "worlds").mkdir(parents=True)
+    (pack / "assets" / "scenes").mkdir(parents=True)
+    (pack / "assets" / "scenes" / "valley.webp").write_bytes(b"RIFF-scene-test")
+    (pack / "content" / "worlds" / "valley.json").write_text(json.dumps({
+        "world_id": "valley",
+        "world_name": "Valley",
+        "default_rule": "freeform_fantasy",
+        "scene_image": {"kind": "asset", "path": "assets/scenes/valley.webp"},
+    }), encoding="utf-8")
+    config_dir = tmp_path / "data" / "scene-pack"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+
+    world = host.load_world_template("valley")
+
+    assert world["scene_image"] == {
+        "kind": "plugin",
+        "plugin_id": "scene-pack",
+        "path": "assets/scenes/valley.webp",
+    }
+
+
+def test_content_pack_manifest_declares_scene_image_assets():
+    manifest = plugin_service.build_content_pack_manifest(
+        "scene-pack", "Scene Pack", "1.0.0", "", True, True, False,
+        has_scene_images=True,
+    )
+
+    assert manifest["contributes"]["scene_images"] == ["assets/scenes/*"]
+    assert "content.scene-image" in manifest["capabilities"]
+
+
 def test_sync_plugin_lorebook_and_cleanup(tmp_path):
     from src.webui.services.plugins import cleanup_plugin_lorebook, sync_plugin_lorebooks
 
@@ -874,13 +1035,34 @@ async def test_theme_and_map_pack_contributions_are_queryable(tmp_path):
     theme_dir = plugins / "paper-theme" / "theme"
     theme_dir.mkdir(parents=True)
     (theme_dir / "theme.json").write_text(json.dumps({
+        "schema_version": 2,
         "id": "paper-theme",
         "name": "Paper Theme",
         "description": "Soft paper colors",
         "tokens": {
-            "base": {"--gold": "#ccaa66", "color": "red", "--bad": "url(http://bad)"},
-            "dark": {"--panel": "#111111"},
+            "base": {
+                "--df-accent": "#ccaa66",
+                "--gold": "#ffaa00",
+                "--df-shadow": "url(http://bad)",
+                "--df-info": "not-a-color",
+                "--df-radius-md": "calc(100vw)",
+            },
+            "dark": {"--df-surface-1": "#111111"},
         },
+    }), encoding="utf-8")
+    write_plugin(
+        plugins,
+        "legacy-theme",
+        plugin_type="theme",
+        entrypoint=False,
+        manifest_extra={"contributes": {"theme": "theme/theme.json"}},
+    )
+    legacy_theme_dir = plugins / "legacy-theme" / "theme"
+    legacy_theme_dir.mkdir(parents=True)
+    (legacy_theme_dir / "theme.json").write_text(json.dumps({
+        "id": "legacy-theme",
+        "name": "Legacy Theme",
+        "tokens": {"base": {"--gold": "#ffcc00"}},
     }), encoding="utf-8")
     write_plugin(
         plugins,
@@ -899,13 +1081,20 @@ async def test_theme_and_map_pack_contributions_are_queryable(tmp_path):
     host.discover()
 
     await host.update_config("paper-theme", {"enabled": True})
+    await host.update_config("legacy-theme", {"enabled": True})
     await host.update_config("map-assets", {"enabled": True})
 
-    assert host.list_contributions("theme")[0]["key"] == "paper-theme"
+    assert {item["key"] for item in host.list_contributions("theme")} == {
+        "legacy-theme",
+        "paper-theme",
+    }
     assert host.list_contributions("map_location")[0]["key"] == "town"
-    theme = host.list_themes()[0]
-    assert theme["tokens"]["base"] == {"--gold": "#ccaa66"}
-    assert theme["tokens"]["dark"] == {"--panel": "#111111"}
+    themes = host.list_themes()
+    assert [theme["id"] for theme in themes] == ["paper-theme"]
+    theme = themes[0]
+    assert theme["schema_version"] == 2
+    assert theme["tokens"]["base"] == {"--df-accent": "#ccaa66"}
+    assert theme["tokens"]["dark"] == {"--df-surface-1": "#111111"}
 
 
 @pytest.mark.asyncio

@@ -130,21 +130,71 @@ const statusChips = computed(() => {
 const recentHealth = computed(() => [...(healthData.value?.events || [])].reverse().slice(0, 10))
 const recentPrivate = computed(() => [...privateMsgs.value].reverse().slice(0, 5))
 const hasSystem = computed(() => statusChips.value.length || recentHealth.value.length || recentPrivate.value.length)
+
+function exportLog() {
+  if (!game.value) return
+  const payload = {
+    game_key: game.value,
+    game: gameDetail.value,
+    exported_at: new Date().toISOString(),
+    page: page.value,
+    per_page: pageSize.value,
+    total: total.value,
+    log: data.value.log || [],
+    system_status: healthData.value?.status || {},
+    health_events: healthData.value?.events || [],
+    private_messages: privateMsgs.value,
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+  const href = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = href
+  anchor.download = `diceframe-${game.value}-log.json`
+  anchor.click()
+  URL.revokeObjectURL(href)
+}
 </script>
 
 <template>
-  <section class="view archive-page logs-page">
-    <header class="view-title archive-hero">
-      <div>
-        <h1>{{ t('gameLogs') }}</h1>
-        <p v-if="game">{{ t('currentSave') }}: {{ game }}</p>
-        <p v-else class="muted">{{ t('noAdventureLogsHint') }}</p>
-      </div>
-      <button @click="load">{{ t('refresh') }}</button>
-    </header>
-
+  <section class="view archive-page logs-page reference-logs-page">
     <p v-if="error" class="error-banner">{{ error }}</p>
 
+    <div class="logs-workspace">
+      <aside class="log-index">
+        <div class="log-campaign-card">
+          <span class="log-index-kicker">{{ t('currentSave') }}</span>
+          <h2>{{ gameDetail?.world_name || game || t('noAdventureLogsHint') }}</h2>
+          <p>{{ gameDetail?.scene || t('notStarted') }}</p>
+          <small v-if="game">{{ game }}</small>
+        </div>
+        <nav class="mode-tabs log-index-tabs">
+          <button type="button" :class="{ active: tab === 'log' }" @click="tab = 'log'">{{ t('dialogueLog') }}</button>
+          <button type="button" :class="{ active: tab === 'proclog' }" @click="tab = 'proclog'">{{ t('processingLog') }}</button>
+        </nav>
+        <div class="log-index-meta">
+          <span>{{ t('totalRoundsCount', { count: total }) }}</span>
+          <span v-if="statusChips.length">{{ t('systemRecords') }} · {{ statusChips.length }}</span>
+        </div>
+        <button class="log-export" :disabled="!game" @click="exportLog">{{ t('export') }}</button>
+      </aside>
+
+      <main class="logs-document">
+    <header class="view-title archive-hero logs-document-head">
+      <div>
+        <span class="section-kicker">CAMPAIGN ARCHIVE</span>
+        <h1>{{ t('gameLogs') }}</h1>
+        <p v-if="game">{{ gameDetail?.world_name || game }} · {{ gameDetail?.scene || t('notStarted') }}</p>
+        <p v-else class="muted">{{ t('noAdventureLogsHint') }}</p>
+      </div>
+      <div class="actions">
+        <button @click="load">{{ t('refresh') }}</button>
+        <button class="log-mobile-export" :disabled="!game" @click="exportLog">{{ t('export') }}</button>
+      </div>
+    </header>
+    <nav class="mode-tabs log-mobile-tabs">
+      <button type="button" :class="{ active: tab === 'log' }" @click="tab = 'log'">{{ t('dialogueLog') }}</button>
+      <button type="button" :class="{ active: tab === 'proclog' }" @click="tab = 'proclog'">{{ t('processingLog') }}</button>
+    </nav>
     <div v-if="hasSystem" class="lore-system">
       <h3>{{ t('systemRecords') }}</h3>
       <div v-if="statusChips.length" class="status-tags">
@@ -163,10 +213,6 @@ const hasSystem = computed(() => statusChips.value.length || recentHealth.value.
       </div>
     </div>
 
-    <div class="mode-tabs">
-      <button type="button" :class="{ active: tab === 'log' }" @click="tab = 'log'">{{ t('dialogueLog') }}</button>
-      <button type="button" :class="{ active: tab === 'proclog' }" @click="tab = 'proclog'">{{ t('processingLog') }}</button>
-    </div>
     <div class="log-toolbar">
       <label>{{ t('perPage') }}
         <select :value="pageSize" @change="setPageSize(($event.target as HTMLSelectElement).value)">
@@ -222,5 +268,7 @@ const hasSystem = computed(() => statusChips.value.length || recentHealth.value.
       <span>{{ t('pageOf', { page, total: totalPages }) }} · {{ t('totalRoundsCount', { count: total }) }}</span>
       <button :disabled="page >= totalPages" @click="goPage(page + 1)">{{ t('nextPage') }}</button>
     </nav>
+      </main>
+    </div>
   </section>
 </template>

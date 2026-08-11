@@ -10,7 +10,7 @@
 
 <p align="center"><a href="https://diceframe.com">Official Website</a></p>
 
-![DiceFrame Web UI preview](docs/assets/diceframe-readme-hero.png)
+![DiceFrame Web UI preview](docs/assets/diceframe-readme-hero.jpg)
 
 DiceFrame is a self-hostable **AI tabletop RPG engine** supporting **DND/COC/custom rules**, with **multiplayer WebUI**.
 
@@ -108,7 +108,7 @@ docker compose up -d
 4. Choose Game Language: English.
 5. Pick the English fantasy template, create or import characters, then enter Play.
 6. Submit actions in natural language.
-7. If DiceFrame asks for a roll, roll first; the GM narration resumes after the result is recorded.
+7. If an action triggers a check, the system adjudicates and rolls once automatically; the GM narration then resumes.
 
 ## Languages And Content
 
@@ -125,7 +125,7 @@ The built-in QQ/NapCat plugin receives its DiceFrame Bot API Token automatically
 
 The Bot follows the bound game's language for help and primary operation messages, with native Chinese and English commands available.
 
-The plugin store indexes author-owned repositories. Installation resolves the latest stable GitHub Release to an exact commit; safe declarative updates may run automatically, while process or permission-expanding updates require confirmation. Local/private sharing uses `.dfplugin`. Supported capabilities include channel adapters, Bot Bridge command/hook/render extensions, content packs, themes, structured tools, and the location/asset subset of map packs. Import/export and Provider types remain reserved and cannot be installed from the store.
+The plugin store indexes author-owned repositories. Installation resolves the latest stable GitHub Release to an exact commit; the store checks for updates and notifies; installing or updating always requires user confirmation, and process or permission-expanding updates require explicit confirmation. Local/private sharing uses `.dfplugin`. Supported capabilities include channel adapters, Bot Bridge command/hook/render extensions, content packs, themes, structured tools, and the location/asset subset of map packs. Import/export and Provider types remain reserved and cannot be installed from the store.
 
 ## Documentation
 

@@ -37,6 +37,34 @@ _BUDGET_MEMORY = 0.06          # 长期记忆
 _BUDGET_HISTORY_MIN = 0.22     # 对话历史最小比例
 # 剩余 ~6% 用于玩家消息和分隔符
 
+_INVENTORY_STATE_LIMIT = 20
+_KEY_ITEMS_STATE_LIMIT = 12
+
+
+def _compact_state_view(state: dict) -> None:
+    """超预算时压缩玩家背包/关键物品为最近条目 + 计数，而不是整个丢弃。
+
+    只修改 state 的本地副本；角色卡与存档不受影响。装备保持完整。
+    """
+    for pdata in state.get("players", {}).values():
+        sheet = pdata.get("character_sheet", {})
+        inventory = sheet.get("inventory")
+        if isinstance(inventory, list) and inventory:
+            total = len(inventory)
+            shown = min(total, _INVENTORY_STATE_LIMIT)
+            if total > shown:
+                sheet["inventory"] = inventory[-shown:]
+            suffix = "" if total <= shown else "，其余未列出"
+            sheet["inventory_note"] = f"共 {total} 件，列出最近 {shown} 件{suffix}"
+        key_items = sheet.get("key_items")
+        if isinstance(key_items, list) and key_items:
+            total = len(key_items)
+            shown = min(total, _KEY_ITEMS_STATE_LIMIT)
+            if total > shown:
+                sheet["key_items"] = key_items[-shown:]
+            suffix = "" if total <= shown else "，其余未列出"
+            sheet["key_items_note"] = f"共 {total} 件，列出最近 {shown} 件{suffix}"
+
 
 def _detect_max_chars(provider_name: str = "") -> int:
     """根据模型名称检测上下文窗口大小。若设定了环境变量 TRPG_MAX_CONTEXT_CHARS 则直接使用。"""
@@ -182,10 +210,9 @@ async def build_context(
     # 1. 游戏状态（LLM 精简视图，含属性修正）
     state = instance.to_llm_view()
     state_json = json.dumps(state, ensure_ascii=False)
-    # 超预算时丢弃 inventory（最小关键字段），避免硬截断 JSON 破坏语法
+    # 超预算时压缩背包/关键物品为最近条目 + 计数，避免整段丢弃或硬截断 JSON
     if len(state_json) > budget_state:
-        for pdata in state.get("players", {}).values():
-            pdata.get("character_sheet", {}).pop("inventory", None)
+        _compact_state_view(state)
         state_json = json.dumps(state, ensure_ascii=False)
     state_json = _truncate(state_json, budget_state)
     parts.append(("## Game State" if english else "【游戏状态】") + f"\n{state_json}")

@@ -12,6 +12,64 @@ from urllib.parse import quote
 from .registry import ContributionRegistry
 
 
+THEME_SCHEMA_VERSION = 2
+THEME_TOKEN_NAMES = frozenset({
+    "--df-font-title",
+    "--df-font-body",
+    "--df-font-mono",
+    "--df-canvas",
+    "--df-canvas-glow",
+    "--df-surface-1",
+    "--df-surface-2",
+    "--df-surface-3",
+    "--df-surface-raised",
+    "--df-control-bg",
+    "--df-border",
+    "--df-border-soft",
+    "--df-focus",
+    "--df-accent",
+    "--df-accent-strong",
+    "--df-interactive",
+    "--df-interactive-strong",
+    "--df-success",
+    "--df-success-strong",
+    "--df-warning",
+    "--df-danger",
+    "--df-danger-strong",
+    "--df-info",
+    "--df-text",
+    "--df-text-secondary",
+    "--df-text-muted",
+    "--df-on-accent",
+    "--df-hover",
+    "--df-shadow",
+    "--df-shadow-strong",
+    "--df-radius-sm",
+    "--df-radius-md",
+    "--df-radius-lg",
+})
+THEME_VALUE_PATTERN = re.compile(r"^[\w\s#.,()%/+\-'\"]+$", re.UNICODE)
+THEME_HEX_COLOR_PATTERN = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+THEME_COLOR_FUNCTION_PATTERN = re.compile(
+    r"^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch)\([0-9a-zA-Z\s.,%/+*\-]+\)$",
+)
+THEME_RADIUS_PATTERN = re.compile(r"^(?:0|\d+(?:\.\d+)?(?:px|rem|em|%))$")
+THEME_COLOR_TOKENS = frozenset({
+    name for name in THEME_TOKEN_NAMES
+    if name not in {
+        "--df-font-title",
+        "--df-font-body",
+        "--df-font-mono",
+        "--df-shadow",
+        "--df-shadow-strong",
+        "--df-radius-sm",
+        "--df-radius-md",
+        "--df-radius-lg",
+    }
+})
+THEME_RADIUS_TOKENS = frozenset({"--df-radius-sm", "--df-radius-md", "--df-radius-lg"})
+
+
 def safe_id_part(value: Any) -> str:
     """归一化 id 片段：小写，非字母数字/下划线/连字符/中文替换为 _，截断 48 字符。
 
@@ -51,7 +109,39 @@ class PluginContentCatalog:
         if rule_path:
             data = dict(data)
             data["_diceframe_rule_path"] = str(rule_path)
+        item = self.registry.find("world_template", world_id)
+        if item:
+            data = self.expose_scene_image(data, item.plugin_id)
         return data
+
+    def expose_scene_image(self, data: dict[str, Any], plugin_id: str) -> dict[str, Any]:
+        """Convert a packaged scene image into a browser-safe plugin reference."""
+        result = dict(data)
+        reference = result.get("scene_image")
+        if not isinstance(reference, dict):
+            return result
+        kind = str(reference.get("kind") or "")
+        if kind == "builtin":
+            return result
+        if kind != "asset":
+            result.pop("scene_image", None)
+            return result
+        relative_path = str(reference.get("path") or "").replace("\\", "/").strip("/")
+        declared = any(
+            item.plugin_id == plugin_id
+            and item.kind == "scene_image_asset"
+            and item.relative_path == relative_path
+            for item in self.registry.list("scene_image_asset")
+        )
+        if declared:
+            result["scene_image"] = {
+                "kind": "plugin",
+                "plugin_id": plugin_id,
+                "path": relative_path,
+            }
+        else:
+            result.pop("scene_image", None)
+        return result
 
     def list_themes(self) -> list[dict[str, Any]]:
         themes = []
@@ -60,11 +150,18 @@ class PluginContentCatalog:
                 data = json.loads(item.path.read_text(encoding="utf-8"))
                 if not isinstance(data, dict):
                     continue
+                if data.get("schema_version") != THEME_SCHEMA_VERSION:
+                    self.logger.warning(
+                        "Ignoring unsupported plugin theme schema version: %s",
+                        item.path,
+                    )
+                    continue
                 theme_id = str(data.get("id") or item.key).strip()
                 themes.append({
                     "id": theme_id,
                     "name": str(data.get("name") or item.title or theme_id),
                     "description": str(data.get("description") or item.description or ""),
+                    "schema_version": THEME_SCHEMA_VERSION,
                     "plugin_id": item.plugin_id,
                     "plugin_name": item.plugin_name,
                     "tokens": self._sanitize_theme_tokens(data),
@@ -133,11 +230,9 @@ class PluginContentCatalog:
 
     @staticmethod
     def _sanitize_theme_tokens(data: dict[str, Any]) -> dict[str, dict[str, str]]:
-        raw = data.get("tokens") if isinstance(data.get("tokens"), dict) else data.get("variables")
+        raw = data.get("tokens")
         if not isinstance(raw, dict):
             raw = {}
-        if any(key.startswith("--") for key in raw):
-            raw = {"base": raw}
         result: dict[str, dict[str, str]] = {"base": {}, "dark": {}, "light": {}}
         for mode in result:
             values = raw.get(mode)
@@ -147,17 +242,32 @@ class PluginContentCatalog:
                 name = str(key).strip()
                 text = str(value).strip()
                 lowered = text.lower()
-                if not name.startswith("--"):
+                if name not in THEME_TOKEN_NAMES:
                     continue
                 if (
-                    len(text) > 160
-                    or any(character in text for character in "{};")
+                    not text
+                    or len(text) > 160
+                    or not THEME_VALUE_PATTERN.fullmatch(text)
                     or "url(" in lowered
                     or "expression(" in lowered
+                    or "javascript" in lowered
+                    or not PluginContentCatalog._is_theme_value_valid(name, text)
                 ):
                     continue
                 result[mode][name] = text
         return result
+
+    @staticmethod
+    def _is_theme_value_valid(name: str, value: str) -> bool:
+        if name in THEME_COLOR_TOKENS:
+            return (
+                value in {"transparent", "currentColor"}
+                or bool(THEME_HEX_COLOR_PATTERN.fullmatch(value))
+                or bool(THEME_COLOR_FUNCTION_PATTERN.fullmatch(value))
+            )
+        if name in THEME_RADIUS_TOKENS:
+            return bool(THEME_RADIUS_PATTERN.fullmatch(value))
+        return True
 
     def _map_json_items(self, kind: str, world_id: str) -> list[dict[str, Any]]:
         result = []
@@ -206,10 +316,32 @@ class PluginContentCatalog:
                     "source": "plugin",
                     "readonly": True,
                 })
+                self._expose_packaged_portrait(data, item.plugin_id)
                 result.append(data)
             except (OSError, ValueError, TypeError, json.JSONDecodeError):
                 self.logger.warning("插件内容资源读取失败: %s", item.path, exc_info=True)
         return result
+
+    def _expose_packaged_portrait(self, data: dict[str, Any], plugin_id: str) -> None:
+        """Convert the portable package contract into a browser-safe runtime reference."""
+        portrait = data.get("portrait")
+        if not isinstance(portrait, dict) or portrait.get("kind") != "asset":
+            return
+        relative_path = str(portrait.get("path") or "").replace("\\", "/").strip("/")
+        declared = any(
+            item.plugin_id == plugin_id
+            and item.kind == "portrait_asset"
+            and item.relative_path == relative_path
+            for item in self.registry.list("portrait_asset")
+        )
+        if declared:
+            data["portrait"] = {
+                "kind": "plugin",
+                "plugin_id": plugin_id,
+                "path": relative_path,
+            }
+        else:
+            data.pop("portrait", None)
 
     @staticmethod
     def _matches_world(data: dict[str, Any], world_id: str) -> bool:

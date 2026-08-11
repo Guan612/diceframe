@@ -13,7 +13,7 @@ DiceFrame 插件不只面向机器人接入。长期目标是让社区可以通�
 - 聊天桥接：QQ/NapCat、Discord、Telegram 等。
 - Bot Bridge 扩展：新增命令、修改回复、替换文字/图片/卡片展示。
 - 内容包：规则、世界模板、角色模板、NPC、道具、法术、职业。
-- 主题：CSS 变量、色板、背景、图标和界面风格包。
+- 主题：基于 v2 语义 token 的色板、字体、圆角和阴影风格包。
 - 地图包：地点模板、图标、场景素材、战斗网格素材。
 - 导入导出：SillyTavern/酒馆角色卡、世界书、Lorebook 等格式转换。
 - Provider：LLM、Embedding、TTS、图片生成等外部服务接入。
@@ -26,7 +26,7 @@ DiceFrame 插件不只面向机器人接入。长期目标是让社区可以通�
 | 聊天桥接 | `channel-adapter` | 已支持进程托管、配置、启停、HTTP API 调用 |
 | Bot Bridge 扩展 | `bot-extension` | 已支持命令拦截、消息/结果 Hook、文字/图片/卡片渲染和失败回退 |
 | 内容包 | `content-pack` | 已支持规则、世界模板和内容目录注册，支持把内容导入用户角色卡库/世界书 |
-| 主题 | `theme` | 已支持选择和加载经过过滤的 CSS 变量主题 |
+| 主题 | `theme` | 已支持选择和加载 v2 语义 token 主题 |
 | 地图包 | `map-pack` | 部分支持：可安装、配置、展示；地点会并入地图接口，图标/场景/网格素材会作为资产清单返回 |
 | 导入导出 | `import-export` | 预留：尚无统一导入导出任务 API，商店不允许安装 |
 | Provider | `provider` | 预留：尚无 Provider 注册运行时，商店不允许安装 |
@@ -84,7 +84,7 @@ README_CN.md
 | 示例 | 路径 | 类型 | 用途 |
 |------|------|------|------|
 | Starter Content | `plugins/examples/starter-content` | `content-pack` | 规则、世界模板、角色模板、NPC、道具、法术、职业 |
-| Paper Theme | `plugins/examples/paper-theme` | `theme` | 安全 CSS 变量主题 |
+| Paper Theme | `plugins/examples/paper-theme` | `theme` | 安全的 v2 语义 token 主题 |
 | Echo Tool | `plugins/examples/echo-tool` | `tool` | 进程握手、工具注册、JSON 参数与结构化结果 |
 | Bridge Customizer | `plugins/examples/bridge-customizer` | `bot-extension` | 自定义命令、结果 Hook、QQ 图片渲染 |
 
@@ -312,6 +312,8 @@ src/bots/<platform>/
 
 ### 7.2 内容包插件
 
+冒险头图的数据层级、创建/GM/打包/存档迁移全链路见 [`ADVENTURE_SCENE_IMAGE_SPEC_CN.md`](ADVENTURE_SCENE_IMAGE_SPEC_CN.md)。
+
 适用于规则、世界模板、角色模板、NPC、道具、法术、职业等。内容包插件通常是声明型插件，可以没有 `entrypoint`。
 
 建议目录：
@@ -327,6 +329,8 @@ content/
 ```
 
 当前宿主已支持 `rules`、`world_templates`、`character_templates`、`npcs`、`items`、`spells`、`classes` 贡献注册。启用内容包后，插件规则会出现在规则列表中，插件世界模板会出现在创建游戏的世界模板列表中；角色模板、NPC、道具、法术和职业会出现在插件设置页的“内容包”目录中，也可通过 `/api/plugins/content` 查询。目录中的插件内容保持只读，卸载或停用插件后不再出现在列表里；用户主动导入时会复制一份到自己的角色卡库或世界书，之后不再依赖原插件文件。
+
+冒险头图资产通过 `scene_images` 注册，与 `portraits` 一样属于内容包的声明型图片贡献。
 
 `plugin.json` 示例：
 
@@ -346,11 +350,42 @@ content/
     "npcs": ["content/npc/*.json"],
     "items": ["content/items/*.json"],
     "spells": ["content/spells/*.json"],
-    "classes": ["content/classes/*.json"]
+    "classes": ["content/classes/*.json"],
+    "portraits": ["assets/portraits/*"],
+    "scene_images": ["assets/scenes/*"]
   },
   "docs": "README_CN.md"
 }
 ```
+
+角色模板与 NPC 条目可以携带内置头像或内容包图片资源：
+
+```json
+{ "portrait": { "kind": "builtin", "id": "freeform_fantasy:0" } }
+{ "portrait": { "kind": "asset", "path": "assets/portraits/mira.webp" } }
+```
+
+`kind: "asset"` 的路径必须位于插件目录内，并被 `contributes.portraits` 声明；支持 PNG、JPEG、WebP，单张不超过 3 MB。内容包启用期间会直接预览该资源；用户把角色或 NPC 导入自己的卡库或世界书时，宿主会把图片复制并规范化到本地头像库，导入副本不再依赖插件。WebUI 的“制作内容包”勾选“打包角色与 NPC 头像”后会自动完成这些步骤。
+
+规则模板和世界模板都可以声明冒险头图。世界头图用于表达具体世界书的视觉，规则头图是没有世界专属图时的回退：
+
+```json
+{ "scene_image": { "kind": "builtin", "id": "freeform_fantasy" } }
+{ "scene_image": { "kind": "asset", "path": "assets/scenes/valley.webp" } }
+```
+
+`kind: "asset"` 必须匹配 `contributes.scene_images`；支持 PNG、JPEG、WebP，源文件不超过 8 MB、尺寸不小于 320×180。DiceFrame 保存上传图或把包内图片固化到冒险时，会按 16:9 居中裁切并规范化为 1600×900 WebP。内容作者只应在包内写 `builtin` 或 `asset`；`plugin` 和 `upload` 是宿主生成的运行时引用，不属于可分发源格式。
+
+冒险头图完整生命周期与优先级固定如下：
+
+1. 创建冒险时按“世界模板 `scene_image` > 规则模板 `scene_image` > 对应内置规则图”计算内容默认；用户可以直接采用默认，也可以上传该冒险的专属图。
+2. 选定结果写入游戏存档。来自内容包的图片会复制进本地冒险图片库，因此停用、更新或卸载内容包不会让已创建存档失图。
+3. 首页存档卡片、创建流程确认页和游玩页读取同一份存档引用，不各自猜测规则图。
+4. GM 可在游玩页随时上传新图，或“恢复内容默认”。恢复时会重新按当前世界优先、当前规则其次计算。
+5. 存档导出会把非内置头图放入存档 zip，导入到另一台 DiceFrame 后重新落入本地图片库。
+6. WebUI“制作内容包”可分别上传世界默认图和规则默认图；导出器会写入模板、生成 `assets/scenes/` 文件并补全 manifest，打包结果可直接分发。
+
+同一世界有独立美术时把图写在世界模板；多个世界共享同一视觉时只写规则模板。旧包不声明 `scene_image` 时无需迁移，会自动使用内置回退。
 
 约定：
 
@@ -358,7 +393,7 @@ content/
 - `content/worlds/*.json` 必须是 DiceFrame 世界模板，建议显式填写 `world_id`、`world_name`、`default_rule` 和 `language`。
 - 内置规则/世界模板优先于插件资源；插件不要使用与内置资源相同的 ID。
 - 角色模板可从插件设置页导入角色卡库；NPC、道具、法术、职业可导入指定世界书。
-- 内容包不会自动写入用户角色卡库、世界书或运行中游戏，必须由用户主动导入。
+- 内容目录不会自动写入用户角色卡库或世界书，必须由用户主动导入；但用户用包内世界/规则创建冒险时，模板及其默认头图会按上述契约进入新存档。
 - 内容包不得写运行时数据。
 
 内容语言约定：
@@ -368,11 +403,13 @@ content/
 - 规则模板按语言拆分文件：`<rule_id>.json`（中文版，纯中文）+ `<rule_id>_en.json`（英文版，纯英文全文）。`rule_id` 保持不变（是引用键，`world.default_rule` 指向它，不随语言变，区别于世界模板的 `world_id`）。`RuleSystem.path_for(rules_dir, rule_id, language)` 按游戏语言选文件（`_en.json` 不存在则回退中文版）。规则列表与详情会配对合并各语言文件，前端按界面语言显示对应字段。自定义规则可不拆，保持单文件并在字段后加 `_en` 后缀（如 `attr_hint_en`）做英文显示。新增语言：在 `engine/language.py` 的 `_LANG_FIELD_SUFFIXES` 登记后缀，加 `<rule_id>_<suffix>.json`，加载/展示自动生效。
 - 规则字段、枚举、协议标签和内部难度键保持稳定，例如 `rule_id`、`dice_system`、`combat_model`、`mechanics`、`difficulty_instructions` 的键、GM 标签 `HP/GOLD/QUICK_ACTIONS` 等不随内容语言改名。
 
-#### 7.2.1 骰子触发定制（intents 词表）
+#### 7.2.1 AI 检定元数据与离线兼容词表
 
-内容包可以完全自定义"哪些自然语言词触发什么检定"。规则模板里的 `intents` 表定义意图（意图 = 一类检定，如潜行、调查、施法）及各自的触发词。
+正常主链不会再根据玩家消息里的关键词直接触发检定。全员行动收齐或 GM 手动推进后，阶段 1 GM 通过 `dice_checks` 工具统一判断是否需要检定；服务端会校验玩家、角色卡属性/技能和目标值，再生成一次不可重掷的骰面。规则包必须提供稳定的 `attributes[].key`、`dice_system` 和 `mechanics`；可选 `check_mechanic` 显式声明 `dice`、`comparison` 和暴击规则，未声明时由 `dice_system` 推导。
 
-**触发优先级**（从规则词表到全局兜底）：
+`intents` 只保留为模型调用完全不可用时的离线兼容路径，也可为旧客户端/旧存档提供默认属性与候选技能。它不再是正常联网主链的判定权来源。
+
+**离线兼容优先级**（从规则词表到全局兜底）：
 
 1. 规则模板自带 `intents`：用规则自己的词表，完全自控。
 2. 规则模板 `extends: "intents_base"`（或插件目录内的词表基类）：继承主程序/基类的词库，子规则可覆盖个别意图。
@@ -406,13 +443,13 @@ content/
 }
 ```
 
-- `aliases`：触发词，按语言分键（`zh-CN` / `en` / 未来语言）。玩家行动包含任一别名即命中该意图。
+- `aliases`：离线兼容触发词，按语言分键（`zh-CN` / `en` / 未来语言）。
 - `skill_candidates`：命中后候选技能，按角色卡技能名匹配。
 - `default_attribute`：命中后默认用哪个属性检定（`str` / `dex` / `int` / `wis` / `cha` 等）。
 - `priority`：多个意图同时命中时，数值小者优先（先匹配者胜）。
 - `applies_to_dice_systems`：该意图适用于哪些骰制（`d20` / `d100`）。不匹配当前局骰制的意图会被跳过，防止 COC 触发只属于 DND 的意图（反之亦然）。
 
-**`dice_system` 决定骰子本身**：`intents` 只决定"触发哪个检定、用什么属性/技能"，骰子算法（d20 还是 d100、成功线、大成功/大失败）由规则模板顶层的 `dice_system` 和 `mechanics` 决定。
+**`dice_system` 决定骰子本身**：AI 只提出检定参数，骰子算法（d20 还是 d100、成功线、大成功/大失败）由规则模板顶层的 `dice_system`、`mechanics` 和可选 `check_mechanic` 决定。
 
 **继承主程序词库**：插件规则的 `extends` 支持继承主程序 `templates/rules/` 下的词表（如 `intents_base`），只需写 `"extends": "intents_base"`。继承是"按需"的——不需要词库的规则可以不继承，用全局兜底即可。
 
@@ -420,37 +457,39 @@ content/
 
 ### 7.3 主题插件
 
-适用于 CSS 变量、色板、背景、图标和界面风格。主题插件通常是声明型插件。
+主题插件是声明型插件，适用于色板、字体、圆角和阴影。当前只支持主题契约 v2；未声明 `"schema_version": 2` 的旧主题不会被加载，也不会进行旧变量映射。
 
 建议目录：
 
 ```text
 theme/
   theme.json
-  tokens.css
-  assets/
 ```
 
-当前宿主可以通过 `contributes.theme` 或 `contributes.themes` 注册主题描述文件。启用主题插件后，可在 WebUI “设置 -> 插件 -> 主题”选择主题；选择结果保存在当前浏览器，实际生效方式是覆盖 CSS 变量。
+当前宿主可以通过 `contributes.theme` 或 `contributes.themes` 注册主题描述文件。启用主题插件后，可在 WebUI “设置 -> 插件 -> 主题”选择主题；选择结果保存在当前浏览器。
 
 `theme/theme.json` 示例：
 
 ```json
 {
+  "schema_version": 2,
   "id": "paper-soft",
   "name": "Paper Soft",
   "description": "柔和纸面配色。",
   "tokens": {
     "base": {
-      "--gold": "#c79a45"
+      "--df-accent": "#c79a45",
+      "--df-interactive": "#347d78"
     },
     "dark": {
-      "--panel": "#231f19",
-      "--text": "#f0e6d2"
+      "--df-canvas": "#17130f",
+      "--df-surface-1": "#231f19",
+      "--df-text": "#f0e6d2"
     },
     "light": {
-      "--panel": "#fff7df",
-      "--text": "#312719"
+      "--df-canvas": "#eadbb9",
+      "--df-surface-1": "#fff7df",
+      "--df-text": "#312719"
     }
   }
 }
@@ -458,9 +497,13 @@ theme/
 
 约定：
 
-- 只支持 CSS 变量覆盖，不支持注入任意前端组件或脚本。
-- 变量名必须以 `--` 开头；包含 `url(`、`;`、`{}` 等高风险内容的值会被忽略。
-- 主题必须同时考虑亮色/暗色可读性。
+- `tokens` 只接受 `base`、`dark`、`light` 三组；`base` 总是生效，模式组覆盖同名值。
+- 只接受宿主白名单中的 `--df-*` 语义 token。旧的 `--page`、`--panel`、`--gold` 等变量不会映射。
+- 色彩：`--df-canvas`、`--df-canvas-glow`、`--df-surface-1/2/3`、`--df-surface-raised`、`--df-control-bg`、`--df-border`、`--df-border-soft`、`--df-focus`、`--df-accent`、`--df-accent-strong`、`--df-interactive`、`--df-interactive-strong`、`--df-success`、`--df-success-strong`、`--df-warning`、`--df-danger`、`--df-danger-strong`、`--df-info`、`--df-text`、`--df-text-secondary`、`--df-text-muted`、`--df-on-accent`、`--df-hover`。
+- 其他：`--df-font-title/body/mono`、`--df-shadow`、`--df-shadow-strong`、`--df-radius-sm/md/lg`。
+- 值会按 token 类型校验；未知变量、非法颜色、危险声明和 `url()` 都会被忽略。主题不能注入脚本、组件、布局或任意 CSS。
+- 当前不允许主题提供背景图。如果未来开放，只会通过宿主校验的插件资源引用实现，不会允许任意 `url()` CSS 注入。
+- 主题应同时验证亮色/暗色的文本对比度、焦点态和禁用态。
 
 ### 7.4 地图包插件
 
@@ -560,7 +603,7 @@ runtime.run()
 
 官方社区索引仓库为 `https://github.com/diceframe/diceframe-plugins`。作者通过 Issue 模板提交插件 ID 和公开仓库地址；机器人读取最新正式 GitHub Release，自动检查后在投稿 Issue 中给出收录结果。
 
-DiceFrame 安装时重新解析最新 Release，并下载它所指向的完整 Git commit 源码快照，而不是会变化的 `main` 分支。声明型插件在权限不扩大时，打开插件商店时自动检查并更新；带入口的进程型插件只提示更新；权限或运行方式变化会暂停更新并要求重新审核。
+DiceFrame 安装时重新解析最新 Release，并下载它所指向的完整 Git commit 源码快照，而不是会变化的 `main` 分支。声明型插件在权限不扩大时，打开插件商店时自动检查并提示，由用户确认后更新；带入口的进程型插件只提示更新；权限或运行方式变化会暂停更新并要求重新审核。
 
 `trust_level` 只表示来源：`official` 是 DiceFrame 官方维护，`community` 是社区投稿。任何等级都不等于安全担保，进程型插件仍能以当前用户权限运行代码。完整流程见 [插件索引与审核规则](PLUGIN_REGISTRY_CN.md)。
 
@@ -572,7 +615,7 @@ DiceFrame 安装时重新解析最新 Release，并下载它所指向的完整 G
 
 - 不制作政治内容。
 - 不含色情、性化未成年、嫖娼赌博；不渲染过度暴力、血腥、恐怖主义或教唆犯罪。
-- 不侵犯他人著作权、商标权：引用他人作品须标注来源；同人作品须声明非官方、版权归原作。
+- 不侵犯他人著作权、商标权、肖像权或隐私权：使用他人文本、规则、头像、头图、字体、音频等资源时，必须具有授权、开放许可、公有领域依据或其他可证明的合法依据，并按许可要求标注来源和许可；仅署名或声明“非官方”不能代替授权。
 - 不诽谤、侮辱真实人物，不泄露他人隐私或个人信息。
 
 **社区准则**
@@ -583,8 +626,11 @@ DiceFrame 安装时重新解析最新 Release，并下载它所指向的完整 G
 
 **同人 / 衍生作品**
 
-- 在 README 与 description 标注原作名称、声明「非官方同人」、版权归原作所有。
-- 原作者明确反对衍生时，应立即下架。
+- 社区索引允许投稿者上传自己创作的同人世界书、角色、NPC、规则改编和同人图片。必须在 README 与 description 标明原作、权利人和“非官方同人”，并使用 `community` 来源等级。
+- 未取得原权利人授权的社区同人包，不得直接打包从原作提取的立绘、头像、地图、规则书正文/扫描件、音乐、视频、字体或其他现成素材；包内实际分发的文字和图片应由投稿者创作，或另有可证明的许可。
+- 有原权利人授权、适用开放许可或其他明确合法依据的同人包，可以在核验后申请更高审核标记；没有授权证明不影响其按“社区非官方同人”投稿，但 DiceFrame 不为其权利状态背书。
+- “版权归原作”“非官方同人”只是身份说明，不会自动取得复制、改编或网络传播权，也不能掩盖直接搬运原作素材。
+- 收到包含初步证据且能定位到具体版本的权利通知时，DiceFrame 可先临时隐藏相关条目，转送作者并根据补充证据、申诉和最终核查决定恢复或下架。
 
 DiceFrame 不对社区内容逐一预审；维护者发现或收到举报查实后将下架违规插件。
 
@@ -592,7 +638,7 @@ DiceFrame 不对社区内容逐一预审；维护者发现或收到举报查实�
 
 - 安装：宿主解压到临时目录，校验后移动到 `data/plugin-packages/<id>/`。
 - 覆盖安装：必须显式覆盖；宿主会先停止旧插件，再替换目录。
-- 更新：商店解析作者仓库最新正式 Release；声明型插件可自动覆盖，进程型插件必须由用户确认。
+- 更新：商店解析作者仓库最新正式 Release；检测到新版本后提示用户，声明型与进程型插件都必须由用户确认后更新。
 - 卸载：先停止插件，再删除 `data/plugin-packages/<id>/`。默认保留 `data/plugins/<id>/`。
 - 重装同 ID 插件会自动复用保留的配置数据。
 

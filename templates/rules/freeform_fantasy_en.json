@@ -3,6 +3,7 @@
   "extends": "base_d20",
   "rule_version": "1.1",
   "rule_id": "freeform_fantasy",
+  "scene_image": {"kind": "builtin", "id": "freeform_fantasy"},
   "rule_name": "Classic Fantasy Freeform",
   "description": "A lightweight freeform sword-and-sorcery rule based on D&D.",
   "attributes": [

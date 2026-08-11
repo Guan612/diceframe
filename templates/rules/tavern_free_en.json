@@ -2,6 +2,7 @@
   "language": "en",
   "rule_version": "1.1",
   "rule_id": "tavern_free",
+  "scene_image": {"kind": "builtin", "id": "tavern_free"},
   "rule_name": "Tavern Free RP",
   "description": "A no-dice, no-attribute, pure-narrative roleplay mode-free conversation like a tavern session.",
   "attributes": [],

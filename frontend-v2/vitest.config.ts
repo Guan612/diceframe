@@ -5,5 +5,10 @@ import { fileURLToPath, URL } from 'node:url'
 export default defineConfig({
   plugins: [vue()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
-  test: { environment: 'jsdom', include: ['tests/**/*.test.ts'] },
+  test: {
+    environment: 'jsdom',
+    include: ['tests/**/*.test.ts'],
+    setupFiles: ['./tests/setup.ts'],
+    testTimeout: 15_000,
+  },
 })

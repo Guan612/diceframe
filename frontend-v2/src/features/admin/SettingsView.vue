@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NInput, NInputNumber, NSwitch, NTag, NIcon, NCollapse, NCollapseItem, NSpin, NProgress } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSwitch, NTag, NIcon, NCollapse, NCollapseItem, NSpin, NProgress, NModal } from 'naive-ui'
 import {
-  ServerOutline, CubeOutline, CloudDownloadOutline, ExtensionPuzzleOutline,
+  ServerOutline, CubeOutline, CloudDownloadOutline,
   LockClosedOutline, OptionsOutline, InformationCircleOutline, ShareSocialOutline,
-  KeyOutline, CopyOutline, EyeOutline, RefreshOutline,
+  KeyOutline, CopyOutline, EyeOutline, RefreshOutline, ColorPaletteOutline,
+  ImageOutline, PowerOutline,
 } from '@vicons/ionicons5'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useToast } from '@/composables/useToast'
@@ -15,28 +16,132 @@ import { shouldAutoDownloadUpdate, updateStateForVersion, useUpdater } from '@/c
 import { useLocale } from '@/composables/useLocale'
 import { ttsRate, setTtsRate } from '@/utils/tts'
 import { api, errorMessage } from '@/api/client'
+import { pluginApi } from '@/api/plugins'
 import type { MessageKey } from '@/i18n'
 import type { SecretKey } from '@/stores/useSettingsStore'
-import type { AppConfig, LoginAuditEntry, LoginAuditResponse, SecretField, TestResult } from '@/api/types'
-import AppPage from '@/components/common/AppPage.vue'
+import type { AppConfig, HubPreferences, LoginAuditEntry, LoginAuditResponse, SecretField, TestResult } from '@/api/types'
 import TestResultCard from '@/components/admin/TestResultCard.vue'
 import HelpButton from '@/components/common/HelpButton.vue'
-import PluginSettings from '@/features/plugins/PluginSettings.vue'
+import BrandLogo from '@/components/BrandLogo.vue'
 import { copyToClipboard } from '@/utils/clipboard'
+import { useTheme } from '@/composables/useTheme'
+import { useBackgroundImages, type BackgroundSlot } from '@/composables/useBackgroundImages'
 
-type SectionId = 'api' | 'memory' | 'network' | 'sharing' | 'botapi' | 'plugins' | 'access' | 'advanced' | 'about'
+type SectionId = 'api' | 'memory' | 'network' | 'sharing' | 'botapi' | 'appearance' | 'access' | 'advanced' | 'about'
 type StatusTone = 'default' | 'success' | 'warning' | 'error' | 'info'
 type UpdatePackageKind = 'source' | 'portable'
-type SystemStatusItem = { label: string; value: string; detail: string; tone: StatusTone }
+type SystemStatusItem = { label: string; value: string; detail: string; tone: StatusTone; icon: Component }
 type SettingsSection = { id: SectionId; labelKey: MessageKey; icon: Component }
 
 const store = useSettingsStore()
 const route = useRoute()
+const sponsorModalOpen = ref(false)
 const toast = useToast()
 const { confirm } = useConfirm()
 const { updateInfo, updateChecking, checkForUpdates } = useUpdateCheck()
-const { updateStatus, reloadCountdown, downloadPercent, startDownload, applyUpdate, refreshStatus, isUpdateBusy } = useUpdater()
+const {
+  updateStatus,
+  reloadCountdown,
+  downloadPercent,
+  startDownload,
+  applyUpdate,
+  refreshStatus,
+  isUpdateBusy,
+  restartApplication,
+  waitForApplicationRestart,
+} = useUpdater()
 const { t } = useLocale()
+const { current: themeMode, skin: activeSkin, builtinSkins, apply: applyThemeMode, applySkin } = useTheme()
+const {
+  options: backgroundOptions,
+  previews: backgroundPreviews,
+  custom: customBackgrounds,
+  loading: backgroundsLoading,
+  initialize: initializeBackgrounds,
+  setBackground,
+  resetBackground,
+  resetAllBackgrounds,
+} = useBackgroundImages()
+const backgroundBusy = ref<BackgroundSlot | 'all' | ''>('')
+const restartBusy = ref(false)
+const hubPreferences = ref<HubPreferences | null>(null)
+const hubPrivacyBusy = ref(false)
+
+async function loadHubPreferences() {
+  try {
+    hubPreferences.value = await pluginApi.hubPreferences()
+  } catch {
+    hubPreferences.value = null
+  }
+}
+
+async function toggleHubTelemetry(enabled: boolean) {
+  hubPrivacyBusy.value = true
+  try {
+    hubPreferences.value = await pluginApi.updateHubPreferences(enabled)
+    toast.success(t(enabled ? 'hubTelemetryEnabled' : 'hubTelemetryDisabled'))
+  } catch (error: unknown) {
+    toast.error(errorMessage(error))
+  } finally {
+    hubPrivacyBusy.value = false
+  }
+}
+
+async function clearHubIdentity() {
+  const ok = await confirm({
+    title: t('hubClearIdentityTitle'),
+    content: t('hubClearIdentityConfirm'),
+    positiveText: t('hubClearIdentity'),
+    type: 'error',
+  })
+  if (!ok) return
+  hubPrivacyBusy.value = true
+  try {
+    hubPreferences.value = await pluginApi.deleteHubIdentity()
+    toast.success(t('hubIdentityCleared'))
+  } catch (error: unknown) {
+    toast.error(errorMessage(error))
+  } finally {
+    hubPrivacyBusy.value = false
+  }
+}
+
+async function onBackgroundFile(slot: BackgroundSlot, event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  backgroundBusy.value = slot
+  try {
+    await setBackground(slot, file)
+    toast.success(t('backgroundUpdated'))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ''
+    toast.error(t(message === 'image-too-large' ? 'backgroundTooLarge' : 'backgroundUnsupported'))
+  } finally {
+    backgroundBusy.value = ''
+  }
+}
+
+async function resetOneBackground(slot: BackgroundSlot) {
+  backgroundBusy.value = slot
+  try {
+    await resetBackground(slot)
+    toast.success(t('backgroundResetDone'))
+  } finally {
+    backgroundBusy.value = ''
+  }
+}
+
+async function resetBackgrounds() {
+  backgroundBusy.value = 'all'
+  try {
+    await resetAllBackgrounds()
+    toast.success(t('backgroundResetDone'))
+  } finally {
+    backgroundBusy.value = ''
+  }
+}
 
 const updateChannel = computed(() => store.config?.update_channel === 'preview' ? 'preview' : 'stable')
 async function toggleUpdateChannel(enabled: boolean) {
@@ -67,7 +172,7 @@ const sections: SettingsSection[] = [
   { id: 'network', labelKey: 'settingsSectionNetwork', icon: CloudDownloadOutline },
   { id: 'sharing', labelKey: 'settingsSectionSharing', icon: ShareSocialOutline },
   { id: 'botapi', labelKey: 'settingsSectionBotApi', icon: KeyOutline },
-  { id: 'plugins', labelKey: 'settingsSectionPlugins', icon: ExtensionPuzzleOutline },
+  { id: 'appearance', labelKey: 'settingsSectionAppearance', icon: ColorPaletteOutline },
   { id: 'access', labelKey: 'settingsSectionAccess', icon: LockClosedOutline },
   { id: 'advanced', labelKey: 'settingsSectionAdvanced', icon: OptionsOutline },
   { id: 'about', labelKey: 'settingsSectionAbout', icon: InformationCircleOutline },
@@ -191,37 +296,44 @@ const systemStatusItems = computed<SystemStatusItem[]>(() => {
       value: mainReady ? t('statusComplete') : t('statusNeedsSetup'),
       detail: `${apiFormatLabel(c.api_format)} · ${c.model || t('modelUnset')} · ${c.base_url || t('endpointUnset')} · ${hasSecret('api_key', c.api_key) ? t('keyConfigured') : t('keyMissing')}`,
       tone: mainReady ? 'success' : 'warning',
+      icon: ServerOutline,
     },
     {
       label: t('statusFallback'),
       value: enabledFallbacks.length ? t('routesAvailable', { ready: readyFallbacks.length, total: enabledFallbacks.length }) : t('disabled'),
       detail: enabledFallbacks.length ? enabledFallbacks.map(item => `${item.name}: ${item.model || t('modelUnset')}`).join(' · ') : t('fallbackDetailHint'),
       tone: !enabledFallbacks.length ? 'default' : readyFallbacks.length === enabledFallbacks.length ? 'success' : 'warning',
+      icon: CubeOutline,
     },
     {
       label: t('statusVectorMemory'),
       value: c.embedding_enabled ? (embeddingReady ? t('enabled') : t('statusIncomplete')) : t('disabled'),
       detail: `${c.embedding_model || t('modelUnset')} · ${c.embedding_base_url || t('endpointUnset')} · ${t('inputLimit')} ${c.embedding_max_input || t('auto')}`,
       tone: c.embedding_enabled ? (embeddingReady ? 'success' : 'warning') : 'default',
+      icon: CubeOutline,
     },
     {
       label: t('statusNetworkProxy'),
       value: proxyEnabled ? t('enabled') : t('disabled'),
       detail: `${proxySourceLabel.value} · ${proxyFormatLabel.value}${c.proxy_url ? ` · ${c.proxy_url}` : ''}`,
       tone: proxyEnabled ? (c.proxy_supported === false ? 'error' : 'info') : 'default',
+      icon: CloudDownloadOutline,
     },
     {
       label: t('statusAccessControl'),
       value: c.access_password?.configured ? t('passwordSet') : t('passwordUnset'),
       detail: c.access_password?.configured ? t('currentCredential', { masked: c.access_password.masked }) : t('localAccessNoPassword'),
       tone: c.access_password?.configured ? 'success' : 'default',
+      icon: LockClosedOutline,
     },
   ]
 })
 
 onMounted(() => {
+  void initializeBackgrounds()
   void store.load()
   void refreshStatus()
+  void loadHubPreferences()
   syncRouteTarget()
 })
 watch(() => [route.query.section, route.query.focus], syncRouteTarget)
@@ -276,13 +388,13 @@ function setNum(key: keyof AppConfig, v: string | number | null) {
 }
 function setBool(key: keyof AppConfig, v: string | number | boolean) { store.setConfigField(key, Boolean(v)) }
 
-const tokenFields: { key: keyof AppConfig; labelKey: MessageKey }[] = [
-  { key: 'narrative_max_tokens', labelKey: 'narrativeTokens' },
-  { key: 'character_gen_max_tokens', labelKey: 'characterGenTokens' },
-  { key: 'summary_max_tokens', labelKey: 'summaryTokens' },
-  { key: 'brief_max_tokens', labelKey: 'briefTokens' },
-  { key: 'analysis_max_tokens', labelKey: 'analysisTokens' },
-  { key: 'text_gen_max_tokens', labelKey: 'textGenTokens' },
+const tokenFields: { key: keyof AppConfig; labelKey: MessageKey; hintKey: MessageKey }[] = [
+  { key: 'narrative_max_tokens', labelKey: 'narrativeTokens', hintKey: 'narrativeTokensHint' },
+  { key: 'character_gen_max_tokens', labelKey: 'characterGenTokens', hintKey: 'characterGenTokensHint' },
+  { key: 'summary_max_tokens', labelKey: 'summaryTokens', hintKey: 'summaryTokensHint' },
+  { key: 'brief_max_tokens', labelKey: 'briefTokens', hintKey: 'briefTokensHint' },
+  { key: 'analysis_max_tokens', labelKey: 'analysisTokens', hintKey: 'analysisTokensHint' },
+  { key: 'text_gen_max_tokens', labelKey: 'textGenTokens', hintKey: 'textGenTokensHint' },
 ]
 
 async function save(keys: string[], secretKeys: SecretKey[] = []) {
@@ -446,6 +558,32 @@ async function applyDownloadedUpdate() {
   }
 }
 
+async function restartProgram() {
+  const ok = await confirm({
+    title: t('restartProgram'),
+    content: t('restartProgramConfirm'),
+    type: 'warning',
+    positiveText: t('restartProgramAction'),
+    negativeText: t('cancel'),
+  })
+  if (!ok) return
+  restartBusy.value = true
+  try {
+    const result = await restartApplication()
+    toast.info(t('restartProgramStarted'))
+    const ready = await waitForApplicationRestart(result.boot_id)
+    if (ready) {
+      window.location.reload()
+      return
+    }
+    toast.warning(t('restartProgramTimeout'))
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    restartBusy.value = false
+  }
+}
+
 function redownloadUpdatePackage() {
   if (requiredUpdateKind.value) {
     void downloadUpdatePackage(requiredUpdateKind.value)
@@ -454,21 +592,30 @@ function redownloadUpdatePackage() {
 </script>
 
 <template>
-  <AppPage :title="t('settingsTitle')" :subtitle="t('settingsSubtitle')">
-    <template #actions>
-      <NButton :loading="store.loading" @click="store.load()">{{ t('refresh') }}</NButton>
-    </template>
-
+  <section class="view settings-page reference-settings-page">
     <p v-if="store.error" class="error-banner">{{ store.error }}</p>
-    <section class="system-status-grid" :aria-label="t('settingsSystemStatusAria')">
-      <article v-for="item in systemStatusItems" :key="item.label" class="system-status-card">
-        <div class="system-status-head">
-          <span>{{ item.label }}</span>
-          <NTag :type="item.tone" :class="['system-status-tag', `tone-${item.tone}`]" size="small" round>{{ item.value }}</NTag>
+    <div class="settings-overview-grid">
+      <header class="settings-page-heading">
+        <div>
+          <span class="section-kicker">CONTROL ROOM</span>
+          <h1>{{ t('settingsTitle') }}</h1>
+          <p>{{ t('settingsSubtitle') }}</p>
         </div>
-        <p>{{ item.detail }}</p>
-      </article>
-    </section>
+        <NButton :loading="store.loading" @click="store.load()">{{ t('refresh') }}</NButton>
+      </header>
+      <section class="system-status-grid" :aria-label="t('settingsSystemStatusAria')">
+        <article v-for="item in systemStatusItems" :key="item.label" class="system-status-card">
+          <NIcon :component="item.icon" class="system-status-icon" />
+          <div class="system-status-copy">
+            <div class="system-status-head">
+              <span>{{ item.label }}</span>
+              <NTag :type="item.tone" :class="['system-status-tag', `tone-${item.tone}`]" size="small" round>{{ item.value }}</NTag>
+            </div>
+            <p :title="item.detail">{{ item.detail }}</p>
+          </div>
+        </article>
+      </section>
+    </div>
     <div class="settings-layout">
       <aside class="settings-nav">
         <button
@@ -671,8 +818,80 @@ function redownloadUpdatePackage() {
             <p v-if="store.config.bot_token_source === 'env'" class="muted">{{ t('botApiEnvManagedHint') }}</p>
           </div>
 
-          <div v-show="section === 'plugins'" class="settings-pane">
-            <PluginSettings />
+          <div v-show="section === 'appearance'" class="settings-pane appearance-pane">
+            <div class="api-head-row">
+              <div>
+                <h3>{{ t('appearanceTitle') }}</h3>
+                <p class="muted">{{ t('appearanceSubtitle') }}</p>
+              </div>
+            </div>
+            <section class="appearance-mode-section">
+              <h4>{{ t('appearanceMode') }}</h4>
+              <div class="appearance-mode-grid">
+                <button :class="{ active: themeMode === 'dark' }" @click="applyThemeMode('dark')">
+                  <span class="mode-preview mode-preview-dark" aria-hidden="true"><i /><i /><i /></span>
+                  <strong>{{ t('darkMode') }}</strong>
+                </button>
+                <button :class="{ active: themeMode === 'light' }" @click="applyThemeMode('light')">
+                  <span class="mode-preview mode-preview-light" aria-hidden="true"><i /><i /><i /></span>
+                  <strong>{{ t('lightMode') }}</strong>
+                </button>
+              </div>
+            </section>
+            <section class="appearance-skin-section">
+              <h4>{{ t('appearanceColor') }}</h4>
+              <div class="appearance-skin-grid">
+                <button
+                  v-for="item in builtinSkins"
+                  :key="item.id"
+                  :class="{ active: activeSkin === item.id }"
+                  @click="applySkin(item.id)"
+                >
+                  <span class="appearance-swatches" aria-hidden="true"><i v-for="color in item.swatches" :key="color" :style="{ background: color }" /></span>
+                  <span><strong>{{ item.name }}</strong><small>{{ item.description }}</small></span>
+                </button>
+              </div>
+            </section>
+            <section class="appearance-background-section">
+              <div class="appearance-section-heading">
+                <div>
+                  <h4><NIcon :component="ImageOutline" />{{ t('appearanceBackgrounds') }}</h4>
+                  <p>{{ t('appearanceBackgroundsHint') }}</p>
+                </div>
+                <NButton size="small" :loading="backgroundBusy === 'all'" @click="resetBackgrounds">
+                  {{ t('resetAllBackgrounds') }}
+                </NButton>
+              </div>
+              <div class="appearance-background-grid" :class="{ loading: backgroundsLoading }">
+                <article v-for="item in backgroundOptions" :key="item.id" class="background-option-card">
+                  <div
+                    class="background-option-preview"
+                    :style="{ backgroundImage: `linear-gradient(180deg, transparent, color-mix(in srgb, var(--df-canvas) 66%, transparent)), url('${backgroundPreviews[item.id]}')` }"
+                  >
+                    <span v-if="customBackgrounds[item.id]">{{ t('localCustomImage') }}</span>
+                    <span v-else class="builtin-background-badge">{{ t('builtin') }}</span>
+                  </div>
+                  <div class="background-option-copy">
+                    <strong>{{ t(item.titleKey) }}</strong>
+                    <small>{{ t(item.descriptionKey) }}</small>
+                  </div>
+                  <div class="background-option-actions">
+                    <label class="background-file-button">
+                      <input type="file" accept="image/jpeg,image/png,image/webp,image/avif" @change="onBackgroundFile(item.id, $event)">
+                      <span>{{ t('chooseImage') }}</span>
+                    </label>
+                    <NButton size="small" :disabled="!customBackgrounds[item.id]" :loading="backgroundBusy === item.id" @click="resetOneBackground(item.id)">
+                      {{ t('reset') }}
+                    </NButton>
+                  </div>
+                </article>
+              </div>
+              <p class="appearance-local-note">{{ t('appearanceBackgroundLocalOnly') }}</p>
+            </section>
+            <div class="appearance-plugin-callout">
+              <div><strong>{{ t('pluginThemes') }}</strong><p>{{ t('pluginThemesHint') }}</p></div>
+              <RouterLink to="/plugins">{{ t('settingsSectionPlugins') }}</RouterLink>
+            </div>
           </div>
 
           <div v-show="section === 'access'" class="settings-pane">
@@ -718,30 +937,72 @@ function redownloadUpdatePackage() {
             <p v-else-if="!loginHistoryLoading" class="muted">{{ t('noLoginHistory') }}</p>
           </div>
 
-          <div v-show="section === 'advanced'" class="settings-pane">
-            <section class="settings-group-card">
-              <h4>{{ t('ttsSettings') }}</h4>
-              <div class="form-row">
-                <label>{{ t('ttsAutoSpeak') }}</label>
-                <div class="switch-inline">
-                  <NSwitch :value="autoSpeak" @update:value="setAutoSpeak" />
-                  <span>{{ t('enabled') }}</span>
-                </div>
+          <div v-show="section === 'advanced'" class="settings-pane advanced-settings-pane">
+            <section class="advanced-section">
+              <header class="advanced-section-head">
+                <NIcon :component="OptionsOutline" />
+                <div><h3>{{ t('ttsSettings') }}</h3><p>{{ t('ttsSettingsHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div><strong>{{ t('ttsAutoSpeak') }}</strong><small>{{ t('ttsAutoSpeakHint') }}</small></div>
+                <div class="switch-inline"><NSwitch :value="autoSpeak" @update:value="setAutoSpeak" /><span>{{ t('enabled') }}</span></div>
               </div>
-              <div class="form-row">
-                <label>{{ t('ttsRate') }}</label>
-                <NInputNumber :value="ttsRateValue" :min="0.5" :max="5" :step="0.1" @update:value="setTtsRateValue" style="width:140px" />
+              <div class="advanced-row">
+                <div><strong>{{ t('ttsRate') }}</strong><small>{{ t('ttsRateHint') }}</small></div>
+                <NInputNumber class="advanced-number" :value="ttsRateValue" :min="0.5" :max="5" :step="0.1" @update:value="setTtsRateValue" />
               </div>
             </section>
-            <section class="settings-group-card">
-              <h4>{{ t('generationParams') }}</h4>
-              <div v-for="item in tokenFields" :key="item.key" class="form-row">
-                <label>{{ t(item.labelKey) }}</label>
-                <NInputNumber :value="Number(store.config[item.key] ?? 0)" @update:value="setNum(item.key, $event)" style="width:100%" />
+            <section class="advanced-section">
+              <header class="advanced-section-head">
+                <NIcon :component="InformationCircleOutline" />
+                <div><h3>{{ t('hubPrivacyTitle') }}</h3><p>{{ t('hubTelemetryChoiceSummary') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('hubTelemetryChoiceTitle') }}</strong>
+                  <small>{{ hubPreferences?.choice_made ? t('hubChoiceRecorded') : t('hubChoiceNotRecorded') }}</small>
+                </div>
+                <div class="switch-inline">
+                  <NSwitch
+                    :value="Boolean(hubPreferences?.telemetry_enabled)"
+                    :loading="hubPrivacyBusy"
+                    :disabled="!hubPreferences?.available"
+                    @update:value="toggleHubTelemetry"
+                  />
+                  <span>{{ hubPreferences?.telemetry_enabled ? t('enabled') : t('disabled') }}</span>
+                </div>
               </div>
-              <div class="actions-row">
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('hubInstallationIdentity') }}</strong>
+                  <small>{{ hubPreferences?.identity_created ? t('hubIdentityExists') : t('hubIdentityNotCreated') }}</small>
+                </div>
+                <NButton
+                  type="error"
+                  tertiary
+                  :disabled="!hubPreferences?.identity_created"
+                  :loading="hubPrivacyBusy"
+                  @click="clearHubIdentity"
+                >
+                  {{ t('hubClearIdentity') }}
+                </NButton>
+              </div>
+            </section>
+            <section class="advanced-section generation-section">
+              <header class="advanced-section-head">
+                <NIcon :component="OptionsOutline" />
+                <div><h3>{{ t('generationParams') }}</h3><p>{{ t('generationParamsHint') }}</p></div>
+              </header>
+              <div v-for="item in tokenFields" :key="item.key" class="advanced-row token-row">
+                <div><strong>{{ t(item.labelKey) }}</strong><small>{{ t(item.hintKey) }}</small></div>
+                <div class="token-input-wrap">
+                  <NInputNumber class="advanced-number" :value="Number(store.config[item.key] ?? 0)" :step="256" @update:value="setNum(item.key, $event)" />
+                  <span>Token</span>
+                </div>
+              </div>
+              <footer class="advanced-save-row">
                 <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
-              </div>
+              </footer>
             </section>
           </div>
 
@@ -755,6 +1016,16 @@ function redownloadUpdatePackage() {
               </div>
               <div class="update-meta">
                 <span>{{ t('currentVersion') }}: {{ updateInfo?.current_version || t('clickCheckVersion') }}</span>
+                <span class="update-channel-inline" :title="t('updateChannelHint')">
+                  <NSwitch
+                    size="small"
+                    :value="updateChannel === 'preview'"
+                    :disabled="isUpdateBusy"
+                    @update:value="toggleUpdateChannel"
+                  />
+                  <span>{{ t('updateChannel') }}</span>
+                  <NTag v-if="updateChannel === 'preview'" size="small" type="warning">{{ t('previewChannel') }}</NTag>
+                </span>
                 <span v-if="updateInfo?.latest">{{ t('latestVersion') }}: {{ updateInfo.latest.tag_name || updateInfo.latest.version }}<NTag v-if="updateInfo?.latest?.prerelease" size="small" type="warning">{{ t('prereleaseTag') }}</NTag></span>
                 <span v-if="updateInfo?.latest?.published_at">{{ t('publishedAt') }}: {{ updateInfo.latest.published_at.slice(0, 10) }}</span>
               </div>
@@ -814,44 +1085,59 @@ function redownloadUpdatePackage() {
               <div class="actions-row">
                 <NButton :loading="updateChecking" @click="checkUpdate">{{ t('checkUpdate') }}</NButton>
                 <NButton :disabled="!updateInfo?.release_url && !updateInfo?.releases_url && !updateInfo?.source_url" @click="openUpdateUrl">{{ t('openReleasePage') }}</NButton>
+                <NButton type="warning" :loading="restartBusy" @click="restartProgram">
+                  <template #icon><NIcon :component="PowerOutline" /></template>
+                  {{ t('restartProgram') }}
+                </NButton>
               </div>
-              <div class="setting-row">
-                <NSwitch :value="updateChannel === 'preview'" :disabled="isUpdateBusy" @update:value="toggleUpdateChannel" />
-                <span style="margin-left: 8px;">{{ t('updateChannel') }}</span>
-                <NTag v-if="updateChannel === 'preview'" size="small" type="warning">{{ t('previewChannel') }}</NTag>
-              </div>
-              <p class="setting-hint">{{ t('updateChannelHint') }}</p>
             </section>
             <section class="about-card">
-              <h3>{{ t('aboutDiceFrame') }}</h3>
-              <p>{{ t('aboutIntro1') }}</p>
-              <p>{{ t('aboutIntro2') }}</p>
-              <h4>{{ t('whatCanDo') }}</h4>
-              <ul>
-                <li>{{ t('aboutFeature1') }}</li>
-                <li>{{ t('aboutFeature2') }}</li>
-                <li>{{ t('aboutFeature3') }}</li>
-                <li>{{ t('aboutFeature4') }}</li>
-                <li>{{ t('aboutFeature5') }}</li>
-              </ul>
-              <h4>{{ t('disclaimer') }}</h4>
-              <p class="muted">{{ t('disclaimerText') }}</p>
-              <h4>{{ t('contact') }}</h4>
-              <p>{{ t('officialWebsite') }}: <a href="https://diceframe.com" target="_blank" rel="noopener">diceframe.com</a></p>
-              <p>{{ t('projectAddress') }}: <a href="https://github.com/diceframe/diceframe" target="_blank" rel="noopener">diceframe/diceframe</a></p>
-              <p>{{ t('issueFeedback') }}: <a href="https://github.com/diceframe/diceframe/issues" target="_blank" rel="noopener">{{ t('submitIssue') }}</a></p>
-              <p>{{ t('qqGroup') }}: 1060613588</p>
-            </section>
-            <section class="sponsor-card" :aria-label="t('supportProject')">
-              <div>
-                <h4>{{ t('supportProject') }}</h4>
-                <p>{{ t('supportProjectText') }}</p>
+              <header class="about-identity">
+                <BrandLogo :size="58" :with-text="false" class="about-project-logo" />
+                <div><h3>{{ t('aboutDiceFrame') }}</h3><p>{{ t('aboutIntro1') }}</p><p class="muted">{{ t('aboutIntro2') }}</p></div>
+              </header>
+              <div class="about-detail-grid">
+                <article>
+                  <h4>{{ t('whatCanDo') }}</h4>
+                  <ul>
+                    <li>{{ t('aboutFeature1') }}</li>
+                    <li>{{ t('aboutFeature2') }}</li>
+                    <li>{{ t('aboutFeature3') }}</li>
+                    <li>{{ t('aboutFeature4') }}</li>
+                    <li>{{ t('aboutFeature5') }}</li>
+                  </ul>
+                </article>
+                <article>
+                  <h4>{{ t('disclaimer') }}</h4>
+                  <p class="muted">{{ t('disclaimerText') }}</p>
+                </article>
               </div>
-              <img src="/sponsor-wechat-qr.png" :alt="t('wechatSponsorQr')" loading="lazy">
+              <nav class="about-links" :aria-label="t('contact')">
+                <a href="https://diceframe.com" target="_blank" rel="noopener"><span>{{ t('officialWebsite') }}</span><strong>diceframe.com</strong></a>
+                <a href="https://github.com/diceframe/diceframe-content/tree/main/docs" target="_blank" rel="noopener"><span>{{ t('guideDocs') }}</span><strong>diceframe/diceframe-content</strong></a>
+                <a href="https://github.com/diceframe/diceframe" target="_blank" rel="noopener"><span>{{ t('projectAddress') }}</span><strong>diceframe/diceframe</strong></a>
+                <a href="https://github.com/diceframe/diceframe/issues" target="_blank" rel="noopener"><span>{{ t('issueFeedback') }}</span><strong>{{ t('submitIssue') }}</strong></a>
+                <a href="/#/legal/terms" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalTermsTitle') }}</strong></a>
+                <a href="/#/legal/privacy" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalPrivacyTitle') }}</strong></a>
+              </nav>
+              <a class="star-cta" href="https://github.com/diceframe/diceframe" target="_blank" rel="noopener">
+                <strong>⭐ {{ t('starOnGithub') }}</strong>
+                <small>{{ t('starOnGithubHint') }}</small>
+              </a>
+              <button class="sponsor-cta" @click="sponsorModalOpen = true">
+                <strong>{{ t('supportProject') }}</strong>
+                <small>{{ t('supportProjectText') }}</small>
+              </button>
             </section>
+            <NModal v-model:show="sponsorModalOpen" preset="card" :title="t('supportProject')" style="max-width: 360px;">
+              <div class="sponsor-modal">
+                <img src="/sponsor-wechat-qr.png" :alt="t('wechatSponsorQr')" loading="lazy">
+                <p class="muted">{{ t('supportProjectText') }}</p>
+              </div>
+            </NModal>
           </div>
         </NSpin>
       </div>
     </div>
-  </AppPage>
+  </section>
 </template>

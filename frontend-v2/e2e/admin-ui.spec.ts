@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { accessToken } from './support'
 
 const token = accessToken
@@ -17,7 +17,7 @@ test('settings status summary and destructive confirmations are explicit', async
   await page.getByRole('button', { name: '删除' }).first().click()
   await expect(page.getByText('删除存档').first()).toBeVisible()
   await expect(page.getByRole('button', { name: '删除存档' })).toBeVisible()
-  await page.getByRole('button', { name: '取消' }).click()
+  await page.getByRole('button', { name: '取消', exact: true }).click()
 })
 test('rules page exposes structured editing for copied rules', async ({ page }) => {
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token())

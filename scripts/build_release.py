@@ -24,7 +24,10 @@ if str(ROOT) not in sys.path:
 
 from src.template_catalog import is_user_template_file
 
-import build_assistant_knowledge
+try:
+    from . import build_assistant_knowledge
+except ImportError:  # Direct execution: python scripts/build_release.py
+    import build_assistant_knowledge
 
 DIST_DIR = ROOT / "dist"
 BUILD_ROOT = DIST_DIR / "_release_build"
@@ -50,6 +53,7 @@ ROOT_FILES = [
 ]
 
 ROOT_DIRS = [
+    "legal",
     "plugins",
     "prompts",
     "scripts",

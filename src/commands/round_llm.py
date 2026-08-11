@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from src.commands.round_helpers import should_multi_step, validate_dice_constraint
@@ -199,7 +200,10 @@ async def append_multistep_analysis(
     analysis_max_tokens: int,
 ) -> str:
     """WebUI 多步推理：先分析局势，再把分析摘要追加到上下文。"""
+    started = time.perf_counter()
     if not should_multi_step(instance, actions_text):
+        # 供验收日志证明：本轮没有额外局势分析调用。
+        logger.info("局势分析: 未触发，跳过 (round=%d)", instance.round_number)
         return context
 
     try:
@@ -211,11 +215,13 @@ async def append_multistep_analysis(
             max_tokens=analysis_max_tokens,
         )
         analysis_text = analyze_res.content
-        logger.info("多步推理: 分析完成 (round=%d, len=%d)",
-                    instance.round_number, len(analysis_text))
+        logger.info("局势分析: 完成 (round=%d, len=%d, 耗时=%dms)",
+                    instance.round_number,
+                    len(analysis_text),
+                    int((time.perf_counter() - started) * 1000))
         return context + "\n\n【局势分析（内部参考）】\n" + analysis_text[:400]
     except Exception:
-        logger.exception("多步推理分析失败，降级为单次调用 (round=%d)", instance.round_number)
+        logger.exception("局势分析: 失败，降级为单次调用 (round=%d)", instance.round_number)
         return context
 
 
@@ -231,6 +237,7 @@ async def _call_stream_with_length_retry(
     """流式调用被截断时，按 1×、2×、4× 的预算独立重试。"""
     budgets = length_retry_budgets(narrative_max_tokens)
     for budget_index, current_max_tokens in enumerate(budgets):
+        attempt_started = time.perf_counter()
         filt = _NarrationDeltaFilter(on_delta)
         try:
             response = await llm_client.call_stream(
@@ -254,10 +261,11 @@ async def _call_stream_with_length_retry(
                 raise
             bumped = budgets[budget_index + 1]
             logger.info(
-                "流式输出被截断，提高 max_tokens 重试: %d -> %d (round=%d)",
+                "叙事重试: 流式输出被截断，提高 max_tokens %d -> %d (round=%d, 本次耗时=%dms)",
                 current_max_tokens,
                 bumped,
                 instance.round_number,
+                int((time.perf_counter() - attempt_started) * 1000),
             )
             if on_reset:
                 await on_reset()
@@ -289,7 +297,9 @@ async def call_llm_with_tag_retry(
     dice_retry = 0
     retry_kind = ""
     protocol_retry_used = False
+    started = time.perf_counter()
     while True:
+        attempt_started = time.perf_counter()
         retry_context = context
         if retry_kind == "protocol":
             retry_context = append_protocol_repair_instruction(
@@ -327,7 +337,11 @@ async def call_llm_with_tag_retry(
         if malformed_protocol and not protocol_retry_used:
             protocol_retry_used = True
             retry_kind = "protocol"
-            logger.warning("检测到模型协议标签泄漏，按严格格式重试一次 (round=%d)", instance.round_number)
+            logger.warning(
+                "叙事重试: 检测到模型协议标签泄漏，按严格格式重试 (round=%d, 本次耗时=%dms)",
+                instance.round_number,
+                int((time.perf_counter() - attempt_started) * 1000),
+            )
             if on_reset:
                 await on_reset()
             continue
@@ -368,13 +382,19 @@ async def call_llm_with_tag_retry(
         dice_retry += 1
         retry_kind = "dice"
         logger.warning(
-            "骰子约束矛盾，重试 (%d/1, round=%d)",
+            "叙事重试: 骰子约束矛盾，第%d次重试 (round=%d, 本次耗时=%dms)",
             dice_retry,
             instance.round_number,
+            int((time.perf_counter() - attempt_started) * 1000),
         )
         if on_reset:
             await on_reset()
 
+    logger.info(
+        "GM 叙事: 完成 (round=%d, 总耗时=%dms)",
+        instance.round_number,
+        int((time.perf_counter() - started) * 1000),
+    )
     await _compress_long_narration(
         llm_client, gm_prompt, response, actions_text, combat_model, narrative_max_tokens
     )

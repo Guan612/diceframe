@@ -292,6 +292,26 @@ class RuleSystem:
         return self.template.get("dice_system", "d20")
 
     @property
+    def check_mechanic(self) -> dict:
+        """规则无关的检定元数据，供系统执行器与阶段 1 裁判共用。"""
+        declared = self.template.get("check_mechanic")
+        if isinstance(declared, dict) and declared:
+            return dict(declared)
+        if self.dice_system == "d100":
+            return {
+                "dice": "d100",
+                "comparison": "roll_lte_target",
+                "critical": {"success_max": 5, "failure_min": 96},
+            }
+        if self.dice_system == "none":
+            return {"dice": "none", "comparison": "none", "critical": {}}
+        return {
+            "dice": "d20",
+            "comparison": "roll_plus_modifier_gte_target",
+            "critical": {"success": 20, "failure": 1},
+        }
+
+    @property
     def combat_model(self) -> str:
         return self.template.get("combat_model", "hp_based")
 
@@ -635,6 +655,8 @@ def list_available_rules(rules_dir: str | Path) -> list[dict]:
                 "combat_model": template.get("combat_model", "hp_based"),
                 "attr_count": len(template.get("attributes", [])),
                 "custom": bool(template.get("custom", False)),
+                "source_rule_id": template.get("source_rule_id", ""),
+                "scene_image": template.get("scene_image"),
                 "file": str(f),
             })
         except Exception:

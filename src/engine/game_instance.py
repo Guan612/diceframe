@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from src.engine.contracts import (
     ActionRecord,
@@ -134,6 +134,8 @@ class GameInstance:
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
     world_id: str | None = None
+    rule_id: str = "freeform_fantasy"
+    scene_image: dict[str, str] = field(default_factory=dict)
     world_name: str = ""
     group_name: str = ""
     state: GameState = GameState.CREATED
@@ -242,6 +244,10 @@ class GameInstance:
     # 内部：process_round/generate_swipe 互斥锁，防并发处理同一实例
     _process_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _save_fail_count: int = field(default=0, repr=False)
+    # 幸运超时（秒）：每条 pending 幸运检定独立倒计时，到点按失败继续；0=禁用（异步局可设 0）
+    luck_timeout_seconds: int = 60
+    # 内部：每条 pending 幸运检定的超时定时器（check_id -> asyncio.Task），不序列化
+    _luck_timers: dict = field(default_factory=dict, repr=False)
     _tag_fail_streak: int = field(default=0, repr=False)
     # D1: 已确认事项（CONFIRMED 标签累积），注入 LLM 上下文防重复讨论
     confirmed_items: list = field(default_factory=list)
@@ -291,6 +297,7 @@ class GameInstance:
         self,
         *,
         world_id: str | None,
+        rule_id: str,
         world_name: str,
         group_name: str,
         seed_code: str,
@@ -300,6 +307,7 @@ class GameInstance:
     ) -> None:
         """配置新局身份信息；调用方在并发路径中应持有 ``_lock``。"""
         self.world_id = world_id
+        self.rule_id = rule_id or "freeform_fantasy"
         self.world_name = world_name
         self.group_name = group_name
         self.seed_code = seed_code
@@ -314,8 +322,12 @@ class GameInstance:
         entry_point: str | None = None,
         room_password: str | None = None,
         gm_uid: str | None = None,
+        luck_timeout_seconds: int | None = None,
     ) -> None:
-        """集中更新入口与房间身份配置，保留旧存档字段。"""
+        """集中更新入口与房间身份配置，保留旧存档字段。
+
+        luck_timeout_seconds：每玩家幸运超时秒数（0=禁用，异步局建议 0）。
+        """
         if solo_mode is not None:
             self.solo_mode = bool(solo_mode)
         if entry_point is not None:
@@ -324,6 +336,14 @@ class GameInstance:
             self.room_password = room_password
         if gm_uid is not None:
             self.gm_uid = gm_uid
+        if luck_timeout_seconds is not None:
+            if not 0 <= int(luck_timeout_seconds) <= 3600:
+                raise ValueError("幸运超时需在 0..3600 秒之间（0=禁用）")
+            self.luck_timeout_seconds = int(luck_timeout_seconds)
+
+    def set_scene_image(self, reference: dict[str, str]) -> None:
+        """Set the portable adventure scene-image reference."""
+        self.scene_image = dict(reference or {})
 
     def replace_players(self, players: dict[str, PlayerData]) -> None:
         self.players = players
@@ -335,6 +355,9 @@ class GameInstance:
         self.bot_bind_token = token
 
     def set_room_password(self, password: str) -> None:
+        """设置房间密码；非空时要求至少 4 位。空串表示取消密码（开放房）。"""
+        if password and len(password) < 4:
+            raise ValueError("房间密码至少 4 位")
         self.room_password = password
         self.room_token = ""
 
@@ -610,6 +633,7 @@ class GameInstance:
             target["luck_decision"] = desired
             target["luck_spend_available"] = False
             target["luck_resolved_at"] = datetime.now(timezone.utc).isoformat()
+            self._cancel_luck_timer(str(target.get("check_id") or ""))
             if self.last_check and str(self.last_check.get("check_id") or "") == check_id:
                 self.last_check = dict(target)
             self.last_activity = datetime.now(timezone.utc).isoformat()
@@ -626,6 +650,7 @@ class GameInstance:
                 check["luck_decision"] = "declined"
                 check["luck_spend_available"] = False
                 check["luck_resolved_at"] = now
+                self._cancel_luck_timer(str(check.get("check_id") or ""))
                 declined.append(dict(check))
             if declined:
                 if self.last_check:
@@ -638,6 +663,40 @@ class GameInstance:
                         self.last_check = dict(replacement)
                 self.last_activity = now
             return declined
+
+    async def system_decline_luck(self, check_id: str) -> dict:
+        """幸运超时定时器触发：按失败继续单条幸运检定（系统发起，不需 actor）。
+
+        玩家已手动决定时返回 LUCK_ALREADY_RESOLVED，不重复改判。
+        返回 declined_all=True 表示这是最后一条 pending，调用方应重新推进回合。
+        """
+        async with self._lock:
+            target = next(
+                (c for c in self.last_checks if str(c.get("check_id") or "") == check_id),
+                None,
+            )
+            if not target:
+                return {"ok": False, "code": "CHECK_NOT_FOUND", "error": "检定不存在或已过期"}
+            if str(target.get("luck_decision") or "") != "pending":
+                return {"ok": False, "code": "LUCK_ALREADY_RESOLVED", "error": "该检定的幸运选择已经处理"}
+            target["luck_decision"] = "declined"
+            target["luck_spend_available"] = False
+            target["luck_timeout"] = True
+            target["luck_resolved_at"] = datetime.now(timezone.utc).isoformat()
+            if self.last_check and str(self.last_check.get("check_id") or "") == check_id:
+                self.last_check = dict(target)
+            self.last_activity = target["luck_resolved_at"]
+            declined_all = not any(
+                c.get("luck_decision") == "pending"
+                for c in self.last_checks
+            )
+            return {"ok": True, "check_result": dict(target), "declined_all": declined_all}
+
+    def _cancel_luck_timer(self, check_id: str) -> None:
+        """取消并移除某条检定的幸运超时定时器（若已挂）。手动决议先于超时到达时调用。"""
+        task = self._luck_timers.pop(check_id, None)
+        if task and not task.done():
+            task.cancel()
 
     def all_alive_ready(self) -> bool:
         """多人模式下，所有未暂离的存活角色都提交行动后才自动推进。"""
@@ -1047,6 +1106,8 @@ class GameInstance:
         data = {
             "game_key": list(self.game_key),
             "world_id": self.world_id,
+            "rule_id": self.rule_id,
+            "scene_image": self.scene_image,
             "world_name": self.world_name,
             "group_name": self.group_name,
             "state": self.state.value,
@@ -1075,6 +1136,7 @@ class GameInstance:
             "seed_code": self.seed_code,
             "difficulty": self.difficulty,
             "language": normalize_language(self.language),
+            "luck_timeout_seconds": self.luck_timeout_seconds,
             "entry_point": self.entry_point,
             "max_players": self.max_players,
             "gm_uid": self.gm_uid,
@@ -1140,6 +1202,7 @@ class GameInstance:
                 ),
                 "skills": skills,
                 "inventory": cs.get("inventory", []),
+                "key_items": cs.get("key_items", []),
             }
             if cs.get("background"):
                 sheet["background"] = cs["background"]
@@ -1194,6 +1257,10 @@ class GameInstance:
         inst = cls(
             game_key=tuple(data["game_key"]),
             world_id=data.get("world_id"),
+            # Empty marks a pre-rule_id save. The WebUI service resolves it from
+            # the world template on first read and persists the migrated value.
+            rule_id=data.get("rule_id", ""),
+            scene_image=data.get("scene_image", {}),
             world_name=data.get("world_name", ""),
             group_name=data.get("group_name", ""),
             state=GameState(data["state"]),
@@ -1220,6 +1287,7 @@ class GameInstance:
             seed_code=data.get("seed_code", ""),
             difficulty=data.get("difficulty", "标准"),
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
+            luck_timeout_seconds=int(data.get("luck_timeout_seconds", 60) or 0),
             entry_point=data.get("entry_point", "web"),
             max_players=data.get("max_players", 6),
             gm_uid=data.get("gm_uid", ""),
@@ -1513,8 +1581,15 @@ class GameRegistry:
         logger.info("存档恢复完成: %d 个对局", len(recovered))
         return recovered
 
-    async def import_save_zip(self, payload: bytes, *, platform: str = "web", account_id: str = "web_bot") -> dict:
-        """导入导出的存档 zip（state.json + 可选 chatlog.jsonl），作为新对局恢复。
+    async def import_save_zip(
+        self,
+        payload: bytes,
+        *,
+        platform: str = "web",
+        account_id: str = "web_bot",
+        scene_image_importer: Callable[[bytes], dict[str, Any]] | None = None,
+    ) -> dict:
+        """导入导出的存档 zip（state.json + 可选历史/头图），作为新对局恢复。
 
         自动生成唯一新 game_key，不覆盖现有对局。关键点：
         - state.json 内的 game_key 改写为新值，否则 load 后 instance.game_key 仍是导出方
@@ -1538,6 +1613,7 @@ class GameRegistry:
                 limits = {
                     "state.json": MAX_SAVE_STATE_BYTES,
                     "chatlog.jsonl": MAX_SAVE_CHATLOG_BYTES,
+                    "scene-image.asset": 8 * 1024 * 1024,
                 }
                 unpacked_size = 0
                 for info in infos:
@@ -1557,15 +1633,27 @@ class GameRegistry:
                 if not isinstance(state_json, dict) or "game_key" not in state_json:
                     return {"ok": False, "error": "state.json 缺少 game_key"}
                 # 仅接受顶层已知文件，防止解压路径穿越/任意写入
-                allowed = {"state.json", "chatlog.jsonl"}
+                allowed = {"state.json", "chatlog.jsonl", "scene-image.asset"}
                 if any(name for name in names if name not in allowed or "/" in name or "\\" in name or ".." in name):
                     return {"ok": False, "error": "存档包包含非法文件"}
                 chatlog_data = zf.read("chatlog.jsonl") if "chatlog.jsonl" in names else b""
+                scene_image_data = zf.read("scene-image.asset") if "scene-image.asset" in names else b""
         except zipfile.BadZipFile:
             return {"ok": False, "error": "存档包不是有效的 zip"}
         except Exception as exc:
             logger.exception("导入存档解析失败")
             return {"ok": False, "error": f"存档包解析失败：{exc}"}
+
+        scene_reference = state_json.get("scene_image")
+        if isinstance(scene_reference, dict) and scene_reference.get("kind") == "save_asset":
+            if scene_reference.get("path") != "scene-image.asset" or not scene_image_data:
+                return {"ok": False, "error": "存档包缺少冒险头图资产"}
+            if scene_image_importer is None:
+                return {"ok": False, "error": "当前环境不支持导入冒险头图资产"}
+            imported = scene_image_importer(scene_image_data)
+            if not imported.get("ok") or not imported.get("scene_image"):
+                return {"ok": False, "error": str(imported.get("error") or "冒险头图导入失败")}
+            state_json["scene_image"] = imported["scene_image"]
 
         # 生成唯一新 game_key：import_<毫秒时间戳>
         new_key = (platform, f"import_{int(time.time() * 1000)}", account_id)

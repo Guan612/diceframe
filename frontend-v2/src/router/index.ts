@@ -21,6 +21,19 @@ const routes: RouteRecordRaw[] = [
   { path: '/logs', name: 'logs', component: () => import('@/features/admin/LogsView.vue') },
   { path: '/rules', name: 'rules', component: () => import('@/features/admin/RulesView.vue') },
   { path: '/settings', name: 'settings', component: () => import('@/features/admin/SettingsView.vue') },
+  { path: '/plugins', name: 'plugins', component: () => import('@/features/plugins/PluginsView.vue') },
+  {
+    path: '/legal/terms',
+    name: 'legal-terms',
+    component: () => import('@/features/legal/LegalView.vue'),
+    props: { document: 'terms' },
+  },
+  {
+    path: '/legal/privacy',
+    name: 'legal-privacy',
+    component: () => import('@/features/legal/LegalView.vue'),
+    props: { document: 'privacy' },
+  },
 ]
 
 const router = createRouter({
@@ -34,7 +47,7 @@ type PublicRoute = {
 }
 
 export function isPublicRoute(route: PublicRoute): boolean {
-  if (route.name === 'login' || route.name === 'join') return true
+  if (route.name === 'login' || route.name === 'join' || String(route.name || '').startsWith('legal-')) return true
   return route.name === 'play' && Boolean(route.query.user || route.query.share)
 }
 

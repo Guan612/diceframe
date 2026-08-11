@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { builtinPortraits, defaultBuiltinPortrait, resolveBuiltinPortrait } from '../src/utils/portraits'
 
 describe('character portraits', () => {
-  it('provides eight portraits across two atlases for every built-in ruleset', () => {
+  it('provides a distinct mixed-style eight-image portrait set for every built-in ruleset', () => {
+    const allImages = new Set<string>()
     for (const ruleId of ['dnd5e', 'freeform_coc', 'freeform_cyberpunk', 'freeform_fantasy', 'freeform_wuxia', 'tavern_free']) {
       const options = builtinPortraits(ruleId)
       expect(options).toHaveLength(8)
       expect(options.map(option => option.id)).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map(index => `${ruleId}:${index}`))
-      expect(options.slice(0, 4).every(option => option.image.endsWith(`/avatars/${ruleId}.webp`))).toBe(true)
-      expect(options.slice(4).every(option => option.image.endsWith(`/avatars/${ruleId}_2.webp`))).toBe(true)
+      expect(new Set(options.map(option => option.image)).size).toBe(8)
+      expect(options.every(option => option.image.includes(`/avatars/v3/${ruleId}/`))).toBe(true)
+      expect(options.filter(option => option.style === 'realistic')).toHaveLength(4)
+      expect(options.filter(option => option.style === 'anime')).toHaveLength(4)
+      expect(options.every(option => option.position === '50% 26%')).toBe(true)
+      options.forEach(option => allImages.add(option.image))
     }
+    expect(allImages.size).toBe(48)
   })
 
   it('selects stable defaults from all eight portraits', () => {
@@ -19,11 +25,12 @@ describe('character portraits', () => {
     expect(resolveBuiltinPortrait(undefined, 'freeform_coc_en', 'player_1').ruleId).toBe('freeform_coc')
   })
 
-  it('resolves portraits from the added atlas without changing their public ids', () => {
+  it('resolves the new images without changing stored portrait ids', () => {
     const portrait = resolveBuiltinPortrait({ kind: 'builtin', id: 'freeform_wuxia:6' })
     expect(portrait.index).toBe(6)
-    expect(portrait.image).toMatch(/\/avatars\/freeform_wuxia_2\.webp$/)
-    expect(portrait.position).toBe('0% 100%')
+    expect(portrait.style).toBe('anime')
+    expect(portrait.image).toMatch(/\/avatars\/v3\/freeform_wuxia\/anime-3\.jpg$/)
+    expect(portrait.position).toBe('50% 26%')
   })
 
   it('falls custom rules back to the generic fantasy pack', () => {

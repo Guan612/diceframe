@@ -21,7 +21,8 @@ from scripts.prepare_e2e_data import prepare_e2e_data
 
 FRONTEND = ROOT / "frontend-v2"
 HOST = "127.0.0.1"
-PORT = 18000
+# 默认 18000；可用 TRPG_E2E_PORT 覆盖，避免与用户正在运行的实例端口冲突。
+PORT = int(os.getenv("TRPG_E2E_PORT") or 18000)
 
 
 def _port_is_open() -> bool:
@@ -64,6 +65,7 @@ def main() -> int:
         env = os.environ.copy()
         env["TRPG_DATA_DIR"] = str(data_dir)
         env["DICEFRAME_E2E_DATA_DIR"] = str(data_dir)
+        env["TRPG_WEB_PORT"] = str(PORT)
         with log_file.open("w", encoding="utf-8") as output:
             server = subprocess.Popen(
                 [sys.executable, str(ROOT / "web_server.py")],

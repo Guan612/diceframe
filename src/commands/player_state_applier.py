@@ -105,7 +105,7 @@ class PlayerStateApplier:
                         full_loss = abs(loss_dice.total)
                     except Exception:
                         full_loss = 6
-                    actual_loss = (full_loss + 1) // 2 if san_verdict == "成功" else full_loss
+                    actual_loss = (full_loss + 1) // 2 if san_verdict in ("成功", "大成功") else full_loss
                     prev = cs.get("sanity", 99)
                     apply_bounded_stat_delta(
                         cs, "sanity", -actual_loss,

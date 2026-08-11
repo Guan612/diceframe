@@ -3,6 +3,7 @@
   "extends": "base_d20",
   "rule_version": "1.1",
   "rule_id": "freeform_wuxia",
+  "scene_image": {"kind": "builtin", "id": "freeform_wuxia"},
   "rule_name": "Wuxia/Xianxia Freeform",
   "description": "A lightweight freeform rule for an alternate wuxia/xianxia world.",
   "attributes": [

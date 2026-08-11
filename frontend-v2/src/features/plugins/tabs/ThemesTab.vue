@@ -4,7 +4,7 @@ import { useLocale } from '@/composables/useLocale'
 import type { BuiltinSkin, SkinName } from '@/composables/useTheme'
 import type { PluginTheme } from '@/api/types'
 
-const props = defineProps<{
+defineProps<{
   builtinSkins: readonly BuiltinSkin[]
   skin: SkinName
   pluginThemeId: string
@@ -66,3 +66,96 @@ const { t } = useLocale()
     <p v-if="!pluginThemes.length" class="muted">{{ t('noEnabledThemePlugins') }}</p>
   </section>
 </template>
+
+<style scoped>
+.theme-plugin-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--df-surface-1), var(--df-surface-2));
+}
+
+.builtin-theme-panel {
+  margin-bottom: 14px;
+}
+
+.builtin-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.builtin-theme-card {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 11px;
+  text-align: left;
+  background: var(--df-control-bg);
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  color: var(--df-text);
+}
+
+.builtin-theme-card:hover,
+.builtin-theme-card.active {
+  border-color: var(--df-interactive);
+  box-shadow: 0 0 0 2px var(--df-focus);
+}
+
+.builtin-theme-card strong {
+  color: var(--df-accent-strong);
+}
+
+.builtin-theme-card small {
+  color: var(--df-text-muted);
+  line-height: 1.45;
+}
+
+.theme-swatches {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  height: 34px;
+  overflow: hidden;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-sm);
+}
+
+.theme-swatches i {
+  display: block;
+}
+
+.theme-plugin-panel h3 {
+  margin: 0;
+  color: var(--df-accent-strong);
+}
+
+.theme-plugin-panel p {
+  margin: 4px 0 0;
+}
+
+.theme-plugin-controls {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+@media (max-width: 980px) {
+  .builtin-theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .theme-plugin-controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .builtin-theme-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

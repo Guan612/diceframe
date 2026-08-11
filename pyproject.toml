@@ -8,7 +8,10 @@ select = ["E9", "F63", "F7", "F82"]
 
 [tool.pytest.ini_options]
 # 插件自带测试依赖插件源码在 PYTHONPATH，主程序 CI 不提供；插件测试归插件仓库自跑。
-norecursedirs = ["plugins"]
+# 只收集主程序 tests/，避免本机 data/plugin-packages 中用户安装插件的顶层 src 包
+# 污染主程序的 src namespace。
+testpaths = ["tests"]
+norecursedirs = ["plugins", "data/plugin-packages"]
 
 [tool.mypy]
 python_version = "3.11"

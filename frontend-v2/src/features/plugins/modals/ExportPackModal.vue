@@ -139,3 +139,197 @@ const { t } = useLocale()
     </NSpin>
   </NModal>
 </template>
+
+<style scoped>
+.export-pack-modal :deep(.n-card__content) {
+  overflow: hidden;
+  padding-top: 8px;
+}
+
+.export-pack-modal :deep(.n-card-header__close),
+.export-pack-modal :deep(.n-base-close) {
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 50%;
+  color: var(--df-text-secondary);
+  background: color-mix(in srgb, var(--df-control-bg) 90%, transparent);
+  box-shadow: none;
+}
+
+.export-pack-modal :deep(.n-base-close:hover) {
+  border-color: var(--df-interactive);
+  color: var(--df-text);
+  background: color-mix(in srgb, var(--df-interactive) 13%, var(--df-control-bg));
+}
+
+.export-pack-modal :deep(.n-base-close .n-base-icon) {
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+}
+
+.portrait-export-option {
+  display: grid;
+  gap: 5px;
+}
+
+.export-pack-help {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.export-pack-scroll {
+  display: grid;
+  max-height: calc(100dvh - 238px);
+  overflow-y: auto;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.export-pack-section {
+  padding: 11px 12px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 76%, transparent);
+}
+
+.export-pack-section h3 {
+  margin: 0 0 9px;
+  color: var(--df-accent-strong);
+  font-size: 13px;
+}
+
+.export-pack-section .field {
+  margin: 0;
+}
+
+.export-pack-section label {
+  margin: 0;
+}
+
+.export-pack-meta-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(96px, .45fr);
+  gap: 9px 12px;
+}
+
+.export-description-field {
+  grid-column: 1 / -1;
+}
+
+.export-content-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.export-content-column {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.compact-file-field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px dashed var(--df-border-soft);
+  border-radius: var(--df-radius-sm);
+  background: color-mix(in srgb, var(--df-control-bg) 72%, transparent);
+  font-size: 12px;
+}
+
+.compact-file-field.disabled {
+  opacity: .55;
+}
+
+.compact-file-field input {
+  max-width: 100%;
+  color: var(--df-text-secondary);
+  font-size: 11px;
+}
+
+.compact-file-field small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.export-card-select {
+  grid-column: 1 / -1;
+}
+
+.export-resource-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.export-resource-option {
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  padding: 8px 9px;
+  border-radius: var(--df-radius-sm);
+  background: color-mix(in srgb, var(--df-control-bg) 68%, transparent);
+}
+
+.export-pack-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--df-border-soft);
+}
+
+.export-pack-footer .hint,
+.export-pack-footer .actions-row {
+  margin: 0;
+}
+
+.export-pack-footer .hint {
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+@media (max-width: 560px) {
+  .export-pack-scroll {
+    max-height: calc(100dvh - 320px);
+  }
+
+  .export-content-grid,
+  .export-resource-options,
+  .export-pack-footer {
+    grid-template-columns: 1fr;
+  }
+
+  .export-pack-meta-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .export-description-field,
+  .export-card-select,
+  .export-version-field {
+    grid-column: auto;
+  }
+
+  .export-pack-footer .actions-row {
+    justify-content: stretch;
+  }
+
+  .export-pack-footer .actions-row > * {
+    flex: 1;
+  }
+}
+</style>

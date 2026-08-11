@@ -17,7 +17,6 @@ const commandRows: { command: string; desc: MessageKey; role: MessageKey }[] = [
   { command: '@bot \u611f\u77e5', desc: 'napcatCmdPerceptionDesc', role: 'napcatRoleClaimed' },
   { command: '@bot \u652f\u4ed8', desc: 'napcatCmdPaymentDesc', role: 'napcatRoleClaimed' },
   { command: '@bot \u786e\u8ba4\u652f\u4ed8 / \u62d2\u7edd\u652f\u4ed8', desc: 'napcatCmdPaymentConfirmDesc', role: 'napcatRoleClaimed' },
-  { command: '@bot \u63b7\u9ab0', desc: 'napcatCmdRollDesc', role: 'napcatRoleClaimed' },
   { command: '@bot \u63a8\u8fdb / \u4e0b\u4e00\u8f6e', desc: 'napcatCmdAdvanceDesc', role: 'napcatRoleGmOrAllowed' },
   { command: '@bot \u6682\u79bb / \u56de\u6765', desc: 'napcatCmdAwayDesc', role: 'napcatRoleClaimedOrGm' },
   { command: '@bot <action>', desc: 'napcatCmdActionDesc', role: 'napcatRoleClaimed' },
@@ -102,12 +101,12 @@ const commandRows: { command: string; desc: MessageKey; role: MessageKey }[] = [
 .napcat-guide { margin-bottom: 14px; }
 .napcat-guide section { margin: 12px 0; }
 .napcat-guide h4 { margin: 0 0 6px; font-size: 14px; color: #d99b45; }
-.napcat-guide p { font-size: 13px; line-height: 1.7; margin: 4px 0; color: var(--text, #c9c9c9); }
+.napcat-guide p { font-size: 13px; line-height: 1.7; margin: 4px 0; color: var(--df-text, #c9c9c9); }
 .napcat-guide ul, .napcat-guide ol { margin: 4px 0 4px 20px; padding: 0; }
-.napcat-guide li { font-size: 13px; line-height: 1.7; color: var(--text, #c9c9c9); }
+.napcat-guide li { font-size: 13px; line-height: 1.7; color: var(--df-text, #c9c9c9); }
 .napcat-guide code { background: rgba(216,173,82,.12); color: #e0b25a; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
 .napcat-guide .hint { color: #8a8a8a; font-size: 12px; }
 .cmd-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
-.cmd-table th, .cmd-table td { border: 1px solid rgba(255,255,255,.12); padding: 5px 7px; text-align: left; color: var(--text, #c9c9c9); }
+.cmd-table th, .cmd-table td { border: 1px solid rgba(255,255,255,.12); padding: 5px 7px; text-align: left; color: var(--df-text, #c9c9c9); }
 .cmd-table th { background: rgba(255,255,255,.05); color: #d99b45; }
 </style>

@@ -93,6 +93,46 @@ async def api_detail(request: web.Request) -> web.Response:
     return web.json_response(d) if d else web.json_response({"error": "not found"}, status=404)
 
 
+async def api_game_scene_image_file(request: web.Request) -> web.StreamResponse:
+    api = _get_api(request)
+    game_key = request.match_info["game_key"]
+    inst = request.app["subsystems"].registry.get(api._parse_key(game_key))
+    if not inst:
+        return web.json_response({"error": "not found"}, status=404)
+    use_default = request.query.get("default", "").lower() in {"1", "true", "yes"}
+    reference = (
+        api.resolve_default_scene_image(inst.world_id, inst.rule_id)
+        if use_default
+        else inst.scene_image or api.resolve_default_scene_image(inst.world_id, inst.rule_id)
+    )
+    path = api.resolve_scene_image_file(reference)
+    if path is None:
+        return web.json_response({"error": "scene image not found"}, status=404)
+    return web.FileResponse(path, headers={"Cache-Control": "private, max-age=300"})
+
+
+async def api_game_scene_image_update(request: web.Request) -> web.Response:
+    game_key = request.match_info["game_key"]
+    _inst, denied = _gm_only_inst(request, game_key)
+    if denied is not None:
+        return denied
+    body = await request.json()
+    reference = body.get("scene_image")
+    if body.get("file_data"):
+        upload = _get_api(request).save_scene_image_upload(
+            str(body["file_data"]), str(body.get("file_name") or "")
+        )
+        if not upload.get("ok"):
+            return web.json_response(upload, status=400)
+        reference = upload.get("scene_image")
+    result = await _get_api(request).update_scene_image(
+        game_key,
+        reference,
+        use_default=bool(body.get("use_default", False)),
+    )
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 async def api_claim_gm_session(request: web.Request) -> web.Response:
     """Restore the saved GM identity after the owner signs in on another device."""
     api = _get_api(request)
@@ -169,6 +209,28 @@ async def api_set_solo_mode(request: web.Request) -> web.Response:
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
+async def api_set_luck_timeout(request: web.Request) -> web.Response:
+    """GM 按局设置幸运超时秒数（0=禁用，异步局建议 0，实时局默认 60）。"""
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+    if request.get("user_id", "") != inst.gm_uid:
+        return web.json_response({"ok": False, "error": "GM only"}, status=403)
+    body = await request.json()
+    try:
+        seconds = int(body.get("seconds"))
+    except (TypeError, ValueError):
+        return web.json_response({"ok": False, "error": "seconds 必须是整数（秒，0=禁用）"}, status=400)
+    try:
+        inst.configure_session(luck_timeout_seconds=seconds)
+    except ValueError as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=400)
+    await api._reg.save(inst)
+    return web.json_response({"ok": True, "luck_timeout_seconds": inst.luck_timeout_seconds})
+
+
 async def api_set_player_away(request: web.Request) -> web.Response:
     api = _get_api(request)
     gk = request.match_info["game_key"]
@@ -207,7 +269,10 @@ async def api_set_room_password(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "GM only"}, status=403)
     body = await request.json()
     password = str(body.get("password", "") or "")
-    inst.set_room_password(password)
+    try:
+        inst.set_room_password(password)
+    except ValueError as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=400)
     await api._reg.save(inst)
     return web.json_response({"ok": True, "has_room_password": bool(password)})
 
@@ -344,8 +409,11 @@ async def api_create_game(request: web.Request) -> web.Response:
         players=body.get("players", []),
         custom_world=body.get("custom_world", False),
         gm_uid=request.get("user_id", ""),
-        room_password=str(body.get("room_password", "") or ""),
+        # 区分三态：字段缺失/JSON null → None（后端按 solo/多人决定是否生成随机密码）；
+        # 显式空串 "" → 开放；非空 → 加密。
+        room_password=body.get("room_password"),
         language=str(body.get("language", "") or ""),
+        scene_image=body.get("scene_image"),
     )
     return web.json_response(result)
 
@@ -436,7 +504,7 @@ async def api_payment_resolve(request: web.Request) -> web.Response:
 
 
 async def api_export_game(request: web.Request) -> web.Response:
-    """导出单存档为 zip（含 state.json + chatlog.jsonl 完整历史）。"""
+    """导出单存档为可移植 zip（含状态、完整历史与冒险头图）。"""
     api = _get_api(request)
     gk = api._parse_key(request.match_info["game_key"])
     registry = request.app["subsystems"].registry
@@ -459,7 +527,13 @@ async def api_export_game(request: web.Request) -> web.Response:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         try:
-            zf.writestr("state.json", state_path.read_bytes())
+            state_data = json.loads(state_path.read_text(encoding="utf-8-sig"))
+            reference = state_data.get("scene_image")
+            image_path = api.resolve_scene_image_file(reference)
+            if image_path is not None and isinstance(reference, dict) and reference.get("kind") != "builtin":
+                zf.writestr("scene-image.asset", image_path.read_bytes())
+                state_data["scene_image"] = {"kind": "save_asset", "path": "scene-image.asset"}
+            zf.writestr("state.json", json.dumps(state_data, ensure_ascii=False, indent=2))
             chatlog = save_path.with_name("chatlog.jsonl")
             if chatlog.exists():
                 zf.writestr("chatlog.jsonl", chatlog.read_bytes())
@@ -497,7 +571,12 @@ async def api_import_game(request: web.Request) -> web.Response:
         payload = await _read_save_upload(reader)
         if not payload:
             return web.json_response({"ok": False, "error": "缺少存档 zip 文件"}, status=400)
-        result = await request.app["subsystems"].registry.import_save_zip(payload)
+        import base64
+
+        result = await request.app["subsystems"].registry.import_save_zip(
+            payload,
+            scene_image_importer=lambda raw: api.save_scene_image_upload(base64.b64encode(raw).decode("ascii")),
+        )
     except _SavePackageTooLarge:
         return web.json_response({"ok": False, "error": "存档包不能超过 50 MB"}, status=413)
     except Exception as exc:
@@ -642,6 +721,7 @@ async def api_create_from_seed(request: web.Request) -> web.Response:
         players=body.get("players", []),
         gm_uid=request.get("user_id", ""),
         language=str(body.get("language", "") or ""),
+        scene_image=body.get("scene_image"),
     )
     return web.json_response(result)
 
@@ -748,12 +828,15 @@ def register_games(app: web.Application) -> None:
     app.router.add_get("/api/games", api_games)
     app.router.add_post("/api/games/import", api_import_game)
     app.router.add_get("/api/games/{game_key}", api_detail)
+    app.router.add_get("/api/games/{game_key}/scene-image", api_game_scene_image_file)
+    app.router.add_post("/api/games/{game_key}/scene-image", api_game_scene_image_update)
     app.router.add_post("/api/games/{game_key}/claim-gm", api_claim_gm_session)
     app.router.add_get("/api/games/{game_key}/multiplayer", api_multiplayer_status)
     app.router.add_get("/api/games/{game_key}/player-context", api_player_context)
     app.router.add_get("/api/games/{game_key}/health", api_game_health)
     app.router.add_post("/api/games/{game_key}/health/{event_id}/{action:resolve|ignore}", api_mark_health_event)
     app.router.add_post("/api/games/{game_key}/mode", api_set_solo_mode)
+    app.router.add_post("/api/games/{game_key}/settings/luck-timeout", api_set_luck_timeout)
     app.router.add_post("/api/games/{game_key}/players/{user_id}/away", api_set_player_away)
     app.router.add_post("/api/games/{game_key}/player-access", api_set_player_access)
     app.router.add_post("/api/games/create", api_create_game)

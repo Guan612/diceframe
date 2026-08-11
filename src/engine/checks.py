@@ -192,9 +192,14 @@ def roll_check_request(request: dict[str, Any]) -> dict[str, Any]:
     """按 CheckRequest 只生成原始骰值；规则修正与成败由判定解析器计算。"""
     dice_system = str(request.get("dice_system") or "").lower()
     if dice_system == "d100":
-        result = roll("d100")
-        rolls = [result.natural]
-        value = result.natural
+        mode = str(request.get("advantage_mode") or "")
+        if mode in {"advantage", "disadvantage"}:
+            rolls = [roll("d100").natural, roll("d100").natural]
+            value = min(rolls) if mode == "advantage" else max(rolls)
+        else:
+            result = roll("d100")
+            rolls = [result.natural]
+            value = result.natural
     elif dice_system == "d20":
         mode = str(request.get("advantage_mode") or "")
         if mode in {"advantage", "disadvantage"}:

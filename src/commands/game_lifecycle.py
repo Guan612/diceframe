@@ -62,6 +62,7 @@ class GameLifecycle:
         world_description = world_data.get("description", "")
         world_setting = world_data.get("world_setting", "")
         starter_scene = world_data.get("starter_scene", "")
+        sandbox_world = bool(world_data.get("sandbox"))
         player_lines = []
         for pdata in instance.players.values():
             cs = pdata.get("character_sheet", {})
@@ -71,7 +72,23 @@ class GameLifecycle:
                 f"；背景：{cs.get('background', '') or '未填写'}"
             )
         players_text = "\n".join(player_lines) if player_lines else "尚未创建角色"
-        if is_english(instance.language):
+        if is_english(instance.language) and sandbox_world:
+            opening_instruction = (
+                "This is an intentionally blank freeform sandbox with no preset canon, era, "
+                "location, factions, or NPCs. Use only the player character names and backgrounds "
+                "to establish a minimal opening situation, and leave room for the players to define "
+                "the world through play. Do not assume a tavern, medieval fantasy, or any other genre "
+                "unless a character concept establishes it.\n\n"
+                "Write a concise 100-150 word opening that offers an immediate choice."
+            )
+        elif sandbox_world:
+            opening_instruction = (
+                "这是一个有意保持空白的自由沙盒，没有预设时代、地点、阵营、NPC 或固定世界观。"
+                "只根据玩家已经填写的角色姓名与背景建立最少的开场事实，并允许玩家在行动中继续定义世界。"
+                "除非角色设定明确提到，否则不得默认套用酒馆、中世纪奇幻或其他固定题材。"
+                "\n\n请用 100 至 150 字给出一个简洁、可立即行动的开场。"
+            )
+        elif is_english(instance.language):
             opening_instruction = (
                 "The game has just started. As GM, strictly follow the world setting, era, "
                 "location, and genre above. Describe the opening scene, introduce the "

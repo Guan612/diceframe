@@ -17,7 +17,7 @@ DiceFrame's plugin model covers channel adapters, content packs, themes, maps, i
 | Channel adapter | `channel-adapter` | Supported: managed process, settings, start/stop, and DiceFrame HTTP API access |
 | Bot Bridge extension | `bot-extension` | Supported: command interception, message/result hooks, text/image/card rendering, and failure fallback |
 | Content pack | `content-pack` | Supported: rules, worlds, content catalogs, and user-triggered imports |
-| Theme | `theme` | Supported: filtered CSS custom properties |
+| Theme | `theme` | Supported: v2 semantic theme tokens |
 | Map pack | `map-pack` | Partial: locations and icon/scene/grid assets; no live tabletop or editor |
 | Import/export | `import-export` | Reserved: no unified task API; store installation disabled |
 | Provider | `provider` | Reserved: no Provider runtime; store installation disabled |
@@ -50,7 +50,7 @@ For local or private sharing, package the directory as a `.dfplugin` file. A `.d
 | Example | Path | Type | Demonstrates |
 |---------|------|------|--------------|
 | Starter Content | `plugins/examples/starter-content` | `content-pack` | Rules, worlds, characters, NPCs, items, spells, and classes |
-| Paper Theme | `plugins/examples/paper-theme` | `theme` | Safe CSS-variable themes |
+| Paper Theme | `plugins/examples/paper-theme` | `theme` | Safe v2 semantic-token themes |
 | Echo Tool | `plugins/examples/echo-tool` | `tool` | Process handshake, registration, JSON arguments, and structured results |
 | Bridge Customizer | `plugins/examples/bridge-customizer` | `bot-extension` | Custom commands, result hooks, and QQ image rendering |
 
@@ -224,7 +224,7 @@ Standard output is reserved for JSON-RPC. The 256 KB request/response limit stil
 
 ### 7.2 Content Packs
 
-Supported contributions are `rules`, `world_templates`, `character_templates`, `npcs`, `items`, `spells`, and `classes`. Enabled rules and worlds enter normal selectors. Other resources appear in the read-only plugin catalog and may be copied by the user into the card library or a selected lorebook. Imported copies remain after disabling or uninstalling the plugin.
+Supported contributions are `rules`, `world_templates`, `character_templates`, `npcs`, `items`, `spells`, `classes`, `portraits`, and `scene_images`. Enabled rules and worlds enter normal selectors. Other resources appear in the read-only plugin catalog and may be copied by the user into the card library or a selected lorebook. Imported copies remain after disabling or uninstalling the plugin.
 
 ```json
 {
@@ -241,18 +241,51 @@ Supported contributions are `rules`, `world_templates`, `character_templates`, `
     "npcs": ["content/npc/*.json"],
     "items": ["content/items/*.json"],
     "spells": ["content/spells/*.json"],
-    "classes": ["content/classes/*.json"]
+    "classes": ["content/classes/*.json"],
+    "portraits": ["assets/portraits/*"],
+    "scene_images": ["assets/scenes/*"]
   }
 }
 ```
 
-Use stable IDs and avoid built-in IDs. Content is never imported automatically. Worlds and catalog records declare `language`; world text is not automatically translated. Rules use `<rule_id>.json` for Chinese and `<rule_id>_en.json` for English, with Chinese fallback. Protocol fields and GM tags remain language-neutral.
+Character templates and NPC records may declare either a built-in portrait or a packaged image asset:
 
-#### 7.2.1 Customizing dice triggers (intents)
+```json
+{ "portrait": { "kind": "builtin", "id": "freeform_fantasy:0" } }
+{ "portrait": { "kind": "asset", "path": "assets/portraits/mira.webp" } }
+```
 
-A content pack can fully control which natural-language phrases trigger which check. The `intents` table in a rule template defines intents (a class of check, such as stealth, investigate, or casting) and their trigger words.
+Every `kind: "asset"` path must stay inside the plugin and match `contributes.portraits`. PNG, JPEG, and WebP are supported, up to 3 MB per portrait. DiceFrame previews the declared asset directly while the pack is enabled; importing the character or NPC copies and normalizes the image into the local portrait library, so the imported copy no longer depends on the plugin. The built-in content-pack exporter performs this packaging automatically when “Package character and NPC portraits” is selected.
 
-**Trigger precedence** (rule vocabulary first, global fallback last):
+Ruleset and world templates may both declare an adventure cover. A world cover represents that specific setting; the ruleset cover is the fallback for worlds without their own image:
+
+```json
+{ "scene_image": { "kind": "builtin", "id": "freeform_fantasy" } }
+{ "scene_image": { "kind": "asset", "path": "assets/scenes/valley.webp" } }
+```
+
+An `asset` reference must match `contributes.scene_images`. PNG, JPEG, and WebP are supported, with an 8 MB source limit and a minimum size of 320×180. When DiceFrame persists an upload or materializes a packaged image, it center-crops to 16:9 and normalizes it to a 1600×900 WebP. Pack authors should only write `builtin` or `asset`; `plugin` and `upload` are host-generated runtime references, not distributable source syntax.
+
+The lifecycle and precedence are standardized:
+
+1. Creation resolves `world.scene_image > ruleset.scene_image > matching built-in ruleset image`. The user can accept that default or upload an adventure-specific image.
+2. The selection is persisted in the game save. Pack assets are copied into the local adventure-image store, so disabling, updating, or uninstalling the pack does not break existing saves.
+3. The creation confirmation, overview save card, and play page all render the same saved reference.
+4. A GM may upload a replacement or restore the current content default at any time. Restore recalculates world first, then ruleset.
+5. Save export embeds non-built-in covers in the save zip; importing on another DiceFrame instance materializes the image locally.
+6. The WebUI content-pack exporter accepts separate world and ruleset covers, writes the template fields, creates `assets/scenes/`, and completes the manifest.
+
+Put an image on a world when it has distinct art; put it only on the ruleset when several worlds share a visual. Existing packs without `scene_image` require no migration and use the built-in fallback.
+
+Use stable IDs and avoid built-in IDs. Content catalogs are never imported automatically; selected world and ruleset templates do initialize a new save according to the lifecycle above. Worlds and catalog records declare `language`; world text is not automatically translated. Rules use `<rule_id>.json` for Chinese and `<rule_id>_en.json` for English, with Chinese fallback. Protocol fields and GM tags remain language-neutral.
+
+#### 7.2.1 AI check metadata and the offline intent fallback
+
+The normal path no longer triggers a check from keywords in a player's message. After all active players act or the GM manually advances, a phase-one GM calls `dice_checks` to adjudicate the complete batch. The server validates the player, character-sheet attribute/skill, and target before producing one immutable roll. Rule packs must expose stable `attributes[].key`, `dice_system`, and `mechanics` values. An optional `check_mechanic` may declare the dice, comparison, and critical rules; otherwise DiceFrame derives them from `dice_system`.
+
+`intents` remains only as an offline compatibility path when model calls are completely unavailable and as metadata for old clients/saves. It is no longer the authority for the normal online adjudication path.
+
+**Offline fallback precedence** (rule vocabulary first, global fallback last):
 
 1. Rule template defines its own `intents`: fully self-contained.
 2. Rule template `extends: "intents_base"` (or a vocabulary base inside the plugin): inherits the main program/base vocabulary; a child rule can override individual intents.
@@ -286,13 +319,13 @@ A content pack can fully control which natural-language phrases trigger which ch
 }
 ```
 
-- `aliases`: trigger words, keyed by language (`zh-CN` / `en` / future languages). An action containing any alias matches that intent.
+- `aliases`: offline fallback words, keyed by language (`zh-CN` / `en` / future languages).
 - `skill_candidates`: candidate skills matched against the character sheet when the intent hits.
 - `default_attribute`: the default attribute for the check (`str` / `dex` / `int` / `wis` / `cha`, etc.).
 - `priority`: when several intents match, lower value wins (first match by sort order).
 - `applies_to_dice_systems`: which dice systems this intent applies to (`d20` / `d100`). Intents that do not match the current game's dice system are skipped, preventing COC from triggering intents meant only for DND and vice versa.
 
-**`dice_system` controls the dice itself**: `intents` only decide which check triggers and which attribute/skill to use; the dice algorithm (d20 vs d100, success thresholds, criticals) is set by the rule template's top-level `dice_system` and `mechanics`.
+**`dice_system` controls the dice itself**: AI only proposes check parameters; the dice algorithm (d20 vs d100, success thresholds, criticals) is set by the rule template's top-level `dice_system`, `mechanics`, and optional `check_mechanic`.
 
 **Inheriting the main vocabulary**: a plugin rule's `extends` can reference vocabulary under the main program's `templates/rules/` (for example `intents_base`) by writing `"extends": "intents_base"`. Inheritance is opt-in — rules that do not need the vocabulary can omit it and rely on the global fallback.
 
@@ -300,7 +333,39 @@ A content pack can fully control which natural-language phrases trigger which ch
 
 ### 7.3 Themes
 
-Themes register JSON through `contributes.theme` or `contributes.themes`. The frontend applies filtered CSS custom properties and stores the selected theme in the current browser. Variable names begin with `--`; suspicious values containing `url(`, semicolons, or braces are ignored. Scripts, components, layouts, and arbitrary CSS are unsupported.
+Themes register JSON through `contributes.theme` or `contributes.themes`. Only theme contract v2 is supported; themes without `"schema_version": 2` are ignored and legacy variables are not mapped.
+
+```json
+{
+  "schema_version": 2,
+  "id": "paper-soft",
+  "name": "Paper Soft",
+  "tokens": {
+    "base": {
+      "--df-accent": "#c79a45",
+      "--df-interactive": "#347d78"
+    },
+    "dark": {
+      "--df-canvas": "#17130f",
+      "--df-surface-1": "#231f19",
+      "--df-text": "#f0e6d2"
+    },
+    "light": {
+      "--df-canvas": "#eadbb9",
+      "--df-surface-1": "#fff7df",
+      "--df-text": "#312719"
+    }
+  }
+}
+```
+
+- `tokens` accepts only `base`, `dark`, and `light`; the active mode overrides `base`.
+- The host accepts a documented allowlist of semantic `--df-*` tokens covering canvas/surfaces, borders, accents and interaction, semantic states, text, fonts, shadows, and radii.
+- Legacy variables such as `--page`, `--panel`, and `--gold` are unsupported.
+- Values are validated by token type. Unknown tokens, invalid colors, dangerous declarations, and `url()` are ignored.
+- Themes cannot inject components, layouts, scripts, or arbitrary CSS.
+- Theme background images are not supported. A future implementation must use host-controlled plugin asset references and will not expose arbitrary CSS `url()` injection.
+- Theme authors should verify text contrast, focus states, and disabled states in both light and dark modes.
 
 ### 7.4 Map Packs
 
@@ -375,7 +440,7 @@ The community index is [diceframe/diceframe-plugins](https://github.com/dicefram
 }
 ```
 
-When installing, DiceFrame resolves the repository's latest stable GitHub Release to an exact commit, downloads GitHub's source archive for that commit, and validates the manifest again. Declarative plugins are checked and updated automatically when the user opens the plugin store, as long as their permissions and runtime type do not expand. Process plugins notify the user and require confirmation. Any permission or runtime expansion is approval-required. `official`, `verified`, and `community` describe source/review status, not a security guarantee. See [PLUGIN_REGISTRY_EN.md](PLUGIN_REGISTRY_EN.md).
+When installing, DiceFrame resolves the repository's latest stable GitHub Release to an exact commit, downloads GitHub's source archive for that commit, and validates the manifest again. Declarative plugins are checked and prompted when the user opens the plugin store; installing or updating requires user confirmation, as long as their permissions and runtime type do not expand. Process plugins notify the user and require confirmation. Any permission or runtime expansion is approval-required. `official`, `verified`, and `community` describe source/review status, not a security guarantee. See [PLUGIN_REGISTRY_EN.md](PLUGIN_REGISTRY_EN.md).
 
 ### 8.1 Content Guidelines
 
@@ -385,7 +450,7 @@ Content packs are distributed to a public community. Authors must keep content l
 
 - No political content.
 - No pornography, sexualization of minors, or gambling promotion; no excessive gore, terrorism, or incitement to crime.
-- No copyright or trademark infringement: cite sources for others' work; derivative works must state they are unofficial and that copyright belongs to the original creator.
+- Do not infringe copyright, trademarks, likeness, or privacy rights. Third-party text, rules, portraits, covers, fonts, audio, and other assets require authorization, an applicable open license, public-domain status, or another verifiable lawful basis, plus the attribution and license notices that basis requires. Attribution or an “unofficial” label alone is not permission.
 - No defamation or insult of real people; no leaking others' private information.
 
 **Community standards**
@@ -396,8 +461,11 @@ Content packs are distributed to a public community. Authors must keep content l
 
 **Derivative works**
 
-- State the original work in README and description; mark as unofficial derivative; copyright stays with the original creator.
-- Delist immediately if the original creator objects to derivatives.
+- The community index accepts fan-made lorebooks, characters, NPCs, rule adaptations, and artwork created by the submitter. README and description must identify the source work and rights holder, clearly label the package as an unofficial fan work, and use the `community` source level.
+- An unauthorized community fan package must not bundle portraits, maps, rulebook text or scans, music, video, fonts, or other assets extracted from the source work. Text and images actually distributed in the package must be created by the submitter or covered by a separately verifiable permission or license.
+- A fan package with rights-holder permission, an applicable open license, or another clear lawful basis may apply for a higher review marker after verification. Lack of such proof does not block submission as an unofficial community fan work, but DiceFrame does not endorse its rights status.
+- “Copyright belongs to the original creator” and “unofficial fan work” identify provenance but do not grant reproduction, adaptation, or online-distribution rights or excuse copying source assets.
+- When a rights notice includes initial evidence and identifies an exact version, DiceFrame may temporarily hide the item, forward the notice to its author, and restore or delist it after reviewing evidence and any counter-notice.
 
 DiceFrame does not pre-screen every community item; maintainers delist violating plugins when found or upon a verified report.
 
@@ -406,7 +474,7 @@ DiceFrame does not pre-screen every community item; maintainers delist violating
 - Store install: resolve the latest stable GitHub Release to an exact commit, extract to a temporary directory, validate, then move to `data/plugin-packages/<id>/`. Local development can place source directly at `plugins/<id>/` in the repository.
 - Local install: select a `.dfplugin` file created by `scripts/package_plugin.py`.
 - Overwrite: explicit only; stop the old process before replacement.
-- Update: resolve and validate the latest stable Release again. Safe declarative updates are checked when the store is opened and may run automatically; process or permission-expanding updates require confirmation.
+- Update: resolve and validate the latest stable Release again. The store checks for updates when opened and prompts the user; installing or updating always requires user confirmation. Process or permission-expanding updates require explicit confirmation.
 - Uninstall: stop and remove `data/plugin-packages/<id>/` (user-installed source) while preserving `data/plugins/<id>/` runtime data by default.
 - Reinstalling the same ID reuses preserved data.
 

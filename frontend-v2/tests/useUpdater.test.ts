@@ -50,4 +50,18 @@ describe('useUpdater', () => {
     expect(updateStateForVersion({ state: 'done', version: 'v1.7.0' }, '1.7.0')).toBe('done')
     expect(updateStateForVersion(null, '1.7.0')).toBe('idle')
   })
+
+  it('waits until the restarted server reports a new boot id', async () => {
+    mocks.api
+      .mockResolvedValueOnce({ ok: true, boot_id: 'boot-old', pid: 10, version: '1.0.0' })
+      .mockResolvedValueOnce({ ok: true, boot_id: 'boot-new', pid: 11, version: '1.0.0' })
+
+    const ready = useUpdater().waitForApplicationRestart('boot-old', 5_000)
+    await vi.advanceTimersByTimeAsync(1_600)
+
+    await expect(ready).resolves.toBe(true)
+    expect(mocks.api).toHaveBeenCalledTimes(2)
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
 })

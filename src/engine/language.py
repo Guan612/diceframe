@@ -4,18 +4,24 @@ from __future__ import annotations
 
 
 DEFAULT_LANGUAGE = "zh-CN"
-SUPPORTED_LANGUAGES = {"zh-CN", "en", "ja"}
+# 当前只支持 zh-CN / en。ja 曾登记但未全链路实现（is_english 二元分叉会让
+# 日语局输出中文），为避免误导已移出声明；旧存档 language=ja 仍能被
+# normalize_language 识别（见下）。真要上日语时：全链路 n-way 重构 +
+# *_ja 模板/词表/prompt + 前端 ja 消息，见《DiceFrame执行报告.md》P3-A。
+SUPPORTED_LANGUAGES = {"zh-CN", "en"}
 
 # 本地化字段后缀登记：中文（zh-*）无后缀（直接用原字段）；
 # 新增语言在此登记后缀后，{key}_{suffix} 式字段即可被 localized_field 查到。
 # 字段可选，缺失时回退原字段，不强制维护。
-_LANG_FIELD_SUFFIXES = {"en": "en", "ja": "ja"}
+_LANG_FIELD_SUFFIXES = {"en": "en"}
 
 
 def normalize_language(value: object) -> str:
     text = str(value or "").strip().lower().replace("_", "-")
     if text in {"en", "en-us", "en-gb", "english"}:
         return "en"
+    # 识别 ja 但不声明支持：仅用于旧存档兼容（language_name 能显示，字段后缀
+    # 仍回退中文）。恢复完整支持见上 SUPPORTED_LANGUAGES 注释。
     if text in {"ja", "jp", "japanese", "日本語"}:
         return "ja"
     if text in {"zh", "zh-cn", "cn", "chinese", "简体中文", "中文"}:

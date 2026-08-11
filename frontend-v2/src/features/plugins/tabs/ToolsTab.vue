@@ -84,3 +84,12 @@ const toolGroups = computed<PluginToolGroupState[]>(() => {
     <p v-else class="muted">{{ t('noRunningPluginTools') }}</p>
   </NSpin>
 </template>
+
+<style scoped>
+.plugin-tool-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 410px), 1fr));
+  gap: 16px;
+  align-items: start;
+}
+</style>

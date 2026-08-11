@@ -1,5 +1,7 @@
 """Manifest 插件查询、配置和生命周期。"""
 from __future__ import annotations
+import base64
+import hashlib
 import json
 import logging
 import time
@@ -116,6 +118,7 @@ def _autoimport_plugin_content(api: "WebAPI", plugin_id: str) -> None:
             if str(resource.get("plugin_id") or "") != plugin_id:
                 continue
             try:
+                resource = _materialize_content_portrait(api, resource)
                 if kind == "character_template":
                     api.save_character_card(_content_to_character_card(resource))
                 elif target_world and api._lore and api._lore.get_world(target_world):
@@ -330,6 +333,7 @@ def import_plugin_content(
     resource = api._plugins.get_content_resource(kind, resource_id, plugin_id=plugin_id)
     if not resource:
         return {"ok": False, "error": "插件内容不存在或未启用"}
+    resource = _materialize_content_portrait(api, resource)
     if kind == "character_template":
         card = _content_to_character_card(resource)
         result = api.save_character_card(card)
@@ -373,6 +377,7 @@ def import_all_plugin_content(
             if str(resource.get("plugin_id") or "") != plugin_id:
                 continue
             try:
+                resource = _materialize_content_portrait(api, resource)
                 if kind == "character_template":
                     card = _content_to_character_card(resource)
                     result = api.save_character_card(card)
@@ -427,6 +432,10 @@ def export_content_pack(
     card_ids: list[str] | None = None,
     rule_id: str = "",
     flat: bool = False,
+    include_portraits: bool = True,
+    include_scene_images: bool = True,
+    world_scene_image: dict[str, Any] | None = None,
+    rule_scene_image: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """把应用内的世界/角色卡/规则导出成一个内容包 .dfplugin。
 
@@ -451,8 +460,26 @@ def export_content_pack(
     world_default_rule = rule_id if rule_id else ""
 
     if rule_id:
-        files.update(_rule_files(rule_id, api._rules_dir))
-        has_rule = bool(files)
+        rule_files = _rule_files(rule_id, api._rules_dir)
+        for path, raw in list(rule_files.items()):
+            try:
+                rule_data = json.loads(raw)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            reference = rule_scene_image if isinstance(rule_scene_image, dict) else rule_data.get("scene_image")
+            if include_scene_images and reference:
+                packaged = api.package_scene_image(reference, files)
+                if packaged:
+                    rule_data["scene_image"] = packaged
+                elif isinstance(rule_scene_image, dict):
+                    return {"ok": False, "error": "无法读取所选规则头图"}
+                else:
+                    rule_data.pop("scene_image", None)
+            else:
+                rule_data.pop("scene_image", None)
+            rule_files[path] = json.dumps(rule_data, ensure_ascii=False, indent=2)
+        files.update(rule_files)
+        has_rule = bool(rule_files)
 
     if world_id:
         world = api._lore.get_world(world_id)
@@ -460,6 +487,15 @@ def export_content_pack(
             return {"ok": False, "error": "世界不存在"}
         entries = api._lore.list_entries(world_id)
         template = _world_to_template(world, entries, world_default_rule)
+        reference = world_scene_image if isinstance(world_scene_image, dict) else world.get("scene_image")
+        if include_scene_images and reference:
+            packaged = api.package_scene_image(reference, files)
+            if packaged:
+                template["scene_image"] = packaged
+            elif isinstance(world_scene_image, dict):
+                return {"ok": False, "error": "无法读取所选世界头图"}
+        for entry in template.get("starter_lorebook", []):
+            _package_record_portrait(api, entry, files, include=include_portraits)
         files[f"content/worlds/{world_id}.json"] = json.dumps(template, ensure_ascii=False, indent=2)
         has_world = True
 
@@ -468,7 +504,13 @@ def export_content_pack(
         for card in api.list_character_cards().get("cards", []):
             if str(card.get("id") or "") not in selected:
                 continue
-            tmpl = _card_to_character_template(card, world_id=world_id, rule_id=rule_id)
+            packaged_portrait = _package_portrait(api, card.get("portrait"), files) if include_portraits else {}
+            tmpl = _card_to_character_template(
+                card,
+                world_id=world_id,
+                rule_id=rule_id,
+                packaged_portrait=packaged_portrait,
+            )
             fname = safe_id_part(card.get("character_name") or card.get("id") or "character") or "character"
             files[f"content/characters/{fname}.json"] = json.dumps(tmpl, ensure_ascii=False, indent=2)
             has_cards = True
@@ -476,7 +518,11 @@ def export_content_pack(
     if not (has_world or has_rule or has_cards):
         return {"ok": False, "error": "请至少选择一个世界、角色卡或规则"}
 
-    manifest = build_content_pack_manifest(plugin_id, name, version, description, has_world, has_rule, has_cards)
+    has_portraits = any(path.startswith("assets/portraits/") for path in files)
+    has_scene_images = any(path.startswith("assets/scenes/") for path in files)
+    manifest = build_content_pack_manifest(
+        plugin_id, name, version, description, has_world, has_rule, has_cards, has_portraits, has_scene_images
+    )
     files["plugin.json"] = json.dumps(manifest, ensure_ascii=False, indent=2)
     files["config.schema.json"] = json.dumps(_default_config_schema(name), ensure_ascii=False, indent=2)
     files["README.md"] = _default_readme(name, description, has_world, has_rule, has_cards)
@@ -488,7 +534,8 @@ def export_content_pack(
 
 def build_content_pack_manifest(
     plugin_id: str, name: str, version: str, description: str,
-    has_world: bool, has_rule: bool, has_cards: bool,
+    has_world: bool, has_rule: bool, has_cards: bool, has_portraits: bool = False,
+    has_scene_images: bool = False,
 ) -> dict[str, Any]:
     contributes: dict[str, list[str]] = {}
     if has_world:
@@ -497,6 +544,10 @@ def build_content_pack_manifest(
         contributes["rules"] = ["content/rules/*.json"]
     if has_cards:
         contributes["character_templates"] = ["content/characters/*.json"]
+    if has_portraits:
+        contributes["portraits"] = ["assets/portraits/*"]
+    if has_scene_images:
+        contributes["scene_images"] = ["assets/scenes/*"]
     capabilities: list[str] = []
     if has_world:
         capabilities.append("content.world")
@@ -504,6 +555,8 @@ def build_content_pack_manifest(
         capabilities.append("content.rule")
     if has_cards:
         capabilities.append("content.character-template")
+    if has_scene_images:
+        capabilities.append("content.scene-image")
     return {
         "schema_version": 1,
         "id": plugin_id,
@@ -580,16 +633,21 @@ def _entry_to_lorebook_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _card_to_character_template(card: dict[str, Any], world_id: str = "", rule_id: str = "") -> dict[str, Any]:
+def _card_to_character_template(
+    card: dict[str, Any],
+    world_id: str = "",
+    rule_id: str = "",
+    packaged_portrait: dict[str, str] | None = None,
+) -> dict[str, Any]:
     # 去掉应用内部字段：source 是运行期来源标记、plugin_content_id 是插件资源回链、
     # schema_version/raw_sillytavern 是导入元数据、source_plugin 会泄露原插件身份。
     # portrait 是 {kind, id/asset_id} 引用（不是 base64）：builtin 可移植故保留，
     # upload 的 asset_id 在目标用户不存在会变成失效引用，故丢弃。
     skip = {"source", "plugin_content_id", "schema_version", "raw_sillytavern", "source_plugin", "portrait"}
     template = {k: v for k, v in card.items() if k not in skip}
-    portrait = card.get("portrait")
-    if isinstance(portrait, dict) and portrait.get("kind") == "builtin":
-        template["portrait"] = portrait
+    portrait = packaged_portrait if packaged_portrait is not None else card.get("portrait")
+    if isinstance(portrait, dict) and portrait.get("kind") in {"builtin", "asset"}:
+        template["portrait"] = dict(portrait)
     name = str(card.get("character_name") or card.get("id") or "character")
     template.setdefault("character_name", name)
     template["id"] = safe_id_part(card.get("id") or name)
@@ -629,6 +687,82 @@ def _content_to_character_card(resource: dict[str, Any]) -> dict[str, Any]:
     return card
 
 
+def _materialize_content_portrait(api: "WebAPI", resource: dict[str, Any]) -> dict[str, Any]:
+    """Copy a declared plugin portrait into DiceFrame's persistent avatar store."""
+    result = dict(resource)
+    portrait = resource.get("portrait")
+    if not isinstance(portrait, dict):
+        return result
+    kind = str(portrait.get("kind") or "")
+    if kind == "builtin":
+        return result
+    if kind == "upload":
+        asset_id = str(portrait.get("asset_id") or "")
+        if asset_id and api.avatar_file(asset_id):
+            return result
+        result.pop("portrait", None)
+        return result
+    if kind != "plugin":
+        result.pop("portrait", None)
+        return result
+    plugin_id = str(resource.get("plugin_id") or "")
+    if not plugin_id or plugin_id != str(portrait.get("plugin_id") or ""):
+        result.pop("portrait", None)
+        return result
+    path = api.plugin_asset_path(plugin_id, str(portrait.get("path") or ""))
+    if path.stat().st_size > 3 * 1024 * 1024:
+        raise ValueError("内容包头像不能超过 3 MB")
+    saved = api.save_avatar_upload(base64.b64encode(path.read_bytes()).decode("ascii"), path.name)
+    if not saved.get("ok") or not isinstance(saved.get("portrait"), dict):
+        raise ValueError(str(saved.get("error") or "内容包头像导入失败"))
+    result["portrait"] = saved["portrait"]
+    return result
+
+
+def _package_record_portrait(
+    api: "WebAPI",
+    record: dict[str, Any],
+    files: dict[str, str | bytes],
+    *,
+    include: bool,
+) -> None:
+    portrait = _package_portrait(api, record.get("portrait"), files) if include else None
+    if portrait:
+        record["portrait"] = portrait
+    else:
+        record.pop("portrait", None)
+
+
+def _package_portrait(
+    api: "WebAPI",
+    portrait: Any,
+    files: dict[str, str | bytes],
+) -> dict[str, str] | None:
+    if not isinstance(portrait, dict):
+        return None
+    kind = str(portrait.get("kind") or "")
+    if kind == "builtin":
+        portrait_id = str(portrait.get("id") or "").strip()
+        return {"kind": "builtin", "id": portrait_id} if portrait_id else None
+    source: Path | None = None
+    if kind == "upload":
+        source = api.avatar_file(str(portrait.get("asset_id") or ""))
+    elif kind == "plugin":
+        plugin_id = str(portrait.get("plugin_id") or "")
+        if plugin_id:
+            source = api.plugin_asset_path(plugin_id, str(portrait.get("path") or ""))
+    if source is None or not source.is_file() or source.stat().st_size > 3 * 1024 * 1024:
+        return None
+    payload = source.read_bytes()
+    digest = hashlib.sha256(payload).hexdigest()
+    suffix = source.suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+        suffix = ".webp"
+    relative_path = f"assets/portraits/{digest}{suffix}"
+    files.setdefault(relative_path, payload)
+    return {"kind": "asset", "path": relative_path}
+
+
 def _content_to_lore_entry(resource: dict[str, Any], kind: str, world_id: str) -> dict[str, Any]:
     name = _content_name(resource)
     plugin_id = str(resource.get("plugin_id") or "plugin")
@@ -645,7 +779,7 @@ def _content_to_lore_entry(resource: dict[str, Any], kind: str, world_id: str) -
     clean_keywords = [str(item).strip() for item in keywords if str(item).strip()]
     if name and name not in clean_keywords:
         clean_keywords.insert(0, name)
-    return {
+    entry = {
         "id": f"{world_id}_plugin_{safe_id_part(kind)}_{safe_id_part(plugin_id)}_{safe_id_part(resource_id)}",
         "world_id": world_id,
         "name": name,
@@ -659,6 +793,10 @@ def _content_to_lore_entry(resource: dict[str, Any], kind: str, world_id: str) -
         "group": "插件内容包",
         "source_plugin": plugin_id,
     }
+    portrait = resource.get("portrait")
+    if isinstance(portrait, dict) and portrait.get("kind") in {"builtin", "upload"}:
+        entry["portrait"] = dict(portrait)
+    return entry
 
 
 def _content_description(resource: dict[str, Any], kind: str) -> str:

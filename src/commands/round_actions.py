@@ -86,7 +86,14 @@ def format_check_results_constraint(instance: GameInstance, checks: list[dict]) 
             modifier = int(check.get("modifier", 0) or 0)
             total = check.get("total")
             dc = check.get("dc")
-            math_text = f"d20={roll_value} {modifier:+d} = {total} vs DC {dc}"
+            if check.get("opponent_name"):
+                math_text = (
+                    f"d20={roll_value} {modifier:+d} = {total} vs "
+                    f"{check.get('opponent_name')} d20={check.get('opponent_roll')} "
+                    f"{int(check.get('opponent_modifier', 0) or 0):+d} = {check.get('opponent_total')}"
+                )
+            else:
+                math_text = f"d20={roll_value} {modifier:+d} = {total} vs DC {dc}"
         if english:
             blocks.append(
                 "[System Check - Must Follow]\n"
@@ -131,6 +138,8 @@ def build_dice_constraint_block(
     rule: Any,
     dice_system: str,
     dice_resolver: Any,
+    *,
+    planned_only: bool = False,
 ) -> str:
     """逐个结算玩家行动中的 CheckRequest；原始骰值只生成一次。"""
     if dice_system == "none":
@@ -142,6 +151,8 @@ def build_dice_constraint_block(
             continue
         request = action.get("check_request")
         if not isinstance(request, dict):
+            if planned_only:
+                continue
             request = build_check_request(instance, action, rule)
             legacy_match = legacy_roll_re.search(str(action.get("text") or ""))
             if not request and legacy_match:

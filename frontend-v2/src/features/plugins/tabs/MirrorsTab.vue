@@ -20,6 +20,14 @@ defineProps<{
   deleteMirror: (mirror: PluginMirror) => Promise<void> | void
   testMirror: (mirror?: PluginMirror) => Promise<void> | void
 }>()
+
+const emit = defineEmits<{
+  updateNewMirror: [patch: Partial<PluginMirror>]
+}>()
+
+function updateNewMirror(patch: Partial<PluginMirror>) {
+  emit('updateNewMirror', patch)
+}
 </script>
 
 <template>
@@ -34,12 +42,12 @@ defineProps<{
   </section>
 
   <div class="mirror-form">
-    <NInput v-model:value="newMirror.id" class="mirror-field-id" :placeholder="t('mirrorIdPlaceholder')" />
-    <NInput v-model:value="newMirror.name" class="mirror-field-name" :placeholder="t('name')" />
-    <NInput v-model:value="newMirror.raw_prefix" class="mirror-url-input mirror-field-raw" :placeholder="t('rawPrefix')" />
-    <NInput v-model:value="newMirror.clone_prefix" class="mirror-url-input mirror-field-clone" :placeholder="t('clonePrefix')" />
-    <NInputNumber v-model:value="newMirror.priority" :min="1" class="mirror-field-priority" :placeholder="t('priority')" />
-    <NSwitch v-model:value="newMirror.enabled" class="mirror-field-switch" />
+    <NInput :value="newMirror.id" class="mirror-field-id" :placeholder="t('mirrorIdPlaceholder')" @update:value="updateNewMirror({ id: $event })" />
+    <NInput :value="newMirror.name" class="mirror-field-name" :placeholder="t('name')" @update:value="updateNewMirror({ name: $event })" />
+    <NInput :value="newMirror.raw_prefix" class="mirror-url-input mirror-field-raw" :placeholder="t('rawPrefix')" @update:value="updateNewMirror({ raw_prefix: $event })" />
+    <NInput :value="newMirror.clone_prefix" class="mirror-url-input mirror-field-clone" :placeholder="t('clonePrefix')" @update:value="updateNewMirror({ clone_prefix: $event })" />
+    <NInputNumber :value="newMirror.priority" :min="1" class="mirror-field-priority" :placeholder="t('priority')" @update:value="updateNewMirror({ priority: $event || 1 })" />
+    <NSwitch :value="newMirror.enabled" class="mirror-field-switch" @update:value="updateNewMirror({ enabled: $event })" />
     <NButton type="primary" class="mirror-field-add" :loading="busy === 'mirror:add'" @click="addMirror">
       <template #icon><NIcon :component="AddOutline" /></template>
       {{ t('add') }}
@@ -85,3 +93,136 @@ defineProps<{
     </div>
   </NSpin>
 </template>
+
+<style scoped>
+.mirror-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr 96px auto auto;
+  grid-template-areas:
+    "id name priority switch btn"
+    "raw raw clone clone .";
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+  padding: 14px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--df-surface-1), var(--df-surface-2));
+}
+
+.mirror-form .mirror-field-id { grid-area: id; }
+.mirror-form .mirror-field-name { grid-area: name; }
+.mirror-form .mirror-field-raw { grid-area: raw; }
+.mirror-form .mirror-field-clone { grid-area: clone; }
+.mirror-form .mirror-field-priority { grid-area: priority; }
+.mirror-form .mirror-field-switch { grid-area: switch; }
+.mirror-form .mirror-field-add { grid-area: btn; }
+
+.mirror-list {
+  display: grid;
+  gap: 12px;
+}
+
+.mirror-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--df-surface-1), var(--df-surface-2));
+}
+
+.mirror-main {
+  min-width: 0;
+}
+
+.mirror-main p {
+  margin: 6px 0 0;
+  word-break: break-all;
+}
+
+.mirror-heading,
+.mirror-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.mirror-actions {
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+.mirror-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(120px, .8fr) minmax(160px, 1.2fr) minmax(160px, 1.2fr) minmax(90px, .5fr);
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.mirror-test {
+  color: var(--df-accent-strong);
+}
+
+.mirror-form :deep(.n-input),
+.mirror-form :deep(.n-input-number),
+.mirror-edit-grid :deep(.n-input),
+.mirror-edit-grid :deep(.n-input-number) {
+  min-width: 0;
+  width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .mirror-form {
+    grid-template-columns: 1fr 1fr auto auto;
+    grid-template-areas:
+      "id name priority btn"
+      "raw raw clone clone";
+  }
+
+  .mirror-form .mirror-field-switch {
+    display: none;
+  }
+
+  .mirror-edit-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .mirror-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .mirror-form {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "id"
+      "name"
+      "raw"
+      "clone"
+      "priority"
+      "btn";
+  }
+
+  .mirror-form .mirror-field-switch {
+    display: none;
+  }
+
+  .mirror-edit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mirror-actions {
+    justify-content: flex-start;
+  }
+}
+</style>

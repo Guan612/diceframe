@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './fixtures'
 import { accessToken } from './support'
 
 test('layout has no document overflow', async ({ page }) => {
@@ -25,7 +25,7 @@ test('all required viewport widths remain contained', async ({ page }) => {
   }
 })
 
-test('phone navigation stays on one compact row', async ({ page }) => {
+test('phone shell uses a compact header and fixed bottom navigation', async ({ page }) => {
   const token = accessToken()
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
   await page.setViewportSize({ width: 390, height: 844 })
@@ -33,16 +33,212 @@ test('phone navigation stays on one compact row', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '游戏总览' })).toBeVisible()
 
   const layout = await page.evaluate(() => {
-    const header = document.querySelector<HTMLElement>('.top-nav')!
-    const children = ['.top-brand', '.top-menu', '.top-right'].map(selector =>
-      document.querySelector<HTMLElement>(selector)!.getBoundingClientRect(),
-    )
+    const header = document.querySelector<HTMLElement>('.app-header')!
+    const bottom = document.querySelector<HTMLElement>('.mobile-bottom-nav')!
     return {
       height: header.getBoundingClientRect().height,
-      centers: children.map(rect => rect.top + rect.height / 2),
+      bottomPosition: getComputedStyle(bottom).position,
+      bottomLinks: bottom.querySelectorAll('a').length,
+      bottomWidth: bottom.getBoundingClientRect().width,
     }
   })
 
-  expect(layout.height).toBeLessThanOrEqual(44)
-  expect(Math.max(...layout.centers) - Math.min(...layout.centers)).toBeLessThanOrEqual(2)
+  expect(layout.height).toBeLessThanOrEqual(52)
+  expect(layout.bottomPosition).toBe('fixed')
+  expect(layout.bottomLinks).toBe(5)
+  expect(layout.bottomWidth).toBe(390)
+})
+
+test('long admin pages keep the workspace background through all content', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
+  await page.addInitScript(() => localStorage.setItem('currentGame', 'web|e2e-room|web_bot'))
+  await page.goto('/#/lorebook')
+  await expect(page.locator('.lorebook-page')).toBeVisible()
+
+  const geometry = await page.evaluate(() => {
+    const workspace = document.querySelector<HTMLElement>('.app-workspace')!.getBoundingClientRect()
+    const pageView = document.querySelector<HTMLElement>('.lorebook-page')!.getBoundingClientRect()
+    return {
+      viewportHeight: window.innerHeight,
+      workspaceBottom: workspace.bottom,
+      pageBottom: pageView.bottom,
+      workspaceHeight: workspace.height,
+    }
+  })
+
+  if (geometry.pageBottom > geometry.viewportHeight) {
+    expect(geometry.workspaceHeight).toBeGreaterThan(geometry.viewportHeight)
+  }
+  expect(geometry.workspaceBottom).toBeGreaterThanOrEqual(Math.max(geometry.pageBottom, geometry.viewportHeight) - 1)
+})
+
+test('phone play side panels open as drawers without entering document flow', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/play?game=web%7Ce2e-room%7Cweb_bot')
+  await expect(page.getByRole('heading', { name: 'E2E Adventure' })).toBeVisible()
+
+  const sidebar = page.locator('.game-sidebar')
+  const controls = page.locator('.play-control-rail')
+  await expect(sidebar).toBeHidden()
+  await expect(controls).toBeHidden()
+
+  await page.getByRole('button', { name: '状态' }).click()
+  await expect(sidebar).toBeVisible()
+  await sidebar.getByRole('button', { name: '收起侧栏' }).click()
+  await expect(sidebar).toBeHidden()
+
+  await page.getByRole('button', { name: '控台' }).click()
+  await expect(controls).toBeVisible()
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+  expect(overflow).toBe(0)
+  await controls.locator('.rail-toggle').click()
+  await expect(controls).toBeHidden()
+})
+
+test('equipment details modal stays above the open phone character drawer', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/play?game=web%7Ce2e-room%7Cweb_bot')
+  await expect(page.getByRole('heading', { name: 'E2E Adventure' })).toBeVisible()
+
+  await page.getByRole('button', { name: '状态' }).click()
+  const sidebar = page.locator('.game-sidebar')
+  await expect(sidebar).toBeVisible()
+  await sidebar.locator('summary').filter({ hasText: '装备与背包' }).click()
+  await sidebar.getByRole('button', { name: '查看全部详情' }).click()
+
+  const modal = page.locator('body > .modal')
+  await expect(modal).toBeVisible()
+  await expect(modal.getByRole('heading', { name: '装备与背包' })).toBeVisible()
+  const layers = await page.evaluate(() => ({
+    modal: Number.parseInt(getComputedStyle(document.querySelector<HTMLElement>('body > .modal')!).zIndex, 10),
+    drawer: Number.parseInt(getComputedStyle(document.querySelector<HTMLElement>('.game-sidebar')!).zIndex, 10),
+  }))
+  expect(layers.modal).toBeGreaterThan(layers.drawer)
+})
+
+test('phone play keeps scene metadata compact and actions above bottom navigation', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/play?game=web%7Ce2e-room%7Cweb_bot')
+  await expect(page.locator('.composer')).toBeVisible()
+  await page.locator('.composer').scrollIntoViewIfNeeded()
+
+  const layout = await page.evaluate(() => {
+    const scene = document.querySelector<HTMLElement>('.scene-strip')!
+    const composer = document.querySelector<HTMLElement>('.composer')!
+    const nav = document.querySelector<HTMLElement>('.mobile-bottom-nav')!
+    return {
+      sceneHeight: scene.getBoundingClientRect().height,
+      composerBottom: composer.getBoundingClientRect().bottom,
+      navTop: nav.getBoundingClientRect().top,
+    }
+  })
+  expect(layout.sceneHeight).toBeLessThanOrEqual(82)
+  expect(layout.composerBottom).toBeLessThanOrEqual(layout.navTop)
+})
+
+test('phone play has no spacer bands around the game workspace', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/play?game=web%7Ce2e-room%7Cweb_bot')
+  await expect(page.locator('.composer')).toBeVisible()
+
+  const geometry = await page.evaluate(() => {
+    const header = document.querySelector<HTMLElement>('.app-header')!.getBoundingClientRect()
+    const workspace = document.querySelector<HTMLElement>('.app-workspace')!.getBoundingClientRect()
+    const pageView = document.querySelector<HTMLElement>('.play-page')!.getBoundingClientRect()
+    const hud = document.querySelector<HTMLElement>('.play-hud')!.getBoundingClientRect()
+    const main = document.querySelector<HTMLElement>('.play-main')!.getBoundingClientRect()
+    const nav = document.querySelector<HTMLElement>('.mobile-bottom-nav')!.getBoundingClientRect()
+    return {
+      headerGap: workspace.top - header.bottom,
+      hudGap: hud.top - pageView.top,
+      pageBottomGap: nav.top - pageView.bottom,
+      mainBottomGap: pageView.bottom - main.bottom,
+    }
+  })
+
+  expect(Math.abs(geometry.headerGap)).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.hudGap)).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.pageBottomGap)).toBeLessThanOrEqual(1)
+  expect(Math.abs(geometry.mainBottomGap)).toBeLessThanOrEqual(1)
+})
+
+test('phone character actions can scroll clear of bottom navigation', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/characters')
+  const finalAction = page.locator('.shared-character-section button').last()
+  await finalAction.scrollIntoViewIfNeeded()
+  const positions = await page.evaluate(() => {
+    const action = document.querySelectorAll<HTMLElement>('.shared-character-section button')
+    const nav = document.querySelector<HTMLElement>('.mobile-bottom-nav')!
+    return {
+      actionBottom: action[action.length - 1].getBoundingClientRect().bottom,
+      navTop: nav.getBoundingClientRect().top,
+    }
+  })
+  expect(positions.actionBottom).toBeLessThanOrEqual(positions.navTop)
+})
+
+test('login card remains exactly centered at narrow widths', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.clear()
+    localStorage.setItem('diceframe_locale', 'zh-CN')
+  })
+
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto('/#/login')
+    await expect(page.locator('.login-card')).toBeVisible()
+    const geometry = await page.evaluate(() => {
+      const card = document.querySelector<HTMLElement>('.login-card')!.getBoundingClientRect()
+      return {
+        leftGap: card.left,
+        rightGap: window.innerWidth - card.right,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      }
+    })
+    expect(Math.abs(geometry.leftGap - geometry.rightGap), `login gap mismatch at ${width}px`).toBeLessThanOrEqual(1)
+    expect(geometry.overflow, `login overflow at ${width}px`).toBe(0)
+  }
+})
+
+test('character management remains contained on narrow phones', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => {
+    localStorage.setItem('trpg_access_token', value)
+    localStorage.setItem('diceframe_locale', 'zh-CN')
+    localStorage.setItem('currentGame', 'web|e2e-room|web_bot')
+  }, token)
+
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto('/#/characters')
+    await expect(page.locator('.characters-page')).toBeVisible()
+    await expect(page.locator('.current-character-card').first()).toBeVisible()
+    const geometry = await page.evaluate(() => {
+      const pageView = document.querySelector<HTMLElement>('.characters-page')!.getBoundingClientRect()
+      const cards = Array.from(document.querySelectorAll<HTMLElement>('.current-character-card'))
+      const actions = Array.from(document.querySelectorAll<HTMLElement>('.current-character-actions'))
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        pageRight: pageView.right,
+        cardRight: Math.max(...cards.map(card => card.getBoundingClientRect().right)),
+        actionRight: Math.max(...actions.map(action => action.getBoundingClientRect().right)),
+      }
+    })
+    expect(geometry.overflow, `character page overflow at ${width}px`).toBe(0)
+    expect(geometry.pageRight).toBeLessThanOrEqual(width + 1)
+    expect(geometry.cardRight).toBeLessThanOrEqual(width + 1)
+    expect(geometry.actionRight).toBeLessThanOrEqual(width + 1)
+  }
 })

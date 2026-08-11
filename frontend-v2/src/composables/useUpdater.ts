@@ -1,6 +1,12 @@
 import { computed, ref } from 'vue'
 import { api } from '@/api/client'
-import type { UpdateStatusResponse, UpdateDownloadResponse, UpdateApplyResponse } from '@/api/types'
+import type {
+  ApplicationHealthResponse,
+  ApplicationRestartResponse,
+  UpdateStatusResponse,
+  UpdateDownloadResponse,
+  UpdateApplyResponse,
+} from '@/api/types'
 
 // 单例：更新下载状态跨组件共享（设置页打开/关闭不丢失进行中的下载）。
 const updateStatus = ref<UpdateStatusResponse | null>(null)
@@ -109,6 +115,24 @@ async function applyUpdate(): Promise<UpdateApplyResponse> {
   return result
 }
 
+async function restartApplication(): Promise<ApplicationRestartResponse> {
+  return api<ApplicationRestartResponse>('/system/restart', { method: 'POST' })
+}
+
+async function waitForApplicationRestart(previousBootId: string, timeoutMs = 90_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 800))
+    try {
+      const health = await api<ApplicationHealthResponse>('/system/update/health')
+      if (health.ok && health.boot_id && health.boot_id !== previousBootId) return true
+    } catch {
+      // The connection is expected to fail while the old process releases the port.
+    }
+  }
+  return false
+}
+
 export function useUpdater() {
   return {
     updateStatus,
@@ -119,5 +143,7 @@ export function useUpdater() {
     refreshStatus,
     startDownload,
     applyUpdate,
+    restartApplication,
+    waitForApplicationRestart,
   }
 }

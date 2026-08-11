@@ -5,6 +5,7 @@ import router from './router'
 import { i18n } from './i18n'
 import './styles/tokens.css'
 import './styles.css'
+import './styles/v2.css'
 
 const app = createApp(App).use(createPinia()).use(router).use(i18n)
 

@@ -50,14 +50,19 @@ class GameFactory:
 
     async def create_game(
         self, game_key: tuple, world_id: str, world_name: str,
-        group_name: str, rule_id: str = "freeform_fantasy",
+        group_name: str, rule_id: str = "",
         seed_code: str = "", difficulty: str = "标准",
         language: str = DEFAULT_LANGUAGE,
     ) -> GameInstance:
         instance = self.registry.get_or_create(game_key)
+        world_data = self.load_world_template(world_id)
+        if world_data:
+            rule_id = rule_id or world_data.get("default_rule", "")
+        rule_id = rule_id or "freeform_fantasy"
         async with instance._lock:
             instance.configure_game(
                 world_id=world_id,
+                rule_id=rule_id,
                 world_name=world_name,
                 group_name=group_name,
                 state=GameState.WAITING,
@@ -66,9 +71,7 @@ class GameFactory:
                 language=normalize_language(language),
             )
 
-        world_data = self.load_world_template(world_id)
         if world_data:
-            rule_id = world_data.get("default_rule", rule_id)
             await self.init_world_from_template(world_id, world_data)
 
         return instance

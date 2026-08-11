@@ -8,7 +8,7 @@ import PortraitImage from '@/components/PortraitImage.vue'
 interface ContentPluginGroup { key: string; labelKey: string; items: PluginContentResource[] }
 interface ContentPluginEntry { plugin_id: string; plugin_name: string; groups: ContentPluginGroup[] }
 
-const props = defineProps<{
+defineProps<{
   contentByPlugin: ContentPluginEntry[]
   contentGroupCount: number
   contentLoading: boolean
@@ -114,3 +114,131 @@ function contentPortrait(item: PluginContentResource): CharacterPortrait | undef
     </NCollapse>
   </NSpin>
 </template>
+
+<style scoped>
+.content-collapse {
+  margin-top: 4px;
+}
+
+.content-collapse :deep(.n-collapse-item) {
+  margin-bottom: 12px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 28%, var(--df-border-soft));
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 84%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--df-text) 4%, transparent);
+}
+
+.content-collapse :deep(.n-collapse-item:last-child) {
+  margin-bottom: 0;
+}
+
+.content-collapse :deep(.n-collapse-item__header) {
+  padding: 10px 12px;
+  border-bottom: 1px solid transparent;
+  background: color-mix(in srgb, var(--df-surface-raised) 76%, transparent);
+}
+
+.content-collapse :deep(.n-collapse-item--active > .n-collapse-item__header) {
+  border-bottom-color: var(--df-border-soft);
+}
+
+.content-collapse :deep(.n-collapse-item__header-main) {
+  min-width: 0;
+}
+
+.content-collapse :deep(.n-collapse-item__header-extra) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.content-count {
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.import-all-btn {
+  flex-shrink: 0;
+}
+
+.content-plugin-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.content-plugin-head h3 {
+  margin: 0;
+  color: var(--df-accent-strong);
+  font-size: 15px;
+}
+
+.content-plugin-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.content-group {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  background: var(--df-surface-3);
+}
+
+.content-group h3 {
+  margin: 0 0 10px;
+  color: var(--df-accent-strong);
+  font-size: 15px;
+}
+
+.content-group h4 {
+  margin: 0 0 8px;
+  color: var(--df-accent-strong);
+  font-size: 14px;
+}
+
+.content-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.content-item {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--df-text) 3%, transparent);
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.content-item:has(> .portrait-image) {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.content-item:has(> .portrait-image) > .n-button {
+  grid-column: 1 / -1;
+}
+
+.content-item strong,
+.content-item p {
+  overflow-wrap: anywhere;
+}
+
+.content-item-main {
+  min-width: 0;
+}
+
+.content-item p {
+  margin: 4px 0 0;
+  line-height: 1.45;
+}
+</style>

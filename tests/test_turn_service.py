@@ -149,19 +149,16 @@ async def test_submit_action_rejects_invalid_actor_and_busy_round() -> None:
 
 
 @pytest.mark.asyncio
-async def test_submit_action_pauses_for_dice_then_returns_waiting_state() -> None:
+async def test_submit_action_records_natural_language_without_player_dice_gate() -> None:
     instance = FakeInstance()
     api = FakeApi(instance)
-    api.check_request = {"label": "潜行检定", "dice_system": "d100"}
+    api.check_request = {"label": "潜行检定", "dice_system": "d100"}  # 旧启发式不再参与提交主链
 
     pending = await submit_action(api, "game", "gm", "悄悄前进")
-    assert pending["payload"]["phase"] == "dice"
-    assert instance.action_queue[0]["dice_pending"] is True
-
-    resolved = await submit_action(api, "game", "gm", "悄悄前进", confirm=True)
-    assert resolved["payload"]["advanced"] is False
-    assert resolved["payload"]["roll"] == {"value": 17}
-    assert "调查员" in resolved["payload"]["narration"]
+    assert pending["payload"]["phase"] == "done"
+    assert pending["payload"]["advanced"] is False
+    assert "dice_pending" not in instance.action_queue[0]
+    assert "调查员" in pending["payload"]["narration"]
 
 
 @pytest.mark.asyncio
@@ -177,7 +174,7 @@ async def test_submit_action_pauses_for_luck_or_processes_round() -> None:
     assert api._handler.processed == 0
 
     api._handler.luck_after_prepare = []
-    completed = await submit_action(api, "game", "p2", "观察门缝", server_roll=True, confirm=True)
+    completed = await submit_action(api, "game", "p2", "观察门缝")
     assert completed["payload"]["advanced"] is True
     assert completed["payload"]["narration"] == "叙事完成"
     assert completed["payload"]["recap"] == {"scene": "门厅"}

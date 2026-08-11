@@ -34,7 +34,9 @@ Automation never executes the plugin entrypoint and cannot prove that executable
 
 ## Content review
 
-Automation covers structure and code safety only; it does not pre-screen content. All plugin text (lorebook, characters, rules, NPCs, items, etc.) must follow the Content Guidelines (section 8.1 of the plugin development guide). Maintainers check legal lines, community standards, and copyright during human review; verified reports lead to delisting.
+Automation covers structure and code safety only; it does not pre-screen content. All plugin text and assets (lorebooks, characters, rules, NPCs, items, portraits, covers, and similar material) must follow the Content Guidelines (section 8.1 of the plugin development guide). Human review checks legal boundaries, community standards, provenance, and licenses; attribution, a copyright notice, or an “unofficial fan work” label alone is not authorization. A rights notice with initial evidence that identifies an exact version may trigger temporary hiding and forwarding to the author, followed by restoration or delisting after evidence and any counter-notice are reviewed.
+
+The community index accepts unofficial fan lorebooks, characters, NPCs, rule adaptations, and artwork created by the submitter. Packages must not directly redistribute portraits, rulebook text or scans, music, video, fonts, or other assets extracted from the source work. Fan packages without proof of permission remain marked `community`; only verified permission or an applicable open license can qualify them for a higher review marker.
 
 ## Popularity
 
@@ -44,7 +46,7 @@ The star count shown in the store is taken from the plugin's GitHub repository s
 
 | Level | Meaning | Updates |
 |---|---|---|
-| `declarative` | Content, theme, or map plugin without a process entrypoint | Checked and updated automatically when the user opens the plugin store, while permissions and runtime remain unchanged |
+| `declarative` | Content, theme, or map plugin without a process entrypoint | Checked and prompted when the user opens the plugin store; installing or updating requires user confirmation, while permissions and runtime remain unchanged |
 | `unrestricted-process` | Launches Python, Node, an executable, or another process | Notification only; installation requires user confirmation |
 | `bundled` | Maintained by the DiceFrame organization and shipped with the application | Updated with DiceFrame |
 | `approval-required` | A release expanded permissions or changed runtime behavior | Installation and updates pause for another review |

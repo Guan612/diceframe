@@ -3,12 +3,17 @@ import type {
   PluginContentImportResponse,
   PluginContentResponse,
   PluginInfo,
+  HubPluginReadmeResponse,
+  HubPreferences,
+  HubRatingSummary,
+  PluginMarketplaceItem,
   PluginMarketplaceResponse,
   PluginMirror,
   PluginMirrorsResponse,
   PluginMirrorTestResponse,
   PluginToolInvokeResponse,
   PluginToolsResponse,
+  SceneImageRef,
   WorldListResponse,
 } from '@/api/types'
 
@@ -32,6 +37,41 @@ export const pluginApi = {
       { method: 'POST', body: JSON.stringify({ arguments: argumentsValue, context: {} }) },
     ),
   marketplace: () => api<PluginMarketplaceResponse>('/plugins/marketplace'),
+  hubPreferences: (language = 'zh-CN') => api<HubPreferences>(`/hub/preferences?lang=${encodeURIComponent(language)}`),
+  updateHubPreferences: (
+    telemetryEnabled: boolean,
+    legalAcceptance?: HubPreferences['legal_documents'],
+    language = 'zh-CN',
+  ) => api<HubPreferences>('/hub/preferences', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      telemetry_enabled: telemetryEnabled,
+      ...(legalAcceptance ? { legal_acceptance: legalAcceptance } : {}),
+      lang: language,
+    }),
+  }),
+  deleteHubIdentity: () => api<HubPreferences>('/hub/identity', { method: 'DELETE' }),
+  hubDetail: (pluginId: string, signal?: AbortSignal) => api<PluginMarketplaceItem & { ok: boolean }>(
+    `/hub/plugins/${encodeURIComponent(pluginId)}`,
+    { signal },
+  ),
+  hubReadme: (pluginId: string, signal?: AbortSignal) => api<HubPluginReadmeResponse>(
+    `/hub/plugins/${encodeURIComponent(pluginId)}/readme`,
+    { signal },
+  ),
+  hubRatings: (pluginId: string, signal?: AbortSignal) => api<HubRatingSummary>(
+    `/hub/plugins/${encodeURIComponent(pluginId)}/ratings`,
+    { signal },
+  ),
+  setHubLike: (pluginId: string, liked: boolean) => api<{ ok: boolean; liked: boolean }>(
+    `/hub/plugins/${encodeURIComponent(pluginId)}/like`, { method: liked ? 'PUT' : 'DELETE' },
+  ),
+  setHubRating: (pluginId: string, stars: number | null, tags: string[] = []) => api(
+    `/hub/plugins/${encodeURIComponent(pluginId)}/rating`,
+    stars === null
+      ? { method: 'DELETE' }
+      : { method: 'PUT', body: JSON.stringify({ stars, tags }) },
+  ),
   mirrors: () => api<PluginMirrorsResponse>('/plugins/mirrors'),
   content: () => api<PluginContentResponse>('/plugins/content'),
   worlds: () => api<WorldListResponse>('/worlds'),
@@ -51,7 +91,11 @@ export const pluginApi = {
     world_id?: string
     card_ids?: string[]
     rule_id?: string
-    flat?: boolean
+      flat?: boolean
+      include_portraits?: boolean
+      include_scene_images?: boolean
+      world_scene_image?: SceneImageRef
+      rule_scene_image?: SceneImageRef
   }) => apiBlob('/plugins/export', { method: 'POST', body: JSON.stringify(payload) }),
   updateConfig: (pluginId: string, payload: Record<string, unknown>) =>
     api(pluginPath(pluginId, '/config'), { method: 'PUT', body: JSON.stringify(payload) }),

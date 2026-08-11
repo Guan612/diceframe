@@ -127,6 +127,9 @@ def _contribution_from_path(
     kind: str,
     path: Path,
 ) -> PluginContribution:
+    if kind in {"portrait_asset", "scene_image_asset"} and path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+        label = "头像" if kind == "portrait_asset" else "冒险头图"
+        raise ValueError(f"内容包{label}仅支持 PNG、JPEG 或 WebP：{path.relative_to(plugin_dir)}")
     key = path.stem
     title = path.stem
     description = ""

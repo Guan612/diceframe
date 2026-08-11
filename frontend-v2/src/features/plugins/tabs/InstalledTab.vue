@@ -5,7 +5,7 @@ import { useLocale } from '@/composables/useLocale'
 import type { PluginField, PluginInfo } from '@/api/types'
 import NapcatGuide from '@/components/plugins/NapcatGuide.vue'
 
-const props = defineProps<{
+defineProps<{
   loading: boolean
   plugins: PluginInfo[]
   filteredPlugins: PluginInfo[]
@@ -202,3 +202,110 @@ const { t } = useLocale()
     </NCollapse>
   </NSpin>
 </template>
+
+<style scoped>
+.plugin-install h3 {
+  margin: 0;
+  color: var(--df-accent-strong);
+}
+
+.plugin-install p {
+  margin: 4px 0 0;
+}
+
+.plugin-tabs {
+  margin-top: 4px;
+}
+
+.permission-panel {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 6px;
+  background: var(--df-surface-3);
+}
+
+.permission-panel h4 {
+  margin: 0;
+  color: var(--df-accent-strong);
+  font-size: 14px;
+}
+
+.permission-panel p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.permission-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.plugin-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 14px 18px;
+  align-items: start;
+}
+
+.field-wide {
+  grid-column: 1 / -1;
+}
+
+.plugin-docs {
+  padding: 4px 0;
+}
+
+.plugin-docs-content {
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.plugin-docs-content h2 {
+  font-size: 18px;
+  margin: 0 0 10px;
+  color: var(--df-accent-strong);
+}
+
+.plugin-docs-content h3 {
+  font-size: 15px;
+  margin: 16px 0 8px;
+  color: var(--df-accent-strong);
+}
+
+.plugin-docs-content h4 {
+  font-size: 14px;
+  margin: 12px 0 6px;
+  color: var(--df-accent-strong);
+}
+
+.plugin-docs-content p {
+  margin: 6px 0;
+}
+
+.plugin-docs-content ul {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+
+.plugin-docs-content li {
+  margin: 4px 0;
+}
+
+.plugin-docs-content code {
+  background: color-mix(in srgb, var(--df-text) 8%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 13px;
+}
+
+@media (max-width: 860px) {
+  .plugin-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

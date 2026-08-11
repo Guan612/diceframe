@@ -1,15 +1,14 @@
 <script setup lang="ts">
-import { NAlert, NButton, NIcon, NInput, NPagination, NSelect, NSpin, NTag } from 'naive-ui'
+import { NButton, NIcon, NInput, NPagination, NSelect, NSpin, NTag } from 'naive-ui'
 import { CloudDownloadOutline, RefreshOutline, Star } from '@vicons/ionicons5'
 import { useLocale } from '@/composables/useLocale'
-import type { HubPreferences, PluginMarketplaceItem } from '@/api/types'
+import type { PluginMarketplaceItem } from '@/api/types'
 
-const props = defineProps<{
-  hubPreferences: HubPreferences | null
+defineProps<{
   marketKeyword: string
   sortMode: string
   marketLoading: boolean
-  marketplaceSource: { mirror_name?: string; elapsed_ms?: number; hub?: boolean } | null | undefined
+  marketplaceSource: { mirror_name?: string; elapsed_ms?: number; hub?: boolean; stale?: boolean } | null | undefined
   filteredMarketplace: PluginMarketplaceItem[]
   paginatedMarketplace: PluginMarketplaceItem[]
   totalPages: number
@@ -21,7 +20,6 @@ const props = defineProps<{
   pluginTypeIcon: (type?: string) => import('vue').Component
   pluginTypeLabel: (type?: string) => string
   marketItemHasNewerVersion: (item: PluginMarketplaceItem) => boolean
-  setHubTelemetry: (enabled: boolean) => Promise<void> | void
   loadMarketplace: () => Promise<void> | void
   installMarketPlugin: (item: PluginMarketplaceItem) => Promise<void> | void
   openUrl: (url?: string) => void
@@ -38,22 +36,6 @@ const { t } = useLocale()
 </script>
 
 <template>
-  <NAlert
-    v-if="hubPreferences?.available && !hubPreferences.choice_made"
-    type="info"
-    :title="t('hubTelemetryChoiceTitle')"
-    class="hub-choice-alert"
-  >
-    <p>{{ t('hubTelemetryChoiceSummary') }}</p>
-    <div class="hub-choice-actions">
-      <NButton type="primary" :loading="busy === 'hub-telemetry'" @click="setHubTelemetry(true)">
-        {{ t('hubTelemetryEnable') }}
-      </NButton>
-      <NButton :disabled="busy === 'hub-telemetry'" @click="setHubTelemetry(false)">
-        {{ t('hubTelemetryKeepOff') }}
-      </NButton>
-    </div>
-  </NAlert>
   <section class="toolbar-row">
     <NInput :value="marketKeyword" :placeholder="t('pluginSearchPlaceholder')" clearable @update:value="(v) => emit('update:marketKeyword', String(v))" />
     <NSelect :value="sortMode" class="market-sort-select" :options="sortOptions" :placeholder="t('pluginSort')" @update:value="(v) => emit('update:sortMode', String(v || ''))" />
@@ -68,6 +50,7 @@ const { t } = useLocale()
   </div>
   <p v-if="marketplaceSource?.mirror_name" class="muted source-line">
     {{ t('source') }}: {{ marketplaceSource.mirror_name }}, {{ marketplaceSource.elapsed_ms || 0 }} ms
+    <NTag v-if="marketplaceSource.stale" size="small" type="warning">{{ t('hubCachedCatalog') }}</NTag>
   </p>
   <NSpin :show="marketLoading">
     <div class="market-grid">
@@ -85,6 +68,11 @@ const { t } = useLocale()
           </NTag>
         </div>
         <p class="market-desc" :title="item.description">{{ item.description || t('noDescription') }}</p>
+        <p v-if="marketplaceSource?.hub" class="hub-card-stats">
+          <span>{{ t('hubDownloads') }} <strong>{{ item.stats?.downloads_total || 0 }}</strong></span>
+          <span>{{ t('hubRating') }} <strong>{{ item.stats?.rating_average || 0 }}</strong></span>
+          <span>{{ t('hubLikes') }} <strong>{{ item.stats?.likes || 0 }}</strong></span>
+        </p>
         <div class="tag-row">
           <NTag v-if="item.plugin_type" size="small">{{ pluginTypeLabel(item.plugin_type) }}</NTag>
           <NTag v-if="item.support?.level === 'partial'" type="warning" size="small">{{ t('pluginSupportPartial') }}</NTag>
@@ -117,7 +105,7 @@ const { t } = useLocale()
             {{ t('openRepository') }}
           </NButton>
           <NButton v-if="marketplaceSource?.hub" secondary @click="openHubDetail(item)">
-            {{ t('hubPluginDetails') }}
+            {{ t('hubDataAndReviews') }}
           </NButton>
         </div>
       </article>
@@ -128,3 +116,9 @@ const { t } = useLocale()
     <p v-if="!filteredMarketplace.length" class="muted">{{ t('marketplaceNoMatches') }}</p>
   </NSpin>
 </template>
+
+<style scoped>
+.market-sort-select {
+  width: 150px;
+}
+</style>

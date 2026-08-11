@@ -238,3 +238,46 @@ def test_swipe_rollback_restores_resources():
     assert cs2["gold"] == 30
     assert cs2["currency"]["amount"] == 30
     assert cs2["spells_known"] == ["火球"]
+
+
+# ===== SAN 检定：大成功应减半损失（回归：旧逻辑大成功吃满额）=====
+def test_san_check_critical_success_halves_loss(monkeypatch):
+    from types import SimpleNamespace
+    from src.commands import player_state_applier as psa
+    from src.commands.madness_tracker import MadnessTracker
+    from src.engine.dice import DiceResult
+    from src.engine.game_instance import GameInstance
+
+    monkeypatch.setattr(
+        psa, "check_d100",
+        lambda threshold: (DiceResult(formula="d100", rolls=[3], modifier=0, total=3, natural=3), "大成功"),
+    )
+    monkeypatch.setattr(psa, "dice_roll", lambda formula: SimpleNamespace(total=6))
+
+    inst = GameInstance(("web", "san_crit", "bot"))
+    inst.players["p1"] = {"character_name": "调查员", "character_sheet": {"sanity": 50, "max_sanity": 99}}
+    psa.PlayerStateApplier(MadnessTracker()).apply_players(inst, {"p1": {"san_check_loss": "1d6"}})
+
+    # 大成功减半：(6+1)//2 = 3；旧 bug 会扣满额 6
+    assert inst.players["p1"]["character_sheet"]["sanity"] == 47
+
+
+def test_san_check_failure_takes_full_loss(monkeypatch):
+    from types import SimpleNamespace
+    from src.commands import player_state_applier as psa
+    from src.commands.madness_tracker import MadnessTracker
+    from src.engine.dice import DiceResult
+    from src.engine.game_instance import GameInstance
+
+    monkeypatch.setattr(
+        psa, "check_d100",
+        lambda threshold: (DiceResult(formula="d100", rolls=[60], modifier=0, total=60, natural=60), "失败"),
+    )
+    monkeypatch.setattr(psa, "dice_roll", lambda formula: SimpleNamespace(total=6))
+
+    inst = GameInstance(("web", "san_fail", "bot"))
+    inst.players["p1"] = {"character_name": "调查员", "character_sheet": {"sanity": 50, "max_sanity": 99}}
+    psa.PlayerStateApplier(MadnessTracker()).apply_players(inst, {"p1": {"san_check_loss": "1d6"}})
+
+    # 失败吃满额 6
+    assert inst.players["p1"]["character_sheet"]["sanity"] == 44

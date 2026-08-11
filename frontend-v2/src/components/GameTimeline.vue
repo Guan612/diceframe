@@ -9,9 +9,10 @@ import { api } from '@/api/client'
 import { parseGMText, type LoreKeywords } from '@/utils/renderer'
 import { useLocale } from '@/composables/useLocale'
 import PortraitImage from '@/components/PortraitImage.vue'
+import CheckRevealCard from '@/components/play/CheckRevealCard.vue'
 import { speakingKey, ttsSupported, ttsToggle } from '@/utils/tts'
 
-const props = defineProps<{ log: LogEntry[]; live: PublicAction[]; players: Player[]; round: number; lore?: LoreKeywords; gameKey?: string; ruleId?: string; processing?: boolean; isGm?: boolean; liveNarration?: string; pendingChecks?: CheckResult[]; currentUserId?: string; luckBusyId?: string }>()
+const props = defineProps<{ log: LogEntry[]; live: PublicAction[]; players: Player[]; round: number; lore?: LoreKeywords; gameKey?: string; ruleId?: string; processing?: boolean; isGm?: boolean; liveNarration?: string; pendingChecks?: CheckResult[]; revealChecks?: CheckResult[]; currentUserId?: string; luckBusyId?: string }>()
 const emit = defineEmits<{ refresh: []; luck: [check: CheckResult, spend: boolean] }>()
 
 const box = ref<HTMLElement | null>(null), hasNew = ref(false), awayFromBottom = ref(false)
@@ -41,18 +42,12 @@ function actions(entry: LogEntry): Act[] {
 function checks(entry: LogEntry): CheckResult[] {
   return Array.isArray(entry.check_results) ? entry.check_results : []
 }
-function checkMath(check: CheckResult): string {
-  if (typeof check.threshold === 'number') return `${check.dice || 'd100'}=${check.roll} / ${check.threshold}`
-  const modifier = Number(check.modifier || 0)
-  const modifierText = modifier ? ` ${modifier > 0 ? '+' : '-'} ${Math.abs(modifier)}` : ''
-  const total = typeof check.total === 'number' ? ` = ${check.total}` : ''
-  const dc = typeof check.dc === 'number' ? ` / DC ${check.dc}` : ''
-  return `${check.dice || 'd20'}=${check.roll}${modifierText}${total}${dc}`
-}
 function liveAct(a: PublicAction): Act { return toAct(a) }
 function canDecideLuck(check: CheckResult): boolean {
   return !!props.isGm || (!!props.currentUserId && check.actor_uid === props.currentUserId)
 }
+const activeChecks = computed(() => props.revealChecks?.length ? props.revealChecks : (props.pendingChecks || []))
+function emitLuck(check: CheckResult, spend: boolean) { emit('luck', check, spend) }
 
 const visibleLog = computed(() => props.log.slice(-visibleRoundCount.value))
 const hiddenRoundCount = computed(() => Math.max(0, props.log.length - visibleLog.value.length))
@@ -177,17 +172,7 @@ watch(() => rounds.value, (latest) => {
             <span v-if="a.dice" class="dice-tag">🎲 {{ a.dice.system }}={{ a.dice.value }}</span>
           </div>
         </div>
-        <div v-for="check in checks(item.entry)" :key="check.check_id || `${check.actor_uid}-${check.roll}`" class="message check-result-card" :class="{ success: String(check.verdict).includes('成功'), failure: String(check.verdict).includes('失败') }">
-          <strong><NIcon :component="InformationCircleOutline" size="15" /> {{ check.label || '检定' }} · {{ check.actor_name }}</strong>
-          <p>{{ checkMath(check) }} → <b>{{ check.verdict }}</b></p>
-          <details v-if="typeof check.hard_threshold === 'number'">
-            <summary>成功等级</summary>
-            <span>普通 ≤ {{ check.threshold }} · 困难 ≤ {{ check.hard_threshold }} · 极难 ≤ {{ check.extreme_threshold }}</span>
-          </details>
-          <span v-if="check.luck_decision === 'spent' && check.luck_spent" class="dice-tag">{{ t('luckSpent', { cost: check.luck_spent }) }}</span>
-          <span v-else-if="check.luck_decision === 'declined'" class="dice-tag">{{ t('luckDeclined') }}</span>
-          <span v-else-if="check.luck_spend_available && check.luck_cost" class="dice-tag">{{ t('spendLuckForSuccess', { cost: check.luck_cost }) }}</span>
-        </div>
+        <CheckRevealCard v-for="check in checks(item.entry)" :key="check.check_id || `${check.actor_uid}-${check.roll}`" :check="check" />
         <div v-if="item.gm" class="message gm message-with-avatar">
           <span class="narrator-avatar" aria-hidden="true">GM</span>
           <div class="message-copy">
@@ -234,19 +219,15 @@ watch(() => rounds.value, (latest) => {
           <span v-if="liveAct(a).dice" class="dice-tag">🎲 {{ liveAct(a).dice?.system }}={{ liveAct(a).dice?.value }}</span>
         </div>
       </div>
-      <div v-for="check in pendingChecks || []" :key="`pending-${check.check_id}`" class="message check-result-card failure pending-luck-card">
-        <strong><NIcon :component="InformationCircleOutline" size="15" /> {{ check.label || '检定' }} · {{ check.actor_name }}</strong>
-        <p>{{ checkMath(check) }} → <b>{{ check.verdict }}</b></p>
-        <details v-if="typeof check.hard_threshold === 'number'">
-          <summary>成功等级</summary>
-          <span>普通 ≤ {{ check.threshold }} · 困难 ≤ {{ check.hard_threshold }} · 极难 ≤ {{ check.extreme_threshold }}</span>
-        </details>
-        <div v-if="canDecideLuck(check)" class="luck-decision-actions">
-          <button class="dice-tag dice-tag-button" type="button" :disabled="!!luckBusyId" @click="emit('luck', check, true)">{{ t('spendLuckForSuccess', { cost: check.luck_cost || 0 }) }}</button>
-          <button class="ghost luck-decline-button" type="button" :disabled="!!luckBusyId" @click="emit('luck', check, false)">{{ t('keepFailure') }}</button>
-        </div>
-        <span v-else class="dice-tag">{{ t('waitLuckDecision', { name: check.actor_name || check.actor_uid || '' }) }}</span>
-      </div>
+      <CheckRevealCard
+        v-for="check in activeChecks"
+        :key="`pending-${check.check_id}`"
+        :check="check"
+        animate
+        :can-decide-luck="check.luck_decision === 'pending' && canDecideLuck(check)"
+        :busy="!!luckBusyId"
+        @luck="emitLuck"
+      />
       <div v-if="processing" class="message gm thinking-message message-with-avatar" aria-live="polite">
         <span class="narrator-avatar" aria-hidden="true">GM</span>
         <div class="message-copy">

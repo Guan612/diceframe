@@ -1,6 +1,7 @@
 {
   "rule_id": "example_rule",
   "rule_name": "Example Rule",
+  "scene_image": {"kind": "builtin", "id": "freeform_fantasy"},
   "description": "A minimal rule file for DiceFrame content-pack examples.",
   "dice_system": "d20",
   "combat_model": "hp_based",

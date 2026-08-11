@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("trpg")
 
+
 NarrationDelta = Callable[[str], Awaitable[None]]
 NarrationReset = Callable[[], Awaitable[None]]
 
@@ -96,6 +97,15 @@ def _luck_error_status(code: str) -> int:
     return 400
 
 
+async def _prepare_checks(api: "WebAPI", instance: "GameInstance") -> list[dict[str, Any]]:
+    """调用两阶段处理器；为外部/测试处理器保留同步兼容入口。"""
+    ai_prepare = getattr(api._handler, "prepare_round_checks_ai", None)
+    if ai_prepare:
+        return list((await ai_prepare(instance)) or [])
+    legacy_prepare = getattr(api._handler, "prepare_round_checks", None)
+    return list((legacy_prepare(instance) if legacy_prepare else []) or [])
+
+
 async def submit_action(
     api: "WebAPI",
     game_key: str,
@@ -145,42 +155,12 @@ async def submit_action(
         else:
             await instance.resume()
 
-    check_request = api.check_request_for_action(
-        game_key,
-        actor_uid,
-        text,
-        selected_attribute,
-        selected_skill,
-        target_text,
-    )
-    need_check = bool(check_request)
-    dice_system = str((check_request or {}).get("dice_system") or "")
-
     roll_payload: dict[str, Any] | None = None
     if confirm and existing_pending_roll:
         resolved = await api.resolve_pending_dice_for_game(game_key, actor_uid, "player")
         if not resolved.get("ok"):
             return _result(resolved, 400)
         roll_payload = resolved.get("roll")
-    elif need_check and not confirm:
-        await instance.add_action(
-            actor_uid,
-            text,
-            selected_attribute,
-            selected_skill,
-            target_text,
-            source=source,
-            dice_pending=True,
-            dice_system=dice_system,
-            check_request=check_request,
-        )
-        return _result({
-            "phase": "dice",
-            "message": f"需要{check_request.get('label') or '掷骰判定'}",
-            "check_request": check_request,
-            "advanced": False,
-            "multiplayer": instance.multiplayer_status(),
-        })
     elif confirm and d20 is None and server_roll:
         roll_payload = api.roll_for_game(game_key)
         if not roll_payload.get("ok"):
@@ -189,8 +169,6 @@ async def submit_action(
 
     if not (confirm and existing_pending_roll):
         action_text = text
-        if confirm and d20 is not None:
-            action_text = f"{text}\n(系统掷骰: {dice_system}={d20})"
         await instance.add_action(
             actor_uid,
             action_text,
@@ -198,11 +176,10 @@ async def submit_action(
             selected_skill,
             target_text,
             source=source,
-            check_request=check_request,
         )
 
     if await instance.try_advance():
-        api._handler.prepare_round_checks(instance)
+        await _prepare_checks(api, instance)
         if instance.pending_luck_checks():
             await api._reg.save(instance)
             return _result(_pending_luck_payload(instance, roll=roll_payload))
@@ -292,7 +269,7 @@ async def advance_round(
         return _result({"ok": False, "error": "仅 GM 可推进"}, 403)
 
     if instance.state == GameState.ACTIVE_JUDGMENT and instance.action_queue:
-        api._handler.prepare_round_checks(instance)
+        await _prepare_checks(api, instance)
         pending_luck = instance.pending_luck_checks()
         if pending_luck and not force:
             return _result(_pending_luck_payload(instance), 409)
@@ -342,7 +319,7 @@ async def advance_round(
 
     advanced = await instance.advance_round() if force else await instance.try_advance()
     if advanced:
-        api._handler.prepare_round_checks(instance)
+        await _prepare_checks(api, instance)
         pending_luck = instance.pending_luck_checks()
         if pending_luck and not force:
             await api._reg.save(instance)

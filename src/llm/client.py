@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 import aiohttp
 
@@ -82,6 +83,16 @@ class LLMResponse:
     token_budget_used: int = 0     # 成功响应实际使用的最大输出 token 档位
 
 
+@dataclass
+class LLMToolResponse:
+    """一次工具规划调用的结构化结果。"""
+
+    tool_calls: list[dict[str, Any]]
+    total_tokens: int
+    provider_used: str
+    native_tools: bool = True
+
+
 class LLMClient:
     """OpenAI 兼容 API 的异步 HTTP 客户端。
 
@@ -95,6 +106,7 @@ class LLMClient:
         self.default = default if default in self.providers else providers[0].provider_name
         self.proxy_url = proxy_url.strip()
         self._session: aiohttp.ClientSession | None = None
+        self._native_tool_unsupported: set[str] = set()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或懒创建复用的 HTTP session。"""
@@ -106,6 +118,218 @@ class LLMClient:
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+
+    async def call_tools(
+        self,
+        system_prompt: str,
+        user_message: str,
+        *,
+        tools: list[dict[str, Any]],
+        max_tokens: int = 512,
+        temperature: float = 0.1,
+    ) -> LLMToolResponse:
+        """调用模型工具；不支持原生 tools 的供应商自动回退严格 JSON。
+
+        回退仍只产生工具参数，绝不让模型产生或指定骰面。所有调用失败时抛出，
+        由上层决定是否进入离线兼容路径。
+        """
+        primary = self.providers[self.default]
+        ordered = [primary] + [
+            provider for provider in self.providers.values()
+            if provider.fallback and provider.provider_name != primary.provider_name
+        ]
+        errors: list[str] = []
+        for provider in ordered:
+            if provider.provider_name not in self._native_tool_unsupported:
+                try:
+                    return await self._call_tools_one(
+                        provider,
+                        system_prompt,
+                        user_message,
+                        tools,
+                        temperature,
+                        max_tokens,
+                    )
+                except Exception as exc:
+                    errors.append(f"{provider.provider_name}: {exc}")
+                    if "does not support this tool_choice" in str(exc):
+                        self._native_tool_unsupported.add(provider.provider_name)
+                    logger.warning("模型原生工具调用失败，尝试 JSON 回退 (%s): %s", provider.provider_name, exc)
+            try:
+                fallback_prompt = (
+                    system_prompt
+                    + "\n\nNative function calling is unavailable. Adjudicate the supplied actions first, "
+                    + "then return only one JSON object with a tool_calls array. Each item must contain "
+                    + "name=dice_checks and arguments.checks. Populate checks whenever the rules above "
+                    + "warrant a roll; use an empty checks list only when every action is routine, certain, "
+                    + "and consequence-free. Never copy an empty structural example and never return dice values. "
+                    + "Required tool schema: "
+                    + json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
+                )
+                response = await self._call_one(
+                    provider,
+                    fallback_prompt,
+                    user_message,
+                    temperature,
+                    max_tokens,
+                    True,
+                )
+                calls = _parse_json_tool_calls(response.content)
+                if not calls:
+                    raise ValueError("模型未返回必需的工具调用")
+                return LLMToolResponse(
+                    tool_calls=calls,
+                    total_tokens=response.total_tokens,
+                    provider_used=provider.provider_name,
+                    native_tools=False,
+                )
+            except Exception as exc:
+                errors.append(f"{provider.provider_name} JSON fallback: {exc}")
+                logger.warning("模型 JSON 工具回退失败 (%s): %s", provider.provider_name, exc)
+        raise RuntimeError("所有模型工具调用均失败: " + "; ".join(errors))
+
+    async def _call_tools_one(
+        self,
+        provider: ProviderConfig,
+        system_prompt: str,
+        user_message: str,
+        tools: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMToolResponse:
+        if (provider.api_format or "openai").strip().lower() == "anthropic":
+            return await self._call_tools_anthropic(
+                provider, system_prompt, user_message, tools, temperature, max_tokens
+            )
+        return await self._call_tools_openai(
+            provider, system_prompt, user_message, tools, temperature, max_tokens
+        )
+
+    async def _call_tools_openai(
+        self,
+        provider: ProviderConfig,
+        system_prompt: str,
+        user_message: str,
+        tools: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMToolResponse:
+        url = provider.base_url.rstrip("/")
+        if not url.endswith("/chat/completions"):
+            url += "/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {provider.api_key}",
+        }
+        body = {
+            "model": provider.model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "tools": tools,
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": str(tools[0].get("function", {}).get("name") or "")},
+            },
+        }
+        session = await self._get_session()
+        request_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
+        async with session.post(
+            url,
+            json=body,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=120),
+            **request_kwargs,
+        ) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info,
+                    resp.history,
+                    status=resp.status,
+                    message=error_text[:300],
+                    headers=resp.headers,
+                )
+            data = await resp.json()
+        message = data.get("choices", [{}])[0].get("message", {})
+        calls = _normalize_openai_tool_calls(message.get("tool_calls") or [])
+        if not calls and str(message.get("content") or "").strip():
+            calls = _parse_json_tool_calls(str(message.get("content") or ""))
+        if not calls:
+            raise ValueError("供应商未返回强制工具调用")
+        return LLMToolResponse(
+            tool_calls=calls,
+            total_tokens=int(data.get("usage", {}).get("total_tokens", 0) or 0),
+            provider_used=provider.provider_name,
+            native_tools=True,
+        )
+
+    async def _call_tools_anthropic(
+        self,
+        provider: ProviderConfig,
+        system_prompt: str,
+        user_message: str,
+        tools: list[dict[str, Any]],
+        temperature: float,
+        max_tokens: int,
+    ) -> LLMToolResponse:
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": provider.api_key,
+            "anthropic-version": "2023-06-01",
+        }
+        anthropic_tools = []
+        for tool in tools:
+            function = tool.get("function", {})
+            anthropic_tools.append({
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "input_schema": function.get("parameters", {"type": "object"}),
+            })
+        body = {
+            "model": provider.model_name,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_message}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "tools": anthropic_tools,
+            "tool_choice": {
+                "type": "tool",
+                "name": str(anthropic_tools[0].get("name") or ""),
+            },
+        }
+        session = await self._get_session()
+        request_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
+        async with session.post(
+            _anthropic_messages_url(provider.base_url),
+            json=body,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=120),
+            **request_kwargs,
+        ) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise aiohttp.ClientResponseError(
+                    resp.request_info,
+                    resp.history,
+                    status=resp.status,
+                    message=error_text[:300],
+                    headers=resp.headers,
+                )
+            data = await resp.json()
+        calls = [
+            {"name": str(block.get("name") or ""), "arguments": block.get("input") or {}}
+            for block in data.get("content", [])
+            if isinstance(block, dict) and block.get("type") == "tool_use"
+        ]
+        if not calls:
+            raise ValueError("供应商未返回强制工具调用")
+        usage = data.get("usage", {})
+        total_tokens = int(usage.get("input_tokens", 0) or 0) + int(usage.get("output_tokens", 0) or 0)
+        return LLMToolResponse(calls, total_tokens, provider.provider_name, True)
 
     async def call(
         self,
@@ -636,3 +860,40 @@ def _anthropic_text_content(data: dict) -> str:
         if isinstance(block, dict) and block.get("type") == "text":
             parts.append(str(block.get("text") or ""))
     return "\n".join(part for part in parts if part).strip()
+
+
+def _tool_arguments(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        parsed = json.loads(value)
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError("工具 arguments 必须是 JSON object")
+
+
+def _normalize_openai_tool_calls(raw_calls: list[Any]) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+    for raw in raw_calls:
+        if not isinstance(raw, dict):
+            continue
+        function = raw.get("function") if isinstance(raw.get("function"), dict) else raw
+        name = str(function.get("name") or "").strip()
+        if not name:
+            continue
+        calls.append({"name": name, "arguments": _tool_arguments(function.get("arguments") or {})})
+    return calls
+
+
+def _parse_json_tool_calls(content: str) -> list[dict[str, Any]]:
+    text = str(content or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        text = text.rsplit("```", 1)[0].strip()
+    payload = json.loads(text)
+    raw_calls = payload.get("tool_calls") if isinstance(payload, dict) else None
+    if raw_calls is None and isinstance(payload, dict) and "checks" in payload:
+        raw_calls = [{"name": "dice_checks", "arguments": payload}]
+    if not isinstance(raw_calls, list):
+        raise ValueError("JSON 回退缺少 tool_calls")
+    return _normalize_openai_tool_calls(raw_calls)

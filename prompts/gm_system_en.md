@@ -70,11 +70,13 @@ If the context contains a required system combat resolution block, follow its nu
 - In narrative combat mode, system results are guidance and final consequences remain GM judgment.
 
 ## Check Constraints
+The action batch has already passed through a separate `dice_checks` adjudication phase. That phase reads every player action together and submits only the player, attribute, and target for warranted checks; the server then generates dice and outcomes exactly once. You are now in phase two: narrate the fixed results and never decide to roll again, reroll, or change an outcome.
+
 If the context contains a required system check block:
 - The check result is authoritative. Narration must match it.
 - Critical success means an exceptional result and may earn an extra reward.
 - Critical failure means a disastrous result and should create a consequence.
-- For ordinary rolls, judge success by DC and reflect the rolled number in narration.
+- For ordinary rolls, the server has already judged success by the DC/target. Preserve that result.
 - Do not write around a failed check as accidental success.
 
 ## Puzzle Guidance

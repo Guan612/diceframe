@@ -56,8 +56,9 @@ function perceptionKey(m: PrivateMessage | string, i: number) {
     </button>
     <CharacterPanel :player="player" :rule-meta="ruleMeta" :portrait-editable="portraitEditable" @portrait-click="emit('portrait-click')" />
 
-    <section class="panel" v-if="hasPlot">
-      <h2>{{ t('plotTracker') }}</h2>
+    <details class="panel sidebar-disclosure" v-if="hasPlot">
+      <summary><strong>{{ t('plotTracker') }}</strong><span>{{ activeQuests.length + doneQuests.length + notableRelations.length + recentDecisions.length }}</span></summary>
+      <div class="sidebar-disclosure-body">
       <div v-if="activeQuests.length" class="quest-group">
         <strong class="quest-head">{{ t('currentQuests') }}</strong>
         <div v-for="(q, i) in activeQuests" :key="'qa' + i" class="quest-item"><strong>{{ q.title }}</strong><span v-if="q.progress" class="muted"> {{ q.progress }}</span></div>
@@ -74,10 +75,12 @@ function perceptionKey(m: PrivateMessage | string, i: number) {
         <strong class="quest-head">{{ t('recentDecisions') }}</strong>
         <div v-for="(d, i) in recentDecisions" :key="'d' + i" class="quest-item muted">{{ fmtDecision(d) }}</div>
       </div>
-    </section>
+      </div>
+    </details>
 
-    <section class="panel">
-      <header><h2>{{ t('characterPerception') }}</h2><span>{{ privateMessages.length }}</span></header>
+    <details class="panel sidebar-disclosure" :open="privateMessages.length > 0">
+      <summary><strong>{{ t('characterPerception') }}</strong><span>{{ privateMessages.length }}</span></summary>
+      <div class="sidebar-disclosure-body">
       <div v-if="privateMessages.length" class="perceptions">
         <p
           v-for="(m, i) in recentPerceptions"
@@ -87,18 +90,24 @@ function perceptionKey(m: PrivateMessage | string, i: number) {
         >{{ perceptionText(m) }}</p>
       </div>
       <p v-else class="muted">{{ t('noPrivatePerception') }}</p>
-    </section>
+      </div>
+    </details>
 
-    <section class="panel">
-      <h2>{{ t('statusInfo') }}</h2>
+    <details class="panel sidebar-disclosure">
+      <summary><strong>{{ t('statusInfo') }}</strong><span>{{ stateLabel(detail.state) }}</span></summary>
+      <div class="sidebar-disclosure-body">
       <div class="chips"><span>{{ detail.solo_mode ? t('solo') : t('multiplayer') }}</span><span>{{ stateLabel(detail.state) }}</span></div>
       <details><summary>{{ t('coordination') }}</summary>
         <p>{{ t('readyProgress', { ready: detail.multiplayer?.ready_count || 0, total: detail.multiplayer?.active_count ?? detail.multiplayer?.player_count ?? 0 }) }}</p>
         <p>{{ t('waitingList', { names: detail.multiplayer?.waiting_players?.map((p: Player) => p.character_name).join(t('listSeparator')) || t('none') }) }}</p>
         <p v-if="detail.multiplayer?.away_players?.length">{{ t('awayList', { names: detail.multiplayer.away_players.map((p: Player) => p.character_name).join(t('listSeparator')) }) }}</p>
       </details>
-    </section>
+      </div>
+    </details>
 
-    <MapGraph :map="map" :current-scene="detail.scene" @lore-click="emit('lore-click', $event)" />
+    <details class="panel sidebar-disclosure sidebar-map">
+      <summary><strong>{{ t('mapTitle') }}</strong></summary>
+      <div class="sidebar-disclosure-body"><MapGraph :map="map" :current-scene="detail.scene" @lore-click="emit('lore-click', $event)" /></div>
+    </details>
   </aside>
 </template>

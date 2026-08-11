@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import secrets
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -31,11 +33,34 @@ class MarketplaceSource:
 
 
 class PluginMarketplace:
-    def __init__(self, mirrors: MirrorManager, source: MarketplaceSource | None = None) -> None:
+    def __init__(
+        self,
+        mirrors: MirrorManager,
+        source: MarketplaceSource | None = None,
+        *,
+        hub_client: Any = None,
+    ) -> None:
         self.mirrors = mirrors
         self.source = source or MarketplaceSource()
+        self.hub_client = hub_client
 
     async def list_plugins(self) -> dict[str, Any]:
+        if self.hub_client is not None:
+            hub_listing = await self.hub_client.catalog()
+            if hub_listing.get("ok"):
+                plugins = [
+                    item
+                    for item in (
+                        _normalize_market_item(item) for item in hub_listing.get("items", [])
+                    )
+                    if item is not None
+                ]
+                return {
+                    "ok": True,
+                    "plugins": plugins,
+                    "total": len(plugins),
+                    "source": hub_listing.get("source", {"mirror_name": "DiceFrame Hub"}),
+                }
         fetched = await self.mirrors.fetch_raw(
             self.source.owner,
             self.source.repo,
@@ -149,6 +174,14 @@ class PluginMarketplace:
                 item = await self.resolve_release(indexed_item)
             except ValueError as exc:
                 return {"ok": False, "error": str(exc), "plugin": indexed_item}
+            event_id = secrets.token_urlsafe(18)
+            if self.hub_client is not None:
+                self.hub_client.queue_download_event(
+                    plugin_id,
+                    event_id=event_id,
+                    kind="download_started",
+                    plugin_version=str(item.get("version") or ""),
+                )
             archive_url = validate_public_http_url(str(item.get("archive_url") or ""))
             fetched = await self.mirrors.fetch_github_url(
                 archive_url,
@@ -159,7 +192,14 @@ class PluginMarketplace:
                 return {"ok": False, "error": fetched.error or "插件仓库快照下载失败", "plugin": item, "source": fetched.to_dict()}
             source = fetched.to_dict()
             source.pop("data", None)
-            return {"ok": True, "plugin": item, "payload": fetched.data, "source": source}
+            return {
+                "ok": True,
+                "plugin": item,
+                "payload": fetched.data,
+                "source": source,
+                "hub_event_id": event_id,
+                "artifact_hash": hashlib.sha256(fetched.data).hexdigest(),
+            }
         return {"ok": False, "error": f"插件市场中找不到：{plugin_id}"}
 
 
@@ -219,6 +259,13 @@ def _normalize_market_item(item: Any) -> dict[str, Any] | None:
         trust_level = "official" if "official" in tags or distribution == "bundled" else "community"
     verification_error = str(item.get("verification_error") or "")
     installable = bool(item.get("installable", True))
+    security = item.get("security") if isinstance(item.get("security"), dict) else {}
+    if security.get("install_allowed") is False:
+        installable = False
+        reasons = security.get("blocking_reasons")
+        if isinstance(reasons, list) and reasons:
+            verification_error = "；".join(str(reason) for reason in reasons if str(reason))
+        verification_error = verification_error or "Hub 安全策略暂不允许安装该插件"
     if distribution == "bundled":
         installable = False
         verification_error = verification_error or "该插件随 DiceFrame 提供，不需要从商店安装"
@@ -264,4 +311,7 @@ def _normalize_market_item(item: Any) -> dict[str, Any] | None:
         "homepage": str(item.get("homepage") or urls.get("homepage") or repository_url),
         "latest": _latest_field(item),
         "manifest": manifest,
+        "stats": item.get("stats") if isinstance(item.get("stats"), dict) else {},
+        "security": item.get("security") if isinstance(item.get("security"), dict) else {},
+        "readme": item.get("readme") if isinstance(item.get("readme"), dict) else {},
     }

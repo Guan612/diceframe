@@ -143,7 +143,9 @@ def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
                 logger.warning("规则语言模板合并失败: %s", loc_path)
     template["attributes"] = _enrich_attributes(template.get("attributes", []))
     if _plugin_rule_path(api, rule_id):
-        template["plugin_id"] = _plugin_rule_plugin_id(api, rule_id)
+        plugin_id = _plugin_rule_plugin_id(api, rule_id)
+        template = api._plugins.expose_scene_image(template, plugin_id)
+        template["plugin_id"] = plugin_id
         template["readonly"] = True
     return {"ok": True, "rule": template}
 
@@ -230,6 +232,7 @@ def _plugin_rule_items(api: "WebAPI") -> list[dict[str, Any]]:
     for item in plugin_host.contributions.list("rule"):
         try:
             rule = RuleSystem.load(item.path)
+            template = api._plugins.expose_scene_image(rule.template, item.plugin_id)
             result.append({
                 "rule_id": rule.rule_id,
                 "rule_name": rule.rule_name,
@@ -240,6 +243,8 @@ def _plugin_rule_items(api: "WebAPI") -> list[dict[str, Any]]:
                 "combat_model": rule.combat_model,
                 "attr_count": len(rule.attributes),
                 "custom": False,
+                "source_rule_id": template.get("source_rule_id", ""),
+                "scene_image": template.get("scene_image"),
                 "plugin_id": item.plugin_id,
                 "plugin_name": item.plugin_name,
                 "readonly": True,

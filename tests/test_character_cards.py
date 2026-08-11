@@ -11,6 +11,28 @@ class _Api:
         pass
 
 
+def test_update_card_can_explicitly_clear_uploaded_portrait(tmp_path):
+    import json
+    from src.webui.services.character_cards import update_character_card
+
+    class _CardApi:
+        def __init__(self, path):
+            self._character_cards_path = path
+
+    cards_path = tmp_path / "cards.json"
+    cards_path.write_text(json.dumps([{
+        "id": "card-1",
+        "character_name": "Aster",
+        "portrait": {"kind": "upload", "asset_id": "avatar.webp"},
+    }]), encoding="utf-8")
+
+    result = update_character_card(_CardApi(cards_path), "card-1", {"portrait": None})
+
+    assert result["ok"] is True
+    assert "portrait" not in result["card"]
+    assert "portrait" not in json.loads(cards_path.read_text(encoding="utf-8"))[0]
+
+
 def test_export_preserves_business_fields_strips_runtime_markers(tmp_path):
     """导出去掉运行期插件标记，保留 source/raw_sillytavern 业务字段。"""
     import json

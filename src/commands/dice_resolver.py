@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from src.engine.dice import DiceResult, check_coc, check_d20_advantage, check_d100, coc_success_level
+from src.engine.dice import DiceResult, check_coc, check_d20_advantage, check_d100, coc_success_level, roll
 from src.engine.game_instance import GameInstance
 from src.engine.language import is_english
 from src.rules.rule_system import RuleSystem
@@ -21,6 +21,7 @@ def _verdict_text(verdict: str, english: bool) -> str:
         "大成功": "Critical Success",
         "极难成功": "Extreme Success",
         "困难成功": "Hard Success",
+        "普通成功": "Regular Success",
         "成功": "Success",
         "失败": "Failure",
         "大失败": "Critical Failure",
@@ -68,7 +69,7 @@ class DiceResolver:
             matched_skill = self._match_skill(skills, text)
 
         if dice_system == "d100":
-            return self._resolve_coc_value(instance, uid, attrs, matched_skill, roll_value, request)
+            return self._resolve_coc_value(instance, uid, attrs, matched_skill, roll_value, rolls, request)
 
         attr_key = str(request.get("attribute") or action.get("selected_attribute") or "")
         if not attr_key:
@@ -87,9 +88,40 @@ class DiceResolver:
             skill_bonus = rule.skill_bonus(skill_value)
             bonus_label = f"技能「{skill_name}」{skill_value} → 加值 +{skill_bonus}"
 
-        dc = rule.dc_for_difficulty(instance.difficulty, "normal") if rule else 10
-        modifier = attr_mod + skill_bonus
+        requested_target = request.get("target")
+        dc = (
+            max(1, min(40, int(requested_target)))
+            if requested_target is not None
+            else (rule.dc_for_difficulty(instance.difficulty, "normal") if rule else 10)
+        )
+        circumstance_modifier = max(-20, min(20, int(request.get("circumstance_modifier", 0) or 0)))
+        modifier = attr_mod + skill_bonus + circumstance_modifier
         total = roll_value + modifier
+        opponent_ref = str(request.get("opponent") or "")
+        opponent_name = ""
+        opponent_roll = request.get("opponent_roll")
+        opponent_modifier = int(request.get("opponent_modifier", 0) or 0)
+        opponent_total = request.get("opponent_total")
+        if opponent_ref:
+            opponent_attrs: dict = {}
+            if opponent_ref.startswith("npc:"):
+                npc_id = opponent_ref.split(":", 1)[1]
+                npc = instance.npcs.get(npc_id, {})
+                opponent_name = str(npc.get("name") or npc.get("character_name") or npc_id)
+                opponent_attrs = npc.get("attributes", {}) if isinstance(npc.get("attributes"), dict) else {}
+            elif opponent_ref in instance.players:
+                opponent_name = str(instance.players[opponent_ref].get("character_name") or opponent_ref)
+                opponent_attrs = instance.get_character_sheet(opponent_ref).get("attributes", {})
+            if opponent_name:
+                if opponent_roll is None:
+                    opponent_value = int(opponent_attrs.get(attr_key, 10) or 10)
+                    opponent_modifier = rule.attribute_modifier(opponent_value) if rule else (opponent_value - 10) // 2
+                    opponent_roll = roll("d20").natural
+                    opponent_total = int(opponent_roll) + opponent_modifier
+                    request["opponent_roll"] = opponent_roll
+                    request["opponent_modifier"] = opponent_modifier
+                    request["opponent_total"] = opponent_total
+                dc = int(opponent_total)
         if roll_value == 20:
             verdict = "大成功"
         elif roll_value == 1:
@@ -124,10 +156,21 @@ class DiceResolver:
             "advantage_mode": mode,
             "advantage_note": note or None,
             "modifier": modifier,
-            "modifier_breakdown": bonus_label or None,
+            "modifier_breakdown": "；".join(filter(None, [
+                bonus_label,
+                f"情境修正 {circumstance_modifier:+d}" if circumstance_modifier else "",
+            ])) or None,
             "total": total,
             "dc": dc,
             "difficulty": instance.difficulty,
+            "kind": str(request.get("kind") or "check"),
+            "opponent": str(request.get("opponent") or ""),
+            "opponent_name": opponent_name,
+            "opponent_roll": opponent_roll,
+            "opponent_modifier": opponent_modifier if opponent_name else None,
+            "opponent_total": opponent_total,
+            "assist": list(request.get("assist") or []),
+            "planner_source": str(request.get("planner_source") or "legacy"),
             "verdict": verdict,
             "is_critical": verdict == "大成功",
             "is_fumble": verdict == "大失败",
@@ -155,6 +198,7 @@ class DiceResolver:
         attrs: dict,
         matched_skill: dict | None,
         roll_value: int,
+        rolls: list[int],
         request: dict,
     ) -> str:
         cs = instance.get_character_sheet(uid)
@@ -170,6 +214,7 @@ class DiceResolver:
             skill_name = ""
             attribute_label = attr_key
             label = f"属性「{attr_key}」={threshold}%"
+        threshold += max(-20, min(20, int(request.get("circumstance_modifier", 0) or 0)))
         threshold = max(1, min(99, threshold))
         verdict = coc_success_level(roll_value, threshold)
         luck = int(cs.get("luck", 0) or 0)
@@ -183,11 +228,15 @@ class DiceResolver:
             "attribute": attribute_label,
             "skill": skill_name,
             "roll": roll_value,
-            "rolls": [roll_value],
+            "rolls": rolls or [roll_value],
             "threshold": threshold,
             "hard_threshold": threshold // 2,
             "extreme_threshold": threshold // 5,
             "verdict": verdict,
+            "kind": str(request.get("kind") or "check"),
+            "opponent": str(request.get("opponent") or ""),
+            "assist": list(request.get("assist") or []),
+            "planner_source": str(request.get("planner_source") or "legacy"),
             "luck_spend_available": 0 < luck_cost <= luck,
             "luck_cost": luck_cost if 0 < luck_cost <= luck else None,
             "is_critical": verdict == "大成功",

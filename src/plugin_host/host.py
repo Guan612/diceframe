@@ -117,7 +117,7 @@ async def _rename_dir_with_retry(src: Path, dst: Path, *, attempts: int = 3, del
 
 
 class PluginHost:
-    def __init__(self, plugins_dir: Path, data_dir: Path, *, builtin_dir: Path | None = None, base_env: dict[str, str] | None = None, on_plugin_stopped=None) -> None:
+    def __init__(self, plugins_dir: Path, data_dir: Path, *, builtin_dir: Path | None = None, base_env: dict[str, str] | None = None, on_plugin_stopped=None, hub_client=None) -> None:
         self.builtin_dir = builtin_dir
         self.plugins_dir = plugins_dir
         self.data_dir = data_dir
@@ -127,7 +127,8 @@ class PluginHost:
         self.plugins: dict[str, PluginRuntime] = {}
         self.logger = logging.getLogger("trpg.plugins")
         self.mirrors = MirrorManager(self.data_dir / "_marketplace" / "mirrors.json")
-        self.marketplace = PluginMarketplace(self.mirrors)
+        self.hub_client = hub_client
+        self.marketplace = PluginMarketplace(self.mirrors, hub_client=hub_client)
         self.contributions = ContributionRegistry()
         self.content = PluginContentCatalog(self.contributions, self.logger)
         self._api_tokens: dict[str, str] = {}
@@ -373,6 +374,9 @@ class PluginHost:
     def load_world_template(self, world_id: str) -> dict[str, Any] | None:
         return self.content.load_world_template(world_id)
 
+    def expose_scene_image(self, data: dict[str, Any], plugin_id: str) -> dict[str, Any]:
+        return self.content.expose_scene_image(data, plugin_id)
+
     def list_themes(self) -> list[dict[str, Any]]:
         return self.content.list_themes()
 
@@ -454,6 +458,7 @@ class PluginHost:
                 if lorebook_store.get_entry(entry_id):
                     continue
                 entry = dict(raw)
+                self.content._expose_packaged_portrait(entry, plugin_id)
                 entry["id"] = entry_id
                 entry["world_id"] = world_id
                 entry["source_plugin"] = plugin_id
@@ -571,6 +576,14 @@ class PluginHost:
             "approved_permissions": market_item.get("approved_permissions", []),
             "installed_version": package_version,
         })
+        if self.hub_client is not None:
+            self.hub_client.queue_download_event(
+                plugin_id,
+                event_id=str(package.get("hub_event_id") or secrets.token_urlsafe(18)),
+                kind="install_succeeded",
+                plugin_version=package_version,
+                artifact_hash=str(package.get("artifact_hash") or ""),
+            )
         return {"source": package.get("source", {}), "marketplace": package.get("plugin", {}), **detail}
 
     async def update_from_marketplace(self, plugin_id: str) -> dict[str, Any]:

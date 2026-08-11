@@ -1,9 +1,12 @@
-import { computed, reactive, ref, watch, type Ref } from 'vue'
+import { computed, onScopeDispose, reactive, ref, watch, type Ref } from 'vue'
 import { errorMessage } from '@/api/client'
 import { pluginApi } from '@/api/plugins'
+import { useConfirm } from '@/composables/useConfirm'
 import { useLocale } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
+import { renderSafeMarkdown } from '@/utils/markdown'
 import type {
+  HubRatingSummary,
   PluginInfo,
   PluginMarketplaceItem,
   PluginMarketplaceResponse,
@@ -69,12 +72,20 @@ export function usePluginMarketplace(
 ) {
   const toast = useToast()
   const { t } = useLocale()
+  const { confirm } = useConfirm()
   const marketplace = ref<PluginMarketplaceItem[]>([])
   const mirrors = ref<PluginMirror[]>([])
   const mirrorTests = ref<Record<string, string>>({})
   const marketplaceSource = ref<PluginMarketplaceResponse['source'] | null>(null)
   const marketKeyword = ref('')
   const marketLoading = ref(false)
+  const hubDetail = ref<PluginMarketplaceItem | null>(null)
+  const hubReadmeHtml = ref('')
+  const hubDetailOpen = ref(false)
+  const hubDetailLoading = ref(false)
+  const hubReadmeLoading = ref(false)
+  const hubRating = ref<number | null>(null)
+  const hubRatingSummary = ref<HubRatingSummary | null>(null)
   const mirrorLoading = ref(false)
   const sortMode = ref('')  // '' 默认 / stars / name-asc / name-desc
   const newMirror = reactive<PluginMirror>({
@@ -84,6 +95,46 @@ export function usePluginMarketplace(
     clone_prefix: '',
     enabled: true,
     priority: 1,
+  })
+  let marketRetryTimer: number | undefined
+  let marketRetryAttempt = 0
+  let hubDetailController: AbortController | null = null
+  let hubDetailRequestId = 0
+
+  function clearMarketRetry() {
+    if (marketRetryTimer !== undefined) window.clearTimeout(marketRetryTimer)
+    marketRetryTimer = undefined
+  }
+
+  function scheduleMarketRetry() {
+    if (marketRetryTimer !== undefined || marketRetryAttempt >= 2) return
+    const delays = [15_000, 60_000]
+    const delay = delays[marketRetryAttempt++]
+    marketRetryTimer = window.setTimeout(() => {
+      marketRetryTimer = undefined
+      void loadMarketplace({ silent: true })
+    }, delay)
+  }
+
+  function cancelHubDetailLoad() {
+    hubDetailRequestId += 1
+    hubDetailController?.abort()
+    hubDetailController = null
+    hubDetailLoading.value = false
+    hubReadmeLoading.value = false
+  }
+
+  function isAbortError(error: unknown): boolean {
+    return error instanceof Error && error.name === 'AbortError'
+  }
+
+  watch(hubDetailOpen, open => {
+    if (!open) cancelHubDetailLoad()
+  })
+
+  onScopeDispose(() => {
+    clearMarketRetry()
+    cancelHubDetailLoad()
   })
 
   const filteredMarketplace = computed(() => {
@@ -129,17 +180,117 @@ export function usePluginMarketplace(
     return marketItemHasNewerVersion(item, installedVersion)
   }
 
-  async function loadMarketplace() {
-    marketLoading.value = true
+  async function loadMarketplace(options?: { silent?: boolean }) {
+    const silent = options?.silent === true
+    if (!silent) {
+      clearMarketRetry()
+      marketRetryAttempt = 0
+    }
+    const showLoading = !silent || marketplace.value.length === 0
+    if (showLoading) marketLoading.value = true
     try {
       const response = await pluginApi.marketplace()
       if (!response.ok) throw new Error(response.error || t('pluginMarketplaceLoadFailed'))
       marketplace.value = response.plugins || []
       marketplaceSource.value = response.source || null
+      if (response.source?.stale) {
+        scheduleMarketRetry()
+      } else {
+        clearMarketRetry()
+        marketRetryAttempt = 0
+      }
+    } catch (error: unknown) {
+      if (!silent) toast.error(errorMessage(error))
+      scheduleMarketRetry()
+    } finally {
+      if (showLoading) marketLoading.value = false
+    }
+  }
+
+  async function openHubDetail(item: PluginMarketplaceItem) {
+    cancelHubDetailLoad()
+    const controller = new AbortController()
+    hubDetailController = controller
+    const requestId = ++hubDetailRequestId
+    const isCurrentRequest = () => (
+      requestId === hubDetailRequestId && hubDetailOpen.value && !controller.signal.aborted
+    )
+    hubDetail.value = item
+    hubReadmeHtml.value = ''
+    hubReadmeLoading.value = false
+    hubRating.value = null
+    hubRatingSummary.value = null
+    hubDetailOpen.value = true
+    hubDetailLoading.value = true
+    try {
+      const ratingsRequest = pluginApi.hubRatings(item.id, controller.signal)
+      void ratingsRequest.then(ratings => {
+        if (isCurrentRequest()) hubRatingSummary.value = ratings
+      }).catch(() => undefined)
+
+      const detail = await pluginApi.hubDetail(item.id, controller.signal)
+      if (!isCurrentRequest()) return
+      hubDetail.value = detail
+      hubRating.value = detail.own_rating?.stars ?? null
+      hubDetailLoading.value = false
+      // README 走 Hub → 磁盘缓存 → 作者 GitHub Raw 三层兜底，始终请求，
+      // 由后端返回 Hub 已清洗 HTML 或 GitHub Raw Markdown。
+      hubReadmeLoading.value = true
+      void pluginApi.hubReadme(item.id, controller.signal)
+        .then(readme => {
+          if (!isCurrentRequest()) return
+          const html = readme.html || ''
+          const markdown = readme.markdown || ''
+          if (html) {
+            hubReadmeHtml.value = html
+          } else if (markdown) {
+            hubReadmeHtml.value = renderSafeMarkdown(markdown)
+          } else {
+            hubReadmeHtml.value = ''
+          }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (isCurrentRequest()) hubReadmeLoading.value = false
+        })
+    } catch (error: unknown) {
+      if (isCurrentRequest() && !isAbortError(error)) toast.error(errorMessage(error))
+    } finally {
+      if (isCurrentRequest()) hubDetailLoading.value = false
+    }
+  }
+
+  async function toggleHubLike() {
+    const detail = hubDetail.value
+    if (!detail) return
+    busy.value = `hub-like:${detail.id}`
+    try {
+      const next = !detail.liked
+      await pluginApi.setHubLike(detail.id, next)
+      detail.liked = next
+      if (detail.stats) {
+        detail.stats.likes = Math.max(0, Number(detail.stats.likes || 0) + (next ? 1 : -1))
+      }
     } catch (error: unknown) {
       toast.error(errorMessage(error))
     } finally {
-      marketLoading.value = false
+      busy.value = ''
+    }
+  }
+
+  async function saveHubRating(value: number | null) {
+    const detail = hubDetail.value
+    if (!detail) return
+    busy.value = `hub-rating:${detail.id}`
+    try {
+      await pluginApi.setHubRating(detail.id, value)
+      hubRating.value = value
+      detail.own_rating = value === null ? null : { stars: value, tags: [] }
+      toast.success(t('hubRatingSaved'))
+    } catch (error: unknown) {
+      toast.error(errorMessage(error))
+    } finally {
+      busy.value = ''
     }
   }
 
@@ -156,8 +307,24 @@ export function usePluginMarketplace(
   }
 
   async function installMarketPlugin(item: PluginMarketplaceItem) {
-    if (item.risk_level === 'unrestricted-process' && !window.confirm(t('confirmProcessPluginInstall', { name: item.name }))) return
-    if (item.needs_core_update && !window.confirm(t('confirmCoreUpgrade', { name: item.name, version: item.min_app_version || '' }))) return
+    if (item.risk_level === 'unrestricted-process') {
+      const ok = await confirm({
+        title: t('confirmPluginInstallTitle'),
+        content: t('confirmProcessPluginInstall', { name: item.name }),
+        positiveText: t('install'),
+        type: 'warning',
+      })
+      if (!ok) return
+    }
+    if (item.needs_core_update) {
+      const ok = await confirm({
+        title: t('confirmPluginInstallTitle'),
+        content: t('confirmCoreUpgrade', { name: item.name, version: item.min_app_version || '' }),
+        positiveText: t('install'),
+        type: 'warning',
+      })
+      if (!ok) return
+    }
     busy.value = `market:${item.id}`
     try {
       await pluginApi.installMarketplace(item.id, Boolean(item.installed))
@@ -172,8 +339,24 @@ export function usePluginMarketplace(
 
   async function updateInstalledPlugin(plugin: PluginInfo) {
     const marketItem = marketplace.value.find(item => item.id === plugin.id)
-    if (marketItem?.risk_level === 'unrestricted-process' && !window.confirm(t('confirmProcessPluginUpdate', { name: plugin.name }))) return
-    if (marketItem?.needs_core_update && !window.confirm(t('confirmCoreUpgrade', { name: plugin.name, version: marketItem.min_app_version || '' }))) return
+    if (marketItem?.risk_level === 'unrestricted-process') {
+      const ok = await confirm({
+        title: t('confirmPluginUpdateTitle'),
+        content: t('confirmProcessPluginUpdate', { name: plugin.name }),
+        positiveText: t('updateFromStore'),
+        type: 'warning',
+      })
+      if (!ok) return
+    }
+    if (marketItem?.needs_core_update) {
+      const ok = await confirm({
+        title: t('confirmPluginUpdateTitle'),
+        content: t('confirmCoreUpgrade', { name: plugin.name, version: marketItem.min_app_version || '' }),
+        positiveText: t('updateFromStore'),
+        type: 'warning',
+      })
+      if (!ok) return
+    }
     busy.value = `${plugin.id}:update`
     try {
       await pluginApi.update(plugin.id)
@@ -187,7 +370,13 @@ export function usePluginMarketplace(
   }
 
   async function uninstallPlugin(plugin: PluginInfo) {
-    if (!window.confirm(t('confirmUninstallPlugin', { name: plugin.name }))) return
+    const ok = await confirm({
+      title: t('confirmPluginUninstallTitle'),
+      content: t('confirmUninstallPlugin', { name: plugin.name }),
+      positiveText: t('uninstallPlugin'),
+      type: 'error',
+    })
+    if (!ok) return
     busy.value = `${plugin.id}:uninstall`
     try {
       const result = await pluginApi.uninstall(plugin.id)
@@ -231,7 +420,13 @@ export function usePluginMarketplace(
   }
 
   async function deleteMirror(mirror: PluginMirror) {
-    if (!window.confirm(t('confirmDeleteMirror', { name: mirror.name }))) return
+    const ok = await confirm({
+      title: t('confirmMirrorDeleteTitle'),
+      content: t('confirmDeleteMirror', { name: mirror.name }),
+      positiveText: t('confirmDelete'),
+      type: 'error',
+    })
+    if (!ok) return
     busy.value = `mirror:${mirror.id}`
     try {
       await pluginApi.deleteMirror(mirror.id)
@@ -276,6 +471,13 @@ export function usePluginMarketplace(
     marketplaceSource,
     marketKeyword,
     marketLoading,
+    hubDetail,
+    hubReadmeHtml,
+    hubDetailOpen,
+    hubDetailLoading,
+    hubReadmeLoading,
+    hubRating,
+    hubRatingSummary,
     mirrorLoading,
     newMirror,
     sortMode,
@@ -287,6 +489,9 @@ export function usePluginMarketplace(
     goToPage,
     canUpdateFromStore,
     loadMarketplace,
+    openHubDetail,
+    toggleHubLike,
+    saveHubRating,
     loadMirrors,
     installMarketPlugin,
     updateInstalledPlugin,

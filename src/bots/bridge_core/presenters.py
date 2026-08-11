@@ -19,6 +19,8 @@ def format_action_result(result: dict[str, Any], language: str = "zh-CN") -> str
     roll = result.get("roll") or {}
     if roll:
         lines.append(f"🎲 {str(roll.get('dice_system', '')).upper()} = {roll.get('value')}")
+    checks = result.get("check_results") if isinstance(result.get("check_results"), list) else []
+    lines.extend(format_check_result(check, language) for check in checks if isinstance(check, dict))
     narration = str(result.get("narration") or "").strip()
     if narration:
         lines.append(narration)
@@ -26,6 +28,39 @@ def format_action_result(result: dict[str, Any], language: str = "zh-CN") -> str
     if pending_luck:
         lines.extend(luck_prompt_lines(pending_luck, language))
     return "\n".join(lines) or ("Action recorded." if bridge_is_english(language) else "行动已记录。")
+
+
+def format_check_result(check: dict[str, Any], language: str = "zh-CN") -> str:
+    """群聊没有网页卡片，以同一结构化结果渲染紧凑文本。"""
+    english = bridge_is_english(language)
+    actor = str(check.get("actor_name") or check.get("actor_uid") or ("Character" if english else "角色"))
+    label = str(check.get("label") or ("Check" if english else "检定"))
+    dice = str(check.get("dice") or "d20")
+    roll = check.get("roll")
+    verdict_raw = str(check.get("verdict") or "")
+    verdict_map = {
+        "大成功": "Critical Success",
+        "极难成功": "Extreme Success",
+        "困难成功": "Hard Success",
+        "普通成功": "Regular Success",
+        "成功": "Success",
+        "失败": "Failure",
+        "大失败": "Critical Failure",
+    }
+    verdict = verdict_map.get(verdict_raw, verdict_raw) if english else verdict_raw
+    if dice == "d100":
+        math = f"d100={roll} vs {check.get('threshold')}%"
+    else:
+        modifier = int(check.get("modifier", 0) or 0)
+        if check.get("opponent_name"):
+            math = (
+                f"d20={roll}({modifier:+d})={check.get('total')} vs {check.get('opponent_name')} "
+                f"d20={check.get('opponent_roll')}({int(check.get('opponent_modifier', 0) or 0):+d})="
+                f"{check.get('opponent_total')}"
+            )
+        else:
+            math = f"d20={roll}({modifier:+d})={check.get('total')} vs DC {check.get('dc')}"
+    return f"🎲 {actor} · {label} {math} → {verdict}"
 
 
 def luck_prompt_lines(
@@ -279,7 +314,7 @@ def bind_success_text(
             f"1. Claim a character: {command_example('join Character Name', command_prefix=command_prefix)}\n"
             f"   Available: {names}\n"
             f"2. Describe an action: {command_example('I inspect the area', command_prefix=command_prefix)}\n"
-            f"3. When a check is requested: {command_example('roll', command_prefix=command_prefix)}\n"
+            "3. Checks are adjudicated and rolled automatically after the table is ready.\n"
             f"4. Catch up with {command_example('recap', command_prefix=command_prefix)} or "
             f"{command_example('map', command_prefix=command_prefix)}; use "
             f"{command_example('help', command_prefix=command_prefix)} if you get stuck."
@@ -290,7 +325,7 @@ def bind_success_text(
         f"1. 玩家先认领角色：{command_example('加入 角色名', command_prefix=command_prefix)}\n"
         f"   可认领：{names}\n"
         f"2. 认领后直接描述行动：{command_example('我调查四周', command_prefix=command_prefix)}\n"
-        f"3. 需要检定时发送：{command_example('掷骰', command_prefix=command_prefix)}\n"
+        "3. 人齐后系统自动判断并掷骰，不需要发送掷骰命令。\n"
         f"4. 补信息：{command_example('前情', command_prefix=command_prefix)} / {command_example('地图', command_prefix=command_prefix)}；不知道做什么就发：{command_example('帮助', command_prefix=command_prefix)}"
     )
 
@@ -359,7 +394,7 @@ def bound_help_text(
             f"   Catch up: {command_example('recap', command_prefix=command_prefix)}; "
             f"map: {command_example('map', command_prefix=command_prefix)}\n"
             f"2. Describe an action: {command_example('I inspect the area', command_prefix=command_prefix)}\n"
-            f"3. When prompted: {command_example('roll', command_prefix=command_prefix)}\n"
+            "3. Checks are adjudicated and rolled automatically when the table is ready.\n"
             f"   If offered: {command_example('luck', command_prefix=command_prefix)} or {command_example('no luck', command_prefix=command_prefix)}\n"
             f"4. Character status: {command_example('status', command_prefix=command_prefix)}\n"
             f"5. Step away: {command_example('away', command_prefix=command_prefix)}; "
@@ -376,7 +411,7 @@ def bound_help_text(
         f"   补前情：{command_example('前情', command_prefix=command_prefix)}\n"
         f"   看地图：{command_example('地图', command_prefix=command_prefix)}\n"
         f"2. 描述行动：{command_example('我观察四周', command_prefix=command_prefix)} / {command_example('我攻击守卫', command_prefix=command_prefix)}\n"
-        f"3. 如果提示需要检定：{command_example('掷骰', command_prefix=command_prefix)}\n"
+        "3. 人齐后系统自动判断并掷骰，不需要发送掷骰命令。\n"
         f"   如果可以消耗幸运：{command_example('幸运', command_prefix=command_prefix)} / {command_example('不用幸运', command_prefix=command_prefix)}\n"
         f"4. 查看自己状态：{command_example('状态', command_prefix=command_prefix)}\n"
         f"5. 临时离开：{command_example('暂离', command_prefix=command_prefix)}；回来：{command_example('回来', command_prefix=command_prefix)}\n"
@@ -580,8 +615,8 @@ def player_tutorial_lines(*, command_prefix: str = "@我", language: str = "zh-C
             f"   Want an AI draft? {command_example('AI character', command_prefix=command_prefix)}",
             f"3. Claim one: {command_example('join Character Name', command_prefix=command_prefix)}",
             f"4. Start playing: {command_example('I inspect the area', command_prefix=command_prefix)}",
-            f"5. When asked for a check: {command_example('roll', command_prefix=command_prefix)}; "
-            f"status: {command_example('status', command_prefix=command_prefix)}",
+            f"5. Checks are adjudicated and rolled automatically; status: "
+            f"{command_example('status', command_prefix=command_prefix)}",
             f"Extra: {command_example('map', command_prefix=command_prefix)}, "
             f"{command_example('sense', command_prefix=command_prefix)}, "
             f"{command_example('pay', command_prefix=command_prefix)}, or "
@@ -593,7 +628,7 @@ def player_tutorial_lines(*, command_prefix: str = "@我", language: str = "zh-C
         f"   想让 AI 辅助起草：{command_example('AI车卡', command_prefix=command_prefix)}",
         f"3. 有角色：{command_example('加入 角色名', command_prefix=command_prefix)}",
         f"4. 开始玩：{command_example('我观察四周', command_prefix=command_prefix)} / {command_example('我向守卫打听消息', command_prefix=command_prefix)}",
-        f"5. 被要求检定：{command_example('掷骰', command_prefix=command_prefix)}；想看自己状态：{command_example('状态', command_prefix=command_prefix)}",
+        f"5. 检定由系统自动判断并掷骰；想看自己状态：{command_example('状态', command_prefix=command_prefix)}",
         "DND局小抄：优势=2d20取高，劣势=2d20取低；同时出现会抵消",
         f"额外：{command_example('地图', command_prefix=command_prefix)} 看地点；{command_example('感知', command_prefix=command_prefix)} 看私密信息；{command_example('支付', command_prefix=command_prefix)} 处理待确认付款；卡住就发 {command_example('帮助', command_prefix=command_prefix)}",
     ]

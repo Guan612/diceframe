@@ -10,6 +10,7 @@ const error = ref('')
 const linkUpdated = ref(false)
 let pollTimer: number | null = null
 let lastUrl = ''
+let consumers = 0
 
 async function refresh() {
   try {
@@ -77,10 +78,14 @@ function dismissLinkUpdated() {
 
 export function useTunnel() {
   onMounted(() => {
-    refresh()
-    startPolling()
+    consumers += 1
+    void refresh()
+    if (consumers === 1) startPolling()
   })
-  onUnmounted(stopPolling)
+  onUnmounted(() => {
+    consumers = Math.max(0, consumers - 1)
+    if (consumers === 0) stopPolling()
+  })
   return {
     status,
     starting,

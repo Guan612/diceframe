@@ -6,6 +6,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from src.webui.routes.pages import (
     NOINDEX_HEADER_VALUE,
+    _guess_content_type,
     add_response_security_headers,
     robots_txt,
 )
@@ -65,3 +66,8 @@ def test_frontend_html_declares_noindex():
     ).read_text(encoding="utf-8")
 
     assert '<meta name="robots" content="noindex, nofollow, noarchive">' in index_html
+
+
+def test_static_image_types_do_not_depend_on_the_windows_mime_registry():
+    assert _guess_content_type(Path("avatar.webp")) == "image/webp"
+    assert _guess_content_type(Path("background.avif")) == "image/avif"

@@ -234,6 +234,7 @@ def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
                 "status": "世界书",
                 "relation": entry.get("relation", ""),
                 "content": entry.get("content", ""),
+                "portrait": entry.get("portrait"),
             }
     npcs = list(npcs_by_name.values())
     rule_attrs_total = _get_rule_attrs_total(api, inst)
@@ -316,6 +317,15 @@ async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: 
     if "background" in updates and len(str(updates.get("background", ""))) > MAX_BIO_CHARS:
         return {"ok": False, "error": f"角色背景过长（上限 {MAX_BIO_CHARS} 字）"}
     rule = api._load_rule_for_game(inst)
+    if "portrait" in updates:
+        try:
+            portrait = _validated_portrait(api, updates.pop("portrait"))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if portrait is None:
+            cs.pop("portrait", None)
+        else:
+            cs["portrait"] = portrait
     explicit_hp_update = (
         "hp" in updates
         or "max_hp" in updates
