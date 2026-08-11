@@ -31,8 +31,8 @@ _FAILURE_THRESHOLD = 3
 _BREAKER_SECONDS = 60
 _EVENT_QUEUE_SIZE = 64
 _HEARTBEAT_INTERVAL = 6 * 60 * 60
-_READ_TIMEOUT = aiohttp.ClientTimeout(total=3, connect=1, sock_read=2)
-_INTERACTION_TIMEOUT = aiohttp.ClientTimeout(total=6, connect=2, sock_read=4)
+_READ_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
+_INTERACTION_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
 # 商店目录需要快速降级；用户主动打开的详情面板则允许慢链路有完整的加载时间。
 _PLUGIN_DETAIL_TIMEOUT = aiohttp.ClientTimeout(total=60, connect=5, sock_read=55)
 
