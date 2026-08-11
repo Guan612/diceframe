@@ -118,3 +118,21 @@ async def test_delete_character_cleans_player_runtime_state(tmp_path):
     assert not inst.pending_actions
     assert not inst.pending_payments
     assert "p1" not in inst.private_log
+
+
+def test_gm_target_prioritizes_exact_player_name_over_generic():
+    """角色真名叫'冒险者'时，GM 指令应优先命中该玩家而非当作泛指歧义。"""
+    inst = GameInstance(("web", "gm_target", "bot"), state=GameState.ACTIVE_JUDGMENT)
+    inst.players = {
+        "adv": {"character_name": "冒险者", "character_sheet": {"deceased": True, "hp": 0}},
+        "wu": {"character_name": "吴川", "character_sheet": {"deceased": False, "hp": 12}},
+    }
+    uid, err = games._resolve_gm_command_target(inst, "冒险者", prefer_deceased=True)
+    assert uid == "adv"
+    assert err == ""
+
+    # 多个死亡玩家时，泛称才歧义报错
+    inst.players["adv2"] = {"character_name": "第二个冒险者", "character_sheet": {"deceased": True, "hp": 0}}
+    uid2, err2 = games._resolve_gm_command_target(inst, "玩家", prefer_deceased=True)
+    assert uid2 is None
+    assert "写明角色名" in err2

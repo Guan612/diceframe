@@ -292,16 +292,24 @@ async def test_gm_revive_generic_phrase_selects_only_dead_player() -> None:
 @pytest.mark.asyncio
 async def test_gm_revive_ambiguous_target_lists_available_character_names() -> None:
     instance, rule = _coc_instance()
+    # p1 真名就叫"冒险者"且存活：点名"冒险者"应精确命中 p1（提示未死亡），
+    # 而不是被当泛称歧义。只有真名未匹配时才走泛称歧义列名单。
     instance.players["p2"] = {
         "character_name": "学者",
         "character_sheet": {"deceased": False, "hp": 20, "max_hp": 20},
     }
     api = _Api(instance, rule)
 
+    # 真名匹配：精确指向存活角色，复活时提示"未死亡"
     result = await gm_command(api, "web|room|bot", "复活名为冒险者的人")
-
     assert result["ok"] is False
-    assert "冒险者" in result["error"] and "学者" in result["error"]
+    assert "未死亡" in result["error"]
+
+    # 无真名匹配 + 多玩家 → 泛称歧义列出可用名单
+    instance.players["p1"]["character_name"] = "由洛拉"
+    result2 = await gm_command(api, "web|room|bot", "复活名为冒险者的人")
+    assert result2["ok"] is False
+    assert "学者" in result2["error"] and "由洛拉" in result2["error"]
 
 
 @pytest.mark.asyncio

@@ -135,6 +135,16 @@
   white-space: nowrap;
 }
 
+.about-card .about-ctas {
+  display: flex;
+  gap: 8px;
+}
+
+.about-card .about-ctas > * {
+  flex: 1;
+  min-width: 0;
+}
+
 .about-card .star-cta {
   display: grid;
   gap: 3px;
@@ -144,6 +154,8 @@
   color: var(--df-text);
   background: color-mix(in srgb, var(--df-interactive) 8%, var(--df-surface-1));
   text-decoration: none;
+  justify-items: start;
+  align-items: start;
 }
 
 .about-card .star-cta:hover {
@@ -174,8 +186,9 @@
   cursor: pointer;
   font: inherit;
   text-align: left;
+  justify-items: start;
+  align-items: start;
 }
-
 .about-card .sponsor-cta:hover {
   border-color: var(--df-accent-strong);
   background: color-mix(in srgb, var(--df-accent-strong) 16%, var(--df-surface-1));

@@ -490,6 +490,12 @@ def _resolve_gm_command_target(
         if wrapped:
             target = wrapped.group(1).strip("的")
             break
+    # 玩家真名精确匹配优先于泛称：角色名就叫"冒险者"时应命中该玩家，
+    # 而不是当泛指歧义报错（修复 GM 指令复活名为"冒险者"的角色被拒）。
+    for uid, player in inst.players.items():
+        name = str(player.get("character_name") or "")
+        if target in {str(uid), re.sub(r"\s+", "", name)}:
+            return str(uid), ""
     generic_targets = {
         "用户", "玩家", "冒险者", "角色", "当前玩家", "当前角色",
         "user", "player", "adventurer", "currentplayer", "currentcharacter",
@@ -515,10 +521,6 @@ def _resolve_gm_command_target(
             + "、".join(names)
             + "），例如“复活" + names[0] + "”"
         )
-    for uid, player in inst.players.items():
-        name = str(player.get("character_name") or "")
-        if target in {str(uid), re.sub(r"\s+", "", name)}:
-            return str(uid), ""
     names = [str(player.get("character_name") or uid) for uid, player in inst.players.items()]
     suffix = f"；可用角色：{'、'.join(names)}" if names else ""
     return None, f"找不到角色：{raw_target}{suffix}"

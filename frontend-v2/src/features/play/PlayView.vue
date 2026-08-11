@@ -266,7 +266,8 @@ async function command(path: string, body: JsonObject = {}) {
     const r = await api<CommandResponse>(`/games/${encodeURIComponent(game.currentGame.value)}/${path}`, { method: 'POST', body: JSON.stringify(body) })
     if (r.error) { toast.error(r.error); return }
     if (r.forced_waiting?.length) toast.info(t('forcedWaitingToast', { names: r.forced_waiting.join(t('listSeparator')) }))
-    if (r.narration) toast.success(r.narration)
+    // 剧情正文已在时间线/对话区展示，不再用 toast 重复弹出全文
+    if (path !== 'advance' && r.narration) toast.success(r.narration)
     else toast.success(t('operationDone'))
     await game.refresh()
   } catch (e: unknown) { toast.error(errorMessage(e)) } finally { if (thinkingCommand) gmThinking.value = false }

@@ -374,6 +374,11 @@ async function importLore(e: Event) {
       <p class="muted">{{ t('noLoreEntriesHint') }}</p>
     </section>
 
+    <section v-else-if="!currentWorldId && !busy && !showNewWorld" class="empty-panel">
+      <h2>{{ t('chooseWorldEllipsis') }}</h2>
+      <p class="muted">{{ t('standaloneLorebookHint') }}</p>
+    </section>
+
     <Modal v-if="loreEdit" :title="loreEdit.id ? t('editLoreEntry') : t('newLoreEntry')" @close="loreEdit = null">
       <label>{{ t('name') }}<input v-model="loreEdit.name"></label>
       <label>{{ t('type') }}<select v-model="loreEdit.type"><option v-for="tp in loreTypeOrder" :key="tp" :value="tp">{{ typeLabel(tp) }}</option></select></label>

@@ -643,7 +643,7 @@ function redownloadUpdatePackage() {
                 <li><strong>{{ t('apiFormat') }}</strong>: {{ t('apiFormatOpenAI') }}</li>
                 <li><strong>Base URL</strong>: <code>https://api.deepseek.com/v1</code></li>
                 <li><strong>API Key</strong>: {{ t('deepseekHelpApiKey') }}</li>
-                <li><strong>{{ t('model') }}</strong>: <code>deepseek-v4-pro</code></li>
+                <li><strong>{{ t('model') }}</strong>: <code>deepseek-v4-flash</code></li>
               </ul>
               <p>{{ t('deepseekHelpFinish') }}</p>
             </HelpButton></div>
@@ -1120,14 +1120,16 @@ function redownloadUpdatePackage() {
                 <a href="/#/legal/terms" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalTermsTitle') }}</strong></a>
                 <a href="/#/legal/privacy" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalPrivacyTitle') }}</strong></a>
               </nav>
-              <a class="star-cta" href="https://github.com/diceframe/diceframe" target="_blank" rel="noopener">
-                <strong>⭐ {{ t('starOnGithub') }}</strong>
-                <small>{{ t('starOnGithubHint') }}</small>
-              </a>
-              <button class="sponsor-cta" @click="sponsorModalOpen = true">
-                <strong>{{ t('supportProject') }}</strong>
-                <small>{{ t('supportProjectText') }}</small>
-              </button>
+              <div class="about-ctas">
+                <a class="star-cta" href="https://github.com/diceframe/diceframe" target="_blank" rel="noopener">
+                  <strong>⭐ {{ t('starOnGithub') }}</strong>
+                  <small>{{ t('starOnGithubHint') }}</small>
+                </a>
+                <button class="sponsor-cta" @click="sponsorModalOpen = true">
+                  <strong>{{ t('supportProject') }}</strong>
+                  <small>{{ t('supportProjectText') }}</small>
+                </button>
+              </div>
             </section>
             <NModal v-model:show="sponsorModalOpen" preset="card" :title="t('supportProject')" style="max-width: 360px;">
               <div class="sponsor-modal">
