@@ -161,7 +161,17 @@ function exportLog() {
   <section class="view archive-page logs-page reference-logs-page">
     <p v-if="error" class="error-banner">{{ error }}</p>
 
-    <div class="logs-workspace">
+    <main v-if="!game" class="empty empty-game">
+      <section>
+        <h1>{{ t('gameLogs') }}</h1>
+        <p class="muted">{{ t('noAdventureLogsHint') }}</p>
+        <div class="actions">
+          <button class="primary" @click="router.push({ name: 'overview' })">{{ t('viewSaves') }}</button>
+        </div>
+      </section>
+    </main>
+
+    <div v-else class="logs-workspace">
       <aside class="log-index">
         <div class="log-campaign-card">
           <span class="log-index-kicker">{{ t('currentSave') }}</span>
@@ -197,13 +207,6 @@ function exportLog() {
       <button type="button" :class="{ active: tab === 'log' }" @click="tab = 'log'">{{ t('dialogueLog') }}</button>
       <button type="button" :class="{ active: tab === 'proclog' }" @click="tab = 'proclog'">{{ t('processingLog') }}</button>
     </nav>
-    <div v-if="!game" class="empty-panel">
-      <h2>{{ t('noAdventureLogsHint') }}</h2>
-      <div class="actions">
-        <button class="primary" @click="router.push({ name: 'overview' })">{{ t('viewSaves') }}</button>
-      </div>
-    </div>
-    <template v-else>
     <div v-if="hasSystem" class="lore-system">
       <h3>{{ t('systemRecords') }}</h3>
       <div v-if="statusChips.length" class="status-tags">
@@ -277,7 +280,6 @@ function exportLog() {
       <span>{{ t('pageOf', { page, total: totalPages }) }} · {{ t('totalRoundsCount', { count: total }) }}</span>
       <button :disabled="page >= totalPages" @click="goPage(page + 1)">{{ t('nextPage') }}</button>
     </nav>
-    </template>
       </main>
     </div>
   </section>

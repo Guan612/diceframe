@@ -6,6 +6,11 @@
   align-items: start;
 }
 
+/* 无角色栏（未进入存档或未选角色）时单列，避免 grid 只剩 278px 左列大片空白 */
+.lorebook-shell.no-rail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .lorebook-character-rail {
   position: sticky;
   top: 86px;

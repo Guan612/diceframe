@@ -261,7 +261,7 @@ async function importLore(e: Event) {
 
 <template>
   <section class="view archive-page lorebook-page">
-    <div class="lorebook-shell">
+    <div class="lorebook-shell" :class="{ 'no-rail': !(game && activePlayer) }">
       <aside v-if="game && activePlayer" class="lorebook-character-rail">
         <span class="lorebook-rail-label">{{ t('loreCurrentCharacter') }}</span>
         <CharacterPanel :player="activePlayer" :rule-meta="activeRuleMeta" />
