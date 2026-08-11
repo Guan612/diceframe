@@ -195,6 +195,7 @@ watch(() => route.fullPath, () => {
                       <select :value="locale" @change="onLocaleChange">
                         <option value="zh-CN">中文</option>
                         <option value="en">EN</option>
+                        <option value="ja">日本語</option>
                       </select>
                     </label>
                     <details ref="mobileMore" class="mobile-more">
@@ -211,6 +212,7 @@ watch(() => route.fullPath, () => {
                           <select :value="locale" @change="onLocaleChange">
                             <option value="zh-CN">中文</option>
                             <option value="en">EN</option>
+                            <option value="ja">日本語</option>
                           </select>
                         </label>
                       </div>
