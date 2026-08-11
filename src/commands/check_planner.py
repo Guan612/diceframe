@@ -28,7 +28,7 @@ _SKILL_USE_PREFIXES = ("使用", "运用", "尝试", "进行", "施展", "用", 
 
 
 def _prompt_text(language: str) -> str:
-    suffix = localized_text(language, {"en": "en", "zh-CN": "zh", "ja": "zh"})
+    suffix = localized_text(language, {"en": "en", "zh-CN": "zh", "ja": "ja"})
     path = Path(__file__).resolve().parents[2] / "prompts" / f"check_planner_{suffix}.md"
     return path.read_text(encoding="utf-8")
 

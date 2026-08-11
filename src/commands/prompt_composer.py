@@ -50,9 +50,12 @@ class PromptComposer:
         global _GM_PROMPT_CACHE
         if _GM_PROMPT_CACHE is None:
             _GM_PROMPT_CACHE = {}
-        cache_key = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "zh-CN"})
+        cache_key = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "ja"})
         if cache_key not in _GM_PROMPT_CACHE:
-            filename = "gm_system_en.md" if cache_key == "en" else "gm_system_zh.md"
+            filename = (
+                "gm_system_en.md" if cache_key == "en"
+                else ("gm_system_ja.md" if cache_key == "ja" else "gm_system_zh.md")
+            )
             path = self.prompts_dir / filename
             if path.exists():
                 _GM_PROMPT_CACHE[cache_key] = path.read_text(encoding="utf-8")
@@ -67,7 +70,7 @@ class PromptComposer:
                 _GM_PROMPT_CACHE[cache_key] = "你是 TRPG 游戏的主持人（GM）。请用流畅中文进行叙述。（GM prompt 文件缺失）"
         prompt = _GM_PROMPT_CACHE[cache_key]
         if rule_appendix:
-            heading = "## Current Rules" if cache_key == "en" else "## 当前规则"
+            heading = localized_text(cache_key, {"en": "## Current Rules", "zh-CN": "## 当前规则", "ja": "## 現在のルール"})
             prompt += f"\n\n{heading}\n{rule_appendix}"
         return prompt
 
