@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.engine.game_instance import GameInstance
-from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, is_english
+from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, localized_text
 from src.llm.context_builder import build_context
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
@@ -50,7 +50,7 @@ class PromptComposer:
         global _GM_PROMPT_CACHE
         if _GM_PROMPT_CACHE is None:
             _GM_PROMPT_CACHE = {}
-        cache_key = "en" if is_english(language) else "zh-CN"
+        cache_key = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "zh-CN"})
         if cache_key not in _GM_PROMPT_CACHE:
             filename = "gm_system_en.md" if cache_key == "en" else "gm_system_zh.md"
             path = self.prompts_dir / filename

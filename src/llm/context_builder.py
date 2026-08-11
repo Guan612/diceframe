@@ -7,7 +7,7 @@ import logging
 import os
 
 from src.engine.game_instance import GameInstance
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.llm.parser import sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -107,7 +107,7 @@ def _is_key_round(entry: dict) -> bool:
         return True
     return False
 
-def _format_history(log: list[dict], max_chars: int, english: bool = False) -> str:
+def _format_history(log: list[dict], max_chars: int, language: str = "zh-CN") -> str:
     MIN_KEEP = 5
     if not log:
         return ""
@@ -129,7 +129,7 @@ def _format_history(log: list[dict], max_chars: int, english: bool = False) -> s
             if a.get("user_id") != "system"
         )
         gm_text = sanitize_narration(entry.get("gm_response", ""))
-        player_label = "Players" if english else "玩家"
+        player_label = localized_text(language, {"en": "Players", "zh-CN": "玩家", "ja": "プレイヤー"})
         return f"[Round {entry.get('round','?')}]\n{player_label}: {actions_text}\nGM: {gm_text}"
 
     def _entry_slim(entry: dict) -> str:
@@ -138,7 +138,7 @@ def _format_history(log: list[dict], max_chars: int, english: bool = False) -> s
             if a.get("user_id") != "system"
         )
         gm_text = sanitize_narration(entry.get("gm_response", ""))
-        player_label = "Players" if english else "玩家"
+        player_label = localized_text(language, {"en": "Players", "zh-CN": "玩家", "ja": "プレイヤー"})
         return f"[Round {entry.get('round','?')}] {player_label}: {actions_text} | GM: {gm_text[:80]}"
 
     for entry in keep_full:
@@ -191,7 +191,7 @@ async def build_context(
         完整的上下文字符串
     """
     max_total = _detect_max_chars(provider_name)
-    english = is_english(getattr(instance, "language", "zh-CN"))
+    language = getattr(instance, "language", "zh-CN")
     history_entries = instance.log if history_override is None else history_override
 
     # 按比例分配预算
@@ -215,7 +215,7 @@ async def build_context(
         _compact_state_view(state)
         state_json = json.dumps(state, ensure_ascii=False)
     state_json = _truncate(state_json, budget_state)
-    parts.append(("## Game State" if english else "【游戏状态】") + f"\n{state_json}")
+    parts.append(localized_text(language, {"en": "## Game State", "zh-CN": "【游戏状态】", "ja": "## ゲーム状態"}) + f"\n{state_json}")
 
     # 2. Lorebook 条目（核心 NPC/场景优先）
     lorebook_text = ""
@@ -224,7 +224,11 @@ async def build_context(
         visible = entry.get("visible_to", [])
         vis_hint = ""
         if visible:
-            vis_hint = f" [visible only to {','.join(visible)}]" if english else f" [仅{','.join(visible)}可见]"
+            vis_hint = localized_text(language, {
+                "en": f" [visible only to {','.join(visible)}]",
+                "zh-CN": f" [仅{','.join(visible)}可见]",
+                "ja": f" [{','.join(visible)}のみに表示]",
+            })
         entry_text = f"[{entry.get('type', 'other')}]{vis_hint} {entry.get('name', '')}: {entry.get('content', '')}"
         if len(lorebook_text) + len(entry_text) > budget_lorebook:
             trimmed.append(entry.get("name", entry.get("id", "?")))
@@ -234,7 +238,7 @@ async def build_context(
         logger.info("Lorebook 预算裁剪: 丢弃 %d 条 (%s), budget=%d",
                      len(trimmed), ", ".join(trimmed[:5]), budget_lorebook)
     if lorebook_text:
-        parts.append(("## World Knowledge" if english else "【世界观知识】") + f"\n{lorebook_text.strip()}")
+        parts.append(localized_text(language, {"en": "## World Knowledge", "zh-CN": "【世界观知识】", "ja": "## 世界知識"}) + f"\n{lorebook_text.strip()}")
 
     # 3. 摘要 + 关键事实
     summary = sanitize_narration(instance.summary.get("narrative", ""))
@@ -251,12 +255,20 @@ async def build_context(
             facts_text = _truncate("\n".join(facts_lines), budget_summary)
             summary_section_parts.append(facts_text)
     if summary_section_parts:
-        parts.append(("## Recent Events" if english else "【近期经历】") + "\n" + "\n".join(summary_section_parts))
+        parts.append(localized_text(language, {"en": "## Recent Events", "zh-CN": "【近期经历】", "ja": "## 最近の出来事"}) + "\n" + "\n".join(summary_section_parts))
 
     # D1: 已确认事项（防 GM 重复讨论）
     if instance.confirmed_items:
-        confirmed_text = ("; ".join(instance.confirmed_items[-20:]) if english else "、".join(instance.confirmed_items[-20:]))
-        heading = "## Confirmed Items\nIf players ask about the same thing again, move forward instead of re-explaining." if english else "【已确认事项】（玩家再问相同内容时直接推进，不要重复解释）"
+        confirmed_text = localized_text(language, {
+            "en": "; ".join(instance.confirmed_items[-20:]),
+            "zh-CN": "、".join(instance.confirmed_items[-20:]),
+            "ja": "、".join(instance.confirmed_items[-20:]),
+        })
+        heading = localized_text(language, {
+            "en": "## Confirmed Items\nIf players ask about the same thing again, move forward instead of re-explaining.",
+            "zh-CN": "【已确认事项】（玩家再问相同内容时直接推进，不要重复解释）",
+            "ja": "## 確認済み事項\nプレイヤーが同じことを再度尋ねても、再説明せず先へ進めること。",
+        })
         parts.append(f"{heading}\n{confirmed_text}")
 
     # 4. 长期记忆召回（召回源：玩家消息 + 最近 3 轮 GM 回复，提高命中率）
@@ -283,12 +295,12 @@ async def build_context(
     remaining = max(0, max_total - used_chars - len(player_message) - 200)
     history_budget = min(budget_history_base + max(0, remaining - budget_history_base), max_total // 2)
     history_budget = max(history_budget, budget_history_base)
-    history = _format_history(history_entries, history_budget, english)
+    history = _format_history(history_entries, history_budget, language)
     if history:
-        parts.append(("## Conversation History" if english else "【对话历史】") + f"\n{history}")
+        parts.append(localized_text(language, {"en": "## Conversation History", "zh-CN": "【对话历史】", "ja": "## 会話履歴"}) + f"\n{history}")
 
     # 6. 玩家刚说的话
-    parts.append(("## Player Message" if english else "【玩家发言】") + f"\n{player_message}")
+    parts.append(localized_text(language, {"en": "## Player Message", "zh-CN": "【玩家发言】", "ja": "## プレイヤーの発言"}) + f"\n{player_message}")
 
     context = "\n\n---\n\n".join(parts)
 

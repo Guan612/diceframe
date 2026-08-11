@@ -11,7 +11,7 @@ from typing import Any
 
 from src.engine.dice import roll
 from src.engine.game_instance import GameInstance
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.rules.rule_system import RuleSystem
 
 logger = logging.getLogger("trpg")
@@ -39,7 +39,7 @@ def _fallback_intent_specs(language: str) -> list[tuple[str, tuple[str, ...], tu
     """兜底意图表（数据驱动），结构同旧 _INTENT_SPECS：[(intent, aliases, skills, attr)]。"""
     result: list[tuple[str, tuple[str, ...], tuple[str, ...], str]] = []
     intents = _FALLBACK_INTENTS.get("intents") or {}
-    lang = "zh-CN" if not is_english(language) else "en"
+    lang = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "ja"})
     for intent, block in intents.items():
         aliases = block.get("aliases") or {}
         skills = block.get("skill_candidates") or {}
@@ -54,7 +54,7 @@ def _fallback_intent_specs(language: str) -> list[tuple[str, tuple[str, ...], tu
 def _fallback_generic_words(language: str) -> tuple[str, ...]:
     """兜底通用检定词（按语言取，回退中文）。"""
     words = _FALLBACK_INTENTS.get("generic_check_words") or {}
-    lang = "zh-CN" if not is_english(language) else "en"
+    lang = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "ja"})
     return tuple(words.get(lang) or words.get("zh-CN") or ())
 
 
@@ -168,9 +168,12 @@ def build_check_request(
     if not attribute:
         attribute = "dex" if not rule or "dex" in rule.attribute_keys else (rule.attribute_keys[0] if rule.attribute_keys else "")
 
-    english = is_english(instance.language)
     subject = skill or _attribute_name(rule, attribute)
-    label = f"{subject} Check" if english else f"{subject}检定"
+    label = localized_text(instance.language, {
+        "en": f"{subject} Check",
+        "zh-CN": f"{subject}检定",
+        "ja": f"{subject}判定",
+    })
     advantage_mode, advantage_note = _d20_advantage(text, action, rule)
     actor_name = str(instance.players.get(uid, {}).get("character_name") or uid)
     return {

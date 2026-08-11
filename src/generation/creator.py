@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from src.engine.character_utils import initial_special_stat_value, set_hp
-from src.engine.language import DEFAULT_LANGUAGE, is_english, localized_field, normalize_language
+from src.engine.language import DEFAULT_LANGUAGE, is_english, localized_field, localized_text, normalize_language
 
 logger = logging.getLogger("trpg")
 
@@ -262,29 +262,32 @@ def _localized_rule_text(value: dict | str | None, language: str, fallback: str 
 
 def _build_character_prompt(rule, language: str = DEFAULT_LANGUAGE) -> str:
     """根据规则模板动态构造角色生成提示词。"""
-    english = is_english(language)
     attrs_desc = "、".join(
         f"{localized_field(a, 'name', language) or a.get('name') or a.get('key')}({a['key']}, {a.get('min',3)}-{a.get('max',18)})"
         for a in rule.attributes
-    ) if rule.attributes else ("none" if english else "无")
+    ) if rule.attributes else localized_text(language, {"en": "none", "zh-CN": "无", "ja": "なし"})
     attribute_keys = rule.attribute_keys if rule.attributes else ["str", "dex", "con", "int", "wis", "cha"]
     attr_keys = ", ".join(f'"{key}"' for key in attribute_keys)
     attrs_example = ", ".join(f'"{key}": 10' for key in attribute_keys)
-    classes_desc = ", ".join(localized_field(c, "name", language) or c.get("name") or ("Adventurer" if english else "冒险者") for c in rule.classes) if rule.classes else ("Adventurer" if english else "冒险者")
+    classes_desc = ", ".join(localized_field(c, "name", language) or c.get("name") or localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者"}) for c in rule.classes) if rule.classes else localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者"})
     total_points = rule.attribute_points
     skill_pools = localized_field(rule.template, "skill_pools", language)
     if not isinstance(skill_pools, dict):
         skill_pools = rule.template.get("skill_pools", {})
     skills_desc = ", ".join(
         sorted(set(s for pool in skill_pools.values() for s in pool))
-    ) if skill_pools else ("Perception, Basic Attack" if english else "侦查、基础攻击")
+    ) if skill_pools else localized_text(language, {"en": "Perception, Basic Attack", "zh-CN": "侦查、基础攻击", "ja": "知覚、基本攻撃"})
     ss_desc = ""
     for ss in rule.special_stats:
         name = localized_field(ss, "name", language) or ss.get("name") or ss["key"]
-        ss_desc += f"\nSpecial stat: {name}({ss['key']}), max {ss.get('max', 99)}" if english else f"\n特殊属性: {name}({ss['key']}), 上限{ss.get('max', 99)}"
+        ss_desc += localized_text(language, {
+            "en": f"\nSpecial stat: {name}({ss['key']}), max {ss.get('max', 99)}",
+            "zh-CN": f"\n特殊属性: {name}({ss['key']}), 上限{ss.get('max', 99)}",
+            "ja": f"\n特殊ステータス: {name}({ss['key']}), 上限{ss.get('max', 99)}",
+        })
 
-    if english:
-        return f"""You are a TRPG character generator. Create a character sheet strictly following the current rule template.
+    return localized_text(language, {
+        "en": f"""You are a TRPG character generator. Create a character sheet strictly following the current rule template.
 
 Rule: {getattr(rule, 'rule_name_en', '') or rule.rule_name}
 Attributes ({total_points} points total): {attrs_desc}
@@ -312,9 +315,8 @@ Requirements:
 - Choose {rule.max_skills} skills; each skill must include name and value.
 - Keep background concise, under 50 words.
 - Equipment must be common quality.
-- Do not accept overpowered species, powers, or concepts."""
-
-    return f"""你是一个TRPG角色生成师。根据玩家描述，严格按照当前规则模板生成角色卡。
+- Do not accept overpowered species, powers, or concepts.""",
+        "zh-CN": f"""你是一个TRPG角色生成师。根据玩家描述，严格按照当前规则模板生成角色卡。
 
 规则: {rule.rule_name}
 属性系统（共{total_points}点分配）: {attrs_desc}
@@ -342,7 +344,37 @@ Requirements:
 - 技能选{rule.max_skills}个，每个包含name和value字段，value取规则基础值
 - 背景简洁≤50字
 - 装备仅common品质
-- 不接受超模种族或设定"""
+- 不接受超模种族或设定""",
+        "ja": f"""あなたは TRPG のキャラクター生成器です。プレイヤーの説明に従い、現在のルールテンプレートに厳密に従ってキャラクターシートを生成してください。
+
+ルール: {rule.rule_name}
+属性システム（合計{total_points}点）: {attrs_desc}
+属性キー: {{{attr_keys}}}
+選択可能な職業: {classes_desc}
+選択可能なスキル: {skills_desc}{ss_desc}
+
+出力形式（厳密なJSONのみ、JSON以外のテキストを出力しない）：
+{{{{
+  "character_name": "キャラクター名",
+  "race": "種族",
+  "class": "職業",
+  "level": 1,
+  "attributes": {{{attrs_example}}},
+  "hp": 50, "max_hp": 50,
+  "skills": [{{{{"name": "スキル名", "value": 数値}}}}],
+  "background": "背景（50文字以内）",
+  "equipment": [{{{{"name": "装備名", "type": "weapon", "damage": 6, "slot": "main_hand", "quality": "common"}}}}],
+  "inventory": [{{{{"name": "アイテム名", "qty": 1, "effect": "効果"}}}}]
+}}}}
+
+要件:
+- {total_points}点の属性を、それぞれルールの範囲内で割り当てる
+- 可能な限り上記の職業リストから選ぶ。ジャンルに合わない場合は、ジャンルに合う職業名を独自に定義してよい
+- スキルを{rule.max_skills}個選ぶ。各スキルは name と value フィールドを含み、value はルールの基本値を使う
+- 背景は簡潔に、50文字以内
+- 装備は common 品質のみ
+- 過剰な種族・設定を受け入れない""",
+    })
 
 
 def parse_json(content: str) -> dict | None:
@@ -451,13 +483,38 @@ async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fanta
                           language: str = DEFAULT_LANGUAGE) -> dict:
     """AI 生成世界模板，返回 {ok, world_id, world_name, description, starter_scene, lorebook_count}。"""
     language = normalize_language(language)
-    system_template = _WORLD_SYSTEM_PROMPT_EN if is_english(language) else _WORLD_SYSTEM_PROMPT
+    system_template = localized_text(language, {
+        "en": _WORLD_SYSTEM_PROMPT_EN,
+        "zh-CN": _WORLD_SYSTEM_PROMPT,
+        "ja": """あなたは TRPG のワールドビルダーです。ユーザーの短い説明から、そのまま遊べる完全な世界設定を生成してください。
+
+出力形式（厳密なJSONのみ。JSON 以外のテキストを出力しない）：
+{
+  "world_name": "簡潔で魅力的な日本語の世界名",
+  "description": "1文の日本語の要約",
+  "world_setting": "日本語の世界設定。180〜260文字。歴史的背景・主要勢力・現在の時代の特徴を含む",
+  "starter_scene": "日本語の導入シーン。90〜140文字。プレイヤーに明確な行動の入り口を与える",
+  "suggested_difficulty": "标准",
+  "default_rule": "{rule_id}",
+   "starter_lorebook": [
+     {{"id": "{world_prefix}_npc_1", "name": "NPC名", "type": "npc", "keywords": ["トリガーキーワード"], "content": "日本語のエントリ内容", "tier": "core", "unreliable": false}},
+     {{"id": "{world_prefix}_loc_1", "name": "場所名", "type": "location", "keywords": ["トリガーキーワード"], "content": "日本語のエントリ内容", "tier": "core"}}
+   ]
+ }
+
+要件：
+- starter_lorebook には 3〜5 件の初期エントリを含める（NPC 1件・場所 1件・イベント 1件以上）。
+- ID は {world_prefix}_npc_1、{world_prefix}_loc_1 のような形式にする。
+- 中心となるエントリの tier は "core" にする。
+- プレイヤー向けのテキストはすべて自然な日本語にする。
+- JSON のキーと enum 値は指定どおりに保つ。""",
+    })
     system = system_template.replace("{rule_id}", rule_id).replace("{world_prefix}", prompt.replace(" ", "_")[:12])
-    user_message = (
-        f"Create the following world setting:\n{prompt}\nRule: {rule_id}"
-        if is_english(language)
-        else f"创建以下世界观：{prompt}\n使用规则：{rule_id}"
-    )
+    user_message = localized_text(language, {
+        "en": f"Create the following world setting:\n{prompt}\nRule: {rule_id}",
+        "zh-CN": f"创建以下世界观：{prompt}\n使用规则：{rule_id}",
+        "ja": f"以下の世界設定を作成してください：\n{prompt}\n使用ルール：{rule_id}",
+    })
 
     data = await _call_json_with_repair(
         llm_client,
@@ -528,22 +585,71 @@ async def generate_rule(
     """基于母版规则和题材描述生成自定义规则 JSON。"""
     language = normalize_language(language)
     source_rule = _master_template_for_prompt(source_rule, language)
-    user_prompt = (
-        f"User genre description:\n{prompt}\n\n"
-        f"Target rule_id: {rule_id}\n"
-        f"Master rule ID: {source_rule_id}\n"
-        f"Master rule JSON:\n{json.dumps(source_rule, ensure_ascii=False, indent=2)}"
-        if is_english(language)
-        else (
+    user_prompt = localized_text(language, {
+        "en": (
+            f"User genre description:\n{prompt}\n\n"
+            f"Target rule_id: {rule_id}\n"
+            f"Master rule ID: {source_rule_id}\n"
+            f"Master rule JSON:\n{json.dumps(source_rule, ensure_ascii=False, indent=2)}"
+        ),
+        "zh-CN": (
             f"用户题材描述：\n{prompt}\n\n"
             f"目标 rule_id：{rule_id}\n"
             f"母版规则ID：{source_rule_id}\n"
             f"母版规则 JSON：\n{json.dumps(source_rule, ensure_ascii=False, indent=2)}"
-        )
-    )
+        ),
+        "ja": (
+            f"ユーザーのジャンル説明：\n{prompt}\n\n"
+            f"対象 rule_id：{rule_id}\n"
+            f"マスタールール ID：{source_rule_id}\n"
+            f"マスタールール JSON：\n{json.dumps(source_rule, ensure_ascii=False, indent=2)}"
+        ),
+    })
     data = await _call_json_with_repair(
         llm_client,
-        system_prompt=_RULE_SYSTEM_PROMPT_EN if is_english(language) else _RULE_SYSTEM_PROMPT,
+        system_prompt=localized_text(language, {
+            "en": _RULE_SYSTEM_PROMPT_EN,
+            "zh-CN": _RULE_SYSTEM_PROMPT,
+            "ja": """あなたは TRPG のルールデザイナーです。指定されたマスタールール JSON とユーザーのジャンル説明に基づいて、DiceFrame でそのまま使える軽量なカスタムルール JSON を生成してください。
+
+厳密な JSON のみを出力してください。DiceFrame 互換のフィールドを保持すること：
+{
+  "rule_id": "英数字・アンダースコア・ハイフンの短いID",
+  "rule_name": "日本語のフォールバックルール名",
+  "rule_name_en": "English rule name",
+  "description": "1文の日本語の説明",
+  "dice_system": "d20|d100|none",
+  "combat_model": "hp_based|lethal_narrative|none",
+  "mechanics": "メカニクスコード",
+  "ruleset_level": "assisted",
+  "attributes": [{"key":"english_key","name":"日本語フォールバック名","name_en":"English name","min":3,"max":18}],
+  "special_stats": [{"key":"english_key","name":"日本語フォールバック名","name_en":"English name","max":100,"description":"日本語の用途"}],
+  "attribute_points": 60,
+  "attr_hint": "日本語の属性入力ガイド",
+  "hp_formula": "5 + con * 3",
+  "max_skills": 4,
+  "skill_point_total": 220,
+  "max_skill_value": 80,
+  "skill_mode": "narrative",
+  "skill_hint": "日本語のスキル入力ガイド",
+  "currency": "Gold",
+  "classes": [{"name":"日本語の職業 / 出自","description":"日本語の職業説明","starter_equipment":["初期装備"]}],
+  "skill_pools": {"日本語の職業 / 出自":["スキル1","スキル2"]},
+  "item_categories": {"equipment":["アイテム"],"consumable":["消耗品"],"misc":["雑貨"]},
+  "gm_prompt_appendix": "ジャンルとルールの運用を日本語で記したGM向け指示",
+  "difficulty_instructions": {"轻松":"日本語のイージーモード指針","标准":"日本語のスタンダード指針","硬核":"日本語のハードモード指針"}
+}
+
+要件：
+- これは軽量な補助ルールセットであり、既存の公式ルールブックの完全な RAW の再現ではない。
+- 特定の作品に言及する場合は、ジャンルの風味と構造だけを抽出し、独自テキストを複製しない。
+- 属性キーは英字・数字・アンダースコアのみを使う。
+- HP 式は属性キーと + - * / // min max abs int のみ使用できる。
+- 可能なら属性は 5〜8 個にし、キャラクター作成が実用的であること。
+- gm_prompt_appendix はジャンルを逸脱させないよう十分具体的に書く。
+- gm_prompt_appendix で新しい大文字のプロトコルタグを創作・要求しない。状態タグの指示は DiceFrame のシステムプロンプトが別途提供する。
+- プレイヤー向け表示テキストは自然で簡潔な日本語にする。必須の JSON キーと enum 値は変更しない。""",
+        }),
         user_message=user_prompt,
         temperature=0.55,
         max_tokens=max_tokens,
@@ -582,21 +688,58 @@ async def generate_lorebook_entries(
 ) -> list[dict] | None:
     """根据自然语言生成世界书条目列表。"""
     language = normalize_language(language)
-    existing = ("; ".join((existing_names or [])[:80]) if is_english(language) else "、".join((existing_names or [])[:80]))
-    user_prompt = (
-        f"Target lorebook: {world_name or 'Unnamed World'}\n"
-        f"Existing entry names: {existing or 'None'}\n"
-        f"User description:\n{prompt}"
-        if is_english(language)
-        else (
+    existing = localized_text(language, {
+        "en": "; ".join((existing_names or [])[:80]),
+        "zh-CN": "、".join((existing_names or [])[:80]),
+        "ja": "、".join((existing_names or [])[:80]),
+    })
+    user_prompt = localized_text(language, {
+        "en": (
+            f"Target lorebook: {world_name or 'Unnamed World'}\n"
+            f"Existing entry names: {existing or 'None'}\n"
+            f"User description:\n{prompt}"
+        ),
+        "zh-CN": (
             f"目标世界书：{world_name or '未命名世界'}\n"
             f"已有条目名：{existing or '无'}\n"
             f"用户描述：\n{prompt}"
-        )
-    )
+        ),
+        "ja": (
+            f"対象ロアブック：{world_name or '名前のない世界'}\n"
+            f"既存エントリ名：{existing or 'なし'}\n"
+            f"ユーザー説明：\n{prompt}"
+        ),
+    })
     data = await _call_json_with_repair(
         llm_client,
-        system_prompt=_LOREBOOK_ENTRIES_SYSTEM_PROMPT_EN if is_english(language) else _LOREBOOK_ENTRIES_SYSTEM_PROMPT,
+        system_prompt=localized_text(language, {
+            "en": _LOREBOOK_ENTRIES_SYSTEM_PROMPT_EN,
+            "zh-CN": _LOREBOOK_ENTRIES_SYSTEM_PROMPT,
+            "ja": """あなたは TRPG のロアブック編集者です。ユーザーは設定資料・勢力・場所・人物・出来事・謎・呪文・職業を自然言語で説明します。
+
+その説明を構造化されたロアブックエントリに変換してください。厳密な JSON のみを出力し、JSON 以外のテキストを出力しない：
+{
+  "entries": [
+    {
+      "name": "エントリ名",
+      "type": "npc|location|item|event|puzzle|faction|spell|class|other",
+      "keywords": ["トリガーキーワード", "別名"],
+      "content": "このエントリがプレイにどう関わるか・関連性・使える詳細を説明した80〜180文字",
+      "tier": "core|background",
+      "unreliable": false
+    }
+  ]
+}
+
+要件：
+- 情報の密度に応じて 3〜8 件を生成する。
+- 明示的に言及された人物・場所・勢力・出来事は必ず含める。
+- keywords には名前・略称・別名を含め、空配列にしない。
+- type は列挙された値のみを使う。
+- core は中心設定のみに使い、それ以外は background にする。
+- 圧倒的なアーティファクトや解けない設定を創作しない。GM がシナリオで使いやすい内容にする。
+- プレイヤー向けのテキストはすべて自然な日本語にする。""",
+        }),
         user_message=user_prompt,
         temperature=0.7,
         max_tokens=max_tokens,
@@ -626,10 +769,40 @@ async def generate_character(llm_client, prompt: str, game_key: str = "",
         attr_keys = rule.attribute_keys
         attr_total = rule.attribute_points
     else:
-        system_prompt = _CHARACTER_SYSTEM_PROMPT_EN if is_english(language) else _CHARACTER_SYSTEM_PROMPT
+        system_prompt = localized_text(language, {
+            "en": _CHARACTER_SYSTEM_PROMPT_EN,
+            "zh-CN": _CHARACTER_SYSTEM_PROMPT,
+            "ja": """あなたは汎用 TRPG のキャラクターシート生成器です。特定の公式ルールブックを前提とせず、ユーザーの説明とジャンルに合う初期キャラクターを作成してください。
+
+厳密な JSON のみを出力し、JSON 以外のテキストを出力しない：
+{
+  "character_name": "キャラクター名",
+  "race": "種族 / 出自",
+  "class": "職業 / 立ち位置",
+  "level": 1,
+  "attributes": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
+  "hp": 50, "max_hp": 50,
+  "skills": [{"name": "スキル名", "value": 20}],
+  "background": "短い日本語の背景、50文字以内",
+  "equipment": [{"name": "装備名", "type": "misc", "damage": 0, "slot": "pack", "quality": "common"}],
+  "inventory": [{"name": "アイテム名", "qty": 1, "effect": "効果"}]
+}
+
+要件：
+- 初期レベルの強さを保つ。属性合計は約60、各値は3〜18。
+- ジャンルと出自に合うスキルを1〜3個選ぶ。
+- 装備は common 品質のみ。レア・レジェンド・アーティファクト級・圧倒的なアイテムは避ける。
+- 特殊能力は background か skills に書き、無償の支配的能力にはしない。
+- invincible, omnipotent, instant kill, absolute, immortal, creator, control-all のような過剰な語は避ける。
+- 名前・職業・スキル・装備・背景は自然な日本語で、指定されたジャンルに合わせる。""",
+        })
         attr_keys = ["str", "dex", "con", "int", "wis", "cha"]
         attr_total = 60
-    user_message = f"Create this character:\n{prompt}" if is_english(language) else f"创建以下角色：{prompt}"
+    user_message = localized_text(language, {
+        "en": f"Create this character:\n{prompt}",
+        "zh-CN": f"创建以下角色：{prompt}",
+        "ja": f"このキャラクターを作成してください：\n{prompt}",
+    })
 
     response = await llm_client.call(
         system_prompt=system_prompt,
@@ -722,7 +895,7 @@ async def generate_character(llm_client, prompt: str, game_key: str = "",
     # 种族清洗（P2-L：双语；英文名同样拦截）
     race = (data.get("race", "") or "").lower()
     if any(b in race for b in _BANNED_RACES_LOWER):
-        data["race"] = "Human" if is_english(language) else "人类"
+        data["race"] = localized_text(language, {"en": "Human", "zh-CN": "人类", "ja": "人間"})
 
     # 初始化 special_stats
     if rule:

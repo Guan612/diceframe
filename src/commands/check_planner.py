@@ -11,7 +11,7 @@ from typing import Any
 
 from src.engine.checks import build_check_request
 from src.engine.game_instance import GameInstance
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.llm.parser import sanitize_narration
 from src.llm.tools import DICE_CHECKS_TOOL, DICE_CHECKS_TOOL_NAME
 from src.rules.rule_system import RuleSystem
@@ -28,7 +28,7 @@ _SKILL_USE_PREFIXES = ("使用", "运用", "尝试", "进行", "施展", "用", 
 
 
 def _prompt_text(language: str) -> str:
-    suffix = "en" if is_english(language) else "zh"
+    suffix = localized_text(language, {"en": "en", "zh-CN": "zh", "ja": "zh"})
     path = Path(__file__).resolve().parents[2] / "prompts" / f"check_planner_{suffix}.md"
     return path.read_text(encoding="utf-8")
 
@@ -199,11 +199,14 @@ def _label(
             (str(item.get("name") or attribute) for item in rule.attributes if item.get("key") == attribute),
             attribute,
         )
-    if is_english(instance.language):
-        suffix = {"save": "Save", "attack": "Attack"}.get(kind, "Check")
-        return f"{subject} {suffix}".strip()
-    suffix = {"save": "豁免", "attack": "攻击"}.get(kind, "检定")
-    return f"{subject}{suffix}"
+    en_suffix = {"save": "Save", "attack": "Attack"}.get(kind, "Check")
+    zh_suffix = {"save": "豁免", "attack": "攻击"}.get(kind, "检定")
+    ja_suffix = {"save": "セーヴ", "attack": "攻撃"}.get(kind, "判定")
+    return localized_text(instance.language, {
+        "en": f"{subject} {en_suffix}".strip(),
+        "zh-CN": f"{subject}{zh_suffix}",
+        "ja": f"{subject}{ja_suffix}",
+    })
 
 
 def normalize_check_specs(

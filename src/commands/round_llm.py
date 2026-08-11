@@ -12,7 +12,7 @@ from src.commands.tag_json import safe_parse_json
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
-from src.engine.language import is_english, normalize_language
+from src.engine.language import localized_text, normalize_language
 from src.llm.client import OutputTruncatedError, length_retry_budgets
 from src.llm.parser import (
     find_protocol_suffix_start,
@@ -162,10 +162,13 @@ async def _compress_long_narration(
             f"总字数控制在 {target} 字以内，最多 2 段；不要新增设定，不要改变结果。\n\n"
             f"原正文：\n{narration}"
         )
-    compress_system = (
-        "You are a narration compressor. Output only the compressed narration text, no preamble, no ---, no state tags, no meta commentary about the task."
-        if is_english(getattr(response, "language", ""))
-        else "你是叙事压缩器，只输出压缩后的正文，不要前言、不要 ---、不要状态标签、不要对任务的元说明。"
+    compress_system = localized_text(
+        getattr(response, "language", ""),
+        {
+            "en": "You are a narration compressor. Output only the compressed narration text, no preamble, no ---, no state tags, no meta commentary about the task.",
+            "zh-CN": "你是叙事压缩器，只输出压缩后的正文，不要前言、不要 ---、不要状态标签、不要对任务的元说明。",
+            "ja": "あなたはナレーション圧縮器です。圧縮後のナレーション本文のみを出力し、前置き・---・状態タグ・タスクに対するメタ解説を出力しないでください。",
+        },
     )
     try:
         compression_max_tokens = max(
@@ -313,10 +316,14 @@ async def call_llm_with_tag_retry(
                 getattr(instance, "language", "zh-CN"),
             )
         elif retry_kind == "dice":
-            if is_english(getattr(instance, "language", "")):
-                retry_context = context + "\n\nPrevious response contradicted the required dice/check result. Rewrite the narration and strictly follow the check outcome."
-            else:
-                retry_context = context + "\n\n⚠️ 上一轮回复与【系统检定·必须遵循】矛盾，请严格遵循检定结果重新叙述。"
+            retry_context = context + "\n\n" + localized_text(
+                getattr(instance, "language", ""),
+                {
+                    "en": "Previous response contradicted the required dice/check result. Rewrite the narration and strictly follow the check outcome.",
+                    "zh-CN": "⚠️ 上一轮回复与【系统检定·必须遵循】矛盾，请严格遵循检定结果重新叙述。",
+                    "ja": "⚠️ 前の応答が【システム判定・必須遵守】の判定結果に矛盾しています。判定結果を厳守してナレーションを書き直してください。",
+                },
+            )
         if stream:
             response = await _call_stream_with_length_retry(
                 llm_client,
@@ -450,12 +457,17 @@ def apply_parsed_data_to_response(instance: GameInstance, response: Any, data: d
             )
             # P2-B：连续失败时给玩家可见提示，避免"叙事里受伤但 HP 没扣"的
             # 状态漂移无声无息（health_event 仅 GM 可见）。追加到叙事末尾，玩家必见。
-            _sync_notice = (
-                "⚠️ 系统提示：连续多轮状态同步失败，HP/资源/物品可能未更新。"
-                "请告知 GM 检查，或重新生成本轮。"
-                if not is_english(getattr(instance, "language", ""))
-                else "⚠️ System: state sync has failed for several rounds; HP/resources/items "
-                "may be out of date. Ask the GM to check, or regenerate this round."
+            _sync_notice = localized_text(
+                getattr(instance, "language", ""),
+                {
+                    "en": "⚠️ System: state sync has failed for several rounds; HP/resources/items "
+                          "may be out of date. Ask the GM to check, or regenerate this round.",
+                    "zh-CN": "⚠️ 系统提示：连续多轮状态同步失败，HP/资源/物品可能未更新。"
+                              "请告知 GM 检查，或重新生成本轮。",
+                    "ja": "⚠️ システム通知：複数ラウンドにわたり状態同期に失敗しています。"
+                          "HP/資源/アイテムが最新でない可能性があります。GM に確認を依頼するか、"
+                          "このラウンドを再生成してください。",
+                },
             )
             narration_text = str(response.narration or "").strip()
             if narration_text:

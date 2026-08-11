@@ -10,7 +10,7 @@ import logging
 from src.engine.constants import PUZZLE_KEYWORDS
 from src.engine.dice import roll as dice_roll
 from src.engine.game_instance import GameInstance
-from src.engine.language import is_english
+from src.engine.language import localized_text
 from src.engine.puzzle import PuzzleType
 
 logger = logging.getLogger("trpg")
@@ -31,17 +31,33 @@ class PuzzleProcessor:
         if not has_puzzle_intent:
             return ""
 
-        english = is_english(instance.language)
-        puzzle_lines: list[str] = ["[Current Puzzle]" if english else "【当前谜题】"]
+        language = instance.language
+        puzzle_lines: list[str] = [localized_text(language, {"en": "[Current Puzzle]", "zh-CN": "【当前谜题】", "ja": "【現在の謎】"})]
         for puzzle in active_puzzles:
             skill = puzzle.required_skill or (puzzle.allowed_skills[0] if puzzle.allowed_skills else None)
-            status = f"Status: active (attempts {puzzle.attempts}/{puzzle.max_attempts})" if english else f"状态: active (已尝试{puzzle.attempts}/{puzzle.max_attempts})"
-            puzzle_lines.append(f"Name: {puzzle.name}" if english else f"名称: {puzzle.name}")
+            status = localized_text(language, {
+                "en": f"Status: active (attempts {puzzle.attempts}/{puzzle.max_attempts})",
+                "zh-CN": f"状态: active (已尝试{puzzle.attempts}/{puzzle.max_attempts})",
+                "ja": f"状態: active (試行{puzzle.attempts}/{puzzle.max_attempts})",
+            })
+            puzzle_lines.append(localized_text(language, {
+                "en": f"Name: {puzzle.name}",
+                "zh-CN": f"名称: {puzzle.name}",
+                "ja": f"名前: {puzzle.name}",
+            }))
             puzzle_lines.append(status)
             if skill:
-                puzzle_lines.append(f"Required skill: {skill} DC {puzzle.required_dc}" if english else f"所需技能: {skill} DC {puzzle.required_dc}")
+                puzzle_lines.append(localized_text(language, {
+                    "en": f"Required skill: {skill} DC {puzzle.required_dc}",
+                    "zh-CN": f"所需技能: {skill} DC {puzzle.required_dc}",
+                    "ja": f"必要技能: {skill} DC {puzzle.required_dc}",
+                }))
             if puzzle.hint_given:
-                puzzle_lines.append(f"Hint: {puzzle.description}" if english else f"提示: {puzzle.description}")
+                puzzle_lines.append(localized_text(language, {
+                    "en": f"Hint: {puzzle.description}",
+                    "zh-CN": f"提示: {puzzle.description}",
+                    "ja": f"ヒント: {puzzle.description}",
+                }))
 
             # 技能检定型谜题：自动掷骰
             if skill and puzzle.puzzle_type != PuzzleType.RIDDLE:
@@ -66,24 +82,38 @@ class PuzzleProcessor:
 
                 if success:
                     puzzle.solve()
-                    puzzle_lines.append(
-                        f"Check: d20={d20_result.natural}+{attr_mod}={total} >= DC {puzzle.required_dc} -> Success!"
-                        if english else f"检定: d20={d20_result.natural}+{attr_mod}={total} ≥ DC {puzzle.required_dc} → 成功！"
-                    )
+                    puzzle_lines.append(localized_text(language, {
+                        "en": f"Check: d20={d20_result.natural}+{attr_mod}={total} >= DC {puzzle.required_dc} -> Success!",
+                        "zh-CN": f"检定: d20={d20_result.natural}+{attr_mod}={total} ≥ DC {puzzle.required_dc} → 成功！",
+                        "ja": f"判定: d20={d20_result.natural}+{attr_mod}={total} ≥ DC {puzzle.required_dc} → 成功！",
+                    }))
                     if puzzle.success_narration:
-                        puzzle_lines.append(f"Result: {puzzle.success_narration}" if english else f"结果: {puzzle.success_narration}")
+                        puzzle_lines.append(localized_text(language, {
+                            "en": f"Result: {puzzle.success_narration}",
+                            "zh-CN": f"结果: {puzzle.success_narration}",
+                            "ja": f"結果: {puzzle.success_narration}",
+                        }))
                 else:
                     can_continue = puzzle.attempt()
-                    puzzle_lines.append(
-                        f"Check: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} -> Failure"
-                        if english else f"检定: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} → 失败"
-                    )
+                    puzzle_lines.append(localized_text(language, {
+                        "en": f"Check: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} -> Failure",
+                        "zh-CN": f"检定: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} → 失败",
+                        "ja": f"判定: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} → 失敗",
+                    }))
                     if not can_continue:
-                        puzzle_lines.append("Result: maximum attempts exceeded; the puzzle fails." if english else "结果: 超过最大尝试次数，谜题失败！")
+                        puzzle_lines.append(localized_text(language, {
+                            "en": "Result: maximum attempts exceeded; the puzzle fails.",
+                            "zh-CN": "结果: 超过最大尝试次数，谜题失败！",
+                            "ja": "結果: 最大試行回数を超えました。謎は失敗します！",
+                        }))
                         if puzzle.failure_narration:
                             puzzle_lines.append(puzzle.failure_narration)
 
-        puzzle_lines.append("Requirement: GM narration must reflect the puzzle check result and state change." if english else "要求: GM叙事必须体现谜题的检定结果和状态变化")
+        puzzle_lines.append(localized_text(language, {
+            "en": "Requirement: GM narration must reflect the puzzle check result and state change.",
+            "zh-CN": "要求: GM叙事必须体现谜题的检定结果和状态变化",
+            "ja": "要件: GMのナレーションは謎の判定結果と状態変化を反映すること",
+        }))
 
         logger.info(
             "谜题处理: active=%d, attempts=%s",
