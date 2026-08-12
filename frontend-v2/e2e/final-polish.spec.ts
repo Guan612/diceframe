@@ -121,7 +121,7 @@ test('plugin marketplace cards align titles and stretch evenly per row', async (
   test.skip(testInfo.project.name !== 'desktop', 'desktop visual contract')
   await authenticate(page)
   await page.goto('/#/plugins')
-  await page.locator('.n-tabs-tab').filter({ hasText: '插件商店' }).click()
+  await page.locator('.n-tabs-tab').filter({ hasText: '市场' }).click()
   const cards = page.locator('.market-card')
   await expect(cards.first()).toBeVisible()
 
@@ -246,7 +246,7 @@ test('about, header and content-pack controls use the final layout contract', as
   await expect(page.locator('.operator-avatar')).toHaveCount(0)
 
   await page.goto('/#/plugins')
-  await page.locator('.plugin-surface-tabs > .n-tabs-nav .n-tabs-tab').nth(4).click()
+  await page.locator('.plugin-surface-tabs > .n-tabs-nav .n-tabs-tab').nth(2).click()
   const toolbar = page.locator('.content-pack-toolbar')
   await expect(toolbar).toBeVisible()
   const buttonGeometry = await toolbar.locator('.n-button').evaluateAll(buttons => buttons.map(button => {

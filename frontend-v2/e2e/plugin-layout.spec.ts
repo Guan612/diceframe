@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test'
 import { expect, test } from './fixtures'
 
 // 标签顺序与 PluginSettings.vue 的 NTabPane 顺序一致。
-const TAB = { installed: 0, marketplace: 1, themes: 2, tools: 3, content: 4, mirrors: 5 } as const
+const TAB = { installed: 0, marketplace: 1, content: 2, themes: 3, tools: 4, mirrors: 5 } as const
 
 async function openPluginTab(page: Page, index: number) {
   await page.goto('/#/plugins')
