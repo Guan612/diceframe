@@ -271,10 +271,10 @@
   }
 
   .app-shell-play {
-    grid-template-rows: max-content minmax(0, 1fr);
-    height: 100dvh;
+    grid-template-rows: minmax(0, 1fr);
+    height: var(--app-h, 100dvh);
     min-height: 0;
-    padding-bottom: calc(58px + env(safe-area-inset-bottom));
+    padding-bottom: 0;
     overflow: hidden;
   }
 
@@ -341,6 +341,90 @@
     padding-bottom: 0;
     overflow: hidden;
     scroll-padding-bottom: 0;
+  }
+
+  /* 对局页沉浸：手机上隐藏应用顶栏与底部导航，把全部高度让给对局内容。
+     顶栏/底导在对局页均无功能（返回靠 play-hud 返回键，抽屉靠浮动按钮），
+     省下 ~116px 直接还给对话时间线。 */
+  .app-shell-play .app-header,
+  .app-shell-play .mobile-bottom-nav {
+    display: none;
+  }
+
+  .app-shell-play .game-sidebar,
+  .app-shell-play .play-control-rail,
+  .app-shell-play .game-sidebar.collapsed,
+  .app-shell-play .play-control-rail.collapsed {
+    top: 0;
+    bottom: 0;
+  }
+
+  .app-shell-play .play-drawer-backdrop {
+    inset: 0;
+  }
+
+  /* 压缩对局页顶栏与场景条：一行 title + tools，统计行与场景副标让位 */
+  .app-shell-play .play-hud {
+    position: relative;
+    top: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title tools";
+    min-height: 0;
+    padding: 5px 10px;
+    gap: 8px;
+  }
+
+  .app-shell-play .play-hud-stats {
+    display: none;
+  }
+
+  .app-shell-play .play-titleblock h1 {
+    font-size: 16px;
+  }
+
+  .app-shell-play .play-main {
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  }
+
+  .app-shell-play .scene-strip {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    min-height: 0;
+    padding: 6px 10px;
+  }
+
+  .app-shell-play .scene-strip::after {
+    display: none;
+  }
+
+  .app-shell-play .scene-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .app-shell-play .scene-title p {
+    display: none;
+  }
+
+  .app-shell-play .scene-strip h2 {
+    margin: 0;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-shell-play .scene-chips {
+    max-width: none;
+  }
+
+  .app-shell-play .scene-chips span {
+    padding: 2px 6px;
+    font-size: 11px;
   }
 
   .mobile-bottom-nav::before {
