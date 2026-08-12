@@ -560,7 +560,11 @@ async def test_resolve_payment_insufficient_gold(web_api):
         item.get("name") == "解毒草"
         for item in inst.players[uid]["character_sheet"].get("inventory", [])
     )
-    assert next(p for p in inst.pending_payments if p["id"] == "pay_test1")["status"] == "pending"
+    # 余额不足：交易不成立，pending 被自动取消，避免弹窗反复出现
+    assert not any(
+        p["id"] == "pay_test1" and p["status"] == "pending"
+        for p in inst.pending_payments
+    )
 
 
 @pytest.mark.asyncio

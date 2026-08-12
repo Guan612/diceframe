@@ -471,7 +471,16 @@ async def resolve_payment(api: "WebAPI", game_key: str, payment_id: str, accepte
         cs = inst.get_character_sheet(uid)
         current_gold = int(cs.get("gold", 0) or 0)
         if current_gold < amount:
-            return {"ok": False, "error": f"金币不足：需要 {amount}，当前 {current_gold}"}
+            # 确认支付但余额不足：交易不成立。自动取消该 pending，避免
+            # 弹窗因 status=pending 每轮重弹、玩家无法解除（修复反复跳支付窗口）。
+            inst.mark_payment_resolved(payment_id, "rejected", resolved_at=time.time())
+            inst.prune_resolved_payments()
+            await api._reg.save(inst)
+            return {
+                "ok": False,
+                "code": "INSUFFICIENT_FUNDS",
+                "error": f"金币不足：需要 {amount}，当前 {current_gold}，支付已自动取消",
+            }
         apply_currency_delta(cs, -amount)
         inst.set_character_sheet(uid, cs)
         rewards = list(payment.get("rewards") or [])
