@@ -121,7 +121,7 @@ test('equipment details modal stays above the open phone character drawer', asyn
   expect(layers.modal).toBeGreaterThan(layers.drawer)
 })
 
-test('phone play keeps scene metadata compact and actions above bottom navigation', async ({ page }) => {
+test('phone play keeps scene metadata compact and actions anchored to the viewport bottom', async ({ page }) => {
   const token = accessToken()
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
   await page.setViewportSize({ width: 390, height: 844 })
@@ -132,15 +132,22 @@ test('phone play keeps scene metadata compact and actions above bottom navigatio
   const layout = await page.evaluate(() => {
     const scene = document.querySelector<HTMLElement>('.scene-strip')!
     const composer = document.querySelector<HTMLElement>('.composer')!
+    const header = document.querySelector<HTMLElement>('.app-header')!
     const nav = document.querySelector<HTMLElement>('.mobile-bottom-nav')!
     return {
       sceneHeight: scene.getBoundingClientRect().height,
       composerBottom: composer.getBoundingClientRect().bottom,
-      navTop: nav.getBoundingClientRect().top,
+      viewportHeight: window.innerHeight,
+      headerHidden: getComputedStyle(header).display === 'none',
+      navHidden: getComputedStyle(nav).display === 'none',
     }
   })
+  // 沉浸式对局页：顶栏/底导隐藏，输入区贴到视口底边，不再受底部导航遮挡
+  expect(layout.headerHidden).toBe(true)
+  expect(layout.navHidden).toBe(true)
   expect(layout.sceneHeight).toBeLessThanOrEqual(82)
-  expect(layout.composerBottom).toBeLessThanOrEqual(layout.navTop)
+  expect(layout.composerBottom).toBeGreaterThanOrEqual(layout.viewportHeight - 12)
+  expect(layout.composerBottom).toBeLessThanOrEqual(layout.viewportHeight + 1)
 })
 
 test('phone play has no spacer bands around the game workspace', async ({ page }) => {
@@ -151,21 +158,26 @@ test('phone play has no spacer bands around the game workspace', async ({ page }
   await expect(page.locator('.composer')).toBeVisible()
 
   const geometry = await page.evaluate(() => {
-    const header = document.querySelector<HTMLElement>('.app-header')!.getBoundingClientRect()
+    const header = document.querySelector<HTMLElement>('.app-header')!
     const workspace = document.querySelector<HTMLElement>('.app-workspace')!.getBoundingClientRect()
     const pageView = document.querySelector<HTMLElement>('.play-page')!.getBoundingClientRect()
     const hud = document.querySelector<HTMLElement>('.play-hud')!.getBoundingClientRect()
     const main = document.querySelector<HTMLElement>('.play-main')!.getBoundingClientRect()
-    const nav = document.querySelector<HTMLElement>('.mobile-bottom-nav')!.getBoundingClientRect()
+    const nav = document.querySelector<HTMLElement>('.mobile-bottom-nav')!
     return {
-      headerGap: workspace.top - header.bottom,
+      headerHidden: getComputedStyle(header).display === 'none',
+      navHidden: getComputedStyle(nav).display === 'none',
+      workspaceTop: workspace.top,
       hudGap: hud.top - pageView.top,
-      pageBottomGap: nav.top - pageView.bottom,
+      pageBottomGap: window.innerHeight - pageView.bottom,
       mainBottomGap: pageView.bottom - main.bottom,
     }
   })
 
-  expect(Math.abs(geometry.headerGap)).toBeLessThanOrEqual(1)
+  // 沉浸式对局页：顶栏/底导隐藏，对局内容从视口顶铺满到底，无 spacer band
+  expect(geometry.headerHidden).toBe(true)
+  expect(geometry.navHidden).toBe(true)
+  expect(Math.abs(geometry.workspaceTop)).toBeLessThanOrEqual(1)
   expect(Math.abs(geometry.hudGap)).toBeLessThanOrEqual(1)
   expect(Math.abs(geometry.pageBottomGap)).toBeLessThanOrEqual(1)
   expect(Math.abs(geometry.mainBottomGap)).toBeLessThanOrEqual(1)
