@@ -84,7 +84,7 @@ onUnmounted(() => {
     <div v-if="revealed && check.luck_decision === 'pending'" class="luck-decision-actions">
       <template v-if="canDecideLuck">
         <button class="dice-tag dice-tag-button" type="button" :disabled="busy" @click="emit('luck', check, true)">{{ t('spendLuckForSuccess', { cost: check.luck_cost || 0 }) }}</button>
-        <button class="ghost luck-decline-button" type="button" :disabled="busy" @click="emit('luck', check, false)">{{ t('keepFailure') }}</button>
+        <button class="dice-tag dice-tag-button luck-decline-button" type="button" :disabled="busy" @click="emit('luck', check, false)">{{ t('keepFailure') }}</button>
       </template>
       <span v-else class="dice-tag">{{ t('waitLuckDecision', { name: check.actor_name || check.actor_uid || '' }) }}</span>
     </div>
