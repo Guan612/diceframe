@@ -33,10 +33,11 @@ def localized_text(language: object, texts: dict[str, str], fallback: str = "") 
     """按语言查表取文案（P3-A n-way 重构的核心 helper）。
 
     texts = {"zh-CN": "...", "en": "...", "ja": "..."}；未命中当前语言时回退
-    zh-CN，再回退 fallback。逐步替代 `if english: A else B` 的二元分叉。
+    en，再回退 zh-CN，最后回退 fallback。逐步替代 `if english: A else B` 的
+    二元分叉。第三语言（ja）缺失时优先回退英文。
     """
     lang = normalize_language(language)
-    return texts.get(lang) or texts.get("zh-CN") or fallback
+    return texts.get(lang) or texts.get("en") or texts.get("zh-CN") or fallback
 
 
 def lang_suffix(language: object) -> str:
@@ -51,12 +52,18 @@ def lang_suffix(language: object) -> str:
 
 
 def localized_field(template: dict, key: str, language: object = DEFAULT_LANGUAGE):
-    """按语言取本地化字段：优先 {key}_{suffix}，回退 {key}。字段可选，不强制维护。"""
+    """按语言取本地化字段：优先 {key}_{suffix}，第三语言（ja）缺失时回退 {key}_en，
+    再无则回退 {key}（zh 原文）。字段可选，不强制维护。"""
     suffix = lang_suffix(language)
     if suffix:
         v = template.get(f"{key}_{suffix}")
         if v is not None:
             return v
+        # ja 等非 en 语言缺失时先回退英文字段，保持与 localized_text 的回退链一致。
+        if suffix != "en":
+            en_v = template.get(f"{key}_en")
+            if en_v is not None:
+                return en_v
     return template.get(key)
 
 

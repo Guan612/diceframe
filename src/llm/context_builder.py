@@ -1,4 +1,4 @@
-﻿"""Context 拼接器 —— 按 TokenBudget 优先级硬分配，将游戏状态拼接为 LLM 输入。"""
+"""Context 拼接器 —— 按 TokenBudget 优先级硬分配，将游戏状态拼接为 LLM 输入。"""
 
 from __future__ import annotations
 
@@ -35,10 +35,14 @@ _BUDGET_LOREBOOK = 0.20        # Lorebook 条目
 _BUDGET_SUMMARY = 0.08         # 最新摘要 + 关键事实
 _BUDGET_MEMORY = 0.06          # 长期记忆
 _BUDGET_HISTORY_MIN = 0.22     # 对话历史最小比例
+_BUDGET_CONFIRMED = 0.03       # 已确认事项（收尾收缩时最先让出的一档）
 # 剩余 ~6% 用于玩家消息和分隔符
 
 _INVENTORY_STATE_LIMIT = 20
 _KEY_ITEMS_STATE_LIMIT = 12
+
+# 段间分隔符（收尾总长检查也按此计算）
+_SEP = "\n\n---\n\n"
 
 
 def _compact_state_view(state: dict) -> None:
@@ -81,7 +85,7 @@ def _detect_max_chars(provider_name: str = "") -> int:
 
 def _estimate_tokens(text: str) -> int:
     """估算 token 数：CJK 字符约 1 token/字，其余约 4 字符/token。"""
-    cjk = sum(1 for ch in text if '\u4e00' <= ch <= '\u9fff')
+    cjk = sum(1 for ch in text if '一' <= ch <= '鿿')
     return max(1, cjk + (len(text) - cjk) // 4)
 
 
@@ -166,6 +170,59 @@ def _format_history(log: list[dict], max_chars: int, language: str = "zh-CN") ->
     return "\n\n".join(sorted_lines)
 
 
+def _context_total_len(parts: list[str]) -> int:
+    """含段间分隔符的完整上下文长度。"""
+    return sum(len(p) for p in parts) + len(_SEP) * max(0, len(parts) - 1)
+
+
+def _shrink_section(text: str, overflow: int, drop_oldest_rounds: bool) -> str:
+    """把单段上下文收缩 overflow 字符，作为超窗时的最后保险。
+
+    - drop_oldest_rounds=True（对话历史）：保留标题行，从最旧轮次开始整轮
+      删除，保留 [Round N] 行结构不切半行，优先保住最新的轮次；
+    - 其余段：直接硬截断到目标长度。
+    """
+    target = max(1, len(text) - overflow)
+    if not drop_oldest_rounds:
+        return _truncate(text, target)
+    heading, _, body = text.partition("\n")
+    rounds = body.split("\n\n")
+    newest: list[str] = []
+    used = len(heading)
+    for r in reversed(rounds):  # 从最新轮往回保留，放不下的旧轮丢弃
+        need = len(r) + 2
+        if used + need <= target:
+            newest.append(r)
+            used += need
+    newest.reverse()  # 恢复最旧在前的顺序
+    return "\n\n".join([heading] + newest)
+
+
+def _shrink_to_window(parts: list[str], sec_idx: dict[str, int], max_total: int) -> None:
+    """上下文总长超过模型窗口时，按优先级从低到高收缩各段，就地修改 parts。
+
+    正常路径（各段都在预算内）总长由历史预算公式自限，不会走到这里；此函数
+    只兜住极端配置（已确认事项/世界书/角色状态爆大）导致的总长超窗，保证不把
+    超窗上下文发给模型。被收缩的对话历史/已确认事项已有摘要与长期记忆冗余覆盖。
+    """
+    # 优先级从低到高（越靠前越先让出）：对话历史 → 已确认事项 → 长期记忆 → 摘要 → 世界书 → 游戏状态
+    for key, drop_oldest in (
+        ("history", True),
+        ("confirmed", False),
+        ("memory", False),
+        ("summary", False),
+        ("lorebook", False),
+        ("state", False),
+    ):
+        idx = sec_idx.get(key)
+        if idx is None:
+            continue
+        overflow = _context_total_len(parts) - max_total
+        if overflow <= 0:
+            break
+        parts[idx] = _shrink_section(parts[idx], overflow, drop_oldest)
+
+
 async def build_context(
     instance: GameInstance,
     gm_prompt_filled: str,
@@ -186,9 +243,11 @@ async def build_context(
         player_message: 当前玩家说的话
         memory_store: MemoryStore 实例，用于召回长期记忆
         platform: 平台名，用于模型检测（可选）
+        history_override: 覆盖对话历史（如重新生成 swipe 时只取目标轮之前的日志）
 
     Returns:
-        完整的上下文字符串
+        完整的上下文字符串。总长保证不超过 max_total：各块先按预算分配，
+        拼接后若仍超窗（极端配置），按优先级从低到高逐段收缩兜底。
     """
     max_total = _detect_max_chars(provider_name)
     language = getattr(instance, "language", "zh-CN")
@@ -202,9 +261,11 @@ async def build_context(
         budget_lorebook = min(budget_lorebook, lorebook_budget)
     budget_summary = int(max_total * _BUDGET_SUMMARY)
     budget_memory = int(max_total * _BUDGET_MEMORY)
+    budget_confirmed = int(max_total * _BUDGET_CONFIRMED)
     budget_history_base = max(int(max_total * _BUDGET_HISTORY_MIN), max_total // 6)
 
     parts: list[str] = []
+    sec_idx: dict[str, int] = {}  # 段名 → parts 索引，供超窗收尾收缩使用
     reserved_system_chars = min(len(gm_prompt_filled), budget_system)
 
     # 1. 游戏状态（LLM 精简视图，含属性修正）
@@ -216,6 +277,7 @@ async def build_context(
         state_json = json.dumps(state, ensure_ascii=False)
     state_json = _truncate(state_json, budget_state)
     parts.append(localized_text(language, {"en": "## Game State", "zh-CN": "【游戏状态】", "ja": "## ゲーム状態"}) + f"\n{state_json}")
+    sec_idx["state"] = len(parts) - 1
 
     # 2. Lorebook 条目（核心 NPC/场景优先）
     lorebook_text = ""
@@ -239,6 +301,7 @@ async def build_context(
                      len(trimmed), ", ".join(trimmed[:5]), budget_lorebook)
     if lorebook_text:
         parts.append(localized_text(language, {"en": "## World Knowledge", "zh-CN": "【世界观知识】", "ja": "## 世界知識"}) + f"\n{lorebook_text.strip()}")
+        sec_idx["lorebook"] = len(parts) - 1
 
     # 3. 摘要 + 关键事实
     summary = sanitize_narration(instance.summary.get("narrative", ""))
@@ -256,20 +319,23 @@ async def build_context(
             summary_section_parts.append(facts_text)
     if summary_section_parts:
         parts.append(localized_text(language, {"en": "## Recent Events", "zh-CN": "【近期经历】", "ja": "## 最近の出来事"}) + "\n" + "\n".join(summary_section_parts))
+        sec_idx["summary"] = len(parts) - 1
 
-    # D1: 已确认事项（防 GM 重复讨论）
+    # D1: 已确认事项（防 GM 重复讨论；有预算上限，超窗收尾时优先让出）
     if instance.confirmed_items:
         confirmed_text = localized_text(language, {
             "en": "; ".join(instance.confirmed_items[-20:]),
             "zh-CN": "、".join(instance.confirmed_items[-20:]),
             "ja": "、".join(instance.confirmed_items[-20:]),
         })
+        confirmed_text = _truncate(confirmed_text, budget_confirmed)
         heading = localized_text(language, {
             "en": "## Confirmed Items\nIf players ask about the same thing again, move forward instead of re-explaining.",
             "zh-CN": "【已确认事项】（玩家再问相同内容时直接推进，不要重复解释）",
             "ja": "## 確認済み事項\nプレイヤーが同じことを再度尋ねても、再説明せず先へ進めること。",
         })
         parts.append(f"{heading}\n{confirmed_text}")
+        sec_idx["confirmed"] = len(parts) - 1
 
     # 4. 长期记忆召回（召回源：玩家消息 + 最近 3 轮 GM 回复，提高命中率）
     if memory_store:
@@ -287,6 +353,7 @@ async def build_context(
             if memory_text:
                 memory_text = _truncate(memory_text, budget_memory)
                 parts.append(memory_text)
+                sec_idx["memory"] = len(parts) - 1
         except Exception:
             logger.warning("长期记忆召回失败，已降级为无记忆上下文", exc_info=True)
 
@@ -298,11 +365,20 @@ async def build_context(
     history = _format_history(history_entries, history_budget, language)
     if history:
         parts.append(localized_text(language, {"en": "## Conversation History", "zh-CN": "【对话历史】", "ja": "## 会話履歴"}) + f"\n{history}")
+        sec_idx["history"] = len(parts) - 1
 
-    # 6. 玩家刚说的话
+    # 6. 玩家刚说的话（永不参与超窗收缩）
     parts.append(localized_text(language, {"en": "## Player Message", "zh-CN": "【玩家发言】", "ja": "## プレイヤーの発言"}) + f"\n{player_message}")
 
     context = "\n\n---\n\n".join(parts)
+
+    # 收尾硬上限：总长超过模型窗口时按优先级逐段收缩（最后保险，正常路径不触发）。
+    # 历史预算公式自限时总长恒 ≤ 窗口，此检查只兜住极端配置下的超窗。
+    total_len = _context_total_len(parts)
+    if total_len > max_total:
+        logger.warning("Context 超窗 %d > %d，触发收尾收缩", total_len, max_total)
+        _shrink_to_window(parts, sec_idx, max_total)
+        context = "\n\n---\n\n".join(parts)
 
     logger.debug(
         "Context 拼接完成: total_chars=%d, est_tokens=%d, max=%d",

@@ -22,11 +22,19 @@ describe('shouldAutoDownloadUpdate', () => {
     expect(shouldAutoDownloadUpdate(null, 'idle', 'update', true)).toBe(false)
   })
 
-  it('does not trigger while downloading, staged, or applied', () => {
+  it('does not trigger while a download task is in progress', () => {
     expect(shouldAutoDownloadUpdate('source', 'downloading', 'update', true)).toBe(false)
-    expect(shouldAutoDownloadUpdate('source', 'staged', 'update', true)).toBe(false)
-    expect(shouldAutoDownloadUpdate('source', 'done', 'update', true)).toBe(false)
+    expect(shouldAutoDownloadUpdate('source', 'verifying', 'update', true)).toBe(false)
     expect(shouldAutoDownloadUpdate('source', 'applying', 'update', true)).toBe(false)
+    expect(shouldAutoDownloadUpdate('source', 'restarting', 'update', true)).toBe(false)
+  })
+
+  it('allows downloading a newer version after a previous staged/done state', () => {
+    // state/version 是上次更新的持久化结果，检测到新版本时不会重置。若上次
+    // 残留 staged/done（属于旧版本）却因此拦截，弹窗“前往设置”后永远不自动
+    // 下载。有新版本（updateAvailable=true）时应允许重新下载。
+    expect(shouldAutoDownloadUpdate('source', 'staged', 'update', true)).toBe(true)
+    expect(shouldAutoDownloadUpdate('source', 'done', 'update', true)).toBe(true)
   })
 
   it('does not trigger when no update is available', () => {
