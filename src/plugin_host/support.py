@@ -78,14 +78,14 @@ PLUGIN_TYPE_SUPPORT: dict[str, dict[str, Any]] = {
         "filter_order": 2,
     },
     "map-pack": {
-        "level": "partial",
-        "summary": "可注册地点和地图素材，暂不包含实时战棋与地图编辑器",
+        "level": "reserved",
+        "summary": "预留类型：地图地点/图标/场景/网格素材后续接入地图编辑器；暂不在商店提供",
         "process_mode": PROCESS_MODE_STATIC,
         "inferred_permissions": ["map.assets"],
         "required_permission": None,
         "contributes": _MAP_CONTRIBUTIONS,
-        "filterable": True,
-        "filter_order": 5,
+        "filterable": False,
+        "filter_order": 0,
     },
     "import-export": {
         "level": "reserved",

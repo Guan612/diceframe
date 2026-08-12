@@ -26,7 +26,10 @@ from src.version import __version__
 logger = logging.getLogger("trpg.hub")
 
 DEFAULT_HUB_URL = "https://api.diceframe.com"
-_CACHE_MAX_AGE = 30 * 24 * 60 * 60
+# 商店目录缓存有效期：1 天（目录变动频繁，应尽快看到上架/更新）
+_CATALOG_CACHE_MAX_AGE = 24 * 60 * 60
+# 插件 README 等详情缓存有效期：1 天
+_CACHE_MAX_AGE = 24 * 60 * 60
 _FAILURE_THRESHOLD = 3
 _BREAKER_SECONDS = 60
 _EVENT_QUEUE_SIZE = 64
@@ -154,7 +157,7 @@ class HubClient:
             self._write_cache_entry("catalog", result)
             return {"ok": True, **result}
         except (HubUnavailable, aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
-            cached = self._read_cache_entry("catalog")
+            cached = self._read_cache_entry("catalog", _CATALOG_CACHE_MAX_AGE)
             if cached is not None:
                 source = dict(cached.get("source") or {})
                 source.update({
@@ -435,7 +438,7 @@ class HubClient:
     def _read_identity(self) -> dict[str, Any]:
         return self._read_json(self.identity_file)
 
-    def _read_cache_entry(self, key: str) -> dict[str, Any] | None:
+    def _read_cache_entry(self, key: str, max_age: float = _CACHE_MAX_AGE) -> dict[str, Any] | None:
         entry = self._read_json(self.cache_file).get(key)
         if not isinstance(entry, dict):
             return None
@@ -443,7 +446,7 @@ class HubClient:
             fetched_at = float(entry.get("fetched_at") or 0)
         except (TypeError, ValueError):
             return None
-        if time.time() - fetched_at > _CACHE_MAX_AGE:
+        if time.time() - fetched_at > max_age:
             return None
         return entry
 

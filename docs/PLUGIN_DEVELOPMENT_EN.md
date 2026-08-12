@@ -18,7 +18,7 @@ DiceFrame's plugin model covers channel adapters, content packs, themes, maps, i
 | Bot Bridge extension | `bot-extension` | Supported: command interception, message/result hooks, text/image/card rendering, and failure fallback |
 | Content pack | `content-pack` | Supported: rules, worlds, content catalogs, and user-triggered imports |
 | Theme | `theme` | Supported: v2 semantic theme tokens |
-| Map pack | `map-pack` | Partial: locations and icon/scene/grid assets; no live tabletop or editor |
+| Map pack | `map-pack` | Reserved: map assets planned for a future map editor; store installation disabled |
 | Import/export | `import-export` | Reserved: no unified task API; store installation disabled |
 | Provider | `provider` | Reserved: no Provider runtime; store installation disabled |
 | Tool | `tool` | Supported: process handshake, registration, structured invocation, timeout, and manual testing UI |

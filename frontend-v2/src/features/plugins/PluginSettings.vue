@@ -35,7 +35,13 @@ const {
 const busy = ref('')
 // 插件类型筛选（已装 + 商店共用同一筛选值）：筛选条由后端类型表驱动
 const typeFilter = ref('')
-const { pluginTypeFilters, pluginTypeLabel, loadTypes } = usePluginTypes()
+// 商店范围：插件商店 / 内容商店（内容商店只展示 content-pack）
+const marketScope = ref<'plugins' | 'content'>('plugins')
+const { pluginTypeFilters, pluginTypeFiltersFor, pluginTypeLabel, loadTypes } = usePluginTypes()
+function switchMarketScope(scope: 'plugins' | 'content') {
+  marketScope.value = scope
+  typeFilter.value = scope === 'content' ? 'content-pack' : ''
+}
 
 // 插件类型 -> 图标映射（商店卡片标题左侧）
 const pluginTypeIcons: Record<string, Component> = {
@@ -101,7 +107,7 @@ const {
   loadMirrors, installMarketPlugin, openHubDetail, toggleHubLike, saveHubRating,
   updateInstalledPlugin, uninstallPlugin, addMirror, saveMirror,
   deleteMirror, testMirror, openUrl, marketItemHasNewerVersion,
-} = usePluginMarketplace(busy, refreshPluginSurfaces, typeFilter, onUninstalled)
+} = usePluginMarketplace(busy, refreshPluginSurfaces, typeFilter, marketScope, onUninstalled)
 const safeHubReadmeHtml = computed(() => DOMPurify.sanitize(hubReadmeHtml.value))
 const {
   plugins, filteredPlugins, expandedPluginNames, loading, installFile, overwriteInstall,
@@ -263,7 +269,8 @@ onMounted(async () => {
         :total-pages="totalPages"
         :page="page"
         :type-filter="typeFilter"
-        :plugin-type-filters="pluginTypeFilters"
+        :scope="marketScope"
+        :plugin-type-filters="pluginTypeFiltersFor(marketScope)"
         :sort-options="sortOptions"
         :busy="busy"
         :plugin-type-icon="pluginTypeIcon"
@@ -277,6 +284,7 @@ onMounted(async () => {
         @update:market-keyword="(v: string) => marketKeyword = v"
         @update:sort-mode="(v: string) => sortMode = v"
         @update:type-filter="(v: string) => typeFilter = v"
+        @update:scope="(v: string) => switchMarketScope(v as 'plugins' | 'content')"
       />
     </NTabPane>
 

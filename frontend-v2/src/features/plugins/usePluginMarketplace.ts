@@ -68,6 +68,7 @@ export function usePluginMarketplace(
   busy: Ref<string>,
   refreshSurfaces: () => Promise<void>,
   typeFilter: Ref<string>,
+  marketScope: Ref<'plugins' | 'content'>,
   onUninstalled?: (plugin: PluginInfo, result: { lorebook_removed?: number; cards_removed?: number; worlds_removed?: number; worlds_kept?: string[] }) => void,
 ) {
   const toast = useToast()
@@ -141,6 +142,9 @@ export function usePluginMarketplace(
     const type = typeFilter.value
     const keyword = marketKeyword.value.trim().toLowerCase()
     const items = marketplace.value.filter(item => {
+      // 商店 scope：内容商店只看 content-pack；插件商店排除 content-pack
+      if (marketScope.value === 'content' && item.plugin_type !== 'content-pack') return false
+      if (marketScope.value === 'plugins' && item.plugin_type === 'content-pack') return false
       if (type && item.plugin_type !== type) return false
       if (!keyword) return true
       return [item.id, item.name, item.description, item.repository_url, ...(item.tags || [])]
