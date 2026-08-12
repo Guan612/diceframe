@@ -29,8 +29,8 @@ export function usePluginTypes() {
       .map(toFilter),
   )
 
-  // 商店 scope 专用：插件商店排除 content-pack；内容商店只留 content-pack。
-  // 用于插件页"插件商店 / 内容商店"两个选项卡的筛选条分离。
+  // 市场 scope 专用：插件市场排除 content-pack；内容市场只留 content-pack。
+  // 用于插件页"插件市场 / 内容市场"两个选项卡的筛选条分离。
   function pluginTypeFiltersFor(scope: 'plugins' | 'content'): { value: string; labelKey: MessageKey }[] {
     return pluginTypeFilters.value.filter(f =>
       scope === 'content' ? f.value === 'content-pack' : f.value !== 'content-pack',

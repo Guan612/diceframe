@@ -9,6 +9,7 @@ from typing import Any
 
 from aiohttp import web
 
+from src.hub_client import HubHTTPError
 from src.webui.routes._common import _get_api
 
 
@@ -125,6 +126,8 @@ async def api_hub_plugin_like(request: web.Request) -> web.Response:
         result = await _get_api(request).set_hub_plugin_like(
             request.match_info["plugin_id"], request.method == "PUT"
         )
+    except HubHTTPError as exc:
+        return _hub_error_response(exc)
     except Exception as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=502)
     return web.json_response(result)
@@ -147,9 +150,32 @@ async def api_hub_plugin_rating(request: web.Request) -> web.Response:
             result = await _get_api(request).set_hub_plugin_rating(
                 request.match_info["plugin_id"], stars, tags
             )
+    except HubHTTPError as exc:
+        return _hub_error_response(exc)
     except Exception as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=502)
     return web.json_response(result)
+
+
+def _hub_error_response(exc: HubHTTPError) -> web.Response:
+    """把 Hub 的 4xx 原样透传，detail 转成普通用户看得懂的中文提示。
+
+    429 冷却时同时带 retry_after（秒数），前端 api() 据此显示"请 X 秒后重试"。
+    """
+    payload: dict[str, Any] = {"ok": False, "error": _hub_error_message(exc)}
+    if exc.retry_after:
+        payload["retry_after"] = exc.retry_after
+    return web.json_response(payload, status=exc.status)
+
+
+def _hub_error_message(exc: HubHTTPError) -> str:
+    if exc.status == 429:
+        return "操作太频繁，请稍后再试"
+    if exc.status == 403 and "requires an installation" in exc.detail:
+        return "需要先安装该插件才能评分"
+    if exc.detail:
+        return exc.detail
+    return f"DiceFrame Hub HTTP {exc.status}"
 
 
 def register_hub(app: web.Application) -> None:

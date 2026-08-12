@@ -57,9 +57,6 @@ const { t } = useLocale()
   <p v-if="marketplaceSource?.mirror_name" class="muted source-line">
     {{ t('source') }}: {{ marketplaceSource.mirror_name }}, {{ marketplaceSource.elapsed_ms || 0 }} ms
     <NTag v-if="marketplaceSource.stale" size="small" type="warning">{{ t('hubCachedCatalog') }}</NTag>
-    <button v-if="marketplaceSource.stale" type="button" class="source-refresh" :disabled="marketLoading" :title="t('refresh')" @click="loadMarketplace()">
-      <NIcon :component="RefreshOutline" size="12" />
-    </button>
   </p>
   <NSpin :show="marketLoading">
     <div class="market-grid">
@@ -134,26 +131,5 @@ const { t } = useLocale()
   display: flex;
   align-items: center;
   gap: 6px;
-}
-.source-refresh {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 1px solid var(--df-border-soft);
-  border-radius: 50%;
-  background: transparent;
-  color: var(--df-text-muted);
-  cursor: pointer;
-}
-.source-refresh:hover:not(:disabled) {
-  color: var(--df-accent-strong);
-  border-color: var(--df-accent);
-}
-.source-refresh:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 </style>
