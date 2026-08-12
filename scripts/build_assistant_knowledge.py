@@ -19,7 +19,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.webui import assistant_knowledge as ak
+# 直接按文件加载 assistant_knowledge 模块，绕过 src/webui/__init__.py
+# （后者 import WebAPI -> aiohttp，构建环境未装依赖会失败）
+import importlib.util
+_spec = importlib.util.spec_from_file_location(
+    "assistant_knowledge", ROOT / "src" / "webui" / "assistant_knowledge.py"
+)
+ak = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = ak  # 注册后 exec，dataclass 才能解析模块
+_spec.loader.exec_module(ak)
 
 
 def build(output: Path | None = None) -> Path:
