@@ -7,6 +7,17 @@ import './styles/tokens.css'
 import './styles.css'
 import './styles/v2.css'
 
+// 视口高度兜底：部分 App 壳（如 Eagle）的工具栏显示/隐藏不会更新动态视口单位
+// （100dvh 只跟浏览器原生地址栏联动），导致 fixed 元素随视口下移而对局页不跟随。
+// 把真实可视区高度写入 --app-h CSS 变量，布局层用它计算高度，任何 resize 都会触发。
+function syncViewportHeight() {
+  const h = window.visualViewport?.height || window.innerHeight
+  document.documentElement.style.setProperty('--app-h', `${h}px`)
+}
+syncViewportHeight()
+window.addEventListener('resize', syncViewportHeight)
+window.visualViewport?.addEventListener('resize', syncViewportHeight)
+
 const app = createApp(App).use(createPinia()).use(router).use(i18n)
 
 // Hash history resolves asynchronously on a direct deep link. Mounting before
