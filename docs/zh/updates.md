@@ -1,6 +1,6 @@
 # DiceFrame 应用更新
 
-中文 | [English](UPDATER_EN.md)
+中文 | [English](../en/updates.md)
 
 这里介绍 DiceFrame 主程序怎么更新。插件请在插件商店里单独更新。
 

@@ -1,6 +1,6 @@
 # DiceFrame Plugin Registry and Review Policy
 
-[中文](PLUGIN_REGISTRY_CN.md) | English
+[中文](../zh/plugin-registry.md) | English
 
 DiceFrame uses author-maintained source repositories with a separate public index. Authors retain their source, issues, versions, and Releases. [`diceframe/diceframe-plugins`](https://github.com/diceframe/diceframe-plugins) stores only repository locations, review baselines, and cached store metadata.
 

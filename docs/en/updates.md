@@ -1,6 +1,6 @@
 # DiceFrame Application Updates
 
-[中文](UPDATER_CN.md) | English
+[中文](../zh/updates.md) | English
 
 This page explains how to update DiceFrame itself. Plugins are updated separately through the Plugin Store.
 
