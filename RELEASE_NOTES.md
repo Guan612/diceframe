@@ -1,4 +1,4 @@
-# DiceFrame v2.0.0-beta.1
+# DiceFrame v2.0.0-beta.2
 
 ## 中文
 
@@ -30,8 +30,8 @@
 
 ### 下载指南
 
-- **普通 Windows 用户**：下载 `DiceFrame-v2.0.0-beta.1-windows-portable.zip`。
-- **源码运行用户**：下载 `DiceFrame-v2.0.0-beta.1-windows.zip`。
+- **普通 Windows 用户**：下载 `DiceFrame-v2.0.0-beta.2-windows-portable.zip`。
+- **源码运行用户**：下载 `DiceFrame-v2.0.0-beta.2-windows.zip`。
 - `.sha256` 是更新校验文件，普通用户不需要手动下载。
 
 ## English
@@ -64,6 +64,6 @@ This is the first 2.0.0 preview, accumulating 41 commits and 367 file changes si
 
 ### Download Guide
 
-- **Regular Windows users**: download `DiceFrame-v2.0.0-beta.1-windows-portable.zip`.
-- **Source-run users**: download `DiceFrame-v2.0.0-beta.1-windows.zip`.
+- **Regular Windows users**: download `DiceFrame-v2.0.0-beta.2-windows-portable.zip`.
+- **Source-run users**: download `DiceFrame-v2.0.0-beta.2-windows.zip`.
 - `.sha256` files are update checksums; regular users do not need to download them manually.
