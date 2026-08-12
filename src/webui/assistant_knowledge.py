@@ -25,21 +25,19 @@ INDEX_FILE = Path(__file__).parent / "assistant_knowledge_index.json"
 _DOCUMENTS = {
     "zh": (
         "README.md",
-        "docs/USER_GUIDE_CN.md",
-        "docs/PLUGIN_DEVELOPMENT_CN.md",
-        "docs/PLUGIN_REGISTRY_CN.md",
-        "docs/DOCKER_DEPLOY_CN.md",
-        "docs/UPDATER_CN.md",
-        "docs/BOT_BRIDGE_CORE_CN.md",
+        "docs/zh/updates.md",
+        "docs/zh/plugin-development.md",
+        "docs/zh/plugin-registry.md",
+        "docs/zh/remote-access.md",
+        "docs/zh/scene-images.md",
+        "docs/zh/bot-bridge-core.md",
     ),
     "en": (
         "README_EN.md",
-        "docs/USER_GUIDE_EN.md",
-        "docs/PLUGIN_DEVELOPMENT_EN.md",
-        "docs/PLUGIN_REGISTRY_EN.md",
-        "docs/DOCKER_DEPLOY_EN.md",
-        "docs/UPDATER_EN.md",
-        "docs/BOT_BRIDGE_CORE_EN.md",
+        "docs/en/updates.md",
+        "docs/en/plugin-development.md",
+        "docs/en/plugin-registry.md",
+        "docs/en/bot-bridge-core.md",
     ),
 }
 _HEADING_RE = re.compile(r"^(#{1,4})\s+(.+?)\s*$")
