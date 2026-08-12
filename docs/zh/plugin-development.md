@@ -1,6 +1,6 @@
 # DiceFrame 插件开发指南
 
-中文 | [English](PLUGIN_DEVELOPMENT_EN.md)
+中文 | [English](../en/plugin-development.md)
 
 本指南定义 DiceFrame 插件的通用包结构、manifest 标准、配置规则和各类插件的扩展边界。当前真正可用的是聊天桥接、Bot Bridge 命令/Hook/渲染扩展、内容包、安全主题变量、结构化工具，以及地图包中的地点/素材注册。导入导出和 Provider 目前只有类型占位，没有对应业务运行时。
 
@@ -312,7 +312,7 @@ src/bots/<platform>/
 
 ### 7.2 内容包插件
 
-冒险头图的数据层级、创建/GM/打包/存档迁移全链路见 [`ADVENTURE_SCENE_IMAGE_SPEC_CN.md`](ADVENTURE_SCENE_IMAGE_SPEC_CN.md)。
+冒险头图的数据层级、创建/GM/打包/存档迁移全链路见 [`scene-images.md`](scene-images.md)。
 
 适用于规则、世界模板、角色模板、NPC、道具、法术、职业等。内容包插件通常是声明型插件，可以没有 `entrypoint`。
 
@@ -605,7 +605,7 @@ runtime.run()
 
 DiceFrame 安装时重新解析最新 Release，并下载它所指向的完整 Git commit 源码快照，而不是会变化的 `main` 分支。声明型插件在权限不扩大时，打开插件商店时自动检查并提示，由用户确认后更新；带入口的进程型插件只提示更新；权限或运行方式变化会暂停更新并要求重新审核。
 
-`trust_level` 只表示来源：`official` 是 DiceFrame 官方维护，`community` 是社区投稿。任何等级都不等于安全担保，进程型插件仍能以当前用户权限运行代码。完整流程见 [插件索引与审核规则](PLUGIN_REGISTRY_CN.md)。
+`trust_level` 只表示来源：`official` 是 DiceFrame 官方维护，`community` 是社区投稿。任何等级都不等于安全担保，进程型插件仍能以当前用户权限运行代码。完整流程见 [插件索引与审核规则](plugin-registry.md)。
 
 ### 8.1 内容规范
 

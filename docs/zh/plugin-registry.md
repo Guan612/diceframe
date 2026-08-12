@@ -1,6 +1,6 @@
 # DiceFrame 插件索引与审核规则
 
-中文 | [English](PLUGIN_REGISTRY_EN.md)
+中文 | [English](../en/plugin-registry.md)
 
 DiceFrame 采用“作者维护源码仓库、官方只维护公开索引”的模式。插件源码、Issue、版本和 Release 均由作者管理；[`diceframe/diceframe-plugins`](https://github.com/diceframe/diceframe-plugins) 只保存仓库地址、审核基线和商店展示缓存。
 

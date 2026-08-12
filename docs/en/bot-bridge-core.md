@@ -1,6 +1,6 @@
 # Shared Bot Bridge Core
 
-[中文](BOT_BRIDGE_CORE_CN.md) | English
+[中文](../zh/bot-bridge-core.md) | English
 
 Bot Bridge connects DiceFrame to chat platforms. Adapters for NapCat/QQ, Discord, Telegram, and others handle each platform's messages and presentation while DiceFrame keeps the tabletop logic in one place.
 
@@ -70,7 +70,7 @@ platform message
 
 NapCat calls the extension route with its host-injected internal Bot token. The MaiBot plugin detects the protocol through `/api/bot/ping`, uses the same route when available, and keeps its legacy behavior otherwise. Failures, timeouts, and unhandled results fall back to built-in presentation.
 
-Outputs may use `text`, `card`, or `image`. Dynamic images must be written under the plugin-specific runtime directory; DiceFrame validates the path, format, and 10 MB size limit before exposing an authenticated asset route. See the [plugin development guide](PLUGIN_DEVELOPMENT_EN.md#711-bot-bridge-extensions) for the protocol and example.
+Outputs may use `text`, `card`, or `image`. Dynamic images must be written under the plugin-specific runtime directory; DiceFrame validates the path, format, and 10 MB size limit before exposing an authenticated asset route. See the [plugin development guide](plugin-development.md#711-bot-bridge-extensions) for the protocol and example.
 
 Extensions control chat commands and presentation only. Character state, rolls, balances, payment confirmation, and saved-game changes remain authoritative in DiceFrame's game core.
 
@@ -79,5 +79,5 @@ Extensions control chat commands and presentation only. Character state, rolls, 
 - NapCat/QQ uses the shared client, store, command matching, and presenters. Rich cards, direct messages, and platform synchronization remain in the QQ adapter.
 - The shared core and QQ/NapCat now support Chinese and English player-facing commands, help, and primary responses.
 - Presenter command text accepts `command_prefix`; QQ displays platform mentions, while generic examples use `跑团` for Chinese and `/df` for English.
-- The Web settings page supports `.dfplugin` installation, local rescanning, and uninstall. Package standards are documented in [PLUGIN_DEVELOPMENT_EN.md](PLUGIN_DEVELOPMENT_EN.md).
+- The Web settings page supports `.dfplugin` installation, local rescanning, and uninstall. Package standards are documented in [plugin-development.md](plugin-development.md).
 - Bot Bridge extensions support `before_message`, `after_result`, and `render` in QQ/NapCat and the external MaiBot bridge.

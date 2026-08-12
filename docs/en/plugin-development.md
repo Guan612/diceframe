@@ -1,6 +1,6 @@
 # DiceFrame Plugin Development Guide
 
-[中文](PLUGIN_DEVELOPMENT_CN.md) | English
+[中文](../zh/plugin-development.md) | English
 
 This guide defines DiceFrame plugin packages, manifests, settings, permissions, and extension boundaries. The capabilities available today are channel adapters, Bot Bridge command/hook/render extensions, content packs, filtered theme variables, structured tools, and the location/asset subset of map packs. Import/export and Provider plugins remain reserved types without a business runtime.
 
@@ -440,7 +440,7 @@ The community index is [diceframe/diceframe-plugins](https://github.com/dicefram
 }
 ```
 
-When installing, DiceFrame resolves the repository's latest stable GitHub Release to an exact commit, downloads GitHub's source archive for that commit, and validates the manifest again. Declarative plugins are checked and prompted when the user opens the plugin store; installing or updating requires user confirmation, as long as their permissions and runtime type do not expand. Process plugins notify the user and require confirmation. Any permission or runtime expansion is approval-required. `official`, `verified`, and `community` describe source/review status, not a security guarantee. See [PLUGIN_REGISTRY_EN.md](PLUGIN_REGISTRY_EN.md).
+When installing, DiceFrame resolves the repository's latest stable GitHub Release to an exact commit, downloads GitHub's source archive for that commit, and validates the manifest again. Declarative plugins are checked and prompted when the user opens the plugin store; installing or updating requires user confirmation, as long as their permissions and runtime type do not expand. Process plugins notify the user and require confirmation. Any permission or runtime expansion is approval-required. `official`, `verified`, and `community` describe source/review status, not a security guarantee. See [plugin-registry.md](plugin-registry.md).
 
 ### 8.1 Content Guidelines
 
