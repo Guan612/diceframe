@@ -888,6 +888,11 @@ export interface PluginMarketplaceItem {
   }
   liked?: boolean
   own_rating?: { stars: number; tags: string[] } | null
+  // Hub 详情把"当前安装实例是否已点赞/已评分"放在 viewer 里（installation 维度）
+  viewer?: {
+    liked?: boolean
+    rating?: { stars: number; tags: string[] } | null
+  }
   generated_at?: string
 }
 

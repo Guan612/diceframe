@@ -142,7 +142,7 @@ export function usePluginMarketplace(
     const type = typeFilter.value
     const keyword = marketKeyword.value.trim().toLowerCase()
     const items = marketplace.value.filter(item => {
-      // 商店 scope：内容商店只看 content-pack；插件商店排除 content-pack
+      // 市场 scope：内容市场只看 content-pack；插件市场排除 content-pack
       if (marketScope.value === 'content' && item.plugin_type !== 'content-pack') return false
       if (marketScope.value === 'plugins' && item.plugin_type === 'content-pack') return false
       if (type && item.plugin_type !== type) return false
@@ -244,6 +244,11 @@ export function usePluginMarketplace(
       const detail = await pluginApi.hubDetail(item.id, controller.signal)
       if (!isCurrentRequest()) return
       hubDetail.value = detail
+      // Hub 把"当前安装实例是否已点赞/已评分"放在 detail.viewer 里（installation 维度）。
+      // 归一化到顶层 liked / own_rating，让弹窗与交互逻辑统一使用这两个字段。
+      const viewer = detail.viewer
+      detail.liked = Boolean(viewer?.liked)
+      detail.own_rating = viewer?.rating ?? null
       hubRating.value = detail.own_rating?.stars ?? null
       hubDetailLoading.value = false
       // README 走 Hub → 磁盘缓存 → 作者 GitHub Raw 三层兜底，始终请求，

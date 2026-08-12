@@ -35,7 +35,7 @@ const {
 const busy = ref('')
 // 插件类型筛选（已装 + 商店共用同一筛选值）：筛选条由后端类型表驱动
 const typeFilter = ref('')
-// 商店范围：插件商店 / 内容商店（内容商店只展示 content-pack）
+// 市场范围：插件市场 / 内容市场（内容市场只展示 content-pack）
 const marketScope = ref<'plugins' | 'content'>('plugins')
 const { pluginTypeFilters, pluginTypeFiltersFor, pluginTypeLabel, loadTypes } = usePluginTypes()
 function switchMarketScope(scope: 'plugins' | 'content') {
@@ -291,6 +291,23 @@ onMounted(async () => {
       />
     </NTabPane>
 
+    <NTabPane name="content" :tab="t('contentPacks')">
+      <ContentTab
+        :content-by-plugin="contentByPlugin"
+        :content-group-count="contentGroupCount"
+        :content-loading="contentLoading"
+        v-model:content-target-world-id="contentTargetWorldId"
+        :world-options="worldOptions"
+        :busy="busy"
+        :load-content-resources="loadContentResources"
+        :content-title="contentTitle"
+        :content-subtitle="contentSubtitle"
+        :import-content="importContent"
+        :import-all-content="importAllContent"
+        @open-export="openExportModal"
+      />
+    </NTabPane>
+
     <NTabPane name="themes" :tab="t('themes')">
       <ThemesTab
         :builtin-skins="builtinSkins"
@@ -319,23 +336,6 @@ onMounted(async () => {
         :load-tools="loadTools"
         :set-tool-input="setToolInput"
         :invoke-tool="invokeTool"
-      />
-    </NTabPane>
-
-    <NTabPane name="content" :tab="t('contentPacks')">
-      <ContentTab
-        :content-by-plugin="contentByPlugin"
-        :content-group-count="contentGroupCount"
-        :content-loading="contentLoading"
-        v-model:content-target-world-id="contentTargetWorldId"
-        :world-options="worldOptions"
-        :busy="busy"
-        :load-content-resources="loadContentResources"
-        :content-title="contentTitle"
-        :content-subtitle="contentSubtitle"
-        :import-content="importContent"
-        :import-all-content="importAllContent"
-        @open-export="openExportModal"
       />
     </NTabPane>
 

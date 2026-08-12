@@ -45,9 +45,16 @@ class HubUnavailable(RuntimeError):
 
 
 class HubHTTPError(HubUnavailable):
-    def __init__(self, status: int) -> None:
+    """Hub 返回了非 2xx；保留 status、Hub 的 detail 和 Retry-After，供路由透传。"""
+
+    def __init__(self, status: int, *, detail: str = "", retry_after: str = "") -> None:
         self.status = status
-        super().__init__(f"DiceFrame Hub HTTP {status}")
+        self.detail = detail
+        self.retry_after = retry_after
+        message = f"DiceFrame Hub HTTP {status}"
+        if detail:
+            message = f"{message}: {detail}"
+        super().__init__(message)
 
 
 def _platform_name() -> str:
@@ -406,7 +413,20 @@ class HubClient:
                 timeout=timeout,
             ) as response:
                 if response.status < 200 or response.status >= 300:
-                    raise HubHTTPError(response.status)
+                    # Hub 的失败响应体里带用户可读的 detail（如"需要先安装""冷却中"），
+                    # 读取并随异常透传，路由层再转成前端展示的文案。
+                    detail = ""
+                    try:
+                        error_body = await response.json(content_type=None)
+                        if isinstance(error_body, dict):
+                            detail = str(error_body.get("detail") or "")
+                    except (ValueError, aiohttp.ClientError):
+                        pass
+                    raise HubHTTPError(
+                        response.status,
+                        detail=detail,
+                        retry_after=response.headers.get("Retry-After", ""),
+                    )
                 if response.status == 204 or empty_ok and response.content_length == 0:
                     payload: dict[str, Any] = {}
                 else:
