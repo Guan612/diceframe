@@ -430,7 +430,12 @@ async function resolvePay(accepted: boolean) {
     pendingPay.value = null
     await game.refresh()
     toast.success(accepted ? t('paid') : t('paymentRejected'))
-  } catch (e: unknown) { toast.error(errorMessage(e)) }
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+    // 刷新 detail：若后端已自动取消该支付（如金币不足），pending 消失后 watch 不再重弹
+    pendingPay.value = null
+    await game.refresh().catch(() => undefined)
+  }
 }
 
 async function lifecycle(action: string) {
