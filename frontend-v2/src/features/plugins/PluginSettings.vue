@@ -57,6 +57,9 @@ function pluginTypeIcon(type?: string): Component {
 const sortOptions = [
   { label: t('pluginSortDefault'), value: '' },
   { label: t('pluginSortStars'), value: 'stars' },
+  { label: t('pluginSortDownloads'), value: 'downloads' },
+  { label: t('pluginSortRating'), value: 'rating' },
+  { label: t('pluginSortLikes'), value: 'likes' },
   { label: t('pluginSortNameAsc'), value: 'name-asc' },
   { label: t('pluginSortNameDesc'), value: 'name-desc' },
 ]

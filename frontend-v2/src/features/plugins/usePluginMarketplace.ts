@@ -88,7 +88,7 @@ export function usePluginMarketplace(
   const hubRating = ref<number | null>(null)
   const hubRatingSummary = ref<HubRatingSummary | null>(null)
   const mirrorLoading = ref(false)
-  const sortMode = ref('')  // '' 默认 / stars / name-asc / name-desc
+  const sortMode = ref('')  // '' 默认 / stars / downloads / rating / likes / name-asc / name-desc
   const newMirror = reactive<PluginMirror>({
     id: '',
     name: '',
@@ -152,6 +152,15 @@ export function usePluginMarketplace(
     })
     if (sortMode.value === 'stars') {
       return [...items].sort((a, b) => (b.stars || 0) - (a.stars || 0))
+    }
+    if (sortMode.value === 'downloads') {
+      return [...items].sort((a, b) => (b.stats?.downloads_total || 0) - (a.stats?.downloads_total || 0))
+    }
+    if (sortMode.value === 'rating') {
+      return [...items].sort((a, b) => (b.stats?.rating_average || 0) - (a.stats?.rating_average || 0))
+    }
+    if (sortMode.value === 'likes') {
+      return [...items].sort((a, b) => (b.stats?.likes || 0) - (a.stats?.likes || 0))
     }
     if (sortMode.value === 'name-asc') {
       return [...items].sort((a, b) => (a.name || '').localeCompare(b.name || ''))
