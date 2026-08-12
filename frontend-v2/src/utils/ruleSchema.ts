@@ -35,13 +35,20 @@ function isEnglish(): boolean {
   return i18n.global.locale.value === 'en'
 }
 
+// zh 界面用中文；en/ja 界面均回退英文（ja 缺失文案回退英文，而非中文）。
+function localeIsZh(): boolean {
+  const locale = i18n.global.locale.value
+  return typeof locale === 'string' && locale.startsWith('zh')
+}
+
 const LOCALE_FIELD_SUFFIX: Record<string, string> = { en: 'en' }
 
 export function localeFieldSuffix(): string {
   const locale = i18n.global.locale.value
   if (typeof locale === 'string' && locale.startsWith('zh')) return ''
   const main = typeof locale === 'string' ? locale.split('-')[0] : ''
-  return LOCALE_FIELD_SUFFIX[main] || ''
+  // ja 等非 zh 界面缺失时回退 en 后缀字段，而非原字段（zh）。
+  return LOCALE_FIELD_SUFFIX[main] || 'en'
 }
 
 export function localizedField<T = unknown>(obj: Record<string, unknown> | null | undefined, key: string): T | undefined {
@@ -54,8 +61,9 @@ export function localizedField<T = unknown>(obj: Record<string, unknown> | null 
 }
 
 export function localizedLabel(value: LabelValue, fallback: LabelValue = ''): string {
-  const localeFirst = isEnglish() ? 'en' : 'zh'
-  const localeSecond = isEnglish() ? 'zh' : 'en'
+  // zh 界面优先中文标签；en/ja 界面均回退英文标签（ja 缺失时回退英文）。
+  const localeFirst = localeIsZh() ? 'zh' : 'en'
+  const localeSecond = localeIsZh() ? 'en' : 'zh'
   if (value && typeof value === 'object') {
     return value[localeFirst] || value[localeSecond] || localizedLabel(undefined, fallback)
   }
@@ -70,8 +78,8 @@ export function attrDisplayName(attr: RuleAttr): string {
   const key = attr.key || ''
   if (attr.display_name) return attr.display_name
   // 中文界面只显示中文名(力量),不拼括号英文,避免列表/侧栏过宽;
-  // 英文界面显示英文缩写(STR)。
-  const name = isEnglish() ? (attr.name_en || ATTR_NAME_EN[key] || attr.name || key) : (attr.name || ATTR_NAME_ZH[key] || key)
+  // en/ja 界面显示英文缩写(STR)（ja 缺失时回退英文）。
+  const name = localeIsZh() ? (attr.name || ATTR_NAME_ZH[key] || key) : (attr.name_en || ATTR_NAME_EN[key] || attr.name || key)
   return name
 }
 

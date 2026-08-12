@@ -43,8 +43,8 @@ def _fallback_intent_specs(language: str) -> list[tuple[str, tuple[str, ...], tu
     for intent, block in intents.items():
         aliases = block.get("aliases") or {}
         skills = block.get("skill_candidates") or {}
-        alias_list = tuple(aliases.get(lang) or aliases.get("zh-CN") or ())
-        skill_list = tuple(skills.get(lang) or skills.get("zh-CN") or ())
+        alias_list = tuple(aliases.get(lang) or aliases.get("en") or aliases.get("zh-CN") or ())
+        skill_list = tuple(skills.get(lang) or skills.get("en") or skills.get("zh-CN") or ())
         if not alias_list:
             continue
         result.append((intent, alias_list, skill_list, str(block.get("default_attribute") or "")))
@@ -52,10 +52,10 @@ def _fallback_intent_specs(language: str) -> list[tuple[str, tuple[str, ...], tu
 
 
 def _fallback_generic_words(language: str) -> tuple[str, ...]:
-    """兜底通用检定词（按语言取，回退中文）。"""
+    """兜底通用检定词（按语言取，回退英文再中文）。"""
     words = _FALLBACK_INTENTS.get("generic_check_words") or {}
     lang = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "ja"})
-    return tuple(words.get(lang) or words.get("zh-CN") or ())
+    return tuple(words.get(lang) or words.get("en") or words.get("zh-CN") or ())
 
 
 def _normalized(text: object) -> str:

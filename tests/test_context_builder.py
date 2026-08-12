@@ -1,11 +1,15 @@
 """上下文拼接器测试。"""
 
+import logging
+
 import pytest
 from src.llm.context_builder import (
     _INVENTORY_STATE_LIMIT,
     _KEY_ITEMS_STATE_LIMIT,
     _compact_state_view,
-    _detect_max_chars, _estimate_tokens, _truncate, _format_history, build_context,
+    _context_total_len,
+    _detect_max_chars, _estimate_tokens, _truncate, _format_history,
+    _shrink_section, _shrink_to_window, build_context,
 )
 
 
@@ -112,6 +116,49 @@ class TestFormatHistory:
         assert "Round 1" not in result or "Round 5" in result
 
 
+class TestShrinkSection:
+    def test_truncates_non_history(self):
+        result = _shrink_section("x" * 100, 40, drop_oldest_rounds=False)
+        assert len(result) <= 60
+        assert result.endswith("...")
+
+    def test_history_keeps_latest_rounds_with_structure(self):
+        heading = "【对话历史】"
+        rounds = [f"[Round {i}]\n玩家: 行动{i}\nGM: 回复{i}" for i in range(1, 10)]
+        text = heading + "\n" + "\n\n".join(rounds)
+        result = _shrink_section(text, len(text) // 2, drop_oldest_rounds=True)
+        assert result.startswith(heading)
+        assert "Round 9" in result   # 最新轮保留
+        assert "Round 1" not in result  # 最旧轮被丢
+        assert len(result) <= len(text) // 2 + 1
+        # 每个保留的轮次块都完整（含结尾 GM 行），未被切半
+        body = result.split("\n", 1)[1]
+        for block in body.split("\n\n"):
+            assert "GM:" in block
+
+
+class TestShrinkToWindow:
+    def test_shrinks_low_priority_first(self):
+        hist = "【对话历史】\n" + "\n\n".join(
+            f"[Round {i}]\n玩家: 行动{i}\nGM: 回复{i}" for i in range(1, 40)
+        )
+        parts = [
+            "【游戏状态】\n" + "状态" * 200,
+            "【世界观知识】\n" + "设定" * 200,
+            "【已确认事项】\n" + "事项、" * 200,
+            hist,
+        ]
+        sec_idx = {"state": 0, "lorebook": 1, "confirmed": 2, "history": 3}
+        _shrink_to_window(parts, sec_idx, max_total=1600)
+        assert _context_total_len(parts) <= 1600
+        # 历史（最低优先级）被收缩，最新轮保留
+        assert parts[3].startswith("【对话历史】")
+        assert "Round 39" in parts[3]
+        # 更高优先级的段未被触碰（历史一轮收缩就吸收完溢出）
+        assert parts[0] == "【游戏状态】\n" + "状态" * 200
+        assert parts[2] == "【已确认事项】\n" + "事项、" * 200
+
+
 class DummyInstance:
     game_key = ("web", "dummy", "bot")
     summary = {}
@@ -141,3 +188,35 @@ async def test_build_context_does_not_duplicate_system_prompt():
     assert "【游戏状态】" in context
     assert "【世界观知识】" in context
     assert "【玩家发言】" in context
+
+
+@pytest.mark.asyncio
+async def test_build_context_enforces_window_with_extreme_inputs(caplog, monkeypatch):
+    """极端配置（海量已确认事项/世界书 + 超长玩家消息）下，上下文仍不超窗。"""
+    monkeypatch.setenv("TRPG_MAX_CONTEXT_CHARS", "3000")
+    instance = DummyInstance()
+    instance.confirmed_items = [f"已确认事项{i}" * 20 for i in range(200)]
+    instance.log = [
+        {
+            "round": i,
+            "actions": [{"text": f"行动 {i}：前往村口寻找线索。"}],
+            "gm_response": f"第{i}轮 GM 回复：你沿小路走去，夜色中传来低语。" * 3,
+        }
+        for i in range(1, 31)
+    ]
+    with caplog.at_level(logging.WARNING, logger="trpg"):
+        context = await build_context(
+            instance,
+            gm_prompt_filled="你是测试 GM，负责推动剧情。" * 30,
+            lorebook_entries=[
+                {"type": "location", "name": f"地点{i}", "content": "旧祠深处埋着石碑。" * 20}
+                for i in range(1, 60)
+            ],
+            player_message="我" * 1500,
+            provider_name="deepseek",
+        )
+    assert len(context) <= 3000
+    assert "【玩家发言】" in context
+    assert "【已确认事项】" in context
+    # 收尾收缩确已触发
+    assert "触发收尾收缩" in caplog.text

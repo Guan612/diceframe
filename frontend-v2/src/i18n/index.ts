@@ -35,7 +35,8 @@ function initialLocale(): Locale {
 export const i18n = createI18n({
   legacy: false,
   locale: initialLocale(),
-  fallbackLocale: 'zh-CN',
+  // 缺失语言（如 ja 尚未翻译的文案）回退英文，而非中文。
+  fallbackLocale: 'en',
   messages,
   missingWarn: false,
   fallbackWarn: false,

@@ -18,7 +18,9 @@ const hasUnread = computed(() => Boolean(hash.value) && hash.value !== readHash.
 const hasContent = computed(() => Boolean(content.value))
 
 function normalizeLanguage(locale: string): AnnouncementLanguage {
-  return (locale || '').toLowerCase().startsWith('en') ? 'en' : 'zh'
+  const lang = (locale || '').toLowerCase()
+  // 官方公告只有 zh/en；ja 界面回退英文公告，而非中文。
+  return lang.startsWith('en') || lang.startsWith('ja') ? 'en' : 'zh'
 }
 
 function storageKey(language: AnnouncementLanguage): string {

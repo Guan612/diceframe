@@ -29,8 +29,9 @@ const route = useRoute()
 const { naiveTheme, overrides, loadPluginThemes, suspendPluginTheme, restorePluginTheme } = useTheme()
 const { locale, setLocale, t } = useLocale()
 const { updateAvailable } = useUpdateCheck()
-const naiveLocale = computed(() => locale.value === 'en' ? enUS : zhCN)
-const naiveDateLocale = computed(() => locale.value === 'en' ? dateEnUS : dateZhCN)
+// naive-ui 无 ja locale；ja 界面回退英文组件语言，而非中文。
+const naiveLocale = computed(() => locale.value === 'zh-CN' ? zhCN : enUS)
+const naiveDateLocale = computed(() => locale.value === 'zh-CN' ? dateZhCN : dateEnUS)
 
 const items = [
   { id: 'overview', labelKey: 'navOverview', icon: HomeOutline },

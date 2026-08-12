@@ -67,7 +67,16 @@ class PromptComposer:
                     else "You are the GM for a TRPG text adventure. Narrate in natural English. The GM prompt file is missing."
                 )
             else:
-                _GM_PROMPT_CACHE[cache_key] = "你是 TRPG 游戏的主持人（GM）。请用流畅中文进行叙述。（GM prompt 文件缺失）"
+                # ja 等非 en 语言的 prompt 缺失时先回退英文文件，再回退中文。
+                # 输出语言仍由 gm_language_instruction 单独控制，不受此回退影响。
+                en = self.prompts_dir / "gm_system_en.md"
+                zh = self.prompts_dir / "gm_system_zh.md"
+                if en.exists():
+                    _GM_PROMPT_CACHE[cache_key] = en.read_text(encoding="utf-8")
+                elif zh.exists():
+                    _GM_PROMPT_CACHE[cache_key] = zh.read_text(encoding="utf-8")
+                else:
+                    _GM_PROMPT_CACHE[cache_key] = "你是 TRPG 游戏的主持人（GM）。请用流畅中文进行叙述。（GM prompt 文件缺失）"
         prompt = _GM_PROMPT_CACHE[cache_key]
         if rule_appendix:
             heading = localized_text(cache_key, {"en": "## Current Rules", "zh-CN": "## 当前规则", "ja": "## 現在のルール"})

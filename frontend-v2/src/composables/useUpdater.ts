@@ -22,8 +22,11 @@ const isDownloading = computed(() => DOWNLOAD_STATES.has(updateStatus.value?.sta
 const isUpdateBusy = computed(() => ACTIVE_STATES.has(updateStatus.value?.state || 'idle'))
 
 // 从更新弹窗的“去设置”进入时是否自动开始下载。仅在可写的 source/portable
-// 安装、确有新版、且无进行中/已完成任务时触发；docker/development/只读
-// 模式下 kind 为 null，不触发。
+// 安装、确有新版、且无进行中任务时触发；docker/development/只读模式下
+// kind 为 null，不触发。
+// 注意：state/version 反映的是上次更新的持久化结果，检测到新版本时不会重置。
+// 若上次 state 残留为 done/staged（属于旧版本），不能据此拦截——否则弹窗“前往
+// 设置”后永远不自动下载。只拦截真正进行中的任务，避免并发下载。
 export function shouldAutoDownloadUpdate(
   kind: 'source' | 'portable' | null,
   state: string | undefined,
@@ -31,7 +34,7 @@ export function shouldAutoDownloadUpdate(
   updateAvailable: boolean,
 ): boolean {
   if (!kind || focus !== 'update') return false
-  if (state && state !== 'idle' && state !== 'failed') return false
+  if (state && ACTIVE_STATES.has(state as UpdateStatusResponse['state'])) return false
   return updateAvailable
 }
 
