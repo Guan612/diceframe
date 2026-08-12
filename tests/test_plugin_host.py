@@ -693,7 +693,7 @@ def test_list_plugin_types_drives_frontend_filters():
     from src.plugin_host.support import list_plugin_types
     types = list_plugin_types()
     filterable = [t["id"] for t in types if t["filterable"]]
-    assert filterable == ["content-pack", "theme", "tool", "channel-adapter", "map-pack"]
+    assert filterable == ["content-pack", "theme", "tool", "channel-adapter"]
     assert len(types) == 8
     assert {t["id"] for t in types} == {
         "channel-adapter", "content-pack", "theme", "map-pack",
@@ -1188,7 +1188,7 @@ def test_public_plugin_detail_reports_real_support_level(tmp_path):
     host = PluginHost(plugins, tmp_path / "data")
     host.discover()
 
-    assert host.public_detail("map-assets")["support"]["level"] == "partial"
+    assert host.public_detail("map-assets")["support"]["level"] == "reserved"
     assert host.public_detail("future-tool")["support"]["level"] == "supported"
 
 

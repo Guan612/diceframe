@@ -82,11 +82,15 @@
   justify-content: flex-end;
 }
 
+.plugin-workspace .mode-tabs {
+  gap: 8px;
+}
+
 .plugin-workspace .type-filter-row {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
-  margin-bottom: 11px;
+  margin: 11px 0;
   padding: 7px;
   border: 1px solid color-mix(in srgb, var(--df-border-soft) 76%, transparent);
   border-radius: var(--df-radius-md);

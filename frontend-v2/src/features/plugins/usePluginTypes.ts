@@ -17,13 +17,25 @@ export function usePluginTypes() {
     types.value = res.types
   }
 
+  function toFilter(item: PluginTypeInfo): { value: string; labelKey: MessageKey } {
+    return { value: item.id, labelKey: typeLabelKey(item.id) as MessageKey }
+  }
+
   // 筛选按钮：filterable 类型按 filter_order 升序（后端 descriptor 单一来源驱动）
   const pluginTypeFilters = computed(() =>
     types.value
       .filter(item => item.filterable)
       .sort((a, b) => a.filter_order - b.filter_order)
-      .map(item => ({ value: item.id, labelKey: typeLabelKey(item.id) as MessageKey })),
+      .map(toFilter),
   )
+
+  // 商店 scope 专用：插件商店排除 content-pack；内容商店只留 content-pack。
+  // 用于插件页"插件商店 / 内容商店"两个选项卡的筛选条分离。
+  function pluginTypeFiltersFor(scope: 'plugins' | 'content'): { value: string; labelKey: MessageKey }[] {
+    return pluginTypeFilters.value.filter(f =>
+      scope === 'content' ? f.value === 'content-pack' : f.value !== 'content-pack',
+    )
+  }
 
   function pluginTypeLabel(type?: string): string {
     if (!type) return t('uncategorized')
@@ -33,5 +45,5 @@ export function usePluginTypes() {
     return translated !== key ? translated : type
   }
 
-  return { types, pluginTypeFilters, pluginTypeLabel, loadTypes }
+  return { types, pluginTypeFilters, pluginTypeFiltersFor, pluginTypeLabel, loadTypes }
 }

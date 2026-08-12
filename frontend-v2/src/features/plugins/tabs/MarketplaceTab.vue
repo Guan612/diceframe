@@ -14,6 +14,7 @@ defineProps<{
   totalPages: number
   page: number
   typeFilter: string
+  scope: 'plugins' | 'content'
   pluginTypeFilters: { value: string; labelKey: string }[]
   sortOptions: { label: string; value: string }[]
   busy: string
@@ -30,6 +31,7 @@ const emit = defineEmits<{
   'update:marketKeyword': [value: string]
   'update:sortMode': [value: string]
   'update:typeFilter': [value: string]
+  'update:scope': [value: string]
 }>()
 
 const { t } = useLocale()
@@ -44,13 +46,20 @@ const { t } = useLocale()
       {{ t('refresh') }}
     </NButton>
   </section>
-  <div class="type-filter-row">
+  <div class="mode-tabs">
+    <button type="button" :class="{ active: scope === 'plugins' }" @click="emit('update:scope', 'plugins')">{{ t('pluginStoreTab') }}</button>
+    <button type="button" :class="{ active: scope === 'content' }" @click="emit('update:scope', 'content')">{{ t('contentStoreTab') }}</button>
+  </div>
+  <div v-if="scope === 'plugins'" class="type-filter-row">
     <NButton size="tiny" :type="typeFilter === '' ? 'primary' : 'default'" @click="emit('update:typeFilter', '')">{{ t('pluginFilterAll') }}</NButton>
     <NButton v-for="opt in pluginTypeFilters" :key="opt.value" size="tiny" :type="typeFilter === opt.value ? 'primary' : 'default'" @click="emit('update:typeFilter', opt.value)">{{ t(opt.labelKey as never) }}</NButton>
   </div>
   <p v-if="marketplaceSource?.mirror_name" class="muted source-line">
     {{ t('source') }}: {{ marketplaceSource.mirror_name }}, {{ marketplaceSource.elapsed_ms || 0 }} ms
     <NTag v-if="marketplaceSource.stale" size="small" type="warning">{{ t('hubCachedCatalog') }}</NTag>
+    <button v-if="marketplaceSource.stale" type="button" class="source-refresh" :disabled="marketLoading" :title="t('refresh')" @click="loadMarketplace()">
+      <NIcon :component="RefreshOutline" size="12" />
+    </button>
   </p>
   <NSpin :show="marketLoading">
     <div class="market-grid">
@@ -120,5 +129,31 @@ const { t } = useLocale()
 <style scoped>
 .market-sort-select {
   width: 150px;
+}
+.source-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.source-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--df-text-muted);
+  cursor: pointer;
+}
+.source-refresh:hover:not(:disabled) {
+  color: var(--df-accent-strong);
+  border-color: var(--df-accent);
+}
+.source-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

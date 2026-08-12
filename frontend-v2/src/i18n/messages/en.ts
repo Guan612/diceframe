@@ -786,6 +786,8 @@ export const en = {
   pluginRestartHint: 'Restart the plugin after changing tokens or connection parameters.',
   declarativePluginHint: 'Declarative plugins do not start background processes; saved config is written to the plugin data directory immediately.',
   pluginMarketplaceTab: 'Plugin Store',
+  pluginStoreTab: 'Plugin Store',
+  contentStoreTab: 'Content Store',
   pluginToolsTab: 'Tools',
   pluginToolsTitle: 'Plugin Tools',
   pluginToolsHelp: 'Tool plugins appear grouped by plugin: those with a dedicated UI render a card, and other tools can be invoked manually below with a JSON argument (for testing only).',
