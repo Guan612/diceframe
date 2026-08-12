@@ -31,8 +31,9 @@ except ImportError:  # Direct execution: python scripts/build_release.py
 
 DIST_DIR = ROOT / "dist"
 BUILD_ROOT = DIST_DIR / "_release_build"
-EXPECTED_BUILTIN_AVATAR_ATLASES = 12
-MAX_BUILTIN_AVATAR_COMPRESSED_BYTES = 4 * 1024 * 1024
+# v3 头像：6 规则 × 8 张 jpg（4 realistic + 4 anime）。旧 WebP 图集（12 张）已弃用。
+EXPECTED_BUILTIN_AVATAR_ATLASES = 48
+MAX_BUILTIN_AVATAR_COMPRESSED_BYTES = 8 * 1024 * 1024
 BUILTIN_BACKGROUND_FILES = {
     "dark-fantasy-atmosphere.jpg",
     "campaign-mountain-city.jpg",
@@ -302,18 +303,18 @@ def validate_zip(output_zip: Path) -> None:
 
 def validate_avatar_payload(infos: list[zipfile.ZipInfo], *, require_source: bool) -> None:
     normalized = [(info, info.filename.replace("\\", "/")) for info in infos]
-    built = [info for info, name in normalized if "/static-v2/avatars/" in name and name.endswith(".webp")]
-    source = [info for info, name in normalized if "/frontend-v2/public/avatars/" in name and name.endswith(".webp")]
+    built = [info for info, name in normalized if "/static-v2/avatars/v3/" in name and name.endswith(".jpg")]
+    source = [info for info, name in normalized if "/frontend-v2/public/avatars/v3/" in name and name.endswith(".jpg")]
     legacy_png = [name for _, name in normalized if "/avatars/" in name and name.lower().endswith(".png")]
     if legacy_png:
         raise RuntimeError("Release zip contains legacy PNG portrait atlases")
     if len(built) != EXPECTED_BUILTIN_AVATAR_ATLASES:
         raise RuntimeError(
-            f"Release zip must contain {EXPECTED_BUILTIN_AVATAR_ATLASES} built WebP portrait atlases, got {len(built)}"
+            f"Release zip must contain {EXPECTED_BUILTIN_AVATAR_ATLASES} built v3 portrait images, got {len(built)}"
         )
     if require_source and len(source) != EXPECTED_BUILTIN_AVATAR_ATLASES:
         raise RuntimeError(
-            f"Source release must contain {EXPECTED_BUILTIN_AVATAR_ATLASES} source WebP portrait atlases, got {len(source)}"
+            f"Source release must contain {EXPECTED_BUILTIN_AVATAR_ATLASES} source v3 portrait images, got {len(source)}"
         )
     compressed_size = sum(info.compress_size for info in built + source)
     if compressed_size > MAX_BUILTIN_AVATAR_COMPRESSED_BYTES:
