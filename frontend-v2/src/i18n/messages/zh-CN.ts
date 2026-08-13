@@ -569,6 +569,7 @@ export const zhCN = {
   tunnelStarting: '隧道启动中…',
   tunnelActive: '已生效',
   tunnelIdle: '未启用',
+  tunnelPluginRunningHint: '插件已运行，隧道尚未开启',
   tunnelError: '隧道错误',
   tunnelCopyLink: '复制邀请链接',
   tunnelLinkCopied: '已复制邀请链接',

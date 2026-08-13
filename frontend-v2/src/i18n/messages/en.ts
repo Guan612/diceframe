@@ -569,6 +569,7 @@ export const en = {
   tunnelStarting: 'Starting tunnel…',
   tunnelActive: 'Active',
   tunnelIdle: 'Idle',
+  tunnelPluginRunningHint: 'Plugin is running, tunnel is not active yet',
   tunnelError: 'Tunnel error',
   tunnelCopyLink: 'Copy invite link',
   tunnelLinkCopied: 'Invite link copied',

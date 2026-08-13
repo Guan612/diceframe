@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { NAlert, NButton, NInput, NTag, NIcon } from 'naive-ui'
 import { CopyOutline } from '@vicons/ionicons5'
 import { useTunnel } from '@/composables/useTunnel'
+import { pluginApi } from '@/api/plugins'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useLocale } from '@/composables/useLocale'
 import { useToast } from '@/composables/useToast'
@@ -25,11 +26,14 @@ const {
 
 const hasAccessPassword = computed(() => Boolean(store.config.access_password?.configured))
 const providers = computed(() => tunnelProviders.value.filter(provider => provider.plugin_id === props.plugin.id))
-const pluginActive = computed(() => providers.value.some(provider => provider.running))
 const isQuickTunnelPlugin = computed(() => props.plugin.id === 'cloudflare-tunnel')
 
 async function onTunnelEnable(pluginId: string) {
   if (!hasAccessPassword.value) { toast.error(t('tunnelNeedPassword')); return }
+  const provider = providers.value.find(p => p.plugin_id === pluginId)
+  if (!provider?.running) {
+    await pluginApi.setRunning(pluginId, true)
+  }
   await enableTunnel(pluginId)
   if (tunnelError.value) toast.error(tunnelError.value)
 }
@@ -59,17 +63,18 @@ async function onCopyTunnelLink() {
     <div v-for="p in providers" :key="p.plugin_id" class="form-row">
       <label>{{ p.name }}</label>
       <div class="switch-inline">
-        <NTag v-if="p.running" type="success" size="small">{{ t('tunnelActive') }}</NTag>
+        <NTag v-if="tunnelActive" type="success" size="small">{{ t('tunnelActive') }}</NTag>
         <NTag v-else size="small">{{ t('tunnelIdle') }}</NTag>
         <NTag v-if="p.needs_core_update" type="warning" size="small">{{ t('pluginNeedsCoreUpdate', { version: p.min_app_version || '' }) }}</NTag>
-        <NButton v-if="!pluginActive" type="primary" size="small" :loading="tunnelStarting" :disabled="!hasAccessPassword || tunnelActive" @click="onTunnelEnable(p.plugin_id)">{{ t('tunnelEnable') }}</NButton>
+        <NButton v-if="!tunnelActive" type="primary" size="small" :loading="tunnelStarting" :disabled="!hasAccessPassword" @click="onTunnelEnable(p.plugin_id)">{{ t('tunnelEnable') }}</NButton>
         <NButton v-else size="small" :loading="tunnelStarting" @click="onTunnelStop(p.plugin_id)">{{ t('tunnelStop') }}</NButton>
       </div>
+      <p v-if="p.running && !tunnelActive" class="form-hint">{{ t('tunnelPluginRunningHint') }}</p>
     </div>
     <div v-if="tunnelStarting && !tunnelActive" class="form-row">
       <p class="muted">{{ t('tunnelStarting') }}</p>
     </div>
-    <div v-if="pluginActive && tunnelStatus?.url" class="form-row">
+    <div v-if="tunnelActive && tunnelStatus?.url" class="form-row">
       <label>{{ t('tunnelActive') }}</label>
       <NInput :value="tunnelStatus.url" readonly />
       <div class="actions-row">
