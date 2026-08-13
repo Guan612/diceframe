@@ -70,7 +70,7 @@ async function onCopyTunnelLink() {
         <NTag v-if="tunnelActive" type="success" size="small">{{ t('tunnelActive') }}</NTag>
         <NTag v-else size="small">{{ t('tunnelIdle') }}</NTag>
         <NTag v-if="p.needs_core_update" type="warning" size="small">{{ t('pluginNeedsCoreUpdate', { version: p.min_app_version || '' }) }}</NTag>
-        <NButton v-if="!tunnelActive" type="primary" size="small" :loading="tunnelStarting" :disabled="!hasAccessPassword" @click="onTunnelEnable(p.plugin_id)">{{ t('tunnelEnable') }}</NButton>
+        <NButton v-if="!tunnelActive" type="primary" size="small" :loading="tunnelStarting" @click="onTunnelEnable(p.plugin_id)">{{ t('tunnelEnable') }}</NButton>
         <NButton v-else size="small" :loading="tunnelStarting" @click="onTunnelStop(p.plugin_id)">{{ t('tunnelStop') }}</NButton>
       </div>
       <p v-if="p.running && !tunnelActive" class="form-hint">{{ t('tunnelPluginRunningHint') }}</p>
