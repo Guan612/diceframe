@@ -81,6 +81,8 @@ _SAFE_PARENT_ENV = {
     "SYSTEMROOT",
     "TEMP",
     "TMP",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_ARCHITEW6432",
     "TZ",
     "WINDIR",
 }
