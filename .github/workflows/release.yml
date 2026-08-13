@@ -7,7 +7,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   windows-zip:
@@ -42,15 +46,8 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: diceframe-windows-zip
-          path: dist/*.zip
-
-      - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
-        with:
-          body_path: RELEASE_NOTES.md
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          files: |
+          if-no-files-found: error
+          path: |
             dist/*.zip
             dist/*.sha256
 
@@ -86,14 +83,61 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: diceframe-windows-portable
-          path: dist/*portable*.zip
+          if-no-files-found: error
+          path: |
+            dist/*portable*.zip
+            dist/*portable*.sha256
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows-zip, windows-portable]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download source package
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: diceframe-windows-zip
+          path: dist
+
+      - name: Download portable package
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: diceframe-windows-portable
+          path: dist
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_zip="DiceFrame-${GITHUB_REF_NAME}-windows.zip"
+          portable_zip="DiceFrame-${GITHUB_REF_NAME}-windows-portable.zip"
+          cd dist
+          for file in \
+            "$source_zip" \
+            "$source_zip.sha256" \
+            "$portable_zip" \
+            "$portable_zip.sha256"
+          do
+            test -s "$file"
+          done
+          sha256sum --check "$source_zip.sha256" "$portable_zip.sha256"
 
       - name: Attach to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           body_path: RELEASE_NOTES.md
           prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          overwrite_files: false
+          preserve_order: true
           files: |
-            dist/*portable*.zip
-            dist/*portable*.sha256
+            dist/DiceFrame-${{ github.ref_name }}-windows.zip
+            dist/DiceFrame-${{ github.ref_name }}-windows.zip.sha256
+            dist/DiceFrame-${{ github.ref_name }}-windows-portable.zip
+            dist/DiceFrame-${{ github.ref_name }}-windows-portable.zip.sha256
