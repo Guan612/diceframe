@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { NAlert, NButton, NInput, NTag, NIcon } from 'naive-ui'
 import { CopyOutline } from '@vicons/ionicons5'
 import { useTunnel } from '@/composables/useTunnel'
@@ -25,6 +25,10 @@ const {
 } = useTunnel()
 
 const hasAccessPassword = computed(() => Boolean(store.config.access_password?.configured))
+
+onMounted(() => {
+  if (!store.config.access_password) void store.load()
+})
 const providers = computed(() => tunnelProviders.value.filter(provider => provider.plugin_id === props.plugin.id))
 const isQuickTunnelPlugin = computed(() => props.plugin.id === 'cloudflare-tunnel')
 
