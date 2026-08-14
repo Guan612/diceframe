@@ -565,6 +565,7 @@ export const ja = {
   tunnelStarting: 'トンネル起動中…',
   tunnelActive: '有効',
   tunnelIdle: '未有効化',
+  tunnelPluginRunningHint: 'プラグインは実行中、トンネルは未起動',
   tunnelError: 'トンネルエラー',
   tunnelCopyLink: '招待リンクをコピー',
   tunnelLinkCopied: '招待リンクをコピーしました',

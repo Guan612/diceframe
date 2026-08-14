@@ -190,7 +190,7 @@ def build_launcher(output: Path, icon: Path) -> None:
             "/nologo",
             "/optimize+",
             "/target:exe",
-            "/platform:anycpu",
+            "/platform:x64",
             f"/win32icon:{icon}",
             f"/out:{output}",
             str(SOURCE),
