@@ -194,6 +194,7 @@ details:not([open])>:not(summary){display:none}
 .plugin-status{padding:5px 8px;border:1px solid var(--df-border-soft);background:var(--df-surface-3);border-radius:4px}
 .plugin-status.running{color:#9ce0a4;border-color:rgba(79,143,88,.38);background:rgba(79,143,88,.16)}
 .plugin-head h3{margin:0;color:var(--df-accent-strong)}
+.plugin-head h3 .n-tag{margin-left:6px}
 .plugin-head p{color:var(--df-text-muted);margin:4px 0 0;font-size:13px}
 .field{margin:10px 0;display:flex;flex-direction:column;gap:4px}
 .field > .switch-label{display:flex;flex-direction:row;align-items:center;gap:8px;font-size:14px;color:var(--df-text-secondary)}
