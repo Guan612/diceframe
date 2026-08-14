@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import type { CharacterItem, CharacterSheet, Player, RuleAttribute, RuleMeta } from '@/api/types'
+import type { CharacterItem, CharacterSheet, CharacterSkill, Player, RuleAttribute, RuleMeta } from '@/api/types'
 import { attrDisplayName, getCurrencyAmount, getResourceValue, currencyLabel } from '@/utils/ruleSchema'
 import { buildSpecialStats, primaryResourceList } from '@/utils/play'
 import { useLocale } from '@/composables/useLocale'
@@ -31,6 +31,7 @@ function pct(cur: number, max: number) { return Math.max(0, Math.min(100, cur / 
 
 const PREVIEW_LIMIT = 4
 const showItemsModal = ref(false)
+const showSkillsModal = ref(false)
 const equipment = computed<CharacterItem[]>(() => cs.value.equipment || [])
 const inventory = computed<CharacterItem[]>(() => cs.value.inventory || [])
 const keyItems = computed<CharacterItem[]>(() => cs.value.key_items || [])
@@ -77,6 +78,22 @@ function keyItemDetail(it: CharacterItem): string {
 function restCount(len: number): number {
   return Math.max(0, len - PREVIEW_LIMIT)
 }
+function skillDetail(s: string | CharacterSkill): string {
+  if (typeof s === 'string') return ''
+  const parts: string[] = []
+  for (const [key, value] of Object.entries(s)) {
+    if (key === 'name' || key === 'value' || key === 'type' || key === 'key') continue
+    if (value === undefined || value === null || value === '') continue
+    parts.push(`${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`)
+  }
+  return parts.join('\n')
+}
+function skillTitle(s: string | CharacterSkill): string {
+  const name = label(s)
+  const value = typeof s === 'object' && s.value !== undefined ? ` (${s.value})` : ''
+  const detail = skillDetail(s)
+  return detail ? `${name}${value}\n\n${detail}` : ''
+}
 </script>
 
 <template>
@@ -117,8 +134,9 @@ function restCount(len: number): number {
     </div>
     <details class="character-detail-block"><summary>{{ t('skills') }}</summary>
       <div class="chips">
-        <span v-for="s in cs.skills || []" :key="label(s)">{{ label(s) }}<template v-if="typeof s === 'object'"> {{ s.value }}</template></span>
+        <span v-for="(s, i) in cs.skills || []" :key="'s' + i" :title="skillTitle(s) || undefined">{{ label(s) }}<template v-if="typeof s === 'object' && s.value !== undefined"> {{ s.value }}</template></span>
       </div>
+      <button v-if="(cs.skills || []).length" type="button" class="item-view-all" @click="showSkillsModal = true">{{ t('viewAllDetails') }}</button>
     </details>
     <details class="character-detail-block"><summary>{{ t('equipmentAndInventory') }}</summary>
       <div class="item-groups">
@@ -180,5 +198,28 @@ function restCount(len: number): number {
         <p v-if="!hasItems" class="item-empty">{{ t('none') }}</p>
       </div>
     </Modal>
+
+    <Modal v-if="showSkillsModal" :title="t('skills')" @close="showSkillsModal = false">
+      <div class="item-modal-body">
+        <ul class="item-detail-list skill-detail-list">
+          <li v-for="(s, i) in cs.skills || []" :key="'skill' + i" class="item-detail-row">
+            <span class="item-detail-name">{{ label(s) }}<template v-if="typeof s === 'object' && s.value !== undefined"> ({{ s.value }})</template></span>
+            <span v-if="skillDetail(s)" class="item-detail-meta skill-detail-meta">{{ skillDetail(s) }}</span>
+          </li>
+        </ul>
+        <p v-if="!(cs.skills || []).length" class="item-empty">{{ t('none') }}</p>
+      </div>
+    </Modal>
   </section>
 </template>
+
+<style scoped>
+.skill-detail-list {
+  flex-direction: column;
+  align-items: stretch;
+}
+.skill-detail-meta {
+  flex-basis: 100%;
+  white-space: pre-line;
+}
+</style>
