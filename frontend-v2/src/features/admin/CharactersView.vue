@@ -703,7 +703,7 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
         </div>
       </div>
       <label>{{ t('skills') }}</label>
-      <SkillEditor v-model="edit.skills" :pool="skillPool" />
+      <SkillEditor v-model="edit.skills" :pool="skillPool" :meta="ruleMeta" />
       <label>{{ t('backgroundStory') }}<textarea rows="3" v-model="edit.background"></textarea></label>
       <ItemEditor v-model:equipment="edit.equipment" v-model:inventory="edit.inventory" />
       <label>{{ t('keyItemsLineHelp') }}<textarea rows="3" v-model="edit.keyText"></textarea></label>
@@ -729,7 +729,7 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
       <label>{{ t('originIdentity') }}<input v-model="editCard.race"></label>
       <label>{{ t('classRole') }}<input v-model="editCard.class"></label>
       <label>{{ t('skills') }}</label>
-      <SkillEditor v-model="editCard.skills" :pool="skillPool" />
+      <SkillEditor v-model="editCard.skills" :pool="skillPool" :meta="ruleMeta" />
       <label>{{ t('background') }}<textarea rows="4" v-model="editCard.background"></textarea></label>
       <label>{{ t('initialMoney') }}<input type="number" v-model.number="editCard.gold"></label>
       <template #actions>

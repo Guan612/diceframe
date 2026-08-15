@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { CharacterSkill, SkillSpec } from '@/api/types'
+import type { CharacterSkill, RuleMeta, SkillSpec } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
+import { localizedField, skillPointCost } from '@/utils/ruleSchema'
 
-const props = defineProps<{ modelValue: CharacterSkill[]; pool?: Array<string | SkillSpec> }>()
+const props = defineProps<{ modelValue: CharacterSkill[]; pool?: Array<string | SkillSpec>; meta?: RuleMeta | null }>()
 const emit = defineEmits<{ 'update:modelValue': [v: CharacterSkill[]] }>()
 const { t } = useLocale()
 
@@ -30,13 +31,31 @@ function updateVal(i: number, v: number) {
   arr[i] = { ...arr[i], value: v || 0 }
   skills.value = arr
 }
+
+const skillHint = computed(() => localizedField<string>(props.meta, 'skill_hint') || '')
+const maxSkills = computed(() => Number(props.meta?.max_skills || 0))
+const skillPointTotal = computed(() => Number(props.meta?.skill_point_total || 0))
+const maxSkillValue = computed(() => Number(props.meta?.max_skill_value || 0))
+const filledSkills = computed(() => skills.value.filter(s => s.name.trim()))
+const skillSpent = computed(() => filledSkills.value.reduce((sum, skill) => sum + skillPointCost(skill, props.meta), 0))
+const skillOverLimit = computed(() =>
+  Boolean((maxSkills.value && filledSkills.value.length > maxSkills.value)
+    || (skillPointTotal.value && skillSpent.value > skillPointTotal.value)
+    || (maxSkillValue.value && skills.value.some(s => (Number(s.value || 0) || 0) > maxSkillValue.value)))
+)
 </script>
 
 <template>
   <div class="skill-editor">
+    <p v-if="skillHint" class="muted sheet-hint">{{ skillHint }}</p>
+    <p class="muted sheet-hint" :class="{ warn: skillOverLimit }">
+      <span v-if="maxSkills">{{ t('skillCount', { count: filledSkills.length, max: maxSkills }) }}</span>
+      <span v-if="skillPointTotal"> · {{ t('skillPointsSpent', { spent: skillSpent, total: skillPointTotal }) }}</span>
+      <span v-if="maxSkillValue"> · {{ t('maxSingleSkill', { max: maxSkillValue }) }}</span>
+    </p>
     <div v-for="(s, i) in skills" :key="i" class="skill-row">
       <input :value="s.name" :placeholder="t('skillName')" @input="updateName(i, ($event.target as HTMLInputElement).value)">
-      <input type="number" :value="s.value" min="0" @input="updateVal(i, Number(($event.target as HTMLInputElement).value))">
+      <input type="number" :value="s.value" min="0" :class="{ warn: maxSkillValue && (Number(s.value || 0) || 0) > maxSkillValue }" @input="updateVal(i, Number(($event.target as HTMLInputElement).value))">
       <button class="modal-x" :title="t('delete')" @click="remove(i)">×</button>
     </div>
     <button class="chip" @click="add()">+ {{ t('addSkill') }}</button>
