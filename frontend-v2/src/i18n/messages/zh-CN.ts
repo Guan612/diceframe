@@ -1502,6 +1502,8 @@ export const zhCN = {
   mapBackgroundUpload: '上传地图图片',
   mapBackgroundSaved: '地图背景已保存',
   mapBackgroundInvalidFile: '请选择不超过 8 MB 的 PNG、JPEG 或 WebP 图片',
+  // apiErrors：key 是后端返回的稳定错误码（error_code），value 是界面语言文案。
+  // 翻译时参照英文值即可，无需理解后端原始消息；未收录的错误码由前端回退显示原文。
   apiErrors: {
     game_not_found: '游戏不存在',
     player_not_in_game: '未加入本局，请通过邀请链接加入',

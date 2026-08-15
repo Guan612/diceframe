@@ -1491,6 +1491,9 @@ export const ja = {
   mapBackgroundUpload: 'マップ画像をアップロード',
   mapBackgroundSaved: 'マップ背景を保存しました',
   mapBackgroundInvalidFile: '8 MB 以下の PNG、JPEG、WebP 画像を選択してください',
+  // apiErrors：key はバックエンドが返す安定したエラーコード（error_code）、value は画面言語の文言。
+  // 翻訳時は英語の値だけを参照すればよく、バックエンドの原文を理解する必要はありません。
+  // 未収録のエラーコードはフロントエンドが原文を表示します。
   apiErrors: {
     game_not_found: 'ゲームが見つかりません',
     player_not_in_game: 'この卓に参加していません。招待リンクから参加してください',
