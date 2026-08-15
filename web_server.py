@@ -1097,10 +1097,12 @@ app.on_cleanup.append(on_cleanup)
 from src.webui.connection_pool import ConnectionPool
 from src.webui.session import SessionManager, session_middleware
 from src.webui.sse_ticket import SseTicketStore
+from src.webui.errors import error_code_middleware
 
 app.middlewares.append(session_middleware)
 app.middlewares.append(abuse_guard_middleware)
 app.middlewares.append(auth_middleware)
+app.middlewares.append(error_code_middleware)
 app.on_response_prepare.append(add_response_security_headers)
 app["_config_reload_lock"] = asyncio.Lock()
 app["session_manager"] = SessionManager(DATA_DIR)
