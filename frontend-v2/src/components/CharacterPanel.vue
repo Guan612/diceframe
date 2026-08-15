@@ -99,12 +99,12 @@ function skillTitle(s: string | CharacterSkill): string {
 const levelUpPoints = computed(() => Number(cs.value.level_up_points || 0))
 const showLevelUp = ref(false)
 const fallbackLevelUpAttrs: RuleAttr[] = [
-  { key: 'str', name: '力量', min: 1, max: 100 },
-  { key: 'con', name: '体质', min: 1, max: 100 },
-  { key: 'dex', name: '敏捷', min: 1, max: 100 },
-  { key: 'int', name: '智力', min: 1, max: 100 },
-  { key: 'wis', name: '感知', min: 1, max: 100 },
-  { key: 'cha', name: '魅力', min: 1, max: 100 },
+  { key: 'str', name: '力量', name_en: 'STR', min: 1, max: 100 },
+  { key: 'con', name: '体质', name_en: 'CON', min: 1, max: 100 },
+  { key: 'dex', name: '敏捷', name_en: 'DEX', min: 1, max: 100 },
+  { key: 'int', name: '智力', name_en: 'INT', min: 1, max: 100 },
+  { key: 'wis', name: '感知', name_en: 'WIS', min: 1, max: 100 },
+  { key: 'cha', name: '魅力', name_en: 'CHA', min: 1, max: 100 },
 ]
 const levelUpAttrs = computed<RuleAttr[]>(() => {
   const defs = props.ruleMeta?.attributes as RuleAttribute[] | undefined
