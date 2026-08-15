@@ -4,7 +4,9 @@ import { NIcon } from 'naive-ui'
 import { ChevronBack, ChevronForward, MapOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
 import { api, apiBlob, isNotFoundError } from '@/api/client'
-import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CheckResult, CommandResponse, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
+import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CheckResult, CommandResponse, GameDetail, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
+import { queryString } from '@/stores/gameContext'
+import { isStoredPlayerMember } from '@/utils/joinIdentity'
 import { useGame } from '@/composables/useGame'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -510,6 +512,22 @@ async function loadPlayContext() {
   if (route.query.share && !route.query.user && !localStorage.getItem('trpg_access_token')) {
     router.replace({ name: 'join', query: { game: game.currentGame.value, share: '1' } })
     return
+  }
+  // 被踢/身份过期的玩家直连 play 链接时，SSE 与私聊接口会持续 403「未加入本局」。
+  // 先独立校验一次成员资格（不依赖 refresh，因其 private-log 403 会中断整组请求），
+  // 失效则清掉本地身份缓存，送回加入页走重新加入（GM 有 access_token，不受影响）。
+  const linkUid = queryString(route.query.user)
+  if (linkUid && !localStorage.getItem('trpg_access_token')) {
+    try {
+      const d = await api<GameDetail>(`/games/${encodeURIComponent(game.currentGame.value)}`)
+      if (!isStoredPlayerMember(d, linkUid)) {
+        localStorage.removeItem('trpg_play_user_' + game.currentGame.value)
+        router.replace({ name: 'join', query: { game: game.currentGame.value, share: '1' } })
+        return
+      }
+    } catch {
+      // 校验请求本身失败（网络抖动/后端重启）：保持旧行为留在本页，下次刷新重试。
+    }
   }
   if (!route.query.user) {
     try {

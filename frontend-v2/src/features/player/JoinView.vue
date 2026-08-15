@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/client'
 import type { CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSkill, GameDetail, PlayerCreateResponse, RuleAttribute, RuleMeta } from '@/api/types'
 import { rememberCurrentGame } from '@/stores/gameContext'
+import { isStoredPlayerMember } from '@/utils/joinIdentity'
 import { attrDisplayName, suggestedAttributes, skillPointCost } from '@/utils/ruleSchema'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useConfirm } from '@/composables/useConfirm'
@@ -86,17 +87,34 @@ function skillToForm(skill: string | CharacterSkill): JoinSkill {
 
 onMounted(async () => {
   const stored = localStorage.getItem('trpg_play_user_' + gameKey.value)
-  if (stored) { rememberCurrentGame(gameKey.value); router.replace({ name: 'play', query: { game: gameKey.value, user: stored, share: '1' } }); return }
-  if (linkUser.value) resumeUser.value = linkUser.value
   try {
     const d = await api<GameDetail>(`/games/${encodeURIComponent(gameKey.value)}`)
     detail.value = d
+    if (stored) {
+      // 校验本地身份是否仍是成员：被踢后缓存过期，不能再盲跳游玩界面。
+      if (isStoredPlayerMember(d, stored)) {
+        rememberCurrentGame(gameKey.value)
+        router.replace({ name: 'play', query: { game: gameKey.value, user: stored, share: '1' } })
+        return
+      }
+      // 被踢/身份过期：清掉本地缓存，走正常重新加入（尊重房间密码等门槛）。
+      localStorage.removeItem('trpg_play_user_' + gameKey.value)
+    }
+    if (linkUser.value) resumeUser.value = linkUser.value
     if (d.has_room_password && !localStorage.getItem('trpg_play_room_' + gameKey.value)) {
       needRoomPassword.value = true
       return
     }
     await afterGate()
-  } catch (e: unknown) { error.value = errorMessage(e) }
+  } catch (e: unknown) {
+    // 详情获取失败：若本地有身份，按旧行为放行进游玩，避免成员被临时故障锁住。
+    if (stored) {
+      rememberCurrentGame(gameKey.value)
+      router.replace({ name: 'play', query: { game: gameKey.value, user: stored, share: '1' } })
+      return
+    }
+    error.value = errorMessage(e)
+  }
 })
 
 async function afterGate() {
