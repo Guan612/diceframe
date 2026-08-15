@@ -111,13 +111,6 @@ docker compose up -d
 6. Submit actions in natural language.
 7. If an action triggers a check, the system adjudicates and rolls once automatically; the GM narration then resumes.
 
-## Languages And Content
-
-- App language controls menus, buttons, settings, and UI messages.
-- Game Language controls GM narration, opening scenes, summaries, quick actions, and AI-generated content.
-- World templates, lorebooks, and content packs declare their content language with `language`. Create prioritizes matching templates while still allowing other-language content.
-- Rules use separate language files: `<rule_id>.json` for Chinese and `<rule_id>_en.json` for English. The stable ID and mechanics fields do not change; missing English files fall back to Chinese.
-
 More player-facing help is in the [DiceFrame user guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/guide.md).
 
 ## Plugins and Chat Adapters
@@ -135,9 +128,9 @@ The plugin store indexes author-owned repositories. Installation resolves the la
 | User guide | [User guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/guide.md) | [用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md) |
 | Docker deployment | [Docker deployment](https://github.com/diceframe/diceframe-content/blob/main/docs/en/deploy.md) | [Docker 部署](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/deploy.md) |
 | Application updates | [Application updates](docs/en/updates.md) | [应用更新](docs/zh/updates.md) |
-| Plugin development | [Plugin development](docs/en/plugin-development.md) | [插件开发](docs/zh/plugin-development.md) |
-| Plugin index and review | [Plugin registry](docs/en/plugin-registry.md) | [插件索引与审核](docs/zh/plugin-registry.md) |
-| Bot Bridge core | [Bot Bridge Core](docs/en/bot-bridge-core.md) | [Bot Bridge 核心](docs/zh/bot-bridge-core.md) |
+| Plugin development | [Plugin development](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-development.md) | [插件开发](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md) |
+| Plugin index and review | [Plugin registry](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-registry.md) | [插件索引与审核](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md) |
+| Bot Bridge core | [Bot Bridge Core](https://github.com/diceframe/diceframe-content/blob/main/docs/en/bot-bridge-core.md) | [Bot Bridge 核心](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/bot-bridge-core.md) |
 
 ## Data And Privacy
 

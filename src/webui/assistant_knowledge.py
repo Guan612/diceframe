@@ -26,18 +26,10 @@ _DOCUMENTS = {
     "zh": (
         "README.md",
         "docs/zh/updates.md",
-        "docs/zh/plugin-development.md",
-        "docs/zh/plugin-registry.md",
-        "docs/zh/remote-access.md",
-        "docs/zh/scene-images.md",
-        "docs/zh/bot-bridge-core.md",
     ),
     "en": (
         "README_EN.md",
         "docs/en/updates.md",
-        "docs/en/plugin-development.md",
-        "docs/en/plugin-registry.md",
-        "docs/en/bot-bridge-core.md",
     ),
 }
 _HEADING_RE = re.compile(r"^(#{1,4})\s+(.+?)\s*$")

@@ -134,13 +134,6 @@ Windows 下也可以双击 `web_ui.bat` 启动；它会检查依赖，并在缺�
 
 多人模式下，GM 创建游戏后复制邀请链接给其他玩家。玩家加入并认领角色后，每轮提交自己的行动；所有活跃玩家都提交后，或 GM 强制推进后，进入下一段叙事。
 
-## 语言和内容
-
-- 界面语言控制菜单、按钮、设置页和提示文案。
-- 游戏语言控制 GM 叙事、开场、摘要、快捷行动和 AI 生成内容。
-- 世界模板、世界书和内容包使用 `language` 标识内容语言。创建页会优先显示同语言模板，其他语言内容仍可选择，并会显示内容语言。
-- 规则按语言拆分文件：中文版 `<rule_id>.json`，英文版 `<rule_id>_en.json`；`rule_id` 和机制字段保持稳定，缺少英文版时回退中文版。
-
 ## QQ / NapCat
 
 推荐的群聊方式是内置 QQ / NapCat 插件。
@@ -175,7 +168,7 @@ Bot 会跟随绑定对局的语言显示帮助和主要操作提示；中文与�
 - `@bot 暂离` / `@bot 回来`：临时下线不阻塞回合。
 - `@bot <自然语言行动>`：提交角色行动。
 
-Bot 不直接读写存档，只通过 Web 服务的 HTTP API 工作。插件商店优先从 DiceFrame Hub 读取审核状态、统计与详情，Hub 不可用时自动降级到本地缓存和公开索引镜像；插件包仍直接从作者自己的 GitHub 正式 Release 固定到精确提交下载，Hub 不代理包体。商店检测到插件新版本时会提示，安装与更新均由用户手动确认；进程型或扩权更新始终需要确认。本地和私下分享使用 `.dfplugin`。匿名使用统计默认关闭，可在“设置 → 高级 → DiceFrame Hub 与隐私”中开启、关闭或清除假名化安装身份；游戏、角色、插件列表、模型配置和正文不会作为心跳发送。开发时可用 `DICEFRAME_HUB_URL=http://127.0.0.1:18080` 指向本机 Hub，非本机地址必须使用 HTTPS。插件开发说明见 [docs/zh/plugin-development.md](docs/zh/plugin-development.md)，投稿和审核边界见 [docs/zh/plugin-registry.md](docs/zh/plugin-registry.md)。示例插件在 `plugins/examples/`，包括内容包、主题、可调用工具和 Bot Bridge 命令/展示扩展；可用 `python scripts\package_plugin.py plugins\examples\bridge-customizer --overwrite` 打包测试。
+Bot 不直接读写存档，只通过 Web 服务的 HTTP API 工作。插件商店优先从 DiceFrame Hub 读取审核状态、统计与详情，Hub 不可用时自动降级到本地缓存和公开索引镜像；插件包仍直接从作者自己的 GitHub 正式 Release 固定到精确提交下载，Hub 不代理包体。商店检测到插件新版本时会提示，安装与更新均由用户手动确认；进程型或扩权更新始终需要确认。本地和私下分享使用 `.dfplugin`。匿名使用统计默认关闭，可在“设置 → 高级 → DiceFrame Hub 与隐私”中开启、关闭或清除假名化安装身份；游戏、角色、插件列表、模型配置和正文不会作为心跳发送。开发时可用 `DICEFRAME_HUB_URL=http://127.0.0.1:18080` 指向本机 Hub，非本机地址必须使用 HTTPS。插件开发说明见 [插件开发指南](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md)，投稿和审核边界见 [插件索引与审核规则](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md)。示例插件在 `plugins/examples/`，包括内容包、主题、可调用工具和 Bot Bridge 命令/展示扩展；可用 `python scripts\package_plugin.py plugins\examples\bridge-customizer --overwrite` 打包测试。
 
 ## 文档
 
@@ -184,9 +177,9 @@ Bot 不直接读写存档，只通过 Web 服务的 HTTP API 工作。插件商�
 | 用户手册 | [用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md) | [User guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/guide.md) |
 | Docker 部署 | [Docker 部署](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/deploy.md) | [Docker deployment](https://github.com/diceframe/diceframe-content/blob/main/docs/en/deploy.md) |
 | 应用更新 | [应用更新](docs/zh/updates.md) | [Application updates](docs/en/updates.md) |
-| 插件开发 | [插件开发](docs/zh/plugin-development.md) | [Plugin development](docs/en/plugin-development.md) |
-| 插件索引与审核 | [插件索引与审核](docs/zh/plugin-registry.md) | [Plugin registry](docs/en/plugin-registry.md) |
-| Bot Bridge 核心 | [Bot Bridge 核心](docs/zh/bot-bridge-core.md) | [Bot Bridge Core](docs/en/bot-bridge-core.md) |
+| 插件开发 | [插件开发](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md) | [Plugin development](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-development.md) |
+| 插件索引与审核 | [插件索引与审核](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md) | [Plugin registry](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-registry.md) |
+| Bot Bridge 核心 | [Bot Bridge 核心](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/bot-bridge-core.md) | [Bot Bridge Core](https://github.com/diceframe/diceframe-content/blob/main/docs/en/bot-bridge-core.md) |
 
 
 ## 数据与隐私
@@ -232,7 +225,7 @@ data/
 ├── plugins/               # 内置/示例插件（随版本分发；用户安装的插件在 data/plugin-packages/）
 ├── prompts/               # GM 系统提示词
 ├── templates/             # 内置规则和世界模板
-└── docs/                  # 技术文档（zh/en 双语：插件开发、审核、更新、Bot Bridge 等）
+└── docs/                  # 技术文档（zh/en 双语：应用更新；插件开发等文档见 diceframe-content）
 ```
 
 ## License
