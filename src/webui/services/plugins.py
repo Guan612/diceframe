@@ -439,6 +439,7 @@ def export_content_pack(
     include_map: bool = True,
     map_background: dict[str, Any] | None = None,
     map_icons: list[dict[str, Any]] | None = None,
+    language: str = "",
 ) -> dict[str, Any]:
     """把应用内的世界/角色卡/规则导出成一个内容包 .dfplugin。
 
@@ -555,6 +556,7 @@ def export_content_pack(
         has_rule,
         has_cards,
         bool(map_package and map_package.has_map),
+        language=language or (str(world.get("language") or "zh-CN") if world_id and world else "zh-CN"),
     )
 
     payload = api._plugins.package_files(plugin_id, files, flat=flat)
@@ -636,20 +638,58 @@ def _default_readme(
     has_rule: bool,
     has_cards: bool,
     has_map: bool = False,
+    language: str = "zh-CN",
 ) -> str:
+    """按内容语言生成兜底 README；作者自带 README 时不会被调用。"""
+    lang_key = "en" if (language or "").lower().startswith("en") else ("ja" if (language or "").lower().startswith("ja") else "zh")
+    copy = {
+        "zh": {
+            "content": "## 内容",
+            "world": "- 世界模板（含世界书条目，启用后自动灌入）",
+            "rule": "- 规则",
+            "cards": "- 角色模板（可在插件内容目录导入角色卡库）",
+            "map": "- 场景地图（地点、地图定义及所选图标/底图）",
+            "usage": "## 用法",
+            "step1": "1. 设置页 -> 插件 -> 导入本 .dfplugin",
+            "step2": "2. 打开本内容包的开关",
+            "step3": "3. 创建游戏时选择本世界与规则",
+        },
+        "en": {
+            "content": "## Contents",
+            "world": "- World template (with lorebook entries, auto-imported when enabled)",
+            "rule": "- Rule",
+            "cards": "- Character templates (importable from the plugin content catalog)",
+            "map": "- Scene map (locations, map definitions, icons/backgrounds)",
+            "usage": "## Usage",
+            "step1": "1. Open Settings → Plugins and import this .dfplugin",
+            "step2": "2. Enable this content pack",
+            "step3": "3. Pick this world and rule when creating a game",
+        },
+        "ja": {
+            "content": "## 内容",
+            "world": "- ワールドテンプレート（ロアブックエントリを含み、有効化時に自動で取り込みます）",
+            "rule": "- ルール",
+            "cards": "- キャラクターテンプレート（プラグインコンテンツからインポート可能）",
+            "map": "- シーンマップ（地点・マップ定義・選択したアイコン/背景）",
+            "usage": "## 使い方",
+            "step1": "1. 設定 → プラグイン から本 .dfplugin をインポート",
+            "step2": "2. 本コンテンツパックを有効化",
+            "step3": "3. ゲーム作成時に本ワールドとルールを選択",
+        },
+    }[lang_key]
     lines = [f"# {name}", ""]
     if description:
         lines += [description, ""]
-    lines.append("## 内容")
+    lines.append(copy["content"])
     if has_world:
-        lines.append("- 世界模板（含世界书条目，启用后自动灌入）")
+        lines.append(copy["world"])
     if has_rule:
-        lines.append("- 规则")
+        lines.append(copy["rule"])
     if has_cards:
-        lines.append("- 角色模板（可在插件内容目录导入角色卡库）")
+        lines.append(copy["cards"])
     if has_map:
-        lines.append("- 场景地图（地点、地图定义及所选图标/底图）")
-    lines += ["", "## 用法", "1. 设置页 -> 插件 -> 导入本 .dfplugin", "2. 打开本内容包的开关", "3. 创建游戏时选择本世界与规则", ""]
+        lines.append(copy["map"])
+    lines += ["", copy["usage"], copy["step1"], copy["step2"], copy["step3"], ""]
     return "\n".join(lines)
 
 

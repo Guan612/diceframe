@@ -2,10 +2,20 @@ import { i18n } from '@/i18n'
 
 const tokenKey = 'trpg_access_token'
 
-export class ApiError extends Error { constructor(message: string, public status: number) { super(message) } }
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public code?: string) { super(message) }
+}
 
 export function isNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404
+}
+
+export function errorCodeOf(data: unknown): string | undefined {
+  if (data && typeof data === 'object' && 'error_code' in data) {
+    const code = (data as { error_code?: unknown }).error_code
+    return typeof code === 'string' && code ? code : undefined
+  }
+  return undefined
 }
 
 function isPlayerShareLocation(): boolean {
@@ -68,7 +78,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   const data = await response.json().catch(() => ({}))
   await handleUnauthorized(response)
   if (response.status === 429) throw new ApiError(rateLimitMessage(data), 429)
-  if (!response.ok) throw new ApiError(data.error || `HTTP ${response.status}`, response.status)
+  if (!response.ok) throw new ApiError(data.error || `HTTP ${response.status}`, response.status, errorCodeOf(data))
   return data
 }
 
@@ -83,7 +93,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
   }
   if (!response.ok) {
     const data = await response.json().catch(() => ({}))
-    throw new ApiError(data.error || `HTTP ${response.status}`, response.status)
+    throw new ApiError(data.error || `HTTP ${response.status}`, response.status, errorCodeOf(data))
   }
   return response
 }
@@ -123,4 +133,11 @@ export async function gameEventSource(gameKey: string): Promise<EventSource> {
   return new EventSource(`/api/games/${encodeURIComponent(gameKey)}/sse?${q}`)
 }
 
-export function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error) }
+export function errorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code) {
+    // 有稳定错误码时优先本地化文案（apiErrors.<code>）；未翻译回退后端原文。
+    const localized = i18n.global.t(`apiErrors.${error.code}`)
+    if (localized && localized !== `apiErrors.${error.code}`) return localized
+  }
+  return error instanceof Error ? error.message : String(error)
+}
