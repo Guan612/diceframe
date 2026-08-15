@@ -13,7 +13,7 @@ interface Decision { title?: string; summary?: string; description?: string; rou
 interface PlotTracker { quests?: Record<string, Quest>; relations?: Record<string, Relation>; decisions?: Array<Decision | string> }
 
 const props = defineProps<{ detail: GameDetail; player?: Player; privateMessages: PrivateMessage[]; map?: MapData | null; ruleMeta?: RuleMeta | null; collapsed?: boolean; portraitEditable?: boolean }>()
-const emit = defineEmits<{ 'lore-click': [name: string]; 'open-map': []; 'toggle-sidebar': []; 'portrait-click': [] }>()
+const emit = defineEmits<{ 'lore-click': [name: string]; 'open-map': []; 'toggle-sidebar': []; 'portrait-click': []; 'allocate-level-up': [attrs: Record<string, number>] }>()
 const { t } = useLocale()
 
 const pt = computed<PlotTracker>(() => (props.detail.plot_tracker && typeof props.detail.plot_tracker === 'object' ? props.detail.plot_tracker as PlotTracker : {}))
@@ -54,7 +54,7 @@ function perceptionKey(m: PrivateMessage | string, i: number) {
     <button class="sidebar-toggle" @click="emit('toggle-sidebar')" :title="collapsed ? t('expandSidebar') : t('collapseSidebar')">
       <NIcon :component="collapsed ? ChevronForward : ChevronBack" size="16" />
     </button>
-    <CharacterPanel :player="player" :rule-meta="ruleMeta" :portrait-editable="portraitEditable" @portrait-click="emit('portrait-click')" />
+    <CharacterPanel :player="player" :rule-meta="ruleMeta" :portrait-editable="portraitEditable" @portrait-click="emit('portrait-click')" @allocate-level-up="(attrs) => emit('allocate-level-up', attrs)" />
 
     <details class="panel sidebar-disclosure" v-if="hasPlot">
       <summary><strong>{{ t('plotTracker') }}</strong><span>{{ activeQuests.length + doneQuests.length + notableRelations.length + recentDecisions.length }}</span></summary>

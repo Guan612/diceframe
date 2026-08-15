@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { CharacterItem, CharacterSheet, CharacterSkill, Player, RuleAttribute, RuleMeta } from '@/api/types'
-import { attrDisplayName, getCurrencyAmount, getResourceValue, currencyLabel } from '@/utils/ruleSchema'
+import { attrDisplayName, getCurrencyAmount, getResourceValue, currencyLabel, type RuleAttr } from '@/utils/ruleSchema'
 import { buildSpecialStats, primaryResourceList } from '@/utils/play'
 import { useLocale } from '@/composables/useLocale'
 import PortraitImage from '@/components/PortraitImage.vue'
 import Modal from '@/components/ui/Modal.vue'
+import LevelUpDialog from '@/components/admin/LevelUpDialog.vue'
 
 const props = defineProps<{ player?: Player; ruleMeta?: RuleMeta | null; portraitEditable?: boolean }>()
-const emit = defineEmits<{ 'portrait-click': [] }>()
+const emit = defineEmits<{ 'portrait-click': []; 'allocate-level-up': [attrs: Record<string, number>] }>()
 const { t } = useLocale()
 function label(item: unknown) { if (typeof item === 'string') return item; if (item && typeof item === 'object' && 'name' in item) return String((item as { name?: unknown }).name || JSON.stringify(item)); return JSON.stringify(item) }
 
@@ -94,6 +95,25 @@ function skillTitle(s: string | CharacterSkill): string {
   const detail = skillDetail(s)
   return detail ? `${name}${value}\n\n${detail}` : ''
 }
+
+const levelUpPoints = computed(() => Number(cs.value.level_up_points || 0))
+const showLevelUp = ref(false)
+const fallbackLevelUpAttrs: RuleAttr[] = [
+  { key: 'str', name: '力量', min: 1, max: 100 },
+  { key: 'con', name: '体质', min: 1, max: 100 },
+  { key: 'dex', name: '敏捷', min: 1, max: 100 },
+  { key: 'int', name: '智力', min: 1, max: 100 },
+  { key: 'wis', name: '感知', min: 1, max: 100 },
+  { key: 'cha', name: '魅力', min: 1, max: 100 },
+]
+const levelUpAttrs = computed<RuleAttr[]>(() => {
+  const defs = props.ruleMeta?.attributes as RuleAttribute[] | undefined
+  return defs && defs.length ? defs : fallbackLevelUpAttrs
+})
+function submitLevelUp(attrs: Record<string, number>) {
+  showLevelUp.value = false
+  emit('allocate-level-up', attrs)
+}
 </script>
 
 <template>
@@ -129,6 +149,19 @@ function skillTitle(s: string | CharacterSkill): string {
       </div>
     </div>
 
+    <div v-if="levelUpPoints > 0" class="level-up-notice">
+      <span>{{ t('pointsToAllocate', { points: levelUpPoints }) }}</span>
+      <button type="button" class="primary" @click="showLevelUp = true">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints }) }}</button>
+    </div>
+    <LevelUpDialog
+      v-if="showLevelUp"
+      :rule-attrs="levelUpAttrs"
+      :rule-meta="ruleMeta"
+      :character="player"
+      :level-up-points="levelUpPoints"
+      @submit="submitLevelUp"
+      @cancel="showLevelUp = false"
+    />
     <div class="chips character-attributes">
       <span v-for="a in attrs" :key="a.key">{{ a.name }} {{ a.value }}</span>
     </div>
@@ -214,6 +247,9 @@ function skillTitle(s: string | CharacterSkill): string {
 </template>
 
 <style scoped>
+.level-up-notice{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 0 4px;padding:7px 9px;border:1px solid var(--df-border-soft);border-radius:var(--df-radius-sm);background:var(--df-hover)}
+.level-up-notice span{color:var(--df-warning);font-size:12px;line-height:1.3}
+.level-up-notice button{padding:2px 10px;font-size:12px;white-space:nowrap}
 .skill-detail-list {
   flex-direction: column;
   align-items: stretch;
