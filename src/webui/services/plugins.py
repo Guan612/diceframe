@@ -851,21 +851,20 @@ def _content_to_lore_entry(resource: dict[str, Any], kind: str, world_id: str) -
 
 
 def _content_description(resource: dict[str, Any], kind: str) -> str:
+    """内容包资源 → 世界书条目 content，保真输出主文本。
+
+    主文本（description/content/summary）原文直接作为条目内容，不再包装
+    「类型：/来源插件：/描述：」标题——类型与来源插件已存世界书条目的独立
+    字段（type/source_plugin），重复拼入内容只会污染 LLM 上下文、挤占 token，
+    英文内容包还会出现中英混杂。effect/机制/背景 等补充字段保留标题区分，
+    其余自定义字段以 JSON 数据块附加。
+    """
     lines = []
-    label = {
-        "npc": "NPC",
-        "item": "道具",
-        "spell": "法术",
-        "class": "职业",
-    }.get(kind, "内容")
-    lines.append(f"类型：{label}")
-    plugin_name = str(resource.get("plugin_name") or resource.get("plugin_id") or "").strip()
-    if plugin_name:
-        lines.append(f"来源插件：{plugin_name}")
+    for key in ("description", "content", "summary"):
+        value = resource.get(key)
+        if isinstance(value, str) and value.strip():
+            lines.append(value.strip())
     for key, title in (
-        ("description", "描述"),
-        ("summary", "摘要"),
-        ("content", "内容"),
         ("effect", "效果"),
         ("mechanics", "机制"),
         ("background", "背景"),
