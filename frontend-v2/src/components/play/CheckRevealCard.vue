@@ -95,6 +95,8 @@ onUnmounted(() => {
 
 <style scoped>
 .check-reveal-card{position:relative;margin:7px auto;border-left:4px solid var(--df-danger);background:linear-gradient(135deg,rgba(45,37,25,.98),rgba(24,30,29,.96));overflow:hidden;transition:border-color .25s ease,box-shadow .25s ease}
+:root[data-mode="light"] .check-reveal-card{background:linear-gradient(135deg,var(--df-surface-2),var(--df-surface-3))}
+:root[data-mode="light"] .check-die{background:rgba(0,0,0,.06)}
 .check-reveal-card.success{border-left-color:var(--df-success)}
 .check-reveal-card.critical{border-left-color:var(--df-accent-strong);box-shadow:0 0 24px rgba(216,173,82,.2)}
 .check-reveal-card.fumble{border-left-color:var(--df-danger);box-shadow:0 0 22px rgba(185,58,58,.18)}

@@ -417,6 +417,14 @@ async function selectCard(card: CharacterCard) {
   } catch (e: unknown) { toast.error(errorMessage(e)) }
 }
 
+async function allocateLevelUp(attrs: Record<string, number>) {
+  try {
+    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, { method: 'PUT', body: JSON.stringify({ attributes: attrs }) })
+    toast.success(t('attributePointsAllocated'))
+    await game.refresh()
+  } catch (e: unknown) { toast.error(errorMessage(e)) }
+}
+
 async function kick(uid: string) {
   const ok = await confirm({ title: t('kickPlayerTitle'), content: t('kickPlayerContent'), positiveText: t('kickPlayerTitle'), negativeText: t('cancel'), type: 'error' })
   if (!ok) return
@@ -648,6 +656,7 @@ onBeforeUnmount(() => {
         @open-map="openMap"
         @toggle-sidebar="toggleSidebarPanel"
         @portrait-click="openPortraitEditor"
+        @allocate-level-up="allocateLevelUp"
       />
 
       <Modal v-if="showPortraitEditor && game.player.value" :title="t('changeAvatar')" @close="showPortraitEditor = false">
