@@ -26,7 +26,7 @@ DiceFrame 2.2.0 adds player-driven growth and GM controls, and fixes a batch of 
 ### New
 
 - **Players can allocate level-up attribute points themselves**: after leveling up, players see "X attribute points to allocate" on their character panel in the play view and can spend them directly; the GM-side management entry is unchanged.
-- **GM commands support XP adjustments**: commands like "给XX加经验100点" or "give 100 xp to XX" now write experience directly to the character sheet; characters meeting the threshold auto-level on the next round resolution (applies to XP-based rules only; CoC uses skill-growth checks and is unaffected).
+- **GM commands support XP adjustments**: commands like "add 100 xp to XX" now write experience directly to the character sheet; characters meeting the threshold auto-level on the next round resolution (applies to XP-based rules only; CoC uses skill-growth checks and is unaffected).
 - **Localized API error messages**: API errors now carry stable error codes; common errors (not in this game, wrong room password, GM only, etc.) show localized text in English/Japanese interfaces, with untranslated errors falling back to the original message — no functional impact.
 - **Plugin fallback README follows content language**: when a content pack ships no README, the generated one now uses the pack's content language (Chinese/English/Japanese) instead of hardcoded Chinese.
 
