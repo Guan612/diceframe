@@ -14,7 +14,7 @@
     {"key": "cha", "name": "魅力", "min": 3, "max": 18}
   ],
   "special_stats": [
-    {"key": "qi", "name": "内力", "max": 100,
+    {"key": "qi", "name": "内力", "max": 100, "initial": 100,
      "description": "使用内功和轻功消耗内力，调息休息可恢复"}
   ],
   "attribute_points": 60,

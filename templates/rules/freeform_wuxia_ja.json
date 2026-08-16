@@ -16,7 +16,7 @@
     {"key": "cha", "name": "魅力", "min": 3, "max": 18}
   ],
   "special_stats": [
-    {"key": "qi", "name": "内力", "max": 100,
+    {"key": "qi", "name": "内力", "max": 100, "initial": 100,
      "description": "内功や軽功を使うと内力が消費され、瞑想や休息で回復します。"}
   ],
   "attribute_points": 60,
