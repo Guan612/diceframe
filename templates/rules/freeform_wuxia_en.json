@@ -15,7 +15,7 @@
     {"key": "cha", "name": "Charisma", "min": 3, "max": 18}
   ],
   "special_stats": [
-    {"key": "qi", "name": "Qi", "max": 100,
+    {"key": "qi", "name": "Qi", "max": 100, "initial": 100,
      "description": "Using internal arts and lightness arts consumes Qi; meditation and rest restore it."}
   ],
   "attribute_points": 60,

@@ -15,6 +15,7 @@ COMMANDS = [
     ("Text mojibake audit", [sys.executable, "scripts/audit_text_i18n.py"]),
     ("API route contract audit", [sys.executable, "scripts/audit_api_contracts.py"]),
     ("Architecture audit", [sys.executable, "scripts/audit_architecture.py"]),
+    ("Rule template audit", [sys.executable, "scripts/audit_rules.py"]),
     ("Python compile check", [sys.executable, "-m", "compileall", "-q", "src", "scripts", "web_server.py"]),
     ("Python correctness lint", [sys.executable, "-m", "ruff", "check", "."]),
     ("Gradual Python type check", [sys.executable, "-m", "mypy"]),
