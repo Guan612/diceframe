@@ -19,6 +19,12 @@ DiceFrame 2.2.0 为玩家自助成长与 GM 控制补充能力，并修复了浅
 - **内容包世界书条目冗余标签**：内容包导入的世界书条目不再携带「类型：/来源插件：/描述：」前缀——类型与来源插件本就是条目的独立字段，重复拼入内容会挤占生成上下文，英文内容包也会出现中英混杂。主文本改为保真输出。
 - **英文界面下的兜底属性名**：升级加点弹窗在规则属性缺失时的兜底属性，英文界面显示 STR/CON 等英文缩写而非中文。
 
+### 下载指南
+
+- **普通 Windows 用户**：下载 `DiceFrame-v2.2.0-windows-portable.zip`。
+- **源码运行用户**：下载 `DiceFrame-v2.2.0-windows.zip`。
+- `.sha256` 是更新校验文件，普通用户不需要手动下载。
+
 ## English
 
 DiceFrame 2.2.0 adds player-driven growth and GM controls, and fixes a batch of issues including light-mode readability, kicked-player rejoin, and redundant lorebook entries.
