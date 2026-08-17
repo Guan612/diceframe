@@ -55,6 +55,41 @@ _GM_RESOURCE_ALIASES = {
 }
 
 
+def _resource_aliases_for_rule(rule: RuleSystem | None) -> dict[str, str]:
+    """内置通用别名 + 当前规则资源动态别名；规则自定义优先。
+
+    special_stats 的 name/key 自动可用（GM 可直接说"给小林加KPI 10"），
+    可选 aliases 字段补充口语变体。动态别名只作用于当前游戏的规则。
+    """
+    aliases = dict(_GM_RESOURCE_ALIASES)
+    if rule:
+        for spec in rule.resource_schema:
+            key = str(spec.get("key") or "").strip()
+            if not key:
+                continue
+            for alias in spec.get("aliases") or []:
+                normalized = str(alias).strip().lower()
+                if normalized:
+                    aliases[normalized] = key
+            label = str(spec.get("label") or "").strip()
+            if label:
+                aliases[label.lower()] = key
+            aliases[key.lower()] = key
+    return aliases
+
+
+def _resource_display_label(resource_key: str, matched_alias: str, rule: RuleSystem | None) -> str:
+    if rule:
+        for spec in rule.resource_schema:
+            if str(spec.get("key") or "") == resource_key:
+                label = str(spec.get("label") or "").strip()
+                if label:
+                    return label
+    if resource_key == "currency":
+        return "金币"
+    return matched_alias
+
+
 def _instance_rule_id(api: "WebAPI", inst: Any) -> str:
     """Return the active rule and lazily migrate saves created before rule_id existed."""
     rule_id = str(getattr(inst, "rule_id", "") or "").strip()
@@ -546,7 +581,8 @@ def _resolve_gm_command_target(
 
 def _parse_gm_resource_change(inst, command: str, rule: RuleSystem | None) -> dict[str, Any] | None:
     compact = re.sub(r"\s+", "", command).lower()
-    aliases = sorted(_GM_RESOURCE_ALIASES, key=len, reverse=True)
+    resource_aliases = _resource_aliases_for_rule(rule)
+    aliases = sorted(resource_aliases, key=len, reverse=True)
     resource_group = "|".join(re.escape(alias) for alias in aliases)
     patterns: tuple[tuple[re.Pattern[str], int], ...] = (
         (re.compile(rf"^给(?P<target>.+?)(?:加|增加|恢复|补充|给予)(?P<resource>{resource_group})(?P<amount>\d+)点?$"), 1),
@@ -570,7 +606,7 @@ def _parse_gm_resource_change(inst, command: str, rule: RuleSystem | None) -> di
     if error:
         return {"error": error}
     resource_alias = match.group("resource")
-    resource_key = _GM_RESOURCE_ALIASES[resource_alias]
+    resource_key = resource_aliases[resource_alias]
     raw_delta = match.groupdict().get("delta")
     delta = int(raw_delta) if raw_delta else sign * int(match.group("amount"))
     if delta == 0:
@@ -599,7 +635,7 @@ def _parse_gm_resource_change(inst, command: str, rule: RuleSystem | None) -> di
         "uid": uid,
         "character_name": inst.players.get(uid, {}).get("character_name") or uid,
         "resource": resource_key,
-        "resource_label": resource_alias,
+        "resource_label": _resource_display_label(resource_key, resource_alias, rule),
         "requested_delta": delta,
         "actual_delta": actual_delta,
         "before": before,

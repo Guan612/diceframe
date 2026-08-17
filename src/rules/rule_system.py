@@ -441,12 +441,15 @@ class RuleSystem:
         for stat in self.special_stats:
             key = stat.get("key")
             if key:
-                resources.append({
+                resource = {
                     "key": key,
                     "label": stat.get("name", key),
                     "min": stat.get("min", 0),
                     "max": stat.get("max", 99),
-                })
+                }
+                if stat.get("aliases"):
+                    resource["aliases"] = stat["aliases"]
+                resources.append(resource)
         return resources
 
     @property
