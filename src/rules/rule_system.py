@@ -14,6 +14,7 @@ from src.engine.language import (
     field_suffixes,
     lang_suffix,
     localized_field,
+    localized_text,
     normalize_language,
 )
 
@@ -441,12 +442,15 @@ class RuleSystem:
         for stat in self.special_stats:
             key = stat.get("key")
             if key:
-                resources.append({
+                resource = {
                     "key": key,
                     "label": stat.get("name", key),
                     "min": stat.get("min", 0),
                     "max": stat.get("max", 99),
-                })
+                }
+                if stat.get("aliases"):
+                    resource["aliases"] = stat["aliases"]
+                resources.append(resource)
         return resources
 
     @property
@@ -516,6 +520,36 @@ class RuleSystem:
 
     def get_gm_prompt_appendix(self, language: str = DEFAULT_LANGUAGE) -> str:
         return str(localized_field(self.template, "gm_prompt_appendix", language) or "")
+
+    # 有专属标签/结算通道的资源不进 STAT 通道
+    _STAT_EXCLUSIVE_KEYS = {"sanity", "luck", "mana"}
+
+    def resource_tag_appendix(self, language: str = DEFAULT_LANGUAGE) -> str:
+        """GM 提示词附录：列出本规则可用 STAT 标签结算的特殊资源与阈值触发器。"""
+        rows: list[str] = []
+        for stat in self.special_stats:
+            key = str(stat.get("key") or "")
+            if not key or key in self._STAT_EXCLUSIVE_KEYS:
+                continue
+            name = localized_field(stat, "name", language) or stat.get("name") or key
+            rows.append(f"{name}({key}, 0-{int(stat.get('max', 99) or 99)})")
+        if not rows:
+            return ""
+        trigger_note = ""
+        if any(stat.get("triggers") for stat in self.special_stats):
+            trigger_note = localized_text(language, {
+                "en": " Thresholds declared by this rule are auto-flagged by the system.",
+                "zh-CN": "规则声明的结局阈值由系统自动提醒，命中后按提示推进。",
+                "ja": "ルールが宣言した閾値はシステムが自動で通知します。",
+            })
+        return localized_text(language, {
+            "en": "Rule resources (settle with STAT:playerID:resourceKey:delta; "
+                  f"do NOT use STAT for HP/Gold/Mana/Sanity/Luck): {', '.join(rows)}.{trigger_note}",
+            "zh-CN": "本规则特殊资源（用 STAT:玩家ID:资源key:变化量 结算增减；"
+                     f"HP/金币/法力/理智/幸运请用各自专属标签，不要走 STAT）：{'、'.join(rows)}。{trigger_note}",
+            "ja": "本ルールの特殊リソース（STAT:プレイヤーID:リソースkey:増減 で処理；"
+                  f"HP/通貨/マナ/正気度/幸運は専用タグを使用）：{'、'.join(rows)}。{trigger_note}",
+        })
 
     def get_difficulty_instructions(self, difficulty: str, language: str = DEFAULT_LANGUAGE) -> str:
         di = localized_field(self.template, "difficulty_instructions", language)

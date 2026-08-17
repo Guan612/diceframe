@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -232,6 +233,81 @@ async def test_gm_resource_command_updates_luck_directly_without_public_action()
     assert instance.get_character_sheet("p1")["luck"] == 50
     assert instance.action_queue == []
     assert instance.gm_directives == []
+
+
+def _office_like_rule(tmp_path: Path) -> RuleSystem:
+    template = {
+        "rule_id": "test_office_rule",
+        "rule_name": "测试办公规则",
+        "dice_system": "d20",
+        "attributes": [{"key": "brain", "name": "智商", "min": 3, "max": 18}],
+        "special_stats": [
+            {"key": "kpi", "name": "KPI", "max": 100, "initial": 42,
+             "aliases": ["绩效", "kpi进度"]},
+            {"key": "overtime", "name": "加班值", "max": 100, "initial": 0},
+        ],
+    }
+    path = tmp_path / "test_office_rule.json"
+    path.write_text(json.dumps(template, ensure_ascii=False), encoding="utf-8")
+    return RuleSystem.load(path)
+
+
+def _office_instance(rule: RuleSystem) -> GameInstance:
+    instance = GameInstance(("web", "office", "bot"))
+    instance.state = GameState.ACTIVE_ACTION
+    instance.round_number = 1
+    instance.rule_id = rule.rule_id
+    instance.players["p1"] = {
+        "character_name": "小林",
+        "character_sheet": {
+            "attributes": {"brain": 16},
+            "kpi": 42,
+            "max_kpi": 100,
+            "overtime": 0,
+            "max_overtime": 100,
+        },
+    }
+    return instance
+
+
+@pytest.mark.asyncio
+async def test_gm_command_accepts_rule_special_stat_name_and_key(tmp_path):
+    rule = _office_like_rule(tmp_path)
+    instance = _office_instance(rule)
+    api = _Api(instance, rule)
+
+    by_name = await gm_command(api, "web|office|bot", "给小林加KPI10")
+    assert by_name["ok"] is True
+    assert by_name["kind"] == "resource_update"
+    assert instance.get_character_sheet("p1")["kpi"] == 52
+    assert by_name["resource_update"]["resource_label"] == "KPI"
+
+    by_key = await gm_command(api, "web|office|bot", "小林的overtime+5")
+    assert by_key["ok"] is True
+    assert instance.get_character_sheet("p1")["overtime"] == 5
+
+
+@pytest.mark.asyncio
+async def test_gm_command_accepts_rule_resource_aliases_and_clamps_max(tmp_path):
+    rule = _office_like_rule(tmp_path)
+    instance = _office_instance(rule)
+    api = _Api(instance, rule)
+
+    by_alias = await gm_command(api, "web|office|bot", "给小林加绩效70")
+    assert by_alias["ok"] is True
+    # 42 + 70 = 112，钳制到 max 100
+    assert instance.get_character_sheet("p1")["kpi"] == 100
+
+
+@pytest.mark.asyncio
+async def test_gm_command_rule_resource_alias_not_leaking_across_rules(tmp_path):
+    coc_instance, coc_rule = _coc_instance()
+    coc_api = _Api(coc_instance, coc_rule)
+
+    unknown = await gm_command(coc_api, "web|room|bot", "给用户加KPI10")
+    # KPI 不在 CoC 规则中：不落 resource_update，降级为私密指令
+    assert unknown.get("kind") in {None, "directive"}
+    assert unknown.get("kind") != "resource_update"
 
 
 @pytest.mark.asyncio

@@ -179,6 +179,32 @@ def _revive(value: str, result: dict, _limits: dict) -> None:
         result.setdefault("revive_commands", []).append({"uid": uid, "method": method})
 
 
+# 这些资源有专属标签或专属结算通道，STAT 不得重复使用。
+_STAT_EXCLUSIVE_KEYS = {"hp", "gold", "currency", "pay", "mana", "sanity", "san", "luck", "xp"}
+
+
+def _stat(value: str, result: dict, _limits: dict) -> None:
+    """规则自定义资源标签：STAT:玩家ID:资源key:变化量。"""
+    parts = value.split(":")
+    if len(parts) != 3:
+        logger.warning("STAT 格式无效，已忽略: %s", value)
+        return
+    uid, stat_key, delta_text = (part.strip() for part in parts)
+    stat_key = stat_key.lower()
+    if stat_key in _STAT_EXCLUSIVE_KEYS:
+        logger.warning("STAT 使用了专属标签资源，已忽略（请用 HP/GOLD/MANA/SAN/LUCK/XP）: %s %s", uid, stat_key)
+        return
+    parsed = _parse_int(delta_text, tag="STAT", uid=uid)
+    if parsed is None:
+        return
+    if not -100 <= parsed <= 100:
+        logger.warning("STAT 变更幅度异常，已忽略: %s %s %+d", uid, stat_key, parsed)
+        return
+    update = _player_update(result, uid)
+    changes = update.setdefault("stat_changes", {})
+    changes[stat_key] = changes.get(stat_key, 0) + parsed
+
+
 PLAYER_TAG_HANDLERS: dict[str, PlayerTagHandler] = {
     "HP": _hp,
     "PAY": _pay,
@@ -194,6 +220,7 @@ PLAYER_TAG_HANDLERS: dict[str, PlayerTagHandler] = {
     "PUSH": _push,
     "MANA": _mana,
     "REVIVE": _revive,
+    "STAT": _stat,
 }
 
 

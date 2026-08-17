@@ -21,6 +21,7 @@ from src.commands.state_items import (
     classify_item,
     grant_classified_item,
 )
+from src.rules.rule_system import RuleSystem
 
 logger = logging.getLogger("trpg")
 
@@ -40,11 +41,21 @@ class StateUpdateApplier:
         self._players = PlayerStateApplier(self._madness)
         self._npcs = NpcStateApplier()
         self._item_cats = ItemCategoryResolver(rules_dir, worlds_dir, load_world_template)
+        self._rules_dir = rules_dir
+        self._load_world_template = load_world_template
+
+    def _load_rule(self, instance: GameInstance) -> RuleSystem | None:
+        try:
+            world_data = self._load_world_template(str(instance.world_id or "")) or {}
+            return RuleSystem.load_for_world(world_data, self._rules_dir)
+        except Exception:
+            logger.warning("STAT 规则加载失败: world_id=%s", instance.world_id, exc_info=True)
+            return None
 
     def apply_state_update(self, instance: GameInstance, update: dict) -> None:
         """将 LLM 输出的 state_update 应用到游戏状态。"""
-        # 玩家状态更新
-        self._players.apply_players(instance, update.get("players", {}))
+        # 玩家状态更新（带当前规则，供 STAT 资源结算与阈值触发器使用）
+        self._players.apply_players(instance, update.get("players", {}), rule=self._load_rule(instance))
 
         # NPC 状态更新
         self._npcs.apply_npcs(instance, update.get("npcs", {}))
