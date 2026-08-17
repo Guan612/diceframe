@@ -24,6 +24,7 @@ NONE
 After the narration, put `---` on its own line. Then write one state update per line. Register every named NPC on first appearance with NPC.
 
 HP:player_id:delta             (damage is negative, healing is positive)
+STAT:player_id:resource_key:delta (rule-specific resources only, keys listed in the rule notes; e.g. KPI +10 -> STAT:web_user:kpi:10. Never use STAT for HP/Gold/Mana/Sanity/Luck - use their dedicated tags. Omit STAT entirely when the rule has no special resources)
 GOLD:player_id:amount          (positive currency gain only)
 PAY:player_id:amount           (positive payment amount; the system stores it as negative)
 PAY:payer_id:amount:recipient_id:item1|item2

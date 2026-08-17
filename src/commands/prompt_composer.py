@@ -106,6 +106,9 @@ class PromptComposer:
                     difficulty_text = rule.get_difficulty_instructions(instance.difficulty, language)
                     if difficulty_text:
                         ctx.rule_appendix = ctx.rule_appendix + "\n\n" + difficulty_text
+                    stat_appendix = rule.resource_tag_appendix(language)
+                    if stat_appendix:
+                        ctx.rule_appendix = ctx.rule_appendix + "\n\n" + stat_appendix
         except Exception:
             logger.warning("规则上下文加载失败，回退默认值: world_id=%s", instance.world_id, exc_info=True)
         return ctx
@@ -133,6 +136,9 @@ class PromptComposer:
                     difficulty_text = rule.get_difficulty_instructions(instance.difficulty, language)
                     if difficulty_text:
                         ctx.rule_appendix += "\n\n" + difficulty_text
+                    stat_appendix = rule.resource_tag_appendix(language)
+                    if stat_appendix:
+                        ctx.rule_appendix += "\n\n" + stat_appendix
         except Exception:
             logger.warning("swipe 规则上下文加载失败，回退默认值: world_id=%s", instance.world_id, exc_info=True)
         return ctx

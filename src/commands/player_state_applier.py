@@ -13,11 +13,14 @@ from src.engine.character_utils import (
     apply_bounded_stat_delta,
     apply_currency_delta,
     apply_hp_delta,
+    apply_resource_delta,
     bounded_hp_delta,
+    get_resource,
     sync_death_from_hp,
 )
 from src.engine.game_instance import GameInstance
 from src.commands.madness_tracker import MadnessTracker
+from src.commands.resource_triggers import check_resource_triggers
 from src.commands.state_items import append_unique_equipment
 
 logger = logging.getLogger("trpg")
@@ -29,7 +32,7 @@ class PlayerStateApplier:
     def __init__(self, madness: MadnessTracker):
         self._madness = madness
 
-    def apply_players(self, instance: GameInstance, players_update: dict) -> None:
+    def apply_players(self, instance: GameInstance, players_update: dict, rule=None) -> None:
         for uid, pud in players_update.items():
             if uid in instance.players:
                 cs = instance.get_character_sheet(uid)
@@ -154,6 +157,19 @@ class PlayerStateApplier:
                         cs["mana"] = cs.get("int", 10) * 3
                     apply_bounded_stat_delta(cs, "mana", -5)
                     logger.info("施法: %s cast %s, mana=%d", uid, cast_spell, cs["mana"])
+                # 规则自定义资源（STAT 标签）：只结算角色卡上已存在的资源，钳制上下限
+                stat_changes = pud.get("stat_changes")
+                if isinstance(stat_changes, dict) and stat_changes:
+                    for stat_key, delta in stat_changes.items():
+                        if not isinstance(delta, (int, float)) or int(delta) == 0:
+                            continue
+                        stat_key = str(stat_key)
+                        if get_resource(cs, stat_key) is None and stat_key not in cs:
+                            logger.warning("STAT 资源不在角色卡上，已忽略: %s %s", uid, stat_key)
+                            continue
+                        after = apply_resource_delta(cs, stat_key, int(delta), rule)
+                        logger.info("规则资源变化: %s %s %+d -> %d", uid, stat_key, int(delta), after)
+                    check_resource_triggers(instance, uid, rule)
                 # 死亡检测
                 if sync_death_from_hp(cs, instance.round_number):
                     logger.info("%s 已死亡 (round=%d, hp=%d)",

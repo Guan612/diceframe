@@ -18,6 +18,7 @@ from src.engine.game_instance import GameState
 from src.engine.dice import roll
 from src.engine.health import health_payload, mark_health_event, record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.commands.resource_triggers import check_resource_triggers
 from src.llm.parser import sanitize_narration
 from src.rules.rule_system import RuleSystem
 
@@ -712,6 +713,7 @@ async def gm_command(api: "WebAPI", game_key: str, command: str, mode: str = "no
             repair_hint="如修正有误，可提交相反数值恢复。",
         )
         await api._reg.save(inst)
+        triggered = check_resource_triggers(inst, str(resource_change.get("uid") or ""), rule)
         return {
             "ok": True,
             "message": (
@@ -721,6 +723,7 @@ async def gm_command(api: "WebAPI", game_key: str, command: str, mode: str = "no
             ),
             "kind": "resource_update",
             "resource_update": resource_change,
+            "triggered": triggered,
         }
 
     revive = _parse_gm_revive_command(inst, command)

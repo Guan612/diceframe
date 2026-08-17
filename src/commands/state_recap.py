@@ -23,6 +23,7 @@ def item_counts(items: list[dict]) -> dict[str, int]:
 def snapshot_public_player_state(instance: GameInstance) -> dict[str, dict]:
     snapshot: dict[str, dict] = {}
     for uid, player, cs in instance.iter_player_sheets():
+        resources = cs.get("resources") or {}
         snapshot[uid] = {
             "name": player.get("character_name") or cs.get("character_name") or uid,
             "hp": cs.get("hp"),
@@ -36,6 +37,11 @@ def snapshot_public_player_state(instance: GameInstance) -> dict[str, dict]:
             "inventory": item_counts(cs.get("inventory", [])),
             "key_items": item_counts(cs.get("key_items", [])),
             "equipment": item_counts(cs.get("equipment", [])),
+            "rule_resources": {
+                key: int(res.get("current", 0) or 0)
+                for key, res in resources.items()
+                if isinstance(res, dict)
+            },
         }
     return snapshot
 
@@ -129,6 +135,24 @@ def build_state_change_messages(instance: GameInstance, before: dict[str, dict],
                     "en": f"{label} {int(old_value)} -> {int(new_value)} ({signed_delta(delta)})",
                     "zh-CN": f"{label} {int(old_value)} → {int(new_value)}（{signed_delta(delta)}）",
                     "ja": f"{label} {int(old_value)} → {int(new_value)}（{signed_delta(delta)}）",
+                }))
+
+        # 规则自定义资源（STAT 标签/GM 指令改动）；专属字段已在上面播报，此处跳过
+        exclusive = {"hp", "gold", "mana", "sanity", "luck"}
+        resources = cs.get("resources") or {}
+        old_resources = old.get("rule_resources") or {}
+        for key, res in resources.items():
+            if key in exclusive or not isinstance(res, dict):
+                continue
+            old_value = old_resources.get(key)
+            new_value = int(res.get("current", 0) or 0)
+            if isinstance(old_value, (int, float)) and int(old_value) != new_value:
+                label = str(res.get("label") or key)
+                delta = new_value - int(old_value)
+                parts.append(localized_text(language, {
+                    "en": f"{label} {int(old_value)} -> {new_value} ({signed_delta(delta)})",
+                    "zh-CN": f"{label} {int(old_value)} -> {new_value}（{signed_delta(delta)}）",
+                    "ja": f"{label} {int(old_value)} -> {new_value}（{signed_delta(delta)}）",
                 }))
 
         if old.get("status") != cs.get("status") and cs.get("status"):
