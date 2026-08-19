@@ -292,7 +292,8 @@ function authorLabel(author: unknown): string {
 }
 
 .hub-readme {
-  max-height: 62vh;
+  /* dvh 跟随移动端浏览器地址栏收放，避免 100vh 高于实际可视区导致底部溢出 */
+  max-height: 62dvh;
   overflow: auto;
   margin-top: 16px;
   padding-right: 8px;
@@ -300,7 +301,7 @@ function authorLabel(author: unknown): string {
 
 :global(.hub-detail-modal) {
   width: min(1180px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
 }
 
 :global(.hub-detail-modal > .n-card__content) {
@@ -314,6 +315,10 @@ function authorLabel(author: unknown): string {
 }
 
 @media (max-width: 620px) {
+  .hub-readme {
+    max-height: 46dvh;
+  }
+
   .hub-detail-hero {
     grid-template-columns: auto minmax(0, 1fr);
   }

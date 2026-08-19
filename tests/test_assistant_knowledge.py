@@ -22,6 +22,11 @@ def knowledge_docs(tmp_path, monkeypatch):
         "en": ("docs/GUIDE_CN.md",),
     })
     monkeypatch.setattr(assistant_knowledge, "_CACHE", {})
+    monkeypatch.setattr(assistant_knowledge, "_REMOTE_CACHE", {})
+    # 测试不联网：远程文档拉取一律返回失败（走内置索引兜底路径）
+    async def _no_remote(lang_key):
+        return None
+    monkeypatch.setattr(assistant_knowledge, "_fetch_remote_docs", _no_remote)
     monkeypatch.setattr(assistant_knowledge, "INDEX_FILE", tmp_path / "nonexistent.json")
     return guide
 
@@ -55,3 +60,34 @@ async def test_unrelated_query_returns_no_context(knowledge_docs):
     result = await assistant_knowledge.search_knowledge("量子物理光谱", "zh-CN")
     assert result.context == ""
     assert result.sources == []
+
+
+@pytest.mark.asyncio
+async def test_remote_docs_replace_builtin_chunks(knowledge_docs, monkeypatch):
+    """远程文档按 source 全量替换内置快照：上游更新即时生效，其余文档保留。"""
+    async def _remote(lang_key):
+        return {"guide.md": "# 用户指南\n\n## 插件\n新版：从插件页上传 dfplugin。\n"}
+    monkeypatch.setattr(assistant_knowledge, "_fetch_remote_docs", _remote)
+
+    result = await assistant_knowledge.search_knowledge("插件怎么安装", "zh-CN")
+    assert "新版：从插件页上传 dfplugin" in result.context
+    assert any(s["source"] == "docs/zh/guide.md" for s in result.sources)
+
+    # 内置文档未被远程覆盖的部分仍然可检索（GUIDE_CN.md 不在远程清单里）
+    result_api = await assistant_knowledge.search_knowledge("怎么配置 API", "zh-CN")
+    assert "填写模型地址" in result_api.context
+
+
+@pytest.mark.asyncio
+async def test_remote_failure_is_cached_to_avoid_refetch(knowledge_docs, monkeypatch):
+    """离线时失败结果按 TTL 缓存，不会每条消息都重撞网络。"""
+    calls = []
+
+    async def _remote(lang_key):
+        calls.append(lang_key)
+        return None
+    monkeypatch.setattr(assistant_knowledge, "_fetch_remote_docs", _remote)
+
+    for _ in range(3):
+        await assistant_knowledge.search_knowledge("怎么配置 API", "zh-CN")
+    assert calls == ["zh"]

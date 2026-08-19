@@ -597,6 +597,9 @@ async def on_startup(app: web.Application) -> None:
     await plugin_host.start_enabled()
     app["_embedding_backfill_task"] = asyncio.create_task(_embed_pending_memories(app))
     app["_save_task"] = asyncio.create_task(_periodic_save(app))
+    # 后台预热 DF 助手的远程文档索引（diceframe-content），失败静默回退内置索引
+    from src.webui.assistant_knowledge import prefetch_remote_indexes
+    app["_assistant_docs_task"] = asyncio.create_task(prefetch_remote_indexes())
 
 
 async def on_cleanup(app: web.Application) -> None:

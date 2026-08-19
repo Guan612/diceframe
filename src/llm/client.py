@@ -107,6 +107,8 @@ class LLMClient:
         self.proxy_url = proxy_url.strip()
         self._session: aiohttp.ClientSession | None = None
         self._native_tool_unsupported: set[str] = set()
+        # 强制 tool_choice 被拒但 tool_choice=auto 可用的供应商（如思考模式模型）
+        self._native_tool_auto: set[str] = set()
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取或懒创建复用的 HTTP session。"""
@@ -132,6 +134,10 @@ class LLMClient:
 
         回退仍只产生工具参数，绝不让模型产生或指定骰面。所有调用失败时抛出，
         由上层决定是否进入离线兼容路径。
+
+        思考模式模型常拒绝强制 tool_choice 但接受 tool_choice=auto：此类供应商
+        先用 auto 重试原生调用，仍失败才走 JSON 回退；JSON 回退截断时按
+        length_retry_budgets 放大 max_tokens 重试。
         """
         primary = self.providers[self.default]
         ordered = [primary] + [
@@ -140,7 +146,8 @@ class LLMClient:
         ]
         errors: list[str] = []
         for provider in ordered:
-            if provider.provider_name not in self._native_tool_unsupported:
+            forced = provider.provider_name not in self._native_tool_unsupported
+            if forced or provider.provider_name in self._native_tool_auto:
                 try:
                     return await self._call_tools_one(
                         provider,
@@ -149,11 +156,26 @@ class LLMClient:
                         tools,
                         temperature,
                         max_tokens,
+                        force_tool_choice=forced,
                     )
                 except Exception as exc:
                     errors.append(f"{provider.provider_name}: {exc}")
-                    if "does not support this tool_choice" in str(exc):
+                    if forced and "does not support this tool_choice" in str(exc):
                         self._native_tool_unsupported.add(provider.provider_name)
+                        try:
+                            result = await self._call_tools_one(
+                                provider,
+                                system_prompt,
+                                user_message,
+                                tools,
+                                temperature,
+                                max_tokens,
+                                force_tool_choice=False,
+                            )
+                            self._native_tool_auto.add(provider.provider_name)
+                            return result
+                        except Exception as auto_exc:
+                            errors.append(f"{provider.provider_name} (tool_choice=auto): {auto_exc}")
                     logger.warning("模型原生工具调用失败，尝试 JSON 回退 (%s): %s", provider.provider_name, exc)
             try:
                 fallback_prompt = (
@@ -166,14 +188,27 @@ class LLMClient:
                     + "Required tool schema: "
                     + json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
                 )
-                response = await self._call_one(
-                    provider,
-                    fallback_prompt,
-                    user_message,
-                    temperature,
-                    max_tokens,
-                    True,
-                )
+                budgets = length_retry_budgets(max_tokens)
+                response = None
+                for attempt, budget in enumerate(budgets, 1):
+                    try:
+                        response = await self._call_one(
+                            provider,
+                            fallback_prompt,
+                            user_message,
+                            temperature,
+                            budget,
+                            True,
+                        )
+                        break
+                    except OutputTruncatedError:
+                        if attempt >= len(budgets):
+                            raise
+                        logger.warning(
+                            "JSON 回退输出截断，提高 max_tokens 重试 (%s): %d -> %d",
+                            provider.provider_name, budget, budgets[attempt],
+                        )
+                        await asyncio.sleep(BASE_DELAY * 0.5)
                 calls = _parse_json_tool_calls(response.content)
                 if not calls:
                     raise ValueError("模型未返回必需的工具调用")
@@ -196,13 +231,16 @@ class LLMClient:
         tools: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
+        force_tool_choice: bool = True,
     ) -> LLMToolResponse:
         if (provider.api_format or "openai").strip().lower() == "anthropic":
             return await self._call_tools_anthropic(
-                provider, system_prompt, user_message, tools, temperature, max_tokens
+                provider, system_prompt, user_message, tools, temperature, max_tokens,
+                force_tool_choice=force_tool_choice,
             )
         return await self._call_tools_openai(
-            provider, system_prompt, user_message, tools, temperature, max_tokens
+            provider, system_prompt, user_message, tools, temperature, max_tokens,
+            force_tool_choice=force_tool_choice,
         )
 
     async def _call_tools_openai(
@@ -213,6 +251,7 @@ class LLMClient:
         tools: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
+        force_tool_choice: bool = True,
     ) -> LLMToolResponse:
         url = provider.base_url.rstrip("/")
         if not url.endswith("/chat/completions"):
@@ -221,7 +260,7 @@ class LLMClient:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {provider.api_key}",
         }
-        body = {
+        body: dict[str, Any] = {
             "model": provider.model_name,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -230,11 +269,14 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "tools": tools,
-            "tool_choice": {
+        }
+        if force_tool_choice:
+            body["tool_choice"] = {
                 "type": "function",
                 "function": {"name": str(tools[0].get("function", {}).get("name") or "")},
-            },
-        }
+            }
+        else:
+            body["tool_choice"] = "auto"
         session = await self._get_session()
         request_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
         async with session.post(
@@ -275,6 +317,7 @@ class LLMClient:
         tools: list[dict[str, Any]],
         temperature: float,
         max_tokens: int,
+        force_tool_choice: bool = True,
     ) -> LLMToolResponse:
         headers = {
             "Content-Type": "application/json",
@@ -296,11 +339,14 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "tools": anthropic_tools,
-            "tool_choice": {
+        }
+        if force_tool_choice:
+            body["tool_choice"] = {
                 "type": "tool",
                 "name": str(anthropic_tools[0].get("name") or ""),
-            },
-        }
+            }
+        else:
+            body["tool_choice"] = {"type": "auto"}
         session = await self._get_session()
         request_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
         async with session.post(

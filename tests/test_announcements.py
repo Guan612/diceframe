@@ -45,7 +45,7 @@ def _remote(text_by_path):
 async def test_online_success_returns_content_and_hash(tmp_path, monkeypatch):
     monkeypatch.setattr(
         content_service, "_fetch_remote",
-        _remote({"content/announcements/zh.md": "# 你好\n公告"}),
+        _remote({"announcements/zh.md": "# 你好\n公告"}),
     )
     api = FakeAPI(content_cache_dir=tmp_path)
 
@@ -79,7 +79,7 @@ async def test_memory_hit_skips_network(tmp_path, monkeypatch):
 async def test_restart_offline_serves_disk_cache_and_marks_stale(tmp_path, monkeypatch):
     monkeypatch.setattr(
         content_service, "_fetch_remote",
-        _remote({"content/announcements/zh.md": "上次公告"}),
+        _remote({"announcements/zh.md": "上次公告"}),
     )
     api = FakeAPI(content_cache_dir=tmp_path)
     fresh = await announcements_service.fetch_official_announcement(api, "zh-CN")
@@ -91,7 +91,7 @@ async def test_restart_offline_serves_disk_cache_and_marks_stale(tmp_path, monke
     monkeypatch.setattr(content_service, "_CACHE", {})
     monkeypatch.setattr(content_service, "_FAILURE_UNTIL", {})
     monkeypatch.setattr(content_service, "_INFLIGHT", {})
-    cache_path = content_service._cache_file(api, "content/announcements/zh.md")
+    cache_path = content_service._cache_file(api, "announcements/zh.md")
     assert cache_path is not None and cache_path.exists()
     old = time.time() - 7200
     os.utime(cache_path, (old, old))
@@ -119,8 +119,8 @@ async def test_zh_and_en_are_isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(
         content_service, "_fetch_remote",
         _remote({
-            "content/announcements/zh.md": "中文公告",
-            "content/announcements/en.md": "English notice",
+            "announcements/zh.md": "中文公告",
+            "announcements/en.md": "English notice",
         }),
     )
     api = FakeAPI(content_cache_dir=tmp_path)

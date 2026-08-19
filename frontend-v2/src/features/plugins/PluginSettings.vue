@@ -9,6 +9,7 @@ import {
 } from '@vicons/ionicons5'
 import { useTheme, type SkinName } from '@/composables/useTheme'
 import { useLocale } from '@/composables/useLocale'
+import { renderSafeMarkdown } from '@/utils/markdown'
 import type { PluginInfo } from '@/api/types'
 import { pluginApi } from '@/api/plugins'
 import { usePluginContent } from './usePluginContent'
@@ -183,28 +184,6 @@ async function loadPluginDocs(pluginId: string) {
   }
 }
 
-function renderDocsMarkdown(markdown: string): string {
-  // 轻量 markdown 转 HTML：标题、列表、加粗、代码、段落
-  const escaped = markdown
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const withCode = escaped.replace(/`([^`]+)`/g, '<code>$1</code>')
-  const withBold = withCode.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-  const lines = withBold.split('\n')
-  let html = ''
-  let inList = false
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (trimmed.startsWith('### ')) { if (inList) { html += '</ul>'; inList = false } html += `<h4>${trimmed.slice(4)}</h4>` }
-    else if (trimmed.startsWith('## ')) { if (inList) { html += '</ul>'; inList = false } html += `<h3>${trimmed.slice(3)}</h3>` }
-    else if (trimmed.startsWith('# ')) { if (inList) { html += '</ul>'; inList = false } html += `<h2>${trimmed.slice(2)}</h2>` }
-    else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) { if (!inList) { html += '<ul>'; inList = true } html += `<li>${trimmed.slice(2)}</li>` }
-    else if (trimmed === '') { if (inList) { html += '</ul>'; inList = false } }
-    else { if (inList) { html += '</ul>'; inList = false } html += `<p>${trimmed}</p>` }
-  }
-  if (inList) html += '</ul>'
-  return html
-}
-
 onMounted(async () => {
   await load()
   await Promise.all([
@@ -260,7 +239,7 @@ onMounted(async () => {
         :permission-description="permissionDescription"
         :plugin-type-label="pluginTypeLabel"
         :load-plugin-docs="loadPluginDocs"
-        :render-docs-markdown="renderDocsMarkdown"
+        :render-docs-markdown="renderSafeMarkdown"
         @update:type-filter="(v: string) => typeFilter = v"
         @update:expanded-plugin-names="(v: string[]) => expandedPluginNames = v"
         @update:overwrite-install="(v: boolean) => overwriteInstall = v"

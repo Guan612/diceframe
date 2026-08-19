@@ -50,7 +50,7 @@ watch(() => [props.document, locale.value], load)
       <NButton secondary @click="goBack">{{ t('back') }}</NButton>
     </header>
     <NSpin :show="loading">
-      <article v-if="html" class="legal-document" v-html="html" />
+      <article v-if="html" class="legal-document safe-markdown" v-html="html" />
       <section v-else-if="failed" class="legal-load-error">
         <p>{{ t('legalLoadFailed') }}</p>
         <NButton @click="load">{{ t('retry') }}</NButton>
@@ -100,22 +100,6 @@ watch(() => [props.document, locale.value], load)
   border: 1px solid var(--df-border-soft);
   border-radius: 10px;
   background: var(--df-surface-1);
-  line-height: 1.8;
-}
-
-.legal-document :deep(h1) { margin-top: 0; font-size: 26px; }
-.legal-document :deep(h2) { margin: 28px 0 10px; font-size: 19px; }
-.legal-document :deep(h3) { margin: 22px 0 8px; font-size: 16px; }
-.legal-document :deep(p),
-.legal-document :deep(ul),
-.legal-document :deep(ol) { margin: 10px 0; }
-.legal-document :deep(ul),
-.legal-document :deep(ol) { padding-left: 24px; }
-.legal-document :deep(a) { color: var(--df-accent-strong); }
-.legal-document :deep(code) {
-  padding: 2px 5px;
-  border-radius: 4px;
-  background: var(--df-surface-2);
 }
 
 @media (max-width: 560px) {

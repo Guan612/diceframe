@@ -724,7 +724,7 @@ export const zhCN = {
   projectTagline: 'AI 跑团引擎',
   viewAnnouncement: '查看公告',
   newAnnouncement: '有新公告',
-  officialAnnouncement: '官方公告',
+  officialAnnouncement: '公告',
   noAnnouncement: '暂无公告',
   announcementCached: '当前显示上次成功获取的缓存内容',
   assistantTitle: 'DF助手',

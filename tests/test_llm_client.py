@@ -307,6 +307,164 @@ async def test_call_tools_uses_native_openai_function_calling(monkeypatch):
     }
 
 
+class _ErrorOpenAIResponse(_FakeResponse):
+    def __init__(self, status: int, message: str) -> None:
+        self.status = status
+        self._message = message
+        self.headers = {}
+        self.request_info = SimpleNamespace(
+            real_url="https://test.local/v1/chat/completions",
+            url="https://test.local/v1/chat/completions",
+            method="POST",
+            headers={},
+        )
+        self.history = ()
+
+    async def text(self):
+        return self._message
+
+
+class _JSONContentOpenAIResponse(_FakeResponse):
+    def __init__(self, payload: str) -> None:
+        self._payload = payload
+
+    async def json(self):
+        return {
+            "choices": [{
+                "message": {"content": self._payload},
+                "finish_reason": "stop",
+            }],
+            "usage": {"total_tokens": 300},
+        }
+
+
+class _SequentialSession:
+    def __init__(self, responses) -> None:
+        self.responses = list(responses)
+        self.calls: list[dict] = []
+
+    def post(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return self.responses.pop(0)
+
+
+_DICE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "dice_checks",
+        "description": "plan checks",
+        "parameters": {"type": "object", "properties": {"checks": {"type": "array"}}},
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_call_tools_retries_with_auto_tool_choice_when_forced_rejected(monkeypatch):
+    """思考模式模型拒绝强制 tool_choice 时，应改用 auto 重试原生调用而非直接回退。"""
+    session = _SequentialSession([
+        _ErrorOpenAIResponse(400, '{"error":{"message":"Thinking mode does not support this tool_choice"}}'),
+        _ToolOpenAIResponse(),
+    ])
+    provider = ProviderConfig(
+        provider_name="thinking-model",
+        base_url="https://api.example.com",
+        api_key="test-key",
+        model_name="thinking-test",
+    )
+    client = LLMClient(providers=[provider], default=provider.provider_name)
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+
+    result = await client.call_tools("system", "actions", tools=[_DICE_TOOL])
+
+    assert result.native_tools is True
+    assert result.provider_used == "thinking-model"
+    assert session.calls[0]["json"]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "dice_checks"},
+    }
+    assert session.calls[1]["json"]["tool_choice"] == "auto"
+    # 供应商被记住：后续调用直接走 auto，不再触发 400
+    assert provider.provider_name in client._native_tool_auto
+    assert provider.provider_name in client._native_tool_unsupported
+    follow_up = _ToolOpenAISession()
+
+    async def fake_get_session2():
+        return follow_up
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session2)
+    result2 = await client.call_tools("system", "actions", tools=[_DICE_TOOL])
+    assert result2.native_tools is True
+    assert len(follow_up.calls) == 1
+    assert follow_up.calls[0]["json"]["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_call_tools_json_fallback_retries_with_larger_max_tokens(monkeypatch):
+    """JSON 回退截断时应按预算序列放大 max_tokens 重试，而非一次失败即放弃。"""
+    json_payload = json.dumps(
+        {"tool_calls": [{"name": "dice_checks", "arguments": {"checks": []}}]},
+        ensure_ascii=False,
+    )
+    session = _SequentialSession([
+        _EmptyOpenAIResponse(),                       # 思考烧完预算 -> finish_reason=length
+        _JSONContentOpenAIResponse(json_payload),     # 放大后成功
+    ])
+    provider = ProviderConfig(
+        provider_name="thinking-model",
+        base_url="https://api.example.com",
+        api_key="test-key",
+        model_name="thinking-test",
+    )
+    client = LLMClient(providers=[provider], default=provider.provider_name)
+    client._native_tool_unsupported.add(provider.provider_name)
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+    monkeypatch.setattr("src.llm.client.BASE_DELAY", 0.0)
+
+    result = await client.call_tools("system", "actions", tools=[_DICE_TOOL], max_tokens=512)
+
+    assert result.native_tools is False
+    assert result.tool_calls == [{"name": "dice_checks", "arguments": {"checks": []}}]
+    sent_budgets = [call["json"]["max_tokens"] for call in session.calls]
+    assert sent_budgets == [512, 1024]
+
+
+@pytest.mark.asyncio
+async def test_call_tools_json_fallback_raises_after_exhausted_budgets(monkeypatch):
+    """所有预算档位均截断时 JSON 回退应失败，由上层进入离线路径。"""
+    session = _SequentialSession([
+        _EmptyOpenAIResponse(),
+        _EmptyOpenAIResponse(),
+        _EmptyOpenAIResponse(),
+    ])
+    provider = ProviderConfig(
+        provider_name="thinking-model",
+        base_url="https://api.example.com",
+        api_key="test-key",
+        model_name="thinking-test",
+    )
+    client = LLMClient(providers=[provider], default=provider.provider_name)
+    client._native_tool_unsupported.add(provider.provider_name)
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+    monkeypatch.setattr("src.llm.client.BASE_DELAY", 0.0)
+
+    with pytest.raises(RuntimeError, match="所有模型工具调用均失败"):
+        await client.call_tools("system", "actions", tools=[_DICE_TOOL], max_tokens=512)
+    sent_budgets = [call["json"]["max_tokens"] for call in session.calls]
+    assert sent_budgets == [512, 1024, 2048]
+
+
 class _FakeStreamContent:
     """模拟 aiohttp StreamReader 的按行异步迭代（每行含 \\n）。"""
 

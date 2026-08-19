@@ -174,7 +174,7 @@ const { t } = useLocale()
           <NTabPane v-else-if="p.docs" name="docs" :tab="t('guideDocs')">
             <div class="plugin-docs">
               <p v-if="pluginDocsLoading[p.id]" class="muted">{{ t('pluginLoading') }}</p>
-              <div v-else-if="pluginDocs[p.id]" class="plugin-docs-content" v-html="renderDocsMarkdown(pluginDocs[p.id].content)" />
+              <div v-else-if="pluginDocs[p.id]" class="plugin-docs-content safe-markdown" v-html="renderDocsMarkdown(pluginDocs[p.id].content)" />
               <p v-else class="muted">{{ t('pluginNoDocs') }}</p>
             </div>
           </NTabPane>
@@ -260,47 +260,9 @@ const { t } = useLocale()
 }
 
 .plugin-docs-content {
-  font-size: 14px;
-  line-height: 1.7;
-  overflow-wrap: anywhere;
-}
-
-.plugin-docs-content h2 {
-  font-size: 18px;
-  margin: 0 0 10px;
-  color: var(--df-accent-strong);
-}
-
-.plugin-docs-content h3 {
-  font-size: 15px;
-  margin: 16px 0 8px;
-  color: var(--df-accent-strong);
-}
-
-.plugin-docs-content h4 {
-  font-size: 14px;
-  margin: 12px 0 6px;
-  color: var(--df-accent-strong);
-}
-
-.plugin-docs-content p {
-  margin: 6px 0;
-}
-
-.plugin-docs-content ul {
-  margin: 6px 0;
-  padding-left: 20px;
-}
-
-.plugin-docs-content li {
-  margin: 4px 0;
-}
-
-.plugin-docs-content code {
-  background: color-mix(in srgb, var(--df-text) 8%, transparent);
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 13px;
+  max-height: 56vh;
+  padding: 2px 0;
+  overflow-y: auto;
 }
 
 @media (max-width: 860px) {
