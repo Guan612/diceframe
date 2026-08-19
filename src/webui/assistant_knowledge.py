@@ -24,8 +24,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import aiohttp
-
 logger = logging.getLogger("trpg")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -238,11 +236,17 @@ async def _fetch_remote_docs(lang_key: str) -> dict[str, str] | None:
     """从 diceframe-content 仓库拉取 docs/{lang}/*.md；全部失败返回 None。
 
     单个文件 404（文档被上游删除）不影响其他文件，按实际拉到的集合替换。
+    aiohttp 延迟到函数内导入：本模块被 scripts/build_assistant_knowledge.py
+    在无依赖的构建环境加载，顶层 import 会让发布打包直接崩（CI 不装 aiohttp）。
     """
     if not _DOCS_BASE_URLS:
         return None
     paths = _CONTENT_DOC_PATHS.get(lang_key) or ()
     if not paths:
+        return None
+    try:
+        import aiohttp
+    except ImportError:
         return None
 
     async def fetch_one(session: aiohttp.ClientSession, base: str, path: str) -> str | None:
