@@ -6,6 +6,7 @@ import { i18n } from './i18n'
 import './styles/tokens.css'
 import './styles.css'
 import './styles/v2.css'
+import './styles/markdown.css'
 
 // 视口高度兜底：部分 App 壳（如 Eagle）的工具栏显示/隐藏不会更新动态视口单位
 // （100dvh 只跟浏览器原生地址栏联动），导致 fixed 元素随视口下移而对局页不跟随。

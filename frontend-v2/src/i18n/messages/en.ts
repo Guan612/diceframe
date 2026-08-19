@@ -724,7 +724,7 @@ export const en = {
   projectTagline: 'AI tabletop RPG engine',
   viewAnnouncement: 'View announcement',
   newAnnouncement: 'New announcement',
-  officialAnnouncement: 'Official announcement',
+  officialAnnouncement: 'Announcements',
   noAnnouncement: 'No announcement yet',
   announcementCached: 'Showing cached content from an earlier sync',
   assistantTitle: 'DF Assistant',

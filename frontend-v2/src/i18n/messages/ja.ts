@@ -720,7 +720,7 @@ export const ja = {
   projectTagline: 'AI TRPG エンジン',
   viewAnnouncement: 'お知らせを見る',
   newAnnouncement: '新しいお知らせがあります',
-  officialAnnouncement: '公式お知らせ',
+  officialAnnouncement: 'お知らせ',
   noAnnouncement: 'お知らせはありません',
   announcementCached: '直近に正常取得したキャッシュ内容を表示しています',
   assistantTitle: 'DF アシスタント',

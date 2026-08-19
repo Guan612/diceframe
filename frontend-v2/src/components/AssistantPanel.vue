@@ -105,7 +105,7 @@ function ask(question: string) {
             >
               <i /><i /><i /><span class="sr-only">{{ t('assistantThinking') }}</span>
             </span>
-            <div v-else-if="message.role === 'assistant'" v-html="renderMd(message.content)" />
+            <div v-else-if="message.role === 'assistant'" class="safe-markdown" v-html="renderMd(message.content)" />
             <span v-else>{{ message.content }}</span>
           </div>
 
@@ -320,14 +320,6 @@ function ask(question: string) {
   background: linear-gradient(155deg, var(--df-surface-raised), var(--df-surface-2));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .04);
 }
-
-.assistant-bubble.assistant :deep(p) { margin: 0 0 7px; }
-.assistant-bubble.assistant :deep(p:last-child) { margin-bottom: 0; }
-.assistant-bubble.assistant :deep(ul),
-.assistant-bubble.assistant :deep(ol) { margin: 5px 0; padding-left: 19px; }
-.assistant-bubble.assistant :deep(pre) { overflow-x: auto; padding: 9px; border-radius: 7px; background: var(--df-control-bg); }
-.assistant-bubble.assistant :deep(code) { padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, var(--df-interactive) 11%, transparent); }
-.assistant-bubble.assistant :deep(a) { color: var(--df-interactive-strong); }
 
 .assistant-thinking {
   display: inline-flex;

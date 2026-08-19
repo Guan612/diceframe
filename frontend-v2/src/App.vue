@@ -85,7 +85,7 @@ async function loadOwnerPluginThemes() {
   }
 }
 
-const { hasContent, hasUnread, load, markRead } = useAnnouncements()
+const { hasUnread, load, markRead } = useAnnouncements()
 const announcementOpen = ref(false)
 const startupPrivacySettled = ref(false)
 const startupUpdateSettled = ref(false)
@@ -188,7 +188,7 @@ watch(() => route.fullPath, () => {
                   </nav>
 
                   <div class="app-header-actions">
-                    <AnnouncementButton v-if="hasContent" @open="announcementOpen = true" />
+                    <AnnouncementButton @open="announcementOpen = true" />
                     <AnnouncementPanel v-model:show="announcementOpen" />
                     <ThemeToggle />
                     <label class="locale-select desktop-locale">

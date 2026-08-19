@@ -591,18 +591,31 @@ function openUpdateUrl() {
   if (url) window.open(url, '_blank', 'noopener')
 }
 
+// 本次会话内由用户/自动下载触发的更新：下载完成（staged）后自动应用，
+// 不再要求用户手动点"应用升级"。仅在亲眼看到 downloading->staged 的
+// 转变时触发；打开页面时残留的旧 staged 状态不自动应用（避免未经确认重启服务）。
+let autoApplyArmed = false
+
 async function downloadUpdatePackage(kind: UpdatePackageKind) {
   try {
     const result = await startDownload(kind)
     if (!result.ok) {
       toast.error(result.error || t('updateDownloadFailed'))
     } else {
+      autoApplyArmed = true
       toast.success(t('updateDownloadStarted'))
     }
   } catch (e: unknown) {
     toast.error(errorMessage(e))
   }
 }
+
+watch(() => updateStatus.value?.state, (state) => {
+  if (!autoApplyArmed || state !== 'staged') return
+  if (updateStatus.value?.kind !== requiredUpdateKind.value) return
+  autoApplyArmed = false
+  void applyDownloadedUpdate()
+})
 
 async function applyDownloadedUpdate() {
   try {

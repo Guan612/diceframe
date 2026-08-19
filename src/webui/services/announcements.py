@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("trpg")
 
-ANNOUNCEMENT_DIR = "content/announcements"
+ANNOUNCEMENT_DIR = "announcements"
 _SUCCESS_TTL = 600
 _STALE_TTL = 86_400
 
