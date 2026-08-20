@@ -84,6 +84,10 @@ async function send(text: string, locale = 'zh-CN') {
         onSources(sources) {
           assistantMessage.sources = sources
         },
+        onReset() {
+          // 服务端截断重试：清空已显示的部分回答，等重试后的完整内容。
+          assistantMessage.content = ''
+        },
       },
       controller.signal,
     )

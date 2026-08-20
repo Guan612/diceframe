@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
+from src.llm.client import OutputTruncatedError, length_retry_budgets
 from src.webui import assistant_knowledge
 
 if TYPE_CHECKING:
@@ -190,15 +191,28 @@ async def chat_stream(
         payload = json.dumps({"delta": text}, ensure_ascii=False)
         await response.write(f"data: {payload}\n\n".encode())
 
+    # 思考模型可能把输出预算烧在推理上导致 finish_reason=length（正文被截断）。
+    # 截断时先发 reset 让前端清空已显示内容，再放大 max_tokens 重试；budgets
+    # 按 length_retry_budgets 逐步放大（2x/4x）。全部预算耗尽才视为失败。
+    budgets = length_retry_budgets(max(1, int(api.text_gen_max_tokens)))
     try:
-        await api._llm_client.call_stream(
-            system,
-            user_message,
-            temperature=0.6,
-            max_tokens=api.text_gen_max_tokens,
-            on_delta=on_delta,
-        )
-        await response.write(b"event: done\ndata: complete\n\n")
+        for budget in budgets:
+            try:
+                await api._llm_client.call_stream(
+                    system,
+                    user_message,
+                    temperature=0.6,
+                    max_tokens=budget,
+                    on_delta=on_delta,
+                )
+                await response.write(b"event: done\ndata: complete\n\n")
+                return
+            except OutputTruncatedError:
+                if budget == budgets[-1]:
+                    raise
+                reset_payload = json.dumps({"reset": True}, ensure_ascii=False)
+                await response.write(f"event: reset\ndata: {reset_payload}\n\n".encode())
+                await asyncio.sleep(1)
     except asyncio.CancelledError:
         raise
     except (ConnectionResetError, BrokenPipeError):
