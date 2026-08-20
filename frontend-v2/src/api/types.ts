@@ -346,6 +346,8 @@ export interface GameSummary {
   max_players?: number
   total_llm_calls?: number
   total_tokens?: number
+  started_at?: string
+  last_activity?: string
   seed_code?: string
   [key: string]: unknown
 }

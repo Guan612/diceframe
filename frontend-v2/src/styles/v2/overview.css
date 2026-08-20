@@ -185,6 +185,14 @@
   white-space: nowrap;
 }
 
+.save-sort-select {
+  width: auto;
+  min-width: 158px;
+  min-height: 34px;
+  padding-block: 5px;
+  font: 12px/1.2 var(--df-font-body);
+}
+
 .game-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
   gap: 18px;
@@ -573,6 +581,7 @@
   .library-heading-copy { justify-content: space-between; }
   .library-heading-actions { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
   .library-heading-actions button { width: 100%; min-width: 0; }
+  .save-sort-select { width: 100%; min-width: 0; }
   .game-card-cover { min-height: 142px; }
 }
 

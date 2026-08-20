@@ -17,6 +17,7 @@ import AssistantPanel from '@/components/AssistantPanel.vue'
 import { useAssistant } from '@/composables/useAssistant'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
+import { sortGames, type SaveSortMode } from './saveSorting'
 
 const router = useRouter()
 const assistantOpen = ref(false)
@@ -24,9 +25,11 @@ const { stop: stopAssistant } = useAssistant()
 watch(assistantOpen, (open) => { if (!open) stopAssistant() })
 const toast = useToast()
 const { confirm } = useConfirm()
-const { t } = useLocale()
+const { locale, t } = useLocale()
 
 const games = ref<GameSummary[]>([])
+const saveSort = ref<SaveSortMode>('recent')
+const sortedGames = computed(() => sortGames(games.value, saveSort.value, locale.value))
 const sceneImageUrls = ref<Record<string, string>>({})
 const error = ref('')
 function setError(e: unknown) { error.value = errorMessage(e) }
@@ -36,7 +39,7 @@ const selected = ref<string[]>([])
 const activeGames = computed(() => games.value.filter(g => stateClass(g.state) === 'badge-active').length)
 const playerCount = computed(() => games.value.reduce((sum, g) => sum + Number(g.player_count || 0), 0))
 const roundCount = computed(() => games.value.reduce((sum, g) => sum + Number(g.round_number || 0), 0))
-const latestScene = computed(() => games.value.find(g => g.scene)?.scene || t('noScene'))
+const latestScene = computed(() => sortedGames.value.find(g => g.scene)?.scene || t('noScene'))
 const statItems = computed(() => [
   { key: 'saves', value: games.value.length, label: t('totalSaves'), icon: BookOutline },
   { key: 'active', value: activeGames.value, label: t('activeGames'), icon: HourglassOutline },
@@ -101,7 +104,7 @@ async function exportGame(key: string) {
 async function exportAll() {
   if (!games.value.length) { toast.info(t('noSavesToExport')); return }
   toast.info(`${t('exportStarting')} ${games.value.length}...`)
-  for (const g of games.value) {
+  for (const g of sortedGames.value) {
     await exportGame(g.game_key)
     await new Promise(resolve => setTimeout(resolve, 250))
   }
@@ -230,6 +233,12 @@ onBeforeUnmount(() => {
       <header class="library-heading">
         <div class="library-heading-copy"><span><i />{{ t('recentAdventures') }}</span><small>{{ games.length }} {{ t('totalSaves') }}</small></div>
         <div class="library-heading-actions">
+          <select v-model="saveSort" class="save-sort-select" :aria-label="t('saveSort')">
+            <option value="recent">{{ t('saveSortRecent') }}</option>
+            <option value="oldest">{{ t('saveSortOldest') }}</option>
+            <option value="name">{{ t('saveSortName') }}</option>
+            <option value="round">{{ t('saveSortRound') }}</option>
+          </select>
           <button @click="selectAll">{{ t('selectAll') }}</button>
           <button @click="selectInvert">{{ t('invertSelection') }}</button>
           <button @click="clearSelection" :disabled="!selected.length">{{ t('clearSelection') }}</button>
@@ -238,7 +247,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
       <div class="game-grid">
-        <article v-for="g in games" :key="g.game_key" class="game-card">
+        <article v-for="g in sortedGames" :key="g.game_key" class="game-card">
           <div class="game-card-cover" :style="gameSceneStyle(g)">
             <span class="cover-sigil"><NIcon :component="CompassOutline" /></span>
             <label class="game-select compact">
