@@ -452,3 +452,41 @@
 .create-actions button:first-child {
   margin-right: auto;
 }
+
+@media (max-width: 800px) {
+  .wizard {
+    place-items: start center;
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+    overflow: hidden;
+  }
+
+  .wizard-inner {
+    display: flex;
+    width: 100%;
+    max-height: calc(var(--app-h, 100dvh) - 20px - env(safe-area-inset-bottom));
+    flex-direction: column;
+    padding: 14px;
+    overflow: hidden;
+  }
+
+  .wizard-steps {
+    flex: 0 0 auto;
+  }
+
+  .wizard-pane {
+    min-height: 0;
+    padding-right: 2px;
+    overflow-y: auto;
+  }
+
+  .wizard-actions {
+    position: sticky;
+    z-index: 1;
+    bottom: 0;
+    flex: 0 0 auto;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--df-border-soft);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--df-surface-2) 82%, transparent), var(--df-surface-2) 30%);
+  }
+}
