@@ -12,6 +12,7 @@ import {
   BookOutline, HourglassOutline, PeopleOutline, DiceOutline, TrophyOutline,
   CompassOutline, EnterOutline, RefreshOutline, DownloadOutline, TrashOutline,
   SparklesOutline,
+  LinkOutline,
 } from '@vicons/ionicons5'
 import AssistantPanel from '@/components/AssistantPanel.vue'
 import { useAssistant } from '@/composables/useAssistant'
@@ -216,6 +217,7 @@ onBeforeUnmount(() => {
       <div class="overview-actions">
         <button @click="saveImportInput?.click()" :disabled="busy">{{ t('importSave') }}</button>
         <input ref="saveImportInput" type="file" accept=".zip" @change="onImportSave" hidden>
+        <button @click="router.push({ name: 'peer' })"><NIcon :component="LinkOutline" />{{ t('peerDirectConnect') }}</button>
         <button class="success" @click="play('')">{{ t('createAdventure') }}</button>
       </div>
     </header>

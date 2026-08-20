@@ -10,7 +10,7 @@ from typing import Any
 from aiohttp import web
 
 from src.hub_client import HubHTTPError
-from src.webui.routes._common import _get_api
+from src.webui.routes._common import _get_api, _require_confirmed_request
 
 
 class _ClientDisconnected(RuntimeError):
@@ -68,6 +68,18 @@ async def api_hub_identity_delete(request: web.Request) -> web.Response:
     except Exception as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=502)
     return web.json_response(result)
+
+
+async def api_hub_rendezvous_room_create(request: web.Request) -> web.Response:
+    if denied := _require_confirmed_request(request):
+        return denied
+    try:
+        result = await _get_api(request).create_rendezvous_room()
+    except HubHTTPError as exc:
+        return _hub_error_response(exc)
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result, status=201)
 
 
 async def api_hub_plugin_detail(request: web.Request) -> web.Response:
@@ -182,6 +194,7 @@ def register_hub(app: web.Application) -> None:
     app.router.add_get("/api/hub/preferences", api_hub_preferences)
     app.router.add_patch("/api/hub/preferences", api_hub_preferences_update)
     app.router.add_delete("/api/hub/identity", api_hub_identity_delete)
+    app.router.add_post("/api/hub/rendezvous/rooms", api_hub_rendezvous_room_create)
     app.router.add_get("/api/hub/plugins/{plugin_id}", api_hub_plugin_detail)
     app.router.add_get("/api/hub/plugins/{plugin_id}/readme", api_hub_plugin_readme)
     app.router.add_get("/api/hub/plugins/{plugin_id}/ratings", api_hub_plugin_ratings)

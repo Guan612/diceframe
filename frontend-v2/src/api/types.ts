@@ -1279,6 +1279,16 @@ export interface TunnelStatus {
   providers: TunnelProvider[]
   error?: string
 }
+
+export interface RendezvousRoomResponse {
+  ok: boolean
+  protocol_version: 1
+  room_code: string
+  host_token: string
+  guest_token: string
+  expires_at: string
+  websocket_url: string
+}
 export interface UpdateApplyResponse {
   ok:boolean
   error?:string

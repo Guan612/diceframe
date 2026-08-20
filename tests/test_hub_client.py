@@ -5,6 +5,7 @@ import json
 
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
 
 from src.hub_client import (
     HubClient,
@@ -15,7 +16,11 @@ from src.hub_client import (
 )
 from src.plugin_host.marketplace import PluginMarketplace
 from src.plugin_host.mirrors import FetchResult, validate_public_http_url
-from src.webui.routes.hub import _ClientDisconnected, _await_hub_read
+from src.webui.routes.hub import (
+    _ClientDisconnected,
+    _await_hub_read,
+    api_hub_rendezvous_room_create,
+)
 from src.webui.services import legal
 from src.webui.services.hub import plugin_readme
 from src.webui.services.hub import preferences as hub_preferences
@@ -140,6 +145,58 @@ async def test_catalog_is_public_and_uses_stale_disk_cache_offline(tmp_path):
         assert stale["items"] == fresh["items"]
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_rendezvous_room_creation_is_anonymous(tmp_path):
+    async def create_room(request):
+        assert request.headers.get("Authorization") is None
+        assert await request.read() == b""
+        return web.json_response(
+            {
+                "protocol_version": 1,
+                "room_code": "ABCDEFGH",
+                "host_token": "host-secret",
+                "guest_token": "guest-secret",
+                "expires_at": "2026-08-20T12:05:00+00:00",
+                "websocket_url": "ws://127.0.0.1:18080/v1/rendezvous/rooms/ABCDEFGH/ws",
+            },
+            status=201,
+        )
+
+    runner, base_url = await _serve([("POST", "/v1/rendezvous/rooms", create_room)])
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        room = await client.create_rendezvous_room()
+        assert room["room_code"] == "ABCDEFGH"
+        assert room["guest_token"] == "guest-secret"
+        assert not client.identity_file.exists()
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_local_rendezvous_route_requires_owner_confirmation():
+    denied = make_mocked_request("POST", "/api/hub/rendezvous/rooms", app=web.Application())
+    response = await api_hub_rendezvous_room_create(denied)
+    assert response.status == 403
+
+    class Api:
+        async def create_rendezvous_room(self):
+            return {"ok": True, "room_code": "ABCDEFGH"}
+
+    app = web.Application()
+    app["api"] = Api()
+    allowed = make_mocked_request(
+        "POST",
+        "/api/hub/rendezvous/rooms",
+        headers={"X-TRPG-Confirm": "true"},
+        app=app,
+    )
+    response = await api_hub_rendezvous_room_create(allowed)
+    assert response.status == 201
+    assert json.loads(response.text)["room_code"] == "ABCDEFGH"
 
 
 @pytest.mark.asyncio

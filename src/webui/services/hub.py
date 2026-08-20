@@ -98,6 +98,10 @@ async def delete_identity(api: "WebAPI") -> dict[str, Any]:
     return await preferences(api)
 
 
+async def create_rendezvous_room(api: "WebAPI") -> dict[str, Any]:
+    return {"ok": True, **await _client(api).create_rendezvous_room()}
+
+
 async def plugin_detail(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
     return {"ok": True, **await _client(api).plugin_detail(plugin_id)}
 

@@ -1,0 +1,90 @@
+.peer-page {
+  min-height: var(--app-h, 100dvh);
+  padding: clamp(20px, 4vw, 54px);
+  background: var(--df-app-bg);
+  color: var(--df-text);
+}
+
+.peer-header,
+.peer-layout {
+  width: min(1080px, 100%);
+  margin-inline: auto;
+}
+
+.peer-header h1 {
+  margin: 8px 0;
+  font: 700 clamp(28px, 5vw, 48px)/1.05 var(--df-font-display);
+}
+
+.peer-header p { max-width: 760px; color: var(--df-text-muted); }
+
+.peer-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 24px;
+  color: var(--df-text-muted);
+  text-decoration: none;
+}
+
+.peer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  gap: 18px;
+  margin-top: 28px;
+}
+
+.peer-card {
+  min-width: 0;
+  padding: clamp(18px, 3vw, 28px);
+  border: 1px solid var(--df-border);
+  border-radius: var(--df-radius-lg);
+  background: var(--df-surface-1);
+  box-shadow: var(--df-shadow);
+}
+
+.peer-mode-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 22px; }
+.peer-mode-tabs button.active { border-color: var(--df-accent); color: var(--df-accent-strong); background: var(--df-accent-soft); }
+
+.peer-field { display: grid; gap: 7px; margin-bottom: 16px; }
+.peer-field > span { font-weight: 700; }
+.peer-field small,
+.peer-invite > small { color: var(--df-text-muted); line-height: 1.5; }
+.peer-field textarea { resize: vertical; overflow-wrap: anywhere; font-family: var(--df-font-mono); font-size: 12px; }
+.peer-primary { width: 100%; justify-content: center; }
+
+.peer-invite { display: grid; gap: 12px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--df-border-soft); }
+.peer-invite > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.peer-invite code,
+.peer-status > header code { color: var(--df-accent-strong); font-size: 18px; letter-spacing: .12em; }
+
+.peer-status > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.peer-status > header div { display: grid; gap: 8px; }
+.peer-status > header strong { display: inline-flex; align-items: center; gap: 8px; }
+.peer-status > header strong i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; }
+.peer-state-connected { color: var(--df-success); }
+.peer-state-error { color: var(--df-danger); }
+.peer-state-signaling,
+.peer-state-waiting,
+.peer-state-connecting { color: var(--df-accent-strong); }
+
+.peer-boundary { margin: 20px 0; padding: 12px; border-left: 3px solid var(--df-accent); background: var(--df-surface-2); color: var(--df-text-muted); }
+.peer-privacy-warning { margin: 20px 0 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--df-warning) 45%, var(--df-border)); border-radius: var(--df-radius-sm); color: var(--df-text); background: color-mix(in srgb, var(--df-warning) 10%, var(--df-surface-2)); }
+.peer-diagnostics h2 { margin: 0; font: 700 20px/1.2 var(--df-font-display); }
+.peer-diagnostics > p { color: var(--df-text-muted); }
+.peer-message-log { display: flex; min-height: 220px; max-height: 340px; flex-direction: column; gap: 10px; margin: 16px 0; padding: 14px; overflow-y: auto; border: 1px solid var(--df-border-soft); border-radius: var(--df-radius-md); background: var(--df-surface-2); }
+.peer-message-log > div { display: grid; gap: 3px; max-width: 85%; }
+.peer-message-log > div.sent { align-self: end; text-align: right; }
+.peer-message-log small { color: var(--df-text-muted); }
+.peer-message-log span { padding: 8px 10px; border-radius: var(--df-radius-sm); background: var(--df-surface-1); overflow-wrap: anywhere; }
+.peer-message-log .sent span { background: var(--df-accent-soft); }
+.peer-message-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+
+@media (max-width: 760px) {
+  .peer-page { padding: 16px 12px calc(24px + env(safe-area-inset-bottom)); }
+  .peer-layout { grid-template-columns: 1fr; }
+  .peer-card { padding: 16px; }
+  .peer-status > header { align-items: start; flex-direction: column; }
+  .peer-message-form { grid-template-columns: 1fr; }
+  .peer-message-form button { width: 100%; justify-content: center; }
+}

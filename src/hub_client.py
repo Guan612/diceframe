@@ -184,6 +184,14 @@ class HubClient:
             request_timeout=_PLUGIN_DETAIL_TIMEOUT,
         )
 
+    async def create_rendezvous_room(self) -> dict[str, Any]:
+        """Create an anonymous, short-lived WebRTC signaling room.
+
+        This does not create or reuse the Hub installation identity. The room
+        credentials stay in memory and are returned to the local owner UI only.
+        """
+        return await self._request("POST", "/v1/rendezvous/rooms")
+
     async def plugin_readme(self, plugin_id: str) -> dict[str, Any]:
         return await self._request(
             "GET",
