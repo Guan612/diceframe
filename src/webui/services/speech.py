@@ -18,6 +18,25 @@ _OPENAI_BUILTIN_VOICES = (
     "nova", "onyx", "sage", "shimmer", "verse",
 )
 
+_EDGE_TTS_BUILTIN_VOICES = (
+    ("zh-CN-XiaoxiaoNeural", "晓晓（女声·温柔）"),
+    ("zh-CN-XiaoyiNeural", "晓伊（女声·活泼）"),
+    ("zh-CN-YunjianNeural", "云健（男声·浑厚）"),
+    ("zh-CN-YunxiNeural", "云希（男声·阳光）"),
+    ("zh-CN-YunxiaNeural", "云夏（男声·少年）"),
+    ("zh-CN-YunyangNeural", "云扬（男声·播音）"),
+    ("zh-CN-liaoning-XiaobeiNeural", "晓北（东北话·女声）"),
+    ("zh-CN-shaanxi-XiaoniNeural", "晓妮（陕西话·女声）"),
+    ("zh-HK-HiuMaanNeural", "曉昐（粤语·女声）"),
+    ("zh-HK-WanLungNeural", "雲龍（粤语·男声）"),
+    ("zh-TW-HsiaoChenNeural", "曉臻（台湾腔·女声）"),
+    ("zh-TW-YunJheNeural", "雲哲（台湾腔·男声）"),
+    ("ja-JP-NanamiNeural", "七海（日语·女声）"),
+    ("ja-JP-KeitaNeural", "圭太（日语·男声）"),
+    ("en-US-AriaNeural", "Aria（英语·女声）"),
+    ("en-US-GuyNeural", "Guy（英语·男声）"),
+)
+
 
 def _plugin_voice_profiles(api: "WebAPI") -> list[dict[str, Any]]:
     if not api._plugins or not hasattr(api._plugins, "list_voice_profiles"):
@@ -43,6 +62,21 @@ def list_voices(api: "WebAPI") -> dict[str, Any]:
                     "engine": "openai-compatible",
                     "voice_id": voice_id,
                     "language": "",
+                    "description": "",
+                    "plugin_id": "",
+                    "plugin_name": "",
+                    "preview_url": "",
+                    "license": "provider",
+                })
+    elif service.provider_id == "edge-tts":
+        for voice_id, name in _EDGE_TTS_BUILTIN_VOICES:
+            if voice_id not in known:
+                voices.append({
+                    "id": voice_id,
+                    "name": name,
+                    "engine": "edge-tts",
+                    "voice_id": voice_id,
+                    "language": voice_id.rsplit("-", 1)[0],
                     "description": "",
                     "plugin_id": "",
                     "plugin_name": "",

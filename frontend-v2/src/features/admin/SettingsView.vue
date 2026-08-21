@@ -226,6 +226,18 @@ async function loadTtsVoices() {
   catch { ttsVoices.value = null }
 }
 
+const EDGE_TTS_DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural'
+
+function setTtsProvider(value: string) {
+  setStr('tts_provider', value)
+  const currentVoice = String(store.config.tts_default_voice || '')
+  if (value === 'edge-tts' && !currentVoice.endsWith('Neural')) {
+    setStr('tts_default_voice', EDGE_TTS_DEFAULT_VOICE)
+  } else if (value === 'openai-compatible' && currentVoice.endsWith('Neural')) {
+    setStr('tts_default_voice', 'alloy')
+  }
+}
+
 const TTS_CONFIG_KEYS = [
   'tts_provider', 'tts_base_url', 'tts_model', 'tts_audio_format',
   'tts_default_voice', 'tts_gm_voice', 'tts_player_voice',
@@ -1081,14 +1093,15 @@ function redownloadUpdatePackage() {
               </div>
               <div class="advanced-row">
                 <div><strong>{{ t('ttsProvider') }}</strong></div>
-                <select :value="store.config.tts_provider ?? 'browser'" @change="setStr('tts_provider', eventValue($event))">
+                <select :value="store.config.tts_provider ?? 'browser'" @change="setTtsProvider(eventValue($event))">
                   <option value="browser">{{ t('ttsProviderBrowser') }}</option>
                   <option value="openai-compatible">{{ t('ttsProviderOpenAI') }}</option>
                   <option value="gpt-sovits">GPT-SoVITS</option>
+                  <option value="edge-tts">{{ t('ttsProviderEdge') }}</option>
                 </select>
               </div>
               <template v-if="ttsProvider !== 'browser'">
-                <div class="advanced-row">
+                <div v-if="ttsProvider === 'openai-compatible' || ttsProvider === 'gpt-sovits'" class="advanced-row">
                   <div><strong>Base URL</strong></div>
                   <NInput
                     :value="store.config.tts_base_url ?? ''"
@@ -1096,7 +1109,7 @@ function redownloadUpdatePackage() {
                     @update:value="setStr('tts_base_url', $event)"
                   />
                 </div>
-                <div class="advanced-row">
+                <div v-if="ttsProvider === 'openai-compatible' || ttsProvider === 'gpt-sovits'" class="advanced-row">
                   <div><strong>API Key</strong></div>
                   <NInput
                     :value="store.secrets.tts_api_key ?? ''"
@@ -1110,12 +1123,13 @@ function redownloadUpdatePackage() {
                   <div><strong>{{ t('model') }}</strong></div>
                   <NInput :value="store.config.tts_model ?? 'tts-1'" placeholder="tts-1" @update:value="setStr('tts_model', $event)" />
                 </div>
-                <div class="advanced-row">
+                <div v-if="ttsProvider !== 'edge-tts'" class="advanced-row">
                   <div><strong>{{ t('ttsAudioFormat') }}</strong></div>
                   <select :value="store.config.tts_audio_format ?? 'mp3'" @change="setStr('tts_audio_format', eventValue($event))">
                     <option value="mp3">MP3</option><option value="wav">WAV</option><option value="opus">Opus</option><option value="flac">FLAC</option><option value="aac">AAC</option>
                   </select>
                 </div>
+                <p v-if="ttsProvider === 'edge-tts'" class="muted tts-inline-hint">{{ t('ttsEdgeHint') }}</p>
                 <div class="advanced-row">
                   <div><strong>{{ t('ttsCacheSize') }}</strong></div>
                   <NInputNumber :value="Number(store.config.tts_cache_mb ?? 256)" :min="16" :max="2048" :step="64" @update:value="setNum('tts_cache_mb', $event)" />
