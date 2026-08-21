@@ -1108,6 +1108,11 @@ export interface AppConfig {
   tts_player_voice?: string
   tts_timeout_seconds?: number
   tts_cache_mb?: number
+  asr_provider?: 'disabled' | 'openai-compatible'
+  asr_base_url?: string
+  asr_api_key?: SecretField
+  asr_model?: string
+  asr_timeout_seconds?: number
   [key: string]: unknown
 }
 

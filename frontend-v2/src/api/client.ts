@@ -95,8 +95,8 @@ async function interceptPeerApi<T>(
 export async function api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const peer = await interceptPeerApi<T>(path, init)
   if (peer.handled) return peer.value
-  const isFormData = init.body instanceof FormData
-  const headers = authHeaders(init.headers, !isFormData)
+  const isRawBody = init.body instanceof FormData || init.body instanceof Blob
+  const headers = authHeaders(init.headers, !isRawBody)
   applyConfirmHeader(headers, init)
   const response = await fetch(apiUrl(path), { ...init, headers })
   const data = await response.json().catch(() => ({}))

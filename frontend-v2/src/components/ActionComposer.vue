@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/client'
 import type { ActionSubmitResponse, GameDetail } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
+import { appendDictated, asrLanguageFor, initializeAsr, useVoiceInput, voiceInputSupported } from '@/utils/asr'
 
 const props = defineProps<{ gameKey: string; userId: string; detail: GameDetail; disabled?: boolean }>()
 const emit = defineEmits<{ refresh: []; processing: [value: boolean] }>()
-const { t } = useLocale()
+const { t, locale } = useLocale()
 
 const text = ref(''), busy = ref(false), notice = ref('')
 
@@ -15,6 +16,27 @@ const hint = computed(() => props.detail.solo_mode ? t('soloHint') : own.value ?
 const defaultQuickActions = computed(() => [t('quickObserve'), t('quickExplore'), t('quickTalk'), t('quickPrepareCombat')])
 const quickActions = computed(() => (props.detail.quick_actions?.length ? props.detail.quick_actions : defaultQuickActions.value) as string[])
 const locked = computed(() => props.disabled || busy.value)
+
+const micAvailable = computed(() => voiceInputSupported())
+const {
+  recording, transcribing, errorCode, serverMessage, elapsedSeconds,
+  toggle: toggleVoice, release: releaseVoice,
+} = useVoiceInput({
+  gameKey: props.gameKey,
+  lang: () => asrLanguageFor(locale.value),
+  onText: chunk => { text.value = appendDictated(text.value, chunk) },
+})
+
+const dictationError = computed(() => {
+  if (errorCode.value === 'asr-mic-denied') return t('asrMicDenied')
+  if (errorCode.value === 'asr-record-failed') return t('asrRecordFailed')
+  if (errorCode.value === 'asr-failed') return t('asrFailed')
+  return serverMessage.value
+})
+
+onMounted(() => { void initializeAsr() })
+
+watch(locked, value => { if (value) releaseVoice() })
 
 function resetSubmissionState() {
   notice.value = ''
@@ -36,6 +58,7 @@ watch(
 async function submit() {
   const action = text.value.trim()
   if (!action || locked.value) return
+  releaseVoice()
   busy.value = true; notice.value = ''; emit('processing', true)
   try {
     const r = await api<ActionSubmitResponse>(`/games/${encodeURIComponent(props.gameKey)}/action`, { method: 'POST', body: JSON.stringify({ text: action }) })
@@ -52,11 +75,24 @@ async function submit() {
       <div class="composer-title-row">
         <strong>{{ t('composerTitle') }}</strong>
         <span v-if="hint" class="composer-hint">{{ hint }}</span>
+        <button
+          v-if="micAvailable"
+          type="button"
+          class="dictation-toggle"
+          :class="{ active: recording }"
+          :title="recording ? t('asrStop') : t('asrVoice')"
+          :aria-pressed="recording"
+          :disabled="transcribing || (locked && !recording)"
+          @click="toggleVoice()"
+        >{{ recording ? '⏹' : '🎤' }}</button>
       </div>
     </div>
     <div class="quick-actions" :aria-label="t('quickActions')">
       <button v-for="action in quickActions" :key="action" :disabled="locked" @click="text = action">{{ action }}</button>
     </div>
+    <div v-if="dictationError" class="dictation-status error">{{ dictationError }}</div>
+    <div v-else-if="recording" class="dictation-status">{{ t('asrRecording', { seconds: elapsedSeconds }) }}</div>
+    <div v-else-if="transcribing" class="dictation-status">{{ t('asrTranscribing') }}</div>
     <div class="composer-row">
       <textarea v-model="text" :disabled="locked" :placeholder="t('actionPlaceholder')" @keydown.ctrl.enter.prevent="submit()" />
       <button class="primary" @click="submit()" :disabled="locked || !text.trim()">{{ busy ? t('processing') : t('action') }}</button>
@@ -64,3 +100,45 @@ async function submit() {
     <div v-if="notice" class="notice">{{ notice }}</div>
   </div>
 </template>
+
+<style scoped>
+.dictation-toggle {
+  flex: 0 0 auto;
+  min-width: 32px;
+  padding: 2px 9px;
+  border: 1px solid color-mix(in srgb, var(--df-interactive) 38%, var(--df-border-soft));
+  border-radius: 999px;
+  color: var(--df-text-secondary);
+  background: color-mix(in srgb, var(--df-interactive) 10%, var(--df-control-bg));
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dictation-toggle.active {
+  border-color: color-mix(in srgb, var(--df-danger) 55%, var(--df-border-soft));
+  color: var(--df-danger-strong);
+  background: color-mix(in srgb, var(--df-danger) 12%, transparent);
+}
+
+.dictation-toggle:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.dictation-status {
+  margin-bottom: 7px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--df-interactive) 32%, var(--df-border-soft));
+  border-radius: 6px;
+  color: var(--df-text);
+  background: color-mix(in srgb, var(--df-interactive) 8%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dictation-status.error {
+  border-color: color-mix(in srgb, var(--df-danger) 38%, var(--df-border-soft));
+  color: var(--df-danger-strong);
+  background: color-mix(in srgb, var(--df-danger) 8%, transparent);
+}
+</style>
