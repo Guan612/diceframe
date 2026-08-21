@@ -47,10 +47,18 @@ class HubUnavailable(RuntimeError):
 class HubHTTPError(HubUnavailable):
     """Hub 返回了非 2xx；保留 status、Hub 的 detail 和 Retry-After，供路由透传。"""
 
-    def __init__(self, status: int, *, detail: str = "", retry_after: str = "") -> None:
+    def __init__(
+        self,
+        status: int,
+        *,
+        detail: str = "",
+        retry_after: str = "",
+        error_code: str = "",
+    ) -> None:
         self.status = status
         self.detail = detail
         self.retry_after = retry_after
+        self.error_code = error_code
         message = f"DiceFrame Hub HTTP {status}"
         if detail:
             message = f"{message}: {detail}"
@@ -184,13 +192,72 @@ class HubClient:
             request_timeout=_PLUGIN_DETAIL_TIMEOUT,
         )
 
-    async def create_rendezvous_room(self) -> dict[str, Any]:
-        """Create an anonymous, short-lived WebRTC signaling room.
+    async def create_rendezvous_room(self, peer_count: int) -> dict[str, Any]:
+        """Create a governed host-star room with the local pseudonymous identity."""
+        if isinstance(peer_count, bool) or not isinstance(peer_count, int) or not 2 <= peer_count <= 32:
+            raise ValueError("peer_count 必须是 2 到 32 的整数")
+        try:
+            payload = await self._request(
+                "POST",
+                "/v1/rendezvous/rooms",
+                auth=True,
+                json_body={"peer_count": peer_count},
+            )
+        except HubHTTPError as exc:
+            if exc.status != 401:
+                raise
+            # A locally cached identity may have been deleted by retention or a
+            # previous clear-identity request. Re-register without deleting the
+            # stored identity first: the old file is only overwritten after the
+            # new registration succeeds, so a transient 401 (proxy hiccup, brief
+            # Hub trouble) never destroys the installed identity and its
+            # like/rating associations. A deliberate Hub revocation uses 403
+            # and must never be bypassed this way.
+            payload = await self._request(
+                "POST",
+                "/v1/rendezvous/rooms",
+                auth=True,
+                json_body={"peer_count": peer_count},
+                force_reregister=True,
+            )
+        invitations = payload.get("invitations")
+        required_strings = (
+            "room_code",
+            "host_peer_id",
+            "host_token",
+            "expires_at",
+            "websocket_url",
+        )
+        valid_invitations = isinstance(invitations, list) and all(
+            isinstance(item, dict)
+            and isinstance(item.get("peer_id"), str)
+            and isinstance(item.get("token"), str)
+            for item in invitations
+        )
+        protocol_version = payload.get("protocol_version")
+        websocket_url = payload.get("websocket_url")
+        if (
+            (
+                protocol_version != 2
+                # v3+ 是 Hub 新增协议：应提示更新客户端，而不是误导用户更新 Hub。
+                and not (isinstance(protocol_version, int) and protocol_version > 2)
+            )
+            or payload.get("topology") != "host-star"
+            or any(not isinstance(payload.get(key), str) for key in required_strings)
+            # 隐私政策承诺信令走 HTTPS/WSS：拒绝明文 ws 或任意非 websocket scheme。
+            or not isinstance(websocket_url, str)
+            or not (websocket_url.startswith("wss://") or websocket_url.startswith("ws://"))
+            or not valid_invitations
+            or len(invitations) != peer_count - 1
+        ):
+            raise HubUnavailable("Hub 联机协议不兼容或响应不完整，请先更新 Hub")
+        if protocol_version != 2:
+            raise HubUnavailable("Hub 已升级到更新的联机协议，请更新 DiceFrame 客户端")
+        return payload
 
-        This does not create or reuse the Hub installation identity. The room
-        credentials stay in memory and are returned to the local owner UI only.
-        """
-        return await self._request("POST", "/v1/rendezvous/rooms")
+    async def rendezvous_config(self) -> dict[str, Any]:
+        """Read the anonymous Hub-side availability and entry visibility controls."""
+        return await self._request("GET", "/v1/rendezvous/config")
 
     async def plugin_readme(self, plugin_id: str) -> dict[str, Any]:
         return await self._request(
@@ -354,15 +421,15 @@ class HubClient:
                 logger.debug("Hub 匿名心跳发送失败")
             await asyncio.sleep(_HEARTBEAT_INTERVAL)
 
-    async def _ensure_identity(self) -> str:
+    async def _ensure_identity(self, *, force_reregister: bool = False) -> str:
         current = self._read_identity()
         token = str(current.get("installation_token") or "")
-        if token:
+        if token and not force_reregister:
             return token
         async with self._identity_lock:
             current = self._read_identity()
             token = str(current.get("installation_token") or "")
-            if token:
+            if token and not force_reregister:
                 return token
             payload = await self._request(
                 "POST",
@@ -377,6 +444,8 @@ class HubClient:
             installation_id = str(payload.get("installation_id") or "")
             if not token or not installation_id:
                 raise HubUnavailable("Hub 安装身份响应无效")
+            # 401 轮换场景：注册成功即证明旧 token 已被 Hub 收回，
+            # 此时才落盘覆盖；注册失败则原身份文件保持不动。
             self._atomic_write(
                 self.identity_file,
                 {"installation_id": installation_id, "installation_token": token},
@@ -390,6 +459,7 @@ class HubClient:
         *,
         auth: bool = False,
         auth_optional: bool = False,
+        force_reregister: bool = False,
         json_body: dict[str, Any] | None = None,
         empty_ok: bool = False,
         request_timeout: aiohttp.ClientTimeout | None = None,
@@ -404,7 +474,7 @@ class HubClient:
         assert self._session is not None
         headers: dict[str, str] = {}
         if auth:
-            headers["Authorization"] = f"Bearer {await self._ensure_identity()}"
+            headers["Authorization"] = f"Bearer {await self._ensure_identity(force_reregister=force_reregister)}"
         elif auth_optional:
             token = str(self._read_identity().get("installation_token") or "")
             if token:
@@ -424,16 +494,19 @@ class HubClient:
                     # Hub 的失败响应体里带用户可读的 detail（如"需要先安装""冷却中"），
                     # 读取并随异常透传，路由层再转成前端展示的文案。
                     detail = ""
+                    error_code = ""
                     try:
                         error_body = await response.json(content_type=None)
                         if isinstance(error_body, dict):
                             detail = str(error_body.get("detail") or "")
+                            error_code = str(error_body.get("code") or "")[:80]
                     except (ValueError, aiohttp.ClientError):
                         pass
                     raise HubHTTPError(
                         response.status,
                         detail=detail,
                         retry_after=response.headers.get("Retry-After", ""),
+                        error_code=error_code,
                     )
                 if response.status == 204 or empty_ok and response.content_length == 0:
                     payload: dict[str, Any] = {}

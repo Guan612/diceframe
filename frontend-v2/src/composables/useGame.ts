@@ -6,6 +6,7 @@ import type { CharacterListResponse, GameDetail, GameLogResponse, LogEntry, Lore
 import type { LoreKeywords } from '@/utils/renderer'
 import { clearCurrentGame, gameFromQuery, queryString, readCurrentGame, rememberCurrentGame } from '@/stores/gameContext'
 import { resolveMapBackgroundAsset, revokeMapBackgroundAsset } from '@/api/mapBackgrounds'
+import { activePeerGameClient } from '@/peer/game/bridge'
 
 const KEY_MAP:Record<string,keyof LoreKeywords>={npc:'npc',location:'location',item:'item',faction:'faction',event:'event',puzzle:'puzzle',other:'other',lore:'other'}
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error || 'Load failed') }
@@ -30,6 +31,7 @@ export function useGame(){
   const detail = ref<GameDetail|null>(null), players = ref<Player[]>([]), log = ref<LogEntry[]>([]), liveNarration = ref('')
   const privateMessages = ref<PrivateMessage[]>([]), map = ref<MapData>({locations:[]}), lore = ref<LoreKeywords>({}), loreEntries = ref<LoreEntry[]>([]), loading=ref(false), error=ref('')
   let source:EventSource|null=null
+  let unsubscribePeerEvents:(()=>void)|null=null
   let pollTimer:number|undefined
   let refreshTimer:number|undefined
   let reconnectTimer:number|undefined
@@ -73,6 +75,9 @@ export function useGame(){
 
   function clearMissingGame(gameKey: string) {
     if (currentGame.value !== gameKey) return
+    // P2P 直连局走数据通道而非服务器接口；服务器 404 属预期（局在房主本机），
+    // 不能据此清空页面。
+    if (activePeerGameClient()?.gameKey === gameKey) return
     clearCurrentGame(gameKey)
     currentGame.value = ''
     detail.value = null
@@ -88,6 +93,8 @@ export function useGame(){
     error.value = ''
     source?.close()
     source = null
+    unsubscribePeerEvents?.()
+    unsubscribePeerEvents = null
     clearRefreshTimer()
     if (pollTimer) {
       clearInterval(pollTimer)
@@ -157,10 +164,17 @@ export function useGame(){
   async function connect(){
     const version=++connectVersion
     source?.close(); source=null; clearRefreshTimer(); liveNarration.value=''
+    unsubscribePeerEvents?.(); unsubscribePeerEvents=null
     if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=undefined}
     if(pollTimer){clearInterval(pollTimer);pollTimer=undefined}
     const gameKey=currentGame.value
     if(!gameKey)return
+    const peerGame = activePeerGameClient()
+    if (peerGame?.gameKey === gameKey) {
+      unsubscribePeerEvents = peerGame.subscribe(scheduleSilentRefresh)
+      pollTimer=window.setInterval(() => void refresh(true),30000)
+      return
+    }
     try{
       const next=await gameEventSource(gameKey)
       if(version!==connectVersion || gameKey!==currentGame.value){next.close();return}
@@ -199,6 +213,6 @@ export function useGame(){
   })
   watch(() => route.query.user, () => { userId.value = routeUser() })
   watch(() => log.value.length, (next, prev) => { if ((prev ?? 0) < next) liveNarration.value = '' })
-  onBeforeUnmount(()=>{connectVersion++;source?.close();revokeMapBackgroundAsset(map.value);clearRefreshTimer();if(pollTimer)clearInterval(pollTimer);if(reconnectTimer)clearTimeout(reconnectTimer)})
+  onBeforeUnmount(()=>{connectVersion++;source?.close();unsubscribePeerEvents?.();revokeMapBackgroundAsset(map.value);clearRefreshTimer();if(pollTimer)clearInterval(pollTimer);if(reconnectTimer)clearTimeout(reconnectTimer)})
   return {currentGame,userId,actorId,detail,players,player,log,privateMessages,map,lore,loreEntries,loading,error,isGm,refresh,connect,selectGame,liveNarration}
 }

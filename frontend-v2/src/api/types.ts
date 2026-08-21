@@ -1280,15 +1280,33 @@ export interface TunnelStatus {
   error?: string
 }
 
+export interface RendezvousPeerInvitation {
+  peer_id: string
+  token: string
+}
+
 export interface RendezvousRoomResponse {
   ok: boolean
-  protocol_version: 1
+  protocol_version: 2
+  topology: 'host-star'
   room_code: string
+  host_peer_id: string
   host_token: string
-  guest_token: string
+  invitations: RendezvousPeerInvitation[]
   expires_at: string
   websocket_url: string
 }
+
+export interface RendezvousConfigResponse {
+  ok: boolean
+  enabled: boolean
+  entry_visible: boolean
+  load_level: 'normal' | 'busy' | 'nearly_full'
+  max_peers_per_room: number
+  retry_after: number
+  message: string
+}
+
 export interface UpdateApplyResponse {
   ok:boolean
   error?:string

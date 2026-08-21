@@ -1,9 +1,29 @@
 .peer-page {
+  display: flex;
+  flex-direction: column;
   min-height: var(--app-h, 100dvh);
   padding: clamp(20px, 4vw, 54px);
   background: var(--df-app-bg);
   color: var(--df-text);
 }
+
+.peer-page-embedded {
+  min-height: 0;
+  padding: 14px 16px 16px;
+  background: transparent;
+}
+
+.peer-page-embedded .peer-layout {
+  width: 100%;
+  margin-top: 0;
+  gap: 14px;
+}
+
+/* 弹窗内空间有限：卡片/字段/页签间距整体收紧，避免大片留白 */
+.peer-page-embedded .peer-card { padding: 16px; }
+.peer-page-embedded .peer-mode-tabs { margin-bottom: 16px; }
+.peer-page-embedded .peer-field { margin-bottom: 12px; }
+.peer-page-embedded .peer-direct-consent { margin: 2px 0 12px; }
 
 .peer-header,
 .peer-layout {
@@ -29,12 +49,21 @@
 
 .peer-layout {
   display: grid;
+  flex: 1;
+  align-items: stretch;
   grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  grid-template-rows: 1fr;
   gap: 18px;
   margin-top: 28px;
 }
+.peer-load-level { display: inline-flex; align-items: center; width: fit-content; }
+.peer-load-normal { color: var(--df-success) !important; }
+.peer-load-busy { color: var(--df-warning, #c9913a) !important; }
+.peer-load-nearly_full { color: var(--df-danger) !important; }
 
 .peer-card {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   padding: clamp(18px, 3vw, 28px);
   border: 1px solid var(--df-border);
@@ -51,11 +80,45 @@
 .peer-field small,
 .peer-invite > small { color: var(--df-text-muted); line-height: 1.5; }
 .peer-field textarea { resize: vertical; overflow-wrap: anywhere; font-family: var(--df-font-mono); font-size: 12px; }
+.peer-invite-preview { display: grid; gap: 6px; margin: -2px 0 16px; padding: 10px 12px; border: 1px solid var(--df-border-soft); border-radius: var(--df-radius-sm); background: var(--df-surface-2); }
+.peer-invite-preview span { color: var(--df-text-muted); font-size: 12px; }
+.peer-invite-stun-list { display: grid; gap: 4px; }
+.peer-invite-preview code { overflow-wrap: anywhere; color: var(--df-accent-strong); }
+.peer-direct-consent { display: flex; align-items: flex-start; gap: 9px; margin: 4px 0 14px; color: var(--df-text-muted); font-size: 13px; line-height: 1.55; }
+.peer-direct-consent input { width: auto; margin-top: 3px; flex: 0 0 auto; }
+.peer-direct-consent a { color: var(--df-accent-strong); }
 .peer-primary { width: 100%; justify-content: center; }
 
-.peer-invite { display: grid; gap: 12px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--df-border-soft); }
-.peer-invite > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.peer-invite code,
+/* 邀请码列表：单行紧凑横排（序号徽章 + 单行码 + 复制），
+   1~6 个码都不拉高页面；完整码靠复制按钮取，输入框横向滚动预览。 */
+.peer-invite { display: grid; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--df-border-soft); }
+.peer-invite-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.peer-invite-room { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
+.peer-invite-room code { color: var(--df-accent-strong); font-size: 16px; letter-spacing: .1em; }
+.peer-invite-item { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.peer-invite-index {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--df-accent-soft);
+  color: var(--df-accent-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+/* 两行换行预览：base64 无空格需 break-all 才能折行，比单行多露出近一倍内容 */
+.peer-invite-code textarea {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-family: var(--df-font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.peer-invite-copy { min-height: 30px; padding: 0 9px; white-space: nowrap; font-size: 12px; }
+.peer-invite > small { color: var(--df-text-muted); line-height: 1.5; }
+.peer-copy-all { min-height: 30px; padding: 0 10px; white-space: nowrap; font-size: 12px; }
+
 .peer-status > header code { color: var(--df-accent-strong); font-size: 18px; letter-spacing: .12em; }
 
 .peer-status > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
@@ -67,24 +130,70 @@
 .peer-state-signaling,
 .peer-state-waiting,
 .peer-state-connecting { color: var(--df-accent-strong); }
+.peer-member-states { display: grid; gap: 6px; margin-top: 16px; padding: 12px; border: 1px solid var(--df-border-soft); border-radius: var(--df-radius-sm); background: var(--df-surface-2); }
+.peer-member-states code { overflow-wrap: anywhere; color: var(--df-text-muted); }
+.peer-disconnect { margin-top: 12px; }
+.peer-enter-game { margin: 12px 0 0 8px; }
 
 .peer-boundary { margin: 20px 0; padding: 12px; border-left: 3px solid var(--df-accent); background: var(--df-surface-2); color: var(--df-text-muted); }
-.peer-privacy-warning { margin: 20px 0 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--df-warning) 45%, var(--df-border)); border-radius: var(--df-radius-sm); color: var(--df-text); background: color-mix(in srgb, var(--df-warning) 10%, var(--df-surface-2)); }
-.peer-diagnostics h2 { margin: 0; font: 700 20px/1.2 var(--df-font-display); }
-.peer-diagnostics > p { color: var(--df-text-muted); }
-.peer-message-log { display: flex; min-height: 220px; max-height: 340px; flex-direction: column; gap: 10px; margin: 16px 0; padding: 14px; overflow-y: auto; border: 1px solid var(--df-border-soft); border-radius: var(--df-radius-md); background: var(--df-surface-2); }
-.peer-message-log > div { display: grid; gap: 3px; max-width: 85%; }
-.peer-message-log > div.sent { align-self: end; text-align: right; }
-.peer-message-log small { color: var(--df-text-muted); }
-.peer-message-log span { padding: 8px 10px; border-radius: var(--df-radius-sm); background: var(--df-surface-1); overflow-wrap: anywhere; }
-.peer-message-log .sent span { background: var(--df-accent-soft); }
-.peer-message-form { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.peer-connection-check {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: var(--df-surface-2);
+}
+.peer-connection-check h2 { margin: 0; font: 700 20px/1.2 var(--df-font-display); }
+.peer-connection-check p { margin: 0; color: var(--df-text-muted); line-height: 1.65; }
+.peer-connection-check strong { display: inline-flex; align-items: center; gap: 8px; width: fit-content; color: var(--df-text-muted); }
+.peer-connection-check strong i { width: 8px; height: 8px; border-radius: 50%; background: var(--df-text-muted); }
+.peer-connection-check.active { border-color: color-mix(in srgb, var(--df-success) 42%, var(--df-border)); }
+.peer-connection-check.active strong { color: var(--df-success); }
+.peer-connection-check.active strong i { background: var(--df-success); box-shadow: 0 0 10px color-mix(in srgb, var(--df-success) 70%, transparent); }
+
+.peer-status-detail {
+  padding: 8px 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 5px;
+  color: var(--df-text-secondary);
+  background: color-mix(in srgb, var(--df-surface-2) 55%, transparent);
+  font-size: 12px;
+  line-height: 1.6;
+}
 
 @media (max-width: 760px) {
   .peer-page { padding: 16px 12px calc(24px + env(safe-area-inset-bottom)); }
-  .peer-layout { grid-template-columns: 1fr; }
+  .peer-page-embedded { min-height: 0; padding: 12px 10px calc(20px + env(safe-area-inset-bottom)); }
+  .peer-layout { grid-template-columns: 1fr; grid-template-rows: auto; align-items: start; }
   .peer-card { padding: 16px; }
   .peer-status > header { align-items: start; flex-direction: column; }
-  .peer-message-form { grid-template-columns: 1fr; }
-  .peer-message-form button { width: 100%; justify-content: center; }
+  /* 窄屏下复制按钮收成图标+短文案，避免挤压码区 */
+  .peer-invite-item { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px; }
+  .peer-invite-index { width: 22px; height: 22px; }
+}
+
+/* 启动弹窗：宽度适中、超高可滚、矮内容自然收缩不再底部留白 */
+/* 启动弹窗宿主层：本文件是全局样式，直接写类名即可（:global() 只适用于 scoped 样式） */
+.peer-connect-modal-host {
+  display: flex;
+  align-items: center;
+}
+
+.peer-connect-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 620px) {
+  .peer-connect-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+  }
 }

@@ -15,13 +15,16 @@ import {
   LinkOutline,
 } from '@vicons/ionicons5'
 import AssistantPanel from '@/components/AssistantPanel.vue'
+import PeerConnectModal from '@/features/peer/PeerConnectModal.vue'
 import { useAssistant } from '@/composables/useAssistant'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
+import { getRendezvousConfig } from '@/api/peer'
 import { sortGames, type SaveSortMode } from './saveSorting'
 
 const router = useRouter()
 const assistantOpen = ref(false)
+const peerModalOpen = ref(false)
 const { stop: stopAssistant } = useAssistant()
 watch(assistantOpen, (open) => { if (!open) stopAssistant() })
 const toast = useToast()
@@ -29,6 +32,7 @@ const { confirm } = useConfirm()
 const { locale, t } = useLocale()
 
 const games = ref<GameSummary[]>([])
+const peerEntryVisible = ref(false)
 const saveSort = ref<SaveSortMode>('recent')
 const sortedGames = computed(() => sortGames(games.value, saveSort.value, locale.value))
 const sceneImageUrls = ref<Record<string, string>>({})
@@ -62,6 +66,16 @@ async function load() {
     sceneImageUrls.value = Object.fromEntries(entries)
     for (const url of Object.values(previous)) revokeSceneImageUrl(url)
   } catch (e: unknown) { setError(e) }
+}
+
+async function loadPeerEntryVisibility() {
+  peerEntryVisible.value = false
+  try {
+    const config = await getRendezvousConfig()
+    peerEntryVisible.value = config.entry_visible === true
+  } catch {
+    // Fail closed: an unavailable Hub cannot establish a new rendezvous session.
+  }
 }
 
 function play(key: string) {
@@ -198,7 +212,10 @@ function gameSceneStyle(game: GameSummary): Record<string, string> {
   return sceneImageStyle(sceneImageUrls.value[game.game_key] || ruleSceneUrl(String(game.rule_id || '')))
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadPeerEntryVisibility()
+})
 onBeforeUnmount(() => {
   for (const url of Object.values(sceneImageUrls.value)) revokeSceneImageUrl(url)
 })
@@ -215,9 +232,9 @@ onBeforeUnmount(() => {
         <p>{{ t('overviewSubtitle') }}</p>
       </div>
       <div class="overview-actions">
+        <button v-if="peerEntryVisible" class="peer-launch-button" @click="peerModalOpen = true"><NIcon :component="LinkOutline" />{{ t('peerDirectConnect') }}</button>
         <button @click="saveImportInput?.click()" :disabled="busy">{{ t('importSave') }}</button>
         <input ref="saveImportInput" type="file" accept=".zip" @change="onImportSave" hidden>
-        <button @click="router.push({ name: 'peer' })"><NIcon :component="LinkOutline" />{{ t('peerDirectConnect') }}</button>
         <button class="success" @click="play('')">{{ t('createAdventure') }}</button>
       </div>
     </header>
@@ -235,12 +252,15 @@ onBeforeUnmount(() => {
       <header class="library-heading">
         <div class="library-heading-copy"><span><i />{{ t('recentAdventures') }}</span><small>{{ games.length }} {{ t('totalSaves') }}</small></div>
         <div class="library-heading-actions">
-          <select v-model="saveSort" class="save-sort-select" :aria-label="t('saveSort')">
-            <option value="recent">{{ t('saveSortRecent') }}</option>
-            <option value="oldest">{{ t('saveSortOldest') }}</option>
-            <option value="name">{{ t('saveSortName') }}</option>
-            <option value="round">{{ t('saveSortRound') }}</option>
-          </select>
+          <label class="save-sort-field">
+            <span>{{ t('saveSort') }}</span>
+            <select v-model="saveSort" class="save-sort-select" :aria-label="t('saveSort')">
+              <option value="recent">{{ t('saveSortRecent') }}</option>
+              <option value="oldest">{{ t('saveSortOldest') }}</option>
+              <option value="name">{{ t('saveSortName') }}</option>
+              <option value="round">{{ t('saveSortRound') }}</option>
+            </select>
+          </label>
           <button @click="selectAll">{{ t('selectAll') }}</button>
           <button @click="selectInvert">{{ t('invertSelection') }}</button>
           <button @click="clearSelection" :disabled="!selected.length">{{ t('clearSelection') }}</button>
@@ -303,6 +323,7 @@ onBeforeUnmount(() => {
           <AssistantPanel @close="assistantOpen = false" />
         </NDrawerContent>
       </NDrawer>
+      <PeerConnectModal v-model:show="peerModalOpen" />
       <button
         class="overview-assistant-fab"
         @click="assistantOpen = true"

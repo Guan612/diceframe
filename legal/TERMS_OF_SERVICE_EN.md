@@ -1,8 +1,8 @@
 # DiceFrame Terms of Use
 
-Last updated: August 11, 2026  
-Effective date: August 11, 2026  
-Version: 1.0
+Last updated: August 20, 2026
+Effective date: August 20, 2026
+Version: 1.1
 
 Please read these Terms and the DiceFrame Privacy Policy before downloading, installing, deploying, or using DiceFrame.
 
@@ -20,9 +20,15 @@ You may use, study, modify, and distribute DiceFrame under AGPL-3.0. These Terms
 
 ## 3. Self-hosting and third parties
 
-DiceFrame primarily runs on infrastructure controlled by its deployer. The deployer chooses model providers, plugins, network exposure, sharing, and backups and is responsible for related accounts, fees, keys, security, and legal duties. AI requests send the prompt and game context needed for generation to the provider selected by the user. GitHub, DiceFrame Hub, Cloudflare, NapCat, mirrors, and plugin repositories are independent services unless expressly stated otherwise.
+DiceFrame primarily runs on infrastructure controlled by its deployer. The deployer chooses model providers, plugins, network exposure, sharing, and backups and is responsible for related accounts, fees, keys, security, and legal duties. AI requests send the prompt and game context needed for generation to the provider selected by the user. GitHub, DiceFrame Hub, Cloudflare, Metered, Nextcloud, NapCat, mirrors, and plugin repositories are independent services unless expressly stated otherwise.
 
 Keep model keys, DiceFrame access passwords, bot tokens, Hub tokens, and backups secure. The deployer is responsible for risks arising from weak passwords, exposed ports, incorrect proxies, leaked credentials, or delayed updates.
+
+Direct connection is an invitation-only feature actively enabled by users. Official Hub exchanges only short-lived WebRTC handshake signaling; after setup, participant DataChannel content does not pass through Hub. The direct-connect protocol permits only enumerated game reads and player operations, binds each participant identity at the host client, and executes operations through the host's local game engine. Hosts should confirm that the selected game, participants, and model configuration are appropriate to share. Maintainers ordinarily cannot view, recover, or proactively review DataChannel content. Hosts and participants remain responsible for lawful use, respect for others' rights, and appropriate access control.
+
+Each client may use a listed third-party STUN option (currently Cloudflare, Metered, Nextcloud, or a multi-provider combination), use no STUN, or enter one or more third-party/self-hosted STUN URIs. Availability, data processing, international transfer, and any charges are governed by those providers and the selecting user. DiceFrame does not provide TURN, so strict NAT, CGNAT, firewalls, or third-party failure may prevent connection.
+
+One-time link codes contain a guest secret and must be sent only to intended participants and replaced if exposed. Do not use direct connection, signaling, room codes, or custom servers for scanning, attacks, access-control evasion, unlawful content, or infringement. Official Hub may rate-limit, reject, ban sources, close handshakes, or disable the feature for security, capacity, maintenance, complaints, or compliance.
 
 ## 4. AI content and acceptable use
 
@@ -46,7 +52,7 @@ Submit reproducible issues through [GitHub Issues](https://github.com/diceframe/
 
 DiceFrame, announcements, the public plugin index, Hub, mirrors, and update services are provided “as is” and “as available,” without promises of uninterrupted availability, error-free operation, universal compatibility, fitness for a particular purpose, or permanent storage.
 
-Maintainers may change, suspend, or discontinue online services without revoking source-code rights already granted under AGPL-3.0. To the maximum extent permitted by law, maintainers are not liable for indirect, incidental, special, or consequential losses arising from DiceFrame, AI output, third-party services, plugins, public deployment, lost data, account issues, or fees. Nothing excludes liability or mandatory user rights that cannot lawfully be excluded.
+Maintainers may rate-limit, shed load, change, suspend, or discontinue online services without revoking source-code rights already granted under AGPL-3.0. Hub unavailability, full capacity, or refusal of a new handshake does not ordinarily control local functions or an already established direct channel, but successful setup through strict NAT is not guaranteed. To the maximum extent permitted by law, maintainers are not liable for indirect, incidental, special, or consequential losses arising from DiceFrame, AI output, third-party services, plugins, public deployment, lost data, account issues, or fees. Nothing excludes liability or mandatory user rights that cannot lawfully be excluded.
 
 ## 8. Relationship and intellectual property
 
