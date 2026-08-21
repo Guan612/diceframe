@@ -9,6 +9,7 @@ CLAUDE.md
 **/CLAUDE.md
 
 data/
+data-test/
 .tmp_audit_data/
 .pytest_cache/
 __pycache__/

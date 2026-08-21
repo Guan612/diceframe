@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/client'
 import type { CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSkill, GameDetail, PlayerCreateResponse, RuleAttribute, RuleMeta } from '@/api/types'
@@ -9,6 +9,9 @@ import { attrDisplayName, suggestedAttributes, skillPointCost } from '@/utils/ru
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useConfirm } from '@/composables/useConfirm'
 import { characterCardNeedsConversion, characterCardRuleName } from '@/utils/characterCards'
+import { activePeerGameClient } from '@/peer/game/bridge'
+import { usePeerSessionStore } from '@/peer/store/peerSession'
+import { friendlyPeerDetail } from '@/features/peer/friendlyDetail'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 
@@ -38,6 +41,8 @@ const ruleMeta = ref<RuleMeta>({})
 const cards = ref<CharacterCard[]>([])
 const form = ref<JoinForm>({ character_name: '', race: '', class: '', hp: '', background: '', attributes: {}, skills: [{ name: '', value: '' }] })
 const error = ref(''), busy = ref(false)
+/** peer 会话恢复失败等场景的原始错误码转成人话；其它错误原样展示。 */
+const displayError = computed(() => friendlyPeerDetail(error.value, t))
 const sheetReady = ref(false)
 const needRoomPassword = ref(false), roomPasswordInput = ref('')
 const resumeUser = ref('')
@@ -86,6 +91,30 @@ function skillToForm(skill: string | CharacterSkill): JoinSkill {
 }
 
 onMounted(async () => {
+  // P2P 直连局：刷新后先恢复 peer 会话（不落服务器 /games 接口）。
+  if (route.query.peer === '1' && !activePeerGameClient()) {
+    const peerSession = usePeerSessionStore()
+    if (peerSession.hasPersistedSession()) {
+      peerSession.restore(api)
+      const savedGameKey = peerSession.gameKey || gameKey.value
+      if (!peerSession.isHost) {
+        // guest 等连接建立后向 host 重绑身份再进游玩页。
+        watch(() => peerSession.state, async (next) => {
+          if (next !== 'connected' && next !== 'error') return
+          if (next === 'connected') await peerSession.rebindIdentity()
+          rememberCurrentGame(savedGameKey)
+          router.replace({
+            name: 'play',
+            query: { game: savedGameKey, share: '1', peer: '1' },
+          })
+        }, { immediate: true })
+      } else {
+        rememberCurrentGame(savedGameKey)
+        router.replace({ name: 'play', query: { game: savedGameKey, peer: '1' } })
+      }
+      return
+    }
+  }
   const stored = localStorage.getItem('trpg_play_user_' + gameKey.value)
   try {
     const d = await api<GameDetail>(`/games/${encodeURIComponent(gameKey.value)}`)
@@ -241,7 +270,7 @@ async function create() {
         </div>
       </div>
       <label class="sheet-field">{{ t('roomPassword') }}<input type="password" v-model="roomPasswordInput" @keyup.enter="verifyRoomPassword" :placeholder="t('roomPassword')"></label>
-      <p v-if="error" class="error-banner">{{ error }}</p>
+      <p v-if="error" class="error-banner">{{ displayError }}</p>
       <button class="primary submit" :disabled="busy || !roomPasswordInput.trim()" @click="verifyRoomPassword">{{ busy ? t('validating') : t('verifyAndContinue') }}</button>
     </section>
 
@@ -252,7 +281,7 @@ async function create() {
           <p>{{ busy ? t('restoringViaLink') : t('preparingTable') }}</p>
         </div>
       </div>
-      <p v-if="error" class="error-banner">{{ error }}</p>
+      <p v-if="error" class="error-banner">{{ displayError }}</p>
     </section>
 
     <section v-else-if="!sheetReady" class="join-form">
@@ -262,7 +291,7 @@ async function create() {
           <p>{{ t('syncingCharacterRules') }}</p>
         </div>
       </div>
-      <p v-if="error" class="error-banner">{{ error }}</p>
+      <p v-if="error" class="error-banner">{{ displayError }}</p>
     </section>
 
     <section v-else class="join-form player-sheet-form">
@@ -329,7 +358,7 @@ async function create() {
         <span class="field-label-row"><span>{{ t('characterBackground') }}</span><small>{{ form.background.length }} / {{ backgroundLimit }}</small></span>
         <textarea class="character-background-input" rows="8" :maxlength="backgroundLimit" v-model="form.background" :placeholder="t('characterBackgroundLongHint')"></textarea>
       </label>
-      <p v-if="error" class="error-banner">{{ error }}</p>
+      <p v-if="error" class="error-banner">{{ displayError }}</p>
       <button class="primary submit" :disabled="busy || !form.character_name.trim()" @click="create">{{ busy ? t('creating') : t('createCharacterAndEnter') }}</button>
     </section>
   </main>

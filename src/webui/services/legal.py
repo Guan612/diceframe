@@ -11,8 +11,12 @@ if TYPE_CHECKING:
     from src.webui.api import WebAPI
 
 
-LEGAL_VERSION = "1.0"
-LEGAL_UPDATED_AT = "2026-08-11"
+LEGAL_VERSION = "1.1"
+LEGAL_UPDATED_AT = "2026-08-20"
+_DOCUMENT_METADATA = {
+    "terms": {"version": LEGAL_VERSION, "updated_at": LEGAL_UPDATED_AT},
+    "privacy": {"version": "1.2", "updated_at": "2026-08-21"},
+}
 _LEGAL_DIR = Path(__file__).resolve().parents[3] / "legal"
 _DOCUMENTS = {
     ("terms", "zh"): "TERMS_OF_SERVICE_CN.md",
@@ -58,16 +62,17 @@ def bundled_documents() -> dict[str, Any]:
     """Return the immutable legal snapshot shipped in this DiceFrame release."""
     documents: dict[str, Any] = {}
     for document_name in _DOCUMENT_NAMES:
+        metadata = _DOCUMENT_METADATA[document_name]
         languages: dict[str, Any] = {}
         for language in ("zh", "en"):
             text = _bundled_text(document_name, language)
             languages[language] = {
-                "path": f"legal/{document_name}/{LEGAL_VERSION}/{language}.md",
+                "path": f"legal/{document_name}/{metadata['version']}/{language}.md",
                 "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
             }
         documents[document_name] = {
-            "version": LEGAL_VERSION,
-            "updated_at": LEGAL_UPDATED_AT,
+            "version": metadata["version"],
+            "updated_at": metadata["updated_at"],
             "languages": languages,
         }
     return documents
@@ -118,28 +123,49 @@ async def _remote_documents(api: "WebAPI", *, allow_cached: bool) -> dict[str, A
     )
 
 
+def _select_documents(remote: dict[str, Any] | None) -> tuple[dict[str, Any], str]:
+    bundled = bundled_documents()
+    if remote is not None:
+        # Hub 清单缺任一文档时整体回退内置快照，避免 `remote[name]` KeyError 500；
+        # 且仅当所有远端文档都不比内置旧时才用远端（防降级）。
+        remote_fresh = True
+        for name in _DOCUMENT_NAMES:
+            entry = remote.get(name)
+            bundled_entry = bundled.get(name)
+            if not isinstance(entry, dict) or not isinstance(bundled_entry, dict):
+                remote_fresh = False
+                break
+            if entry.get("updated_at") < bundled_entry.get("updated_at"):
+                remote_fresh = False
+                break
+        if remote_fresh:
+            return remote, "online"
+    return bundled, "bundled"
+
+
 async def current_documents(api: "WebAPI") -> dict[str, Any]:
     """Use the newest reachable manifest; retain the release snapshot for offline startup."""
     remote = await _remote_documents(api, allow_cached=True)
-    return remote or bundled_documents()
+    return _select_documents(remote)[0]
 
 
 async def document(api: "WebAPI", document_name: str, language: str) -> dict[str, Any]:
     if document_name not in _DOCUMENT_NAMES:
         raise KeyError(document_name)
     selected_language = _language(language)
-    documents = await _remote_documents(api, allow_cached=False)
-    if documents is None:
-        raise LegalContentUnavailable("当前在线法律原文暂时无法获取")
+    documents, source = _select_documents(await _remote_documents(api, allow_cached=False))
     metadata = documents[document_name]
     localized = metadata["languages"][selected_language]
-    text = await api.fetch_public_content_text(
-        localized["path"],
-        force_refresh=True,
-        allow_cached=False,
-    )
+    if source == "bundled":
+        text = _bundled_text(document_name, selected_language)
+    else:
+        text = await api.fetch_public_content_text(
+            localized["path"],
+            force_refresh=True,
+            allow_cached=False,
+        )
     if not text or hashlib.sha256(text.encode("utf-8")).hexdigest() != localized["sha256"]:
-        raise LegalContentUnavailable("当前在线法律原文校验失败")
+        raise LegalContentUnavailable("当前法律原文校验失败")
     return {
         "ok": True,
         "document": document_name,
@@ -147,7 +173,7 @@ async def document(api: "WebAPI", document_name: str, language: str) -> dict[str
         "version": metadata["version"],
         "updated_at": metadata["updated_at"],
         "sha256": localized["sha256"],
-        "source": "online",
+        "source": source,
         "content": text,
     }
 

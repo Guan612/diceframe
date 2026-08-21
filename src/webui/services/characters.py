@@ -582,6 +582,13 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
         uid = requested_uid
     else:
         uid = "player_" + str(time.time_ns())[-12:]
+    max_players = max(1, int(getattr(inst, "max_players", 6) or 6))
+    if uid not in inst.players and len(inst.players) >= max_players:
+        return {
+            "ok": False,
+            "error": f"房间已满（最多 {max_players} 人）",
+            "error_code": "game_room_full",
+        }
     rule = api._load_rule_for_game(inst)
     rule_id = rule.rule_id if rule else "freeform_fantasy"
     # 仅传了名字的轻量加入会自动生成默认角色卡。

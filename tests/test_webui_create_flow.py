@@ -998,6 +998,32 @@ async def test_player_join_reuses_only_explicit_user_link(web_api):
 
 
 @pytest.mark.asyncio
+async def test_player_join_rejects_new_seat_when_game_is_full(web_api):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    created = await api.create_game(
+        "template_world",
+        "满员测试",
+        players=[{"character_name": "艾琳", "attributes": {"str": 10}}],
+    )
+    inst = registry.get(api._parse_key(created["game_key"]))
+    inst.max_players = 1
+
+    rejected = await api.create_player(created["game_key"], {"name": "洛恩"})
+    restored = await api.create_player(created["game_key"], {
+        "user_id": created["players"][0]["user_id"],
+    })
+
+    assert rejected == {
+        "ok": False,
+        "error": "房间已满（最多 1 人）",
+        "error_code": "game_room_full",
+    }
+    assert restored["ok"] is True
+    assert restored["reused"] is True
+    assert len(inst.players) == 1
+
+
+@pytest.mark.asyncio
 async def test_create_game_binds_gm_to_first_created_player(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     created = await api.create_game(

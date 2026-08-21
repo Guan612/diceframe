@@ -30,13 +30,14 @@ describe('owner route access', () => {
     )).resolves.toBe(true)
   })
 
-  it('keeps login, legal documents, join, and player share routes public without probing owner access', async () => {
+  it('keeps login, legal documents, join, peer, and player share routes public without probing owner access', async () => {
     const probe = vi.fn()
     const routes = [
       route('login', '/login'),
       route('legal-terms', '/legal/terms'),
       route('legal-privacy', '/legal/privacy'),
       route('join', '/join?game=demo', { game: 'demo' }),
+      route('peer', '/peer'),
       route('play', '/play?game=demo&user=player', { game: 'demo', user: 'player' }),
       route('play', '/play?game=demo&share=1', { game: 'demo', share: '1' }),
     ]

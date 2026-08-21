@@ -346,6 +346,8 @@ export interface GameSummary {
   max_players?: number
   total_llm_calls?: number
   total_tokens?: number
+  started_at?: string
+  last_activity?: string
   seed_code?: string
   [key: string]: unknown
 }
@@ -1277,6 +1279,34 @@ export interface TunnelStatus {
   providers: TunnelProvider[]
   error?: string
 }
+
+export interface RendezvousPeerInvitation {
+  peer_id: string
+  token: string
+}
+
+export interface RendezvousRoomResponse {
+  ok: boolean
+  protocol_version: 2
+  topology: 'host-star'
+  room_code: string
+  host_peer_id: string
+  host_token: string
+  invitations: RendezvousPeerInvitation[]
+  expires_at: string
+  websocket_url: string
+}
+
+export interface RendezvousConfigResponse {
+  ok: boolean
+  enabled: boolean
+  entry_visible: boolean
+  load_level: 'normal' | 'busy' | 'nearly_full'
+  max_peers_per_room: number
+  retry_after: number
+  message: string
+}
+
 export interface UpdateApplyResponse {
   ok:boolean
   error?:string

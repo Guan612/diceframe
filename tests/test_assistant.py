@@ -159,6 +159,37 @@ async def test_chat_stream_error_event():
     assert "event: error" in text
 
 
+@pytest.mark.asyncio
+async def test_chat_stream_truncation_retries_with_reset():
+    """输出被 max_tokens 截断时应发 reset 并放大预算重试，而非直接报错。"""
+    from src.llm.client import OutputTruncatedError
+
+    class RetryClient:
+        def __init__(self):
+            self.attempts = 0
+            self.max_tokens_seen: list[int] = []
+
+        async def call_stream(self, system_prompt, user_message, *, temperature=0.7,
+                              max_tokens=1024, force_provider=None, json_mode=False, on_delta=None):
+            self.attempts += 1
+            self.max_tokens_seen.append(max_tokens)
+            if self.attempts == 1:
+                raise OutputTruncatedError("length")
+            await on_delta("完整回答")
+
+    api = FakeAPI(llm_client=RetryClient())
+    resp = FakeStreamResponse()
+    await assistant_service.chat_stream(api, resp, [{"role": "user", "content": "问题"}], "zh-CN")
+
+    text = b"".join(resp.written).decode()
+    assert "event: reset" in text
+    assert '"delta": "完整回答"' in text
+    assert "event: done" in text
+    assert "event: error" not in text
+    # length_retry_budgets(1024) = 1024 -> 2048；第二次预算放大后成功
+    assert api._llm_client.max_tokens_seen == [1024, 2048]
+
+
 # ---- route ----
 
 def _make_request(owner=False):

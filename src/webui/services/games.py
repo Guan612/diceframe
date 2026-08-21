@@ -125,6 +125,7 @@ def list_games(api: "WebAPI") -> dict[str, Any]:
             "scene": inst.scene,
             "total_llm_calls": inst.total_llm_calls,
             "total_tokens": inst.total_tokens,
+            "started_at": inst.started_at,
             "last_activity": inst.last_activity,
             "seed_code": inst.seed_code,
             "language": normalize_language(getattr(inst, "language", DEFAULT_LANGUAGE)),
@@ -133,6 +134,12 @@ def list_games(api: "WebAPI") -> dict[str, Any]:
             "ready_count": inst.multiplayer_status()["ready_count"],
             "alive_count": inst.multiplayer_status()["alive_count"],
         })
+    # 注册表保留加载/创建顺序，但总览首先应展示最近实际活动过的存档。
+    # 老存档可能没有 last_activity，此时回退到 started_at，并稳定地留在有时间记录的存档之后。
+    active.sort(
+        key=lambda game: str(game.get("last_activity") or game.get("started_at") or ""),
+        reverse=True,
+    )
     return {"games": active, "total": len(active)}
 
 

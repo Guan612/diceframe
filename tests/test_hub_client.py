@@ -5,9 +5,11 @@ import json
 
 import pytest
 from aiohttp import web
+from aiohttp.test_utils import make_mocked_request
 
 from src.hub_client import (
     HubClient,
+    HubHTTPError,
     HubUnavailable,
     _PLUGIN_DETAIL_TIMEOUT,
     _platform_name,
@@ -15,11 +17,17 @@ from src.hub_client import (
 )
 from src.plugin_host.marketplace import PluginMarketplace
 from src.plugin_host.mirrors import FetchResult, validate_public_http_url
-from src.webui.routes.hub import _ClientDisconnected, _await_hub_read
+from src.webui.routes.hub import (
+    _ClientDisconnected,
+    _await_hub_read,
+    api_hub_rendezvous_config,
+    api_hub_rendezvous_room_create,
+)
 from src.webui.services import legal
 from src.webui.services.hub import plugin_readme
 from src.webui.services.hub import preferences as hub_preferences
 from src.webui.services.hub import update_preferences as update_hub_preferences
+from src.version import __version__
 
 
 class _LegalApi:
@@ -99,7 +107,7 @@ async def test_first_start_records_legal_acceptance_without_requiring_hub():
     assert result["telemetry_enabled"] is False
     assert result["choice_made"] is True
     assert result["legal_accepted"] is True
-    assert api._config_state["legal_terms_accepted_version"] == "1.0"
+    assert api._config_state["legal_terms_accepted_version"] == "1.1"
 
 
 @pytest.mark.asyncio
@@ -140,6 +148,223 @@ async def test_catalog_is_public_and_uses_stale_disk_cache_offline(tmp_path):
         assert stale["items"] == fresh["items"]
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_rendezvous_room_creation_uses_pseudonymous_installation_identity(tmp_path):
+    async def installation(request):
+        assert await request.json() == {
+            "app_version": __version__,
+            "platform": _platform_name(),
+            "telemetry_enabled": False,
+        }
+        return web.json_response(
+            {"installation_id": "install-rendezvous", "installation_token": "room-token"},
+            status=201,
+        )
+
+    async def create_room(request):
+        assert request.headers.get("Authorization") == "Bearer room-token"
+        assert await request.json() == {"peer_count": 2}
+        return web.json_response(
+            {
+                "protocol_version": 2,
+                "topology": "host-star",
+                "room_code": "ABCDEFGH",
+                "host_peer_id": "h_abcdefghijk",
+                "host_token": "host-secret",
+                "invitations": [
+                    {"peer_id": "p_abcdefghijk", "token": "guest-secret"}
+                ],
+                "expires_at": "2026-08-20T12:05:00+00:00",
+                "websocket_url": (
+                    "ws://127.0.0.1:18080/v1/rendezvous/rooms/ABCDEFGH/ws"
+                ),
+            },
+            status=201,
+        )
+
+    runner, base_url = await _serve(
+        [
+            ("POST", "/v1/installations", installation),
+            ("POST", "/v1/rendezvous/rooms", create_room),
+        ]
+    )
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        room = await client.create_rendezvous_room(2)
+        assert room["protocol_version"] == 2
+        assert room["invitations"][0]["token"] == "guest-secret"
+        assert client.identity_file.exists()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_rendezvous_401_rotates_identity_only_after_successful_reregister(tmp_path):
+    """瞬时 401 不销毁本地身份：只有重注册成功才落盘新身份。"""
+    calls = {"rooms": 0, "installations": 0}
+
+    async def installation(request):
+        calls["installations"] += 1
+        return web.json_response(
+            {"installation_id": "install-new", "installation_token": "new-token"},
+            status=201,
+        )
+
+    async def create_room(request):
+        calls["rooms"] += 1
+        auth = request.headers.get("Authorization") or ""
+        if auth == "Bearer stale-token":
+            # 第一次：旧 token 已被 Hub 收回 → 401
+            return web.json_response({"error": "invalid token"}, status=401)
+        assert auth == "Bearer new-token"
+        return web.json_response(
+            {
+                "protocol_version": 2,
+                "topology": "host-star",
+                "room_code": "ABCDEFGH",
+                "host_peer_id": "h_abcdefghijk",
+                "host_token": "host-secret",
+                "invitations": [
+                    {"peer_id": "p_abcdefghijk", "token": "guest-secret"}
+                ],
+                "expires_at": "2026-08-20T12:05:00+00:00",
+                "websocket_url": (
+                    "ws://127.0.0.1:18080/v1/rendezvous/rooms/ABCDEFGH/ws"
+                ),
+            },
+            status=201,
+        )
+
+    runner, base_url = await _serve(
+        [
+            ("POST", "/v1/installations", installation),
+            ("POST", "/v1/rendezvous/rooms", create_room),
+        ]
+    )
+    client = HubClient(tmp_path, base_url=base_url)
+    client._atomic_write(
+        client.identity_file,
+        {"installation_id": "install-old", "installation_token": "stale-token"},
+    )
+    try:
+        room = await client.create_rendezvous_room(2)
+        assert room["room_code"] == "ABCDEFGH"
+        assert calls == {"rooms": 2, "installations": 1}
+        identity = json.loads(client.identity_file.read_text(encoding="utf-8"))
+        assert identity["installation_token"] == "new-token"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_rendezvous_transient_401_keeps_stored_identity(tmp_path):
+    """重注册失败（如 Hub 异常）时，原身份文件必须原样保留。"""
+    async def installation(request):
+        return web.json_response({"error": "hub trouble"}, status=503)
+
+    async def create_room(request):
+        return web.json_response({"error": "invalid token"}, status=401)
+
+    runner, base_url = await _serve(
+        [
+            ("POST", "/v1/installations", installation),
+            ("POST", "/v1/rendezvous/rooms", create_room),
+        ]
+    )
+    client = HubClient(tmp_path, base_url=base_url)
+    client._atomic_write(
+        client.identity_file,
+        {"installation_id": "install-old", "installation_token": "stale-token"},
+    )
+    try:
+        with pytest.raises(HubUnavailable):
+            await client.create_rendezvous_room(2)
+        identity = json.loads(client.identity_file.read_text(encoding="utf-8"))
+        assert identity["installation_token"] == "stale-token"
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_rendezvous_config_is_anonymous(tmp_path):
+    async def config(request):
+        assert request.headers.get("Authorization") is None
+        return web.json_response(
+            {
+                "enabled": True,
+                "entry_visible": False,
+                "message": "",
+            }
+        )
+
+    runner, base_url = await _serve([("GET", "/v1/rendezvous/config", config)])
+    client = HubClient(tmp_path, base_url=base_url)
+    try:
+        result = await client.rendezvous_config()
+        assert result["entry_visible"] is False
+        assert not client.identity_file.exists()
+    finally:
+        await client.close()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_local_rendezvous_route_validates_count_and_confirmation():
+    app = web.Application()
+    denied = make_mocked_request(
+        "POST",
+        "/api/hub/rendezvous/rooms",
+        app=app,
+    )
+    response = await api_hub_rendezvous_room_create(denied)
+    assert response.status == 403
+
+    class Api:
+        async def create_rendezvous_room(self, peer_count):
+            return {"ok": True, "protocol_version": 2, "peer_count": peer_count}
+
+    app["api"] = Api()
+    class JsonRequest:
+        def __init__(self, body):
+            self.app = app
+            self.headers = {"X-TRPG-Confirm": "true"}
+            self._body = body
+
+        async def json(self):
+            return self._body
+
+    invalid = JsonRequest({"peer_count": 1})
+    response = await api_hub_rendezvous_room_create(invalid)
+    assert response.status == 400
+
+    allowed = JsonRequest({"peer_count": 6})
+    response = await api_hub_rendezvous_room_create(allowed)
+    assert response.status == 201
+    assert json.loads(response.text)["peer_count"] == 6
+
+
+@pytest.mark.asyncio
+async def test_local_rendezvous_config_route_is_public_and_proxies_visibility():
+    class Api:
+        async def rendezvous_config(self):
+            return {
+                "ok": True,
+                "enabled": True,
+                "entry_visible": False,
+                "message": "",
+            }
+
+    app = web.Application()
+    app["api"] = Api()
+    request = make_mocked_request("GET", "/api/hub/rendezvous/config", app=app)
+
+    response = await api_hub_rendezvous_config(request)
+
+    assert response.status == 200
+    assert json.loads(response.text)["entry_visible"] is False
 
 
 @pytest.mark.asyncio

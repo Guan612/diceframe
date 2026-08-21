@@ -81,6 +81,12 @@
   padding-inline: 18px;
 }
 
+.overview-actions .peer-launch-button {
+  border-color: color-mix(in srgb, var(--df-accent) 48%, var(--df-border));
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent-soft) 58%, var(--df-surface-1));
+}
+
 .overview-stats {
   grid-template-columns: repeat(4, minmax(150px, .8fr)) minmax(260px, 1.5fr);
   gap: 16px;
@@ -182,6 +188,23 @@
   min-height: 34px;
   padding-inline: 11px;
   font-size: 12px;
+  white-space: nowrap;
+}
+
+.save-sort-select {
+  width: auto;
+  min-width: 158px;
+  min-height: 34px;
+  padding-block: 5px;
+  font: 12px/1.2 var(--df-font-body);
+}
+
+.save-sort-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--df-text-muted);
+  font: 12px/1.2 var(--df-font-body);
   white-space: nowrap;
 }
 
@@ -567,12 +590,14 @@
   .overview-page { padding-top: 12px; }
   .adventure-library { margin-bottom: 120px; }
   .overview-hero { min-height: 0; }
-  .overview-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
-  .overview-actions button { min-width: 0; padding-inline: 9px; }
+  .overview-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(92px, 1fr)); width: 100%; }
+  .overview-actions button { min-width: 0; padding-inline: 7px; font-size: 12px; white-space: nowrap; }
   .library-heading { align-items: stretch; flex-direction: column; gap: 9px; }
   .library-heading-copy { justify-content: space-between; }
   .library-heading-actions { grid-auto-flow: row; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
-  .library-heading-actions button { width: 100%; min-width: 0; }
+  .library-heading-actions button { width: 100%; min-width: 0; min-height: 40px; }
+  .save-sort-field { grid-column: 1 / -1; display: grid; grid-template-columns: auto minmax(0, 1fr); min-height: 40px; padding: 0 10px; border: 1px solid var(--df-border-soft); border-radius: var(--df-radius-sm); background: var(--df-surface-1); }
+  .save-sort-select { width: 100%; min-width: 0; }
   .game-card-cover { min-height: 142px; }
 }
 

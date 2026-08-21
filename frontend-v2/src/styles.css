@@ -357,7 +357,7 @@ details:not([open])>:not(summary){display:none}
 .wizard-step{flex:1;text-align:center;padding:8px 4px;font-size:13px;color:var(--df-text-muted);border-bottom:2px solid var(--df-border-soft)}
 .wizard-step.active{color:var(--df-accent-strong);border-bottom-color:var(--df-accent);font-weight:600}
 .wizard-step.done{color:var(--df-accent-strong);opacity:.7}
-.wizard{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:30;display:grid;place-items:center;padding:15px;overflow-y:auto}
+.wizard{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:130;display:grid;place-items:center;padding:15px;overflow-y:auto}
 .wizard-inner{width:min(680px,100%);max-height:90vh;overflow:auto;background:linear-gradient(180deg,var(--df-surface-1),var(--df-surface-2));border:1px solid var(--df-border);padding:18px;border-radius:8px;box-shadow:var(--df-shadow),inset 0 1px 0 rgba(255,255,255,.05)}
 .wizard-pane{display:flex;flex-direction:column;gap:10px}
 .wizard-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}

@@ -15,6 +15,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/create', name: 'create', component: () => import('@/features/create/CreateView.vue') },
   { path: '/play', name: 'play', component: () => import('@/features/play/PlayView.vue') },
   { path: '/join', name: 'join', component: () => import('@/features/player/JoinView.vue') },
+  { path: '/peer', name: 'peer', component: () => import('@/features/peer/PeerConnectView.vue') },
   { path: '/characters', name: 'characters', component: () => import('@/features/admin/CharactersView.vue') },
   { path: '/lorebook', name: 'lorebook', component: () => import('@/features/admin/LorebookView.vue') },
   { path: '/memory', name: 'memory', component: () => import('@/features/admin/MemoryView.vue') },
@@ -47,7 +48,7 @@ type PublicRoute = {
 }
 
 export function isPublicRoute(route: PublicRoute): boolean {
-  if (route.name === 'login' || route.name === 'join' || String(route.name || '').startsWith('legal-')) return true
+  if (route.name === 'login' || route.name === 'join' || route.name === 'peer' || String(route.name || '').startsWith('legal-')) return true
   return route.name === 'play' && Boolean(route.query.user || route.query.share)
 }
 

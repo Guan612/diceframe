@@ -206,6 +206,12 @@ class WebAPI:
     async def delete_hub_identity(self) -> dict[str, Any]:
         return await hub.delete_identity(self)
 
+    async def create_rendezvous_room(self, peer_count: int) -> dict[str, Any]:
+        return await hub.create_rendezvous_room(self, peer_count)
+
+    async def rendezvous_config(self) -> dict[str, Any]:
+        return await hub.rendezvous_config(self)
+
     async def hub_plugin_detail(self, plugin_id: str) -> dict[str, Any]:
         return await hub.plugin_detail(self, plugin_id)
 

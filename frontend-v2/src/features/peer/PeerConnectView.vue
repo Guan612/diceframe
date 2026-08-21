@@ -1,0 +1,445 @@
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
+import { NIcon, NInput } from 'naive-ui'
+import { ArrowBackOutline, CopyOutline, LinkOutline } from '@vicons/ionicons5'
+import { storeToRefs } from 'pinia'
+import { createRendezvousRoom, getRendezvousConfig } from '@/api/peer'
+import { api, ApiError, errorMessage } from '@/api/client'
+import type { GamesResponse, GameSummary } from '@/api/types'
+import { useLocale } from '@/composables/useLocale'
+import { useConfirm } from '@/composables/useConfirm'
+import { useToast } from '@/composables/useToast'
+import { usePeerSessionStore } from '@/peer/store/peerSession'
+import { copyToClipboard } from '@/utils/clipboard'
+import { friendlyPeerDetail } from './friendlyDetail'
+import {
+  STUN_PRESETS,
+  decodePeerInvite,
+  encodePeerInvites,
+  stunUrlsForPreset,
+  type EncodedPeerInvite,
+  type StunPresetId,
+} from './inviteCode'
+
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
+type Mode = 'host' | 'guest'
+type GuestStunChoice = 'invite' | StunPresetId
+
+const STUN_PRESET_KEY = 'diceframe_peer_stun_preset'
+const STUN_CUSTOM_KEY = 'diceframe_peer_stun_custom'
+
+function savedStunPreset(): StunPresetId {
+  const value = typeof localStorage === 'undefined' ? null : localStorage.getItem(STUN_PRESET_KEY)
+  return value === 'cloudflare'
+    || value === 'metered'
+    || value === 'nextcloud'
+    || value === 'multi'
+    || value === 'none'
+    || value === 'custom'
+    ? value
+    : 'cloudflare'
+}
+
+function savedCustomStunUrl(): string {
+  return typeof localStorage === 'undefined' ? '' : localStorage.getItem(STUN_CUSTOM_KEY) || ''
+}
+
+function saveLocalValue(key: string, value: string): void {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(key, value)
+}
+
+const { t } = useLocale()
+const toast = useToast()
+const { confirm } = useConfirm()
+const router = useRouter()
+const peerSession = usePeerSessionStore()
+const { connected, peerStates, roomCode, state, stateDetail } = storeToRefs(peerSession)
+const mode = ref<Mode>('host')
+const busy = ref(false)
+const peerCount = ref(2)
+const availableGames = ref<GameSummary[]>([])
+const hubMaxPeersPerRoom = ref(6)
+const hubRetryAfter = ref(15)
+const hubLoadLevel = ref<'normal' | 'busy' | 'nearly_full'>('normal')
+const selectedGameKey = ref('')
+const hostStunPreset = ref<StunPresetId>(savedStunPreset())
+const hostCustomStunUrl = ref(savedCustomStunUrl())
+const guestStunChoice = ref<GuestStunChoice>('invite')
+const guestCustomStunUrl = ref('')
+const directConsent = ref(false)
+const inviteCodes = ref<EncodedPeerInvite[]>([])
+const inviteInput = ref('')
+
+const stateLabel = computed(() => t(`peerState_${state.value}`))
+/** 状态详情里的 Hub/协议原始错误码转成人话，正常进度文案原样展示。 */
+const displayDetail = computed(() => friendlyPeerDetail(stateDetail.value, t))
+/** 失败/关闭状态的 detail 才用红色横幅；连接中的进度提示走中性样式。 */
+const isFailureState = computed(() => (
+  state.value === 'error' || state.value === 'closed'
+))
+/** 会话活跃期间（连接中/已连接）禁止切换模式或误触创建/加入。 */
+const sessionActive = computed(() => (
+  state.value === 'signaling'
+  || state.value === 'waiting'
+  || state.value === 'connecting'
+  || state.value === 'connected'
+))
+const invitePreview = computed(() => {
+  try {
+    return decodePeerInvite(inviteInput.value)
+  } catch {
+    return null
+  }
+})
+const selectedGame = computed(() => (
+  availableGames.value.find(game => game.game_key === selectedGameKey.value)
+))
+function gameSlots(game: GameSummary | undefined): number {
+  if (!game) return 0
+  return Math.max(0, Number(game.max_players || 6) - Number(game.player_count || 0))
+}
+const maxRoomPeerCount = computed(() => {
+  const game = selectedGame.value
+  if (!game) return 2
+  const availableSlots = Math.max(0, Number(game.max_players || 6) - Number(game.player_count || 0))
+  return Math.max(2, Math.min(hubMaxPeersPerRoom.value, availableSlots + 1))
+})
+const capacityHint = computed(() => {
+  const game = selectedGame.value
+  if (!game) return ''
+  return t('peerCapacityHint', {
+    slots: String(gameSlots(game)),
+    max: String(maxRoomPeerCount.value),
+  })
+})
+const hubLoadLabel = computed(() => t(`peerLoad_${hubLoadLevel.value}`))
+
+watch(hostStunPreset, value => saveLocalValue(STUN_PRESET_KEY, value))
+watch(hostCustomStunUrl, value => saveLocalValue(STUN_CUSTOM_KEY, value.trim()))
+// 上限收敛必须即时且可见：输入超限或上限变化（切换游戏、列表/Hub 配置加载完成）时
+// 立刻把人数收敛到上限并 toast 说明，避免「输入框显示 6，点创建后静默变 2」的困惑。
+function clampPeerCount(capacity: number) {
+  if (typeof peerCount.value === 'number' && peerCount.value > capacity) {
+    peerCount.value = capacity
+    toast.warning(t('peerCapacityTrimmed', { max: String(capacity) }))
+  }
+}
+watch(peerCount, () => clampPeerCount(maxRoomPeerCount.value))
+watch(maxRoomPeerCount, capacity => clampPeerCount(capacity))
+
+onMounted(async () => {
+  const [gamesResult, configResult] = await Promise.allSettled([
+    api<GamesResponse>('/games'),
+    getRendezvousConfig(),
+  ])
+  if (gamesResult.status === 'fulfilled') {
+    availableGames.value = (gamesResult.value.games || []).filter(game => (
+      Number(game.player_count || 0) < Number(game.max_players || 6)
+    ))
+    selectedGameKey.value = availableGames.value[0]?.game_key || ''
+  }
+  if (configResult.status === 'fulfilled') {
+    const config = configResult.value
+    hubMaxPeersPerRoom.value = Math.max(2, Math.min(32, Number(config.max_peers_per_room) || 6))
+    hubRetryAfter.value = Math.max(1, Number(config.retry_after) || 15)
+    if (config.load_level === 'busy' || config.load_level === 'nearly_full') {
+      hubLoadLevel.value = config.load_level
+    }
+  }
+})
+
+function selectMode(next: Mode) {
+  if (sessionActive.value) return
+  peerSession.reset()
+  mode.value = next
+  inviteCodes.value = []
+}
+
+function selectedGuestStunUrls(inviteUrls: readonly string[]): string[] {
+  if (guestStunChoice.value === 'invite') return [...inviteUrls]
+  return stunUrlsForPreset(guestStunChoice.value, guestCustomStunUrl.value)
+}
+
+function stunConfigError(error: unknown): string | null {
+  if (!(error instanceof Error)) return null
+  if (error.message === 'too_many_stun_urls') return t('peerStunTooMany')
+  if (error.message === 'invalid_stun_url') return t('peerStunInvalid')
+  return null
+}
+
+async function createRoom() {
+  if (!directConsent.value || sessionActive.value) return
+  busy.value = true
+  stateDetail.value = ''
+  try {
+    if (!selectedGameKey.value) throw new Error(t('peerGameRequired'))
+    const game = selectedGame.value
+    if (!game) throw new Error(t('peerGameRequired'))
+    if (game.solo_mode !== false) {
+      const accepted = await confirm({
+        title: t('peerConvertSoloTitle'),
+        content: t('peerConvertSoloContent'),
+        positiveText: t('peerConvertSoloAction'),
+        type: 'warning',
+      })
+      if (!accepted) return
+      const converted = await api<{ ok?: boolean; solo_mode?: boolean; error?: string }>(
+        `/games/${encodeURIComponent(selectedGameKey.value)}/mode`,
+        { method: 'POST', body: JSON.stringify({ solo: false }) },
+      )
+      if (!converted.ok || converted.solo_mode !== false) {
+        throw new Error(converted.error || t('peerConvertSoloFailed'))
+      }
+      game.solo_mode = false
+    }
+    const selectedStunUrls = stunUrlsForPreset(hostStunPreset.value, hostCustomStunUrl.value)
+    // 兜底收敛：正常路径下 watcher 已即时收敛，这里防 watcher 未触发的边界情况。
+    const requestedCount = peerCount.value
+    const capacity = maxRoomPeerCount.value
+    if (requestedCount > capacity) {
+      peerCount.value = capacity
+      toast.warning(t('peerCapacityTrimmed', { max: String(capacity) }))
+    }
+    const room = await createRendezvousRoom(peerCount.value)
+    inviteCodes.value = encodePeerInvites(
+      room,
+      selectedStunUrls,
+      selectedGameKey.value,
+    )
+    peerSession.startMulti({
+      isHost: true,
+      localPeerId: room.host_peer_id,
+      hostPeerId: room.host_peer_id,
+      guestPeerIds: room.invitations.map(item => item.peer_id),
+      roomCode: room.room_code,
+      token: room.host_token,
+      websocketUrl: room.websocket_url,
+      stunUrls: selectedStunUrls,
+      gameKey: selectedGameKey.value,
+      localApi: api,
+    })
+  } catch (error) {
+    const stunError = stunConfigError(error)
+    if (stunError) {
+      peerSession.updateState('error', stunError)
+    } else if (error instanceof ApiError && error.code === 'rendezvous_busy') {
+      peerSession.updateState('error', t('peerBusyRetry', { seconds: error.retryAfter || hubRetryAfter.value }))
+    } else {
+      peerSession.updateState('error', errorMessage(error))
+    }
+  } finally {
+    busy.value = false
+  }
+}
+
+function joinRoom() {
+  if (!directConsent.value || sessionActive.value || busy.value) return
+  busy.value = true
+  try {
+    const invite = decodePeerInvite(inviteInput.value)
+    if (Date.parse(invite.expiresAt) <= Date.now()) throw new Error(t('peerInviteExpired'))
+    const selectedStunUrls = selectedGuestStunUrls(invite.stunUrls)
+    peerSession.startMulti({
+      isHost: false,
+      localPeerId: invite.peerId,
+      token: invite.guestToken,
+      hostPeerId: invite.hostPeerId,
+      guestPeerIds: [invite.peerId],
+      roomCode: invite.roomCode,
+      websocketUrl: invite.websocketUrl,
+      stunUrls: selectedStunUrls,
+      gameKey: invite.gameKey,
+    })
+  } catch (error) {
+    const stunError = stunConfigError(error)
+    if (stunError) {
+      peerSession.updateState('error', stunError)
+    } else {
+      peerSession.updateState('error', error instanceof Error && error.message !== 'invalid_invite'
+        ? error.message
+        : t('peerInviteInvalid'))
+    }
+  } finally {
+    busy.value = false
+  }
+}
+
+async function copyInvite(inviteCode: string) {
+  await copyToClipboard(inviteCode)
+  toast.success(t('peerInviteCopied'))
+}
+
+/** 多码房间一键复制全部，方便房主整段发给玩家。 */
+async function copyAllInvites() {
+  const all = inviteCodes.value
+    .map((invite, index) => `${index + 1}. ${invite.inviteCode}`)
+    .join('\n\n')
+  await copyToClipboard(all)
+  toast.success(t('peerAllInvitesCopied'))
+}
+
+function enterGame() {
+  if (!peerSession.gameKey) return
+  if (peerSession.isHost) {
+    router.push({ name: 'play', query: { game: peerSession.gameKey } })
+  } else {
+    router.push({
+      name: 'join',
+      query: { game: peerSession.gameKey, share: '1', peer: '1' },
+    })
+  }
+}
+</script>
+
+<template>
+  <section class="peer-page" :class="{ 'peer-page-embedded': embedded }">
+    <header v-if="!embedded" class="peer-header">
+      <RouterLink :to="{ name: 'overview' }" class="peer-back">
+        <NIcon :component="ArrowBackOutline" />{{ t('peerBack') }}
+      </RouterLink>
+      <span class="section-kicker">{{ t('peerKicker') }}</span>
+      <h1>{{ t('peerTitle') }}</h1>
+      <p>{{ t('peerSubtitle') }}</p>
+    </header>
+
+    <main class="peer-layout">
+      <section class="peer-card peer-setup">
+        <div class="peer-mode-tabs">
+          <button :class="{ active: mode === 'host' }" :disabled="sessionActive" @click="selectMode('host')">{{ t('peerHostMode') }}</button>
+          <button :class="{ active: mode === 'guest' }" :disabled="sessionActive" @click="selectMode('guest')">{{ t('peerGuestMode') }}</button>
+        </div>
+
+        <label v-if="mode === 'host'" class="peer-field">
+          <span>{{ t('peerGame') }}</span>
+          <select v-model="selectedGameKey" :disabled="state !== 'idle' && state !== 'closed' && state !== 'error'">
+            <option value="">{{ t('peerSelectGame') }}</option>
+            <option v-for="game in availableGames" :key="game.game_key" :value="game.game_key">{{ game.world_name || game.game_key }}{{ game.solo_mode === false ? '' : ` · ${t('peerSoloSave')}` }}</option>
+          </select>
+          <small>{{ availableGames.length ? t('peerGameHint') : t('peerNoMultiplayerGames') }}</small>
+        </label>
+        <label v-if="mode === 'host'" class="peer-field">
+          <span>{{ t('peerStunServer') }}</span>
+          <select v-model="hostStunPreset" :disabled="state !== 'idle' && state !== 'closed' && state !== 'error'">
+            <option v-for="preset in STUN_PRESETS" :key="preset.id" :value="preset.id">{{ t(`peerStunPreset_${preset.id}`) }}</option>
+          </select>
+          <small>{{ t(`peerStunPresetHint_${hostStunPreset}`) }}</small>
+        </label>
+        <label v-if="mode === 'host'" class="peer-field">
+          <span>{{ t('peerPlayerCount') }}</span>
+          <input v-model.number="peerCount" type="number" min="2" :max="maxRoomPeerCount" :disabled="state !== 'idle' && state !== 'closed' && state !== 'error'">
+          <small v-if="capacityHint">{{ capacityHint }}</small>
+          <small>{{ t('peerPlayerCountHint') }}</small>
+          <small class="peer-load-level" :class="`peer-load-${hubLoadLevel}`">{{ t('peerHubLoad') }}：{{ hubLoadLabel }}</small>
+        </label>
+        <label v-if="mode === 'host' && hostStunPreset === 'custom'" class="peer-field">
+          <span>{{ t('peerStunCustomAddress') }}</span>
+          <textarea v-model.trim="hostCustomStunUrl" rows="3" :placeholder="t('peerStunCustomPlaceholder')" :disabled="state !== 'idle' && state !== 'closed' && state !== 'error'" />
+          <small>{{ t('peerStunHint') }}</small>
+        </label>
+
+        <template v-if="mode === 'host'">
+          <label class="peer-direct-consent">
+            <input v-model="directConsent" type="checkbox">
+            <span>{{ t('peerDirectConsent') }} <RouterLink :to="{ name: 'legal-privacy' }" target="_blank" rel="noopener">{{ t('legalPrivacyTitle') }}</RouterLink></span>
+          </label>
+          <button class="success peer-primary" :disabled="!directConsent || !selectedGameKey || busy || sessionActive" @click="createRoom">
+            <NIcon :component="LinkOutline" />{{ t('peerCreateRoom') }}
+          </button>
+          <div v-if="inviteCodes.length" class="peer-invite">
+            <header class="peer-invite-header">
+              <div class="peer-invite-room">
+                <span>{{ t('peerRoomCode') }}</span><code>{{ roomCode }}</code>
+              </div>
+              <button v-if="inviteCodes.length > 1" class="peer-copy-all" @click="copyAllInvites">
+                <NIcon :component="CopyOutline" />{{ t('peerCopyAllInvites') }}
+              </button>
+            </header>
+            <div
+              v-for="(invite, index) in inviteCodes"
+              :key="invite.peerId"
+              class="peer-invite-item"
+            >
+              <span class="peer-invite-index" aria-hidden="true">{{ index + 1 }}</span>
+              <NInput
+                class="peer-invite-code"
+                :value="invite.inviteCode"
+                type="textarea"
+                readonly
+                :autosize="{ minRows: 2, maxRows: 2 }"
+                :aria-label="t('peerInviteNumber', { number: index + 1 })"
+              />
+              <button
+                class="peer-invite-copy"
+                :aria-label="t('peerCopyInvite')"
+                @click="copyInvite(invite.inviteCode)"
+              >
+                <NIcon :component="CopyOutline" />{{ t('peerCopyInvite') }}
+              </button>
+            </div>
+            <small>{{ t('peerInviteSecurityHint') }}</small>
+          </div>
+        </template>
+
+        <template v-else>
+          <label class="peer-field">
+            <span>{{ t('peerPasteInvite') }}</span>
+            <textarea v-model.trim="inviteInput" rows="4" :placeholder="t('peerInvitePlaceholder')" />
+          </label>
+          <div v-if="invitePreview" class="peer-invite-preview">
+            <span>{{ t('peerInviteStun') }}</span>
+            <div class="peer-invite-stun-list">
+              <code v-for="url in invitePreview.stunUrls" :key="url">{{ url }}</code>
+              <code v-if="!invitePreview.stunUrls.length">{{ t('peerStunPreset_none') }}</code>
+            </div>
+          </div>
+          <label class="peer-field">
+            <span>{{ t('peerGuestStunChoice') }}</span>
+            <select v-model="guestStunChoice">
+              <option value="invite">{{ t('peerStunUseInvite') }}</option>
+              <option v-for="preset in STUN_PRESETS" :key="preset.id" :value="preset.id">{{ t(`peerStunPreset_${preset.id}`) }}</option>
+            </select>
+            <small>{{ t('peerGuestStunHint') }}</small>
+          </label>
+          <label v-if="guestStunChoice === 'custom'" class="peer-field">
+            <span>{{ t('peerStunCustomAddress') }}</span>
+            <textarea v-model.trim="guestCustomStunUrl" rows="3" :placeholder="t('peerStunCustomPlaceholder')" />
+            <small>{{ t('peerStunHint') }}</small>
+          </label>
+          <label class="peer-direct-consent">
+            <input v-model="directConsent" type="checkbox">
+            <span>{{ t('peerDirectConsent') }} <RouterLink :to="{ name: 'legal-privacy' }" target="_blank" rel="noopener">{{ t('legalPrivacyTitle') }}</RouterLink></span>
+          </label>
+          <button class="success peer-primary" :disabled="!directConsent || !inviteInput || sessionActive || busy" @click="joinRoom">
+            <NIcon :component="LinkOutline" />{{ t('peerJoinRoom') }}
+          </button>
+        </template>
+      </section>
+
+      <section class="peer-card peer-status">
+        <header>
+          <div>
+            <span>{{ t('peerConnectionStatus') }}</span>
+            <strong :class="`peer-state-${state}`"><i />{{ stateLabel }}</strong>
+          </div>
+          <code v-if="roomCode">{{ roomCode }}</code>
+        </header>
+        <p v-if="stateDetail" :class="isFailureState ? 'error-banner' : 'peer-status-detail'">{{ displayDetail }}</p>
+        <div v-if="Object.keys(peerStates).length" class="peer-member-states">
+          <strong>{{ t('peerConnectedPeers') }}</strong>
+          <code v-for="(peerState, peerId) in peerStates" :key="peerId">{{ peerId }} · {{ t(`peerState_${peerState}`) }}</code>
+        </div>
+        <button v-if="state !== 'idle' && state !== 'closed'" class="peer-disconnect" @click="peerSession.stop()">{{ t('peerDisconnect') }}</button>
+        <button v-if="connected && peerSession.gameKey" class="success peer-enter-game" @click="enterGame">{{ t('peerEnterGame') }}</button>
+        <p class="peer-boundary">{{ t('peerBoundary') }}</p>
+
+        <div class="peer-connection-check" :class="{ active: connected }">
+          <h2>{{ t('peerConnectionCheckTitle') }}</h2>
+          <p>{{ t('peerConnectionCheckHint') }}</p>
+          <strong><i />{{ t(connected ? 'peerConnectionCheckActive' : 'peerConnectionCheckWaiting') }}</strong>
+        </div>
+      </section>
+    </main>
+  </section>
+</template>

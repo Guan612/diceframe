@@ -22,11 +22,11 @@ def test_legal_acceptance_is_date_versioned_and_hashed():
         state,
         acceptance=acceptance,
         documents=documents,
-        accepted_at="2026-08-11T00:00:00Z",
+        accepted_at="2026-08-20T00:00:00Z",
     )
 
     assert legal.accepted(state, documents) is True
-    assert state["legal_accepted_at"] == "2026-08-11T00:00:00Z"
+    assert state["legal_accepted_at"] == "2026-08-20T00:00:00Z"
     assert state["legal_terms_accepted_updated_at"] == documents["terms"]["updated_at"]
     assert state["legal_terms_accepted_hash"] == acceptance["terms"]["sha256"]
 
@@ -48,6 +48,7 @@ def test_persisted_acceptance_state_restores_every_recorded_field():
     restored = legal.persisted_acceptance_state(saved)
 
     assert restored == {key: value for key, value in saved.items() if key != "unrelated"}
+    assert legal.accepted(restored, legal.bundled_documents()) is False
 
 
 def test_same_document_date_does_not_require_confirmation_for_formatting_hash_change():
@@ -124,3 +125,26 @@ async def test_bad_online_document_is_not_shown_as_a_bundled_snapshot():
 
     with pytest.raises(legal.LegalContentUnavailable, match="校验失败"):
         await legal.document(Api(), "privacy", "en")
+
+
+@pytest.mark.asyncio
+async def test_older_online_manifest_cannot_downgrade_bundled_legal_documents():
+    older = legal.bundled_documents()
+    for entry in older.values():
+        entry["version"] = "1.0"
+        entry["updated_at"] = "2026-08-11"
+        for language, localized in entry["languages"].items():
+            localized["path"] = localized["path"].replace("/1.1/", "/1.0/")
+
+    class Api:
+        async def fetch_public_content_json(self, _path, **_kwargs):
+            return {"documents": older}
+
+        async def fetch_public_content_text(self, _path, **_kwargs):
+            raise AssertionError("older online content must not replace the bundled policy")
+
+    documents = await legal.current_documents(Api())
+    result = await legal.document(Api(), "privacy", "zh-CN")
+    assert documents["privacy"]["version"] == "1.2"
+    assert result["source"] == "bundled"
+    assert result["version"] == "1.2"

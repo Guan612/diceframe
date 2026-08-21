@@ -12,21 +12,29 @@ import {
   BookOutline, HourglassOutline, PeopleOutline, DiceOutline, TrophyOutline,
   CompassOutline, EnterOutline, RefreshOutline, DownloadOutline, TrashOutline,
   SparklesOutline,
+  LinkOutline,
 } from '@vicons/ionicons5'
 import AssistantPanel from '@/components/AssistantPanel.vue'
+import PeerConnectModal from '@/features/peer/PeerConnectModal.vue'
 import { useAssistant } from '@/composables/useAssistant'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
+import { getRendezvousConfig } from '@/api/peer'
+import { sortGames, type SaveSortMode } from './saveSorting'
 
 const router = useRouter()
 const assistantOpen = ref(false)
+const peerModalOpen = ref(false)
 const { stop: stopAssistant } = useAssistant()
 watch(assistantOpen, (open) => { if (!open) stopAssistant() })
 const toast = useToast()
 const { confirm } = useConfirm()
-const { t } = useLocale()
+const { locale, t } = useLocale()
 
 const games = ref<GameSummary[]>([])
+const peerEntryVisible = ref(false)
+const saveSort = ref<SaveSortMode>('recent')
+const sortedGames = computed(() => sortGames(games.value, saveSort.value, locale.value))
 const sceneImageUrls = ref<Record<string, string>>({})
 const error = ref('')
 function setError(e: unknown) { error.value = errorMessage(e) }
@@ -36,7 +44,7 @@ const selected = ref<string[]>([])
 const activeGames = computed(() => games.value.filter(g => stateClass(g.state) === 'badge-active').length)
 const playerCount = computed(() => games.value.reduce((sum, g) => sum + Number(g.player_count || 0), 0))
 const roundCount = computed(() => games.value.reduce((sum, g) => sum + Number(g.round_number || 0), 0))
-const latestScene = computed(() => games.value.find(g => g.scene)?.scene || t('noScene'))
+const latestScene = computed(() => sortedGames.value.find(g => g.scene)?.scene || t('noScene'))
 const statItems = computed(() => [
   { key: 'saves', value: games.value.length, label: t('totalSaves'), icon: BookOutline },
   { key: 'active', value: activeGames.value, label: t('activeGames'), icon: HourglassOutline },
@@ -58,6 +66,16 @@ async function load() {
     sceneImageUrls.value = Object.fromEntries(entries)
     for (const url of Object.values(previous)) revokeSceneImageUrl(url)
   } catch (e: unknown) { setError(e) }
+}
+
+async function loadPeerEntryVisibility() {
+  peerEntryVisible.value = false
+  try {
+    const config = await getRendezvousConfig()
+    peerEntryVisible.value = config.entry_visible === true
+  } catch {
+    // Fail closed: an unavailable Hub cannot establish a new rendezvous session.
+  }
 }
 
 function play(key: string) {
@@ -101,7 +119,7 @@ async function exportGame(key: string) {
 async function exportAll() {
   if (!games.value.length) { toast.info(t('noSavesToExport')); return }
   toast.info(`${t('exportStarting')} ${games.value.length}...`)
-  for (const g of games.value) {
+  for (const g of sortedGames.value) {
     await exportGame(g.game_key)
     await new Promise(resolve => setTimeout(resolve, 250))
   }
@@ -194,7 +212,10 @@ function gameSceneStyle(game: GameSummary): Record<string, string> {
   return sceneImageStyle(sceneImageUrls.value[game.game_key] || ruleSceneUrl(String(game.rule_id || '')))
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  void loadPeerEntryVisibility()
+})
 onBeforeUnmount(() => {
   for (const url of Object.values(sceneImageUrls.value)) revokeSceneImageUrl(url)
 })
@@ -211,6 +232,7 @@ onBeforeUnmount(() => {
         <p>{{ t('overviewSubtitle') }}</p>
       </div>
       <div class="overview-actions">
+        <button v-if="peerEntryVisible" class="peer-launch-button" @click="peerModalOpen = true"><NIcon :component="LinkOutline" />{{ t('peerDirectConnect') }}</button>
         <button @click="saveImportInput?.click()" :disabled="busy">{{ t('importSave') }}</button>
         <input ref="saveImportInput" type="file" accept=".zip" @change="onImportSave" hidden>
         <button class="success" @click="play('')">{{ t('createAdventure') }}</button>
@@ -230,6 +252,15 @@ onBeforeUnmount(() => {
       <header class="library-heading">
         <div class="library-heading-copy"><span><i />{{ t('recentAdventures') }}</span><small>{{ games.length }} {{ t('totalSaves') }}</small></div>
         <div class="library-heading-actions">
+          <label class="save-sort-field">
+            <span>{{ t('saveSort') }}</span>
+            <select v-model="saveSort" class="save-sort-select" :aria-label="t('saveSort')">
+              <option value="recent">{{ t('saveSortRecent') }}</option>
+              <option value="oldest">{{ t('saveSortOldest') }}</option>
+              <option value="name">{{ t('saveSortName') }}</option>
+              <option value="round">{{ t('saveSortRound') }}</option>
+            </select>
+          </label>
           <button @click="selectAll">{{ t('selectAll') }}</button>
           <button @click="selectInvert">{{ t('invertSelection') }}</button>
           <button @click="clearSelection" :disabled="!selected.length">{{ t('clearSelection') }}</button>
@@ -238,7 +269,7 @@ onBeforeUnmount(() => {
         </div>
       </header>
       <div class="game-grid">
-        <article v-for="g in games" :key="g.game_key" class="game-card">
+        <article v-for="g in sortedGames" :key="g.game_key" class="game-card">
           <div class="game-card-cover" :style="gameSceneStyle(g)">
             <span class="cover-sigil"><NIcon :component="CompassOutline" /></span>
             <label class="game-select compact">
@@ -292,6 +323,7 @@ onBeforeUnmount(() => {
           <AssistantPanel @close="assistantOpen = false" />
         </NDrawerContent>
       </NDrawer>
+      <PeerConnectModal v-model:show="peerModalOpen" />
       <button
         class="overview-assistant-fab"
         @click="assistantOpen = true"

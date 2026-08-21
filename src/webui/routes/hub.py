@@ -10,7 +10,7 @@ from typing import Any
 from aiohttp import web
 
 from src.hub_client import HubHTTPError
-from src.webui.routes._common import _get_api
+from src.webui.routes._common import _get_api, _require_confirmed_request
 
 
 class _ClientDisconnected(RuntimeError):
@@ -65,6 +65,40 @@ async def api_hub_preferences_update(request: web.Request) -> web.Response:
 async def api_hub_identity_delete(request: web.Request) -> web.Response:
     try:
         result = await _get_api(request).delete_hub_identity()
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result)
+
+
+async def api_hub_rendezvous_room_create(request: web.Request) -> web.Response:
+    if denied := _require_confirmed_request(request):
+        return denied
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        return web.json_response({"ok": False, "error": "请求体不是合法 JSON"}, status=400)
+    peer_count = body.get("peer_count") if isinstance(body, dict) else None
+    # 服务端兜底上限：与游戏侧 max_players 默认值对齐，防止信令房间
+    # 批准了游戏侧必然拒绝的人数（第 7+ 人信令成功但进游戏必失败）。
+    if isinstance(peer_count, bool) or not isinstance(peer_count, int) or not 2 <= peer_count <= 6:
+        return web.json_response(
+            {"ok": False, "error": "peer_count 必须是 2 到 6 的整数"},
+            status=400,
+        )
+    try:
+        result = await _get_api(request).create_rendezvous_room(peer_count)
+    except HubHTTPError as exc:
+        return _hub_error_response(exc)
+    except Exception as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=502)
+    return web.json_response(result, status=201)
+
+
+async def api_hub_rendezvous_config(request: web.Request) -> web.Response:
+    try:
+        result = await _get_api(request).rendezvous_config()
+    except HubHTTPError as exc:
+        return _hub_error_response(exc)
     except Exception as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=502)
     return web.json_response(result)
@@ -163,12 +197,16 @@ def _hub_error_response(exc: HubHTTPError) -> web.Response:
     429 冷却时同时带 retry_after（秒数），前端 api() 据此显示"请 X 秒后重试"。
     """
     payload: dict[str, Any] = {"ok": False, "error": _hub_error_message(exc)}
+    if exc.error_code:
+        payload["error_code"] = exc.error_code
     if exc.retry_after:
         payload["retry_after"] = exc.retry_after
     return web.json_response(payload, status=exc.status)
 
 
 def _hub_error_message(exc: HubHTTPError) -> str:
+    if exc.status == 429 and exc.error_code == "installation_room_limit" and exc.detail:
+        return exc.detail
     if exc.status == 429:
         return "操作太频繁，请稍后再试"
     if exc.status == 403 and "requires an installation" in exc.detail:
@@ -182,6 +220,8 @@ def register_hub(app: web.Application) -> None:
     app.router.add_get("/api/hub/preferences", api_hub_preferences)
     app.router.add_patch("/api/hub/preferences", api_hub_preferences_update)
     app.router.add_delete("/api/hub/identity", api_hub_identity_delete)
+    app.router.add_get("/api/hub/rendezvous/config", api_hub_rendezvous_config)
+    app.router.add_post("/api/hub/rendezvous/rooms", api_hub_rendezvous_room_create)
     app.router.add_get("/api/hub/plugins/{plugin_id}", api_hub_plugin_detail)
     app.router.add_get("/api/hub/plugins/{plugin_id}/readme", api_hub_plugin_readme)
     app.router.add_get("/api/hub/plugins/{plugin_id}/ratings", api_hub_plugin_ratings)

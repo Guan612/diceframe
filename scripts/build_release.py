@@ -86,6 +86,7 @@ EXCLUDED_DIR_NAMES = {
     ".venv",
     "__pycache__",
     "data",
+    "data-test",
     "dist",
     "env",
     "node_modules",

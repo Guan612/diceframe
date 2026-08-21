@@ -1,5 +1,7 @@
 # data/ 全部为运行时数据与 secrets（config/access_token/secrets/*.db/saves/plugins/sessions/bot/debug/tmp_cards 等），不入库
 data/
+# 联机测试的第二个实例数据副本，同样不入库
+data-test/
 
 # Python
 __pycache__/

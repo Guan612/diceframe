@@ -13,6 +13,8 @@ export interface AssistantSource {
 export interface AssistantStreamHandlers {
   onDelta: (text: string) => void
   onSources?: (sources: AssistantSource[]) => void
+  /** 服务端因输出截断需放大预算重试：清空当前已显示内容后重新流式。 */
+  onReset?: () => void
 }
 
 export class AssistantStreamError extends Error {
@@ -103,6 +105,10 @@ function dispatchEvent(block: string, handlers: AssistantStreamHandlers): boolea
       ? payload.sources.filter(isAssistantSource)
       : []
     handlers.onSources?.(sources)
+    return false
+  }
+  if (event === 'reset') {
+    handlers.onReset?.()
     return false
   }
   if (typeof payload.delta === 'string') handlers.onDelta(payload.delta)
