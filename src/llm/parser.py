@@ -72,7 +72,8 @@ _INTERNAL_CHECK_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _INTERNAL_GM_DIRECTIVE_RE = re.compile(
-    r"^(?:【GM(?:私密)?指令】|\[Private GM Directives?\])",
+    r"^(?:【GM(?:私密)?指令】|【GMプライベート指示】|【权限裁定·必须遵循】|【権限裁定・必ず従うこと】|"
+    r"\[Private GM Directives?\]|## Authority Adjudication)",
     re.IGNORECASE,
 )
 
@@ -186,7 +187,10 @@ def sanitize_narration(text: str) -> str:
             if not normalized_heading:
                 skipping_directive = False
                 continue
-            if normalized_heading.startswith(("-", "以下内容只用于", "Apply these directives")):
+            if normalized_heading.startswith((
+                "-", "以下内容只用于", "Apply these directives", "これらの指示は",
+                "以下声明被裁判", "The referee flagged", "以下の宣言は",
+            )):
                 continue
             skipping_directive = False
         if normalized_heading.startswith("要求：下一次判定必须优先遵循这条 GM 指令"):

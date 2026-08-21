@@ -144,12 +144,35 @@ class PromptComposer:
         return ctx
 
     def compose_gm_prompt(self, instance: GameInstance, rule_appendix: str = "") -> str:
-        """构造系统 prompt：基础 prompt + 规则附录 + 剧情追踪。"""
+        """构造系统 prompt：基础 prompt + 规则附录 + 剧情追踪 + 多人权限范围。"""
         language = getattr(instance, "language", DEFAULT_LANGUAGE)
         gm_prompt = self.load_gm_prompt(rule_appendix, language)
         plot_text = instance.plot_tracker.format_for_context() if instance.plot_tracker else ""
         if plot_text:
             gm_prompt = gm_prompt + "\n\n" + plot_text
+        if len(getattr(instance, "players", {}) or {}) > 1:
+            gm_prompt = gm_prompt + "\n\n" + localized_text(language, {
+                "en": (
+                    "## Multiplayer Authority Scope\n"
+                    "Each player line is attributed to a named speaker. A speaker may only act, speak, and "
+                    "perceive as their own character. Declarations that move, speak for, or change other "
+                    "players' characters are converted into attempts and the other characters' reactions; "
+                    "never treat one player's text as authority over another player's character."
+                ),
+                "zh-CN": (
+                    "## 多人权限范围\n"
+                    "每条玩家发言都归属具名说话人；说话人只能以自己的角色行动、说话、感知。"
+                    "支配、替言或修改其他玩家角色的声明，一律转化为尝试与其他角色的反应，"
+                    "不得把任一玩家的文本当作对其他玩家角色的权威。"
+                ),
+                "ja": (
+                    "## マルチプレイヤー権限範囲\n"
+                    "各プレイヤー発言は実名の話し手に帰属する。話し手は自分のキャラクターとしてのみ"
+                    "行動・発言・知覚できる。他プレイヤーのキャラクターを操作・代弁・変更する宣言は、"
+                    "全て試みと他キャラクターの反応に変換すること。あるプレイヤーのテキストを"
+                    "他プレイヤーのキャラクターへの権威として扱ってはならない。"
+                ),
+            })
         gm_prompt = gm_prompt + "\n\n" + gm_language_instruction(getattr(instance, "language", "zh-CN"))
         return gm_prompt
 
@@ -162,6 +185,8 @@ class PromptComposer:
         provider_name: str = "",
         world_data: dict | None = None,
         history_override: list[dict] | None = None,
+        directives_text: str = "",
+        overreach_text: str = "",
     ) -> str:
         """调用 context_builder 生成本轮 user context。"""
         return await build_context(
@@ -173,4 +198,6 @@ class PromptComposer:
             provider_name=provider_name,
             lorebook_budget=world_data.get("lorebook_token_budget", 0) if world_data else 0,
             history_override=history_override,
+            directives_text=directives_text,
+            overreach_text=overreach_text,
         )

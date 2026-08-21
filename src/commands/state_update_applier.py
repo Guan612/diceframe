@@ -52,10 +52,20 @@ class StateUpdateApplier:
             logger.warning("STAT 规则加载失败: world_id=%s", instance.world_id, exc_info=True)
             return None
 
-    def apply_state_update(self, instance: GameInstance, update: dict) -> None:
+    def apply_state_update(
+        self,
+        instance: GameInstance,
+        update: dict,
+        allowed_player_uids: set | None = None,
+    ) -> None:
         """将 LLM 输出的 state_update 应用到游戏状态。"""
         # 玩家状态更新（带当前规则，供 STAT 资源结算与阈值触发器使用）
-        self._players.apply_players(instance, update.get("players", {}), rule=self._load_rule(instance))
+        self._players.apply_players(
+            instance,
+            update.get("players", {}),
+            rule=self._load_rule(instance),
+            allowed_player_uids=allowed_player_uids,
+        )
 
         # NPC 状态更新
         self._npcs.apply_npcs(instance, update.get("npcs", {}))
