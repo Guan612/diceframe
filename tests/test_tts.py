@@ -5,12 +5,19 @@ import io
 import wave
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
-from src.tts import SpeechRequest, SpeechService, SpeechServiceError
-from src.tts.providers import ProviderAudio, _openai_speech_url
-from src.webui.services.speech import _is_public_game_text
+from src.tts import SpeechRequest, SpeechService, SpeechServiceError, VoiceProfile
+from src.tts.providers import (
+    EdgeTtsProvider,
+    ProviderAudio,
+    ProviderError,
+    _openai_speech_url,
+)
+from src.webui.config_update import prepare_config_update
+from src.webui.services.speech import _is_public_game_text, list_voices
 
 
 def _config(**changes):
@@ -192,3 +199,165 @@ def test_openai_speech_url_accepts_root_v1_and_full_endpoint():
     assert _openai_speech_url("https://example.test") == "https://example.test/v1/audio/speech"
     assert _openai_speech_url("https://example.test/v1") == "https://example.test/v1/audio/speech"
     assert _openai_speech_url("https://example.test/v1/audio/speech") == "https://example.test/v1/audio/speech"
+
+
+def _edge_provider() -> EdgeTtsProvider:
+    return EdgeTtsProvider(
+        base_url="", api_key="", model="", audio_format="mp3", timeout_seconds=30,
+    )
+
+
+class _RecordingCommunicate:
+    def __init__(self, text: str, voice: str, *, rate: str, proxy: str | None, **_: Any) -> None:
+        self.kwargs = {"text": text, "voice": voice, "rate": rate, "proxy": proxy}
+
+    async def stream(self):
+        yield {"type": "WordBoundary", "text": "测"}
+        yield {"type": "audio", "data": b"mp3-a"}
+        yield {"type": "audio", "data": b"mp3-b"}
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_provider_maps_request_to_communicate(monkeypatch):
+    import edge_tts
+
+    instances: list[_RecordingCommunicate] = []
+
+    def factory(*args, **kwargs):
+        instance = _RecordingCommunicate(*args, **kwargs)
+        instances.append(instance)
+        return instance
+
+    monkeypatch.setattr(edge_tts, "Communicate", factory)
+    provider = _edge_provider()
+
+    audio = await provider.synthesize(SpeechRequest(text="你好", voice="", speed=1.5), None)
+
+    assert audio.body == b"mp3-amp3-b"
+    assert audio.content_type == "audio/mpeg"
+    assert instances[0].kwargs == {
+        "text": "你好",
+        "voice": "zh-CN-XiaoxiaoNeural",
+        "rate": "+50%",
+        "proxy": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_provider_prefers_profile_voice_id(monkeypatch):
+    import edge_tts
+
+    instances: list[_RecordingCommunicate] = []
+
+    def factory(*args, **kwargs):
+        instance = _RecordingCommunicate(*args, **kwargs)
+        instances.append(instance)
+        return instance
+
+    monkeypatch.setattr(edge_tts, "Communicate", factory)
+    profile = VoiceProfile(id="personal:edge", name="七海", engine="edge-tts", voice_id="ja-JP-NanamiNeural")
+
+    await _edge_provider().synthesize(SpeechRequest(text="テスト", voice="zh-CN-YunxiNeural"), profile)
+
+    assert instances[0].kwargs["voice"] == "ja-JP-NanamiNeural"
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_provider_rejects_non_neural_voice():
+    with pytest.raises(ProviderError, match="Neural"):
+        await _edge_provider().synthesize(SpeechRequest(text="测试", voice="alloy"), None)
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_provider_rejects_empty_audio(monkeypatch):
+    import edge_tts
+
+    class _SilentCommunicate:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def stream(self):
+            yield {"type": "WordBoundary", "text": "静"}
+
+    monkeypatch.setattr(edge_tts, "Communicate", _SilentCommunicate)
+
+    with pytest.raises(ProviderError, match="空音频"):
+        await _edge_provider().synthesize(SpeechRequest(text="测试"), None)
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_provider_wraps_upstream_errors(monkeypatch):
+    from edge_tts.exceptions import EdgeTTSException
+
+    class _BrokenCommunicate:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        async def stream(self):
+            raise EdgeTTSException("websocket closed")
+            yield {"type": "audio", "data": b""}  # pragma: no cover
+
+    import edge_tts
+
+    monkeypatch.setattr(edge_tts, "Communicate", _BrokenCommunicate)
+
+    with pytest.raises(ProviderError, match="Edge TTS 合成失败"):
+        await _edge_provider().synthesize(SpeechRequest(text="测试"), None)
+
+
+def test_edge_tts_needs_no_base_url_or_api_key(tmp_path):
+    service = SpeechService(
+        _config(tts_provider="edge-tts", tts_base_url="", tts_api_key=""),
+        tmp_path / "cache",
+    )
+
+    assert service.backend_enabled is True
+    assert isinstance(service._provider(), EdgeTtsProvider)
+
+
+def test_edge_tts_provider_passes_runtime_config_update():
+    result = prepare_config_update({"tts_provider": "browser"}, {"tts_provider": "edge-tts"})
+
+    assert result.error == ""
+    assert result.state["tts_provider"] == "edge-tts"
+
+
+def test_edge_tts_builtin_voice_catalog(tmp_path):
+    service = SpeechService(_config(tts_provider="edge-tts", tts_base_url=""), tmp_path / "cache")
+    api = SimpleNamespace(_speech=service, _plugins=None)
+
+    catalog = list_voices(api)
+    voices = {voice["id"]: voice for voice in catalog["voices"]}
+
+    assert catalog["provider"] == "edge-tts"
+    assert voices["zh-CN-XiaoxiaoNeural"]["engine"] == "edge-tts"
+    assert voices["zh-CN-XiaoxiaoNeural"]["name"].startswith("晓晓")
+    assert voices["zh-CN-XiaoxiaoNeural"]["language"] == "zh-CN"
+    assert voices["ja-JP-NanamiNeural"]["language"] == "ja-JP"
+
+
+@pytest.mark.asyncio
+async def test_edge_tts_personal_voice_alias_synthesizes(tmp_path, monkeypatch):
+    service = SpeechService(_config(tts_provider="edge-tts", tts_base_url=""), tmp_path / "cache")
+    saved = service.save_voice_profile(
+        "",
+        {"name": "韩语女声", "engine": "edge-tts", "voice_id": "ko-KR-SunHiNeural"},
+    )
+    provider = _FakeProvider()
+    monkeypatch.setattr(service, "_provider", lambda: provider)
+
+    result = await service.synthesize(
+        SpeechRequest(text="测试", voice=saved["id"]),
+        service.personal_voice_profiles(),
+    )
+
+    assert result.body.startswith(b"audio:")
+    assert provider.voices[0].voice_id == "ko-KR-SunHiNeural"
+    assert provider.voices[0].source == "personal"
+
+
+def test_edge_tts_personal_voice_requires_voice_id(tmp_path):
+    service = SpeechService(_config(tts_provider="edge-tts", tts_base_url=""), tmp_path / "cache")
+
+    with pytest.raises(ValueError, match="voice ID"):
+        service.save_voice_profile("", {"name": "缺 ID", "engine": "edge-tts"})

@@ -160,6 +160,23 @@ describe('tts utils', () => {
     await vi.waitFor(() => expect(speakingKey.value).toBe(''))
   })
 
+  it('routes edge-tts narration through the server engine', async () => {
+    ttsRuntimeConfig.value = {
+      provider: 'edge-tts',
+      defaultVoice: 'zh-CN-XiaoxiaoNeural',
+      gmVoice: 'zh-CN-YunxiNeural',
+      playerVoice: '',
+    }
+    const synthesize = vi.spyOn(speechApi, 'synthesize').mockResolvedValue(new Blob(['audio'], { type: 'audio/mpeg' }))
+
+    ttsSpeak('篝火噼啪作响。', 'gm:edge', { gameKey: 'web|room|bot', role: 'gm', lang: 'zh-CN' })
+
+    await vi.waitFor(() => expect(synthesize).toHaveBeenCalledOnce())
+    expect(mocks.speak).not.toHaveBeenCalled()
+    expect(synthesize.mock.calls[0][1]).toMatchObject({ voice: 'zh-CN-YunxiNeural' })
+    await vi.waitFor(() => expect(speakingKey.value).toBe(''))
+  })
+
   it('rejects non-WAV personal references before uploading', async () => {
     await expect(speechApi.saveProfile(
       {

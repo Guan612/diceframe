@@ -6,6 +6,7 @@ Caching, validation and plugin voice resolution remain in ``SpeechService``.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -115,6 +116,58 @@ class GptSovitsProvider(SpeechProvider):
             "speed_factor": max(0.6, min(float(request.speed), 1.65)),
         }
         return await self._post_json(_endpoint_url(self.base_url, "tts"), payload)
+
+
+class EdgeTtsProvider(SpeechProvider):
+    """Microsoft Edge online voices through the free read-aloud endpoint.
+
+    Output is always 24 kHz MP3 regardless of ``audio_format``; no key or
+    base URL is required, so ``api_key``/``base_url`` stay empty.
+    """
+
+    provider_id = "edge-tts"
+    DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
+
+    async def synthesize(self, request: SpeechRequest, voice: VoiceProfile | None) -> ProviderAudio:
+        try:
+            import edge_tts
+        except ImportError as exc:
+            raise ProviderError("缺少 edge-tts 依赖，请执行 pip install -r requirements.txt 安装后重试") from exc
+        voice_id = (voice.voice_id if voice else "") or request.voice or self.DEFAULT_VOICE
+        if not voice_id.endswith("Neural"):
+            raise ProviderError(
+                f"无效的 Edge TTS 音色：{voice_id}。请使用 zh-CN-XiaoxiaoNeural 这类以 Neural 结尾的微软音色"
+            )
+        speed = max(0.5, min(float(request.speed), 5.0))
+        communicate = edge_tts.Communicate(
+            request.text,
+            voice_id,
+            rate=f"{int(round((speed - 1) * 100)):+d}%",
+            proxy=self.proxy_url or None,
+            connect_timeout=max(1, int(min(15.0, self.timeout_seconds))),
+            receive_timeout=max(1, int(self.timeout_seconds)),
+        )
+        try:
+            body = await asyncio.wait_for(_collect_edge_audio(communicate), timeout=self.timeout_seconds)
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise ProviderError(f"Edge TTS 合成超时（{self.timeout_seconds:.0f} 秒）") from exc
+        except (edge_tts.exceptions.EdgeTTSException, aiohttp.ClientError, OSError) as exc:
+            raise ProviderError(f"Edge TTS 合成失败：{exc}") from exc
+        if not body:
+            raise ProviderError("Edge TTS 返回了空音频")
+        return ProviderAudio(body=body, content_type="audio/mpeg")
+
+
+async def _collect_edge_audio(communicate: Any) -> bytes:
+    chunks = bytearray()
+    async for chunk in communicate.stream():
+        if chunk.get("type") != "audio":
+            continue
+        data = chunk.get("data") or b""
+        if len(chunks) + len(data) > MAX_UPSTREAM_AUDIO_BYTES:
+            raise ProviderError("TTS 音频超过 20 MB 限制")
+        chunks.extend(data)
+    return bytes(chunks)
 
 
 async def _read_limited(response: aiohttp.ClientResponse) -> bytes:

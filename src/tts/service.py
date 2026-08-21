@@ -19,7 +19,7 @@ from .contracts import (
     SpeechRequest,
     VoiceProfile,
 )
-from .providers import GptSovitsProvider, OpenAICompatibleProvider, ProviderError, SpeechProvider
+from .providers import EdgeTtsProvider, GptSovitsProvider, OpenAICompatibleProvider, ProviderError, SpeechProvider
 from .profile_store import VoiceProfileStore
 
 
@@ -151,6 +151,8 @@ class SpeechService:
             return OpenAICompatibleProvider(**kwargs)
         if self.provider_id == "gpt-sovits":
             return GptSovitsProvider(**kwargs)
+        if self.provider_id == "edge-tts":
+            return EdgeTtsProvider(**kwargs)
         raise SpeechServiceError(f"不支持的 TTS provider：{self.provider_id}")
 
     def _resolve_voice(self, voice_id: str, profiles: list[dict[str, Any]]) -> VoiceProfile | None:
@@ -247,7 +249,8 @@ class SpeechService:
             raise ValueError(f"不支持的 TTS provider：{self.provider_id}")
         if self.audio_format not in SUPPORTED_AUDIO_FORMATS:
             raise ValueError(f"不支持的 TTS 音频格式：{self.audio_format}")
-        if self.backend_enabled:
+        # edge-tts 由 provider 内置固定端点，无需 Base URL；其余后端引擎必须显式指定。
+        if self.backend_enabled and self.provider_id != "edge-tts":
             parsed = urlparse(self.base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
                 raise ValueError("TTS Base URL 必须是无内嵌凭据的 http(s) 地址")
