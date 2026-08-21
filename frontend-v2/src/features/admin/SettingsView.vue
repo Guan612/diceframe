@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { NButton, NInput, NInputNumber, NSwitch, NTag, NIcon, NCollapse, NCollapseItem, NSpin, NProgress, NModal } from 'naive-ui'
 import {
   ServerOutline, CubeOutline, CloudDownloadOutline,
   LockClosedOutline, OptionsOutline, InformationCircleOutline, ShareSocialOutline,
   KeyOutline, CopyOutline, EyeOutline, RefreshOutline, ColorPaletteOutline,
-  ImageOutline, PowerOutline,
+  ImageOutline, PowerOutline, MicOutline,
 } from '@vicons/ionicons5'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useToast } from '@/composables/useToast'
@@ -15,7 +15,8 @@ import { useUpdateCheck } from '@/composables/useUpdateCheck'
 import { shouldAutoDownloadUpdate, updateStateForVersion, useUpdater } from '@/composables/useUpdater'
 import { useLocale } from '@/composables/useLocale'
 import { initializeTts, ttsRate, setTtsRate } from '@/utils/tts'
-import { api, errorMessage } from '@/api/client'
+import { asrLanguageFor, initializeAsr, startRecording, type RecordingSession } from '@/utils/asr'
+import { ApiError, api, errorMessage } from '@/api/client'
 import { speechApi } from '@/api/speech'
 import { pluginApi } from '@/api/plugins'
 import type { MessageKey } from '@/i18n'
@@ -277,6 +278,68 @@ async function testTts() {
     ttsTesting.value = false
   }
 }
+
+// 语音识别（云端 ASR）：与 TTS 相同的保存/测试模式，测试改为录一段话再识别。
+const asrProvider = computed(() => String(store.config.asr_provider || 'disabled'))
+const asrTesting = ref(false)
+const asrTestRecording = ref(false)
+const asrTestText = ref('')
+let asrTestSession: RecordingSession | null = null
+
+const ASR_CONFIG_KEYS = ['asr_provider', 'asr_base_url', 'asr_model', 'asr_timeout_seconds']
+
+async function saveAsr(showToast = true): Promise<boolean> {
+  try {
+    await store.saveSection(ASR_CONFIG_KEYS, ['asr_api_key'])
+    await initializeAsr(true)
+    if (showToast) toast.success(t('settingsSaved'))
+    return true
+  } catch (error: unknown) {
+    toast.error(errorMessage(error))
+    return false
+  }
+}
+
+async function testAsr() {
+  if (asrTestRecording.value) {
+    await stopAsrTest()
+    return
+  }
+  asrTesting.value = true
+  asrTestText.value = ''
+  try {
+    if (!await saveAsr(false)) return
+    asrTestSession = await startRecording()
+    asrTestRecording.value = true
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === 'asr-mic-denied') toast.error(t('asrMicDenied'))
+    else toast.error(t('asrRecordFailed'))
+  } finally {
+    asrTesting.value = false
+  }
+}
+
+async function stopAsrTest() {
+  const session = asrTestSession
+  asrTestSession = null
+  asrTestRecording.value = false
+  if (!session) return
+  asrTesting.value = true
+  try {
+    const blob = await session.stop()
+    asrTestText.value = await speechApi.transcribeTest(blob, asrLanguageFor(locale.value))
+  } catch (error: unknown) {
+    toast.error(error instanceof ApiError && error.message ? error.message : t('asrFailed'))
+  } finally {
+    asrTesting.value = false
+  }
+}
+
+onUnmounted(() => {
+  asrTestSession?.cancel()
+  asrTestSession = null
+  asrTestRecording.value = false
+})
 
 const testing = ref(false)
 const testResult = ref<TestResult | null>(null)
@@ -1161,6 +1224,57 @@ function redownloadUpdatePackage() {
               <footer class="advanced-save-row">
                 <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
               </footer>
+            </section>
+            <section class="advanced-section asr-section">
+              <header class="advanced-section-head">
+                <NIcon :component="MicOutline" />
+                <div><h3>{{ t('asrSettings') }}</h3><p>{{ t('asrSettingsHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div><strong>{{ t('asrProvider') }}</strong></div>
+                <select :value="store.config.asr_provider ?? 'disabled'" @change="setStr('asr_provider', eventValue($event))">
+                  <option value="disabled">{{ t('asrProviderDisabled') }}</option>
+                  <option value="openai-compatible">{{ t('asrProviderOpenAI') }}</option>
+                </select>
+              </div>
+              <template v-if="asrProvider === 'openai-compatible'">
+                <div class="advanced-row">
+                  <div><strong>Base URL</strong></div>
+                  <NInput
+                    :value="store.config.asr_base_url ?? ''"
+                    placeholder="https://api.openai.com/v1"
+                    @update:value="setStr('asr_base_url', $event)"
+                  />
+                </div>
+                <div class="advanced-row">
+                  <div><strong>API Key</strong></div>
+                  <NInput
+                    :value="store.secrets.asr_api_key ?? ''"
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="store.config.asr_api_key?.configured ? t('secretConfiguredPlaceholder', { masked: store.config.asr_api_key.masked }) : t('ttsApiKeyOptional')"
+                    @update:value="setSecret('asr_api_key', $event)"
+                  />
+                </div>
+                <div class="advanced-row">
+                  <div><strong>{{ t('model') }}</strong></div>
+                  <NInput :value="store.config.asr_model ?? 'whisper-1'" placeholder="whisper-1" @update:value="setStr('asr_model', $event)" />
+                </div>
+                <div class="advanced-row">
+                  <div><strong>{{ t('asrTimeout') }}</strong></div>
+                  <NInputNumber :value="Number(store.config.asr_timeout_seconds ?? 60)" :min="5" :max="300" :step="5" @update:value="setNum('asr_timeout_seconds', $event)" />
+                </div>
+                <p class="muted tts-inline-hint">{{ t('asrHint') }}</p>
+              </template>
+              <footer class="advanced-save-row">
+                <NButton type="primary" @click="saveAsr()">{{ t('saveAction') }}</NButton>
+                <NButton
+                  v-if="asrProvider === 'openai-compatible'"
+                  :loading="asrTesting && !asrTestRecording"
+                  @click="testAsr"
+                >{{ asrTestRecording ? t('asrTestStop') : t('asrSaveAndTest') }}</NButton>
+              </footer>
+              <p v-if="asrTestText" class="muted tts-inline-hint">{{ t('asrTestResult', { text: asrTestText }) }}</p>
             </section>
           </div>
 

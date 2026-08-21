@@ -10,18 +10,20 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.network_proxy import effective_proxy_url, is_supported_proxy_url
+from src.asr.contracts import SUPPORTED_ASR_PROVIDER_IDS
 from src.tts.contracts import SUPPORTED_PROVIDER_IDS
 from src.webui.access_password import hash_access_password
 
 SECRET_CONFIG_KEYS = frozenset({
     "api_key", "embedding_api_key", "fallback1_api_key", "fallback2_api_key",
-    "access_token", "bot_token", "napcat_token", "tts_api_key",
+    "access_token", "bot_token", "napcat_token", "tts_api_key", "asr_api_key",
 })
 STRING_CONFIG_KEYS = frozenset({
     "base_url", "model", "embedding_base_url", "embedding_model",
     "fallback1_base_url", "fallback1_model", "fallback2_base_url", "fallback2_model",
     "public_base_url", "napcat_host", "napcat_connection_id",
     "tts_base_url", "tts_model", "tts_default_voice", "tts_gm_voice", "tts_player_voice",
+    "asr_base_url", "asr_model",
 })
 API_FORMAT_KEYS = frozenset({"api_format", "fallback1_api_format", "fallback2_api_format"})
 CONFIG_KEYS = (
@@ -39,6 +41,7 @@ CONFIG_KEYS = (
     "update_channel",
     "tts_provider", "tts_base_url", "tts_api_key", "tts_model", "tts_audio_format",
     "tts_default_voice", "tts_gm_voice", "tts_player_voice", "tts_timeout_seconds", "tts_cache_mb",
+    "asr_provider", "asr_base_url", "asr_api_key", "asr_model", "asr_timeout_seconds",
 )
 MODEL_RUNTIME_CONFIG_KEYS = frozenset({
     "api_key", "base_url", "model", "api_format",
@@ -52,6 +55,7 @@ API_RUNTIME_CONFIG_KEYS = frozenset({
     "character_gen_max_tokens", "text_gen_max_tokens",
     "tts_provider", "tts_base_url", "tts_api_key", "tts_model", "tts_audio_format",
     "tts_default_voice", "tts_gm_voice", "tts_player_voice", "tts_timeout_seconds", "tts_cache_mb",
+    "asr_provider", "asr_base_url", "asr_api_key", "asr_model", "asr_timeout_seconds",
 })
 BOT_CONFIG_MAP = {
     "qq_bot_enabled": "enabled",
@@ -162,6 +166,16 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
                 if not 16 <= cache_mb <= 2048:
                     return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "TTS 缓存必须在 16–2048 MB 之间")
                 candidate[key] = cache_mb
+            elif key == "asr_provider":
+                provider = str(raw or "").strip()
+                if provider not in SUPPORTED_ASR_PROVIDER_IDS:
+                    return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "ASR Provider 无效")
+                candidate[key] = provider
+            elif key == "asr_timeout_seconds":
+                timeout = float(raw)
+                if not 5 <= timeout <= 300:
+                    return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "ASR 超时必须在 5–300 秒之间")
+                candidate[key] = timeout
             elif key == "napcat_port":
                 port = int(raw)
                 if not 1 <= port <= 65535:

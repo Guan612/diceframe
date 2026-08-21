@@ -5,9 +5,12 @@ import ActionComposer from '../src/components/ActionComposer.vue'
 import { api } from '../src/api/client'
 import type { GameDetail } from '../src/api/types'
 
-vi.mock('../src/api/client', () => ({
-  api: vi.fn(),
-}))
+vi.mock('../src/api/client', () => {
+  class ApiError extends Error {
+    constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
+  }
+  return { api: vi.fn(), apiBlob: vi.fn(), ApiError }
+})
 
 const mockedApi = vi.mocked(api)
 

@@ -62,4 +62,20 @@ export const speechApi = {
     })
     return response.blob()
   },
+  transcribe: async (gameKey: string, blob: Blob, lang = ''): Promise<string> => {
+    const query = lang ? `?lang=${encodeURIComponent(lang)}` : ''
+    const result = await api<{ ok: boolean; text: string }>(
+      `/games/${encodeURIComponent(gameKey)}/transcription${query}`,
+      { method: 'POST', body: blob },
+    )
+    return result.text
+  },
+  transcribeTest: async (blob: Blob, lang = ''): Promise<string> => {
+    const query = lang ? `?lang=${encodeURIComponent(lang)}` : ''
+    const result = await api<{ ok: boolean; text: string }>(
+      `/asr/test${query}`,
+      { method: 'POST', body: blob },
+    )
+    return result.text
+  },
 }

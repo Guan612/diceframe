@@ -15,7 +15,7 @@ from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
 from src.engine.world_template import load_world_template
-from src.webui.services import avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -108,7 +108,7 @@ class WebAPI:
                  handler=None, llm_client=None, worlds_dir: Path | None = None,
                  character_gen_max_tokens: int = 2048,
                  text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
-                 speech_service=None):
+                 speech_service=None, asr_service=None):
         self._reg = registry
         self._lore = lorebook
         self._mem = memory
@@ -125,6 +125,7 @@ class WebAPI:
         self._plugins = plugin_host
         self._hub = hub_client
         self._speech = speech_service
+        self._asr = asr_service
         if self._plugins and self._handler and hasattr(self._handler, "set_plugin_host"):
             self._handler.set_plugin_host(self._plugins)
 
@@ -279,6 +280,19 @@ class WebAPI:
         speed: float = 1.0,
     ):
         return await speech.test_synthesis(self, text, voice, language, speed)
+
+    async def transcribe_speech(
+        self,
+        game_key: str,
+        user_id: str,
+        audio: bytes,
+        content_type: str,
+        language: str = "",
+    ):
+        return await asr.transcribe(self, game_key, user_id, audio, content_type, language)
+
+    async def test_transcription(self, audio: bytes, content_type: str, language: str = ""):
+        return await asr.test_transcription(self, audio, content_type, language)
 
     async def rescan_plugins(self) -> dict[str, Any]:
         return await plugins.rescan_plugins(self)
