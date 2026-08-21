@@ -1161,57 +1161,6 @@ function redownloadUpdatePackage() {
             </section>
             <section class="advanced-section">
               <header class="advanced-section-head">
-                <NIcon :component="MicOutline" />
-                <div><h3>{{ t('asrSettings') }}</h3><p>{{ t('asrSettingsHint') }}</p></div>
-              </header>
-              <div class="advanced-row">
-                <div><strong>{{ t('asrProvider') }}</strong></div>
-                <select :value="store.config.asr_provider ?? 'disabled'" @change="setStr('asr_provider', eventValue($event))">
-                  <option value="disabled">{{ t('asrProviderDisabled') }}</option>
-                  <option value="openai-compatible">{{ t('asrProviderOpenAI') }}</option>
-                </select>
-              </div>
-              <template v-if="asrProvider === 'openai-compatible'">
-                <div class="advanced-row">
-                  <div><strong>Base URL</strong></div>
-                  <NInput
-                    :value="store.config.asr_base_url ?? ''"
-                    placeholder="https://api.openai.com/v1"
-                    @update:value="setStr('asr_base_url', $event)"
-                  />
-                </div>
-                <div class="advanced-row">
-                  <div><strong>API Key</strong></div>
-                  <NInput
-                    :value="store.secrets.asr_api_key ?? ''"
-                    type="password"
-                    show-password-on="click"
-                    :placeholder="store.config.asr_api_key?.configured ? t('secretConfiguredPlaceholder', { masked: store.config.asr_api_key.masked }) : t('ttsApiKeyOptional')"
-                    @update:value="setSecret('asr_api_key', $event)"
-                  />
-                </div>
-                <div class="advanced-row">
-                  <div><strong>{{ t('model') }}</strong></div>
-                  <NInput :value="store.config.asr_model ?? 'whisper-1'" placeholder="whisper-1" @update:value="setStr('asr_model', $event)" />
-                </div>
-                <div class="advanced-row">
-                  <div><strong>{{ t('asrTimeout') }}</strong></div>
-                  <NInputNumber :value="Number(store.config.asr_timeout_seconds ?? 60)" :min="5" :max="300" :step="5" @update:value="setNum('asr_timeout_seconds', $event)" />
-                </div>
-                <p class="muted tts-inline-hint">{{ t('asrHint') }}</p>
-              </template>
-              <footer class="advanced-save-row">
-                <NButton type="primary" @click="saveAsr()">{{ t('saveAction') }}</NButton>
-                <NButton
-                  v-if="asrProvider === 'openai-compatible'"
-                  :loading="asrTesting && !asrTestRecording"
-                  @click="testAsr"
-                >{{ asrTestRecording ? t('asrTestStop') : t('asrSaveAndTest') }}</NButton>
-              </footer>
-              <p v-if="asrTestText" class="muted tts-inline-hint">{{ t('asrTestResult', { text: asrTestText }) }}</p>
-            </section>
-            <section class="advanced-section">
-              <header class="advanced-section-head">
                 <NIcon :component="InformationCircleOutline" />
                 <div><h3>{{ t('hubPrivacyTitle') }}</h3><p>{{ t('hubTelemetryChoiceSummary') }}</p></div>
               </header>
@@ -1261,6 +1210,57 @@ function redownloadUpdatePackage() {
               <footer class="advanced-save-row">
                 <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
               </footer>
+            </section>
+            <section class="advanced-section asr-section">
+              <header class="advanced-section-head">
+                <NIcon :component="MicOutline" />
+                <div><h3>{{ t('asrSettings') }}</h3><p>{{ t('asrSettingsHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div><strong>{{ t('asrProvider') }}</strong></div>
+                <select :value="store.config.asr_provider ?? 'disabled'" @change="setStr('asr_provider', eventValue($event))">
+                  <option value="disabled">{{ t('asrProviderDisabled') }}</option>
+                  <option value="openai-compatible">{{ t('asrProviderOpenAI') }}</option>
+                </select>
+              </div>
+              <template v-if="asrProvider === 'openai-compatible'">
+                <div class="advanced-row">
+                  <div><strong>Base URL</strong></div>
+                  <NInput
+                    :value="store.config.asr_base_url ?? ''"
+                    placeholder="https://api.openai.com/v1"
+                    @update:value="setStr('asr_base_url', $event)"
+                  />
+                </div>
+                <div class="advanced-row">
+                  <div><strong>API Key</strong></div>
+                  <NInput
+                    :value="store.secrets.asr_api_key ?? ''"
+                    type="password"
+                    show-password-on="click"
+                    :placeholder="store.config.asr_api_key?.configured ? t('secretConfiguredPlaceholder', { masked: store.config.asr_api_key.masked }) : t('ttsApiKeyOptional')"
+                    @update:value="setSecret('asr_api_key', $event)"
+                  />
+                </div>
+                <div class="advanced-row">
+                  <div><strong>{{ t('model') }}</strong></div>
+                  <NInput :value="store.config.asr_model ?? 'whisper-1'" placeholder="whisper-1" @update:value="setStr('asr_model', $event)" />
+                </div>
+                <div class="advanced-row">
+                  <div><strong>{{ t('asrTimeout') }}</strong></div>
+                  <NInputNumber :value="Number(store.config.asr_timeout_seconds ?? 60)" :min="5" :max="300" :step="5" @update:value="setNum('asr_timeout_seconds', $event)" />
+                </div>
+                <p class="muted tts-inline-hint">{{ t('asrHint') }}</p>
+              </template>
+              <footer class="advanced-save-row">
+                <NButton type="primary" @click="saveAsr()">{{ t('saveAction') }}</NButton>
+                <NButton
+                  v-if="asrProvider === 'openai-compatible'"
+                  :loading="asrTesting && !asrTestRecording"
+                  @click="testAsr"
+                >{{ asrTestRecording ? t('asrTestStop') : t('asrSaveAndTest') }}</NButton>
+              </footer>
+              <p v-if="asrTestText" class="muted tts-inline-hint">{{ t('asrTestResult', { text: asrTestText }) }}</p>
             </section>
           </div>
 

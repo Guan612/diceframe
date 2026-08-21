@@ -185,6 +185,10 @@
   grid-column: 1 / -1;
 }
 
+.advanced-settings-pane > .asr-section {
+  grid-column: 1 / -1;
+}
+
 .advanced-section + .advanced-section {
   border-top: 1px solid color-mix(in srgb, var(--df-accent) 26%, var(--df-border-soft));
 }

@@ -100,17 +100,21 @@ test('appearance and advanced settings obey the compact layout contract', async 
 
   await page.goto('/#/settings?section=advanced')
   const advancedSections = page.locator('.advanced-settings-pane > .advanced-section')
-  await expect(advancedSections).toHaveCount(3)
+  await expect(advancedSections).toHaveCount(4)
   await expect(advancedSections.first()).toBeVisible()
   // “DiceFrame Hub 与隐私”紧跟语音朗读（TTS）之后，位于第 2 个 section。
   await expect(advancedSections.nth(1).getByRole('heading', { name: 'DiceFrame Hub 与隐私' })).toBeVisible()
   const advancedBoxes = await advancedSections.evaluateAll(elements =>
     elements.map(element => element.getBoundingClientRect()).map(rect => ({ top: rect.top, left: rect.left, width: rect.width })),
   )
-  expect(advancedBoxes).toHaveLength(3)
+  expect(advancedBoxes).toHaveLength(4)
   expect(advancedBoxes[1].top).toBeGreaterThan(advancedBoxes[0].top)
   expect(Math.abs(advancedBoxes[1].top - advancedBoxes[2].top)).toBeLessThanOrEqual(1)
   expect(advancedBoxes[2].left).toBeGreaterThan(advancedBoxes[1].left + advancedBoxes[1].width)
+  // 语音识别（ASR）区块独占末行，与 TTS 同宽。
+  expect(advancedBoxes[3].top).toBeGreaterThan(advancedBoxes[1].top)
+  expect(Math.abs(advancedBoxes[3].left - advancedBoxes[0].left)).toBeLessThanOrEqual(1)
+  expect(Math.abs(advancedBoxes[3].width - advancedBoxes[0].width)).toBeLessThanOrEqual(2)
 
   await page.goto('/#/settings?section=about')
   await expect(page.locator('.about-card')).toBeVisible()
