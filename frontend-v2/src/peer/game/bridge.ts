@@ -21,7 +21,7 @@ const MUTATING_OPERATIONS = new Set<PeerGameOperation>([
   'character.update',
 ])
 const MAX_REQUESTS_PER_MINUTE = 120
-const MAX_IN_FLIGHT_PER_PEER = 4
+const MAX_IN_FLIGHT_PER_PEER = 8
 
 /**
  * 对端 payload 字段白名单：只放行各操作实际需要的字段，其余全部剥离。
@@ -67,6 +67,7 @@ export class PeerHostGameBridge {
   private readonly actorByPeer = new Map<string, string>()
   private readonly requestTimes = new Map<string, number[]>()
   private readonly inFlight = new Map<string, number>()
+  private readonly waiters = new Map<string, Array<() => void>>()
 
   constructor(
     readonly gameKey: string,
@@ -81,14 +82,46 @@ export class PeerHostGameBridge {
     operation: PeerGameOperation,
     payload: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    this.admit(peerId)
+    await this.admit(peerId)
     try {
       const result = await this.dispatch(peerId, operation, sanitizePayload(operation, payload))
       if (MUTATING_OPERATIONS.has(operation)) this.onMutation()
       return result
     } finally {
-      this.inFlight.set(peerId, Math.max(0, (this.inFlight.get(peerId) ?? 1) - 1))
+      this.release(peerId)
     }
+  }
+
+  /** 每分钟总量限流直接拒绝；并发超限排队等空位（游玩页挂载会并发十几个读请求，不能抛错）。 */
+  private admit(peerId: string): Promise<void> {
+    const now = Date.now()
+    const recent = (this.requestTimes.get(peerId) ?? [])
+      .filter(timestamp => now - timestamp < 60_000)
+    if (recent.length >= MAX_REQUESTS_PER_MINUTE) {
+      return Promise.reject(new Error('peer_game_rate_limited'))
+    }
+    recent.push(now)
+    this.requestTimes.set(peerId, recent)
+    const active = this.inFlight.get(peerId) ?? 0
+    if (active < MAX_IN_FLIGHT_PER_PEER) {
+      this.inFlight.set(peerId, active + 1)
+      return Promise.resolve()
+    }
+    return new Promise(resolve => {
+      const list = this.waiters.get(peerId) ?? []
+      list.push(resolve)
+      this.waiters.set(peerId, list)
+    })
+  }
+
+  /** 释放一个并发位：优先 handed off 给排队者（计数不变），否则递减。 */
+  private release(peerId: string): void {
+    const next = (this.waiters.get(peerId) ?? []).shift()
+    if (next) {
+      next()
+      return
+    }
+    this.inFlight.set(peerId, Math.max(0, (this.inFlight.get(peerId) ?? 1) - 1))
   }
 
   private async dispatch(
@@ -188,18 +221,6 @@ export class PeerHostGameBridge {
       )
     }
     throw new Error('peer_game_operation_not_supported')
-  }
-
-  private admit(peerId: string): void {
-    const now = Date.now()
-    const recent = (this.requestTimes.get(peerId) ?? [])
-      .filter(timestamp => now - timestamp < 60_000)
-    if (recent.length >= MAX_REQUESTS_PER_MINUTE) throw new Error('peer_game_rate_limited')
-    const active = this.inFlight.get(peerId) ?? 0
-    if (active >= MAX_IN_FLIGHT_PER_PEER) throw new Error('too_many_peer_game_requests')
-    recent.push(now)
-    this.requestTimes.set(peerId, recent)
-    this.inFlight.set(peerId, active + 1)
   }
 
   private async execute(path: string, init?: RequestInit): Promise<Record<string, unknown>> {

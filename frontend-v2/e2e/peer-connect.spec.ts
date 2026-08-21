@@ -21,8 +21,8 @@ test('two clients establish a direct data channel through Hub signaling', async 
   await guest.locator('.peer-direct-consent input').check()
   await guest.getByRole('button', { name: '连接房主' }).click()
 
-  await expect(host.getByText('P2P 直连成功')).toBeVisible({ timeout: 20_000 })
-  await expect(guest.getByText('P2P 直连成功')).toBeVisible({ timeout: 20_000 })
+  await expect(host.getByText('P2P 直连成功', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect(guest.getByText('P2P 直连成功', { exact: true })).toBeVisible({ timeout: 20_000 })
   // 通道状态块进入 active 即代表心跳自检通过；不锁具体文案，避免文案调整破坏 e2e。
   await expect(host.locator('.peer-connection-check.active')).toBeVisible()
   await expect(guest.locator('.peer-connection-check.active')).toBeVisible()
@@ -34,7 +34,8 @@ test('two clients establish a direct data channel through Hub signaling', async 
   await guest.getByLabel('角色名').fill('Peer E2E Player')
   await guest.getByRole('button', { name: '创建角色并进入' }).click()
   await expect(guest).toHaveURL(/#\/play\?/, { timeout: 20_000 })
-  await expect(guest.getByText('Peer E2E Player').first()).toBeVisible({ timeout: 20_000 })
+  // 移动端角色面板默认收起，名字节点存在但隐藏；用 attached 断言身份已建立即可。
+  await expect(guest.getByText('Peer E2E Player').first()).toBeAttached({ timeout: 20_000 })
 
   await context.close()
 })

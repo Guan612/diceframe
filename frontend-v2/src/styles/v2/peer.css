@@ -50,7 +50,7 @@
 .peer-layout {
   display: grid;
   flex: 1;
-  align-items: stretch;
+  align-items: start;
   grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
   grid-template-rows: 1fr;
   gap: 18px;
