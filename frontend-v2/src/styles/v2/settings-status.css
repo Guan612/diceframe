@@ -185,8 +185,23 @@
   grid-column: 1 / -1;
 }
 
+/* 双列错位布局：左列 Hub 隐私 + 语音识别上下堆叠，
+   右列生成参数跨两行并拉伸到底，与左列底边对齐。 */
+.advanced-settings-pane > .hub-section {
+  grid-column: 1;
+  grid-row: 2;
+}
+
 .advanced-settings-pane > .asr-section {
-  grid-column: 1 / -1;
+  grid-column: 1;
+  grid-row: 3;
+  align-self: start;
+}
+
+.advanced-settings-pane > .generation-section {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  align-self: stretch;
 }
 
 .advanced-section + .advanced-section {

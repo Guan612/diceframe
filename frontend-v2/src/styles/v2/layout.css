@@ -513,6 +513,52 @@
     top: auto;
   }
 
+  /* 移动端游玩页（全屏路由，无 app-shell 外壳）：干净竖流——
+     HUD/场景条/通知/输入框定高，日志区占满剩余高度并内部滚动；
+     修复旧布局页面不铺满、日志被压到一两条、内容溢出叠在兄弟元素上的问题。 */
+  .play-page {
+    display: flex;
+    height: 100dvh;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .play-page .play-hud {
+    position: relative;
+    top: 0;
+    flex: 0 0 auto;
+  }
+
+  .play-page .play-layout {
+    display: flex;
+    height: auto;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
+  .play-page .play-main {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .play-page .play-main .scene-strip,
+  .play-page .play-main .table-notice,
+  .play-page .play-main .token-budget-hint,
+  .play-page .play-main .composer {
+    flex: 0 0 auto;
+  }
+
+  .play-page .play-main .timeline-wrap {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
   .play-toolbar {
     max-width: 58vw;
   }
