@@ -233,6 +233,7 @@ async def test_plan_round_checks_uses_single_batched_tool_call() -> None:
         "provider": "fake",
         "total_tokens": 37,
         "errors": [],
+        "overreach": [],
     }
 
 

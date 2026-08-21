@@ -204,6 +204,9 @@ class GameInstance:
     # 状态变化 recap：最近一回合的 state_update（前端渲染用）
     last_state_update: dict | None = None
 
+    # 本轮裁判标注的越权声明（仅多人局且开关启用时注入 GM 上下文）
+    last_overreach: list = field(default_factory=list)
+
     # 最近一回合因输出截断触发的 token 预算升档（给 GM 的低打扰提示）
     last_token_budget_bump: TokenBudgetBump | None = None
 
@@ -484,6 +487,7 @@ class GameInstance:
     def reset_round_checks(self, *, prepared: bool = False) -> None:
         self.last_check = None
         self.last_checks.clear()
+        self.last_overreach.clear()
         self.round_checks_prepared = prepared
 
     def mark_log_persisted(self) -> None:
@@ -1094,6 +1098,7 @@ class GameInstance:
             "health_status": self.health_status,
             "last_check": self.last_check,
             "last_checks": self.last_checks,
+            "last_overreach": self.last_overreach,
             "round_checks_prepared": self.round_checks_prepared,
             "round_start_snapshot": self.round_start_snapshot,
             "last_state_update": self.last_state_update,
@@ -1243,6 +1248,7 @@ class GameInstance:
             health_status=data.get("health_status", {}),
             last_check=data.get("last_check"),
             last_checks=data.get("last_checks") or [],
+            last_overreach=data.get("last_overreach") or [],
             round_checks_prepared=bool(data.get("round_checks_prepared", False)),
             round_start_snapshot=data.get("round_start_snapshot") or {},
             last_state_update=data.get("last_state_update"),

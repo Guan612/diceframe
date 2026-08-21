@@ -419,6 +419,7 @@ async def plan_round_checks(
         temperature=0.1,
     )
     raw_checks: list[Any] = []
+    overreach_notes: list[dict[str, str]] = []
     for call in response.tool_calls:
         if str(call.get("name") or "") != DICE_CHECKS_TOOL_NAME:
             continue
@@ -426,6 +427,19 @@ async def plan_round_checks(
         checks = arguments.get("checks")
         if isinstance(checks, list):
             raw_checks.extend(checks)
+        # overreach 与 checks 独立解析：畸形/缺失只影响标注本身，绝不波及检定规划。
+        try:
+            over = arguments.get("overreach")
+            if isinstance(over, list):
+                for item in over[:8]:
+                    if not isinstance(item, dict):
+                        continue
+                    uid = _match_player(instance, item.get("player"))
+                    reason = str(item.get("reason") or "").strip()[:160]
+                    if uid and reason:
+                        overreach_notes.append({"player": uid, "reason": reason})
+        except Exception:
+            logger.warning("overreach 标注解析失败，已忽略 (round=%d)", instance.round_number, exc_info=True)
     planned, errors = normalize_check_specs(instance, rule, raw_checks)
     planned = _merge_safety_net_checks(instance, rule, planned)
     return planned, {
@@ -434,4 +448,5 @@ async def plan_round_checks(
         "provider": response.provider_used,
         "total_tokens": response.total_tokens,
         "errors": errors,
+        "overreach": overreach_notes,
     }
