@@ -13,7 +13,7 @@ export interface SpeakOptions {
 }
 
 interface RuntimeTtsConfig {
-  provider: 'browser' | 'openai-compatible' | 'gpt-sovits'
+  provider: 'browser' | 'openai-compatible' | 'gpt-sovits' | 'edge-tts'
   defaultVoice: string
   gmVoice: string
   playerVoice: string
@@ -35,7 +35,7 @@ export async function initializeTts(force = false): Promise<void> {
   configPromise = speechApi.publicConfig().then((config: AppConfig) => {
     const provider = config.tts_provider
     ttsRuntimeConfig.value = {
-      provider: provider === 'openai-compatible' || provider === 'gpt-sovits' ? provider : 'browser',
+      provider: provider === 'openai-compatible' || provider === 'gpt-sovits' || provider === 'edge-tts' ? provider : 'browser',
       defaultVoice: String(config.tts_default_voice || 'alloy'),
       gmVoice: String(config.tts_gm_voice || ''),
       playerVoice: String(config.tts_player_voice || ''),

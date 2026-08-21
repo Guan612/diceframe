@@ -1098,7 +1098,7 @@ export interface AppConfig {
   bot_token?: SecretField
   bot_token_source?: 'env' | 'generated'
   update_channel?: 'stable' | 'preview'
-  tts_provider?: 'browser' | 'openai-compatible' | 'gpt-sovits'
+  tts_provider?: 'browser' | 'openai-compatible' | 'gpt-sovits' | 'edge-tts'
   tts_base_url?: string
   tts_api_key?: SecretField
   tts_model?: string
@@ -1114,7 +1114,7 @@ export interface AppConfig {
 export interface TtsVoiceProfile {
   id: string
   name: string
-  engine: 'openai-compatible' | 'gpt-sovits' | string
+  engine: 'openai-compatible' | 'gpt-sovits' | 'edge-tts' | string
   voice_id?: string
   language?: string
   description?: string
@@ -1128,7 +1128,7 @@ export interface TtsVoiceProfile {
 export interface TtsPersonalVoiceProfile {
   id: string
   name: string
-  engine: 'openai-compatible' | 'gpt-sovits'
+  engine: 'openai-compatible' | 'gpt-sovits' | 'edge-tts'
   voice_id?: string
   language?: string
   description?: string
@@ -1141,7 +1141,7 @@ export interface TtsPersonalVoiceProfile {
 
 export interface TtsPersonalVoiceProfileInput {
   name: string
-  engine: 'openai-compatible' | 'gpt-sovits'
+  engine: 'openai-compatible' | 'gpt-sovits' | 'edge-tts'
   voice_id?: string
   language?: string
   description?: string
@@ -1160,7 +1160,7 @@ export interface TtsPersonalVoiceProfilesResponse {
 
 export interface TtsVoiceCatalog {
   ok: boolean
-  provider: 'browser' | 'openai-compatible' | 'gpt-sovits'
+  provider: 'browser' | 'openai-compatible' | 'gpt-sovits' | 'edge-tts'
   backend_enabled: boolean
   model?: string
   audio_format?: string

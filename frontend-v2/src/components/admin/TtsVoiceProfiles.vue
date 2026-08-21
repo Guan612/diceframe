@@ -29,7 +29,7 @@ const currentProfiles = computed(() => profiles.value.filter(profile => profile.
 function emptyDraft(): TtsPersonalVoiceProfileInput {
   return {
     name: '',
-    engine: props.provider === 'gpt-sovits' ? 'gpt-sovits' : 'openai-compatible',
+    engine: (props.provider as TtsPersonalVoiceProfileInput['engine']) || 'openai-compatible',
     voice_id: '',
     language: '',
     description: '',
@@ -171,7 +171,7 @@ watch(() => props.provider, closeForm)
       <article v-for="profile in currentProfiles" :key="profile.id" class="tts-profile-card">
         <div>
           <strong>{{ profile.name }}</strong>
-          <small>{{ profile.engine === 'openai-compatible' ? profile.voice_id : (profile.has_reference_audio ? t('ttsUploadedReference') : t('ttsServerReference')) }}</small>
+          <small>{{ profile.engine === 'gpt-sovits' ? (profile.has_reference_audio ? t('ttsUploadedReference') : t('ttsServerReference')) : profile.voice_id }}</small>
         </div>
         <div class="tts-profile-actions">
           <NButton size="tiny" :loading="testingId === profile.id" :disabled="provider !== profile.engine" @click="testProfile(profile)">{{ t('ttsPreview') }}</NButton>
@@ -189,11 +189,11 @@ watch(() => props.provider, closeForm)
       </div>
       <div class="form-row">
         <label>{{ t('ttsVoiceEngine') }}</label>
-        <span>{{ draft.engine === 'gpt-sovits' ? 'GPT-SoVITS' : 'OpenAI compatible' }}</span>
+        <span>{{ draft.engine === 'gpt-sovits' ? 'GPT-SoVITS' : draft.engine === 'edge-tts' ? t('ttsEngineEdge') : 'OpenAI compatible' }}</span>
       </div>
-      <div v-if="draft.engine === 'openai-compatible'" class="form-row">
+      <div v-if="draft.engine !== 'gpt-sovits'" class="form-row">
         <label>Voice ID</label>
-        <NInput v-model:value="draft.voice_id" placeholder="voice-id" />
+        <NInput v-model:value="draft.voice_id" :placeholder="draft.engine === 'edge-tts' ? 'ko-KR-SunHiNeural' : 'voice-id'" />
       </div>
       <template v-else>
         <div class="form-row">

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.network_proxy import effective_proxy_url, is_supported_proxy_url
+from src.tts.contracts import SUPPORTED_PROVIDER_IDS
 from src.webui.access_password import hash_access_password
 
 SECRET_CONFIG_KEYS = frozenset({
@@ -143,7 +144,7 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
                 candidate[key] = "preview" if str(raw).strip() == "preview" else "stable"
             elif key == "tts_provider":
                 provider = str(raw or "").strip()
-                if provider not in {"browser", "openai-compatible", "gpt-sovits"}:
+                if provider not in SUPPORTED_PROVIDER_IDS:
                     return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "TTS Provider 无效")
                 candidate[key] = provider
             elif key == "tts_audio_format":

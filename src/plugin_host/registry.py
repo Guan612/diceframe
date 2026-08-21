@@ -19,7 +19,7 @@ from .support import plugin_type_descriptor
 _IMAGE_KINDS = frozenset({"portrait_asset", "scene_image_asset"}) | MAP_IMAGE_KINDS
 _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 _AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".ogg", ".opus", ".flac", ".m4a", ".aac"})
-_VOICE_ENGINES = frozenset({"openai-compatible", "gpt-sovits"})
+_VOICE_ENGINES = frozenset({"openai-compatible", "gpt-sovits", "edge-tts"})
 _NAMESPACED_KINDS = MAP_KINDS | frozenset({"voice_profile", "voice_asset"})
 
 
@@ -238,8 +238,8 @@ def _validate_voice_profile(data: dict[str, Any], relative_path: Path) -> None:
         raise ValueError(f"音色预设必须声明 license：{relative_path}")
     if data.get("consent") is not True:
         raise ValueError(f"音色预设必须声明 consent=true，确认拥有音色与参考音频授权：{relative_path}")
-    if engine == "openai-compatible" and not str(data.get("voice_id") or "").strip():
-        raise ValueError(f"OpenAI 兼容音色预设必须声明 voice_id：{relative_path}")
+    if engine in {"openai-compatible", "edge-tts"} and not str(data.get("voice_id") or "").strip():
+        raise ValueError(f"音色预设必须声明 voice_id：{relative_path}")
     if engine == "gpt-sovits":
         if not str(data.get("reference_audio") or "").strip():
             raise ValueError(f"GPT-SoVITS 音色预设必须声明 reference_audio：{relative_path}")

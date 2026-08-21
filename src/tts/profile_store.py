@@ -19,7 +19,7 @@ PROFILE_SCHEMA_VERSION = 1
 MAX_REFERENCE_AUDIO_BYTES = 10 * 1024 * 1024
 MAX_REFERENCE_DURATION_SECONDS = 120
 PROFILE_ID_RE = re.compile(r"^personal:[a-f0-9]{32}$")
-SUPPORTED_ENGINES = frozenset({"openai-compatible", "gpt-sovits"})
+SUPPORTED_ENGINES = frozenset({"openai-compatible", "gpt-sovits", "edge-tts"})
 
 
 class VoiceProfileStore:
@@ -107,6 +107,8 @@ class VoiceProfileStore:
         voice_id = _bounded(values.get("voice_id"), 200)
         if engine == "openai-compatible" and not voice_id:
             raise ValueError("OpenAI 兼容音色需要填写服务端 voice ID")
+        if engine == "edge-tts" and not voice_id:
+            raise ValueError("Edge TTS 音色需要填写微软 voice ID（如 ko-KR-SunHiNeural）")
         server_path = _bounded(values.get("server_reference_path"), 1024)
         if "\x00" in server_path:
             raise ValueError("参考音频路径无效")

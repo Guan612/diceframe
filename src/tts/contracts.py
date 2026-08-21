@@ -8,7 +8,7 @@ from typing import Any
 
 
 SUPPORTED_AUDIO_FORMATS = frozenset({"mp3", "opus", "aac", "flac", "wav", "pcm"})
-SUPPORTED_PROVIDER_IDS = frozenset({"browser", "openai-compatible", "gpt-sovits"})
+SUPPORTED_PROVIDER_IDS = frozenset({"browser", "openai-compatible", "gpt-sovits", "edge-tts"})
 
 
 @dataclass(frozen=True)
