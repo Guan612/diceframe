@@ -754,24 +754,6 @@ const systemStatusItems = computed<SystemStatusItem[]>(() => {
   const ttsProviderConfig = providerById(String(c.tts_provider_ref || '').trim())
   const asrProviderConfig = providerById(String(c.asr_provider_ref || '').trim())
   const mainReady = Boolean(c.model && providerReady(c.llm_provider_ref))
-  const fallbackSlots = [
-    {
-      name: t('fallbackSlot1'),
-      enabled: !!c.fallback1_enabled,
-      provider: providerById(String(c.fallback1_provider_ref || '').trim()),
-      model: c.fallback1_model,
-      ready: Boolean(c.fallback1_model && providerReady(c.fallback1_provider_ref)),
-    },
-    {
-      name: t('fallbackSlot2'),
-      enabled: !!c.fallback2_enabled,
-      provider: providerById(String(c.fallback2_provider_ref || '').trim()),
-      model: c.fallback2_model,
-      ready: Boolean(c.fallback2_model && providerReady(c.fallback2_provider_ref)),
-    },
-  ]
-  const enabledFallbacks = fallbackSlots.filter(item => item.enabled)
-  const readyFallbacks = enabledFallbacks.filter(item => item.ready)
   const embeddingReady = Boolean(c.embedding_enabled && c.embedding_model && providerReady(c.embedding_provider_ref))
   const ttsMode = String(c.tts_provider || 'browser')
   const asrMode = String(c.asr_provider || 'disabled')
@@ -793,15 +775,6 @@ const systemStatusItems = computed<SystemStatusItem[]>(() => {
       detail: mainDetail,
       tone: mainReady ? 'success' : 'warning',
       icon: ServerOutline,
-    },
-    {
-      label: t('statusFallback'),
-      value: enabledFallbacks.length ? t('routesAvailable', { ready: readyFallbacks.length, total: enabledFallbacks.length }) : t('disabled'),
-      detail: enabledFallbacks.length
-        ? enabledFallbacks.map(item => `${item.name}: ${item.provider?.name || t('modelRoutingUnassigned')} · ${item.model || t('modelUnset')}`).join(' · ')
-        : t('fallbackDetailHint'),
-      tone: !enabledFallbacks.length ? 'default' : readyFallbacks.length === enabledFallbacks.length ? 'success' : 'warning',
-      icon: CubeOutline,
     },
     {
       label: t('statusSpeechModels'),
