@@ -110,7 +110,7 @@ class WebAPI:
                  handler=None, llm_client=None, worlds_dir: Path | None = None,
                  character_gen_max_tokens: int = 2048,
                  text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
-                 speech_service=None, asr_service=None):
+                 speech_service=None, asr_service=None, imagegen_service=None):
         self._reg = registry
         self._lore = lorebook
         self._mem = memory
@@ -128,6 +128,7 @@ class WebAPI:
         self._hub = hub_client
         self._speech = speech_service
         self._asr = asr_service
+        self._imagegen = imagegen_service
         if self._plugins and self._handler and hasattr(self._handler, "set_plugin_host"):
             self._handler.set_plugin_host(self._plugins)
 
@@ -713,6 +714,11 @@ class WebAPI:
 
     def delete_avatar(self, asset_id: str) -> dict[str, Any]:
         return avatars.delete_avatar(self, asset_id)
+
+    def generated_image_file(self, asset_id: str) -> Path | None:
+        if self._imagegen is None:
+            return None
+        return self._imagegen.assets.file(asset_id)
 
     def save_scene_image_upload(self, file_data: str, file_name: str = "") -> dict[str, Any]:
         return scene_images.save_scene_image_upload(self, file_data, file_name)

@@ -160,6 +160,12 @@ class GameHandler:
     def set_plugin_host(self, plugin_host) -> None:
         self._plugin_host = plugin_host
 
+    def set_image_generation_service(self, service) -> None:
+        if hasattr(self._round_processor, "set_image_generation_service"):
+            self._round_processor.set_image_generation_service(service)
+        if hasattr(self._swipe_generator, "set_scene_image_hook"):
+            self._swipe_generator.set_scene_image_hook(self._round_processor.schedule_scene_image)
+
     async def _init_world_from_template(self, world_id: str, template: dict) -> None:
         """兼容旧内部调用；实际逻辑已拆到 GameFactory。"""
         await self._factory.init_world_from_template(world_id, template)

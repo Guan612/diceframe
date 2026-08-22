@@ -47,6 +47,8 @@ export async function resolveSceneImageUrl(reference: SceneImageRef | undefined,
   let path = ''
   if (reference.kind === 'upload' && reference.asset_id) {
     path = `/scene-images/${encodeURIComponent(reference.asset_id)}`
+  } else if (reference.kind === 'generated' && reference.asset_id) {
+    path = `/generated-images/${encodeURIComponent(reference.asset_id)}`
   } else if (reference.kind === 'plugin' && reference.plugin_id && reference.path) {
     path = `/plugins/assets/${encodeURIComponent(reference.plugin_id)}/${encodeAssetPath(reference.path)}`
   }
