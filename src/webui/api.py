@@ -852,6 +852,10 @@ class WebAPI:
                               api_format: str = "openai") -> dict[str, Any]:
         return await generation.test_connection(self, base_url, api_key, model, proxy_url, api_format)
 
+    async def list_models(self, base_url: str, api_key: str,
+                          proxy_url: str = "", api_format: str = "openai") -> dict[str, Any]:
+        return await generation.list_models(self, base_url, api_key, proxy_url, api_format)
+
     async def generate_world(self, prompt: str, rule_id: str = "", language: str = "") -> dict[str, Any]:
         return await generation.generate_world(self, prompt, rule_id, language)
 
