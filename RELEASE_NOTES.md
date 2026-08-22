@@ -1,8 +1,8 @@
-# DiceFrame v2.3.0
+# DiceFrame v2.3.1
 
 ## 中文
 
-DiceFrame 2.3.0 是 2.3 系列正式版，重点完善 AI 服务配置、语音与图片能力，并修复战斗判定和断线续流的一致性问题。
+DiceFrame 2.3.1 是 2.3 系列正式版，重点完善 AI 服务配置、语音与图片能力，并修复战斗判定和断线续流的一致性问题。
 
 ### 新增
 
@@ -28,13 +28,13 @@ DiceFrame 2.3.0 是 2.3 系列正式版，重点完善 AI 服务配置、语音�
 
 ### 下载指南
 
-- **普通 Windows 用户**：下载 `DiceFrame-v2.3.0-windows-portable.zip`。
-- **源码运行用户**：下载 `DiceFrame-v2.3.0-windows.zip`。
+- **普通 Windows 用户**：下载 `DiceFrame-v2.3.1-windows-portable.zip`。
+- **源码运行用户**：下载 `DiceFrame-v2.3.1-windows.zip`。
 - `.sha256` 是更新校验文件，普通用户不需要手动下载。
 
 ## English
 
-DiceFrame 2.3.0 is the stable release of the 2.3 series. It focuses on AI service configuration, speech and image capabilities, and consistent combat resolution and stream recovery.
+DiceFrame 2.3.1 is the stable release of the 2.3 series. It focuses on AI service configuration, speech and image capabilities, and consistent combat resolution and stream recovery.
 
 ### New
 
@@ -60,6 +60,6 @@ DiceFrame 2.3.0 is the stable release of the 2.3 series. It focuses on AI servic
 
 ### Download Guide
 
-- **Regular Windows users**: download `DiceFrame-v2.3.0-windows-portable.zip`.
-- **Source-run users**: download `DiceFrame-v2.3.0-windows.zip`.
+- **Regular Windows users**: download `DiceFrame-v2.3.1-windows-portable.zip`.
+- **Source-run users**: download `DiceFrame-v2.3.1-windows.zip`.
 - `.sha256` files are update checksums; regular users do not need to download them manually.
