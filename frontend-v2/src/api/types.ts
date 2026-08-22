@@ -1057,6 +1057,15 @@ export interface SecretField {
   masked: string
 }
 
+export interface AiProvider {
+  id: string
+  name: string
+  base_url: string
+  api_format: 'openai' | 'anthropic' | string
+  models?: string[]
+  api_key?: SecretField
+}
+
 export interface BotTokenResponse {
   ok: boolean
   token: string
@@ -1069,6 +1078,13 @@ export interface AppConfig {
   model?: string
   api_format?: string
   api_key?: SecretField
+  ai_providers?: AiProvider[]
+  llm_provider_ref?: string
+  fallback1_provider_ref?: string
+  fallback2_provider_ref?: string
+  embedding_provider_ref?: string
+  tts_provider_ref?: string
+  asr_provider_ref?: string
   fallback1_enabled?: boolean
   fallback1_base_url?: string
   fallback1_api_key?: SecretField
