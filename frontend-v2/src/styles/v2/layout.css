@@ -521,7 +521,7 @@
      修复旧布局页面不铺满、日志被压到一两条、内容溢出叠在兄弟元素上的问题。 */
   .play-page {
     display: flex;
-    height: 100dvh;
+    height: var(--app-h, 100dvh);
     min-height: 0;
     flex-direction: column;
     overflow: hidden;
@@ -630,7 +630,7 @@
   }
 
   .play-page-immersive .play-main {
-    padding-bottom: 6px;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
     overflow: hidden;
   }
 

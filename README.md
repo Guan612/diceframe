@@ -27,7 +27,7 @@ DiceFrame 是一个可以自己部署的 **AI 跑团引擎**，支持 **D&D / Co
 
 ## 交流与反馈
 
-问题反馈和改进建议请优先通过 [GitHub Issues](https://github.com/diceframe/diceframe/issues) 提交，代码贡献欢迎发起 PR。
+问题反馈和改进建议请优先通过 [GitHub Issues](https://github.com/diceframe/diceframe/issues) 提交，代码贡献欢迎发起 PR。提交前请阅读 [贡献指南](CONTRIBUTING.md)。
 
 QQ 交流群：1060613588
 
@@ -53,7 +53,7 @@ QQ 交流群：1060613588
 
 [前往 Releases 下载最新版](https://github.com/diceframe/diceframe/releases/latest)
 
-下载最新的 `DiceFrame-vX.Y.Z-windows-portable.zip`，解压后运行 `DiceFrame.exe`。首次打开后，先在“设置 → AI 服务商”添加服务商名称、API 格式、Base URL、API Key 和可用模型，再到“模型配置”为主模型、备用模型、Embedding、TTS、ASR 和生图选择实际使用的服务商与模型。
+下载最新的 `DiceFrame-vX.Y.Z-windows-portable.zip`，解压后运行 `DiceFrame.exe`。首次打开后，先在“设置 → AI 服务商”添加服务商名称、API 格式、Base URL、API Key 和可用模型，再到“模型配置”为主模型、备用模型、向量记忆、TTS、ASR 和生图选择实际使用的服务商与模型。向量记忆的开关、输入上限和连接测试也集中在该页的向量模型卡片中。
 
 Windows 便携版可以在设置页检查并应用更新。
 
@@ -79,8 +79,8 @@ NAS 用户可以在 Docker 管理界面搜索 `diceframe` 拉取镜像，或在 
 `latest` 只跟随正式版。预览版也会发布 Docker 镜像，但不会覆盖 `latest`；需要体验时请从 GitHub Releases 复制完整预览版本号并显式拉取，例如：
 
 ```bash
-docker pull ghcr.io/diceframe/diceframe:2.3.0-beta.1
-# Docker Hub：docker pull falconku/diceframe:2.3.0-beta.1
+docker pull ghcr.io/diceframe/diceframe:2.3.0-beta.2
+# Docker Hub：docker pull falconku/diceframe:2.3.0-beta.2
 ```
 
 后续更新 Compose 部署：
@@ -118,7 +118,7 @@ python web_server.py
 http://localhost:18000
 ```
 
-第一次进入设置页，先在“AI 服务商”添加连接信息与模型目录，再到“模型配置”分配主模型、备用模型和各项 AI 能力。旧版已经保存的内联 API 地址、模型名和 API Key 仍可继续使用；环境变量方式也保持兼容：
+第一次进入设置页，先在“AI 服务商”添加连接信息与模型目录，再到“模型配置”分配主模型、备用模型和各项 AI 能力；向量记忆不再使用独立选项卡，开关、输入上限和测试与向量模型配置放在一起。旧版已经保存的内联 API 地址、模型名和 API Key 仍可继续使用；环境变量方式也保持兼容：
 
 ```bash
 TRPG_LLM_API_KEY=your_key
@@ -239,6 +239,12 @@ data/
 ├── templates/             # 内置规则和世界模板
 └── docs/                  # 双语文档：更新、规则与骰子、玩家直连；插件开发等见 diceframe-content
 ```
+
+## 贡献者
+
+感谢所有提交代码、文档、测试、问题反馈和内容改进的朋友。贡献者由 GitHub 根据提交记录自动统计，详见 [Contributors](https://github.com/diceframe/diceframe/graphs/contributors)。其中可能包含 CI、发布流程和代码助手等机器人账号；它们保留在自动统计中，但不代表人工开发者名单。
+
+贡献规则和本地验证方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## License
 

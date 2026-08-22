@@ -10,6 +10,7 @@ vi.mock('../src/api/client', () => {
 
 import { ApiError, api } from '../src/api/client'
 import { providerSecretKey, useSettingsStore } from '../src/stores/useSettingsStore'
+import { providerTestKind } from '../src/utils/providerModels'
 
 const mockedApi = vi.mocked(api)
 
@@ -108,6 +109,36 @@ describe('AI provider library settings store', () => {
       model: 'claude-x',
       api_key: 'sk-draft',
     })
+  })
+
+  it('routes provider embedding tests through the embedding endpoint', async () => {
+    const store = useSettingsStore()
+    mockedApi.mockResolvedValue({ ok: true, dimension: 1024 })
+
+    await store.testProvider({
+      providerId: 'sf',
+      baseUrl: 'https://api.siliconflow.cn/v1',
+      apiKey: '',
+      apiFormat: 'openai',
+      model: 'BAAI/bge-m3',
+      kind: 'embedding',
+    })
+
+    expect(mockedApi.mock.calls[0][0]).toBe('/test-embedding')
+    expect(JSON.parse(mockedApi.mock.calls[0][1]!.body as string)).toEqual({
+      provider_id: 'sf',
+      base_url: 'https://api.siliconflow.cn/v1',
+      api_format: 'openai',
+      model: 'BAAI/bge-m3',
+    })
+  })
+
+  it('auto-selects a compatible provider test endpoint and allows manual overrides', () => {
+    expect(providerTestKind('BAAI/bge-m3')).toBe('embedding')
+    expect(providerTestKind('Qwen/Qwen3-8B')).toBe('model')
+    expect(providerTestKind('BAAI/bge-reranker-v2-m3')).toBeNull()
+    expect(providerTestKind('Qwen/Qwen-Image')).toBeNull()
+    expect(providerTestKind('custom-vector-model', 'embedding')).toBe('embedding')
   })
 
   it('requests a model catalog with saved provider credentials by id', async () => {

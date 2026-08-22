@@ -147,11 +147,11 @@ async function submit() {
 
 @media (max-width: 800px) {
   .composer-row.has-dictation {
-    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 40px 72px;
   }
 
-  .composer-row textarea {
-    grid-column: 1 / -1;
+  .dictation-toggle {
+    min-width: 40px;
   }
 }
 </style>
