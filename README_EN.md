@@ -28,6 +28,12 @@ It brings the Web UI, character sheets, lorebooks, dice checks, state changes, c
 - Application updates with side-by-side portable installs, health checks, rollback, and install-specific guidance.
 - Docker support for Linux deployment, with runtime data mounted under `data/`.
 
+## Contributing
+
+Bug reports and feature requests belong in [GitHub Issues](https://github.com/diceframe/diceframe/issues). Code and documentation contributions should use a Pull Request after reading [CONTRIBUTING.md](CONTRIBUTING.md).
+
+GitHub maintains the [Contributors](https://github.com/diceframe/diceframe/graphs/contributors) page from commit history. It may include CI, release, and coding-assistant bot accounts; those records are kept accurate and are not intended to be a manually curated list of human developers.
+
 ## Quick Start
 
 ### Windows Portable
@@ -95,8 +101,8 @@ Runtime data is stored in `data/`.
 The `latest` image always tracks stable releases. Preview images are published under their explicit version tags and never replace `latest`. To try one, copy the full preview version from GitHub Releases, for example:
 
 ```bash
-docker pull ghcr.io/diceframe/diceframe:2.3.0-beta.1
-# Docker Hub: docker pull falconku/diceframe:2.3.0-beta.1
+docker pull ghcr.io/diceframe/diceframe:2.3.0-beta.2
+# Docker Hub: docker pull falconku/diceframe:2.3.0-beta.2
 ```
 
 See the [Docker deployment guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/deploy.md) for ports, volumes, secrets, and NapCat networking.

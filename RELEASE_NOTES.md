@@ -1,8 +1,8 @@
-# DiceFrame v2.3.0-beta.2
+# DiceFrame v2.3.0
 
 ## 中文
 
-DiceFrame 2.3.0-beta.2 是 2.3 系列的第二个预览版，重点完善 AI 服务配置、语音与图片能力，并修复战斗判定和断线续流的一致性问题。
+DiceFrame 2.3.0 是 2.3 系列正式版，重点完善 AI 服务配置、语音与图片能力，并修复战斗判定和断线续流的一致性问题。
 
 ### 新增
 
@@ -20,11 +20,6 @@ DiceFrame 2.3.0-beta.2 是 2.3 系列的第二个预览版，重点完善 AI 服
 - **规则与骰子可靠性**：统一 D&D、CoC 等规则的检定入口与奖惩骰行为，并加强长期战役和多人权限边界校验。
 - **设置页布局**：高级设置新增项目后仍能稳定排列；顶部状态卡保持单排，可横向查看完整信息。
 
-### 容器镜像
-
-- 本预览版发布 `ghcr.io/diceframe/diceframe:2.3.0-beta.2` 和 `docker.io/falconku/diceframe:2.3.0-beta.2`。
-- 预览版不会更新 `latest`；`latest` 仍只指向正式版。
-
 ### 已知限制
 
 - 玩家直连仍为实验性功能：对称 NAT 或严格防火墙可能阻止连接，房主必须保持 DiceFrame 和房间在线。
@@ -33,13 +28,13 @@ DiceFrame 2.3.0-beta.2 是 2.3 系列的第二个预览版，重点完善 AI 服
 
 ### 下载指南
 
-- **普通 Windows 用户**：下载 `DiceFrame-v2.3.0-beta.2-windows-portable.zip`。
-- **源码运行用户**：下载 `DiceFrame-v2.3.0-beta.2-windows.zip`。
+- **普通 Windows 用户**：下载 `DiceFrame-v2.3.0-windows-portable.zip`。
+- **源码运行用户**：下载 `DiceFrame-v2.3.0-windows.zip`。
 - `.sha256` 是更新校验文件，普通用户不需要手动下载。
 
 ## English
 
-DiceFrame 2.3.0-beta.2 is the second preview of the 2.3 series. It focuses on AI service configuration, speech and image capabilities, and consistent combat resolution and stream recovery.
+DiceFrame 2.3.0 is the stable release of the 2.3 series. It focuses on AI service configuration, speech and image capabilities, and consistent combat resolution and stream recovery.
 
 ### New
 
@@ -57,11 +52,6 @@ DiceFrame 2.3.0-beta.2 is the second preview of the 2.3 series. It focuses on AI
 - **Reliable rules and dice**: D&D, CoC, and other bundled rules share consistent check planning and bonus/penalty behavior, with stronger long-campaign and multiplayer authority validation.
 - **Stable settings layout**: advanced settings remain aligned as options are added, and the top status cards stay on one horizontally scrollable row without truncating their content.
 
-### Container Images
-
-- This preview publishes `ghcr.io/diceframe/diceframe:2.3.0-beta.2` and `docker.io/falconku/diceframe:2.3.0-beta.2`.
-- Preview releases do not update `latest`; `latest` remains reserved for stable releases.
-
 ### Known Limits
 
 - Player-to-player direct connect remains experimental: symmetric NAT or strict firewalls may prevent connections, and the host must keep DiceFrame and the room online.
@@ -70,6 +60,6 @@ DiceFrame 2.3.0-beta.2 is the second preview of the 2.3 series. It focuses on AI
 
 ### Download Guide
 
-- **Regular Windows users**: download `DiceFrame-v2.3.0-beta.2-windows-portable.zip`.
-- **Source-run users**: download `DiceFrame-v2.3.0-beta.2-windows.zip`.
+- **Regular Windows users**: download `DiceFrame-v2.3.0-windows-portable.zip`.
+- **Source-run users**: download `DiceFrame-v2.3.0-windows.zip`.
 - `.sha256` files are update checksums; regular users do not need to download them manually.

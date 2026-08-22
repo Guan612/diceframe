@@ -163,6 +163,7 @@ export const useSettingsStore = defineStore('settings', () => {
     apiKey: string
     apiFormat: string
     model: string
+    kind?: 'model' | 'embedding'
   }): Promise<TestResult> {
     const body: Record<string, unknown> = {
       base_url: input.baseUrl,
@@ -171,7 +172,8 @@ export const useSettingsStore = defineStore('settings', () => {
     }
     if (input.providerId) body.provider_id = input.providerId
     if (input.apiKey) body.api_key = input.apiKey
-    return api<TestResult>('/test-connection', { method: 'POST', body: JSON.stringify(body) })
+    const path = input.kind === 'embedding' ? '/test-embedding' : '/test-connection'
+    return api<TestResult>(path, { method: 'POST', body: JSON.stringify(body) })
   }
 
   async function fetchProviderModels(input: {

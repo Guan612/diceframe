@@ -31,15 +31,22 @@ import BrandLogo from '@/components/BrandLogo.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useTheme } from '@/composables/useTheme'
 import { useBackgroundImages, type BackgroundSlot } from '@/composables/useBackgroundImages'
+import {
+  modelCapability,
+  providerTestKind,
+  type ModelCapability,
+  type ProviderTestKind,
+  type ProviderTestMode,
+} from '@/utils/providerModels'
+import { normalizeSettingsSection, type SettingsSectionId } from '@/utils/settingsSections'
 
-type SectionId = 'api' | 'models' | 'memory' | 'network' | 'sharing' | 'botapi' | 'appearance' | 'access' | 'advanced' | 'about'
 type StatusTone = 'default' | 'success' | 'warning' | 'error' | 'info'
 type UpdatePackageKind = 'source' | 'portable'
-type ModelCapability = 'chat' | 'image' | 'embedding' | 'tts' | 'asr'
 type ModelCatalogFilter = 'all' | ModelCapability
 type ProviderModelGroup = { name: string; models: string[] }
 type SystemStatusItem = { label: string; value: string; detail: string; tone: StatusTone; icon: Component }
-type SettingsSection = { id: SectionId; labelKey: MessageKey; icon: Component }
+type RoutingStatusItem = SystemStatusItem & { enabled: boolean; order: number }
+type SettingsSection = { id: SettingsSectionId; labelKey: MessageKey; icon: Component }
 
 const store = useSettingsStore()
 const route = useRoute()
@@ -173,11 +180,10 @@ async function toggleUpdateChannel(enabled: boolean) {
   }
 }
 
-const section = ref<SectionId>('api')
+const section = ref<SettingsSectionId>('api')
 const sections: SettingsSection[] = [
   { id: 'api', labelKey: 'settingsSectionApi', icon: ServerOutline },
   { id: 'models', labelKey: 'settingsSectionModels', icon: SparklesOutline },
-  { id: 'memory', labelKey: 'settingsSectionMemory', icon: CubeOutline },
   { id: 'network', labelKey: 'settingsSectionNetwork', icon: CloudDownloadOutline },
   { id: 'sharing', labelKey: 'settingsSectionSharing', icon: ShareSocialOutline },
   { id: 'botapi', labelKey: 'settingsSectionBotApi', icon: KeyOutline },
@@ -192,10 +198,8 @@ function queryValue(value: unknown): string {
 }
 
 function syncRouteTarget() {
-  const requestedSection = queryValue(route.query.section)
-  if (sections.some(item => item.id === requestedSection)) {
-    section.value = requestedSection as SectionId
-  }
+  const requestedSection = normalizeSettingsSection(queryValue(route.query.section))
+  if (requestedSection) section.value = requestedSection
   if (queryValue(route.query.focus) === 'update') {
     section.value = 'about'
     void nextTick(() => {
@@ -310,12 +314,14 @@ interface ProviderDraft {
 }
 const providerDrafts = ref<ProviderDraft[]>([])
 const providerTestModels = ref<Record<string, string>>({})
+const providerTestModes = ref<Record<string, ProviderTestMode>>({})
 const providerSearch = ref('')
 const activeProviderId = ref('')
 const providerSaving = ref(false)
 const providerTestingId = ref('')
 const providerFetchingModelsId = ref('')
 const providerTestedId = ref('')
+const providerTestedKind = ref<ProviderTestKind>('model')
 const providerTestResult = ref<TestResult | null>(null)
 const providerCatalogOpen = ref(false)
 const providerCatalogProviderId = ref('')
@@ -428,6 +434,15 @@ async function saveProvidersList() {
 async function testProviderDraft(draft: ProviderDraft, testModel: string) {
   providerTestingId.value = draft.id
   providerTestResult.value = null
+  const model = testModel.trim() || String(store.config.model || 'gpt-4o-mini')
+  const kind = providerTestKind(model, providerTestModes.value[draft.id] || 'auto')
+  if (!kind) {
+    providerTestedId.value = draft.id
+    providerTestedKind.value = 'model'
+    providerTestResult.value = { ok: false, error: t('providerTestUnsupported') }
+    providerTestingId.value = ''
+    return
+  }
   try {
     providerTestResult.value = await store.testProvider({
       // 已保存的服务商可让服务端取凭据；新草稿只带明文输入。
@@ -435,9 +450,11 @@ async function testProviderDraft(draft: ProviderDraft, testModel: string) {
       baseUrl: draft.base_url,
       apiKey: store.secrets[providerSecretKey(draft.id)]?.trim() || '',
       apiFormat: draft.api_format,
-      model: testModel.trim() || String(store.config.model || 'gpt-4o-mini'),
+      model,
+      kind,
     })
     providerTestedId.value = draft.id
+    providerTestedKind.value = kind
   } catch (e: unknown) {
     toast.error(errorMessage(e))
   } finally {
@@ -528,6 +545,15 @@ function setActiveProviderTestModel(value: string | number) {
   providerTestModels.value[activeProvider.value.id] = String(value)
 }
 
+function setActiveProviderTestMode(value: string) {
+  if (!activeProvider.value || !['auto', 'model', 'embedding'].includes(value)) return
+  providerTestModes.value[activeProvider.value.id] = value as ProviderTestMode
+}
+
+function providerTestActionLabel(model: string, mode: ProviderTestMode): string {
+  return providerTestKind(model, mode) === 'embedding' ? t('testEmbeddingConnection') : t('testConnection')
+}
+
 function providerMark(draft: ProviderDraft): string {
   return (draft.name || draft.id).trim().slice(0, 1).toUpperCase()
 }
@@ -536,17 +562,6 @@ function providerStyle(providerId: string) {
   let hash = 0
   for (const character of providerId) hash = ((hash << 5) - hash) + character.charCodeAt(0)
   return { '--provider-hue': String(Math.abs(hash) % 360) }
-}
-
-function modelCapability(model: string): ModelCapability {
-  const value = model.toLowerCase()
-  if (/(image|dall-e|flux|stable[-_. ]?diffusion|(^|[-_.])sd3|kolors|qwen[-_. ]?image|ideogram|imagen)/.test(value)) {
-    return 'image'
-  }
-  if (/(embed|embedding|bge|e5-|text2vec|rerank)/.test(value)) return 'embedding'
-  if (/(whisper|sensevoice|paraformer|funasr|speech[-_. ]?to[-_. ]?text|transcri|(^|[-_.])asr)/.test(value)) return 'asr'
-  if (/(tts|cosyvoice|fish[-_. ]?speech|gpt[-_. ]?sovits|chattts|voice)/.test(value)) return 'tts'
-  return 'chat'
 }
 
 function modelCapabilityLabels(model: string): string[] {
@@ -607,7 +622,7 @@ const MODEL_ROUTING_CONFIG_KEYS = [
   'llm_provider_ref', 'model',
   'fallback1_enabled', 'fallback1_provider_ref', 'fallback1_model',
   'fallback2_enabled', 'fallback2_provider_ref', 'fallback2_model',
-  'embedding_provider_ref', 'embedding_model',
+  'embedding_enabled', 'embedding_provider_ref', 'embedding_model', 'embedding_max_input',
   'tts_provider', 'tts_provider_ref', 'tts_model',
   'asr_provider', 'asr_provider_ref', 'asr_model',
   'imagegen_enabled', 'imagegen_auto_scene', 'imagegen_provider_ref', 'imagegen_model',
@@ -630,6 +645,12 @@ async function saveModelRouting() {
   } finally {
     modelRoutingSaving.value = false
   }
+}
+
+async function setModelRoutingBool(key: keyof AppConfig, value: boolean) {
+  if (modelRoutingSaving.value) return
+  setBool(key, value)
+  await saveModelRouting()
 }
 
 async function saveAsr(showToast = true): Promise<boolean> {
@@ -782,6 +803,8 @@ const systemStatusItems = computed<SystemStatusItem[]>(() => {
   const ttsBuiltIn = ttsMode === 'browser' || ttsMode === 'edge-tts'
   const ttsReady = Boolean(ttsBuiltIn || (c.tts_model && providerReady(c.tts_provider_ref)))
   const asrReady = Boolean(asrMode === 'disabled' || (c.asr_model && providerReady(c.asr_provider_ref)))
+  const speechReady = ttsReady && asrReady
+  const speechPartial = ttsReady !== asrReady
   const proxyEnabled = !!c.proxy_enabled
   const mainDetail = mainProvider ? `${mainProvider.name || mainProvider.id} · ${c.model || t('modelUnset')}` : t('modelRoutingUnassigned')
   const ttsDetail = ttsBuiltIn
@@ -790,13 +813,15 @@ const systemStatusItems = computed<SystemStatusItem[]>(() => {
   const asrDetail = asrMode === 'disabled'
     ? t('asrProviderDisabled')
     : (asrProviderConfig ? `${asrProviderConfig.name || asrProviderConfig.id} · ${c.asr_model || t('modelUnset')}` : t('modelRoutingUnassigned'))
-  return [
+  const routingItems: RoutingStatusItem[] = [
     {
       label: t('statusMainModel'),
       value: mainReady ? t('statusComplete') : t('statusNeedsSetup'),
       detail: mainDetail,
       tone: mainReady ? 'success' : 'warning',
       icon: ServerOutline,
+      enabled: mainReady,
+      order: 0,
     },
     {
       label: t('statusFallback'),
@@ -806,14 +831,23 @@ const systemStatusItems = computed<SystemStatusItem[]>(() => {
         : t('fallbackDetailHint'),
       tone: !enabledFallbacks.length ? 'default' : readyFallbacks.length === enabledFallbacks.length ? 'success' : 'warning',
       icon: CubeOutline,
+      enabled: enabledFallbacks.length > 0,
+      order: 1,
     },
     {
       label: t('statusSpeechModels'),
-      value: ttsReady && asrReady ? t('statusComplete') : t('statusNeedsSetup'),
+      value: speechReady ? t('statusComplete') : speechPartial ? t('statusPartial') : t('statusNeedsSetup'),
       detail: `TTS: ${ttsDetail} · ASR: ${asrDetail}`,
-      tone: ttsReady && asrReady ? 'success' : 'warning',
+      tone: speechReady ? 'success' : 'warning',
       icon: VolumeHighOutline,
+      enabled: speechReady,
+      order: 2,
     },
+  ]
+  const [mainRoutingItem, ...optionalRoutingItems] = routingItems
+  const statusItems: SystemStatusItem[] = [
+    mainRoutingItem,
+    ...optionalRoutingItems.sort((left, right) => Number(right.enabled) - Number(left.enabled) || left.order - right.order),
     {
       label: t('statusVectorMemory'),
       value: c.embedding_enabled ? (embeddingReady ? t('enabled') : t('statusIncomplete')) : t('disabled'),
@@ -836,6 +870,7 @@ const systemStatusItems = computed<SystemStatusItem[]>(() => {
       icon: LockClosedOutline,
     },
   ]
+  return statusItems
 })
 
 onMounted(() => {
@@ -1159,7 +1194,6 @@ function redownloadUpdatePackage() {
           <div v-show="section === 'api'" class="settings-pane ai-management-pane">
             <header class="ai-manager-header">
               <div>
-                <span class="section-kicker">MODEL CONTROL</span>
                 <h3>{{ t('aiProviders') }}</h3>
                 <p>{{ t('aiProvidersHint') }}</p>
               </div>
@@ -1328,7 +1362,7 @@ function redownloadUpdatePackage() {
                 </section>
 
                 <section class="provider-editor-section provider-test-section">
-                  <label class="provider-field provider-field-wide">
+                  <label class="provider-field">
                     <span>{{ t('providerTestModel') }}</span>
                     <NInput
                       :value="providerTestModels[activeProvider.id] ?? ''"
@@ -1336,11 +1370,22 @@ function redownloadUpdatePackage() {
                       @update:value="setActiveProviderTestModel"
                     />
                   </label>
+                  <label class="provider-field">
+                    <span>{{ t('providerTestType') }}</span>
+                    <select
+                      :value="providerTestModes[activeProvider.id] || 'auto'"
+                      @change="setActiveProviderTestMode(eventValue($event))"
+                    >
+                      <option value="auto">{{ t('providerTestAuto') }}</option>
+                      <option value="model">{{ t('providerTestChat') }}</option>
+                      <option value="embedding">{{ t('providerTestEmbedding') }}</option>
+                    </select>
+                  </label>
                   <div class="provider-test-actions">
                     <NButton
                       :loading="providerTestingId === activeProvider.id"
                       @click="testProviderDraft(activeProvider, providerTestModels[activeProvider.id] || activeProvider.models[0] || '')"
-                    >{{ t('testConnection') }}</NButton>
+                    >{{ providerTestActionLabel(providerTestModels[activeProvider.id] || activeProvider.models[0] || String(store.config.model || 'gpt-4o-mini'), providerTestModes[activeProvider.id] || 'auto') }}</NButton>
                     <NButton type="primary" :loading="providerSaving" :disabled="!providerLibrarySupported" @click="saveProvidersList">{{ t('providerSave') }}</NButton>
                     <NButton
                       quaternary
@@ -1351,7 +1396,7 @@ function redownloadUpdatePackage() {
                   <TestResultCard
                     v-if="providerTestedId === activeProvider.id && providerTestResult"
                     :result="providerTestResult"
-                    kind="model"
+                    :kind="providerTestedKind"
                   />
                 </section>
               </section>
@@ -1433,7 +1478,6 @@ function redownloadUpdatePackage() {
           <div v-show="section === 'models'" class="settings-pane model-routing-pane">
             <header class="model-routing-header">
               <div>
-                <span class="section-kicker">MODEL ROUTING</span>
                 <h3>{{ t('modelRoutingTitle') }}</h3>
                 <p>{{ t('modelRoutingHint') }}</p>
               </div>
@@ -1448,7 +1492,8 @@ function redownloadUpdatePackage() {
                   <h4>{{ t('modelRoutingHelpExampleTitle') }}</h4>
                   <p>{{ t('modelRoutingHelpExampleText') }}</p>
                 </HelpButton>
-                <NButton type="primary" :loading="modelRoutingSaving" :disabled="!providerLibrarySupported" @click="saveModelRouting">
+                <NButton class="model-routing-save" type="success" :loading="modelRoutingSaving" :disabled="!providerLibrarySupported" @click="saveModelRouting">
+                  <template #icon><NIcon :component="CheckmarkCircleOutline" /></template>
                   {{ t('modelRoutingSave') }}
                 </NButton>
               </div>
@@ -1464,89 +1509,91 @@ function redownloadUpdatePackage() {
               <NButton @click="section = 'api'">{{ t('providerAdd') }}</NButton>
             </div>
 
-            <div v-if="providerLibrarySupported && (store.config.ai_providers || []).length" class="model-routing-grid">
-              <article class="model-role-card">
+            <div
+              v-if="providerLibrarySupported && (store.config.ai_providers || []).length"
+              class="model-routing-grid"
+              :class="{ 'is-saving': modelRoutingSaving }"
+            >
+              <article class="model-role-card model-role-card-main">
                 <header><NIcon :component="SparklesOutline" /><div><h4>{{ t('modelRoleMain') }}</h4><p>{{ t('modelRoleMainHint') }}</p></div></header>
                 <label><span>{{ t('providerName') }}</span><select :value="store.config.llm_provider_ref || ''" @change="setModelRoleProvider('llm_provider_ref', 'model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
                 <label><span>{{ t('model') }}</span><select :value="store.config.model || ''" :disabled="!store.config.llm_provider_ref" @change="setStr('model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.llm_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
+                <div class="model-fallback-grid">
+                  <section class="model-fallback-slot">
+                    <header><strong>{{ t('fallbackSlot1') }}</strong><NSwitch :value="!!store.config.fallback1_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('fallback1_enabled', $event)" /></header>
+                    <label><span>{{ t('providerName') }}</span><select :value="store.config.fallback1_provider_ref || ''" :disabled="!store.config.fallback1_enabled" @change="setModelRoleProvider('fallback1_provider_ref', 'fallback1_model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
+                    <label><span>{{ t('model') }}</span><select :value="store.config.fallback1_model || ''" :disabled="!store.config.fallback1_enabled || !store.config.fallback1_provider_ref" @change="setStr('fallback1_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.fallback1_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
+                  </section>
+                  <section class="model-fallback-slot">
+                    <header><strong>{{ t('fallbackSlot2') }}</strong><NSwitch :value="!!store.config.fallback2_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('fallback2_enabled', $event)" /></header>
+                    <label><span>{{ t('providerName') }}</span><select :value="store.config.fallback2_provider_ref || ''" :disabled="!store.config.fallback2_enabled" @change="setModelRoleProvider('fallback2_provider_ref', 'fallback2_model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
+                    <label><span>{{ t('model') }}</span><select :value="store.config.fallback2_model || ''" :disabled="!store.config.fallback2_enabled || !store.config.fallback2_provider_ref" @change="setStr('fallback2_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.fallback2_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
+                  </section>
+                </div>
               </article>
 
-              <article class="model-role-card">
-                <header><NIcon :component="CubeOutline" /><div><h4>{{ t('fallbackSlot1') }}</h4><p>{{ t('modelRoleFallbackHint') }}</p></div></header>
-                <label class="model-role-enabled"><span>{{ t('enabled') }}</span><NSwitch :value="!!store.config.fallback1_enabled" @update:value="setBool('fallback1_enabled', $event)" /></label>
-                <label><span>{{ t('providerName') }}</span><select :value="store.config.fallback1_provider_ref || ''" :disabled="!store.config.fallback1_enabled" @change="setModelRoleProvider('fallback1_provider_ref', 'fallback1_model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                <label><span>{{ t('model') }}</span><select :value="store.config.fallback1_model || ''" :disabled="!store.config.fallback1_enabled || !store.config.fallback1_provider_ref" @change="setStr('fallback1_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.fallback1_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-              </article>
+              <div class="model-capability-grid">
+                <div class="model-capability-column">
+                  <article class="model-role-card model-role-card-embedding">
+                    <header>
+                      <NIcon :component="CubeOutline" />
+                      <div><h4>{{ t('modelRoleEmbedding') }}</h4><p>{{ t('modelRoleEmbeddingHint') }}</p></div>
+                      <HelpButton :title="t('embeddingHelpTitle')">
+                        <h4>{{ t('embeddingHelpWhatTitle') }}</h4>
+                        <p>{{ t('embeddingHelpWhatText') }}</p>
+                        <h4>{{ t('embeddingHelpChooseTitle') }}</h4>
+                        <p>{{ t('embeddingHelpChooseBefore') }} <code>bge-m3</code>{{ t('embeddingHelpChooseAfter') }} <code>text-embedding-3-small</code>, <code>gte-large</code>, <code>nomic-embed-text</code>{{ t('embeddingHelpChooseSuffix') }}</p>
+                        <h4>{{ t('embeddingHelpConfigTitle') }}</h4>
+                        <p>{{ t('embeddingHelpCentralized') }}</p>
+                        <h4>{{ t('test') }}</h4>
+                        <p>{{ t('embeddingHelpTest') }}</p>
+                      </HelpButton>
+                    </header>
+                    <label class="model-role-enabled"><span>{{ t('vectorMemory') }}</span><NSwitch :value="!!store.config.embedding_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('embedding_enabled', $event)" /></label>
+                    <label><span>{{ t('providerName') }}</span><select :value="store.config.embedding_provider_ref || ''" :disabled="!store.config.embedding_enabled" @change="setModelRoleProvider('embedding_provider_ref', 'embedding_model', eventValue($event), 'embedding')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
+                    <label><span>{{ t('model') }}</span><select :value="store.config.embedding_model || ''" :disabled="!store.config.embedding_enabled || !store.config.embedding_provider_ref" @change="setStr('embedding_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.embedding_provider_ref || ''), 'embedding')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
+                    <label><span>{{ t('maxInput') }}</span><NInputNumber :value="store.config.embedding_max_input ?? 0" :min="0" :disabled="!store.config.embedding_enabled" @update:value="setNum('embedding_max_input', $event)" /></label>
+                    <p class="model-role-field-hint">{{ t('maxInputHint') }}</p>
+                    <div class="model-role-actions">
+                      <NButton :loading="testing && testKind === 'embedding'" :disabled="!store.config.embedding_enabled" @click="runTest('embedding')">{{ t('testEmbeddingConnection') }}</NButton>
+                    </div>
+                    <TestResultCard v-if="testKind === 'embedding' && testResult" :result="testResult" kind="embedding" />
+                  </article>
 
-              <article class="model-role-card">
-                <header><NIcon :component="CubeOutline" /><div><h4>{{ t('fallbackSlot2') }}</h4><p>{{ t('modelRoleFallbackHint') }}</p></div></header>
-                <label class="model-role-enabled"><span>{{ t('enabled') }}</span><NSwitch :value="!!store.config.fallback2_enabled" @update:value="setBool('fallback2_enabled', $event)" /></label>
-                <label><span>{{ t('providerName') }}</span><select :value="store.config.fallback2_provider_ref || ''" :disabled="!store.config.fallback2_enabled" @change="setModelRoleProvider('fallback2_provider_ref', 'fallback2_model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                <label><span>{{ t('model') }}</span><select :value="store.config.fallback2_model || ''" :disabled="!store.config.fallback2_enabled || !store.config.fallback2_provider_ref" @change="setStr('fallback2_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.fallback2_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-              </article>
+                  <article class="model-role-card">
+                    <header><NIcon :component="VolumeHighOutline" /><div><h4>{{ t('modelRoleTts') }}</h4><p>{{ t('modelRoleTtsHint') }}</p></div></header>
+                    <label><span>{{ t('modelRoutingMode') }}</span><select :value="store.config.tts_provider || 'browser'" @change="setTtsProvider(eventValue($event))"><option value="browser">{{ t('ttsProviderBrowser') }}</option><option value="edge-tts">{{ t('ttsProviderEdge') }}</option><option value="openai-compatible">{{ t('ttsProviderOpenAI') }}</option><option value="gpt-sovits">GPT-SoVITS</option></select></label>
+                    <template v-if="ttsProvider === 'openai-compatible' || ttsProvider === 'gpt-sovits'">
+                      <label><span>{{ t('providerName') }}</span><select :value="store.config.tts_provider_ref || ''" @change="setModelRoleProvider('tts_provider_ref', 'tts_model', eventValue($event), 'tts')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
+                      <label><span>{{ t('model') }}</span><select :value="store.config.tts_model || ''" :disabled="!store.config.tts_provider_ref" @change="setStr('tts_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.tts_provider_ref || ''), 'tts')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
+                    </template>
+                  </article>
+                </div>
 
-              <article class="model-role-card">
-                <header><NIcon :component="CubeOutline" /><div><h4>{{ t('modelRoleEmbedding') }}</h4><p>{{ t('modelRoleEmbeddingHint') }}</p></div></header>
-                <label><span>{{ t('providerName') }}</span><select :value="store.config.embedding_provider_ref || ''" @change="setModelRoleProvider('embedding_provider_ref', 'embedding_model', eventValue($event), 'embedding')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                <label><span>{{ t('model') }}</span><select :value="store.config.embedding_model || ''" :disabled="!store.config.embedding_provider_ref" @change="setStr('embedding_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.embedding_provider_ref || ''), 'embedding')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-              </article>
+                <div class="model-capability-column">
+                  <article class="model-role-card">
+                    <header><NIcon :component="ImageOutline" /><div><h4>{{ t('modelRoleImagegen') }}</h4><p>{{ t('modelRoleImagegenHint') }}</p></div></header>
+                    <label class="model-role-enabled"><span>{{ t('enabled') }}</span><NSwitch :value="!!store.config.imagegen_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('imagegen_enabled', $event)" /></label>
+                    <label class="model-role-enabled"><span>{{ t('imagegenAutoScene') }}</span><NSwitch :value="!!store.config.imagegen_auto_scene" :disabled="modelRoutingSaving || !store.config.imagegen_enabled" @update:value="setModelRoutingBool('imagegen_auto_scene', $event)" /></label>
+                    <label><span>{{ t('providerName') }}</span><select :value="store.config.imagegen_provider_ref || ''" :disabled="!store.config.imagegen_enabled" @change="setModelRoleProvider('imagegen_provider_ref', 'imagegen_model', eventValue($event), 'image')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in openAiProviders" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
+                    <label><span>{{ t('model') }}</span><select :value="store.config.imagegen_model || ''" :disabled="!store.config.imagegen_enabled || !store.config.imagegen_provider_ref" @change="setStr('imagegen_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.imagegen_provider_ref || ''), 'image')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
+                    <label><span>{{ t('imagegenStylePrefix') }}</span><NInput :value="String(store.config.imagegen_style_prefix || '')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_style_prefix', $event)" /></label>
+                    <label><span>{{ t('imagegenSquareSize') }}</span><NInput :value="String(store.config.imagegen_square_size || '1024x1024')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_square_size', $event)" /></label>
+                    <label><span>{{ t('imagegenLandscapeSize') }}</span><NInput :value="String(store.config.imagegen_landscape_size || '1792x1024')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_landscape_size', $event)" /></label>
+                    <label><span>{{ t('imagegenTimeout') }}</span><NInputNumber :value="Number(store.config.imagegen_timeout_seconds || 120)" :min="5" :max="300" :disabled="!store.config.imagegen_enabled" @update:value="setNum('imagegen_timeout_seconds', $event)" /></label>
+                  </article>
 
-              <article class="model-role-card">
-                <header><NIcon :component="ImageOutline" /><div><h4>{{ t('modelRoleImagegen') }}</h4><p>{{ t('modelRoleImagegenHint') }}</p></div></header>
-                <label class="model-role-enabled"><span>{{ t('enabled') }}</span><NSwitch :value="!!store.config.imagegen_enabled" @update:value="setBool('imagegen_enabled', $event)" /></label>
-                <label class="model-role-enabled"><span>{{ t('imagegenAutoScene') }}</span><NSwitch :value="!!store.config.imagegen_auto_scene" :disabled="!store.config.imagegen_enabled" @update:value="setBool('imagegen_auto_scene', $event)" /></label>
-                <label><span>{{ t('providerName') }}</span><select :value="store.config.imagegen_provider_ref || ''" :disabled="!store.config.imagegen_enabled" @change="setModelRoleProvider('imagegen_provider_ref', 'imagegen_model', eventValue($event), 'image')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in openAiProviders" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                <label><span>{{ t('model') }}</span><select :value="store.config.imagegen_model || ''" :disabled="!store.config.imagegen_enabled || !store.config.imagegen_provider_ref" @change="setStr('imagegen_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.imagegen_provider_ref || ''), 'image')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                <label><span>{{ t('imagegenStylePrefix') }}</span><NInput :value="String(store.config.imagegen_style_prefix || '')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_style_prefix', $event)" /></label>
-                <label><span>{{ t('imagegenSquareSize') }}</span><NInput :value="String(store.config.imagegen_square_size || '1024x1024')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_square_size', $event)" /></label>
-                <label><span>{{ t('imagegenLandscapeSize') }}</span><NInput :value="String(store.config.imagegen_landscape_size || '1792x1024')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_landscape_size', $event)" /></label>
-                <label><span>{{ t('imagegenTimeout') }}</span><NInputNumber :value="Number(store.config.imagegen_timeout_seconds || 120)" :min="5" :max="300" :disabled="!store.config.imagegen_enabled" @update:value="setNum('imagegen_timeout_seconds', $event)" /></label>
-              </article>
-
-              <article class="model-role-card">
-                <header><NIcon :component="VolumeHighOutline" /><div><h4>{{ t('modelRoleTts') }}</h4><p>{{ t('modelRoleTtsHint') }}</p></div></header>
-                <label><span>{{ t('modelRoutingMode') }}</span><select :value="store.config.tts_provider || 'browser'" @change="setTtsProvider(eventValue($event))"><option value="browser">{{ t('ttsProviderBrowser') }}</option><option value="edge-tts">{{ t('ttsProviderEdge') }}</option><option value="openai-compatible">{{ t('ttsProviderOpenAI') }}</option><option value="gpt-sovits">GPT-SoVITS</option></select></label>
-                <template v-if="ttsProvider === 'openai-compatible' || ttsProvider === 'gpt-sovits'">
-                  <label><span>{{ t('providerName') }}</span><select :value="store.config.tts_provider_ref || ''" @change="setModelRoleProvider('tts_provider_ref', 'tts_model', eventValue($event), 'tts')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                  <label><span>{{ t('model') }}</span><select :value="store.config.tts_model || ''" :disabled="!store.config.tts_provider_ref" @change="setStr('tts_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.tts_provider_ref || ''), 'tts')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                </template>
-              </article>
-
-              <article class="model-role-card">
-                <header><NIcon :component="MicOutline" /><div><h4>{{ t('modelRoleAsr') }}</h4><p>{{ t('modelRoleAsrHint') }}</p></div></header>
-                <label><span>{{ t('modelRoutingMode') }}</span><select :value="store.config.asr_provider || 'disabled'" @change="setAsrProvider(eventValue($event))"><option value="disabled">{{ t('asrProviderDisabled') }}</option><option value="openai-compatible">{{ t('asrProviderOpenAI') }}</option></select></label>
-                <template v-if="asrProvider === 'openai-compatible'">
-                  <label><span>{{ t('providerName') }}</span><select :value="store.config.asr_provider_ref || ''" @change="setModelRoleProvider('asr_provider_ref', 'asr_model', eventValue($event), 'asr')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                  <label><span>{{ t('model') }}</span><select :value="store.config.asr_model || ''" :disabled="!store.config.asr_provider_ref" @change="setStr('asr_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.asr_provider_ref || ''), 'asr')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                </template>
-              </article>
+                  <article class="model-role-card">
+                    <header><NIcon :component="MicOutline" /><div><h4>{{ t('modelRoleAsr') }}</h4><p>{{ t('modelRoleAsrHint') }}</p></div></header>
+                    <label><span>{{ t('modelRoutingMode') }}</span><select :value="store.config.asr_provider || 'disabled'" @change="setAsrProvider(eventValue($event))"><option value="disabled">{{ t('asrProviderDisabled') }}</option><option value="openai-compatible">{{ t('asrProviderOpenAI') }}</option></select></label>
+                    <template v-if="asrProvider === 'openai-compatible'">
+                      <label><span>{{ t('providerName') }}</span><select :value="store.config.asr_provider_ref || ''" @change="setModelRoleProvider('asr_provider_ref', 'asr_model', eventValue($event), 'asr')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
+                      <label><span>{{ t('model') }}</span><select :value="store.config.asr_model || ''" :disabled="!store.config.asr_provider_ref" @change="setStr('asr_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.asr_provider_ref || ''), 'asr')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
+                    </template>
+                  </article>
+                </div>
+              </div>
             </div>
-          </div>
-
-          <div v-show="section === 'memory'" class="settings-pane">
-            <div class="api-head-row"><h3>{{ t('vectorMemory') }}</h3><HelpButton :title="t('embeddingHelpTitle')">
-              <h4>{{ t('embeddingHelpWhatTitle') }}</h4>
-              <p>{{ t('embeddingHelpWhatText') }}</p>
-              <h4>{{ t('embeddingHelpChooseTitle') }}</h4>
-              <p>{{ t('embeddingHelpChooseBefore') }} <code>bge-m3</code>{{ t('embeddingHelpChooseAfter') }} <code>text-embedding-3-small</code>, <code>gte-large</code>, <code>nomic-embed-text</code>{{ t('embeddingHelpChooseSuffix') }}</p>
-              <h4>{{ t('embeddingHelpConfigTitle') }}</h4>
-              <p>{{ t('embeddingHelpCentralized') }}</p>
-              <h4>{{ t('test') }}</h4>
-              <p>{{ t('embeddingHelpTest') }}</p>
-            </HelpButton></div>
-            <div class="form-row"><label>{{ t('vectorMemory') }}</label><div class="switch-inline"><NSwitch :value="!!store.config.embedding_enabled" @update:value="setBool('embedding_enabled', $event)" /><span>{{ t('enabled') }}</span></div></div>
-            <div class="model-binding-summary">
-              <NIcon :component="CubeOutline" />
-              <div><strong>{{ t('modelRoleEmbedding') }}</strong><small>{{ modelBindingSummary(store.config.embedding_provider_ref, store.config.embedding_model) }}</small></div>
-              <NButton size="small" @click="section = 'models'">{{ t('modelRoutingOpen') }}</NButton>
-            </div>
-            <div class="form-row"><label>{{ t('maxInput') }}</label><NInputNumber :value="store.config.embedding_max_input ?? 0" @update:value="setNum('embedding_max_input', $event)" style="width:100%" /></div>
-            <p class="form-hint">{{ t('maxInputHint') }}</p>
-            <div class="actions-row">
-              <NButton type="primary" @click="save(['embedding_enabled', 'embedding_max_input'])">{{ t('saveAction') }}</NButton>
-              <NButton :loading="testing && testKind === 'embedding'" @click="runTest('embedding')">{{ t('testEmbeddingConnection') }}</NButton>
-            </div>
-            <TestResultCard v-if="testKind === 'embedding' && testResult" :result="testResult" kind="embedding" />
           </div>
 
           <div v-show="section === 'network'" class="settings-pane">
@@ -2012,6 +2059,8 @@ function redownloadUpdatePackage() {
                 <a href="https://diceframe.com/docs?doc=guide" target="_blank" rel="noopener"><span>{{ t('guideDocs') }}</span><strong>diceframe.com/docs</strong></a>
                 <a href="https://github.com/diceframe/diceframe" target="_blank" rel="noopener"><span>{{ t('projectAddress') }}</span><strong>diceframe/diceframe</strong></a>
                 <a href="https://github.com/diceframe/diceframe/issues" target="_blank" rel="noopener"><span>{{ t('issueFeedback') }}</span><strong>{{ t('submitIssue') }}</strong></a>
+                <a href="https://github.com/diceframe/diceframe/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener"><span>{{ t('contributingGuide') }}</span><strong>CONTRIBUTING.md</strong></a>
+                <a href="https://github.com/diceframe/diceframe/graphs/contributors" target="_blank" rel="noopener"><span>{{ t('contributors') }}</span><strong>{{ t('viewContributors') }}</strong></a>
                 <a href="/#/legal/terms" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalTermsTitle') }}</strong></a>
                 <a href="/#/legal/privacy" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalPrivacyTitle') }}</strong></a>
               </nav>

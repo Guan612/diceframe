@@ -62,6 +62,22 @@
   min-width: 0;
 }
 
+@media (min-width: 801px) {
+  .characters-page .current-character-card:only-child {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, auto);
+    align-items: center;
+  }
+
+  .characters-page .current-character-card:only-child .current-character-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: min(100%, 520px);
+  }
+
+  .characters-page .current-character-card:only-child .current-character-actions:has(> button:nth-child(4)) {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 .characters-page .npc-strip {
   padding: 11px 13px 14px;
 }

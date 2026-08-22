@@ -7,6 +7,8 @@ function source(relativePath: string): string {
 }
 
 const playViewSource = source('../src/features/play/PlayView.vue')
+const actionComposerSource = source('../src/components/ActionComposer.vue')
+const mainSource = source('../src/main.ts')
 const layoutCss = source('../src/styles/v2/layout.css')
 const lightCss = source('../src/styles/v2/light.css')
 
@@ -32,5 +34,19 @@ describe('shared host and player play layout', () => {
       expect(layoutCss).not.toContain(selector)
       expect(lightCss).not.toContain(selector)
     }
+  })
+
+  it('keeps the mobile action controls beside the textarea', () => {
+    expect(actionComposerSource).toMatch(
+      /@media \(max-width: 800px\)[\s\S]*?\.composer-row\.has-dictation\s*\{\s*grid-template-columns: minmax\(0, 1fr\) 40px 72px;/,
+    )
+    expect(actionComposerSource).not.toContain('grid-column: 1 / -1')
+  })
+
+  it('tracks the visible mobile viewport throughout browser toolbar transitions', () => {
+    expect(mainSource).toContain("window.visualViewport?.addEventListener('resize', syncViewportHeight)")
+    expect(mainSource).toContain("window.visualViewport?.addEventListener('scroll', syncViewportHeight)")
+    expect(layoutCss).toMatch(/\.play-page\s*\{[\s\S]*?height: var\(--app-h, 100dvh\);/)
+    expect(layoutCss).toContain('padding-bottom: calc(6px + env(safe-area-inset-bottom));')
   })
 })

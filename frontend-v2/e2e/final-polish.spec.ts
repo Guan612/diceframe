@@ -165,11 +165,37 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
   await page.keyboard.press('Escape')
 
   await page.goto('/#/settings?section=models')
+  await expect(page.locator('.settings-nav').getByText('向量记忆', { exact: true })).toHaveCount(0)
   const routingHeader = page.locator('.model-routing-header')
   await routingHeader.getByRole('button', { name: '帮助' }).click()
   await expect(page.getByRole('dialog').getByRole('heading', { name: '如何配置模型', exact: true })).toBeVisible()
   await expect(page.getByRole('dialog').getByText(/deepseek-v4-pro/)).toBeVisible()
   await page.keyboard.press('Escape')
+
+  const modelCards = page.locator('.model-routing-grid')
+  const mainCard = page.locator('.model-role-card-main')
+  const embeddingCard = page.locator('.model-role-card-embedding')
+  await expect(mainCard.locator('.model-fallback-slot')).toHaveCount(2)
+  await expect(mainCard.getByText('备用 1', { exact: true })).toBeVisible()
+  await expect(mainCard.getByText('备用 2', { exact: true })).toBeVisible()
+  await expect(embeddingCard.getByText('向量记忆', { exact: true })).toBeVisible()
+  await expect(embeddingCard.getByRole('button', { name: '测试向量连接' })).toBeVisible()
+  const modelLayout = await modelCards.evaluate(element => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    display: getComputedStyle(element).display,
+    headerBackground: getComputedStyle(element.previousElementSibling!).backgroundImage,
+  }))
+  const capabilityLayout = await page.locator('.model-capability-grid').evaluate(element => ({
+    display: getComputedStyle(element).display,
+    columns: getComputedStyle(element).gridTemplateColumns.split(' ').length,
+    alignItems: getComputedStyle(element).alignItems,
+    columnCount: element.children.length,
+  }))
+  expect(modelLayout.scrollWidth).toBeLessThanOrEqual(modelLayout.clientWidth + 1)
+  expect(modelLayout.display).toBe('grid')
+  expect(modelLayout.headerBackground).toBe('none')
+  expect(capabilityLayout).toEqual({ display: 'grid', columns: 2, alignItems: 'start', columnCount: 2 })
 
   await page.goto('/#/settings?section=advanced')
   const timeoutSection = page.locator('.test-timeout-section')
