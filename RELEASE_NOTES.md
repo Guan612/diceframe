@@ -1,55 +1,75 @@
-# DiceFrame v2.3.0-beta.1
+# DiceFrame v2.3.0-beta.2
 
 ## 中文
 
-DiceFrame 2.3.0-beta.1 为预览版：新增「联机冒险」玩家直连能力（实验性），并强化多人局的安全与公平性。
+DiceFrame 2.3.0-beta.2 是 2.3 系列的第二个预览版，重点完善 AI 服务配置、语音与图片能力，并修复战斗判定和断线续流的一致性问题。
 
 ### 新增
 
-- **玩家直连（实验性）**：无需自建服务器，房主创建临时直连房间，为每位玩家生成独立的一次性链接码；朋友粘贴链接码即可加入同一场冒险。连接信息仅用于短暂握手，直连成功后游戏数据在参与者之间直接传输。
-- **联机冒险入口**：总览页新增「联机冒险」按钮，在同一窗口内完成创建房间或粘贴链接码加入。
+- **统一 AI 服务商与模型配置**：集中维护服务商、Base URL、API Key 和模型目录，并在独立页面为主模型、向量模型、TTS、语音识别与图片生成分配模型。旧版内联配置继续兼容，无需强制迁移。
+- **内置图片生成**：可通过 OpenAI 兼容接口生成场景图、头像、物品图和地图背景；生成结果会保存为游戏素材，未配置时不影响现有玩法。
+- **云端语音识别**：支持 OpenAI 兼容的音频转写接口，玩家可在行动输入框旁录音并将识别文本直接填入输入框。
+- **免费 Edge TTS**：新增微软 Edge 在线音色，无需 API Key 或 Base URL，可直接用于 GM 和角色朗读。
 
-### 改进
+### 改进与修复
 
-- **多人公平性保护**：系统明确玩家与 GM 的权限边界——单个玩家的叙述不能改写世界事实、NPC 或其他玩家的角色状态，多人同局体验更可靠。
-- **联机体验**：邀请码列表更紧凑，支持一键复制全部链接码；连接失败提示改为可读文案；房主离开后房间自动废弃，避免朋友拿着失效链接码空等。
-- **骰子与判定可靠性**：D&D 普通属性/技能检定统一按 `d20 + 修正值 >= DC` 结算，不再要求自然 20 才能成功；CoC 奖惩骰会先构造最终百分骰结果再取高/取低，正确处理 `00 + 0 = 100`。
-- **规则能力显式化**：内置奇幻、赛博朋克、武侠与 CoC 规则明确声明优势/劣势或奖惩骰能力；多人有效协助可按规则转换为优势，长团难度不会随回合数自动抬高。现有存档无需转换。
+- **AI 配置帮助与连接测试**：恢复服务商和模型配置帮助，以 DeepSeek 为示例；连接测试超时可在高级设置中配置为 5–300 秒。
+- **战斗检定一致性**：战斗命中与暴击统一以服务端 `CheckResult` 为准，不再二次掷命中骰；重试不会重复掷骰或重复扣血，异常缺少检定结果时会安全停止结算。
+- **断线续流**：游戏事件流使用稳定游标恢复，网络抖动或页面恢复时减少事件丢失和重复展示，同时保持旧客户端兼容。
+- **多人和移动端体验**：直连邀请码与玩家身份绑定；房主和玩家视图共用布局规则，修复移动端日志区、卡片遮挡和输入区排列问题。
+- **规则与骰子可靠性**：统一 D&D、CoC 等规则的检定入口与奖惩骰行为，并加强长期战役和多人权限边界校验。
+- **设置页布局**：高级设置新增项目后仍能稳定排列；顶部状态卡保持单排，可横向查看完整信息。
+
+### 容器镜像
+
+- 本预览版发布 `ghcr.io/diceframe/diceframe:2.3.0-beta.2` 和 `docker.io/falconku/diceframe:2.3.0-beta.2`。
+- 预览版不会更新 `latest`；`latest` 仍只指向正式版。
 
 ### 已知限制
 
-- 直连为实验性功能：对称 NAT、严格防火墙等网络环境可能无法连通；链接码 5 分钟有效且一次性使用；房主必须保持 DiceFrame 和房间在线。
-- 当前直连只传输明确支持的游戏 JSON 操作，不传输语音识别音频或其他二进制附件；相关入口会隐藏或回退到内置资源。
+- 玩家直连仍为实验性功能：对称 NAT 或严格防火墙可能阻止连接，房主必须保持 DiceFrame 和房间在线。
+- Edge TTS 使用微软在线朗读接口，服务协议变化时可能需要升级依赖。
+- 图片生成和云端语音识别需要用户自行配置兼容服务；P2P 直连模式不传输录音音频。
 
 ### 下载指南
 
-- **普通 Windows 用户**：下载 `DiceFrame-v2.3.0-beta.1-windows-portable.zip`。
-- **源码运行用户**：下载 `DiceFrame-v2.3.0-beta.1-windows.zip`。
+- **普通 Windows 用户**：下载 `DiceFrame-v2.3.0-beta.2-windows-portable.zip`。
+- **源码运行用户**：下载 `DiceFrame-v2.3.0-beta.2-windows.zip`。
 - `.sha256` 是更新校验文件，普通用户不需要手动下载。
 
 ## English
 
-DiceFrame 2.3.0-beta.1 is a preview release: it introduces the experimental "Multiplayer Adventure" player-to-player direct connect, and hardens fairness and safety for multiplayer sessions.
+DiceFrame 2.3.0-beta.2 is the second preview of the 2.3 series. It focuses on AI service configuration, speech and image capabilities, and consistent combat resolution and stream recovery.
 
 ### New
 
-- **Player-to-player direct connect (experimental)**: no self-hosted server needed — the host creates a temporary room and issues an independent one-time link code per player; friends paste a code to join the same adventure. Connection details are exchanged only for the brief handshake; once connected, game data travels directly between participants.
-- **Multiplayer Adventure entry**: the overview page gains a "Multiplayer Adventure" button that handles room creation and code-based joining in one window.
+- **Unified AI providers and model routing**: manage providers, base URLs, API keys, and model catalogs in one place, then assign models for chat, embeddings, TTS, transcription, and image generation on a dedicated page. Legacy inline settings remain compatible and do not require forced migration.
+- **Built-in image generation**: generate scene art, portraits, item images, and map backgrounds through OpenAI-compatible APIs. Generated assets persist with the game, while unconfigured installations continue to work normally.
+- **Cloud speech recognition**: use OpenAI-compatible audio transcription endpoints to record beside the action input and insert recognized text directly into the editor.
+- **Free Edge TTS**: Microsoft Edge online voices are available without an API key or base URL for GM and character narration.
 
-### Improvements
+### Improvements and Fixes
 
-- **Multiplayer fairness protection**: the system enforces the authority boundary between players and the GM — one player's narration can no longer rewrite world facts, NPCs, or other players' character states.
-- **Connect UX**: a more compact invite-code list with copy-all, readable failure messages, and rooms that expire once the host leaves so friends never wait on a dead code.
-- **Reliable dice resolution**: ordinary D&D ability/skill checks consistently resolve as `d20 + modifier >= DC` and no longer require a natural 20 to succeed. CoC bonus/penalty dice compare completed percentile results and correctly treat `00 + 0` as 100.
-- **Explicit rule capabilities**: bundled fantasy, cyberpunk, wuxia, and CoC rules explicitly declare advantage/disadvantage or bonus/penalty support. Effective multiplayer assistance can grant advantage where the rule allows it, and difficulty does not rise automatically with campaign length. Existing saves require no conversion.
+- **AI setup help and connection tests**: provider and model help is restored with DeepSeek as the example. Connection-test timeout is configurable from 5 to 300 seconds in advanced settings.
+- **Consistent combat checks**: combat hits and criticals now use the server `CheckResult` as the sole authority, without a second attack roll. Retries do not reroll or apply damage twice, and missing check results fail safely.
+- **Stream recovery**: game event streams resume from stable cursors after network interruptions or page recovery, reducing missing or duplicated events while remaining compatible with older clients.
+- **Multiplayer and mobile UX**: direct-connect invitations are bound to player identities; host and player views share layout rules, with fixes for mobile logs, overlapping cards, and action controls.
+- **Reliable rules and dice**: D&D, CoC, and other bundled rules share consistent check planning and bonus/penalty behavior, with stronger long-campaign and multiplayer authority validation.
+- **Stable settings layout**: advanced settings remain aligned as options are added, and the top status cards stay on one horizontally scrollable row without truncating their content.
 
-### Known limits
+### Container Images
 
-- Direct connect is experimental: symmetric NAT or strict firewalls may prevent a connection; link codes are one-time and expire after five minutes; the host must keep DiceFrame and the room online.
-- The current direct transport carries explicitly supported JSON game operations, not speech-recognition audio or other binary attachments. Affected UI entry points are hidden or fall back to bundled assets.
+- This preview publishes `ghcr.io/diceframe/diceframe:2.3.0-beta.2` and `docker.io/falconku/diceframe:2.3.0-beta.2`.
+- Preview releases do not update `latest`; `latest` remains reserved for stable releases.
+
+### Known Limits
+
+- Player-to-player direct connect remains experimental: symmetric NAT or strict firewalls may prevent connections, and the host must keep DiceFrame and the room online.
+- Edge TTS relies on Microsoft's online read-aloud interface and may require dependency updates if that service changes.
+- Image generation and cloud transcription require a user-configured compatible service. P2P direct mode does not transport recorded audio.
 
 ### Download Guide
 
-- **Regular Windows users**: download `DiceFrame-v2.3.0-beta.1-windows-portable.zip`.
-- **Source-run users**: download `DiceFrame-v2.3.0-beta.1-windows.zip`.
+- **Regular Windows users**: download `DiceFrame-v2.3.0-beta.2-windows-portable.zip`.
+- **Source-run users**: download `DiceFrame-v2.3.0-beta.2-windows.zip`.
 - `.sha256` files are update checksums; regular users do not need to download them manually.
