@@ -1173,7 +1173,7 @@ function redownloadUpdatePackage() {
                 <NButton v-if="ttsProvider !== 'browser'" :loading="ttsTesting" @click="testTts">{{ t('ttsSaveAndTest') }}</NButton>
               </footer>
             </section>
-            <section class="advanced-section">
+            <section class="advanced-section hub-section">
               <header class="advanced-section-head">
                 <NIcon :component="InformationCircleOutline" />
                 <div><h3>{{ t('hubPrivacyTitle') }}</h3><p>{{ t('hubTelemetryChoiceSummary') }}</p></div>

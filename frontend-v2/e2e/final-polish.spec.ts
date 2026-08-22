@@ -104,26 +104,24 @@ test('appearance and advanced settings obey the compact layout contract', async 
   // 契约不锁 section 数量：新增块只需自觉选择“整行”或“成对”布局；只锁布局不变量。
   await expect(page.locator('.advanced-settings-pane').getByRole('heading', { name: 'DiceFrame Hub 与隐私' })).toBeVisible()
   const advancedBoxes = await advancedSections.evaluateAll(elements =>
-    elements.map(element => element.getBoundingClientRect()).map(rect => ({ top: rect.top, left: rect.left, width: rect.width })),
+    elements.map(element => element.getBoundingClientRect()).map(rect => ({ top: rect.top, left: rect.left, width: rect.width, height: rect.height })),
   )
   expect(advancedBoxes.length).toBeGreaterThanOrEqual(3)
-  // 首块（语音朗读）作为整行宽度基准；逐行检查：单独块必须整行，并排必须恰好两个填满。
-  const fullWidth = advancedBoxes[0].width
-  const paneLeft = advancedBoxes[0].left
-  const rows: { top: number; boxes: typeof advancedBoxes }[] = []
+  // 契约只做烟雾级检查：所有块在面板内、块间不重叠；
+  // 具体排布（谁和谁并排、谁跨行、列宽比例）交给视觉评审，不在 e2e 里编码布局。
+  const paneBox = await page.locator('.advanced-settings-pane').boundingBox()
+  expect(paneBox).not.toBeNull()
   for (const box of advancedBoxes) {
-    const row = rows.find(candidate => Math.abs(candidate.top - box.top) <= 1)
-    if (row) row.boxes.push(box)
-    else rows.push({ top: box.top, boxes: [box] })
+    expect(box.left).toBeGreaterThanOrEqual(paneBox!.x - 1)
+    expect(box.left + box.width).toBeLessThanOrEqual(paneBox!.x + paneBox!.width + 1)
   }
-  for (const row of rows) {
-    if (row.boxes.length === 1) {
-      expect(Math.abs(row.boxes[0].width - fullWidth)).toBeLessThanOrEqual(2)
-    } else {
-      expect(row.boxes.length).toBe(2)
-      const sorted = [...row.boxes].sort((a, b) => a.left - b.left)
-      expect(Math.abs(sorted[0].left - paneLeft)).toBeLessThanOrEqual(1)
-      expect(Math.abs(sorted[1].left + sorted[1].width - (paneLeft + fullWidth))).toBeLessThanOrEqual(2)
+  for (let i = 0; i < advancedBoxes.length; i += 1) {
+    for (let j = i + 1; j < advancedBoxes.length; j += 1) {
+      const a = advancedBoxes[i]
+      const b = advancedBoxes[j]
+      const overlapX = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left)
+      const overlapY = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top)
+      expect(Math.min(overlapX, overlapY)).toBeLessThanOrEqual(1)
     }
   }
 

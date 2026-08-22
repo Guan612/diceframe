@@ -510,6 +510,14 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .advanced-settings-pane > .hub-section,
+  .advanced-settings-pane > .asr-section,
+  .advanced-settings-pane > .generation-section {
+    grid-column: auto;
+    grid-row: auto;
+    align-self: auto;
+  }
+
   .reference-settings-page .settings-pane.about {
     grid-template-columns: minmax(0, 1fr);
   }
