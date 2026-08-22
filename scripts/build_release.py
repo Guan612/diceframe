@@ -105,6 +105,10 @@ EXCLUDED_SUFFIXES = {
     ".tsbuildinfo",
 }
 
+# web_server.py imports this module during startup. Keep it explicit so a
+# packaging exclusion cannot silently produce an unusable release archive.
+REQUIRED_RUNTIME_SOURCE_FILES = ("src/ai_providers.py",)
+
 FORBIDDEN_ZIP_PATTERNS = [
     re.compile(r"(^|/)data/"),
     re.compile(r"(^|/)\.env$"),
@@ -153,7 +157,7 @@ def is_excluded(path: Path) -> bool:
         return True
     if path.name.startswith(".env"):
         return True
-    if path.name.startswith("ai_") or "_copy_" in path.name:
+    if "_copy_" in path.name:
         return True
     return path.suffix in EXCLUDED_SUFFIXES
 
@@ -306,6 +310,9 @@ def validate_zip(output_zip: Path) -> None:
         raise RuntimeError("Release zip is missing static-v2/index.html")
     if not any("/static-v2/assets/" in name and name.endswith(".js") for name in names):
         raise RuntimeError("Release zip is missing built frontend assets")
+    for relative in REQUIRED_RUNTIME_SOURCE_FILES:
+        if not any(name.endswith("/" + relative) for name in names):
+            raise RuntimeError(f"Release zip is missing {relative}")
     validate_avatar_payload(infos, require_source=True)
     validate_background_payload(infos, require_source=True)
 

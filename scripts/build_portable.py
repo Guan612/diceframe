@@ -241,6 +241,9 @@ def validate_zip(output_zip: Path) -> None:
     for suffix in required:
         if not any(name.endswith(suffix) for name in names):
             raise RuntimeError(f"Portable zip is missing {suffix}")
+    for relative in build_release.REQUIRED_RUNTIME_SOURCE_FILES:
+        if not any(name.endswith("/app/" + relative) for name in names):
+            raise RuntimeError(f"Portable zip is missing app/{relative}")
     if any(name.endswith("/Start DiceFrame.bat") for name in names):
         raise RuntimeError("Portable zip should not contain Start DiceFrame.bat")
     if any(name.lower().endswith(".bat") for name in names):

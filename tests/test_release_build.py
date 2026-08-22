@@ -26,6 +26,19 @@ def test_copy_tree_excludes_legacy_user_templates(monkeypatch, tmp_path):
     assert not (target / "custom_rule_home.json").exists()
 
 
+def test_copy_tree_keeps_core_ai_modules(monkeypatch, tmp_path):
+    root = tmp_path / "root"
+    source = root / "src"
+    target = tmp_path / "package" / "src"
+    source.mkdir(parents=True)
+    (source / "ai_providers.py").write_text("PROVIDER = True", encoding="utf-8")
+    monkeypatch.setattr(build_release, "ROOT", root)
+
+    build_release.copy_tree(source, target)
+
+    assert (target / "ai_providers.py").exists()
+
+
 def test_prepare_package_tree_excludes_docs(monkeypatch, tmp_path):
     root = tmp_path / "root"
     (root / "docs").mkdir(parents=True)
