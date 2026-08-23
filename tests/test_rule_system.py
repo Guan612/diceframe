@@ -166,6 +166,28 @@ class TestRuleInheritance:
         assert character["heat"] == 0
         assert "cyberware" not in character
 
+    @pytest.mark.parametrize(
+        ("rule_id", "required_attributes"),
+        [
+            ("dnd5e", {"str", "dex", "con", "int", "wis", "cha"}),
+            ("freeform_coc", {"pow", "siz", "edu", "app"}),
+            ("freeform_fantasy", {"str", "dex", "con", "int", "wis", "cha"}),
+        ],
+    )
+    def test_default_character_uses_v2_rule_schema(self, rule_id, required_attributes):
+        character = make_default_character("V2", rule_id)
+        assert required_attributes <= set(character["attributes"])
+        assert character["class"] != "冒险者"
+        if rule_id == "dnd5e":
+            assert character["attr_points_max"] == 72
+            assert all(item.get("item_key") for item in character["equipment"])
+            assert any(item.get("damage_dice") == "1d12" for item in character["equipment"])
+            assert any(item.get("type") == "armor" and item.get("ac_base") == 11 for item in character["equipment"])
+        if rule_id == "freeform_coc":
+            pow_value = character["attributes"]["pow"]
+            assert character["sanity"] == min(pow_value if pow_value > 20 else pow_value * 5, 99)
+            assert 0 <= character["luck"] <= 99
+
     def test_list_available_rules_hides_abstract_base(self, tmp_path):
         (tmp_path / "base_d20.json").write_text(
             """{"rule_id": "base_d20", "rule_name": "Base", "abstract": true}""",

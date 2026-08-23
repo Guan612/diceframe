@@ -21,10 +21,12 @@ from src.rules.rule_system import RuleSystem
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES = ROOT / "templates" / "rules"
+LEGACY_RULES = ROOT / "tests" / "fixtures" / "legacy_rules"
 
 
 def _rule(name: str) -> RuleSystem:
-    return RuleSystem.load(RULES / name)
+    path = Path(name)
+    return RuleSystem.load(path if path.is_absolute() else (ROOT / path if path.parts[0] == "tests" else RULES / path))
 
 
 def test_dnd5e_declares_lite_mechanics_and_base_d20_keeps_legacy() -> None:
@@ -49,8 +51,8 @@ def test_dnd5e_declares_lite_mechanics_and_base_d20_keeps_legacy() -> None:
 
 def test_dnd5e_mechanics_identical_across_languages() -> None:
     zh = json.loads((RULES / "dnd5e.json").read_text(encoding="utf-8"))
-    en = json.loads((RULES / "dnd5e_en.json").read_text(encoding="utf-8"))
-    ja = json.loads((RULES / "dnd5e_ja.json").read_text(encoding="utf-8"))
+    en = json.loads((LEGACY_RULES / "dnd5e_en.json").read_text(encoding="utf-8"))
+    ja = json.loads((LEGACY_RULES / "dnd5e_ja.json").read_text(encoding="utf-8"))
     keys = ["check_mechanic", "damage_mechanic", "armor_model", "max_check_dc", "dc_table", "death_mechanic"]
     for other in (en, ja):
         for key in keys:
@@ -140,6 +142,30 @@ def test_category_lite_ac_by_armor_category() -> None:
     ) == 18
 
 
+def test_v2_dnd_armor_uses_canonical_equipment_not_legacy_table(monkeypatch) -> None:
+    """V2 starter items retain AC mechanics after the legacy lookup is gone."""
+    dnd = _rule("dnd5e.json")
+    equipment, _ = build_starter_items(dnd, "战士")
+    monkeypatch.setattr("src.engine.constants.ARMOR_LITE", {})
+
+    chain_mail = next(item for item in equipment if item["item_key"] == "chain_mail")
+    shield = next(item for item in equipment if item["item_key"] == "shield")
+    assert chain_mail == {
+        "name": "链甲", "type": "armor", "slot": "armor", "quality": "common",
+        "item_key": "chain_mail", "armor_category": "heavy", "ac_base": 16, "dex_cap": 0,
+    }
+    assert shield["ac_bonus"] == 2
+    assert _attack_target_dc(dnd, {"attributes": {"dex": 8}, "equipment": equipment}) == 18
+
+
+def test_category_lite_keeps_name_only_armor_as_legacy_fallback() -> None:
+    dnd = _rule("dnd5e.json")
+    # Old saves predate canonical armor fields and must retain their old AC.
+    assert _attack_target_dc(
+        dnd, {"attributes": {"dex": 18}, "equipment": [{"name": "链甲"}, {"name": "盾牌"}]}
+    ) == 18
+
+
 def test_legacy_rules_keep_sum_armor_ac(tmp_path) -> None:
     rule_file = tmp_path / "sum_armor.json"
     rule_file.write_text(
@@ -176,8 +202,8 @@ def test_starter_items_carry_damage_dice_for_known_weapons() -> None:
     ("rule_file", "class_name", "weapon_name", "shield_name", "armor_name"),
     [
         ("dnd5e.json", "战士", "长剑", "盾牌", "链甲"),
-        ("dnd5e_en.json", "Fighter", "Longsword", "Shield", "Chain Mail"),
-        ("dnd5e_ja.json", "ファイター", "ロングソード", "盾", "チェインメイル"),
+        (str(LEGACY_RULES / "dnd5e_en.json"), "Fighter", "Longsword", "Shield", "Chain Mail"),
+        (str(LEGACY_RULES / "dnd5e_ja.json"), "ファイター", "ロングソード", "盾", "チェインメイル"),
     ],
 )
 def test_dnd_fighter_starter_equipment_is_equipped_in_all_languages(
@@ -187,7 +213,7 @@ def test_dnd_fighter_starter_equipment_is_equipped_in_all_languages(
     shield_name: str,
     armor_name: str,
 ) -> None:
-    rule = _rule(rule_file)
+    rule = RuleSystem.load(Path(rule_file) if "/" in rule_file or "\\" in rule_file else RULES / rule_file)
     equipment, inventory = build_starter_items(rule, class_name)
 
     assert not inventory
@@ -203,8 +229,8 @@ def test_dnd_fighter_starter_equipment_is_equipped_in_all_languages(
     ("rule_file", "class_name", "focus_name"),
     [
         ("dnd5e.json", "术士", "法器"),
-        ("dnd5e_en.json", "Sorcerer", "Arcane Focus"),
-        ("dnd5e_ja.json", "ソーサラー", "秘術焦点"),
+        (str(LEGACY_RULES / "dnd5e_en.json"), "Sorcerer", "Arcane Focus"),
+        (str(LEGACY_RULES / "dnd5e_ja.json"), "ソーサラー", "秘術焦点"),
     ],
 )
 def test_dnd_sorcerer_dict_starter_focus_is_canonical_and_nonweapon(

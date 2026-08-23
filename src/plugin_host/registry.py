@@ -38,6 +38,7 @@ class PluginContribution:
     title: str = ""
     description: str = ""
     content_schema_version: int = 1
+    default_locale: str = ""
 
     @property
     def ref(self) -> ResourceRef:
@@ -64,17 +65,20 @@ class ContributionRegistry:
         self._items: list[PluginContribution] = []
         self._by_kind_key: dict[tuple[str, str], PluginContribution] = {}
         self._by_ref: dict[ResourceRef, PluginContribution] = {}
+        self._ambiguous: set[tuple[str, str]] = set()
 
     def clear(self) -> None:
         self._items.clear()
         self._by_kind_key.clear()
         self._by_ref.clear()
+        self._ambiguous.clear()
 
     def clear_plugin(self, plugin_id: str) -> None:
         kept = [item for item in self._items if item.plugin_id != plugin_id]
         self._items = []
         self._by_kind_key = {}
         self._by_ref = {}
+        self._ambiguous = set()
         for item in kept:
             self._add(item)
 
@@ -119,6 +123,8 @@ class ContributionRegistry:
         if plugin_id:
             return self._by_ref.get(ResourceRef(f"plugin:{plugin_id}", kind, key))
         if kind not in _NAMESPACED_KINDS:
+            if (kind, key) in self._ambiguous:
+                return None
             return self._by_kind_key.get((kind, key))
         matches = [item for item in self._items if item.kind == kind and item.key == key]
         return matches[0] if len(matches) == 1 else None
@@ -131,12 +137,16 @@ class ContributionRegistry:
         lookup_key = f"{item.plugin_id}:{item.key}" if item.kind in _NAMESPACED_KINDS else item.key
         existing = self._by_kind_key.get((item.kind, lookup_key))
         if existing:
+            if item.kind in {"rule", "world_template"} and existing.plugin_id != item.plugin_id:
+                raise ValueError(f"插件 {item.kind} plain ID 冲突：{item.key}")
             if item.kind in _NAMESPACED_KINDS:
                 raise ValueError(f"插件内资源 ID 重复：{item.kind} {item.key}")
             if existing.plugin_id != item.plugin_id and item.content_schema_version < 2:
                 raise ValueError(
                     f"插件资源冲突：{item.kind} {item.key} 已由 {existing.plugin_id} 提供"
                 )
+            if existing.plugin_id != item.plugin_id:
+                self._ambiguous.add((item.kind, item.key))
         self._items.append(item)
         self._by_kind_key[(item.kind, lookup_key)] = item
 
@@ -232,6 +242,7 @@ def _contribution_from_path(
         title=title.strip(),
         description=description.strip(),
         content_schema_version=int(manifest.get("content_schema_version", 1) or 1),
+        default_locale=str(manifest.get("default_locale") or ""),
     )
 
 

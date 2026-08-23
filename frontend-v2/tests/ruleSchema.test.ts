@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calcAutoHp, suggestedAttributes } from '../src/utils/ruleSchema'
+import { calcAutoHp, localizedField, suggestedAttributes } from '../src/utils/ruleSchema'
 
 describe('ruleSchema helpers', () => {
   it('calculates CoC 7e HP from percentile CON and SIZ', () => {
@@ -19,5 +19,9 @@ describe('ruleSchema helpers', () => {
     const suggested = suggestedAttributes(attrs, 60)
     expect(Object.values(suggested).reduce((sum, value) => sum + value, 0)).toBe(60)
     expect(Object.values(suggested).every(value => value >= 3 && value <= 18)).toBe(true)
+  })
+
+  it('uses backend-materialized Content V2 fields as the authority', () => {
+    expect(localizedField({ active_locale: 'en', rule_name: 'D&D 5e Lite', rule_name_en: 'legacy' }, 'rule_name')).toBe('D&D 5e Lite')
   })
 })

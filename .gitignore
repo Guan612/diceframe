@@ -44,9 +44,6 @@ dist/
 .claude/settings.local.json
 .claude/skills/
 .codex/
-AGENTS.md
-CLAUDE.md
-docs/ARCHITECTURE_*.md
 docs/RELEASE_*.md
 docs/I18N_PLAN_*.md
 

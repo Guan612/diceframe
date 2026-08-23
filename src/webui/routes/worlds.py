@@ -29,7 +29,7 @@ async def api_delete_world(request: web.Request) -> web.Response:
 
 
 async def api_world_templates(request: web.Request) -> web.Response:
-    return web.json_response(_get_api(request).list_world_templates())
+    return web.json_response(_get_api(request).list_world_templates(request.query.get("language", "")))
 
 
 async def api_lorebook(request: web.Request) -> web.Response:

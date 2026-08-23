@@ -15,6 +15,7 @@ from src.engine.game_instance import GameInstance
 from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, localized_text
 from src.llm.context_builder import build_context
 from src.memory.delta import MemoryStore
+from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
 
 logger = logging.getLogger("trpg")
@@ -112,9 +113,13 @@ class PromptComposer:
                 rule = None
                 active_rule_id = str(getattr(instance, "rule_id", "") or "").strip()
                 if active_rule_id:
-                    active_path = RuleSystem.path_for(self.rules_dir, active_rule_id, language)
-                    if active_path.exists():
-                        rule = RuleSystem.load(active_path)
+                    core = self.rules_dir / f"{active_rule_id}.json"
+                    if core.exists():
+                        rule = RuleSystem(RuleBundleLoader().load_rule(self.rules_dir, active_rule_id, language))
+                    else:
+                        active_path = RuleSystem.path_for(self.rules_dir, active_rule_id, language)
+                        if active_path.exists():
+                            rule = RuleSystem.load(active_path)
                 # 插件规则不一定在内置 rules_dir；缺失时仍由世界贡献路径兜底。
                 if rule is None:
                     rule = RuleSystem.load_for_world(world_data, self.rules_dir)

@@ -24,3 +24,27 @@ def test_core_domains_do_not_import_compat_or_webui_adapters() -> None:
                 if imported in text:
                     violations.append(f"{path.relative_to(ROOT)} imports {imported}")
     assert not violations, "\n".join(violations)
+
+
+def test_builtin_v2_rules_do_not_reintroduce_full_locale_copies() -> None:
+    product_rules = ROOT / "templates" / "rules"
+    legacy_copies = []
+    for path in (*product_rules.glob("*_en.json"), *product_rules.glob("*_ja.json")):
+        try:
+            import json
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not data.get("abstract"):
+            legacy_copies.append(path)
+    assert not legacy_copies
+    fixtures = ROOT / "tests" / "fixtures" / "legacy_rules"
+    assert list(fixtures.glob("*_en.json"))
+
+
+def test_v2_locale_authority_is_backend_materialized() -> None:
+    rules_service = (ROOT / "src" / "webui" / "services" / "rules.py").read_text(encoding="utf-8")
+    create_view = (ROOT / "frontend-v2" / "src" / "features" / "create" / "CreateView.vue").read_text(encoding="utf-8")
+    assert "RuleBundleLoader" in rules_service
+    assert "rule_name_en" not in create_view
+    assert "description_en" not in create_view

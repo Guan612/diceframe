@@ -381,8 +381,8 @@ class WebAPI:
     ) -> dict[str, Any]:
         return await plugins.invoke_plugin_tool(self, plugin_id, tool_name, arguments, context)
 
-    def list_plugin_content(self, kind: str = "", world_id: str = "", rule_id: str = "") -> dict[str, Any]:
-        return plugins.list_plugin_content(self, kind, world_id, rule_id)
+    def list_plugin_content(self, kind: str = "", world_id: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
+        return plugins.list_plugin_content(self, kind, world_id, rule_id, language)
 
     def sync_plugin_lorebooks(self) -> dict[str, Any]:
         """同步已启用插件的世界模板世界书到世界书库（幂等）。"""
@@ -488,16 +488,20 @@ class WebAPI:
         rule_id = (rule_id or "").strip()
         if not rule_id or not rules.is_valid_rule_id(rule_id):
             return None
-        rule_path = RuleSystem.path_for(self._rules_dir, rule_id, language)
-        if not rule_path.exists() and self._plugins:
-            plugin_path = self._plugins.contribution_path("rule", rule_id)
-            if plugin_path:
-                rule_path = plugin_path
-        if not rule_path.exists():
-            return None
-        if rule_path.parent == self._rules_dir and (self._rules_dir / "locales").exists():
+        core_path = self._rules_dir / f"{rule_id}.json"
+        if core_path.exists():
             return RuleSystem(RuleBundleLoader().load_rule(self._rules_dir, rule_id, language))
-        return RuleSystem.load(rule_path)
+        if self._plugins:
+            item = self._plugins.contributions.find("rule", rule_id)
+            if item:
+                localized = self._plugins.load_rule_template(
+                    rule_id, language, plugin_id=item.plugin_id,
+                )
+                if localized:
+                    return RuleSystem(localized)
+                return RuleSystem.load(item.path)
+        legacy_path = RuleSystem.path_for(self._rules_dir, rule_id, language)
+        return RuleSystem.load(legacy_path) if legacy_path.exists() else None
 
     # ---- 游戏总览 ----
 
@@ -776,8 +780,8 @@ class WebAPI:
 
     # ---- 规则配置 ----
 
-    def list_rules(self) -> dict[str, Any]:
-        return rules.list_rules(self)
+    def list_rules(self, language: str = "") -> dict[str, Any]:
+        return rules.list_rules(self, language)
 
     def save_custom_rule(self, data: dict[str, Any]) -> dict[str, Any]:
         return rules.save_custom_rule(self, data)
@@ -793,14 +797,14 @@ class WebAPI:
 
     # ---- 世界模板 ----
 
-    def list_world_templates(self) -> dict[str, Any]:
+    def list_world_templates(self, language: str = "") -> dict[str, Any]:
         # 确保已启用插件的世界模板世界书已同步（幂等）
         if self._plugins:
             try:
                 plugins.sync_plugin_lorebooks(self)
             except Exception:
                 logger.warning("list_world_templates 同步插件世界书失败，已跳过", exc_info=True)
-        return worlds.list_world_templates(self)
+        return worlds.list_world_templates(self, language)
 
     def cleanup_orphan_game_templates(self, world_id: str = "") -> int:
         return worlds.cleanup_orphan_game_templates(self, world_id)

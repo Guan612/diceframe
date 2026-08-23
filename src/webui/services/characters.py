@@ -75,7 +75,7 @@ def _format_rule_attr(attr: dict) -> dict:
         "key": key,
         "name": name,
         "name_en": name_en,
-        "display_name": f"{name} ({name_en})" if name_en else name,
+        "display_name": attr.get("display_name") or (f"{name} ({name_en})" if name_en else name),
         "min": attr.get("min", 3),
         "max": attr.get("max", 18),
     }
