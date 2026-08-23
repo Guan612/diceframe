@@ -1,0 +1,10 @@
+{
+  "locale_schema_version": 1,
+  "locale": "ja",
+  "target": {"kind": "rule", "id": "dnd5e"},
+  "rule": {"rule_name": "D&D 5e ライトルール", "description": "D&D 5e 風の軽量アシストルール。"},
+  "attributes": {"str": {"name": "筋力"}, "dex": {"name": "敏捷力"}, "con": {"name": "耐久力"}, "int": {"name": "知力"}, "wis": {"name": "判断力"}, "cha": {"name": "魅力"}},
+  "classes": {"barbarian": {"name": "蛮族"}, "bard": {"name": "吟遊詩人"}, "cleric": {"name": "クレリック"}, "druid": {"name": "ドルイド"}, "fighter": {"name": "ファイター"}, "monk": {"name": "モンク"}, "paladin": {"name": "パラディン"}, "ranger": {"name": "レンジャー"}, "rogue": {"name": "ローグ"}, "sorcerer": {"name": "ソーサラー"}, "warlock": {"name": "ウォーロック"}, "wizard": {"name": "ウィザード"}},
+  "items": {"dagger": {"name": "ダガー"}, "shortsword": {"name": "ショートソード"}, "longsword": {"name": "ロングソード"}, "scimitar": {"name": "シミター"}, "rapier": {"name": "レイピア"}, "greatsword": {"name": "グレートソード"}, "greataxe": {"name": "大斧"}, "mace": {"name": "メイス"}, "warhammer": {"name": "ウォーハンマー"}, "quarterstaff": {"name": "クォータースタッフ"}, "longbow": {"name": "ロングボウ"}, "shortbow": {"name": "ショートボウ"}, "leather_armor": {"name": "革鎧"}, "chain_mail": {"name": "チェインメイル"}, "shield": {"name": "盾"}, "wooden_shield": {"name": "木の盾"}, "arcane_focus": {"name": "秘術焦点"}},
+  "skills": {"athletics": {"aliases": ["運動"]}, "acrobatics": {"aliases": ["軽業"]}, "stealth": {"aliases": ["隠密"]}, "perception": {"aliases": ["知覚"]}, "arcana": {"aliases": ["魔法学"]}, "insight": {"aliases": ["洞察"]}}
+}
