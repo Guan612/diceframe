@@ -276,7 +276,7 @@ def rebuild_lorebook_index(api: "WebAPI", world_id: str) -> None:
         logger.exception("重建世界书索引失败: world_id=%s", world_id)
 
 
-def list_world_templates(api: "WebAPI") -> dict[str, Any]:
+def list_world_templates(api: "WebAPI", language: str = "") -> dict[str, Any]:
     """列出所有可用的世界模板。"""
     templates = []
     seen: set[str] = set()
@@ -298,12 +298,12 @@ def list_world_templates(api: "WebAPI") -> dict[str, Any]:
                 if "_blank_" in str(world_id) and not data.get("starter_lorebook", []):
                     continue
                 if int(data.get("world_schema_version", 1) or 1) >= 2:
-                    data = load_content_world(worlds_dir, str(world_id)) or data
+                    data = load_content_world(worlds_dir, str(world_id), language) or data
                 templates.append(_world_template_summary(data, f.stem))
                 seen.add(str(world_id))
             except Exception:
                 logger.warning("世界模板读取失败: %s", f, exc_info=True)
-    for item in _plugin_world_templates(api):
+    for item in _plugin_world_templates(api, language):
         if str(item.get("world_id") or "") not in seen:
             templates.append(item)
             seen.add(str(item.get("world_id") or ""))
@@ -359,6 +359,7 @@ def _world_template_summary(data: dict[str, Any], fallback_id: str) -> dict[str,
         "world_name": data.get("world_name", fallback_id),
         "description": data.get("description", ""),
         "language": data.get("language", ""),
+        "active_locale": data.get("active_locale", ""),
         "suggested_difficulty": data.get("suggested_difficulty", "标准"),
         "default_rule": data.get("default_rule", "freeform_fantasy"),
         "recommended_rules": _recommended_rules(data),
@@ -382,15 +383,14 @@ def _recommended_rules(data: dict[str, Any]) -> list[str]:
     return result
 
 
-def _plugin_world_templates(api: "WebAPI") -> list[dict[str, Any]]:
+def _plugin_world_templates(api: "WebAPI", language: str = "") -> list[dict[str, Any]]:
     plugin_host = getattr(api, "_plugins", None)
     if not plugin_host:
         return []
     result = []
     for item in plugin_host.contributions.list("world_template"):
         try:
-            data = json.loads(item.path.read_text(encoding="utf-8"))
-            data = plugin_host.expose_scene_image(data, item.plugin_id)
+            data = plugin_host.load_world_template(item.key, language) or {}
             summary = _world_template_summary(data, item.path.stem)
             summary["plugin_id"] = item.plugin_id
             summary["plugin_name"] = item.plugin_name

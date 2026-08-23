@@ -738,6 +738,7 @@ def make_default_character(
             rule = RuleSystem(RuleBundleLoader().load_rule(rules_dir, rule_id, language))
         elif rule_path.exists():
             rule = RuleSystem.load(rule_path)
+        if rule is not None:
             keys = rule.attribute_keys
             pts = rule.attribute_points
             lo = min(a.get("min", 3) for a in rule.attributes) if rule.attributes else 3

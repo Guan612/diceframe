@@ -442,8 +442,8 @@ class PluginHost:
     def contribution_path(self, kind: str, key: str) -> Path | None:
         return self.content.contribution_path(kind, key)
 
-    def load_world_template(self, world_id: str) -> dict[str, Any] | None:
-        return self.content.load_world_template(world_id)
+    def load_world_template(self, world_id: str, language: str = "") -> dict[str, Any] | None:
+        return self.content.load_world_template(world_id, language)
 
     def expose_scene_image(self, data: dict[str, Any], plugin_id: str) -> dict[str, Any]:
         return self.content.expose_scene_image(data, plugin_id)
@@ -463,11 +463,12 @@ class PluginHost:
         *,
         world_id: str = "",
         rule_id: str = "",
+        language: str = "",
     ) -> dict[str, list[dict[str, Any]]]:
-        return self.content.list_content_resources(kind, world_id=world_id, rule_id=rule_id)
+        return self.content.list_content_resources(kind, world_id=world_id, rule_id=rule_id, language=language)
 
-    def get_content_resource(self, kind: str, key: str, *, plugin_id: str = "") -> dict[str, Any] | None:
-        return self.content.get_content_resource(kind, key, plugin_id=plugin_id)
+    def get_content_resource(self, kind: str, key: str, *, plugin_id: str = "", language: str = "") -> dict[str, Any] | None:
+        return self.content.get_content_resource(kind, key, plugin_id=plugin_id, language=language)
 
     def public_asset_path(self, plugin_id: str, relative_path: str) -> Path:
         runtime = self._require(plugin_id)
@@ -1154,14 +1155,18 @@ class PluginHost:
             raise ValueError("插件 ID 与目录名不一致")
         if int(manifest.get("schema_version", 0)) != 1:
             raise ValueError("不支持的 manifest schema_version")
+        supported_versions = {
+            "content_schema_version": {1, 2},
+            "locale_schema_version": {1},
+        }
         for field in ("content_schema_version", "locale_schema_version"):
             if field in manifest:
                 try:
                     version = int(manifest[field])
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"{field} 必须是正整数") from exc
-                if version < 1:
-                    raise ValueError(f"{field} 必须是正整数")
+                if version not in supported_versions[field]:
+                    raise ValueError(f"不支持的 {field}: {version}")
         if "default_locale" in manifest and not str(manifest["default_locale"] or "").strip():
             raise ValueError("default_locale 不能为空")
         plugin_type = self._plugin_type(manifest)

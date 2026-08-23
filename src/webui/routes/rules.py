@@ -8,7 +8,7 @@ from src.webui.routes._common import _get_api, _require_confirmed_request
 
 
 async def api_rules(request: web.Request) -> web.Response:
-    return web.json_response(_get_api(request).list_rules())
+    return web.json_response(_get_api(request).list_rules(request.query.get("language", "")))
 
 
 async def api_rule_create(request: web.Request) -> web.Response:

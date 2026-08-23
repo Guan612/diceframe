@@ -128,6 +128,7 @@ async def api_plugin_content(request: web.Request) -> web.Response:
         request.query.get("kind", ""),
         request.query.get("world_id", ""),
         request.query.get("rule_id", ""),
+        request.query.get("language", ""),
     )
     return web.json_response(result)
 

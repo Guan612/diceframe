@@ -105,18 +105,15 @@ function worldIdOf(w: WorldTemplateSummary | WorldSummary): string { return Stri
 function worldNameOf(w: WorldTemplateSummary | WorldSummary): string { return String(w.world_name || w.name || w.id || '') }
 function worldLanguageLabel(w: WorldTemplateSummary | WorldSummary): string { return contentLanguageOf(w) === 'en' ? t('english') : t('chinese') }
 function worldOptionLabel(w: WorldTemplateSummary | WorldSummary): string { return `${worldNameOf(w)} · ${worldLanguageLabel(w)}` }
-function ruleNameOf(r: RuleSummary): string { return gameLanguage.value === 'en' ? String(r.rule_name_en || r.rule_name || r.rule_id) : (r.rule_name || r.rule_id) }
-function ruleDescriptionOf(r: RuleSummary): string {
-  const en = String(r.description_en || ''), zh = String(r.description || '')
-  return gameLanguage.value === 'en' ? (en || zh) : (zh || en)
-}
+function ruleNameOf(r: RuleSummary): string { return String(r.rule_name || r.rule_id) }
+function ruleDescriptionOf(r: RuleSummary): string { return String(r.description || '') }
 function cloneCharacter<T extends CharacterSheet>(value: T): T { return JSON.parse(JSON.stringify(value)) as T }
 function gameDefault(zh: string, en: string): string { return gameLanguage.value === 'en' ? en : zh }
 function ensureCharacter(value: CharacterSheet): CreateCharacter {
   return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer')) }
 }
 
-watch(activeRule, async (id) => {
+watch([activeRule, gameLanguage], async ([id]) => {
   if (!id) { ruleDetail.value = null; return }
   try {
     const rd = await api<RuleDetailResponse>(`/rules/${id}?language=${encodeURIComponent(gameLanguage.value)}`)
@@ -142,6 +139,17 @@ watch([defaultSceneImageRef, activeRule], async ([reference, ruleId]) => {
 }, { immediate: true })
 watch(seed, (value) => { if (value.trim()) sceneImageFile.value = null })
 watch(locale, (next) => { gameLanguage.value = next })
+watch(gameLanguage, async (language, previous) => {
+  if (language === previous) return
+  try {
+    const [w, r] = await Promise.all([
+      api<WorldTemplatesResponse>(`/world-templates?language=${encodeURIComponent(language)}`),
+      api<RulesResponse>(`/rules?language=${encodeURIComponent(language)}`),
+    ])
+    worlds.value = w.templates || []
+    rules.value = r.rules || []
+  } catch { /* keep the last usable catalog on a transient request failure */ }
+})
 watch([gameLanguage, worlds], () => {
   if (world.value && availableWorlds.value.some(w => worldIdOf(w) === world.value)) return
   world.value = worldIdOf(availableWorlds.value[0] || worlds.value[0] || {})
@@ -160,8 +168,8 @@ watch([gameLanguage, loreWorlds], () => {
 onMounted(async () => {
   const settingsPromise = settings.load().finally(() => { settingsChecked.value = true })
   const [w, r, lw, cs] = await Promise.all([
-    api<WorldTemplatesResponse>('/world-templates'),
-    api<RulesResponse>('/rules'),
+    api<WorldTemplatesResponse>(`/world-templates?language=${encodeURIComponent(gameLanguage.value)}`),
+    api<RulesResponse>(`/rules?language=${encodeURIComponent(gameLanguage.value)}`),
     api<WorldListResponse>('/worlds'),
     api<CharacterCardsResponse>('/character-cards'),
     settingsPromise,

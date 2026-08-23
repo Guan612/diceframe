@@ -304,13 +304,14 @@ async def invoke_plugin_tool(
     return {"ok": True, "plugin_id": plugin_id, "tool_name": tool_name, "result": result}
 
 
-def list_plugin_content(api: "WebAPI", kind: str = "", world_id: str = "", rule_id: str = "") -> dict[str, Any]:
+def list_plugin_content(api: "WebAPI", kind: str = "", world_id: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
     if not api._plugins:
         return {"ok": False, "error": "插件宿主未启用", "resources": {}}
     resources = api._plugins.list_content_resources(
         (kind or "").strip(),
         world_id=(world_id or "").strip(),
         rule_id=(rule_id or "").strip(),
+        language=(language or "").strip(),
     )
     total = sum(len(items) for items in resources.values())
     return {"ok": True, "resources": resources, "total": total}
