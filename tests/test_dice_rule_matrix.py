@@ -121,12 +121,12 @@ def test_preroll_metadata_uses_custom_d20_critical_rule(monkeypatch: pytest.Monk
     assert result["fumble"] is False
 
 
-@pytest.mark.parametrize("rule_file", ["dnd5e.json", "dnd5e_en.json", "dnd5e_ja.json"])
+@pytest.mark.parametrize("rule_file", ["dnd5e.json", "tests/fixtures/legacy_rules/dnd5e_en.json", "tests/fixtures/legacy_rules/dnd5e_ja.json"])
 def test_dnd5e_ability_checks_do_not_auto_succeed_or_fail(
     monkeypatch: pytest.MonkeyPatch,
     rule_file: str,
 ) -> None:
-    rule = RuleSystem.load(Path("templates/rules") / rule_file)
+    rule = RuleSystem.load(Path(rule_file) if "/" in rule_file else Path("templates/rules") / rule_file)
     rolls: Iterator[int] = iter((20, 1))
     monkeypatch.setattr("src.engine.dice_rng.random.randint", lambda _a, _b: next(rolls))
 

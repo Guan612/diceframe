@@ -26,15 +26,20 @@ _ATTR_NAME_EN = {
 }
 
 
-def _enrich_attributes(attributes: list[dict]) -> list[dict]:
+def _enrich_attributes(attributes: list[dict], *, localized: bool = False) -> list[dict]:
     enriched = []
     for attr in attributes or []:
         item = dict(attr)
         key = item.get("key", "")
         name = item.get("name", key)
-        name_en = item.get("name_en") or _ATTR_NAME_EN.get(key, key.upper())
-        item["name_en"] = name_en
-        item["display_name"] = f"{name} ({name_en})" if name_en else name
+        if localized:
+            # Content V2 already materialized the requested locale. Do not
+            # rebuild a second translation authority from attribute keys.
+            item["display_name"] = name
+        else:
+            name_en = item.get("name_en") or _ATTR_NAME_EN.get(key, key.upper())
+            item["name_en"] = name_en
+            item["display_name"] = f"{name} ({name_en})" if name_en else name
         enriched.append(item)
     return enriched
 
@@ -149,7 +154,9 @@ def get_rule_template(api: "WebAPI", rule_id: str, language: str = "") -> dict[s
                     logger.warning("规则语言模板合并失败: %s", loc_path)
     else:
         template = dict(rule.template)
-    template["attributes"] = _enrich_attributes(template.get("attributes", []))
+    template["attributes"] = _enrich_attributes(
+        template.get("attributes", []), localized=bool(template.get("active_locale"))
+    )
     if _plugin_rule_path(api, rule_id):
         plugin_id = _plugin_rule_plugin_id(api, rule_id)
         template = api._plugins.expose_scene_image(template, plugin_id)

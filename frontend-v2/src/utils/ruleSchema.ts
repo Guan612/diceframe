@@ -48,6 +48,9 @@ export function localeFieldSuffix(): string {
 }
 
 export function localizedField<T = unknown>(obj: Record<string, unknown> | null | undefined, key: string): T | undefined {
+  // Content V2 responses are already materialized by the backend. Only V1
+  // payloads without active_locale may use the historical suffix fallback.
+  if (obj?.active_locale) return obj[key] as T | undefined
   const suffix = localeFieldSuffix()
   if (suffix) {
     const v = obj?.[`${key}_${suffix}`]
