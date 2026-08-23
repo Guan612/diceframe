@@ -48,3 +48,17 @@ def test_dnd5e_core_has_canonical_mechanics_and_no_locale_overlay_fields():
     assert core["items"]["arcane_focus"] == {"type": "focus"}
     assert core["items"]["chain_mail"]["ac_base"] == 16
     assert all(item.get("id") for item in core["classes"])
+
+
+def test_dnd5e_v2_starter_items_do_not_depend_on_legacy_damage_tables(monkeypatch):
+    from src.engine import constants
+
+    monkeypatch.setattr(constants, "WEAPON_DAMAGE", {})
+    monkeypatch.setattr(constants, "WEAPON_DAMAGE_DICE", {})
+    rule = RuleSystem(RuleBundleLoader().load_rule(RULES, "dnd5e", "en"))
+
+    equipment, _ = build_starter_items(rule, "Fighter")
+
+    longsword = next(item for item in equipment if item["item_key"] == "longsword")
+    assert longsword["type"] == "weapon"
+    assert longsword["damage_dice"] == "1d8"

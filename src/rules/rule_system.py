@@ -161,6 +161,10 @@ class RuleSystem:
             if isinstance(item, dict):
                 item.pop("name", None)
                 item.pop("description", None)
+        for item in value.get("special_stats", []):
+            if isinstance(item, dict):
+                item.pop("name", None)
+                item.pop("description", None)
         value.pop("skill_pools", None)
         value.pop("skill_names", None)
         value.pop("difficulty_instructions", None)
