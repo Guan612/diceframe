@@ -25,7 +25,7 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
         raise ValueError(f"locale overlay contains mechanics fields: {sorted(forbidden)}")
     result.update({key: value for key, value in rule_fields.items() if key in _DISPLAY_FIELDS})
     result.update({key: value for key, value in fields.items() if key in _DISPLAY_FIELDS})
-    for key, values in (("attributes", overlay.get("attributes")), ("classes", overlay.get("classes")), ("items", overlay.get("items")), ("skills", overlay.get("skills"))):
+    for key, values in (("attributes", overlay.get("attributes")), ("classes", overlay.get("classes")), ("items", overlay.get("items")), ("skills", overlay.get("skills")), ("special_stats", overlay.get("special_stats"))):
         if not isinstance(values, dict):
             continue
         if key == "attributes":

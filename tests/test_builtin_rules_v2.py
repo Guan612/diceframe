@@ -35,6 +35,25 @@ def test_builtin_rule_locale_base_fallback_and_display_name() -> None:
     assert template["rule_name"] == "Classic Fantasy Freeform"
 
 
+@pytest.mark.parametrize(
+    ("locale", "sanity_name", "luck_name"),
+    (
+        ("zh-CN", "理智值", "幸运值"),
+        ("en", "Sanity", "Luck"),
+        ("ja", "正気度", "幸運"),
+    ),
+)
+def test_coc_special_stats_locale_overlays(locale: str, sanity_name: str, luck_name: str) -> None:
+    loader = RuleBundleLoader()
+    system = RuleSystem(loader.load_rule("templates/rules", "freeform_coc", locale))
+    stats = {str(item["key"]): item for item in system.template["special_stats"]}
+
+    assert stats["sanity"]["name"] == sanity_name
+    assert stats["luck"]["name"] == luck_name
+    assert stats["sanity"]["max"] == 99
+    assert stats["luck"]["max"] == 99
+
+
 def test_legacy_full_copy_rules_remain_loadable() -> None:
     loader = RuleBundleLoader()
 
