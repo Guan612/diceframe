@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
+
+from src.content.worlds import load_world_template as _load_content_world
 
 
 def world_template_path(worlds_dir: str | Path, world_id: str) -> Path:
@@ -12,13 +13,6 @@ def world_template_path(worlds_dir: str | Path, world_id: str) -> Path:
     return Path(worlds_dir) / f"{world_id}.json"
 
 
-def load_world_template(worlds_dir: str | Path, world_id: str) -> dict[str, Any] | None:
-    """加载世界模板 JSON；不存在时返回 None。"""
-    world_id = (world_id or "").strip()
-    if not world_id:
-        return None
-    path = world_template_path(worlds_dir, world_id)
-    if not path.exists():
-        return None
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+def load_world_template(worlds_dir: str | Path, world_id: str, locale: str = "") -> dict[str, Any] | None:
+    """加载 V2 世界模板，旧 V1 文件由同一入口透明回退。"""
+    return _load_content_world(worlds_dir, world_id, locale)
