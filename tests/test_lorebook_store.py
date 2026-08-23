@@ -313,6 +313,32 @@ class TestMigration:
                 except PermissionError:
                     time.sleep(0.1)
 
+    def test_old_db_without_type_check_and_missing_columns_converges_to_current_schema(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL, name TEXT NOT NULL,
+                type TEXT DEFAULT 'other', content TEXT DEFAULT ''
+            );
+            INSERT INTO worlds VALUES ('w1', '测试');
+            INSERT INTO lorebook_entries VALUES ('e1', 'w1', '旧条目', 'location', '保留');
+            """
+        )
+        from src.migrations import lorebook
+        migrate = lorebook.migrate
+        assert migrate(conn) == 2
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(lorebook_entries)")}
+        assert set(lorebook._LOREBOOK_COLUMNS) <= columns
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='lorebook_entries'").fetchone()[0].upper()
+        assert "TIER IN" in sql and "MATCH_MODE IN" in sql
+        assert conn.execute("SELECT content FROM lorebook_entries WHERE id='e1'").fetchone()[0] == "保留"
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE lorebook_entries SET tier='invalid' WHERE id='e1'")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE lorebook_entries SET match_mode='invalid' WHERE id='e1'")
     def test_failed_lorebook_rebuild_rolls_back_without_new_table(self, monkeypatch):
         from src.migrations import lorebook
 

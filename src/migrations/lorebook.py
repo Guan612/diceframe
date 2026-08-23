@@ -23,11 +23,11 @@ CREATE TABLE lorebook_entries_new (
     content TEXT NOT NULL DEFAULT '',
     unreliable INTEGER DEFAULT 0,
     sync_on_enter INTEGER DEFAULT 0,
-    tier TEXT DEFAULT 'background',
+    tier TEXT DEFAULT 'background' CHECK(tier IN ('core','background','archived')),
     triggers_recursive TEXT DEFAULT '[]',
     visible_to TEXT DEFAULT '[]',
     is_constant INTEGER DEFAULT 0,
-    match_mode TEXT DEFAULT 'any',
+    match_mode TEXT DEFAULT 'any' CHECK(match_mode IN ('any','all','not_any','not_all')),
     sticky INTEGER DEFAULT 0,
     cooldown INTEGER DEFAULT 0,
     delay INTEGER DEFAULT 0,
@@ -63,16 +63,20 @@ def _v1(conn: sqlite3.Connection) -> None:
 
 
 def _v2(conn: sqlite3.Connection) -> None:
-    """Rebuild only databases carrying the historical type CHECK constraint."""
+    """Converge historical tables to the current schema when required."""
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='lorebook_entries'"
     ).fetchone()
     table_sql = str(row[0] or "") if row else ""
     normalized = table_sql.upper().replace('"', "")
-    if "CHECK" not in normalized or "TYPE IN" not in normalized:
+    old_columns = table_columns(conn, "lorebook_entries")
+    missing_columns = set(_LOREBOOK_COLUMNS) - old_columns
+    needs_rebuild = bool(missing_columns)
+    needs_rebuild |= "TYPE IN" in normalized
+    needs_rebuild |= "TIER IN" not in normalized or "MATCH_MODE IN" not in normalized
+    if not needs_rebuild:
         return
 
-    old_columns = table_columns(conn, "lorebook_entries")
     shared = [column for column in _LOREBOOK_COLUMNS if column in old_columns]
     # ``executescript`` implicitly commits in sqlite3, which would break the
     # migration runner's rollback contract. This block contains one statement.
