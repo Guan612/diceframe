@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from src.content.locale import apply_locale_overlay, resolve_locale
 from src.content.rule_locale import materialize_rule
+from src.content.worlds import materialize_world
 from src.rules.rule_system import RuleSystem
 
 from .registry import ContributionRegistry
@@ -125,9 +126,9 @@ class PluginContentCatalog:
         item = self.registry.find("rule", rule_id, plugin_id=plugin_id)
         if not item or not item.path.exists():
             return None
-        if item.content_schema_version < 2:
-            return json.loads(item.path.read_text(encoding="utf-8"))
         resolved = RuleSystem.load(item.path).template
+        if item.content_schema_version < 2:
+            return resolved
         return self._materialize_locale(item, "rule", dict(resolved), language)
 
     def expose_scene_image(self, data: dict[str, Any], plugin_id: str) -> dict[str, Any]:
@@ -424,6 +425,8 @@ class PluginContentCatalog:
         allowed_top = {"locale_schema_version", "locale", "target", "fields"}
         if kind == "rule":
             allowed_top |= {"rule", "attributes", "classes", "items", "skills", "special_stats"}
+        elif kind == "world_template":
+            allowed_top.add("starter_lorebook")
         unknown = set(overlay) - allowed_top
         if unknown:
             raise ValueError(f"插件 locale 含未知顶层字段: {sorted(unknown)}")
@@ -444,12 +447,7 @@ class PluginContentCatalog:
         if not isinstance(fields, dict):
             raise ValueError("插件 locale fields 必须为对象")
         if kind == "world_template":
-            allowed = {"world_name", "description", "world_setting", "starter_scene", "suggested_difficulty", "starter_lorebook"}
-            forbidden = set(fields) - allowed
-            if forbidden:
-                raise ValueError(f"locale overlay contains mechanics fields: {sorted(forbidden)}")
-            result = dict(data)
-            result.update(fields)
+            return materialize_world(data, overlay)
         else:
             result = apply_locale_overlay(data, fields)
         result["active_locale"] = overlay.get("locale", language)

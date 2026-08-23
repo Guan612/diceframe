@@ -14,6 +14,15 @@ _NESTED_DISPLAY_FIELDS = frozenset({"name", "description", "label", "hint", "fla
 
 
 def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    allowed_top = {"locale_schema_version", "locale", "target", "fields", "rule", "attributes", "classes", "items", "skills", "special_stats"}
+    unknown_top = set(overlay) - allowed_top
+    if unknown_top:
+        raise ValueError(f"locale overlay contains unknown top-level fields: {sorted(unknown_top)}")
+    if overlay.get("locale_schema_version") != 1 or not str(overlay.get("locale") or "").strip():
+        raise ValueError("rule locale schema is invalid")
+    target = overlay.get("target")
+    if not isinstance(target, dict) or target.get("kind") != "rule" or str(target.get("id") or "") != str(core.get("rule_id") or ""):
+        raise ValueError("rule locale target is invalid")
     result = copy.deepcopy(core)
     fields = overlay.get("fields") if isinstance(overlay.get("fields"), dict) else {}
     rule_fields = overlay.get("rule") if isinstance(overlay.get("rule"), dict) else {}
@@ -28,6 +37,34 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
     for key, values in (("attributes", overlay.get("attributes")), ("classes", overlay.get("classes")), ("items", overlay.get("items")), ("skills", overlay.get("skills")), ("special_stats", overlay.get("special_stats"))):
         if not isinstance(values, dict):
             continue
+        if key == "attributes":
+            allowed = {str(item.get("key")) for item in result.get("attributes", []) if isinstance(item, dict) and item.get("key")}
+            nested_allowed = {"name", "label", "hint"}
+        elif key == "classes":
+            allowed = {str(item.get("id")) for item in result.get("classes", []) if isinstance(item, dict) and item.get("id")}
+            nested_allowed = {"name", "description"}
+        elif key == "items":
+            raw_items = result.get("items", {})
+            allowed = {str(item) for item in raw_items} if isinstance(raw_items, dict) else set()
+            nested_allowed = {"name", "description"}
+        elif key == "special_stats":
+            allowed = {str(item.get("key")) for item in result.get("special_stats", []) if isinstance(item, dict) and item.get("key")}
+            nested_allowed = _NESTED_DISPLAY_FIELDS
+        else:
+            raw_skills = result.get("skills", result.get("skill_names", {}))
+            allowed = {str(item) for item in raw_skills} if isinstance(raw_skills, dict) else set()
+            nested_allowed = {"aliases", "name", "description", "label", "hint"}
+        unknown_ids = set(values) - allowed
+        if unknown_ids:
+            raise ValueError(f"locale overlay contains unknown {key} identities: {sorted(unknown_ids)}")
+        for identity, data in values.items():
+            if not isinstance(data, dict):
+                raise ValueError(f"locale overlay {key}.{identity} must be an object")
+            forbidden = set(data) - nested_allowed
+            if forbidden:
+                raise ValueError(f"locale overlay contains mechanics fields: {sorted(forbidden)}")
+            if "aliases" in data and not isinstance(data["aliases"], list):
+                raise ValueError("locale overlay skill aliases must be a list")
         if key == "attributes":
             by_key = {str(item.get("key")): item for item in result.get("attributes", []) if isinstance(item, dict)}
             for identity, data in values.items():
