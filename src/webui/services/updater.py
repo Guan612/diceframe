@@ -374,7 +374,7 @@ class UpdaterService:
             if sha_asset:
                 sha_url = str(sha_asset.get("download_url", ""))
                 sha_result = await self._mirrors.fetch_github_url(
-                    sha_url, binary=False, max_bytes=4096
+                    sha_url, binary=False, max_bytes=4096, resolve=False,
                 )
                 if sha_result.ok and sha_result.data:
                     expected_sha = parse_sha256_file(
@@ -396,6 +396,7 @@ class UpdaterService:
                 target,
                 max_bytes=MAX_APP_UPDATE_BYTES,
                 on_progress=on_progress,
+                resolve=False,
             )
             if not result.ok:
                 self._state.update(state="failed", error=result.error or "下载失败")
