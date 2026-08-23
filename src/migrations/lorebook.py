@@ -58,6 +58,10 @@ def _v1(conn: sqlite3.Connection) -> None:
     ):
         ensure_column(conn, "lorebook_entries", name, definition)
     ensure_column(conn, "worlds", "language", "TEXT DEFAULT 'zh-CN'")
+    ensure_column(conn, "worlds", "author", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "worlds", "version", "TEXT NOT NULL DEFAULT '1.0'")
+    ensure_column(conn, "worlds", "created_at", "TEXT NOT NULL DEFAULT ''")
+    ensure_column(conn, "worlds", "updated_at", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "lorebook_entries", "source_plugin", "TEXT DEFAULT ''")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)")
 

@@ -53,13 +53,14 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_lorebook_world ON lorebook_entries(world_id);
-CREATE INDEX IF NOT EXISTS idx_lorebook_type  ON lorebook_entries(world_id, type);
-CREATE INDEX IF NOT EXISTS idx_lorebook_tier  ON lorebook_entries(world_id, tier);
-
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
 """
+
+_CURRENT_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_world ON lorebook_entries(world_id)",
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_type ON lorebook_entries(world_id, type)",
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_tier ON lorebook_entries(world_id, tier)",
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)",
+)
 class LorebookStore:
     """世界书 SQLite 存储管理器。
 
@@ -75,9 +76,14 @@ class LorebookStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
         migrate_lorebook(self._conn)
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)")
+        for statement in _CURRENT_INDEXES:
+            self._conn.execute(statement)
+        if self._conn.execute("PRAGMA foreign_key_check").fetchone():
+            raise sqlite3.IntegrityError("lorebook foreign key check failed")
         self._conn.commit()
         logger.info("Lorebook 数据库已打开: %s", self.db_path)
 
