@@ -50,6 +50,9 @@ export const en = {
   chinese: '简体中文',
   english: 'English',
   createTitle: 'Create Adventure',
+  recommendedRules: 'Recommended Rules',
+  recommended: 'Recommended',
+  recommendedHint: 'You can still pick any other rule from the full rule list below.',
   createSubtitle: 'Choose a world source and set the starting party.',
   stepWorld: 'World',
   stepCharacters: 'Characters',
@@ -1762,6 +1765,9 @@ export const en = {
   sceneGalleryEmpty: 'No generated scene images in this adventure yet',
   setAsMapBackground: 'Set as map background',
   mapBackgroundSet: 'Map background updated',
+  statusDowned: 'Unconscious',
+  statusStable: 'Stable',
+  deathSaves: 'Death Saves',
   mapBackgroundInvalidFile: 'Choose a PNG, JPEG, or WebP image no larger than 8 MB',
   // apiErrors：key 是后端返回的稳定错误码（error_code），value 是界面语言文案。
   // 翻译时参照英文值即可，无需理解后端原始消息；未收录的错误码由前端回退显示原文。

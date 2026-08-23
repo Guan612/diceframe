@@ -7,6 +7,7 @@ import logging
 import random
 import struct
 from pathlib import Path
+from typing import Any
 
 from src.rules.rule_system import RuleSystem
 
@@ -137,6 +138,38 @@ def set_hp(character_sheet: dict, hp: int | float, max_hp: int | float | None = 
     return current
 
 
+def armor_ac_components(character_sheet: dict) -> dict[str, Any]:
+    """category_lite 护甲模型的 AC 组件：最高甲基础值、DEX 封顶、盾加值。
+
+    无已知护甲时 base=0，调用方按 10 + 完整 DEX 处理（无甲）。
+    """
+    from src.engine.constants import ARMOR_LITE
+
+    base = 0
+    dex_cap: int | None = None
+    category = ""
+    shield = 0
+    equipment = character_sheet.get("equipment")
+    if not isinstance(equipment, list):
+        return {"base": base, "dex_cap": dex_cap, "shield": shield, "category": category}
+    for item in equipment:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("item_key") or item.get("name") or "").strip().casefold()
+        spec = ARMOR_LITE.get(key)
+        if not spec:
+            continue
+        if spec.get("category") == "shield":
+            shield = max(shield, int(spec.get("ac_bonus", 2)))
+            continue
+        item_base = int(spec.get("ac_base", 0))
+        if item_base > base:
+            base = item_base
+            dex_cap = spec.get("dex_cap")
+            category = str(spec.get("category") or "")
+    return {"base": base, "dex_cap": dex_cap, "shield": shield, "category": category}
+
+
 def armor_value(character_sheet: dict) -> int:
     """Return trusted armor from explicit state or equipped items.
 
@@ -240,11 +273,109 @@ def mark_character_dead(character_sheet: dict, round_number: int | None = None) 
     return True
 
 
-def sync_death_from_hp(character_sheet: dict, round_number: int | None = None) -> bool:
-    """当 HP 归零时统一落死亡状态；本次新死亡返回 True。"""
+def sync_death_from_hp(character_sheet: dict, round_number: int | None = None, rule: Any | None = None) -> bool:
+    """当 HP 归零时落死亡/昏迷状态；本次新死亡返回 True。
+
+    规则声明 ``death_mechanic.hp_zero=downed_death_saves`` 时进入昏迷并
+    初始化死亡豁免计数（D&D 5e 式）；否则保持旧版即死语义。
+    """
     if int(character_sheet.get("hp", 0) or 0) > 0:
         return False
+    if (
+        rule is not None
+        and rule.death_mechanic["hp_zero"] == "downed_death_saves"
+        and not character_sheet.get("deceased")
+    ):
+        if str(character_sheet.get("status") or "") not in {"downed", "stable"}:
+            enter_downed_state(character_sheet)
+        return False
     return mark_character_dead(character_sheet, round_number)
+
+
+def enter_downed_state(character_sheet: dict) -> None:
+    """进入昏迷状态并重置死亡豁免计数。"""
+    character_sheet["status"] = "downed"
+    character_sheet["death_saves"] = {"success": 0, "failure": 0}
+
+
+def wake_character(character_sheet: dict) -> bool:
+    """HP>0 时清除昏迷/稳定状态与豁免计数；实际清除时返回 True。"""
+    if int(character_sheet.get("hp", 0) or 0) <= 0:
+        return False
+    changed = False
+    if str(character_sheet.get("status") or "") in {"downed", "stable"}:
+        character_sheet.pop("status", None)
+        changed = True
+    if "death_saves" in character_sheet:
+        character_sheet.pop("death_saves", None)
+        changed = True
+    return changed
+
+
+def record_death_save_failures(
+    character_sheet: dict, count: int, round_number: int | None = None
+) -> str | None:
+    """昏迷角色受击累加失败（5e：任何伤害 1 次、暴击 2 次）；满 3 次死亡返回 'dead'。"""
+    if str(character_sheet.get("status") or "") not in {"downed", "stable"} or int(count) <= 0:
+        return None
+    # A stable character is still at 0 HP. Old saves may retain a stale
+    # death_saves object, so renewed damage always starts a fresh tracker.
+    if str(character_sheet.get("status") or "") == "stable":
+        character_sheet["status"] = "downed"
+        character_sheet["death_saves"] = {"success": 0, "failure": 0}
+    saves = character_sheet.get("death_saves")
+    if not isinstance(saves, dict):
+        saves = {"success": 0, "failure": 0}
+        character_sheet["death_saves"] = saves
+    saves["failure"] = int(saves.get("failure", 0) or 0) + int(count)
+    if int(saves["failure"]) >= 3:
+        character_sheet.pop("status", None)
+        character_sheet.pop("death_saves", None)
+        mark_character_dead(character_sheet, round_number)
+        return "dead"
+    return "recorded"
+
+
+def is_conscious(character_sheet: dict) -> bool:
+    """角色是否能行动：未死亡且未昏迷（稳定者仍昏迷，不能行动）。"""
+    return not character_sheet.get("deceased") and str(
+        character_sheet.get("status") or ""
+    ) not in {"downed", "stable"}
+
+
+def apply_death_save(character_sheet: dict, roll_value: int, round_number: int | None = None) -> str:
+    """应用一次死亡豁免并返回事件：wake/dead/stable/success/failure/failure_double。"""
+    saves = character_sheet.get("death_saves")
+    if not isinstance(saves, dict):
+        saves = {"success": 0, "failure": 0}
+        character_sheet["death_saves"] = saves
+    value = int(roll_value)
+    if value >= 20:
+        set_hp(character_sheet, 1, character_sheet.get("max_hp"))
+        character_sheet.pop("status", None)
+        character_sheet.pop("death_saves", None)
+        return "wake"
+    if value <= 1:
+        saves["failure"] = int(saves.get("failure", 0) or 0) + 2
+        event = "failure_double"
+    elif value >= 10:
+        saves["success"] = int(saves.get("success", 0) or 0) + 1
+        event = "success"
+    else:
+        saves["failure"] = int(saves.get("failure", 0) or 0) + 1
+        event = "failure"
+    if int(saves.get("failure", 0) or 0) >= 3:
+        character_sheet.pop("status", None)
+        character_sheet.pop("death_saves", None)
+        mark_character_dead(character_sheet, round_number)
+        return "dead"
+    if int(saves.get("success", 0) or 0) >= 3:
+        character_sheet["status"] = "stable"
+        # Stable is a terminal state for automatic saves; do not leave three
+        # active successes that can be mistaken for an in-progress tracker.
+        character_sheet.pop("death_saves", None)
+        return "stable"
+    return event
 
 
 def revive_character(character_sheet: dict, method: str = "法术") -> bool:
@@ -429,24 +560,91 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
         return [], []
     cls = next((c for c in rule.classes if c.get("name") == class_name), rule.classes[0])
     starter = cls.get("starter_equipment", [])
+    # Historical templates and third-party rules may use a single item object.
+    # Normalize at this boundary so the normal item construction path handles it.
+    if isinstance(starter, dict):
+        starter = [starter]
+    elif not isinstance(starter, list):
+        starter = []
     if not starter:
         return [], []
-    from src.engine.constants import WEAPON_DAMAGE
+    from src.engine.constants import (
+        ARMOR_LITE,
+        WEAPON_DAMAGE,
+        WEAPON_DAMAGE_DICE,
+        canonical_item_key,
+    )
     equip: list[dict] = []
     inv: list[dict] = []
+    category_lite = getattr(rule, "armor_model", "sum") == "category_lite"
+    equipped_weapons = 0
+
+    def make_item(iname: str, slot: str = "") -> dict | None:
+        display_key = str(iname).strip().casefold()
+        item_key = canonical_item_key(iname)
+        key = item_key or display_key
+        if category_lite and key == "arcane_focus":
+            return {
+                "name": iname,
+                "type": "focus",
+                "slot": slot,
+                "quality": "common",
+                "item_key": item_key,
+            }
+        armor = ARMOR_LITE.get(key)
+        if category_lite and armor:
+            if armor.get("category") == "shield":
+                return {
+                    "name": iname, "type": "shield", "slot": slot or "off_hand", "quality": "common",
+                    **({"item_key": item_key} if item_key else {}),
+                }
+            return {
+                "name": iname,
+                "type": "armor",
+                "slot": slot or "armor",
+                "armor": int(armor.get("ac_base", 0)),
+                "quality": "common",
+                **({"item_key": item_key} if item_key else {}),
+            }
+        damage = WEAPON_DAMAGE.get(key, WEAPON_DAMAGE.get(display_key, 0))
+        damage_dice = WEAPON_DAMAGE_DICE.get(key, WEAPON_DAMAGE_DICE.get(display_key, ""))
+        if damage_dice or damage:
+            return {
+                "name": iname,
+                "type": "weapon",
+                "damage": int(damage or 0),
+                "slot": slot or ("main_hand" if equipped_weapons == 0 else "off_hand"),
+                "quality": "common",
+                **({"item_key": item_key} if item_key else {}),
+                **({"damage_dice": damage_dice} if damage_dice else {}),
+            }
+        return None
+
     for st_item in starter:
         if isinstance(st_item, dict):
             iname = st_item.get("name", "")
             islot = st_item.get("slot", "")
-            if islot:
-                equip.append({"name": iname, "type": "weapon", "damage": WEAPON_DAMAGE.get(iname, 0), "slot": islot, "quality": "common"})
+            item = make_item(str(iname), str(islot))
+            if item and (islot or item.get("type") == "focus"):
+                equip.append(item)
+                equipped_weapons += int(item.get("type") == "weapon")
             else:
                 inv.append({"name": iname, "qty": 1, "effect": ""})
         else:
             iname = str(st_item)
             cat = find_item_category(rule.item_categories, iname)
-            if cat == "equipment" and iname in WEAPON_DAMAGE and not equip:
-                equip.append({"name": iname, "type": "weapon", "damage": WEAPON_DAMAGE[iname], "slot": "main_hand", "quality": "common"})
+            item = make_item(iname)
+            known_rule_item = item is not None and category_lite
+            legacy_weapon = (
+                item is not None
+                and item.get("type") == "weapon"
+                and cat == "equipment"
+                and equipped_weapons == 0
+            )
+            if known_rule_item or legacy_weapon:
+                assert item is not None
+                equip.append(item)
+                equipped_weapons += int(item.get("type") == "weapon")
             else:
                 inv.append({"name": iname, "qty": 1, "effect": ""})
     return equip, inv

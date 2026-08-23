@@ -50,6 +50,9 @@ export const zhCN = {
   chinese: '简体中文',
   english: 'English',
   createTitle: '创建新冒险',
+  recommendedRules: '推荐规则',
+  recommended: '推荐',
+  recommendedHint: '你也可以在下方完整规则列表中选择其他规则。',
   createSubtitle: '选择世界来源，设定初始角色。',
   stepWorld: '世界',
   stepCharacters: '角色',
@@ -1762,6 +1765,9 @@ export const zhCN = {
   sceneGalleryEmpty: '本局还没有生成场景图',
   setAsMapBackground: '设为地图背景',
   mapBackgroundSet: '地图背景已更新',
+  statusDowned: '昏迷',
+  statusStable: '稳定',
+  deathSaves: '死亡豁免',
   mapBackgroundInvalidFile: '请选择不超过 8 MB 的 PNG、JPEG 或 WebP 图片',
   // apiErrors：key 是后端返回的稳定错误码（error_code），value 是界面语言文案。
   // 翻译时参照英文值即可，无需理解后端原始消息；未收录的错误码由前端回退显示原文。

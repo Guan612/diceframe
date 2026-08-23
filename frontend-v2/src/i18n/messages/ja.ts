@@ -50,6 +50,9 @@ export const ja = {
   chinese: '簡体中文',
   english: 'English',
   createTitle: '新しい冒険を作成',
+  recommendedRules: 'おすすめルール',
+  recommended: 'おすすめ',
+  recommendedHint: '下のルール一覧から他のルールを選ぶこともできます。',
   createSubtitle: '世界のソースを選択し、初期キャラクターを設定します。',
   stepWorld: '世界',
   stepCharacters: 'キャラクター',
@@ -1762,6 +1765,9 @@ export const ja = {
   sceneGalleryEmpty: 'このセッションには生成済みのシーン画像がまだありません',
   setAsMapBackground: 'マップ背景に設定',
   mapBackgroundSet: 'マップ背景を更新しました',
+  statusDowned: '意識不明',
+  statusStable: '安定',
+  deathSaves: '死亡セーヴ',
   mapBackgroundInvalidFile: '8 MB 以下の PNG、JPEG、WebP 画像を選択してください',
   // apiErrors：key はバックエンドが返す安定したエラーコード（error_code）、value は画面言語の文言。
   // 翻訳時は英語の値だけを参照すればよく、バックエンドの原文を理解する必要はありません。
