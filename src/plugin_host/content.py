@@ -373,17 +373,18 @@ class PluginContentCatalog:
                     data.setdefault("character_name", item.title or item.key)
                 else:
                     data.setdefault("name", item.title or item.key)
+                if kind == "rule" and item.content_schema_version >= 2:
+                    data = self.load_rule_template(item.key, language, plugin_id=item.plugin_id) or data
+                else:
+                    data = self._materialize_locale(item, kind, data, language)
+                data.setdefault("id", item.key)
                 data.update({
                     "plugin_id": item.plugin_id,
                     "plugin_name": item.plugin_name,
                     "source": "plugin",
                     "readonly": True,
+                    "ref": str(item.ref),
                 })
-                if kind == "rule" and item.content_schema_version >= 2:
-                    data = self.load_rule_template(item.key, language, plugin_id=item.plugin_id) or data
-                else:
-                    data = self._materialize_locale(item, kind, data, language)
-                data["ref"] = str(item.ref)
                 self._expose_packaged_portrait(data, item.plugin_id)
                 result.append(data)
             except (OSError, TypeError, json.JSONDecodeError):

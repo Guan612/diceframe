@@ -70,6 +70,12 @@ def test_world_locale_can_only_overlay_canonical_lore_display_fields():
         materialize_world(core, {**overlay, "starter_lorebook": {"npc_fake": {"name": "Fake"}}})
     with pytest.raises(ValueError):
         materialize_world(core, {**overlay, "starter_lorebook": {"npc_guide": {"tier": "archived"}}})
+    with pytest.raises(ValueError):
+        materialize_world(core, {**overlay, "unknown": True})
+    with pytest.raises(ValueError):
+        materialize_world(core, {**overlay, "fields": "bad"})
+    with pytest.raises(ValueError):
+        materialize_world(core, {**overlay, "starter_lorebook": []})
 
 
 def test_rule_locale_nested_mechanics_are_rejected():
@@ -83,6 +89,12 @@ def test_rule_locale_nested_mechanics_are_rejected():
         materialize_rule(core, {**base, "items": {"sword": {"damage_dice": "9d99"}}})
     with pytest.raises(ValueError):
         materialize_rule(core, {**base, "classes": {"fighter": {"scripts": []}}})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "fields": "bad"})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "items": []})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "skills": 42})
 
 
 @pytest.mark.asyncio

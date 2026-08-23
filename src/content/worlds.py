@@ -15,6 +15,12 @@ def materialize_world(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str
     """Apply a typed world locale without changing canonical lore identity/mechanics."""
     if not isinstance(overlay, dict):
         raise ValueError("world locale overlay must be an object")
+    allowed_top = {"locale_schema_version", "locale", "target", "fields", "starter_lorebook"}
+    unknown_top = set(overlay) - allowed_top
+    if unknown_top:
+        raise ValueError(f"world locale contains unknown top-level fields: {sorted(unknown_top)}")
+    if overlay.get("locale_schema_version") != 1 or not isinstance(overlay.get("locale"), str) or not overlay["locale"].strip():
+        raise ValueError("world locale schema is invalid")
     fields = overlay.get("fields")
     if not isinstance(fields, dict) or set(fields) - _DISPLAY_FIELDS:
         raise ValueError("world locale fields contain mechanics or unknown fields")

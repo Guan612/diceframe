@@ -24,8 +24,10 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
     if not isinstance(target, dict) or target.get("kind") != "rule" or str(target.get("id") or "") != str(core.get("rule_id") or ""):
         raise ValueError("rule locale target is invalid")
     result = copy.deepcopy(core)
-    fields = overlay.get("fields") if isinstance(overlay.get("fields"), dict) else {}
-    rule_fields = overlay.get("rule") if isinstance(overlay.get("rule"), dict) else {}
+    fields = overlay.get("fields", {})
+    rule_fields = overlay.get("rule", {})
+    if not isinstance(fields, dict) or not isinstance(rule_fields, dict):
+        raise ValueError("rule locale fields and rule must be objects")
     forbidden = set(fields) - _DISPLAY_FIELDS
     if forbidden:
         raise ValueError(f"locale overlay contains mechanics fields: {sorted(forbidden)}")
@@ -35,8 +37,10 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
     result.update({key: value for key, value in rule_fields.items() if key in _DISPLAY_FIELDS})
     result.update({key: value for key, value in fields.items() if key in _DISPLAY_FIELDS})
     for key, values in (("attributes", overlay.get("attributes")), ("classes", overlay.get("classes")), ("items", overlay.get("items")), ("skills", overlay.get("skills")), ("special_stats", overlay.get("special_stats"))):
-        if not isinstance(values, dict):
+        if values is None:
             continue
+        if not isinstance(values, dict):
+            raise ValueError(f"rule locale {key} must be an object")
         if key == "attributes":
             allowed = {str(item.get("key")) for item in result.get("attributes", []) if isinstance(item, dict) and item.get("key")}
             nested_allowed = {"name", "label", "hint"}
