@@ -135,14 +135,17 @@ def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
     template.setdefault("identity_schema", rule.identity_schema)
     template.setdefault("progression_schema", rule.progression_schema)
     template.setdefault("ui_schema", rule.ui_schema)
-    for s in sorted(field_suffixes()):
-        loc_path = rule_path.parent / f"{rule_path.stem}_{s}.json"
-        if loc_path.exists():
-            try:
-                loc = json.loads(loc_path.read_text(encoding="utf-8"))
-                _merge_localized_fields(template, loc, s)
-            except Exception:
-                logger.warning("规则语言模板合并失败: %s", loc_path)
+    if int(template.get("rule_schema_version", 1) or 1) < 2:
+        for s in sorted(field_suffixes()):
+            loc_path = rule_path.parent / f"{rule_path.stem}_{s}.json"
+            if loc_path.exists():
+                try:
+                    loc = json.loads(loc_path.read_text(encoding="utf-8"))
+                    _merge_localized_fields(template, loc, s)
+                except Exception:
+                    logger.warning("规则语言模板合并失败: %s", loc_path)
+    else:
+        template = dict(rule.template)
     template["attributes"] = _enrich_attributes(template.get("attributes", []))
     if _plugin_rule_path(api, rule_id):
         plugin_id = _plugin_rule_plugin_id(api, rule_id)
