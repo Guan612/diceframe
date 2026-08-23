@@ -17,6 +17,7 @@ from src.engine.language import (
     localized_text,
     normalize_language,
 )
+from src.content.rule_locale import materialize_rule
 
 logger = logging.getLogger("trpg")
 SUPPORTED_DICE_SYSTEMS = frozenset({"d20", "d100", "none"})
@@ -166,8 +167,14 @@ class RuleSystem:
 
     @classmethod
     def load(cls, path: str | Path) -> "RuleSystem":
-        from src.rules.loader import RuleBundleLoader
-        template = RuleBundleLoader().load(path)
+        source = Path(path)
+        raw = json.loads(source.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and raw.get("locale_schema_version") and raw.get("target"):
+            target = raw.get("target") or {}
+            core = source.parents[2] / f"{target.get('id')}.json"
+            template = materialize_rule(_resolve_rule_template(core), raw)
+        else:
+            template = _resolve_rule_template(source)
         logger.info("规则已加载: %s (%s)", template.get("rule_id"), template.get("rule_name"))
         return cls(template)
 
