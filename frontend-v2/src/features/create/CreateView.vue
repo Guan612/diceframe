@@ -119,7 +119,7 @@ function ensureCharacter(value: CharacterSheet): CreateCharacter {
 watch(activeRule, async (id) => {
   if (!id) { ruleDetail.value = null; return }
   try {
-    const rd = await api<RuleDetailResponse>(`/rules/${id}`)
+    const rd = await api<RuleDetailResponse>(`/rules/${id}?language=${encodeURIComponent(gameLanguage.value)}`)
     ruleDetail.value = rd.rule || null
   } catch { ruleDetail.value = null }
 }, { immediate: true })
