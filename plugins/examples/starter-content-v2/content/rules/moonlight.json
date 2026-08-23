@@ -1,0 +1,1 @@
+{"id": "moonlight", "rule_id": "moonlight", "content_schema_version": 2, "rule_schema_version": 2, "dice_system": "d20", "combat_model": "hp_based", "attributes": [{"key": "str", "min": 3, "max": 20}]}
