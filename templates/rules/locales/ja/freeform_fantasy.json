@@ -5,6 +5,16 @@
     "kind": "rule",
     "id": "freeform_fantasy"
   },
+  "items": {
+    "iron_sword": {"name": "鉄の剣"},
+    "leather_armor": {"name": "革鎧"},
+    "staff": {"name": "杖"},
+    "spellbook": {"name": "魔法書"},
+    "longbow": {"name": "長弓"},
+    "arrows": {"name": "矢×20"},
+    "dagger": {"name": "短剣"},
+    "lockpicks": {"name": "ピッキングツール"}
+  },
   "rule": {
     "rule_name": "クラシックファンタジー・フリーフォーム",
     "description": "D&D を基にした軽量な剣と魔法のフリーフォームルール。",

@@ -199,6 +199,38 @@ def test_starter_items_carry_damage_dice_for_known_weapons() -> None:
 
 
 @pytest.mark.parametrize(
+    ("locale", "class_name", "sword_name", "armor_name", "spellbook_name"),
+    [
+        ("zh-CN", "战士", "铁剑", "皮甲", "法术书"),
+        ("en", "Warrior", "Iron Sword", "Leather Armor", "Spellbook"),
+        ("ja", "戦士", "鉄の剣", "革鎧", "魔法書"),
+    ],
+)
+def test_freeform_fantasy_starter_items_use_declared_types(
+    locale: str, class_name: str, sword_name: str, armor_name: str, spellbook_name: str,
+) -> None:
+    """Built-in Fantasy equipment must not use the legacy damage-name fallback."""
+    rule_path = RULES / "freeform_fantasy.json" if locale == "zh-CN" else RULES / "locales" / locale / "freeform_fantasy.json"
+    rule = RuleSystem.load(rule_path)
+    equipment, inventory = build_starter_items(rule, class_name)
+
+    sword = next(item for item in equipment if item["name"] == sword_name)
+    armor = next(item for item in equipment if item["name"] == armor_name)
+    assert sword["type"] == "weapon"
+    assert sword["item_key"] == "iron_sword"
+    assert armor["type"] == "armor"
+    assert armor["item_key"] == "leather_armor"
+    assert armor["armor"] == 2
+    assert all(item["name"] != armor_name for item in inventory)
+
+    mage_rule = RuleSystem.load(rule_path)
+    _mage_equipment, mage_inventory = build_starter_items(
+        mage_rule, {"zh-CN": "法师", "en": "Mage", "ja": "魔術師"}[locale]
+    )
+    assert any(item["name"] == spellbook_name for item in mage_inventory)
+
+
+@pytest.mark.parametrize(
     ("rule_file", "class_name", "weapon_name", "shield_name", "armor_name"),
     [
         ("dnd5e.json", "战士", "长剑", "盾牌", "链甲"),

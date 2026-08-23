@@ -239,6 +239,78 @@ class TestMigration:
                 except PermissionError:
                     time.sleep(0.1)
 
+    def test_open_migrates_minimal_legacy_schema_before_creating_indexes(self):
+        """字段不完整的旧库也必须能打开并完成完整 CRUD。"""
+        import gc
+        import sqlite3
+
+        t = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        t.close()
+        path = Path(t.name)
+        try:
+            conn = sqlite3.connect(str(path))
+            conn.execute("CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            conn.execute("INSERT INTO worlds (id, name) VALUES ('w1', '旧世界')")
+            conn.execute(
+                "CREATE TABLE lorebook_entries ("
+                "id TEXT PRIMARY KEY, world_id TEXT NOT NULL REFERENCES worlds(id), "
+                "name TEXT NOT NULL, type TEXT, keywords TEXT, content TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO lorebook_entries (id, world_id, name, type, keywords, content) "
+                "VALUES ('e1', 'w1', '旧条目', 'location', '[]', '旧内容')"
+            )
+            conn.commit()
+            conn.close()
+            del conn
+            gc.collect()
+
+            store = LorebookStore(path)
+            store.open()
+            try:
+                assert store.get_world("w1")["language"] == "zh-CN"
+                assert store.get_entry("e1")["tier"] == "background"
+                assert store._execute("PRAGMA user_version").fetchone()[0] == 2
+                indexes = {
+                    row[1] for row in store._execute("PRAGMA index_list('lorebook_entries')")
+                }
+                assert {
+                    "idx_lorebook_world", "idx_lorebook_type",
+                    "idx_lorebook_tier", "idx_lorebook_source",
+                } <= indexes
+
+                store.create_world("w2", "新世界")
+                store.add_entry({
+                    "id": "e2", "world_id": "w2", "name": "新条目",
+                    "keywords": ["新"], "content": "内容",
+                })
+                assert store.list_entries("w2")[0]["id"] == "e2"
+                store.update_entry("e2", {"name": "更新条目"})
+                assert store.get_entry("e2")["name"] == "更新条目"
+                store.delete_entry("e2")
+                assert store.get_entry("e2") is None
+            finally:
+                store.close()
+                del store
+                gc.collect()
+
+            reopened = LorebookStore(path)
+            reopened.open()
+            try:
+                assert reopened.get_entry("e1")["content"] == "旧内容"
+                assert reopened.list_worlds()[0]["id"] in {"w1", "w2"}
+            finally:
+                reopened.close()
+                del reopened
+                gc.collect()
+        finally:
+            for _ in range(20):
+                try:
+                    path.unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    time.sleep(0.1)
+
     def test_drop_legacy_type_check_allows_spell_class(self):
         """老库 type 列带 CHECK 约束：打开时重建表去掉约束，能插入 spell/class。"""
         import gc

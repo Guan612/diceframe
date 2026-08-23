@@ -53,12 +53,15 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+"""
+
+_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_lorebook_world ON lorebook_entries(world_id);
 CREATE INDEX IF NOT EXISTS idx_lorebook_type  ON lorebook_entries(world_id, type);
 CREATE INDEX IF NOT EXISTS idx_lorebook_tier  ON lorebook_entries(world_id, tier);
-
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
+CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin);
 """
 # 迁移后的 lorebook_entries 目标列（新表结构，顺序即 _drop_legacy_type_check_sql 的建表顺序）
 _LOREBOOK_NEW_COLUMNS = (
@@ -124,7 +127,8 @@ class LorebookStore:
         self._conn.executescript(SCHEMA)
         migrate_lorebook(self._conn)
         self._drop_legacy_type_check()
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)")
+        # 旧库可能还没有迁移出的列；所有依赖列的索引必须在 migration 之后创建。
+        self._conn.executescript(_INDEXES)
         self._conn.commit()
         logger.info("Lorebook 数据库已打开: %s", self.db_path)
 

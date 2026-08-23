@@ -597,14 +597,43 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
     inv: list[dict] = []
     category_lite = getattr(rule, "armor_model", "sum") == "category_lite"
     item_defs = getattr(rule, "template", {}).get("items", {}) if hasattr(rule, "template") else {}
+    if not isinstance(item_defs, dict):
+        item_defs = {}
     equipped_weapons = 0
 
-    def make_item(iname: str, slot: str = "") -> dict | None:
+    def resolve_item(iname: str) -> tuple[str, dict | None]:
         display_key = str(iname).strip().casefold()
         item_key = canonical_item_key(iname)
         if display_key in item_defs:
             item_key = display_key
         item_def = item_defs.get(item_key) if item_key else None
+        if not isinstance(item_def, dict):
+            item_def = None
+        if item_def is None:
+            # V2 rules normally use canonical IDs; this keeps a localized
+            # legacy starter name usable when its item definition has a name.
+            for candidate_key, candidate in item_defs.items():
+                if (
+                    isinstance(candidate, dict)
+                    and str(candidate.get("name") or "").strip().casefold() == display_key
+                ):
+                    item_key = str(candidate_key)
+                    item_def = candidate
+                    break
+        return item_key, item_def
+
+    def display_name_for(iname: str) -> str:
+        _, item_def = resolve_item(iname)
+        return str((item_def or {}).get("name") or iname)
+
+    def declared_item_type(iname: str) -> str:
+        _, item_def = resolve_item(iname)
+        item_type = str((item_def or {}).get("type") or "").strip().casefold()
+        return item_type if item_type in {"weapon", "armor", "shield", "focus"} else ""
+
+    def make_item(iname: str, slot: str = "") -> dict | None:
+        display_key = str(iname).strip().casefold()
+        item_key, item_def = resolve_item(iname)
         display_name = str((item_def or {}).get("name") or iname)
         if isinstance(item_def, dict) and item_def.get("type"):
             item_type = str(item_def["type"])
@@ -622,6 +651,8 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
                         "armor_category": str(item_def.get("armor_category") or ""),
                         "ac_base": int(item_def.get("ac_base", 0) or 0),
                     })
+                    if "armor" in item_def:
+                        canonical_armor["armor"] = int(item_def.get("armor", 0) or 0)
                     if "dex_cap" in item_def:
                         canonical_armor["dex_cap"] = item_def["dex_cap"]
                 return canonical_armor
@@ -678,12 +709,12 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
                 equip.append(item)
                 equipped_weapons += int(item.get("type") == "weapon")
             else:
-                inv.append({"name": iname, "qty": 1, "effect": ""})
+                inv.append({"name": display_name_for(str(iname)), "qty": 1, "effect": ""})
         else:
             iname = str(st_item)
             cat = find_item_category(rule.item_categories, iname)
             item = make_item(iname)
-            known_rule_item = item is not None and category_lite
+            known_rule_item = item is not None and (category_lite or bool(declared_item_type(iname)))
             legacy_weapon = (
                 item is not None
                 and item.get("type") == "weapon"
@@ -695,7 +726,7 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
                 equip.append(item)
                 equipped_weapons += int(item.get("type") == "weapon")
             else:
-                inv.append({"name": iname, "qty": 1, "effect": ""})
+                inv.append({"name": display_name_for(iname), "qty": 1, "effect": ""})
     return equip, inv
 
 
