@@ -558,8 +558,9 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
     """
     if not rule or not getattr(rule, "classes", None):
         return [], []
-    cls = next((c for c in rule.classes if c.get("name") == class_name), rule.classes[0])
-    starter = cls.get("starter_equipment", [])
+    cls = next((c for c in rule.classes if c.get("name") == class_name or c.get("id") == class_name), rule.classes[0])
+    use_canonical = bool(getattr(rule, "template", {}).get("active_locale")) if hasattr(rule, "template") else False
+    starter = (cls.get("starter_equipment_ids") if use_canonical else None) or cls.get("starter_equipment", [])
     # Historical templates and third-party rules may use a single item object.
     # Normalize at this boundary so the normal item construction path handles it.
     if isinstance(starter, dict):
@@ -577,15 +578,36 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
     equip: list[dict] = []
     inv: list[dict] = []
     category_lite = getattr(rule, "armor_model", "sum") == "category_lite"
+    item_defs = getattr(rule, "template", {}).get("items", {}) if hasattr(rule, "template") else {}
     equipped_weapons = 0
 
     def make_item(iname: str, slot: str = "") -> dict | None:
         display_key = str(iname).strip().casefold()
         item_key = canonical_item_key(iname)
+        if display_key in item_defs:
+            item_key = display_key
+        item_def = item_defs.get(item_key) if item_key else None
+        display_name = str((item_def or {}).get("name") or iname)
+        if isinstance(item_def, dict) and item_def.get("type"):
+            item_type = str(item_def["type"])
+            if item_type == "focus":
+                return {"name": display_name, "type": "focus", "slot": slot, "quality": "common", "item_key": item_key}
+            if item_type in {"shield", "armor"}:
+                return {
+                    "name": display_name, "type": item_type, "slot": slot or ("off_hand" if item_type == "shield" else "armor"),
+                    "quality": "common", **({"item_key": item_key} if item_key else {}),
+                    **({"armor": int(item_def.get("ac_base", 0))} if item_type == "armor" else {}),
+                }
+            if item_type == "weapon":
+                return {
+                    "name": display_name, "type": "weapon", "damage": int(item_def.get("damage", 0) or 0),
+                    "slot": slot or ("main_hand" if equipped_weapons == 0 else "off_hand"), "quality": "common",
+                    **({"item_key": item_key} if item_key else {}), **({"damage_dice": item_def["damage_dice"]} if item_def.get("damage_dice") else {}),
+                }
         key = item_key or display_key
         if category_lite and key == "arcane_focus":
             return {
-                "name": iname,
+                "name": display_name,
                 "type": "focus",
                 "slot": slot,
                 "quality": "common",
@@ -595,11 +617,11 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
         if category_lite and armor:
             if armor.get("category") == "shield":
                 return {
-                    "name": iname, "type": "shield", "slot": slot or "off_hand", "quality": "common",
+                    "name": display_name, "type": "shield", "slot": slot or "off_hand", "quality": "common",
                     **({"item_key": item_key} if item_key else {}),
                 }
             return {
-                "name": iname,
+                "name": display_name,
                 "type": "armor",
                 "slot": slot or "armor",
                 "armor": int(armor.get("ac_base", 0)),
@@ -610,7 +632,7 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
         damage_dice = WEAPON_DAMAGE_DICE.get(key, WEAPON_DAMAGE_DICE.get(display_key, ""))
         if damage_dice or damage:
             return {
-                "name": iname,
+                "name": display_name,
                 "type": "weapon",
                 "damage": int(damage or 0),
                 "slot": slot or ("main_hand" if equipped_weapons == 0 else "off_hand"),

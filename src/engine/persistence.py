@@ -19,6 +19,7 @@ from typing import Any, Callable
 from src.engine import game_instance
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import record_health_event
+from src.compat.saves import normalize_save_payload
 
 logger = logging.getLogger("trpg")
 
@@ -138,7 +139,7 @@ async def load(registry: GameRegistry, game_key: tuple) -> GameInstance | None:
         else:
             return None
 
-    instance = GameInstance.from_dict(data)
+    instance = GameInstance.from_dict(normalize_save_payload(data))
     if recovered_from_backup:
         record_health_event(
             instance,
