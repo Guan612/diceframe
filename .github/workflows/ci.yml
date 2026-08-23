@@ -113,3 +113,35 @@ jobs:
       - name: Run clean-data browser tests
         working-directory: frontend-v2
         run: npm run test:e2e:smoke
+
+  mobile:
+    name: Mobile checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install mobile dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck mobile
+        run: npm run typecheck
+
+      - name: Run mobile tests
+        run: npm test
+
+      - name: Lint mobile
+        run: npm run lint
