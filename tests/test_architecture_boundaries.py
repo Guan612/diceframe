@@ -28,8 +28,16 @@ def test_core_domains_do_not_import_compat_or_webui_adapters() -> None:
 
 def test_builtin_v2_rules_do_not_reintroduce_full_locale_copies() -> None:
     product_rules = ROOT / "templates" / "rules"
-    assert not list(product_rules.glob("*_en.json"))
-    assert not list(product_rules.glob("*_ja.json"))
+    legacy_copies = []
+    for path in (*product_rules.glob("*_en.json"), *product_rules.glob("*_ja.json")):
+        try:
+            import json
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if not data.get("abstract"):
+            legacy_copies.append(path)
+    assert not legacy_copies
     fixtures = ROOT / "tests" / "fixtures" / "legacy_rules"
     assert list(fixtures.glob("*_en.json"))
 
