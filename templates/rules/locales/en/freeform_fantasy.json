@@ -1,0 +1,140 @@
+{
+  "locale_schema_version": 1,
+  "locale": "en",
+  "target": {
+    "kind": "rule",
+    "id": "freeform_fantasy"
+  },
+  "rule": {
+    "rule_name": "Classic Fantasy Freeform",
+    "description": "A lightweight freeform sword-and-sorcery rule based on D&D.",
+    "attr_hint": "Attributes use 3-18 values; 10 is roughly average, 14+ means clear aptitude. Concentrating points leaves clear weaknesses.",
+    "skill_hint": "Skills tell the GM what the character excels at. Write as \"Skill Name (20-80)\" or just the name; higher values mean more reliability in narrative and checks.",
+    "gm_prompt_appendix": "You are the GM of a classic fantasy world. The world is full of magic, monsters, and adventure. Players can freely explore dungeons, interact with NPCs, and solve puzzles. Combat uses the d20 resolution system.",
+    "difficulty_instructions": {
+      "轻松": "Easy fights, ample resources, friendly NPCs",
+      "标准": "Challenging but fair, limited resources, strategy needed",
+      "硬核": "Scarce resources, fierce enemies, permanent death possible"
+    },
+    "skill_pools": {
+      "Warrior": [
+        "Heavy Strike",
+        "Defensive Stance",
+        "Charge"
+      ],
+      "Mage": [
+        "Fireball",
+        "Magic Shield",
+        "Arcana"
+      ],
+      "Ranger": [
+        "Precise Shot",
+        "Tracking",
+        "Nature Sense"
+      ],
+      "Rogue": [
+        "Stealth",
+        "Lockpicking",
+        "Sneak Attack"
+      ]
+    },
+    "item_categories": {
+      "equipment": [
+        "Sword",
+        "Bow",
+        "Staff",
+        "Dagger",
+        "Scimitar",
+        "Greatsword",
+        "Spear",
+        "Mace",
+        "Warhammer",
+        "Shield",
+        "Leather Armor",
+        "Chain Mail",
+        "Plate Armor",
+        "Robe",
+        "Boots",
+        "Gloves",
+        "Helmet",
+        "Cloak",
+        "Bracers",
+        "Necklace",
+        "Ring",
+        "Armor",
+        "Body Armor",
+        "Chestplate",
+        "Greaves",
+        "Armguards",
+        "Pauldrons"
+      ],
+      "consumable": [
+        "Potion",
+        "Scroll",
+        "Elixir",
+        "Rations",
+        "Bandage",
+        "Antidote",
+        "Bomb",
+        "Talisman",
+        "Torch",
+        "Arrows",
+        "Crossbow Bolts"
+      ],
+      "misc": [
+        "Key",
+        "Map",
+        "Letter",
+        "Token",
+        "Stone",
+        "Gem",
+        "Crystal",
+        "Book",
+        "Notebook",
+        "Badge",
+        "Backpack",
+        "Rope",
+        "Lantern"
+      ]
+    },
+    "currency": "Gold"
+  },
+  "attributes": {
+    "str": {
+      "name": "Strength"
+    },
+    "dex": {
+      "name": "Dexterity"
+    },
+    "con": {
+      "name": "Constitution"
+    },
+    "int": {
+      "name": "Intelligence"
+    },
+    "wis": {
+      "name": "Wisdom"
+    },
+    "cha": {
+      "name": "Charisma"
+    }
+  },
+  "classes": {
+    "warrior": {
+      "name": "Warrior",
+      "description": "Frontline melee specialist"
+    },
+    "mage": {
+      "name": "Mage",
+      "description": "Arcane spellcaster"
+    },
+    "ranger": {
+      "name": "Ranger",
+      "description": "Ranged and tracking specialist"
+    },
+    "rogue": {
+      "name": "Rogue",
+      "description": "Stealth and lockpicking expert"
+    }
+  }
+}

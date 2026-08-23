@@ -118,7 +118,7 @@ def save_custom_rule(api: "WebAPI", data: dict[str, Any]) -> dict[str, Any]:
     }}
 
 
-def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
+def get_rule_template(api: "WebAPI", rule_id: str, language: str = "") -> dict[str, Any]:
     rule_id = (rule_id or "").strip()
     if not _RULE_ID_RE.fullmatch(rule_id):
         return {"ok": False, "error": "规则 ID 不合法"}
@@ -126,7 +126,10 @@ def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
     if not rule_path or not rule_path.exists():
         return {"ok": False, "error": f"规则不存在: {rule_id}"}
     template = json.loads(rule_path.read_text(encoding="utf-8"))
-    rule = RuleSystem.load(rule_path)
+    if language and int(template.get("rule_schema_version", 1) or 1) >= 2:
+        rule = RuleSystem.load(RuleSystem.path_for(api._rules_dir, rule_id, language))
+    else:
+        rule = RuleSystem.load(rule_path)
     template.setdefault("check_mechanic", rule.check_mechanic)
     template.setdefault("max_check_dc", rule.max_check_dc)
     template.setdefault("conflict_model", rule.conflict_model)
@@ -135,14 +138,17 @@ def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
     template.setdefault("identity_schema", rule.identity_schema)
     template.setdefault("progression_schema", rule.progression_schema)
     template.setdefault("ui_schema", rule.ui_schema)
-    for s in sorted(field_suffixes()):
-        loc_path = rule_path.parent / f"{rule_path.stem}_{s}.json"
-        if loc_path.exists():
-            try:
-                loc = json.loads(loc_path.read_text(encoding="utf-8"))
-                _merge_localized_fields(template, loc, s)
-            except Exception:
-                logger.warning("规则语言模板合并失败: %s", loc_path)
+    if int(template.get("rule_schema_version", 1) or 1) < 2:
+        for s in sorted(field_suffixes()):
+            loc_path = rule_path.parent / f"{rule_path.stem}_{s}.json"
+            if loc_path.exists():
+                try:
+                    loc = json.loads(loc_path.read_text(encoding="utf-8"))
+                    _merge_localized_fields(template, loc, s)
+                except Exception:
+                    logger.warning("规则语言模板合并失败: %s", loc_path)
+    else:
+        template = dict(rule.template)
     template["attributes"] = _enrich_attributes(template.get("attributes", []))
     if _plugin_rule_path(api, rule_id):
         plugin_id = _plugin_rule_plugin_id(api, rule_id)

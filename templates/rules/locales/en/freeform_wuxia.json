@@ -1,0 +1,144 @@
+{
+  "locale_schema_version": 1,
+  "locale": "en",
+  "target": {
+    "kind": "rule",
+    "id": "freeform_wuxia"
+  },
+  "rule": {
+    "rule_name": "Wuxia/Xianxia Freeform",
+    "description": "A lightweight freeform rule for an alternate wuxia/xianxia world.",
+    "attr_hint": "Attributes use 3-18 values; 10 is roughly average. Internal arts, agility, and insight scale with the corresponding attributes.",
+    "skill_hint": "Skills may be martial techniques, lightness arts, medicine/poison, or jianghu methods. Write as \"Skill Name (20-80)\"; higher values mean deeper mastery.",
+    "gm_prompt_appendix": "You are the GM of an alternate wuxia/xianxia world. Jianghu feuds, sect conflicts, cultivation and immortality-seeking, demon slaying-a world full of chivalry and serendipity. Players can roam the jianghu freely, join a sect, challenge masters, and explore secret realms. Mind the consumption and recovery of Qi; lightness arts can cross terrain obstacles.",
+    "difficulty_instructions": {
+      "轻松": "Weaker foes, friendly sects, ample opportunities",
+      "标准": "The jianghu is dangerous but fair; training and strategy needed",
+      "硬核": "Powerful foes surround you, high risk of cultivation deviation, wounds heal slowly"
+    },
+    "skill_pools": {
+      "Swordsman": [
+        "Sword Control",
+        "Sword Aura",
+        "Sword Shield",
+        "Parry Break"
+      ],
+      "Daoist": [
+        "Exorcism",
+        "Talismans",
+        "Alchemy",
+        "Qi Sight"
+      ],
+      "Assassin": [
+        "Hidden Weapons",
+        "Lightness Arts",
+        "Poisons",
+        "Disguise"
+      ],
+      "Wanderer": [
+        "Staff Arts",
+        "Tracking",
+        "Healing",
+        "Persuasion"
+      ]
+    },
+    "item_categories": {
+      "equipment": [
+        "Sword",
+        "Saber",
+        "Flying Sword",
+        "Whisk",
+        "Daoist Robe",
+        "Talisman",
+        "Jade Pendant",
+        "Staff",
+        "Iron Fan",
+        "Dart",
+        "Hidden Weapon",
+        "Soft Armor",
+        "Light Armor",
+        "Armor"
+      ],
+      "pills": [
+        "Pill",
+        "Medicine",
+        "Powder",
+        "Pellet",
+        "Elixir",
+        "Dew",
+        "Syrup",
+        "Paste",
+        "Dust",
+        "Decoction"
+      ],
+      "consumable": [
+        "Talisman",
+        "Spirit Stone",
+        "Scroll",
+        "Wound Medicine",
+        "Qi Pill",
+        "Antidote Powder",
+        "Clarity Pill"
+      ],
+      "misc": [
+        "Token",
+        "Jade Slip",
+        "Token",
+        "Map",
+        "Manual",
+        "Saber Manual",
+        "Sword Manual",
+        "Fragment",
+        "Divination",
+        "Compass",
+        "Gourd",
+        "Wine Flask"
+      ]
+    },
+    "currency": "Spirit Stone"
+  },
+  "attributes": {
+    "str": {
+      "name": "Strength"
+    },
+    "dex": {
+      "name": "Dexterity"
+    },
+    "con": {
+      "name": "Constitution"
+    },
+    "int": {
+      "name": "Intelligence"
+    },
+    "wis": {
+      "name": "Wisdom"
+    },
+    "cha": {
+      "name": "Charisma"
+    }
+  },
+  "classes": {
+    "swordsman": {
+      "name": "Swordsman",
+      "description": "A warrior who follows the Way of the Sword"
+    },
+    "daoist": {
+      "name": "Daoist",
+      "description": "A practitioner of Daoist arts and talismans"
+    },
+    "assassin": {
+      "name": "Assassin",
+      "description": "A hidden-weapons master in the shadows"
+    },
+    "wanderer": {
+      "name": "Wanderer",
+      "description": "A wandering champion of justice"
+    }
+  },
+  "special_stats": {
+    "qi": {
+      "name": "Qi",
+      "description": "Using internal arts and lightness arts consumes Qi; meditation and rest restore it."
+    }
+  }
+}

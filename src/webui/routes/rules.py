@@ -20,7 +20,9 @@ async def api_rule_create(request: web.Request) -> web.Response:
 
 
 async def api_rule_detail(request: web.Request) -> web.Response:
-    return web.json_response(_get_api(request).get_rule_template(request.match_info["rule_id"]))
+    return web.json_response(_get_api(request).get_rule_template(
+        request.match_info["rule_id"], request.query.get("language", ""),
+    ))
 
 
 async def api_rule_character_schema(request: web.Request) -> web.Response:

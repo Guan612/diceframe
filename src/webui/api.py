@@ -782,8 +782,8 @@ class WebAPI:
     def save_custom_rule(self, data: dict[str, Any]) -> dict[str, Any]:
         return rules.save_custom_rule(self, data)
 
-    def get_rule_template(self, rule_id: str) -> dict[str, Any]:
-        return rules.get_rule_template(self, rule_id)
+    def get_rule_template(self, rule_id: str, language: str = "") -> dict[str, Any]:
+        return rules.get_rule_template(self, rule_id, language)
 
     def update_custom_rule(self, rule_id: str, template: dict[str, Any]) -> dict[str, Any]:
         return rules.update_custom_rule(self, rule_id, template)

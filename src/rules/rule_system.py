@@ -145,7 +145,7 @@ class RuleSystem:
         import copy
         import json
         value = copy.deepcopy(self.template)
-        for field in ("rule_name", "name", "description", "attr_hint", "skill_hint", "gm_prompt_appendix", "active_locale", "default_locale", "locale_schema_version"):
+        for field in ("rule_name", "name", "description", "attr_hint", "skill_hint", "gm_prompt_appendix", "difficulty_instructions", "skill_pools", "item_categories", "currency", "active_locale", "default_locale", "locale_schema_version"):
             value.pop(field, None)
         for item in value.get("attributes", []):
             if isinstance(item, dict):
@@ -154,6 +154,7 @@ class RuleSystem:
             if isinstance(item, dict):
                 item.pop("name", None)
                 item.pop("description", None)
+                item.pop("starter_equipment", None)
                 if "starter_equipment_ids" in item:
                     item.pop("starter_equipment", None)
         for item in value.get("items", {}).values():

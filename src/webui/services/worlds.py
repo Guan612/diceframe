@@ -9,6 +9,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.content.worlds import load_world_template as load_content_world
 from src.generation import creator
 from src.template_catalog import is_user_template_file
 
@@ -285,10 +286,19 @@ def list_world_templates(api: "WebAPI") -> dict[str, Any]:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 world_id = data.get("world_id", f.stem)
+                if f.stem.endswith("_en") or f.stem.endswith("_ja"):
+                    canonical_id = f.stem.rsplit("_", 1)[0]
+                    canonical = worlds_dir / f"{canonical_id}.json"
+                    if canonical.exists():
+                        canonical_data = json.loads(canonical.read_text(encoding="utf-8"))
+                        if int(canonical_data.get("world_schema_version", 1) or 1) >= 2:
+                            continue
                 if data.get("deprecated"):
                     continue
                 if "_blank_" in str(world_id) and not data.get("starter_lorebook", []):
                     continue
+                if int(data.get("world_schema_version", 1) or 1) >= 2:
+                    data = load_content_world(worlds_dir, str(world_id)) or data
                 templates.append(_world_template_summary(data, f.stem))
                 seen.add(str(world_id))
             except Exception:
