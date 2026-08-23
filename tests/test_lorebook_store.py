@@ -152,6 +152,72 @@ class TestEntryCRUD:
 
 
 class TestMigration:
+    def test_store_open_migrates_minimal_worlds_and_entries_end_to_end(self):
+        path = Path(tempfile.NamedTemporaryFile(suffix=".db", delete=False).name)
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL REFERENCES worlds(id),
+                name TEXT NOT NULL, type TEXT, content TEXT
+            );
+            INSERT INTO worlds VALUES ('legacy', 'Legacy');
+            INSERT INTO lorebook_entries VALUES ('old', 'legacy', 'Old', 'location', 'keep');
+            """
+        )
+        conn.commit()
+        conn.close()
+        store = LorebookStore(path)
+        try:
+            store.open()
+            assert store.get_world("legacy")["author"] == ""
+            assert store.get_entry("old")["content"] == "keep"
+            store.add_entry({"id": "new", "world_id": "legacy", "name": "New", "type": "spell"})
+            store.update_entry("new", {"content": "updated"})
+            assert store.get_entry("new")["content"] == "updated"
+            store.delete_entry("new")
+            assert store.get_entry("new") is None
+        finally:
+            store.close()
+            store.open()
+            try:
+                assert store.get_entry("old") is not None
+            finally:
+                store.close()
+                path.unlink(missing_ok=True)
+
+    def test_fresh_and_migrated_schema_have_matching_contract(self):
+        fresh, fresh_path = _temp_store()
+        legacy_path = Path(tempfile.NamedTemporaryFile(suffix=".db", delete=False).name)
+        conn = sqlite3.connect(legacy_path)
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (id TEXT PRIMARY KEY, world_id TEXT NOT NULL REFERENCES worlds(id), name TEXT NOT NULL, type TEXT, content TEXT);
+            INSERT INTO worlds VALUES ('w', 'W');
+            INSERT INTO lorebook_entries VALUES ('e', 'w', 'E', 'location', 'C');
+            """
+        )
+        conn.commit()
+        conn.close()
+        migrated = LorebookStore(legacy_path)
+        try:
+            migrated.open()
+            for table in ("worlds", "lorebook_entries"):
+                fresh_info = [tuple(row[1:6]) for row in fresh._conn.execute(f"PRAGMA table_info({table})")]
+                migrated_info = [tuple(row[1:6]) for row in migrated._conn.execute(f"PRAGMA table_info({table})")]
+                assert migrated_info == fresh_info
+            fresh_indexes = {row[1] for row in fresh._conn.execute("PRAGMA index_list(lorebook_entries)")}
+            migrated_indexes = {row[1] for row in migrated._conn.execute("PRAGMA index_list(lorebook_entries)")}
+            assert {"idx_lorebook_world", "idx_lorebook_type", "idx_lorebook_tier", "idx_lorebook_source"} <= fresh_indexes & migrated_indexes
+            assert migrated._conn.execute("PRAGMA foreign_key_list(lorebook_entries)").fetchone()[2] == "worlds"
+        finally:
+            fresh.close()
+            migrated.close()
+            fresh_path.unlink(missing_ok=True)
+            legacy_path.unlink(missing_ok=True)
+
     def test_latest_schema_is_versioned_and_reopen_is_idempotent(self):
         store, path = _temp_store()
         try:

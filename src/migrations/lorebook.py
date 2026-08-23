@@ -13,6 +13,21 @@ _LOREBOOK_COLUMNS = (
     "group", "group_weight", "connected_to", "source_plugin", "created_at", "updated_at",
 )
 
+_WORLDS_COLUMNS = ("id", "name", "description", "language", "author", "version", "created_at", "updated_at")
+
+_WORLDS_SQL = """
+CREATE TABLE worlds_new (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    language TEXT DEFAULT 'zh-CN',
+    author TEXT DEFAULT '',
+    version TEXT DEFAULT '1.0',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
 _REBUILT_ENTRIES_SQL = """
 CREATE TABLE lorebook_entries_new (
     id TEXT PRIMARY KEY,
@@ -58,16 +73,19 @@ def _v1(conn: sqlite3.Connection) -> None:
     ):
         ensure_column(conn, "lorebook_entries", name, definition)
     ensure_column(conn, "worlds", "language", "TEXT DEFAULT 'zh-CN'")
-    ensure_column(conn, "worlds", "author", "TEXT NOT NULL DEFAULT ''")
-    ensure_column(conn, "worlds", "version", "TEXT NOT NULL DEFAULT '1.0'")
-    ensure_column(conn, "worlds", "created_at", "TEXT NOT NULL DEFAULT ''")
-    ensure_column(conn, "worlds", "updated_at", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "lorebook_entries", "source_plugin", "TEXT DEFAULT ''")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)")
 
 
 def _v2(conn: sqlite3.Connection) -> None:
     """Converge historical tables to the current schema when required."""
+    world_columns = table_columns(conn, "worlds")
+    worlds_sql = str(conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='worlds'"
+    ).fetchone()[0] or "")
+    worlds_need_rebuild = set(_WORLDS_COLUMNS) - world_columns or any(
+        marker not in worlds_sql.upper().replace('"', '')
+        for marker in ("CREATED_AT TEXT NOT NULL", "UPDATED_AT TEXT NOT NULL")
+    )
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='lorebook_entries'"
     ).fetchone()
@@ -78,7 +96,41 @@ def _v2(conn: sqlite3.Connection) -> None:
     needs_rebuild = bool(missing_columns)
     needs_rebuild |= "TYPE IN" in normalized
     needs_rebuild |= "TIER IN" not in normalized or "MATCH_MODE IN" not in normalized
-    if not needs_rebuild:
+    if not needs_rebuild and not worlds_need_rebuild:
+        return
+
+    if worlds_need_rebuild:
+        # Rebuild parent and child together so old foreign keys never point at
+        # a dropped table. Missing values use the current schema defaults.
+        conn.execute(_WORLDS_SQL)
+        shared_worlds = [column for column in _WORLDS_COLUMNS if column in world_columns]
+        if shared_worlds:
+            columns = ", ".join(f'"{column}"' for column in shared_worlds)
+            conn.execute(
+                f"INSERT INTO worlds_new ({columns}) SELECT {columns} FROM worlds"
+            )
+        conn.execute(
+            _REBUILT_ENTRIES_SQL
+            .replace("lorebook_entries_new", "lorebook_entries_world_new")
+            .replace("REFERENCES worlds(id)", "REFERENCES worlds_new(id)")
+        )
+        shared_entries = [column for column in _LOREBOOK_COLUMNS if column in old_columns]
+        if shared_entries:
+            columns = ", ".join(f'"{column}"' for column in shared_entries)
+            conn.execute(
+                f"INSERT INTO lorebook_entries_world_new ({columns}) SELECT {columns} FROM lorebook_entries"
+            )
+        conn.execute("DROP TABLE lorebook_entries")
+        conn.execute("DROP TABLE worlds")
+        conn.execute("ALTER TABLE worlds_new RENAME TO worlds")
+        conn.execute("ALTER TABLE lorebook_entries_world_new RENAME TO lorebook_entries")
+        for statement in (
+            "CREATE INDEX IF NOT EXISTS idx_lorebook_world ON lorebook_entries(world_id)",
+            "CREATE INDEX IF NOT EXISTS idx_lorebook_type ON lorebook_entries(world_id, type)",
+            "CREATE INDEX IF NOT EXISTS idx_lorebook_tier ON lorebook_entries(world_id, tier)",
+            "CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)",
+        ):
+            conn.execute(statement)
         return
 
     shared = [column for column in _LOREBOOK_COLUMNS if column in old_columns]
