@@ -8,6 +8,7 @@ from src.rules.rule_system import RuleSystem
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES = ROOT / "templates" / "rules"
+LEGACY_RULES = ROOT / "tests" / "fixtures" / "legacy_rules"
 
 
 def test_dnd5e_v2_locale_views_share_exact_mechanics():
@@ -37,8 +38,8 @@ def test_dnd5e_v2_aliases_are_compat_boundary_only():
 
 
 def test_legacy_full_localized_copies_remain_loadable():
-    for suffix in ("", "_en", "_ja"):
-        rule = RuleSystem.load(RULES / f"dnd5e{suffix}.json")
+    for path in (RULES / "dnd5e.json", LEGACY_RULES / "dnd5e_en.json", LEGACY_RULES / "dnd5e_ja.json"):
+        rule = RuleSystem.load(path)
         assert rule.rule_id == "dnd5e"
 
 
