@@ -494,8 +494,8 @@ class WebAPI:
         if self._plugins:
             item = self._plugins.contributions.find("rule", rule_id)
             if item:
-                localized = self._plugins.get_content_resource(
-                    "rule", rule_id, plugin_id=item.plugin_id, language=language,
+                localized = self._plugins.load_rule_template(
+                    rule_id, language, plugin_id=item.plugin_id,
                 )
                 if localized:
                     return RuleSystem(localized)

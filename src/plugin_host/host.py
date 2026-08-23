@@ -445,6 +445,9 @@ class PluginHost:
     def load_world_template(self, world_id: str, language: str = "") -> dict[str, Any] | None:
         return self.content.load_world_template(world_id, language)
 
+    def load_rule_template(self, rule_id: str, language: str = "", *, plugin_id: str = "") -> dict[str, Any] | None:
+        return self.content.load_rule_template(rule_id, language, plugin_id=plugin_id)
+
     def expose_scene_image(self, data: dict[str, Any], plugin_id: str) -> dict[str, Any]:
         return self.content.expose_scene_image(data, plugin_id)
 

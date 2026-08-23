@@ -277,8 +277,8 @@ def _plugin_rule_items(api: "WebAPI", language: str = "") -> list[dict[str, Any]
     result = []
     for item in plugin_host.contributions.list("rule"):
         try:
-            localized = plugin_host.get_content_resource(
-                "rule", item.key, plugin_id=item.plugin_id, language=language,
+            localized = plugin_host.load_rule_template(
+                item.key, language, plugin_id=item.plugin_id,
             )
             rule = RuleSystem(localized) if localized else RuleSystem.load(item.path)
             template = api._plugins.expose_scene_image(rule.template, item.plugin_id)

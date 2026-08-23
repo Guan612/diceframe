@@ -137,6 +137,8 @@ class ContributionRegistry:
         lookup_key = f"{item.plugin_id}:{item.key}" if item.kind in _NAMESPACED_KINDS else item.key
         existing = self._by_kind_key.get((item.kind, lookup_key))
         if existing:
+            if item.kind in {"rule", "world_template"} and existing.plugin_id != item.plugin_id:
+                raise ValueError(f"插件 {item.kind} plain ID 冲突：{item.key}")
             if item.kind in _NAMESPACED_KINDS:
                 raise ValueError(f"插件内资源 ID 重复：{item.kind} {item.key}")
             if existing.plugin_id != item.plugin_id and item.content_schema_version < 2:

@@ -89,6 +89,7 @@ export interface CharacterCard extends CharacterSheet {
   rule_version?: string
   mechanics?: string
   language?: string
+  active_locale?: string
   character_name: string
   race?: string
   class?: string

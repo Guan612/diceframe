@@ -13,7 +13,7 @@ import MapBackgroundPicker from '@/components/common/MapBackgroundPicker.vue'
 import { importTavernCard } from '@/utils/characterImport'
 import { rememberCurrentGame } from '@/stores/gameContext'
 import { useSettingsStore } from '@/stores/useSettingsStore'
-import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
+import { filterByContentLanguage } from '@/utils/contentLanguage'
 import { recommendedRuleSummaries } from '@/utils/recommendedRules'
 import { characterCardNeedsConversion } from '@/utils/characterCards'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
@@ -74,8 +74,7 @@ const defaultSceneImageRef = computed<SceneImageRef | undefined>(() => {
   return activeRuleSummary.value?.scene_image || ruleDetail.value?.scene_image
 })
 const selectedSceneImageUrl = computed(() => customSceneImageUrl.value || defaultSceneImageUrl.value || ruleSceneUrl(activeRule.value))
-const languageMatchedWorlds = computed(() => filterByContentLanguage(worlds.value, gameLanguage.value))
-const availableWorlds = computed(() => languageMatchedWorlds.value.length ? languageMatchedWorlds.value : worlds.value)
+const availableWorlds = computed(() => worlds.value)
 const availableLoreWorlds = computed(() => filterByContentLanguage(loreWorlds.value, gameLanguage.value))
 const ruleAttrs = computed(() => ruleDetail.value?.attributes || [])
 const skillPool = computed(() => ruleDetail.value?.skill_pool || ruleDetail.value?.skills || [])
@@ -103,7 +102,12 @@ const showApiSetupHint = computed(() => settingsChecked.value && !settings.error
 
 function worldIdOf(w: WorldTemplateSummary | WorldSummary): string { return String(w.world_id || w.id || '') }
 function worldNameOf(w: WorldTemplateSummary | WorldSummary): string { return String(w.world_name || w.name || w.id || '') }
-function worldLanguageLabel(w: WorldTemplateSummary | WorldSummary): string { return contentLanguageOf(w) === 'en' ? t('english') : t('chinese') }
+function worldLanguageLabel(w: WorldTemplateSummary | WorldSummary): string {
+  const language = String((w as WorldTemplateSummary).active_locale || (w as WorldSummary).language || '').toLowerCase()
+  if (language.startsWith('ja')) return '日本語'
+  if (language.startsWith('en')) return t('english')
+  return t('chinese')
+}
 function worldOptionLabel(w: WorldTemplateSummary | WorldSummary): string { return `${worldNameOf(w)} · ${worldLanguageLabel(w)}` }
 function ruleNameOf(r: RuleSummary): string { return String(r.rule_name || r.rule_id) }
 function ruleDescriptionOf(r: RuleSummary): string { return String(r.description || '') }

@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from src.content.locale import apply_locale_overlay, resolve_locale
 from src.content.rule_locale import materialize_rule
+from src.rules.rule_system import RuleSystem
 
 from .registry import ContributionRegistry
 
@@ -86,7 +87,7 @@ def safe_id_part(value: Any) -> str:
 class PluginContentCatalog:
     """读取已注册静态贡献；不参与插件进程生命周期。"""
 
-    CONTENT_KINDS = frozenset({"character_template", "npc", "item", "spell", "class"})
+    CONTENT_KINDS = frozenset({"character_template", "npc", "item", "spell", "class", "rule"})
 
     def __init__(
         self,
@@ -117,6 +118,17 @@ class PluginContentCatalog:
             data = self.expose_scene_image(data, item.plugin_id)
             data = self._materialize_locale(item, "world_template", data, language)
         return data
+
+    def load_rule_template(
+        self, rule_id: str, language: str = "", *, plugin_id: str = "",
+    ) -> dict[str, Any] | None:
+        item = self.registry.find("rule", rule_id, plugin_id=plugin_id)
+        if not item or not item.path.exists():
+            return None
+        if item.content_schema_version < 2:
+            return json.loads(item.path.read_text(encoding="utf-8"))
+        resolved = RuleSystem.load(item.path).template
+        return self._materialize_locale(item, "rule", dict(resolved), language)
 
     def expose_scene_image(self, data: dict[str, Any], plugin_id: str) -> dict[str, Any]:
         """Convert a packaged scene image into a browser-safe plugin reference."""
@@ -366,11 +378,14 @@ class PluginContentCatalog:
                     "source": "plugin",
                     "readonly": True,
                 })
-                data = self._materialize_locale(item, kind, data, language)
+                if kind == "rule" and item.content_schema_version >= 2:
+                    data = self.load_rule_template(item.key, language, plugin_id=item.plugin_id) or data
+                else:
+                    data = self._materialize_locale(item, kind, data, language)
                 data["ref"] = str(item.ref)
                 self._expose_packaged_portrait(data, item.plugin_id)
                 result.append(data)
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            except (OSError, TypeError, json.JSONDecodeError):
                 self.logger.warning("插件内容资源读取失败: %s", item.path, exc_info=True)
         return result
 
@@ -382,14 +397,18 @@ class PluginContentCatalog:
         language: str,
     ) -> dict[str, Any]:
         """Apply a validated plugin locale overlay without changing mechanics."""
-        plugin_root = item.path.parents[2]
+        if item.content_schema_version < 2:
+            return data
         relative = Path(item.relative_path)
+        if len(relative.parts) < 3 or relative.parts[0] != "content":
+            raise ValueError("V2 插件内容必须位于 content/<kind>/ 目录")
+        plugin_root = item.path.parents[2]
         locale_root = plugin_root / "locales"
         if not locale_root.exists():
             return data
         locales: dict[str, dict[str, Any]] = {}
         for candidate in locale_root.iterdir():
-            overlay_path = candidate / relative.relative_to("content")
+            overlay_path = candidate.joinpath(*relative.parts[1:])
             if overlay_path.exists() and overlay_path.is_file():
                 try:
                     loaded = json.loads(overlay_path.read_text(encoding="utf-8"))
@@ -402,8 +421,16 @@ class PluginContentCatalog:
         overlay = resolve_locale(locales, language, item.default_locale or "zh-CN")
         if not overlay:
             return data
+        allowed_top = {"locale_schema_version", "locale", "target", "fields"}
+        if kind == "rule":
+            allowed_top |= {"rule", "attributes", "classes", "items", "skills", "special_stats"}
+        unknown = set(overlay) - allowed_top
+        if unknown:
+            raise ValueError(f"插件 locale 含未知顶层字段: {sorted(unknown)}")
         if overlay.get("locale_schema_version") != 1:
             raise ValueError("插件 locale_schema_version 必须为 1")
+        if not str(overlay.get("locale") or "").strip():
+            raise ValueError("插件 locale 必须非空")
         target = overlay.get("target")
         target_kind = str(target.get("kind") or "") if isinstance(target, dict) else ""
         valid_target_kinds = {kind}
