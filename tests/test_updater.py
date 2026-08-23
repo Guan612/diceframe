@@ -175,10 +175,10 @@ async def test_download_update_respects_channel_and_accepts_prerelease_latest(tm
     digest = hashlib.sha256(content).hexdigest()
     mirrors = SimpleNamespace()
 
-    async def fake_fetch(url, *, binary=False, max_bytes=None):
+    async def fake_fetch(url, *, binary=False, max_bytes=None, resolve=True):
         return FetchResult(ok=True, data=f"{digest}  {ZIP_NAME}", mirror_name="m")
 
-    async def fake_download(url, target, *, max_bytes=None, on_progress=None):
+    async def fake_download(url, target, *, max_bytes=None, on_progress=None, resolve=True):
         target.write_bytes(content)
         return FetchResult(ok=True, mirror_name="m")
 
@@ -213,10 +213,10 @@ async def test_download_update_success_flow(tmp_path):
     digest = hashlib.sha256(content).hexdigest()
     mirrors = SimpleNamespace()
 
-    async def fake_fetch(url, *, binary=False, max_bytes=None):
+    async def fake_fetch(url, *, binary=False, max_bytes=None, resolve=True):
         return FetchResult(ok=True, data=f"{digest}  {ZIP_NAME}", mirror_name="测试镜像")
 
-    async def fake_download(url, target, *, max_bytes=None, on_progress=None):
+    async def fake_download(url, target, *, max_bytes=None, on_progress=None, resolve=True):
         target.write_bytes(content)
         if on_progress:
             on_progress(len(content), len(content))
@@ -251,10 +251,10 @@ async def test_download_update_progress_updates_bytes(tmp_path):
     content = b"x" * 1024
     mirrors = SimpleNamespace()
 
-    async def fake_fetch(url, *, binary=False, max_bytes=None):
+    async def fake_fetch(url, *, binary=False, max_bytes=None, resolve=True):
         return FetchResult(ok=True, data="a" * 64)
 
-    async def fake_download(url, target, *, max_bytes=None, on_progress=None):
+    async def fake_download(url, target, *, max_bytes=None, on_progress=None, resolve=True):
         # 分两块写，触发两次进度回调
         target.write_bytes(content)
         if on_progress:
@@ -345,8 +345,8 @@ async def test_download_update_rejects_source_package_for_portable_install(
 async def test_download_update_sha_mismatch_marks_failed(tmp_path):
     content = b"real content"
     mirrors = SimpleNamespace()
-    mirrors.fetch_github_url = lambda url, *, binary=False, max_bytes=None: _async_fetch("0" * 64)
-    mirrors.download_to_file = lambda url, target, *, max_bytes=None, on_progress=None: _async_download(target, content)
+    mirrors.fetch_github_url = lambda url, *, binary=False, max_bytes=None, resolve=True: _async_fetch("0" * 64)
+    mirrors.download_to_file = lambda url, target, *, max_bytes=None, on_progress=None, resolve=True: _async_download(target, content)
     latest = {"version": "1.6.0", "assets": [_asset(ZIP_NAME), _asset(ZIP_NAME + ".sha256")]}
 
     svc = _make_service(tmp_path, mirrors)
@@ -364,10 +364,10 @@ async def test_download_update_sha_mismatch_marks_failed(tmp_path):
 async def test_download_update_download_failure_marks_failed(tmp_path):
     mirrors = SimpleNamespace()
 
-    async def fake_fetch(url, *, binary=False, max_bytes=None):
+    async def fake_fetch(url, *, binary=False, max_bytes=None, resolve=True):
         return FetchResult(ok=True, data="a" * 64)
 
-    async def fake_download(url, target, *, max_bytes=None, on_progress=None):
+    async def fake_download(url, target, *, max_bytes=None, on_progress=None, resolve=True):
         return FetchResult(ok=False, error="镜像源均失败")
 
     mirrors.fetch_github_url = fake_fetch
@@ -390,11 +390,11 @@ async def test_download_update_sha_sidecar_missing_skips_verify(tmp_path):
     content = b"no sidecar"
     mirrors = SimpleNamespace()
 
-    async def fake_download(url, target, *, max_bytes=None, on_progress=None):
+    async def fake_download(url, target, *, max_bytes=None, on_progress=None, resolve=True):
         target.write_bytes(content)
         return FetchResult(ok=True, mirror_name="m")
 
-    mirrors.fetch_github_url = lambda url, *, binary=False, max_bytes=None: _async_fetch(None)
+    mirrors.fetch_github_url = lambda url, *, binary=False, max_bytes=None, resolve=True: _async_fetch(None)
     mirrors.download_to_file = fake_download
     # 无 .sha256 asset
     latest = {"version": "1.6.0", "assets": [_asset(ZIP_NAME)]}
