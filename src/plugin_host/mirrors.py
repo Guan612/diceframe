@@ -212,8 +212,9 @@ class MirrorManager:
         mirror_id: str = "",
         binary: bool = False,
         max_bytes: int | None = None,
+        resolve: bool = True,
     ) -> FetchResult:
-        normalized_url = validate_public_http_url(url)
+        normalized_url = validate_public_http_url(url, resolve=resolve)
         mirrors = [self._require(mirror_id)] if mirror_id else self.enabled()
         if not mirrors:
             return await self._fetch(
@@ -262,14 +263,17 @@ class MirrorManager:
         mirror_id: str = "",
         max_bytes: int | None = None,
         on_progress: Callable[[int, int], Any] | None = None,
+        resolve: bool = True,
     ) -> FetchResult:
         """流式下载大文件到 target_path（经多镜像降级），支持进度回调。
 
         与 fetch_github_url 不同，本方法逐 chunk 写盘而非全部读入内存，
         适合 release zip 等大文件。on_progress(downloaded, total) 在每个 chunk
         后调用（total 为 0 表示未知长度），可为同步或异步回调。
+        resolve=False 时跳过 DNS 解析与私网地址校验，适用于 Docker/虚拟网卡
+        环境下公网域名可能解析到内网地址的场景。
         """
-        normalized_url = validate_public_http_url(url)
+        normalized_url = validate_public_http_url(url, resolve=resolve)
         mirrors = [self._require(mirror_id)] if mirror_id else self.enabled()
         if not mirrors:
             return await self._download_to_file(
