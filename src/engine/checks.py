@@ -184,6 +184,12 @@ def _attribute_name(rule: RuleSystem | None, key: str) -> str:
 
 
 def detect_advantage_mode(text: str, action: dict, rule: RuleSystem | None) -> tuple[str, str]:
+    """只识别玩家明确声明的骰子模式（优势/劣势、奖励骰/惩罚骰）。
+
+    情境性优劣势（高地、黑暗、偷袭等）由 LLM 检定规划器结合 scene /
+    recent_narration 裁量，经 dice_checks.advantage 下发；这里不再凭单个
+    情境词机械改判，避免“高地营地”“黑暗神殿”这类描写误触发。
+    """
     if not rule:
         return "", ""
     capability = rule.advantage_mechanic
@@ -204,10 +210,10 @@ def detect_advantage_mode(text: str, action: dict, rule: RuleSystem | None) -> t
     if kind != "d20_keep_high_low":
         return "", ""
     has_advantage = raw_mode in {"advantage", "优势", "有利", "bonus"} or any(
-        word in text for word in ("优势", "有利", "占优", "奖励骰", "帮忙", "协助", "偷袭", "高地")
+        word in text for word in ("优势", "有利", "奖励骰")
     )
     has_disadvantage = raw_mode in {"disadvantage", "劣势", "不利", "penalty"} or any(
-        word in text for word in ("劣势", "不利", "受阻", "惩罚骰", "黑暗", "负伤", "疲惫", "干扰")
+        word in text for word in ("劣势", "不利", "惩罚骰")
     )
     if has_advantage and has_disadvantage:
         return "", "优势与劣势同时存在，已抵消"

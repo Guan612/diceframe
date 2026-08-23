@@ -63,6 +63,13 @@ DICE_CHECKS_TOOL: dict[str, Any] = {
                             "advantage": {
                                 "type": "string",
                                 "enum": ["normal", "advantage", "disadvantage"],
+                                "description": (
+                                    "Situational edge judged from the full context (scene, recent narration, "
+                                    "concrete circumstances such as attacking unseen or acting restrained). "
+                                    "Use only with clear situational grounds, never from a single word; default "
+                                    "normal. Mapped to the ruleset mechanic (d20 keep high/low, d100 bonus/penalty "
+                                    "dice) and validated server-side."
+                                ),
                             },
                             "kind": {
                                 "type": "string",
