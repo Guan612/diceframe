@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import tempfile
 import time
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from src.lorebook.bootstrap import ensure_world_from_template
 from src.lorebook.store import LorebookStore
+from src.migrations.sqlite import MigrationError
 
 
 def _temp_store():
@@ -148,6 +152,24 @@ class TestEntryCRUD:
 
 
 class TestMigration:
+    def test_latest_schema_is_versioned_and_reopen_is_idempotent(self):
+        store, path = _temp_store()
+        try:
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+            store.create_world("w1", "测试")
+            store.add_entry({"id": "e1", "world_id": "w1", "name": "x", "type": "spell"})
+            store.close()
+            reopened = LorebookStore(path)
+            reopened.open()
+            try:
+                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+                assert reopened.get_entry("e1")["type"] == "spell"
+            finally:
+                reopened.close()
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
     def test_new_columns_exist(self):
         store, path = _temp_store()
         try:
@@ -268,6 +290,9 @@ class TestMigration:
             store = LorebookStore(path)
             store.open()
             try:
+                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+                index_names = {row[1] for row in store._conn.execute("PRAGMA index_list(lorebook_entries)")}
+                assert {"idx_lorebook_world", "idx_lorebook_type", "idx_lorebook_tier", "idx_lorebook_source"} <= index_names
                 # 旧库已含 w1；不要 create_world（INSERT OR REPLACE 会级联删 e1）
                 # 新类型 spell/class 能插入（CHECK 已去掉）
                 store.add_entry({"id": "s1", "world_id": "w1", "name": "火球", "type": "spell", "content": "c"})
@@ -287,3 +312,28 @@ class TestMigration:
                     break
                 except PermissionError:
                     time.sleep(0.1)
+
+    def test_failed_lorebook_rebuild_rolls_back_without_new_table(self, monkeypatch):
+        from src.migrations import lorebook
+
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL, name TEXT NOT NULL,
+                type TEXT NOT NULL CHECK(type IN ('npc','other')),
+                content TEXT DEFAULT ''
+            );
+            INSERT INTO worlds VALUES ('w1', '测试');
+            INSERT INTO lorebook_entries VALUES ('e1', 'w1', '旧条目', 'npc', '保留');
+            """
+        )
+        monkeypatch.setattr(lorebook, "_REBUILT_ENTRIES_SQL", "CREATE TABLE lorebook_entries_new (broken")
+        with pytest.raises(MigrationError):
+            lorebook.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert conn.execute("SELECT content FROM lorebook_entries WHERE id='e1'").fetchone()[0] == "保留"
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lorebook_entries_new'"
+        ).fetchone() is None
