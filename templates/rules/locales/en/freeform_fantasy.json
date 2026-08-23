@@ -5,6 +5,16 @@
     "kind": "rule",
     "id": "freeform_fantasy"
   },
+  "items": {
+    "iron_sword": {"name": "Iron Sword"},
+    "leather_armor": {"name": "Leather Armor"},
+    "staff": {"name": "Staff"},
+    "spellbook": {"name": "Spellbook"},
+    "longbow": {"name": "Longbow"},
+    "arrows": {"name": "Arrows x20"},
+    "dagger": {"name": "Dagger"},
+    "lockpicks": {"name": "Lockpicks"}
+  },
   "rule": {
     "rule_name": "Classic Fantasy Freeform",
     "description": "A lightweight freeform sword-and-sorcery rule based on D&D.",

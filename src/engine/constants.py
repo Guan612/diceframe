@@ -101,6 +101,7 @@ ARMOR_LITE: dict[str, dict] = {
 # Rules consume canonical item keys; localized names remain display data and
 # are normalized at creation/fallback boundaries for compatibility with saves.
 ITEM_KEY_ALIASES: dict[str, str] = {
+    "铁剑": "iron_sword", "iron sword": "iron_sword", "鉄の剣": "iron_sword",
     "匕首": "dagger", "dagger": "dagger", "短剣": "dagger",
     "短剑": "shortsword", "shortsword": "shortsword", "ショートソード": "shortsword",
     "长剑": "longsword", "longsword": "longsword", "ロングソード": "longsword",
@@ -119,6 +120,9 @@ ITEM_KEY_ALIASES: dict[str, str] = {
     "盾牌": "shield", "盾": "shield", "shield": "shield",
     "木盾": "wooden_shield", "wooden shield": "wooden_shield", "木の盾": "wooden_shield",
     "法器": "arcane_focus", "arcane focus": "arcane_focus", "秘術焦点": "arcane_focus",
+    "法术书": "spellbook", "spellbook": "spellbook", "魔法書": "spellbook",
+    "箭矢×20": "arrows", "arrows": "arrows", "矢×20": "arrows",
+    "撬锁工具": "lockpicks", "lockpicks": "lockpicks", "ピッキングツール": "lockpicks",
 }
 
 

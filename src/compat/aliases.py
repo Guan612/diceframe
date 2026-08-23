@@ -20,6 +20,7 @@ _CLASS_ALIASES = {
 }
 
 _ITEM_ALIASES = {
+    "铁剑": "iron_sword", "iron sword": "iron_sword", "鉄の剣": "iron_sword",
     "长剑": "longsword", "longsword": "longsword", "ロングソード": "longsword",
     "链甲": "chain_mail", "chain mail": "chain_mail", "チェインメイル": "chain_mail",
     "盾牌": "shield", "盾": "shield", "shield": "shield",
@@ -29,6 +30,9 @@ _ITEM_ALIASES = {
     "短弓": "shortbow", "shortbow": "shortbow", "ショートボウ": "shortbow",
     "短剑": "shortsword", "shortsword": "shortsword", "ショートソード": "shortsword",
     "匕首": "dagger", "dagger": "dagger", "短剣": "dagger",
+    "法术书": "spellbook", "spellbook": "spellbook", "魔法書": "spellbook",
+    "箭矢×20": "arrows", "arrows": "arrows", "矢×20": "arrows",
+    "撬锁工具": "lockpicks", "lockpicks": "lockpicks", "ピッキングツール": "lockpicks",
 }
 
 
