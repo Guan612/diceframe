@@ -14,6 +14,7 @@ from src.engine.game_instance import GameRegistry
 from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
+from src.rules.loader import RuleBundleLoader
 from src.engine.world_template import load_world_template
 from src.webui.services import asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
@@ -494,6 +495,8 @@ class WebAPI:
                 rule_path = plugin_path
         if not rule_path.exists():
             return None
+        if rule_path.parent == self._rules_dir and (self._rules_dir / "locales").exists():
+            return RuleSystem(RuleBundleLoader().load_rule(self._rules_dir, rule_id, language))
         return RuleSystem.load(rule_path)
 
     # ---- 游戏总览 ----

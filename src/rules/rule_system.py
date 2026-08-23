@@ -17,6 +17,7 @@ from src.engine.language import (
     localized_text,
     normalize_language,
 )
+from src.content.rule_locale import materialize_rule
 
 logger = logging.getLogger("trpg")
 SUPPORTED_DICE_SYSTEMS = frozenset({"d20", "d100", "none"})
@@ -139,9 +140,41 @@ class RuleSystem:
             supported = ", ".join(sorted(SUPPORTED_DICE_SYSTEMS))
             raise ValueError(f"不支持的检定骰制: {self._dice_system}（当前支持 {supported}）")
 
+    def mechanics_snapshot(self) -> str:
+        """Return a locale-invariant representation of deterministic mechanics."""
+        import copy
+        import json
+        value = copy.deepcopy(self.template)
+        for field in ("rule_name", "name", "description", "attr_hint", "skill_hint", "gm_prompt_appendix", "active_locale", "default_locale", "locale_schema_version"):
+            value.pop(field, None)
+        for item in value.get("attributes", []):
+            if isinstance(item, dict):
+                item.pop("name", None)
+        for item in value.get("classes", []):
+            if isinstance(item, dict):
+                item.pop("name", None)
+                item.pop("description", None)
+                if "starter_equipment_ids" in item:
+                    item.pop("starter_equipment", None)
+        for item in value.get("items", {}).values():
+            if isinstance(item, dict):
+                item.pop("name", None)
+                item.pop("description", None)
+        value.pop("skill_pools", None)
+        value.pop("skill_names", None)
+        value.pop("difficulty_instructions", None)
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
     @classmethod
     def load(cls, path: str | Path) -> "RuleSystem":
-        template = _resolve_rule_template(Path(path))
+        source = Path(path)
+        raw = json.loads(source.read_text(encoding="utf-8"))
+        if isinstance(raw, dict) and raw.get("locale_schema_version") and raw.get("target"):
+            target = raw.get("target") or {}
+            core = source.parents[2] / f"{target.get('id')}.json"
+            template = materialize_rule(_resolve_rule_template(core), raw)
+        else:
+            template = _resolve_rule_template(source)
         logger.info("规则已加载: %s (%s)", template.get("rule_id"), template.get("rule_name"))
         return cls(template)
 
@@ -151,6 +184,12 @@ class RuleSystem:
         base = Path(rules_dir) / f"{rule_id}.json"
         suffix = lang_suffix(language) if language else ""
         if suffix:
+            v2_locale = Path(rules_dir) / "locales" / str(language).replace("_", "-") / f"{rule_id}.json"
+            if v2_locale.exists():
+                return v2_locale
+            v2_base = Path(rules_dir) / "locales" / str(language).replace("_", "-").split("-", 1)[0] / f"{rule_id}.json"
+            if v2_base.exists():
+                return v2_base
             localized = Path(rules_dir) / f"{rule_id}_{suffix}.json"
             if localized.exists():
                 return localized
