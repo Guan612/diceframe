@@ -70,4 +70,22 @@ def sync_template_catalog(
         except OSError:
             stats["failed"] += 1
             logger.exception("模板同步失败: %s -> %s", source, target)
+
+    # Content V2 typed locales live below ``locales/<locale>/``.  Runtime
+    # loaders read from data/templates, so copying only the root core files
+    # silently drops localization in an actual server process even though
+    # direct loader tests against the bundled directory pass.
+    locale_dir = bundled_dir / "locales"
+    if locale_dir.is_dir():
+        for source in sorted(locale_dir.rglob("*.json")):
+            target = runtime_dir / source.relative_to(bundled_dir)
+            try:
+                if target.exists() and source.read_bytes() == target.read_bytes():
+                    continue
+                existed = target.exists()
+                _copy_atomic(source, target)
+                stats["updated" if existed else "copied"] += 1
+            except OSError:
+                stats["failed"] += 1
+                logger.exception("模板 locale 同步失败: %s -> %s", source, target)
     return stats
