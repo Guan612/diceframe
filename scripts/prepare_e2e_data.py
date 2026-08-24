@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -13,10 +14,21 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.engine.game_instance import GameInstance, GameState
+from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.webui.services.legal import bundled_documents
 
 
 E2E_GAME_KEY = ("web", "e2e-room", "web_bot")
+E2E_DND_GAME_KEY = ("web", "e2e-dnd2024", "web_bot")
+
+
+def _write_save(data_dir: Path, instance: GameInstance) -> Path:
+    save_file = data_dir / "saves" / "#".join(instance.game_key) / "state.json"
+    save_file.parent.mkdir(parents=True, exist_ok=True)
+    save_file.write_text(
+        json.dumps(instance.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    return save_file
 
 
 def prepare_e2e_data(data_dir: Path) -> Path:
@@ -27,6 +39,15 @@ def prepare_e2e_data(data_dir: Path) -> Path:
     config_file.write_text(
         json.dumps(
             {
+                "ai_providers": [{
+                    "id": "e2e-provider",
+                    "name": "E2E Provider",
+                    "base_url": "http://127.0.0.1:9/v1",
+                    "api_format": "openai",
+                    "models": ["e2e-chat", "e2e-embedding"],
+                }],
+                "llm_provider_ref": "e2e-provider",
+                "model": "e2e-chat",
                 "hub_telemetry_enabled": False,
                 "hub_telemetry_choice_made": True,
                 "legal_terms_accepted_updated_at": documents["terms"]["updated_at"],
@@ -38,8 +59,14 @@ def prepare_e2e_data(data_dir: Path) -> Path:
         ),
         encoding="utf-8",
     )
-    save_file = data_dir / "saves" / "#".join(E2E_GAME_KEY) / "state.json"
-    save_file.parent.mkdir(parents=True, exist_ok=True)
+    (data_dir / "secrets.json").write_text(
+        json.dumps(
+            {"ai_provider_key_e2e-provider": secrets.token_urlsafe(24)},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     instance = GameInstance(
         game_key=E2E_GAME_KEY,
         world_id="default_fantasy",
@@ -92,7 +119,35 @@ def prepare_e2e_data(data_dir: Path) -> Path:
         ],
         "gm_response": "The road is quiet.",
     }]
-    save_file.write_text(json.dumps(instance.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+    save_file = _write_save(data_dir, instance)
+
+    runtime = Dnd2024Runtime()
+    choices = runtime.builder_choices(None, {"locale": "zh-CN"})
+    preset = next(item for item in choices["quick_presets"] if item["id"] == "stalwart_guardian")
+    dnd_character = runtime.finalize_character(
+        None, {**preset["draft"], "locale": "zh-CN", "name": "新手守护者"},
+    )
+    dnd_instance = GameInstance(
+        game_key=E2E_DND_GAME_KEY,
+        world_id="default_fantasy",
+        world_name="D&D 2024 新手桌",
+        group_name="Professional Ruleset Browser Tests",
+        state=GameState.ACTIVE_ACTION,
+        solo_mode=False,
+        gm_uid="e2e-gm",
+        scene="灰沼村议事厅",
+        rule_id="dnd2024_srd",
+        language="zh-CN",
+    )
+    dnd_instance.players = {
+        "e2e-gm": {
+            "character_name": "新手守护者",
+            "character_sheet": dnd_character,
+        },
+    }
+    if not dnd_instance.bind_ruleset_runtime(dnd_character["rule_binding"]):
+        raise RuntimeError("failed to bind D&D 2024 runtime in E2E fixture")
+    _write_save(data_dir, dnd_instance)
     return save_file
 
 

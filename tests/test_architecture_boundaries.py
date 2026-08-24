@@ -9,6 +9,7 @@ FORBIDDEN_CORE_IMPORTS = (
     "src.compat.content_v1",
     "src.compat.worlds_v1",
     "src.webui",
+    "src.rulesets.dnd2024",
 )
 
 
@@ -40,6 +41,17 @@ def test_builtin_v2_rules_do_not_reintroduce_full_locale_copies() -> None:
     assert not legacy_copies
     fixtures = ROOT / "tests" / "fixtures" / "legacy_rules"
     assert list(fixtures.glob("*_en.json"))
+
+
+def test_ruleset_runtime_layer_does_not_import_webui_or_compat() -> None:
+    directory = ROOT / "src" / "rulesets"
+    violations: list[str] = []
+    for path in directory.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for imported in ("src.webui", "src.compat"):
+            if imported in text:
+                violations.append(f"{path.relative_to(ROOT)} imports {imported}")
+    assert not violations, "\n".join(violations)
 
 
 def test_v2_locale_authority_is_backend_materialized() -> None:

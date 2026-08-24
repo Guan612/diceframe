@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, apiBlob } from '@/api/client'
-import type { CharacterCard, CharacterCardsResponse, CharacterItem, CharacterListResponse, CharacterPortrait, CharacterSchemaResponse, CharacterSheet, CharacterSkill, JsonObject, RuleMeta, RulesResponse, RuleSummary, SkillSpec, WorldListResponse, WorldSummary } from '@/api/types'
+import type { CharacterCard, CharacterCardsResponse, CharacterItem, CharacterListResponse, CharacterPortrait, CharacterSchemaResponse, CharacterSheet, CharacterSkill, JsonObject, Player, RuleMeta, RulesResponse, RuleSummary, SkillSpec, WorldListResponse, WorldSummary } from '@/api/types'
 import { readCurrentGame } from '@/stores/gameContext'
 import { importTavernCard } from '@/utils/characterImport'
 import { useToast } from '@/composables/useToast'
@@ -15,6 +15,9 @@ import LevelUpDialog from '@/components/admin/LevelUpDialog.vue'
 import ItemEditor from '@/components/admin/ItemEditor.vue'
 import PortraitImage from '@/components/PortraitImage.vue'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
+import Dnd2024AdvancementPanel from '@/features/rulesets/dnd2024/progression/Dnd2024AdvancementPanel.vue'
+import RulesetExperienceHost from '@/features/rulesets/RulesetExperienceHost.vue'
+import ProfessionalCharacterCenter from '@/features/rulesets/ProfessionalCharacterCenter.vue'
 import {
   identitySchema, identityLabel, getIdentityValue, setIdentityUpdate,
   currencyLabel, getCurrencyAmount, getResourceValue,
@@ -63,6 +66,14 @@ interface CharacterCardPatch extends JsonObject {
   gold: number
   portrait?: CharacterPortrait | null
 }
+interface ProfessionalEditTarget {
+  target: 'game' | 'card'
+  character: CharacterSheet
+  ruleId: string
+  gameKey?: string
+  userId?: string
+  cardId?: string
+}
 interface UpdateCharacterPayload extends JsonObject {
   character_name: string
   level: number
@@ -94,6 +105,9 @@ const edit = ref<CharacterEditForm | null>(null)
 const editLevelUp = ref<LevelUpState | null>(null)
 const editCard = ref<CardEditForm | null>(null)
 const editNpcPortrait = ref<NpcPortraitEdit | null>(null)
+const advancementCard = ref<CharacterCard | null>(null)
+const advancementPlayer = ref<Player | null>(null)
+const professionalEdit = ref<ProfessionalEditTarget | null>(null)
 const showWizard = ref(false)
 const characterSearch = ref('')
 const characterSort = ref<'name' | 'rule'>('name')
@@ -151,6 +165,25 @@ function cardRuleLabel(card: CharacterCard): string {
   if (!card.rule_id) return t('unboundRule')
   const rule = rules.value.find(candidate => candidate.rule_id === card.rule_id)
   return rule ? ruleNameOf(rule) : String(card.rule_name || card.rule_id)
+}
+function hasRulesAwareLifecycle(capabilities: unknown): boolean {
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return false
+  return (capabilities as JsonObject).character_lifecycle === 'rules_aware'
+}
+function isProfessionalCard(card: CharacterCard): boolean {
+  return hasRulesAwareLifecycle(card.ruleset_runtime?.capabilities)
+}
+function isProfessionalGame(): boolean {
+  return hasRulesAwareLifecycle(data.value?.ruleset_runtime?.capabilities)
+}
+function isSelectedProfessionalRule(): boolean {
+  const rule = rules.value.find(candidate => candidate.rule_id === ruleId.value)
+  return hasRulesAwareLifecycle(rule?.ruleset_runtime?.capabilities)
+}
+function professionalLevel(card: CharacterSheet): number {
+  const canonical = card.ruleset_character as JsonObject | undefined
+  const build = canonical?.build as JsonObject | undefined
+  return Number(build?.level || card.level || 1)
 }
 function currentRuleBinding(): Pick<CharacterCard, 'rule_id' | 'rule_name' | 'rule_version' | 'mechanics' | 'language'> {
   const rule = rules.value.find(candidate => candidate.rule_id === ruleId.value)
@@ -341,7 +374,7 @@ onMounted(async () => {
   const uid = route.query.edit_user ? String(route.query.edit_user) : ''
   if (uid && data.value?.players?.length) {
     const p = data.value.players.find(x => x.user_id === uid)
-    if (p) openEdit(p)
+    if (p) openPlayerEditor(p)
   }
 })
 
@@ -386,6 +419,20 @@ function openEdit(p: import('@/api/types').Player) {
     identityValues: Object.fromEntries(fields.map((f: IdentityField) => [f.key, getIdentityValue(cs, f)])),
     portrait: cs.portrait ? { ...cs.portrait } : undefined,
   }
+}
+
+function openPlayerEditor(p: import('@/api/types').Player) {
+  if (isProfessionalGame()) {
+    professionalEdit.value = {
+      target: 'game',
+      character: { ...(p.character_sheet || {}), character_name: p.character_name },
+      ruleId: ruleId.value,
+      gameKey: game.value,
+      userId: p.user_id,
+    }
+    return
+  }
+  openEdit(p)
 }
 
 const attrSum = computed(() => {
@@ -480,6 +527,18 @@ function openCardEdit(c: CharacterCard) {
     rule_id: c.rule_id,
   }
 }
+function openCardEditor(c: CharacterCard) {
+  if (isProfessionalCard(c)) {
+    professionalEdit.value = {
+      target: 'card',
+      character: c,
+      ruleId: String(c.rule_id || ''),
+      cardId: cardId(c),
+    }
+    return
+  }
+  openCardEdit(c)
+}
 async function saveCardEdit() {
   const e = editCard.value
   if (!e) return
@@ -500,6 +559,36 @@ async function saveCardEdit() {
     await load()
     toast.success(t('characterCardUpdated'))
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
+}
+
+async function onCardAdvanced() {
+  busy.value = true
+  try {
+    advancementCard.value = null
+    await load()
+    toast.success(String(locale.value).startsWith('en') ? 'Character advanced.' : '角色升级已完成。')
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  } finally { busy.value = false }
+}
+
+async function onLiveCharacterAdvanced() {
+  busy.value = true
+  try {
+    advancementPlayer.value = null
+    await load()
+    toast.success(String(locale.value).startsWith('en') ? 'Character advanced.' : '角色升级已完成。')
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  } finally { busy.value = false }
+}
+
+async function onProfessionalSaved(_character?: CharacterSheet, reason?: 'profile' | 'rest') {
+  professionalEdit.value = null
+  await load()
+  toast.success(reason === 'rest'
+    ? (String(locale.value).startsWith('en') ? 'Rest completed.' : '休息已按规则结算。')
+    : (String(locale.value).startsWith('en') ? 'Character profile saved.' : '人物资料已安全保存。'))
 }
 
 async function deleteCard(c: CharacterCard) {
@@ -536,10 +625,17 @@ async function saveNpcPortrait() {
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 
-async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
+async function onWizardSubmit(c: CharacterSheet) {
   busy.value = true
   try {
-    await api('/character-cards', { method: 'POST', body: JSON.stringify({ ...c, ...currentRuleBinding() }) })
+    await api('/character-cards', {
+      method: 'POST',
+      body: JSON.stringify({
+        ...c,
+        character_name: String(c.character_name || t('unnamed')),
+        ...currentRuleBinding(),
+      }),
+    })
     showWizard.value = false
     await load()
     toast.success(t('characterCardCreated'))
@@ -575,7 +671,7 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
       <div class="current-character-grid">
       <article v-for="p in data?.players || []" :key="p.user_id" class="char-card current-character-card">
         <div class="current-character-identity">
-          <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openEdit(p)">
+          <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openPlayerEditor(p)">
             <PortraitImage :portrait="p.character_sheet?.portrait" :rule-id="ruleId" :seed="p.user_id" :name="p.character_name" :size="96" />
             <span>{{ t('clickToChangeAvatar') }}</span>
           </button>
@@ -598,8 +694,9 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
           </div>
         </div>
         <div class="actions current-character-actions">
-          <button class="success" @click="openEdit(p)">{{ t('edit') }}</button>
-          <button v-if="levelUpPoints(p) > 0" class="primary" @click="openLevelUp(p)">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints(p) }) }}</button>
+          <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('en') ? 'Character center' : '专业角色中心') : t('edit') }}</button>
+          <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('en') ? 'Class advancement' : '职业升级' }}</button>
+          <button v-if="!isProfessionalGame() && levelUpPoints(p) > 0" class="primary" @click="openLevelUp(p)">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints(p) }) }}</button>
           <button @click="saveToCard(p)">{{ t('saveToSharedLibrary') }}</button>
           <button class="danger" @click="deleteCharacter(p)">{{ t('remove') }}</button>
         </div>
@@ -660,7 +757,7 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
       <article v-for="c in filteredCards" :key="c.card_id || c.id" class="char-card library-character-card">
         <div class="character-card-summary">
           <input type="checkbox" :checked="selectedCardIds.has(cardId(c))" @change="toggleCardSelect(cardId(c))" class="card-select" :title="t('selectCard')">
-          <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openCardEdit(c)">
+          <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openCardEditor(c)">
             <PortraitImage :portrait="c.portrait" :rule-id="c.rule_id" :seed="cardId(c) || c.character_name" :name="c.character_name" :size="64" />
             <span>{{ t('clickToChangeAvatar') }}</span>
           </button>
@@ -672,7 +769,8 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
           </div>
         </div>
         <div class="actions">
-          <button @click="openCardEdit(c)">{{ t('editCard') }}</button>
+          <button v-if="isProfessionalCard(c) && professionalLevel(c) < 20" class="success" @click="advancementCard = c">{{ String(locale).startsWith('en') ? 'Level up' : '职业升级' }}</button>
+          <button @click="openCardEditor(c)">{{ isProfessionalCard(c) ? (String(locale).startsWith('en') ? 'Character center' : '专业角色中心') : t('editCard') }}</button>
           <button @click="exportSingleCard(c)">{{ t('export') }}</button>
           <button class="danger" @click="deleteCard(c)">{{ t('delete') }}</button>
         </div>
@@ -738,6 +836,45 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
       </template>
     </Modal>
 
+    <Modal v-if="advancementCard" :title="String(locale).startsWith('en') ? 'D&D 2024 advancement' : 'D&D 2024 职业升级'" @close="advancementCard = null">
+      <Dnd2024AdvancementPanel
+        :rule-id="String(advancementCard.rule_id || ruleId)"
+        :character="advancementCard"
+        :card-id="cardId(advancementCard)"
+        :revision="Number(advancementCard.ruleset_revision || 0)"
+        :language="String(advancementCard.language || locale)"
+        @applied="onCardAdvanced"
+        @cancel="advancementCard = null"
+      />
+    </Modal>
+
+    <Modal v-if="advancementPlayer?.character_sheet" :title="String(locale).startsWith('en') ? 'D&D 2024 advancement' : 'D&D 2024 职业升级'" @close="advancementPlayer = null">
+      <Dnd2024AdvancementPanel
+        :rule-id="ruleId"
+        :character="advancementPlayer.character_sheet"
+        :game-key="game"
+        :user-id="advancementPlayer.user_id"
+        :revision="Number(advancementPlayer.character_sheet.ruleset_revision || 0)"
+        :language="String(locale)"
+        @applied="onLiveCharacterAdvanced"
+        @cancel="advancementPlayer = null"
+      />
+    </Modal>
+
+    <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('en') ? 'Professional character center' : '专业角色中心'" @close="professionalEdit = null">
+      <ProfessionalCharacterCenter
+        :character="professionalEdit.character"
+        :target="professionalEdit.target"
+        :rule-id="professionalEdit.ruleId"
+        :language="String(locale)"
+        :game-key="professionalEdit.gameKey"
+        :user-id="professionalEdit.userId"
+        :card-id="professionalEdit.cardId"
+        @saved="onProfessionalSaved"
+        @cancel="professionalEdit = null"
+      />
+    </Modal>
+
     <Modal v-if="editNpcPortrait" :title="`${editNpcPortrait.name} · ${t('characterAvatar')}`" @close="editNpcPortrait = null">
       <PortraitPicker v-model="editNpcPortrait.portrait" :rule-id="ruleId" :seed="editNpcPortrait.npcId" :name="editNpcPortrait.name" />
       <template #actions>
@@ -746,8 +883,15 @@ async function onWizardSubmit(c: CharacterSheet & { character_name: string }) {
       </template>
     </Modal>
 
+    <RulesetExperienceHost
+      v-if="showWizard && isSelectedProfessionalRule()"
+      :rule-id="ruleId"
+      :language="String(locale)"
+      @submit="onWizardSubmit"
+      @cancel="showWizard = false"
+    />
     <CharacterWizard
-      v-if="showWizard"
+      v-else-if="showWizard"
       :rule-meta="ruleMeta"
       :rule-attrs="ruleAttrs"
       :attr-total="ruleAttrsTotal"

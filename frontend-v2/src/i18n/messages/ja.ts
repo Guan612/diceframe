@@ -52,6 +52,7 @@ export const ja = {
   createTitle: '新しい冒険を作成',
   recommendedRules: 'おすすめルール',
   recommended: 'おすすめ',
+  professional: '専門',
   recommendedHint: '下のルール一覧から他のルールを選ぶこともできます。',
   createSubtitle: '世界のソースを選択し、初期キャラクターを設定します。',
   stepWorld: '世界',

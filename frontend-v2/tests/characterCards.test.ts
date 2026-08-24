@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { CharacterCard } from '../src/api/types'
-import { characterCardNeedsConversion, characterCardRuleName } from '../src/utils/characterCards'
+import {
+  characterCardHasCompatibleProfessionalBlueprint,
+  characterCardNeedsConversion,
+  characterCardRuleName,
+} from '../src/utils/characterCards'
 
 function card(ruleId = '', ruleName = ''): CharacterCard {
   return {
@@ -25,5 +29,24 @@ describe('character card rule binding', () => {
   it('uses the friendly rule name and falls back for legacy cards', () => {
     expect(characterCardRuleName(card('freeform_coc', 'Call of Cthulhu'), 'Unbound')).toBe('Call of Cthulhu')
     expect(characterCardRuleName(card(), 'Unbound')).toBe('Unbound')
+  })
+
+  it('requires an exact canonical binding before reusing a professional blueprint', () => {
+    const professional = {
+      ...card('dnd2024_srd'),
+      ruleset_character: {
+        rule_binding: { rule_id: 'dnd2024_srd', runtime_id: 'core:dnd2024' },
+        build: { level: 1 },
+      },
+    }
+    expect(characterCardHasCompatibleProfessionalBlueprint(
+      professional, 'dnd2024_srd', 'core:dnd2024',
+    )).toBe(true)
+    expect(characterCardHasCompatibleProfessionalBlueprint(
+      card('dnd2024_srd'), 'dnd2024_srd', 'core:dnd2024',
+    )).toBe(false)
+    expect(characterCardHasCompatibleProfessionalBlueprint(
+      professional, 'dnd2024_srd', 'core:other',
+    )).toBe(false)
   })
 })

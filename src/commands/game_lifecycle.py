@@ -136,30 +136,51 @@ class GameLifecycle:
             f"{opening_instruction}"
         )
 
-        response = await self.llm_client.call(
-            system_prompt=gm_prompt,
-            user_message=welcome_context,
-            temperature=0.8,
-            max_tokens=self.narrative_max_tokens,
-        )
-        response = await repair_malformed_protocol_response(
-            self.llm_client,
-            response,
-            system_prompt=gm_prompt,
-            user_message=welcome_context,
-            language=instance.language,
-            temperature=0.8,
-            max_tokens=self.narrative_max_tokens,
-        )
-        response.content = normalize_tag_protocol(response.content)
-
-        narration = extract_narration_from_response(response)
-        if "---" in response.content:
-            narration = response.content.split("---", 1)[0].strip()
-        narration = sanitize_narration(narration)
-
-        # 开场标签同样需要落地到 instance：NPC 登记、场景、首次战利品等。
-        start_data = parse_tag_state(response.content, rule_ctx.combat_model)
+        response = None
+        try:
+            response = await self.llm_client.call(
+                system_prompt=gm_prompt,
+                user_message=welcome_context,
+                temperature=0.8,
+                max_tokens=self.narrative_max_tokens,
+            )
+            response = await repair_malformed_protocol_response(
+                self.llm_client,
+                response,
+                system_prompt=gm_prompt,
+                user_message=welcome_context,
+                language=instance.language,
+                temperature=0.8,
+                max_tokens=self.narrative_max_tokens,
+            )
+            response.content = normalize_tag_protocol(response.content)
+            narration = extract_narration_from_response(response)
+            if "---" in response.content:
+                narration = response.content.split("---", 1)[0].strip()
+            narration = sanitize_narration(narration)
+            # 开场标签同样需要落地到 instance：NPC 登记、场景、首次战利品等。
+            start_data = parse_tag_state(response.content, rule_ctx.combat_model)
+        except Exception:
+            logger.exception("开场叙事生成失败，已保存可继续的兜底开场")
+            narration = localized_text(
+                instance.language,
+                {
+                    "en": (
+                        f"{instance.world_name} is ready. The opening narration could not be "
+                        "generated, but your game and characters have been saved. Configure or "
+                        "retry the model service, then continue when you are ready."
+                    ),
+                    "zh-CN": (
+                        f"《{instance.world_name}》已经创建，角色与存档均已保存。"
+                        "本次开场叙事生成失败；请检查模型服务后继续游戏或重试。"
+                    ),
+                    "ja": (
+                        f"『{instance.world_name}』を作成し、キャラクターとセーブを保存しました。"
+                        "オープニング生成に失敗したため、モデル設定を確認してから続行または再試行してください。"
+                    ),
+                },
+            )
+            start_data = {}
         if start_data.get("state_update"):
             self.state_applier.apply_state_update(instance, start_data["state_update"])
         if start_data.get("plot_update") and instance.plot_tracker:
@@ -175,7 +196,8 @@ class GameLifecycle:
             {"en": "Game Start", "zh-CN": "游戏开始", "ja": "ゲーム開始"},
         )
         instance.set_scene(scene or start_label)
-        instance.record_llm_usage(response.total_tokens)
+        if response is not None:
+            instance.record_llm_usage(response.total_tokens)
         instance.append_log_entry({
             "round": 0,
             "actions": [{"user_id": "system", "text": start_label}],

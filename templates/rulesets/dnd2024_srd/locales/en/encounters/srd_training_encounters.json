@@ -1,0 +1,22 @@
+{
+  "locale_schema_version": 1,
+  "locale": "en",
+  "target": {"kind": "encounter_catalog", "id": "srd_training_encounters"},
+  "fields": {
+    "name": "SRD Starter Combat Presets",
+    "labels": {
+      "presets": {
+        "first_skirmish": {"name": "First Skirmish", "description": "One weaker goblin for learning initiative, movement, and attacks."},
+        "goblin_patrol": {"name": "Goblin Patrol", "description": "One standard enemy that can switch between melee and ranged attacks."},
+        "crypt_pair": {"name": "Crypt Pair", "description": "A skeleton and wolf encounter for practicing target selection."}
+      },
+      "profiles": {
+        "goblin_minion": "Goblin Minion",
+        "goblin_warrior": "Goblin Warrior",
+        "skeleton": "Skeleton",
+        "wolf": "Wolf"
+      },
+      "attacks": {"dagger": "Dagger", "scimitar": "Scimitar", "shortbow": "Shortbow", "shortsword": "Shortsword", "bite": "Bite"}
+    }
+  }
+}

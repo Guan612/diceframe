@@ -562,6 +562,7 @@ def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None 
         speech_service=speech_service,
         asr_service=asr_service,
         imagegen_service=imagegen_service,
+        ruleset_registry=getattr(subsystems, "ruleset_registry", None),
     )
     # 配置状态引用就地更新，始终指向最新值（更新频道等运行时配置）
     api._config_state = STATE
@@ -837,6 +838,12 @@ async def auth_middleware(request: web.Request, handler):
         return await handler(request)
     if request.method == "GET" and request.path.startswith("/api/legal/"):
         return await handler(request)
+    # Professional player creation runs on public share/join pages before a
+    # player identity exists.  These five endpoints are stateless, bounded by
+    # the builder service's payload/depth/node limits, and never mutate a save.
+    # Keep rule management and every other /api/rules path owner-only.
+    if _is_public_ruleset_builder_request(request):
+        return await handler(request)
     # 启动器在更新切换期间没有用户令牌，只读取版本和进程号。
     if request.method == "GET" and request.path == "/api/system/update/health":
         return await handler(request)
@@ -861,6 +868,22 @@ _BOT_PUBLIC_ENDPOINTS = frozenset({
     "/api/generate-world",
     "/api/generate-text",
 })
+
+
+def _is_public_ruleset_builder_request(request: web.Request) -> bool:
+    parts = [part for part in request.path.split("/") if part]
+    if len(parts) == 4 and parts[:2] == ["api", "rules"]:
+        return request.method == "GET" and parts[3] in {"experience", "progression"}
+    return bool(
+        len(parts) == 5
+        and parts[:2] == ["api", "rules"]
+        and request.method == "POST"
+        and (
+            (parts[3] == "builder" and parts[4] in {"choices", "validate", "derive", "finalize"})
+            or (parts[3] == "advancement" and parts[4] in {"preview", "apply"})
+            or (parts[3] == "rest" and parts[4] == "resolve")
+        )
+    )
 
 
 def _bot_request_game_key(request: web.Request) -> str:
@@ -908,9 +931,9 @@ def _share_player_user_id(request: web.Request) -> str:
         return uid or request.get("user_id", "")
     if len(parts) >= 4:
         tail = parts[3]
-        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "avatars", "scene-image", "map-background-asset", "generated-images"}:
+        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "available-actions", "avatars", "scene-image", "map-background-asset", "generated-images"}:
             return uid or request.get("user_id", "")
-        if request.method == "POST" and tail in {"players", "action", "sse-ticket", "avatars", "scene-image", "generated-images"}:
+        if request.method == "POST" and tail in {"players", "action", "intents", "adventure-actions", "decisions", "sse-ticket", "avatars", "scene-image", "generated-images", "character"}:
             return uid or request.get("user_id", "")
         if (
             request.method == "POST"
@@ -919,7 +942,7 @@ def _share_player_user_id(request: web.Request) -> str:
             and parts[5] == "luck"
         ):
             return uid or request.get("user_id", "")
-        if request.method == "PUT" and tail == "character":
+        if request.method in {"PUT", "PATCH"} and tail == "character":
             return uid or request.get("user_id", "")
     return ""
 

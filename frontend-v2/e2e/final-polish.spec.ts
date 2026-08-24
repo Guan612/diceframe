@@ -195,7 +195,12 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
   expect(modelLayout.scrollWidth).toBeLessThanOrEqual(modelLayout.clientWidth + 1)
   expect(modelLayout.display).toBe('grid')
   expect(modelLayout.headerBackground).toBe('none')
-  expect(capabilityLayout).toEqual({ display: 'grid', columns: 2, alignItems: 'start', columnCount: 2 })
+  expect(capabilityLayout).toEqual({
+    display: 'grid',
+    columns: testInfo.project.name === 'mobile' ? 1 : 2,
+    alignItems: 'start',
+    columnCount: 2,
+  })
 
   await page.goto('/#/settings?section=advanced')
   const timeoutSection = page.locator('.test-timeout-section')

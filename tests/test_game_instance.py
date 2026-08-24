@@ -10,6 +10,37 @@ from src.engine.health import health_payload, mark_health_event, record_health_e
 from src.commands.progression_resolver import ProgressionResolver
 
 
+def test_versioned_ruleset_state_is_optional_and_round_trips() -> None:
+    legacy = GameInstance(game_key=("web", "legacy", "bot"))
+    assert "ruleset_runtime" not in legacy.to_dict()
+
+    instance = GameInstance(game_key=("web", "professional", "bot"))
+    assert instance.bind_ruleset_runtime({
+        "runtime_id": "core:dnd2024",
+        "runtime_version": 1,
+        "content_version": "srd-5.2.1+r1",
+        "state_schema_version": 1,
+    })
+    instance.event_ledger.append({"batch_id": "test-batch"})
+
+    restored = GameInstance.from_dict(instance.to_dict())
+
+    assert restored.ruleset_runtime == {
+        "id": "core:dnd2024",
+        "version": 1,
+        "content_version": "srd-5.2.1+r1",
+        "state_schema_version": 1,
+    }
+    assert restored.ruleset_state == {"state_schema_version": 1}
+    assert restored.event_ledger == [{"batch_id": "test-batch"}]
+    assert not restored.bind_ruleset_runtime({
+        "runtime_id": "core:dnd2024",
+        "runtime_version": 2,
+        "content_version": "future",
+        "state_schema_version": 2,
+    })
+
+
 @pytest.mark.asyncio
 class TestGameInstance:
     async def test_initial_state(self):

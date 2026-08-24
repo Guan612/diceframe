@@ -1,0 +1,534 @@
+from __future__ import annotations
+
+import base64
+import json
+from copy import deepcopy
+from types import SimpleNamespace
+
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+import pytest
+
+from src.engine.game_instance import GameInstance, GameRegistry
+from src.rules.rule_system import RuleSystem
+from src.rulesets.builtin import build_default_ruleset_registry
+from src.rulesets.dnd2024.runtime import Dnd2024Runtime
+from src.webui.routes.character_cards import register_character_cards
+from src.webui.routes.games import register_games
+from src.webui.services import (
+    character_cards,
+    characters,
+    ruleset_advancement,
+    ruleset_characters,
+    ruleset_rest,
+)
+from src.webui.services._common import _parse_game_key
+
+
+class _Api:
+    def __init__(self, tmp_path):
+        self._reg = GameRegistry(tmp_path / "saves")
+        self._character_cards_path = tmp_path / "character_cards.json"
+        self._ruleset_registry = build_default_ruleset_registry()
+        self._runtime = self._ruleset_registry.get("core:dnd2024")
+        self._rule = RuleSystem({
+            "rule_id": "dnd2024_srd",
+            "rule_name": "5E 2024 SRD",
+            "runtime": {"id": "core:dnd2024", "minimum_version": 1},
+        })
+
+    @staticmethod
+    def _parse_key(game_key: str):
+        return _parse_game_key(game_key)
+
+    def _load_rule_for_game(self, instance):
+        del instance
+        return self._rule
+
+    def _load_rule_by_id(self, rule_id: str, language: str = ""):
+        del language
+        return self._rule if rule_id == "dnd2024_srd" else None
+
+    def avatar_file(self, asset_id: str):
+        del asset_id
+        return None
+
+    def generated_image_file(self, asset_id: str):
+        del asset_id
+        return None
+
+    def save_character_card(self, character: dict):
+        return character_cards.save_character_card(self, character)
+
+
+def _professional_character(runtime: Dnd2024Runtime) -> dict:
+    choices = runtime.builder_choices(None, {"locale": "en"})
+    preset = next(
+        item for item in choices["quick_presets"]
+        if item["id"] == "stalwart_guardian"
+    )
+    return runtime.finalize_character(
+        None,
+        {**preset["draft"], "locale": "en", "name": "Boundary Hero"},
+    )
+
+
+@pytest.fixture()
+def professional_context(tmp_path):
+    api = _Api(tmp_path)
+    character = _professional_character(api._runtime)
+    instance = GameInstance(
+        game_key=("web", "character-lifecycle", "web_bot"),
+        world_id="test-world",
+        rule_id="dnd2024_srd",
+        gm_uid="gm",
+        language="en",
+    )
+    instance.players["gm"] = {
+        "character_name": character["character_name"],
+        "character_sheet": deepcopy(character),
+    }
+    assert instance.bind_ruleset_runtime(character["rule_binding"])
+    api._reg.register(instance)
+    return api, instance, character
+
+
+@pytest.mark.asyncio
+async def test_legacy_live_update_rejects_professional_mechanics_atomically(
+    professional_context,
+) -> None:
+    api, instance, _character = professional_context
+    before = deepcopy(instance.players["gm"])
+
+    result = await characters.update_character(
+        api,
+        "web|character-lifecycle|web_bot",
+        "gm",
+        {
+            "character_name": "Partially Mutated",
+            "portrait": {"kind": "builtin", "id": "wizard-1"},
+            "hp": 999,
+            "attributes": {"str": 99},
+        },
+    )
+
+    assert result == {
+        "ok": False,
+        "error_code": "RULESET_CHARACTER_OPERATION_REQUIRED",
+        "error": "专业规则角色不能使用旧版通用编辑接口",
+    }
+    assert instance.players["gm"] == before
+
+
+@pytest.mark.asyncio
+async def test_live_profile_update_preserves_canonical_mechanics(
+    professional_context,
+) -> None:
+    api, instance, _character = professional_context
+    before = deepcopy(instance.get_character_sheet("gm")["ruleset_character"])
+
+    result = await ruleset_characters.update_live_character_profile(
+        api,
+        "web|character-lifecycle|web_bot",
+        "gm",
+        {
+            "character_name": "Renamed Hero",
+            "portrait": {"kind": "builtin", "id": "wizard-1"},
+            "profile": {
+                "pronouns": "they/them",
+                "appearance": "A weathered blue cloak.",
+                "personality": "Patient with new adventurers.",
+                "backstory": "Left the academy to protect a frontier town.",
+                "notes": "Prefers non-lethal solutions.",
+            },
+        },
+    )
+
+    assert result["ok"] is True
+    sheet = instance.get_character_sheet("gm")
+    canonical = sheet["ruleset_character"]
+    assert instance.players["gm"]["character_name"] == "Renamed Hero"
+    assert canonical["identity"]["name"] == "Renamed Hero"
+    assert canonical["profile"]["backstory"].startswith("Left the academy")
+    assert sheet["portrait"] == {"kind": "builtin", "id": "wizard-1"}
+    for key in (
+        "rule_binding", "build", "abilities", "proficiencies", "resources",
+        "equipment", "features", "spellcasting", "derived", "sources", "progression",
+    ):
+        assert canonical[key] == before[key]
+    assert sheet["hp"] == canonical["resources"]["hp"]
+    assert sheet["attributes"] == canonical["abilities"]
+
+
+def test_raw_card_update_rejects_professional_canonical_overwrite(
+    professional_context,
+) -> None:
+    api, _instance, character = professional_context
+    saved = character_cards.save_character_card(api, character)["card"]
+    before = deepcopy(character_cards.list_character_cards(api)["cards"])
+
+    result = character_cards.update_character_card(
+        api,
+        saved["id"],
+        {
+            "character_name": "Partially Mutated",
+            "ruleset_character": {"resources": {"hp": 999}},
+        },
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "RULESET_CHARACTER_OPERATION_REQUIRED"
+    assert character_cards.list_character_cards(api)["cards"] == before
+
+
+def test_professional_card_is_rebuilt_before_storage(professional_context) -> None:
+    api, _instance, character = professional_context
+    forged = deepcopy(character)
+    forged["ruleset_character"]["resources"]["hp"] = 9999
+    forged["ruleset_character"]["derived"]["armor_class"] = 99
+    forged["ruleset_character"]["profile"] = {"notes": "Keep this safe note."}
+
+    result = character_cards.save_character_card(api, forged)
+
+    assert result["ok"] is True
+    card = result["card"]
+    assert card["ruleset_character"]["resources"]["hp"] != 9999
+    assert card["ruleset_character"]["derived"]["armor_class"] != 99
+    assert card["ruleset_character"]["profile"] == {"notes": "Keep this safe note."}
+
+
+@pytest.mark.asyncio
+async def test_invalid_professional_import_is_rejected_before_storage(
+    professional_context,
+) -> None:
+    api, _instance, character = professional_context
+    forged = deepcopy(character)
+    forged["schema_version"] = 2
+    forged["rule_id"] = "dnd2024_srd"
+    forged["ruleset_character"]["build"]["class_levels"][0]["class_ref"] = "class:not-real"
+    payload = base64.b64encode(
+        json.dumps(forged, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+
+    imported = await character_cards.import_character_card(
+        api, file_data=payload, file_name="forged.json",
+    )
+
+    assert imported["ok"] is False
+    assert imported["error_code"] == "INVALID_RULESET_CHARACTER"
+    assert character_cards.list_character_cards(api)["cards"] == []
+
+
+def test_card_profile_update_preserves_professional_blueprint(
+    professional_context,
+) -> None:
+    api, _instance, character = professional_context
+    saved = character_cards.save_character_card(api, character)["card"]
+    before = deepcopy(saved["ruleset_character"])
+
+    result = ruleset_characters.update_character_card_profile(
+        api,
+        saved["id"],
+        {
+            "character_name": "Library Hero",
+            "profile": {"backstory": "Kept as reusable campaign-neutral notes."},
+        },
+    )
+
+    assert result["ok"] is True
+    card = result["card"]
+    assert card["character_name"] == "Library Hero"
+    assert card["ruleset_character"]["identity"]["name"] == "Library Hero"
+    assert card["ruleset_character"]["profile"]["backstory"].startswith("Kept as")
+    for key in (
+        "rule_binding", "build", "abilities", "proficiencies", "resources",
+        "equipment", "features", "spellcasting", "derived", "sources", "progression",
+    ):
+        assert card["ruleset_character"][key] == before[key]
+
+
+def test_dnd_runtime_declares_rules_aware_character_lifecycle() -> None:
+    assert Dnd2024Runtime.capabilities.character_lifecycle == "rules_aware"
+
+
+def test_card_advancement_is_entity_backed_versioned_and_idempotent(
+    professional_context,
+) -> None:
+    api, _instance, character = professional_context
+    saved = character_cards.save_character_card(api, character)["card"]
+    card_id = saved["id"]
+    choices = {"hp_method": "fixed"}
+
+    preview = ruleset_advancement.preview_card(api, card_id, {"choices": choices})
+    applied = ruleset_advancement.apply_card(
+        api,
+        card_id,
+        {"choices": choices, "expected_revision": 0, "operation_id": "level-2"},
+    )
+    duplicate = ruleset_advancement.apply_card(
+        api,
+        card_id,
+        {"choices": choices, "expected_revision": 0, "operation_id": "level-2"},
+    )
+    stale = ruleset_advancement.apply_card(
+        api,
+        card_id,
+        {"choices": choices, "expected_revision": 0, "operation_id": "level-3"},
+    )
+
+    assert preview["revision"] == 0
+    assert preview["advancement"]["to_level"] == 2
+    assert applied["ok"] is True
+    assert applied["revision"] == 1
+    assert applied["card"]["ruleset_character"]["build"]["level"] == 2
+    assert duplicate["ok"] is True
+    assert duplicate["duplicate"] is True
+    assert duplicate["revision"] == 1
+    assert stale["ok"] is False
+    assert stale["code"] == "STALE_CHARACTER_REVISION"
+
+
+@pytest.mark.asyncio
+async def test_live_advancement_is_entity_backed_versioned_and_idempotent(
+    professional_context,
+) -> None:
+    api, instance, _character = professional_context
+
+    preview = ruleset_advancement.preview_live(
+        api, "web|character-lifecycle|web_bot", "gm", {"choices": {"hp_method": "fixed"}},
+    )
+    applied = await ruleset_advancement.apply_live(
+        api, "web|character-lifecycle|web_bot", "gm",
+        {
+            "choices": {"hp_method": "fixed"},
+            "expected_revision": 0,
+            "operation_id": "live-level-2",
+        },
+    )
+    duplicate = await ruleset_advancement.apply_live(
+        api, "web|character-lifecycle|web_bot", "gm",
+        {
+            "choices": {"hp_method": "fixed"},
+            "expected_revision": 0,
+            "operation_id": "live-level-2",
+        },
+    )
+    stale = await ruleset_advancement.apply_live(
+        api, "web|character-lifecycle|web_bot", "gm",
+        {
+            "choices": {"hp_method": "fixed"},
+            "expected_revision": 0,
+            "operation_id": "live-level-3",
+        },
+    )
+
+    assert preview["revision"] == 0
+    assert applied["revision"] == 1
+    assert applied["character"]["ruleset_character"]["build"]["level"] == 2
+    assert duplicate["duplicate"] is True
+    assert stale["code"] == "STALE_CHARACTER_REVISION"
+    assert instance.get_character_sheet("gm")["ruleset_revision"] == 1
+
+
+@pytest.mark.asyncio
+async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context) -> None:
+    api, instance, _character = professional_context
+    sheet = instance.get_character_sheet("gm")
+    sheet["ruleset_character"]["resources"]["hp"] = 1
+    sheet["hp"] = 1
+
+    applied = await ruleset_rest.resolve_live(
+        api, "web|character-lifecycle|web_bot", "gm",
+        {
+            "rest": "short",
+            "hit_dice": {"d10": 1},
+            "confirm_elapsed_time": True,
+            "expected_revision": 0,
+            "operation_id": "short-rest-1",
+        },
+    )
+    duplicate = await ruleset_rest.resolve_live(
+        api, "web|character-lifecycle|web_bot", "gm",
+        {
+            "rest": "short",
+            "hit_dice": {"d10": 1},
+            "confirm_elapsed_time": True,
+            "expected_revision": 0,
+            "operation_id": "short-rest-1",
+        },
+    )
+    forged = await ruleset_rest.resolve_live(
+        api, "web|character-lifecycle|web_bot", "gm",
+        {
+            "rest": "short",
+            "hit_die_rolls": {"d10": [10]},
+            "confirm_elapsed_time": True,
+            "expected_revision": 1,
+            "operation_id": "short-rest-forged",
+        },
+    )
+
+    rested = instance.get_character_sheet("gm")
+    assert applied["ok"] is True
+    assert applied["revision"] == 1
+    assert rested["hp"] > 1
+    assert rested["ruleset_character"]["resources"]["hit_dice"]["d10"] == 0
+    assert duplicate["duplicate"] is True
+    assert duplicate["character"] == rested
+    assert forged["code"] == "CLIENT_ROLLS_FORBIDDEN"
+
+
+def test_authoritative_event_batch_advances_character_revision_once(
+    professional_context,
+) -> None:
+    api, instance, _character = professional_context
+    before_hp = instance.get_character_sheet("gm")["ruleset_character"]["resources"]["hp"]
+    batch = {
+        "batch_id": "batch_character_damage_1",
+        "intent_id": "damage-1",
+        "intent_type": "attack",
+        "expected_version": 0,
+        "result_version": 1,
+        "events": [{
+            "type": "resource.changed",
+            "target_id": "player:gm",
+            "resource": "hp",
+            "delta": -2,
+        }],
+        "source_ref": "test:authoritative-damage",
+    }
+
+    applied = api._runtime.apply_event_batch(instance, batch)
+    replayed = api._runtime.apply_event_batch(instance, batch)
+
+    sheet = instance.get_character_sheet("gm")
+    assert applied["applied"] is True
+    assert applied["character_revisions"] == {"gm": 1}
+    assert sheet["ruleset_character"]["resources"]["hp"] == before_hp - 2
+    assert sheet["ruleset_revision"] == 1
+    assert replayed["duplicate"] is True
+    assert replayed["character_revisions"] == {}
+    assert sheet["ruleset_operation_log"][-1]["operation_id"] == batch["batch_id"]
+
+
+@pytest.mark.asyncio
+async def test_live_character_adopts_server_owned_professional_blueprint(
+    professional_context,
+) -> None:
+    api, instance, _character = professional_context
+    replacement = _professional_character(api._runtime)
+    replacement["ruleset_character"]["identity"]["name"] = "Replacement Hero"
+    replacement["character_name"] = "Replacement Hero"
+    saved = character_cards.save_character_card(api, replacement)["card"]
+
+    result = await ruleset_characters.adopt_character_card(
+        api, "web|character-lifecycle|web_bot", "gm", saved["id"],
+    )
+
+    assert result["ok"] is True
+    sheet = instance.get_character_sheet("gm")
+    assert instance.players["gm"]["character_name"] == "Replacement Hero"
+    assert sheet["character_name"] == "Replacement Hero"
+    assert sheet["hp"] == sheet["ruleset_character"]["resources"]["hp"]
+
+
+def _http_app(api: _Api) -> web.Application:
+    @web.middleware
+    async def identity(request: web.Request, handler):
+        request["user_id"] = request.headers.get("X-Test-User", "")
+        request["owner_authenticated"] = request.headers.get("X-Test-Owner") == "1"
+        return await handler(request)
+
+    app = web.Application(middlewares=[identity])
+    app["api"] = api
+    app["subsystems"] = SimpleNamespace(registry=api._reg)
+    register_games(app)
+    register_character_cards(app)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_profile_http_routes_enforce_live_identity_and_patch_cards(
+    professional_context,
+) -> None:
+    api, instance, character = professional_context
+    saved = character_cards.save_character_card(api, character)["card"]
+    game_path = "/api/games/web%7Ccharacter-lifecycle%7Cweb_bot/character/gm/profile"
+    card_path = f"/api/character-cards/{saved['id']}/profile"
+
+    async with TestClient(TestServer(_http_app(api))) as client:
+        denied = await client.patch(
+            game_path,
+            headers={"X-Test-User": "intruder"},
+            json={"character_name": "Stolen"},
+        )
+        updated = await client.patch(
+            game_path,
+            headers={"X-Test-User": "gm"},
+            json={"profile": {"personality": "Welcoming and concise."}},
+        )
+        updated_card = await client.patch(
+            card_path,
+            headers={"X-Test-Owner": "1"},
+            json={"profile": {"notes": "Reusable blueprint notes."}},
+        )
+        updated_card_body = await updated_card.json()
+
+    assert denied.status == 403
+    assert updated.status == 200
+    assert instance.get_character_sheet("gm")["ruleset_character"]["profile"] == {
+        "personality": "Welcoming and concise.",
+    }
+    assert updated_card.status == 200
+    assert updated_card_body["card"]["ruleset_character"]["profile"]["notes"].startswith(
+        "Reusable"
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_advancement_and_rest_http_routes_enforce_identity(
+    professional_context,
+) -> None:
+    api, instance, _character = professional_context
+    base = "/api/games/web%7Ccharacter-lifecycle%7Cweb_bot/character/gm"
+
+    async with TestClient(TestServer(_http_app(api))) as client:
+        preview = await client.post(
+            f"{base}/advancement/preview",
+            headers={"X-Test-User": "gm"},
+            json={"choices": {"hp_method": "fixed"}},
+        )
+        denied = await client.post(
+            f"{base}/advancement/apply",
+            headers={"X-Test-User": "intruder"},
+            json={
+                "choices": {"hp_method": "fixed"},
+                "expected_revision": 0,
+                "operation_id": "http-level-2",
+            },
+        )
+        applied = await client.post(
+            f"{base}/advancement/apply",
+            headers={"X-Test-User": "gm"},
+            json={
+                "choices": {"hp_method": "fixed"},
+                "expected_revision": 0,
+                "operation_id": "http-level-2",
+            },
+        )
+        rested = await client.post(
+            f"{base}/rest",
+            headers={"X-Test-User": "gm"},
+            json={
+                "rest": "long",
+                "confirm_elapsed_time": True,
+                "expected_revision": 1,
+                "operation_id": "http-long-rest",
+            },
+        )
+
+    assert preview.status == 200
+    assert denied.status == 403
+    assert applied.status == 200
+    assert rested.status == 200
+    assert instance.get_character_sheet("gm")["ruleset_revision"] == 2

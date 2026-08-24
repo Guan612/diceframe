@@ -53,3 +53,15 @@ V2 resource IDs must already be canonical. The registry never silently normalize
 ## Frontend and Rule Boundaries
 
 The backend materializes V2 locales and the frontend renders the returned payload; the frontend does not reimplement Content V2 locale architecture. D&D using d20 is not the same as changing generic d20 behavior. D&D-specific behavior remains inside the D&D boundary.
+
+## D&D 2024 Authoritative Play State
+
+`core:dnd2024` combat, Session 0, campaign records, and the guided adventure share `GameInstance.ruleset_state.version` and one EventBatch ledger. Combat and campaign events have separate reducers; the runtime composition root dispatches explicit intent types without making the generic engine import D&D code.
+
+The mechanics authority for a professional character is `ruleset_character`. Creation, shared-library import/edit, joining a game, in-game profile editing, advancement, and rest all go through the `character_lifecycle` capability; legacy top-level character fields are compatibility projections only. Profile edits cannot overwrite abilities, HP, AC, advancement history, or runtime/content/state versions. Mechanical changes are revalidated or replayed from canonical choices and history.
+
+Every Session 0 revision clears stale consent and can be locked only after all current players accept. Tasks, clues, facts, important items, and relationships enter a pending proposal before a separate GM intent confirms or rejects them. Chapter summaries are deterministic projections of confirmed events and are copied to long-term memory only after the authoritative save succeeds.
+
+Professional rules accept free-text adventure actions through the `narrative_adventure` capability. Session 0 and tutorial state control when input is available, and provider preflight failures do not append an action record. The LLM receives only a read-only authoritative view and may narrate actions or resolved events; it cannot create campaign facts, spend resources, or advance tutorial steps.
+
+The frontend dynamically loads a D&D professional-rules play area from runtime capabilities. Its “1 Start Here”, “2 Combat When Needed”, and “3 Review the Story (Optional)” tabs explain the current objective and next step, mount only the active panel, pause polling while the document is hidden, and scroll inside a bounded workspace without changing legacy-rule layouts or creation paths. Direct-connect player intents use an explicit field allowlist.

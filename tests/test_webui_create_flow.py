@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -221,6 +222,116 @@ def test_game_rule_loading_prefers_saved_rule_and_migrates_legacy_save(web_api):
 
 
 @pytest.mark.asyncio
+async def test_professional_character_is_rederived_bound_and_saved_without_field_collision(
+    web_api,
+):
+    api, _lorebook, registry, _fake_llm, worlds_dir = web_api
+    (api._rules_dir / "dnd2024_srd.json").write_text(
+        json.dumps({
+            "rule_id": "dnd2024_srd",
+            "rule_name": "5E 2024 SRD 专业规则",
+            "dice_system": "d20",
+            "combat_model": "hp_based",
+            "runtime": {"id": "core:dnd2024", "minimum_version": 1},
+            "attributes": [
+                {"key": key, "name": key.upper(), "min": 3, "max": 20}
+                for key in ("str", "dex", "con", "int", "wis", "cha")
+            ],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _write_world(worlds_dir, "dnd2024_world", default_rule="dnd2024_srd")
+    choices = api.ruleset_builder_choices("dnd2024_srd", {"locale": "zh-CN"}, "zh-CN")
+    preset = choices["choices"]["quick_presets"][0]
+    finalized = api.ruleset_builder_finalize(
+        "dnd2024_srd",
+        {**preset["draft"], "locale": "zh-CN", "name": "边界测试者"},
+        "zh-CN",
+    )["character"]
+    finalized["hp"] = 999
+    finalized["armor_class"] = 999
+    finalized["attributes"]["str"] = 99
+
+    created = await api.create_game(
+        "dnd2024_world",
+        "专业规则测试",
+        rule_id="dnd2024_srd",
+        players=[finalized],
+    )
+
+    assert created["ok"] is True
+    instance = registry.get(api._parse_key(created["game_key"]))
+    assert instance is not None
+    sheet = instance.get_character_sheet(next(iter(instance.players)))
+    canonical = sheet["ruleset_character"]
+    assert sheet["hp"] == canonical["resources"]["hp"] != 999
+    assert sheet["armor_class"] == canonical["derived"]["armor_class"] != 999
+    assert sheet["attributes"]["str"] == canonical["abilities"]["str"] != 99
+    assert isinstance(sheet["equipment"], list)
+    assert isinstance(canonical["equipment"], dict)
+    assert instance.ruleset_runtime["id"] == "core:dnd2024"
+    cards = api.list_character_cards()["cards"]
+    assert cards[-1]["ruleset_character"]["rule_binding"]["content_version"] == (
+        "srd-5.2.1+r4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_professional_seed_restart_keeps_rule_and_prevalidates_before_mutation(
+    web_api,
+):
+    api, _lorebook, registry, _fake_llm, worlds_dir = web_api
+    (api._rules_dir / "dnd2024_srd.json").write_text(
+        json.dumps({
+            "rule_id": "dnd2024_srd",
+            "rule_name": "5E 2024 SRD 专业规则",
+            "dice_system": "d20",
+            "runtime": {"id": "core:dnd2024", "minimum_version": 1},
+            "attributes": [
+                {"key": key, "name": key.upper(), "min": 3, "max": 20}
+                for key in ("str", "dex", "con", "int", "wis", "cha")
+            ],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _write_world(worlds_dir, "dnd2024_seed_world", default_rule="dnd2024_srd")
+    preset = api.ruleset_builder_choices(
+        "dnd2024_srd", {"locale": "zh-CN"}, "zh-CN",
+    )["choices"]["quick_presets"][0]
+    finalized = api.ruleset_builder_finalize(
+        "dnd2024_srd",
+        {**preset["draft"], "locale": "zh-CN", "name": "种子测试者"},
+        "zh-CN",
+    )["character"]
+    original = await api.create_game(
+        "dnd2024_seed_world",
+        "专业规则种子",
+        rule_id="dnd2024_srd",
+        players=[finalized],
+    )
+    before_keys = {inst.game_key for inst in registry.list_all()}
+
+    invalid = deepcopy(finalized)
+    invalid["ruleset_character"]["rule_binding"]["runtime_version"] = 999
+    rejected = await api.create_from_seed(original["seed_code"], players=[invalid])
+
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == "INVALID_PROFESSIONAL_CHARACTER"
+    assert {inst.game_key for inst in registry.list_all()} == before_keys
+
+    finalized["hp"] = 999
+    restarted = await api.create_from_seed(
+        original["seed_code"], players=[finalized], gm_uid="seed_gm",
+    )
+
+    assert restarted["ok"] is True
+    instance = registry.get(api._parse_key(restarted["game_key"]))
+    assert instance.rule_id == "dnd2024_srd"
+    assert instance.ruleset_runtime["id"] == "core:dnd2024"
+    assert instance.get_character_sheet("seed_gm")["hp"] != 999
+
+
+@pytest.mark.asyncio
 async def test_generate_lorebook_entries_from_natural_language(web_api):
     api, lorebook, _registry, fake_llm, _worlds_dir = web_api
     lorebook.create_world("custom_world", "测试世界", description="用于批量生成测试")
@@ -392,6 +503,35 @@ async def test_create_game_uses_created_character_before_opening(web_api):
     assert "艾琳" in fake_llm.calls[-1]["user_message"]
     assert "精灵 游侠" in fake_llm.calls[-1]["user_message"]
     assert result["players"][0]["character_name"] == "艾琳"
+
+
+@pytest.mark.asyncio
+async def test_create_game_persists_and_returns_success_when_opening_generation_fails(
+    web_api, monkeypatch,
+):
+    api, _lorebook, registry, fake_llm, _worlds_dir = web_api
+
+    async def fail_opening(*_args, **_kwargs):
+        raise ConnectionError("test provider is unavailable")
+
+    monkeypatch.setattr(fake_llm, "call", fail_opening)
+    result = await api.create_game(
+        "template_world",
+        "断线仍可进入",
+        players=[{
+            "character_name": "守夜人",
+            "race": "人类",
+            "class": "战士",
+            "attributes": {"str": 12},
+        }],
+    )
+
+    assert result["ok"] is True
+    inst = registry.get(api._parse_key(result["game_key"]))
+    assert inst is not None
+    assert inst.log[-1]["round"] == 0
+    assert "已经创建" in inst.log[-1]["gm_response"]
+    assert (registry.save_dir / "#".join(inst.game_key) / "state.json").is_file()
 
 
 @pytest.mark.asyncio
@@ -739,6 +879,7 @@ def test_character_schema_is_available_without_active_game(web_api):
     }
     assert result["rule_attrs_total"] == 60
     assert result["skill_pool"] == ["侦查", "射击"]
+    assert result["ruleset_runtime"]["id"] == "core:legacy"
 
 
 def test_character_card_preserves_rule_blueprint_without_runtime_state(web_api):
@@ -835,6 +976,7 @@ def test_save_custom_rule_copies_existing_rule_template(web_api):
     assert created["rule_name"] == "测试自定义规则"
     assert created["description"] == "从自由幻想复制的测试规则"
     assert created["custom"] is True
+    assert created["ruleset_runtime"]["id"] == "core:legacy"
 
 
 @pytest.mark.parametrize("language", ["zh-CN", "en", "ja"])
@@ -993,6 +1135,25 @@ def test_rule_template_detail_includes_computed_ui_schema(web_api):
     assert rule["identity_schema"][0]["legacy_field"] == "race"
     assert rule["progression_schema"]["type"]
     assert rule["ui_schema"]["primary_resources"] == ["hp"]
+    assert detail["ruleset_runtime"]["id"] == "core:legacy"
+    assert detail["ruleset_runtime"]["capabilities"]["character_builder"] == "legacy"
+
+
+def test_rule_template_rejects_unavailable_explicit_runtime(web_api):
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    source = json.loads(
+        (api._rules_dir / "freeform_fantasy.json").read_text(encoding="utf-8")
+    )
+    source["rule_id"] = "missing_runtime_rule"
+    source["runtime"] = {"id": "missing:runtime", "minimum_version": 1}
+    (api._rules_dir / "missing_runtime_rule.json").write_text(
+        json.dumps(source), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="ruleset runtime is not available"):
+        api.get_rule_template("missing_runtime_rule")
+    with pytest.raises(ValueError, match="内容或运行时无效"):
+        api.list_rules()
 
 
 def test_delete_custom_rule_removes_only_custom_rule(web_api):
@@ -1685,9 +1846,65 @@ async def test_create_game_room_password_tristate(web_api):
     assert inst3.room_password == ""
 
     # 4) 太短 → 拒绝
+    keys_before_rejection = {instance.game_key for instance in registry.list_all()}
     r4 = await api.create_game("template_world", "弱密码", players=list(players), solo=False, room_password="ab")
     assert r4.get("ok") is False
     assert "至少 4 位" in r4.get("error", "")
+    assert {instance.game_key for instance in registry.list_all()} == keys_before_rejection
+
+
+@pytest.mark.asyncio
+async def test_create_game_rolls_back_when_player_creation_raises(web_api, monkeypatch):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    keys_before = {instance.game_key for instance in registry.list_all()}
+    saves_before = {path.parent for path in registry.save_dir.rglob("state.json")}
+
+    async def broken_create_player(*_args, **_kwargs):
+        raise RuntimeError("simulated character storage failure")
+
+    monkeypatch.setattr(api, "create_player", broken_create_player)
+    result = await api.create_game(
+        "template_world", "原子创建测试",
+        players=[{"character_name": "艾琳", "attributes": {"str": 10}}],
+        gm_uid="web_session_gm",
+    )
+
+    assert result == {
+        "ok": False,
+        "error_code": "GAME_CREATE_FAILED",
+        "error": "创建角色失败，未留下半成品存档，请重试。",
+    }
+    assert {instance.game_key for instance in registry.list_all()} == keys_before
+    assert {path.parent for path in registry.save_dir.rglob("state.json")} == saves_before
+
+
+@pytest.mark.asyncio
+async def test_create_game_rolls_back_first_saved_player_when_second_fails(web_api, monkeypatch):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    original_create_player = api.create_player
+    calls = 0
+
+    async def fail_second_player(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            return {"ok": False, "error": "simulated second player failure"}
+        return await original_create_player(*args, **kwargs)
+
+    monkeypatch.setattr(api, "create_player", fail_second_player)
+    result = await api.create_game(
+        "template_world", "多角色原子创建测试",
+        players=[
+            {"character_name": "艾琳", "attributes": {"str": 10}},
+            {"character_name": "洛恩", "attributes": {"str": 10}},
+        ],
+        gm_uid="web_session_gm",
+    )
+
+    assert result["ok"] is False
+    assert "simulated second player failure" in result["error"]
+    assert registry.list_all() == []
+    assert list(registry.save_dir.rglob("state.json")) == []
 
 
 def test_delete_world_removes_user_template(web_api):

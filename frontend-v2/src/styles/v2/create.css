@@ -467,7 +467,7 @@
 
 .create-recommended-rules .rec-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -500,6 +500,11 @@
 .create-recommended-rules .rec-card small {
   color: var(--df-interactive-strong);
   font-size: 10px;
+}
+
+.create-recommended-rules .rec-card small.professional {
+  color: var(--df-accent-strong);
+  font-weight: 800;
 }
 
 .create-recommended-rules .rec-card p {

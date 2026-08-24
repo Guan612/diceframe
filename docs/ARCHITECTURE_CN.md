@@ -53,3 +53,27 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 ## Frontend 与规则边界
 
 Backend materializes V2 locale，frontend 只渲染返回字段，不重新实现 Content V2 locale architecture。D&D 如何使用 d20 不等于修改 generic d20 本身；D&D 专属行为必须留在 D&D 边界内。
+
+## Ruleset Runtime
+
+`src/rulesets/` 是版本化规则运行时边界。规则模板缺少 `runtime` 时显式回退到 `core:legacy`，继续使用现有 RuleSystem、RoundProcessor、CombatResolver 和 ProgressionResolver。新运行时必须由 canonical `runtime.id` 绑定，不能根据 `rule_id`、翻译名或 mechanics 字符串模糊推断。未知或版本不兼容的 runtime 必须拒绝。
+
+Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、memory、lorebook 不得反向导入任何具体规则运行时。WebAPI 和前端只通过 `ruleset_runtime` capabilities 了解体验能力。
+
+## Ruleset Bundle v1
+
+`templates/rulesets/<directory_id>/` 是第一方专业规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。
+
+Bundle locale 只能物化白名单展示字段。效果使用白名单 DSL；任意代码执行键、未知效果原语、重复 ID、无效内部引用、越界归属路径或 locale mechanics override 都会使整个 bundle 加载失败。详细格式见 `docs/rulesets/dnd2024/CONTENT_BUNDLE_CN.md`。
+
+## D&D 2024 权威游戏状态
+
+`core:dnd2024` 的战斗、Session 0、战役记录和教学冒险共享 `GameInstance.ruleset_state.version` 与 EventBatch ledger。战斗事件只由战斗 reducer 应用，战役事件只由 campaign reducer 应用；runtime composition root 按显式 `intent_type` 分派，generic engine 不导入 D&D 实现。
+
+专业角色的机械权威是 `ruleset_character`。创建、共享卡库导入/编辑、加入游戏、游戏内资料编辑、升级和休息均经由 `character_lifecycle` capability；legacy 顶层角色字段只是兼容投影。资料编辑不得覆盖属性、HP、AC、成长历史、runtime/content/state 版本等机械字段，机械更新必须从 canonical 选择与历史重新验证或回放。
+
+Session 0 的每次修订都会清空旧成员确认，只有全部当前玩家接受后 GM 才能锁定。任务、线索、事实、重要物品和关系先保存为 pending proposal，再由 GM 以独立 Intent 确认或拒绝。章节摘要是已确认事件的确定性投影，并在存档成功后写入长期记忆；记忆投影失败不得回滚或伪装已经持久化的权威状态。
+
+专业规则通过 `narrative_adventure` capability 接受自然语言冒险行动。Session 0 和教学状态决定输入是否可用；动作先完成模型预检，失败不会写入记录。LLM 只接收权威状态的只读视图并叙述行动或已结算事件，不能直接创建战役事实、扣减资源或推进教学步骤。
+
+前端仅按 capability 动态加载 D&D 专业规则游玩区。游玩区使用“1 从这里开始 / 2 遇敌时战斗 / 3 回看故事（可选）”三页签，并在首屏说明当前目标和下一步；任一时刻只挂载当前面板并在页面隐藏时暂停轮询。内容在有界区域内部滚动，不改变旧规则的布局或创建路径。直接联机桥接对玩家 Intent 使用字段白名单。

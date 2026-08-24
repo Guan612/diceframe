@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ChevronBack, ChevronForward, MapOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
@@ -32,6 +32,13 @@ import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePi
 import MapBackgroundSettingsModal from '@/components/play/MapBackgroundSettingsModal.vue'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
+
+const Dnd2024CombatPanel = defineAsyncComponent(
+  () => import('@/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue'),
+)
+const Dnd2024CampaignPanel = defineAsyncComponent(
+  () => import('@/features/rulesets/dnd2024/campaign/Dnd2024CampaignPanel.vue'),
+)
 
 defineOptions({ name: 'PlayView' })
 
@@ -96,6 +103,76 @@ function joinNames(names: string[]) { return names.filter(Boolean).join(t('listS
 function onLocaleChange(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
 
 const actorId = computed(() => game.actorId.value || game.player.value?.user_id || '')
+const rulesetRefreshKey = ref(0)
+async function refreshRulesetPanels(): Promise<void> {
+  rulesetRefreshKey.value += 1
+  await game.refresh(true)
+}
+const hasAuthoritativeCombat = computed(() => Boolean(
+  game.detail.value?.ruleset_runtime?.capabilities?.authoritative_intents
+  && game.detail.value?.ruleset_runtime?.capabilities?.deterministic_combat,
+))
+const hasRulesAwareCharacters = computed(() => (
+  game.detail.value?.ruleset_runtime?.capabilities?.character_lifecycle === 'rules_aware'
+))
+const hasCampaignGuidance = computed(() => Boolean(
+  game.detail.value?.ruleset_runtime?.capabilities?.session_zero
+  || game.detail.value?.ruleset_runtime?.capabilities?.tutorial_coach,
+))
+type RulesetPanelTab = 'campaign' | 'combat' | 'story'
+const rulesetPanelTab = ref<RulesetPanelTab>('campaign')
+const hasProfessionalWorkspace = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value)
+const rulesetTabCopy = computed(() => locale.value.startsWith('zh') ? {
+  label: '5E 2024 游玩区', campaign: '1 从这里开始', combat: '2 遇敌时战斗', story: '3 回看故事（可选）',
+  guide: '第一次玩只需留在第 1 页，照着“当前目标”和大按钮走。真的遇到敌人时再进入第 2 页；第 3 页只是回看，不影响继续游戏。',
+  campaignHelp: '现在做这里：先一键开局，再读当前目标并选一个做法；想自由尝试时，下方也能直接说人话。',
+  combatHelp: '只有出现敌人并进入遭遇战时才用这里；系统会列出当前合法动作，不用背规则。',
+  storyHelp: '这是可选的故事回放页；看完后回到第 1 页继续冒险。',
+} : {
+  label: '5E 2024 play areas', campaign: '1 Start here', combat: '2 Combat when needed', story: '3 Story recap (optional)',
+  guide: 'For your first game, stay on page 1 and follow the current objective and large buttons. Open page 2 only when enemies appear. Page 3 is optional history.',
+  campaignHelp: 'Do this now: use the one-click start, read the current objective, and choose an option. You can also describe any idea in plain language below.',
+  combatHelp: 'Use this only after an encounter starts. The game lists legal actions, so you do not need to memorize rules.',
+  storyHelp: 'This is an optional story replay. Return to page 1 when you are ready to continue.',
+})
+const rulesetTabs = computed(() => [
+  ...(hasCampaignGuidance.value ? [{ id: 'campaign' as const, label: rulesetTabCopy.value.campaign }] : []),
+  ...(hasAuthoritativeCombat.value ? [{ id: 'combat' as const, label: rulesetTabCopy.value.combat }] : []),
+  { id: 'story' as const, label: rulesetTabCopy.value.story },
+])
+const rulesetCurrentHelp = computed(() => ({
+  campaign: rulesetTabCopy.value.campaignHelp,
+  combat: rulesetTabCopy.value.combatHelp,
+  story: rulesetTabCopy.value.storyHelp,
+})[rulesetPanelTab.value])
+
+function selectRulesetTab(tab: RulesetPanelTab): void {
+  rulesetPanelTab.value = tab
+}
+
+function onRulesetTabKey(event: KeyboardEvent): void {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const buttons = Array.from(
+    (event.currentTarget as HTMLElement).closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') || [],
+  )
+  if (!buttons.length) return
+  const current = Math.max(0, buttons.indexOf(event.currentTarget as HTMLButtonElement))
+  const next = event.key === 'Home' ? 0
+    : event.key === 'End' ? buttons.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length
+  event.preventDefault()
+  buttons[next]?.click()
+  void nextTick(() => buttons[next]?.focus())
+}
+
+watch(rulesetTabs, (tabs, previous) => {
+  const professionalJustBecameAvailable = (
+    previous?.length === 1 && previous[0]?.id === 'story' && tabs.length > 1
+  )
+  if (professionalJustBecameAvailable || !tabs.some(tab => tab.id === rulesetPanelTab.value)) {
+    rulesetPanelTab.value = tabs[0]?.id || 'story'
+  }
+}, { immediate: true })
 const canEditOwnPortrait = computed(() => Boolean(
   actorId.value
   && game.player.value?.user_id === actorId.value
@@ -177,8 +254,9 @@ async function savePortrait() {
   if (!canEditOwnPortrait.value || !game.currentGame.value || !actorId.value) return
   portraitBusy.value = true
   try {
-    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, {
-      method: 'PUT',
+    const suffix = hasRulesAwareCharacters.value ? '/profile' : ''
+    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}${suffix}`, {
+      method: hasRulesAwareCharacters.value ? 'PATCH' : 'PUT',
       body: JSON.stringify({ portrait: portraitDraft.value ? { ...portraitDraft.value } : null }),
     })
     await game.refresh(true)
@@ -422,7 +500,14 @@ async function selectCard(card: CharacterCard) {
     return
   }
   try {
-    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, { method: 'PUT', body: JSON.stringify(card) })
+    if (hasRulesAwareCharacters.value) {
+      await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}/adopt-card`, {
+        method: 'POST',
+        body: JSON.stringify({ card_id: String(card.card_id || card.id || '') }),
+      })
+    } else {
+      await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, { method: 'PUT', body: JSON.stringify(card) })
+    }
     showCards.value = false
     await game.refresh()
   } catch (e: unknown) { toast.error(errorMessage(e)) }
@@ -710,7 +795,7 @@ onBeforeUnmount(() => {
         @saved="onMapBackgroundSaved"
       />
 
-      <section class="play-main">
+      <section class="play-main" :class="{ 'ruleset-mode': hasProfessionalWorkspace }">
         <section class="scene-strip">
           <div class="scene-title">
             <span class="scene-label">{{ t('currentScene') }}</span>
@@ -724,7 +809,83 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <nav
+          v-if="hasProfessionalWorkspace"
+          class="ruleset-workspace-tabs"
+          role="tablist"
+          :aria-label="rulesetTabCopy.label"
+        >
+          <button
+            v-for="tab in rulesetTabs"
+            :id="`ruleset-tab-${tab.id}`"
+            :key="tab.id"
+            role="tab"
+            :aria-controls="`ruleset-panel-${tab.id}`"
+            :aria-selected="rulesetPanelTab === tab.id"
+            :tabindex="rulesetPanelTab === tab.id ? 0 : -1"
+            @click="selectRulesetTab(tab.id)"
+            @keydown="onRulesetTabKey"
+          >
+            {{ tab.label }}
+          </button>
+        </nav>
+
+        <aside v-if="hasProfessionalWorkspace" class="ruleset-workspace-guide" aria-live="polite">
+          <strong>{{ rulesetCurrentHelp }}</strong>
+          <span>{{ rulesetTabCopy.guide }}</span>
+        </aside>
+
+        <section
+          v-if="hasProfessionalWorkspace"
+          :id="`ruleset-panel-${rulesetPanelTab}`"
+          class="ruleset-workspace"
+          role="tabpanel"
+          :aria-labelledby="`ruleset-tab-${rulesetPanelTab}`"
+          tabindex="0"
+        >
+          <Dnd2024CampaignPanel
+            v-if="rulesetPanelTab === 'campaign' && hasCampaignGuidance"
+            :game-key="game.currentGame.value"
+            :actor-id="actorId"
+            :is-gm="game.isGm.value"
+            :refresh-key="rulesetRefreshKey"
+            @refresh="refreshRulesetPanels"
+            @navigate="selectRulesetTab"
+          />
+
+          <Dnd2024CombatPanel
+            v-else-if="rulesetPanelTab === 'combat' && hasAuthoritativeCombat"
+            :game-key="game.currentGame.value"
+            :actor-id="actorId"
+            :is-gm="game.isGm.value"
+            :refresh-key="rulesetRefreshKey"
+            @refresh="refreshRulesetPanels"
+            @navigate="selectRulesetTab"
+          />
+
+          <GameTimeline
+            v-else
+            :log="game.log.value"
+            :live="game.detail.value.multiplayer?.submitted_actions || []"
+            :players="game.players.value"
+            :round="game.detail.value.round_number || 0"
+            :lore="game.lore.value"
+            :game-key="game.currentGame.value"
+            :rule-id="String(ruleMeta?.rule_id || '')"
+            :processing="showGmThinking"
+            :is-gm="game.isGm.value"
+            :live-narration="game.liveNarration.value"
+            :pending-checks="pendingLuckDecisions"
+            :reveal-checks="revealChecks"
+            :current-user-id="actorId"
+            :luck-busy-id="luckBusyId"
+            @refresh="game.refresh"
+            @luck="onLuckDecision"
+          />
+        </section>
+
         <GameTimeline
+          v-else
           :log="game.log.value"
           :live="game.detail.value.multiplayer?.submitted_actions || []"
           :players="game.players.value"
@@ -746,7 +907,7 @@ onBeforeUnmount(() => {
         <div v-if="tableNotice" class="table-notice notice">{{ tableNotice }}</div>
         <p v-if="tokenBudgetHint" class="token-budget-hint" aria-live="polite">{{ tokenBudgetHint }}</p>
 
-        <ActionComposer :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh" />
+        <ActionComposer v-if="!hasAuthoritativeCombat" :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh" />
       </section>
 
       <aside

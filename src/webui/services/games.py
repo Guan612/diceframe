@@ -147,7 +147,7 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
     inst = api._reg.get(api._parse_key(game_key))
     if not inst:
         return None
-    return {
+    detail = {
         "game_key": _GAME_KEY_SEP.join(inst.game_key),
         "world_id": inst.world_id or "",
         "rule_id": _instance_rule_id(api, inst),
@@ -183,6 +183,21 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
         "recap": _public_recap(inst),
         "token_budget_bump": getattr(inst, "last_token_budget_bump", None),
     }
+    if getattr(inst, "ruleset_runtime", None):
+        binding = dict(inst.ruleset_runtime)
+        rule = api._load_rule_for_game(inst)
+        if rule is not None:
+            try:
+                binding = {
+                    **binding,
+                    **api._ruleset_registry.describe(rule.template).to_dict(),
+                }
+            except ValueError:
+                logger.warning(
+                    "对局规则运行时元数据不可用: %s", inst.game_key, exc_info=True,
+                )
+        detail["ruleset_runtime"] = binding
+    return detail
 
 
 def _saved_world_id(api: "WebAPI", game_key: tuple[str, ...]) -> str:
@@ -218,6 +233,25 @@ def delete_game(api: "WebAPI", game_key: str) -> dict[str, Any]:
         "ok": True,
         "world_template_removed": bool(removed_templates),
     }
+
+
+def _discard_incomplete_game(
+    api: "WebAPI", game_key: tuple[str, ...], world_id: str = "",
+) -> None:
+    """Best-effort rollback for a create flow not yet handed to the user."""
+    save_dir = api._reg._save_path(game_key).parent
+    try:
+        if save_dir.exists():
+            shutil.rmtree(save_dir)
+    except Exception:
+        logger.warning("清理创建失败的存档目录失败: %s", save_dir, exc_info=True)
+    finally:
+        api._reg.remove(game_key)
+    if world_id:
+        try:
+            api.cleanup_orphan_game_templates(world_id)
+        except Exception:
+            logger.warning("清理创建失败的临时世界模板失败: %s", world_id, exc_info=True)
 
 
 def _clean_public_narration(text: str) -> str:
@@ -855,6 +889,43 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
     resolved_world_name = game_name or world_id
     resolved_language = normalize_language(language)
 
+    # Reject an invalid password before creating a registry entry or a
+    # game-scoped world template, so validation cannot leave a phantom game.
+    generated_password: str | None = None
+    if room_password is None:
+        if not solo:
+            generated_password = secrets.token_urlsafe(6)
+            room_password = generated_password
+    elif room_password == "":
+        room_password = ""
+    else:
+        room_password = str(room_password)
+        if len(room_password) < 4:
+            return {"ok": False, "error": "房间密码至少 4 位"}
+
+    # Professional sheets are validated as a complete batch before any game,
+    # player, card, or save mutation. create_player repeats normalization at the
+    # final storage boundary so callers cannot bypass this preflight.
+    try:
+        selected_rule = api._load_rule_by_id(rule_id, resolved_language)
+        runtime = (
+            api._ruleset_registry.resolve(selected_rule.template)
+            if selected_rule is not None else None
+        )
+        if runtime and runtime.capabilities.character_builder == "professional":
+            players = [
+                runtime.normalize_character_submission(
+                    selected_rule, character, resolved_language,
+                )
+                for character in players
+            ]
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "error_code": "INVALID_PROFESSIONAL_CHARACTER",
+            "error": str(exc),
+        }
+
     # 自定义世界：既要在 lorebook 库里建空世界书，也要在 templates/worlds 下
     # 写一份最小模板 JSON。否则 process_round 的 _load_world_template 拿不到
     # 任何数据，会出现「填了唐代仙侠世界，开局却讲克苏鲁、地图是霍华德住所」
@@ -911,28 +982,26 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
                     encoding="utf-8")
                 logger.info("已写入自定义世界模板: %s (rule=%s)", template_path, resolved_rule)
 
-    instance = await api._handler.create_game(
-        game_key, world_id=world_id,
-        world_name=resolved_world_name, group_name=group_name,
-        rule_id=rule_id,
-        language=resolved_language,
-    )
+    try:
+        instance = await api._handler.create_game(
+            game_key, world_id=world_id,
+            world_name=resolved_world_name, group_name=group_name,
+            rule_id=rule_id,
+            language=resolved_language,
+        )
+    except Exception:
+        _discard_incomplete_game(api, game_key, world_id)
+        logger.exception("创建游戏实例失败: %s", game_key)
+        return {
+            "ok": False,
+            "error_code": "GAME_CREATE_FAILED",
+            "error": "创建游戏失败，未留下半成品存档，请重试。",
+        }
     instance.set_difficulty(difficulty)
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(selected_map_background)
     # 房间密码三态：字段缺失(None) 且 多人局 → 生成随机密码回显（安全默认，
     # 防止 GM 以为设了密码实际开放）；显式空串 "" → 明确开放；非空 → 加密并校验长度。
-    generated_password: str | None = None
-    if room_password is None:
-        if not solo:
-            generated_password = secrets.token_urlsafe(6)
-            room_password = generated_password
-    elif room_password == "":
-        room_password = ""
-    else:
-        room_password = str(room_password)
-        if len(room_password) < 4:
-            return {"ok": False, "error": "房间密码至少 4 位"}
     instance.configure_session(
         solo_mode=solo,
         entry_point="web",
@@ -966,21 +1035,49 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
     created_players: list[dict[str, Any]] = []
     for idx, character in enumerate(players or []):
         # 第一个角色绑 GM 身份（force_uid=gm_uid），后续角色为 GM 代建（独立 uid）
-        if idx == 0 and gm_uid:
-            created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, force_uid=gm_uid)
-        else:
-            created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, assign_new_id=True)
+        try:
+            if idx == 0 and gm_uid:
+                created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, force_uid=gm_uid)
+            else:
+                created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, assign_new_id=True)
+        except Exception:
+            _discard_incomplete_game(api, game_key, world_id)
+            logger.exception("创建游戏角色失败，已回滚: %s", game_key)
+            return {
+                "ok": False,
+                "error_code": "GAME_CREATE_FAILED",
+                "error": "创建角色失败，未留下半成品存档，请重试。",
+            }
         if created.get("ok"):
             created_players.append(created)
         else:
+            _discard_incomplete_game(api, game_key, world_id)
             return {"ok": False, "error": f"创建角色失败: {created.get('error', '未知错误')}"}
 
-    narration = await api._handler.start_game(instance)
+    try:
+        narration = await api._handler.start_game(instance)
+    except Exception:
+        _discard_incomplete_game(api, game_key, world_id)
+        logger.exception("生成游戏开场失败，已回滚: %s", game_key)
+        return {
+            "ok": False,
+            "error_code": "GAME_CREATE_FAILED",
+            "error": "生成开场失败，未留下半成品存档，请检查模型设置后重试。",
+        }
     world_name = instance.world_name
 
     # GM 严格绑定成功创建的第一个角色；没有角色就没有 GM。
     instance.configure_session(gm_uid=created_players[0]["user_id"] if created_players else "")
-    await api._reg.save(instance)
+    try:
+        await api._reg.save(instance)
+    except Exception:
+        _discard_incomplete_game(api, game_key, world_id)
+        logger.exception("保存新游戏失败，已回滚: %s", game_key)
+        return {
+            "ok": False,
+            "error_code": "GAME_CREATE_FAILED",
+            "error": "保存新游戏失败，未留下半成品存档，请重试。",
+        }
 
     return {
         "ok": True,
@@ -1083,13 +1180,37 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
     world_id = target_inst.world_id or "default_fantasy"
     world_name = target_inst.world_name
     resolved_language = normalize_language(language or getattr(target_inst, "language", DEFAULT_LANGUAGE))
+    rule_id = _instance_rule_id(api, target_inst)
+
+    # A seed restart is a new save, but it must keep the original save's rule
+    # identity.  Professional sheets receive the same all-or-nothing preflight
+    # as the normal create path before the new instance is registered.
+    try:
+        selected_rule = api._load_rule_by_id(rule_id, resolved_language)
+        runtime = (
+            api._ruleset_registry.resolve(selected_rule.template)
+            if selected_rule is not None else None
+        )
+        if runtime and runtime.capabilities.character_builder == "professional":
+            players = [
+                runtime.normalize_character_submission(
+                    selected_rule, character, resolved_language,
+                )
+                for character in players
+            ]
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "error_code": "INVALID_PROFESSIONAL_CHARACTER",
+            "error": str(exc),
+        }
     try:
         selected_scene_image = api.materialize_scene_image(
             scene_image
             if scene_image
             else (
                 getattr(target_inst, "scene_image", None)
-                or api.resolve_default_scene_image(world_id, _instance_rule_id(api, target_inst))
+                or api.resolve_default_scene_image(world_id, rule_id)
             )
         )
     except ValueError as exc:
@@ -1098,31 +1219,69 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
     unique_id = f"{world_id}_{time.time_ns()}"
     game_key = ("web", unique_id, "web_bot")
 
-    instance = await api._handler.create_game(
-        game_key, world_id=world_id, world_name=world_name,
-        group_name="Web端", seed_code=seed_code,
-        difficulty=target_inst.difficulty,
-        language=resolved_language,
-    )
+    try:
+        instance = await api._handler.create_game(
+            game_key, world_id=world_id, world_name=world_name,
+            group_name="Web端", seed_code=seed_code,
+            difficulty=target_inst.difficulty,
+            rule_id=rule_id,
+            language=resolved_language,
+        )
+    except Exception:
+        _discard_incomplete_game(api, game_key, world_id)
+        logger.exception("按引用码创建游戏实例失败: %s", game_key)
+        return {
+            "ok": False,
+            "error_code": "GAME_CREATE_FAILED",
+            "error": "重开失败，未留下半成品存档，请重试。",
+        }
     instance.configure_session(solo_mode=solo)
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(dict(getattr(target_inst, "map_background", {}) or {}))
     created_players: list[dict[str, Any]] = []
     for idx, character in enumerate(players or []):
-        if idx == 0 and gm_uid:
-            created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, force_uid=gm_uid)
-        else:
-            created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, assign_new_id=True)
+        try:
+            if idx == 0 and gm_uid:
+                created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, force_uid=gm_uid)
+            else:
+                created = await api.create_player(_GAME_KEY_SEP.join(game_key), character, assign_new_id=True)
+        except Exception:
+            _discard_incomplete_game(api, game_key, world_id)
+            logger.exception("按引用码创建角色失败，已回滚: %s", game_key)
+            return {
+                "ok": False,
+                "error_code": "GAME_CREATE_FAILED",
+                "error": "重开角色创建失败，未留下半成品存档，请重试。",
+            }
         if created.get("ok"):
             created_players.append(created)
         else:
+            _discard_incomplete_game(api, game_key, world_id)
             return {"ok": False, "error": f"创建角色失败: {created.get('error', '未知错误')}"}
-    narration = await api._handler.start_game(instance)
+    try:
+        narration = await api._handler.start_game(instance)
+    except Exception:
+        _discard_incomplete_game(api, game_key, world_id)
+        logger.exception("按引用码生成开场失败，已回滚: %s", game_key)
+        return {
+            "ok": False,
+            "error_code": "GAME_CREATE_FAILED",
+            "error": "重开生成开场失败，未留下半成品存档，请检查模型设置后重试。",
+        }
     world_name = instance.world_name
 
     # 与 create_game 一致：首个成功创建的角色拥有 GM 身份。
     instance.configure_session(gm_uid=created_players[0]["user_id"] if created_players else "")
-    await api._reg.save(instance)
+    try:
+        await api._reg.save(instance)
+    except Exception:
+        _discard_incomplete_game(api, game_key, world_id)
+        logger.exception("保存重开游戏失败，已回滚: %s", game_key)
+        return {
+            "ok": False,
+            "error_code": "GAME_CREATE_FAILED",
+            "error": "保存重开游戏失败，未留下半成品存档，请重试。",
+        }
 
     return {
         "ok": True,

@@ -10,12 +10,16 @@ import CharacterCardPicker from '@/components/admin/CharacterCardPicker.vue'
 import PortraitImage from '@/components/PortraitImage.vue'
 import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePicker.vue'
 import MapBackgroundPicker from '@/components/common/MapBackgroundPicker.vue'
+import RulesetExperienceHost from '@/features/rulesets/RulesetExperienceHost.vue'
 import { importTavernCard } from '@/utils/characterImport'
 import { rememberCurrentGame } from '@/stores/gameContext'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import { filterByContentLanguage } from '@/utils/contentLanguage'
 import { recommendedRuleSummaries } from '@/utils/recommendedRules'
-import { characterCardNeedsConversion } from '@/utils/characterCards'
+import {
+  characterCardHasCompatibleProfessionalBlueprint,
+  characterCardNeedsConversion,
+} from '@/utils/characterCards'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadSceneImage } from '@/api/sceneImages'
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
@@ -60,7 +64,7 @@ const customSceneImageUrl = ref('')
 const ruleDetail = ref<RuleTemplate | null>(null)
 const characters = ref<CreateCharacter[]>([])
 const cards = ref<CharacterCard[]>([])
-const showWizard = ref(false), showPicker = ref(false)
+const showWizard = ref(false), showRulesetBuilder = ref(false), showPicker = ref(false)
 const editIdx = ref<number | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const dfInput = ref<HTMLInputElement | null>(null)
@@ -68,6 +72,9 @@ const dfInput = ref<HTMLInputElement | null>(null)
 const step = ref<Step>(1)
 const activeRule = computed(() => mode.value === 'ai' ? (aiGeneratedRule.value?.rule_id || aiRule.value) : rule.value)
 const activeRuleSummary = computed(() => rules.value.find(item => item.rule_id === activeRule.value))
+const usesProfessionalBuilder = computed(() => (
+  activeRuleSummary.value?.ruleset_runtime?.capabilities.character_builder === 'professional'
+))
 const activeWorldTemplate = computed(() => worlds.value.find(item => worldIdOf(item) === world.value))
 const defaultSceneImageRef = computed<SceneImageRef | undefined>(() => {
   if (mode.value === 'template' && activeWorldTemplate.value?.scene_image) return activeWorldTemplate.value.scene_image
@@ -81,6 +88,12 @@ const skillPool = computed(() => ruleDetail.value?.skill_pool || ruleDetail.valu
 const attrTotal = computed(() => ruleDetail.value?.attribute_points || 60)
 const selectedTemplateWorldName = computed(() => worldNameOf(worlds.value.find(item => worldIdOf(item) === world.value) || {}))
 const recommendedRulesList = computed(() => recommendedRuleSummaries(activeWorldTemplate.value, rules.value))
+function isProfessionalRule(summary: RuleSummary): boolean {
+  return summary.ruleset_runtime?.capabilities.character_builder === 'professional'
+}
+function recommendationBadge(summary: RuleSummary): string {
+  return t(isProfessionalRule(summary) ? 'professional' : 'recommended')
+}
 const confirmationName = computed(() => {
   if (seed.value.trim()) return t('restoreBySeed')
   if (mode.value === 'template') return name.value.trim() || selectedTemplateWorldName.value || t('modeTemplate')
@@ -93,11 +106,19 @@ const confirmationWorld = computed(() => {
   if (mode.value === 'custom') return customName.value.trim() || t('modeCustom')
   return t('modeAi')
 })
-const apiReady = computed(() => Boolean(
-  String(settings.config.base_url || '').trim()
-  && String(settings.config.model || '').trim()
-  && settings.config.api_key?.configured,
-))
+const apiReady = computed(() => {
+  const model = String(settings.config.model || '').trim()
+  const providerRef = String(settings.config.llm_provider_ref || '').trim()
+  if (providerRef) {
+    const provider = (settings.config.ai_providers || []).find(item => item.id === providerRef)
+    return Boolean(model && provider?.base_url?.trim() && provider.api_key?.configured)
+  }
+  return Boolean(
+    model
+    && String(settings.config.base_url || '').trim()
+    && settings.config.api_key?.configured,
+  )
+})
 const showApiSetupHint = computed(() => settingsChecked.value && !settings.error && !apiReady.value)
 
 function worldIdOf(w: WorldTemplateSummary | WorldSummary): string { return String(w.world_id || w.id || '') }
@@ -117,6 +138,49 @@ function ensureCharacter(value: CharacterSheet): CreateCharacter {
   return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer')) }
 }
 
+function legacyCharacterFromCard(card: CharacterCard): CreateCharacter {
+  return ensureCharacter({
+    character_name: card.character_name,
+    background: card.background || '',
+    identity: card.identity || {},
+    attributes: card.attributes || {},
+    skills: card.skills || [],
+    equipment: card.equipment || [],
+    inventory: card.inventory || [],
+    key_items: card.key_items || [],
+    gold: card.gold || 0,
+    currency: card.currency,
+    race: card.race,
+    class: card.class,
+    portrait: card.portrait,
+  })
+}
+
+function professionalCardIsCompatible(card: CharacterCard): boolean {
+  return characterCardHasCompatibleProfessionalBlueprint(
+    card,
+    activeRule.value,
+    activeRuleSummary.value?.ruleset_runtime?.id,
+  )
+}
+
+function characterFromCard(card: CharacterCard): CreateCharacter {
+  const legacy = legacyCharacterFromCard(card)
+  if (!usesProfessionalBuilder.value || !professionalCardIsCompatible(card)) return legacy
+  const canonical = cloneCharacter(card.ruleset_character as CharacterSheet)
+  const binding = card.rule_binding || canonical.rule_binding
+  return ensureCharacter({
+    ...legacy,
+    rule_binding: cloneCharacter(binding as CharacterSheet),
+    ruleset_character: canonical,
+  })
+}
+
+function cardNeedsReview(card: CharacterCard): boolean {
+  return characterCardNeedsConversion(card, activeRule.value)
+    || (usesProfessionalBuilder.value && !professionalCardIsCompatible(card))
+}
+
 watch([activeRule, gameLanguage], async ([id]) => {
   if (!id) { ruleDetail.value = null; return }
   try {
@@ -125,6 +189,21 @@ watch([activeRule, gameLanguage], async ([id]) => {
   } catch { ruleDetail.value = null }
 }, { immediate: true })
 watch([aiPrompt, aiRule, aiAutoRule], () => { aiGeneratedRule.value = null })
+watch(usesProfessionalBuilder, (enabled) => {
+  showWizard.value = false
+  showRulesetBuilder.value = false
+  if (enabled) {
+    if (characters.value.length === 1) {
+      const current = characters.value[0]
+      const empty = !current.background
+        && !Object.keys(current.attributes || {}).length
+        && !(current.skills || []).length
+      if (empty) characters.value = []
+    }
+  } else if (!characters.value.length) {
+    characters.value = [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer'), background: '', identity: {}, attributes: {}, skills: [] }]
+  }
+})
 watch(sceneImageFile, (file) => {
   revokeSceneImageUrl(customSceneImageUrl.value)
   customSceneImageUrl.value = file ? URL.createObjectURL(file) : ''
@@ -188,7 +267,9 @@ onMounted(async () => {
     ? worldDefaultRule
     : (rules.value[0]?.rule_id || '')
   aiRule.value = rule.value
-  characters.value = [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer'), background: '', identity: {}, attributes: {}, skills: [] }]
+  characters.value = usesProfessionalBuilder.value
+    ? []
+    : [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer'), background: '', identity: {}, attributes: {}, skills: [] }]
 })
 
 onBeforeUnmount(() => {
@@ -198,7 +279,8 @@ onBeforeUnmount(() => {
 
 function openWizard(idx: number | null) {
   editIdx.value = idx
-  showWizard.value = true
+  if (usesProfessionalBuilder.value) showRulesetBuilder.value = true
+  else showWizard.value = true
 }
 function onWizardSubmit(c: CharacterSheet) {
   const character = ensureCharacter(c)
@@ -207,27 +289,21 @@ function onWizardSubmit(c: CharacterSheet) {
   showWizard.value = false
   editIdx.value = null
 }
+function onRulesetSubmit(c: CharacterSheet) {
+  const character = ensureCharacter(c)
+  if (editIdx.value !== null) characters.value[editIdx.value] = character
+  else characters.value.push(character)
+  showRulesetBuilder.value = false
+  editIdx.value = null
+}
 function onPickerPick(c: CharacterCard) {
-  const character = ensureCharacter({
-    character_name: c.character_name,
-    background: c.background || '',
-    identity: c.identity || {},
-    attributes: c.attributes || {},
-    skills: c.skills || [],
-    equipment: c.equipment || [],
-    inventory: c.inventory || [],
-    key_items: c.key_items || [],
-    gold: c.gold || 0,
-    currency: c.currency,
-    race: c.race,
-    class: c.class,
-    portrait: c.portrait,
-  })
+  const character = characterFromCard(c)
   characters.value.push(character)
   showPicker.value = false
-  if (characterCardNeedsConversion(c, activeRule.value)) {
+  if (cardNeedsReview(c)) {
     editIdx.value = characters.value.length - 1
-    showWizard.value = true
+    if (usesProfessionalBuilder.value) showRulesetBuilder.value = true
+    else showWizard.value = true
     toast.info(t('cardRuleConversionReview'))
   } else {
     toast.success(t('addedFromLibrary'))
@@ -238,15 +314,16 @@ async function importCardFile(file: File) {
   const card = r.card
   if (!card) throw new Error(t('importFailed'))
   cards.value.push(card)
-  characters.value.push(ensureCharacter({
-    character_name: card.character_name,
-    background: card.background || '',
-    identity: card.identity || {},
-    attributes: card.attributes || {},
-    skills: card.skills || [],
-    portrait: card.portrait,
-  }))
-  toast.success(t('importedCharacter', { name: card.character_name }))
+  const character = characterFromCard(card)
+  characters.value.push(character)
+  if (cardNeedsReview(card)) {
+    editIdx.value = characters.value.length - 1
+    if (usesProfessionalBuilder.value) showRulesetBuilder.value = true
+    else showWizard.value = true
+    toast.info(t('cardRuleConversionReview'))
+  } else {
+    toast.success(t('importedCharacter', { name: card.character_name }))
+  }
 }
 function onStImport(e: Event) {
   const input = e.target as HTMLInputElement
@@ -309,6 +386,7 @@ async function nextStep() {
 function prevStep() { if (step.value > 1) step.value = (step.value - 1) as Step }
 
 async function create() {
+  if (busy.value) return
   busy.value = true; error.value = ''
   try {
     requireApiConfiguration()
@@ -319,7 +397,7 @@ async function create() {
       if (!r.ok && r.error) throw new Error(r.error)
       if (!r.game_key) throw new Error(t('missingGameId'))
       rememberCurrentGame(r.game_key, r.world_name || '')
-      router.push({ name: 'play', query: { game: r.game_key } }); return
+      await router.push({ name: 'play', query: { game: r.game_key } }); return
     }
     const selectedMapBackground = mapBackgroundFile.value
       ? await uploadMapBackground(mapBackgroundFile.value)
@@ -355,8 +433,11 @@ async function create() {
     if (!r.game_key) throw new Error(t('missingGameId'))
     if (r.generated_password) window.alert(t('roomPasswordGenerated', { pwd: r.generated_password }))
     rememberCurrentGame(r.game_key, r.world_name || String(payload.game_name || ''))
-    router.push({ name: 'play', query: { game: r.game_key } })
-  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
+    await router.push({ name: 'play', query: { game: r.game_key } })
+  } catch (e: unknown) {
+    error.value = errorMessage(e)
+    toast.error(error.value)
+  } finally { busy.value = false }
 }
 </script>
 
@@ -414,7 +495,7 @@ async function create() {
                   <div class="rec-grid">
                     <button v-for="r in recommendedRulesList" :key="r.rule_id" type="button" :class="['rec-card', { active: rule === r.rule_id }]" @click="rule = r.rule_id">
                       <strong>{{ ruleNameOf(r) }}</strong>
-                      <small>{{ t('recommended') }}</small>
+                      <small :class="{ professional: isProfessionalRule(r) }">{{ recommendationBadge(r) }}</small>
                       <p>{{ ruleDescriptionOf(r) }}</p>
                     </button>
                   </div>
@@ -479,6 +560,7 @@ async function create() {
     </div>
 
     <CharacterWizard v-if="showWizard" :rule-meta="ruleDetail" :rule-attrs="ruleAttrs" :attr-total="attrTotal" :skill-pool="skillPool" :rule-id="activeRule" :language="gameLanguage" :initial="editIdx !== null ? characters[editIdx] : undefined" @submit="onWizardSubmit" @cancel="showWizard = false" />
+    <RulesetExperienceHost v-if="showRulesetBuilder" :rule-id="activeRule" :language="gameLanguage" :initial="editIdx !== null ? characters[editIdx] : undefined" @submit="onRulesetSubmit" @cancel="showRulesetBuilder = false" />
     <CharacterCardPicker v-if="showPicker" :cards="cards" :target-rule-id="activeRule" @pick="onPickerPick" @close="showPicker = false" />
   </section>
 </template>

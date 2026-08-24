@@ -16,6 +16,7 @@ const MUTATING_OPERATIONS = new Set<PeerGameOperation>([
   'player.rebind',
   'player.away',
   'action.submit',
+  'ruleset.intent',
   'luck.resolve',
   'payment.resolve',
   'character.update',
@@ -42,6 +43,12 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'player.rebind': ['user_id'],
   'player.away': ['away'],
   'action.submit': ['text', 'selected_attribute', 'selected_skill', 'target_text'],
+  'ruleset.actions': [],
+  'ruleset.intent': [
+    'intent_id', 'type', 'expected_version', 'actor_id', 'target_id', 'target_ids',
+    'weapon_ref', 'attack_id', 'spell_ref', 'slot_level', 'damage_type', 'distance',
+    'decision_id', 'option', 'response', 'comment', 'choice_id', 'enabled',
+  ],
   'luck.resolve': ['check_id', 'spend'],
   'payment.resolve': ['payment_id', 'accepted'],
   'character.update': [
@@ -218,6 +225,8 @@ export class PeerHostGameBridge {
       })
     }
     if (operation === 'action.submit') return write('/action', payload)
+    if (operation === 'ruleset.actions') return read('/available-actions')
+    if (operation === 'ruleset.intent') return write('/intents', payload)
     if (operation === 'luck.resolve') {
       const checkId = requiredIdentifier(payload.check_id, 'check_id')
       return write(`/checks/${encodeURIComponent(checkId)}/luck`, {
@@ -304,6 +313,8 @@ export class PeerRemoteGameClient {
     else if (method === 'GET' && parsed.tail === '/player-context') operation = 'game.player_context'
     else if (method === 'POST' && parsed.tail === '/players') operation = 'player.create'
     else if (method === 'POST' && parsed.tail === '/action') operation = 'action.submit'
+    else if (method === 'GET' && parsed.tail === '/available-actions') operation = 'ruleset.actions'
+    else if (method === 'POST' && parsed.tail === '/intents') operation = 'ruleset.intent'
     else {
       const luck = /^\/checks\/([^/]+)\/luck$/u.exec(parsed.tail)
       const payment = /^\/payments\/([^/]+)$/u.exec(parsed.tail)

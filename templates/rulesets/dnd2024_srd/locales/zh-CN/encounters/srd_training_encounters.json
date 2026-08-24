@@ -1,0 +1,22 @@
+{
+  "locale_schema_version": 1,
+  "locale": "zh-CN",
+  "target": {"kind": "encounter_catalog", "id": "srd_training_encounters"},
+  "fields": {
+    "name": "SRD 新手战斗预设",
+    "labels": {
+      "presets": {
+        "first_skirmish": {"name": "第一次遭遇", "description": "一名较弱的哥布林，适合讲解先攻、移动和攻击。"},
+        "goblin_patrol": {"name": "哥布林巡逻兵", "description": "一名能切换近战和远程武器的标准敌人。"},
+        "crypt_pair": {"name": "地穴双敌", "description": "骷髅与狼的双目标遭遇，适合练习目标选择。"}
+      },
+      "profiles": {
+        "goblin_minion": "哥布林仆从",
+        "goblin_warrior": "哥布林战士",
+        "skeleton": "骷髅",
+        "wolf": "狼"
+      },
+      "attacks": {"dagger": "匕首", "scimitar": "弯刀", "shortbow": "短弓", "shortsword": "短剑", "bite": "啃咬"}
+    }
+  }
+}

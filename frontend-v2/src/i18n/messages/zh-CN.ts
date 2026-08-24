@@ -52,6 +52,7 @@ export const zhCN = {
   createTitle: '创建新冒险',
   recommendedRules: '推荐规则',
   recommended: '推荐',
+  professional: '专业',
   recommendedHint: '你也可以在下方完整规则列表中选择其他规则。',
   createSubtitle: '选择世界来源，设定初始角色。',
   stepWorld: '世界',

@@ -33,6 +33,11 @@ describe('peer host game bridge', () => {
       path: '/api/config',
     })
     await bridge.handle('p_abcdefghijk', 'action.submit', { text: '调查房间' })
+    await bridge.handle('p_abcdefghijk', 'ruleset.intent', {
+      intent_id: 'intent-1', type: 'attack', expected_version: 2,
+      actor_id: 'player:someone-else', target_id: 'enemy:goblin',
+      weapon_ref: 'item:longsword', submitted_by: 'forged', damage: 9999,
+    })
 
     const createBody = JSON.parse(String(calls[1].init?.body))
     expect(createBody.user_id).toBeUndefined()
@@ -44,7 +49,16 @@ describe('peer host game bridge', () => {
     )
     const actionBody = JSON.parse(String(calls[3].init?.body))
     expect(actionBody).toEqual({ text: '调查房间' })
-    expect(changed).toHaveBeenCalledTimes(2)
+    expect(calls[5].path).toBe(
+      '/games/web%7Cgame%7Chost/intents?user=player_123&share=1&delegate=1',
+    )
+    const intentBody = JSON.parse(String(calls[5].init?.body))
+    expect(intentBody).toEqual({
+      intent_id: 'intent-1', type: 'attack', expected_version: 2,
+      actor_id: 'player:someone-else', target_id: 'enemy:goblin',
+      weapon_ref: 'item:longsword',
+    })
+    expect(changed).toHaveBeenCalledTimes(3)
   })
 
   it('strips non-whitelisted fields from peer payloads', async () => {
@@ -85,6 +99,31 @@ describe('peer host game bridge', () => {
     expect(luckBody).toEqual({ spend: true })
   })
 
+  it('allows only player-side Session 0 and tutorial intent fields', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    const executor: PeerLocalApiExecutor = async (path, init) => {
+      calls.push({ path, init })
+      if (path === '/games/web%7Cgame%7Chost') return { game_key: 'web|game|host', player_access_open: true }
+      if (path === '/games/web%7Cgame%7Chost/players') return { ok: true, user_id: 'player_123' }
+      return { ok: true }
+    }
+    const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined)
+    await bridge.handle('p_abcdefghijk', 'player.create', { character_name: 'Guide' })
+    await bridge.handle('p_abcdefghijk', 'ruleset.intent', {
+      intent_id: 'session-1', type: 'session_zero.respond', expected_version: 3,
+      response: 'accept', comment: 'Looks good', choice_id: 'forged',
+      agreement: { difficulty: 'lethal' }, submitted_by: 'gm',
+    })
+
+    const body = JSON.parse(String(calls[3].init?.body))
+    expect(body).toEqual({
+      intent_id: 'session-1', type: 'session_zero.respond', expected_version: 3,
+      response: 'accept', comment: 'Looks good', choice_id: 'forged',
+    })
+    expect(body.agreement).toBeUndefined()
+    expect(body.submitted_by).toBeUndefined()
+  })
+
   it('stops all player operations when the local game owner closes access', async () => {
     const executor: PeerLocalApiExecutor = async () => ({
       game_key: 'web|game|host',
@@ -121,6 +160,16 @@ describe('peer remote game client', () => {
       'h_abcdefghijk',
       'player.create',
       { character_name: '调查员' },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/available-actions')
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'ruleset.actions', {},
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/intents', {
+      method: 'POST', body: JSON.stringify({ intent_id: 'i-1', type: 'end_turn' }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'ruleset.intent', { intent_id: 'i-1', type: 'end_turn' },
     )
     await expect(client.tryApi('/games/web%7Cgame%7Chost/export'))
       .rejects.toThrow('peer_game_operation_not_supported')

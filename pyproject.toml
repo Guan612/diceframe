@@ -24,8 +24,16 @@ files = [
     "src/engine/persistence.py",
     "src/plugin_host/content.py",
     "src/plugin_host/descriptors.py",
+    "src/rulesets/contracts.py",
+    "src/rulesets/bundle.py",
+    "src/rulesets/builtin.py",
+    "src/rulesets/dnd2024/runtime.py",
+    "src/rulesets/dnd2024/character/builder.py",
+    "src/rulesets/registry.py",
+    "src/rulesets/legacy_adapter.py",
     "src/webui/config_update.py",
     "src/webui/services/turns.py",
+    "src/webui/services/ruleset_builder.py",
 ]
 
 [tool.coverage.run]

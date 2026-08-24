@@ -32,6 +32,8 @@ from src.commands.story_recap import StoryRecapGenerator
 from src.commands.swipe_generator import SwipeGenerator
 from src.content.worlds import localize_lorebook_entries
 from src.engine.language import DEFAULT_LANGUAGE
+from src.rulesets.builtin import build_default_ruleset_registry
+from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
 
@@ -53,6 +55,7 @@ class GameHandler:
         summary_max_tokens: int = 1024,
         brief_max_tokens: int = 1024,
         analysis_max_tokens: int = 1024,
+        ruleset_registry: RulesetRuntimeRegistry | None = None,
     ):
         self.registry = registry
         self._combat = CombatResolver()
@@ -64,7 +67,10 @@ class GameHandler:
         self.memory_store = memory_store
         self.prompts_dir = prompts_dir or Path(".")
         self.rules_dir = rules_dir or Path(".")
-        self._prompt = PromptComposer(self.prompts_dir, self.rules_dir, self.memory_store)
+        self.ruleset_registry = ruleset_registry or build_default_ruleset_registry()
+        self._prompt = PromptComposer(
+            self.prompts_dir, self.rules_dir, self.memory_store, self.ruleset_registry,
+        )
         self.worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
         self._plugin_host = None
         self._factory = GameFactory(self.registry, self.lorebook_store, self.worlds_dir)

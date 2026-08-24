@@ -608,6 +608,7 @@
   .create-field-grid,
   .create-config-surface,
   .create-mode-cards,
+  .create-recommended-rules .rec-grid,
   .create-confirm-grid {
     grid-template-columns: minmax(0, 1fr);
   }

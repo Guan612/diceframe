@@ -133,6 +133,9 @@ class GameInstance:
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
+    ruleset_runtime: dict[str, Any] = field(default_factory=dict)
+    ruleset_state: dict[str, Any] = field(default_factory=dict)
+    event_ledger: list[dict[str, Any]] = field(default_factory=list)
     scene_image: dict[str, str] = field(default_factory=dict)
     map_background: dict[str, str] = field(default_factory=dict)
     world_name: str = ""
@@ -347,6 +350,29 @@ class GameInstance:
             if not 0 <= int(luck_timeout_seconds) <= 3600:
                 raise ValueError("幸运超时需在 0..3600 秒之间（0=禁用）")
             self.luck_timeout_seconds = int(luck_timeout_seconds)
+
+    def bind_ruleset_runtime(self, binding: dict[str, Any]) -> bool:
+        """Bind versioned ruleset state once; reject mixed-runtime characters."""
+
+        normalized = {
+            "id": str(binding.get("runtime_id") or ""),
+            "version": int(binding.get("runtime_version", 0) or 0),
+            "content_version": str(binding.get("content_version") or ""),
+            "state_schema_version": int(binding.get("state_schema_version", 0) or 0),
+        }
+        if not all((
+            normalized["id"], normalized["version"],
+            normalized["content_version"], normalized["state_schema_version"],
+        )):
+            return False
+        if self.ruleset_runtime and self.ruleset_runtime != normalized:
+            return False
+        self.ruleset_runtime = normalized
+        if not self.ruleset_state:
+            self.ruleset_state = {
+                "state_schema_version": normalized["state_schema_version"],
+            }
+        return True
 
     def set_scene_image(self, reference: dict[str, str]) -> None:
         """Set the portable adventure scene-image reference."""
@@ -1118,6 +1144,10 @@ class GameInstance:
             "confirmed_items": self.confirmed_items,
             "private_log": self.private_log,
         }
+        if self.ruleset_runtime:
+            data["ruleset_runtime"] = self.ruleset_runtime
+            data["ruleset_state"] = self.ruleset_state
+            data["event_ledger"] = self.event_ledger
         if self.puzzle_manager and hasattr(self.puzzle_manager, "to_active_dict"):
             data["puzzles"] = self.puzzle_manager.to_active_dict()
         if self.plot_tracker and hasattr(self.plot_tracker, "to_dict"):
@@ -1217,6 +1247,9 @@ class GameInstance:
             # Empty marks a pre-rule_id save. The WebUI service resolves it from
             # the world template on first read and persists the migrated value.
             rule_id=data.get("rule_id", ""),
+            ruleset_runtime=data.get("ruleset_runtime") or {},
+            ruleset_state=data.get("ruleset_state") or {},
+            event_ledger=data.get("event_ledger") or [],
             scene_image=data.get("scene_image", {}),
             map_background=data.get("map_background", {}),
             world_name=data.get("world_name", ""),

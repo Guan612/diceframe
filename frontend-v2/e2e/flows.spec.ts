@@ -6,7 +6,8 @@ const token = accessToken
 test('gm and player render the same game through shared play components', async ({ browser, request }) => {
   const headers = { Authorization: `Bearer ${token()}` }
   const games = await (await request.get('/api/games', { headers })).json()
-  const game = games.games.find((item: any) => item.player_count > 1 || item.solo_mode === false) || games.games[0]
+  const game = games.games.find((item: any) => item.game_key === 'web|e2e-room|web_bot')
+  if (!game) throw new Error('legacy E2E fixture is missing')
   const chars = await (await request.get(`/api/games/${encodeURIComponent(game.game_key)}/characters`, { headers })).json()
   const player = chars.players.find((item: any) => item.user_id !== game.gm_uid) || chars.players[0]
 
@@ -58,7 +59,8 @@ test('gm and player render the same game through shared play components', async 
 
 test('generic invite opens free character creation without gm password', async ({ page, request }) => {
   const games = await (await request.get('/api/games', { headers: { Authorization: `Bearer ${token()}` } })).json()
-  const game = games.games.find((item: any) => item.solo_mode === false) || games.games[0]
+  const game = games.games.find((item: any) => item.game_key === 'web|e2e-room|web_bot')
+  if (!game) throw new Error('legacy E2E fixture is missing')
   const unexpectedUnauthorized: string[] = []
   page.on('response', response => {
     if (response.status() === 401 && /\/api\/(?:system\/update-check|plugins\/themes)/.test(response.url())) {

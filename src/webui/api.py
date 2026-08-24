@@ -15,8 +15,10 @@ from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
 from src.rules.loader import RuleBundleLoader
+from src.rulesets.builtin import build_default_ruleset_registry
+from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -111,12 +113,17 @@ class WebAPI:
                  handler=None, llm_client=None, worlds_dir: Path | None = None,
                  character_gen_max_tokens: int = 2048,
                  text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
-                 speech_service=None, asr_service=None, imagegen_service=None):
+                 speech_service=None, asr_service=None, imagegen_service=None,
+                 ruleset_registry: RulesetRuntimeRegistry | None = None):
         self._reg = registry
         self._lore = lorebook
         self._mem = memory
         self._rules_dir = rules_dir
         self._handler = handler
+        handler_rulesets = getattr(handler, "ruleset_registry", None)
+        self._ruleset_registry: RulesetRuntimeRegistry = (
+            ruleset_registry or handler_rulesets or build_default_ruleset_registry()
+        )
         self._llm_client = llm_client
         self._worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
@@ -796,6 +803,67 @@ class WebAPI:
 
     def delete_custom_rule(self, rule_id: str) -> dict[str, Any]:
         return rules.delete_custom_rule(self, rule_id)
+
+    def ruleset_experience(self, rule_id: str, language: str = "") -> dict[str, Any]:
+        return ruleset_builder.experience(self, rule_id, language)
+
+    def ruleset_builder_choices(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.choices(self, rule_id, draft, language)
+
+    def ruleset_builder_validate(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.validate(self, rule_id, draft, language)
+
+    def ruleset_builder_derive(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.derive(self, rule_id, draft, language)
+
+    def ruleset_builder_finalize(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.finalize(self, rule_id, draft, language)
+
+    def ruleset_progression(
+        self, rule_id: str, class_ref: str, start_level: int = 1,
+        end_level: int = 20, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_advancement.progression(
+            self, rule_id, class_ref, start_level, end_level, language,
+        )
+
+    def ruleset_advancement_preview(
+        self, rule_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_advancement.preview(self, rule_id, body, language)
+
+    def ruleset_advancement_apply(
+        self, rule_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_advancement.apply(self, rule_id, body, language)
+
+    def ruleset_rest_resolve(
+        self, rule_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_rest.resolve(self, rule_id, body, language)
+
+    async def ruleset_available_actions(
+        self, game_key: str, requester_id: str, requester_is_gm: bool = False,
+    ) -> dict[str, Any]:
+        return await ruleset_gameplay.available_actions(
+            self, game_key, requester_id, requester_is_gm,
+        )
+
+    async def ruleset_submit_intent(
+        self, game_key: str, requester_id: str, requester_is_gm: bool,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await ruleset_gameplay.submit_intent(
+            self, game_key, requester_id, requester_is_gm, body,
+        )
 
     # ---- 世界模板 ----
 

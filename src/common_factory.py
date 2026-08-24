@@ -13,6 +13,8 @@ from src.lorebook.bootstrap import seed_builtin_worlds
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
+from src.rulesets.builtin import build_default_ruleset_registry
+from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
 
@@ -24,6 +26,7 @@ class TRPGSubsystems:
     lorebook_store: LorebookStore
     lorebook_matcher: KeywordMatcher
     memory_store: MemoryStore
+    ruleset_registry: RulesetRuntimeRegistry
     handler: GameHandler
 
 
@@ -78,6 +81,7 @@ def create_trpg_subsystems(
             proxy_url=proxy_url,
         )
 
+    ruleset_registry = build_default_ruleset_registry()
     handler = GameHandler(
         registry=registry,
         llm_client=llm_client,
@@ -87,6 +91,7 @@ def create_trpg_subsystems(
         prompts_dir=prompts_dir,
         rules_dir=rules_dir,
         worlds_dir=worlds_dir,
+        ruleset_registry=ruleset_registry,
         narrative_max_tokens=narrative_max_tokens,
         summary_max_tokens=summary_max_tokens,
         brief_max_tokens=brief_max_tokens,
@@ -102,5 +107,6 @@ def create_trpg_subsystems(
         lorebook_store=lorebook_store,
         lorebook_matcher=lorebook_matcher,
         memory_store=memory_store,
+        ruleset_registry=ruleset_registry,
         handler=handler,
     )

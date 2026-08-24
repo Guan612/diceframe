@@ -8,7 +8,8 @@
   "default_rule": "freeform_fantasy",
   "recommended_rules": [
     "freeform_fantasy",
-    "dnd5e"
+    "dnd5e",
+    "dnd2024_srd"
   ],
   "starter_lorebook": [
     {

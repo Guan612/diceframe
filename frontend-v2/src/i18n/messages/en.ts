@@ -52,6 +52,7 @@ export const en = {
   createTitle: 'Create Adventure',
   recommendedRules: 'Recommended Rules',
   recommended: 'Recommended',
+  professional: 'Professional',
   recommendedHint: 'You can still pick any other rule from the full rule list below.',
   createSubtitle: 'Choose a world source and set the starting party.',
   stepWorld: 'World',

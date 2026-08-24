@@ -99,12 +99,19 @@ def _to_character_card(character: dict, source: str = "") -> dict[str, Any]:
         value = character.get(key, cs.get(key, ""))
         if value not in (None, ""):
             card[key] = str(value)
+    # Professional cards retain canonical choices and version binding. Runtime
+    # derived values are still discarded on reuse because create_player asks
+    # the selected runtime to rebuild the complete submission from these choices.
+    for key in ("rule_binding", "ruleset_character"):
+        value = cs.get(key, character.get(key))
+        if isinstance(value, dict):
+            card[key] = copy.deepcopy(value)
     # 插件导入的卡带来源标记（source_plugin / plugin_content_id），保存时必须透传；
     # 否则卸载清理按 source_plugin 过滤会匹配不到，插件卡成了无法清理的残留。
-    for key in ("source_plugin", "plugin_content_id"):
+    for key in ("source_plugin", "plugin_content_id", "raw_sillytavern"):
         value = character.get(key, cs.get(key))
         if value not in (None, ""):
-            card[key] = value
+            card[key] = copy.deepcopy(value)
     return card
 
 
@@ -114,11 +121,34 @@ def list_character_cards(api: "WebAPI") -> dict[str, Any]:
     if len(deduped) != len(cards):
         _write_cards(api, deduped)
         cards = deduped
-    return {"cards": cards, "total": len(cards)}
+    from src.webui.services.ruleset_characters import runtime_metadata_for_card
+
+    visible_cards = []
+    for card in cards:
+        visible = copy.deepcopy(card)
+        metadata = runtime_metadata_for_card(api, card)
+        if metadata is not None:
+            visible["ruleset_runtime"] = metadata
+        visible_cards.append(visible)
+    return {"cards": visible_cards, "total": len(visible_cards)}
 
 
 def save_character_card(api: "WebAPI", character: dict) -> dict[str, Any]:
-    card = _to_character_card(character, source=str(character.get("source") or "角色卡库"))
+    from src.webui.services.ruleset_characters import (
+        RulesetCharacterOperationError,
+        normalize_character_card_blueprint,
+    )
+
+    source = str(character.get("source") or "角色卡库")
+    # Game creation passes a player wrapper with mechanics nested under
+    # ``character_sheet``. Convert that wrapper to the reusable card shape
+    # before professional validation so the canonical blueprint is not missed.
+    candidate = _to_character_card(character, source=source)
+    try:
+        candidate = normalize_character_card_blueprint(api, candidate)
+    except RulesetCharacterOperationError as exc:
+        return {"ok": False, "error_code": exc.code, "error": str(exc)}
+    card = _to_character_card(candidate, source=source)
     cards = _read_cards(api)
     sig = _card_signature(card)
     for existing in cards:
@@ -140,6 +170,14 @@ def update_character_card(api: "WebAPI", card_id: str, patch: dict[str, Any]) ->
     for idx, old in enumerate(cards):
         if old.get("id") != card_id:
             continue
+        from src.webui.services.ruleset_characters import card_has_rules_aware_lifecycle
+
+        if card_has_rules_aware_lifecycle(api, old):
+            return {
+                "ok": False,
+                "error_code": "RULESET_CHARACTER_OPERATION_REQUIRED",
+                "error": "专业规则角色卡不能使用旧版通用编辑接口",
+            }
         updated = {**old}
         for key in (
             "character_name", "race", "class", "background", "gold", "source",
@@ -147,7 +185,10 @@ def update_character_card(api: "WebAPI", card_id: str, patch: dict[str, Any]) ->
         ):
             if key in patch:
                 updated[key] = patch[key]
-        for key in ("identity", "attributes", "skills", "equipment", "inventory", "key_items", "currency"):
+        for key in (
+            "identity", "attributes", "skills", "equipment", "inventory", "key_items",
+            "currency", "rule_binding", "ruleset_character",
+        ):
             if key in patch and isinstance(patch[key], (dict, list)):
                 updated[key] = patch[key]
         if "portrait" in patch:
@@ -327,10 +368,15 @@ async def import_character_card(api: "WebAPI", file_data: str = "", file_name: s
             return {"ok": False, "error": "DiceFrame 角色卡不支持导入为 NPC，请选择「导入为角色卡」"}
         card = dict(as_json)
         card.setdefault("character_name", card.get("character_name") or card.get("name") or "未命名")
-        cards = _read_cards(api)
-        cards.append(card)
-        _write_cards(api, cards)
-        return {"ok": True, "card": card, "imported_as": "character_card", "format": "diceframe"}
+        saved = save_character_card(api, card)
+        if not saved.get("ok"):
+            return saved
+        return {
+            "ok": True,
+            "card": saved["card"],
+            "imported_as": "character_card",
+            "format": "diceframe",
+        }
 
     tmp_path = Path(tempfile.gettempdir()) / f"trpg_card_import_{int(time.time_ns())}_{safe_name}"
     tmp_path.write_bytes(raw_bytes)
@@ -371,7 +417,10 @@ def export_character_cards(api: "WebAPI", card_ids: list[str]) -> dict[str, Any]
 
     # 仅去掉运行期插件来源标记；source（人类可读来源）和 raw_sillytavern（酒馆原始数据）
     # 是业务字段，保留以保证导出→导入无损往返（否则酒馆卡丢 raw_sillytavern 后无法还原）。
-    skip = {"source_plugin", "plugin_content_id"}
+    skip = {
+        "source_plugin", "plugin_content_id",
+        "ruleset_revision", "ruleset_operation_log",
+    }
     payloads: list[tuple[str, str]] = []
     used_names: dict[str, int] = {}
     for card in selected:
