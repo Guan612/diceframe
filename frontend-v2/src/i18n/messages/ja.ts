@@ -856,7 +856,7 @@ export const ja = {
   updateRolledBack: '新しいバージョンがヘルスチェックに合格しなかったため、自動的にロールバックしました',
   updateApplyFailed: '更新の適用に失敗',
   updateRestartNeeded: 'ファイルを置き換えました。DiceFrame を手動で再起動すると有効になります。',
-  updateDockerHint: 'Docker 環境では docker compose pull && docker compose up -d で更新します。NAS ユーザーはデバイス付属のコンテナ管理画面から新しいイメージを確認・取得することもできます。',
+  updateDockerHint: 'Compose 配置では、まず docker-compose.yml がある配置ディレクトリに移動し、docker compose pull && docker compose up -d を実行します。docker run で起動した場合は、配置ガイドに従ってイメージを取得し、コンテナを再作成してください。NAS ではコンテナ管理画面から更新できます。',
   updateSelfUpdateUnsupported: '現在の環境は自動更新に対応していません。手動でダウンロードしてください。',
   supportProject: 'プロジェクトを支援',
   supportProjectText: 'DiceFrame が役に立ったら、プロジェクトの継続的なメンテナンスへの支援をお願いします。',

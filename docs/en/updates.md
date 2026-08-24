@@ -38,9 +38,12 @@ If you use a Git checkout, continue updating it with `git pull`.
 For a Docker Compose deployment, run:
 
 ```bash
+cd /path/to/diceframe  # Must contain docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
+
+`no configuration file provided: not found` means the current directory has no Compose file. Change to the original deployment directory and retry. If the container was originally started with `docker run`, pull the new image and recreate it with the original ports, volumes, and environment variables instead of applying Compose commands.
 
 NAS users can use the device's container manager to check for updates, pull the latest image, and recreate the container. Make sure `data/` is mounted from the host.
 

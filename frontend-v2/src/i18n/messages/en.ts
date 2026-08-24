@@ -856,7 +856,7 @@ export const en = {
   updateRolledBack: 'The new version failed its health check and was rolled back',
   updateApplyFailed: 'Failed to apply update',
   updateRestartNeeded: 'Files were replaced. Restart DiceFrame to finish the update.',
-  updateDockerHint: 'For Docker, run docker compose pull && docker compose up -d. NAS users can also check for and pull a new image from their device’s container manager.',
+  updateDockerHint: 'Compose deployment: first open the deployment directory containing docker-compose.yml, then run docker compose pull && docker compose up -d. If you originally used docker run, follow the deployment guide to pull the image and recreate the container. NAS users can update it in their container manager.',
   updateSelfUpdateUnsupported: 'Auto-update is not supported in this environment. Please download manually.',
   supportProject: 'Support the Project',
   supportProjectText: 'If DiceFrame helps you, support is welcome to keep the project maintained.',

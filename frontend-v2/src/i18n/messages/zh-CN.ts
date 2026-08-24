@@ -856,7 +856,7 @@ export const zhCN = {
   updateRolledBack: '新版本未通过健康检查，已自动回滚',
   updateApplyFailed: '应用更新失败',
   updateRestartNeeded: '文件已替换，请手动重启 DiceFrame 后生效。',
-  updateDockerHint: 'Docker 环境请使用 docker compose pull && docker compose up -d 更新；NAS 用户也可以前往设备自带的容器管理界面检查并拉取新镜像。',
+  updateDockerHint: 'Compose 部署：先进入存放 docker-compose.yml 的部署目录，再运行 docker compose pull && docker compose up -d。若当初使用 docker run 启动，请按部署文档拉取镜像并重新创建容器；NAS 用户也可以在容器管理界面完成更新。',
   updateSelfUpdateUnsupported: '当前环境不支持自动更新，请手动下载。',
   supportProject: '支持项目',
   supportProjectText: '如果 DiceFrame 对你有帮助，欢迎支持项目继续维护。',
