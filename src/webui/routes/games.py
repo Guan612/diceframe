@@ -202,7 +202,11 @@ async def api_set_solo_mode(request: web.Request) -> web.Response:
     inst = request.app["subsystems"].registry.get(api._parse_key(gk))
     if not inst:
         return web.json_response({"ok": False, "error": "not found"}, status=404)
-    if request.get("user_id", "") != inst.gm_uid:
+    if not is_game_gm(
+        inst,
+        request.get("user_id", ""),
+        bool(request.get("owner_authenticated", False)),
+    ):
         return web.json_response({"ok": False, "error": "GM only"}, status=403)
     body = await request.json()
     result = await api.set_solo_mode(gk, bool(body.get("solo")))

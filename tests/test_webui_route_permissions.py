@@ -41,6 +41,10 @@ class FakeAPI:
         self.calls.append(("switch", game_key, world_id))
         return {"ok": True, "world_id": world_id}
 
+    async def set_solo_mode(self, game_key: str, solo: bool) -> dict:
+        self.calls.append(("mode", game_key, solo))
+        return {"ok": True, "solo_mode": solo}
+
     def delete_game(self, game_key: str) -> dict:
         key = self._parse_key(game_key)
         save_dir = self.registry._save_path(key).parent
@@ -204,6 +208,42 @@ async def test_owner_confirmed_delete_can_remove_orphaned_save(tmp_path):
     assert response_json(response)["ok"] is True
     assert not save_dir.exists()
     assert registry.removed == [key]
+
+
+@pytest.mark.asyncio
+async def test_owner_session_can_convert_solo_save_for_online_room(tmp_path):
+    registry = FakeRegistry(tmp_path)
+    registry.items[("web", "room", "bot")] = SimpleNamespace(gm_uid="original_gm_session")
+    req, api = make_request(
+        registry,
+        user_id="current_owner_session",
+        owner_authenticated=True,
+        body={"solo": False},
+    )
+
+    response = await games.api_set_solo_mode(req)
+
+    assert response.status == 200
+    assert response_json(response) == {"ok": True, "solo_mode": False}
+    assert api.calls == [("mode", "web|room|bot", False)]
+
+
+@pytest.mark.asyncio
+async def test_non_owner_session_cannot_convert_foreign_solo_save(tmp_path):
+    registry = FakeRegistry(tmp_path)
+    registry.items[("web", "room", "bot")] = SimpleNamespace(gm_uid="original_gm_session")
+    req, api = make_request(
+        registry,
+        user_id="player_session",
+        owner_authenticated=False,
+        body={"solo": False},
+    )
+
+    response = await games.api_set_solo_mode(req)
+
+    assert response.status == 403
+    assert response_json(response) == {"ok": False, "error": "GM only"}
+    assert api.calls == []
 
 
 @pytest.mark.asyncio
