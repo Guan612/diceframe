@@ -229,7 +229,9 @@ export function useGame(){
     await refresh(true)
     await connect()
   })
-  watch(() => log.value.length, (next, prev) => { if ((prev ?? 0) < next) liveNarration.value = '' })
+  // 新回合写入 log 时清掉流式气泡。第一页满员后长度不再增长（旧条目被挤到下一页），
+  // 须按最新条目的 round 判断，否则“GM 思考中”在正式输出落地后残留。
+  watch(() => log.value[log.value.length - 1]?.round, (next, prev) => { if (next !== prev) liveNarration.value = '' })
   onBeforeUnmount(()=>{connectVersion++;source?.close();unsubscribePeerEvents?.();revokeMapBackgroundAsset(map.value);clearRefreshTimer();if(pollTimer)clearInterval(pollTimer);if(reconnectTimer)clearTimeout(reconnectTimer)})
   return {currentGame,userId,actorId,detail,players,player,log,privateMessages,map,lore,loreEntries,loading,error,isGm,refresh,connect,selectGame,liveNarration}
 }
