@@ -81,6 +81,24 @@ python web_server.py
 
 On Windows, `web_ui.bat` can start the Web UI. It checks Python runtime dependencies and, if `static-v2/` is missing, runs `npm ci` and `npm run build` inside `frontend-v2/` before starting `web_server.py`.
 
+### Standalone Web Frontend
+
+If the browser frontend should always use HTTPS while the backend keeps running on a NAS, home machine, or server, build the frontend separately and deploy it to Cloudflare Pages or another static host:
+
+```bash
+cd frontend-v2
+npm ci
+npm run build:standalone
+```
+
+For Cloudflare Pages, use `frontend-v2` as the root directory, `npm run build:standalone` as the build command, and `dist` as the output directory. Open the standalone frontend and enter the backend HTTPS address on the login page. Allow the frontend origin on the backend, for example:
+
+```bash
+TRPG_WEB_CORS_ORIGINS=https://diceframe.pages.dev
+```
+
+The backend still needs HTTPS through Cloudflare Tunnel, a reverse proxy, or another HTTPS endpoint; HTTPS on the static frontend alone cannot make a browser call a plain HTTP backend. The server-served frontend keeps its default same-origin mode and does not require a backend address.
+
 ## Docker
 
 ```bash

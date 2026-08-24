@@ -10,6 +10,8 @@ from pathlib import Path
 
 from aiohttp import web
 
+from src.webui.cors import is_allowed_cors_origin
+
 logger = logging.getLogger("trpg")
 
 
@@ -79,6 +81,14 @@ async def session_middleware(request: web.Request, handler) -> web.StreamRespons
 
     response = await handler(request)
     if new_token != token:
-        response.set_cookie("trpg_session", new_token, httponly=True,
-                           path="/", max_age=7 * 86400, samesite="Lax")
+        cross_origin = is_allowed_cors_origin(request)
+        response.set_cookie(
+            "trpg_session",
+            new_token,
+            httponly=True,
+            path="/",
+            max_age=7 * 86400,
+            samesite="None" if cross_origin else "Lax",
+            secure=cross_origin,
+        )
     return response

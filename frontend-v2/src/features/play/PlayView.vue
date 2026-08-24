@@ -3,7 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ChevronBack, ChevronForward, MapOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
-import { api, apiBlob, isNotFoundError } from '@/api/client'
+import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
+import { currentBackendUrl, isStandaloneFrontend } from '@/api/connection'
 import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CheckResult, CommandResponse, GameDetail, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
@@ -350,7 +351,12 @@ async function ensureSettingsLoaded() {
 
 async function invite() {
   await ensureSettingsLoaded()
-  await copyToClipboard(buildJoinLink(game.currentGame.value, settings.config.public_base_url))
+  await copyToClipboard(buildJoinLink(
+    game.currentGame.value,
+    settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
+    undefined,
+    currentBackendUrl(),
+  ))
   toast.success(t('inviteCopied'))
 }
 
@@ -454,7 +460,12 @@ async function setAway(uid: string, away: boolean) {
 
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
-  await copyToClipboard(buildJoinLink(game.currentGame.value, settings.config.public_base_url, uid))
+  await copyToClipboard(buildJoinLink(
+    game.currentGame.value,
+    settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
+    uid,
+    currentBackendUrl(),
+  ))
   toast.success(t('controlLinkCopied'))
 }
 
@@ -522,7 +533,7 @@ async function loadPlayContext() {
   if (!game.currentGame.value) return
   syncPlayRoute()
   // Shared player links without a user query belong on the character creation flow.
-  if (route.query.share && !route.query.user && !localStorage.getItem('trpg_access_token')) {
+  if (route.query.share && !route.query.user && !hasAccessToken()) {
     router.replace({ name: 'join', query: { game: game.currentGame.value, share: '1' } })
     return
   }
@@ -530,7 +541,7 @@ async function loadPlayContext() {
   // 先独立校验一次成员资格（不依赖 refresh，因其 private-log 403 会中断整组请求），
   // 失效则清掉本地身份缓存，送回加入页走重新加入（GM 有 access_token，不受影响）。
   const linkUid = queryString(route.query.user)
-  if (linkUid && !localStorage.getItem('trpg_access_token')) {
+  if (linkUid && !hasAccessToken()) {
     try {
       const d = await api<GameDetail>(`/games/${encodeURIComponent(game.currentGame.value)}`)
       if (!isStoredPlayerMember(d, linkUid)) {

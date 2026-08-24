@@ -1,3 +1,4 @@
+import { apiUrl, authHeaders } from '@/api/client'
 import { i18n } from '@/i18n'
 
 export interface ChatMessage {
@@ -33,12 +34,12 @@ export async function streamAssistantChat(
   handlers: AssistantStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  const token = localStorage.getItem('trpg_access_token') || ''
-  const resp = await fetch('/api/assistant/chat', {
+  const resp = await fetch(apiUrl('/assistant/chat'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    headers: authHeaders(undefined, true),
     body: JSON.stringify({ messages, language: locale }),
     signal,
+    credentials: 'include',
   })
   if (!resp.ok || !resp.body) {
     throw new AssistantStreamError(await responseError(resp), `HTTP_${resp.status}`)
