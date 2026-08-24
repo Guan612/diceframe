@@ -44,6 +44,7 @@ _CONTENT_DOC_PATHS = {
     "zh": (
         "guide.md",
         "deploy.md",
+        "standalone-webui.md",
         "plugin-development.md",
         "plugin-registry.md",
         "scene-images.md",
@@ -54,6 +55,7 @@ _CONTENT_DOC_PATHS = {
     "en": (
         "guide.md",
         "deploy.md",
+        "standalone-webui.md",
         "plugin-development.md",
         "plugin-registry.md",
         "voice-pack-publishing.md",

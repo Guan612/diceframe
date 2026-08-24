@@ -89,6 +89,7 @@ export interface CharacterCard extends CharacterSheet {
   rule_version?: string
   mechanics?: string
   language?: string
+  active_locale?: string
   character_name: string
   race?: string
   class?: string
@@ -662,6 +663,7 @@ export interface WorldTemplateSummary {
   world_name?: string
   description?: string
   default_rule?: string
+  recommended_rules?: string[]
   scene_image?: SceneImageRef
   language?: string
   [key: string]: unknown
@@ -1151,6 +1153,8 @@ export interface AppConfig {
   proxy_source?: string
   proxy_supported?: boolean
   public_base_url?: string
+  web_cors_origins?: string
+  web_cors_origins_source?: 'env' | 'config' | string
   access_password?: SecretField
   bot_token?: SecretField
   bot_token_source?: 'env' | 'generated'

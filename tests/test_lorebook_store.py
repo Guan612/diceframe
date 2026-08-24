@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import tempfile
 import time
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from src.lorebook.bootstrap import ensure_world_from_template
 from src.lorebook.store import LorebookStore
+from src.migrations.sqlite import MigrationError
 
 
 def _temp_store():
@@ -148,6 +152,90 @@ class TestEntryCRUD:
 
 
 class TestMigration:
+    def test_store_open_migrates_minimal_worlds_and_entries_end_to_end(self):
+        path = Path(tempfile.NamedTemporaryFile(suffix=".db", delete=False).name)
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL REFERENCES worlds(id),
+                name TEXT NOT NULL, type TEXT, content TEXT
+            );
+            INSERT INTO worlds VALUES ('legacy', 'Legacy');
+            INSERT INTO lorebook_entries VALUES ('old', 'legacy', 'Old', 'location', 'keep');
+            """
+        )
+        conn.commit()
+        conn.close()
+        store = LorebookStore(path)
+        try:
+            store.open()
+            assert store.get_world("legacy")["author"] == ""
+            assert store.get_entry("old")["content"] == "keep"
+            store.add_entry({"id": "new", "world_id": "legacy", "name": "New", "type": "spell"})
+            store.update_entry("new", {"content": "updated"})
+            assert store.get_entry("new")["content"] == "updated"
+            store.delete_entry("new")
+            assert store.get_entry("new") is None
+        finally:
+            store.close()
+            store.open()
+            try:
+                assert store.get_entry("old") is not None
+            finally:
+                store.close()
+                path.unlink(missing_ok=True)
+
+    def test_fresh_and_migrated_schema_have_matching_contract(self):
+        fresh, fresh_path = _temp_store()
+        legacy_path = Path(tempfile.NamedTemporaryFile(suffix=".db", delete=False).name)
+        conn = sqlite3.connect(legacy_path)
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (id TEXT PRIMARY KEY, world_id TEXT NOT NULL REFERENCES worlds(id), name TEXT NOT NULL, type TEXT, content TEXT);
+            INSERT INTO worlds VALUES ('w', 'W');
+            INSERT INTO lorebook_entries VALUES ('e', 'w', 'E', 'location', 'C');
+            """
+        )
+        conn.commit()
+        conn.close()
+        migrated = LorebookStore(legacy_path)
+        try:
+            migrated.open()
+            for table in ("worlds", "lorebook_entries"):
+                fresh_info = [tuple(row[1:6]) for row in fresh._conn.execute(f"PRAGMA table_info({table})")]
+                migrated_info = [tuple(row[1:6]) for row in migrated._conn.execute(f"PRAGMA table_info({table})")]
+                assert migrated_info == fresh_info
+            fresh_indexes = {row[1] for row in fresh._conn.execute("PRAGMA index_list(lorebook_entries)")}
+            migrated_indexes = {row[1] for row in migrated._conn.execute("PRAGMA index_list(lorebook_entries)")}
+            assert {"idx_lorebook_world", "idx_lorebook_type", "idx_lorebook_tier", "idx_lorebook_source"} <= fresh_indexes & migrated_indexes
+            assert migrated._conn.execute("PRAGMA foreign_key_list(lorebook_entries)").fetchone()[2] == "worlds"
+        finally:
+            fresh.close()
+            migrated.close()
+            fresh_path.unlink(missing_ok=True)
+            legacy_path.unlink(missing_ok=True)
+
+    def test_latest_schema_is_versioned_and_reopen_is_idempotent(self):
+        store, path = _temp_store()
+        try:
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+            store.create_world("w1", "测试")
+            store.add_entry({"id": "e1", "world_id": "w1", "name": "x", "type": "spell"})
+            store.close()
+            reopened = LorebookStore(path)
+            reopened.open()
+            try:
+                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+                assert reopened.get_entry("e1")["type"] == "spell"
+            finally:
+                reopened.close()
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
     def test_new_columns_exist(self):
         store, path = _temp_store()
         try:
@@ -239,6 +327,78 @@ class TestMigration:
                 except PermissionError:
                     time.sleep(0.1)
 
+    def test_open_migrates_minimal_legacy_schema_before_creating_indexes(self):
+        """字段不完整的旧库也必须能打开并完成完整 CRUD。"""
+        import gc
+        import sqlite3
+
+        t = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        t.close()
+        path = Path(t.name)
+        try:
+            conn = sqlite3.connect(str(path))
+            conn.execute("CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            conn.execute("INSERT INTO worlds (id, name) VALUES ('w1', '旧世界')")
+            conn.execute(
+                "CREATE TABLE lorebook_entries ("
+                "id TEXT PRIMARY KEY, world_id TEXT NOT NULL REFERENCES worlds(id), "
+                "name TEXT NOT NULL, type TEXT, keywords TEXT, content TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO lorebook_entries (id, world_id, name, type, keywords, content) "
+                "VALUES ('e1', 'w1', '旧条目', 'location', '[]', '旧内容')"
+            )
+            conn.commit()
+            conn.close()
+            del conn
+            gc.collect()
+
+            store = LorebookStore(path)
+            store.open()
+            try:
+                assert store.get_world("w1")["language"] == "zh-CN"
+                assert store.get_entry("e1")["tier"] == "background"
+                assert store._execute("PRAGMA user_version").fetchone()[0] == 3
+                indexes = {
+                    row[1] for row in store._execute("PRAGMA index_list('lorebook_entries')")
+                }
+                assert {
+                    "idx_lorebook_world", "idx_lorebook_type",
+                    "idx_lorebook_tier", "idx_lorebook_source",
+                } <= indexes
+
+                store.create_world("w2", "新世界")
+                store.add_entry({
+                    "id": "e2", "world_id": "w2", "name": "新条目",
+                    "keywords": ["新"], "content": "内容",
+                })
+                assert store.list_entries("w2")[0]["id"] == "e2"
+                store.update_entry("e2", {"name": "更新条目"})
+                assert store.get_entry("e2")["name"] == "更新条目"
+                store.delete_entry("e2")
+                assert store.get_entry("e2") is None
+            finally:
+                store.close()
+                del store
+                gc.collect()
+
+            reopened = LorebookStore(path)
+            reopened.open()
+            try:
+                assert reopened.get_entry("e1")["content"] == "旧内容"
+                assert reopened.list_worlds()[0]["id"] in {"w1", "w2"}
+            finally:
+                reopened.close()
+                del reopened
+                gc.collect()
+        finally:
+            for _ in range(20):
+                try:
+                    path.unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    time.sleep(0.1)
+
     def test_drop_legacy_type_check_allows_spell_class(self):
         """老库 type 列带 CHECK 约束：打开时重建表去掉约束，能插入 spell/class。"""
         import gc
@@ -268,6 +428,9 @@ class TestMigration:
             store = LorebookStore(path)
             store.open()
             try:
+                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 3
+                index_names = {row[1] for row in store._conn.execute("PRAGMA index_list(lorebook_entries)")}
+                assert {"idx_lorebook_world", "idx_lorebook_type", "idx_lorebook_tier", "idx_lorebook_source"} <= index_names
                 # 旧库已含 w1；不要 create_world（INSERT OR REPLACE 会级联删 e1）
                 # 新类型 spell/class 能插入（CHECK 已去掉）
                 store.add_entry({"id": "s1", "world_id": "w1", "name": "火球", "type": "spell", "content": "c"})
@@ -287,3 +450,115 @@ class TestMigration:
                     break
                 except PermissionError:
                     time.sleep(0.1)
+
+    def test_old_db_without_type_check_and_missing_columns_converges_to_current_schema(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL, name TEXT NOT NULL,
+                type TEXT DEFAULT 'other', content TEXT DEFAULT ''
+            );
+            INSERT INTO worlds VALUES ('w1', '测试');
+            INSERT INTO lorebook_entries VALUES ('e1', 'w1', '旧条目', 'location', '保留');
+            """
+        )
+        from src.migrations import lorebook
+        migrate = lorebook.migrate
+        assert migrate(conn) == 3
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(lorebook_entries)")}
+        assert set(lorebook._LOREBOOK_COLUMNS) <= columns
+        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='lorebook_entries'").fetchone()[0].upper()
+        assert "TIER IN" in sql and "MATCH_MODE IN" in sql
+        assert conn.execute("SELECT content FROM lorebook_entries WHERE id='e1'").fetchone()[0] == "保留"
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE lorebook_entries SET tier='invalid' WHERE id='e1'")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("UPDATE lorebook_entries SET match_mode='invalid' WHERE id='e1'")
+
+    def test_database_already_at_v2_still_runs_v3_convergence(self):
+        from src.migrations import lorebook
+        from src.migrations.sqlite import run_migrations
+
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL REFERENCES worlds(id),
+                name TEXT NOT NULL, type TEXT, keywords TEXT, content TEXT
+            );
+            INSERT INTO worlds VALUES ('w1', '旧世界');
+            INSERT INTO lorebook_entries VALUES ('e1', 'w1', '旧条目', 'location', '[]', '保留');
+            """
+        )
+
+        assert run_migrations(conn, ((1, lorebook._v1), (2, lorebook._v2))) == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+
+        assert lorebook.migrate(conn) == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert conn.execute(
+            "SELECT content FROM lorebook_entries WHERE id='e1'"
+        ).fetchone()[0] == "保留"
+        schema = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='lorebook_entries'"
+        ).fetchone()[0].upper()
+        assert "TIER IN" in schema and "MATCH_MODE IN" in schema
+        assert conn.execute(
+            "PRAGMA foreign_key_list(lorebook_entries)"
+        ).fetchone()[2] == "worlds"
+
+    def test_v3_normalizes_invalid_legacy_tier_and_match_mode(self):
+        from src.migrations import lorebook
+        from src.migrations.sqlite import run_migrations
+
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL, name TEXT NOT NULL,
+                type TEXT, keywords TEXT, content TEXT
+            );
+            INSERT INTO worlds VALUES ('w1', '旧世界');
+            INSERT INTO lorebook_entries VALUES ('e1', 'w1', '旧条目', 'other', '[]', '保留');
+            """
+        )
+        assert run_migrations(conn, ((1, lorebook._v1), (2, lorebook._v2))) == 2
+        conn.execute(
+            "UPDATE lorebook_entries SET tier='legacy-special', match_mode='sometimes' WHERE id='e1'"
+        )
+        conn.commit()
+
+        assert lorebook.migrate(conn) == 3
+        assert conn.execute(
+            "SELECT tier, match_mode FROM lorebook_entries WHERE id='e1'"
+        ).fetchone() == ("background", "any")
+
+    def test_failed_lorebook_rebuild_rolls_back_without_new_table(self, monkeypatch):
+        from src.migrations import lorebook
+
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL, name TEXT NOT NULL,
+                type TEXT NOT NULL CHECK(type IN ('npc','other')),
+                content TEXT DEFAULT ''
+            );
+            INSERT INTO worlds VALUES ('w1', '测试');
+            INSERT INTO lorebook_entries VALUES ('e1', 'w1', '旧条目', 'npc', '保留');
+            """
+        )
+        monkeypatch.setattr(lorebook, "_REBUILT_ENTRIES_SQL", "CREATE TABLE lorebook_entries_new (broken")
+        with pytest.raises(MigrationError):
+            lorebook.migrate(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert conn.execute("SELECT content FROM lorebook_entries WHERE id='e1'").fetchone()[0] == "保留"
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lorebook_entries_new'"
+        ).fetchone() is None

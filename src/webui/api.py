@@ -14,6 +14,7 @@ from src.engine.game_instance import GameRegistry
 from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
+from src.rules.loader import RuleBundleLoader
 from src.engine.world_template import load_world_template
 from src.webui.services import asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
@@ -380,8 +381,8 @@ class WebAPI:
     ) -> dict[str, Any]:
         return await plugins.invoke_plugin_tool(self, plugin_id, tool_name, arguments, context)
 
-    def list_plugin_content(self, kind: str = "", world_id: str = "", rule_id: str = "") -> dict[str, Any]:
-        return plugins.list_plugin_content(self, kind, world_id, rule_id)
+    def list_plugin_content(self, kind: str = "", world_id: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
+        return plugins.list_plugin_content(self, kind, world_id, rule_id, language)
 
     def sync_plugin_lorebooks(self) -> dict[str, Any]:
         """同步已启用插件的世界模板世界书到世界书库（幂等）。"""
@@ -421,11 +422,12 @@ class WebAPI:
         include_map: bool = True,
         map_background: dict[str, Any] | None = None,
         map_icons: list[dict[str, Any]] | None = None,
+        language: str = "",
     ) -> dict[str, Any]:
         return plugins.export_content_pack(
             self, plugin_id, name, version, description, world_id, card_ids, rule_id, flat,
             include_portraits, include_scene_images, world_scene_image, rule_scene_image,
-            include_map, map_background, map_icons,
+            include_map, map_background, map_icons, language,
         )
 
     def package_content_map(
@@ -457,25 +459,26 @@ class WebAPI:
     async def check_updates(self, include_prerelease: bool | None = None) -> dict[str, Any]:
         return await system.check_updates(self, include_prerelease)
 
-    def _load_world_template(self, world_id: str) -> dict[str, Any] | None:
+    def _load_world_template(self, world_id: str, language: str = "") -> dict[str, Any] | None:
         """按 world_id 读取世界模板；不存在或非法时返回 None。"""
         if not self._worlds_dir:
             return None
-        data = load_world_template(self._worlds_dir, world_id)
+        data = load_world_template(self._worlds_dir, world_id, language)
         if data:
             return data
         if self._plugins:
-            return self._plugins.load_world_template(world_id)
+            return self._plugins.load_world_template(world_id, language)
         return None
 
     def _load_rule_for_game(self, inst) -> RuleSystem | None:
         """优先按存档自身规则加载；旧存档缺失时回退世界默认规则。"""
         if not inst.world_id or not self._worlds_dir:
             return None
-        world_data = self._load_world_template(inst.world_id)
+        language = getattr(inst, "language", "") or ""
+        world_data = self._load_world_template(inst.world_id, language)
         if not world_data:
             return None
-        language = getattr(inst, "language", "") or world_data.get("language", "")
+        language = language or world_data.get("active_locale") or world_data.get("language", "")
         rule_id = str(
             getattr(inst, "rule_id", "")
             or world_data.get("default_rule")
@@ -487,14 +490,20 @@ class WebAPI:
         rule_id = (rule_id or "").strip()
         if not rule_id or not rules.is_valid_rule_id(rule_id):
             return None
-        rule_path = RuleSystem.path_for(self._rules_dir, rule_id, language)
-        if not rule_path.exists() and self._plugins:
-            plugin_path = self._plugins.contribution_path("rule", rule_id)
-            if plugin_path:
-                rule_path = plugin_path
-        if not rule_path.exists():
-            return None
-        return RuleSystem.load(rule_path)
+        core_path = self._rules_dir / f"{rule_id}.json"
+        if core_path.exists():
+            return RuleSystem(RuleBundleLoader().load_rule(self._rules_dir, rule_id, language))
+        if self._plugins:
+            item = self._plugins.contributions.find("rule", rule_id)
+            if item:
+                localized = self._plugins.load_rule_template(
+                    rule_id, language, plugin_id=item.plugin_id,
+                )
+                if localized:
+                    return RuleSystem(localized)
+                return RuleSystem.load(item.path)
+        legacy_path = RuleSystem.path_for(self._rules_dir, rule_id, language)
+        return RuleSystem.load(legacy_path) if legacy_path.exists() else None
 
     # ---- 游戏总览 ----
 
@@ -773,14 +782,14 @@ class WebAPI:
 
     # ---- 规则配置 ----
 
-    def list_rules(self) -> dict[str, Any]:
-        return rules.list_rules(self)
+    def list_rules(self, language: str = "") -> dict[str, Any]:
+        return rules.list_rules(self, language)
 
     def save_custom_rule(self, data: dict[str, Any]) -> dict[str, Any]:
         return rules.save_custom_rule(self, data)
 
-    def get_rule_template(self, rule_id: str) -> dict[str, Any]:
-        return rules.get_rule_template(self, rule_id)
+    def get_rule_template(self, rule_id: str, language: str = "") -> dict[str, Any]:
+        return rules.get_rule_template(self, rule_id, language)
 
     def update_custom_rule(self, rule_id: str, template: dict[str, Any]) -> dict[str, Any]:
         return rules.update_custom_rule(self, rule_id, template)
@@ -790,14 +799,14 @@ class WebAPI:
 
     # ---- 世界模板 ----
 
-    def list_world_templates(self) -> dict[str, Any]:
+    def list_world_templates(self, language: str = "") -> dict[str, Any]:
         # 确保已启用插件的世界模板世界书已同步（幂等）
         if self._plugins:
             try:
                 plugins.sync_plugin_lorebooks(self)
             except Exception:
                 logger.warning("list_world_templates 同步插件世界书失败，已跳过", exc_info=True)
-        return worlds.list_world_templates(self)
+        return worlds.list_world_templates(self, language)
 
     def cleanup_orphan_game_templates(self, world_id: str = "") -> int:
         return worlds.cleanup_orphan_game_templates(self, world_id)

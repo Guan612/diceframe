@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:standalone": "vue-tsc -b && vite build --mode standalone",
     "typecheck": "vue-tsc -b",
     "lint": "eslint src tests --max-warnings 0",
     "test": "vitest run",

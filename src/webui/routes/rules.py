@@ -8,7 +8,13 @@ from src.webui.routes._common import _get_api, _require_confirmed_request
 
 
 async def api_rules(request: web.Request) -> web.Response:
-    return web.json_response(_get_api(request).list_rules())
+    try:
+        return web.json_response(_get_api(request).list_rules(request.query.get("language", "")))
+    except ValueError as exc:
+        return web.json_response(
+            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
+            status=422,
+        )
 
 
 async def api_rule_create(request: web.Request) -> web.Response:
@@ -20,7 +26,15 @@ async def api_rule_create(request: web.Request) -> web.Response:
 
 
 async def api_rule_detail(request: web.Request) -> web.Response:
-    return web.json_response(_get_api(request).get_rule_template(request.match_info["rule_id"]))
+    try:
+        return web.json_response(_get_api(request).get_rule_template(
+            request.match_info["rule_id"], request.query.get("language", ""),
+        ))
+    except ValueError as exc:
+        return web.json_response(
+            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
+            status=422,
+        )
 
 
 async def api_rule_character_schema(request: web.Request) -> web.Response:

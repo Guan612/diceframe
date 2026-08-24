@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { errorMessage, setAccessToken, validateAccessToken } from '@/api/client'
+import { api, errorMessage, setAccessToken, validateAccessToken } from '@/api/client'
+import { currentBackendUrl, isStandaloneFrontend, normalizeBackendUrl, setBackendUrl } from '@/api/connection'
+import type { AppConfig } from '@/api/types'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { LOCALE_STORAGE_KEY } from '@/i18n'
 import BrandLogo from '@/components/BrandLogo.vue'
@@ -21,8 +23,46 @@ const token = ref('')
 const busy = ref(false)
 const error = ref('')
 const redirect = computed(() => String(route.query.redirect || '/'))
+const standalone = isStandaloneFrontend()
+const serverUrl = ref(currentBackendUrl())
+const serverConnected = ref(!standalone || Boolean(serverUrl.value))
+const serverNeedsPassword = ref(true)
+const serverBusy = ref(false)
+const serverError = ref('')
+
+async function connectServer() {
+  const normalized = normalizeBackendUrl(serverUrl.value)
+  if (!normalized) {
+    serverError.value = t('invalidServerAddress')
+    serverConnected.value = false
+    return
+  }
+  serverBusy.value = true
+  serverError.value = ''
+  try {
+    setBackendUrl(normalized)
+    serverUrl.value = normalized
+    const config = await api<AppConfig>('/config')
+    serverConnected.value = true
+    serverNeedsPassword.value = Boolean(config.access_password?.configured)
+    if (!serverNeedsPassword.value) location.href = redirect.value || '/'
+  } catch (e: unknown) {
+    serverConnected.value = false
+    serverError.value = errorMessage(e) || t('serverConnectionFailed')
+  } finally {
+    serverBusy.value = false
+  }
+}
 
 async function submit() {
+  if (standalone && !serverConnected.value) {
+    await connectServer()
+    return
+  }
+  if (!serverNeedsPassword.value) {
+    location.href = redirect.value || '/'
+    return
+  }
   const value = token.value.trim()
   if (!value) { error.value = t('enterAccessPassword'); return }
   busy.value = true
@@ -37,6 +77,10 @@ async function submit() {
     busy.value = false
   }
 }
+
+onMounted(() => {
+  if (standalone && serverUrl.value) void connectServer()
+})
 </script>
 
 <template>
@@ -75,9 +119,16 @@ async function submit() {
           <h1>DiceFrame</h1>
           <p class="muted">{{ t('loginHelp') }}</p>
         </header>
-        <form @submit.prevent="submit">
-          <label>{{ t('accessPassword') }}<input v-model="token" type="password" autocomplete="current-password" autofocus placeholder="Access token"></label>
-          <button class="primary submit" :disabled="busy"><span>{{ busy ? t('validating') : t('enter') }}</span></button>
+        <div v-if="standalone" class="server-connection">
+          <label>{{ t('serverAddress') }}<input v-model="serverUrl" type="url" autocomplete="url" :placeholder="t('serverAddressPlaceholder')"></label>
+          <button class="secondary submit" type="button" :disabled="serverBusy" @click="connectServer"><span>{{ serverBusy ? t('connecting') : t('connectServer') }}</span></button>
+          <p class="hint muted">{{ t('serverConnectionHint') }}</p>
+          <p v-if="serverConnected" class="server-connected">{{ t('serverConnected') }}</p>
+          <p v-if="serverError" class="error-banner">{{ serverError }}</p>
+        </div>
+        <form v-if="!standalone || (serverConnected && serverNeedsPassword)" @submit.prevent="submit">
+          <label>{{ t('accessPassword') }}<input v-model="token" type="password" autocomplete="current-password" :autofocus="!standalone" placeholder="Access token"></label>
+          <button class="primary submit" :disabled="busy || serverBusy"><span>{{ busy ? t('validating') : t('enter') }}</span></button>
         </form>
         <p v-if="error" class="error-banner">{{ error }}</p>
         <div class="login-help">
@@ -99,6 +150,9 @@ async function submit() {
 .login-page {
   padding-bottom: 60px;
 }
+.server-connection { display: grid; gap: 10px; margin-bottom: 16px; }
+.server-connection .submit { margin-top: 0; }
+.server-connected { color: var(--df-success, #82c997); margin: 0; font-size: 13px; }
 .locale-switch { position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%); z-index: 10; }
 .locale-switch select {
   padding: 4px 10px; border-radius: 6px;

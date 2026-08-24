@@ -9,6 +9,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from src.migrations.lorebook import migrate as migrate_lorebook
+
 logger = logging.getLogger("trpg")
 
 SCHEMA = """
@@ -50,72 +52,14 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_lorebook_world ON lorebook_entries(world_id);
-CREATE INDEX IF NOT EXISTS idx_lorebook_type  ON lorebook_entries(world_id, type);
-CREATE INDEX IF NOT EXISTS idx_lorebook_tier  ON lorebook_entries(world_id, tier);
-
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
 """
-# 表升级
-_MIGRATE_CONSTANT = "ALTER TABLE lorebook_entries ADD COLUMN is_constant INTEGER DEFAULT 0;"
-_MIGRATE_MATCH_MODE = "ALTER TABLE lorebook_entries ADD COLUMN match_mode TEXT DEFAULT 'any' CHECK(match_mode IN ('any','all','not_any','not_all'));"
-_MIGRATE_STICKY = "ALTER TABLE lorebook_entries ADD COLUMN sticky INTEGER DEFAULT 0;"
-_MIGRATE_COOLDOWN = "ALTER TABLE lorebook_entries ADD COLUMN cooldown INTEGER DEFAULT 0;"
-_MIGRATE_DELAY = "ALTER TABLE lorebook_entries ADD COLUMN delay INTEGER DEFAULT 0;"
-_MIGRATE_ORDER = 'ALTER TABLE lorebook_entries ADD COLUMN "order" INTEGER DEFAULT 100;'
-_MIGRATE_PROBABILITY = "ALTER TABLE lorebook_entries ADD COLUMN probability INTEGER DEFAULT 100;"
-_MIGRATE_GROUP = 'ALTER TABLE lorebook_entries ADD COLUMN "group" TEXT DEFAULT \'\';'
-_MIGRATE_GROUP_WEIGHT = "ALTER TABLE lorebook_entries ADD COLUMN group_weight INTEGER DEFAULT 1;"
-_MIGRATE_CONNECTED = "ALTER TABLE lorebook_entries ADD COLUMN connected_to TEXT DEFAULT '[]';"
-_MIGRATE_WORLD_LANGUAGE = "ALTER TABLE worlds ADD COLUMN language TEXT DEFAULT 'zh-CN';"
-_MIGRATE_SOURCE_PLUGIN = "ALTER TABLE lorebook_entries ADD COLUMN source_plugin TEXT DEFAULT '';"
 
-# 迁移后的 lorebook_entries 目标列（新表结构，顺序即 _drop_legacy_type_check_sql 的建表顺序）
-_LOREBOOK_NEW_COLUMNS = (
-    "id", "world_id", "name", "type", "keywords", "content", "unreliable",
-    "sync_on_enter", "tier", "triggers_recursive", "visible_to", "is_constant",
-    "match_mode", "sticky", "cooldown", "delay", "order", "probability",
-    "group", "group_weight", "connected_to", "source_plugin", "created_at", "updated_at",
+_CURRENT_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_world ON lorebook_entries(world_id)",
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_type ON lorebook_entries(world_id, type)",
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_tier ON lorebook_entries(world_id, tier)",
+    "CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)",
 )
-
-
-def _drop_legacy_type_check_sql() -> str:
-    """去掉老库 type 列 CHECK 约束的整表重建 SQL。
-
-    老库可能列不全（迁移前的历史版本），不能假设 22 列齐全。先由调用方读
-    PRAGMA table_info 取真实列，这里只定义新表结构（含 source_plugin），
-    数据复制用显式列名对齐。
-    """
-    return """
-CREATE TABLE lorebook_entries_new (
-    id TEXT PRIMARY KEY,
-    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'other',
-    keywords TEXT NOT NULL DEFAULT '[]',
-    content TEXT NOT NULL DEFAULT '',
-    unreliable INTEGER DEFAULT 0,
-    sync_on_enter INTEGER DEFAULT 0,
-    tier TEXT DEFAULT 'background',
-    triggers_recursive TEXT DEFAULT '[]',
-    visible_to TEXT DEFAULT '[]',
-    is_constant INTEGER DEFAULT 0,
-    match_mode TEXT DEFAULT 'any',
-    sticky INTEGER DEFAULT 0,
-    cooldown INTEGER DEFAULT 0,
-    delay INTEGER DEFAULT 0,
-    "order" INTEGER DEFAULT 100,
-    probability INTEGER DEFAULT 100,
-    "group" TEXT DEFAULT '',
-    group_weight INTEGER DEFAULT 1,
-    connected_to TEXT DEFAULT '[]',
-    source_plugin TEXT DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-"""
 
 
 class LorebookStore:
@@ -133,45 +77,16 @@ class LorebookStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
-        # 运行表升级
-        for mig in (_MIGRATE_CONSTANT, _MIGRATE_MATCH_MODE, _MIGRATE_STICKY,
-                     _MIGRATE_COOLDOWN, _MIGRATE_DELAY, _MIGRATE_ORDER,
-                     _MIGRATE_PROBABILITY, _MIGRATE_GROUP, _MIGRATE_GROUP_WEIGHT,
-                      _MIGRATE_CONNECTED, _MIGRATE_WORLD_LANGUAGE, _MIGRATE_SOURCE_PLUGIN):
-            try:
-                self._conn.execute(mig)
-                self._conn.commit()
-            except sqlite3.OperationalError:
-                pass
-        self._drop_legacy_type_check()
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)")
+        migrate_lorebook(self._conn)
+        for statement in _CURRENT_INDEXES:
+            self._conn.execute(statement)
+        if self._conn.execute("PRAGMA foreign_key_check").fetchone():
+            raise sqlite3.IntegrityError("lorebook foreign key check failed")
         self._conn.commit()
         logger.info("Lorebook 数据库已打开: %s", self.db_path)
-
-    def _drop_legacy_type_check(self) -> None:
-        """去掉老库 type 列的 CHECK 约束，允许新类型 spell/class。
-
-        旧版建表语句带 `CHECK(type IN (...))`，无法插入 spell/class。通过检查
-        建表 SQL 是否含 CHECK 判断：含则整表重建去掉约束。仅老库触发一次。
-        """
-        row = self._execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='lorebook_entries'").fetchone()
-        table_sql = str(row[0] or "") if row else ""
-        if "CHECK" not in table_sql.upper():
-            return
-        # 整表重建：按新表列显式对齐，老表缺的列用 DEFAULT 补齐
-        old_cols = [r["name"] for r in self._execute("PRAGMA table_info(lorebook_entries)")]
-        shared = [c for c in _LOREBOOK_NEW_COLUMNS if c in old_cols]
-        col_sql = ", ".join(f'"{c}"' for c in shared)
-        self._conn.executescript(_drop_legacy_type_check_sql())
-        if shared:
-            self._execute(
-                f"INSERT INTO lorebook_entries_new ({col_sql}) SELECT {col_sql} FROM lorebook_entries"
-            )
-        self._conn.execute("DROP TABLE lorebook_entries")
-        self._conn.execute("ALTER TABLE lorebook_entries_new RENAME TO lorebook_entries")
-        self._conn.commit()
-        logger.info("已迁移 lorebook_entries 去掉 type CHECK 约束，支持 spell/class")
 
     def close(self) -> None:
         if self._conn:

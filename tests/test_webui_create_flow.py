@@ -837,6 +837,50 @@ def test_save_custom_rule_copies_existing_rule_template(web_api):
     assert created["custom"] is True
 
 
+@pytest.mark.parametrize("language", ["zh-CN", "en", "ja"])
+def test_builtin_rule_list_materializes_requested_locale(web_api, language):
+    api, *_ = web_api
+    core = json.loads((api._rules_dir / "freeform_fantasy.json").read_text(encoding="utf-8"))
+    core["rule_schema_version"] = 2
+    (api._rules_dir / "freeform_fantasy.json").write_text(json.dumps(core), encoding="utf-8")
+    locale_dir = api._rules_dir / "locales" / language
+    locale_dir.mkdir(parents=True, exist_ok=True)
+    (locale_dir / "freeform_fantasy.json").write_text(json.dumps({
+        "locale_schema_version": 1, "locale": language,
+        "target": {"kind": "rule", "id": "freeform_fantasy"},
+        "fields": {"rule_name": f"Fantasy {language}", "description": f"Description {language}"},
+    }), encoding="utf-8")
+    payload = api.list_rules(language)
+    rule = next(item for item in payload["rules"] if item["rule_id"] == "freeform_fantasy")
+    assert rule["rule_id"] == "freeform_fantasy"
+    assert rule["rule_name"]
+    assert rule["description"]
+    assert rule["active_locale"] in {language, "zh-CN"}
+
+
+@pytest.mark.parametrize("language", ["zh-CN", "en", "ja"])
+def test_builtin_world_list_keeps_identity_when_localized(web_api, language):
+    api, *_ = web_api
+    world = api._worlds_dir / "default_fantasy.json"
+    world.write_text(json.dumps({
+        "world_schema_version": 2, "world_id": "default_fantasy",
+        "world_name": "幻想", "description": "中文", "default_rule": "dnd5e",
+    }), encoding="utf-8")
+    locale_dir = api._worlds_dir / "locales" / language
+    locale_dir.mkdir(parents=True, exist_ok=True)
+    (locale_dir / "default_fantasy.json").write_text(json.dumps({
+        "locale_schema_version": 1, "locale": language,
+        "target": {"kind": "world", "id": "default_fantasy"},
+        "fields": {"world_name": f"Fantasy {language}", "description": f"Description {language}"},
+    }), encoding="utf-8")
+    payload = api.list_world_templates(language)
+    world = next(item for item in payload["templates"] if item["world_id"] == "default_fantasy")
+    assert world["world_id"] == "default_fantasy"
+    assert world["default_rule"] == "dnd5e"
+    assert world["world_name"]
+    assert world["description"]
+
+
 def test_save_custom_rule_rejects_unsafe_rule_id(web_api):
     api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
 
@@ -1506,6 +1550,50 @@ def test_character_api_exposes_generic_rule_meta(web_api):
     assert result["rule_meta"]["currency_system"]["units"]
     assert result["rule_meta"]["resource_schema"][0]["key"] == "hp"
     assert result["rule_meta"]["identity_schema"][0]["legacy_field"] == "race"
+
+
+def test_character_api_localizes_persisted_lorebook_npcs_for_game_language(web_api):
+    api, lorebook, registry, _fake_llm, worlds_dir = web_api
+    world_id = "localized_character_world"
+    _write_world(worlds_dir, world_id, starter_lorebook=[{
+        "id": "npc_guide", "name": "向导", "type": "npc",
+        "keywords": ["向导"], "content": "中文介绍", "tier": "core",
+    }])
+    core_path = worlds_dir / f"{world_id}.json"
+    core = json.loads(core_path.read_text(encoding="utf-8"))
+    core.update({"world_schema_version": 2, "default_locale": "zh-CN"})
+    core_path.write_text(json.dumps(core, ensure_ascii=False), encoding="utf-8")
+    locale_path = worlds_dir / "locales" / "en" / f"{world_id}.json"
+    locale_path.parent.mkdir(parents=True, exist_ok=True)
+    locale_path.write_text(json.dumps({
+        "locale_schema_version": 1,
+        "locale": "en",
+        "target": {"kind": "world", "id": world_id},
+        "fields": {"world_name": "Localized Character World"},
+        "starter_lorebook": {
+            "npc_guide": {
+                "name": "Old Guide",
+                "keywords": ["guide"],
+                "content": "English introduction",
+            },
+        },
+    }), encoding="utf-8")
+    lorebook.create_world(world_id, "本地化角色世界")
+    lorebook.add_entry({
+        "id": "npc_guide", "world_id": world_id, "name": "向导",
+        "type": "npc", "keywords": ["向导"], "content": "中文介绍",
+        "tier": "core",
+    })
+    instance = registry.get_or_create(("web", "localized-npcs", "bot"))
+    instance.world_id = world_id
+    instance.language = "en"
+
+    result = api.list_characters("web|localized-npcs|bot")
+
+    assert result["npcs"][0]["npc_id"] == "npc_guide"
+    assert result["npcs"][0]["name"] == "Old Guide"
+    assert result["npcs"][0]["content"] == "English introduction"
+    assert result["npcs"][0]["status"] == "Lorebook"
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,10 @@
 {
   "rule_version": "1.1",
   "rule_id": "tavern_free",
-  "scene_image": {"kind": "builtin", "id": "tavern_free"},
+  "scene_image": {
+    "kind": "builtin",
+    "id": "tavern_free"
+  },
   "rule_name": "酒馆自由模式",
   "description": "无骼子、无属性、纯叙事角色扮演模式，像酒馆跑团一样自由对话",
   "attributes": [],
@@ -27,27 +30,32 @@
     {
       "name": "冒险者",
       "description": "自由的冒险者",
-      "starter_equipment": []
+      "starter_equipment": [],
+      "id": "adventurer"
     },
     {
       "name": "商人",
       "description": "旅行商人",
-      "starter_equipment": []
+      "starter_equipment": [],
+      "id": "merchant"
     },
     {
       "name": "吟游诗人",
       "description": "吟游诗人",
-      "starter_equipment": []
+      "starter_equipment": [],
+      "id": "bard"
     },
     {
       "name": "佣兵",
       "description": "雇佣兵",
-      "starter_equipment": []
+      "starter_equipment": [],
+      "id": "mercenary"
     },
     {
       "name": "学者",
       "description": "游学学者",
-      "starter_equipment": []
+      "starter_equipment": [],
+      "id": "scholar"
     }
   ],
   "skill_pools": {},
@@ -58,5 +66,8 @@
     "轻松": 0,
     "标准": 0,
     "硬核": 0
-  }
+  },
+  "rule_schema_version": 2,
+  "default_locale": "zh-CN",
+  "locale_schema_version": 1
 }

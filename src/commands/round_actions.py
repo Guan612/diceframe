@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from src.engine.checks import build_check_request, roll_check_request
+from src.engine.character_utils import is_conscious
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
 
@@ -42,6 +43,7 @@ def collect_actions_text(instance: GameInstance) -> str:
         format_action_line(instance, action)
         for action in instance.action_queue
         if action.get("user_id") in instance.players
+        and is_conscious(instance.get_character_sheet(str(action.get("user_id") or "")))
     ]
     actions_text = "\n".join(player_lines)
     if not actions_text:
@@ -128,12 +130,22 @@ def format_check_results_constraint(instance: GameInstance, checks: list[dict]) 
     return "\n\n" + "\n\n".join(blocks)
 
 
-def initialize_puzzles_from_lorebook(instance: GameInstance, lorebook_store: Any) -> None:
+def initialize_puzzles_from_lorebook(
+    instance: GameInstance,
+    lorebook_store: Any,
+    *,
+    world_data: dict | None = None,
+) -> None:
     """从世界书初始化谜题（仅新增未注册的谜题）。"""
     if not instance.world_id or not lorebook_store or not instance.puzzle_manager:
         return
 
-    all_entries = lorebook_store.list_entries(instance.world_id)
+    from src.content.worlds import localize_lorebook_entries
+
+    all_entries = localize_lorebook_entries(
+        lorebook_store.list_entries(instance.world_id),
+        world_data,
+    )
     for entry in all_entries:
         if entry.get("type") != "puzzle":
             continue

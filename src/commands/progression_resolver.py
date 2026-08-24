@@ -9,6 +9,7 @@ from pathlib import Path
 from src.engine.character_utils import set_hp
 from src.engine.game_instance import GameInstance
 from src.engine.world_template import world_template_path
+from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
 
 logger = logging.getLogger("trpg")
@@ -25,6 +26,9 @@ class ProgressionResolver:
         """成长必须跟随存档选择的规则，而不是世界创建页的默认规则。"""
         rule_id = str(getattr(instance, "rule_id", "") or "").strip()
         if rule_id:
+            core = self.rules_dir / f"{rule_id}.json"
+            if core.exists():
+                return RuleSystem(RuleBundleLoader().load_rule(self.rules_dir, rule_id, getattr(instance, "language", "")))
             rule_path = RuleSystem.path_for(
                 self.rules_dir, rule_id, getattr(instance, "language", "")
             )

@@ -9,5 +9,12 @@
   "suggested_difficulty": "自由",
   "default_rule": "tavern_free",
   "starter_lorebook": [],
-  "item_categories": {"equipment": [], "consumable": [], "misc": []}
+  "item_categories": {
+    "equipment": [],
+    "consumable": [],
+    "misc": []
+  },
+  "world_schema_version": 2,
+  "locale_schema_version": 1,
+  "default_locale": "zh-CN"
 }

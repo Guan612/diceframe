@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { NIcon, NInput } from 'naive-ui'
 import { ArrowBackOutline, CopyOutline, LinkOutline } from '@vicons/ionicons5'
@@ -73,6 +73,7 @@ const guestCustomStunUrl = ref('')
 const directConsent = ref(false)
 const inviteCodes = ref<EncodedPeerInvite[]>([])
 const inviteInput = ref('')
+const invitePanel = ref<HTMLElement | null>(null)
 
 const stateLabel = computed(() => t(`peerState_${state.value}`))
 /** 状态详情里的 Hub/协议原始错误码转成人话，正常进度文案原样展示。 */
@@ -210,7 +211,8 @@ async function createRoom() {
     const game = selectedGame.value
     if (!game) throw new Error(t('peerGameRequired'))
     if (!hasInviteCapacity.value) throw new Error(t('peerNoInviteCapacity'))
-    if (game.solo_mode !== false) {
+    const shouldConvertSoloSave = game.solo_mode !== false
+    if (shouldConvertSoloSave) {
       const accepted = await confirm({
         title: t('peerConvertSoloTitle'),
         content: t('peerConvertSoloContent'),
@@ -218,6 +220,15 @@ async function createRoom() {
         type: 'warning',
       })
       if (!accepted) return
+    }
+    // 与游戏页保持一致：开房前恢复存档绑定的 GM 会话。浏览器 Cookie 更新、
+    // 静态前端换源或换设备后，当前 Web 会话 ID 可能与存档 gm_uid 不同；
+    // 只放宽单个接口会让后续 GM 操作继续失败，因此必须先完成身份恢复。
+    await api(`/games/${encodeURIComponent(selectedGameKey.value)}/claim-gm`, {
+      method: 'POST',
+      body: '{}',
+    })
+    if (shouldConvertSoloSave) {
       const converted = await api<{ ok?: boolean; solo_mode?: boolean; error?: string }>(
         `/games/${encodeURIComponent(selectedGameKey.value)}/mode`,
         { method: 'POST', body: JSON.stringify({ solo: false }) },
@@ -254,6 +265,8 @@ async function createRoom() {
       guestActorIds,
       localApi: api,
     })
+    await nextTick()
+    invitePanel.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   } catch (error) {
     const stunError = stunConfigError(error)
     if (stunError) {
@@ -410,42 +423,6 @@ async function enterGame() {
           <button class="success peer-primary" :disabled="!directConsent || !selectedGameKey || playersLoading || !hasInviteCapacity || busy || sessionActive" @click="createRoom">
             <NIcon :component="LinkOutline" />{{ t('peerCreateRoom') }}
           </button>
-          <div v-if="inviteCodes.length" class="peer-invite">
-            <header class="peer-invite-header">
-              <div class="peer-invite-room">
-                <span>{{ t('peerRoomCode') }}</span><code>{{ roomCode }}</code>
-              </div>
-              <button v-if="inviteCodes.length > 1" class="peer-copy-all" @click="copyAllInvites">
-                <NIcon :component="CopyOutline" />{{ t('peerCopyAllInvites') }}
-              </button>
-            </header>
-            <div
-              v-for="(invite, index) in inviteCodes"
-              :key="invite.peerId"
-              class="peer-invite-item"
-            >
-              <span class="peer-invite-index" aria-hidden="true">{{ index + 1 }}</span>
-              <div class="peer-invite-code-wrap">
-                <strong>{{ invite.actorName || t('peerNewPlayerNumber', { number: index + 1 }) }}</strong>
-                <NInput
-                  class="peer-invite-code"
-                  :value="invite.inviteCode"
-                  type="textarea"
-                  readonly
-                  :autosize="{ minRows: 2, maxRows: 2 }"
-                  :aria-label="t('peerInviteForTarget', { name: invite.actorName || t('peerNewPlayerNumber', { number: index + 1 }) })"
-                />
-              </div>
-              <button
-                class="peer-invite-copy"
-                :aria-label="t('peerCopyInvite')"
-                @click="copyInvite(invite.inviteCode)"
-              >
-                <NIcon :component="CopyOutline" />{{ t('peerCopyInvite') }}
-              </button>
-            </div>
-            <small>{{ t('peerInviteSecurityHint') }}</small>
-          </div>
         </template>
 
         <template v-else>
@@ -490,10 +467,58 @@ async function enterGame() {
             <span>{{ t('peerConnectionStatus') }}</span>
             <strong :class="`peer-state-${state}`"><i />{{ stateLabel }}</strong>
           </div>
-          <code v-if="roomCode">{{ roomCode }}</code>
+          <div v-if="roomCode" class="peer-status-room">
+            <span>{{ t('peerRoomCode') }}</span>
+            <code>{{ roomCode }}</code>
+          </div>
         </header>
         <p v-if="stateDetail" :class="isFailureState ? 'error-banner' : 'peer-status-detail'">{{ displayDetail }}</p>
-        <div v-if="Object.keys(peerStates).length" class="peer-member-states">
+        <section v-if="mode === 'host' && inviteCodes.length" ref="invitePanel" class="peer-invite">
+          <header class="peer-invite-header">
+            <div class="peer-invite-heading">
+              <strong>{{ t('peerInvitesReadyTitle', { count: inviteCodes.length }) }}</strong>
+              <small>{{ t('peerInvitesReadyHint') }}</small>
+            </div>
+            <button v-if="inviteCodes.length > 1" class="peer-copy-all" @click="copyAllInvites">
+              <NIcon :component="CopyOutline" />{{ t('peerCopyAllInvites') }}
+            </button>
+          </header>
+          <div
+            v-for="(invite, index) in inviteCodes"
+            :key="invite.peerId"
+            class="peer-invite-item"
+          >
+            <span class="peer-invite-index" aria-hidden="true">{{ index + 1 }}</span>
+            <div class="peer-invite-code-wrap">
+              <div class="peer-invite-meta">
+                <strong>{{ invite.actorName || t('peerNewPlayerNumber', { number: index + 1 }) }}</strong>
+                <span
+                  class="peer-invite-peer-state"
+                  :class="`peer-state-${peerStates[invite.peerId] || 'waiting'}`"
+                >
+                  <i />{{ t(`peerState_${peerStates[invite.peerId] || 'waiting'}`) }}
+                </span>
+              </div>
+              <NInput
+                class="peer-invite-code"
+                :value="invite.inviteCode"
+                type="textarea"
+                readonly
+                :autosize="{ minRows: 2, maxRows: 2 }"
+                :aria-label="t('peerInviteForTarget', { name: invite.actorName || t('peerNewPlayerNumber', { number: index + 1 }) })"
+              />
+            </div>
+            <button
+              class="peer-invite-copy"
+              :aria-label="t('peerCopyInvite')"
+              @click="copyInvite(invite.inviteCode)"
+            >
+              <NIcon :component="CopyOutline" />{{ t('peerCopyInvite') }}
+            </button>
+          </div>
+          <small>{{ t('peerInviteSecurityHint') }}</small>
+        </section>
+        <div v-if="Object.keys(peerStates).length && !(mode === 'host' && inviteCodes.length)" class="peer-member-states">
           <strong>{{ t('peerConnectedPeers') }}</strong>
           <code v-for="(peerState, peerId) in peerStates" :key="peerId">{{ peerId }} · {{ t(`peerState_${peerState}`) }}</code>
         </div>

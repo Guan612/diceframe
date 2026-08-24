@@ -8,7 +8,11 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from src.content.contracts import canonical_id
+from src.content.rule_locale import materialize_rule
+from src.engine.language import normalize_language
 from src.plugin_host.content import safe_id_part
+from src.rules.loader import RuleBundleLoader
 from src.plugin_host.support import list_plugin_types as _support_plugin_types, plugin_type_descriptor
 from src.bots.bridge_core.card_renderer import cleanup_card_cache
 
@@ -304,13 +308,14 @@ async def invoke_plugin_tool(
     return {"ok": True, "plugin_id": plugin_id, "tool_name": tool_name, "result": result}
 
 
-def list_plugin_content(api: "WebAPI", kind: str = "", world_id: str = "", rule_id: str = "") -> dict[str, Any]:
+def list_plugin_content(api: "WebAPI", kind: str = "", world_id: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
     if not api._plugins:
         return {"ok": False, "error": "插件宿主未启用", "resources": {}}
     resources = api._plugins.list_content_resources(
         (kind or "").strip(),
         world_id=(world_id or "").strip(),
         rule_id=(rule_id or "").strip(),
+        language=(language or "").strip(),
     )
     total = sum(len(items) for items in resources.values())
     return {"ok": True, "resources": resources, "total": total}
@@ -462,14 +467,36 @@ def export_content_pack(
     files: dict[str, str | bytes] = {}
     has_world = has_rule = has_cards = False
     map_package = None
-    world_default_rule = rule_id if rule_id else ""
+    try:
+        if canonical_id(plugin_id) != plugin_id:
+            raise ValueError
+    except ValueError:
+        return {"ok": False, "error": "内容包 ID 必须使用小写英文开头，且只能包含小写英文、数字、下划线或短横线"}
+    exported_rule_id = _export_resource_id(rule_id, "rule") if rule_id else ""
+    exported_world_id = _export_resource_id(world_id, "world") if world_id else ""
+    world_default_rule = exported_rule_id
+    pack_locale = normalize_language(language or "zh-CN")
+    world: dict[str, Any] | None = None
+    if world_id:
+        world = api._lore.get_world(world_id)
+        if not world:
+            return {"ok": False, "error": "世界不存在"}
+        if not language:
+            pack_locale = normalize_language(str(world.get("language") or "zh-CN"))
 
     if rule_id:
-        rule_files = _rule_files(rule_id, api._rules_dir)
+        rule_files = _rule_files(
+            rule_id,
+            api._rules_dir,
+            exported_rule_id=exported_rule_id,
+            default_locale=pack_locale,
+        )
         for path, raw in list(rule_files.items()):
             try:
                 rule_data = json.loads(raw)
             except (TypeError, json.JSONDecodeError):
+                continue
+            if not path.startswith("content/rules/"):
                 continue
             reference = rule_scene_image if isinstance(rule_scene_image, dict) else rule_data.get("scene_image")
             if include_scene_images and reference:
@@ -487,17 +514,23 @@ def export_content_pack(
         has_rule = bool(rule_files)
 
     if world_id:
-        world = api._lore.get_world(world_id)
-        if not world:
-            return {"ok": False, "error": "世界不存在"}
+        assert world is not None
         entries = api._lore.list_entries(world_id)
-        template = _world_to_template(world, entries, world_default_rule)
+        export_world = dict(world)
+        export_world["id"] = exported_world_id
+        export_world["world_id"] = exported_world_id
+        template = _world_to_template(
+            export_world,
+            entries,
+            world_default_rule,
+            default_locale=pack_locale,
+        )
         if include_map:
             try:
                 map_package = api.package_content_map(
                     plugin_id,
                     name,
-                    world,
+                    export_world,
                     entries,
                     files,
                     background_selection=map_background,
@@ -516,7 +549,7 @@ def export_content_pack(
                 return {"ok": False, "error": "无法读取所选世界头图"}
         for entry in template.get("starter_lorebook", []):
             _package_record_portrait(api, entry, files, include=include_portraits)
-        files[f"content/worlds/{world_id}.json"] = json.dumps(template, ensure_ascii=False, indent=2)
+        files[f"content/worlds/{exported_world_id}.json"] = json.dumps(template, ensure_ascii=False, indent=2)
         has_world = True
 
     if card_ids:
@@ -527,11 +560,11 @@ def export_content_pack(
             packaged_portrait = _package_portrait(api, card.get("portrait"), files) if include_portraits else {}
             tmpl = _card_to_character_template(
                 card,
-                world_id=world_id,
-                rule_id=rule_id,
+                world_id=exported_world_id,
+                rule_id=exported_rule_id,
                 packaged_portrait=packaged_portrait,
             )
-            fname = safe_id_part(card.get("character_name") or card.get("id") or "character") or "character"
+            fname = str(tmpl["id"])
             files[f"content/characters/{fname}.json"] = json.dumps(tmpl, ensure_ascii=False, indent=2)
             has_cards = True
 
@@ -546,6 +579,7 @@ def export_content_pack(
         bool(map_package and map_package.has_locations),
         bool(map_package and map_package.has_icons),
         bool(map_package and map_package.has_backgrounds),
+        default_locale=pack_locale,
     )
     files["plugin.json"] = json.dumps(manifest, ensure_ascii=False, indent=2)
     files["config.schema.json"] = json.dumps(_default_config_schema(name), ensure_ascii=False, indent=2)
@@ -556,7 +590,7 @@ def export_content_pack(
         has_rule,
         has_cards,
         bool(map_package and map_package.has_map),
-        language=language or (str(world.get("language") or "zh-CN") if world_id and world else "zh-CN"),
+        language=pack_locale,
     )
 
     payload = api._plugins.package_files(plugin_id, files, flat=flat)
@@ -570,6 +604,7 @@ def build_content_pack_manifest(
     has_scene_images: bool = False,
     has_map_definitions: bool = False, has_map_locations: bool = False,
     has_map_icons: bool = False, has_map_backgrounds: bool = False,
+    default_locale: str = "zh-CN",
 ) -> dict[str, Any]:
     contributes: dict[str, list[str]] = {}
     if has_world:
@@ -603,6 +638,9 @@ def build_content_pack_manifest(
         capabilities.append("content.map")
     return {
         "schema_version": 1,
+        "content_schema_version": 2,
+        "locale_schema_version": 1,
+        "default_locale": normalize_language(default_locale or "zh-CN"),
         "id": plugin_id,
         "name": name,
         "version": version,
@@ -693,9 +731,17 @@ def _default_readme(
     return "\n".join(lines)
 
 
-def _world_to_template(world: dict[str, Any], entries: list[dict[str, Any]], default_rule: str = "") -> dict[str, Any]:
+def _world_to_template(
+    world: dict[str, Any],
+    entries: list[dict[str, Any]],
+    default_rule: str = "",
+    *,
+    default_locale: str = "zh-CN",
+) -> dict[str, Any]:
     world_id = str(world.get("id") or world.get("world_id") or "")
     template: dict[str, Any] = {
+        "world_schema_version": 2,
+        "default_locale": normalize_language(default_locale or world.get("language") or "zh-CN"),
         "world_id": world_id,
         "world_name": str(world.get("name") or world.get("world_name") or world_id),
         "description": str(world.get("description") or ""),
@@ -741,7 +787,7 @@ def _card_to_character_template(
         template["portrait"] = dict(portrait)
     name = str(card.get("character_name") or card.get("id") or "character")
     template.setdefault("character_name", name)
-    template["id"] = safe_id_part(card.get("id") or name)
+    template["id"] = _export_resource_id(str(card.get("id") or name), "character")
     if world_id:
         template["world_id"] = world_id
     if rule_id:
@@ -749,16 +795,133 @@ def _card_to_character_template(
     return template
 
 
-def _rule_files(rule_id: str, rules_dir: Path) -> dict[str, str]:
-    """读取自定义规则文件（中文版 + 英文版若存在），返回 {相对路径: 文本}。"""
+def _rule_files(
+    rule_id: str,
+    rules_dir: Path,
+    *,
+    exported_rule_id: str = "",
+    default_locale: str = "zh-CN",
+) -> dict[str, str]:
+    """Export one canonical V2 rule plus typed locale overlays."""
     files: dict[str, str] = {}
     base = rules_dir / f"{rule_id}.json"
-    if base.exists():
-        files[f"content/rules/{rule_id}.json"] = base.read_text(encoding="utf-8")
-    en = rules_dir / f"{rule_id}_en.json"
-    if en.exists():
-        files[f"content/rules/{rule_id}_en.json"] = en.read_text(encoding="utf-8")
+    if not base.exists():
+        return files
+    target_id = exported_rule_id or _export_resource_id(rule_id, "rule")
+    raw = json.loads(base.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("规则文件必须是 JSON 对象")
+    source_is_v2 = int(raw.get("rule_schema_version", 1) or 1) >= 2
+    core = RuleBundleLoader().load(base)
+    core = dict(core)
+    core.pop("extends", None)
+    core["rule_id"] = target_id
+    core["rule_schema_version"] = 2
+    core["default_locale"] = normalize_language(default_locale or raw.get("default_locale") or "zh-CN")
+    core["locale_schema_version"] = 1
+    files[f"content/rules/{target_id}.json"] = json.dumps(core, ensure_ascii=False, indent=2)
+
+    if source_is_v2:
+        for locale_dir in sorted((rules_dir / "locales").glob("*")):
+            overlay_path = locale_dir / f"{rule_id}.json"
+            if not overlay_path.is_file():
+                continue
+            overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+            if not isinstance(overlay, dict):
+                raise ValueError(f"规则 locale 必须是 JSON 对象：{overlay_path}")
+            overlay = dict(overlay)
+            overlay["target"] = {"kind": "rule", "id": target_id}
+            materialize_rule(core, overlay)
+            locale = str(overlay.get("locale") or locale_dir.name)
+            files[f"locales/{locale}/rules/{target_id}.json"] = json.dumps(
+                overlay, ensure_ascii=False, indent=2,
+            )
+    else:
+        for suffix, locale in (("en", "en"), ("ja", "ja")):
+            legacy = rules_dir / f"{rule_id}_{suffix}.json"
+            if not legacy.is_file():
+                continue
+            localized = RuleBundleLoader().load(legacy)
+            overlay = _legacy_rule_locale_overlay(core, localized, locale, target_id)
+            materialize_rule(core, overlay)
+            files[f"locales/{locale}/rules/{target_id}.json"] = json.dumps(
+                overlay, ensure_ascii=False, indent=2,
+            )
     return files
+
+
+def _legacy_rule_locale_overlay(
+    core: dict[str, Any],
+    localized: dict[str, Any],
+    locale: str,
+    target_id: str,
+) -> dict[str, Any]:
+    """Adapt a V1 full-language copy into V2 display-only fields."""
+    display_fields = (
+        "rule_name", "name", "description", "attr_hint", "skill_hint",
+        "gm_prompt_appendix", "difficulty_instructions", "currency",
+    )
+    overlay: dict[str, Any] = {
+        "locale_schema_version": 1,
+        "locale": locale,
+        "target": {"kind": "rule", "id": target_id},
+        "rule": {key: localized[key] for key in display_fields if key in localized},
+    }
+    for collection, identity_key, allowed_fields in (
+        ("attributes", "key", ("name", "label", "hint")),
+        ("classes", "id", ("name", "description")),
+        ("special_stats", "key", ("name", "description", "label", "hint", "flavor")),
+    ):
+        core_items = [item for item in core.get(collection, []) if isinstance(item, dict)]
+        localized_items = [item for item in localized.get(collection, []) if isinstance(item, dict)]
+        values: dict[str, dict[str, Any]] = {}
+        for index, core_item in enumerate(core_items):
+            identity_value = str(core_item.get(identity_key) or "")
+            if not identity_value or index >= len(localized_items):
+                continue
+            display = {
+                field: localized_items[index][field]
+                for field in allowed_fields if field in localized_items[index]
+            }
+            if display:
+                values[identity_value] = display
+        if values:
+            overlay[collection] = values
+    core_items = core.get("items")
+    localized_items = localized.get("items")
+    if isinstance(core_items, dict) and isinstance(localized_items, dict):
+        values = {
+            str(identity_value): {
+                field: localized_items[identity_value][field]
+                for field in ("name", "description")
+                if isinstance(localized_items.get(identity_value), dict)
+                and field in localized_items[identity_value]
+            }
+            for identity_value in core_items
+            if identity_value in localized_items
+        }
+        overlay["items"] = {key: value for key, value in values.items() if value}
+    return overlay
+
+
+def _export_resource_id(value: str, prefix: str) -> str:
+    """Keep canonical ids; deterministically hash legacy/non-ASCII identities."""
+    text = str(value or "").strip()
+    try:
+        return canonical_id(text)
+    except ValueError:
+        ascii_slug = "".join(
+            ch.lower() if ch.isascii() and ch.isalnum() else "_"
+            for ch in text
+        ).strip("_")
+        ascii_slug = "_".join(part for part in ascii_slug.split("_") if part)
+        if ascii_slug and ascii_slug[0].isalpha():
+            try:
+                return canonical_id(ascii_slug[:80])
+            except ValueError:
+                pass
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+        return canonical_id(f"{prefix}_{digest}")
 
 
 

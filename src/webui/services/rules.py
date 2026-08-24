@@ -8,6 +8,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from src.rules.rule_system import SUPPORTED_DICE_SYSTEMS, RuleSystem
+from src.rules.loader import RuleBundleLoader
 from src.engine.language import field_suffixes
 
 if TYPE_CHECKING:
@@ -26,15 +27,20 @@ _ATTR_NAME_EN = {
 }
 
 
-def _enrich_attributes(attributes: list[dict]) -> list[dict]:
+def _enrich_attributes(attributes: list[dict], *, localized: bool = False) -> list[dict]:
     enriched = []
     for attr in attributes or []:
         item = dict(attr)
         key = item.get("key", "")
         name = item.get("name", key)
-        name_en = item.get("name_en") or _ATTR_NAME_EN.get(key, key.upper())
-        item["name_en"] = name_en
-        item["display_name"] = f"{name} ({name_en})" if name_en else name
+        if localized:
+            # Content V2 already materialized the requested locale. Do not
+            # rebuild a second translation authority from attribute keys.
+            item["display_name"] = name
+        else:
+            name_en = item.get("name_en") or _ATTR_NAME_EN.get(key, key.upper())
+            item["name_en"] = name_en
+            item["display_name"] = f"{name} ({name_en})" if name_en else name
         enriched.append(item)
     return enriched
 
@@ -60,11 +66,28 @@ def _merge_localized_fields(template: dict, loc: dict, suffix: str) -> None:
                         zh_item[f"{field}_{suffix}"] = loc_item[field]
 
 
-def list_rules(api: "WebAPI") -> dict[str, Any]:
+def list_rules(api: "WebAPI", language: str = "") -> dict[str, Any]:
     from src.rules.rule_system import list_available_rules
     rules = list_available_rules(api._rules_dir)
+    loader = RuleBundleLoader()
+    for item in rules:
+        rule_id = str(item.get("rule_id") or "")
+        core = api._rules_dir / f"{rule_id}.json"
+        if not rule_id or not core.exists():
+            continue
+        try:
+            raw = json.loads(core.read_text(encoding="utf-8"))
+            if int(raw.get("rule_schema_version", 1) or 1) >= 2:
+                localized = loader.load_rule(api._rules_dir, rule_id, language)
+                item.update({
+                    "rule_name": localized.get("rule_name", rule_id),
+                    "description": localized.get("description", ""),
+                    "active_locale": localized.get("active_locale", ""),
+                })
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError(f"规则 {rule_id} 的 locale 无效：{exc}") from exc
     seen = {str(rule.get("rule_id") or "") for rule in rules}
-    for item in _plugin_rule_items(api):
+    for item in _plugin_rule_items(api, language):
         rule_id = str(item.get("rule_id") or "")
         if rule_id and rule_id not in seen:
             rules.append(item)
@@ -118,7 +141,7 @@ def save_custom_rule(api: "WebAPI", data: dict[str, Any]) -> dict[str, Any]:
     }}
 
 
-def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
+def get_rule_template(api: "WebAPI", rule_id: str, language: str = "") -> dict[str, Any]:
     rule_id = (rule_id or "").strip()
     if not _RULE_ID_RE.fullmatch(rule_id):
         return {"ok": False, "error": "规则 ID 不合法"}
@@ -126,7 +149,10 @@ def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
     if not rule_path or not rule_path.exists():
         return {"ok": False, "error": f"规则不存在: {rule_id}"}
     template = json.loads(rule_path.read_text(encoding="utf-8"))
-    rule = RuleSystem.load(rule_path)
+    if language and int(template.get("rule_schema_version", 1) or 1) >= 2:
+        rule = RuleSystem(RuleBundleLoader().load_rule(api._rules_dir, rule_id, language))
+    else:
+        rule = RuleSystem.load(rule_path)
     template.setdefault("check_mechanic", rule.check_mechanic)
     template.setdefault("max_check_dc", rule.max_check_dc)
     template.setdefault("conflict_model", rule.conflict_model)
@@ -135,15 +161,20 @@ def get_rule_template(api: "WebAPI", rule_id: str) -> dict[str, Any]:
     template.setdefault("identity_schema", rule.identity_schema)
     template.setdefault("progression_schema", rule.progression_schema)
     template.setdefault("ui_schema", rule.ui_schema)
-    for s in sorted(field_suffixes()):
-        loc_path = rule_path.parent / f"{rule_path.stem}_{s}.json"
-        if loc_path.exists():
-            try:
-                loc = json.loads(loc_path.read_text(encoding="utf-8"))
-                _merge_localized_fields(template, loc, s)
-            except Exception:
-                logger.warning("规则语言模板合并失败: %s", loc_path)
-    template["attributes"] = _enrich_attributes(template.get("attributes", []))
+    if int(template.get("rule_schema_version", 1) or 1) < 2:
+        for s in sorted(field_suffixes()):
+            loc_path = rule_path.parent / f"{rule_path.stem}_{s}.json"
+            if loc_path.exists():
+                try:
+                    loc = json.loads(loc_path.read_text(encoding="utf-8"))
+                    _merge_localized_fields(template, loc, s)
+                except Exception:
+                    logger.warning("规则语言模板合并失败: %s", loc_path)
+    else:
+        template = dict(rule.template)
+    template["attributes"] = _enrich_attributes(
+        template.get("attributes", []), localized=bool(template.get("active_locale"))
+    )
     if _plugin_rule_path(api, rule_id):
         plugin_id = _plugin_rule_plugin_id(api, rule_id)
         template = api._plugins.expose_scene_image(template, plugin_id)
@@ -239,14 +270,17 @@ def _plugin_rule_plugin_id(api: "WebAPI", rule_id: str) -> str:
     return item.plugin_id if item else ""
 
 
-def _plugin_rule_items(api: "WebAPI") -> list[dict[str, Any]]:
+def _plugin_rule_items(api: "WebAPI", language: str = "") -> list[dict[str, Any]]:
     plugin_host = getattr(api, "_plugins", None)
     if not plugin_host:
         return []
     result = []
     for item in plugin_host.contributions.list("rule"):
         try:
-            rule = RuleSystem.load(item.path)
+            localized = plugin_host.load_rule_template(
+                item.key, language, plugin_id=item.plugin_id,
+            )
+            rule = RuleSystem(localized) if localized else RuleSystem.load(item.path)
             template = api._plugins.expose_scene_image(rule.template, item.plugin_id)
             result.append({
                 "rule_id": rule.rule_id,
@@ -265,6 +299,6 @@ def _plugin_rule_items(api: "WebAPI") -> list[dict[str, Any]]:
                 "readonly": True,
                 "file": str(item.path),
             })
-        except Exception:
-            logger.warning("插件规则模板读取失败: %s", item.path, exc_info=True)
+        except Exception as exc:
+            raise ValueError(f"插件规则模板读取失败：{item.path}: {exc}") from exc
     return result

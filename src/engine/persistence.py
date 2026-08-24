@@ -19,21 +19,14 @@ from typing import Any, Callable
 from src.engine import game_instance
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import record_health_event
+from src.compat.saves import normalize_save_payload
+from src.compat.save_paths import save_path
 
 logger = logging.getLogger("trpg")
 
 
 def _save_path(registry: GameRegistry, game_key: tuple) -> Path:
-    parts = [str(x) for x in game_key]
-    if any(not part or "/" in part or "\\" in part or part in {".", ".."} for part in parts):
-        raise ValueError(f"非法 game_key 存档路径: {game_key}")
-    key_str = registry._KEY_SEPARATOR.join(parts)
-    path = registry.save_dir / key_str / "state.json"
-    base = registry.save_dir.resolve()
-    parent = path.parent.resolve()
-    if base != parent and base not in parent.parents:
-        raise ValueError(f"非法 game_key 存档路径: {game_key}")
-    return path
+    return save_path(registry, game_key)
 
 
 async def save(registry: GameRegistry, instance: GameInstance) -> None:
@@ -138,7 +131,7 @@ async def load(registry: GameRegistry, game_key: tuple) -> GameInstance | None:
         else:
             return None
 
-    instance = GameInstance.from_dict(data)
+    instance = GameInstance.from_dict(normalize_save_payload(data))
     if recovered_from_backup:
         record_health_event(
             instance,

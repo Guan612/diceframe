@@ -271,7 +271,7 @@ def _build_character_prompt(rule, language: str = DEFAULT_LANGUAGE) -> str:
     attrs_example = ", ".join(f'"{key}": 10' for key in attribute_keys)
     classes_desc = ", ".join(localized_field(c, "name", language) or c.get("name") or localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者"}) for c in rule.classes) if rule.classes else localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者"})
     total_points = rule.attribute_points
-    skill_pools = localized_field(rule.template, "skill_pools", language)
+    skill_pools = rule.skill_pools
     if not isinstance(skill_pools, dict):
         skill_pools = rule.template.get("skill_pools", {})
     skills_desc = ", ".join(

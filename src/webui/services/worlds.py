@@ -9,6 +9,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.content.worlds import load_world_template as load_content_world
 from src.generation import creator
 from src.template_catalog import is_user_template_file
 
@@ -265,17 +266,16 @@ def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
 
 
 def rebuild_lorebook_index(api: "WebAPI", world_id: str) -> None:
-    """重建关键词匹配索引（CRUD 后自动调用）。"""
+    """Invalidate the shared index so the next game rebuilds its own locale view."""
     if not api._handler or not world_id:
         return
     try:
-        entries = api._lore.list_entries(world_id)
-        api._handler.matcher.build(entries)
+        api._handler.invalidate_matcher_for_world(world_id)
     except Exception:
-        logger.exception("重建世界书索引失败: world_id=%s", world_id)
+        logger.exception("世界书索引失效标记失败: world_id=%s", world_id)
 
 
-def list_world_templates(api: "WebAPI") -> dict[str, Any]:
+def list_world_templates(api: "WebAPI", language: str = "") -> dict[str, Any]:
     """列出所有可用的世界模板。"""
     templates = []
     seen: set[str] = set()
@@ -285,15 +285,24 @@ def list_world_templates(api: "WebAPI") -> dict[str, Any]:
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 world_id = data.get("world_id", f.stem)
+                if f.stem.endswith("_en") or f.stem.endswith("_ja"):
+                    canonical_id = f.stem.rsplit("_", 1)[0]
+                    canonical = worlds_dir / f"{canonical_id}.json"
+                    if canonical.exists():
+                        canonical_data = json.loads(canonical.read_text(encoding="utf-8"))
+                        if int(canonical_data.get("world_schema_version", 1) or 1) >= 2:
+                            continue
                 if data.get("deprecated"):
                     continue
                 if "_blank_" in str(world_id) and not data.get("starter_lorebook", []):
                     continue
+                if int(data.get("world_schema_version", 1) or 1) >= 2:
+                    data = load_content_world(worlds_dir, str(world_id), language) or data
                 templates.append(_world_template_summary(data, f.stem))
                 seen.add(str(world_id))
-            except Exception:
-                logger.warning("世界模板读取失败: %s", f, exc_info=True)
-    for item in _plugin_world_templates(api):
+            except Exception as exc:
+                raise ValueError(f"世界模板读取失败：{f}: {exc}") from exc
+    for item in _plugin_world_templates(api, language):
         if str(item.get("world_id") or "") not in seen:
             templates.append(item)
             seen.add(str(item.get("world_id") or ""))
@@ -349,27 +358,43 @@ def _world_template_summary(data: dict[str, Any], fallback_id: str) -> dict[str,
         "world_name": data.get("world_name", fallback_id),
         "description": data.get("description", ""),
         "language": data.get("language", ""),
+        "active_locale": data.get("active_locale", ""),
         "suggested_difficulty": data.get("suggested_difficulty", "标准"),
         "default_rule": data.get("default_rule", "freeform_fantasy"),
+        "recommended_rules": _recommended_rules(data),
         "scene_image": data.get("scene_image"),
         "lorebook_count": len(data.get("starter_lorebook", [])),
     }
 
 
-def _plugin_world_templates(api: "WebAPI") -> list[dict[str, Any]]:
+def _recommended_rules(data: dict[str, Any]) -> list[str]:
+    """世界模板的推荐规则列表（可选字段）；去重、去空，缺失时返回空列表。"""
+    raw = data.get("recommended_rules")
+    if not isinstance(raw, list):
+        return []
+    result: list[str] = []
+    for item in raw[:6]:
+        if not isinstance(item, str):
+            continue
+        rule_id = item.strip()
+        if rule_id and rule_id not in result:
+            result.append(rule_id)
+    return result
+
+
+def _plugin_world_templates(api: "WebAPI", language: str = "") -> list[dict[str, Any]]:
     plugin_host = getattr(api, "_plugins", None)
     if not plugin_host:
         return []
     result = []
     for item in plugin_host.contributions.list("world_template"):
         try:
-            data = json.loads(item.path.read_text(encoding="utf-8"))
-            data = plugin_host.expose_scene_image(data, item.plugin_id)
+            data = plugin_host.load_world_template(item.key, language) or {}
             summary = _world_template_summary(data, item.path.stem)
             summary["plugin_id"] = item.plugin_id
             summary["plugin_name"] = item.plugin_name
             summary["readonly"] = True
             result.append(summary)
-        except Exception:
-            logger.warning("插件世界模板读取失败: %s", item.path, exc_info=True)
+        except Exception as exc:
+            raise ValueError(f"插件世界模板读取失败：{item.path}: {exc}") from exc
     return result

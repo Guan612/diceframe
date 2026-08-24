@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { ApiError, api, errorMessage } from '@/api/client'
+import { ApiError, api, errorMessage, setAccessToken } from '@/api/client'
 import type { AppConfig, BotTokenResponse, TestResult } from '@/api/types'
 
 export type SecretKey =
@@ -107,7 +107,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   async function saveAccessPassword(password: string) {
     await api('/config', { method: 'POST', body: JSON.stringify({ access_token: password }) })
-    localStorage.setItem('trpg_access_token', password)
+    setAccessToken(password)
     await load()
   }
 

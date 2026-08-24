@@ -25,7 +25,22 @@
   ],
   "item_categories": {
     "equipment": [],
-    "consumable": ["麦酒", "热汤", "面包", "葡萄酒", "茶"],
-    "misc": ["信件", "地图", "钥匙", "徽章", "笔记本"]
-  }
+    "consumable": [
+      "麦酒",
+      "热汤",
+      "面包",
+      "葡萄酒",
+      "茶"
+    ],
+    "misc": [
+      "信件",
+      "地图",
+      "钥匙",
+      "徽章",
+      "笔记本"
+    ]
+  },
+  "world_schema_version": 2,
+  "locale_schema_version": 1,
+  "default_locale": "zh-CN"
 }

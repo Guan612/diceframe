@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from src.content.locale import apply_locale_overlay, resolve_locale
+from src.content.rule_locale import materialize_rule
+from src.content.worlds import materialize_world
+from src.rules.rule_system import RuleSystem
+
 from .registry import ContributionRegistry
 
 
@@ -83,7 +88,7 @@ def safe_id_part(value: Any) -> str:
 class PluginContentCatalog:
     """读取已注册静态贡献；不参与插件进程生命周期。"""
 
-    CONTENT_KINDS = frozenset({"character_template", "npc", "item", "spell", "class"})
+    CONTENT_KINDS = frozenset({"character_template", "npc", "item", "spell", "class", "rule"})
 
     def __init__(
         self,
@@ -97,22 +102,41 @@ class PluginContentCatalog:
         item = self.registry.find(kind, key)
         return item.path if item else None
 
-    def load_world_template(self, world_id: str) -> dict[str, Any] | None:
+    def load_world_template(self, world_id: str, language: str = "") -> dict[str, Any] | None:
         path = self.contribution_path("world_template", world_id)
         if not path or not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            return None
-        rule_id = str(data.get("default_rule") or "")
-        rule_path = self.contribution_path("rule", rule_id) if rule_id else None
-        if rule_path:
-            data = dict(data)
-            data["_diceframe_rule_path"] = str(rule_path)
+            raise ValueError(f"插件世界模板必须是 JSON 对象：{path}")
         item = self.registry.find("world_template", world_id)
         if item:
             data = self.expose_scene_image(data, item.plugin_id)
+            data = self._materialize_locale(item, "world_template", data, language)
+        rule_id = str(data.get("default_rule") or "")
+        rule_item = self.registry.find("rule", rule_id) if rule_id else None
+        if rule_item:
+            data = dict(data)
+            data["_diceframe_rule_path"] = str(rule_item.path)
+            localized_rule = self.load_rule_template(
+                rule_id,
+                language,
+                plugin_id=rule_item.plugin_id,
+            )
+            if localized_rule:
+                data["_diceframe_rule_data"] = localized_rule
         return data
+
+    def load_rule_template(
+        self, rule_id: str, language: str = "", *, plugin_id: str = "",
+    ) -> dict[str, Any] | None:
+        item = self.registry.find("rule", rule_id, plugin_id=plugin_id)
+        if not item or not item.path.exists():
+            return None
+        resolved = RuleSystem.load(item.path).template
+        if item.content_schema_version < 2:
+            return resolved
+        return self._materialize_locale(item, "rule", dict(resolved), language)
 
     def expose_scene_image(self, data: dict[str, Any], plugin_id: str) -> dict[str, Any]:
         """Convert a packaged scene image into a browser-safe plugin reference."""
@@ -149,7 +173,7 @@ class PluginContentCatalog:
             try:
                 data = json.loads(item.path.read_text(encoding="utf-8"))
                 if not isinstance(data, dict):
-                    continue
+                    raise ValueError(f"插件内容资源必须是 JSON 对象：{item.path}")
                 if data.get("schema_version") != THEME_SCHEMA_VERSION:
                     self.logger.warning(
                         "Ignoring unsupported plugin theme schema version: %s",
@@ -227,10 +251,11 @@ class PluginContentCatalog:
         *,
         world_id: str = "",
         rule_id: str = "",
+        language: str = "",
     ) -> dict[str, list[dict[str, Any]]]:
         kinds = [kind] if kind in self.CONTENT_KINDS else sorted(self.CONTENT_KINDS)
         return {
-            name: self._content_json_items(name, world_id=world_id, rule_id=rule_id)
+            name: self._content_json_items(name, world_id=world_id, rule_id=rule_id, language=language)
             for name in kinds
         }
 
@@ -240,19 +265,20 @@ class PluginContentCatalog:
         key: str,
         *,
         plugin_id: str = "",
+        language: str = "",
     ) -> dict[str, Any] | None:
         kind = (kind or "").strip()
         key = (key or "").strip()
         plugin_id = (plugin_id or "").strip()
         if kind not in self.CONTENT_KINDS or not key:
             return None
-        item = self.registry.find(kind, key)
+        item = self.registry.find(kind, key, plugin_id=plugin_id)
         if not item or (plugin_id and item.plugin_id != plugin_id):
             return None
         return next(
             (
                 resource
-                for resource in self._content_json_items(kind)
+                for resource in self._content_json_items(kind, language=language)
                 if str(resource.get("id") or "") == key
                 and (not plugin_id or str(resource.get("plugin_id") or "") == plugin_id)
             ),
@@ -338,6 +364,7 @@ class PluginContentCatalog:
         *,
         world_id: str = "",
         rule_id: str = "",
+        language: str = "",
     ) -> list[dict[str, Any]]:
         result = []
         for item in self.registry.list(kind):
@@ -353,16 +380,86 @@ class PluginContentCatalog:
                     data.setdefault("character_name", item.title or item.key)
                 else:
                     data.setdefault("name", item.title or item.key)
+                if kind == "rule" and item.content_schema_version >= 2:
+                    data = self.load_rule_template(item.key, language, plugin_id=item.plugin_id) or data
+                else:
+                    data = self._materialize_locale(item, kind, data, language)
+                data.setdefault("id", item.key)
                 data.update({
                     "plugin_id": item.plugin_id,
                     "plugin_name": item.plugin_name,
                     "source": "plugin",
                     "readonly": True,
+                    "ref": str(item.ref),
                 })
                 self._expose_packaged_portrait(data, item.plugin_id)
                 result.append(data)
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
-                self.logger.warning("插件内容资源读取失败: %s", item.path, exc_info=True)
+            except (OSError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"插件内容资源读取失败：{item.path}: {exc}") from exc
+        return result
+
+    def _materialize_locale(
+        self,
+        item,
+        kind: str,
+        data: dict[str, Any],
+        language: str,
+    ) -> dict[str, Any]:
+        """Apply a validated plugin locale overlay without changing mechanics."""
+        if item.content_schema_version < 2:
+            return data
+        relative = Path(item.relative_path)
+        if len(relative.parts) < 3 or relative.parts[0] != "content":
+            raise ValueError("V2 插件内容必须位于 content/<kind>/ 目录")
+        plugin_root = item.path.parents[2]
+        locale_root = plugin_root / "locales"
+        if not locale_root.exists():
+            return data
+        locales: dict[str, dict[str, Any]] = {}
+        for candidate in locale_root.iterdir():
+            overlay_path = candidate.joinpath(*relative.parts[1:])
+            if overlay_path.exists() and overlay_path.is_file():
+                try:
+                    loaded = json.loads(overlay_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError) as exc:
+                    raise ValueError(f"插件 locale 读取失败：{overlay_path}: {exc}") from exc
+                if not isinstance(loaded, dict):
+                    raise ValueError(f"插件 locale 必须是 JSON 对象：{overlay_path}")
+                locales[candidate.name] = loaded
+        if not locales:
+            return data
+        overlay = resolve_locale(locales, language, item.default_locale or "zh-CN")
+        if not overlay:
+            return data
+        allowed_top = {"locale_schema_version", "locale", "target", "fields"}
+        if kind == "rule":
+            allowed_top |= {"rule", "attributes", "classes", "items", "skills", "special_stats"}
+        elif kind == "world_template":
+            allowed_top.add("starter_lorebook")
+        unknown = set(overlay) - allowed_top
+        if unknown:
+            raise ValueError(f"插件 locale 含未知顶层字段: {sorted(unknown)}")
+        if overlay.get("locale_schema_version") != 1:
+            raise ValueError("插件 locale_schema_version 必须为 1")
+        if not str(overlay.get("locale") or "").strip():
+            raise ValueError("插件 locale 必须非空")
+        target = overlay.get("target")
+        target_kind = str(target.get("kind") or "") if isinstance(target, dict) else ""
+        valid_target_kinds = {kind}
+        if kind == "world_template":
+            valid_target_kinds.add("world")
+        if target_kind not in valid_target_kinds or str(target.get("id") or "") != str(data.get("id") or item.key):
+            raise ValueError("插件 locale target 与资源不匹配")
+        if kind == "rule":
+            return materialize_rule(data, overlay)
+        fields = overlay.get("fields")
+        if not isinstance(fields, dict):
+            raise ValueError("插件 locale fields 必须为对象")
+        if kind == "world_template":
+            return materialize_world(data, overlay)
+        else:
+            result = apply_locale_overlay(data, fields)
+        result["active_locale"] = overlay.get("locale", language)
         return result
 
     def _expose_packaged_portrait(self, data: dict[str, Any], plugin_id: str) -> None:

@@ -55,7 +55,7 @@ class GameFactory:
         language: str = DEFAULT_LANGUAGE,
     ) -> GameInstance:
         instance = self.registry.get_or_create(game_key)
-        world_data = self.load_world_template(world_id)
+        world_data = self.load_world_template(world_id, language)
         if world_data:
             rule_id = rule_id or world_data.get("default_rule", "")
         rule_id = rule_id or "freeform_fantasy"
@@ -72,17 +72,16 @@ class GameFactory:
             )
 
         if world_data:
-            await self.init_world_from_template(world_id, world_data)
+            # Persist the canonical starter lore. Localized display text is
+            # materialized per game when matching/building prompts.
+            canonical_world = self.load_world_template(world_id) or world_data
+            await self.init_world_from_template(world_id, canonical_world)
 
         return instance
 
-    def load_world_template(self, world_id: str) -> dict | None:
+    def load_world_template(self, world_id: str, language: str = "") -> dict | None:
         """加载世界模板 JSON 文件。"""
-        try:
-            return load_world_template(self.worlds_dir, world_id)
-        except Exception:
-            logger.exception("世界模板加载失败: %s", world_id)
-            return None
+        return load_world_template(self.worlds_dir, world_id, language)
 
     async def init_world_from_template(self, world_id: str, template: dict) -> None:
         """从模板初始化世界书条目。"""

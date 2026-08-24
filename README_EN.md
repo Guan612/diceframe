@@ -81,7 +81,21 @@ python web_server.py
 
 On Windows, `web_ui.bat` can start the Web UI. It checks Python runtime dependencies and, if `static-v2/` is missing, runs `npm ci` and `npm run build` inside `frontend-v2/` before starting `web_server.py`.
 
+### Standalone Web Frontend
+
+If the browser frontend should always use HTTPS while the backend keeps running on a NAS, home machine, or server, build the WebUI separately and deploy it to Cloudflare Pages or another static host:
+
+```bash
+cd frontend-v2
+npm ci
+npm run build:standalone
+```
+
+See the [standalone WebUI deployment guide](https://diceframe.com/en/docs?doc=standalone) for Cloudflare Pages settings, backend HTTPS, the CORS allowlist, security guidance, and troubleshooting. Packaged Windows builds, Docker, and the server-served WebUI keep using the default same-origin mode and need no standalone configuration.
+
 ## Docker
+
+Run these commands from a cloned repository or extracted source release directory that contains `docker-compose.yml`:
 
 ```bash
 cp .env.example .env
@@ -110,9 +124,12 @@ See the [Docker deployment guide](https://github.com/diceframe/diceframe-content
 To update a Compose deployment:
 
 ```bash
+cd /path/to/diceframe
 docker compose pull
 docker compose up -d
 ```
+
+If the container was originally started with `docker run`, do not switch to Compose from an arbitrary directory. Recreate it with the original ports, volumes, and environment variables as described in the deployment guide. `no configuration file provided: not found` means the current directory has no Compose file.
 
 ## First Game
 
@@ -133,7 +150,11 @@ The built-in QQ/NapCat plugin receives its DiceFrame Bot API Token automatically
 
 The Bot follows the bound game's language for help and primary operation messages, with native Chinese and English commands available.
 
-The plugin store indexes author-owned repositories. Installation resolves the latest stable GitHub Release to an exact commit; the store checks for updates and notifies; installing or updating always requires user confirmation, and process or permission-expanding updates require explicit confirmation. Local/private sharing uses `.dfplugin`. Supported capabilities include channel adapters, Bot Bridge command/hook/render extensions, content packs, themes, structured tools, and the location/asset subset of map packs. Import/export and Provider types remain reserved and cannot be installed from the store.
+The DiceFrame plugin store lets you browse and install community plugins published by their authors through GitHub Releases. Installing or updating always requires confirmation, with an additional risk warning when a plugin requests external-process access or expanded permissions. Locally or privately shared plugins can also be installed from `.dfplugin` files.
+
+DiceFrame Hub provides review information, version status, and details for the plugin store. Installed plugins and local games continue to work if Hub is temporarily unavailable. Anonymous usage statistics are disabled by default and can be managed under **Settings → Advanced → DiceFrame Hub and privacy**.
+
+To develop or publish a plugin, see the [plugin development guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-development.md) and [plugin registry and review rules](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-registry.md).
 
 ## Documentation
 
@@ -141,6 +162,7 @@ The plugin store indexes author-owned repositories. Installation resolves the la
 |-------|---------|------|
 | User guide | [User guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/guide.md) | [用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md) |
 | Docker deployment | [Docker deployment](https://github.com/diceframe/diceframe-content/blob/main/docs/en/deploy.md) | [Docker 部署](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/deploy.md) |
+| Standalone WebUI | [Standalone WebUI](https://diceframe.com/en/docs?doc=standalone) | [独立部署 WebUI](https://diceframe.com/docs?doc=standalone) |
 | Application updates | [Application updates](docs/en/updates.md) | [应用更新](docs/zh/updates.md) |
 | Rules and dice | [Rules and dice](docs/en/rules-and-dice.md) | [规则与骰子](docs/zh/rules-and-dice.md) |
 | Player Direct Connect (experimental) | [Player Direct Connect](docs/en/direct-connect.md) | [玩家直连](docs/zh/direct-connect.md) |

@@ -9,8 +9,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from src.engine.combat import AttackResult, resolve_attack
-from src.engine.constants import WEAPON_DAMAGE
+from src.engine.combat import AttackResult, resolve_attack, _check_succeeded
+from src.engine.character_utils import is_conscious, record_death_save_failures, sync_death_from_hp
+from src.engine.constants import WEAPON_DAMAGE, canonical_item_key
 from src.engine.dice import roll_initiative
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
@@ -102,13 +103,35 @@ class CombatResolver:
 
     @staticmethod
     def _weapon(character_sheet: dict[str, Any], action_text: str) -> tuple[dict[str, Any] | None, str]:
-        for equipment in character_sheet.get("equipment", []) or []:
-            if equipment.get("slot") == "main_hand":
-                name = str(equipment.get("name") or "徒手")
-                return {"name": name, "damage": equipment.get("damage", 2)}, name
-        for name in sorted(WEAPON_DAMAGE, key=lambda value: -len(value)):
-            if name in action_text:
-                return {"name": name, "damage": WEAPON_DAMAGE[name]}, name
+        equipment = character_sheet.get("equipment", []) or []
+        weapons: list[dict[str, Any]] = []
+        for item in equipment:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            explicit_type = str(item.get("type") or "").strip().casefold()
+            key = str(item.get("item_key") or canonical_item_key(name) or "").casefold()
+            # A non-empty type is authoritative. Only records with no type at
+            # all use the pre-item-type name/legacy damage compatibility path.
+            is_weapon = (
+                explicit_type == "weapon"
+                if explicit_type
+                else bool(name) and (key in WEAPON_DAMAGE or name.casefold() in WEAPON_DAMAGE)
+            )
+            if is_weapon:
+                weapons.append({**item, "name": name or "徒手", "damage": item.get("damage", 2)})
+
+        normalized_action = action_text.casefold()
+        for weapon in weapons:
+            name = str(weapon["name"])
+            key = str(weapon.get("item_key") or canonical_item_key(name) or "").casefold()
+            if (name and name.casefold() in normalized_action) or (key and key in normalized_action):
+                return weapon, name
+        for weapon in weapons:
+            if weapon.get("slot") == "main_hand":
+                return weapon, str(weapon["name"])
+        if weapons:
+            return weapons[0], str(weapons[0]["name"])
         return None, "徒手"
 
     @staticmethod
@@ -137,7 +160,7 @@ class CombatResolver:
             "round": instance.round_number,
         })
 
-    def resolve_combat(self, instance: GameInstance, actions_text: str, combat_model: str) -> str:
+    def resolve_combat(self, instance: GameInstance, actions_text: str, combat_model: str, rule: Any | None = None) -> str:
         """只结算有唯一权威攻击 ``CheckResult`` 的行动。"""
         del actions_text  # 禁止从多人汇总文本猜攻击者、武器或目标。
         results: list[tuple[AttackResult, dict[str, Any]]] = []
@@ -145,6 +168,8 @@ class CombatResolver:
         for action in list(instance.action_queue):
             actor_uid = str(action.get("user_id") or "")
             if actor_uid not in instance.players or not instance.is_alive(actor_uid):
+                continue
+            if not is_conscious(instance.get_character_sheet(actor_uid)):
                 continue
             check = self._authoritative_attack_check(instance, action, actor_uid)
             if check is None:
@@ -165,7 +190,10 @@ class CombatResolver:
             character_sheet = instance.get_character_sheet(actor_uid)
             attacker_name = str(player.get("character_name") or actor_uid)
             weapon, weapon_name = self._weapon(character_sheet, str(action.get("text") or ""))
-            attr_value = int(character_sheet.get("attributes", {}).get("str", 10) or 10)
+            request = action.get("check_request") if isinstance(action.get("check_request"), dict) else {}
+            attribute_key = str(check.get("attribute_key") or request.get("attribute") or "str").strip().casefold()
+            attr_value = int(character_sheet.get("attributes", {}).get(attribute_key, 10) or 10)
+            was_unconscious = str((target or {}).get("status") or "") in {"downed", "stable"}
 
             attacker_faction = str(character_sheet.get("faction") or "party")
             target_faction = ""
@@ -208,7 +236,44 @@ class CombatResolver:
                     attacker_uid=actor_uid,
                     target_ref=target_ref,
                     target_name=target_name,
+                    rule=rule,
                 )
+                # 声明昏迷机制的规则：玩家目标 HP 归零立即落昏迷（旧版即死语义不变，仍走状态更新路径）。
+                if (
+                    target_uid
+                    and rule is not None
+                    and rule.death_mechanic["hp_zero"] == "downed_death_saves"
+                ):
+                    sync_death_from_hp(target, instance.round_number, rule)
+                # 5e：昏迷中受击累加死亡豁免失败（任何伤害 1 次、暴击 2 次）。
+                if (
+                    was_unconscious
+                    and rule is not None
+                    and rule.death_mechanic["hp_zero"] == "downed_death_saves"
+                    and _check_succeeded(check)
+                    and result.actual_damage > 0
+                ):
+                    failures = 2 if result.is_critical else 1
+                    outcome = record_death_save_failures(
+                        target, failures, instance.round_number
+                    )
+                    result.description += localized_text(instance.language, {
+                        "zh-CN": (
+                            "（昏迷受击，死亡豁免失败满3次，死亡）"
+                            if outcome == "dead"
+                            else f"（昏迷受击，死亡豁免失败+{failures}）"
+                        ),
+                        "en": (
+                            " (hit while unconscious: 3rd failure, dies)"
+                            if outcome == "dead"
+                            else f" (hit while unconscious: death save failures +{failures})"
+                        ),
+                        "ja": (
+                            "（意識不明で被弾：失敗3回で死亡）"
+                            if outcome == "dead"
+                            else f"（意識不明で被弾：死亡セーヴ失敗+{failures}）"
+                        ),
+                    })
                 # 战斗 outcome 属于行动的下游状态，不回写或改动
                 # 已形成的 CheckResult。进程重试时复用它，既不重掷
                 # 命中骰，也不重复扣 HP。

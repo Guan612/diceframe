@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.engine.game_instance import GameInstance
 from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, localized_text
 from src.llm.context_builder import build_context
 from src.memory.delta import MemoryStore
+from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
 
 logger = logging.getLogger("trpg")
@@ -86,7 +88,7 @@ class PromptComposer:
     def load_rule_context(
         self,
         instance: GameInstance,
-        load_world_template: Callable[[str], dict],
+        load_world_template: Callable[[str, str], dict],
     ) -> RulePromptContext:
         """加载存档实际选择的规则，并构造规则 prompt 附录。
 
@@ -99,25 +101,29 @@ class PromptComposer:
     def _load_rule_context(
         self,
         instance: GameInstance,
-        load_world_template: Callable[[str], dict],
+        load_world_template: Callable[[str, str], dict],
     ) -> RulePromptContext:
         ctx = RulePromptContext()
         if not instance.world_id:
             return ctx
         try:
-            world_data = load_world_template(instance.world_id)
+            language = getattr(instance, "language", DEFAULT_LANGUAGE)
+            world_data = load_world_template_compat(load_world_template, instance.world_id, language)
             ctx.world_data = world_data
             if world_data:
-                language = getattr(instance, "language", DEFAULT_LANGUAGE)
                 rule = None
                 active_rule_id = str(getattr(instance, "rule_id", "") or "").strip()
                 if active_rule_id:
-                    active_path = RuleSystem.path_for(self.rules_dir, active_rule_id, language)
-                    if active_path.exists():
-                        rule = RuleSystem.load(active_path)
+                    core = self.rules_dir / f"{active_rule_id}.json"
+                    if core.exists():
+                        rule = RuleSystem(RuleBundleLoader().load_rule(self.rules_dir, active_rule_id, language))
+                    else:
+                        active_path = RuleSystem.path_for(self.rules_dir, active_rule_id, language)
+                        if active_path.exists():
+                            rule = RuleSystem.load(active_path)
                 # 插件规则不一定在内置 rules_dir；缺失时仍由世界贡献路径兜底。
                 if rule is None:
-                    rule = RuleSystem.load_for_world(world_data, self.rules_dir)
+                    rule = RuleSystem.load_for_world(world_data, self.rules_dir, language)
                 if rule:
                     ctx.rule = rule
                     ctx.rule_appendix = rule.get_gm_prompt_appendix(language)
@@ -129,6 +135,8 @@ class PromptComposer:
                     stat_appendix = rule.resource_tag_appendix(language)
                     if stat_appendix:
                         ctx.rule_appendix = ctx.rule_appendix + "\n\n" + stat_appendix
+        except ValueError:
+            raise
         except Exception:
             logger.warning("规则上下文加载失败，回退默认值: world_id=%s", instance.world_id, exc_info=True)
         return ctx
@@ -136,7 +144,7 @@ class PromptComposer:
     def load_swipe_rule_context(
         self,
         instance: GameInstance,
-        load_world_template: Callable[[str], dict],
+        load_world_template: Callable[[str, str], dict],
     ) -> RulePromptContext:
         """swipe 与正常回合必须使用同一套存档规则。"""
         return self._load_rule_context(instance, load_world_template)

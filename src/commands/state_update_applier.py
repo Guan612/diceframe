@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
+from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.engine.game_instance import GameInstance
 from src.commands.item_category_resolver import ItemCategoryResolver
 from src.commands.madness_tracker import MadnessTracker
@@ -67,7 +68,7 @@ class StateUpdateApplier:
         self,
         rules_dir: Path,
         worlds_dir: Path | None,
-        load_world_template: Callable[[str], dict],
+        load_world_template: Callable[[str, str], dict],
     ):
         self._madness = MadnessTracker()
         self._players = PlayerStateApplier(self._madness)
@@ -78,8 +79,15 @@ class StateUpdateApplier:
 
     def _load_rule(self, instance: GameInstance) -> RuleSystem | None:
         try:
-            world_data = self._load_world_template(str(instance.world_id or "")) or {}
-            return RuleSystem.load_for_world(world_data, self._rules_dir)
+            language = str(getattr(instance, "language", "") or "")
+            world_data = load_world_template_compat(
+                self._load_world_template,
+                str(instance.world_id or ""),
+                language,
+            ) or {}
+            return RuleSystem.load_for_world(world_data, self._rules_dir, language)
+        except ValueError:
+            raise
         except Exception:
             logger.warning("STAT 规则加载失败: world_id=%s", instance.world_id, exc_info=True)
             return None

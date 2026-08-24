@@ -23,6 +23,7 @@ from src.commands.round_effects import (
     update_quick_actions,
 )
 from src.commands.check_planner import plan_round_checks
+from src.commands.death_save_tracker import resolve_round_death_saves
 from src.commands.round_llm import (
     append_multistep_analysis,
     apply_parsed_data_to_response,
@@ -112,8 +113,8 @@ class RoundProcessor:
         puzzles: Any,
         state_applier: Any,
         progression: Any,
-        load_world_template: Callable[[str], dict | None],
-        ensure_matcher_for_world: Callable[[str], None],
+        load_world_template: Callable[[str, str], dict | None],
+        ensure_matcher_for_world: Callable[[str, str], None],
         narrative_max_tokens: int,
         summary_max_tokens: int,
         analysis_max_tokens: int,
@@ -379,11 +380,9 @@ class RoundProcessor:
         actions_text = collect_actions_text(instance)
 
         if instance.world_id:
-            self._ensure_matcher_for_world(instance.world_id)
+            self._ensure_matcher_for_world(instance.world_id, instance.language)
         lorebook_matches = self.matcher.match_with_recursive(
             actions_text, timed_state=instance.lorebook_timed_state)
-
-        initialize_puzzles_from_lorebook(instance, self.lorebook_store)
 
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
         rule_appendix = rule_ctx.rule_appendix
@@ -391,6 +390,17 @@ class RoundProcessor:
         dice_system = rule_ctx.dice_system
         world_data = rule_ctx.world_data
         rule = rule_ctx.rule
+
+        initialize_puzzles_from_lorebook(
+            instance,
+            self.lorebook_store,
+            world_data=world_data,
+        )
+
+        # 昏迷角色的死亡豁免先于战斗/叙事结算，文本并入行动块供 GM 遵循。
+        death_text = resolve_round_death_saves(instance, rule)
+        if death_text:
+            actions_text = death_text + "\n" + actions_text
 
         dice_block = format_check_results_constraint(instance, list(instance.last_checks))
         if dice_block:
@@ -403,7 +413,7 @@ class RoundProcessor:
             if action.get("user_id") in instance.players
         )
         if instance.combat_state != "none" or explicit_attack:
-            combat_text = self._combat.resolve_combat(instance, actions_text, combat_model)
+            combat_text = self._combat.resolve_combat(instance, actions_text, combat_model, rule)
             if combat_text:
                 actions_text = combat_text + "\n" + actions_text
                 if instance.combat_state == "none" and instance.combat_enemies:

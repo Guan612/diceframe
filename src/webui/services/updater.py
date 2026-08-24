@@ -220,8 +220,9 @@ def is_self_update_supported(root: Path) -> dict[str, Any]:
             "mode": "docker",
             "reason": "docker",
             "hint": (
-                "Docker 环境请使用 docker compose pull && docker compose up -d 更新；"
-                "NAS 用户也可以前往设备自带的容器管理界面检查并拉取新镜像"
+                "Compose 部署请先进入存放 docker-compose.yml 的目录，再运行 "
+                "docker compose pull && docker compose up -d；使用 docker run 启动的容器"
+                "需要按部署文档拉取镜像并重新创建，NAS 也可在容器管理界面完成更新"
             ),
         }
 

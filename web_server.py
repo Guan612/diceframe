@@ -12,7 +12,16 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 sys.path.insert(0, str(Path(__file__).parent))
+from src.runtime_env import load_project_env
+
+load_project_env(Path(__file__).resolve().with_name(".env"))
+
 from src.common_factory import TRPGSubsystems, create_trpg_subsystems
+from src.migrations.config import (
+    DEFAULT_NARRATIVE_MAX_TOKENS,
+    GENERATION_DEFAULTS_VERSION,
+    migrate_generation_defaults as _migrate_generation_defaults,
+)
 from src.ai_providers import (
     is_provider_secret_key,
     normalize_ai_providers,
@@ -39,6 +48,7 @@ from src.webui.access_password import (
 )
 from src.webui.abuse_guard import ABUSE_GUARD_KEY, AbuseGuard, abuse_guard_middleware
 from src.webui.api import WebAPI
+from src.webui.cors import cors_middleware, cors_response_prepare, normalize_cors_origins, parse_cors_origins
 from src.webui.config_update import (
     API_RUNTIME_CONFIG_KEYS,
     MODEL_RUNTIME_CONFIG_KEYS,
@@ -81,8 +91,6 @@ from src.webui.services import legal as legal_svc
 logger = logging.getLogger("trpg")
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
 
-DEFAULT_NARRATIVE_MAX_TOKENS = 2048
-GENERATION_DEFAULTS_VERSION = 5
 
 DATA_DIR = Path(os.getenv("TRPG_DATA_DIR", str(Path(__file__).parent / "data")))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -128,37 +136,6 @@ def _load_json_object(path: Path, label: str) -> dict:
 # 仅在配置值等于某个已知旧默认时提升，保留用户自定义值。
 # 默认值历史上单调递增，缺失字段按最小旧默认补全后同样提升。
 # character_gen_max_tokens 一直是 2048，无旧默认需提升，不在表中。
-_TOKEN_FIELD_MIGRATIONS: tuple[tuple[str, frozenset[int], int], ...] = (
-    ("narrative_max_tokens", frozenset({1024, 1536}), DEFAULT_NARRATIVE_MAX_TOKENS),
-    ("analysis_max_tokens", frozenset({512}), 1024),
-    ("summary_max_tokens", frozenset({400}), 1024),
-    ("brief_max_tokens", frozenset({300}), 1024),
-    ("text_gen_max_tokens", frozenset({400}), 1024),
-)
-
-
-def _migrate_generation_defaults(config: dict) -> bool:
-    """一次性提升旧版默认生成额度，同时保留用户的自定义数值。"""
-    try:
-        version = int(config.get("generation_defaults_version", 0) or 0)
-    except (TypeError, ValueError):
-        version = 0
-    if version >= GENERATION_DEFAULTS_VERSION:
-        return False
-
-    for field, old_defaults, new_default in _TOKEN_FIELD_MIGRATIONS:
-        missing = min(old_defaults)
-        try:
-            current = int(config.get(field, missing) or missing)
-        except (TypeError, ValueError):
-            current = missing
-        if current in old_defaults:
-            config[field] = new_default
-
-    config["generation_defaults_version"] = GENERATION_DEFAULTS_VERSION
-    return True
-
-
 saved = _load_json_object(CONFIG_FILE, "主配置")
 secrets = _load_json_object(SECRETS_FILE, "敏感配置")
 _generation_defaults_migrated = _migrate_generation_defaults(saved)
@@ -175,6 +152,9 @@ API_FORMAT = (os.getenv("TRPG_LLM_API_FORMAT")
               or saved.get("api_format", "openai"))
 PORT = int(os.getenv("TRPG_WEB_PORT") or saved.get("web_port", 18000))
 HOST = os.getenv("TRPG_WEB_HOST") or saved.get("web_host", "0.0.0.0")
+WEB_CORS_ENV_VALUE = str(os.getenv("TRPG_WEB_CORS_ORIGINS") or "").strip()
+WEB_CORS_CONFIG_VALUE = WEB_CORS_ENV_VALUE or str(saved.get("web_cors_origins") or "")
+WEB_CORS_ORIGINS = parse_cors_origins(WEB_CORS_CONFIG_VALUE)
 EMB_ENABLED = saved.get("embedding_enabled", False)
 EMB_BASE_URL = saved.get("embedding_base_url", "")
 EMB_MODEL = (os.getenv("TRPG_EMBEDDING_MODEL")
@@ -235,6 +215,7 @@ _AI_PROVIDERS_DEFAULT = normalize_ai_providers(saved.get("ai_providers"))
 STATE = {
     "generation_defaults_version": GENERATION_DEFAULTS_VERSION,
     "api_key": API_KEY, "base_url": BASE_URL, "model": MODEL, "api_format": API_FORMAT, "web_port": PORT,
+    "web_cors_origins": normalize_cors_origins(WEB_CORS_CONFIG_VALUE),
     "ai_providers": _AI_PROVIDERS_DEFAULT,
     "llm_provider_ref": str(saved.get("llm_provider_ref", "")),
     "fallback1_provider_ref": str(saved.get("fallback1_provider_ref", "")),
@@ -365,6 +346,7 @@ def _public_config() -> dict:
     public["access_password"] = mask_access_password(STATE.get("access_token", ""))
     public["bot_token"] = _mask_secret(STATE.get("bot_token", ""))
     public["bot_token_source"] = "env" if os.getenv("TRPG_BOT_TOKEN") else "generated"
+    public["web_cors_origins_source"] = "env" if WEB_CORS_ENV_VALUE else "config"
     public["napcat_token"] = _mask_secret(STATE.get("napcat_token", ""))
     proxy_url = STATE.get("proxy_url", "")
     public["proxy_url"] = mask_proxy_url(proxy_url)
@@ -977,6 +959,11 @@ async def api_config_post(request: web.Request) -> web.Response:
 
 
 async def _apply_config_update(request: web.Request, body: dict) -> web.Response:
+    if "web_cors_origins" in body and WEB_CORS_ENV_VALUE:
+        return web.json_response(
+            {"ok": False, "error": "TRPG_WEB_CORS_ORIGINS 已由环境变量接管，请修改 .env 后重启后端"},
+            status=409,
+        )
     prepared = prepare_config_update(STATE, body)
     if prepared.error:
         return web.json_response({"ok": False, "error": prepared.error}, status=400)
@@ -1034,6 +1021,9 @@ async def _apply_config_update(request: web.Request, body: dict) -> web.Response
                 await candidate_embedding.close()
         logger.exception("保存候选配置失败")
         return web.json_response({"ok": False, "error": f"配置保存失败：{exc}"}, status=500)
+
+    if "web_cors_origins" in changed_keys:
+        request.app["cors_origins"] = parse_cors_origins(STATE.get("web_cors_origins", ""))
 
     if access_password_changed:
         _delete_access_token_file()
@@ -1291,6 +1281,8 @@ from src.webui.session import SessionManager, session_middleware
 from src.webui.sse_ticket import SseTicketStore
 from src.webui.errors import error_code_middleware
 
+app.middlewares.append(cors_middleware)
+app.on_response_prepare.append(cors_response_prepare)
 app.middlewares.append(session_middleware)
 app.middlewares.append(abuse_guard_middleware)
 app.middlewares.append(auth_middleware)
@@ -1303,6 +1295,7 @@ app[LOGIN_AUDIT_KEY] = LoginAuditStore(DATA_DIR)
 app["connection_pool"] = ConnectionPool()
 app["sse_tickets"] = SseTicketStore()
 app["static_v2_dir"] = STATIC_V2_DIR
+app["cors_origins"] = WEB_CORS_ORIGINS
 app["runtime_control"] = {
         "boot_id": secrets_module.token_hex(8),
     "restart_requested": False,

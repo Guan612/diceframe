@@ -30,6 +30,7 @@ from src.commands.state_recap import (
 )
 from src.commands.story_recap import StoryRecapGenerator
 from src.commands.swipe_generator import SwipeGenerator
+from src.content.worlds import localize_lorebook_entries
 from src.engine.language import DEFAULT_LANGUAGE
 
 logger = logging.getLogger("trpg")
@@ -69,7 +70,7 @@ class GameHandler:
         self._factory = GameFactory(self.registry, self.lorebook_store, self.worlds_dir)
         self._state_applier = StateUpdateApplier(self.rules_dir, self.worlds_dir, self._load_world_template)
         self._progression = ProgressionResolver(self.rules_dir, self.worlds_dir)
-        self._last_matcher_world_id: str | None = None
+        self._last_matcher_scope: tuple[str, str] | None = None
         self._round_processor = RoundProcessor(
             self.registry,
             self.llm_client,
@@ -114,12 +115,19 @@ class GameHandler:
         self.brief_max_tokens = brief_max_tokens
         self.analysis_max_tokens = analysis_max_tokens
 
-    def _ensure_matcher_for_world(self, world_id: str) -> None:
+    def _ensure_matcher_for_world(self, world_id: str, language: str = "") -> None:
         """确保关键词匹配器已加载当前世界的条目。"""
-        if world_id and world_id != self._last_matcher_world_id and self.lorebook_store:
+        scope = (str(world_id or ""), str(language or DEFAULT_LANGUAGE))
+        if world_id and scope != self._last_matcher_scope and self.lorebook_store:
             entries = self.lorebook_store.list_entries(world_id)
+            entries = localize_lorebook_entries(entries, self._load_world_template(world_id, language))
             self.matcher.build(entries)
-            self._last_matcher_world_id = world_id
+            self._last_matcher_scope = scope
+
+    def invalidate_matcher_for_world(self, world_id: str) -> None:
+        """Force the next round to rebuild a locale-correct lorebook view."""
+        if self._last_matcher_scope and self._last_matcher_scope[0] == str(world_id or ""):
+            self._last_matcher_scope = None
 
     # ---- 新建游戏 ----
 
@@ -132,7 +140,7 @@ class GameHandler:
         """兼容旧入口；实际逻辑已拆到 GameFactory。"""
         plugin_template = None
         if self._plugin_host and not self._factory.load_world_template(world_id):
-            plugin_template = self._plugin_host.load_world_template(world_id)
+            plugin_template = self._plugin_host.load_world_template(world_id, language)
         instance = await self._factory.create_game(
             game_key, world_id, world_name, group_name,
             rule_id=rule_id, seed_code=seed_code, difficulty=difficulty,
@@ -148,13 +156,13 @@ class GameHandler:
             logger.info("插件世界模板，已同步世界书并跳过重复初始化: %s", world_id)
         return instance
 
-    def _load_world_template(self, world_id: str) -> dict | None:
+    def _load_world_template(self, world_id: str, language: str = "") -> dict | None:
         """兼容旧内部调用；实际逻辑已拆到 GameFactory。"""
-        data = self._factory.load_world_template(world_id)
+        data = self._factory.load_world_template(world_id, language)
         if data:
             return data
         if self._plugin_host:
-            return self._plugin_host.load_world_template(world_id)
+            return self._plugin_host.load_world_template(world_id, language)
         return None
 
     def set_plugin_host(self, plugin_host) -> None:
