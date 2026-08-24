@@ -95,6 +95,8 @@ See the [standalone WebUI deployment guide](https://diceframe.com/en/docs?doc=st
 
 ## Docker
 
+Run these commands from a cloned repository or extracted source release directory that contains `docker-compose.yml`:
+
 ```bash
 cp .env.example .env
 # edit .env as needed
@@ -122,9 +124,12 @@ See the [Docker deployment guide](https://github.com/diceframe/diceframe-content
 To update a Compose deployment:
 
 ```bash
+cd /path/to/diceframe
 docker compose pull
 docker compose up -d
 ```
+
+If the container was originally started with `docker run`, do not switch to Compose from an arbitrary directory. Recreate it with the original ports, volumes, and environment variables as described in the deployment guide. `no configuration file provided: not found` means the current directory has no Compose file.
 
 ## First Game
 

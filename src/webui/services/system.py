@@ -224,6 +224,6 @@ async def _parse_release_payload(payload: str, include_prerelease: bool) -> dict
 def _install_hint(repo: str) -> dict[str, str]:
     return {
         "windows": "下载新版源码包或 Release 附件，保留 data/ 目录后替换程序文件，再重新运行 web_ui.bat。",
-        "docker": "如果使用镜像部署，拉取新版镜像后重新 docker compose up -d；如果是源码构建镜像，用新版源码重新 build。",
+        "docker": "Compose 部署请先进入存放 docker-compose.yml 的目录，再拉取镜像并重新 docker compose up -d；docker run 部署需重新创建容器，源码镜像需用新版源码重新 build。",
         "source": f"源码用户可从 https://github.com/{repo}/releases 下载新版，升级前先备份 data/。",
     }

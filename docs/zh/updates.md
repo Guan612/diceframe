@@ -38,9 +38,12 @@
 使用 Docker Compose 部署时运行：
 
 ```bash
+cd /path/to/diceframe  # 必须是存放 docker-compose.yml 的部署目录
 docker compose pull
 docker compose up -d
 ```
+
+如果提示 `no configuration file provided: not found`，说明当前目录没有 Compose 配置文件。请进入原部署目录后重试；如果最初使用 `docker run` 启动，则应拉取新镜像后按原端口、卷和环境变量重新创建容器，不能直接套用 Compose 更新命令。
 
 NAS 用户可以直接在设备自带的容器管理界面检查更新、拉取最新镜像并重新创建容器。请确认 `data/` 已挂载到宿主机。
 

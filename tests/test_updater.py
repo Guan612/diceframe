@@ -107,6 +107,8 @@ def test_self_update_unsupported_in_docker(tmp_path, monkeypatch):
     result = updater.is_self_update_supported(tmp_path)
     assert result["supported"] is False
     assert result["reason"] == "docker"
+    assert "docker-compose.yml" in result["hint"]
+    assert "docker run" in result["hint"]
 
 
 def test_self_update_unsupported_when_readonly(tmp_path, monkeypatch):

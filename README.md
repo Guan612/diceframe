@@ -83,12 +83,15 @@ docker pull ghcr.io/diceframe/diceframe:2.3.0-beta.2
 # Docker Hub：docker pull falconku/diceframe:2.3.0-beta.2
 ```
 
-后续更新 Compose 部署：
+如果原先使用 Compose 部署，更新命令必须在存放 `docker-compose.yml` 的部署目录执行：
 
 ```bash
+cd /path/to/diceframe
 docker compose pull
 docker compose up -d
 ```
+
+如果原先使用的是上面的 `docker run` 命令，则不能在任意目录改用 Compose 更新；请按部署说明拉取新镜像并用原端口、卷和环境变量重新创建容器。出现 `no configuration file provided: not found`，表示当前目录没有 Compose 配置文件。
 
 ### 从源码运行
 

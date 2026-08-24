@@ -13,7 +13,9 @@ test('two clients establish a direct data channel through Hub signaling', async 
   await host.locator('.peer-direct-consent input').check()
   await host.getByRole('button', { name: '创建临时直连房间' }).click()
   // 批量开房会同时生成已绑定角色与空闲席位的链接；该流程需要空闲席位来创建新角色。
-  const invite = await host.getByLabel('新玩家 1 的一次性链接码').getByRole('textbox').inputValue()
+  const invitePanel = host.locator('.peer-status .peer-invite')
+  await expect(invitePanel).toContainText('玩家邀请码')
+  const invite = await invitePanel.getByLabel('新玩家 1 的一次性链接码').getByRole('textbox').inputValue()
   expect(invite).toMatch(/^DFP2-/)
 
   await guest.goto('/#/peer')
@@ -22,8 +24,13 @@ test('two clients establish a direct data channel through Hub signaling', async 
   await guest.locator('.peer-direct-consent input').check()
   await guest.getByRole('button', { name: '连接房主' }).click()
 
-  await expect(host.getByText('P2P 直连成功', { exact: true })).toBeVisible({ timeout: 20_000 })
-  await expect(guest.getByText('P2P 直连成功', { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect(host.locator('.peer-status > header .peer-state-connected')).toHaveText('P2P 直连成功', {
+    timeout: 20_000,
+  })
+  await expect(guest.locator('.peer-status > header .peer-state-connected')).toHaveText('P2P 直连成功', {
+    timeout: 20_000,
+  })
+  await expect(host.locator('.peer-invite-peer-state.peer-state-connected')).toHaveCount(1)
   // 通道状态块进入 active 即代表心跳自检通过；不锁具体文案，避免文案调整破坏 e2e。
   await expect(host.locator('.peer-connection-check.active')).toBeVisible()
   await expect(guest.locator('.peer-connection-check.active')).toBeVisible()
