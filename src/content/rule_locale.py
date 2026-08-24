@@ -7,10 +7,24 @@ from typing import Any
 
 _DISPLAY_FIELDS = frozenset({
     "rule_name", "name", "description", "attr_hint", "skill_hint",
-    "gm_prompt_appendix", "difficulty_instructions", "skill_pools",
-    "item_categories", "currency",
+    "gm_prompt_appendix", "difficulty_instructions", "currency",
 })
+_DISPLAY_STRING_FIELDS = _DISPLAY_FIELDS - {"difficulty_instructions"}
 _NESTED_DISPLAY_FIELDS = frozenset({"name", "description", "label", "hint", "flavor"})
+
+
+def _validate_display_fields(values: dict[str, Any], location: str) -> None:
+    for key, value in values.items():
+        if key in _DISPLAY_STRING_FIELDS and not isinstance(value, str):
+            raise ValueError(f"locale overlay {location}.{key} must be a string")
+        if key == "difficulty_instructions":
+            if not isinstance(value, dict) or any(
+                not isinstance(name, str) or not isinstance(text, str)
+                for name, text in value.items()
+            ):
+                raise ValueError(
+                    f"locale overlay {location}.difficulty_instructions must be a string map"
+                )
 
 
 def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -34,6 +48,8 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
     forbidden = set(rule_fields) - _DISPLAY_FIELDS
     if forbidden:
         raise ValueError(f"locale overlay contains mechanics fields: {sorted(forbidden)}")
+    _validate_display_fields(fields, "fields")
+    _validate_display_fields(rule_fields, "rule")
     result.update({key: value for key, value in rule_fields.items() if key in _DISPLAY_FIELDS})
     result.update({key: value for key, value in fields.items() if key in _DISPLAY_FIELDS})
     for key, values in (("attributes", overlay.get("attributes")), ("classes", overlay.get("classes")), ("items", overlay.get("items")), ("skills", overlay.get("skills")), ("special_stats", overlay.get("special_stats"))):
@@ -57,6 +73,8 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
         else:
             raw_skills = result.get("skills", result.get("skill_names", {}))
             allowed = {str(item) for item in raw_skills} if isinstance(raw_skills, dict) else set()
+            # Aliases are localized input labels resolving to an existing
+            # canonical skill id; they do not define a skill or its outcome.
             nested_allowed = {"aliases", "name", "description", "label", "hint"}
         unknown_ids = set(values) - allowed
         if unknown_ids:
@@ -69,6 +87,10 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
                 raise ValueError(f"locale overlay contains mechanics fields: {sorted(forbidden)}")
             if "aliases" in data and not isinstance(data["aliases"], list):
                 raise ValueError("locale overlay skill aliases must be a list")
+            if "aliases" in data and any(not isinstance(alias, str) for alias in data["aliases"]):
+                raise ValueError("locale overlay skill aliases must contain only strings")
+            if any(not isinstance(value, str) for name, value in data.items() if name != "aliases"):
+                raise ValueError(f"locale overlay {key}.{identity} display fields must be strings")
         if key == "attributes":
             by_key = {str(item.get("key")): item for item in result.get("attributes", []) if isinstance(item, dict)}
             for identity, data in values.items():
@@ -86,7 +108,23 @@ def materialize_rule(core: dict[str, Any], overlay: dict[str, Any]) -> dict[str,
                 if identity in result["items"] and isinstance(data, dict):
                     result["items"][identity].update({k: v for k, v in data.items() if k in {"name", "description"}})
         elif key == "skills":
-            result.setdefault("skill_names", {}).update(values)
+            raw_skills = result.get("skills")
+            if isinstance(raw_skills, dict):
+                result["canonical_skill_names"] = {
+                    str(identity): str(data.get("name") or identity)
+                    for identity, data in raw_skills.items()
+                    if isinstance(data, dict)
+                }
+                for identity, data in values.items():
+                    if identity in raw_skills and isinstance(raw_skills[identity], dict):
+                        raw_skills[identity].update({
+                            k: v for k, v in data.items()
+                            if k in {"aliases", "name", "description", "label", "hint"}
+                        })
+            result.setdefault("skill_names", {}).update({
+                identity: str(data.get("name") or identity)
+                for identity, data in values.items()
+            })
         elif key == "special_stats":
             by_key = {str(item.get("key")): item for item in result.get("special_stats", []) if isinstance(item, dict)}
             for identity, data in values.items():

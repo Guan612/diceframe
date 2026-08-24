@@ -118,7 +118,28 @@
       "冲锋枪",
       "砍刀",
       "棍棒",
-      "警棍"
+      "警棍",
+      "Revolver",
+      "Pistol",
+      "Rifle",
+      "Shotgun",
+      "Saber",
+      "Flashlight",
+      "Knife",
+      "SMG",
+      "Machete",
+      "Club",
+      "Baton",
+      "リボルバー",
+      "拳銃",
+      "ライフル",
+      "ショットガン",
+      "サーベル",
+      "懐中電灯",
+      "ナイフ",
+      "サブマシンガン",
+      "マチェーテ",
+      "警棒"
     ],
     "consumable": [
       "急救包",
@@ -132,7 +153,31 @@
       "干粮",
       "水壶",
       "镇定剂",
-      "吗啡"
+      "吗啡",
+      "First Aid Kit",
+      "Bandage",
+      "Bullets",
+      "Gasoline",
+      "Whiskey",
+      "Cigarettes",
+      "Matches",
+      "Rope",
+      "Rations",
+      "Canteen",
+      "Sedative",
+      "Morphine",
+      "応急処置キット",
+      "包帯",
+      "弾丸",
+      "ガソリン",
+      "ウイスキー",
+      "煙草",
+      "マッチ",
+      "ロープ",
+      "食料",
+      "水筒",
+      "鎮静剤",
+      "モルヒネ"
     ],
     "misc": [
       "钥匙",
@@ -146,7 +191,31 @@
       "放大镜",
       "指南针",
       "汽车",
-      "自行车"
+      "自行车",
+      "Key",
+      "Notebook",
+      "Photograph",
+      "Map",
+      "Book",
+      "Amulet",
+      "ID",
+      "Pocket Watch",
+      "Magnifying Glass",
+      "Compass",
+      "Car",
+      "Bicycle",
+      "鍵",
+      "ノート",
+      "写真",
+      "地図",
+      "本",
+      "お守り",
+      "身分証",
+      "懐中時計",
+      "虫眼鏡",
+      "コンパス",
+      "自動車",
+      "自転車"
     ]
   },
   "skill_base_values": {
@@ -244,65 +313,65 @@
     }
   ],
   "skill_pools": {
-    "私家侦探": [
-      "侦查",
-      "聆听",
-      "图书馆使用",
-      "心理学",
-      "话术",
-      "潜行",
-      "追踪",
-      "射击"
+    "private_detective": [
+      "spot_hidden",
+      "listen",
+      "library_use",
+      "psychology",
+      "fast_talk",
+      "stealth",
+      "track",
+      "firearms"
     ],
-    "学者": [
-      "图书馆使用",
-      "历史",
-      "外语",
-      "母语",
-      "神秘学",
-      "考古学",
-      "人类学",
-      "说服"
+    "scholar": [
+      "library_use",
+      "history",
+      "foreign_language",
+      "own_language",
+      "occult",
+      "archaeology",
+      "anthropology",
+      "persuade"
     ],
-    "医生": [
-      "急救",
-      "医学",
-      "心理学",
-      "精神分析",
-      "说服",
-      "图书馆使用",
-      "外语",
-      "博物学"
+    "doctor": [
+      "first_aid",
+      "medicine",
+      "psychology",
+      "psychoanalysis",
+      "persuade",
+      "library_use",
+      "foreign_language",
+      "natural_world"
     ],
-    "退伍军人": [
-      "射击",
-      "格斗",
-      "闪避",
-      "急救",
-      "侦查",
-      "聆听",
-      "驾驶",
-      "生存"
+    "veteran": [
+      "firearms",
+      "fighting",
+      "dodge",
+      "first_aid",
+      "spot_hidden",
+      "listen",
+      "drive",
+      "survival"
     ],
-    "记者": [
-      "侦查",
-      "聆听",
-      "话术",
-      "说服",
-      "心理学",
-      "图书馆使用",
-      "摄影",
-      "外语"
+    "journalist": [
+      "spot_hidden",
+      "listen",
+      "fast_talk",
+      "persuade",
+      "psychology",
+      "library_use",
+      "photography",
+      "foreign_language"
     ],
-    "古董商": [
-      "会计",
-      "估价",
-      "历史",
-      "图书馆使用",
-      "神秘学",
-      "说服",
-      "外语",
-      "侦查"
+    "antiquarian": [
+      "accounting",
+      "appraise",
+      "history",
+      "library_use",
+      "occult",
+      "persuade",
+      "foreign_language",
+      "spot_hidden"
     ]
   },
   "gm_prompt_appendix": "你是1920年代调查恐怖故事的GM。玩家面对的是无法理解的存在，战斗往往致命；鼓励玩家搜集线索、推理真相，而非正面冲突。CoC属性与技能使用 d100 百分制：普通成功≤阈值，困难成功≤阈值/2，极难成功≤阈值/5。失败可以推动剧情但必须带来代价。每次遭遇超自然事物时，要求玩家进行理智检定（只在 `---` 后使用 SAN_CHECK:玩家ID:损失骰 标签，如 SAN_CHECK:玩家ID:1d6；正文不得展示标签、玩家ID或骰子协议）。\n\n理智值变化规则：\n- 直接修改使用 SAN:玩家ID:变化量（如 SAN:玩家ID:-5）\n- 休息恢复：游戏内过夜休息可用 SAN:玩家ID:+1d6 恢复少量理智\n- 心理治疗：成功心理学或精神分析检定后可用 SAN:玩家ID:+1d3 恢复\n- 理智值归零可能永久疯狂，角色不一定可继续操作\n- 推动检定使用 PUSH:玩家ID:技能名 标签\n- 幸运消耗使用 LUCK:玩家ID:-消耗量 降低检定后果",
@@ -313,5 +382,85 @@
   },
   "rule_schema_version": 2,
   "default_locale": "zh-CN",
-  "locale_schema_version": 1
+  "locale_schema_version": 1,
+  "skills": {
+    "spot_hidden": {
+      "name": "侦查"
+    },
+    "listen": {
+      "name": "聆听"
+    },
+    "library_use": {
+      "name": "图书馆使用"
+    },
+    "psychology": {
+      "name": "心理学"
+    },
+    "fast_talk": {
+      "name": "话术"
+    },
+    "stealth": {
+      "name": "潜行"
+    },
+    "track": {
+      "name": "追踪"
+    },
+    "firearms": {
+      "name": "射击"
+    },
+    "history": {
+      "name": "历史"
+    },
+    "foreign_language": {
+      "name": "外语"
+    },
+    "own_language": {
+      "name": "母语"
+    },
+    "occult": {
+      "name": "神秘学"
+    },
+    "archaeology": {
+      "name": "考古学"
+    },
+    "anthropology": {
+      "name": "人类学"
+    },
+    "persuade": {
+      "name": "说服"
+    },
+    "first_aid": {
+      "name": "急救"
+    },
+    "medicine": {
+      "name": "医学"
+    },
+    "psychoanalysis": {
+      "name": "精神分析"
+    },
+    "natural_world": {
+      "name": "博物学"
+    },
+    "fighting": {
+      "name": "格斗"
+    },
+    "dodge": {
+      "name": "闪避"
+    },
+    "drive": {
+      "name": "驾驶"
+    },
+    "survival": {
+      "name": "生存"
+    },
+    "photography": {
+      "name": "摄影"
+    },
+    "accounting": {
+      "name": "会计"
+    },
+    "appraise": {
+      "name": "估价"
+    }
+  }
 }

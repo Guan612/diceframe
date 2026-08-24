@@ -58,6 +58,33 @@ CREATE TABLE lorebook_entries_new (
 """
 
 
+def _entry_select_expression(column: str) -> str:
+    """Normalize historical unconstrained values while rebuilding v3."""
+    quoted = f'"{column}"'
+    if column == "tier":
+        return f"CASE WHEN {quoted} IN ('core','background','archived') THEN {quoted} ELSE 'background' END"
+    if column == "match_mode":
+        return f"CASE WHEN {quoted} IN ('any','all','not_any','not_all') THEN {quoted} ELSE 'any' END"
+    if column in {"created_at", "updated_at"}:
+        return f"COALESCE({quoted}, datetime('now'))"
+    if column == "type":
+        return f"COALESCE({quoted}, 'other')"
+    if column == "keywords":
+        return f"COALESCE({quoted}, '[]')"
+    if column == "content":
+        return f"COALESCE({quoted}, '')"
+    return quoted
+
+
+def _world_select_expression(column: str) -> str:
+    quoted = f'"{column}"'
+    if column in {"created_at", "updated_at"}:
+        return f"COALESCE({quoted}, datetime('now'))"
+    if column == "name":
+        return f"COALESCE({quoted}, 'Unnamed World')"
+    return quoted
+
+
 def _v1(conn: sqlite3.Connection) -> None:
     for name, definition in (
         ("is_constant", "INTEGER DEFAULT 0"),
@@ -106,8 +133,9 @@ def _v3(conn: sqlite3.Connection) -> None:
         shared_worlds = [column for column in _WORLDS_COLUMNS if column in world_columns]
         if shared_worlds:
             columns = ", ".join(f'"{column}"' for column in shared_worlds)
+            selected = ", ".join(_world_select_expression(column) for column in shared_worlds)
             conn.execute(
-                f"INSERT INTO worlds_new ({columns}) SELECT {columns} FROM worlds"
+                f"INSERT INTO worlds_new ({columns}) SELECT {selected} FROM worlds"
             )
         conn.execute(
             _REBUILT_ENTRIES_SQL
@@ -117,8 +145,9 @@ def _v3(conn: sqlite3.Connection) -> None:
         shared_entries = [column for column in _LOREBOOK_COLUMNS if column in old_columns]
         if shared_entries:
             columns = ", ".join(f'"{column}"' for column in shared_entries)
+            selected = ", ".join(_entry_select_expression(column) for column in shared_entries)
             conn.execute(
-                f"INSERT INTO lorebook_entries_world_new ({columns}) SELECT {columns} FROM lorebook_entries"
+                f"INSERT INTO lorebook_entries_world_new ({columns}) SELECT {selected} FROM lorebook_entries"
             )
         conn.execute("DROP TABLE lorebook_entries")
         conn.execute("DROP TABLE worlds")
@@ -139,9 +168,10 @@ def _v3(conn: sqlite3.Connection) -> None:
     conn.execute(_REBUILT_ENTRIES_SQL)
     if shared:
         columns = ", ".join(f'"{column}"' for column in shared)
+        selected = ", ".join(_entry_select_expression(column) for column in shared)
         conn.execute(
             f"INSERT INTO lorebook_entries_new ({columns}) "
-            f"SELECT {columns} FROM lorebook_entries"
+            f"SELECT {selected} FROM lorebook_entries"
         )
     conn.execute("DROP TABLE lorebook_entries")
     conn.execute("ALTER TABLE lorebook_entries_new RENAME TO lorebook_entries")

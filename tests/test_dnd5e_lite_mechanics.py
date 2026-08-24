@@ -35,6 +35,7 @@ def test_dnd5e_declares_lite_mechanics_and_base_d20_keeps_legacy() -> None:
         "armor_reduces_damage": False,
         "degree_affects_damage": False,
         "critical_damage": "double_damage_dice",
+        "minimum_damage": 0,
     }
     assert dnd.armor_model == "category_lite"
     assert d20_dc_cap(dnd) == 30
@@ -44,6 +45,7 @@ def test_dnd5e_declares_lite_mechanics_and_base_d20_keeps_legacy() -> None:
         "armor_reduces_damage": True,
         "degree_affects_damage": True,
         "critical_damage": "double_total",
+        "minimum_damage": 1,
     }
     assert base.armor_model == "sum"
     assert d20_dc_cap(base) == 20
@@ -53,10 +55,16 @@ def test_dnd5e_mechanics_identical_across_languages() -> None:
     zh = json.loads((RULES / "dnd5e.json").read_text(encoding="utf-8"))
     en = json.loads((LEGACY_RULES / "dnd5e_en.json").read_text(encoding="utf-8"))
     ja = json.loads((LEGACY_RULES / "dnd5e_ja.json").read_text(encoding="utf-8"))
-    keys = ["check_mechanic", "damage_mechanic", "armor_model", "max_check_dc", "dc_table", "death_mechanic"]
+    keys = ["check_mechanic", "armor_model", "max_check_dc", "dc_table", "death_mechanic"]
     for other in (en, ja):
         for key in keys:
             assert zh[key] == other[key], key
+        # V1 full copies retain their historical 1-point floor; every other
+        # D&D mechanic remains compatible.
+        assert {
+            key: value for key, value in zh["damage_mechanic"].items()
+            if key != "minimum_damage"
+        } == other["damage_mechanic"]
 
 
 def test_legacy_fixed_damage_path_unchanged() -> None:
@@ -74,6 +82,14 @@ def test_dnd5e_armor_does_not_reduce_and_degree_does_not_add() -> None:
     normal = {"verdict": "成功", "is_critical": False, "dice_system": "d20", "total": 25}
     # 高总值不追加伤害；护甲不减伤
     assert calc_hp_based_damage(7, 1, 5, normal, mechanic=mech) == 8
+
+
+def test_dnd5e_allows_zero_damage_after_negative_modifier() -> None:
+    dnd = _rule("dnd5e.json")
+    normal = {"verdict": "成功", "is_critical": False, "dice_system": "d20", "total": 12}
+
+    assert calc_hp_based_damage(1, -3, 0, normal, mechanic=dnd.damage_mechanic) == 0
+    assert calc_hp_based_damage(1, -3, 0, normal) == 1
 
 
 def test_dnd5e_critical_doubles_damage_dice_only(monkeypatch) -> None:
@@ -196,6 +212,19 @@ def test_starter_items_carry_damage_dice_for_known_weapons() -> None:
     equip, _inv = build_starter_items(dnd, "战士")
     sword = next(item for item in equip if item["name"] == "长剑")
     assert sword["damage_dice"] == "1d8"
+
+
+@pytest.mark.parametrize("locale", ["zh-CN", "en", "ja"])
+def test_every_dnd_class_starter_item_has_a_canonical_identity(locale: str) -> None:
+    from src.rules.loader import RuleBundleLoader
+
+    rule = RuleSystem(RuleBundleLoader().load_rule(RULES, "dnd5e", locale))
+    for class_data in rule.classes:
+        equipment, inventory = build_starter_items(rule, str(class_data["id"]))
+        assert equipment or inventory, class_data["id"]
+        for item in equipment + inventory:
+            assert item.get("item_key"), (locale, class_data["id"], item)
+            assert item["name"] != item["item_key"]
 
 
 @pytest.mark.parametrize(

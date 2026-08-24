@@ -98,7 +98,31 @@
       "战术头盔",
       "神经鞭",
       "智能瞄具",
-      "消音器"
+      "消音器",
+      "Pistol",
+      "SMG",
+      "Assault Rifle",
+      "Shotgun",
+      "Sniper Rifle",
+      "Knife",
+      "Stun Bat",
+      "Body Armor",
+      "Tactical Helmet",
+      "Neural Whip",
+      "Smart Scope",
+      "Suppressor",
+      "拳銃",
+      "サブマシンガン",
+      "アサルトライフル",
+      "ショットガン",
+      "狙撃銃",
+      "ナイフ",
+      "スタンバトン",
+      "ボディアーマー",
+      "戦術ヘルメット",
+      "神経鞭",
+      "スマートスコープ",
+      "サプレッサー"
     ],
     "cyberware": [
       "义眼",
@@ -110,7 +134,27 @@
       "数据插槽",
       "皮下通讯器",
       "疼痛编辑器",
-      "扫描器植入体"
+      "扫描器植入体",
+      "Cybereye",
+      "Prosthetic",
+      "Subdermal Armor",
+      "Neural Interface",
+      "Reflex Booster",
+      "Muscle Fiber Weave",
+      "Datajack",
+      "Subdermal Comms",
+      "Pain Editor",
+      "Scanner Implant",
+      "義眼",
+      "義肢",
+      "皮下装甲",
+      "神経インターフェース",
+      "反射増強器",
+      "筋繊維強化",
+      "データジャック",
+      "皮下通信機",
+      "痛覚エディタ",
+      "スキャナーインプラント"
     ],
     "consumable": [
       "急救包",
@@ -122,7 +166,27 @@
       "一次性破解芯片",
       "维修套件",
       "烟雾弹",
-      "破片手雷"
+      "破片手雷",
+      "Medkit",
+      "Ammo",
+      "Battery",
+      "Stimulant",
+      "Painkiller",
+      "Neural Stabilizer",
+      "Disposable Crack Chip",
+      "Repair Kit",
+      "Smoke Grenade",
+      "Frag Grenade",
+      "メディキット",
+      "弾薬",
+      "電池",
+      "興奮剤",
+      "鎮痛剤",
+      "神経安定剤",
+      "使い捨てクラックチップ",
+      "修理キット",
+      "スモークグレネード",
+      "フラッググレネード"
     ],
     "misc": [
       "密钥",
@@ -134,7 +198,27 @@
       "无人机",
       "企业通行证",
       "黑钱账户",
-      "线人联系方式"
+      "线人联系方式",
+      "Key",
+      "Data Chip",
+      "Hacking Terminal",
+      "Drive",
+      "Forged ID",
+      "Comm",
+      "Drone",
+      "Corp Pass",
+      "Black Money Account",
+      "Informant Contact",
+      "鍵",
+      "データチップ",
+      "ハッキング端末",
+      "ドライブ",
+      "偽造ID",
+      "通信機",
+      "ドローン",
+      "社員証",
+      "ブラックマネー口座",
+      "情報屋の連絡先"
     ]
   },
   "classes": [
@@ -212,69 +296,69 @@
     }
   ],
   "skill_pools": {
-    "街头佣兵": [
-      "枪械",
-      "近战",
-      "战术掩护",
-      "威慑",
-      "体能",
-      "义体作战"
+    "street_merc": [
+      "firearms",
+      "melee",
+      "tactical_cover",
+      "intimidate",
+      "athletics",
+      "cyberware_combat"
     ],
-    "黑客": [
-      "入侵",
-      "电子对抗",
-      "数据挖掘",
-      "追踪规避",
-      "安保系统",
-      "伪装身份"
+    "hacker": [
+      "intrusion",
+      "electronic_warfare",
+      "data_mining",
+      "trace_evasion",
+      "security_systems",
+      "identity_spoofing"
     ],
-    "技师": [
-      "维修",
-      "义体维护",
-      "武器改造",
-      "无人机操控",
-      "爆破",
-      "驾驶"
+    "tech": [
+      "repair",
+      "cyberware_maintenance",
+      "weapon_modding",
+      "drone_control",
+      "demolitions",
+      "driving"
     ],
-    "掮客": [
-      "街头话术",
-      "情报收集",
-      "交易",
-      "潜入",
-      "帮派关系",
-      "黑市渠道"
+    "fixer": [
+      "streetwise",
+      "intel_gathering",
+      "deal_making",
+      "infiltration",
+      "gang_contacts",
+      "black_market"
     ],
-    "公司人": [
-      "企业礼仪",
-      "合同识破",
-      "资源调度",
-      "心理施压",
-      "安保协议",
-      "内幕消息"
+    "corp": [
+      "corporate_etiquette",
+      "contract_loophole",
+      "resource_allocation",
+      "psychological_pressure",
+      "security_protocol",
+      "insider_info"
     ],
-    "游民车手": [
-      "驾驶",
-      "载具维修",
-      "路线规划",
-      "走私",
-      "野外生存",
-      "追车"
+    "nomad_driver": [
+      "driving",
+      "vehicle_repair",
+      "route_planning",
+      "smuggling",
+      "wilderness_survival",
+      "vehicular_pursuit"
     ],
-    "媒体记者": [
-      "调查",
-      "采访",
-      "摄录",
-      "公众煽动",
-      "线人经营",
-      "揭露黑料"
+    "media": [
+      "investigation",
+      "interview",
+      "recording",
+      "public_agitation",
+      "source_cultivation",
+      "expose"
     ],
-    "街头医师": [
-      "急救",
-      "外科",
-      "义体安装",
-      "药剂调配",
-      "精神稳定",
-      "黑诊所关系"
+    "street_doc": [
+      "first_aid",
+      "surgery",
+      "cyberware_install",
+      "pharma_compounding",
+      "mental_stabilization",
+      "black_clinic_contacts"
     ]
   },
   "gm_prompt_appendix": "你是近未来赛博朋克世界的GM。大企业统治基础设施、媒体、医疗、安保和法律；帮派控制街区，黑市填补一切空隙；玩家在霓虹灯、酸雨、贫民窟和钢铁摩天楼之间求生。\n\n这是 d20 轻量规则，不是 Cyberpunk 2020/RED 官方规则。请把赛博朋克味道放在叙事结构与代价上：\n- 每个任务至少牵涉企业、帮派、警方、黑市、媒体或线人中的一方；不要让委托显得干净无害。\n- 信息比火力更重要。鼓励侦察、谈判、黑入、潜入、伪造身份、制造替罪羊和及时撤退。\n- 黑客不是万能钥匙。入侵要面对 ICE、防火墙、追踪、警报、蜜罐、物理隔离或反制黑客；失败会提高热度或暴露身份。\n- 义体强大但有代价。新义体可能增加义体占用、带来维护费、黑客后门、排异反应、人性损耗、企业保修锁或债务。\n- 战斗应该危险、短促、昂贵。重火力会引来安保、无人机、媒体或帮派报复；枪声之后一定有后果。\n- 热度代表被盯上的程度。公开杀戮、入侵失败、留下证据、得罪企业或背叛帮派都应提高热度；低调善后、嫁祸、清证据或交易可降低热度。\n- 人性代表角色还剩多少自我。残酷选择、背叛亲友、过度义体化、精神创伤和企业洗脑会降低人性；关系、休整、治疗和守住底线可恢复少量人性。\n\n资源变化建议：义体占用、人性、热度没有独立的通用资源协议标签；请在正文中自然描述，并在 `---` 后用 MEMORY 记录重大且需要延续的变化。不要频繁精算，但重大代价必须形成明确剧情后果。",
@@ -285,5 +369,148 @@
   },
   "rule_schema_version": 2,
   "default_locale": "zh-CN",
-  "locale_schema_version": 1
+  "locale_schema_version": 1,
+  "skills": {
+    "firearms": {
+      "name": "枪械"
+    },
+    "melee": {
+      "name": "近战"
+    },
+    "tactical_cover": {
+      "name": "战术掩护"
+    },
+    "intimidate": {
+      "name": "威慑"
+    },
+    "athletics": {
+      "name": "体能"
+    },
+    "cyberware_combat": {
+      "name": "义体作战"
+    },
+    "intrusion": {
+      "name": "入侵"
+    },
+    "electronic_warfare": {
+      "name": "电子对抗"
+    },
+    "data_mining": {
+      "name": "数据挖掘"
+    },
+    "trace_evasion": {
+      "name": "追踪规避"
+    },
+    "security_systems": {
+      "name": "安保系统"
+    },
+    "identity_spoofing": {
+      "name": "伪装身份"
+    },
+    "repair": {
+      "name": "维修"
+    },
+    "cyberware_maintenance": {
+      "name": "义体维护"
+    },
+    "weapon_modding": {
+      "name": "武器改造"
+    },
+    "drone_control": {
+      "name": "无人机操控"
+    },
+    "demolitions": {
+      "name": "爆破"
+    },
+    "driving": {
+      "name": "驾驶"
+    },
+    "streetwise": {
+      "name": "街头话术"
+    },
+    "intel_gathering": {
+      "name": "情报收集"
+    },
+    "deal_making": {
+      "name": "交易"
+    },
+    "infiltration": {
+      "name": "潜入"
+    },
+    "gang_contacts": {
+      "name": "帮派关系"
+    },
+    "black_market": {
+      "name": "黑市渠道"
+    },
+    "corporate_etiquette": {
+      "name": "企业礼仪"
+    },
+    "contract_loophole": {
+      "name": "合同识破"
+    },
+    "resource_allocation": {
+      "name": "资源调度"
+    },
+    "psychological_pressure": {
+      "name": "心理施压"
+    },
+    "security_protocol": {
+      "name": "安保协议"
+    },
+    "insider_info": {
+      "name": "内幕消息"
+    },
+    "vehicle_repair": {
+      "name": "载具维修"
+    },
+    "route_planning": {
+      "name": "路线规划"
+    },
+    "smuggling": {
+      "name": "走私"
+    },
+    "wilderness_survival": {
+      "name": "野外生存"
+    },
+    "vehicular_pursuit": {
+      "name": "追车"
+    },
+    "investigation": {
+      "name": "调查"
+    },
+    "interview": {
+      "name": "采访"
+    },
+    "recording": {
+      "name": "摄录"
+    },
+    "public_agitation": {
+      "name": "公众煽动"
+    },
+    "source_cultivation": {
+      "name": "线人经营"
+    },
+    "expose": {
+      "name": "揭露黑料"
+    },
+    "first_aid": {
+      "name": "急救"
+    },
+    "surgery": {
+      "name": "外科"
+    },
+    "cyberware_install": {
+      "name": "义体安装"
+    },
+    "pharma_compounding": {
+      "name": "药剂调配"
+    },
+    "mental_stabilization": {
+      "name": "精神稳定"
+    },
+    "black_clinic_contacts": {
+      "name": "黑诊所关系"
+    }
+  }
 }

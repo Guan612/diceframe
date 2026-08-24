@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.content.rule_locale import materialize_rule
-from src.content.worlds import load_world_template, materialize_world
+from src.content.worlds import load_world_template, localize_lorebook_entries, materialize_world
 from src.plugin_host import PluginHost
 
 
@@ -83,6 +83,7 @@ def test_rule_locale_nested_mechanics_are_rejected():
         "rule_id": "r", "attributes": [{"key": "str", "name": "Strength"}],
         "classes": [{"id": "fighter", "name": "Fighter"}],
         "items": {"sword": {"name": "Sword", "damage_dice": "1d8"}},
+        "skills": {"strike": {"name": "Strike"}},
     }
     base = {"locale_schema_version": 1, "locale": "en", "target": {"kind": "rule", "id": "r"}}
     with pytest.raises(ValueError):
@@ -95,6 +96,42 @@ def test_rule_locale_nested_mechanics_are_rejected():
         materialize_rule(core, {**base, "items": []})
     with pytest.raises(ValueError):
         materialize_rule(core, {**base, "skills": 42})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "rule": {"skill_pools": {"fighter": ["cheat"]}}})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "rule": {"item_categories": {"weapon": ["anything"]}}})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "rule": {"currency": {"name": "gold"}}})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "rule": {"difficulty_instructions": ["bad"]}})
+    with pytest.raises(ValueError):
+        materialize_rule(core, {**base, "skills": {"strike": {"aliases": ["hit", 1]}}})
+
+
+def test_persisted_lorebook_gets_a_per_game_localized_view():
+    persisted = [{
+        "id": "default_fantasy_tavern_keeper", "world_id": "default_fantasy",
+        "name": "酒馆老板", "keywords": ["酒馆"], "content": "中文内容",
+        "type": "npc", "tier": "core", "match_mode": "all",
+    }]
+    world = {
+        "world_id": "default_fantasy",
+        "starter_lorebook": [{
+            "id": "tavern_keeper", "name": "Innkeeper", "keywords": ["inn"],
+            "content": "English content", "type": "npc", "tier": "archived",
+        }],
+    }
+
+    localized = localize_lorebook_entries(persisted, world)
+
+    assert localized[0]["id"] == "default_fantasy_tavern_keeper"
+    assert localized[0]["name"] == "Innkeeper"
+    assert localized[0]["keywords"] == ["inn"]
+    assert localized[0]["content"] == "English content"
+    assert localized[0]["type"] == "npc"
+    assert localized[0]["tier"] == "core"
+    assert localized[0]["match_mode"] == "all"
+    assert persisted[0]["name"] == "酒馆老板"
 
 
 @pytest.mark.asyncio

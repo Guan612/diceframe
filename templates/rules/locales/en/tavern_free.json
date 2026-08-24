@@ -10,12 +10,6 @@
     "description": "A no-dice, no-attribute, pure-narrative roleplay mode-free conversation like a tavern session.",
     "attr_hint": "Tavern mode needs no attribute allocation; just write the character concept.",
     "skill_hint": "Write 1-5 things you're good at; descriptive only, no numeric checks.",
-    "skill_pools": {},
-    "item_categories": {
-      "equipment": [],
-      "consumable": [],
-      "misc": []
-    },
     "currency": "Gold"
   },
   "classes": {

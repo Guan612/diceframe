@@ -21,3 +21,15 @@ def test_failed_migration_rolls_back_version():
     with pytest.raises(MigrationError):
         run_migrations(conn, ((1, lambda db: db.execute("alter table missing add column x text")),))
     assert conn.execute("pragma user_version").fetchone()[0] == 0
+
+
+def test_future_database_version_is_rejected_before_running_steps():
+    conn = sqlite3.connect(":memory:")
+    conn.execute("pragma user_version = 999")
+    calls = []
+
+    with pytest.raises(MigrationError, match="newer than supported"):
+        run_migrations(conn, ((1, lambda _db: calls.append(1)),))
+
+    assert not calls
+    assert conn.execute("pragma user_version").fetchone()[0] == 999

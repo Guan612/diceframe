@@ -422,11 +422,12 @@ class WebAPI:
         include_map: bool = True,
         map_background: dict[str, Any] | None = None,
         map_icons: list[dict[str, Any]] | None = None,
+        language: str = "",
     ) -> dict[str, Any]:
         return plugins.export_content_pack(
             self, plugin_id, name, version, description, world_id, card_ids, rule_id, flat,
             include_portraits, include_scene_images, world_scene_image, rule_scene_image,
-            include_map, map_background, map_icons,
+            include_map, map_background, map_icons, language,
         )
 
     def package_content_map(
@@ -458,25 +459,26 @@ class WebAPI:
     async def check_updates(self, include_prerelease: bool | None = None) -> dict[str, Any]:
         return await system.check_updates(self, include_prerelease)
 
-    def _load_world_template(self, world_id: str) -> dict[str, Any] | None:
+    def _load_world_template(self, world_id: str, language: str = "") -> dict[str, Any] | None:
         """按 world_id 读取世界模板；不存在或非法时返回 None。"""
         if not self._worlds_dir:
             return None
-        data = load_world_template(self._worlds_dir, world_id)
+        data = load_world_template(self._worlds_dir, world_id, language)
         if data:
             return data
         if self._plugins:
-            return self._plugins.load_world_template(world_id)
+            return self._plugins.load_world_template(world_id, language)
         return None
 
     def _load_rule_for_game(self, inst) -> RuleSystem | None:
         """优先按存档自身规则加载；旧存档缺失时回退世界默认规则。"""
         if not inst.world_id or not self._worlds_dir:
             return None
-        world_data = self._load_world_template(inst.world_id)
+        language = getattr(inst, "language", "") or ""
+        world_data = self._load_world_template(inst.world_id, language)
         if not world_data:
             return None
-        language = getattr(inst, "language", "") or world_data.get("language", "")
+        language = language or world_data.get("active_locale") or world_data.get("language", "")
         rule_id = str(
             getattr(inst, "rule_id", "")
             or world_data.get("default_rule")

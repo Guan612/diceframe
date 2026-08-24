@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from src.content.contracts import ResourceRef
+from src.content.contracts import ResourceRef, canonical_id
 
 from .map_validation import (
     MAP_IMAGE_KINDS,
@@ -24,6 +24,9 @@ _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 _AUDIO_SUFFIXES = frozenset({".wav", ".mp3", ".ogg", ".opus", ".flac", ".m4a", ".aac"})
 _VOICE_ENGINES = frozenset({"openai-compatible", "gpt-sovits", "edge-tts"})
 _NAMESPACED_KINDS = MAP_KINDS | frozenset({"voice_profile", "voice_asset"})
+_V2_CANONICAL_KINDS = frozenset({
+    "character_template", "npc", "item", "spell", "class", "rule", "world_template",
+})
 
 
 @dataclass(frozen=True)
@@ -44,7 +47,11 @@ class PluginContribution:
     def ref(self) -> ResourceRef:
         # Asset paths are legacy local keys; retain the original key while
         # exposing a canonical identity for the V2 registry.
-        local_id = re.sub(r"[^a-zA-Z0-9_-]", "_", self.key).lower().strip("_") or "asset"
+        local_id = (
+            canonical_id(self.key)
+            if self.content_schema_version >= 2 and self.kind in _V2_CANONICAL_KINDS
+            else re.sub(r"[^a-zA-Z0-9_-]", "_", self.key).lower().strip("_") or "asset"
+        )
         return ResourceRef(f"plugin:{self.plugin_id}", self.kind, local_id)
 
     def to_dict(self) -> dict[str, Any]:
@@ -231,17 +238,30 @@ def _contribution_from_path(
         description = str(data.get("description") or "")
     if not key.strip():
         raise ValueError(f"插件资源 ID 不能为空：{path.relative_to(plugin_dir)}")
+    content_schema_version = int(manifest.get("content_schema_version", 1) or 1)
+    normalized_key = key.strip()
+    if content_schema_version >= 2 and kind in _V2_CANONICAL_KINDS:
+        try:
+            canonical = canonical_id(normalized_key)
+        except ValueError as exc:
+            raise ValueError(
+                f"Content V2 插件资源 ID 非法：{normalized_key!r}（{path.relative_to(plugin_dir)}）"
+            ) from exc
+        if canonical != normalized_key:
+            raise ValueError(
+                f"Content V2 插件资源 ID 必须是规范形式 {canonical!r}，不能使用 {normalized_key!r}"
+            )
     return PluginContribution(
         plugin_id=str(manifest.get("id") or ""),
         plugin_name=str(manifest.get("name") or manifest.get("id") or ""),
         plugin_type=str(manifest.get("plugin_type") or ""),
         kind=kind,
-        key=key.strip(),
+        key=normalized_key,
         path=path,
         relative_path=path.relative_to(plugin_dir).as_posix(),
         title=title.strip(),
         description=description.strip(),
-        content_schema_version=int(manifest.get("content_schema_version", 1) or 1),
+        content_schema_version=content_schema_version,
         default_locale=str(manifest.get("default_locale") or ""),
     )
 

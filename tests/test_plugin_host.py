@@ -331,6 +331,9 @@ def test_content_pack_manifest_declares_scene_image_assets():
 
     assert manifest["contributes"]["scene_images"] == ["assets/scenes/*"]
     assert "content.scene-image" in manifest["capabilities"]
+    assert manifest["content_schema_version"] == 2
+    assert manifest["locale_schema_version"] == 1
+    assert manifest["default_locale"] == "zh-CN"
 
 
 def test_sync_plugin_lorebook_and_cleanup(tmp_path):
@@ -544,11 +547,19 @@ async def test_export_content_pack_round_trips_through_install(tmp_path):
     assert "my-pack/README.md" in names
     assert "my-pack/content/worlds/w1.json" in names
     assert "my-pack/content/rules/myrule.json" in names
+    assert not any(name.endswith("myrule_en.json") for name in names)
+    manifest = json.loads(archive.read("my-pack/plugin.json"))
+    assert manifest["content_schema_version"] == 2
+    assert manifest["locale_schema_version"] == 1
+    exported_rule = json.loads(archive.read("my-pack/content/rules/myrule.json"))
+    assert exported_rule["rule_schema_version"] == 2
     char_files = [n for n in names if n.startswith("my-pack/content/characters/")]
     assert len(char_files) == 1
     # starter_lorebook 无损：2 条，类型/内容保留
     world_tmpl = json.loads(archive.read("my-pack/content/worlds/w1.json"))
     assert world_tmpl["world_id"] == "w1"
+    assert world_tmpl["world_schema_version"] == 2
+    assert world_tmpl["default_locale"] == "zh-CN"
     assert world_tmpl["default_rule"] == "myrule"
     assert len(world_tmpl["starter_lorebook"]) == 2
     assert {e["type"] for e in world_tmpl["starter_lorebook"]} == {"location", "npc"}
@@ -2807,6 +2818,34 @@ async def test_same_plugin_duplicate_v2_item_id_is_rejected(tmp_path):
     host = PluginHost(plugins, tmp_path / "data")
     details = host.discover()
     assert details[0]["status"] == "failed"
+
+
+@pytest.mark.parametrize("resource_id", ["Moon Blade", "Moon_Blade", "moon blade", "月刃"])
+def test_v2_plugin_rejects_noncanonical_resource_ids(tmp_path, resource_id):
+    plugins = tmp_path / "plugins"
+    write_plugin(
+        plugins,
+        "canonical-pack",
+        plugin_type="content-pack",
+        entrypoint=False,
+        manifest_extra={
+            "content_schema_version": 2,
+            "locale_schema_version": 1,
+            "default_locale": "en",
+            "contributes": {"items": ["content/items/*.json"]},
+        },
+    )
+    item_dir = plugins / "canonical-pack" / "content" / "items"
+    item_dir.mkdir(parents=True)
+    (item_dir / "item.json").write_text(
+        json.dumps({"id": resource_id, "name": "Moon Blade"}),
+        encoding="utf-8",
+    )
+
+    details = PluginHost(plugins, tmp_path / "data").discover()
+
+    assert details[0]["status"] == "failed"
+    assert "规范形式" in details[0]["error"] or "ID 非法" in details[0]["error"]
 
 
 @pytest.mark.asyncio

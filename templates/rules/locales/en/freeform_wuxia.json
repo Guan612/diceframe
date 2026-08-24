@@ -16,85 +16,6 @@
       "标准": "The jianghu is dangerous but fair; training and strategy needed",
       "硬核": "Powerful foes surround you, high risk of cultivation deviation, wounds heal slowly"
     },
-    "skill_pools": {
-      "Swordsman": [
-        "Sword Control",
-        "Sword Aura",
-        "Sword Shield",
-        "Parry Break"
-      ],
-      "Daoist": [
-        "Exorcism",
-        "Talismans",
-        "Alchemy",
-        "Qi Sight"
-      ],
-      "Assassin": [
-        "Hidden Weapons",
-        "Lightness Arts",
-        "Poisons",
-        "Disguise"
-      ],
-      "Wanderer": [
-        "Staff Arts",
-        "Tracking",
-        "Healing",
-        "Persuasion"
-      ]
-    },
-    "item_categories": {
-      "equipment": [
-        "Sword",
-        "Saber",
-        "Flying Sword",
-        "Whisk",
-        "Daoist Robe",
-        "Talisman",
-        "Jade Pendant",
-        "Staff",
-        "Iron Fan",
-        "Dart",
-        "Hidden Weapon",
-        "Soft Armor",
-        "Light Armor",
-        "Armor"
-      ],
-      "pills": [
-        "Pill",
-        "Medicine",
-        "Powder",
-        "Pellet",
-        "Elixir",
-        "Dew",
-        "Syrup",
-        "Paste",
-        "Dust",
-        "Decoction"
-      ],
-      "consumable": [
-        "Talisman",
-        "Spirit Stone",
-        "Scroll",
-        "Wound Medicine",
-        "Qi Pill",
-        "Antidote Powder",
-        "Clarity Pill"
-      ],
-      "misc": [
-        "Token",
-        "Jade Slip",
-        "Token",
-        "Map",
-        "Manual",
-        "Saber Manual",
-        "Sword Manual",
-        "Fragment",
-        "Divination",
-        "Compass",
-        "Gourd",
-        "Wine Flask"
-      ]
-    },
     "currency": "Spirit Stone"
   },
   "attributes": {
@@ -139,6 +60,56 @@
     "qi": {
       "name": "Qi",
       "description": "Using internal arts and lightness arts consumes Qi; meditation and rest restore it."
+    }
+  },
+  "skills": {
+    "sword_control": {
+      "name": "Sword Control"
+    },
+    "sword_aura": {
+      "name": "Sword Aura"
+    },
+    "sword_shield": {
+      "name": "Sword Shield"
+    },
+    "parry_break": {
+      "name": "Parry Break"
+    },
+    "exorcism": {
+      "name": "Exorcism"
+    },
+    "talismans": {
+      "name": "Talismans"
+    },
+    "alchemy": {
+      "name": "Alchemy"
+    },
+    "qi_sight": {
+      "name": "Qi Sight"
+    },
+    "hidden_weapons": {
+      "name": "Hidden Weapons"
+    },
+    "lightness_arts": {
+      "name": "Lightness Arts"
+    },
+    "poisons": {
+      "name": "Poisons"
+    },
+    "disguise": {
+      "name": "Disguise"
+    },
+    "staff_arts": {
+      "name": "Staff Arts"
+    },
+    "tracking": {
+      "name": "Tracking"
+    },
+    "healing": {
+      "name": "Healing"
+    },
+    "persuasion": {
+      "name": "Persuasion"
     }
   }
 }

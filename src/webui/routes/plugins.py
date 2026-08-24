@@ -124,13 +124,19 @@ async def api_plugin_tool_invoke(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 async def api_plugin_content(request: web.Request) -> web.Response:
-    result = _get_api(request).list_plugin_content(
-        request.query.get("kind", ""),
-        request.query.get("world_id", ""),
-        request.query.get("rule_id", ""),
-        request.query.get("language", ""),
-    )
-    return web.json_response(result)
+    try:
+        result = _get_api(request).list_plugin_content(
+            request.query.get("kind", ""),
+            request.query.get("world_id", ""),
+            request.query.get("rule_id", ""),
+            request.query.get("language", ""),
+        )
+        return web.json_response(result)
+    except ValueError as exc:
+        return web.json_response(
+            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
+            status=422,
+        )
 
 async def api_plugin_content_import(request: web.Request) -> web.Response:
     denied=_require_confirmed_request(request)
@@ -187,6 +193,7 @@ async def api_plugin_export(request: web.Request) -> web.Response:
               bool(body.get("include_map", True)),
               body.get("map_background"),
               body.get("map_icons") or [],
+              body.get("language", ""),
           )
     except ValueError as exc:
         return web.json_response({"ok":False,"error":str(exc)},status=400)

@@ -266,14 +266,13 @@ def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
 
 
 def rebuild_lorebook_index(api: "WebAPI", world_id: str) -> None:
-    """重建关键词匹配索引（CRUD 后自动调用）。"""
+    """Invalidate the shared index so the next game rebuilds its own locale view."""
     if not api._handler or not world_id:
         return
     try:
-        entries = api._lore.list_entries(world_id)
-        api._handler.matcher.build(entries)
+        api._handler.invalidate_matcher_for_world(world_id)
     except Exception:
-        logger.exception("重建世界书索引失败: world_id=%s", world_id)
+        logger.exception("世界书索引失效标记失败: world_id=%s", world_id)
 
 
 def list_world_templates(api: "WebAPI", language: str = "") -> dict[str, Any]:
@@ -301,8 +300,8 @@ def list_world_templates(api: "WebAPI", language: str = "") -> dict[str, Any]:
                     data = load_content_world(worlds_dir, str(world_id), language) or data
                 templates.append(_world_template_summary(data, f.stem))
                 seen.add(str(world_id))
-            except Exception:
-                logger.warning("世界模板读取失败: %s", f, exc_info=True)
+            except Exception as exc:
+                raise ValueError(f"世界模板读取失败：{f}: {exc}") from exc
     for item in _plugin_world_templates(api, language):
         if str(item.get("world_id") or "") not in seen:
             templates.append(item)
@@ -396,6 +395,6 @@ def _plugin_world_templates(api: "WebAPI", language: str = "") -> list[dict[str,
             summary["plugin_name"] = item.plugin_name
             summary["readonly"] = True
             result.append(summary)
-        except Exception:
-            logger.warning("插件世界模板读取失败: %s", item.path, exc_info=True)
+        except Exception as exc:
+            raise ValueError(f"插件世界模板读取失败：{item.path}: {exc}") from exc
     return result

@@ -69,3 +69,27 @@ def test_localized_field_falls_back_to_english_suffix_for_ja():
     assert localized_field(template, "name", "en") == "English Name"
     # 无 _en 时回退原字段。
     assert localized_field({"name": "中文名"}, "name", "ja") == "中文名"
+
+
+def test_prompt_composer_passes_game_language_to_world_and_rule_loaders():
+    root = Path(__file__).resolve().parents[1]
+    instance = GameInstance(
+        game_key=("web", "locale-runtime", "bot"),
+        world_id="default_fantasy",
+        rule_id="freeform_fantasy",
+        language="en",
+    )
+    calls: list[tuple[str, str]] = []
+
+    def load_world(world_id: str, language: str):
+        calls.append((world_id, language))
+        from src.content.worlds import load_world_template
+        return load_world_template(root / "templates" / "worlds", world_id, language)
+
+    context = PromptComposer(
+        root / "prompts", root / "templates" / "rules",
+    ).load_rule_context(instance, load_world)
+
+    assert calls == [("default_fantasy", "en")]
+    assert context.world_data["active_locale"] == "en"
+    assert context.rule.rule_name == "Classic Fantasy Freeform"

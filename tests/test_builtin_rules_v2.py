@@ -12,6 +12,7 @@ RULE_IDS = (
     "freeform_cyberpunk",
     "freeform_wuxia",
     "tavern_free",
+    "dnd5e",
 )
 LEGACY_RULES = "tests/fixtures/legacy_rules"
 
@@ -34,6 +35,18 @@ def test_builtin_rule_locale_base_fallback_and_display_name() -> None:
 
     assert template["active_locale"] == "en"
     assert template["rule_name"] == "Classic Fantasy Freeform"
+
+
+def test_localized_skill_pools_keep_canonical_mechanics_and_base_values() -> None:
+    loader = RuleBundleLoader()
+    zh = RuleSystem(loader.load_rule("templates/rules", "freeform_coc", "zh-CN"))
+    en = RuleSystem(loader.load_rule("templates/rules", "freeform_coc", "en"))
+
+    assert "private_detective" in zh.canonical_skill_pools
+    assert next(iter(en.skill_pools)) == "Private Detective"
+    assert "Spot Hidden" in en.skill_pools["Private Detective"]
+    assert en._skill_base_value("Spot Hidden") == 25
+    assert zh.mechanics_snapshot() == en.mechanics_snapshot()
 
 
 @pytest.mark.parametrize(
