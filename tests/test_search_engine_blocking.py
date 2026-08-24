@@ -41,7 +41,7 @@ async def test_security_headers_are_added_to_success_error_and_stream_responses(
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
         assert response.headers["Referrer-Policy"] == "no-referrer"
-        assert response.headers["Permissions-Policy"] == "camera=(), microphone=(), geolocation=()"
+        assert response.headers["Permissions-Policy"] == "camera=(), microphone=(self), geolocation=()"
 
 
 @pytest.mark.asyncio
