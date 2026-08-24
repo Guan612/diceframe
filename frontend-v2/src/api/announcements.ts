@@ -1,3 +1,5 @@
+import { api } from '@/api/client'
+
 export interface AnnouncementPayload {
   content: string
   hash: string
@@ -11,11 +13,9 @@ export async function fetchAnnouncement(lang: string): Promise<AnnouncementPaylo
   const controller = new AbortController()
   const timer = window.setTimeout(() => controller.abort(), 10000)
   try {
-    const resp = await fetch(`/api/announcements?lang=${encodeURIComponent(lang)}`, {
+    const payload = await api<unknown>(`/announcements?lang=${encodeURIComponent(lang)}`, {
       signal: controller.signal,
     })
-    if (!resp.ok) return { ...EMPTY }
-    const payload = await resp.json() as unknown
     if (!isAnnouncementPayload(payload)) return { ...EMPTY }
     return payload
   } catch {

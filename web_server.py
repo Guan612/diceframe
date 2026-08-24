@@ -44,6 +44,7 @@ from src.webui.access_password import (
 )
 from src.webui.abuse_guard import ABUSE_GUARD_KEY, AbuseGuard, abuse_guard_middleware
 from src.webui.api import WebAPI
+from src.webui.cors import cors_middleware, parse_cors_origins
 from src.webui.config_update import (
     API_RUNTIME_CONFIG_KEYS,
     MODEL_RUNTIME_CONFIG_KEYS,
@@ -147,6 +148,7 @@ API_FORMAT = (os.getenv("TRPG_LLM_API_FORMAT")
               or saved.get("api_format", "openai"))
 PORT = int(os.getenv("TRPG_WEB_PORT") or saved.get("web_port", 18000))
 HOST = os.getenv("TRPG_WEB_HOST") or saved.get("web_host", "0.0.0.0")
+WEB_CORS_ORIGINS = parse_cors_origins(os.getenv("TRPG_WEB_CORS_ORIGINS", ""))
 EMB_ENABLED = saved.get("embedding_enabled", False)
 EMB_BASE_URL = saved.get("embedding_base_url", "")
 EMB_MODEL = (os.getenv("TRPG_EMBEDDING_MODEL")
@@ -1263,6 +1265,7 @@ from src.webui.session import SessionManager, session_middleware
 from src.webui.sse_ticket import SseTicketStore
 from src.webui.errors import error_code_middleware
 
+app.middlewares.append(cors_middleware)
 app.middlewares.append(session_middleware)
 app.middlewares.append(abuse_guard_middleware)
 app.middlewares.append(auth_middleware)
@@ -1275,6 +1278,7 @@ app[LOGIN_AUDIT_KEY] = LoginAuditStore(DATA_DIR)
 app["connection_pool"] = ConnectionPool()
 app["sse_tickets"] = SseTicketStore()
 app["static_v2_dir"] = STATIC_V2_DIR
+app["cors_origins"] = WEB_CORS_ORIGINS
 app["runtime_control"] = {
         "boot_id": secrets_module.token_hex(8),
     "restart_requested": False,

@@ -1,7 +1,11 @@
 import { i18n } from '@/i18n'
 import { activePeerGameClient } from '@/peer/game/bridge'
-
-const tokenKey = 'trpg_access_token'
+import {
+  accessTokenStorageKey,
+  buildApiUrl,
+  currentBackendUrl,
+  isStandaloneFrontend,
+} from '@/api/connection'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
@@ -37,15 +41,15 @@ function shareQuery(): string {
   return out.toString()
 }
 
-function apiUrl(path: string): string {
+export function apiUrl(path: string): string {
   const query = shareQuery()
-  return `/api${path}${query ? (path.includes('?') ? '&' : '?') + query : ''}`
+  return `${buildApiUrl(path)}${query ? (path.includes('?') ? '&' : '?') + query : ''}`
 }
 
-function authHeaders(initHeaders?: HeadersInit, contentType = true): Headers {
+export function authHeaders(initHeaders?: HeadersInit, contentType = true): Headers {
   const headers = new Headers(initHeaders)
   if (contentType) headers.set('Content-Type', 'application/json')
-  const token = localStorage.getItem(tokenKey)
+  const token = localStorage.getItem(accessTokenStorageKey())
   if (token) headers.set('Authorization', `Bearer ${token}`)
   return headers
 }
@@ -98,7 +102,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   const isRawBody = init.body instanceof FormData || init.body instanceof Blob
   const headers = authHeaders(init.headers, !isRawBody)
   applyConfirmHeader(headers, init)
-  const response = await fetch(apiUrl(path), { ...init, headers })
+  const response = await fetch(apiUrl(path), { ...init, headers, credentials: 'include' })
   const data = await response.json().catch(() => ({}))
   await handleUnauthorized(response)
   if (response.status === 429) {
@@ -121,7 +125,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
   }
   const headers = authHeaders(init.headers, false)
   applyConfirmHeader(headers, init)
-  const response = await fetch(apiUrl(path), { ...init, headers })
+  const response = await fetch(apiUrl(path), { ...init, headers, credentials: 'include' })
   await handleUnauthorized(response)
   if (response.status === 429) {
     const data = await response.json().catch(() => ({}))
@@ -137,7 +141,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
 export async function validateAccessToken(value: string): Promise<void> {
   const headers = new Headers()
   if (value) headers.set('Authorization', `Bearer ${value}`)
-  const response = await fetch(apiUrl('/login'), { method: 'POST', headers })
+  const response = await fetch(apiUrl('/login'), { method: 'POST', headers, credentials: 'include' })
   if (response.status === 429) {
     const data = await response.json().catch(() => ({}))
     throw new ApiError(rateLimitMessage(data), 429)
@@ -145,20 +149,22 @@ export async function validateAccessToken(value: string): Promise<void> {
   if (!response.ok) throw new ApiError(i18n.global.t('incorrectPassword'), response.status)
 }
 
-export function setAccessToken(value: string) { localStorage.setItem(tokenKey, value) }
-export function hasAccessToken(): boolean { return !!localStorage.getItem(tokenKey) }
+export function setAccessToken(value: string) { localStorage.setItem(accessTokenStorageKey(), value) }
+export function hasAccessToken(): boolean { return !!localStorage.getItem(accessTokenStorageKey()) }
 
 export type OwnerAccessStatus = 'allowed' | 'login-required' | 'unavailable'
 
 export async function checkOwnerAccess(): Promise<OwnerAccessStatus> {
   try {
-    // Do not use apiUrl(): a player share query must never grant access to owner pages.
-    const response = await fetch('/api/me', { headers: authHeaders(undefined, false) })
+    const response = await fetch(buildApiUrl('/me'), {
+      headers: authHeaders(undefined, false),
+      credentials: 'include',
+    })
     if (response.status === 401) return 'login-required'
+    if (isStandaloneFrontend() && !currentBackendUrl()) return 'login-required'
     return response.ok ? 'allowed' : 'unavailable'
   } catch {
-    // A temporary network failure should not trap local users on the login page.
-    return 'unavailable'
+    return isStandaloneFrontend() && !currentBackendUrl() ? 'login-required' : 'unavailable'
   }
 }
 
@@ -167,7 +173,7 @@ export async function gameEventSource(gameKey: string, cursor = ''): Promise<Eve
   const q = new URLSearchParams(shareQuery())
   q.set('ticket', result.ticket)
   if (cursor) q.set('cursor', cursor)
-  return new EventSource(`/api/games/${encodeURIComponent(gameKey)}/sse?${q}`)
+  return new EventSource(`${buildApiUrl(`/games/${encodeURIComponent(gameKey)}/sse`)}?${q}`, { withCredentials: true })
 }
 
 export function errorMessage(error: unknown): string {
