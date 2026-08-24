@@ -1730,6 +1730,8 @@ export const en = {
   peerInviteTargetRequired: 'Choose an existing character or new-player seat for every link code.',
   peerNoInviteCapacity: 'This save has no other character to invite and no free character seat.',
   peerRoomCode: 'Room code',
+  peerInvitesReadyTitle: 'Player invite codes ({count})',
+  peerInvitesReadyHint: 'Each player uses the code matched to their character. Copy codes individually or copy them all at once.',
   peerInviteCode: 'One-time link code',
   peerInviteNumber: 'One-time link code for player {number}',
   peerInviteForTarget: 'One-time link code for {name}',

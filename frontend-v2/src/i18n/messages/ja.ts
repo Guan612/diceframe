@@ -1730,6 +1730,8 @@ export const ja = {
   peerInviteTargetRequired: '各リンクコードに既存キャラクターまたは新規プレイヤー枠を選択してください。',
   peerNoInviteCapacity: '再招待できる別のキャラクターも、新しいキャラクター枠もありません。',
   peerRoomCode: 'ルームコード',
+  peerInvitesReadyTitle: 'プレイヤー招待コード（{count}）',
+  peerInvitesReadyHint: '各プレイヤーは自分のキャラクターに対応するコードを使用します。個別またはまとめてコピーできます。',
   peerInviteCode: 'ワンタイム招待コード',
   peerInviteNumber: 'プレイヤー {number} のワンタイム招待コード',
   peerInviteForTarget: '{name} のワンタイム招待コード',

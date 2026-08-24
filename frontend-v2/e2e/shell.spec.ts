@@ -203,7 +203,8 @@ test('solo save asks before conversion and only then creates an online room', as
   await page.getByRole('button', { name: '转换并创建房间' }).click()
   await expect.poll(() => converted).toBe(true)
   await expect.poll(() => roomRequests).toBe(1)
-  await expect(page.locator('.peer-invite textarea')).toHaveValue(/^DFP2-/)
+  await expect(page.locator('.peer-status .peer-invite textarea')).toHaveValue(/^DFP2-/)
+  await expect(page.locator('.peer-setup .peer-invite')).toHaveCount(0)
 })
 
 test('a full save can issue a direct-connect code for an occupied character', async ({ page, request }) => {
@@ -293,6 +294,9 @@ test('a full save can issue a direct-connect code for an occupied character', as
   await page.getByRole('button', { name: '创建临时直连房间' }).click()
 
   await expect.poll(() => requestedPeerCount).toBe(2)
-  await expect(page.locator('.peer-invite-code-wrap > strong')).toHaveText('夜莺')
-  await expect(page.locator('.peer-invite textarea')).toHaveValue(/^DFP2-/)
+  await expect(page.locator('.peer-status .peer-invite-meta > strong')).toHaveText('夜莺')
+  await expect(page.locator('.peer-status .peer-invite textarea')).toHaveValue(/^DFP2-/)
+  await expect(page.locator('.peer-status-room')).toContainText('FULLROOM')
+  await expect(page.locator('.peer-status .peer-invite-peer-state')).toContainText('等待另一客户端')
+  await expect(page.locator('.peer-status .peer-member-states')).toHaveCount(0)
 })

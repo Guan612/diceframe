@@ -1730,6 +1730,8 @@ export const zhCN = {
   peerInviteTargetRequired: '请为每个链接码选择已有角色或新玩家席位。',
   peerNoInviteCapacity: '该存档没有可重新邀请的其他角色，也没有新的角色席位。',
   peerRoomCode: '房间码',
+  peerInvitesReadyTitle: '玩家邀请码（{count}）',
+  peerInvitesReadyHint: '每名玩家使用与自己角色对应的一码；可以逐条复制，也可以一次复制全部。',
   peerInviteCode: '一次性链接码',
   peerInviteNumber: '玩家 {number} 的一次性链接码',
   peerInviteForTarget: '{name} 的一次性链接码',
