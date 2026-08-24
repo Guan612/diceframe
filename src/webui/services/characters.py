@@ -14,6 +14,8 @@ from src.engine.character_utils import (
     make_default_character,
     normalize_character_sheet,
 )
+from src.content.worlds import localize_lorebook_entries
+from src.engine.language import localized_text
 from src.engine.health import record_health_event
 from src.commands.state_items import grant_classified_item
 
@@ -165,7 +167,14 @@ def _character_schema_for_rule(rule) -> dict[str, Any]:
         "progression_schema": rule.progression_schema,
         "ui_schema": rule.ui_schema,
     }
-    skill_pool = list(rule.template.get("skill_pool") or rule.template.get("skills") or [])
+    explicit_skill_pool = rule.template.get("skill_pool")
+    legacy_skills = rule.template.get("skills")
+    if isinstance(explicit_skill_pool, list):
+        skill_pool = list(explicit_skill_pool)
+    elif isinstance(legacy_skills, list):
+        skill_pool = list(legacy_skills)
+    else:
+        skill_pool = []
     if not skill_pool:
         # Standalone creation has no class selection context yet. Offer the
         # union of class pools so the same rule schema remains useful before a
@@ -222,7 +231,16 @@ def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
         name = npc.get("character_name") or npc.get("name") or nid
         npcs_by_name[name] = {"npc_id": nid, **npc, "name": name}
     if api._lore and inst.world_id:
-        for entry in api._lore.list_entries(inst.world_id, "npc"):
+        entries = api._lore.list_entries(inst.world_id, "npc")
+        world_data = api._load_world_template(
+            inst.world_id,
+            str(getattr(inst, "language", "") or ""),
+        )
+        lore_status = localized_text(
+            getattr(inst, "language", ""),
+            {"en": "Lorebook", "zh-CN": "世界书", "ja": "ワールドブック"},
+        )
+        for entry in localize_lorebook_entries(entries, world_data):
             name = entry.get("name", "")
             if not name or name in npcs_by_name:
                 continue
@@ -231,7 +249,7 @@ def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
                 "name": name,
                 "character_name": name,
                 "tier": entry.get("tier", ""),
-                "status": "世界书",
+                "status": lore_status,
                 "relation": entry.get("relation", ""),
                 "content": entry.get("content", ""),
                 "portrait": entry.get("portrait"),
@@ -428,6 +446,11 @@ async def update_npc_portrait(api: "WebAPI", game_key: str, npc_id: str, portrai
     if npc is None and api._lore and inst.world_id:
         entry = api._lore.get_entry(npc_key)
         if entry and entry.get("world_id") == inst.world_id and entry.get("type") == "npc":
+            world_data = api._load_world_template(
+                inst.world_id,
+                str(getattr(inst, "language", "") or ""),
+            )
+            entry = localize_lorebook_entries([entry], world_data)[0]
             name = str(entry.get("name") or npc_key)
             npc = {
                 "name": name,

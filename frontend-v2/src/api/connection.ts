@@ -2,6 +2,9 @@ const BACKEND_URL_KEY = 'trpg_backend_url'
 const ACCESS_TOKEN_KEY = 'trpg_access_token'
 const HTTP_SCHEME_RE = /^https?:\/\//i
 
+type ConnectionLocation = Pick<Location, 'pathname' | 'search' | 'hash'>
+type ConnectionNavigation = ConnectionLocation & Pick<Location, 'assign'>
+
 function hashQuery(): URLSearchParams {
   if (typeof location === 'undefined') return new URLSearchParams()
   return new URLSearchParams(location.hash.split('?')[1] || '')
@@ -45,6 +48,19 @@ export function setBackendUrl(value: string): string {
   if (!normalized) throw new Error('invalid-backend-url')
   localStorage.setItem(BACKEND_URL_KEY, normalized)
   return normalized
+}
+
+export function backendLoginUrl(target: ConnectionLocation = location): string {
+  const currentLocation = `${target.pathname}${target.search}${target.hash}`
+  return `${target.pathname}${target.search}#/login?redirect=${encodeURIComponent(currentLocation)}`
+}
+
+export function redirectToBackendLogin(
+  standalone = isStandaloneFrontend(),
+  target: ConnectionNavigation | undefined = typeof location === 'undefined' ? undefined : location,
+): void {
+  if (!standalone || !target || target.hash.startsWith('#/login')) return
+  target.assign(backendLoginUrl(target))
 }
 
 export function accessTokenStorageKey(): string {

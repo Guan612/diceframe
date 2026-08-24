@@ -4,6 +4,7 @@ import pytest
 
 from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
+from src.webui.services.characters import _character_schema_for_rule
 
 
 RULE_IDS = (
@@ -47,6 +48,28 @@ def test_localized_skill_pools_keep_canonical_mechanics_and_base_values() -> Non
     assert "Spot Hidden" in en.skill_pools["Private Detective"]
     assert en._skill_base_value("Spot Hidden") == 25
     assert zh.mechanics_snapshot() == en.mechanics_snapshot()
+
+
+@pytest.mark.parametrize(
+    ("locale", "expected", "canonical_id"),
+    (
+        ("zh-CN", "重击", "heavy_strike"),
+        ("en", "Heavy Strike", "heavy_strike"),
+        ("ja", "重撃", "heavy_strike"),
+    ),
+)
+def test_character_schema_skill_pool_uses_localized_display_names(
+    locale: str,
+    expected: str,
+    canonical_id: str,
+) -> None:
+    loader = RuleBundleLoader()
+    rule = RuleSystem(loader.load_rule("templates/rules", "freeform_fantasy", locale))
+
+    skill_pool = _character_schema_for_rule(rule)["skill_pool"]
+
+    assert expected in skill_pool
+    assert canonical_id not in skill_pool
 
 
 @pytest.mark.parametrize(

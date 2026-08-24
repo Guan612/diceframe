@@ -108,15 +108,26 @@
 .peer-direct-consent a { color: var(--df-accent-strong); }
 .peer-primary { width: 100%; justify-content: center; }
 
-/* 邀请码列表：单行紧凑横排（序号徽章 + 单行码 + 复制），
-   1~6 个码都不拉高页面；完整码靠复制按钮取，输入框横向滚动预览。 */
-.peer-invite { display: grid; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--df-border-soft); }
-.peer-invite-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.peer-invite-room { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; }
-.peer-invite-room code { color: var(--df-accent-strong); font-size: 16px; letter-spacing: .1em; }
+/* 开房后的邀请操作归入右侧房间控制台，与连接状态保持同一上下文。 */
+.peer-invite {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 24%, var(--df-border-soft));
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-accent-soft) 34%, var(--df-surface-2));
+}
+.peer-invite-header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.peer-invite-heading { display: grid; min-width: 0; gap: 4px; }
+.peer-invite-heading > strong { color: var(--df-text); }
+.peer-invite-heading > small { color: var(--df-text-muted); font-size: 12px; line-height: 1.5; }
 .peer-invite-item { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .peer-invite-code-wrap { display: grid; min-width: 0; gap: 4px; }
-.peer-invite-code-wrap > strong { overflow: hidden; color: var(--df-text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.peer-invite-meta { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 8px; }
+.peer-invite-meta > strong { overflow: hidden; color: var(--df-text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.peer-invite-peer-state { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 5px; font-size: 11px; white-space: nowrap; }
+.peer-invite-peer-state i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .peer-invite-index {
   display: grid;
   width: 26px;
@@ -140,7 +151,9 @@
 .peer-invite > small { color: var(--df-text-muted); line-height: 1.5; }
 .peer-copy-all { min-height: 30px; padding: 0 10px; white-space: nowrap; font-size: 12px; }
 
-.peer-status > header code { color: var(--df-accent-strong); font-size: 18px; letter-spacing: .12em; }
+.peer-status-room { display: grid; justify-items: end; gap: 4px; }
+.peer-status-room > span { color: var(--df-text-muted); font-size: 11px; }
+.peer-status-room code { color: var(--df-accent-strong); font-size: 18px; letter-spacing: .12em; }
 
 .peer-status > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .peer-status > header div { display: grid; gap: 8px; }
@@ -192,9 +205,13 @@
   .peer-layout { grid-template-columns: 1fr; grid-template-rows: auto; align-items: start; }
   .peer-card { padding: 16px; }
   .peer-status > header { align-items: start; flex-direction: column; }
+  .peer-status-room { justify-items: start; }
+  .peer-invite-header { align-items: stretch; flex-direction: column; }
+  .peer-copy-all { width: 100%; justify-content: center; }
   /* 窄屏下复制按钮收成图标+短文案，避免挤压码区 */
   .peer-invite-item { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px; }
   .peer-invite-index { width: 22px; height: 22px; }
+  .peer-invite-meta { align-items: start; flex-direction: column; gap: 3px; }
   .peer-room-batch li { grid-template-columns: 22px minmax(0, 1fr); }
   .peer-room-batch li > small { grid-column: 2; }
 }
