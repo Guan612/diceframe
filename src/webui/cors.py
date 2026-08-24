@@ -45,10 +45,8 @@ def is_allowed_cors_origin(request: web.Request) -> bool:
     return bool(origin and origin in request.app.get("cors_origins", frozenset()))
 
 
-def apply_cors_headers(request: web.Request, response: web.StreamResponse) -> None:
-    origin = str(request.headers.get("Origin") or "").strip().rstrip("/")
-    if not origin or origin not in request.app.get("cors_origins", frozenset()):
-        return
+def _apply_allowed_cors_headers(response: web.StreamResponse, origin: str) -> None:
+    """Apply headers for an origin already authorized for the current request."""
     response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["Access-Control-Allow-Headers"] = (
@@ -56,7 +54,17 @@ def apply_cors_headers(request: web.Request, response: web.StreamResponse) -> No
     )
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
     response.headers["Access-Control-Max-Age"] = "600"
-    response.headers.add("Vary", "Origin")
+    vary = [part.strip() for part in response.headers.get("Vary", "").split(",") if part.strip()]
+    if not any(part.lower() == "origin" for part in vary):
+        vary.append("Origin")
+    response.headers["Vary"] = ", ".join(vary)
+
+
+def apply_cors_headers(request: web.Request, response: web.StreamResponse) -> None:
+    origin = str(request.headers.get("Origin") or "").strip().rstrip("/")
+    if not origin or origin not in request.app.get("cors_origins", frozenset()):
+        return
+    _apply_allowed_cors_headers(response, origin)
 
 
 async def cors_response_prepare(request: web.Request, response: web.StreamResponse) -> None:
@@ -74,5 +82,8 @@ async def cors_middleware(request: web.Request, handler) -> web.StreamResponse:
     else:
         response = await handler(request)
     if allowed:
-        apply_cors_headers(request, response)
+        # Keep the request-start decision stable for its response. In particular,
+        # changing the allowlist must not make the successful settings response
+        # unreadable to the frontend that submitted it.
+        _apply_allowed_cors_headers(response, origin)
     return response

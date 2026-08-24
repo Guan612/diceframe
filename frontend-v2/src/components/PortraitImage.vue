@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { CharacterPortrait } from '@/api/types'
+import { apiBlob } from '@/api/client'
 import { uploadedAvatarUrl } from '@/api/avatars'
 import { generatedImageUrl } from '@/api/generatedImages'
 import { builtinPortraits, initials, resolveBuiltinPortrait } from '@/utils/portraits'
@@ -35,13 +36,9 @@ const hasValidBuiltin = computed(() => {
 const builtin = computed(() => resolveBuiltinPortrait(props.portrait, props.ruleId, props.seed || props.name))
 const isUpload = computed(() => props.portrait?.kind === 'upload' && !!props.portrait.asset_id && !uploadFailed.value)
 const isGenerated = computed(() => props.portrait?.kind === 'generated' && !!props.portrait.asset_id && !uploadFailed.value)
-const pluginUrl = computed(() => {
-  const portrait = props.portrait
-  if (portrait?.kind !== 'plugin' || !portrait.plugin_id || !portrait.path || uploadFailed.value) return ''
-  const path = portrait.path.split('/').map(encodeURIComponent).join('/')
-  return `/api/plugins/assets/${encodeURIComponent(portrait.plugin_id)}/${path}`
-})
-const hasImage = computed(() => isUpload.value || isGenerated.value || Boolean(pluginUrl.value))
+const isPlugin = computed(() => props.portrait?.kind === 'plugin'
+  && !!props.portrait.plugin_id && !!props.portrait.path && !uploadFailed.value)
+const hasImage = computed(() => isUpload.value || isGenerated.value || isPlugin.value)
 const boxStyle = computed(() => ({ width: `${props.size}px`, height: `${props.size}px` }))
 const builtinStyle = computed(() => ({
   width: '100%',
@@ -52,32 +49,47 @@ const builtinStyle = computed(() => ({
 }))
 
 watch(
-  () => ['upload', 'generated'].includes(String(props.portrait?.kind || '')) ? `${props.portrait?.kind}:${props.portrait?.asset_id || ''}` : '',
+  () => {
+    const portrait = props.portrait
+    if (portrait?.kind === 'plugin') return `plugin:${portrait.plugin_id || ''}:${portrait.path || ''}`
+    return ['upload', 'generated'].includes(String(portrait?.kind || ''))
+      ? `${portrait?.kind}:${portrait?.asset_id || ''}`
+      : ''
+  },
   async (key) => {
     const version = ++loadVersion
     clearUploadUrl()
     uploadFailed.value = false
-    const [kind, assetId] = key.split(':', 2)
-    if (!assetId) return
+    const portrait = props.portrait
+    if (!key || !portrait) return
     let nextUrl = ''
+    let nextOwnsUrl = false
     try {
-      nextUrl = kind === 'generated' ? await generatedImageUrl(assetId) : await uploadedAvatarUrl(assetId)
+      if (portrait.kind === 'plugin' && portrait.plugin_id && portrait.path) {
+        const path = portrait.path.split('/').filter(Boolean).map(encodeURIComponent).join('/')
+        const response = await apiBlob(`/plugins/assets/${encodeURIComponent(portrait.plugin_id)}/${path}`)
+        nextUrl = URL.createObjectURL(await response.blob())
+        nextOwnsUrl = true
+      } else if (portrait.kind === 'generated' && portrait.asset_id) {
+        nextUrl = await generatedImageUrl(portrait.asset_id)
+        nextOwnsUrl = true
+      } else if (portrait.kind === 'upload' && portrait.asset_id) {
+        nextUrl = await uploadedAvatarUrl(portrait.asset_id)
+      } else {
+        return
+      }
       if (version !== loadVersion) {
-        if (kind === 'generated' && nextUrl.startsWith('blob:')) URL.revokeObjectURL(nextUrl)
+        if (nextOwnsUrl && nextUrl.startsWith('blob:')) URL.revokeObjectURL(nextUrl)
         return
       }
       uploadUrl.value = nextUrl
-      ownsUploadUrl = kind === 'generated'
+      ownsUploadUrl = nextOwnsUrl
     } catch {
-      if (kind === 'generated' && nextUrl.startsWith('blob:')) URL.revokeObjectURL(nextUrl)
+      if (nextOwnsUrl && nextUrl.startsWith('blob:')) URL.revokeObjectURL(nextUrl)
       if (version === loadVersion) uploadFailed.value = true
     }
   },
   { immediate: true },
-)
-watch(
-  () => props.portrait?.kind === 'plugin' ? `${props.portrait.plugin_id || ''}:${props.portrait.path || ''}` : '',
-  () => { uploadFailed.value = false },
 )
 
 onBeforeUnmount(() => {
@@ -88,8 +100,7 @@ onBeforeUnmount(() => {
 
 <template>
   <span class="portrait-image" :class="{ 'portrait-empty': !hasValidBuiltin && !hasImage }" :style="boxStyle" :title="name" role="img" :aria-label="name || 'avatar'">
-    <img v-if="(isUpload || isGenerated) && uploadUrl" :src="uploadUrl" alt="" @error="uploadFailed = true">
-    <img v-else-if="pluginUrl" :src="pluginUrl" alt="" @error="uploadFailed = true">
+    <img v-if="hasImage && uploadUrl" :src="uploadUrl" alt="" @error="uploadFailed = true">
     <span v-else-if="hasValidBuiltin" class="portrait-builtin" :style="builtinStyle"><i>{{ initials(name) }}</i></span>
     <span v-else class="portrait-empty-text">{{ initials(name) }}</span>
   </span>

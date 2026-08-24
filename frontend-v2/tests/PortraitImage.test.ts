@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import PortraitImage from '../src/components/PortraitImage.vue'
 
 vi.mock('../src/api/avatars', () => ({
   uploadedAvatarUrl: vi.fn(async () => 'blob:mock-avatar'),
 }))
+
+afterEach(() => {
+  localStorage.clear()
+  location.hash = ''
+  vi.unstubAllGlobals()
+})
 
 describe('PortraitImage', () => {
   it('renders an empty placeholder instead of an auto-assigned portrait when none chosen', () => {
@@ -34,7 +40,25 @@ describe('PortraitImage', () => {
     expect(wrapper.find('.portrait-builtin').exists()).toBe(false)
   })
 
-  it('renders a declared content-pack portrait through the plugin asset endpoint', () => {
+  it('loads a declared content-pack portrait through the configured backend', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('portrait', {
+      status: 200,
+      headers: { 'Content-Type': 'image/webp' },
+    }))
+    const createObjectURL = vi.fn().mockReturnValue('blob:plugin-portrait')
+    const revokeObjectURL = vi.fn()
+    class MockURL extends URL {}
+    MockURL.createObjectURL = createObjectURL
+    MockURL.revokeObjectURL = revokeObjectURL
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('URL', MockURL)
+    vi.stubGlobal('__DF_STANDALONE__', true)
+    localStorage.setItem('trpg_backend_url', 'https://backend.example/diceframe')
+    localStorage.setItem(
+      `trpg_access_token:${encodeURIComponent('https://backend.example/diceframe')}`,
+      'owner-token',
+    )
+
     const wrapper = mount(PortraitImage, {
       props: {
         name: 'Mira',
@@ -47,9 +71,16 @@ describe('PortraitImage', () => {
       },
     })
 
-    expect(wrapper.find('img').attributes('src')).toBe(
-      '/api/plugins/assets/portrait%20pack/assets/portraits/mira%20one.webp',
+    await flushPromises()
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://backend.example/diceframe/api/plugins/assets/portrait%20pack/assets/portraits/mira%20one.webp',
     )
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer owner-token')
+    expect(wrapper.find('img').attributes('src')).toBe('blob:plugin-portrait')
     expect(wrapper.find('.portrait-empty').exists()).toBe(false)
+    wrapper.unmount()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:plugin-portrait')
   })
 })

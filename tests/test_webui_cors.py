@@ -80,3 +80,24 @@ async def test_cors_headers_are_present_when_stream_prepares_before_middleware_r
         response = await client.get("/events", headers={"Origin": "https://play.example.com"})
         assert response.status == 200
         assert response.headers["Access-Control-Allow-Origin"] == "https://play.example.com"
+
+
+@pytest.mark.asyncio
+async def test_cors_response_keeps_request_start_origin_when_handler_changes_allowlist():
+    async def change_allowlist(request: web.Request) -> web.Response:
+        request.app["cors_origins"] = frozenset({"https://next.example.com"})
+        return web.json_response({"ok": True})
+
+    app = web.Application(middlewares=[cors_middleware])
+    app["cors_origins"] = frozenset({"https://play.example.com"})
+    app.on_response_prepare.append(cors_response_prepare)
+    app.router.add_post("/api/config", change_allowlist)
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/config",
+            headers={"Origin": "https://play.example.com"},
+        )
+        assert response.status == 200
+        assert response.headers["Access-Control-Allow-Origin"] == "https://play.example.com"
+        assert response.headers["Vary"] == "Origin"
