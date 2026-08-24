@@ -463,6 +463,7 @@ export const zhCN = {
   settingsSubtitle: '模型接口、生成参数与系统配置',
   settingsSystemStatusAria: '系统状态总览',
   settingsSectionApi: '模型接口',
+  settingsSectionConnection: '后端连接',
   settingsSectionModels: '模型配置',
   settingsSectionMemory: '向量记忆',
   settingsSectionNetwork: '网络代理',

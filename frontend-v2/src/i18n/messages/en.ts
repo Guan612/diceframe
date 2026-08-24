@@ -463,6 +463,7 @@ export const en = {
   settingsSubtitle: 'Model endpoints, generation parameters, and system configuration',
   settingsSystemStatusAria: 'System status overview',
   settingsSectionApi: 'Model API',
+  settingsSectionConnection: 'Backend Connection',
   settingsSectionModels: 'Model Routing',
   settingsSectionMemory: 'Vector Memory',
   settingsSectionNetwork: 'Network Proxy',
