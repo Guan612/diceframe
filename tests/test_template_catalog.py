@@ -49,3 +49,23 @@ def test_sync_does_not_replace_user_template_that_collides_with_bundle_name(tmp_
     assert stats["preserved"] == 1
     saved = json.loads((runtime / "base.json").read_text(encoding="utf-8"))
     assert saved["rule_name"] == "用户"
+
+
+def test_sync_copies_and_refreshes_nested_typed_locales(tmp_path):
+    bundled = tmp_path / "bundle" / "rules"
+    runtime = tmp_path / "data" / "templates" / "rules"
+    locale = bundled / "locales" / "en" / "base.json"
+    _write(bundled / "base.json", {"rule_id": "base", "rule_schema_version": 2})
+    _write(locale, {"locale_schema_version": 1, "locale": "en", "fields": {"rule_name": "Base"}})
+
+    first = sync_template_catalog(bundled, runtime, "rules")
+
+    copied = runtime / "locales" / "en" / "base.json"
+    assert first["copied"] == 2
+    assert json.loads(copied.read_text(encoding="utf-8"))["fields"]["rule_name"] == "Base"
+
+    _write(locale, {"locale_schema_version": 1, "locale": "en", "fields": {"rule_name": "Updated"}})
+    second = sync_template_catalog(bundled, runtime, "rules")
+
+    assert second["updated"] == 1
+    assert json.loads(copied.read_text(encoding="utf-8"))["fields"]["rule_name"] == "Updated"

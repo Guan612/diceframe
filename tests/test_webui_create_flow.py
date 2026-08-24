@@ -1552,6 +1552,50 @@ def test_character_api_exposes_generic_rule_meta(web_api):
     assert result["rule_meta"]["identity_schema"][0]["legacy_field"] == "race"
 
 
+def test_character_api_localizes_persisted_lorebook_npcs_for_game_language(web_api):
+    api, lorebook, registry, _fake_llm, worlds_dir = web_api
+    world_id = "localized_character_world"
+    _write_world(worlds_dir, world_id, starter_lorebook=[{
+        "id": "npc_guide", "name": "向导", "type": "npc",
+        "keywords": ["向导"], "content": "中文介绍", "tier": "core",
+    }])
+    core_path = worlds_dir / f"{world_id}.json"
+    core = json.loads(core_path.read_text(encoding="utf-8"))
+    core.update({"world_schema_version": 2, "default_locale": "zh-CN"})
+    core_path.write_text(json.dumps(core, ensure_ascii=False), encoding="utf-8")
+    locale_path = worlds_dir / "locales" / "en" / f"{world_id}.json"
+    locale_path.parent.mkdir(parents=True, exist_ok=True)
+    locale_path.write_text(json.dumps({
+        "locale_schema_version": 1,
+        "locale": "en",
+        "target": {"kind": "world", "id": world_id},
+        "fields": {"world_name": "Localized Character World"},
+        "starter_lorebook": {
+            "npc_guide": {
+                "name": "Old Guide",
+                "keywords": ["guide"],
+                "content": "English introduction",
+            },
+        },
+    }), encoding="utf-8")
+    lorebook.create_world(world_id, "本地化角色世界")
+    lorebook.add_entry({
+        "id": "npc_guide", "world_id": world_id, "name": "向导",
+        "type": "npc", "keywords": ["向导"], "content": "中文介绍",
+        "tier": "core",
+    })
+    instance = registry.get_or_create(("web", "localized-npcs", "bot"))
+    instance.world_id = world_id
+    instance.language = "en"
+
+    result = api.list_characters("web|localized-npcs|bot")
+
+    assert result["npcs"][0]["npc_id"] == "npc_guide"
+    assert result["npcs"][0]["name"] == "Old Guide"
+    assert result["npcs"][0]["content"] == "English introduction"
+    assert result["npcs"][0]["status"] == "Lorebook"
+
+
 @pytest.mark.asyncio
 async def test_game_health_api_marks_event(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
