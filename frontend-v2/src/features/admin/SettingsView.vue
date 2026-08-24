@@ -1631,6 +1631,26 @@ function redownloadUpdatePackage() {
             <div class="actions-row">
               <NButton type="primary" @click="save(['public_base_url'])">{{ t('saveSharingAddress') }}</NButton>
             </div>
+            <h3>{{ t('corsOriginsTitle') }}</h3>
+            <p class="muted">{{ t('corsOriginsHelp') }}</p>
+            <NInput
+              :value="store.config.web_cors_origins ?? ''"
+              type="textarea"
+              :autosize="{ minRows: 2, maxRows: 5 }"
+              :disabled="store.config.web_cors_origins_source === 'env'"
+              :placeholder="t('corsOriginsPlaceholder')"
+              @update:value="setStr('web_cors_origins', $event)"
+            />
+            <p class="form-hint">
+              {{ store.config.web_cors_origins_source === 'env' ? t('corsOriginsEnvOverride') : t('corsOriginsConfigHint') }}
+            </p>
+            <div class="actions-row">
+              <NButton
+                type="primary"
+                :disabled="store.config.web_cors_origins_source === 'env'"
+                @click="save(['web_cors_origins'])"
+              >{{ t('saveCorsOrigins') }}</NButton>
+            </div>
           </div>
 
           <div v-show="section === 'botapi'" class="settings-pane">

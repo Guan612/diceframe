@@ -1153,6 +1153,8 @@ export interface AppConfig {
   proxy_source?: string
   proxy_supported?: boolean
   public_base_url?: string
+  web_cors_origins?: string
+  web_cors_origins_source?: 'env' | 'config' | string
   access_password?: SecretField
   bot_token?: SecretField
   bot_token_source?: 'env' | 'generated'
