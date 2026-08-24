@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.rules.rule_system import RuleSystem
+from src.rules.loader import RuleBundleLoader
 
 logger = logging.getLogger("trpg")
 
@@ -155,6 +156,23 @@ def armor_ac_components(character_sheet: dict) -> dict[str, Any]:
     for item in equipment:
         if not isinstance(item, dict):
             continue
+        # Content V2 equipment carries its AC mechanics with the item.  Never
+        # re-identify such an item through the legacy name/key table: locale
+        # names are display data and the canonical fields are authoritative.
+        item_type = str(item.get("type") or "").strip()
+        if item_type == "shield" and "ac_bonus" in item:
+            shield = max(shield, int(item.get("ac_bonus") or 0))
+            continue
+        if item_type == "armor" and "ac_base" in item:
+            item_base = int(item.get("ac_base") or 0)
+            if item_base > base:
+                base = item_base
+                dex_cap = item.get("dex_cap")
+                category = str(item.get("armor_category") or "")
+            continue
+
+        # Old saves and V1 content only contain names/item keys, so retain the
+        # historical lookup exclusively as a compatibility boundary.
         key = str(item.get("item_key") or item.get("name") or "").strip().casefold()
         spec = ARMOR_LITE.get(key)
         if not spec:
@@ -579,25 +597,65 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
     inv: list[dict] = []
     category_lite = getattr(rule, "armor_model", "sum") == "category_lite"
     item_defs = getattr(rule, "template", {}).get("items", {}) if hasattr(rule, "template") else {}
+    if not isinstance(item_defs, dict):
+        item_defs = {}
     equipped_weapons = 0
 
-    def make_item(iname: str, slot: str = "") -> dict | None:
+    def resolve_item(iname: str) -> tuple[str, dict | None]:
         display_key = str(iname).strip().casefold()
         item_key = canonical_item_key(iname)
         if display_key in item_defs:
             item_key = display_key
         item_def = item_defs.get(item_key) if item_key else None
+        if not isinstance(item_def, dict):
+            item_def = None
+        if item_def is None:
+            # V2 rules normally use canonical IDs; this keeps a localized
+            # legacy starter name usable when its item definition has a name.
+            for candidate_key, candidate in item_defs.items():
+                if (
+                    isinstance(candidate, dict)
+                    and str(candidate.get("name") or "").strip().casefold() == display_key
+                ):
+                    item_key = str(candidate_key)
+                    item_def = candidate
+                    break
+        return item_key, item_def
+
+    def display_name_for(iname: str) -> str:
+        _, item_def = resolve_item(iname)
+        return str((item_def or {}).get("name") or iname)
+
+    def declared_item_type(iname: str) -> str:
+        _, item_def = resolve_item(iname)
+        item_type = str((item_def or {}).get("type") or "").strip().casefold()
+        return item_type if item_type in {"weapon", "armor", "shield", "focus"} else ""
+
+    def make_item(iname: str, slot: str = "") -> dict | None:
+        display_key = str(iname).strip().casefold()
+        item_key, item_def = resolve_item(iname)
         display_name = str((item_def or {}).get("name") or iname)
         if isinstance(item_def, dict) and item_def.get("type"):
             item_type = str(item_def["type"])
             if item_type == "focus":
                 return {"name": display_name, "type": "focus", "slot": slot, "quality": "common", "item_key": item_key}
             if item_type in {"shield", "armor"}:
-                return {
+                canonical_armor = {
                     "name": display_name, "type": item_type, "slot": slot or ("off_hand" if item_type == "shield" else "armor"),
                     "quality": "common", **({"item_key": item_key} if item_key else {}),
-                    **({"armor": int(item_def.get("ac_base", 0))} if item_type == "armor" else {}),
                 }
+                if item_type == "shield":
+                    canonical_armor["ac_bonus"] = int(item_def.get("ac_bonus", 0) or 0)
+                else:
+                    canonical_armor.update({
+                        "armor_category": str(item_def.get("armor_category") or ""),
+                        "ac_base": int(item_def.get("ac_base", 0) or 0),
+                    })
+                    if "armor" in item_def:
+                        canonical_armor["armor"] = int(item_def.get("armor", 0) or 0)
+                    if "dex_cap" in item_def:
+                        canonical_armor["dex_cap"] = item_def["dex_cap"]
+                return canonical_armor
             if item_type == "weapon":
                 return {
                     "name": display_name, "type": "weapon", "damage": int(item_def.get("damage", 0) or 0),
@@ -651,12 +709,12 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
                 equip.append(item)
                 equipped_weapons += int(item.get("type") == "weapon")
             else:
-                inv.append({"name": iname, "qty": 1, "effect": ""})
+                inv.append({"name": display_name_for(str(iname)), "qty": 1, "effect": ""})
         else:
             iname = str(st_item)
             cat = find_item_category(rule.item_categories, iname)
             item = make_item(iname)
-            known_rule_item = item is not None and category_lite
+            known_rule_item = item is not None and (category_lite or bool(declared_item_type(iname)))
             legacy_weapon = (
                 item is not None
                 and item.get("type") == "weapon"
@@ -668,7 +726,7 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
                 equip.append(item)
                 equipped_weapons += int(item.get("type") == "weapon")
             else:
-                inv.append({"name": iname, "qty": 1, "effect": ""})
+                inv.append({"name": display_name_for(iname), "qty": 1, "effect": ""})
     return equip, inv
 
 
@@ -702,12 +760,16 @@ def make_default_character(
         else Path(__file__).parent.parent.parent / "templates" / "rules"
     )
     rule_path = RuleSystem.path_for(rules_dir, rule_id, language)
+    core_path = rules_dir / f"{rule_id}.json"
     rule: RuleSystem | None = None
 
     skill_base_values: dict[str, int] = {}
     try:
-        if rule_path.exists():
+        if core_path.exists():
+            rule = RuleSystem(RuleBundleLoader().load_rule(rules_dir, rule_id, language))
+        elif rule_path.exists():
             rule = RuleSystem.load(rule_path)
+        if rule is not None:
             keys = rule.attribute_keys
             pts = rule.attribute_points
             lo = min(a.get("min", 3) for a in rule.attributes) if rule.attributes else 3
@@ -772,7 +834,11 @@ def calc_hp_from_rule(attrs: dict[str, int], rule_id: str = "freeform_fantasy",
     if rules_dir is None:
         rules_dir = Path(__file__).parent.parent.parent / "templates" / "rules"
     try:
+        core_path = rules_dir / f"{rule_id}.json"
         rule_path = RuleSystem.path_for(rules_dir, rule_id, language)
+        if core_path.exists():
+            rule = RuleSystem(RuleBundleLoader().load_rule(rules_dir, rule_id, language))
+            return rule.calculate_hp(attrs, class_name)
         if rule_path.exists():
             rule = RuleSystem.load(rule_path)
             return rule.calculate_hp(attrs, class_name)
@@ -788,7 +854,15 @@ def get_rule_attr_config(rule_id: str = "freeform_fantasy",
     if rules_dir is None:
         rules_dir = Path(__file__).parent.parent.parent / "templates" / "rules"
     try:
+        core_path = rules_dir / f"{rule_id}.json"
         rule_path = RuleSystem.path_for(rules_dir, rule_id, language)
+        if core_path.exists():
+            rule = RuleSystem(RuleBundleLoader().load_rule(rules_dir, rule_id, language))
+            keys = rule.attribute_keys
+            pts = rule.attribute_points
+            mins = [a.get("min", 3) for a in rule.attributes] if rule.attributes else [3]
+            maxs = [a.get("max", 18) for a in rule.attributes] if rule.attributes else [18]
+            return keys, pts, min(mins), min(maxs, 16)
         if rule_path.exists():
             rule = RuleSystem.load(rule_path)
             keys = rule.attribute_keys

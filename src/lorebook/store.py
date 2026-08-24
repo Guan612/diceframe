@@ -52,7 +52,6 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
 """
 
 _CURRENT_INDEXES = (
@@ -61,6 +60,8 @@ _CURRENT_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_lorebook_tier ON lorebook_entries(world_id, tier)",
     "CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)",
 )
+
+
 class LorebookStore:
     """世界书 SQLite 存储管理器。
 

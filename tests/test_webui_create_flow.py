@@ -837,6 +837,50 @@ def test_save_custom_rule_copies_existing_rule_template(web_api):
     assert created["custom"] is True
 
 
+@pytest.mark.parametrize("language", ["zh-CN", "en", "ja"])
+def test_builtin_rule_list_materializes_requested_locale(web_api, language):
+    api, *_ = web_api
+    core = json.loads((api._rules_dir / "freeform_fantasy.json").read_text(encoding="utf-8"))
+    core["rule_schema_version"] = 2
+    (api._rules_dir / "freeform_fantasy.json").write_text(json.dumps(core), encoding="utf-8")
+    locale_dir = api._rules_dir / "locales" / language
+    locale_dir.mkdir(parents=True, exist_ok=True)
+    (locale_dir / "freeform_fantasy.json").write_text(json.dumps({
+        "locale_schema_version": 1, "locale": language,
+        "target": {"kind": "rule", "id": "freeform_fantasy"},
+        "fields": {"rule_name": f"Fantasy {language}", "description": f"Description {language}"},
+    }), encoding="utf-8")
+    payload = api.list_rules(language)
+    rule = next(item for item in payload["rules"] if item["rule_id"] == "freeform_fantasy")
+    assert rule["rule_id"] == "freeform_fantasy"
+    assert rule["rule_name"]
+    assert rule["description"]
+    assert rule["active_locale"] in {language, "zh-CN"}
+
+
+@pytest.mark.parametrize("language", ["zh-CN", "en", "ja"])
+def test_builtin_world_list_keeps_identity_when_localized(web_api, language):
+    api, *_ = web_api
+    world = api._worlds_dir / "default_fantasy.json"
+    world.write_text(json.dumps({
+        "world_schema_version": 2, "world_id": "default_fantasy",
+        "world_name": "幻想", "description": "中文", "default_rule": "dnd5e",
+    }), encoding="utf-8")
+    locale_dir = api._worlds_dir / "locales" / language
+    locale_dir.mkdir(parents=True, exist_ok=True)
+    (locale_dir / "default_fantasy.json").write_text(json.dumps({
+        "locale_schema_version": 1, "locale": language,
+        "target": {"kind": "world", "id": "default_fantasy"},
+        "fields": {"world_name": f"Fantasy {language}", "description": f"Description {language}"},
+    }), encoding="utf-8")
+    payload = api.list_world_templates(language)
+    world = next(item for item in payload["templates"] if item["world_id"] == "default_fantasy")
+    assert world["world_id"] == "default_fantasy"
+    assert world["default_rule"] == "dnd5e"
+    assert world["world_name"]
+    assert world["description"]
+
+
 def test_save_custom_rule_rejects_unsafe_rule_id(web_api):
     api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
 

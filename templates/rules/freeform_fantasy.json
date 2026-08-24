@@ -131,7 +131,8 @@
         "铁剑",
         "皮甲"
       ],
-      "id": "warrior"
+      "id": "warrior",
+      "starter_equipment_ids": ["iron_sword", "leather_armor"]
     },
     {
       "name": "法师",
@@ -140,7 +141,8 @@
         "法杖",
         "法术书"
       ],
-      "id": "mage"
+      "id": "mage",
+      "starter_equipment_ids": ["staff", "spellbook"]
     },
     {
       "name": "游侠",
@@ -149,7 +151,8 @@
         "长弓",
         "箭矢×20"
       ],
-      "id": "ranger"
+      "id": "ranger",
+      "starter_equipment_ids": ["longbow", "arrows"]
     },
     {
       "name": "盗贼",
@@ -158,9 +161,20 @@
         "匕首",
         "撬锁工具"
       ],
-      "id": "rogue"
+      "id": "rogue",
+      "starter_equipment_ids": ["dagger", "lockpicks"]
     }
   ],
+  "items": {
+    "iron_sword": {"name": "铁剑", "type": "weapon", "damage": 6},
+    "leather_armor": {"name": "皮甲", "type": "armor", "armor": 2},
+    "staff": {"name": "法杖", "type": "weapon", "damage": 3},
+    "spellbook": {"name": "法术书"},
+    "longbow": {"name": "长弓", "type": "weapon", "damage": 6},
+    "arrows": {"name": "箭矢×20"},
+    "dagger": {"name": "匕首", "type": "weapon", "damage": 4},
+    "lockpicks": {"name": "撬锁工具"}
+  },
   "skill_pools": {
     "战士": [
       "重击",

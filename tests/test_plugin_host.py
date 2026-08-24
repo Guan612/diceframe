@@ -2693,3 +2693,165 @@ def test_version_below_semantics():
     assert version_below("2.0.0", "1.9.12") is True
 
 
+@pytest.mark.asyncio
+async def test_v2_plugin_rule_catalog_metadata_and_locale_fallback(tmp_path):
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "starter-content-v2", plugin_type="content-pack", entrypoint=False,
+                 manifest_extra={"content_schema_version": 2, "locale_schema_version": 1,
+                                 "default_locale": "en", "contributes": {
+                                     "rules": ["content/rules/*.json"],
+                                     "items": ["content/items/*.json"],
+                                 }})
+    root = plugins / "starter-content-v2"
+    (root / "content" / "rules").mkdir(parents=True)
+    (root / "content" / "items").mkdir(parents=True)
+    (root / "locales" / "en" / "rules").mkdir(parents=True)
+    (root / "locales" / "en" / "items").mkdir(parents=True)
+    (root / "content" / "rules" / "moonlight.json").write_text(json.dumps({
+        "rule_schema_version": 2, "rule_id": "moonlight", "extends": "base_d20", "rule_name": "Core Moonlight",
+        "description": "Core description", "dice_system": "d20", "attributes": [],
+    }), encoding="utf-8")
+    (root / "content" / "items" / "shared.json").write_text(json.dumps({
+        "id": "shared", "name": "Core Shared", "damage_dice": "1d8",
+    }), encoding="utf-8")
+    (root / "locales" / "en" / "rules" / "moonlight.json").write_text(json.dumps({
+        "locale_schema_version": 1, "locale": "en", "target": {"kind": "rule", "id": "moonlight"},
+        "fields": {"rule_name": "Moonlight Rule", "description": "Localized description"},
+    }), encoding="utf-8")
+    item_locale_path = root / "locales" / "en" / "items" / "shared.json"
+    item_locale_path.write_text(json.dumps({
+        "locale_schema_version": 1, "locale": "en", "target": {"kind": "item", "id": "shared"},
+        "fields": {"name": "Localized Shared"},
+    }), encoding="utf-8")
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    await host.update_config("starter-content-v2", {"enabled": True})
+    resource = host.get_content_resource("rule", "moonlight", plugin_id="starter-content-v2", language="en")
+    assert resource is not None
+    assert resource["id"] == "moonlight"
+    assert resource["plugin_id"] == "starter-content-v2"
+    assert resource["source"] == "plugin" and resource["readonly"] is True
+    assert resource["ref"] == "plugin:starter-content-v2:rule:moonlight"
+    assert resource["rule_name"] == "Moonlight Rule"
+    assert resource["intents"]
+    item = host.get_content_resource("item", "shared", plugin_id="starter-content-v2", language="en-US")
+    assert item is not None and item["name"] == "Localized Shared"
+    assert item["damage_dice"] == "1d8"
+    invalid_overlays = [
+        {"locale_schema_version": 1, "locale": "en", "target": {"kind": "item", "id": "shared"}, "fields": {"damage_dice": "9d99"}},
+        {"locale_schema_version": 1, "locale": "en", "target": {"kind": "item", "id": "shared"}, "fields": {"name": "x"}, "unexpected": True},
+        {"locale_schema_version": 1, "locale": "en", "target": {"kind": "item", "id": "wrong"}, "fields": {"name": "x"}},
+        {"locale_schema_version": 999, "locale": "en", "target": {"kind": "item", "id": "shared"}, "fields": {"name": "x"}},
+        {"locale_schema_version": 1, "locale": "en", "target": {"kind": "item", "id": "shared"}, "fields": "bad"},
+    ]
+    for invalid in invalid_overlays:
+        item_locale_path.write_text(json.dumps(invalid), encoding="utf-8")
+        with pytest.raises(ValueError):
+            host.get_content_resource("item", "shared", plugin_id="starter-content-v2", language="en")
+    rule_locale_path = root / "locales" / "en" / "rules" / "moonlight.json"
+    for invalid in (
+        {"locale_schema_version": 1, "locale": "en", "target": {"kind": "rule", "id": "moonlight"}, "fields": "bad"},
+        {"locale_schema_version": 1, "locale": "en", "target": {"kind": "rule", "id": "moonlight"}, "items": []},
+    ):
+        rule_locale_path.write_text(json.dumps(invalid), encoding="utf-8")
+        with pytest.raises(ValueError):
+            host.get_content_resource("rule", "moonlight", plugin_id="starter-content-v2", language="en")
+
+
+@pytest.mark.asyncio
+async def test_v1_plugin_rule_non_content_layout_ignores_locales(tmp_path):
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "legacy-rule-pack", plugin_type="content-pack", entrypoint=False,
+                 manifest_extra={"contributes": {"rules": ["rules/*.json"]}})
+    root = plugins / "legacy-rule-pack"
+    (root / "rules").mkdir(parents=True)
+    (root / "locales" / "en" / "rules").mkdir(parents=True)
+    rule_path = root / "rules" / "legacy.json"
+    rule_path.write_text(json.dumps({
+        "rule_id": "legacy", "rule_name": "Legacy Rule", "dice_system": "d20", "attributes": [],
+    }), encoding="utf-8")
+    (root / "locales" / "en" / "rules" / "legacy.json").write_text(json.dumps({"fields": "bad"}), encoding="utf-8")
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    await host.update_config("legacy-rule-pack", {"enabled": True})
+    assert host.load_rule_template("legacy") ["rule_name"] == "Legacy Rule"
+
+
+@pytest.mark.asyncio
+async def test_v2_plugin_namespace_and_plain_id_collisions_are_explicit(tmp_path):
+    plugins = tmp_path / "plugins"
+    for plugin_id in ("pack-a", "pack-b"):
+        write_plugin(plugins, plugin_id, plugin_type="content-pack", entrypoint=False,
+                     manifest_extra={"content_schema_version": 2, "contributes": {"items": ["content/items/*.json"]}})
+        item_dir = plugins / plugin_id / "content" / "items"
+        item_dir.mkdir(parents=True)
+        (item_dir / "shared.json").write_text(json.dumps({"id": "shared", "name": plugin_id}), encoding="utf-8")
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    await host.update_config("pack-a", {"enabled": True})
+    await host.update_config("pack-b", {"enabled": True})
+    assert host.get_content_resource("item", "shared", plugin_id="pack-a")["name"] == "pack-a"
+    assert host.get_content_resource("item", "shared", plugin_id="pack-b")["name"] == "pack-b"
+    assert host.get_content_resource("item", "shared") is None
+
+
+@pytest.mark.asyncio
+async def test_same_plugin_duplicate_v2_item_id_is_rejected(tmp_path):
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "duplicate", plugin_type="content-pack", entrypoint=False,
+                 manifest_extra={"content_schema_version": 2, "contributes": {"items": ["content/items/*.json"]}})
+    item_dir = plugins / "duplicate" / "content" / "items"
+    item_dir.mkdir(parents=True)
+    for filename in ("one.json", "two.json"):
+        (item_dir / filename).write_text(json.dumps({"id": "same", "name": filename}), encoding="utf-8")
+    host = PluginHost(plugins, tmp_path / "data")
+    details = host.discover()
+    assert details[0]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_v2_rule_and_world_plain_id_collisions_are_rejected(tmp_path):
+    plugins = tmp_path / "plugins"
+    for plugin_id in ("rule-a", "rule-b"):
+        write_plugin(plugins, plugin_id, plugin_type="content-pack", entrypoint=False,
+                     manifest_extra={"content_schema_version": 2, "contributes": {"rules": ["content/rules/*.json"]}})
+        rule_dir = plugins / plugin_id / "content" / "rules"
+        rule_dir.mkdir(parents=True)
+        (rule_dir / "shared.json").write_text(json.dumps({
+            "rule_id": "shared", "rule_schema_version": 2, "rule_name": plugin_id,
+            "dice_system": "d20", "attributes": [],
+        }), encoding="utf-8")
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+    await host.update_config("rule-a", {"enabled": True})
+    with pytest.raises(ValueError, match="plain ID 冲突"):
+        await host.update_config("rule-b", {"enabled": True})
+
+    world_plugins = tmp_path / "world-plugins"
+    for plugin_id in ("world-a", "world-b"):
+        write_plugin(world_plugins, plugin_id, plugin_type="content-pack", entrypoint=False,
+                     manifest_extra={"content_schema_version": 2, "contributes": {"world_templates": ["content/worlds/*.json"]}})
+        world_dir = world_plugins / plugin_id / "content" / "worlds"
+        world_dir.mkdir(parents=True)
+        (world_dir / "shared.json").write_text(json.dumps({
+            "world_id": "shared", "world_name": plugin_id, "starter_lorebook": [],
+        }), encoding="utf-8")
+    world_host = PluginHost(world_plugins, tmp_path / "world-data")
+    world_host.discover()
+    await world_host.update_config("world-a", {"enabled": True})
+    with pytest.raises(ValueError, match="plain ID 冲突"):
+        await world_host.update_config("world-b", {"enabled": True})
+
+
+@pytest.mark.parametrize("field,value", [
+    ("content_schema_version", 999), ("locale_schema_version", 999),
+    ("content_schema_version", "two"), ("locale_schema_version", "one"),
+])
+def test_manifest_future_and_non_numeric_versions_fail_closed(tmp_path, field, value):
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "invalid-version", manifest_extra={field: value})
+    host = PluginHost(plugins, tmp_path / "data")
+    details = host.discover()
+    assert details[0]["status"] == "failed"
+
+

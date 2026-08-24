@@ -13,6 +13,7 @@ RULE_IDS = (
     "freeform_wuxia",
     "tavern_free",
 )
+LEGACY_RULES = "tests/fixtures/legacy_rules"
 
 
 @pytest.mark.parametrize("rule_id", RULE_IDS)
@@ -58,9 +59,9 @@ def test_legacy_full_copy_rules_remain_loadable() -> None:
     loader = RuleBundleLoader()
 
     for path in (
-        "templates/rules/freeform_fantasy_en.json",
-        "templates/rules/freeform_coc_ja.json",
-        "templates/rules/tavern_free_en.json",
+        f"{LEGACY_RULES}/freeform_fantasy_en.json",
+        f"{LEGACY_RULES}/freeform_coc_ja.json",
+        f"{LEGACY_RULES}/tavern_free_en.json",
     ):
         template = loader.load(path)
         assert template["rule_id"]
