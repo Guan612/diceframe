@@ -17,6 +17,7 @@ describe('settings section links', () => {
 
   it('accepts current sections and ignores unknown targets', () => {
     expect(normalizeSettingsSection('api')).toBe('api')
+    expect(normalizeSettingsSection('connection')).toBe('connection')
     expect(normalizeSettingsSection('models')).toBe('models')
     expect(normalizeSettingsSection('missing')).toBeNull()
   })

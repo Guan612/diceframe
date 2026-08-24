@@ -463,6 +463,7 @@ export const ja = {
   settingsSubtitle: 'モデルインターフェース、生成パラメータ、システム設定',
   settingsSystemStatusAria: 'システム状態の概要',
   settingsSectionApi: 'モデルインターフェース',
+  settingsSectionConnection: 'バックエンド接続',
   settingsSectionModels: 'モデル割り当て',
   settingsSectionMemory: 'ベクトル記憶',
   settingsSectionNetwork: 'ネットワークプロキシ',

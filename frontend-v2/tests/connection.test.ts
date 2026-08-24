@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   accessTokenStorageKey,
+  backendLoginUrl,
   buildApiUrl,
   currentBackendUrl,
   normalizeBackendUrl,
@@ -17,6 +18,11 @@ describe('frontend connection', () => {
     expect(normalizeBackendUrl('https://example.com/diceframe/')).toBe('https://example.com/diceframe')
     expect(normalizeBackendUrl('example.com:9876')).toBe('http://example.com:9876')
     expect(normalizeBackendUrl('javascript:alert(1)')).toBe('')
+  })
+
+  it('builds a reconnect URL that preserves the current route', () => {
+    window.history.replaceState({}, '', '/#/settings?section=connection')
+    expect(backendLoginUrl()).toBe('/#/login?redirect=%2F%23%2Fsettings%3Fsection%3Dconnection')
   })
 
   it('keeps external backend state isolated behind the standalone build flag', () => {

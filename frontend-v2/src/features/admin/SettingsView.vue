@@ -198,7 +198,9 @@ async function toggleUpdateChannel(enabled: boolean) {
 }
 
 const section = ref<SettingsSectionId>('api')
+const connectionSection: SettingsSection = { id: 'connection', labelKey: 'settingsSectionConnection', icon: ServerOutline }
 const sections: SettingsSection[] = [
+  ...(standaloneFrontend ? [connectionSection] : []),
   { id: 'api', labelKey: 'settingsSectionApi', icon: ServerOutline },
   { id: 'models', labelKey: 'settingsSectionModels', icon: SparklesOutline },
   { id: 'network', labelKey: 'settingsSectionNetwork', icon: CloudDownloadOutline },
@@ -1633,18 +1635,19 @@ function redownloadUpdatePackage() {
             <TestResultCard v-if="testKind === 'proxy' && testResult" :result="testResult" kind="proxy" />
           </div>
 
+          <div v-show="section === 'connection'" class="settings-pane">
+            <h3>{{ t('backendConnectionTitle') }}</h3>
+            <p class="muted">{{ t('backendConnectionHelp') }}</p>
+            <div class="form-row">
+              <label>{{ t('serverAddress') }}</label>
+              <NInput v-model:value="backendUrl" :placeholder="t('serverAddressPlaceholder')" />
+            </div>
+            <div class="actions-row">
+              <NButton type="primary" @click="switchBackend">{{ t('switchBackend') }}</NButton>
+            </div>
+          </div>
+
           <div v-show="section === 'sharing'" class="settings-pane">
-            <template v-if="standaloneFrontend">
-              <h3>{{ t('backendConnectionTitle') }}</h3>
-              <p class="muted">{{ t('backendConnectionHelp') }}</p>
-              <div class="form-row">
-                <label>{{ t('serverAddress') }}</label>
-                <NInput v-model:value="backendUrl" :placeholder="t('serverAddressPlaceholder')" />
-              </div>
-              <div class="actions-row">
-                <NButton type="primary" @click="switchBackend">{{ t('switchBackend') }}</NButton>
-              </div>
-            </template>
             <h3>{{ t('sharingLinkAddress') }}</h3>
             <p class="muted">{{ t('sharingHelp') }}</p>
             <div class="form-row">

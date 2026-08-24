@@ -47,6 +47,16 @@ export function setBackendUrl(value: string): string {
   return normalized
 }
 
+export function backendLoginUrl(): string {
+  const currentLocation = `${location.pathname}${location.search}${location.hash}`
+  return `${location.pathname}${location.search}#/login?redirect=${encodeURIComponent(currentLocation)}`
+}
+
+export function redirectToBackendLogin(): void {
+  if (!isStandaloneFrontend() || typeof location === 'undefined' || location.hash.startsWith('#/login')) return
+  location.assign(backendLoginUrl())
+}
+
 export function accessTokenStorageKey(): string {
   const backend = currentBackendUrl()
   return backend ? `${ACCESS_TOKEN_KEY}:${encodeURIComponent(backend)}` : ACCESS_TOKEN_KEY

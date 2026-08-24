@@ -5,6 +5,7 @@ import {
   buildApiUrl,
   currentBackendUrl,
   isStandaloneFrontend,
+  redirectToBackendLogin,
 } from '@/api/connection'
 
 export class ApiError extends Error {
@@ -96,13 +97,22 @@ async function interceptPeerApi<T>(
   return result.handled ? { handled: true, value: result.value as T } : { handled: false }
 }
 
+async function fetchWithConnectionRecovery(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init)
+  } catch (error: unknown) {
+    if (!(error instanceof Error && error.name === 'AbortError')) redirectToBackendLogin()
+    throw error
+  }
+}
+
 export async function api<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const peer = await interceptPeerApi<T>(path, init)
   if (peer.handled) return peer.value
   const isRawBody = init.body instanceof FormData || init.body instanceof Blob
   const headers = authHeaders(init.headers, !isRawBody)
   applyConfirmHeader(headers, init)
-  const response = await fetch(apiUrl(path), { ...init, headers, credentials: 'include' })
+  const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   const data = await response.json().catch(() => ({}))
   await handleUnauthorized(response)
   if (response.status === 429) {
@@ -125,7 +135,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
   }
   const headers = authHeaders(init.headers, false)
   applyConfirmHeader(headers, init)
-  const response = await fetch(apiUrl(path), { ...init, headers, credentials: 'include' })
+  const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   await handleUnauthorized(response)
   if (response.status === 429) {
     const data = await response.json().catch(() => ({}))
@@ -141,7 +151,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
 export async function validateAccessToken(value: string): Promise<void> {
   const headers = new Headers()
   if (value) headers.set('Authorization', `Bearer ${value}`)
-  const response = await fetch(apiUrl('/login'), { method: 'POST', headers, credentials: 'include' })
+  const response = await fetchWithConnectionRecovery(apiUrl('/login'), { method: 'POST', headers, credentials: 'include' })
   if (response.status === 429) {
     const data = await response.json().catch(() => ({}))
     throw new ApiError(rateLimitMessage(data), 429)
@@ -156,7 +166,7 @@ export type OwnerAccessStatus = 'allowed' | 'login-required' | 'unavailable'
 
 export async function checkOwnerAccess(): Promise<OwnerAccessStatus> {
   try {
-    const response = await fetch(buildApiUrl('/me'), {
+    const response = await fetchWithConnectionRecovery(buildApiUrl('/me'), {
       headers: authHeaders(undefined, false),
       credentials: 'include',
     })
