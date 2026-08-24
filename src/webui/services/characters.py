@@ -167,7 +167,14 @@ def _character_schema_for_rule(rule) -> dict[str, Any]:
         "progression_schema": rule.progression_schema,
         "ui_schema": rule.ui_schema,
     }
-    skill_pool = list(rule.template.get("skill_pool") or rule.template.get("skills") or [])
+    explicit_skill_pool = rule.template.get("skill_pool")
+    legacy_skills = rule.template.get("skills")
+    if isinstance(explicit_skill_pool, list):
+        skill_pool = list(explicit_skill_pool)
+    elif isinstance(legacy_skills, list):
+        skill_pool = list(legacy_skills)
+    else:
+        skill_pool = []
     if not skill_pool:
         # Standalone creation has no class selection context yet. Offer the
         # union of class pools so the same rule schema remains useful before a
