@@ -211,7 +211,8 @@ async function createRoom() {
     const game = selectedGame.value
     if (!game) throw new Error(t('peerGameRequired'))
     if (!hasInviteCapacity.value) throw new Error(t('peerNoInviteCapacity'))
-    if (game.solo_mode !== false) {
+    const shouldConvertSoloSave = game.solo_mode !== false
+    if (shouldConvertSoloSave) {
       const accepted = await confirm({
         title: t('peerConvertSoloTitle'),
         content: t('peerConvertSoloContent'),
@@ -219,6 +220,15 @@ async function createRoom() {
         type: 'warning',
       })
       if (!accepted) return
+    }
+    // 与游戏页保持一致：开房前恢复存档绑定的 GM 会话。浏览器 Cookie 更新、
+    // 静态前端换源或换设备后，当前 Web 会话 ID 可能与存档 gm_uid 不同；
+    // 只放宽单个接口会让后续 GM 操作继续失败，因此必须先完成身份恢复。
+    await api(`/games/${encodeURIComponent(selectedGameKey.value)}/claim-gm`, {
+      method: 'POST',
+      body: '{}',
+    })
+    if (shouldConvertSoloSave) {
       const converted = await api<{ ok?: boolean; solo_mode?: boolean; error?: string }>(
         `/games/${encodeURIComponent(selectedGameKey.value)}/mode`,
         { method: 'POST', body: JSON.stringify({ solo: false }) },

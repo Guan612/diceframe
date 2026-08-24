@@ -123,6 +123,7 @@ test('direct share route follows browser locale and exposes a language switch', 
 })
 
 test('solo save asks before conversion and only then creates an online room', async ({ page, request }) => {
+  let gmClaimed = false
   let converted = false
   let roomRequests = 0
   await page.route('**/api/**', async route => {
@@ -143,7 +144,17 @@ test('solo save asks before conversion and only then creates an online room', as
       })
       return
     }
+    if (url.pathname.endsWith('/claim-gm')) {
+      gmClaimed = true
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, user_id: 'gm_owner' }),
+      })
+      return
+    }
     if (url.pathname.endsWith('/mode')) {
+      expect(gmClaimed).toBe(true)
       converted = true
       expect(route.request().postDataJSON()).toEqual({ solo: false })
       await route.fulfill({
@@ -198,9 +209,11 @@ test('solo save asks before conversion and only then creates an online room', as
   await page.locator('.peer-direct-consent input').check()
   await page.getByRole('button', { name: '创建临时直连房间' }).click()
   await expect(page.getByText('转换为多人存档？')).toBeVisible()
+  expect(gmClaimed).toBe(false)
   expect(converted).toBe(false)
   expect(roomRequests).toBe(0)
   await page.getByRole('button', { name: '转换并创建房间' }).click()
+  await expect.poll(() => gmClaimed).toBe(true)
   await expect.poll(() => converted).toBe(true)
   await expect.poll(() => roomRequests).toBe(1)
   await expect(page.locator('.peer-status .peer-invite textarea')).toHaveValue(/^DFP2-/)
@@ -208,6 +221,7 @@ test('solo save asks before conversion and only then creates an online room', as
 })
 
 test('a full save can issue a direct-connect code for an occupied character', async ({ page, request }) => {
+  let gmClaimed = false
   let requestedPeerCount = 0
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url())
@@ -225,6 +239,15 @@ test('a full save can issue a direct-connect code for an occupied character', as
             max_players: 2,
           }],
         }),
+      })
+      return
+    }
+    if (url.pathname.endsWith('/claim-gm')) {
+      gmClaimed = true
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ok: true, user_id: 'gm_owner' }),
       })
       return
     }
@@ -293,6 +316,7 @@ test('a full save can issue a direct-connect code for an occupied character', as
   await page.locator('.peer-direct-consent input').check()
   await page.getByRole('button', { name: '创建临时直连房间' }).click()
 
+  await expect.poll(() => gmClaimed).toBe(true)
   await expect.poll(() => requestedPeerCount).toBe(2)
   await expect(page.locator('.peer-status .peer-invite-meta > strong')).toHaveText('夜莺')
   await expect(page.locator('.peer-status .peer-invite textarea')).toHaveValue(/^DFP2-/)
