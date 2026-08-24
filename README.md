@@ -112,6 +112,8 @@ pip install -r requirements.txt
 python web_server.py
 ```
 
+直接运行时会自动读取项目根目录的 `.env`；已经在 PowerShell、服务管理器或 Docker 中设置的环境变量优先级更高。
+
 启动后打开终端里显示的地址，默认是：
 
 ```text
@@ -144,6 +146,8 @@ Cloudflare Pages 可使用 `frontend-v2` 作为 Root directory，Build command �
 ```bash
 TRPG_WEB_CORS_ORIGINS=https://diceframe.pages.dev
 ```
+
+也可以从服务器自带 WebUI 的“设置 → 分享地址”配置独立前端 Origin；网页配置会保存到 `data/config.json` 并立即生效。若设置了 `TRPG_WEB_CORS_ORIGINS`，环境变量优先，WebUI 中的白名单会显示为只读。
 
 后端地址仍需通过 Cloudflare Tunnel、反向代理或其他方式提供 HTTPS；仅给静态前端提供 HTTPS，不能让浏览器访问普通 HTTP 后端。服务器自带前端继续使用默认的同源模式，不需要填写后端地址。
 

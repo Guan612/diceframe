@@ -4,7 +4,8 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from src.webui.cors import cors_middleware, parse_cors_origins
+from src.webui.cors import cors_middleware, cors_response_prepare, parse_cors_origins
+from src.webui.config_update import prepare_config_update
 from src.webui.session import SessionManager, session_middleware
 
 
@@ -17,8 +18,28 @@ def test_parse_cors_origins_rejects_wildcards_and_paths():
     assert parse_cors_origins("https://play.example.com/path") == set()
 
 
+def test_cors_config_normalizes_valid_origins_and_rejects_invalid_values():
+    prepared = prepare_config_update(
+        {},
+        {"web_cors_origins": "https://play.example.com/, http://localhost:5173"},
+    )
+    assert prepared.error == ""
+    assert prepared.state["web_cors_origins"] == "http://localhost:5173, https://play.example.com"
+
+    invalid = prepare_config_update({}, {"web_cors_origins": "*"})
+    assert "完整的 http(s) Origin" in invalid.error
+
+
 async def _ok(_: web.Request) -> web.Response:
     return web.json_response({"ok": True})
+
+
+async def _stream(request: web.Request) -> web.StreamResponse:
+    response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+    await response.prepare(request)
+    await response.write(b"data: ready\n\n")
+    await response.write_eof()
+    return response
 
 
 @pytest.mark.asyncio
@@ -46,3 +67,16 @@ async def test_cors_preflight_and_credentials_cookie(tmp_path):
         assert response.headers["Access-Control-Allow-Origin"] == "https://play.example.com"
         assert "SameSite=None" in response.headers["Set-Cookie"]
         assert "Secure" in response.headers["Set-Cookie"]
+
+
+@pytest.mark.asyncio
+async def test_cors_headers_are_present_when_stream_prepares_before_middleware_returns():
+    app = web.Application(middlewares=[cors_middleware])
+    app["cors_origins"] = frozenset({"https://play.example.com"})
+    app.on_response_prepare.append(cors_response_prepare)
+    app.router.add_route("GET", "/events", _stream)
+
+    async with TestClient(TestServer(app)) as client:
+        response = await client.get("/events", headers={"Origin": "https://play.example.com"})
+        assert response.status == 200
+        assert response.headers["Access-Control-Allow-Origin"] == "https://play.example.com"
