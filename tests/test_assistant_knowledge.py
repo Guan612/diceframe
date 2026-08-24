@@ -7,6 +7,11 @@ import pytest
 from src.webui import assistant_knowledge
 
 
+def test_content_doc_paths_include_standalone_webui_guide():
+    assert "standalone-webui.md" in assistant_knowledge._CONTENT_DOC_PATHS["zh"]
+    assert "standalone-webui.md" in assistant_knowledge._CONTENT_DOC_PATHS["en"]
+
+
 @pytest.fixture
 def knowledge_docs(tmp_path, monkeypatch):
     (tmp_path / "docs").mkdir()
