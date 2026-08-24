@@ -31,6 +31,7 @@ import BrandLogo from '@/components/BrandLogo.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useTheme } from '@/composables/useTheme'
 import { useBackgroundImages, type BackgroundSlot } from '@/composables/useBackgroundImages'
+import { currentBackendUrl, isStandaloneFrontend, normalizeBackendUrl, setBackendUrl } from '@/api/connection'
 import {
   modelCapability,
   providerTestKind,
@@ -67,6 +68,8 @@ const {
 } = useUpdater()
 const { t, locale } = useLocale()
 const { current: themeMode, skin: activeSkin, builtinSkins, apply: applyThemeMode, applySkin } = useTheme()
+const standaloneFrontend = isStandaloneFrontend()
+const backendUrl = ref(standaloneFrontend ? currentBackendUrl() : '')
 const {
   options: backgroundOptions,
   previews: backgroundPreviews,
@@ -81,6 +84,20 @@ const backgroundBusy = ref<BackgroundSlot | 'all' | ''>('')
 const restartBusy = ref(false)
 const hubPreferences = ref<HubPreferences | null>(null)
 const hubPrivacyBusy = ref(false)
+
+function switchBackend() {
+  const nextBackendUrl = normalizeBackendUrl(backendUrl.value)
+  if (!nextBackendUrl) {
+    toast.error(t('invalidServerAddress'))
+    return
+  }
+  if (nextBackendUrl === currentBackendUrl()) {
+    toast.info(t('backendAlreadyConnected'))
+    return
+  }
+  setBackendUrl(nextBackendUrl)
+  window.location.assign(`${window.location.pathname}${window.location.search}#/login`)
+}
 
 async function loadHubPreferences() {
   try {
@@ -1617,6 +1634,17 @@ function redownloadUpdatePackage() {
           </div>
 
           <div v-show="section === 'sharing'" class="settings-pane">
+            <template v-if="standaloneFrontend">
+              <h3>{{ t('backendConnectionTitle') }}</h3>
+              <p class="muted">{{ t('backendConnectionHelp') }}</p>
+              <div class="form-row">
+                <label>{{ t('serverAddress') }}</label>
+                <NInput v-model:value="backendUrl" :placeholder="t('serverAddressPlaceholder')" />
+              </div>
+              <div class="actions-row">
+                <NButton type="primary" @click="switchBackend">{{ t('switchBackend') }}</NButton>
+              </div>
+            </template>
             <h3>{{ t('sharingLinkAddress') }}</h3>
             <p class="muted">{{ t('sharingHelp') }}</p>
             <div class="form-row">
