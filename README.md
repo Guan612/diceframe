@@ -133,7 +133,7 @@ Windows 下也可以双击 `web_ui.bat` 启动；它会检查依赖，并在缺�
 
 ### 独立部署 Web 前端
 
-如果希望让浏览器前端固定使用 HTTPS、而后端继续运行在 NAS、家用电脑或服务器上，可以单独构建前端并部署到 Cloudflare Pages 等静态托管：
+如果希望让浏览器前端固定使用 HTTPS、而后端继续运行在 NAS、家用电脑或服务器上，可以把 WebUI 单独构建并部署到 Cloudflare Pages 等静态托管：
 
 ```bash
 cd frontend-v2
@@ -141,15 +141,7 @@ npm ci
 npm run build:standalone
 ```
 
-Cloudflare Pages 可使用 `frontend-v2` 作为 Root directory，Build command 为 `npm run build:standalone`，输出目录为 `dist`。打开独立前端后，在登录页填写后端的 HTTPS 地址。后端需要允许该前端域名的跨域请求，例如：
-
-```bash
-TRPG_WEB_CORS_ORIGINS=https://diceframe.pages.dev
-```
-
-也可以从服务器自带 WebUI 的“设置 → 分享地址”配置独立前端 Origin；网页配置会保存到 `data/config.json` 并立即生效。若设置了 `TRPG_WEB_CORS_ORIGINS`，环境变量优先，WebUI 中的白名单会显示为只读。
-
-后端地址仍需通过 Cloudflare Tunnel、反向代理或其他方式提供 HTTPS；仅给静态前端提供 HTTPS，不能让浏览器访问普通 HTTP 后端。服务器自带前端继续使用默认的同源模式，不需要填写后端地址。
+完整的 Cloudflare Pages 参数、后端 HTTPS、跨域白名单、安全建议与排错步骤见官网的[独立部署 WebUI 指南](https://diceframe.com/docs?doc=standalone)。Windows 便携版、Docker 和服务器自带 WebUI 继续使用默认同源模式，不需要单独配置。
 
 新手玩法、多人流程、群聊命令和状态变动说明见 [DiceFrame 用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md)。
 
@@ -208,6 +200,7 @@ Bot 不直接读写存档，只通过 Web 服务的 HTTP API 工作。插件商�
 |------|------|---------|
 | 用户手册 | [用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md) | [User guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/guide.md) |
 | Docker 部署 | [Docker 部署](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/deploy.md) | [Docker deployment](https://github.com/diceframe/diceframe-content/blob/main/docs/en/deploy.md) |
+| 独立 WebUI | [独立部署 WebUI](https://diceframe.com/docs?doc=standalone) | [Standalone WebUI](https://diceframe.com/en/docs?doc=standalone) |
 | 应用更新 | [应用更新](docs/zh/updates.md) | [Application updates](docs/en/updates.md) |
 | 规则与骰子 | [规则与骰子](docs/zh/rules-and-dice.md) | [Rules and dice](docs/en/rules-and-dice.md) |
 | 玩家直连（实验性） | [玩家直连](docs/zh/direct-connect.md) | [Player Direct Connect](docs/en/direct-connect.md) |

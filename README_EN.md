@@ -83,7 +83,7 @@ On Windows, `web_ui.bat` can start the Web UI. It checks Python runtime dependen
 
 ### Standalone Web Frontend
 
-If the browser frontend should always use HTTPS while the backend keeps running on a NAS, home machine, or server, build the frontend separately and deploy it to Cloudflare Pages or another static host:
+If the browser frontend should always use HTTPS while the backend keeps running on a NAS, home machine, or server, build the WebUI separately and deploy it to Cloudflare Pages or another static host:
 
 ```bash
 cd frontend-v2
@@ -91,13 +91,7 @@ npm ci
 npm run build:standalone
 ```
 
-For Cloudflare Pages, use `frontend-v2` as the root directory, `npm run build:standalone` as the build command, and `dist` as the output directory. Open the standalone frontend and enter the backend HTTPS address on the login page. Allow the frontend origin on the backend, for example:
-
-```bash
-TRPG_WEB_CORS_ORIGINS=https://diceframe.pages.dev
-```
-
-The backend still needs HTTPS through Cloudflare Tunnel, a reverse proxy, or another HTTPS endpoint; HTTPS on the static frontend alone cannot make a browser call a plain HTTP backend. The server-served frontend keeps its default same-origin mode and does not require a backend address.
+See the [standalone WebUI deployment guide](https://diceframe.com/en/docs?doc=standalone) for Cloudflare Pages settings, backend HTTPS, the CORS allowlist, security guidance, and troubleshooting. Packaged Windows builds, Docker, and the server-served WebUI keep using the default same-origin mode and need no standalone configuration.
 
 ## Docker
 
@@ -159,6 +153,7 @@ The plugin store indexes author-owned repositories. Installation resolves the la
 |-------|---------|------|
 | User guide | [User guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/guide.md) | [用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md) |
 | Docker deployment | [Docker deployment](https://github.com/diceframe/diceframe-content/blob/main/docs/en/deploy.md) | [Docker 部署](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/deploy.md) |
+| Standalone WebUI | [Standalone WebUI](https://diceframe.com/en/docs?doc=standalone) | [独立部署 WebUI](https://diceframe.com/docs?doc=standalone) |
 | Application updates | [Application updates](docs/en/updates.md) | [应用更新](docs/zh/updates.md) |
 | Rules and dice | [Rules and dice](docs/en/rules-and-dice.md) | [规则与骰子](docs/zh/rules-and-dice.md) |
 | Player Direct Connect (experimental) | [Player Direct Connect](docs/en/direct-connect.md) | [玩家直连](docs/zh/direct-connect.md) |
