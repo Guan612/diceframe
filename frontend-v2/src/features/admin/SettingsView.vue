@@ -31,6 +31,7 @@ import BrandLogo from '@/components/BrandLogo.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useTheme } from '@/composables/useTheme'
 import { useBackgroundImages, type BackgroundSlot } from '@/composables/useBackgroundImages'
+import { currentBackendUrl, isStandaloneFrontend, normalizeBackendUrl, setBackendUrl } from '@/api/connection'
 import {
   modelCapability,
   providerTestKind,
@@ -38,7 +39,7 @@ import {
   type ProviderTestKind,
   type ProviderTestMode,
 } from '@/utils/providerModels'
-import { normalizeSettingsSection, type SettingsSectionId } from '@/utils/settingsSections'
+import { isSettingsSectionAvailable, normalizeSettingsSection, type SettingsSectionId } from '@/utils/settingsSections'
 
 type StatusTone = 'default' | 'success' | 'warning' | 'error' | 'info'
 type UpdatePackageKind = 'source' | 'portable'
@@ -67,6 +68,8 @@ const {
 } = useUpdater()
 const { t, locale } = useLocale()
 const { current: themeMode, skin: activeSkin, builtinSkins, apply: applyThemeMode, applySkin } = useTheme()
+const standaloneFrontend = isStandaloneFrontend()
+const backendUrl = ref(standaloneFrontend ? currentBackendUrl() : '')
 const {
   options: backgroundOptions,
   previews: backgroundPreviews,
@@ -81,6 +84,20 @@ const backgroundBusy = ref<BackgroundSlot | 'all' | ''>('')
 const restartBusy = ref(false)
 const hubPreferences = ref<HubPreferences | null>(null)
 const hubPrivacyBusy = ref(false)
+
+function switchBackend() {
+  const nextBackendUrl = normalizeBackendUrl(backendUrl.value)
+  if (!nextBackendUrl) {
+    toast.error(t('invalidServerAddress'))
+    return
+  }
+  if (nextBackendUrl === currentBackendUrl()) {
+    toast.info(t('backendAlreadyConnected'))
+    return
+  }
+  setBackendUrl(nextBackendUrl)
+  window.location.assign(`${window.location.pathname}${window.location.search}#/login`)
+}
 
 async function loadHubPreferences() {
   try {
@@ -181,7 +198,9 @@ async function toggleUpdateChannel(enabled: boolean) {
 }
 
 const section = ref<SettingsSectionId>('api')
+const connectionSection: SettingsSection = { id: 'connection', labelKey: 'settingsSectionConnection', icon: ServerOutline }
 const sections: SettingsSection[] = [
+  ...(standaloneFrontend ? [connectionSection] : []),
   { id: 'api', labelKey: 'settingsSectionApi', icon: ServerOutline },
   { id: 'models', labelKey: 'settingsSectionModels', icon: SparklesOutline },
   { id: 'network', labelKey: 'settingsSectionNetwork', icon: CloudDownloadOutline },
@@ -199,7 +218,9 @@ function queryValue(value: unknown): string {
 
 function syncRouteTarget() {
   const requestedSection = normalizeSettingsSection(queryValue(route.query.section))
-  if (requestedSection) section.value = requestedSection
+  if (requestedSection && isSettingsSectionAvailable(requestedSection, standaloneFrontend)) {
+    section.value = requestedSection
+  }
   if (queryValue(route.query.focus) === 'update') {
     section.value = 'about'
     void nextTick(() => {
@@ -1614,6 +1635,18 @@ function redownloadUpdatePackage() {
             </div>
             <p class="muted">{{ t('proxyHint') }}</p>
             <TestResultCard v-if="testKind === 'proxy' && testResult" :result="testResult" kind="proxy" />
+          </div>
+
+          <div v-if="standaloneFrontend" v-show="section === 'connection'" class="settings-pane">
+            <h3>{{ t('backendConnectionTitle') }}</h3>
+            <p class="muted">{{ t('backendConnectionHelp') }}</p>
+            <div class="form-row">
+              <label>{{ t('serverAddress') }}</label>
+              <NInput v-model:value="backendUrl" :placeholder="t('serverAddressPlaceholder')" />
+            </div>
+            <div class="actions-row">
+              <NButton type="primary" @click="switchBackend">{{ t('switchBackend') }}</NButton>
+            </div>
           </div>
 
           <div v-show="section === 'sharing'" class="settings-pane">
