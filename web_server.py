@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 from aiohttp import web
 
 sys.path.insert(0, str(Path(__file__).parent))
+from src.runtime_env import load_project_env
+
+load_project_env(Path(__file__).resolve().with_name(".env"))
+
 from src.common_factory import TRPGSubsystems, create_trpg_subsystems
 from src.migrations.config import (
     DEFAULT_NARRATIVE_MAX_TOKENS,
@@ -44,6 +48,7 @@ from src.webui.access_password import (
 )
 from src.webui.abuse_guard import ABUSE_GUARD_KEY, AbuseGuard, abuse_guard_middleware
 from src.webui.api import WebAPI
+from src.webui.cors import cors_middleware, cors_response_prepare, normalize_cors_origins, parse_cors_origins
 from src.webui.config_update import (
     API_RUNTIME_CONFIG_KEYS,
     MODEL_RUNTIME_CONFIG_KEYS,
@@ -147,6 +152,9 @@ API_FORMAT = (os.getenv("TRPG_LLM_API_FORMAT")
               or saved.get("api_format", "openai"))
 PORT = int(os.getenv("TRPG_WEB_PORT") or saved.get("web_port", 18000))
 HOST = os.getenv("TRPG_WEB_HOST") or saved.get("web_host", "0.0.0.0")
+WEB_CORS_ENV_VALUE = str(os.getenv("TRPG_WEB_CORS_ORIGINS") or "").strip()
+WEB_CORS_CONFIG_VALUE = WEB_CORS_ENV_VALUE or str(saved.get("web_cors_origins") or "")
+WEB_CORS_ORIGINS = parse_cors_origins(WEB_CORS_CONFIG_VALUE)
 EMB_ENABLED = saved.get("embedding_enabled", False)
 EMB_BASE_URL = saved.get("embedding_base_url", "")
 EMB_MODEL = (os.getenv("TRPG_EMBEDDING_MODEL")
@@ -207,6 +215,7 @@ _AI_PROVIDERS_DEFAULT = normalize_ai_providers(saved.get("ai_providers"))
 STATE = {
     "generation_defaults_version": GENERATION_DEFAULTS_VERSION,
     "api_key": API_KEY, "base_url": BASE_URL, "model": MODEL, "api_format": API_FORMAT, "web_port": PORT,
+    "web_cors_origins": normalize_cors_origins(WEB_CORS_CONFIG_VALUE),
     "ai_providers": _AI_PROVIDERS_DEFAULT,
     "llm_provider_ref": str(saved.get("llm_provider_ref", "")),
     "fallback1_provider_ref": str(saved.get("fallback1_provider_ref", "")),
@@ -337,6 +346,7 @@ def _public_config() -> dict:
     public["access_password"] = mask_access_password(STATE.get("access_token", ""))
     public["bot_token"] = _mask_secret(STATE.get("bot_token", ""))
     public["bot_token_source"] = "env" if os.getenv("TRPG_BOT_TOKEN") else "generated"
+    public["web_cors_origins_source"] = "env" if WEB_CORS_ENV_VALUE else "config"
     public["napcat_token"] = _mask_secret(STATE.get("napcat_token", ""))
     proxy_url = STATE.get("proxy_url", "")
     public["proxy_url"] = mask_proxy_url(proxy_url)
@@ -949,6 +959,11 @@ async def api_config_post(request: web.Request) -> web.Response:
 
 
 async def _apply_config_update(request: web.Request, body: dict) -> web.Response:
+    if "web_cors_origins" in body and WEB_CORS_ENV_VALUE:
+        return web.json_response(
+            {"ok": False, "error": "TRPG_WEB_CORS_ORIGINS 已由环境变量接管，请修改 .env 后重启后端"},
+            status=409,
+        )
     prepared = prepare_config_update(STATE, body)
     if prepared.error:
         return web.json_response({"ok": False, "error": prepared.error}, status=400)
@@ -1006,6 +1021,9 @@ async def _apply_config_update(request: web.Request, body: dict) -> web.Response
                 await candidate_embedding.close()
         logger.exception("保存候选配置失败")
         return web.json_response({"ok": False, "error": f"配置保存失败：{exc}"}, status=500)
+
+    if "web_cors_origins" in changed_keys:
+        request.app["cors_origins"] = parse_cors_origins(STATE.get("web_cors_origins", ""))
 
     if access_password_changed:
         _delete_access_token_file()
@@ -1263,6 +1281,8 @@ from src.webui.session import SessionManager, session_middleware
 from src.webui.sse_ticket import SseTicketStore
 from src.webui.errors import error_code_middleware
 
+app.middlewares.append(cors_middleware)
+app.on_response_prepare.append(cors_response_prepare)
 app.middlewares.append(session_middleware)
 app.middlewares.append(abuse_guard_middleware)
 app.middlewares.append(auth_middleware)
@@ -1275,6 +1295,7 @@ app[LOGIN_AUDIT_KEY] = LoginAuditStore(DATA_DIR)
 app["connection_pool"] = ConnectionPool()
 app["sse_tickets"] = SseTicketStore()
 app["static_v2_dir"] = STATIC_V2_DIR
+app["cors_origins"] = WEB_CORS_ORIGINS
 app["runtime_control"] = {
         "boot_id": secrets_module.token_hex(8),
     "restart_requested": False,

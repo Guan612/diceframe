@@ -20,13 +20,14 @@ from src.ai_providers import (
 from src.asr.contracts import SUPPORTED_ASR_PROVIDER_IDS
 from src.tts.contracts import SUPPORTED_PROVIDER_IDS
 from src.webui.access_password import hash_access_password
+from src.webui.cors import invalid_cors_origins, normalize_cors_origins
 
 SECRET_CONFIG_KEYS = frozenset({
     "api_key", "embedding_api_key", "fallback1_api_key", "fallback2_api_key",
     "access_token", "bot_token", "napcat_token", "tts_api_key", "asr_api_key", "imagegen_api_key",
 })
 STRING_CONFIG_KEYS = frozenset({
-    "base_url", "model", "embedding_base_url", "embedding_model",
+    "base_url", "model", "embedding_base_url", "embedding_model", "web_cors_origins",
     "fallback1_base_url", "fallback1_model", "fallback2_base_url", "fallback2_model",
     "public_base_url", "napcat_host", "napcat_connection_id",
     "tts_base_url", "tts_model", "tts_default_voice", "tts_gm_voice", "tts_player_voice",
@@ -37,7 +38,7 @@ STRING_CONFIG_KEYS = frozenset({
 })
 API_FORMAT_KEYS = frozenset({"api_format", "fallback1_api_format", "fallback2_api_format"})
 CONFIG_KEYS = (
-    "api_key", "base_url", "model", "api_format", "web_port", "embedding_enabled",
+    "api_key", "base_url", "model", "api_format", "web_port", "web_cors_origins", "embedding_enabled",
     "embedding_base_url", "embedding_model", "embedding_api_key", "embedding_max_input",
     "fallback1_enabled", "fallback1_base_url", "fallback1_model", "fallback1_api_format", "fallback1_api_key",
     "fallback2_enabled", "fallback2_base_url", "fallback2_model", "fallback2_api_format", "fallback2_api_key",
@@ -178,6 +179,16 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
                 continue
             if key in API_FORMAT_KEYS:
                 candidate[key] = normalize_api_format(raw)
+            elif key == "web_cors_origins":
+                invalid = invalid_cors_origins(raw)
+                if invalid:
+                    return PreparedConfigUpdate(
+                        candidate,
+                        changed_keys,
+                        access_password_changed,
+                        "跨域来源必须是完整的 http(s) Origin，不能使用 *、路径或查询参数",
+                    )
+                candidate[key] = normalize_cors_origins(raw)
             elif key == "ai_providers":
                 candidate[key] = normalize_ai_providers(raw)
             elif key in STRING_CONFIG_KEYS:

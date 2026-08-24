@@ -15,11 +15,13 @@ export function normalizePublicBaseUrl(value?: string): string {
   }
 }
 
-export function buildJoinLink(gameKey: string, publicBaseUrl?: string, user?: string): string {
+export function buildJoinLink(gameKey: string, publicBaseUrl?: string, user?: string, backendUrl?: string): string {
   const base = normalizePublicBaseUrl(publicBaseUrl).replace(/\/+$/, '')
   const url = new URL(`${base}/`)
   const params = new URLSearchParams({ game: gameKey, share: '1' })
   if (user) params.set('user', user)
+  const server = normalizePublicBaseUrl(backendUrl)
+  if (backendUrl && server) params.set('server', server)
   url.hash = `/join?${params.toString()}`
   return url.toString()
 }

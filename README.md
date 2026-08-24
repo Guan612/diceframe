@@ -112,6 +112,8 @@ pip install -r requirements.txt
 python web_server.py
 ```
 
+直接运行时会自动读取项目根目录的 `.env`；已经在 PowerShell、服务管理器或 Docker 中设置的环境变量优先级更高。
+
 启动后打开终端里显示的地址，默认是：
 
 ```text
@@ -128,6 +130,26 @@ python web_server.py
 ```
 
 Windows 下也可以双击 `web_ui.bat` 启动；它会检查依赖，并在缺少前端构建产物时自动构建。
+
+### 独立部署 Web 前端
+
+如果希望让浏览器前端固定使用 HTTPS、而后端继续运行在 NAS、家用电脑或服务器上，可以单独构建前端并部署到 Cloudflare Pages 等静态托管：
+
+```bash
+cd frontend-v2
+npm ci
+npm run build:standalone
+```
+
+Cloudflare Pages 可使用 `frontend-v2` 作为 Root directory，Build command 为 `npm run build:standalone`，输出目录为 `dist`。打开独立前端后，在登录页填写后端的 HTTPS 地址。后端需要允许该前端域名的跨域请求，例如：
+
+```bash
+TRPG_WEB_CORS_ORIGINS=https://diceframe.pages.dev
+```
+
+也可以从服务器自带 WebUI 的“设置 → 分享地址”配置独立前端 Origin；网页配置会保存到 `data/config.json` 并立即生效。若设置了 `TRPG_WEB_CORS_ORIGINS`，环境变量优先，WebUI 中的白名单会显示为只读。
+
+后端地址仍需通过 Cloudflare Tunnel、反向代理或其他方式提供 HTTPS；仅给静态前端提供 HTTPS，不能让浏览器访问普通 HTTP 后端。服务器自带前端继续使用默认的同源模式，不需要填写后端地址。
 
 新手玩法、多人流程、群聊命令和状态变动说明见 [DiceFrame 用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md)。
 
