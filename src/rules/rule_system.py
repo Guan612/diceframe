@@ -145,7 +145,7 @@ class RuleSystem:
         import copy
         import json
         value = copy.deepcopy(self.template)
-        for field in ("rule_name", "name", "description", "attr_hint", "skill_hint", "gm_prompt_appendix", "difficulty_instructions", "skill_pools", "item_categories", "currency", "active_locale", "default_locale", "locale_schema_version"):
+        for field in ("rule_name", "name", "description", "attr_hint", "skill_hint", "gm_prompt_appendix", "difficulty_instructions", "currency", "active_locale", "default_locale", "locale_schema_version"):
             value.pop(field, None)
         for item in value.get("attributes", []):
             if isinstance(item, dict):
@@ -165,8 +165,12 @@ class RuleSystem:
             if isinstance(item, dict):
                 item.pop("name", None)
                 item.pop("description", None)
-        value.pop("skill_pools", None)
+        for item in value.get("skills", {}).values():
+            if isinstance(item, dict):
+                for field in ("aliases", "name", "description", "label", "hint"):
+                    item.pop(field, None)
         value.pop("skill_names", None)
+        value.pop("canonical_skill_names", None)
         value.pop("difficulty_instructions", None)
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -429,6 +433,7 @@ class RuleSystem:
             "armor_reduces_damage": bool(declared.get("armor_reduces_damage", True)),
             "degree_affects_damage": bool(declared.get("degree_affects_damage", True)),
             "critical_damage": critical if critical in {"double_total", "double_damage_dice", "none"} else "double_total",
+            "minimum_damage": max(0, int(declared.get("minimum_damage", 1) or 0)),
         }
 
     @property
@@ -640,11 +645,54 @@ class RuleSystem:
 
     @property
     def skill_pools(self) -> dict[str, list[str]]:
-        """职业技能池: {"战士": ["基础攻击", ...], ...}"""
-        return self.template.get("skill_pools", {})
+        """Localized profession skill pools for presentation and input matching."""
+        raw = self.canonical_skill_pools
+        classes = {
+            str(item.get("id")): str(item.get("name") or item.get("id"))
+            for item in self.classes
+            if isinstance(item, dict) and item.get("id")
+        }
+        skills = self.template.get("skills")
+        skill_names = self.template.get("skill_names")
+        if not isinstance(skills, dict):
+            skills = {}
+        if not isinstance(skill_names, dict):
+            skill_names = {}
+
+        def display_skill_name(skill_id: object) -> str:
+            identity = str(skill_id)
+            definition = skills.get(identity)
+            if isinstance(definition, dict) and definition.get("name"):
+                return str(definition["name"])
+            return str(skill_names.get(identity) or identity)
+
+        return {
+            classes.get(str(class_id), str(class_id)): [
+                display_skill_name(skill_id)
+                for skill_id in identities
+            ]
+            for class_id, identities in raw.items()
+        }
+
+    @property
+    def canonical_skill_pools(self) -> dict[str, list[str]]:
+        """Locale-invariant class ids mapped to canonical skill identities."""
+        value = self.template.get("skill_pools", {})
+        return value if isinstance(value, dict) else {}
 
     def get_skill_pool(self, class_name: str) -> list[str]:
-        return self.skill_pools.get(class_name, [])
+        pools = self.skill_pools
+        if class_name in pools:
+            return pools[class_name]
+        class_display = next(
+            (
+                str(item.get("name") or item.get("id"))
+                for item in self.classes
+                if isinstance(item, dict) and str(item.get("id") or "") == class_name
+            ),
+            class_name,
+        )
+        return pools.get(class_display, [])
 
     def get_class_names(self) -> list[str]:
         return [c["name"] for c in self.classes]
@@ -768,12 +816,26 @@ class RuleSystem:
         自定义技能按房规兜底 5，防 above_base 模式下凭空全算超基导致超模建卡（P2-E）。"""
         if name in self.skill_base_values:
             return int(self.skill_base_values[name])
+        skills = self.template.get("skills") or {}
+        canonical_names = self.template.get("canonical_skill_names") or {}
+        for identity, definition in skills.items():
+            display_name = definition.get("name") if isinstance(definition, dict) else ""
+            if name not in {str(identity), str(display_name)}:
+                continue
+            canonical_name = str(canonical_names.get(identity) or display_name or identity)
+            if canonical_name in self.skill_base_values:
+                return int(self.skill_base_values[canonical_name])
         in_pool = any(name in pool for pool in self.skill_pools.values())
         return 5 if not in_pool else 0
 
 
     @classmethod
-    def load_for_world(cls, world_data: dict, rules_dir: Path) -> "RuleSystem | None":
+    def load_for_world(
+        cls,
+        world_data: dict,
+        rules_dir: Path,
+        language: str = "",
+    ) -> "RuleSystem | None":
         """从世界模板数据加载关联的规则系统。
 
         Args:
@@ -783,14 +845,17 @@ class RuleSystem:
         Returns:
             RuleSystem 或 None（未找到规则文件时）
         """
+        plugin_rule_data = world_data.get("_diceframe_rule_data")
+        if isinstance(plugin_rule_data, dict):
+            return cls(plugin_rule_data)
         plugin_rule_path = world_data.get("_diceframe_rule_path")
         if plugin_rule_path:
             path = Path(plugin_rule_path)
             if path.exists():
                 return cls.load(path)
         rule_id = world_data.get("default_rule", "freeform_fantasy")
-        language = world_data.get("language", DEFAULT_LANGUAGE)
-        rule_path = cls.path_for(rules_dir, rule_id, language)
+        active_language = language or world_data.get("active_locale") or world_data.get("language", DEFAULT_LANGUAGE)
+        rule_path = cls.path_for(rules_dir, rule_id, active_language)
         if rule_path.exists():
             return cls.load(rule_path)
         return None
@@ -831,8 +896,8 @@ def list_available_rules(rules_dir: str | Path) -> list[dict]:
                         loc = _resolve_rule_template(loc_path)
                         template[f"rule_name_{s}"] = loc.get("rule_name", "")
                         template[f"description_{s}"] = loc.get("description", "")
-                    except Exception:
-                        logger.warning("规则语言模板读取失败: %s", loc_path)
+                    except Exception as exc:
+                        raise ValueError(f"规则语言模板读取失败: {loc_path}: {exc}") from exc
             result.append({
                 "rule_id": rule_id,
                 "rule_name": template.get("rule_name", f.stem),
@@ -847,6 +912,6 @@ def list_available_rules(rules_dir: str | Path) -> list[dict]:
                 "scene_image": template.get("scene_image"),
                 "file": str(f),
             })
-        except Exception:
-            logger.warning("规则模板读取失败: %s", f)
+        except Exception as exc:
+            raise ValueError(f"规则模板读取失败: {f}: {exc}") from exc
     return result

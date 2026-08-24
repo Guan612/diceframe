@@ -10,7 +10,7 @@ import { fileToBase64 } from '@/utils/characterImport'
 
 export function usePluginExport(busy: Ref<string>) {
   const toast = useToast()
-  const { t } = useLocale()
+  const { t, locale } = useLocale()
   const worlds = ref<WorldListResponse['worlds']>([])
   const cards = ref<CharacterCard[]>([])
   const rules = ref<RuleSummary[]>([])
@@ -109,6 +109,7 @@ export function usePluginExport(busy: Ref<string>) {
         include_map: shouldExportMap,
         map_background: mapBackground,
         map_icons: mapIcons,
+        language: locale.value,
       })
       const blob = await response.blob()
       const disposition = response.headers.get('Content-Disposition') || ''

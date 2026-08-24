@@ -130,12 +130,22 @@ def format_check_results_constraint(instance: GameInstance, checks: list[dict]) 
     return "\n\n" + "\n\n".join(blocks)
 
 
-def initialize_puzzles_from_lorebook(instance: GameInstance, lorebook_store: Any) -> None:
+def initialize_puzzles_from_lorebook(
+    instance: GameInstance,
+    lorebook_store: Any,
+    *,
+    world_data: dict | None = None,
+) -> None:
     """从世界书初始化谜题（仅新增未注册的谜题）。"""
     if not instance.world_id or not lorebook_store or not instance.puzzle_manager:
         return
 
-    all_entries = lorebook_store.list_entries(instance.world_id)
+    from src.content.worlds import localize_lorebook_entries
+
+    all_entries = localize_lorebook_entries(
+        lorebook_store.list_entries(instance.world_id),
+        world_data,
+    )
     for entry in all_entries:
         if entry.get("type") != "puzzle":
             continue

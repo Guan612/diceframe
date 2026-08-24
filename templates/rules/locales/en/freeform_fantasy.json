@@ -6,14 +6,30 @@
     "id": "freeform_fantasy"
   },
   "items": {
-    "iron_sword": {"name": "Iron Sword"},
-    "leather_armor": {"name": "Leather Armor"},
-    "staff": {"name": "Staff"},
-    "spellbook": {"name": "Spellbook"},
-    "longbow": {"name": "Longbow"},
-    "arrows": {"name": "Arrows x20"},
-    "dagger": {"name": "Dagger"},
-    "lockpicks": {"name": "Lockpicks"}
+    "iron_sword": {
+      "name": "Iron Sword"
+    },
+    "leather_armor": {
+      "name": "Leather Armor"
+    },
+    "staff": {
+      "name": "Staff"
+    },
+    "spellbook": {
+      "name": "Spellbook"
+    },
+    "longbow": {
+      "name": "Longbow"
+    },
+    "arrows": {
+      "name": "Arrows x20"
+    },
+    "dagger": {
+      "name": "Dagger"
+    },
+    "lockpicks": {
+      "name": "Lockpicks"
+    }
   },
   "rule": {
     "rule_name": "Classic Fantasy Freeform",
@@ -25,87 +41,6 @@
       "轻松": "Easy fights, ample resources, friendly NPCs",
       "标准": "Challenging but fair, limited resources, strategy needed",
       "硬核": "Scarce resources, fierce enemies, permanent death possible"
-    },
-    "skill_pools": {
-      "Warrior": [
-        "Heavy Strike",
-        "Defensive Stance",
-        "Charge"
-      ],
-      "Mage": [
-        "Fireball",
-        "Magic Shield",
-        "Arcana"
-      ],
-      "Ranger": [
-        "Precise Shot",
-        "Tracking",
-        "Nature Sense"
-      ],
-      "Rogue": [
-        "Stealth",
-        "Lockpicking",
-        "Sneak Attack"
-      ]
-    },
-    "item_categories": {
-      "equipment": [
-        "Sword",
-        "Bow",
-        "Staff",
-        "Dagger",
-        "Scimitar",
-        "Greatsword",
-        "Spear",
-        "Mace",
-        "Warhammer",
-        "Shield",
-        "Leather Armor",
-        "Chain Mail",
-        "Plate Armor",
-        "Robe",
-        "Boots",
-        "Gloves",
-        "Helmet",
-        "Cloak",
-        "Bracers",
-        "Necklace",
-        "Ring",
-        "Armor",
-        "Body Armor",
-        "Chestplate",
-        "Greaves",
-        "Armguards",
-        "Pauldrons"
-      ],
-      "consumable": [
-        "Potion",
-        "Scroll",
-        "Elixir",
-        "Rations",
-        "Bandage",
-        "Antidote",
-        "Bomb",
-        "Talisman",
-        "Torch",
-        "Arrows",
-        "Crossbow Bolts"
-      ],
-      "misc": [
-        "Key",
-        "Map",
-        "Letter",
-        "Token",
-        "Stone",
-        "Gem",
-        "Crystal",
-        "Book",
-        "Notebook",
-        "Badge",
-        "Backpack",
-        "Rope",
-        "Lantern"
-      ]
     },
     "currency": "Gold"
   },
@@ -145,6 +80,44 @@
     "rogue": {
       "name": "Rogue",
       "description": "Stealth and lockpicking expert"
+    }
+  },
+  "skills": {
+    "heavy_strike": {
+      "name": "Heavy Strike"
+    },
+    "defensive_stance": {
+      "name": "Defensive Stance"
+    },
+    "charge": {
+      "name": "Charge"
+    },
+    "fireball": {
+      "name": "Fireball"
+    },
+    "magic_shield": {
+      "name": "Magic Shield"
+    },
+    "arcana": {
+      "name": "Arcana"
+    },
+    "precise_shot": {
+      "name": "Precise Shot"
+    },
+    "tracking": {
+      "name": "Tracking"
+    },
+    "nature_sense": {
+      "name": "Nature Sense"
+    },
+    "stealth": {
+      "name": "Stealth"
+    },
+    "lockpicking": {
+      "name": "Lockpicking"
+    },
+    "sneak_attack": {
+      "name": "Sneak Attack"
     }
   }
 }

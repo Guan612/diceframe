@@ -25,8 +25,8 @@ class SwipeGenerator:
         matcher: Any,
         prompt: Any,
         state_applier: StateUpdateApplier,
-        load_world_template: Callable[[str], dict | None],
-        ensure_matcher_for_world: Callable[[str], None],
+        load_world_template: Callable[[str, str], dict | None],
+        ensure_matcher_for_world: Callable[[str, str], None],
         narrative_max_tokens: int,
     ):
         self.llm_client = llm_client
@@ -78,7 +78,7 @@ class SwipeGenerator:
             instance, list(target_entry.get("check_results") or [])
         )
         if instance.world_id:
-            self.ensure_matcher_for_world(instance.world_id)
+            self.ensure_matcher_for_world(instance.world_id, instance.language)
         lorebook_matches = self.matcher.match_with_recursive(
             actions_text, timed_state=instance.lorebook_timed_state)
 

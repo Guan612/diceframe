@@ -11,6 +11,10 @@ from typing import Any
 
 from src.rules.rule_system import RuleSystem
 from src.rules.loader import RuleBundleLoader
+from src.compat.characters import (
+    migrate_legacy_character_sheet,
+    normalize_character_sheet as normalize_legacy_character_sheet,
+)
 
 logger = logging.getLogger("trpg")
 
@@ -432,92 +436,9 @@ def reset_character_for_restart(character_sheet: dict) -> dict:
     return character_sheet
 
 
-def migrate_legacy_character_sheet(character_sheet: dict, rule: RuleSystem | None = None) -> dict:
-    """Populate generic identity/resources/progression/currency from legacy fields."""
-    identity = character_sheet.setdefault("identity", {})
-    identity.setdefault("origin", character_sheet.get("race", ""))
-    identity.setdefault("archetype", character_sheet.get("class", ""))
-    identity.setdefault("background", character_sheet.get("background", ""))
-
-    progression = character_sheet.setdefault("progression", {})
-    progression.setdefault("type", rule.progression_schema.get("type", rule.growth_system) if rule else "xp_level")
-    progression.setdefault("level", int(character_sheet.get("level", 1) or 1))
-    progression.setdefault("xp", int(character_sheet.get("xp", 0) or 0))
-
-    currency = character_sheet.setdefault("currency", {})
-    currency.setdefault("amount", int(character_sheet.get("gold", 0) or 0))
-    if rule:
-        currency.setdefault("base_unit", rule.currency_system.get("base_unit", "unit"))
-        currency.setdefault("label", rule.ui_schema.get("currency_label", rule.currency))
-
-    resources = character_sheet.setdefault("resources", {})
-    hp = resources.setdefault("hp", {})
-    hp.setdefault("label", "生命")
-    hp.setdefault("current", int(character_sheet.get("hp", 0) or 0))
-    hp.setdefault("max", int(character_sheet.get("max_hp", hp.get("current", 0)) or 0))
-    hp.setdefault("min", 0)
-    if rule:
-        for spec in rule.resource_schema:
-            key = spec.get("key")
-            if not key or key == "hp":
-                continue
-            res = resources.setdefault(key, {})
-            res.setdefault("label", spec.get("label", key))
-            if key in character_sheet:
-                res.setdefault("current", int(character_sheet.get(key, 0) or 0))
-            if f"max_{key}" in character_sheet:
-                res.setdefault("max", int(character_sheet.get(f"max_{key}", 0) or 0))
-            elif "max" in spec:
-                res.setdefault("max", spec.get("max"))
-            res.setdefault("min", spec.get("min", 0))
-    return character_sheet
-
-
 def normalize_character_sheet(character_sheet: dict, rule: RuleSystem | None = None) -> dict:
     """Ensure new generic fields exist while keeping legacy fields in sync."""
-    migrate_legacy_character_sheet(character_sheet, rule)
-    identity = character_sheet.setdefault("identity", {})
-    if character_sheet.get("race"):
-        identity["origin"] = character_sheet.get("race", "")
-    else:
-        character_sheet["race"] = identity.get("origin", "人类") or "人类"
-    if character_sheet.get("class"):
-        identity["archetype"] = character_sheet.get("class", "")
-    else:
-        character_sheet["class"] = identity.get("archetype", "冒险者") or "冒险者"
-    if "background" in character_sheet:
-        identity["background"] = character_sheet.get("background", "")
-    else:
-        character_sheet["background"] = identity.get("background", "")
-
-    progression = character_sheet.setdefault("progression", {})
-    if "level" in character_sheet:
-        progression["level"] = int(character_sheet.get("level", 1) or 1)
-    else:
-        character_sheet["level"] = int(progression.get("level", 1) or 1)
-    if "xp" in character_sheet:
-        progression["xp"] = int(character_sheet.get("xp", 0) or 0)
-    else:
-        character_sheet["xp"] = int(progression.get("xp", 0) or 0)
-
-    resources = character_sheet.setdefault("resources", {})
-    hp = resources.setdefault("hp", {})
-    if "hp" in character_sheet:
-        hp["current"] = int(character_sheet.get("hp", 0) or 0)
-    else:
-        character_sheet["hp"] = int(hp.get("current", 0) or 0)
-    if "max_hp" in character_sheet:
-        hp["max"] = int(character_sheet.get("max_hp", 0) or 0)
-    else:
-        character_sheet["max_hp"] = int(hp.get("max", character_sheet.get("hp", 0)) or 0)
-
-    currency = character_sheet.setdefault("currency", {})
-    if "gold" in character_sheet:
-        currency["amount"] = int(character_sheet.get("gold", 0) or 0)
-    else:
-        character_sheet["gold"] = int(currency.get("amount", 0) or 0)
-    character_sheet["skills"] = format_skills(character_sheet.get("skills", []))
-    return character_sheet
+    return normalize_legacy_character_sheet(character_sheet, rule)
 
 
 def roll_attributes(
@@ -628,8 +549,20 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
 
     def declared_item_type(iname: str) -> str:
         _, item_def = resolve_item(iname)
-        item_type = str((item_def or {}).get("type") or "").strip().casefold()
-        return item_type if item_type in {"weapon", "armor", "shield", "focus"} else ""
+        return str((item_def or {}).get("type") or "").strip().casefold()
+
+    def make_inventory_item(iname: str) -> dict:
+        item_key, item_def = resolve_item(iname)
+        result = {
+            "name": str((item_def or {}).get("name") or iname),
+            "qty": max(1, int((item_def or {}).get("quantity", 1) or 1)),
+            "effect": str((item_def or {}).get("effect") or ""),
+        }
+        if item_key and item_def is not None:
+            result["item_key"] = item_key
+            if item_def.get("type"):
+                result["type"] = str(item_def["type"])
+        return result
 
     def make_item(iname: str, slot: str = "") -> dict | None:
         display_key = str(iname).strip().casefold()
@@ -709,12 +642,15 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
                 equip.append(item)
                 equipped_weapons += int(item.get("type") == "weapon")
             else:
-                inv.append({"name": display_name_for(str(iname)), "qty": 1, "effect": ""})
+                inv.append(make_inventory_item(str(iname)))
         else:
             iname = str(st_item)
             cat = find_item_category(rule.item_categories, iname)
             item = make_item(iname)
-            known_rule_item = item is not None and (category_lite or bool(declared_item_type(iname)))
+            known_rule_item = item is not None and (
+                category_lite
+                or declared_item_type(iname) in {"weapon", "armor", "shield", "focus"}
+            )
             legacy_weapon = (
                 item is not None
                 and item.get("type") == "weapon"
@@ -726,7 +662,7 @@ def build_starter_items(rule, class_name: str) -> tuple[list[dict], list[dict]]:
                 equip.append(item)
                 equipped_weapons += int(item.get("type") == "weapon")
             else:
-                inv.append({"name": display_name_for(iname), "qty": 1, "effect": ""})
+                inv.append(make_inventory_item(iname))
     return equip, inv
 
 

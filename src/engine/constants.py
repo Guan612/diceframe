@@ -121,7 +121,12 @@ ITEM_KEY_ALIASES: dict[str, str] = {
     "木盾": "wooden_shield", "wooden shield": "wooden_shield", "木の盾": "wooden_shield",
     "法器": "arcane_focus", "arcane focus": "arcane_focus", "秘術焦点": "arcane_focus",
     "法术书": "spellbook", "spellbook": "spellbook", "魔法書": "spellbook",
-    "箭矢×20": "arrows", "arrows": "arrows", "矢×20": "arrows",
+    "鲁特琴": "lute", "lute": "lute", "リュート": "lute",
+    "圣徽": "holy_symbol", "holy symbol": "holy_symbol", "聖印": "holy_symbol",
+    "槲寄生": "mistletoe", "mistletoe": "mistletoe", "ヤドリギ": "mistletoe",
+    "飞镖x10": "dart", "飞镖×10": "dart", "darts x10": "dart", "ダーツ×10": "dart",
+    "箭矢x20": "arrows", "箭矢×20": "arrows", "arrows": "arrows", "矢×20": "arrows",
+    "盗贼工具": "thieves_tools", "thieves' tools": "thieves_tools", "盗賊道具": "thieves_tools",
     "撬锁工具": "lockpicks", "lockpicks": "lockpicks", "ピッキングツール": "lockpicks",
 }
 

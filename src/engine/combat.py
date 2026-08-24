@@ -92,6 +92,7 @@ def calc_hp_based_damage(
     未提供时走旧版固定伤害路径，行为与历史实现完全一致。
     """
     mech = dict(mechanic or {})
+    minimum_damage = max(0, int(mech.get("minimum_damage", 1) or 0))
     armor_reduces = bool(mech.get("armor_reduces_damage", True))
     degree = bool(mech.get("degree_affects_damage", True))
     crit_mode = str(mech.get("critical_damage") or "double_total")
@@ -115,7 +116,7 @@ def calc_hp_based_damage(
                 base += (resolved_total - 10) // 3
     if armor_reduces:
         base -= int(target_armor)
-    return max(1, base)
+    return max(minimum_damage, base)
 
 
 def calc_lethal_damage(

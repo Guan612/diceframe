@@ -92,7 +92,58 @@
       "胸甲",
       "腿甲",
       "臂甲",
-      "护肩"
+      "护肩",
+      "Sword",
+      "Bow",
+      "Staff",
+      "Dagger",
+      "Scimitar",
+      "Greatsword",
+      "Spear",
+      "Mace",
+      "Warhammer",
+      "Shield",
+      "Leather Armor",
+      "Chain Mail",
+      "Plate Armor",
+      "Robe",
+      "Boots",
+      "Gloves",
+      "Helmet",
+      "Cloak",
+      "Bracers",
+      "Necklace",
+      "Ring",
+      "Armor",
+      "Body Armor",
+      "Chestplate",
+      "Greaves",
+      "Armguards",
+      "Pauldrons",
+      "剣",
+      "杖",
+      "短剣",
+      "シミター",
+      "大剣",
+      "槍",
+      "メイス",
+      "ウォーハンマー",
+      "革鎧",
+      "チェインメイル",
+      "プレートアーマー",
+      "ローブ",
+      "ブーツ",
+      "手袋",
+      "兜",
+      "マント",
+      "腕甲",
+      "ネックレス",
+      "指輪",
+      "鎧",
+      "ボディアーマー",
+      "脛当て",
+      "腕当て",
+      "肩甲"
     ],
     "consumable": [
       "药水",
@@ -105,7 +156,29 @@
       "符咒",
       "火把",
       "箭矢",
-      "弩箭"
+      "弩箭",
+      "Potion",
+      "Scroll",
+      "Elixir",
+      "Rations",
+      "Bandage",
+      "Antidote",
+      "Bomb",
+      "Talisman",
+      "Torch",
+      "Arrows",
+      "Crossbow Bolts",
+      "薬",
+      "巻物",
+      "エリクサー",
+      "食料",
+      "包帯",
+      "解毒薬",
+      "爆弾",
+      "お守り",
+      "たいまつ",
+      "矢",
+      "弩矢"
     ],
     "misc": [
       "钥匙",
@@ -120,7 +193,30 @@
       "徽章",
       "背包",
       "绳索",
-      "灯笼"
+      "灯笼",
+      "Key",
+      "Map",
+      "Letter",
+      "Token",
+      "Stone",
+      "Gem",
+      "Crystal",
+      "Book",
+      "Notebook",
+      "Badge",
+      "Backpack",
+      "Rope",
+      "Lantern",
+      "鍵",
+      "地図",
+      "手紙",
+      "印章",
+      "石",
+      "本",
+      "ノート",
+      "リュック",
+      "ロープ",
+      "ランタン"
     ]
   },
   "classes": [
@@ -132,7 +228,10 @@
         "皮甲"
       ],
       "id": "warrior",
-      "starter_equipment_ids": ["iron_sword", "leather_armor"]
+      "starter_equipment_ids": [
+        "iron_sword",
+        "leather_armor"
+      ]
     },
     {
       "name": "法师",
@@ -142,7 +241,10 @@
         "法术书"
       ],
       "id": "mage",
-      "starter_equipment_ids": ["staff", "spellbook"]
+      "starter_equipment_ids": [
+        "staff",
+        "spellbook"
+      ]
     },
     {
       "name": "游侠",
@@ -152,7 +254,10 @@
         "箭矢×20"
       ],
       "id": "ranger",
-      "starter_equipment_ids": ["longbow", "arrows"]
+      "starter_equipment_ids": [
+        "longbow",
+        "arrows"
+      ]
     },
     {
       "name": "盗贼",
@@ -162,39 +267,68 @@
         "撬锁工具"
       ],
       "id": "rogue",
-      "starter_equipment_ids": ["dagger", "lockpicks"]
+      "starter_equipment_ids": [
+        "dagger",
+        "lockpicks"
+      ]
     }
   ],
   "items": {
-    "iron_sword": {"name": "铁剑", "type": "weapon", "damage": 6},
-    "leather_armor": {"name": "皮甲", "type": "armor", "armor": 2},
-    "staff": {"name": "法杖", "type": "weapon", "damage": 3},
-    "spellbook": {"name": "法术书"},
-    "longbow": {"name": "长弓", "type": "weapon", "damage": 6},
-    "arrows": {"name": "箭矢×20"},
-    "dagger": {"name": "匕首", "type": "weapon", "damage": 4},
-    "lockpicks": {"name": "撬锁工具"}
+    "iron_sword": {
+      "name": "铁剑",
+      "type": "weapon",
+      "damage": 6
+    },
+    "leather_armor": {
+      "name": "皮甲",
+      "type": "armor",
+      "armor": 2
+    },
+    "staff": {
+      "name": "法杖",
+      "type": "weapon",
+      "damage": 3
+    },
+    "spellbook": {
+      "name": "法术书"
+    },
+    "longbow": {
+      "name": "长弓",
+      "type": "weapon",
+      "damage": 6
+    },
+    "arrows": {
+      "name": "箭矢×20"
+    },
+    "dagger": {
+      "name": "匕首",
+      "type": "weapon",
+      "damage": 4
+    },
+    "lockpicks": {
+      "name": "撬锁工具"
+    }
   },
   "skill_pools": {
-    "战士": [
-      "重击",
-      "防御姿态",
-      "冲锋"
+    "warrior": [
+      "heavy_strike",
+      "defensive_stance",
+      "charge"
     ],
-    "法师": [
-      "火球术",
-      "魔法护盾",
-      "法术辨识"
+    "mage": [
+      "fireball",
+      "magic_shield",
+      "arcana"
     ],
-    "游侠": [
-      "精准射击",
-      "追踪",
-      "自然感知"
+    "ranger": [
+      "precise_shot",
+      "tracking",
+      "nature_sense"
     ],
-    "盗贼": [
-      "潜行",
-      "开锁",
-      "偷袭"
+    "rogue": [
+      "stealth",
+      "lockpicking",
+      "sneak_attack"
     ]
   },
   "gm_prompt_appendix": "你是经典奇幻世界的GM。世界充满魔法、怪物和冒险。玩家可以自由探索地城、与NPC互动、解决谜题。战斗使用d20判定系统。",
@@ -205,5 +339,43 @@
   },
   "rule_schema_version": 2,
   "default_locale": "zh-CN",
-  "locale_schema_version": 1
+  "locale_schema_version": 1,
+  "skills": {
+    "heavy_strike": {
+      "name": "重击"
+    },
+    "defensive_stance": {
+      "name": "防御姿态"
+    },
+    "charge": {
+      "name": "冲锋"
+    },
+    "fireball": {
+      "name": "火球术"
+    },
+    "magic_shield": {
+      "name": "魔法护盾"
+    },
+    "arcana": {
+      "name": "法术辨识"
+    },
+    "precise_shot": {
+      "name": "精准射击"
+    },
+    "tracking": {
+      "name": "追踪"
+    },
+    "nature_sense": {
+      "name": "自然感知"
+    },
+    "stealth": {
+      "name": "潜行"
+    },
+    "lockpicking": {
+      "name": "开锁"
+    },
+    "sneak_attack": {
+      "name": "偷袭"
+    }
+  }
 }

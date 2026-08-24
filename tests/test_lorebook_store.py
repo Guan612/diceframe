@@ -511,6 +511,33 @@ class TestMigration:
             "PRAGMA foreign_key_list(lorebook_entries)"
         ).fetchone()[2] == "worlds"
 
+    def test_v3_normalizes_invalid_legacy_tier_and_match_mode(self):
+        from src.migrations import lorebook
+        from src.migrations.sqlite import run_migrations
+
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            """
+            CREATE TABLE worlds (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE lorebook_entries (
+                id TEXT PRIMARY KEY, world_id TEXT NOT NULL, name TEXT NOT NULL,
+                type TEXT, keywords TEXT, content TEXT
+            );
+            INSERT INTO worlds VALUES ('w1', '旧世界');
+            INSERT INTO lorebook_entries VALUES ('e1', 'w1', '旧条目', 'other', '[]', '保留');
+            """
+        )
+        assert run_migrations(conn, ((1, lorebook._v1), (2, lorebook._v2))) == 2
+        conn.execute(
+            "UPDATE lorebook_entries SET tier='legacy-special', match_mode='sometimes' WHERE id='e1'"
+        )
+        conn.commit()
+
+        assert lorebook.migrate(conn) == 3
+        assert conn.execute(
+            "SELECT tier, match_mode FROM lorebook_entries WHERE id='e1'"
+        ).fetchone() == ("background", "any")
+
     def test_failed_lorebook_rebuild_rolls_back_without_new_table(self, monkeypatch):
         from src.migrations import lorebook
 

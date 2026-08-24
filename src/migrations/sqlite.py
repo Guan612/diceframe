@@ -40,6 +40,11 @@ def run_migrations(
     steps = sorted(migrations, key=lambda item: item[0])
     current = int(conn.execute("PRAGMA user_version").fetchone()[0])
     target = target_version if target_version is not None else (steps[-1][0] if steps else current)
+    latest_registered = steps[-1][0] if steps else 0
+    if current > latest_registered:
+        raise MigrationError(
+            f"Database user_version {current} is newer than supported version {latest_registered}"
+        )
     try:
         conn.execute("BEGIN")
         for version, migrate in steps:

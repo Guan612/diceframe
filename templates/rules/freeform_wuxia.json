@@ -87,7 +87,31 @@
       "暗器",
       "软甲",
       "轻甲",
-      "甲胄"
+      "甲胄",
+      "Sword",
+      "Saber",
+      "Flying Sword",
+      "Whisk",
+      "Daoist Robe",
+      "Talisman",
+      "Jade Pendant",
+      "Staff",
+      "Iron Fan",
+      "Dart",
+      "Hidden Weapon",
+      "Soft Armor",
+      "Light Armor",
+      "Armor",
+      "剣",
+      "飛剣",
+      "麈尾",
+      "護符",
+      "長棍",
+      "鉄扇",
+      "飛鏢",
+      "軟甲",
+      "軽甲",
+      "鎧甲"
     ],
     "pills": [
       "丹",
@@ -99,7 +123,20 @@
       "浆",
       "膏",
       "粉",
-      "汤"
+      "汤",
+      "Pill",
+      "Medicine",
+      "Powder",
+      "Pellet",
+      "Elixir",
+      "Dew",
+      "Syrup",
+      "Paste",
+      "Dust",
+      "Decoction",
+      "薬",
+      "漿",
+      "湯"
     ],
     "consumable": [
       "符咒",
@@ -108,7 +145,18 @@
       "金疮药",
       "真气丹",
       "解毒散",
-      "清心丸"
+      "清心丸",
+      "Talisman",
+      "Spirit Stone",
+      "Scroll",
+      "Wound Medicine",
+      "Qi Pill",
+      "Antidote Powder",
+      "Clarity Pill",
+      "霊石",
+      "巻物",
+      "金創薬",
+      "真気丹"
     ],
     "misc": [
       "令牌",
@@ -122,7 +170,26 @@
       "卜卦",
       "罗盘",
       "葫芦",
-      "酒壶"
+      "酒壶",
+      "Token",
+      "Jade Slip",
+      "Map",
+      "Manual",
+      "Saber Manual",
+      "Sword Manual",
+      "Fragment",
+      "Divination",
+      "Compass",
+      "Gourd",
+      "Wine Flask",
+      "玉簡",
+      "地図",
+      "刀譜",
+      "剣譜",
+      "残巻",
+      "羅盤",
+      "瓢箪",
+      "酒壺"
     ]
   },
   "classes": [
@@ -164,29 +231,29 @@
     }
   ],
   "skill_pools": {
-    "剑客": [
-      "御剑术",
-      "剑气纵横",
-      "剑盾",
-      "破招"
+    "swordsman": [
+      "sword_control",
+      "sword_aura",
+      "sword_shield",
+      "parry_break"
     ],
-    "道士": [
-      "驱邪",
-      "符咒",
-      "炼丹",
-      "望气"
+    "daoist": [
+      "exorcism",
+      "talismans",
+      "alchemy",
+      "qi_sight"
     ],
-    "刺客": [
-      "暗器",
-      "轻功",
-      "毒术",
-      "易容"
+    "assassin": [
+      "hidden_weapons",
+      "lightness_arts",
+      "poisons",
+      "disguise"
     ],
-    "游侠": [
-      "棍法",
-      "追踪",
-      "疗伤",
-      "交涉"
+    "wanderer": [
+      "staff_arts",
+      "tracking",
+      "healing",
+      "persuasion"
     ]
   },
   "gm_prompt_appendix": "你是架空武侠仙侠世界的GM。江湖恩怨、宗门争斗、修仙问道、降妖除魔--这是一个充满侠义与奇遇的世界。玩家可以在江湖中自由行走，拜入宗门、挑战高手、探寻秘境。注意内力的消耗与恢复，轻功可以跨越地形障碍。",
@@ -197,5 +264,55 @@
   },
   "rule_schema_version": 2,
   "default_locale": "zh-CN",
-  "locale_schema_version": 1
+  "locale_schema_version": 1,
+  "skills": {
+    "sword_control": {
+      "name": "御剑术"
+    },
+    "sword_aura": {
+      "name": "剑气纵横"
+    },
+    "sword_shield": {
+      "name": "剑盾"
+    },
+    "parry_break": {
+      "name": "破招"
+    },
+    "exorcism": {
+      "name": "驱邪"
+    },
+    "talismans": {
+      "name": "符咒"
+    },
+    "alchemy": {
+      "name": "炼丹"
+    },
+    "qi_sight": {
+      "name": "望气"
+    },
+    "hidden_weapons": {
+      "name": "暗器"
+    },
+    "lightness_arts": {
+      "name": "轻功"
+    },
+    "poisons": {
+      "name": "毒术"
+    },
+    "disguise": {
+      "name": "易容"
+    },
+    "staff_arts": {
+      "name": "棍法"
+    },
+    "tracking": {
+      "name": "追踪"
+    },
+    "healing": {
+      "name": "疗伤"
+    },
+    "persuasion": {
+      "name": "交涉"
+    }
+  }
 }

@@ -16,124 +16,6 @@
       "标准": "Tight corporate security, planning and trade-offs needed; failed hacks, shootouts, and betrayal visibly raise heat.",
       "硬核": "Corporate manhunts everywhere, proactive ICE counterattacks, pricey cyberware upkeep; every violent act or failure can bring long-term debt, humanity loss, or a manhunt."
     },
-    "skill_pools": {
-      "Street Merc": [
-        "Firearms",
-        "Melee",
-        "Tactical Cover",
-        "Intimidate",
-        "Athletics",
-        "Cyberware Combat"
-      ],
-      "Hacker": [
-        "Intrusion",
-        "Electronic Warfare",
-        "Data Mining",
-        "Trace Evasion",
-        "Security Systems",
-        "Identity Spoofing"
-      ],
-      "Tech": [
-        "Repair",
-        "Cyberware Maintenance",
-        "Weapon Modding",
-        "Drone Control",
-        "Demolitions",
-        "Driving"
-      ],
-      "Fixer": [
-        "Streetwise",
-        "Intel Gathering",
-        "Deal-Making",
-        "Infiltration",
-        "Gang Contacts",
-        "Black Market"
-      ],
-      "Corp": [
-        "Corporate Etiquette",
-        "Contract Loophole",
-        "Resource Allocation",
-        "Psychological Pressure",
-        "Security Protocol",
-        "Insider Info"
-      ],
-      "Nomad Driver": [
-        "Driving",
-        "Vehicle Repair",
-        "Route Planning",
-        "Smuggling",
-        "Wilderness Survival",
-        "Vehicular Pursuit"
-      ],
-      "Media": [
-        "Investigation",
-        "Interview",
-        "Recording",
-        "Public Agitation",
-        "Source Cultivation",
-        "Expose"
-      ],
-      "Street Doc": [
-        "First Aid",
-        "Surgery",
-        "Cyberware Install",
-        "Pharma Compounding",
-        "Mental Stabilization",
-        "Black Clinic Contacts"
-      ]
-    },
-    "item_categories": {
-      "equipment": [
-        "Pistol",
-        "SMG",
-        "Assault Rifle",
-        "Shotgun",
-        "Sniper Rifle",
-        "Knife",
-        "Stun Bat",
-        "Body Armor",
-        "Tactical Helmet",
-        "Neural Whip",
-        "Smart Scope",
-        "Suppressor"
-      ],
-      "cyberware": [
-        "Cybereye",
-        "Prosthetic",
-        "Subdermal Armor",
-        "Neural Interface",
-        "Reflex Booster",
-        "Muscle Fiber Weave",
-        "Datajack",
-        "Subdermal Comms",
-        "Pain Editor",
-        "Scanner Implant"
-      ],
-      "consumable": [
-        "Medkit",
-        "Ammo",
-        "Battery",
-        "Stimulant",
-        "Painkiller",
-        "Neural Stabilizer",
-        "Disposable Crack Chip",
-        "Repair Kit",
-        "Smoke Grenade",
-        "Frag Grenade"
-      ],
-      "misc": [
-        "Key",
-        "Data Chip",
-        "Hacking Terminal",
-        "Drive",
-        "Forged ID",
-        "Comm",
-        "Drone",
-        "Corp Pass",
-        "Black Money Account",
-        "Informant Contact"
-      ]
-    },
     "currency": "Credits"
   },
   "attributes": {
@@ -202,6 +84,149 @@
     "heat": {
       "name": "Heat",
       "description": "How much corporate security, police, gangs, or bounty hunters are watching the character. Higher heat means more frequent checks, tracking, and retaliation."
+    }
+  },
+  "skills": {
+    "firearms": {
+      "name": "Firearms"
+    },
+    "melee": {
+      "name": "Melee"
+    },
+    "tactical_cover": {
+      "name": "Tactical Cover"
+    },
+    "intimidate": {
+      "name": "Intimidate"
+    },
+    "athletics": {
+      "name": "Athletics"
+    },
+    "cyberware_combat": {
+      "name": "Cyberware Combat"
+    },
+    "intrusion": {
+      "name": "Intrusion"
+    },
+    "electronic_warfare": {
+      "name": "Electronic Warfare"
+    },
+    "data_mining": {
+      "name": "Data Mining"
+    },
+    "trace_evasion": {
+      "name": "Trace Evasion"
+    },
+    "security_systems": {
+      "name": "Security Systems"
+    },
+    "identity_spoofing": {
+      "name": "Identity Spoofing"
+    },
+    "repair": {
+      "name": "Repair"
+    },
+    "cyberware_maintenance": {
+      "name": "Cyberware Maintenance"
+    },
+    "weapon_modding": {
+      "name": "Weapon Modding"
+    },
+    "drone_control": {
+      "name": "Drone Control"
+    },
+    "demolitions": {
+      "name": "Demolitions"
+    },
+    "driving": {
+      "name": "Driving"
+    },
+    "streetwise": {
+      "name": "Streetwise"
+    },
+    "intel_gathering": {
+      "name": "Intel Gathering"
+    },
+    "deal_making": {
+      "name": "Deal-Making"
+    },
+    "infiltration": {
+      "name": "Infiltration"
+    },
+    "gang_contacts": {
+      "name": "Gang Contacts"
+    },
+    "black_market": {
+      "name": "Black Market"
+    },
+    "corporate_etiquette": {
+      "name": "Corporate Etiquette"
+    },
+    "contract_loophole": {
+      "name": "Contract Loophole"
+    },
+    "resource_allocation": {
+      "name": "Resource Allocation"
+    },
+    "psychological_pressure": {
+      "name": "Psychological Pressure"
+    },
+    "security_protocol": {
+      "name": "Security Protocol"
+    },
+    "insider_info": {
+      "name": "Insider Info"
+    },
+    "vehicle_repair": {
+      "name": "Vehicle Repair"
+    },
+    "route_planning": {
+      "name": "Route Planning"
+    },
+    "smuggling": {
+      "name": "Smuggling"
+    },
+    "wilderness_survival": {
+      "name": "Wilderness Survival"
+    },
+    "vehicular_pursuit": {
+      "name": "Vehicular Pursuit"
+    },
+    "investigation": {
+      "name": "Investigation"
+    },
+    "interview": {
+      "name": "Interview"
+    },
+    "recording": {
+      "name": "Recording"
+    },
+    "public_agitation": {
+      "name": "Public Agitation"
+    },
+    "source_cultivation": {
+      "name": "Source Cultivation"
+    },
+    "expose": {
+      "name": "Expose"
+    },
+    "first_aid": {
+      "name": "First Aid"
+    },
+    "surgery": {
+      "name": "Surgery"
+    },
+    "cyberware_install": {
+      "name": "Cyberware Install"
+    },
+    "pharma_compounding": {
+      "name": "Pharma Compounding"
+    },
+    "mental_stabilization": {
+      "name": "Mental Stabilization"
+    },
+    "black_clinic_contacts": {
+      "name": "Black Clinic Contacts"
     }
   }
 }

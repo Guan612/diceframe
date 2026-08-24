@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.engine.game_instance import GameInstance
 from src.rules.rule_system import RuleSystem
 
@@ -45,7 +46,7 @@ class ItemCategoryResolver:
         self,
         rules_dir: Path,
         worlds_dir: Path | None,
-        load_world_template: Callable[[str], dict],
+        load_world_template: Callable[[str, str], dict],
     ):
         self.rules_dir = rules_dir
         self.worlds_dir = worlds_dir
@@ -55,11 +56,18 @@ class ItemCategoryResolver:
         rule_cats: dict[str, list[str]] = {}
         try:
             if instance.world_id and self.worlds_dir:
-                world_data = self._load_world_template(instance.world_id)
+                language = str(getattr(instance, "language", "") or "")
+                world_data = load_world_template_compat(
+                    self._load_world_template,
+                    instance.world_id,
+                    language,
+                )
                 if world_data:
-                    rule = RuleSystem.load_for_world(world_data, self.rules_dir)
+                    rule = RuleSystem.load_for_world(world_data, self.rules_dir, language)
                     if rule:
                         rule_cats = rule.item_categories
+        except ValueError:
+            raise
         except Exception:
             logger.warning("物品分类表加载失败，回退内置表: world_id=%s", instance.world_id, exc_info=True)
 

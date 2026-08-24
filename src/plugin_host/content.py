@@ -108,16 +108,23 @@ class PluginContentCatalog:
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
-            return None
-        rule_id = str(data.get("default_rule") or "")
-        rule_path = self.contribution_path("rule", rule_id) if rule_id else None
-        if rule_path:
-            data = dict(data)
-            data["_diceframe_rule_path"] = str(rule_path)
+            raise ValueError(f"插件世界模板必须是 JSON 对象：{path}")
         item = self.registry.find("world_template", world_id)
         if item:
             data = self.expose_scene_image(data, item.plugin_id)
             data = self._materialize_locale(item, "world_template", data, language)
+        rule_id = str(data.get("default_rule") or "")
+        rule_item = self.registry.find("rule", rule_id) if rule_id else None
+        if rule_item:
+            data = dict(data)
+            data["_diceframe_rule_path"] = str(rule_item.path)
+            localized_rule = self.load_rule_template(
+                rule_id,
+                language,
+                plugin_id=rule_item.plugin_id,
+            )
+            if localized_rule:
+                data["_diceframe_rule_data"] = localized_rule
         return data
 
     def load_rule_template(
@@ -166,7 +173,7 @@ class PluginContentCatalog:
             try:
                 data = json.loads(item.path.read_text(encoding="utf-8"))
                 if not isinstance(data, dict):
-                    continue
+                    raise ValueError(f"插件内容资源必须是 JSON 对象：{item.path}")
                 if data.get("schema_version") != THEME_SCHEMA_VERSION:
                     self.logger.warning(
                         "Ignoring unsupported plugin theme schema version: %s",
@@ -387,8 +394,8 @@ class PluginContentCatalog:
                 })
                 self._expose_packaged_portrait(data, item.plugin_id)
                 result.append(data)
-            except (OSError, TypeError, json.JSONDecodeError):
-                self.logger.warning("插件内容资源读取失败: %s", item.path, exc_info=True)
+            except (OSError, TypeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"插件内容资源读取失败：{item.path}: {exc}") from exc
         return result
 
     def _materialize_locale(
@@ -414,10 +421,11 @@ class PluginContentCatalog:
             if overlay_path.exists() and overlay_path.is_file():
                 try:
                     loaded = json.loads(overlay_path.read_text(encoding="utf-8"))
-                except (OSError, ValueError, TypeError):
-                    continue
-                if isinstance(loaded, dict):
-                    locales[candidate.name] = loaded
+                except (OSError, ValueError, TypeError) as exc:
+                    raise ValueError(f"插件 locale 读取失败：{overlay_path}: {exc}") from exc
+                if not isinstance(loaded, dict):
+                    raise ValueError(f"插件 locale 必须是 JSON 对象：{overlay_path}")
+                locales[candidate.name] = loaded
         if not locales:
             return data
         overlay = resolve_locale(locales, language, item.default_locale or "zh-CN")

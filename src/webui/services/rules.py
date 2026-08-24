@@ -84,8 +84,8 @@ def list_rules(api: "WebAPI", language: str = "") -> dict[str, Any]:
                     "description": localized.get("description", ""),
                     "active_locale": localized.get("active_locale", ""),
                 })
-        except (OSError, ValueError, TypeError):
-            logger.warning("规则列表本地化失败: %s", rule_id, exc_info=True)
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError(f"规则 {rule_id} 的 locale 无效：{exc}") from exc
     seen = {str(rule.get("rule_id") or "") for rule in rules}
     for item in _plugin_rule_items(api, language):
         rule_id = str(item.get("rule_id") or "")
@@ -299,6 +299,6 @@ def _plugin_rule_items(api: "WebAPI", language: str = "") -> list[dict[str, Any]
                 "readonly": True,
                 "file": str(item.path),
             })
-        except Exception:
-            logger.warning("插件规则模板读取失败: %s", item.path, exc_info=True)
+        except Exception as exc:
+            raise ValueError(f"插件规则模板读取失败：{item.path}: {exc}") from exc
     return result

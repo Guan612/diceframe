@@ -31,9 +31,9 @@ class GameLifecycle:
         llm_client: Any,
         prompt: Any,
         state_applier: StateUpdateApplier,
-        ensure_matcher_for_world: Callable[[str], None],
+        ensure_matcher_for_world: Callable[[str, str], None],
         create_game: Callable[..., Awaitable[GameInstance]],
-        load_world_template: Callable[[str], dict | None],
+        load_world_template: Callable[[str, str], dict | None],
         narrative_max_tokens: int,
         brief_max_tokens: int,
     ):
@@ -54,7 +54,7 @@ class GameLifecycle:
         self.registry.register(instance)
 
         if instance.world_id:
-            self.ensure_matcher_for_world(instance.world_id)
+            self.ensure_matcher_for_world(instance.world_id, instance.language)
 
         rule_ctx = self.prompt.load_rule_context(instance, self.load_world_template)
         gm_prompt = self.prompt.compose_gm_prompt(instance, rule_ctx.rule_appendix)

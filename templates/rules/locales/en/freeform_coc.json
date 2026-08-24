@@ -16,111 +16,6 @@
       "标准": "Clues must be pieced together, combat is risky, Sanity loss normal.",
       "硬核": "Clues are scarce and possibly misleading, combat is highly lethal, Sanity loss doubled."
     },
-    "skill_pools": {
-      "Private Detective": [
-        "Spot Hidden",
-        "Listen",
-        "Library Use",
-        "Psychology",
-        "Fast Talk",
-        "Stealth",
-        "Track",
-        "Firearms"
-      ],
-      "Scholar": [
-        "Library Use",
-        "History",
-        "Foreign Language",
-        "Own Language",
-        "Occult",
-        "Archaeology",
-        "Anthropology",
-        "Persuade"
-      ],
-      "Doctor": [
-        "First Aid",
-        "Medicine",
-        "Psychology",
-        "Psychoanalysis",
-        "Persuade",
-        "Library Use",
-        "Foreign Language",
-        "Natural World"
-      ],
-      "Veteran": [
-        "Firearms",
-        "Fighting",
-        "Dodge",
-        "First Aid",
-        "Spot Hidden",
-        "Listen",
-        "Drive",
-        "Survival"
-      ],
-      "Journalist": [
-        "Spot Hidden",
-        "Listen",
-        "Fast Talk",
-        "Persuade",
-        "Psychology",
-        "Library Use",
-        "Photography",
-        "Foreign Language"
-      ],
-      "Antiquarian": [
-        "Accounting",
-        "Appraise",
-        "History",
-        "Library Use",
-        "Occult",
-        "Persuade",
-        "Foreign Language",
-        "Spot Hidden"
-      ]
-    },
-    "item_categories": {
-      "equipment": [
-        "Revolver",
-        "Pistol",
-        "Rifle",
-        "Shotgun",
-        "Saber",
-        "Flashlight",
-        "Knife",
-        "SMG",
-        "Machete",
-        "Club",
-        "Baton"
-      ],
-      "consumable": [
-        "First Aid Kit",
-        "Bandage",
-        "Bullets",
-        "Gasoline",
-        "Whiskey",
-        "Cigarettes",
-        "Matches",
-        "Rope",
-        "Rations",
-        "Canteen",
-        "Sedative",
-        "Morphine"
-      ],
-      "misc": [
-        "Key",
-        "Notebook",
-        "Photograph",
-        "Map",
-        "Book",
-        "Amulet",
-        "ID",
-        "Pocket Watch",
-        "Magnifying Glass",
-        "Compass",
-        "Car",
-        "Bicycle"
-      ]
-    },
     "currency": "Dollars"
   },
   "attributes": {
@@ -183,6 +78,86 @@
     "luck": {
       "name": "Luck",
       "description": "Per house rules, luck may be spent to turn a failure into a success or reduce consequences."
+    }
+  },
+  "skills": {
+    "spot_hidden": {
+      "name": "Spot Hidden"
+    },
+    "listen": {
+      "name": "Listen"
+    },
+    "library_use": {
+      "name": "Library Use"
+    },
+    "psychology": {
+      "name": "Psychology"
+    },
+    "fast_talk": {
+      "name": "Fast Talk"
+    },
+    "stealth": {
+      "name": "Stealth"
+    },
+    "track": {
+      "name": "Track"
+    },
+    "firearms": {
+      "name": "Firearms"
+    },
+    "history": {
+      "name": "History"
+    },
+    "foreign_language": {
+      "name": "Foreign Language"
+    },
+    "own_language": {
+      "name": "Own Language"
+    },
+    "occult": {
+      "name": "Occult"
+    },
+    "archaeology": {
+      "name": "Archaeology"
+    },
+    "anthropology": {
+      "name": "Anthropology"
+    },
+    "persuade": {
+      "name": "Persuade"
+    },
+    "first_aid": {
+      "name": "First Aid"
+    },
+    "medicine": {
+      "name": "Medicine"
+    },
+    "psychoanalysis": {
+      "name": "Psychoanalysis"
+    },
+    "natural_world": {
+      "name": "Natural World"
+    },
+    "fighting": {
+      "name": "Fighting"
+    },
+    "dodge": {
+      "name": "Dodge"
+    },
+    "drive": {
+      "name": "Drive"
+    },
+    "survival": {
+      "name": "Survival"
+    },
+    "photography": {
+      "name": "Photography"
+    },
+    "accounting": {
+      "name": "Accounting"
+    },
+    "appraise": {
+      "name": "Appraise"
     }
   }
 }

@@ -517,10 +517,10 @@ class PluginHost:
                 continue
             try:
                 data = json.loads(item.path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, TypeError):
-                continue
+            except (OSError, ValueError, TypeError) as exc:
+                raise ValueError(f"插件世界模板读取失败：{item.path}: {exc}") from exc
             if not isinstance(data, dict) or not data.get("world_id"):
-                continue
+                raise ValueError(f"插件世界模板缺少 world_id：{item.path}")
             world_id = str(data["world_id"])
             if not lorebook_store.get_world(world_id):
                 lorebook_store.create_world(
