@@ -39,7 +39,7 @@ import {
   type ProviderTestKind,
   type ProviderTestMode,
 } from '@/utils/providerModels'
-import { normalizeSettingsSection, type SettingsSectionId } from '@/utils/settingsSections'
+import { isSettingsSectionAvailable, normalizeSettingsSection, type SettingsSectionId } from '@/utils/settingsSections'
 
 type StatusTone = 'default' | 'success' | 'warning' | 'error' | 'info'
 type UpdatePackageKind = 'source' | 'portable'
@@ -218,7 +218,9 @@ function queryValue(value: unknown): string {
 
 function syncRouteTarget() {
   const requestedSection = normalizeSettingsSection(queryValue(route.query.section))
-  if (requestedSection) section.value = requestedSection
+  if (requestedSection && isSettingsSectionAvailable(requestedSection, standaloneFrontend)) {
+    section.value = requestedSection
+  }
   if (queryValue(route.query.focus) === 'update') {
     section.value = 'about'
     void nextTick(() => {
@@ -1635,7 +1637,7 @@ function redownloadUpdatePackage() {
             <TestResultCard v-if="testKind === 'proxy' && testResult" :result="testResult" kind="proxy" />
           </div>
 
-          <div v-show="section === 'connection'" class="settings-pane">
+          <div v-if="standaloneFrontend" v-show="section === 'connection'" class="settings-pane">
             <h3>{{ t('backendConnectionTitle') }}</h3>
             <p class="muted">{{ t('backendConnectionHelp') }}</p>
             <div class="form-row">

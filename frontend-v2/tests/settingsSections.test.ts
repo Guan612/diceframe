@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { normalizeSettingsSection } from '../src/utils/settingsSections'
+import { isSettingsSectionAvailable, normalizeSettingsSection } from '../src/utils/settingsSections'
 
 function source(relativePath: string): string {
   return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf-8')
@@ -20,6 +20,13 @@ describe('settings section links', () => {
     expect(normalizeSettingsSection('connection')).toBe('connection')
     expect(normalizeSettingsSection('models')).toBe('models')
     expect(normalizeSettingsSection('missing')).toBeNull()
+  })
+
+  it('only exposes backend connections in standalone frontends', () => {
+    expect(isSettingsSectionAvailable('connection', true)).toBe(true)
+    expect(isSettingsSectionAvailable('connection', false)).toBe(false)
+    expect(isSettingsSectionAvailable('api', false)).toBe(true)
+    expect(settingsSource).toContain('v-if="standaloneFrontend" v-show="section === \'connection\'"')
   })
 
   it('auto-saves model feature switches through the shared model routing save path', () => {

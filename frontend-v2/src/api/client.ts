@@ -101,7 +101,9 @@ async function fetchWithConnectionRecovery(input: RequestInfo | URL, init?: Requ
   try {
     return await fetch(input, init)
   } catch (error: unknown) {
-    if (!(error instanceof Error && error.name === 'AbortError')) redirectToBackendLogin()
+    const isAbortError = typeof error === 'object' && error !== null && 'name' in error
+      && (error as { name?: unknown }).name === 'AbortError'
+    if (!isAbortError) redirectToBackendLogin()
     throw error
   }
 }
