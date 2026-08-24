@@ -192,7 +192,11 @@ Bot 会跟随绑定对局的语言显示帮助和主要操作提示；中文与�
 - `@bot 暂离` / `@bot 回来`：临时下线不阻塞回合。
 - `@bot <自然语言行动>`：提交角色行动。
 
-Bot 不直接读写存档，只通过 Web 服务的 HTTP API 工作。插件商店优先从 DiceFrame Hub 读取审核状态、统计与详情，Hub 不可用时自动降级到本地缓存和公开索引镜像；插件包仍直接从作者自己的 GitHub 正式 Release 固定到精确提交下载，Hub 不代理包体。商店检测到插件新版本时会提示，安装与更新均由用户手动确认；进程型或扩权更新始终需要确认。本地和私下分享使用 `.dfplugin`。匿名使用统计默认关闭，可在“设置 → 高级 → DiceFrame Hub 与隐私”中开启、关闭或清除假名化安装身份；游戏、角色、插件列表、模型配置和正文不会作为心跳发送。开发时可用 `DICEFRAME_HUB_URL=http://127.0.0.1:18080` 指向本机 Hub，非本机地址必须使用 HTTPS。插件开发说明见 [插件开发指南](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md)，投稿和审核边界见 [插件索引与审核规则](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md)。示例插件在 `plugins/examples/`，包括内容包、主题、可调用工具和 Bot Bridge 命令/展示扩展；可用 `python scripts\package_plugin.py plugins\examples\bridge-customizer --overwrite` 打包测试。
+DiceFrame 插件商店可以浏览和安装社区插件。插件由作者通过 GitHub Release 发布；安装和更新都需要用户确认，插件申请运行外部进程或扩大权限时会额外提示风险。本地或私下分享的插件也可以通过 `.dfplugin` 文件安装。
+
+DiceFrame Hub 为插件商店提供审核信息、版本状态和详情。Hub 暂时不可用时，已安装插件和本地游戏不受影响。匿名使用统计默认关闭，可以在“设置 → 高级参数 → DiceFrame Hub 与隐私”中管理。
+
+如果你想开发或发布插件，请阅读[插件开发指南](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md)和[插件索引与审核规则](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md)。
 
 ## 文档
 

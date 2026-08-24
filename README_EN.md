@@ -145,7 +145,11 @@ The built-in QQ/NapCat plugin receives its DiceFrame Bot API Token automatically
 
 The Bot follows the bound game's language for help and primary operation messages, with native Chinese and English commands available.
 
-The plugin store indexes author-owned repositories. Installation resolves the latest stable GitHub Release to an exact commit; the store checks for updates and notifies; installing or updating always requires user confirmation, and process or permission-expanding updates require explicit confirmation. Local/private sharing uses `.dfplugin`. Supported capabilities include channel adapters, Bot Bridge command/hook/render extensions, content packs, themes, structured tools, and the location/asset subset of map packs. Import/export and Provider types remain reserved and cannot be installed from the store.
+The DiceFrame plugin store lets you browse and install community plugins published by their authors through GitHub Releases. Installing or updating always requires confirmation, with an additional risk warning when a plugin requests external-process access or expanded permissions. Locally or privately shared plugins can also be installed from `.dfplugin` files.
+
+DiceFrame Hub provides review information, version status, and details for the plugin store. Installed plugins and local games continue to work if Hub is temporarily unavailable. Anonymous usage statistics are disabled by default and can be managed under **Settings → Advanced → DiceFrame Hub and privacy**.
+
+To develop or publish a plugin, see the [plugin development guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-development.md) and [plugin registry and review rules](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-registry.md).
 
 ## Documentation
 
