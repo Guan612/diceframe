@@ -19,6 +19,7 @@ import { characterCardNeedsConversion } from '@/utils/characterCards'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadSceneImage } from '@/api/sceneImages'
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
+import { isLlmConfigReady } from '@/utils/modelConfiguration'
 
 interface CreateCharacter extends CharacterSheet { character_name: string }
 type CreateMode = 'template' | 'custom' | 'ai'
@@ -93,11 +94,7 @@ const confirmationWorld = computed(() => {
   if (mode.value === 'custom') return customName.value.trim() || t('modeCustom')
   return t('modeAi')
 })
-const apiReady = computed(() => Boolean(
-  String(settings.config.base_url || '').trim()
-  && String(settings.config.model || '').trim()
-  && settings.config.api_key?.configured,
-))
+const apiReady = computed(() => isLlmConfigReady(settings.config))
 const showApiSetupHint = computed(() => settingsChecked.value && !settings.error && !apiReady.value)
 
 function worldIdOf(w: WorldTemplateSummary | WorldSummary): string { return String(w.world_id || w.id || '') }
