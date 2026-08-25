@@ -21,6 +21,18 @@ PROVIDER_REF_KEYS = frozenset({
     "embedding_provider_ref", "tts_provider_ref", "asr_provider_ref", "imagegen_provider_ref",
 })
 
+# 路由键 -> 该路由要求的模型能力。只对明确的手动覆盖做协调，
+# 启发式识别可能误判，不能因为它改变就悄悄清空用户已有配置。
+MODEL_CAPABILITY_ROUTES = (
+    ("llm_provider_ref", "model", "chat", "主模型"),
+    ("fallback1_provider_ref", "fallback1_model", "chat", "备用模型 1"),
+    ("fallback2_provider_ref", "fallback2_model", "chat", "备用模型 2"),
+    ("embedding_provider_ref", "embedding_model", "embedding", "向量模型"),
+    ("tts_provider_ref", "tts_model", "tts", "语音合成模型"),
+    ("asr_provider_ref", "asr_model", "asr", "语音识别模型"),
+    ("imagegen_provider_ref", "imagegen_model", "image", "图像生成模型"),
+)
+
 
 def is_valid_provider_id(provider_id: str) -> bool:
     return bool(_PROVIDER_ID_PATTERN.match(provider_id or ""))
@@ -123,3 +135,35 @@ def strip_dangling_provider_refs(candidate: dict[str, Any]) -> None:
         ref = str(candidate.get(key) or "").strip()
         if ref and ref not in known:
             candidate[key] = ""
+
+
+def reconcile_model_capability_routes(candidate: dict[str, Any]) -> list[str]:
+    """清理显式能力覆盖与路由用途不一致的旧绑定。
+
+    仅检查 provider 目录中存在的模型和显式 ``model_capabilities``，因此普通
+    的自动识别结果不会改变既有配置。返回被解除的路由名称供 API 提示用户。
+    """
+    providers = {
+        str(entry.get("id") or ""): entry
+        for entry in candidate.get("ai_providers") or []
+        if isinstance(entry, dict) and str(entry.get("id") or "")
+    }
+    cleared: list[str] = []
+    for ref_key, model_key, required, label in MODEL_CAPABILITY_ROUTES:
+        ref = str(candidate.get(ref_key) or "").strip()
+        model = str(candidate.get(model_key) or "").strip()
+        provider = providers.get(ref)
+        if not ref or not model or not provider:
+            continue
+        models = provider.get("models")
+        if not isinstance(models, list) or model not in models:
+            continue
+        capabilities = provider.get("model_capabilities")
+        override = capabilities.get(model) if isinstance(capabilities, dict) else None
+        if not override or override == required:
+            continue
+        # A matching override is valid. Any other explicit override is stale.
+        candidate[ref_key] = ""
+        candidate[model_key] = ""
+        cleared.append(label)
+    return cleared

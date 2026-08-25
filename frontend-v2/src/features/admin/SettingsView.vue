@@ -441,13 +441,14 @@ async function saveProvidersList() {
   }
   providerSaving.value = true
   try {
-    await store.saveProviders(
+    const warnings = await store.saveProviders(
       providerDrafts.value.map(d => ({
         id: d.id, name: d.name, base_url: d.base_url, api_format: d.api_format, models: d.models,
         model_capabilities: d.model_capabilities,
       })),
     )
     toast.success(t('settingsSaved'))
+    warnings.forEach(warning => toast.warning(warning))
   } catch (e: unknown) {
     toast.error(errorMessage(e))
   } finally {
@@ -565,7 +566,15 @@ function draftModelCapability(draft: ProviderDraft | null, model: string): Model
   return modelCapability(model, draft?.model_capabilities[model])
 }
 
+function draftModelCapabilitySelection(draft: ProviderDraft | null, model: string): ModelCapability | 'auto' {
+  return draft?.model_capabilities[model] || 'auto'
+}
+
 function setDraftModelCapability(draft: ProviderDraft, model: string, capability: string) {
+  if (capability === 'auto') {
+    delete draft.model_capabilities[model]
+    return
+  }
   if (!['chat', 'image', 'embedding', 'tts', 'asr'].includes(capability)) return
   draft.model_capabilities[model] = capability as ModelCapability
 }
@@ -604,12 +613,13 @@ function providerStyle(providerId: string) {
 
 function modelCapabilityLabels(model: string, override?: string): string[] {
   const capability = modelCapability(model, override)
-  if (capability === 'image') return [t('modelCapabilityImage')]
-  if (capability === 'embedding') return [t('modelCapabilityEmbedding')]
-  if (capability === 'tts') return [t('modelCapabilityTts')]
-  if (capability === 'asr') return [t('modelCapabilityAsr')]
+  const labels = [override ? t('modelCapabilityManualOverride') : t('modelCapabilityAuto')]
+  if (capability === 'image') return [...labels, t('modelCapabilityImage')]
+  if (capability === 'embedding') return [...labels, t('modelCapabilityEmbedding')]
+  if (capability === 'tts') return [...labels, t('modelCapabilityTts')]
+  if (capability === 'asr') return [...labels, t('modelCapabilityAsr')]
 
-  const labels = [t('modelCapabilityChat')]
+  labels.push(t('modelCapabilityChat'))
   const value = model.toLowerCase()
   if (/(reason|thinking|deepseek-r|(^|[-_.])r1|(^|[-_.])o[134])/.test(value)) {
     labels.push(t('modelCapabilityReasoning'))
@@ -678,9 +688,10 @@ async function saveModelRouting() {
   }
   modelRoutingSaving.value = true
   try {
-    await store.saveSection(MODEL_ROUTING_CONFIG_KEYS)
+    const warnings = await store.saveSection(MODEL_ROUTING_CONFIG_KEYS)
     await Promise.all([initializeTts(true), initializeAsr(true), loadTtsVoices()])
     toast.success(t('modelRoutingSaved'))
+    warnings.forEach(warning => toast.warning(warning))
   } catch (error: unknown) {
     toast.error(errorMessage(error))
   } finally {
@@ -1390,9 +1401,10 @@ function redownloadUpdatePackage() {
                           <label class="provider-model-capability">
                             <span>{{ t('modelCapabilityManual') }}</span>
                             <select
-                              :value="draftModelCapability(activeProvider, modelName)"
+                              :value="draftModelCapabilitySelection(activeProvider, modelName)"
                               @change="setDraftModelCapability(activeProvider, modelName, eventValue($event))"
                             >
+                              <option value="auto">{{ t('modelCapabilityAuto') }}</option>
                               <option value="chat">{{ t('modelCapabilityChat') }}</option>
                               <option value="image">{{ t('modelCapabilityImage') }}</option>
                               <option value="embedding">{{ t('modelCapabilityEmbedding') }}</option>

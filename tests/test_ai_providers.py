@@ -9,6 +9,7 @@ from src.ai_providers import (
     is_provider_secret_key,
     normalize_ai_providers,
     provider_secret_key,
+    reconcile_model_capability_routes,
     resolve_provider,
     strip_dangling_provider_refs,
     strip_orphan_provider_secrets,
@@ -26,8 +27,19 @@ class _ConfigRequest:
         return self._body
 
 
-def _provider(provider_id="sf", base_url="https://api.siliconflow.cn/v1", api_format="openai"):
-    return {"id": provider_id, "name": provider_id, "base_url": base_url, "api_format": api_format}
+def _provider(
+    provider_id="sf",
+    base_url="https://api.siliconflow.cn/v1",
+    api_format="openai",
+    models=None,
+    model_capabilities=None,
+):
+    entry = {"id": provider_id, "name": provider_id, "base_url": base_url, "api_format": api_format}
+    if models is not None:
+        entry["models"] = models
+    if model_capabilities is not None:
+        entry["model_capabilities"] = model_capabilities
+    return entry
 
 
 def _state(**overrides):
@@ -121,6 +133,30 @@ def test_strip_orphan_secrets_and_dangling_refs():
     assert config["tts_provider_ref"] == "a"
 
 
+def test_reconcile_model_capability_routes_clears_only_incompatible_manual_bindings():
+    config = _state(
+        ai_providers=[_provider(
+            models=["comfy-image", "heuristic-image"],
+            model_capabilities={"comfy-image": "image"},
+        )],
+        llm_provider_ref="sf", model="comfy-image",
+        imagegen_provider_ref="sf", imagegen_model="comfy-image",
+        imagegen_enabled=True,
+        embedding_provider_ref="sf", embedding_model="heuristic-image",
+    )
+
+    cleared = reconcile_model_capability_routes(config)
+
+    assert cleared == ["主模型"]
+    assert config["llm_provider_ref"] == ""
+    assert config["model"] == ""
+    assert config["imagegen_provider_ref"] == "sf"
+    assert config["imagegen_model"] == "comfy-image"
+    # 没有显式覆盖的模型不因启发式结果而被清理。
+    assert config["embedding_provider_ref"] == "sf"
+    assert config["embedding_model"] == "heuristic-image"
+
+
 # ---------- 配置更新 ----------
 
 def test_config_update_accepts_provider_library_and_refs():
@@ -162,6 +198,22 @@ def test_config_update_deleting_provider_cleans_orphan_secret_and_ref():
     assert prepared.state[provider_secret_key("a")] == "k1"
     assert provider_secret_key("b") not in prepared.state
     assert prepared.state["llm_provider_ref"] == ""
+
+
+def test_config_update_reconciles_routes_after_manual_capability_change():
+    current = _state(
+        ai_providers=[_provider(models=["comfy-model"], model_capabilities={"comfy-model": "chat"})],
+        llm_provider_ref="sf", model="comfy-model",
+    )
+
+    prepared = prepare_config_update(current, {
+        "ai_providers": [_provider(models=["comfy-model"], model_capabilities={"comfy-model": "image"})],
+    })
+
+    assert prepared.error == ""
+    assert prepared.state["llm_provider_ref"] == ""
+    assert prepared.state["model"] == ""
+    assert prepared.warnings == ("主模型已解除：所选模型的手动能力不是该用途所需类型",)
 
 
 def test_config_update_degrades_speech_engines_when_provider_deleted():

@@ -578,6 +578,8 @@ export const en = {
   pluginProviderModelsEmpty: 'This provider has no saved models; update its model catalog in Model Settings',
   modelCapabilityChat: 'Chat',
   modelCapabilityManual: 'Manual type',
+  modelCapabilityAuto: 'Auto-detected',
+  modelCapabilityManualOverride: 'Manual',
   modelCapabilityReasoning: 'Reasoning',
   modelCapabilityImage: 'Image',
   modelCapabilityEmbedding: 'Embedding',

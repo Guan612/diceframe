@@ -163,6 +163,24 @@ describe('AI provider library settings store', () => {
     expect(payload.ai_providers[0].model_capabilities).toEqual({ 'custom-painter': 'image' })
   })
 
+  it('omits capability overrides when a model is restored to automatic detection', async () => {
+    const store = useSettingsStore()
+    mockedApi.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
+      ai_providers: [{
+        id: 'custom', name: 'Custom', base_url: 'https://example.test/v1', api_format: 'openai',
+        models: ['custom-painter'],
+      }],
+    })
+
+    await store.saveProviders([{
+      id: 'custom', name: 'Custom', base_url: 'https://example.test/v1', api_format: 'openai',
+      models: ['custom-painter'], model_capabilities: {},
+    }])
+
+    const payload = JSON.parse(mockedApi.mock.calls[0][1]!.body as string)
+    expect(payload.ai_providers[0].model_capabilities).toBeUndefined()
+  })
+
   it('requests a model catalog with saved provider credentials by id', async () => {
     const store = useSettingsStore()
     mockedApi.mockResolvedValue({ ok: true, models: ['model-b', 'model-a'], count: 2 })

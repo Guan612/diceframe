@@ -14,6 +14,7 @@ from src.ai_providers import (
     PROVIDER_REF_KEYS,
     is_provider_secret_key,
     normalize_ai_providers,
+    reconcile_model_capability_routes,
     strip_dangling_provider_refs,
     strip_orphan_provider_secrets,
 )
@@ -144,6 +145,7 @@ class PreparedConfigUpdate:
     changed_keys: frozenset[str]
     access_password_changed: bool
     error: str = ""
+    warnings: tuple[str, ...] = ()
 
 
 def clean_text_value(value: Any) -> str:
@@ -286,6 +288,7 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
     strip_orphan_provider_secrets(candidate)
     strip_dangling_provider_refs(candidate)
     _degrade_speech_engines_lost_provider(candidate, refs_before)
+    cleared_model_routes = reconcile_model_capability_routes(candidate)
 
     imagegen_ref = str(candidate.get("imagegen_provider_ref") or "").strip()
     if imagegen_ref:
@@ -308,7 +311,15 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
         return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "代理地址仅支持 http:// 或 https://")
     if float(candidate.get("napcat_reply_delay_max_sec", 0)) < float(candidate.get("napcat_reply_delay_min_sec", 0)):
         return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "NapCat 回复延迟上限不能小于下限")
-    return PreparedConfigUpdate(candidate, changed_keys, access_password_changed)
+    return PreparedConfigUpdate(
+        candidate,
+        changed_keys,
+        access_password_changed,
+        warnings=tuple(
+            f"{label}已解除：所选模型的手动能力不是该用途所需类型"
+            for label in cleared_model_routes
+        ),
+    )
 
 
 def bot_plugin_changes(body: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:

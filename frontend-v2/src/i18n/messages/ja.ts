@@ -578,6 +578,8 @@ export const ja = {
   pluginProviderModelsEmpty: '保存済みモデルがありません。モデル設定でモデル一覧を更新してください',
   modelCapabilityChat: 'チャット',
   modelCapabilityManual: '手動タイプ',
+  modelCapabilityAuto: '自動判定',
+  modelCapabilityManualOverride: '手動',
   modelCapabilityReasoning: '推論',
   modelCapabilityImage: '画像',
   modelCapabilityEmbedding: 'ベクトル',

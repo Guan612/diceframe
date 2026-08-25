@@ -578,6 +578,8 @@ export const zhCN = {
   pluginProviderModelsEmpty: '该服务商没有已保存模型，请先在“模型接口”维护模型目录',
   modelCapabilityChat: '对话',
   modelCapabilityManual: '手动类型',
+  modelCapabilityAuto: '自动识别',
+  modelCapabilityManualOverride: '手动',
   modelCapabilityReasoning: '推理',
   modelCapabilityImage: '图片',
   modelCapabilityEmbedding: '向量',
