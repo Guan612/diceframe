@@ -13,6 +13,7 @@ from typing import Any
 
 PROVIDER_SECRET_KEY_PREFIX = "ai_provider_key_"
 _PROVIDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MODEL_CAPABILITIES = frozenset({"chat", "image", "embedding", "tts", "asr"})
 
 # 引用键 → 能力侧的运行时重建分组（与 config_update 的两个 frozenset 对应）
 PROVIDER_REF_KEYS = frozenset({
@@ -72,6 +73,17 @@ def normalize_ai_providers(raw: Any) -> list[dict[str, Any]]:
         models = _normalize_models(item.get("models"))
         if models:
             entry["models"] = models
+        raw_capabilities = item.get("model_capabilities")
+        if isinstance(raw_capabilities, dict) and models:
+            model_names = set(models)
+            capabilities = {
+                str(model): str(capability).strip().lower()
+                for model, capability in raw_capabilities.items()
+                if str(model) in model_names
+                and str(capability).strip().lower() in _MODEL_CAPABILITIES
+            }
+            if capabilities:
+                entry["model_capabilities"] = capabilities
         entries.append(entry)
     return entries
 

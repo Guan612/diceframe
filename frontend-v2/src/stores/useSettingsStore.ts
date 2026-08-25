@@ -15,6 +15,7 @@ export interface AiProviderInput {
   base_url: string
   api_format: string
   models?: string[]
+  model_capabilities?: Record<string, 'chat' | 'image' | 'embedding' | 'tts' | 'asr'>
 }
 
 export interface ProviderModelsResponse {
@@ -78,6 +79,7 @@ export const useSettingsStore = defineStore('settings', () => {
       ai_providers: providers.map((p) => ({
         id: p.id, name: p.name, base_url: p.base_url, api_format: p.api_format,
         models: p.models || [],
+        ...(Object.keys(p.model_capabilities || {}).length ? { model_capabilities: p.model_capabilities } : {}),
       })),
     }
     for (const p of providers) {
@@ -92,7 +94,10 @@ export const useSettingsStore = defineStore('settings', () => {
       if (!saved) return false
       const expectedModels = provider.models || []
       const actualModels = saved.models || []
+      const expectedCapabilities = provider.model_capabilities || {}
+      const actualCapabilities = saved.model_capabilities || {}
       return expectedModels.every(model => actualModels.includes(model))
+        && Object.entries(expectedCapabilities).every(([model, capability]) => actualCapabilities[model] === capability)
     })
     if (!persisted) {
       throw new ApiError(

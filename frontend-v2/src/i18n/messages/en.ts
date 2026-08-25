@@ -577,6 +577,7 @@ export const en = {
   pluginAiProviderSelectFirst: 'Select an AI provider first',
   pluginProviderModelsEmpty: 'This provider has no saved models; update its model catalog in Model Settings',
   modelCapabilityChat: 'Chat',
+  modelCapabilityManual: 'Manual type',
   modelCapabilityReasoning: 'Reasoning',
   modelCapabilityImage: 'Image',
   modelCapabilityEmbedding: 'Embedding',

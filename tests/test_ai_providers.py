@@ -68,6 +68,24 @@ def test_normalize_ai_providers_keeps_unique_model_catalog():
     assert out[0]["models"] == ["model-b", "model-a"]
 
 
+def test_normalize_ai_providers_keeps_valid_manual_model_capabilities():
+    out = normalize_ai_providers([{
+        "id": "a",
+        "models": ["chat-looking-image", "real-chat"],
+        "model_capabilities": {
+            "chat-looking-image": "image",
+            "real-chat": "CHAT",
+            "missing-model": "tts",
+            "bad": "unknown",
+        },
+    }])
+
+    assert out[0]["model_capabilities"] == {
+        "chat-looking-image": "image",
+        "real-chat": "chat",
+    }
+
+
 def test_provider_secret_key_roundtrip():
     assert provider_secret_key("sf") == "ai_provider_key_sf"
     assert is_provider_secret_key("ai_provider_key_sf")

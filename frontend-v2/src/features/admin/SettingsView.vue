@@ -331,6 +331,7 @@ interface ProviderDraft {
   base_url: string
   api_format: string
   models: string[]
+  model_capabilities: Record<string, ModelCapability>
   configuredMasked: string
 }
 const providerDrafts = ref<ProviderDraft[]>([])
@@ -377,7 +378,7 @@ const providerCatalogFilteredModels = computed(() => {
   return providerCatalogSourceModels.value.filter(model => {
     const matchesQuery = !query || model.toLowerCase().includes(query)
     const matchesCapability = providerCatalogFilter.value === 'all'
-      || modelCapability(model) === providerCatalogFilter.value
+      || draftModelCapability(activeCatalogProvider.value, model) === providerCatalogFilter.value
     return matchesQuery && matchesCapability
   })
 })
@@ -386,11 +387,11 @@ const providerCatalogFilters = computed(() => {
   const models = providerCatalogSourceModels.value
   const filters: { id: ModelCatalogFilter; label: string; count: number }[] = [
     { id: 'all', label: t('modelPickerAll'), count: models.length },
-    { id: 'chat', label: t('modelCapabilityChat'), count: models.filter(model => modelCapability(model) === 'chat').length },
-    { id: 'image', label: t('modelCapabilityImage'), count: models.filter(model => modelCapability(model) === 'image').length },
-    { id: 'embedding', label: t('modelCapabilityEmbedding'), count: models.filter(model => modelCapability(model) === 'embedding').length },
-    { id: 'tts', label: t('modelCapabilityTts'), count: models.filter(model => modelCapability(model) === 'tts').length },
-    { id: 'asr', label: t('modelCapabilityAsr'), count: models.filter(model => modelCapability(model) === 'asr').length },
+    { id: 'chat', label: t('modelCapabilityChat'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'chat').length },
+    { id: 'image', label: t('modelCapabilityImage'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'image').length },
+    { id: 'embedding', label: t('modelCapabilityEmbedding'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'embedding').length },
+    { id: 'tts', label: t('modelCapabilityTts'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'tts').length },
+    { id: 'asr', label: t('modelCapabilityAsr'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'asr').length },
   ]
   return filters
 })
@@ -402,6 +403,7 @@ function syncProviderDrafts(list: AppConfig['ai_providers']) {
     base_url: p.base_url,
     api_format: String(p.api_format || 'openai'),
     models: [...new Set((p.models || []).map(model => String(model).trim()).filter(Boolean))],
+    model_capabilities: { ...(p.model_capabilities || {}) },
     configuredMasked: p.api_key?.configured ? p.api_key.masked : '',
   }))
   if (!providerDrafts.value.some(provider => provider.id === activeProviderId.value)) {
@@ -417,7 +419,7 @@ function addProviderDraft() {
   }
   const provider = {
     id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-    name: '', base_url: '', api_format: 'openai', models: [], configuredMasked: '',
+    name: '', base_url: '', api_format: 'openai', models: [], model_capabilities: {}, configuredMasked: '',
   }
   providerDrafts.value.push(provider)
   activeProviderId.value = provider.id
@@ -442,6 +444,7 @@ async function saveProvidersList() {
     await store.saveProviders(
       providerDrafts.value.map(d => ({
         id: d.id, name: d.name, base_url: d.base_url, api_format: d.api_format, models: d.models,
+        model_capabilities: d.model_capabilities,
       })),
     )
     toast.success(t('settingsSaved'))
@@ -456,7 +459,11 @@ async function testProviderDraft(draft: ProviderDraft, testModel: string) {
   providerTestingId.value = draft.id
   providerTestResult.value = null
   const model = testModel.trim() || String(store.config.model || 'gpt-4o-mini')
-  const kind = providerTestKind(model, providerTestModes.value[draft.id] || 'auto')
+  const kind = providerTestKind(
+    model,
+    providerTestModes.value[draft.id] || 'auto',
+    draft.model_capabilities[model],
+  )
   if (!kind) {
     providerTestedId.value = draft.id
     providerTestedKind.value = 'model'
@@ -551,6 +558,16 @@ function isCatalogModelSelected(model: string): boolean {
 
 function removeProviderModel(draft: ProviderDraft, model: string) {
   draft.models = draft.models.filter(item => item !== model)
+  delete draft.model_capabilities[model]
+}
+
+function draftModelCapability(draft: ProviderDraft | null, model: string): ModelCapability {
+  return modelCapability(model, draft?.model_capabilities[model])
+}
+
+function setDraftModelCapability(draft: ProviderDraft, model: string, capability: string) {
+  if (!['chat', 'image', 'embedding', 'tts', 'asr'].includes(capability)) return
+  draft.model_capabilities[model] = capability as ModelCapability
 }
 
 function providerHasKey(draft: ProviderDraft): boolean {
@@ -585,8 +602,8 @@ function providerStyle(providerId: string) {
   return { '--provider-hue': String(Math.abs(hash) % 360) }
 }
 
-function modelCapabilityLabels(model: string): string[] {
-  const capability = modelCapability(model)
+function modelCapabilityLabels(model: string, override?: string): string[] {
+  const capability = modelCapability(model, override)
   if (capability === 'image') return [t('modelCapabilityImage')]
   if (capability === 'embedding') return [t('modelCapabilityEmbedding')]
   if (capability === 'tts') return [t('modelCapabilityTts')]
@@ -617,8 +634,11 @@ function providerById(id: string) {
 }
 
 function savedProviderModels(providerId: string, capability?: ModelCapability): string[] {
-  const models = providerById(providerId)?.models || []
-  return capability ? models.filter(model => modelCapability(model) === capability) : models
+  const provider = providerById(providerId)
+  const models = provider?.models || []
+  return capability
+    ? models.filter(model => modelCapability(model, provider?.model_capabilities?.[model]) === capability)
+    : models
 }
 
 function modelBindingSummary(providerId: unknown, model: unknown): string {
@@ -1365,8 +1385,21 @@ function redownloadUpdatePackage() {
                           <span class="provider-model-orbit"><i /><i /></span>
                           <div class="provider-model-copy">
                             <strong>{{ modelName }}</strong>
-                            <small>{{ modelCapabilityLabels(modelName).join(' · ') }}</small>
+                            <small>{{ modelCapabilityLabels(modelName, activeProvider.model_capabilities[modelName]).join(' · ') }}</small>
                           </div>
+                          <label class="provider-model-capability">
+                            <span>{{ t('modelCapabilityManual') }}</span>
+                            <select
+                              :value="draftModelCapability(activeProvider, modelName)"
+                              @change="setDraftModelCapability(activeProvider, modelName, eventValue($event))"
+                            >
+                              <option value="chat">{{ t('modelCapabilityChat') }}</option>
+                              <option value="image">{{ t('modelCapabilityImage') }}</option>
+                              <option value="embedding">{{ t('modelCapabilityEmbedding') }}</option>
+                              <option value="tts">{{ t('modelCapabilityTts') }}</option>
+                              <option value="asr">{{ t('modelCapabilityAsr') }}</option>
+                            </select>
+                          </label>
                           <button
                             type="button"
                             class="provider-model-remove"
@@ -1478,7 +1511,7 @@ function redownloadUpdatePackage() {
                   <span class="provider-model-orbit"><i /><i /></span>
                   <span class="provider-catalog-copy">
                     <strong>{{ modelName }}</strong>
-                    <small>{{ modelCapabilityLabels(modelName).join(' · ') }}</small>
+                    <small>{{ modelCapabilityLabels(modelName, activeCatalogProvider?.model_capabilities[modelName]).join(' · ') }}</small>
                   </span>
                   <span class="provider-catalog-toggle">{{ isCatalogModelSelected(modelName) ? '−' : '+' }}</span>
                 </button>

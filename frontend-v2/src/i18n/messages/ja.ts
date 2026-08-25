@@ -577,6 +577,7 @@ export const ja = {
   pluginAiProviderSelectFirst: '先に AI プロバイダーを選択してください',
   pluginProviderModelsEmpty: '保存済みモデルがありません。モデル設定でモデル一覧を更新してください',
   modelCapabilityChat: 'チャット',
+  modelCapabilityManual: '手動タイプ',
   modelCapabilityReasoning: '推論',
   modelCapabilityImage: '画像',
   modelCapabilityEmbedding: 'ベクトル',
