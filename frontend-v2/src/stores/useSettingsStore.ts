@@ -15,6 +15,7 @@ export interface AiProviderInput {
   base_url: string
   api_format: string
   models?: string[]
+  model_capabilities?: Record<string, 'chat' | 'image' | 'embedding' | 'tts' | 'asr'>
 }
 
 export interface ProviderModelsResponse {
@@ -68,9 +69,10 @@ export const useSettingsStore = defineStore('settings', () => {
     const payload: Record<string, unknown> = {}
     for (const k of keys) if (k in config.value) payload[k] = getConfigField(k as keyof AppConfig)
     Object.assign(payload, collectSecrets(secretKeys))
-    await api('/config', { method: 'POST', body: JSON.stringify(payload) })
+    const result = await api<{ warnings?: string[] }>('/config', { method: 'POST', body: JSON.stringify(payload) })
     for (const k of secretKeys) secrets.value[k] = ''
     await load()
+    return result.warnings || []
   }
 
   async function saveProviders(providers: AiProviderInput[]) {
@@ -78,13 +80,14 @@ export const useSettingsStore = defineStore('settings', () => {
       ai_providers: providers.map((p) => ({
         id: p.id, name: p.name, base_url: p.base_url, api_format: p.api_format,
         models: p.models || [],
+        ...(Object.keys(p.model_capabilities || {}).length ? { model_capabilities: p.model_capabilities } : {}),
       })),
     }
     for (const p of providers) {
       const v = secrets.value[providerSecretKey(p.id)]?.trim()
       if (v) payload[providerSecretKey(p.id)] = v
     }
-    await api('/config', { method: 'POST', body: JSON.stringify(payload) })
+    const result = await api<{ warnings?: string[] }>('/config', { method: 'POST', body: JSON.stringify(payload) })
     const refreshed = await api<AppConfig>('/config')
     const savedProviders = Array.isArray(refreshed.ai_providers) ? refreshed.ai_providers : null
     const persisted = savedProviders && providers.every(provider => {
@@ -92,7 +95,10 @@ export const useSettingsStore = defineStore('settings', () => {
       if (!saved) return false
       const expectedModels = provider.models || []
       const actualModels = saved.models || []
+      const expectedCapabilities = provider.model_capabilities || {}
+      const actualCapabilities = saved.model_capabilities || {}
       return expectedModels.every(model => actualModels.includes(model))
+        && Object.entries(expectedCapabilities).every(([model, capability]) => actualCapabilities[model] === capability)
     })
     if (!persisted) {
       throw new ApiError(
@@ -103,6 +109,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
     config.value = refreshed
     for (const p of providers) secrets.value[providerSecretKey(p.id)] = ''
+    return result.warnings || []
   }
 
   async function saveAccessPassword(password: string) {

@@ -10,7 +10,7 @@ vi.mock('../src/api/client', () => {
 
 import { ApiError, api } from '../src/api/client'
 import { providerSecretKey, useSettingsStore } from '../src/stores/useSettingsStore'
-import { providerTestKind } from '../src/utils/providerModels'
+import { modelCapability, providerTestKind } from '../src/utils/providerModels'
 
 const mockedApi = vi.mocked(api)
 
@@ -139,6 +139,46 @@ describe('AI provider library settings store', () => {
     expect(providerTestKind('BAAI/bge-reranker-v2-m3')).toBeNull()
     expect(providerTestKind('Qwen/Qwen-Image')).toBeNull()
     expect(providerTestKind('custom-vector-model', 'embedding')).toBe('embedding')
+  })
+
+  it('uses and persists a manual capability when automatic detection is wrong', async () => {
+    expect(modelCapability('custom-painter')).toBe('chat')
+    expect(modelCapability('custom-painter', 'image')).toBe('image')
+    expect(providerTestKind('custom-painter', 'auto', 'image')).toBeNull()
+
+    const store = useSettingsStore()
+    mockedApi.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
+      ai_providers: [{
+        id: 'custom', name: 'Custom', base_url: 'https://example.test/v1', api_format: 'openai',
+        models: ['custom-painter'], model_capabilities: { 'custom-painter': 'image' },
+      }],
+    })
+
+    await store.saveProviders([{
+      id: 'custom', name: 'Custom', base_url: 'https://example.test/v1', api_format: 'openai',
+      models: ['custom-painter'], model_capabilities: { 'custom-painter': 'image' },
+    }])
+
+    const payload = JSON.parse(mockedApi.mock.calls[0][1]!.body as string)
+    expect(payload.ai_providers[0].model_capabilities).toEqual({ 'custom-painter': 'image' })
+  })
+
+  it('omits capability overrides when a model is restored to automatic detection', async () => {
+    const store = useSettingsStore()
+    mockedApi.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
+      ai_providers: [{
+        id: 'custom', name: 'Custom', base_url: 'https://example.test/v1', api_format: 'openai',
+        models: ['custom-painter'],
+      }],
+    })
+
+    await store.saveProviders([{
+      id: 'custom', name: 'Custom', base_url: 'https://example.test/v1', api_format: 'openai',
+      models: ['custom-painter'], model_capabilities: {},
+    }])
+
+    const payload = JSON.parse(mockedApi.mock.calls[0][1]!.body as string)
+    expect(payload.ai_providers[0].model_capabilities).toBeUndefined()
   })
 
   it('requests a model catalog with saved provider credentials by id', async () => {

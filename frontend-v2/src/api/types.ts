@@ -1104,6 +1104,7 @@ export interface AiProvider {
   base_url: string
   api_format: 'openai' | 'anthropic' | string
   models?: string[]
+  model_capabilities?: Record<string, 'chat' | 'image' | 'embedding' | 'tts' | 'asr'>
   api_key?: SecretField
 }
 
