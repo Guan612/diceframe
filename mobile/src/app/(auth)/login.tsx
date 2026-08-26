@@ -1,10 +1,10 @@
 import * as React from 'react'
-import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native'
-import { useRouter } from 'expo-router'
+import { ActivityIndicator, Platform, Pressable, ScrollView, View } from 'react-native'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 
 import { PageHeader } from '@/components/page-header'
 import { Screen } from '@/components/screen'
-import { Button, ButtonText } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Text } from '@/components/ui/text'
 import {
@@ -20,6 +20,7 @@ import { useKeyboardHeight } from '@/lib/use-keyboard-height'
 /** 服务器连接 + Owner 登录；已连接时进入即“换服务器”流程 */
 export default function LoginScreen() {
   const router = useRouter()
+  const { mode } = useLocalSearchParams<{ mode?: string }>()
   const settings = useSettingsStore()
 
   const [serverUrl, setServerUrl] = React.useState(settings.baseUrl)
@@ -29,14 +30,19 @@ export default function LoginScreen() {
   const [busy, setBusy] = React.useState<'server' | 'login' | null>(null)
   const [error, setError] = React.useState('')
 
+  // Web 端服务器地址可留空 = 使用当前站点（同源相对路径，dev 下由 Metro
+  // 的反向代理转发到后端）；原生端必须显式填写局域网地址。
+  const isWeb = Platform.OS === 'web'
+
   // 进入页面时的模式快照：已有服务器 = “换服务器”流程。
   // 用快照而不是响应式读取，避免首次连接成功保存 baseUrl 后页面中途翻转。
   const [switching] = React.useState(() => settings.baseUrl !== '')
+  const switchingServer = mode === 'switch'
 
   // 已连接过服务器时进入本页自动探测：直接显示密码框（或开放服务器直入按钮），
   // 不需要用户先按一次“连接”。
   React.useEffect(() => {
-    if (!settings.baseUrl) return
+    if ((!settings.baseUrl && !isWeb) || switchingServer) return
     let active = true
     async function probe() {
       setBusy('server')
@@ -53,11 +59,11 @@ export default function LoginScreen() {
     return () => {
       active = false
     }
-  }, [settings.baseUrl])
+  }, [settings.baseUrl, switchingServer, isWeb])
 
   async function connectServer() {
     const normalized = normalizeBaseUrl(serverUrl)
-    if (!normalized) {
+    if (!normalized && !isWeb) {
       setError(strings.common.networkError)
       return
     }
@@ -101,7 +107,7 @@ export default function LoginScreen() {
   }
 
   return (
-    <Screen>
+    <Screen style={{ width: '100%', maxWidth: 600, alignSelf: 'center' }}>
       {switching ? (
         <PageHeader title="切换服务器" onBack={() => router.back()} />
       ) : (
@@ -125,7 +131,7 @@ export default function LoginScreen() {
           <Input
             value={serverUrl}
             onChangeText={setServerUrl}
-            placeholder={strings.login.serverPlaceholder}
+            placeholder={isWeb ? strings.login.serverPlaceholderWeb : strings.login.serverPlaceholder}
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
@@ -135,7 +141,7 @@ export default function LoginScreen() {
             {busy === 'server' ? (
               <ActivityIndicator className="text-primary-foreground" />
             ) : (
-              <ButtonText>{switching ? '切换服务器' : strings.login.connect}</ButtonText>
+              <Text>{switching ? '切换服务器' : strings.login.connect}</Text>
             )}
           </Button>
         </View>
@@ -156,15 +162,13 @@ export default function LoginScreen() {
                   {busy === 'login' ? (
                     <ActivityIndicator className="text-primary-foreground" />
                   ) : (
-                    <ButtonText>{strings.login.login}</ButtonText>
+                    <Text>{strings.login.login}</Text>
                   )}
                 </Button>
               </>
             ) : (
               <Button variant="secondary" onPress={enterOpen} disabled={busy !== null}>
-                <ButtonText className="text-secondary-foreground">
-                  {strings.login.enterOpen}
-                </ButtonText>
+                <Text>{strings.login.enterOpen}</Text>
               </Button>
             )}
           </View>

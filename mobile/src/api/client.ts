@@ -54,6 +54,8 @@ interface ApiContext {
    * set-cookie 响应头，也没有自动 cookie 管理，因此由客户端自行生成
    * uuid token 并以 Cookie 头主动携带；服务端 session_middleware 对任意
    * 未知 token 都会建档（token → user_id），claim-gm/rebind 都基于它生效。
+   * Web 端例外：浏览器禁止 JS 设置 Cookie 头，会话由服务端 httponly
+   * Set-Cookie + 浏览器 cookie jar 自动管理（与 frontend-v2 一致）。
    */
   sessionToken: string | null
   onUnauthorized?: () => void
@@ -119,6 +121,11 @@ export function buildUrl(path: string, extra?: URLSearchParams): string {
   return `${context.baseUrl}/api${normalized}${q && q.size > 0 ? (normalized.includes('?') ? '&' : '?') + q.toString() : ''}`
 }
 
+export function buildStaticAssetUrl(path: string): string {
+  const normalized = path.startsWith('/') ? path : `/${path}`
+  return `${context.baseUrl}/v2-assets${normalized}`
+}
+
 /** 游戏 SSE 地址（一次性票据 + 游标 + 分享参数；对齐 Web gameEventSource） */
 export function buildPlaySseUrl(gameKey: string, ticket: string, cursor = ''): string {
   const q = shareQuery() ?? new URLSearchParams()
@@ -143,7 +150,11 @@ function buildHeaders(init: RequestInit): Headers {
   const rawBody = isRawBody(init.body)
   if (!rawBody && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   if (context.token) headers.set('Authorization', `Bearer ${context.token}`)
-  if (!headers.has('Cookie')) headers.set('Cookie', `trpg_session=${ensureSessionToken()}`)
+  // Web 浏览器会静默丢弃 JS 设置的 Cookie 头，交给服务端 Set-Cookie +
+  // cookie jar 自动管理；不引入 react-native 依赖以保证 node 测试环境可用
+  if (typeof document === 'undefined' && !headers.has('Cookie')) {
+    headers.set('Cookie', `trpg_session=${ensureSessionToken()}`)
+  }
   if (init.method && init.method !== 'GET') headers.set('X-TRPG-Confirm', 'true')
   return headers
 }

@@ -225,6 +225,7 @@ export interface GameDetail {
   pending_luck_decisions?: CheckResult[]
   round_check_results?: CheckResult[]
   total_tokens?: number
+  plot_tracker?: PlotTracker
   [key: string]: unknown
 }
 
@@ -441,7 +442,7 @@ export interface CharacterCardSummary extends CharacterSheet {
   [key: string]: unknown
 }
 
-// ---------- 地图（只读小地图） ----------
+// ---------- 地图 ----------
 
 export interface MapLocation {
   id?: string
@@ -459,12 +460,42 @@ export interface MapLocation {
   [key: string]: unknown
 }
 
+export interface MapAsset {
+  id: string
+  ref?: string
+  name?: string
+  description?: string
+  plugin_id?: string
+  plugin_name?: string
+  path?: string
+  url?: string
+  [key: string]: unknown
+}
+
+export interface MapDefinition {
+  id: string
+  source_id?: string
+  name: string
+  description?: string
+  mode: 'graph' | string
+  plugin_id?: string
+  plugin_name?: string
+  background?: MapAsset | null
+  default_view?: { x?: number; y?: number; zoom?: number }
+  [key: string]: unknown
+}
+
 export interface MapData {
   schema_version?: number
   map_mode?: 'graph' | string
   locations: MapLocation[]
   current_scene?: string
   current_location_id?: string
+  active_map?: MapDefinition | null
+  assets?: {
+    icons?: MapAsset[]
+    scenes?: MapAsset[]
+  }
   [key: string]: unknown
 }
 
@@ -499,5 +530,138 @@ export interface TranscriptionResponse {
 
 export interface PlayerContextResponse {
   preview?: boolean
+  [key: string]: unknown
+}
+
+// ---------- 世界观模板 / 规则（创建对局选择器） ----------
+
+export interface WorldTemplateSummary {
+  id?: string
+  world_id?: string
+  name?: string
+  world_name?: string
+  description?: string
+  default_rule?: string
+  recommended_rules?: string[]
+  scene_image?: SceneImageRef
+  language?: string
+  [key: string]: unknown
+}
+
+export interface WorldTemplatesResponse {
+  templates?: WorldTemplateSummary[]
+}
+
+export interface RuleSummary {
+  rule_id: string
+  rule_name?: string
+  rule_name_en?: string
+  description?: string
+  dice_system?: string
+  combat_model?: string
+  attr_count?: number
+  custom?: boolean
+  file?: string
+  source_rule_id?: string
+  scene_image?: SceneImageRef
+  [key: string]: unknown
+}
+
+export interface RulesResponse {
+  rules?: RuleSummary[]
+  total?: number
+}
+
+// ---------- 剧情追踪（GameDetail.plot_tracker） ----------
+
+export interface PlotQuest {
+  title?: string
+  progress?: string
+  status?: string
+}
+
+export interface PlotRelation {
+  npc_name?: string
+  tier?: string
+}
+
+export interface PlotDecision {
+  title?: string
+  summary?: string
+  description?: string
+  round_number?: number
+}
+
+export interface PlotTracker {
+  quests?: Record<string, PlotQuest>
+  relations?: Record<string, PlotRelation>
+  decisions?: (PlotDecision | string)[]
+}
+
+// ---------- 生成图 ----------
+
+export interface GeneratedImageItem {
+  asset_id: string
+  generation_id?: string
+  prompt?: string
+  revised_prompt?: string
+  round?: number
+  status?: string
+}
+
+// ---------- 角色卡（character-cards 接口） ----------
+
+// ---------- 角色卡（character-cards 接口） ----------
+
+export interface CharacterCard {
+  card_id?: string
+  id?: string
+  character_name?: string
+  race?: string
+  class?: string
+  level?: number
+  background?: string
+  gold?: number
+  skills?: (string | CharacterSkill)[]
+  portrait?: CharacterPortrait | null
+  rule_id?: string
+  rule_name?: string
+  rule_version?: string
+  mechanics?: string
+  language?: string
+  source?: string
+  [key: string]: unknown
+}
+
+export interface CharacterCardsResponse {
+  cards?: CharacterCard[]
+  [key: string]: unknown
+}
+
+// ---------- 世界观切换 ----------
+
+export interface WorldCandidate {
+  id: string
+  name: string
+  description?: string
+  source?: string
+  default_rule?: string
+  entry_count?: number
+}
+
+// ---------- 机器人绑定 ----------
+
+export interface BotBindTokenResponse {
+  bind_token?: string
+  ok?: boolean
+  error?: string
+  [key: string]: unknown
+}
+
+// ---------- 支付决议 ----------
+
+export interface PaymentResolveResponse {
+  ok?: boolean
+  error?: string
   [key: string]: unknown
 }

@@ -1,0 +1,78 @@
+import * as React from 'react'
+import { Modal, Pressable, ScrollView, useWindowDimensions, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+
+import { appLayoutForWidth } from '@/lib/layout'
+import { useKeyboardHeight } from '@/lib/use-keyboard-height'
+import { cn } from '@/lib/utils'
+
+type SheetProps = {
+  open: boolean
+  onClose: () => void
+  children: React.ReactNode
+  className?: string
+  /** 隐藏顶部把手 */
+  noHandle?: boolean
+  /** 由 Sheet 提供滚动；关闭后由子组件接管唯一滚动容器 */
+  scrollable?: boolean
+  /** Sheet 滚动容器中需要固定的直接子项索引 */
+  stickyHeaderIndices?: number[]
+}
+
+/** 底部抽屉（Modal + slide）；键盘弹出时整体垫高，内容超高时内部滚动 */
+export function Sheet({
+  open,
+  onClose,
+  children,
+  className,
+  noHandle = false,
+  scrollable = true,
+  stickyHeaderIndices,
+}: SheetProps) {
+  const insets = useSafeAreaInsets()
+  const keyboardHeight = useKeyboardHeight()
+  const { width } = useWindowDimensions()
+  const { isTablet } = appLayoutForWidth(width)
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+      navigationBarTranslucent
+    >
+      <View className={cn('flex-1', isTablet ? 'items-center justify-center px-6' : 'justify-end')}>
+        <Pressable className="absolute inset-0 bg-black/60" onPress={onClose} />
+        <View
+          className={cn(
+            'max-h-[90%] border-border bg-card px-5 pt-2',
+            isTablet ? 'w-full rounded-xl border' : 'rounded-t-xl border-t',
+            className,
+          )}
+          style={{
+            maxWidth: isTablet ? 680 : undefined,
+            paddingBottom: (isTablet ? 16 : insets.bottom + 16) + keyboardHeight,
+          }}
+        >
+          {!noHandle && (
+            <View className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-muted-foreground/30" />
+          )}
+          {scrollable ? (
+            <ScrollView
+              style={{ flexShrink: 1 }}
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+              keyboardShouldPersistTaps="handled"
+              stickyHeaderIndices={stickyHeaderIndices}
+            >
+              {children}
+            </ScrollView>
+          ) : (
+            <View className="min-h-0 flex-1">{children}</View>
+          )}
+        </View>
+      </View>
+    </Modal>
+  )
+}
