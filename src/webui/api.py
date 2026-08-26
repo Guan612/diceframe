@@ -12,13 +12,14 @@ from typing import Any
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.game_instance import GameRegistry
 from src.lorebook.store import LorebookStore
+from src.adventures import AdventureBundleLoader
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
 from src.rules.loader import RuleBundleLoader
 from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -126,6 +127,9 @@ class WebAPI:
         )
         self._llm_client = llm_client
         self._worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
+        self._adventure_loader = AdventureBundleLoader(
+            Path(__file__).parent.parent.parent / "templates" / "adventures"
+        )
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._avatars_dir = self._reg.save_dir.parent / "avatars"
         self._scene_images_dir = self._reg.save_dir.parent / "scene-images"
@@ -867,6 +871,11 @@ class WebAPI:
 
     # ---- 世界模板 ----
 
+    def list_adventures(
+        self, rule_id: str = "", world_id: str = "", language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.list_adventures(self, rule_id, world_id, language)
+
     def list_world_templates(self, language: str = "") -> dict[str, Any]:
         # 确保已启用插件的世界模板世界书已同步（幂等）
         if self._plugins:
@@ -896,12 +905,13 @@ class WebAPI:
                            room_password: str = "",
                            language: str = "",
                            scene_image: dict[str, Any] | None = None,
-                           map_background: dict[str, Any] | None = None) -> dict[str, Any]:
+                           map_background: dict[str, Any] | None = None,
+                           adventure_id: str = "") -> dict[str, Any]:
         return await games.create_game(self, world_id, game_name, group_name, rule_id,
                                        solo, lorebook_world_id, difficulty, description,
                                        create_lorebook, blank_lorebook, source_world_id,
                                        players, custom_world, gm_uid, room_password,
-                                       language, scene_image, map_background)
+                                       language, scene_image, map_background, adventure_id)
 
     # ---- 重开引用码 ----
 

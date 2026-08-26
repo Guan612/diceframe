@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
-  "kind": "starter_adventure",
+  "kind": "adventure",
   "id": "lanterns_of_greymoor",
   "source_ref": "diceframe-original:dnd2024-adventures/lanterns-of-greymoor",
+  "recommended_world_id": "greymoor",
   "automation_level": "deterministic",
   "estimated_minutes": 90,
   "start_step_id": "mistbound_road",
@@ -15,24 +16,28 @@
     {
       "id": "mistbound_road",
       "chapter_id": "missing_light",
+      "scene_ref": "scene:greymoor_mistbound_road",
       "requires": "none",
       "choice_ids": ["inspect_cold_ash", "check_wagon_tracks"]
     },
     {
       "id": "keepers_plea",
       "chapter_id": "missing_light",
+      "scene_ref": "scene:greymoor_waykeeper_cottage",
       "requires": "none",
       "choice_ids": ["reassure_mira", "ask_precise_questions"]
     },
     {
       "id": "read_the_trail",
       "chapter_id": "missing_light",
+      "scene_ref": "scene:greymoor_forked_trail",
       "requires": "none",
       "choice_ids": ["follow_small_tracks", "follow_arcane_residue"]
     },
     {
       "id": "thorn_ambush",
       "chapter_id": "thorn_glade",
+      "scene_ref": "scene:greymoor_thorn_glade",
       "requires": "combat_ended",
       "encounter_preset_id": "first_skirmish",
       "choice_ids": ["secure_the_glade"]
@@ -40,6 +45,7 @@
     {
       "id": "restore_the_lantern",
       "chapter_id": "old_shrine",
+      "scene_ref": "scene:greymoor_old_shrine",
       "requires": "none",
       "choice_ids": ["return_the_light", "share_the_truth"]
     }

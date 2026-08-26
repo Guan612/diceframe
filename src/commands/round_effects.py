@@ -11,6 +11,7 @@ from src.engine.character_utils import revive_character
 from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
 from src.engine.puzzle import PuzzleState
+from src.rulesets.contracts import NarrativeCombatSignalRuntime
 
 logger = logging.getLogger("trpg")
 
@@ -44,6 +45,19 @@ def apply_combat_command(instance: GameInstance, data: dict) -> None:
     if combat_cmd == "end" and instance.combat_state == "active":
         instance.end_combat()
         logger.info("战斗结束 (round=%d)", instance.round_number)
+
+
+def apply_ruleset_combat_signal(
+    instance: GameInstance, data: dict, runtime: Any | None,
+) -> bool:
+    """Let an authoritative runtime turn a GM combat marker into a tool request."""
+
+    signal = str(data.get("combat_command") or "").strip().casefold()
+    if signal not in {"start", "begin"} or not isinstance(
+        runtime, NarrativeCombatSignalRuntime,
+    ):
+        return False
+    return bool(runtime.apply_narrative_combat_signal(instance, signal))
 
 
 def apply_revive_commands(instance: GameInstance, data: dict) -> None:

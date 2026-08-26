@@ -27,7 +27,7 @@ templates/rulesets/<directory_id>/
   "bundle_id": "core:dnd2024-srd",
   "runtime_id": "core:dnd2024",
   "ruleset_version": "0.1.0",
-  "content_version": "srd-5.2.1+r4",
+  "content_version": "srd-5.2.1+r5",
   "default_locale": "zh-CN",
   "supported_locales": ["zh-CN", "en"],
   "license": {
@@ -66,7 +66,7 @@ templates/rulesets/<directory_id>/
 
 `kind:id` 是 bundle 内部引用格式，例如 `ability:str`。所有以 `_ref` 结尾的字段必须是一个可解析内部引用；以 `_refs` 结尾的字段必须是内部引用数组。`source_ref` 是来源证据，不是内部引用。
 
-`presets/` 与 `content/` 使用相同的 canonical entity 契约、引用检查和代码执行禁令。它只用于第一方构筑、队伍、教学等不可执行预设；预设不能绕过 runtime 的最终合法性验证。
+`presets/` 与 `content/` 使用相同的 canonical entity 契约、引用检查和代码执行禁令。它只用于第一方构筑、队伍与通用战斗参考等不可执行预设；预设不能绕过 runtime 的最终合法性验证。剧情、场景、NPC、地图位置与冒险专属遭遇属于独立 Adventure Bundle，不得复制进 Ruleset Bundle。
 
 ## Locale Overlay
 

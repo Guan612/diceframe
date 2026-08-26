@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/client'
-import type { CharacterCard, CharacterCardsResponse, CharacterSheet, GameMutationResponse, GeneratedRuleResponse, GeneratedWorldResponse, RuleDetailResponse, RuleSummary, RuleTemplate, RulesResponse, SceneImageRef, WorldListResponse, WorldSummary, WorldTemplateSummary, WorldTemplatesResponse } from '@/api/types'
+import type { AdventureSummary, AdventuresResponse, CharacterCard, CharacterCardsResponse, CharacterSheet, GameMutationResponse, GeneratedRuleResponse, GeneratedWorldResponse, RuleDetailResponse, RuleSummary, RuleTemplate, RulesResponse, SceneImageRef, WorldListResponse, WorldSummary, WorldTemplateSummary, WorldTemplatesResponse } from '@/api/types'
 import { useToast } from '@/composables/useToast'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import CharacterWizard from '@/components/admin/CharacterWizard.vue'
@@ -53,6 +53,8 @@ const customName = ref(''), customDesc = ref('')
 const aiPrompt = ref(''), aiRule = ref('')
 const aiAutoRule = ref(false), aiGeneratedRule = ref<GeneratedRuleResponse | null>(null)
 const loreChoice = ref('__builtin__')
+const adventures = ref<AdventureSummary[]>([])
+const adventureId = ref('')
 const seed = ref(''), busy = ref(false), error = ref('')
 const settingsChecked = ref(false)
 const sceneImageFile = ref<File | null>(null)
@@ -75,6 +77,14 @@ const activeRuleSummary = computed(() => rules.value.find(item => item.rule_id =
 const usesProfessionalBuilder = computed(() => (
   activeRuleSummary.value?.ruleset_runtime?.capabilities.character_builder === 'professional'
 ))
+const supportsAdventurePackages = computed(() => Boolean(
+  activeRuleSummary.value?.ruleset_runtime?.capabilities.adventure_formats?.length,
+))
+const showAdventurePackages = computed(() => (
+  mode.value === 'template'
+  && supportsAdventurePackages.value
+))
+const selectedAdventure = computed(() => adventures.value.find(item => item.adventure_id === adventureId.value))
 const activeWorldTemplate = computed(() => worlds.value.find(item => worldIdOf(item) === world.value))
 const defaultSceneImageRef = computed<SceneImageRef | undefined>(() => {
   if (mode.value === 'template' && activeWorldTemplate.value?.scene_image) return activeWorldTemplate.value.scene_image
@@ -187,6 +197,29 @@ watch([activeRule, gameLanguage], async ([id]) => {
     const rd = await api<RuleDetailResponse>(`/rules/${id}?language=${encodeURIComponent(gameLanguage.value)}`)
     ruleDetail.value = rd.rule || null
   } catch { ruleDetail.value = null }
+}, { immediate: true })
+let adventureCatalogSequence = 0
+watch([activeRule, world, gameLanguage, mode, loreChoice], async ([ruleId, worldId]) => {
+  const sequence = ++adventureCatalogSequence
+  if (!ruleId || !worldId || !showAdventurePackages.value) {
+    adventures.value = []
+    adventureId.value = ''
+    return
+  }
+  try {
+    const result = await api<AdventuresResponse>(
+      `/adventures?rule_id=${encodeURIComponent(ruleId)}&world_id=${encodeURIComponent(worldId)}&language=${encodeURIComponent(gameLanguage.value)}`,
+    )
+    if (sequence !== adventureCatalogSequence) return
+    adventures.value = result.adventures || []
+    if (!adventures.value.some(item => item.adventure_id === adventureId.value && item.compatibility === 'compatible')) {
+      adventureId.value = ''
+    }
+  } catch {
+    if (sequence !== adventureCatalogSequence) return
+    adventures.value = []
+    adventureId.value = ''
+  }
 }, { immediate: true })
 watch([aiPrompt, aiRule, aiAutoRule], () => { aiGeneratedRule.value = null })
 watch(usesProfessionalBuilder, (enabled) => {
@@ -402,7 +435,7 @@ async function create() {
     const selectedMapBackground = mapBackgroundFile.value
       ? await uploadMapBackground(mapBackgroundFile.value)
       : mapBackgroundSelection(mapBackgroundChoice.value)
-    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground }
+    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, adventure_id: showAdventurePackages.value ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground }
     let worldId = ''
     if (mode.value === 'template') {
       worldId = world.value; payload.world_id = worldId
@@ -514,6 +547,17 @@ async function create() {
               </template>
               <label v-if="mode !== 'ai'"><span>{{ t('rule') }}</span><select v-model="rule"><option v-for="r in rules" :key="r.rule_id" :value="r.rule_id">{{ ruleNameOf(r) }}</option></select></label>
               <label><span>{{ t('lorebookSource') }}</span><select v-model="loreChoice"><option value="__builtin__">{{ t('builtinLorebook') }}</option><option value="__blank__">{{ t('blankLorebook') }}</option><option v-for="w in availableLoreWorlds" :key="worldIdOf(w)" :value="'copy:' + worldIdOf(w)">{{ t('copyFrom') }}{{ worldNameOf(w) }} · {{ worldLanguageLabel(w) }}</option></select></label>
+              <label v-if="showAdventurePackages" class="wide">
+                <span>{{ gameDefault('冒险包（可选）', 'Adventure package (optional)') }}</span>
+                <select v-model="adventureId">
+                  <option value="">{{ gameDefault('标准自由对局', 'Standard free play') }}</option>
+                  <option v-for="item in adventures" :key="item.adventure_id" :value="item.adventure_id" :disabled="item.compatibility !== 'compatible'">
+                    {{ item.name }} · {{ item.estimated_minutes }} {{ gameDefault('分钟', 'min') }}{{ item.compatibility !== 'compatible' ? gameDefault('（需匹配推荐世界）', ' (requires its recommended world)') : '' }}
+                  </option>
+                </select>
+                <small>{{ selectedAdventure?.summary || gameDefault('不选择冒险包时，世界书照常生效，进入正常专业规则对局。冒险包只提供剧情节点，不会替换你选择的世界书。', 'Without an adventure package, the selected world book remains active in standard professional play. An adventure package adds story nodes without replacing that world book.') }}</small>
+                <small v-if="selectedAdventure?.recommended_world_id" class="adventure-recommendation">{{ gameDefault('推荐世界仅供参考：', 'Recommended world: ') }}{{ selectedAdventure.recommended_world_id }}{{ gameDefault('；复制或自定义世界书也可以使用。', '; copied or custom world books are also supported.') }}</small>
+              </label>
               <label class="wide"><span>{{ t('extraBackground') }}</span><textarea v-model="description" rows="4" :placeholder="t('extraBackgroundPlaceholder')"></textarea></label>
               <label><span>{{ t('gameMode') }}</span><select v-model.number="solo"><option :value="true">{{ t('solo') }}</option><option :value="false">{{ t('multiplayer') }}</option></select></label>
               <label><span>{{ t('difficulty') }}</span><select v-model="difficulty"><option :value="DIFFICULTY_EASY">{{ t('easy') }}</option><option :value="DIFFICULTY_NORMAL">{{ t('normal') }}</option><option :value="DIFFICULTY_HARDCORE">{{ t('hardcore') }}</option></select></label>
@@ -548,6 +592,7 @@ async function create() {
           <div class="create-confirm-grid">
             <article><span>{{ t('world') }}</span><strong>{{ confirmationWorld }}</strong></article>
             <article><span>{{ t('rule') }}</span><strong>{{ ruleNameOf(rules.find(r => r.rule_id === activeRule) || { rule_id: activeRule }) }}</strong></article>
+            <article v-if="supportsAdventurePackages"><span>{{ gameDefault('冒险模式', 'Adventure mode') }}</span><strong>{{ selectedAdventure?.name || gameDefault('标准自由对局', 'Standard free play') }}</strong></article>
             <article><span>{{ t('difficulty') }}</span><strong>{{ difficulty === DIFFICULTY_EASY ? t('easy') : difficulty === DIFFICULTY_HARDCORE ? t('hardcore') : t('normal') }}</strong></article>
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>

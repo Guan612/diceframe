@@ -42,6 +42,45 @@ def test_versioned_ruleset_state_is_optional_and_round_trips() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reset_preserves_exact_ruleset_and_adventure_bindings() -> None:
+    instance = GameInstance(
+        game_key=("web", "professional-restart", "bot"),
+        world_id="greymoor",
+        rule_id="dnd2024_srd",
+    )
+    ruleset = {
+        "runtime_id": "core:dnd2024",
+        "runtime_version": 1,
+        "content_version": "srd-5.2.1+r5",
+        "state_schema_version": 1,
+    }
+    adventure = {
+        "adventure_id": "core:lanterns_of_greymoor",
+        "version": "1.0.0",
+        "format": "diceframe:adventure-graph-v1",
+        "content_digest": "sha256:test-binding",
+        "world_id": "greymoor",
+    }
+    assert instance.bind_ruleset_runtime(ruleset)
+    assert instance.bind_adventure(adventure)
+    instance.ruleset_state["version"] = 42
+    instance.event_ledger.append({"batch_id": "old-run"})
+
+    await instance.reset()
+
+    assert instance.rule_id == "dnd2024_srd"
+    assert instance.ruleset_runtime == {
+        "id": "core:dnd2024",
+        "version": 1,
+        "content_version": "srd-5.2.1+r5",
+        "state_schema_version": 1,
+    }
+    assert instance.adventure_binding == adventure
+    assert instance.ruleset_state == {"state_schema_version": 1}
+    assert instance.event_ledger == []
+
+
+@pytest.mark.asyncio
 class TestGameInstance:
     async def test_initial_state(self):
         inst = GameInstance(game_key=("qq", "123", "bot1"))

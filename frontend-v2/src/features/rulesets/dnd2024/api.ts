@@ -14,6 +14,5 @@ export {
   resolveRulesetRest,
   resolveRulesetDecision,
   submitRulesetIntent,
-  submitRulesetAdventureAction,
   validateRulesetBuilderDraft,
 } from '@/api/rulesets'

@@ -64,6 +64,9 @@ class CombatResolutionMixin:
             "initiative_rolls": initiatives, "enemies": enemies, "positions": positions,
             "economy": self._fresh_economy(first), "position_mode": "theater",
             "reactions": {actor_id: 1 for actor_id in order},
+            "encounter_instance_id": str(intent.get("encounter_instance_id") or ""),
+            "encounter_preset_id": str(intent.get("encounter_preset_id") or ""),
+            "origin_step_id": str(intent.get("origin_step_id") or ""),
         }
 
     def _attack_events(

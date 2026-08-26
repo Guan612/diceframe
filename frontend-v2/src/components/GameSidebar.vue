@@ -93,6 +93,8 @@ function perceptionKey(m: PrivateMessage | string, i: number) {
       </div>
     </details>
 
+    <slot name="after-perception" />
+
     <details class="panel sidebar-disclosure">
       <summary><strong>{{ t('statusInfo') }}</strong><span>{{ stateLabel(detail.state) }}</span></summary>
       <div class="sidebar-disclosure-body">

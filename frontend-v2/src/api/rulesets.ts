@@ -220,16 +220,6 @@ export function submitRulesetIntent(
   )
 }
 
-export function submitRulesetAdventureAction(
-  gameKey: string,
-  declaration: JsonObject,
-): Promise<RulesetGameplayResponse & { narration: string; duplicate?: boolean }> {
-  return api<RulesetGameplayResponse & { narration: string; duplicate?: boolean }>(
-    `/games/${encodeURIComponent(gameKey)}/adventure-actions`,
-    { method: 'POST', body: JSON.stringify(declaration) },
-  )
-}
-
 export function resolveRulesetDecision(
   gameKey: string,
   decisionId: string,

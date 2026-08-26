@@ -140,11 +140,16 @@ async def submit_action(
                     "error_code": "RULESET_RUNTIME_UNAVAILABLE",
                     "error": str(exc),
                 }, 409)
-            if runtime.capabilities.authoritative_intents:
+            state = getattr(instance, "ruleset_state", {})
+            combat = state.get("combat") if isinstance(state, dict) else None
+            combat_active = isinstance(combat, dict) and combat.get("status") == "active"
+            if runtime.capabilities.authoritative_intents and (
+                not runtime.capabilities.narrative_turns or combat_active
+            ):
                 return _result({
                     "ok": False,
                     "error_code": "STRUCTURED_INTENT_REQUIRED",
-                    "error": "当前专业规则使用权威动作面板，请从合法动作列表提交行动",
+                    "error": "当前处于权威战斗，请在专业战斗工具中选择合法动作",
                 }, 409)
     if instance.is_dead(actor_uid):
         return _result({"error": "角色已死亡，无法提交行动"}, 403)

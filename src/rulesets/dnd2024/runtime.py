@@ -6,12 +6,13 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from src.adventures import ADVENTURE_GRAPH_FORMAT, AdventureBundleLoader, LoadedAdventureBundle
 from src.rulesets.bundle import LoadedRulesetBundle, RulesetBundleLoader
 from src.rulesets.contracts import RulesetCapabilities
-from src.rulesets.dnd2024.adventure import NarrativeAdventureMixin
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
+from src.rulesets.dnd2024.play import EncounterAccess, resolve_story_encounter_access
 from src.rulesets.dnd2024.progression import (
     Dnd2024AdvancementEngine,
     Dnd2024ProgressionCatalog,
@@ -21,7 +22,7 @@ from src.rulesets.dnd2024.resting import Dnd2024RestEngine
 from src.rulesets.dnd2024.spells import Dnd2024SpellSelection, SpellCatalogError
 
 
-class Dnd2024Runtime(NarrativeAdventureMixin):
+class Dnd2024Runtime:
     runtime_id = "core:dnd2024"
     runtime_version = 1
     capabilities = RulesetCapabilities(
@@ -33,13 +34,40 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
         versioned_state=True,
         session_zero=True,
         tutorial_coach=True,
-        narrative_adventure=True,
+        narrative_turns=True,
+        adventure_formats=(ADVENTURE_GRAPH_FORMAT,),
     )
 
     def __init__(self, bundles_dir: str | Path | None = None):
         default = Path(__file__).resolve().parents[3] / "templates" / "rulesets"
         self._loader = RulesetBundleLoader(bundles_dir or default)
         self._bundle_cache: dict[str, LoadedRulesetBundle] = {}
+        adventures = Path(__file__).resolve().parents[3] / "templates" / "adventures"
+        self._adventure_loader = AdventureBundleLoader(adventures)
+
+    def load_adventure(
+        self, instance: Any, locale: str = "",
+    ) -> LoadedAdventureBundle | None:
+        binding = getattr(instance, "adventure_binding", None)
+        if not isinstance(binding, dict) or not str(binding.get("adventure_id") or ""):
+            return None
+        bundle = self._adventure_loader.resolve(str(binding["adventure_id"]), locale)
+        if (
+            bundle.manifest.required_runtime_id != self.runtime_id
+            or bundle.manifest.required_runtime_version > self.runtime_version
+            or bundle.manifest.format not in self.capabilities.adventure_formats
+        ):
+            raise ValueError("bound adventure package is incompatible with this rules runtime")
+        if (
+            bundle.manifest.world_policy == "fixed"
+            and str(getattr(instance, "world_id", "") or "")
+            != bundle.manifest.recommended_world_id
+        ):
+            raise ValueError("bound adventure package is incompatible with the selected world")
+        expected = bundle.binding(str(getattr(instance, "world_id", "") or ""))
+        if binding != expected:
+            raise ValueError("bound adventure package is missing or has changed")
+        return bundle
 
     def load_bundle(self, locale: str = "") -> LoadedRulesetBundle:
         cache_key = str(locale or "").replace("_", "-")
@@ -53,6 +81,38 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
             )
         self._bundle_cache[cache_key] = bundle
         return bundle
+
+    def _campaign_engine(
+        self, instance: Any, locale: str = "",
+    ) -> Dnd2024CampaignEngine:
+        adventure = self.load_adventure(instance, locale)
+        return Dnd2024CampaignEngine(
+            self.load_bundle(locale), adventure.adventure if adventure is not None else None,
+        )
+
+    def _combat_engine(
+        self,
+        instance: Any,
+        access: Any = None,
+        locale: str = "",
+    ) -> Dnd2024CombatEngine:
+        adventure = self.load_adventure(instance, locale)
+        catalogs = adventure.list("encounter_catalog") if adventure is not None else []
+        if len(catalogs) > 1:
+            raise ValueError("adventure package contains multiple encounter catalogs")
+        catalog = catalogs[0] if catalogs else None
+        if access is None:
+            return Dnd2024CombatEngine(
+                self.load_bundle(locale), encounter_catalog=catalog,
+            )
+        return Dnd2024CombatEngine(self.load_bundle(locale), access, catalog)
+
+    @staticmethod
+    def _encounter_access(instance: Any, campaign: dict[str, Any]) -> EncounterAccess:
+        """Prefer a bound story encounter; otherwise keep the GM combat tool usable."""
+
+        story = resolve_story_encounter_access(instance, campaign)
+        return story if story.mode == "story" else EncounterAccess.sandbox()
 
     def _builder(self, draft: dict[str, Any]) -> Dnd2024CharacterBuilder:
         return Dnd2024CharacterBuilder(self.load_bundle(str(draft.get("locale") or "")))
@@ -288,9 +348,16 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
     def available_intents(self, instance: Any, actor_id: str) -> list[dict[str, Any]]:
         locale = str(getattr(instance, "language", "") or "")
         bundle = self.load_bundle(locale)
+        campaign_engine = self._campaign_engine(instance, locale)
+        campaign = campaign_engine.gameplay_view(
+            instance,
+            actor_id,
+            actor_id == str(getattr(instance, "gm_uid", "") or ""),
+        )
+        access = self._encounter_access(instance, campaign)
         return [
-            *Dnd2024CampaignEngine(bundle).available_intents(instance, actor_id),
-            *Dnd2024CombatEngine(bundle).available_intents(instance, actor_id),
+            *campaign_engine.available_intents(instance, actor_id),
+            *self._combat_engine(instance, access, locale).available_intents(instance, actor_id),
         ]
 
     def prepare_intent_submission(
@@ -303,6 +370,10 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
         elif not requester_is_gm:
             prepared["actor_id"] = f"player:{requester_id}"
         return prepared
+
+    def next_automatic_intent(self, instance: Any) -> dict[str, Any] | None:
+        locale = str(getattr(instance, "language", "") or "")
+        return self._combat_engine(instance, locale=locale).next_automatic_intent(instance)
 
     @staticmethod
     def memory_deltas_from_event_batch(
@@ -323,15 +394,21 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
         locale = str(getattr(instance, "language", "") or "")
         bundle = self.load_bundle(locale)
         if str(intent.get("type") or "") in CAMPAIGN_INTENT_TYPES:
-            return Dnd2024CampaignEngine(bundle).validate_intent(instance, intent)
-        return Dnd2024CombatEngine(bundle).validate_intent(instance, intent)
+            return self._campaign_engine(instance, locale).validate_intent(instance, intent)
+        campaign_engine = self._campaign_engine(instance, locale)
+        campaign = campaign_engine.gameplay_view(instance)
+        access = self._encounter_access(instance, campaign)
+        return self._combat_engine(instance, access, locale).validate_intent(instance, intent)
 
     def resolve_intent(self, instance: Any, intent: dict[str, Any], rng: Any) -> dict[str, Any]:
         locale = str(getattr(instance, "language", "") or "")
         bundle = self.load_bundle(locale)
         if str(intent.get("type") or "") in CAMPAIGN_INTENT_TYPES:
-            return Dnd2024CampaignEngine(bundle).resolve_intent(instance, intent, rng)
-        return Dnd2024CombatEngine(bundle).resolve_intent(instance, intent, rng)
+            return self._campaign_engine(instance, locale).resolve_intent(instance, intent, rng)
+        campaign_engine = self._campaign_engine(instance, locale)
+        campaign = campaign_engine.gameplay_view(instance)
+        access = self._encounter_access(instance, campaign)
+        return self._combat_engine(instance, access, locale).resolve_intent(instance, intent, rng)
 
     def apply_event_batch(
         self, instance: Any, batch: dict[str, Any],
@@ -343,9 +420,25 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
             for uid in getattr(instance, "players", {})
         }
         if str(batch.get("intent_type") or "") in CAMPAIGN_INTENT_TYPES:
-            result = Dnd2024CampaignEngine(bundle).apply_batch(instance, batch)
+            campaign_engine = self._campaign_engine(instance, locale)
+            result = campaign_engine.apply_batch(instance, batch)
+            if result.get("applied"):
+                campaign_view = campaign_engine.gameplay_view(instance)
+                step = (campaign_view.get("tutorial") or {}).get("current_step")
+                if isinstance(step, dict):
+                    scene_name = str(step.get("title") or "").strip()
+                    scene_ref = str(step.get("scene_ref") or "")
+                    adventure = self.load_adventure(instance, locale)
+                    if adventure is not None and scene_ref.count(":") == 1:
+                        kind, entity_id = scene_ref.split(":", 1)
+                        entity = adventure.get(kind, entity_id) or {}
+                        scene_name = str(entity.get("name") or scene_name).strip()
+                    if scene_name:
+                        instance.set_scene(scene_name)
         else:
-            result = Dnd2024CombatEngine(bundle).apply_batch(instance, batch)
+            result = self._combat_engine(instance, locale=locale).apply_batch(instance, batch)
+            if result.get("applied") and str(batch.get("intent_type") or "") == "combat.start":
+                instance.ruleset_state.pop("encounter_request", None)
         revisions: dict[str, int] = {}
         if result.get("applied"):
             for uid in getattr(instance, "players", {}):
@@ -374,11 +467,37 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
     ) -> dict[str, Any]:
         locale = str(getattr(instance, "language", "") or "")
         bundle = self.load_bundle(locale)
-        view = Dnd2024CombatEngine(bundle).gameplay_view(instance)
-        view["campaign"] = Dnd2024CampaignEngine(bundle).gameplay_view(
+        campaign_engine = self._campaign_engine(instance, locale)
+        campaign = campaign_engine.gameplay_view(
             instance, viewer_id, viewer_is_gm,
         )
+        access = self._encounter_access(instance, campaign)
+        combat_engine = self._combat_engine(instance, access, locale)
+        view = combat_engine.gameplay_view(instance)
+        request = instance.ruleset_state.get("encounter_request")
+        view["encounter_request"] = deepcopy(request) if isinstance(request, dict) else None
+        view["campaign"] = campaign
         return view
+
+    def apply_narrative_combat_signal(self, instance: Any, signal: str) -> bool:
+        """Persist an advisory request that wakes the authoritative combat tool."""
+
+        if str(signal or "").strip().casefold() not in {"start", "begin"}:
+            return False
+        state = self._combat_engine(
+            instance, locale=str(getattr(instance, "language", "") or ""),
+        ).initialize_state(instance)
+        if (state.get("combat") or {}).get("status") == "active":
+            return False
+        current = state.get("encounter_request")
+        if isinstance(current, dict) and current.get("status") == "pending":
+            return False
+        state["encounter_request"] = {
+            "status": "pending",
+            "source": "narrative",
+            "round": int(getattr(instance, "round_number", 0) or 0),
+        }
+        return True
 
     def build_llm_view(self, instance: Any) -> dict[str, Any]:
         state = dict(instance.to_llm_view())
@@ -411,6 +530,24 @@ class Dnd2024Runtime(NarrativeAdventureMixin):
         }
         state.pop("combat_enemies", None)
         return state
+
+    def filter_narrative_state_update(
+        self, instance: Any, update: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep an active adventure step authoritative over narrative scene tags."""
+
+        filtered = deepcopy(update)
+        campaign = self._campaign_engine(
+            instance, str(getattr(instance, "language", "") or ""),
+        ).gameplay_view(instance)
+        tutorial = campaign.get("tutorial") if isinstance(campaign, dict) else None
+        if (
+            isinstance(tutorial, dict)
+            and tutorial.get("status") == "active"
+            and isinstance(tutorial.get("current_step"), dict)
+        ):
+            filtered["scene_change"] = ""
+        return filtered
 
     def project_legacy_character(self, character: dict[str, Any]) -> dict[str, Any]:
         locale = str(character.get("locale") or "")

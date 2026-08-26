@@ -159,14 +159,32 @@ function spellDisabled(key: SpellList, spell: RulesetSpellChoice): boolean {
 function friendlySpellError(message: string): string {
   const prepared = message.match(/^prepared_spell_refs must contain exactly (\d+) spells$/)
   if (prepared) {
-    return text(`准备法术需要正好 ${prepared[1]} 个，请按上方“准备法术”数量补齐。`, `Choose exactly ${prepared[1]} prepared spells using the list above.`)
+    const required = Number(prepared[1])
+    const selected = selectedSpells('prepared_spell_refs').length
+    const remaining = Math.max(0, required - selected)
+    return text(
+      `准备法术需要正好 ${required} 个；现在已选 ${selected} 个${remaining ? `，还差 ${remaining} 个` : '，数量已满足'}。请在“准备法术”区域继续选择。`,
+      `Prepared spells require exactly ${required}; ${selected} selected${remaining ? `, ${remaining} remaining` : ', count complete'}. Continue in the Prepared spells section.`,
+    )
   }
   const spellbook = message.match(/^spellbook_refs must contain exactly (\d+) spells$/)
   if (spellbook) {
-    return text(`法术书需要正好 ${spellbook[1]} 个法术，请按上方“法术书”数量补齐。`, `Choose exactly ${spellbook[1]} spells for the spellbook using the list above.`)
+    const required = Number(spellbook[1])
+    const selected = selectedSpells('spellbook_refs').length
+    const remaining = Math.max(0, required - selected)
+    return text(
+      `法术书需要正好 ${required} 个法术；现在已选 ${selected} 个${remaining ? `，还差 ${remaining} 个` : '，数量已满足'}。请在“法术书”区域继续选择。`,
+      `The spellbook requires exactly ${required}; ${selected} selected${remaining ? `, ${remaining} remaining` : ', count complete'}. Continue in the Spellbook section.`,
+    )
   }
   if (message === 'wizard prepared_spell_refs must be in spellbook_refs') {
     return text('准备法术必须先放进法术书；请先勾选法术书，再从其中选择准备法术。', 'Prepared spells must also be in the spellbook. Choose spellbook spells first.')
+  }
+  if (message === 'subclass_ref is required at this level') {
+    return text('本级需要选择一个子职；请在“选择子职”区域完成选择。', 'Choose a subclass in the Choose subclass section for this level.')
+  }
+  if (message.includes('ability_score_increases')) {
+    return text('属性提升还没有按要求分配完成；请检查每项属性的加值和合计要求。', 'Ability increases are incomplete; check each score and the required total.')
   }
   return message
 }
@@ -213,7 +231,7 @@ onMounted(() => {
 <template>
   <section class="advancement-panel" aria-labelledby="dnd-advancement-title">
     <header>
-      <div><span>5E · 2024 · SRD</span><h3 id="dnd-advancement-title">{{ text('职业升级', 'Class advancement') }}</h3><p v-if="preview">Lv. {{ preview.from_level }} → Lv. {{ preview.to_level }}</p></div>
+      <div><span>5E · 2024 · SRD</span><h3 id="dnd-advancement-title">{{ text('职业升级', 'Class advancement') }}</h3><p v-if="preview">Lv. {{ preview.from_level }} → Lv. {{ preview.to_level }}</p><p class="flow-hint">{{ text('先看本级变化，再完成需要选择的项目；底部按钮可用后才会真正升级。', 'Review the level changes, complete the choices, then apply when the bottom button is enabled.') }}</p></div>
     </header>
 
     <p v-if="busy && !preview" class="notice" role="status">{{ text('正在核对职业成长表…', 'Checking the class table…') }}</p>
@@ -232,11 +250,11 @@ onMounted(() => {
 
       <fieldset v-if="abilityRequirement"><legend>{{ text(`属性提升（合计 ${abilityRequirement.total}）`, `Ability increase (total ${abilityRequirement.total})`) }}</legend><div class="ability-grid"><label v-for="ability in ABILITIES" :key="ability" :class="{ unavailable: !abilityAllowed(ability) }"><span>{{ ability.toUpperCase() }} <small>{{ abilityDiff[ability] }}</small></span><select :disabled="!abilityAllowed(ability)" :value="(choices.ability_score_increases as JsonObject)?.[ability] || 0" @change="setAbility(ability, Number(($event.target as HTMLSelectElement).value))"><option :value="0">+0</option><option :value="1">+1</option><option v-if="abilityRequirement.pattern === '2_or_1_1'" :value="2">+2</option></select></label></div></fieldset>
 
-      <fieldset v-if="spellRequirement" class="spell-section"><legend>{{ text('调整职业法术', 'Update class spells') }}</legend><p class="spell-help">{{ text('按每一栏标题中的数量勾选，达到上限后其他选项会自动锁定。法师请先选法术书，再从法术书里选准备法术。', 'Select the exact count shown in each section. Extra options lock automatically. Wizards choose the spellbook first, then prepared spells from it.') }}</p><div v-if="Number(spellRequirement.cantrip_count)"><b>{{ text(`戏法 ${selectedSpells('cantrip_refs').length}/${spellRequirement.cantrip_count}`, `Cantrips ${selectedSpells('cantrip_refs').length}/${spellRequirement.cantrip_count}`) }}</b><div class="spell-grid"><label v-for="spell in spellRows('cantrips')" :key="spell.ref"><input type="checkbox" :disabled="spellDisabled('cantrip_refs', spell)" :checked="selectedSpells('cantrip_refs').includes(spell.ref)" @change="toggleSpell('cantrip_refs', spell)"> {{ spell.name }}</label></div></div><div v-if="Number(spellRequirement.spellbook_minimum)"><b>{{ text(`法术书 ${selectedSpells('spellbook_refs').length}/${spellRequirement.spellbook_minimum}`, `Spellbook ${selectedSpells('spellbook_refs').length}/${spellRequirement.spellbook_minimum}`) }}</b><div class="spell-grid"><label v-for="spell in spellRows('leveled_spells')" :key="`book-${spell.ref}`"><input type="checkbox" :disabled="spellDisabled('spellbook_refs', spell)" :checked="selectedSpells('spellbook_refs').includes(spell.ref)" @change="toggleSpell('spellbook_refs', spell)"> {{ spell.name }} <small>Lv.{{ spell.level }}</small></label></div></div><div v-if="Number(spellRequirement.prepared_spell_count)"><b>{{ text(`准备法术 ${selectedSpells('prepared_spell_refs').length}/${spellRequirement.prepared_spell_count}`, `Prepared ${selectedSpells('prepared_spell_refs').length}/${spellRequirement.prepared_spell_count}`) }}</b><div class="spell-grid"><label v-for="spell in spellRows('leveled_spells')" :key="`prepared-${spell.ref}`" :class="{ unavailable: preparedDisabled(spell) || spellDisabled('prepared_spell_refs', spell) }"><input type="checkbox" :disabled="spellDisabled('prepared_spell_refs', spell)" :checked="selectedSpells('prepared_spell_refs').includes(spell.ref)" @change="toggleSpell('prepared_spell_refs', spell)"> {{ spell.name }} <small>Lv.{{ spell.level }}</small></label></div></div></fieldset>
+      <fieldset v-if="spellRequirement" class="spell-section"><legend>{{ text('调整职业法术', 'Update class spells') }}</legend><p class="spell-help">{{ text('每个区域标题都写着“已选 / 需要”。达到需要的数量后，其他选项会自动锁定；取消一个已选项即可重新选择。法师请先选法术书，再从法术书里选准备法术。', 'Each section shows selected / required. Once the required count is reached, extra options lock automatically; uncheck one to choose another. Wizards choose the spellbook first, then prepared spells from it.') }}</p><div v-if="Number(spellRequirement.cantrip_count)"><b>{{ text(`戏法：已选 ${selectedSpells('cantrip_refs').length} / 需要 ${spellRequirement.cantrip_count}`, `Cantrips: ${selectedSpells('cantrip_refs').length} selected / ${spellRequirement.cantrip_count} required`) }}</b><div class="spell-grid"><label v-for="spell in spellRows('cantrips')" :key="spell.ref"><input type="checkbox" :disabled="spellDisabled('cantrip_refs', spell)" :checked="selectedSpells('cantrip_refs').includes(spell.ref)" @change="toggleSpell('cantrip_refs', spell)"> {{ spell.name }}</label></div></div><div v-if="Number(spellRequirement.spellbook_minimum)"><b>{{ text(`法术书：已选 ${selectedSpells('spellbook_refs').length} / 需要 ${spellRequirement.spellbook_minimum}`, `Spellbook: ${selectedSpells('spellbook_refs').length} selected / ${spellRequirement.spellbook_minimum} required`) }}</b><div class="spell-grid"><label v-for="spell in spellRows('leveled_spells')" :key="`book-${spell.ref}`"><input type="checkbox" :disabled="spellDisabled('spellbook_refs', spell)" :checked="selectedSpells('spellbook_refs').includes(spell.ref)" @change="toggleSpell('spellbook_refs', spell)"> {{ spell.name }} <small>Lv.{{ spell.level }}</small></label></div></div><div v-if="Number(spellRequirement.prepared_spell_count)"><b>{{ text(`准备法术：已选 ${selectedSpells('prepared_spell_refs').length} / 需要 ${spellRequirement.prepared_spell_count}`, `Prepared: ${selectedSpells('prepared_spell_refs').length} selected / ${spellRequirement.prepared_spell_count} required`) }}</b><div class="spell-grid"><label v-for="spell in spellRows('leveled_spells')" :key="`prepared-${spell.ref}`" :class="{ unavailable: preparedDisabled(spell) || spellDisabled('prepared_spell_refs', spell) }"><input type="checkbox" :disabled="spellDisabled('prepared_spell_refs', spell)" :checked="selectedSpells('prepared_spell_refs').includes(spell.ref)" @change="toggleSpell('prepared_spell_refs', spell)"> {{ spell.name }} <small>Lv.{{ spell.level }}</small></label></div></div></fieldset>
 
       <fieldset><legend>{{ text('本级变化', 'Level changes') }}</legend><div class="feature-list"><span v-for="feature in (diff.gained_feature_ids as string[]) || []" :key="feature">{{ featureName(feature) }}</span></div><p v-if="Object.keys(slotChanges).length">{{ text('法术位变化', 'Spell slot changes') }}: <code>{{ JSON.stringify(slotChanges) }}</code></p></fieldset>
 
-      <div v-if="preview.errors.length" class="errors" role="alert"><b>{{ text('还需完成：', 'Still required:') }}</b><ul><li v-for="message in preview.errors" :key="message">{{ friendlySpellError(message) }}</li></ul></div>
+      <div v-if="preview.errors.length" class="errors" role="alert"><b>{{ text('升级还不能确认', 'Upgrade is not ready') }}</b><p class="error-help">{{ text('下面每一条都告诉你缺什么；按提示补齐后，系统会自动重新核对。', 'Each item below tells you what is missing. The panel rechecks automatically after you make a choice.') }}</p><ul><li v-for="message in preview.errors" :key="message">{{ friendlySpellError(message) }}</li></ul></div>
     </template>
     <p v-if="error" class="errors" role="alert">{{ error }}</p>
     <footer><button type="button" @click="emit('cancel')">{{ text('取消', 'Cancel') }}</button><button type="button" class="primary" :disabled="busy || !preview?.ok" @click="apply">{{ busy ? text('核对中…', 'Checking…') : text('确认升级', 'Apply level') }}</button></footer>
@@ -248,7 +266,7 @@ onMounted(() => {
 .advancement-panel > header { display: flex; justify-content: space-between; gap: 16px; }
 .advancement-panel header span { color: #d5a44f; font-size: 11px; letter-spacing: .16em; }
 .advancement-panel h3 { margin: 3px 0; font-family: Georgia, serif; font-size: 27px; }
-.advancement-panel header p { margin: 0; color: #aeb8c6; }
+.advancement-panel header p { margin: 0; color: #aeb8c6; }.advancement-panel header .flow-hint { margin-top: 6px; font-size: 13px; line-height: 1.5; }
 .advancement-panel header button { align-self: start; width: 44px; border-radius: 50%; font-size: 20px; }
 .level-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .level-summary article { display: grid; gap: 3px; padding: 13px; border: 1px solid #3b4656; border-radius: 11px; background: #111925; }
@@ -268,7 +286,7 @@ label input[type='radio'], label input[type='checkbox'] { width: 22px; height: 2
 .ability-grid select, select, input[type='number'] { min-height: 44px; border: 1px solid #465367; border-radius: 8px; background: #101722; color: #edf1f7; padding: 7px; }
 .feature-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .feature-list span { padding: 5px 8px; border-radius: 99px; background: #263142; text-transform: capitalize; }
-.errors { padding: 11px 13px; border: 1px solid #8c4650; border-radius: 9px; background: #351a20; color: #ffc1c7; }
+.errors { padding: 11px 13px; border: 1px solid #8c4650; border-radius: 9px; background: #351a20; color: #ffc1c7; }.errors .error-help { margin: 5px 0 0; line-height: 1.5; }.errors li { line-height: 1.55; }
 .errors ul { margin: 6px 0 0; padding-left: 20px; }
 .notice { color: #aeb8c6; }
 .spell-help { margin: 0; color: #b9c5d3; line-height: 1.55; }

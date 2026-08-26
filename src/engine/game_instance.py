@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import dataclass, field
@@ -135,6 +136,7 @@ class GameInstance:
     rule_id: str = "freeform_fantasy"
     ruleset_runtime: dict[str, Any] = field(default_factory=dict)
     ruleset_state: dict[str, Any] = field(default_factory=dict)
+    adventure_binding: dict[str, Any] = field(default_factory=dict)
     event_ledger: list[dict[str, Any]] = field(default_factory=list)
     scene_image: dict[str, str] = field(default_factory=dict)
     map_background: dict[str, str] = field(default_factory=dict)
@@ -372,6 +374,21 @@ class GameInstance:
             self.ruleset_state = {
                 "state_schema_version": normalized["state_schema_version"],
             }
+        return True
+
+    def bind_adventure(self, binding: dict[str, Any] | None) -> bool:
+        """Bind one immutable adventure package, or explicitly select sandbox."""
+
+        value = dict(binding or {})
+        if value:
+            required = {"adventure_id", "version", "format", "content_digest", "world_id"}
+            if set(value) != required or not all(str(value.get(key) or "") for key in required):
+                return False
+            if str(value["world_id"]) != str(self.world_id or ""):
+                return False
+        if self.adventure_binding and self.adventure_binding != value:
+            return False
+        self.adventure_binding = value
         return True
 
     def set_scene_image(self, reference: dict[str, str]) -> None:
@@ -1021,6 +1038,8 @@ class GameInstance:
             saved_group_name = self.group_name
             saved_solo = self.solo_mode
             saved_language = normalize_language(self.language)
+            saved_ruleset_runtime = copy.deepcopy(self.ruleset_runtime)
+            saved_adventure_binding = copy.deepcopy(self.adventure_binding)
             self.players.clear()
             self.npcs.clear()
             self.round_number = 0
@@ -1058,6 +1077,13 @@ class GameInstance:
             self.last_state_update = None
             self.last_token_budget_bump = None
             self.gm_directives.clear()
+            self.ruleset_runtime = saved_ruleset_runtime
+            self.ruleset_state = (
+                {"state_schema_version": int(saved_ruleset_runtime.get("state_schema_version", 1) or 1)}
+                if saved_ruleset_runtime else {}
+            )
+            self.adventure_binding = saved_adventure_binding
+            self.event_ledger.clear()
             self.state = GameState.CREATED
             self.world_id = saved_world_id
             self.world_name = saved_world_name
@@ -1085,6 +1111,7 @@ class GameInstance:
             "game_key": list(self.game_key),
             "world_id": self.world_id,
             "rule_id": self.rule_id,
+            "adventure_binding": self.adventure_binding,
             "scene_image": self.scene_image,
             "map_background": self.map_background,
             "world_name": self.world_name,
@@ -1249,6 +1276,7 @@ class GameInstance:
             rule_id=data.get("rule_id", ""),
             ruleset_runtime=data.get("ruleset_runtime") or {},
             ruleset_state=data.get("ruleset_state") or {},
+            adventure_binding=data.get("adventure_binding") or {},
             event_ledger=data.get("event_ledger") or [],
             scene_image=data.get("scene_image", {}),
             map_background=data.get("map_background", {}),

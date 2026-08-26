@@ -3,10 +3,11 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 function source(relativePath: string): string {
-  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf-8')
+  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf-8').replace(/\r\n/g, '\n')
 }
 
 const playViewSource = source('../src/features/play/PlayView.vue')
+const gameSidebarSource = source('../src/components/GameSidebar.vue')
 const actionComposerSource = source('../src/components/ActionComposer.vue')
 const mainSource = source('../src/main.ts')
 const layoutCss = source('../src/styles/v2/layout.css')
@@ -53,19 +54,36 @@ describe('shared host and player play layout', () => {
     expect(layoutCss).toContain('padding-bottom: calc(6px + env(safe-area-inset-bottom));')
   })
 
-  it('isolates professional rulesets in an accessible, bounded, lazy workspace', () => {
+  it('keeps one classic play surface and loads D&D enhancements in a bounded toolbox', () => {
     expect(playViewSource).toContain("defineAsyncComponent(\n  () => import('@/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue')")
     expect(playViewSource).toContain("defineAsyncComponent(\n  () => import('@/features/rulesets/dnd2024/campaign/Dnd2024CampaignPanel.vue')")
-    expect(playViewSource).toContain('role="tablist"')
-    expect(playViewSource).toContain('role="tabpanel"')
-    expect(playViewSource).toContain('@keydown="onRulesetTabKey"')
-    expect(playViewSource).toContain("label: '5E 2024 游玩区'")
-    expect(playViewSource).toContain("campaign: '1 从这里开始'")
-    expect(playViewSource).toContain("combat: '2 遇敌时战斗'")
-    expect(playViewSource).toContain("story: '3 回看故事（可选）'")
-    expect(playViewSource).toContain('class="ruleset-workspace-guide"')
-    expect(rulesetWorkspaceCss).toMatch(/\.ruleset-workspace\s*\{[\s\S]*?flex:\s*1 1 auto;[\s\S]*?overflow:\s*auto;/)
-    expect(rulesetWorkspaceCss).toContain('.play-main.ruleset-mode')
+    expect(playViewSource.match(/<GameTimeline/g)).toHaveLength(1)
+    expect(playViewSource.match(/<ActionComposer/g)).toHaveLength(1)
+    expect(playViewSource).toContain('dialog-class="dnd-toolbox-dialog"')
+    expect(playViewSource).toContain('<template #after-perception>')
+    expect(playViewSource).toContain("menu: 'DND5E工具'")
+    expect(playViewSource).not.toContain('play-tools-menu')
+    const dndToolsStart = playViewSource.indexOf('class="panel sidebar-disclosure dnd5e-sidebar-tools"')
+    const dndTools = playViewSource.slice(dndToolsStart, playViewSource.indexOf('</details>', dndToolsStart))
+    expect(dndTools).toContain('rulesetToolCopy.campaign')
+    expect(dndTools).toContain('rulesetToolCopy.combat')
+    expect(dndTools).not.toContain("t('characters')")
+    expect(dndTools).not.toContain("t('mapTitle')")
+    expect(dndTools).not.toContain("t('sceneGallery')")
+    expect(dndTools).not.toContain("t('rule')")
+    expect(gameSidebarSource.indexOf('<slot name="after-perception" />')).toBeGreaterThan(gameSidebarSource.indexOf("t('characterPerception')"))
+    expect(gameSidebarSource.indexOf('<slot name="after-perception" />')).toBeLessThan(gameSidebarSource.indexOf("t('statusInfo')"))
+    expect(playViewSource).toContain("@click=\"openRulesetTool('campaign')\"")
+    expect(playViewSource).toContain("@click=\"openRulesetTool('combat')\"")
+    expect(playViewSource).toContain("activeRulesetTool.value = 'combat'")
+    expect(playViewSource).toContain("step?.requires === 'combat_ended'")
+    expect(playViewSource).toContain("response.gameplay.encounter_request?.status === 'pending'")
+    expect(playViewSource).not.toContain('Dnd2024PlayWorkspace')
+    expect(playViewSource).not.toContain('Dnd2024PartyFeed')
+    expect(playViewSource).not.toContain('unified_play_context')
+    expect(actionComposerSource).not.toContain('professional-mode-switch')
+    expect(rulesetWorkspaceCss).toContain('.dialog.dnd-toolbox-dialog')
+    expect(rulesetWorkspaceCss).toContain('.dnd-toolbox-tabs')
   })
 
   it('keeps professional controls touch-sized and honors reduced motion and light mode', () => {

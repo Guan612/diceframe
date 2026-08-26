@@ -106,6 +106,19 @@ function spellRefs(key: string): string[] {
   return ((classMagic.value[key] as string[] | undefined) || []).map(refName)
 }
 
+const spellSlotRows = computed(() => {
+  const current = (classMagic.value.slots_current as Record<string, unknown> | undefined) || {}
+  const maximum = (classMagic.value.slots_max as Record<string, unknown> | undefined) || {}
+  const levels = [...new Set([...Object.keys(current), ...Object.keys(maximum)])]
+    .filter(level => /^\d+$/.test(level))
+    .sort((a, b) => Number(a) - Number(b))
+  return levels.map(level => ({
+    level,
+    current: Number(current[level] || 0),
+    maximum: Number(maximum[level] || 0),
+  }))
+})
+
 async function save(): Promise<void> {
   busy.value = true
   failure.value = ''
@@ -233,14 +246,24 @@ async function completeRest(): Promise<void> {
       <code>{{ (canonical.rule_binding as JsonObject)?.content_version || '—' }}</code>
     </div>
 
-    <div v-else class="center-panel read-only-panel">
+    <div v-else class="center-panel read-only-panel magic-panel">
       <p class="locked-note">{{ text('法术位和职业资源会在战斗、休息与升级时由规则引擎更新，不需要手工计算。', 'Spell slots and class resources are updated by combat, rest, and advancement rules.') }}</p>
       <dl>
         <div><dt>{{ text('施法关键属性', 'Spellcasting ability') }}</dt><dd>{{ abilityName(String(classMagic.ability || '')) }}</dd></div>
         <div><dt>{{ text('法术攻击', 'Spell attack') }}</dt><dd>+{{ derived.spell_attack_bonus || 0 }}</dd></div>
         <div><dt>{{ text('法术豁免 DC', 'Spell save DC') }}</dt><dd>{{ derived.spell_save_dc || '—' }}</dd></div>
-        <div><dt>{{ text('法术位（当前 / 上限）', 'Spell slots (current / max)') }}</dt><dd>{{ JSON.stringify(classMagic.slots_current || {}) }} / {{ JSON.stringify(classMagic.slots_max || {}) }}</dd></div>
       </dl>
+      <section class="resource-section">
+        <div class="section-heading"><h3>{{ text('法术位', 'Spell slots') }}</h3><span>{{ text('当前 / 上限', 'Current / max') }}</span></div>
+        <div v-if="spellSlotRows.length" class="spell-slot-grid">
+          <article v-for="slot in spellSlotRows" :key="slot.level" class="spell-slot-card">
+            <small>{{ text(`${slot.level} 环`, `Level ${slot.level}`) }}</small>
+            <strong>{{ slot.current }} <span>/ {{ slot.maximum }}</span></strong>
+            <div class="slot-meter" aria-hidden="true"><i :style="{ width: `${slot.maximum ? Math.min(100, Math.max(0, slot.current / slot.maximum * 100)) : 0}%` }"></i></div>
+          </article>
+        </div>
+        <p v-else class="empty-resource">{{ text('当前没有可用法术位（戏法不消耗法术位）。', 'No spell slots at this level (cantrips do not use slots).') }}</p>
+      </section>
       <h3>{{ text('戏法', 'Cantrips') }}</h3><div class="tag-list"><span v-for="spell in spellRefs('cantrip_refs')" :key="spell">{{ spell }}</span><i v-if="!spellRefs('cantrip_refs').length">{{ text('此职业当前没有职业戏法', 'No class cantrips at this level') }}</i></div>
       <h3>{{ text('已准备法术', 'Prepared spells') }}</h3><div class="tag-list"><span v-for="spell in spellRefs('prepared_spell_refs')" :key="spell">{{ spell }}</span><i v-if="!spellRefs('prepared_spell_refs').length">{{ text('此职业当前没有准备法术', 'No prepared spells at this level') }}</i></div>
       <section v-if="target === 'game'" class="rest-center">
@@ -283,10 +306,11 @@ async function completeRest(): Promise<void> {
 .ability-grid { grid-template-columns: repeat(6, 1fr); }.ability-grid article { text-align: center; }
 .newbie-callout, .safe-edit-note, .locked-note { padding: 14px 16px; border-left: 4px solid #65c9b7; border-radius: 8px; background: rgb(71 176 157 / 11%); }
 .newbie-callout ol { margin: 8px 0 0; padding-left: 22px; }.newbie-callout li + li { margin-top: 6px; }
-.profile-panel label { display: grid; gap: 6px; }.profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }.profile-grid label:nth-child(n+4) { grid-column: 1 / -1; }
-.profile-panel input, .profile-panel textarea { width: 100%; }
+.profile-panel label { display: grid; gap: 6px; min-width: 0; }.profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.profile-grid label:nth-child(n+4) { grid-column: 1 / -1; }
+.profile-panel input, .profile-panel textarea { width: 100%; min-width: 0; box-sizing: border-box; }.profile-panel textarea { min-height: 74px; resize: vertical; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
 .read-only-panel dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }.read-only-panel dl div { padding: 12px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 10px; }.read-only-panel dt { color: var(--text-muted, #aeb9c7); }.read-only-panel dd { margin: 4px 0 0; font-weight: 700; }
-.tag-list { display: flex; flex-wrap: wrap; gap: 8px; }.tag-list span { padding: 5px 9px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 999px; }.tag-list i { color: var(--text-muted, #aeb9c7); }
+.tag-list { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }.tag-list span { max-width: 100%; padding: 5px 9px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 999px; overflow-wrap: anywhere; }.tag-list i { color: var(--text-muted, #aeb9c7); }
+.magic-panel { gap: 12px; }.magic-panel h3 { margin: 4px 0 0; }.resource-section { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 12px; background: color-mix(in srgb, var(--card-bg, #151c27) 92%, #d8a94e 4%); }.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }.section-heading h3 { margin: 0; }.section-heading span { color: var(--text-muted, #aeb9c7); font-size: 12px; }.spell-slot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }.spell-slot-card { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 9px; background: rgb(10 15 23 / 28%); }.spell-slot-card small { color: var(--text-muted, #aeb9c7); }.spell-slot-card strong { font-size: 20px; }.spell-slot-card strong span { color: var(--text-muted, #aeb9c7); font-size: 14px; font-weight: 400; }.slot-meter { height: 4px; overflow: hidden; border-radius: 99px; background: rgb(255 255 255 / 12%); }.slot-meter i { display: block; height: 100%; border-radius: inherit; background: #d8a94e; }.empty-resource { margin: 0; color: var(--text-muted, #aeb9c7); }
 .rest-center { display: grid; gap: 12px; margin-top: 8px; padding: 16px; border: 1px solid #80693f; border-radius: 14px; background: rgb(205 159 72 / 8%); }.rest-center h3, .rest-center p { margin: 0; }.rest-center p { color: var(--text-muted, #aeb9c7); }.rest-types { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }.rest-types label { display: flex; align-items: flex-start; gap: 9px; padding: 12px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 10px; }.rest-types span { display: grid; gap: 3px; }.rest-types small { color: var(--text-muted, #aeb9c7); }.hit-dice-grid { display: flex; flex-wrap: wrap; gap: 9px; }.hit-dice-grid label { display: grid; gap: 5px; min-width: 150px; }.hit-dice-grid input { width: 100%; }.server-roll-note { font-size: 12px; }.rest-confirm { display: flex; align-items: center; gap: 8px; }.rest-center > button { justify-self: end; }
 .center-error { padding: 10px; border-radius: 8px; background: rgb(190 62 62 / 16%); color: #ffb5b5; }.professional-character-center footer { display: flex; justify-content: flex-end; gap: 10px; position: sticky; bottom: 0; padding: 10px 0; background: color-mix(in srgb, var(--card-bg, #151c27) 94%, transparent); }
 @media (max-width: 720px) { .professional-character-center { width: 100%; }.center-tabs { grid-template-columns: 1fr 1fr; }.vital-grid { grid-template-columns: 1fr 1fr; }.ability-grid { grid-template-columns: repeat(3, 1fr); }.profile-grid, .read-only-panel dl, .rest-types { grid-template-columns: 1fr; }.profile-grid label:nth-child(n+4) { grid-column: auto; } }

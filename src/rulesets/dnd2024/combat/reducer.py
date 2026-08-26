@@ -30,6 +30,9 @@ class CombatReducerMixin:
                 "economy": deepcopy(event["economy"]),
                 "pending_decisions": [], "position_mode": event["position_mode"],
                 "reactions": deepcopy(event["reactions"]),
+                "encounter_instance_id": str(event.get("encounter_instance_id") or ""),
+                "encounter_preset_id": str(event.get("encounter_preset_id") or ""),
+                "origin_step_id": str(event.get("origin_step_id") or ""),
             }
             return
         if event_type == "dnd2024.reaction.spent":
@@ -43,6 +46,20 @@ class CombatReducerMixin:
             combat["status"] = "ended"
             combat["outcome"] = str(event.get("reason") or "ended")
             combat["economy"] = {}
+            encounter_id = str(combat.get("encounter_instance_id") or "")
+            if encounter_id:
+                history = state.setdefault("combat_history", [])
+                if not any(
+                    isinstance(item, dict) and item.get("encounter_instance_id") == encounter_id
+                    for item in history
+                ):
+                    history.append({
+                        "encounter_instance_id": encounter_id,
+                        "encounter_preset_id": str(combat.get("encounter_preset_id") or ""),
+                        "origin_step_id": str(combat.get("origin_step_id") or ""),
+                        "outcome": combat["outcome"],
+                    })
+                    del history[:-64]
             return
         if event_type == "dnd2024.action.spent":
             resource = str(event["resource"])

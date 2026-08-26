@@ -288,7 +288,7 @@ def test_real_srd_bundle_all_classes_form_legal_level_one_characters(class_id) -
     character = runtime.finalize_character(None, draft)
 
     assert errors == []
-    assert character["rule_binding"]["content_version"] == "srd-5.2.1+r4"
+    assert character["rule_binding"]["content_version"] == "srd-5.2.1+r5"
     assert character["ruleset_character"]["build"]["class_levels"] == [
         {"class_ref": f"class:{class_id}", "level": 1}
     ]

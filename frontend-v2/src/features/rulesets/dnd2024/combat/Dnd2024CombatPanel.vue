@@ -46,8 +46,9 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   title: '专业规则战斗台', authority: '命中、豁免、伤害与资源均由服务器结算',
   loading: '正在同步权威状态…', refresh: '刷新', start: '开始战斗',
   chooseEncounter: '选择遭遇预设', noCombat: '当前没有进行中的战斗。GM 可从已验证预设开场。',
-  storyBridge: '剧情继续', storyPurpose: '这不是额外关卡，而是刚才冒险故事中的下一步。', storyAction: '现在只需要启动这场教学遭遇；开始后，系统会列出你此刻能做的动作。',
-  guidedEncounter: '剧情指定遭遇', guidedStart: '开始第一次交锋', waitingForGm: '请等待 GM 启动这场剧情中的遭遇。启动后，这里会显示先攻、目标和可用动作。',
+  storyBridge: '剧情继续', storyPurpose: '这不是额外关卡，而是刚才冒险故事中的下一步。', storyAction: '现在启动这场剧情遭遇；开始后，敌方由服务器自动行动，每位玩家只操作自己的角色。',
+  guidedEncounter: '剧情指定遭遇', guidedStart: '开始遭遇', waitingForGm: '请等待 GM 启动这场剧情中的遭遇。启动后，这里会显示先攻、目标和可用动作。', guidedOnly: '这场战斗由当前剧情指定，玩家不需要选择其他遭遇。',
+  narrativeRequest: '公共剧情已经进入交战态势。请选择符合当前敌情的遭遇预设，启动后切换到权威先攻与行动流程。',
   round: '轮次', current: '当前行动者', position: '位置', hp: '生命值', ac: '护甲等级',
   action: '动作', bonus: '附赠动作', movement: '移动', reaction: '反应',
   attack: '攻击', cast: '施放法术', target: '目标', weapon: '武器', spell: '法术', slot: '法术位',
@@ -55,17 +56,19 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   endTurn: '结束回合', endCombat: '结束战斗', deathSave: '死亡豁免', stabilize: '稳定伤者',
   confirm: '确认并交给服务器结算', cancel: '取消', resolve: '发动反应', decline: '放弃反应',
   legalOnly: '这里只显示当前合法动作；若状态已经变化，服务器会拒绝过期请求并说明原因。',
-  waiting: '尚未轮到你的角色。', ended: '战斗已经结束。', conditions: '状态',
+  waiting: '尚未轮到你的角色。', waitingForTeammate: '等待队友行动', enemyActing: '敌方正在由服务器自动行动…', ended: '战斗已经结束。', conditions: '状态',
   lastResult: '最近结算', none: '无', economy: '本回合资源', available: '可用', spent: '已用',
   inRange: '可用', longRange: '远距攻击（劣势）', tooFar: '距离不足',
   targetDistance: '你与目标相距', autoWeapon: '已优先选择当前距离可用的武器。',
   moveCloser: '当前武器都够不到目标。请先移动靠近，或改用射程更远的武器。',
+  tacticalTrack: '战术距离带', chooseDestination: '每格 5 尺；轮到你时可点击可达格选择移动距离。',
 } : {
   title: 'Professional Combat Console', authority: 'The server resolves rolls, saves, damage, and resources',
   loading: 'Synchronizing authoritative state…', refresh: 'Refresh', start: 'Start Combat',
   chooseEncounter: 'Choose an encounter preset', noCombat: 'No combat is active. The GM can start from a validated preset.',
-  storyBridge: 'Continue the story', storyPurpose: 'This is not an extra level; it is the next scene in the adventure you just played.', storyAction: 'Start this tutorial encounter. The console will then show only the actions you can take now.',
-  guidedEncounter: 'Story-selected encounter', guidedStart: 'Start the first encounter', waitingForGm: 'Wait for the GM to start this story encounter. Then this page will show initiative, targets, and legal actions.',
+  storyBridge: 'Continue the story', storyPurpose: 'This is not an extra level; it is the next scene in the adventure you just played.', storyAction: 'Start this story encounter. The server operates enemies automatically, while each player controls only their own character.',
+  guidedEncounter: 'Story-selected encounter', guidedStart: 'Start encounter', waitingForGm: 'Wait for the GM to start this story encounter. The combat tool will then show initiative, targets, and legal actions.', guidedOnly: 'This encounter is selected by the current story. Players do not need to choose another preset.',
+  narrativeRequest: 'The shared story has entered an engagement. Choose the preset that matches the opposition, then switch to authoritative initiative and actions.',
   round: 'Round', current: 'Current actor', position: 'Position', hp: 'HP', ac: 'Armor Class',
   action: 'Action', bonus: 'Bonus Action', movement: 'Movement', reaction: 'Reaction',
   attack: 'Attack', cast: 'Cast Spell', target: 'Target', weapon: 'Weapon', spell: 'Spell', slot: 'Slot',
@@ -73,11 +76,12 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   endTurn: 'End Turn', endCombat: 'End Combat', deathSave: 'Death Save', stabilize: 'Stabilize',
   confirm: 'Confirm and let the server resolve', cancel: 'Cancel', resolve: 'Use Reaction', decline: 'Decline',
   legalOnly: 'Only currently legal actions are shown. The server rejects stale requests with a reason.',
-  waiting: 'Waiting for your character’s turn.', ended: 'Combat has ended.', conditions: 'Conditions',
+  waiting: 'Waiting for your character’s turn.', waitingForTeammate: 'Waiting for teammate', enemyActing: 'The enemy is acting automatically…', ended: 'Combat has ended.', conditions: 'Conditions',
   lastResult: 'Latest Resolution', none: 'None', economy: 'Turn Resources', available: 'Available', spent: 'Spent',
   inRange: 'In range', longRange: 'Long range (disadvantage)', tooFar: 'Out of range',
   targetDistance: 'Distance to target', autoWeapon: 'A weapon usable at this distance is selected first.',
   moveCloser: 'None of your weapons can reach this target. Move closer or use a longer-ranged weapon.',
+  tacticalTrack: 'Tactical distance track', chooseDestination: 'Each cell is 5 ft. On your turn, select a reachable cell to set movement.',
 })
 
 const gameplay = computed(() => data.value?.gameplay)
@@ -97,6 +101,7 @@ const guidedCombatStep = computed(() => {
 const guidedCombatPreset = computed(() => guidedCombatStep.value
   ? gameplay.value?.encounter_presets.find(preset => preset.id === guidedCombatStep.value?.encounter_preset_id)
   : undefined)
+const narrativeCombatPending = computed(() => gameplay.value?.encounter_request?.status === 'pending')
 const attackAction = computed(() => action('attack'))
 const spellAction = computed(() => action('cast_spell'))
 const moveAction = computed(() => action('move'))
@@ -121,9 +126,58 @@ const selectedTarget = computed(() => targetsFor(selectedSpell.value).find(
   item => item.actor_id === selectedTargetId.value,
 ))
 const latestEvents = computed(() => {
+  const batches = data.value?.result?.resolved_event_batches
+  if (Array.isArray(batches)) {
+    return batches.flatMap(batch => (
+      Array.isArray(batch.events) ? batch.events as JsonObject[] : []
+    )).filter(event => event.type !== 'intent.submitted')
+  }
   const batch = data.value?.result?.event_batch
   return Array.isArray(batch?.events) ? batch.events as JsonObject[] : []
 })
+const waitingText = computed(() => {
+  const current = String(combat.value?.current_actor_id || '')
+  if (!current) return copy.value.waiting
+  if (current.startsWith('enemy:')) return copy.value.enemyActing
+  if (current === `player:${props.actorId}`) return copy.value.waiting
+  return `${copy.value.waitingForTeammate}：${targetName(current)}`
+})
+const trackMin = computed(() => {
+  const positions = combat.value?.actors.map(actor => Number(actor.position || 0)) || [0]
+  const movement = Number(moveAction.value?.movement_remaining || 0)
+  return Math.floor((Math.min(0, ...positions) - movement) / 5) * 5
+})
+const trackMax = computed(() => {
+  const positions = combat.value?.actors.map(actor => Number(actor.position || 0)) || [0]
+  const movement = Number(moveAction.value?.movement_remaining || 0)
+  return Math.ceil((Math.max(30, ...positions) + movement) / 5) * 5
+})
+const trackTicks = computed(() => Array.from(
+  { length: Math.max(1, (trackMax.value - trackMin.value) / 5 + 1) },
+  (_, index) => trackMin.value + index * 5,
+))
+const selectedDestination = computed(() => (
+  currentActor.value ? Number(currentActor.value.position || 0) + Number(movementDistance.value || 0) : null
+))
+
+function canReachPosition(position: number): boolean {
+  if (!moveAction.value || !currentActor.value) return false
+  const distance = position - Number(currentActor.value.position || 0)
+  return distance !== 0 && Math.abs(distance) <= Number(moveAction.value.movement_remaining || 0)
+}
+
+function chooseTrackPosition(position: number): void {
+  if (!canReachPosition(position) || !currentActor.value) return
+  movementDistance.value = position - Number(currentActor.value.position || 0)
+}
+
+function tokenTrackStyle(position: number, index: number): Record<string, string> {
+  const span = Math.max(5, trackMax.value - trackMin.value)
+  return {
+    left: `${(Number(position || 0) - trackMin.value) / span * 100}%`,
+    top: `${8 + (index % 3) * 30}px`,
+  }
+}
 
 function localizedTerm(value: unknown): string {
   const key = String(value || '')
@@ -317,6 +371,8 @@ async function startCombat(): Promise<void> {
   await submit({
     intent_id: intentId(), type: 'combat.start',
     expected_version: gameplay.value?.state_version ?? 0,
+    encounter_preset_id: selectedPreset.value.id,
+    encounter_instance_id: action('combat.start')?.encounter_instance_id,
     enemies: selectedPreset.value.enemies,
   })
 }
@@ -324,9 +380,11 @@ async function startCombat(): Promise<void> {
 async function decide(decision: RulesetPendingDecision, option: string): Promise<void> {
   busy.value = true
   try {
-    data.value = await resolveRulesetDecision(props.gameKey, decision.decision_id, {
+    const payload = {
+      type: 'decision.resolve', decision_id: decision.decision_id,
       intent_id: intentId(), expected_version: gameplay.value?.state_version ?? 0, option,
-    })
+    }
+    data.value = await resolveRulesetDecision(props.gameKey, decision.decision_id, payload)
     error.value = ''
     emit('refresh')
   } catch (cause: unknown) {
@@ -380,6 +438,10 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 
     <template v-if="gameplay">
       <section v-if="combat?.status !== 'active'" class="encounter-start">
+        <div v-if="narrativeCombatPending && !guidedCombatStep" class="story-bridge">
+          <span class="story-bridge-label">{{ copy.storyBridge }}</span>
+          <p>{{ copy.narrativeRequest }}</p>
+        </div>
         <template v-if="guidedCombatStep && combat?.status !== 'ended'">
           <div class="story-bridge">
             <span class="story-bridge-label">{{ copy.storyBridge }}</span>
@@ -390,18 +452,24 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
         </template>
         <p v-else>{{ combat?.status === 'ended' ? copy.ended : copy.noCombat }}</p>
         <template v-if="isGm && action('combat.start')">
-          <label>
-            <span>{{ guidedCombatStep ? copy.guidedEncounter : copy.chooseEncounter }}</span>
-            <select v-model="selectedPresetId" :disabled="Boolean(guidedCombatStep)">
+          <div v-if="guidedCombatStep" class="guided-preset">
+            <span>{{ copy.guidedEncounter }}</span>
+            <strong>{{ guidedCombatPreset?.name || guidedCombatStep.encounter_preset_id }}</strong>
+            <p>{{ guidedCombatPreset?.description }}</p>
+            <small>{{ copy.guidedOnly }}</small>
+          </div>
+          <label v-else>
+            <span>{{ copy.chooseEncounter }}</span>
+            <select v-model="selectedPresetId">
               <option v-for="preset in gameplay.encounter_presets" :key="preset.id" :value="preset.id">
                 {{ preset.name }} · {{ localizedTerm(preset.difficulty) }}
               </option>
             </select>
           </label>
-          <p class="preset-description">{{ selectedPreset?.description }}</p>
+          <p v-if="!guidedCombatStep" class="preset-description">{{ selectedPreset?.description }}</p>
           <button class="combat-primary" :disabled="busy || !selectedPreset" @click="startCombat">{{ guidedCombatStep ? copy.guidedStart : copy.start }}</button>
         </template>
-        <p v-else-if="guidedCombatStep && combat?.status !== 'ended'" class="combat-state">{{ copy.waitingForGm }}</p>
+        <p v-else-if="(guidedCombatStep || narrativeCombatPending) && combat?.status !== 'ended'" class="combat-state">{{ copy.waitingForGm }}</p>
       </section>
 
       <template v-else>
@@ -422,6 +490,30 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
             {{ targetName(actorIdValue) }}
           </li>
         </ol>
+
+        <section class="tactical-track" :aria-label="copy.tacticalTrack">
+          <header><strong>{{ copy.tacticalTrack }}</strong><span>{{ copy.chooseDestination }}</span></header>
+          <div class="track-surface">
+            <div class="track-cells" :style="{ gridTemplateColumns: `repeat(${trackTicks.length}, minmax(34px, 1fr))` }">
+              <button
+                v-for="position in trackTicks"
+                :key="position"
+                type="button"
+                :class="{ reachable: canReachPosition(position), selected: selectedDestination === position }"
+                :disabled="!canReachPosition(position)"
+                :aria-label="`${copy.position} ${position} ${copy.feet}`"
+                @click="chooseTrackPosition(position)"
+              ><span>{{ position }}</span></button>
+            </div>
+            <span
+              v-for="(actor, index) in combat.actors"
+              :key="`track-${actor.actor_id}`"
+              :class="['track-token', actor.kind, { current: actor.actor_id === combat.current_actor_id }]"
+              :style="tokenTrackStyle(actor.position, index)"
+              :title="`${actor.name} · ${actor.position} ${copy.feet}`"
+            >{{ actor.name.slice(0, 2) }}</span>
+          </div>
+        </section>
 
         <div class="actor-grid">
           <article v-for="actor in combat.actors" :key="actor.actor_id" :class="['actor-card', actor.kind]">
@@ -521,7 +613,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
             <button v-if="action('combat.end')" class="danger" @click="stageSimple('combat.end')">{{ copy.endCombat }}</button>
           </section>
         </div>
-        <p v-else class="combat-state">{{ copy.waiting }}</p>
+        <p v-else class="combat-state">{{ waitingText }}</p>
 
         <section v-if="staged" ref="confirmCard" class="confirm-card" role="group" :aria-label="copy.confirm" tabindex="-1">
           <strong>{{ copy.confirm }}</strong>
@@ -556,12 +648,25 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 .story-bridge h3, .story-bridge p { margin: 0; }
 .story-bridge p { color: #e3d9c6; line-height: 1.6; }
 .story-bridge aside { padding: 9px 11px; border-left: 3px solid #d5a64f; background: rgb(14 20 24 / 56%); color: #f2e6cf; line-height: 1.55; }
+.guided-preset { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid #a17b3f; border-radius: 10px; background: rgb(91 62 26 / 24%); }.guided-preset span, .guided-preset small { color: #f0c975; font-size: 12px; }.guided-preset strong { font-size: 17px; }.guided-preset p { margin: 0; color: #e3d9c6; line-height: 1.5; }
 .combat-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .combat-summary span { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid #394551; border-radius: 10px; background: #151c23; }
 .combat-summary small { color: #9ca6ae; }
 .initiative { display: flex; gap: 6px; margin: 0; padding: 0; overflow-x: auto; list-style: none; }
 .initiative li { min-width: max-content; padding: 5px 9px; border: 1px solid #3b4650; border-radius: 999px; color: #aeb8c0; }
 .initiative li.current { border-color: #d2a855; background: #362b19; color: #ffe5a8; }
+.tactical-track { display: grid; gap: 7px; padding: 11px; border: 1px solid #3b4650; border-radius: 12px; background: #0e151c; }
+.tactical-track > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.tactical-track > header span { color: #aeb8c0; font-size: 12px; }
+.track-surface { position: relative; min-height: 112px; padding-top: 76px; overflow-x: auto; overflow-y: hidden; }
+.track-cells { display: grid; min-width: max-content; }
+.track-cells button { min-width: 34px; min-height: 34px; padding: 0; border-radius: 0; border-color: #35414b; color: #89949c; background: #151e26; font-size: 10px; }
+.track-cells button.reachable { border-color: #97783d; color: #f0cf8b; background: #2c261b; cursor: pointer; }
+.track-cells button.selected { border-color: #e4b75e; background: #5c421d; box-shadow: inset 0 0 0 2px #e4b75e; }
+.track-cells button:disabled { opacity: 1; cursor: default; }
+.track-token { position: absolute; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; margin-left: -14px; border: 2px solid #6ba2be; border-radius: 50%; background: #173347; color: #eef9ff; font-size: 10px; font-weight: 800; box-shadow: 0 4px 9px rgb(0 0 0 / 38%); }
+.track-token.enemy { border-color: #c56b6b; background: #55292b; }
+.track-token.current { outline: 3px solid #e4b75e; outline-offset: 2px; }
 .actor-grid, .combat-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
 .actor-card, .action-card { display: grid; gap: 8px; padding: 12px; border: 1px solid #3b4650; border-radius: 12px; background: #111820; }
 .actor-card.enemy { border-color: #664446; }
@@ -588,6 +693,7 @@ button:focus-visible, select:focus-visible, input:focus-visible, .confirm-card:f
 :global(body.light .dnd-combat .story-bridge) { border-color: #aa8546; background: #fff7e7; }
 :global(body.light .dnd-combat .story-bridge p), :global(body.light .dnd-combat .story-bridge aside) { color: #403728; }
 :global(body.light .dnd-combat .actor-card), :global(body.light .dnd-combat .action-card), :global(body.light .dnd-combat .combat-summary span) { border-color: #b8b2a6; background: #fff; }
+:global(body.light .dnd-combat .tactical-track) { border-color: #b8b2a6; background: #f7f9fa; }
 :global(body.light .dnd-combat .action-card select), :global(body.light .dnd-combat .action-card input), :global(body.light .dnd-combat .encounter-start select) { border-color: #908779; background: #fff; color: #211e1a; }
 :global(body.light .dnd-combat .combat-authority), :global(body.light .dnd-combat .preset-description), :global(body.light .dnd-combat .combat-state), :global(body.light .dnd-combat .combat-summary small) { color: #514b43; }
 :global(body.light .dnd-combat .resolution-log li) { background: #e8eef0; color: #27383e; }

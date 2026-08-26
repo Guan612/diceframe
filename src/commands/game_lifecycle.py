@@ -285,13 +285,14 @@ class GameLifecycle:
         world_name = instance.world_name
         group_name = instance.group_name
         seed = instance.seed_code
+        rule_id = instance.rule_id
         language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
         await instance.reset(keep_seed=True)
         instance = await self.create_game(
             instance.game_key, world_id=world_id, world_name=world_name,
-            group_name=group_name, seed_code=seed, language=language,
+            group_name=group_name, seed_code=seed, rule_id=rule_id, language=language,
         )
-        await self.start_game(instance)
+        await self._start_reset_instance(instance)
         instance.record_llm_usage(calls=1)
         await self.registry.save(instance)
         return instance
@@ -308,13 +309,14 @@ class GameLifecycle:
         world_name = instance.world_name
         group_name = instance.group_name
         seed = instance.seed_code
+        rule_id = instance.rule_id
         solo = instance.solo_mode
         language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
 
         await instance.reset(keep_seed=True)
         instance = await self.create_game(
             instance.game_key, world_id=world_id, world_name=world_name,
-            group_name=group_name, seed_code=seed, language=language,
+            group_name=group_name, seed_code=seed, rule_id=rule_id, language=language,
         )
         instance.configure_session(solo_mode=solo)
         instance.replace_players(saved_players)
@@ -322,7 +324,22 @@ class GameLifecycle:
         if not instance.players:
             raise ValueError("重开世界需要至少 1 名角色")
 
-        await self.start_game(instance)
+        await self._start_reset_instance(instance)
         instance.record_llm_usage(calls=1)
         await self.registry.save(instance)
         return instance
+
+    async def _start_reset_instance(self, instance: GameInstance) -> str:
+        """Resume the gameplay stack already bound to this save."""
+
+        runtime_id = str((instance.ruleset_runtime or {}).get("id") or "")
+        if not runtime_id or runtime_id == "core:legacy":
+            return await self.start_game(instance)
+        await instance.activate()
+        self.registry.register(instance)
+        world = self.load_world_template(instance.world_id, instance.language) or {}
+        initial_scene = str(world.get("starter_scene") or instance.world_name or "").strip()
+        if initial_scene:
+            instance.set_scene(initial_scene)
+        await self.registry.save(instance)
+        return ""

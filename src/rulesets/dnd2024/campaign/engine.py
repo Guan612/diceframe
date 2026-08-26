@@ -8,6 +8,7 @@ from hashlib import sha256
 from typing import Any
 
 from src.rulesets.bundle import LoadedRulesetBundle
+from src.rulesets.dnd2024.play.contracts import story_encounter_instance_id
 from src.rulesets.events import EventBatchError, apply_event_batch, stable_batch_id
 
 
@@ -20,8 +21,6 @@ CAMPAIGN_INTENT_TYPES = frozenset({
     "campaign.proposal.resolve",
     "tutorial.start",
     "tutorial.choose",
-    "tutorial.hint",
-    "tutorial.coach.set",
 })
 ENTITY_KINDS = frozenset({"task", "clue", "fact", "item", "relationship"})
 VISIBILITIES = frozenset({"public", "gm"})
@@ -60,29 +59,28 @@ def _text_list(value: Any, field: str, *, maximum_items: int = 20) -> list[str]:
 class Dnd2024CampaignEngine:
     """Resolve non-combat professional play without granting authority to an LLM."""
 
-    def __init__(self, bundle: LoadedRulesetBundle):
+    def __init__(
+        self, bundle: LoadedRulesetBundle, adventure: dict[str, Any] | None = None,
+    ):
         self.bundle = bundle
-        adventures = bundle.list("starter_adventure")
-        if len(adventures) != 1:
-            raise CampaignIntentError("the D&D 2024 bundle must contain one starter adventure")
-        self.adventure = adventures[0]
+        self.adventure = deepcopy(adventure) if isinstance(adventure, dict) else None
         self.steps = {
             str(item.get("id") or ""): item
-            for item in self.adventure.get("steps") or []
+            for item in (self.adventure or {}).get("steps") or []
             if isinstance(item, dict) and item.get("id")
         }
         self.choices = {
             str(item.get("id") or ""): item
-            for item in self.adventure.get("choices") or []
+            for item in (self.adventure or {}).get("choices") or []
             if isinstance(item, dict) and item.get("id")
         }
         self.chapters = {
             str(item.get("id") or ""): item
-            for item in self.adventure.get("chapters") or []
+            for item in (self.adventure or {}).get("chapters") or []
             if isinstance(item, dict) and item.get("id")
         }
-        start_step = str(self.adventure.get("start_step_id") or "")
-        if start_step not in self.steps:
+        start_step = str((self.adventure or {}).get("start_step_id") or "")
+        if self.adventure is not None and start_step not in self.steps:
             raise CampaignIntentError("starter adventure start_step_id is invalid")
         for step_id, step in self.steps.items():
             if str(step.get("chapter_id") or "") not in self.chapters:
@@ -99,10 +97,20 @@ class Dnd2024CampaignEngine:
                 if not isinstance(outcome, dict) or outcome.get("entity_kind") not in ENTITY_KINDS:
                     raise CampaignIntentError(f"starter adventure choice {choice_id} has invalid outcome")
 
-    @staticmethod
-    def _initial_campaign() -> dict[str, Any]:
+    def _initial_campaign(self) -> dict[str, Any]:
         return {
             "schema_version": 1,
+            "world_binding": {
+                "world_id": "",
+                "source": "game",
+            },
+            "adventure_binding": {
+                "adventure_id": "",
+                "world_id": "",
+                "recommended_world_id": "",
+                "compatibility": "not_selected",
+                "scene_source": "world",
+            },
             "session_zero": {
                 "status": "not_started",
                 "revision": 0,
@@ -113,7 +121,7 @@ class Dnd2024CampaignEngine:
             "proposals": {},
             "entities": {kind: {} for kind in sorted(ENTITY_KINDS)},
             "tutorial": {
-                "status": "not_started",
+                "status": "not_started" if self.adventure is not None else "unavailable",
                 "adventure_id": "",
                 "current_step_id": "",
                 "history": [],
@@ -134,10 +142,64 @@ class Dnd2024CampaignEngine:
         if not isinstance(campaign, dict) or int(campaign.get("schema_version", 0) or 0) != 1:
             raise CampaignIntentError("unsupported D&D 2024 campaign state schema")
         campaign.setdefault("session_zero", self._initial_campaign()["session_zero"])
+        world_binding = campaign.setdefault(
+            "world_binding", deepcopy(self._initial_campaign()["world_binding"]),
+        )
+        if not isinstance(world_binding, dict):
+            world_binding = deepcopy(self._initial_campaign()["world_binding"])
+            campaign["world_binding"] = world_binding
+        if not str(world_binding.get("world_id") or ""):
+            world_binding["world_id"] = str(getattr(instance, "world_id", "") or "")
+        world_binding.setdefault("source", "game")
+        adventure_binding = campaign.setdefault(
+            "adventure_binding", deepcopy(self._initial_campaign()["adventure_binding"]),
+        )
+        if not isinstance(adventure_binding, dict):
+            adventure_binding = deepcopy(self._initial_campaign()["adventure_binding"])
+            campaign["adventure_binding"] = adventure_binding
+        adventure_binding.setdefault("adventure_id", "")
+        adventure_binding.setdefault("world_id", "")
+        adventure_binding.setdefault("recommended_world_id", "")
+        adventure_binding.setdefault("compatibility", "not_selected")
+        adventure_binding.setdefault("scene_source", "world")
         campaign.setdefault("proposals", {})
         campaign.setdefault("entities", {kind: {} for kind in sorted(ENTITY_KINDS)})
         campaign.setdefault("tutorial", self._initial_campaign()["tutorial"])
         campaign.setdefault("chapter_summaries", [])
+        tutorial = campaign.get("tutorial")
+        top_binding = dict(getattr(instance, "adventure_binding", {}) or {})
+        if self.adventure is None:
+            if isinstance(tutorial, dict):
+                tutorial.update({
+                    "status": "unavailable",
+                    "adventure_id": "",
+                    "current_step_id": "",
+                    "history": [],
+                    "hints_used": {},
+                })
+            adventure_binding.update({
+                "adventure_id": "",
+                "world_id": str(world_binding.get("world_id") or ""),
+                "recommended_world_id": "",
+                "compatibility": "not_selected",
+                "scene_source": "world",
+            })
+        elif top_binding:
+            bound_world = str(top_binding.get("world_id") or world_binding.get("world_id") or "")
+            recommended_world = str(self.adventure.get("recommended_world_id") or "")
+            adventure_binding.update({
+                "adventure_id": str(top_binding.get("adventure_id") or self.adventure.get("id") or ""),
+                "world_id": bound_world,
+                "recommended_world_id": recommended_world,
+                "compatibility": (
+                    "compatible"
+                    if not recommended_world or not bound_world or bound_world == recommended_world
+                    else "review_required"
+                ),
+                "scene_source": "adventure",
+                "version": str(top_binding.get("version") or ""),
+                "content_digest": str(top_binding.get("content_digest") or ""),
+            })
         return state
 
     @staticmethod
@@ -152,7 +214,6 @@ class Dnd2024CampaignEngine:
             "lines": [],
             "veils": [],
             "table_rules": ["Share spotlight", "Pause when anyone asks"],
-            "coach_enabled": True,
         }
 
     def available_intents(self, instance: Any, actor_id: str) -> list[dict[str, Any]]:
@@ -171,11 +232,15 @@ class Dnd2024CampaignEngine:
             is_gm
             and bool(getattr(instance, "solo_mode", False))
             and session.get("status") == "not_started"
-            and tutorial.get("status") == "not_started"
+            and tutorial.get("status") in {"not_started", "unavailable"}
         ):
             actions.append({
                 "type": "session_zero.quick_start",
-                "label": "Use recommended settings and start the guided adventure",
+                "label": (
+                    "Use recommended settings and start the selected adventure"
+                    if self.adventure is not None
+                    else "Use recommended settings and start a sandbox campaign"
+                ),
                 "expected_version": version,
             })
         if is_gm:
@@ -222,7 +287,7 @@ class Dnd2024CampaignEngine:
                     "options": ["confirm", "reject"],
                     "proposals": pending,
                 })
-        if tutorial.get("status") == "not_started" and is_gm:
+        if self.adventure is not None and tutorial.get("status") == "not_started" and is_gm:
             actions.append({
                 "type": "tutorial.start", "label": "Start guided adventure",
                 "expected_version": version, "adventure_id": self.adventure["id"],
@@ -235,16 +300,6 @@ class Dnd2024CampaignEngine:
                     "expected_version": version,
                     "choice_ids": deepcopy(step.get("choice_ids") or []),
                     "requirement_met": self._requirement_met(state, step),
-                })
-                if tutorial.get("coach_enabled", True):
-                    actions.append({
-                        "type": "tutorial.hint", "label": "Ask for a hint",
-                        "expected_version": version,
-                    })
-            if is_gm:
-                actions.append({
-                    "type": "tutorial.coach.set", "label": "Configure tutorial coach",
-                    "expected_version": version,
                 })
         return actions
 
@@ -303,13 +358,15 @@ class Dnd2024CampaignEngine:
                     "comment": "recommended solo quick start",
                 },
                 {"type": "dnd2024.session_zero.locked", "locked_by": submitted_by},
-                {
+            ])
+            if self.adventure is not None:
+                events.append({
                     "type": "dnd2024.tutorial.started",
                     "adventure_id": self.adventure["id"],
                     "start_step_id": self.adventure["start_step_id"],
+                    **self._adventure_binding_event(instance),
                     "started_by": submitted_by,
-                },
-            ])
+                })
         elif intent_type == "session_zero.propose":
             events.append({
                 "type": "dnd2024.session_zero.proposed",
@@ -361,19 +418,8 @@ class Dnd2024CampaignEngine:
                 "type": "dnd2024.tutorial.started",
                 "adventure_id": self.adventure["id"],
                 "start_step_id": self.adventure["start_step_id"],
+                **self._adventure_binding_event(instance),
                 "started_by": submitted_by,
-            })
-        elif intent_type == "tutorial.coach.set":
-            events.append({
-                "type": "dnd2024.tutorial.coach_configured",
-                "enabled": bool(intent["enabled"]),
-            })
-        elif intent_type == "tutorial.hint":
-            step_id = str(campaign["tutorial"]["current_step_id"])
-            events.append({
-                "type": "dnd2024.tutorial.hint_requested",
-                "step_id": step_id,
-                "requested_by": submitted_by,
             })
         elif intent_type == "tutorial.choose":
             events.extend(self._tutorial_choice_events(state, str(intent["choice_id"]), submitted_by))
@@ -440,6 +486,21 @@ class Dnd2024CampaignEngine:
         campaign["session_zero_defaults"] = self.default_agreement()
         return campaign
 
+    def _adventure_binding_event(self, instance: Any) -> dict[str, Any]:
+        if self.adventure is None:
+            raise CampaignIntentError("no adventure package is bound to this game")
+        world_id = str(getattr(instance, "world_id", "") or "")
+        recommended = str(self.adventure.get("recommended_world_id") or "")
+        return {
+            "world_id": world_id,
+            "recommended_world_id": recommended,
+            "compatibility": (
+                "compatible" if not recommended or not world_id or world_id == recommended
+                else "review_required"
+            ),
+            "scene_source": "adventure",
+        }
+
     def _validate(self, instance: Any, intent: dict[str, Any]) -> None:
         if not isinstance(intent, dict):
             raise CampaignIntentError("intent must be an object")
@@ -466,14 +527,17 @@ class Dnd2024CampaignEngine:
         session = state["campaign"]["session_zero"]
         if intent_type in {
             "session_zero.quick_start", "session_zero.propose", "session_zero.lock", "campaign.propose",
-            "campaign.proposal.resolve", "tutorial.start", "tutorial.coach.set",
+            "campaign.proposal.resolve", "tutorial.start",
         } and not is_gm:
             raise CampaignIntentError("only the GM can perform this campaign operation")
         if intent_type == "session_zero.quick_start":
             if not bool(getattr(instance, "solo_mode", False)):
                 raise CampaignIntentError("recommended quick start is only available in solo mode")
             tutorial = state["campaign"]["tutorial"]
-            if session.get("status") != "not_started" or tutorial.get("status") != "not_started":
+            if (
+                session.get("status") != "not_started"
+                or tutorial.get("status") not in {"not_started", "unavailable"}
+            ):
                 raise CampaignIntentError("recommended quick start is no longer available")
         elif intent_type == "session_zero.propose":
             self._normalize_agreement(intent.get("agreement"))
@@ -497,31 +561,26 @@ class Dnd2024CampaignEngine:
             if intent.get("option") not in {"confirm", "reject"}:
                 raise CampaignIntentError("proposal option must be confirm or reject")
         elif intent_type == "tutorial.start":
+            if self.adventure is None:
+                raise CampaignIntentError("no adventure package is bound to this game")
             if session.get("status") != "locked":
                 raise CampaignIntentError("Session 0 must be locked before the tutorial")
             if state["campaign"]["tutorial"].get("status") != "not_started":
                 raise CampaignIntentError("the tutorial has already started")
             if intent.get("adventure_id") not in {None, "", self.adventure["id"]}:
                 raise CampaignIntentError("starter adventure is not available")
-        elif intent_type == "tutorial.coach.set":
-            if not isinstance(intent.get("enabled"), bool):
-                raise CampaignIntentError("enabled must be a boolean")
-        elif intent_type in {"tutorial.choose", "tutorial.hint"}:
+        elif intent_type == "tutorial.choose":
             tutorial = state["campaign"]["tutorial"]
             if tutorial.get("status") != "active" or not is_player:
                 raise CampaignIntentError("the guided adventure is not active for this player")
             step = self.steps.get(str(tutorial.get("current_step_id") or ""))
             if step is None:
                 raise CampaignIntentError("the guided adventure step is invalid")
-            if intent_type == "tutorial.hint":
-                if not tutorial.get("coach_enabled", True):
-                    raise CampaignIntentError("the tutorial coach is disabled")
-            else:
-                choice_id = str(intent.get("choice_id") or "")
-                if choice_id not in step.get("choice_ids", []):
-                    raise CampaignIntentError("choice is not available for the current tutorial step")
-                if not self._requirement_met(state, step):
-                    raise CampaignIntentError("complete the current tutorial objective first")
+            choice_id = str(intent.get("choice_id") or "")
+            if choice_id not in step.get("choice_ids", []):
+                raise CampaignIntentError("choice is not available for the current tutorial step")
+            if not self._requirement_met(state, step):
+                raise CampaignIntentError("complete the current tutorial objective first")
 
     @staticmethod
     def _all_players_accepted(instance: Any, session: dict[str, Any]) -> bool:
@@ -549,9 +608,6 @@ class Dnd2024CampaignEngine:
         minutes = raw.get("session_length_minutes", 120)
         if isinstance(minutes, bool) or not isinstance(minutes, int) or not 30 <= minutes <= 480:
             raise CampaignIntentError("session_length_minutes must be between 30 and 480")
-        coach = raw.get("coach_enabled", True)
-        if not isinstance(coach, bool):
-            raise CampaignIntentError("coach_enabled must be a boolean")
         safety_tool = str(raw.get("safety_tool") or "pause_and_check")
         if safety_tool != "pause_and_check":
             raise CampaignIntentError("safety_tool is invalid")
@@ -565,7 +621,6 @@ class Dnd2024CampaignEngine:
             "lines": _text_list(raw.get("lines"), "lines"),
             "veils": _text_list(raw.get("veils"), "veils"),
             "table_rules": _text_list(raw.get("table_rules"), "table_rules"),
-            "coach_enabled": coach,
         }
 
     @staticmethod
@@ -592,13 +647,27 @@ class Dnd2024CampaignEngine:
             "status": "pending",
         }
 
-    @staticmethod
-    def _requirement_met(state: dict[str, Any], step: dict[str, Any]) -> bool:
+    def _requirement_met(self, state: dict[str, Any], step: dict[str, Any]) -> bool:
         requirement = str(step.get("requires") or "none")
         if requirement == "none":
             return True
         if requirement == "combat_ended":
-            return state.get("combat", {}).get("status") == "ended"
+            campaign = state.get("campaign") or {}
+            tutorial = campaign.get("tutorial") or {}
+            encounter_id = story_encounter_instance_id(
+                str(tutorial.get("adventure_id") or (self.adventure or {}).get("id") or ""),
+                str(step.get("id") or ""),
+            )
+            combat = state.get("combat") or {}
+            if (
+                combat.get("status") == "ended"
+                and combat.get("encounter_instance_id") == encounter_id
+            ):
+                return True
+            return any(
+                isinstance(item, dict) and item.get("encounter_instance_id") == encounter_id
+                for item in state.get("combat_history") or []
+            )
         return False
 
     def _tutorial_choice_events(
@@ -689,9 +758,12 @@ class Dnd2024CampaignEngine:
         }
 
     def _adventure_view(self) -> dict[str, Any]:
+        if self.adventure is None:
+            return {}
         tutorial = self.adventure.get("tutorial") or {}
         return {
             "id": self.adventure["id"],
+            "recommended_world_id": str(self.adventure.get("recommended_world_id") or ""),
             "name": str(tutorial.get("name") or self.adventure["id"]),
             "summary": str(tutorial.get("summary") or ""),
             "estimated_minutes": int(self.adventure.get("estimated_minutes", 90) or 90),
@@ -727,6 +799,7 @@ class Dnd2024CampaignEngine:
             "hint": str(text.get("hint") or ""),
             "requires": str(step.get("requires") or "none"),
             "encounter_preset_id": str(step.get("encounter_preset_id") or ""),
+            "scene_ref": str(step.get("scene_ref") or ""),
             "choices": choices,
         }
 
@@ -793,6 +866,13 @@ class Dnd2024CampaignEngine:
                 "hints_used": {},
                 "started_by": str(event["started_by"]),
             })
+            campaign["adventure_binding"] = {
+                "adventure_id": str(event["adventure_id"]),
+                "world_id": str(event.get("world_id") or ""),
+                "recommended_world_id": str(event.get("recommended_world_id") or ""),
+                "compatibility": str(event.get("compatibility") or "compatible"),
+                "scene_source": str(event.get("scene_source") or "adventure"),
+            }
             return
         if event_type == "dnd2024.tutorial.coach_configured":
             campaign["tutorial"]["coach_enabled"] = bool(event["enabled"])

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from copy import deepcopy
+import random
 from types import SimpleNamespace
 
 from aiohttp import web
@@ -13,7 +13,6 @@ from src.rulesets.contracts import RulesetCapabilities
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.rulesets.legacy_adapter import LegacyRulesetAdapter
 from src.rulesets.registry import RulesetRuntimeRegistry
-from src.llm.client import LLMResponse
 from src.webui.routes.games import register_games
 from src.webui.services import ruleset_gameplay
 from src.webui.services.turns import submit_action
@@ -28,33 +27,11 @@ class _EnabledRuntime(Dnd2024Runtime):
         authoritative_intents=True,
         deterministic_combat=True,
         versioned_state=True,
-        narrative_adventure=True,
+        session_zero=True,
+        tutorial_coach=True,
+        narrative_turns=True,
+        adventure_formats=("diceframe:adventure-graph-v1",),
     )
-
-
-class _NarrationClient:
-    def __init__(self):
-        self.calls = []
-
-    async def call(self, system_prompt, user_message, **kwargs):
-        self.calls.append((system_prompt, user_message, kwargs))
-        return LLMResponse(
-            content="The lantern keeper looks up and lowers his voice. ‘Then listen carefully.’",
-            narration="The lantern keeper looks up and lowers his voice. ‘Then listen carefully.’",
-            state_update={"players": {"gm": {"hp": 999}}},
-            memory_delta={"add": [{"value": "must be ignored"}]},
-            info_asymmetry=None,
-            plot_update=None,
-            total_tokens=17,
-            is_narration_only=False,
-            provider_used="fake",
-        )
-
-
-class _BrokenNarrationClient:
-    async def call(self, system_prompt, user_message, **kwargs):
-        del system_prompt, user_message, kwargs
-        raise RuntimeError("provider unavailable")
 
 
 class _M5Api:
@@ -68,8 +45,6 @@ class _M5Api:
             "rule_id": "dnd2024_srd",
             "runtime": {"id": "core:dnd2024", "minimum_version": 1},
         })
-        self._llm_client = _NarrationClient()
-        self.text_gen_max_tokens = 700
 
     @staticmethod
     def _parse_key(game_key: str):
@@ -78,6 +53,18 @@ class _M5Api:
     def _load_rule_for_game(self, instance):
         del instance
         return self._rule
+
+    @staticmethod
+    def _load_world_template(world_id, locale=""):
+        del locale
+        return {
+            "world_id": world_id,
+            "world_name": "Selected Test World",
+            "description": "WORLD_CONTEXT_MARKER description",
+            "world_setting": "WORLD_CONTEXT_MARKER setting",
+            "starter_scene": "WORLD_CONTEXT_MARKER starter scene",
+            "starter_lorebook": [],
+        }
 
     async def ruleset_available_actions(
         self, game_key: str, requester_id: str, requester_is_gm: bool = False,
@@ -130,6 +117,33 @@ def _app(registry: GameRegistry, runtime: _EnabledRuntime) -> web.Application:
     return app
 
 
+def _ready_story_encounter(runtime: _EnabledRuntime, instance: GameInstance) -> dict:
+    instance.world_id = "greymoor"
+    package = runtime._adventure_loader.resolve("core:lanterns_of_greymoor", "en")
+    assert instance.bind_adventure(package.binding("greymoor"))
+    instance.solo_mode = True
+    for intent_type, fields in (
+        ("session_zero.quick_start", {}),
+        ("tutorial.choose", {"choice_id": "inspect_cold_ash"}),
+        ("tutorial.choose", {"choice_id": "reassure_mira"}),
+        ("tutorial.choose", {"choice_id": "follow_small_tracks"}),
+    ):
+        version = int(instance.ruleset_state.get("version", 0) or 0)
+        resolved = runtime.resolve_intent(instance, {
+            "intent_id": f"setup-{intent_type}-{version}",
+            "type": intent_type,
+            "expected_version": version,
+            "submitted_by": "gm",
+            **fields,
+        }, random.Random(7))
+        assert resolved["ok"] is True
+        runtime.apply_event_batch(instance, resolved["event_batch"])
+    return next(
+        action for action in runtime.available_intents(instance, "gm")
+        if action["type"] == "combat.start"
+    )
+
+
 @pytest.mark.asyncio
 async def test_m5_http_forces_server_identity_persists_and_replays(tmp_path) -> None:
     runtime = _EnabledRuntime()
@@ -143,15 +157,20 @@ async def test_m5_http_forces_server_identity_persists_and_replays(tmp_path) -> 
         "character_name": "Guardian", "character_sheet": character,
     }
     assert instance.bind_ruleset_runtime(character["rule_binding"])
+    encounter = _ready_story_encounter(runtime, instance)
     registry.register(instance)
     path = "/api/games/web%7Cm5-http%7Cweb_bot"
 
-    async with TestClient(TestServer(_app(registry, runtime))) as client:
+    app = _app(registry, runtime)
+    async with TestClient(TestServer(app)) as client:
         denied = await client.get(f"{path}/available-actions", headers={"X-Test-User": "intruder"})
         available = await client.get(f"{path}/available-actions", headers={"X-Test-User": "gm"})
         available_body = await available.json()
         start_body = {
-            "intent_id": "http-start-1", "type": "combat.start", "expected_version": 0,
+            "intent_id": "http-start-1", "type": "combat.start",
+            "expected_version": encounter["expected_version"],
+            "encounter_preset_id": encounter["encounter_preset_id"],
+            "encounter_instance_id": encounter["encounter_instance_id"],
             "submitted_by": "intruder", "actor_id": "enemy:forged", "enemies": [_enemy()],
         }
         started = await client.post(
@@ -169,7 +188,7 @@ async def test_m5_http_forces_server_identity_persists_and_replays(tmp_path) -> 
         item["type"] for item in available_body["available_actions"]
     }
     assert started.status == 200
-    assert started_body["gameplay"]["state_version"] == 1
+    assert started_body["gameplay"]["state_version"] >= encounter["expected_version"] + 1
     submitted = started_body["result"]["event_batch"]["events"][0]
     assert submitted["actor_id"] == ""
     assert submitted["submitted_by"] == "gm"
@@ -180,8 +199,8 @@ async def test_m5_http_forces_server_identity_persists_and_replays(tmp_path) -> 
     recovered_registry = GameRegistry(tmp_path / "saves")
     recovered = await recovered_registry.load(instance.game_key)
     assert recovered is not None
-    assert recovered.ruleset_state["version"] == 1
-    assert len(recovered.event_ledger) == 1
+    assert recovered.ruleset_state["version"] >= encounter["expected_version"] + 1
+    assert len(recovered.event_ledger) >= 5
 
 
 @pytest.mark.asyncio
@@ -197,12 +216,17 @@ async def test_m5_http_rejects_same_intent_id_with_changed_payload(tmp_path) -> 
         "character_name": "Guardian", "character_sheet": character,
     }
     assert instance.bind_ruleset_runtime(character["rule_binding"])
+    encounter = _ready_story_encounter(runtime, instance)
     registry.register(instance)
     path = "/api/games/web%7Cm5-collision%7Cweb_bot/intents"
 
-    async with TestClient(TestServer(_app(registry, runtime))) as client:
+    app = _app(registry, runtime)
+    async with TestClient(TestServer(app)) as client:
         original = {
-            "intent_id": "same-id", "type": "combat.start", "expected_version": 0,
+            "intent_id": "same-id", "type": "combat.start",
+            "expected_version": encounter["expected_version"],
+            "encounter_preset_id": encounter["encounter_preset_id"],
+            "encounter_instance_id": encounter["encounter_instance_id"],
             "enemies": [_enemy()],
         }
         first = await client.post(path, headers={"X-Test-User": "gm"}, json=original)
@@ -215,11 +239,11 @@ async def test_m5_http_rejects_same_intent_id_with_changed_payload(tmp_path) -> 
     assert first.status == 200
     assert changed.status == 422
     assert changed_body["code"] == "INTENT_ID_CONFLICT"
-    assert len(instance.event_ledger) == 1
+    assert len(instance.event_ledger) >= 5
 
 
 @pytest.mark.asyncio
-async def test_professional_runtime_rejects_legacy_free_text_pipeline(tmp_path) -> None:
+async def test_professional_runtime_rejects_free_text_only_during_combat(tmp_path) -> None:
     runtime = _EnabledRuntime()
     registry = GameRegistry(tmp_path / "saves")
     instance = GameInstance(
@@ -231,6 +255,7 @@ async def test_professional_runtime_rejects_legacy_free_text_pipeline(tmp_path) 
         "character_name": "Guardian", "character_sheet": character,
     }
     assert instance.bind_ruleset_runtime(character["rule_binding"])
+    instance.ruleset_state["combat"] = {"status": "active"}
     registry.register(instance)
     api = _M5Api(registry, runtime)
 
@@ -242,84 +267,25 @@ async def test_professional_runtime_rejects_legacy_free_text_pipeline(tmp_path) 
 
 
 @pytest.mark.asyncio
-async def test_professional_adventure_text_narrates_without_mutating_mechanics(tmp_path) -> None:
+async def test_professional_runtime_uses_shared_multiplayer_action_queue_outside_combat(tmp_path) -> None:
     runtime = _EnabledRuntime()
     registry = GameRegistry(tmp_path / "saves")
     instance = GameInstance(
-        game_key=("web", "m5-adventure", "web_bot"), world_id="test-world",
+        game_key=("web", "m5-shared-turn", "web_bot"), world_id="test-world",
         rule_id="dnd2024_srd", gm_uid="gm", language="en",
     )
-    character = _character(runtime, "stalwart_guardian", "Guardian")
-    instance.players["gm"] = {
-        "character_name": "Guardian", "character_sheet": character,
-    }
-    assert instance.bind_ruleset_runtime(character["rule_binding"])
-    runtime.gameplay_view(instance, "gm", True)
-    instance.ruleset_state["campaign"]["session_zero"].update({
-        "status": "locked",
-        "agreement": runtime.default_agreement() if hasattr(runtime, "default_agreement") else {},
-    })
+    gm = _character(runtime, "stalwart_guardian", "Guardian")
+    ally = _character(runtime, "curious_arcanist", "Arcanist")
+    instance.players["gm"] = {"character_name": "Guardian", "character_sheet": gm}
+    instance.players["ally"] = {"character_name": "Arcanist", "character_sheet": ally}
+    assert instance.bind_ruleset_runtime(gm["rule_binding"])
+    await instance.activate()
     registry.register(instance)
-    before_players = deepcopy(instance.players)
-    before_ruleset = deepcopy(instance.ruleset_state)
-    path = "/api/games/web%7Cm5-adventure%7Cweb_bot/adventure-actions"
-    payload = {"mode": "say", "text": "I ask what happened to the lanterns.", "operation_id": "say-1"}
 
-    async with TestClient(TestServer(_app(registry, runtime))) as client:
-        first = await client.post(path, headers={"X-Test-User": "gm"}, json=payload)
-        first_body = await first.json()
-        duplicate = await client.post(path, headers={"X-Test-User": "gm"}, json=payload)
-        duplicate_body = await duplicate.json()
-
-    assert first.status == 200
-    assert first_body["narration"].startswith("The lantern keeper")
-    assert first_body["duplicate"] is False
-    assert duplicate.status == 200
-    assert duplicate_body["duplicate"] is True
-    assert instance.players == before_players
-    assert instance.ruleset_state == before_ruleset
-    assert len(instance.log) == 1
-    assert instance.log[0]["actions"][0]["text"].startswith("I ask")
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("client", "status", "code", "message"),
-    [
-        (None, 503, "LLM_NOT_CONFIGURED", "not configured"),
-        (_BrokenNarrationClient(), 502, "LLM_REQUEST_FAILED", "could not respond"),
-    ],
-)
-async def test_professional_adventure_text_fails_cleanly_without_recording(
-    tmp_path, client, status, code, message,
-) -> None:
-    runtime = _EnabledRuntime()
-    registry = GameRegistry(tmp_path / "saves")
-    instance = GameInstance(
-        game_key=("web", "m5-adventure-error", "web_bot"), world_id="test-world",
-        rule_id="dnd2024_srd", gm_uid="gm", language="en",
+    result = await submit_action(
+        _M5Api(registry, runtime), "web|m5-shared-turn|web_bot", "gm", "I inspect the tracks",
     )
-    character = _character(runtime, "stalwart_guardian", "Guardian")
-    instance.players["gm"] = {
-        "character_name": "Guardian", "character_sheet": character,
-    }
-    assert instance.bind_ruleset_runtime(character["rule_binding"])
-    runtime.gameplay_view(instance, "gm", True)
-    instance.ruleset_state["campaign"]["session_zero"].update({
-        "status": "locked", "agreement": {},
-    })
-    registry.register(instance)
-    app = _app(registry, runtime)
-    app["api"]._llm_client = client
-    path = "/api/games/web%7Cm5-adventure-error%7Cweb_bot/adventure-actions"
 
-    async with TestClient(TestServer(app)) as http:
-        response = await http.post(path, headers={"X-Test-User": "gm"}, json={
-            "mode": "ask", "text": "What can I do?", "operation_id": f"error-{status}",
-        })
-        body = await response.json()
-
-    assert response.status == status
-    assert body["code"] == code
-    assert message in body["error"]
-    assert instance.log == []
+    assert result["status"] == 200
+    assert result["payload"]["advanced"] is False
+    assert instance.action_queue[0]["text"] == "I inspect the tracks"

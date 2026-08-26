@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from src.engine.game_instance import GameInstance
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
+from src.rulesets.dnd2024.play import EncounterAccess
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 
 
@@ -38,7 +39,9 @@ def _preset_instance(preset_id: str) -> tuple[Dnd2024CombatEngine, GameInstance]
     first = _character(runtime, preset_id, "Arden")
     instance.players["gm"] = {"character_name": "Arden", "character_sheet": first}
     assert instance.bind_ruleset_runtime(first["rule_binding"])
-    return Dnd2024CombatEngine(runtime.load_bundle("en")), instance
+    return Dnd2024CombatEngine(
+        runtime.load_bundle("en"), EncounterAccess.sandbox(),
+    ), instance
 
 
 def _goblin(*, position: int = 5) -> dict:
@@ -86,6 +89,23 @@ def test_weapon_attack_is_server_rolled_atomic_and_idempotent() -> None:
     assert replayed["duplicate"] is True
     assert instance.ruleset_state["combat"]["enemies"]["goblin-1"]["hp"] == hp_after
     assert instance.ruleset_state["combat"]["economy"]["action"] == 0
+
+
+def test_catalog_preset_replaces_client_enemy_payload() -> None:
+    engine, instance = _instance()
+    intent = {
+        "intent_id": "catalog-start", "type": "combat.start", "expected_version": 0,
+        "submitted_by": "gm", "encounter_preset_id": "goblin_patrol",
+        "enemies": [{"id": "forged", "hp": 9999, "armor_class": 1, "attacks": []}],
+    }
+    resolved = engine.resolve_intent(instance, intent, SequenceRng([20, 1]))
+    assert resolved["ok"] is True
+    started = next(
+        event for event in resolved["event_batch"]["events"]
+        if event["type"] == "dnd2024.combat.started"
+    )
+    assert set(started["enemies"]) == {"goblin-warrior-1"}
+    assert started["enemies"]["goblin-warrior-1"]["hp"] == 10
 
 
 def test_prepared_spell_consumes_slot_and_cannot_trust_client_damage() -> None:
@@ -314,6 +334,33 @@ def test_stable_actor_remains_unconscious_and_skips_death_save() -> None:
 
     assert [action["type"] for action in actions] == ["end_turn"]
     assert "unconscious" in canonical["conditions"]
+
+
+def test_enemy_turn_is_declared_by_server_and_returns_control_to_player() -> None:
+    engine, instance = _instance()
+    _start(engine, instance, position=5)
+    ended = engine.resolve_intent(instance, {
+        "intent_id": "player-end", "type": "end_turn", "expected_version": 1,
+        "submitted_by": "gm", "actor_id": "player:gm",
+    }, SequenceRng([]))
+    engine.apply_batch(instance, ended["event_batch"])
+
+    attack = engine.next_automatic_intent(instance)
+    assert attack is not None
+    assert attack["type"] == "attack"
+    assert attack["actor_id"] == "enemy:goblin-1"
+    assert attack["target_id"] == "player:gm"
+    resolved = engine.resolve_intent(instance, attack, SequenceRng([15, 3]))
+    engine.apply_batch(instance, resolved["event_batch"])
+    assert instance.get_character_sheet("gm")["ruleset_character"]["resources"]["hp"] < 12
+
+    finish = engine.next_automatic_intent(instance)
+    assert finish is not None and finish["type"] == "end_turn"
+    resolved_finish = engine.resolve_intent(instance, finish, SequenceRng([]))
+    engine.apply_batch(instance, resolved_finish["event_batch"])
+    assert instance.ruleset_state["combat"]["initiative"][
+        instance.ruleset_state["combat"]["turn_index"]
+    ] == "player:gm"
 
 
 def test_llm_view_uses_canonical_state_and_resolved_event_batch() -> None:

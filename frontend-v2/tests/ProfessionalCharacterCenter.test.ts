@@ -120,4 +120,43 @@ describe('ProfessionalCharacterCenter', () => {
     expect(body).not.toHaveProperty('hit_die_rolls')
     expect(wrapper.emitted('saved')?.[0]?.[1]).toBe('rest')
   })
+
+  it('keeps long profile text readable and renders spell slots as level cards', async () => {
+    const detailedCharacter = {
+      ...character,
+      ruleset_character: {
+        ...character.ruleset_character,
+        profile: {
+          ideals: '保护每一个在边境线上努力生活的人，不让任何人再次独自面对战争。',
+        },
+        spellcasting: {
+          class: {
+            ability: 'int',
+            slots_current: { '1': 2, '2': 1 },
+            slots_max: { '1': 4, '2': 2 },
+            cantrip_refs: ['spell:light'],
+            prepared_spell_refs: ['spell:shield'],
+          },
+        },
+      },
+    }
+    const wrapper = mount(ProfessionalCharacterCenter, {
+      props: {
+        character: detailedCharacter,
+        target: 'card',
+        cardId: 'card-1',
+        ruleId: 'dnd2024_srd',
+        language: 'zh-CN',
+      },
+      global: { stubs: { PortraitPicker: true } },
+    })
+
+    await wrapper.get('.center-tabs button:nth-child(2)').trigger('click')
+    expect((wrapper.findAll('textarea')[3].element as HTMLTextAreaElement).value).toContain('保护每一个')
+    await wrapper.get('.center-tabs button:nth-child(4)').trigger('click')
+    expect(wrapper.findAll('.spell-slot-card')).toHaveLength(2)
+    expect(wrapper.text()).toContain('1 环')
+    expect(wrapper.text()).toContain('2 / 4')
+    expect(wrapper.text()).not.toContain('slots_current')
+  })
 })

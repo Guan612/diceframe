@@ -23,6 +23,7 @@ from src.llm.parser import sanitize_narration
 from src.rules.rule_system import RuleSystem
 
 from src.webui.services._common import _GAME_KEY_SEP, _is_safe_world_id
+from src.webui.services import adventures
 
 if TYPE_CHECKING:
     from src.webui.api import WebAPI
@@ -182,6 +183,7 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
         "plot_tracker": inst.plot_tracker.to_dict() if inst.plot_tracker else None,
         "recap": _public_recap(inst),
         "token_budget_bump": getattr(inst, "last_token_budget_bump", None),
+        "adventure_binding": dict(getattr(inst, "adventure_binding", {}) or {}),
     }
     if getattr(inst, "ruleset_runtime", None):
         binding = dict(inst.ruleset_runtime)
@@ -257,6 +259,13 @@ def _discard_incomplete_game(
 def _clean_public_narration(text: str) -> str:
     """只取公开叙事段，去掉 --- 后面的结构化标签，不截断长度。"""
     return sanitize_narration(str(text or ""))
+
+
+async def _start_created_game(api: "WebAPI", instance: Any, runtime: Any | None) -> str:
+    """Start every save through DiceFrame's single narrative game loop."""
+
+    del runtime
+    return await api._handler.start_game(instance)
 
 
 def _public_recap(inst) -> dict[str, Any]:
@@ -861,7 +870,8 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
                       room_password: str | None = None,
                       language: str = DEFAULT_LANGUAGE,
                       scene_image: dict[str, Any] | None = None,
-                      map_background: dict[str, Any] | None = None) -> dict[str, Any]:
+                      map_background: dict[str, Any] | None = None,
+                      adventure_id: str = "") -> dict[str, Any]:
     if not api._handler or not api._reg:
         return {"ok": False, "error": "系统未就绪"}
     if config_error := api._llm_configuration_error(language):
@@ -912,6 +922,9 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
             api._ruleset_registry.resolve(selected_rule.template)
             if selected_rule is not None else None
         )
+        adventure_binding = adventures.resolve_binding(
+            api, adventure_id, rule_id, world_id, resolved_language,
+        )
         if runtime and runtime.capabilities.character_builder == "professional":
             players = [
                 runtime.normalize_character_submission(
@@ -920,9 +933,14 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
                 for character in players
             ]
     except ValueError as exc:
+        error_code = (
+            "INCOMPATIBLE_ADVENTURE"
+            if str(adventure_id or "").strip()
+            else "INVALID_PROFESSIONAL_CHARACTER"
+        )
         return {
             "ok": False,
-            "error_code": "INVALID_PROFESSIONAL_CHARACTER",
+            "error_code": error_code,
             "error": str(exc),
         }
 
@@ -998,6 +1016,13 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
             "error": "创建游戏失败，未留下半成品存档，请重试。",
         }
     instance.set_difficulty(difficulty)
+    if not instance.bind_adventure(adventure_binding):
+        _discard_incomplete_game(api, game_key, world_id)
+        return {
+            "ok": False,
+            "error_code": "INVALID_ADVENTURE_BINDING",
+            "error": "冒险包绑定无效，未留下半成品存档。",
+        }
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(selected_map_background)
     # 房间密码三态：字段缺失(None) 且 多人局 → 生成随机密码回显（安全默认，
@@ -1055,7 +1080,7 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
             return {"ok": False, "error": f"创建角色失败: {created.get('error', '未知错误')}"}
 
     try:
-        narration = await api._handler.start_game(instance)
+        narration = await _start_created_game(api, instance, runtime)
     except Exception:
         _discard_incomplete_game(api, game_key, world_id)
         logger.exception("生成游戏开场失败，已回滚: %s", game_key)
@@ -1091,6 +1116,7 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
         "round_number": instance.round_number,
         "state": instance.state.value,
         "seed_code": instance.seed_code,
+        "adventure_binding": dict(instance.adventure_binding),
     }
 
 
@@ -1136,6 +1162,13 @@ async def switch_world(api: "WebAPI", game_key: str, world_id: str) -> dict[str,
         return {"ok": False, "error": "游戏不存在"}
     if not _is_safe_world_id(world_id):
         return {"ok": False, "error": "未指定或非法 world_id"}
+    binding = dict(getattr(inst, "adventure_binding", {}) or {})
+    if binding and str(binding.get("world_id") or "") != world_id:
+        return {
+            "ok": False,
+            "error_code": "ADVENTURE_WORLD_LOCKED",
+            "error": "当前存档绑定了固定世界冒险；请新建沙盒对局后再切换世界书。",
+        }
     world_name = world_id
     if api._worlds_dir:
         try:
@@ -1191,6 +1224,19 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
             api._ruleset_registry.resolve(selected_rule.template)
             if selected_rule is not None else None
         )
+        target_adventure_binding = dict(
+            getattr(target_inst, "adventure_binding", {}) or {}
+        )
+        if target_adventure_binding:
+            current_binding = adventures.resolve_binding(
+                api,
+                str(target_adventure_binding.get("adventure_id") or ""),
+                rule_id,
+                world_id,
+                resolved_language,
+            )
+            if current_binding != target_adventure_binding:
+                raise ValueError("bound adventure package is missing or has changed")
         if runtime and runtime.capabilities.character_builder == "professional":
             players = [
                 runtime.normalize_character_submission(
@@ -1199,6 +1245,12 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
                 for character in players
             ]
     except ValueError as exc:
+        if dict(getattr(target_inst, "adventure_binding", {}) or {}):
+            return {
+                "ok": False,
+                "error_code": "INCOMPATIBLE_ADVENTURE",
+                "error": str(exc),
+            }
         return {
             "ok": False,
             "error_code": "INVALID_PROFESSIONAL_CHARACTER",
@@ -1236,6 +1288,13 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
             "error": "重开失败，未留下半成品存档，请重试。",
         }
     instance.configure_session(solo_mode=solo)
+    if not instance.bind_adventure(target_adventure_binding):
+        _discard_incomplete_game(api, game_key, world_id)
+        return {
+            "ok": False,
+            "error_code": "INVALID_ADVENTURE_BINDING",
+            "error": "原存档的冒险绑定无效，未留下半成品存档。",
+        }
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(dict(getattr(target_inst, "map_background", {}) or {}))
     created_players: list[dict[str, Any]] = []
@@ -1259,7 +1318,7 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
             _discard_incomplete_game(api, game_key, world_id)
             return {"ok": False, "error": f"创建角色失败: {created.get('error', '未知错误')}"}
     try:
-        narration = await api._handler.start_game(instance)
+        narration = await _start_created_game(api, instance, runtime)
     except Exception:
         _discard_incomplete_game(api, game_key, world_id)
         logger.exception("按引用码生成开场失败，已回滚: %s", game_key)
@@ -1294,6 +1353,7 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
         "seed_code": seed_code,
         "round_number": instance.round_number,
         "state": instance.state.value,
+        "adventure_binding": dict(instance.adventure_binding),
     }
 
 

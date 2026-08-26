@@ -83,7 +83,8 @@ def test_missing_runtime_binding_resolves_to_legacy() -> None:
             "versioned_state": False,
             "session_zero": False,
             "tutorial_coach": False,
-            "narrative_adventure": False,
+            "narrative_turns": False,
+            "adventure_formats": (),
         },
     }
 

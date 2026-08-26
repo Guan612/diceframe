@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ChevronBack, ChevronForward, MapOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
@@ -32,6 +32,7 @@ import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePi
 import MapBackgroundSettingsModal from '@/components/play/MapBackgroundSettingsModal.vue'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
+import { fetchRulesetAvailableActions } from '@/features/rulesets/dnd2024/api'
 
 const Dnd2024CombatPanel = defineAsyncComponent(
   () => import('@/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue'),
@@ -119,60 +120,56 @@ const hasCampaignGuidance = computed(() => Boolean(
   game.detail.value?.ruleset_runtime?.capabilities?.session_zero
   || game.detail.value?.ruleset_runtime?.capabilities?.tutorial_coach,
 ))
-type RulesetPanelTab = 'campaign' | 'combat' | 'story'
-const rulesetPanelTab = ref<RulesetPanelTab>('campaign')
-const hasProfessionalWorkspace = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value)
-const rulesetTabCopy = computed(() => locale.value.startsWith('zh') ? {
-  label: '5E 2024 游玩区', campaign: '1 从这里开始', combat: '2 遇敌时战斗', story: '3 回看故事（可选）',
-  guide: '第一次玩只需留在第 1 页，照着“当前目标”和大按钮走。真的遇到敌人时再进入第 2 页；第 3 页只是回看，不影响继续游戏。',
-  campaignHelp: '现在做这里：先一键开局，再读当前目标并选一个做法；想自由尝试时，下方也能直接说人话。',
-  combatHelp: '只有出现敌人并进入遭遇战时才用这里；系统会列出当前合法动作，不用背规则。',
-  storyHelp: '这是可选的故事回放页；看完后回到第 1 页继续冒险。',
+type RulesetTool = 'campaign' | 'combat'
+const activeRulesetTool = ref<RulesetTool | ''>('')
+const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value)
+const rulesetToolCopy = computed(() => locale.value.startsWith('zh') ? {
+  menu: 'DND5E工具', campaign: '冒险与战役', combat: '战斗工具', title: 'DND5E工具',
 } : {
-  label: '5E 2024 play areas', campaign: '1 Start here', combat: '2 Combat when needed', story: '3 Story recap (optional)',
-  guide: 'For your first game, stay on page 1 and follow the current objective and large buttons. Open page 2 only when enemies appear. Page 3 is optional history.',
-  campaignHelp: 'Do this now: use the one-click start, read the current objective, and choose an option. You can also describe any idea in plain language below.',
-  combatHelp: 'Use this only after an encounter starts. The game lists legal actions, so you do not need to memorize rules.',
-  storyHelp: 'This is an optional story replay. Return to page 1 when you are ready to continue.',
+  menu: 'DND5E Tools', campaign: 'Adventure & campaign', combat: 'Combat tools', title: 'DND5E Tools',
 })
-const rulesetTabs = computed(() => [
-  ...(hasCampaignGuidance.value ? [{ id: 'campaign' as const, label: rulesetTabCopy.value.campaign }] : []),
-  ...(hasAuthoritativeCombat.value ? [{ id: 'combat' as const, label: rulesetTabCopy.value.combat }] : []),
-  { id: 'story' as const, label: rulesetTabCopy.value.story },
-])
-const rulesetCurrentHelp = computed(() => ({
-  campaign: rulesetTabCopy.value.campaignHelp,
-  combat: rulesetTabCopy.value.combatHelp,
-  story: rulesetTabCopy.value.storyHelp,
-})[rulesetPanelTab.value])
 
-function selectRulesetTab(tab: RulesetPanelTab): void {
-  rulesetPanelTab.value = tab
+function openRulesetTool(tool: RulesetTool): void {
+  activeRulesetTool.value = tool
 }
 
-function onRulesetTabKey(event: KeyboardEvent): void {
-  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-  const buttons = Array.from(
-    (event.currentTarget as HTMLElement).closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]') || [],
-  )
-  if (!buttons.length) return
-  const current = Math.max(0, buttons.indexOf(event.currentTarget as HTMLButtonElement))
-  const next = event.key === 'Home' ? 0
-    : event.key === 'End' ? buttons.length - 1
-      : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length
-  event.preventDefault()
-  buttons[next]?.click()
-  void nextTick(() => buttons[next]?.focus())
-}
-
-watch(rulesetTabs, (tabs, previous) => {
-  const professionalJustBecameAvailable = (
-    previous?.length === 1 && previous[0]?.id === 'story' && tabs.length > 1
-  )
-  if (professionalJustBecameAvailable || !tabs.some(tab => tab.id === rulesetPanelTab.value)) {
-    rulesetPanelTab.value = tabs[0]?.id || 'story'
+function navigateRulesetTool(tool: RulesetTool): void {
+  if (tool === 'campaign' ? hasCampaignGuidance.value : hasAuthoritativeCombat.value) {
+    activeRulesetTool.value = tool
   }
-}, { immediate: true })
+}
+
+let rulesetToolPoll: number | undefined
+let previousEncounterPhase = ''
+async function syncEncounterTool(): Promise<void> {
+  if (!hasAuthoritativeCombat.value || !game.currentGame.value) return
+  try {
+    const response = await fetchRulesetAvailableActions(game.currentGame.value)
+    const combatActive = response.gameplay.combat?.status === 'active'
+    const step = response.gameplay.campaign?.tutorial?.current_step
+    const narrativeEncounterPending = response.gameplay.encounter_request?.status === 'pending'
+    const encounterPending = Boolean(
+      step?.requires === 'combat_ended'
+      && !response.gameplay.campaign?.tutorial?.requirement_met,
+    )
+    const phase = combatActive ? 'active' : encounterPending || narrativeEncounterPending ? 'pending' : ''
+    if (phase && phase !== previousEncounterPhase) activeRulesetTool.value = 'combat'
+    previousEncounterPhase = phase
+  } catch {
+    // The normal play surface remains usable if the optional tool state cannot sync.
+  }
+}
+
+function resetRulesetToolPolling(): void {
+  if (rulesetToolPoll) window.clearInterval(rulesetToolPoll)
+  rulesetToolPoll = undefined
+  previousEncounterPhase = ''
+  if (!hasAuthoritativeCombat.value || !game.currentGame.value) return
+  void syncEncounterTool()
+  rulesetToolPoll = window.setInterval(() => {
+    if (document.visibilityState !== 'hidden') void syncEncounterTool()
+  }, 5000)
+}
 const canEditOwnPortrait = computed(() => Boolean(
   actorId.value
   && game.player.value?.user_id === actorId.value
@@ -676,6 +673,14 @@ watch(() => game.currentGame.value, (next, prev) => {
   if (next && next !== prev) loadPlayContext()
 })
 watch(
+  [() => game.currentGame.value, hasAuthoritativeCombat],
+  resetRulesetToolPolling,
+  { immediate: true },
+)
+watch(() => game.detail.value?.round_number, () => {
+  if (hasAuthoritativeCombat.value) void syncEncounterTool()
+})
+watch(
   [() => game.currentGame.value, () => JSON.stringify(game.detail.value?.scene_image || {})],
   () => { refreshPlaySceneImage() },
   { immediate: true },
@@ -693,6 +698,7 @@ watch(showGmThinking, (thinking) => {
   if (!thinking && game.liveNarration.value) game.liveNarration.value = ''
 })
 onBeforeUnmount(() => {
+  if (rulesetToolPoll) window.clearInterval(rulesetToolPoll)
   sceneImageSequence += 1
   revokeSceneImageUrl(playSceneImageUrl.value)
   revokeSceneImageUrl(sceneImageDefaultUrl.value)
@@ -763,7 +769,17 @@ onBeforeUnmount(() => {
         @toggle-sidebar="toggleSidebarPanel"
         @portrait-click="openPortraitEditor"
         @allocate-level-up="allocateLevelUp"
-      />
+      >
+        <template #after-perception>
+          <details v-if="hasProfessionalTools" class="panel sidebar-disclosure dnd5e-sidebar-tools">
+            <summary><strong>{{ rulesetToolCopy.menu }}</strong></summary>
+            <div class="sidebar-disclosure-body dnd5e-tools-list">
+              <button v-if="hasCampaignGuidance" @click="openRulesetTool('campaign')">{{ rulesetToolCopy.campaign }}</button>
+              <button v-if="hasAuthoritativeCombat" @click="openRulesetTool('combat')">{{ rulesetToolCopy.combat }}</button>
+            </div>
+          </details>
+        </template>
+      </GameSidebar>
 
       <Modal v-if="showPortraitEditor && game.player.value" :title="t('changeAvatar')" @close="showPortraitEditor = false">
         <PortraitPicker
@@ -795,7 +811,50 @@ onBeforeUnmount(() => {
         @saved="onMapBackgroundSaved"
       />
 
-      <section class="play-main" :class="{ 'ruleset-mode': hasProfessionalWorkspace }">
+      <Modal
+        v-if="activeRulesetTool"
+        :title="rulesetToolCopy.title"
+        dialog-class="dnd-toolbox-dialog"
+        @close="activeRulesetTool = ''"
+      >
+        <nav class="dnd-toolbox-tabs" :aria-label="rulesetToolCopy.menu">
+          <button
+            v-if="hasCampaignGuidance"
+            :class="{ active: activeRulesetTool === 'campaign' }"
+            @click="openRulesetTool('campaign')"
+          >{{ rulesetToolCopy.campaign }}</button>
+          <button
+            v-if="hasAuthoritativeCombat"
+            :class="{ active: activeRulesetTool === 'combat' }"
+            @click="openRulesetTool('combat')"
+          >{{ rulesetToolCopy.combat }}</button>
+        </nav>
+        <Dnd2024CampaignPanel
+          v-if="activeRulesetTool === 'campaign' && hasCampaignGuidance"
+          :game-key="game.currentGame.value"
+          :actor-id="actorId"
+          :character-name="game.player.value?.character_name || ''"
+          :scene-name="sceneTitle"
+          :world-name="game.detail.value.world_name || game.detail.value.world_id || ''"
+          :map="game.map.value"
+          :is-gm="game.isGm.value"
+          :refresh-key="rulesetRefreshKey"
+          @refresh="refreshRulesetPanels"
+          @navigate="navigateRulesetTool"
+          @open-map="openMap"
+        />
+        <Dnd2024CombatPanel
+          v-else-if="activeRulesetTool === 'combat' && hasAuthoritativeCombat"
+          :game-key="game.currentGame.value"
+          :actor-id="actorId"
+          :is-gm="game.isGm.value"
+          :refresh-key="rulesetRefreshKey"
+          @refresh="refreshRulesetPanels"
+          @navigate="navigateRulesetTool"
+        />
+      </Modal>
+
+      <section class="play-main">
         <section class="scene-strip">
           <div class="scene-title">
             <span class="scene-label">{{ t('currentScene') }}</span>
@@ -809,83 +868,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <nav
-          v-if="hasProfessionalWorkspace"
-          class="ruleset-workspace-tabs"
-          role="tablist"
-          :aria-label="rulesetTabCopy.label"
-        >
-          <button
-            v-for="tab in rulesetTabs"
-            :id="`ruleset-tab-${tab.id}`"
-            :key="tab.id"
-            role="tab"
-            :aria-controls="`ruleset-panel-${tab.id}`"
-            :aria-selected="rulesetPanelTab === tab.id"
-            :tabindex="rulesetPanelTab === tab.id ? 0 : -1"
-            @click="selectRulesetTab(tab.id)"
-            @keydown="onRulesetTabKey"
-          >
-            {{ tab.label }}
-          </button>
-        </nav>
-
-        <aside v-if="hasProfessionalWorkspace" class="ruleset-workspace-guide" aria-live="polite">
-          <strong>{{ rulesetCurrentHelp }}</strong>
-          <span>{{ rulesetTabCopy.guide }}</span>
-        </aside>
-
-        <section
-          v-if="hasProfessionalWorkspace"
-          :id="`ruleset-panel-${rulesetPanelTab}`"
-          class="ruleset-workspace"
-          role="tabpanel"
-          :aria-labelledby="`ruleset-tab-${rulesetPanelTab}`"
-          tabindex="0"
-        >
-          <Dnd2024CampaignPanel
-            v-if="rulesetPanelTab === 'campaign' && hasCampaignGuidance"
-            :game-key="game.currentGame.value"
-            :actor-id="actorId"
-            :is-gm="game.isGm.value"
-            :refresh-key="rulesetRefreshKey"
-            @refresh="refreshRulesetPanels"
-            @navigate="selectRulesetTab"
-          />
-
-          <Dnd2024CombatPanel
-            v-else-if="rulesetPanelTab === 'combat' && hasAuthoritativeCombat"
-            :game-key="game.currentGame.value"
-            :actor-id="actorId"
-            :is-gm="game.isGm.value"
-            :refresh-key="rulesetRefreshKey"
-            @refresh="refreshRulesetPanels"
-            @navigate="selectRulesetTab"
-          />
-
-          <GameTimeline
-            v-else
-            :log="game.log.value"
-            :live="game.detail.value.multiplayer?.submitted_actions || []"
-            :players="game.players.value"
-            :round="game.detail.value.round_number || 0"
-            :lore="game.lore.value"
-            :game-key="game.currentGame.value"
-            :rule-id="String(ruleMeta?.rule_id || '')"
-            :processing="showGmThinking"
-            :is-gm="game.isGm.value"
-            :live-narration="game.liveNarration.value"
-            :pending-checks="pendingLuckDecisions"
-            :reveal-checks="revealChecks"
-            :current-user-id="actorId"
-            :luck-busy-id="luckBusyId"
-            @refresh="game.refresh"
-            @luck="onLuckDecision"
-          />
-        </section>
-
         <GameTimeline
-          v-else
           :log="game.log.value"
           :live="game.detail.value.multiplayer?.submitted_actions || []"
           :players="game.players.value"
@@ -907,7 +890,7 @@ onBeforeUnmount(() => {
         <div v-if="tableNotice" class="table-notice notice">{{ tableNotice }}</div>
         <p v-if="tokenBudgetHint" class="token-budget-hint" aria-live="polite">{{ tokenBudgetHint }}</p>
 
-        <ActionComposer v-if="!hasAuthoritativeCombat" :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh" />
+        <ActionComposer :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh" />
       </section>
 
       <aside

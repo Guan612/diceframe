@@ -6,7 +6,8 @@ const DND_GAME = 'web%7Ce2e-dnd2024%7Cweb_bot'
 async function openDndTable(page: Page) {
   await page.goto(`/#/play?game=${DND_GAME}`)
   await expect(page.getByRole('heading', { name: 'D&D 2024 新手桌' })).toBeVisible()
-  await expect(page.getByRole('tablist', { name: '5E 2024 游玩区' })).toBeVisible()
+  await expect(page.getByTestId('timeline')).toBeVisible()
+  await expect(page.locator('.composer')).toBeVisible()
 }
 
 function fieldset(page: Page, legend: string) {
@@ -40,18 +41,17 @@ test('classic fantasy recommends the professional 2024 rules as the third card i
   expect(new Set(cardTops).size).toBe(1)
 })
 
-test('professional rules workspace remains contained at phone, zoom-reflow, tablet, and desktop widths', async ({ page }) => {
+test('professional toolbox remains contained at phone, tablet, and desktop widths', async ({ page }) => {
   for (const width of [320, 640, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     await openDndTable(page)
-    await expect(page.getByRole('tab', { name: '1 从这里开始' })).toHaveAttribute('aria-selected', 'true')
+    await page.getByText('专业工具', { exact: true }).click()
+    await page.getByRole('button', { name: '冒险与战役' }).first().click()
     await expect(page.locator('.campaign-panel')).toBeVisible()
 
     const geometry = await page.evaluate(() => {
-      const workspace = document.querySelector<HTMLElement>('.ruleset-workspace')!
-      const main = document.querySelector<HTMLElement>('.play-main')!
+      const workspace = document.querySelector<HTMLElement>('.dnd-toolbox-dialog')!
       const bounds = workspace.getBoundingClientRect()
-      const mainBounds = main.getBoundingClientRect()
       const controls = Array.from(workspace.querySelectorAll<HTMLElement>('button, input:not([type="checkbox"]), select, textarea'))
         .filter(item => item.getBoundingClientRect().width > 0 && getComputedStyle(item).visibility !== 'hidden')
       const checkboxLabels = Array.from(workspace.querySelectorAll<HTMLElement>('label.check'))
@@ -60,47 +60,33 @@ test('professional rules workspace remains contained at phone, zoom-reflow, tabl
         workspaceOverflow: workspace.scrollWidth - workspace.clientWidth,
         workspaceTop: bounds.top,
         workspaceBottom: bounds.bottom,
-        mainTop: mainBounds.top,
-        mainBottom: mainBounds.bottom,
+        viewportHeight: window.innerHeight,
         minControlHeight: Math.min(...controls.map(item => item.getBoundingClientRect().height)),
         minCheckboxTargetHeight: Math.min(...checkboxLabels.map(item => item.getBoundingClientRect().height)),
       }
     })
     expect(geometry.documentOverflow, `document overflow at ${width}px`).toBe(0)
     expect(geometry.workspaceOverflow, `workspace overflow at ${width}px`).toBeLessThanOrEqual(1)
-    expect(geometry.workspaceTop).toBeGreaterThanOrEqual(geometry.mainTop - 1)
-    expect(geometry.workspaceBottom).toBeLessThanOrEqual(geometry.mainBottom + 1)
+    expect(geometry.workspaceTop).toBeGreaterThanOrEqual(0)
+    expect(geometry.workspaceBottom).toBeLessThanOrEqual(geometry.viewportHeight + 1)
     expect(geometry.minControlHeight).toBeGreaterThanOrEqual(43)
     expect(geometry.minCheckboxTargetHeight).toBeGreaterThanOrEqual(43)
   }
 })
 
-test('ruleset tabs support arrow keys and mount only the active professional surface', async ({ page }) => {
+test('professional rules keep one timeline and expose combat as a tool', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await openDndTable(page)
 
-  const campaignTab = page.getByRole('tab', { name: '1 从这里开始' })
-  await campaignTab.focus()
-  await expect(campaignTab).toBeFocused()
-  const outline = await campaignTab.evaluate(element => ({
-    style: getComputedStyle(element).outlineStyle,
-    width: Number.parseFloat(getComputedStyle(element).outlineWidth),
-  }))
-  expect(outline.style).not.toBe('none')
-  expect(outline.width).toBeGreaterThanOrEqual(2)
-
-  await campaignTab.press('ArrowRight')
-  const combatTab = page.getByRole('tab', { name: '2 遇敌时战斗' })
-  await expect(combatTab).toBeFocused()
-  await expect(combatTab).toHaveAttribute('aria-selected', 'true')
-  await expect(page.locator('.dnd-combat')).toBeVisible()
+  await expect(page.getByTestId('timeline')).toHaveCount(1)
+  await expect(page.locator('.composer')).toHaveCount(1)
   await expect(page.locator('.campaign-panel')).toHaveCount(0)
-
-  await combatTab.press('End')
-  const storyTab = page.getByRole('tab', { name: '3 回看故事（可选）' })
-  await expect(storyTab).toBeFocused()
-  await expect(page.locator('.ruleset-workspace .timeline-wrap')).toBeVisible()
   await expect(page.locator('.dnd-combat')).toHaveCount(0)
+  await page.getByText('专业工具', { exact: true }).click()
+  await page.getByRole('button', { name: '战斗工具' }).first().click()
+  await expect(page.locator('.dnd-combat')).toBeVisible()
+  await expect(page.getByTestId('timeline')).toBeVisible()
+  await expect(page.locator('.dnd-party-feed')).toHaveCount(0)
 })
 
 test('professional surfaces keep explicit labels and readable light-mode colors', async ({ page }) => {
@@ -111,6 +97,8 @@ test('professional surfaces keep explicit labels and readable light-mode colors'
   })
   await openDndTable(page)
   await expect(page.locator('body')).toHaveClass(/light/)
+  await page.getByText('专业工具', { exact: true }).click()
+  await page.getByRole('button', { name: '冒险与战役' }).first().click()
 
   const unlabeled = await page.locator('.campaign-panel input').evaluateAll(inputs => inputs.filter(input => {
     const element = input as HTMLInputElement
@@ -149,8 +137,8 @@ test('professional surfaces keep explicit labels and readable light-mode colors'
 test('Chinese professional play area explains the route and localizes campaign enums', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await openDndTable(page)
-  await expect(page.locator('.ruleset-workspace-guide')).toContainText('先一键开局，再读当前目标')
-  await expect(page.getByRole('heading', { name: '冒险引导中心' })).toBeVisible()
+  await expect(page.locator('.dnd-play-status')).toContainText('先完成开团约定')
+  await expect(page.getByRole('heading', { name: '开团准备' })).toBeVisible()
 
   const agreement = page.locator('.agreement-grid')
   const tone = agreement.locator('label').filter({ hasText: /^基调/ }).locator('select')
@@ -258,7 +246,7 @@ test('guided creation enforces proficiency limits and enters the saved game even
   await page.getByRole('button', { name: /创建并进入/ }).click()
 
   await expect(page).toHaveURL(/#\/play\?game=web(?:%7C|\|)/, { timeout: 20_000 })
-  await expect(page.getByRole('tablist', { name: '5E 2024 游玩区' })).toBeVisible()
+  await expect(page.locator('#dnd2024-play-workspace')).toBeVisible()
   const gameKey = await page.evaluate(() => localStorage.getItem('currentGame'))
   expect(gameKey).toBeTruthy()
   const saved = await page.evaluate(async key => {

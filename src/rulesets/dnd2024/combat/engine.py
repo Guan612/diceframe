@@ -9,6 +9,7 @@ from typing import Any
 from src.rulesets.bundle import LoadedRulesetBundle
 from src.rulesets.dnd2024.character.builder import ability_modifier
 from src.rulesets.dnd2024.combat.catalog import Dnd2024CombatCatalog
+from src.rulesets.dnd2024.play.contracts import EncounterAccess
 from src.rulesets.dnd2024.spells.catalog import Dnd2024SpellCatalog
 from src.rulesets.events import EventBatchError, apply_event_batch, stable_batch_id
 
@@ -34,6 +35,8 @@ class Dnd2024CombatEngine(
     CombatValidationMixin, CombatResolutionMixin, CombatReducerMixin, CombatViewMixin,
 ):
     bundle: LoadedRulesetBundle
+    encounter_access: EncounterAccess = field(default_factory=EncounterAccess.blocked)
+    encounter_catalog: dict[str, Any] | None = None
     catalog: Dnd2024CombatCatalog = field(init=False)
     spells: Dnd2024SpellCatalog = field(init=False)
 
@@ -47,6 +50,7 @@ class Dnd2024CombatEngine(
             raise CombatIntentError("ruleset_state must be an object")
         state.setdefault("state_schema_version", 1)
         state.setdefault("version", 0)
+        state.setdefault("combat_history", [])
         state.setdefault("combat", {
             "status": "none", "round": 0, "turn_index": 0,
             "initiative": [], "enemies": {}, "positions": {},
@@ -54,6 +58,8 @@ class Dnd2024CombatEngine(
         })
         if state.get("state_schema_version") != 1:
             raise CombatIntentError("unsupported D&D 2024 combat state schema")
+        if not isinstance(state.get("combat_history"), list):
+            raise CombatIntentError("combat_history must be an array")
         return state
 
     def available_intents(self, instance: Any, actor_id: str) -> list[dict[str, Any]]:
@@ -62,12 +68,25 @@ class Dnd2024CombatEngine(
         version = int(state["version"])
         gm_uid = str(getattr(instance, "gm_uid", "") or "")
         if combat.get("status") != "active":
-            return ([{
+            if actor_id != gm_uid or not self.encounter_access.can_start:
+                return []
+            guided_preset_id = (
+                self.encounter_access.encounter_preset_id
+                if self.encounter_access.mode == "story"
+                else ""
+            )
+            action = {
                 "type": "combat.start", "label": "Start combat", "expected_version": version,
-                "requires": ["enemies"],
-            }] if actor_id == gm_uid else [])
+                "requires": ["encounter_preset_id"] if guided_preset_id else ["enemies"],
+            }
+            if guided_preset_id:
+                action["encounter_preset_id"] = guided_preset_id
+                action["encounter_instance_id"] = self.encounter_access.encounter_instance_id
+            return [action]
         current = self._current_actor(combat)
-        requested = current if actor_id == gm_uid and current.startswith("enemy:") else _player_actor(actor_id)
+        if current.startswith("enemy:"):
+            return []
+        requested = _player_actor(actor_id)
         if requested != current:
             return []
         pending = [
@@ -139,6 +158,110 @@ class Dnd2024CombatEngine(
             })
         return actions
 
+    def next_automatic_intent(self, instance: Any) -> dict[str, Any] | None:
+        """Choose one bounded server-owned enemy operation.
+
+        The method declares an intent only; validation, dice, events, and state
+        mutation still pass through the same authoritative pipeline as player
+        actions.
+        """
+
+        state = self.initialize_state(instance)
+        combat = state["combat"]
+        if combat.get("status") != "active":
+            return None
+        gm_uid = str(getattr(instance, "gm_uid", "") or "")
+        version = int(state.get("version", 0) or 0)
+        pending = list(combat.get("pending_decisions") or [])
+        if pending:
+            decision = pending[0]
+            threats = [str(item) for item in decision.get("threat_actor_ids") or []]
+            option = (
+                "resolve"
+                if "resolve" in decision.get("options", [])
+                and any(actor_id.startswith("enemy:") for actor_id in threats)
+                else "decline"
+            )
+            return {
+                "intent_id": f"auto:decision:{version}:{decision.get('decision_id', '')}",
+                "type": "decision.resolve",
+                "expected_version": version,
+                "submitted_by": gm_uid,
+                "decision_id": str(decision.get("decision_id") or ""),
+                "option": option,
+            }
+        actor_id = self._current_actor(combat)
+        if not actor_id.startswith("enemy:"):
+            return None
+        base = {
+            "intent_id": f"auto:enemy:{version}:{actor_id}",
+            "expected_version": version,
+            "submitted_by": gm_uid,
+            "actor_id": actor_id,
+        }
+        actor = self._actor_view(instance, combat, actor_id)
+        targets = [
+            target for target in self._hostile_targets(instance, combat, actor_id)
+            if int(target.get("hp", 0) or 0) > 0
+        ]
+        targets.sort(key=lambda target: (
+            self._distance(combat, actor_id, str(target["actor_id"])),
+            int(target.get("hp", 0) or 0),
+            str(target["actor_id"]),
+        ))
+        economy = combat.get("economy") or {}
+        can_act = int(economy.get("action", 0) or 0) > 0 or int(
+            economy.get("attacks_remaining", 0) or 0
+        ) > 0
+        if can_act and targets:
+            target = targets[0]
+            distance = self._distance(combat, actor_id, str(target["actor_id"]))
+            attacks = [
+                attack for attack in actor.get("attacks") or []
+                if distance <= int(attack.get("long_range") or attack.get("range", 5) or 5)
+            ]
+            attacks.sort(key=lambda attack: (
+                distance > int(attack.get("range", 5) or 5),
+                -int(attack.get("attack_bonus", 0) or 0),
+                str(attack.get("id") or ""),
+            ))
+            if attacks:
+                return {
+                    **base,
+                    "intent_id": f"{base['intent_id']}:attack",
+                    "type": "attack",
+                    "target_id": str(target["actor_id"]),
+                    "attack_id": str(attacks[0]["id"]),
+                }
+            movement = int(economy.get("movement", 0) or 0)
+            if movement > 0:
+                actor_position = self._position(combat, actor_id)
+                target_position = self._position(combat, str(target["actor_id"]))
+                desired_range = max(
+                    (int(item.get("range", 5) or 5) for item in actor.get("attacks") or []),
+                    default=5,
+                )
+                needed = max(0, abs(target_position - actor_position) - desired_range)
+                distance_to_move = min(movement, needed)
+                if distance_to_move > 0:
+                    signed = distance_to_move if target_position > actor_position else -distance_to_move
+                    return {
+                        **base,
+                        "intent_id": f"{base['intent_id']}:move",
+                        "type": "move",
+                        "distance": signed,
+                    }
+            return {
+                **base,
+                "intent_id": f"{base['intent_id']}:dodge",
+                "type": "dodge",
+            }
+        return {
+            **base,
+            "intent_id": f"{base['intent_id']}:end",
+            "type": "end_turn",
+        }
+
     def validate_intent(self, instance: Any, intent: dict[str, Any]) -> dict[str, Any]:
         try:
             self._validate(instance, intent)
@@ -179,7 +302,22 @@ class Dnd2024CombatEngine(
         }]
         pending: dict[str, Any] | None = None
         if intent_type == "combat.start":
-            events.append(self._start_combat_event(instance, intent, rng))
+            # The catalog is authoritative.  The client may select a preset, but
+            # it must never be able to alter the enemy stat block in the event.
+            resolved_intent = deepcopy(intent)
+            preset_id = str(intent.get("encounter_preset_id") or "")
+            if preset_id:
+                preset = self._preset(preset_id)
+                if preset is None:  # validation normally catches this
+                    raise CombatIntentError("encounter preset is not available")
+                resolved_intent["enemies"] = deepcopy(preset["enemies"])
+            if self.encounter_access.mode == "story":
+                resolved_intent.update({
+                    "encounter_instance_id": self.encounter_access.encounter_instance_id,
+                    "encounter_preset_id": self.encounter_access.encounter_preset_id,
+                    "origin_step_id": self.encounter_access.origin_step_id,
+                })
+            events.append(self._start_combat_event(instance, resolved_intent, rng))
         elif intent_type == "combat.end":
             events.append({"type": "dnd2024.combat.ended", "reason": "gm"})
         elif intent_type == "attack":
@@ -288,13 +426,20 @@ class Dnd2024CombatEngine(
                 "economy": deepcopy(combat.get("economy") or {}),
                 "reactions": deepcopy(combat.get("reactions") or {}),
                 "pending_decisions": deepcopy(combat.get("pending_decisions") or []),
+                "encounter_instance_id": str(combat.get("encounter_instance_id") or ""),
+                "encounter_preset_id": str(combat.get("encounter_preset_id") or ""),
+                "origin_step_id": str(combat.get("origin_step_id") or ""),
                 "actors": actors,
             },
             "encounter_presets": self.encounter_presets(),
         }
 
     def encounter_presets(self) -> list[dict[str, Any]]:
-        catalog = self.bundle.get("encounter_catalog", "srd_training_encounters") or {}
+        catalog = (
+            deepcopy(self.encounter_catalog)
+            if isinstance(self.encounter_catalog, dict)
+            else self.bundle.get("encounter_catalog", "srd_training_encounters") or {}
+        )
         raw_labels = catalog.get("labels")
         labels: dict[str, Any] = raw_labels if isinstance(raw_labels, dict) else {}
         raw_preset_labels = labels.get("presets")
@@ -330,6 +475,15 @@ class Dnd2024CombatEngine(
             self._validate_enemies(preset.get("enemies"))
             result.append(preset)
         return result
+
+    def _preset(self, preset_id: str) -> dict[str, Any] | None:
+        wanted = str(preset_id or "")
+        if not wanted:
+            return None
+        return next(
+            (preset for preset in self.encounter_presets() if preset.get("id") == wanted),
+            None,
+        )
 
     @staticmethod
     def _current_actor(combat: dict[str, Any]) -> str:

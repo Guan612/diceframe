@@ -394,6 +394,7 @@ export interface GamesResponse {
 export interface GameMutationResponse {
   ok?: boolean
   error?: string
+  error_code?: string
   game_key?: string
   world_id?: string
   world_name?: string
@@ -404,6 +405,7 @@ export interface GameMutationResponse {
   seed_code?: string
   language?: string
   generated_password?: string
+  adventure_binding?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -633,7 +635,8 @@ export interface RulesetRuntimeCapabilities {
   versioned_state: boolean
   session_zero: boolean
   tutorial_coach: boolean
-  narrative_adventure: boolean
+  narrative_turns: boolean
+  adventure_formats?: string[]
 }
 
 export interface RulesetRuntimeMeta {
@@ -917,7 +920,7 @@ export interface RulesetSessionZeroAgreement extends JsonObject {
   lines: string[]
   veils: string[]
   table_rules: string[]
-  coach_enabled: boolean
+  coach_enabled?: boolean
 }
 
 export interface RulesetCampaignProposal extends JsonObject {
@@ -959,6 +962,17 @@ export interface RulesetTutorialStep extends JsonObject {
 }
 
 export interface RulesetCampaignView extends JsonObject {
+  world_binding?: {
+    world_id: string
+    source?: string
+  }
+  adventure_binding?: {
+    adventure_id: string
+    world_id: string
+    recommended_world_id?: string
+    compatibility: 'not_selected' | 'compatible' | 'review_required' | string
+    scene_source: 'world' | 'adventure' | string
+  }
   session_zero: {
     status: 'not_started' | 'pending' | 'locked' | string
     revision: number
@@ -998,6 +1012,11 @@ export interface RulesetGameplayView {
     actors: RulesetCombatTarget[]
   }
   encounter_presets: RulesetEncounterPreset[]
+  encounter_request?: {
+    status: 'pending' | string
+    source?: string
+    round?: number
+  } | null
   campaign?: RulesetCampaignView
 }
 
@@ -1015,6 +1034,8 @@ export interface RulesetGameplayResponse {
     state_version: number
     event_batch: JsonObject
     pending_decision?: RulesetPendingDecision | null
+    automatic_event_batches?: JsonObject[]
+    resolved_event_batches?: JsonObject[]
   }
 }
 
@@ -1104,6 +1125,25 @@ export interface WorldSummary {
 
 export interface WorldTemplatesResponse {
   templates?: WorldTemplateSummary[]
+}
+
+export interface AdventureSummary {
+  adventure_id: string
+  version: string
+  format: string
+  world_policy: 'fixed' | 'portable' | 'agnostic'
+  recommended_world_id: string
+  name: string
+  summary: string
+  estimated_minutes: number
+  compatibility: 'compatible' | 'incompatible'
+  incompatibility_reasons: string[]
+}
+
+export interface AdventuresResponse {
+  ok: boolean
+  error?: string
+  adventures: AdventureSummary[]
 }
 
 export interface WorldListResponse {

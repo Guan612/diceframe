@@ -56,6 +56,9 @@ function response(status: 'none' | 'active' = 'none') {
       weapons: [{ id: 'greatsword', weapon_ref: 'item:greatsword', damage: '2d6' }],
       targets: [{ actor_id: 'enemy:goblin-1', kind: 'enemy', name: 'Goblin', hp: 7, max_hp: 7, position: 5 }],
     }, {
+      type: 'move', label: 'Move', actor_id: 'player:gm', expected_version: 1,
+      movement_remaining: 30,
+    }, {
       type: 'end_turn', label: 'End Turn', actor_id: 'player:gm', expected_version: 1,
     }] : [{
       type: 'combat.start', label: 'Start Combat', expected_version: 0, requires: ['enemies'],
@@ -85,13 +88,29 @@ describe('D&D 2024 combat panel', () => {
     const payload = mocks.submit.mock.calls[0][1]
     expect(payload).toMatchObject({
       type: 'combat.start', expected_version: 0,
+      encounter_preset_id: 'first_skirmish',
       enemies: [{ id: 'goblin-1', hp: 7 }],
     })
     expect(payload).not.toHaveProperty('submitted_by')
     wrapper.unmount()
   })
 
-  it('carries the tutorial story into the first encounter and selects its preset', async () => {
+  it('explains when the shared narrative requested authoritative combat', async () => {
+    const requested = response('none') as any
+    requested.gameplay.encounter_request = { status: 'pending', source: 'narrative', round: 3 }
+    mocks.fetch.mockResolvedValueOnce(requested)
+    const wrapper = mount(Dnd2024CombatPanel, {
+      props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('The shared story has entered an engagement')
+    expect(wrapper.text()).toContain('Choose an encounter preset')
+    expect(wrapper.find('.encounter-start .combat-primary').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('carries the selected adventure into its story encounter and selects its preset', async () => {
     const guided = response('none') as any
     guided.gameplay.campaign = {
       session_zero: { status: 'locked', revision: 1, responses: {} },
@@ -114,8 +133,9 @@ describe('D&D 2024 combat panel', () => {
 
     expect(wrapper.text()).toContain('Continue the story')
     expect(wrapper.text()).toContain('A goblin notices you in the grove.')
-    expect(wrapper.text()).toContain('Start the first encounter')
-    expect((wrapper.get('.encounter-start select').element as HTMLSelectElement).value).toBe('first_skirmish')
+    expect(wrapper.text()).toContain('Start this story encounter')
+    expect(wrapper.get('.guided-preset strong').text()).toBe('First Skirmish')
+    expect(wrapper.find('.encounter-start select').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -173,6 +193,24 @@ describe('D&D 2024 combat panel', () => {
     wrapper.unmount()
   })
 
+  it('uses the tactical track to select an authoritative movement distance', async () => {
+    mocks.fetch.mockResolvedValueOnce(response('active'))
+    const wrapper = mount(Dnd2024CombatPanel, {
+      props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('.track-token')).toHaveLength(2)
+    const destination = wrapper.get('button[aria-label="Position 20 ft"]')
+    expect(destination.classes()).toContain('reachable')
+    await destination.trigger('click')
+
+    const movementInput = wrapper.get('.action-card input[type="number"]')
+    expect((movementInput.element as HTMLInputElement).value).toBe('20')
+    expect(destination.classes()).toContain('selected')
+    wrapper.unmount()
+  })
+
   it('shows a waiting state when the server exposes no action', async () => {
     const waiting = response('active')
     waiting.available_actions = []
@@ -182,7 +220,7 @@ describe('D&D 2024 combat panel', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('Waiting for your character’s turn.')
+    expect(wrapper.text()).toContain('Waiting for teammate：Guardian')
     expect(wrapper.find('.combat-actions').exists()).toBe(false)
     wrapper.unmount()
   })

@@ -429,6 +429,7 @@ async def api_create_game(request: web.Request) -> web.Response:
         language=str(body.get("language", "") or ""),
         scene_image=body.get("scene_image"),
         map_background=body.get("map_background"),
+        adventure_id=str(body.get("adventure_id", "") or ""),
     )
     return web.json_response(result)
 
@@ -526,36 +527,6 @@ async def api_ruleset_submit_intent(request: web.Request) -> web.Response:
         )
     result = await api.ruleset_submit_intent(
         game_key, requester_id, requester_is_gm, body,
-    )
-    return web.json_response(result, status=_ruleset_gameplay_status(result))
-
-
-async def api_ruleset_adventure_narration(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_gameplay import submit_adventure_narration
-
-    api = _get_api(request)
-    game_key = request.match_info["game_key"]
-    inst = request.app["subsystems"].registry.get(api._parse_key(game_key))
-    requester_id = str(request.get("user_id", "") or "")
-    if request.get("player_preview", False) and not request.get("player_delegate", False):
-        return web.json_response({
-            "ok": False,
-            "code": "PREVIEW_MODE_FORBIDDEN",
-            "error": "当前是房主预览模式，请先开启允许代操作",
-        }, status=403)
-    try:
-        body = await request.json()
-    except (json.JSONDecodeError, ValueError):
-        return web.json_response(
-            {"ok": False, "code": "INVALID_JSON", "error": "请求体必须是 JSON 对象"},
-            status=400,
-        )
-    result = await submit_adventure_narration(
-        api,
-        game_key,
-        requester_id,
-        _ruleset_requester_is_gm(request, inst),
-        body,
     )
     return web.json_response(result, status=_ruleset_gameplay_status(result))
 
@@ -1093,9 +1064,6 @@ def register_games(app: web.Application) -> None:
     app.router.add_post("/api/games/{game_key}/action", api_action)
     app.router.add_get("/api/games/{game_key}/available-actions", api_ruleset_available_actions)
     app.router.add_post("/api/games/{game_key}/intents", api_ruleset_submit_intent)
-    app.router.add_post(
-        "/api/games/{game_key}/adventure-actions", api_ruleset_adventure_narration,
-    )
     app.router.add_post(
         "/api/games/{game_key}/decisions/{decision_id}", api_ruleset_resolve_decision,
     )

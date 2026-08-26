@@ -6,7 +6,7 @@
 
 ## 版本与许可
 
-- 内容快照：`srd-5.2.1+r4`
+- 内容快照：`srd-5.2.1+r5`
 - 许可：Creative Commons Attribution 4.0 International（CC BY 4.0）
 - 精确归属文本：`templates/rulesets/dnd2024_srd/legal/ATTRIBUTION.md`
 - 页码含义：`source_ref` 中的 `pNN` 是 SRD 5.2.1 文档印刷页码。
@@ -49,7 +49,7 @@
 | 战斗核心 | 1 套状态机 | p24–27 | 先攻、回合、动作经济、移动、距离、攻击、伤害、治疗、条件、专注、反应和濒死的权威结算 |
 | 武器档案 | 15 | p90–92 | 从角色实际装备解析攻击、伤害、距离与类别，不信任客户端数值 |
 | 常用法术效果 | 21 | p107–175 | 只对效果目录内法术做确定性命中/豁免、伤害/治疗、升环、条件和专注结算 |
-| 训练敌人参考 | 3 | p290、p325、p364 | 只取首批原创训练遭遇所需的 Goblin、Skeleton、Wolf 档案 |
+| 训练敌人参考 | 3 | p290、p325、p364 | 只取原创战斗参考与独立冒险所需的 Goblin、Skeleton、Wolf 档案 |
 
 所有来自 SRD 的实体都必须携带非空 `source_ref`。Bundle 加载器会拒绝缺少来源、无法解析的内部引用、未知效果原语和可执行代码字段。
 
@@ -66,9 +66,9 @@
 
 它们使用 `diceframe-original:` 来源命名空间，服务端测试会逐一执行 validate、derive 与 finalize。
 
-三个训练遭遇 `first_skirmish`、`goblin_patrol`、`crypt_pair` 的编排、难度提示和说明同样为 DiceFrame 原创；其中引用的怪物数值按上表追溯到 SRD。
+Ruleset Bundle 中两个通用战斗参考 `goblin_patrol`、`crypt_pair` 的编排、难度提示和说明为 DiceFrame 原创；其中引用的怪物数值按上表追溯到 SRD。
 
-三章新手短冒险 `lanterns_of_greymoor`（《灰沼失灯记》）的场景、NPC、任务、线索、物品、关系、提示、选择与结局全部为 DiceFrame 原创，使用 `diceframe-original:dnd2024-adventures/lanterns-of-greymoor`。它只引用首批已验证训练遭遇，不复制任何第三方冒险文本。
+三章短冒险 `core:lanterns_of_greymoor`（《灰沼失灯记》）及其专属遭遇 `first_skirmish` 位于独立 `templates/adventures/lanterns_of_greymoor/`。场景、NPC、任务、线索、物品、关系、提示、选择与结局全部为 DiceFrame 原创，使用 `diceframe-original:dnd2024-adventures/lanterns-of-greymoor`，不复制任何第三方冒险文本。
 
 ## 本地化边界
 

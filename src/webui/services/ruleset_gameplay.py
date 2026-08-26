@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from src.webui.services.ruleset_builder import validate_draft_shape
-from src.rulesets.contracts import AuthoritativeIntentHooks, NarrativeAdventureRuntime
+from src.rulesets.contracts import (
+    AuthoritativeIntentHooks,
+    AutomaticIntentRuntime,
+)
 
 if TYPE_CHECKING:
     from src.webui.api import WebAPI
@@ -20,6 +23,103 @@ logger = logging.getLogger("trpg")
 
 def _error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message}
+
+
+def _ruleset_timeline_text(batch: dict[str, Any], instance: Any) -> str:
+    """Create one short public timeline entry for an authoritative ruleset batch."""
+    intent_type = str(batch.get("intent_type") or "")
+    event_types = {
+        str(event.get("type") or "")
+        for event in batch.get("events", [])
+        if isinstance(event, dict)
+    }
+    chinese = not str(getattr(instance, "language", "") or "").lower().startswith("en")
+    if "dnd2024.combat.started" in event_types:
+        return "遭遇战开始：当前剧情已进入战斗。" if chinese else "Encounter started: the current story has entered combat."
+    if "dnd2024.combat.ended" in event_types:
+        return "遭遇战结束：可以回到当前冒险继续剧情。" if chinese else "Encounter ended: return to the current adventure."
+    if intent_type == "tutorial.choose":
+        return "剧情选择已记录，当前冒险已推进。" if chinese else "Story choice recorded; the current adventure advanced."
+    if intent_type.startswith("session_zero."):
+        return "开团约定已更新。" if chinese else "Session agreement updated."
+    if intent_type.startswith("campaign."):
+        return "战役记录状态已更新。" if chinese else "Campaign record state updated."
+    return "规则行动已由服务器结算。" if chinese else "Rules action resolved by the server."
+
+
+def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None:
+    intent_type = str(batch.get("intent_type") or "")
+    chinese = not str(getattr(instance, "language", "") or "").lower().startswith("en")
+    action_labels = {
+        "tutorial.choose": ("推进当前剧情", "Advance the current story"),
+        "tutorial.start": ("开始教学冒险", "Start the guided adventure"),
+        "combat.start": ("进入剧情遭遇战", "Enter the story encounter"),
+        "combat.end": ("结束遭遇战", "End the encounter"),
+        "attack": ("进行攻击", "Make an attack"),
+        "cast_spell": ("施放法术", "Cast a spell"),
+        "move": ("移动位置", "Move position"),
+        "end_turn": ("结束回合", "End the turn"),
+    }
+    event_types = {
+        str(event.get("type") or "")
+        for event in batch.get("events", [])
+        if isinstance(event, dict)
+    }
+    if "dnd2024.combat.started" in event_types:
+        action_text = ("进入剧情遭遇战", "Enter the story encounter")[0 if chinese else 1]
+    elif "dnd2024.combat.ended" in event_types:
+        action_text = ("结束剧情遭遇战", "Finish the story encounter")[0 if chinese else 1]
+    else:
+        action_text = action_labels.get(intent_type, ("推进专业规则剧情", "Advance the rules story"))[0 if chinese else 1]
+    submitted_by = next(
+        (
+            str(event.get("submitted_by") or "")
+            for event in batch.get("events", [])
+            if isinstance(event, dict) and event.get("type") == "intent.submitted"
+        ),
+        "",
+    )
+    next_round = max(
+        int(getattr(instance, "round_number", 0) or 0) + 1,
+        max((int(item.get("round", 0) or 0) for item in instance.log), default=0) + 1,
+    )
+    instance.round_number = next_round
+    instance.append_log_entry({
+        "round": next_round,
+        "actions": [{
+            "user_id": submitted_by,
+            "text": action_text,
+            "source": "ruleset_authority",
+            "intent_type": intent_type,
+            "operation_id": str(batch.get("intent_id") or ""),
+        }],
+        "gm_response": _ruleset_timeline_text(batch, instance),
+        "state_changes": [
+            str(event.get("type") or "")
+            for event in batch.get("events", [])
+            if isinstance(event, dict) and str(event.get("type") or "") != "intent.submitted"
+        ],
+        "check_results": [],
+        "swipes": [],
+        "current_swipe": 0,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def _is_public_story_milestone(batch: dict[str, Any]) -> bool:
+    """Keep the shared story feed readable; turn-by-turn mechanics stay in combat."""
+    event_types = {
+        str(event.get("type") or "")
+        for event in batch.get("events", [])
+        if isinstance(event, dict)
+    }
+    return bool(event_types.intersection({
+        "dnd2024.tutorial.started",
+        "dnd2024.tutorial.choice_applied",
+        "dnd2024.tutorial.completed",
+        "dnd2024.combat.started",
+        "dnd2024.combat.ended",
+    }))
 
 
 def _context(
@@ -77,6 +177,7 @@ def _response(
     return payload
 
 
+
 async def available_actions(
     api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool = False,
 ) -> dict[str, Any]:
@@ -90,7 +191,6 @@ async def available_actions(
             api, rule, runtime, instance, effective_requester,
             requester_is_gm=requester_is_gm,
         )
-
 
 async def submit_intent(
     api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool,
@@ -125,15 +225,44 @@ async def submit_intent(
             "initiative_order": deepcopy(instance.initiative_order),
             "initiative_current": instance.initiative_current,
             "last_activity": instance.last_activity,
+            "log": deepcopy(instance.log),
+            "round_number": instance.round_number,
         }
         try:
-            resolved = runtime.resolve_intent(instance, intent, random.SystemRandom())
+            rng = random.SystemRandom()
+            resolved = runtime.resolve_intent(instance, intent, rng)
             if not resolved.get("ok"):
                 return resolved
             batch = resolved.get("event_batch")
             if not isinstance(batch, dict):
                 return _error("INVALID_EVENT_BATCH", "规则运行时没有返回有效事件批次")
             applied = runtime.apply_event_batch(instance, batch)
+            if applied.get("applied") and _is_public_story_milestone(batch):
+                _append_ruleset_timeline_entry(instance, batch)
+            automatic_batches: list[dict[str, Any]] = []
+            automatic_results: list[dict[str, Any]] = []
+            if isinstance(runtime, AutomaticIntentRuntime):
+                for _ in range(256):
+                    automatic_intent = runtime.next_automatic_intent(instance)
+                    if automatic_intent is None:
+                        break
+                    automatic = runtime.resolve_intent(instance, automatic_intent, rng)
+                    if not automatic.get("ok"):
+                        raise ValueError(
+                            str(automatic.get("error") or "automatic combat intent was rejected")
+                        )
+                    automatic_batch = automatic.get("event_batch")
+                    if not isinstance(automatic_batch, dict):
+                        raise ValueError("automatic combat intent returned no event batch")
+                    automatic_applied = runtime.apply_event_batch(instance, automatic_batch)
+                    if not automatic_applied.get("applied"):
+                        raise ValueError("automatic combat intent did not advance state")
+                    automatic_batches.append(deepcopy(automatic_batch))
+                    automatic_results.append(deepcopy(automatic_applied))
+                    if _is_public_story_milestone(automatic_batch):
+                        _append_ruleset_timeline_entry(instance, automatic_batch)
+                else:
+                    raise ValueError("automatic combat turn exceeded the safety limit")
             instance.last_activity = datetime.now(timezone.utc).isoformat()
             await api._reg.save(instance)
         except (ValueError, KeyError, TypeError) as exc:
@@ -145,6 +274,8 @@ async def submit_intent(
             instance.initiative_order = before["initiative_order"]
             instance.initiative_current = before["initiative_current"]
             instance.last_activity = before["last_activity"]
+            instance.log = before["log"]
+            instance.round_number = before["round_number"]
             return _error("INTENT_REJECTED", str(exc))
         except Exception:
             instance.ruleset_state = before["ruleset_state"]
@@ -155,10 +286,17 @@ async def submit_intent(
             instance.initiative_order = before["initiative_order"]
             instance.initiative_current = before["initiative_current"]
             instance.last_activity = before["last_activity"]
+            instance.log = before["log"]
+            instance.round_number = before["round_number"]
             raise
         memory_store = getattr(api, "_mem", None)
+        resolved_batches = [batch, *automatic_batches]
         if memory_store:
-            for memory in runtime.memory_deltas_from_event_batch(batch, instance):
+            for memory in [
+                memory
+                for resolved_batch in resolved_batches
+                for memory in runtime.memory_deltas_from_event_batch(resolved_batch, instance)
+            ]:
                 try:
                     await memory_store.apply_delta(
                         str(instance.game_key), {"add": [memory]},
@@ -176,142 +314,8 @@ async def submit_intent(
                 **applied,
                 "replayed": bool(resolved.get("replayed", False)),
                 "pending_decision": deepcopy(resolved.get("pending_decision")),
+                "automatic_event_batches": automatic_batches,
+                "automatic_results": automatic_results,
+                "resolved_event_batches": resolved_batches,
             },
         )
-
-
-async def submit_adventure_narration(
-    api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool,
-    body: Any,
-) -> dict[str, Any]:
-    instance, rule, runtime, effective_requester, error = _context(
-        api, game_key, requester_id, requester_is_gm,
-    )
-    if error:
-        return error
-    if not runtime.capabilities.narrative_adventure or not isinstance(
-        runtime, NarrativeAdventureRuntime,
-    ):
-        return _error(
-            "NARRATIVE_ADVENTURE_UNAVAILABLE",
-            "当前规则未提供自由冒险叙事入口",
-        )
-    try:
-        parsed = validate_draft_shape(body)
-    except ValueError as exc:
-        return _error("INVALID_ADVENTURE_ACTION", str(exc))
-    text = str(parsed.get("text") or "").strip()
-    mode = str(parsed.get("mode") or "act").strip()
-    operation_id = str(parsed.get("operation_id") or "").strip()
-    if not text or len(text) > 1200:
-        return _error("INVALID_ADVENTURE_ACTION", "自由行动须为 1 至 1200 字")
-    if mode not in {"act", "say", "ask"}:
-        return _error("INVALID_ADVENTURE_ACTION", "自由行动类型无效")
-    if not operation_id or len(operation_id) > 160:
-        return _error("INVALID_OPERATION_ID", "自由行动必须提供有效的 operation_id")
-    client = getattr(api, "_llm_client", None)
-    if client is None:
-        english = str(getattr(instance, "language", "") or "").lower().startswith("en")
-        return _error(
-            "LLM_NOT_CONFIGURED",
-            (
-                "The story model is not configured yet. Open Settings and configure a model before continuing."
-                if english
-                else "尚未配置叙事模型，请先前往设置页配置模型后再继续。"
-            ),
-        )
-    configuration_error = getattr(api, "_llm_configuration_error", None)
-    if callable(configuration_error):
-        details = configuration_error(str(getattr(instance, "language", "") or "zh-CN"))
-        if details:
-            result = _error(
-                "LLM_NOT_CONFIGURED",
-                str(details.get("error") or "尚未配置叙事模型，暂时无法生成冒险回应"),
-            )
-            result["missing"] = list(details.get("missing") or [])
-            return result
-
-    async with instance._lock:
-        previous = next(
-            (
-                item for item in instance.log
-                if any(
-                    isinstance(action, dict)
-                    and action.get("operation_id") == operation_id
-                    for action in item.get("actions", [])
-                )
-            ),
-            None,
-        )
-        if previous is not None:
-            return {
-                **_response(
-                    api, rule, runtime, instance, effective_requester,
-                    requester_is_gm=requester_is_gm,
-                ),
-                "duplicate": True,
-                "narration": str(previous.get("gm_response") or ""),
-            }
-        prepared = runtime.prepare_adventure_narration(
-            instance,
-            effective_requester,
-            {"text": text, "mode": mode},
-            str(getattr(instance, "language", "") or ""),
-        )
-        if not prepared.get("ok"):
-            return prepared
-        try:
-            response = await client.call(
-                str(prepared.get("system_prompt") or ""),
-                str(prepared.get("user_message") or ""),
-                temperature=0.75,
-                max_tokens=min(900, max(256, int(getattr(api, "text_gen_max_tokens", 700) or 700))),
-            )
-        except Exception as exc:
-            logger.warning("D&D 2024 自由冒险叙事调用失败: %s", exc)
-            english = str(getattr(instance, "language", "") or "").lower().startswith("en")
-            return _error(
-                "LLM_REQUEST_FAILED",
-                (
-                    "The story model could not respond. Check the model connection in Settings, then try again; your action was not recorded."
-                    if english
-                    else "故事模型暂时无法回应。请在设置页检查模型连接后重试；刚才的行动没有被记录。"
-                ),
-            )
-        narration = str(response.narration or response.content or "").strip()
-        if not narration:
-            return _error("EMPTY_NARRATION", "叙事模型没有返回可显示的内容")
-        next_round = max(
-            int(getattr(instance, "round_number", 0) or 0) + 1,
-            max((int(item.get("round", 0) or 0) for item in instance.log), default=0) + 1,
-        )
-        now = datetime.now(timezone.utc).isoformat()
-        instance.round_number = next_round
-        instance.append_log_entry({
-            "round": next_round,
-            "actions": [{
-                "user_id": effective_requester,
-                "text": text,
-                "source": "ruleset_narrative",
-                "mode": mode,
-                "operation_id": operation_id,
-                "timestamp": now,
-            }],
-            "gm_response": narration,
-            "state_changes": [],
-            "check_results": [],
-            "swipes": [],
-            "current_swipe": 0,
-            "timestamp": now,
-        })
-        instance.last_activity = now
-        instance.record_llm_usage(int(getattr(response, "total_tokens", 0) or 0))
-        await api._reg.save(instance)
-        return {
-            **_response(
-                api, rule, runtime, instance, effective_requester,
-                requester_is_gm=requester_is_gm,
-            ),
-            "duplicate": False,
-            "narration": narration,
-        }

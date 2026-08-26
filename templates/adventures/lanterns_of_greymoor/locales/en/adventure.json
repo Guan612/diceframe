@@ -1,7 +1,7 @@
 {
   "locale_schema_version": 1,
   "locale": "en",
-  "target": {"kind": "starter_adventure", "id": "lanterns_of_greymoor"},
+  "target": {"kind": "adventure", "id": "lanterns_of_greymoor"},
   "fields": {
     "tutorial": {
       "name": "The Lost Lanterns of Greymoor",

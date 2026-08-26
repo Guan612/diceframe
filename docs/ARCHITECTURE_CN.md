@@ -66,14 +66,24 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 Bundle locale 只能物化白名单展示字段。效果使用白名单 DSL；任意代码执行键、未知效果原语、重复 ID、无效内部引用、越界归属路径或 locale mechanics override 都会使整个 bundle 加载失败。详细格式见 `docs/rulesets/dnd2024/CONTENT_BUNDLE_CN.md`。
 
+## Adventure Bundle v1
+
+专业玩法由四个相互独立的输入组成：Ruleset Runtime 提供机制，Worldbook 提供世界设定与 lore，可选 Adventure Bundle 提供剧情图、场景、NPC、地图位置与冒险专属遭遇，Coach 只在前端提供本地帮助。未绑定 Adventure Bundle 就是标准自由对局，不得暗中加载固定教学剧情。
+
+独立冒险位于 `templates/adventures/<directory_id>/`，采用 `diceframe:adventure-graph-v1`。Manifest 声明 canonical adventure ID、版本、世界策略以及最低 runtime 契约。创建游戏时先校验规则、runtime、格式和世界兼容性，再不可变地保存 `adventure_id / version / format / content_digest / world_id`；重开必须保留并重新校验同一绑定，内容丢失、被改动或 fixed-world 不匹配时直接拒绝。详细格式见 `docs/adventures/ADVENTURE_BUNDLE_CN.md`。
+
+冒险步骤只能替代当前剧情入口，不能替代玩家选择的世界书。叙事上下文始终包含实际 Worldbook 的设定、起始场景与匹配 lore；冒险完成后回到同一世界的标准自由对局，而不是停留在“教程已结束”死页。
+
 ## D&D 2024 权威游戏状态
 
-`core:dnd2024` 的战斗、Session 0、战役记录和教学冒险共享 `GameInstance.ruleset_state.version` 与 EventBatch ledger。战斗事件只由战斗 reducer 应用，战役事件只由 campaign reducer 应用；runtime composition root 按显式 `intent_type` 分派，generic engine 不导入 D&D 实现。
+`core:dnd2024` 的战斗、Session 0 与战役记录共享 `GameInstance.ruleset_state.version` 和 EventBatch ledger；可选冒险通过精确绑定向同一状态机提供剧情输入，但不是 Ruleset Bundle 的一部分。战斗事件只由战斗 reducer 应用，战役事件只由 campaign reducer 应用；runtime composition root 按显式 `intent_type` 分派，generic engine 不导入 D&D 实现。
 
 专业角色的机械权威是 `ruleset_character`。创建、共享卡库导入/编辑、加入游戏、游戏内资料编辑、升级和休息均经由 `character_lifecycle` capability；legacy 顶层角色字段只是兼容投影。资料编辑不得覆盖属性、HP、AC、成长历史、runtime/content/state 版本等机械字段，机械更新必须从 canonical 选择与历史重新验证或回放。
 
 Session 0 的每次修订都会清空旧成员确认，只有全部当前玩家接受后 GM 才能锁定。任务、线索、事实、重要物品和关系先保存为 pending proposal，再由 GM 以独立 Intent 确认或拒绝。章节摘要是已确认事件的确定性投影，并在存档成功后写入长期记忆；记忆投影失败不得回滚或伪装已经持久化的权威状态。
 
-专业规则通过 `narrative_adventure` capability 接受自然语言冒险行动。Session 0 和教学状态决定输入是否可用；动作先完成模型预检，失败不会写入记录。LLM 只接收权威状态的只读视图并叙述行动或已结算事件，不能直接创建战役事实、扣减资源或推进教学步骤。
+自然语言行动继续使用 DiceFrame 唯一的 `/action` 回合流程：单人即时推进，多人先收齐当前存活且在场成员的行动，再统一进行检定与 GM 回复。D&D runtime 只向同一 LLM 上下文追加权威战斗、战役和当前冒险节点的只读信息；所选 Worldbook 与匹配 lore 仍由通用叙事管线提供。LLM 不得直接创建战役事实、扣减资源或推进权威冒险步骤。
 
-前端仅按 capability 动态加载 D&D 专业规则游玩区。游玩区使用“1 从这里开始 / 2 遇敌时战斗 / 3 回看故事（可选）”三页签，并在首屏说明当前目标和下一步；任一时刻只挂载当前面板并在页面隐藏时暂停轮询。内容在有界区域内部滚动，不改变旧规则的布局或创建路径。直接联机桥接对玩家 Intent 使用字段白名单。
+前端保留通用的单时间线、单行动输入框、角色卡、队伍状态、地图、场景图库、规则说明、世界书和 GM 控制台。左侧 `DND5E工具` 只包含冒险/战役与权威战斗两个 D&D 专属入口；工具以有界弹层覆盖主游玩区，不建立第二套消息流或第二套叙事提交接口。冒险节点进入遭遇门槛时会切换到战斗工具；自由剧情中 GM 明确裁定进入先攻，或玩家提交明确攻击并通过通用判定规划识别后，会产生只负责唤醒界面的 `encounter_request`，具体预设、先攻与所有机械结算仍须经过权威战斗 Intent。结束后回到同一条公共时间线继续游玩。
+
+剧情遭遇访问权由 runtime composition root 根据 canonical adventure step 投影成 `EncounterAccess`；campaign 与 combat 引擎不得互相导入。战斗开始事件保存 canonical `encounter_instance_id`、preset 与来源 step，结束后写入 bounded history；剧情门槛只接受匹配的 encounter identity，因此已消费的冒险遭遇不能再次启动。敌方回合由服务端按同一验证、事件和 reducer 管线自动结算；每位玩家只能操作自己的角色，非当前玩家明确处于等待状态。场景、NPC 与地图位置使用 Adventure Bundle canonical refs，locale 只物化显示字段。直接联机桥接对玩家 Intent 使用字段白名单。

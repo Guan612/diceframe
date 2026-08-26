@@ -93,6 +93,9 @@ async def test_m6_http_runs_confirmed_session_and_tutorial_into_memory(tmp_path)
         "character_name": "HTTP Guide", "character_sheet": character,
     }
     assert instance.bind_ruleset_runtime(character["rule_binding"])
+    instance.world_id = "greymoor"
+    package = runtime._adventure_loader.resolve("core:lanterns_of_greymoor", "en")
+    assert instance.bind_adventure(package.binding("greymoor"))
     registry.register(instance)
     path = "/api/games/web%7Cm6-http%7Cweb_bot"
     headers = {"X-Test-User": "gm"}
@@ -132,7 +135,10 @@ async def test_m6_http_runs_confirmed_session_and_tutorial_into_memory(tmp_path)
         preset = next(
             item for item in view["encounter_presets"] if item["id"] == "first_skirmish"
         )
-        await submit("combat.start", enemies=preset["enemies"])
+        await submit(
+            "combat.start", encounter_preset_id="first_skirmish",
+            enemies=preset["enemies"],
+        )
         await submit("combat.end")
         await submit("tutorial.choose", choice_id="secure_the_glade")
         completed = await submit("tutorial.choose", choice_id="return_the_light")
@@ -146,3 +152,13 @@ async def test_m6_http_runs_confirmed_session_and_tutorial_into_memory(tmp_path)
     assert recovered is not None
     assert recovered.ruleset_state["campaign"]["tutorial"]["status"] == "completed"
     assert len(recovered.ruleset_state["campaign"]["chapter_summaries"]) == 3
+    assert len(recovered.log) == 8
+    assert all(
+        action.get("text") not in {"执行规则行动", "Resolve a rules action"}
+        for entry in recovered.log for action in entry.get("actions", [])
+    )
+    assert any(
+        "遭遇战开始" in str(entry.get("gm_response") or "")
+        or "Encounter started" in str(entry.get("gm_response") or "")
+        for entry in recovered.log
+    )

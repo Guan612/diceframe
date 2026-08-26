@@ -272,7 +272,7 @@ async def test_professional_character_is_rederived_bound_and_saved_without_field
     assert instance.ruleset_runtime["id"] == "core:dnd2024"
     cards = api.list_character_cards()["cards"]
     assert cards[-1]["ruleset_character"]["rule_binding"]["content_version"] == (
-        "srd-5.2.1+r4"
+        "srd-5.2.1+r5"
     )
 
 

@@ -65,6 +65,7 @@ from src.webui.routes.avatars import register_avatars
 from src.webui.routes.scene_images import register_scene_images
 from src.webui.routes.maps import register_maps
 from src.webui.routes.rules import register_rules
+from src.webui.routes.adventures import register_adventures
 from src.webui.routes.worlds import register_worlds
 from src.webui.routes.generation import register_generation
 from src.webui.routes.games import register_games
@@ -933,7 +934,7 @@ def _share_player_user_id(request: web.Request) -> str:
         tail = parts[3]
         if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "available-actions", "avatars", "scene-image", "map-background-asset", "generated-images"}:
             return uid or request.get("user_id", "")
-        if request.method == "POST" and tail in {"players", "action", "intents", "adventure-actions", "decisions", "sse-ticket", "avatars", "scene-image", "generated-images", "character"}:
+        if request.method == "POST" and tail in {"players", "action", "intents", "decisions", "sse-ticket", "avatars", "scene-image", "generated-images", "character"}:
             return uid or request.get("user_id", "")
         if (
             request.method == "POST"
@@ -1349,6 +1350,7 @@ def register_routes(application: web.Application) -> None:
     register_worlds(application)
     # rules
     register_rules(application)
+    register_adventures(application)
     # character cards
     register_character_cards(application)
     # character portraits

@@ -22,7 +22,8 @@ class RulesetCapabilities:
     versioned_state: bool = False
     session_zero: bool = False
     tutorial_coach: bool = False
-    narrative_adventure: bool = False
+    narrative_turns: bool = False
+    adventure_formats: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,9 +114,25 @@ class AuthoritativeIntentHooks(Protocol):
 
 
 @runtime_checkable
-class NarrativeAdventureRuntime(Protocol):
-    """Optional out-of-combat free-declaration narration boundary."""
+class NarrativeStatePolicyRuntime(Protocol):
+    """Optional adapter for filtering generic LLM state before it is applied."""
 
-    def prepare_adventure_narration(
-        self, instance: Any, actor_id: str, declaration: dict[str, Any], locale: str,
+    def filter_narrative_state_update(
+        self, instance: Any, update: dict[str, Any],
     ) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class NarrativeCombatSignalRuntime(Protocol):
+    """Optional bridge from a resolved narrative turn to structured combat UI."""
+
+    def apply_narrative_combat_signal(
+        self, instance: Any, signal: str,
+    ) -> bool: ...
+
+
+@runtime_checkable
+class AutomaticIntentRuntime(Protocol):
+    """Optional server-owned turn automation for non-player actors."""
+
+    def next_automatic_intent(self, instance: Any) -> dict[str, Any] | None: ...

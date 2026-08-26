@@ -45,7 +45,29 @@ class CombatValidationMixin:
                 raise CombatIntentError("only the GM can start combat")
             if combat.get("status") == "active":
                 raise CombatIntentError("combat is already active")
-            self._validate_enemies(intent.get("enemies"))
+            if not self.encounter_access.can_start:
+                raise CombatIntentError("the current story does not allow an encounter to start")
+            preset_id = str(intent.get("encounter_preset_id") or "")
+            guided_preset_id = (
+                self.encounter_access.encounter_preset_id
+                if self.encounter_access.mode == "story"
+                else ""
+            )
+            if guided_preset_id:
+                if preset_id != guided_preset_id:
+                    raise CombatIntentError(
+                        "the current story requires its assigned encounter preset"
+                    )
+                requested_instance_id = str(intent.get("encounter_instance_id") or "")
+                if requested_instance_id and requested_instance_id != self.encounter_access.encounter_instance_id:
+                    raise CombatIntentError("the story encounter identity is stale")
+            elif preset_id and self._preset(preset_id) is None:
+                raise CombatIntentError("encounter preset is not available")
+            if not preset_id:
+                self._validate_enemies(intent.get("enemies"))
+            # With a preset, the resolver replaces any submitted enemy list
+            # with the catalog entry. Enemy data is intentionally optional so
+            # clients cannot smuggle a forged stat block into combat.
             self._validate_player_positions(instance, intent.get("player_positions"))
             return
         if combat.get("status") != "active":

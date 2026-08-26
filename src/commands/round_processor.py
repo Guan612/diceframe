@@ -19,6 +19,7 @@ from src.commands.round_effects import (
     apply_plot_update,
     apply_puzzle_updates,
     apply_revive_commands,
+    apply_ruleset_combat_signal,
     store_private_messages,
     update_quick_actions,
 )
@@ -49,6 +50,7 @@ from src.imagegen import (
     game_image_owner_id,
 )
 from src.memory.summarizer import needs_summary, summarize
+from src.rulesets.contracts import NarrativeStatePolicyRuntime
 
 logger = logging.getLogger("trpg")
 
@@ -412,7 +414,8 @@ class RoundProcessor:
             for action in instance.action_queue
             if action.get("user_id") in instance.players
         )
-        if instance.combat_state != "none" or explicit_attack:
+        authoritative_combat = combat_model == "authoritative_event_batch"
+        if not authoritative_combat and (instance.combat_state != "none" or explicit_attack):
             combat_text = self._combat.resolve_combat(instance, actions_text, combat_model, rule)
             if combat_text:
                 actions_text = combat_text + "\n" + actions_text
@@ -443,6 +446,20 @@ class RoundProcessor:
             self.llm_client, instance, gm_prompt, context, combat_model,
             dice_block, self.narrative_max_tokens, actions_text,
             on_delta=on_delta, on_reset=on_reset)
+        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+        runtime_id = str(binding.get("id") or "")
+        ruleset_registry = getattr(self._prompt, "ruleset_registry", None)
+        runtime = None
+        if ruleset_registry is not None and runtime_id:
+            runtime = ruleset_registry.get(
+                runtime_id, minimum_version=int(binding.get("version", 1) or 1),
+            )
+            if isinstance(runtime, NarrativeStatePolicyRuntime):
+                data["state_update"] = runtime.filter_narrative_state_update(
+                    instance, dict(data.get("state_update") or {}),
+                )
+        if authoritative_combat and explicit_attack:
+            data["combat_command"] = "start"
         discard_unresolved_player_damage(instance, data.get("state_update", {}))
         initial_budget = int(getattr(response, "token_budget_initial", 0) or 0)
         used_budget = int(getattr(response, "token_budget_used", 0) or 0)
@@ -471,6 +488,7 @@ class RoundProcessor:
         apply_confirmed_items(instance, data)
         apply_puzzle_updates(instance, data)
         apply_combat_command(instance, data)
+        apply_ruleset_combat_signal(instance, data, runtime)
         apply_revive_commands(instance, data)
         apply_growth_rewards(instance, data, response, rule, self._progression)
         update_quick_actions(instance, data)

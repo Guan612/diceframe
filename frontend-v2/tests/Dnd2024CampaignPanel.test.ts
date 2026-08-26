@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({ fetch: vi.fn(), submit: vi.fn(), locale: 'en' 
 vi.mock('../src/features/rulesets/dnd2024/api', () => ({
   fetchRulesetAvailableActions: mocks.fetch,
   submitRulesetIntent: mocks.submit,
-  submitRulesetAdventureAction: vi.fn(),
 }))
 vi.mock('../src/composables/useLocale', () => ({
   useLocale: () => ({ locale: ref(mocks.locale) }),
@@ -29,7 +28,7 @@ function response(state: 'new' | 'pending' | 'tutorial' = 'new') {
       id: 'core:dnd2024', version: 1, requested_minimum_version: 1,
       capabilities: {
         experience_profile: 'dnd2024', character_builder: 'professional',
-        character_lifecycle: 'rules_aware', narrative_adventure: true,
+        character_lifecycle: 'rules_aware',
         authoritative_intents: true, deterministic_combat: true,
         versioned_state: true, session_zero: true, tutorial_coach: true,
       },
@@ -162,7 +161,7 @@ describe('D&D 2024 campaign panel', () => {
     wrapper.unmount()
   })
 
-  it('puts the current beginner objective before free text and optional GM records', async () => {
+  it('keeps the current objective and optional GM records inside the toolbox', async () => {
     mocks.locale = 'zh-CN'
     mocks.fetch.mockResolvedValueOnce(response('tutorial'))
     const wrapper = mount(Dnd2024CampaignPanel, {
@@ -171,17 +170,16 @@ describe('D&D 2024 campaign panel', () => {
     await flushPromises()
 
     const tutorial = wrapper.get('.tutorial-card')
-    const composer = wrapper.get('.adventure-composer')
     const records = wrapper.get('.records-card')
-    expect(tutorial.text()).toContain('现在只做一件事')
-    expect(tutorial.text()).toContain('当前目标')
-    expect(wrapper.element.compareDocumentPosition(composer.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(composer.element.compareDocumentPosition(records.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(composer.text()).toContain('发送行动，继续冒险')
+    expect(tutorial.text()).toContain('你不需要先学完整规则')
+    expect(tutorial.text()).toContain('你是谁')
+    expect(tutorial.text()).toContain('接下来做什么')
+    expect(tutorial.element.compareDocumentPosition(records.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(wrapper.find('.composer').exists()).toBe(false)
     wrapper.unmount()
   })
 
-  it('keeps free text hidden until the beginner starts the tutorial', async () => {
+  it('keeps narrative input out of the campaign toolbox', async () => {
     mocks.locale = 'zh-CN'
     const notStarted = response('tutorial')
     notStarted.gameplay.campaign.tutorial.status = 'not_started'
@@ -196,6 +194,7 @@ describe('D&D 2024 campaign panel', () => {
     await flushPromises()
 
     expect(wrapper.find('.adventure-composer').exists()).toBe(false)
+    expect(wrapper.find('.composer').exists()).toBe(false)
     expect(wrapper.get('.tutorial-card .campaign-primary').text()).toContain('开始《灰沼失灯记》')
     wrapper.unmount()
   })
@@ -227,7 +226,7 @@ describe('D&D 2024 campaign panel', () => {
     expect(wrapper.get('.choice-grid button').attributes('disabled')).toBeDefined()
     await wrapper.get('.coach-row button').trigger('click')
     await flushPromises()
-    expect(mocks.submit.mock.calls[0][1]).toMatchObject({ type: 'tutorial.hint' })
+    expect(mocks.submit).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('Move or shoot.')
     wrapper.unmount()
   })
@@ -247,6 +246,53 @@ describe('D&D 2024 campaign panel', () => {
 
     expect(mocks.submit.mock.calls[0][1]).toMatchObject({ type: 'tutorial.choose' })
     expect(wrapper.emitted('navigate')).toEqual([['combat']])
+    wrapper.unmount()
+  })
+
+  it('renders standard free play without tutorial controls or shared-log intents', async () => {
+    const sandbox = response('tutorial')
+    sandbox.gameplay.campaign.tutorial = {
+      status: 'unavailable', coach_enabled: false, adventure: {},
+      requirement_met: false, history: [], hints_used: {}, current_step: null,
+    } as any
+    sandbox.available_actions = []
+    mocks.fetch.mockResolvedValueOnce(sandbox)
+    const wrapper = mount(Dnd2024CampaignPanel, {
+      props: {
+        gameKey: 'web|campaign|bot', actorId: 'gm', isGm: true,
+        worldName: 'Selected Worldbook',
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.campaign-head').text()).toContain('Professional rules · Standard mode')
+    expect(wrapper.get('.sandbox-card').text()).toContain('shared action composer')
+    expect(wrapper.get('.sandbox-card').text()).toContain('Selected Worldbook')
+    expect(wrapper.find('.tutorial-card').exists()).toBe(false)
+    expect(wrapper.find('.composer').exists()).toBe(false)
+    expect(mocks.submit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps the professional adventure connected to the shared scene map', async () => {
+    mocks.fetch.mockResolvedValueOnce(response('tutorial'))
+    const wrapper = mount(Dnd2024CampaignPanel, {
+      props: {
+        gameKey: 'web|campaign|bot', actorId: 'gm', isGm: true,
+        worldName: '灰沼边境', sceneName: '灰沼驿道',
+        map: {
+          active_map: { id: 'map-1', name: '灰沼驿道地图', mode: 'graph' },
+          current_location_id: 'road',
+          locations: [{ id: 'road', name: '驿道入口' }],
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.shared-context').text()).toContain('灰沼边境')
+    expect(wrapper.get('.shared-context').text()).toContain('驿道入口')
+    await wrapper.get('.shared-context button').trigger('click')
+    expect(wrapper.emitted('open-map')).toEqual([[]])
     wrapper.unmount()
   })
 })

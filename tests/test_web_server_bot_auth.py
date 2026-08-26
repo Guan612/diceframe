@@ -325,7 +325,6 @@ async def test_share_link_player_can_use_ruleset_gameplay_endpoints(monkeypatch)
     app = _make_sse_auth_app()
     app.router.add_get("/api/games/{game_key}/available-actions", _identity)
     app.router.add_post("/api/games/{game_key}/intents", _identity)
-    app.router.add_post("/api/games/{game_key}/adventure-actions", _identity)
     app.router.add_post("/api/games/{game_key}/decisions/{decision_id}", _identity)
     async with TestClient(TestServer(app)) as client:
         query = {"user": "player-1", "share": "1"}
@@ -335,16 +334,13 @@ async def test_share_link_player_can_use_ruleset_gameplay_endpoints(monkeypatch)
         intent = await client.post(
             "/api/games/web%7Croom%7Cbot/intents", params=query,
         )
-        adventure = await client.post(
-            "/api/games/web%7Croom%7Cbot/adventure-actions", params=query,
-        )
         decision = await client.post(
             "/api/games/web%7Croom%7Cbot/decisions/check-1", params=query,
         )
-        responses = (available, intent, adventure, decision)
+        responses = (available, intent, decision)
         bodies = [await response.json() for response in responses]
 
-    assert [response.status for response in responses] == [200] * 4
+    assert [response.status for response in responses] == [200] * 3
     assert all(body["user_id"] == "player-1" for body in bodies)
 
 

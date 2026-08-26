@@ -1,101 +1,56 @@
-/* Professional rulesets live in a bounded workspace so their deep forms never
-   squeeze or cover the story surface. Legacy rulesets do not render these nodes. */
-.play-main.ruleset-mode {
+.dialog.dnd-toolbox-dialog {
+  width: min(1120px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
 
-.ruleset-workspace-tabs {
+.dnd-toolbox-tabs {
   display: flex;
   flex: 0 0 auto;
-  gap: 6px;
-  min-width: 0;
+  gap: 7px;
+  margin: 10px 0;
   padding: 4px;
-  overflow-x: auto;
   border: 1px solid var(--df-border-soft);
-  border-radius: 10px;
+  border-radius: 9px;
   background: color-mix(in srgb, var(--df-surface-1) 90%, transparent);
-  scrollbar-width: thin;
 }
 
-.ruleset-workspace-tabs button {
-  flex: 1 0 max-content;
-  min-width: 112px;
-  min-height: 44px;
+.dnd-toolbox-tabs button {
+  flex: 1 1 0;
+  min-height: 40px;
   border-color: transparent;
-  color: var(--df-text-secondary);
   background: transparent;
 }
 
-.ruleset-workspace-tabs button[aria-selected="true"] {
-  border-color: color-mix(in srgb, var(--df-interactive) 52%, var(--df-border-soft));
+.dnd-toolbox-tabs button.active {
+  border-color: color-mix(in srgb, var(--df-interactive) 48%, var(--df-border-soft));
   color: var(--df-interactive-strong);
   background: color-mix(in srgb, var(--df-interactive) 14%, var(--df-surface-2));
-  box-shadow: inset 0 -2px 0 var(--df-interactive);
 }
 
-.ruleset-workspace-tabs button:focus-visible,
-.ruleset-workspace:focus-visible {
-  outline: 3px solid var(--df-interactive-strong);
-  outline-offset: 2px;
-}
-
-.ruleset-workspace-guide {
-  display: grid;
-  flex: 0 0 auto;
-  gap: 3px;
-  padding: 9px 12px;
-  border: 1px solid color-mix(in srgb, var(--df-interactive) 28%, var(--df-border-soft));
-  border-radius: 9px;
-  color: var(--df-text-muted);
-  background: color-mix(in srgb, var(--df-interactive) 7%, var(--df-surface-1));
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.ruleset-workspace-guide strong {
-  color: var(--df-text-secondary);
-  font-size: 12px;
-}
-
-.ruleset-workspace {
-  display: block;
+.dnd-toolbox-dialog > .campaign-panel,
+.dnd-toolbox-dialog > .dnd-combat {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  padding: 0 4px 16px;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
-.ruleset-workspace > .timeline-wrap {
-  height: 100%;
-  min-height: 320px;
-}
-
-@media (max-width: 800px) {
-  .play-page .play-main.ruleset-mode {
-    min-height: 0;
-    overflow: hidden;
+@media (max-width: 720px) {
+  .dialog.dnd-toolbox-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 10px;
   }
 
-  .ruleset-workspace-tabs {
-    margin-inline: 0;
-    padding: 3px;
-  }
-
-  .ruleset-workspace-tabs button {
-    min-width: 104px;
-  }
-
-  .ruleset-workspace {
-    padding: 0 0 calc(12px + env(safe-area-inset-bottom));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ruleset-workspace,
-  .ruleset-workspace-tabs {
-    scroll-behavior: auto !important;
+  .dnd-toolbox-tabs {
+    position: sticky;
+    top: 0;
+    z-index: 2;
   }
 }
