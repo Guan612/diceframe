@@ -1076,6 +1076,8 @@ async def _apply_config_update(request: web.Request, body: dict) -> web.Response
         except Exception:
             logger.warning("配置更新后 embedding 补齐失败", exc_info=True)
     payload = {"ok": True, "access_password_changed": access_password_changed}
+    if prepared.warnings:
+        payload["warnings"] = list(prepared.warnings)
     if plugin_warning:
         payload["warning"] = plugin_warning
     return web.json_response(payload)
