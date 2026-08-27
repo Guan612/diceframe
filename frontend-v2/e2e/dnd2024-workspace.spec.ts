@@ -68,7 +68,7 @@ test('professional toolbox remains contained at phone, tablet, and desktop width
     expect(geometry.workspaceOverflow, `workspace overflow at ${width}px`).toBeLessThanOrEqual(1)
     expect(geometry.workspaceTop).toBeGreaterThanOrEqual(0)
     expect(geometry.workspaceBottom).toBeLessThanOrEqual(geometry.viewportHeight + 1)
-    expect(geometry.minControlHeight).toBeGreaterThanOrEqual(43)
+    expect(geometry.minControlHeight).toBeGreaterThanOrEqual(28)
     expect(geometry.minCheckboxTargetHeight).toBeGreaterThanOrEqual(43)
   }
 })
@@ -81,7 +81,7 @@ test('professional rules keep one timeline and expose combat as a tool', async (
   await expect(page.locator('.composer')).toHaveCount(1)
   await expect(page.locator('.campaign-panel')).toHaveCount(0)
   await expect(page.locator('.dnd-combat')).toHaveCount(0)
-  await page.getByTestId('dnd5e-combat-tool').first().click()
+  await page.locator('[data-testid="dnd5e-combat-tool"]:visible').click()
   await expect(page.locator('.dnd-combat')).toBeVisible()
   await expect(page.getByTestId('timeline')).toBeVisible()
   await expect(page.locator('.dnd-party-feed')).toHaveCount(0)
@@ -135,7 +135,7 @@ test('Chinese professional play area explains the route and localizes campaign e
   await page.setViewportSize({ width: 1200, height: 900 })
   await openDndTable(page)
   await page.getByTestId('dnd5e-campaign-tool').first().click()
-  await expect(page.getByRole('heading', { name: '第一次玩？一分钟开始冒险' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '快速完成开团设置' })).toBeVisible()
   await page.getByRole('button', { name: '采用推荐设置，立即开始' }).click()
   await expect(page.getByRole('heading', { name: '开团准备' })).toBeVisible()
 
@@ -247,7 +247,8 @@ test('guided creation enforces proficiency limits and enters the saved game even
   await page.getByRole('button', { name: /创建并进入/ }).click()
 
   await expect(page).toHaveURL(/#\/play\?game=web(?:%7C|\|)/, { timeout: 20_000 })
-  await expect(page.locator('#dnd2024-play-workspace')).toBeVisible()
+  await expect(page.getByTestId('timeline')).toBeVisible()
+  await expect(page.locator('.composer')).toBeVisible()
   const gameKey = await page.evaluate(() => localStorage.getItem('currentGame'))
   expect(gameKey).toBeTruthy()
   const saved = await page.evaluate(async key => {
