@@ -21,6 +21,9 @@ DiceFrame（AI 跑团引擎）的 React Native 客户端。**v1 聚焦核心游�
 页面结构：一级 Tab = 对局列表 + 我的（换服务器/身份/朗读语速）；二级 = 对局内（`play/[gameKey]`）；
 login/join 为全屏流程页。
 
+移动端生命周期行为：切到后台会暂停 SSE 与轮询，回到前台立即刷新并重连；返回对局列表时自动刷新。
+行动提交失败会保留草稿，避免局域网波动时丢失输入。
+
 ## 开发调试（局域网跑团场景）
 
 前置：Node ≥ 20；PC 上运行 DiceFrame 服务端（`python web_server.py`，默认端口 18000）。
@@ -31,6 +34,24 @@ npm install
 npx expo start        # 手机装 Expo Go 扫码，或 Android 调试构建
 ```
 
+如果使用内网穿透把 Expo 暴露给外部设备，隧道应配置为：本地 `127.0.0.1:8081`，远程端口例如
+`32218`。本机 Metro 仍然固定监听 `8081`，不要把本地端口改成 `32218`。
+
+把隧道公网地址写进本机专用的 `mobile/.env.local`：
+
+```env
+DICEFRAME_EXPO_PROXY_URL=http://43.248.188.28:32218
+```
+
+之后直接运行：
+
+```powershell
+npm run start:tunnel
+```
+
+这个命令会自动把本机配置转换为 Expo 的对外地址，只覆盖二维码/开发服务器地址，不改变本机
+Metro 的 `8081` 端口。`mobile/.env.local` 已被 Git 忽略，不会提交个人隧道地址。
+
 1. App 内"服务器地址"填 PC 的局域网地址（如 `192.168.1.5:18000`）
 2. Owner 输入访问密码登录；玩家从 Web 端复制分享链接，在 App「通过分享链接加入」粘贴
 3. 语音输入需服务端配置 ASR（OpenAI 兼容转写端点），否则麦克风按钮自动隐藏
@@ -39,6 +60,20 @@ npx expo start        # 手机装 Expo Go 扫码，或 Android 调试构建
 - `app.json` 已开启 `usesCleartextTraffic`，Android 允许局域网明文 HTTP
 - Expo Go 内可直接测试录音/播放；独立 APK 构建用 `npx expo run:android` 或 EAS
 - iOS：代码已预留（ATS 例外在出包时启用），需 Mac 或 EAS 云构建验证
+
+### Web 端联调（`npm run web`）
+
+Expo Web 页面与后端不同源，浏览器会按 CORS 拦截 API/SSE 请求。`metro.config.js`
+内置了 dev 反向代理（`scripts/dev-api-proxy.cjs`）：Metro 收到的 `/api` 与
+`/v2-assets` 会被转发到本机后端（默认 `http://127.0.0.1:18000`），因此 Web 端
+登录页**服务器地址留空即可**，所有请求走同源，无跨域。
+
+- 后端不在本机时指定目标：`DICEFRAME_API_TARGET=http://192.168.1.5:18000 npm run web`
+- 会话 Cookie 在 Web 上由服务端 httponly `Set-Cookie` + 浏览器 cookie jar 自动管理
+  （原生端才是客户端自管 token + 手动 Cookie 头）
+- 代理仅存在于 Metro dev server：`expo export` 静态包与原生构建不受影响；静态包
+  若部署在后端同一域下，登录页同样留空直连，部署在其他域则填地址并配合后端
+  `TRPG_WEB_CORS_ORIGINS` 白名单
 
 ## 与 Web 端（frontend-v2）的关系
 
@@ -56,6 +91,15 @@ npm run typecheck # tsc --noEmit
 npm run lint      # eslint（react-hooks + compiler 规则）
 npx expo export --platform android --output-dir dist  # 本地整包冒烟
 ```
+
+### 不安装 Android Studio 构建 APK
+
+仓库提供手动触发的 GitHub Actions 工作流 `Build Android APK`。在 GitHub 仓库的
+**Actions** 页面选择该工作流，点击 **Run workflow**；构建完成后，从运行页面底部的
+Artifacts 下载 `diceframe-android-apk`。压缩包内包含可直接安装的
+`DiceFrame-android.apk` 及其 SHA-256 校验文件。
+
+该工作流使用测试签名，适合自用和内测，不用于 Google Play 正式发布。Artifact 保留 14 天。
 
 ## 目录导览
 

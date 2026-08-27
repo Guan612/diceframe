@@ -23,6 +23,7 @@ import {
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadSceneImage } from '@/api/sceneImages'
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
+import { isLlmConfigReady } from '@/utils/modelConfiguration'
 
 interface CreateCharacter extends CharacterSheet { character_name: string }
 type CreateMode = 'template' | 'custom' | 'ai'
@@ -135,19 +136,7 @@ const confirmationWorld = computed(() => {
   if (mode.value === 'custom') return customName.value.trim() || t('modeCustom')
   return t('modeAi')
 })
-const apiReady = computed(() => {
-  const model = String(settings.config.model || '').trim()
-  const providerRef = String(settings.config.llm_provider_ref || '').trim()
-  if (providerRef) {
-    const provider = (settings.config.ai_providers || []).find(item => item.id === providerRef)
-    return Boolean(model && provider?.base_url?.trim() && provider.api_key?.configured)
-  }
-  return Boolean(
-    model
-    && String(settings.config.base_url || '').trim()
-    && settings.config.api_key?.configured,
-  )
-})
+const apiReady = computed(() => isLlmConfigReady(settings.config))
 const showApiSetupHint = computed(() => settingsChecked.value && !settings.error && !apiReady.value)
 
 function worldIdOf(w: WorldTemplateSummary | WorldSummary): string { return String(w.world_id || w.id || '') }
