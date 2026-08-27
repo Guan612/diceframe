@@ -7,7 +7,7 @@
   "presets": [
     {
       "id": "first_skirmish",
-      "difficulty": "tutorial",
+      "difficulty": "standard",
       "enemies": [
         {
           "id": "goblin-minion-1",

@@ -124,6 +124,12 @@ def _xp(value: str, result: dict, _limits: dict) -> None:
             result["xp_rewards"][uid] = result["xp_rewards"].get(uid, 0) + parsed
 
 
+def _milestone(value: str, result: dict, _limits: dict) -> None:
+    target = value.strip()
+    if target and len(target) <= 160:
+        result.setdefault("milestone_grants", []).append(target)
+
+
 def _san(value: str, result: dict, _limits: dict) -> None:
     if not (split := _split(value)):
         return
@@ -213,6 +219,7 @@ PLAYER_TAG_HANDLERS: dict[str, PlayerTagHandler] = {
     "EQUIP": _equip,
     "WEAPON": _weapon,
     "XP": _xp,
+    "MILESTONE": _milestone,
     "SAN": _san,
     "SAN_CHECK": _san_check,
     "LUCK": _luck,

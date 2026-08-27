@@ -1,6 +1,7 @@
 export interface GameSsePayload {
   type?: string
   text?: string
+  state_version?: number
 }
 
 export type GameSseEffect = 'baseline' | 'narration-delta' | 'narration-reset' | 'refresh'

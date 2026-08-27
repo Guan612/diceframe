@@ -192,13 +192,13 @@ class LLMClient:
                             errors.append(f"{provider.provider_name} (tool_choice=auto): {auto_exc}")
                     logger.warning("模型原生工具调用失败，尝试 JSON 回退 (%s): %s", provider.provider_name, exc)
             try:
+                tool_name = str(tools[0].get("function", {}).get("name") or "tool")
                 fallback_prompt = (
                     system_prompt
                     + "\n\nNative function calling is unavailable. Adjudicate the supplied actions first, "
                     + "then return only one JSON object with a tool_calls array. Each item must contain "
-                    + "name=dice_checks and arguments.checks. Populate checks whenever the rules above "
-                    + "warrant a roll; use an empty checks list only when every action is routine, certain, "
-                    + "and consequence-free. Never copy an empty structural example and never return dice values. "
+                    + f"name={tool_name} and arguments matching that tool's schema. "
+                    + "Never copy an empty structural example when the supplied context supports a concrete result. "
                     + "Required tool schema: "
                     + json.dumps(tools, ensure_ascii=False, separators=(",", ":"))
                 )

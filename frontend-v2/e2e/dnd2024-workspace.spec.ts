@@ -32,7 +32,7 @@ test('classic fantasy recommends the professional 2024 rules as the third card i
   await expect(cards).toHaveCount(3)
   await expect(cards.nth(0)).toContainText('经典奇幻自由规则')
   await expect(cards.nth(1)).toContainText('D&D 5e')
-  await expect(cards.nth(2)).toContainText('5E 2024 SRD 专业规则')
+  await expect(cards.nth(2)).toContainText('5E 2024 SRD 高级规则')
   await expect(cards.nth(0).locator('small')).toHaveText('推荐')
   await expect(cards.nth(1).locator('small')).toHaveText('推荐')
   await expect(cards.nth(2).locator('small')).toHaveText('专业')
@@ -196,6 +196,8 @@ test('guided creation enforces proficiency limits and enters the saved game even
   const ruleSelect = page.locator('.create-config-surface label').filter({ hasText: /^规则/ }).locator('select')
   await expect(ruleSelect).toBeVisible()
   await ruleSelect.selectOption('dnd2024_srd')
+  await page.locator('.create-actions .primary').click()
+  await expect(page.locator('.create-game-settings-stage')).toBeVisible()
   await page.locator('.create-actions .primary').click()
 
   await page.locator('.create-character-actions .primary').click()

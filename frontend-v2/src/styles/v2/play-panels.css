@@ -486,6 +486,72 @@
   width: 100%;
 }
 
+.gm-narrative-setting {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 6px;
+  color: var(--df-text-secondary);
+  font-size: 11px;
+}
+
+.gm-narrative-setting select {
+  width: 100%;
+  min-width: 0;
+}
+
+.gm-narrative-setting small {
+  color: var(--df-text-muted);
+  line-height: 1.4;
+}
+
+.gm-advancement-settings,
+.gm-advancement-players {
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+  border-top: 1px solid var(--df-border-soft);
+}
+
+.gm-advancement-settings label,
+.gm-advancement-players article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.gm-advancement-settings label {
+  color: var(--df-text-secondary);
+  font-size: 11px;
+}
+
+.gm-advancement-players article {
+  padding: 7px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 6px;
+}
+
+.gm-advancement-players article > div {
+  display: grid;
+  gap: 2px;
+}
+
+.gm-advancement-players small {
+  color: var(--df-text-muted);
+}
+
+.gm-xp-award {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 5px;
+}
+
+.gm-xp-award input {
+  min-width: 0;
+}
+
 @media (min-width: 801px) {
   .play-layout,
   .play-layout.no-console {

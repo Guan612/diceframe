@@ -42,7 +42,7 @@ import {
 import { isSettingsSectionAvailable, normalizeSettingsSection, type SettingsSectionId } from '@/utils/settingsSections'
 
 type StatusTone = 'default' | 'success' | 'warning' | 'error' | 'info'
-type UpdatePackageKind = 'source' | 'portable'
+type UpdatePackageKind = 'source' | 'portable' | 'docker'
 type ModelCatalogFilter = 'all' | ModelCapability
 type ProviderModelGroup = { name: string; models: string[] }
 type SystemStatusItem = { label: string; value: string; detail: string; tone: StatusTone; icon: Component }
@@ -758,7 +758,7 @@ const proxySourceLabel = computed(() => {
 const proxyFormatLabel = computed(() => (store.config.proxy_supported ? t('proxyFormatSupported') : t('proxyFormatUnsupported')))
 const requiredUpdateKind = computed<UpdatePackageKind | null>(() => {
   const mode = updateStatus.value?.self_update.mode
-  return mode === 'source' || mode === 'portable' ? mode : null
+  return mode === 'source' || mode === 'portable' || mode === 'docker' ? mode : null
 })
 const latestUpdateVersion = computed(() => (
   updateInfo.value?.latest?.version || updateInfo.value?.latest?.tag_name || ''
@@ -774,6 +774,10 @@ const isDisplayedUpdateBusy = computed(() => (
   isDisplayedUpdateDownloading.value
   || displayedUpdateState.value === 'applying'
   || displayedUpdateState.value === 'restarting'
+))
+const dockerRuntimeUpgradeRequired = computed(() => (
+  updateStatus.value?.kind === 'docker'
+  && /newer base image|base runtime|requires cp\d+|different Docker/i.test(updateStatus.value?.error || '')
 ))
 const updateTagType = computed<StatusTone>(() => {
   if (!updateInfo.value) return 'default'
@@ -907,8 +911,8 @@ onMounted(() => {
 watch(() => [route.query.section, route.query.focus], syncRouteTarget)
 
 // 从更新弹窗的“去设置”进入：跳转后自动开始下载，用户无需再点一次下载按钮。
-// 仅在 mode ∈ {source, portable}、确有新版、且无进行中/已完成任务时触发一次；
-// docker/development/只读模式下 requiredUpdateKind 为 null，不触发。
+// 仅在 source/portable/docker-managed、确有新版且无进行中任务时触发一次；
+// 旧 Docker、development 和只读模式下 requiredUpdateKind 为 null，不触发。
 let autoDownloadAttempted = false
 watch(
   () => [requiredUpdateKind.value, updateStatus.value?.state, route.query.focus],
@@ -2048,6 +2052,7 @@ function redownloadUpdatePackage() {
                   </div>
                   <div v-else-if="displayedUpdateState === 'failed'" class="error-text">
                     {{ updateStatus.path ? t('updateApplyFailed') : t('updateDownloadFailed') }}: {{ updateStatus.error }}
+                    <p v-if="dockerRuntimeUpgradeRequired">{{ t('updateDockerRuntimeRequired') }}</p>
                   </div>
                   <div v-else-if="displayedUpdateState === 'applying'" class="muted">
                     {{ t('updateApplying') }}
@@ -2072,7 +2077,11 @@ function redownloadUpdatePackage() {
                   </div>
                   <div v-if="!isDisplayedUpdateBusy && !['staged', 'done'].includes(displayedUpdateState)" class="actions-row">
                     <NButton v-if="requiredUpdateKind" @click="downloadUpdatePackage(requiredUpdateKind)">
-                      {{ requiredUpdateKind === 'portable' ? t('downloadUpdatePortable') : t('downloadUpdateSource') }}
+                      {{ requiredUpdateKind === 'docker'
+                        ? t('downloadUpdateDocker')
+                        : requiredUpdateKind === 'portable'
+                          ? t('downloadUpdatePortable')
+                          : t('downloadUpdateSource') }}
                     </NButton>
                   </div>
                 </template>

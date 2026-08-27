@@ -229,6 +229,38 @@ def test_d20_advantage_reuses_both_confirmed_rolls():
     assert instance.last_check["advantage_mode"] == "advantage"
 
 
+def test_structured_runtime_can_defer_an_action_before_any_generic_roll():
+    instance = GameInstance(("web", "room", "bot"))
+    instance.players["p1"] = {
+        "character_name": "Fighter",
+        "character_sheet": {"attributes": {"str": 16}, "skills": [], "level": 1},
+    }
+    instance.action_queue = [{
+        "user_id": "p1", "text": "I attack the goblin.",
+        "check_request": {
+            "check_id": "opening-attack", "required": True, "actor_uid": "p1",
+            "dice_system": "d20", "label": "Attack", "attribute": "str",
+            "target": 12, "kind": "attack",
+        },
+        "dice_value": 18, "dice_rolls": [18], "dice_pending": False,
+    }]
+    rule = RuleSystem.load(Path("templates/rules/dnd5e.json"))
+
+    block = build_dice_constraint_block(
+        instance,
+        collect_actions_text(instance),
+        rule,
+        "d20",
+        DiceResolver(),
+        skip_action_indexes={0},
+    )
+
+    assert block == ""
+    assert "check_request" not in instance.action_queue[0]
+    assert "dice_value" not in instance.action_queue[0]
+    assert instance.last_checks == []
+
+
 def test_late_game_d20_target_is_capped_and_nineteen_can_succeed() -> None:
     instance = GameInstance(("web", "room", "bot"))
     instance.players["p1"] = {

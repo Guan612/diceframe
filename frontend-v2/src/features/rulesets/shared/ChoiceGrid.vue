@@ -22,6 +22,9 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
     >
       <span class="choice-title"><b>{{ choice.name }}</b><small>{{ choice.automation_level }}</small></span>
       <span v-if="choice.summary" class="choice-summary">{{ choice.summary }}</span>
+      <span v-if="choice.items?.length" class="choice-items">
+        <span v-for="item in choice.items" :key="item.ref">{{ item.name }}<b v-if="item.quantity > 1"> ×{{ item.quantity }}</b></span>
+      </span>
       <code v-if="sourceVisible">{{ choice.source_ref }}</code>
     </button>
   </div>
@@ -37,9 +40,13 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
 .choice-title { display: flex; justify-content: space-between; gap: 8px; }
 .choice-title small { color: #9ba7ba; font-size: 10px; text-transform: uppercase; }
 .choice-summary { color: #aeb8c8; font-size: 12px; line-height: 1.55; }
+.choice-items { display: grid; gap: 2px; color: #d3dbe4; font-size: 12px; line-height: 1.4; }
+.choice-items span { overflow-wrap: anywhere; }
+.choice-items b { color: #e0b766; font-weight: 600; }
 code { color: #8b97aa; font-size: 10px; overflow-wrap: anywhere; }
 :global(body.light .ruleset-choice-card) { border-color: #c3b7a4; background: #fff; color: #302b25; }
 :global(body.light .ruleset-choice-card.selected) { border-color: #a8752c; background: #fff4dc; }
 :global(body.light .ruleset-choice-card .choice-title small), :global(body.light .ruleset-choice-card .choice-summary), :global(body.light .ruleset-choice-card code) { color: #514b43; }
+:global(body.light .ruleset-choice-card .choice-items) { color: #403a33; }
 @media (prefers-reduced-motion: reduce) { .ruleset-choice-card { transition: none; } .ruleset-choice-card:hover { transform: none; } }
 </style>

@@ -76,6 +76,7 @@ async function submit() {
         <strong>{{ t('composerTitle') }}</strong>
         <span v-if="hint" class="composer-hint">{{ hint }}</span>
       </div>
+      <slot name="tools" />
     </div>
     <div class="quick-actions" :aria-label="t('quickActions')">
       <button v-for="action in quickActions" :key="action" :disabled="locked" @click="text = action">{{ action }}</button>

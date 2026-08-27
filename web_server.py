@@ -17,6 +17,7 @@ from src.runtime_env import load_project_env
 load_project_env(Path(__file__).resolve().with_name(".env"))
 
 from src.common_factory import TRPGSubsystems, create_trpg_subsystems
+from src.adventures import sync_adventure_catalog
 from src.migrations.config import (
     DEFAULT_NARRATIVE_MAX_TOKENS,
     GENERATION_DEFAULTS_VERSION,
@@ -307,14 +308,20 @@ ROOT = Path(__file__).parent
 PROMPTS_DIR = ROOT / "prompts"
 BUILTIN_RULES_DIR = ROOT / "templates" / "rules"
 BUILTIN_WORLDS_DIR = ROOT / "templates" / "worlds"
+BUILTIN_ADVENTURES_DIR = ROOT / "templates" / "adventures"
 RULES_DIR = DATA_DIR / "templates" / "rules"
 WORLDS_DIR = DATA_DIR / "templates" / "worlds"
+ADVENTURES_DIR = DATA_DIR / "templates" / "adventures"
 STATIC_V2_DIR = ROOT / "static-v2"
 
 _rule_sync = sync_template_catalog(BUILTIN_RULES_DIR, RULES_DIR, "rules")
 _world_sync = sync_template_catalog(BUILTIN_WORLDS_DIR, WORLDS_DIR, "worlds")
-if any(_rule_sync.values()) or any(_world_sync.values()):
-    logger.info("模板目录已同步到 data: rules=%s worlds=%s", _rule_sync, _world_sync)
+_adventure_sync = sync_adventure_catalog(BUILTIN_ADVENTURES_DIR, ADVENTURES_DIR)
+if any(_rule_sync.values()) or any(_world_sync.values()) or any(_adventure_sync.values()):
+    logger.info(
+        "模板目录已同步到 data: rules=%s worlds=%s adventures=%s",
+        _rule_sync, _world_sync, _adventure_sync,
+    )
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -491,6 +498,7 @@ def _build_subsystems(
     return create_trpg_subsystems(
         data_dir=DATA_DIR, prompts_dir=PROMPTS_DIR,
         rules_dir=RULES_DIR, worlds_dir=WORLDS_DIR,
+        adventures_dir=ADVENTURES_DIR,
         providers=providers, default_provider="default",
         embedding_enabled=emb_enabled,
         embedding_base_url=emb_base,
@@ -556,6 +564,7 @@ def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None 
         memory=subsystems.memory_store, rules_dir=RULES_DIR,
         handler=subsystems.handler, llm_client=subsystems.llm_client,
         worlds_dir=WORLDS_DIR,
+        adventures_dir=ADVENTURES_DIR,
         character_gen_max_tokens=int(runtime_config.get("character_gen_max_tokens", 4096)),
         text_gen_max_tokens=int(runtime_config.get("text_gen_max_tokens", 1024)),
         plugin_host=plugin_host,

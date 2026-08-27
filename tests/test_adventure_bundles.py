@@ -24,6 +24,8 @@ def test_installed_adventure_localizes_display_without_changing_identity() -> No
     assert chinese.adventure["id"] == english.adventure["id"] == "lanterns_of_greymoor"
     assert chinese.adventure["tutorial"]["name"] == "灰沼失灯记"
     assert english.adventure["tutorial"]["name"] == "The Lost Lanterns of Greymoor"
+    chinese_encounters = chinese.list("encounter_catalog")
+    assert chinese_encounters[0]["presets"][0]["difficulty"] == "standard"
     assert chinese.binding("greymoor") == {
         "adventure_id": "core:lanterns_of_greymoor",
         "version": "1.0.0",

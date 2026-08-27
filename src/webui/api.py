@@ -112,6 +112,7 @@ class WebAPI:
     def __init__(self, registry: GameRegistry, lorebook: LorebookStore,
                  memory: MemoryStore, rules_dir: Path,
                  handler=None, llm_client=None, worlds_dir: Path | None = None,
+                 adventures_dir: Path | None = None,
                  character_gen_max_tokens: int = 2048,
                  text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
                  speech_service=None, asr_service=None, imagegen_service=None,
@@ -127,8 +128,11 @@ class WebAPI:
         )
         self._llm_client = llm_client
         self._worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
-        self._adventure_loader = AdventureBundleLoader(
+        self._builtin_adventures_dir = (
             Path(__file__).parent.parent.parent / "templates" / "adventures"
+        ).resolve()
+        self._adventure_loader = AdventureBundleLoader(
+            adventures_dir or self._builtin_adventures_dir
         )
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._avatars_dir = self._reg.save_dir.parent / "avatars"
@@ -612,6 +616,11 @@ class WebAPI:
     async def set_solo_mode(self, game_key: str, solo: bool) -> dict[str, Any]:
         return await games.set_solo_mode(self, game_key, solo)
 
+    async def set_narrative_perspective(
+        self, game_key: str, perspective: str,
+    ) -> dict[str, Any]:
+        return await games.set_narrative_perspective(self, game_key, perspective)
+
     async def mark_game_health_event(
         self,
         game_key: str,
@@ -876,6 +885,35 @@ class WebAPI:
     ) -> dict[str, Any]:
         return adventures.list_adventures(self, rule_id, world_id, language)
 
+    def adventure_detail(self, adventure_id: str, language: str = "") -> dict[str, Any]:
+        return adventures.adventure_detail(self, adventure_id, language)
+
+    def copy_adventure(
+        self, adventure_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.copy_adventure(self, adventure_id, body, language)
+
+    def create_adventure(
+        self, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.create_adventure(self, body, language)
+
+    def update_adventure(
+        self, adventure_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.update_adventure(self, adventure_id, body, language)
+
+    def delete_adventure(self, adventure_id: str) -> dict[str, Any]:
+        return adventures.delete_adventure(self, adventure_id)
+
+    def export_adventure(self, adventure_id: str) -> tuple[str, bytes]:
+        return adventures.export_adventure(self, adventure_id)
+
+    def import_adventure(
+        self, payload: bytes, directory_id: str = "",
+    ) -> dict[str, Any]:
+        return adventures.import_adventure(self, payload, directory_id)
+
     def list_world_templates(self, language: str = "") -> dict[str, Any]:
         # 确保已启用插件的世界模板世界书已同步（幂等）
         if self._plugins:
@@ -906,12 +944,17 @@ class WebAPI:
                            language: str = "",
                            scene_image: dict[str, Any] | None = None,
                            map_background: dict[str, Any] | None = None,
-                           adventure_id: str = "") -> dict[str, Any]:
+                           adventure_id: str = "",
+                           narrative_perspective: str = "auto",
+                           advancement_mode: str = "milestone",
+                           advancement_authority: str = "ai_gm") -> dict[str, Any]:
         return await games.create_game(self, world_id, game_name, group_name, rule_id,
                                        solo, lorebook_world_id, difficulty, description,
                                        create_lorebook, blank_lorebook, source_world_id,
                                        players, custom_world, gm_uid, room_password,
-                                       language, scene_image, map_background, adventure_id)
+                                       language, scene_image, map_background, adventure_id,
+                                       narrative_perspective, advancement_mode,
+                                       advancement_authority)
 
     # ---- 重开引用码 ----
 
@@ -928,8 +971,12 @@ class WebAPI:
                                players: list[dict] | None = None,
                                gm_uid: str = "",
                                language: str = "",
-                               scene_image: dict[str, Any] | None = None) -> dict[str, Any]:
-        return await games.create_from_seed(self, seed_code, solo, players, gm_uid, language, scene_image)
+                               scene_image: dict[str, Any] | None = None,
+                               narrative_perspective: str = "") -> dict[str, Any]:
+        return await games.create_from_seed(
+            self, seed_code, solo, players, gm_uid, language, scene_image,
+            narrative_perspective,
+        )
 
     async def update_scene_image(
         self,

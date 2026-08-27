@@ -10,6 +10,10 @@ describe('shouldAutoDownloadUpdate', () => {
     expect(shouldAutoDownloadUpdate('portable', 'idle', 'update', true)).toBe(true)
   })
 
+  it('triggers for a managed Docker install', () => {
+    expect(shouldAutoDownloadUpdate('docker', 'idle', 'update', true)).toBe(true)
+  })
+
   it('allows retry after a failed download', () => {
     expect(shouldAutoDownloadUpdate('source', 'failed', 'update', true)).toBe(true)
   })

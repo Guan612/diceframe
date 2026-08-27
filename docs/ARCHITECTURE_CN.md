@@ -50,6 +50,12 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 
 `src/migrations/` 负责 persisted schema upgrade；`src/compat/` 负责 old external/runtime shape 到当前 canonical model 的兼容。V1 包通过适配器读取，不能把兼容分支散回正常业务逻辑。
 
+## 应用更新边界
+
+Windows source/portable 与托管 Docker 共用 `src/webui/services/updater.py` 的下载状态机，但安装提交权分离：source 使用备份事务，portable 由 Windows launcher 提交，Docker 候选只能由镜像内稳定的 `src/docker_launcher/` 在健康检查和观察期通过后提交。Docker 应用进程只能写相对候选路径的 restart signal，不得控制 Docker daemon、挂载 Docker socket或覆盖当前版本目录。
+
+Docker Update schema 1 绑定版本、`linux-amd64`、CPython ABI、launcher schema、基础 runtime API 与 `data_rollback_safe`。更新包构建器、应用 updater 和 launcher 必须复用同一 contracts 校验；checksum、平台、ABI、runtime、数据回滚声明或路径安全失败全部 fail closed。版本化应用副本位于 `data/_updater/docker-versions/`，业务数据迁移仍归 `src/migrations/`，程序目录回滚不得冒充数据 schema 回滚。
+
 ## Frontend 与规则边界
 
 Backend materializes V2 locale，frontend 只渲染返回字段，不重新实现 Content V2 locale architecture。D&D 如何使用 d20 不等于修改 generic d20 本身；D&D 专属行为必须留在 D&D 边界内。
@@ -62,15 +68,17 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 ## Ruleset Bundle v1
 
-`templates/rulesets/<directory_id>/` 是第一方专业规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。
+`templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。
 
 Bundle locale 只能物化白名单展示字段。效果使用白名单 DSL；任意代码执行键、未知效果原语、重复 ID、无效内部引用、越界归属路径或 locale mechanics override 都会使整个 bundle 加载失败。详细格式见 `docs/rulesets/dnd2024/CONTENT_BUNDLE_CN.md`。
 
 ## Adventure Bundle v1
 
-专业玩法由四个相互独立的输入组成：Ruleset Runtime 提供机制，Worldbook 提供世界设定与 lore，可选 Adventure Bundle 提供剧情图、场景、NPC、地图位置与冒险专属遭遇，Coach 只在前端提供本地帮助。未绑定 Adventure Bundle 就是标准自由对局，不得暗中加载固定教学剧情。
+高级玩法由四个相互独立的输入组成：Ruleset Runtime 提供机制，Worldbook 提供世界设定与 lore，可选 Adventure Bundle 提供剧情图、场景、NPC、地图位置与冒险专属遭遇，Coach 只在前端提供本地帮助。未绑定 Adventure Bundle 就是标准自由对局，不得暗中加载固定教学剧情。
 
 独立冒险位于 `templates/adventures/<directory_id>/`，采用 `diceframe:adventure-graph-v1`。Manifest 声明 canonical adventure ID、版本、世界策略以及最低 runtime 契约。创建游戏时先校验规则、runtime、格式和世界兼容性，再不可变地保存 `adventure_id / version / format / content_digest / world_id`；重开必须保留并重新校验同一绑定，内容丢失、被改动或 fixed-world 不匹配时直接拒绝。详细格式见 `docs/adventures/ADVENTURE_BUNDLE_CN.md`。
+
+服务启动时，内置冒险包以完整目录为单位同步到 `data/templates/adventures/`；DND runtime、目录 API 和管理 API 共同读取该运行目录。内置包只读，自定义包使用独立 canonical identity，可复制、校验编辑、ZIP 导入/导出和删除。任何已被存档绑定的包禁止编辑或删除，避免破坏固定摘要与重开确定性；所有写入先在临时目录通过同一个 `AdventureBundleLoader` 完整校验，再替换正式目录。
 
 冒险步骤只能替代当前剧情入口，不能替代玩家选择的世界书。叙事上下文始终包含实际 Worldbook 的设定、起始场景与匹配 lore；冒险完成后回到同一世界的标准自由对局，而不是停留在“教程已结束”死页。
 
@@ -78,7 +86,7 @@ Bundle locale 只能物化白名单展示字段。效果使用白名单 DSL；�
 
 `core:dnd2024` 的战斗、Session 0 与战役记录共享 `GameInstance.ruleset_state.version` 和 EventBatch ledger；可选冒险通过精确绑定向同一状态机提供剧情输入，但不是 Ruleset Bundle 的一部分。战斗事件只由战斗 reducer 应用，战役事件只由 campaign reducer 应用；runtime composition root 按显式 `intent_type` 分派，generic engine 不导入 D&D 实现。
 
-专业角色的机械权威是 `ruleset_character`。创建、共享卡库导入/编辑、加入游戏、游戏内资料编辑、升级和休息均经由 `character_lifecycle` capability；legacy 顶层角色字段只是兼容投影。资料编辑不得覆盖属性、HP、AC、成长历史、runtime/content/state 版本等机械字段，机械更新必须从 canonical 选择与历史重新验证或回放。
+高级规则角色的机械权威是 `ruleset_character`。创建、共享卡库导入/编辑、加入游戏、游戏内资料编辑、升级和休息均经由 `character_lifecycle` capability；legacy 顶层角色字段只是兼容投影。资料编辑不得覆盖属性、HP、AC、成长历史、runtime/content/state 版本等机械字段，机械更新必须从 canonical 选择与历史重新验证或回放。
 
 Session 0 的每次修订都会清空旧成员确认，只有全部当前玩家接受后 GM 才能锁定。任务、线索、事实、重要物品和关系先保存为 pending proposal，再由 GM 以独立 Intent 确认或拒绝。章节摘要是已确认事件的确定性投影，并在存档成功后写入长期记忆；记忆投影失败不得回滚或伪装已经持久化的权威状态。
 

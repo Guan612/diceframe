@@ -19,6 +19,8 @@ test('template adventure confirmation identifies the selected world instead of A
   await page.goto('/#/create')
   await expect(page.locator('.create-mode-cards button').first()).toHaveClass(/active/)
   await page.locator('.create-actions .primary').click()
+  await expect(page.locator('.create-game-settings-stage')).toBeVisible()
+  await page.locator('.create-actions .primary').click()
   await expect(page.locator('.create-character-card')).toHaveCount(1)
   await page.locator('.create-actions .primary').click()
 

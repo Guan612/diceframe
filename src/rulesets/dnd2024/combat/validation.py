@@ -40,6 +40,22 @@ class CombatValidationMixin:
         combat = state["combat"]
         gm_uid = str(getattr(instance, "gm_uid", "") or "")
         submitted_by = str(intent.get("submitted_by") or "")
+        if intent_type in {"encounter.ready", "encounter.unready"}:
+            request = state.get("encounter_request")
+            if combat.get("status") == "active":
+                raise CombatIntentError("combat is already active")
+            if not isinstance(request, dict) or request.get("status") != "pending":
+                raise CombatIntentError("there is no pending encounter to prepare for")
+            if submitted_by not in instance.players or submitted_by == gm_uid:
+                raise CombatIntentError("only a non-GM party member can change readiness")
+            ready_ids = {
+                str(item) for item in request.get("ready_player_ids") or [] if str(item)
+            }
+            if intent_type == "encounter.ready" and submitted_by in ready_ids:
+                raise CombatIntentError("the player is already ready")
+            if intent_type == "encounter.unready" and submitted_by not in ready_ids:
+                raise CombatIntentError("the player is not ready")
+            return
         if intent_type == "combat.start":
             if submitted_by != gm_uid:
                 raise CombatIntentError("only the GM can start combat")
@@ -72,6 +88,13 @@ class CombatValidationMixin:
             return
         if combat.get("status") != "active":
             raise CombatIntentError("combat is not active")
+        if intent_type == "combat.message":
+            if submitted_by not in instance.players:
+                raise CombatIntentError("only a party member can send a combat message")
+            text = str(intent.get("text") or "").strip()
+            if not text or len(text) > 500:
+                raise CombatIntentError("combat message must contain 1 to 500 characters")
+            return
         if intent_type == "combat.end":
             if submitted_by != gm_uid:
                 raise CombatIntentError("only the GM can end combat")

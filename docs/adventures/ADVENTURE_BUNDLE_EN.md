@@ -1,6 +1,6 @@
 # Adventure Bundle v1
 
-An Adventure Bundle is an optional, data-only story package. It owns neither rules mechanics nor a Worldbook. When no adventure is selected, professional play starts as standard free play.
+An Adventure Bundle is an optional, data-only story package. It owns neither rules mechanics nor a Worldbook. When no adventure is selected, advanced play starts as standard free play.
 
 ## Layout and identity
 
@@ -27,3 +27,9 @@ Game creation validates format, runtime ID/version, and world policy before savi
 An Adventure Bundle may provide a story graph and referenced scenes, NPCs, map locations, and encounter catalogs. It cannot execute code, mutate character or combat state directly, or change generic d20 behavior. D&D adapts story gates and encounters at an explicit runtime boundary; authoritative mutations still pass through Intents, EventBatches, and reducers.
 
 Narration receives both the current adventure step and the actually selected Worldbook. Completion removes the story gate and returns to standard free play in the same world. Coach hints are local presentation state: they submit no Intent and never enter the shared timeline.
+
+## Management lifecycle
+
+The runtime catalogue is `data/templates/adventures/`. Bundled packages are synchronized from installation templates at startup and remain read-only; editing starts by copying one to a new canonical identity in the `user:` namespace. Custom packages support advanced JSON editing, ZIP import/export, and deletion, with every write fully revalidated in a staging directory.
+
+As soon as any save references an `adventure_id`, that package becomes read-only. Further authoring should create a copy with a new identity or a new version package rather than mutating bound content in place. This preserves deterministic restart against the save's pinned digest.

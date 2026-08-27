@@ -32,6 +32,7 @@ def _new_result() -> dict:
         "info_asymmetry": {},
         "plot_update": {"quests": [], "relations": [], "decisions": []},
         "xp_rewards": {},  # uid -> xp_amount (LLM 可选标签)
+        "milestone_grants": [],  # D&D live advancement entitlement targets
         "growth_skills": [],  # [{uid, skill}] 用于 CoC 技能成长检定
         "scene_image_prompt": "",  # GM 请求为本回合生成场景图（需图像生成插件）
     }

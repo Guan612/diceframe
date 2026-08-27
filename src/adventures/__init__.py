@@ -10,10 +10,13 @@ from .bundle import (
     AdventureBundleLoader,
     LoadedAdventureBundle,
 )
+from .catalog import is_builtin_adventure_directory, sync_adventure_catalog
 
 __all__ = [
     "ADVENTURE_GRAPH_FORMAT",
     "AdventureBundleError",
     "AdventureBundleLoader",
     "LoadedAdventureBundle",
+    "is_builtin_adventure_directory",
+    "sync_adventure_catalog",
 ]

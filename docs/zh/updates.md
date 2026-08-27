@@ -11,7 +11,8 @@
 | Windows 便携版 | 在设置页检查、下载并应用更新 |
 | 解压的源码发布包 | 在设置页应用更新，完成后手动重启 |
 | Git 开发目录 | 收到新版本提示后使用 `git pull` |
-| Docker / NAS | 收到新版本提示后拉取最新镜像 |
+| 支持托管更新的 Docker / NAS | 在设置页下载、应用并自动回滚 |
+| 旧 Docker 镜像或基础运行时升级 | 拉取最新镜像并重新创建容器 |
 
 更新主程序不会删除存档和配置。升级前仍建议备份整个 `data/` 文件夹。
 
@@ -35,6 +36,12 @@
 
 ## Docker 与 NAS
 
+Docker 用户需要先手动拉取一次支持“托管更新”的基线镜像。这个镜像使用稳定 launcher 管理 `data/_updater/docker-versions/` 中的当前和上一应用版本。完成基线迁移后，普通 DiceFrame 应用版本可以在“设置 → 版本更新”中下载和应用；容器 ID 不变，候选版本通过健康检查后才会提交，失败会自动回到上一版本。
+
+Docker Update 清单必须显式声明 `data_rollback_safe: true`，表示该版本写入的持久数据仍可由上一版本读取。缺少声明或涉及不可逆数据迁移的版本会被托管更新器拒绝，必须改走带备份或迁移步骤的基础镜像升级，不能伪装成可自动回滚的普通更新。
+
+Python ABI、系统动态库、CA、字体或 launcher 协议变化仍属于基础运行时升级，需要再次拉取镜像。DiceFrame 不挂载 Docker socket，也不会从容器内控制 Docker daemon。
+
 使用 Docker Compose 部署时运行：
 
 ```bash
@@ -46,6 +53,8 @@ docker compose up -d
 如果提示 `no configuration file provided: not found`，说明当前目录没有 Compose 配置文件。请进入原部署目录后重试；如果最初使用 `docker run` 启动，则应拉取新镜像后按原端口、卷和环境变量重新创建容器，不能直接套用 Compose 更新命令。
 
 NAS 用户可以直接在设备自带的容器管理界面检查更新、拉取最新镜像并重新创建容器。请确认 `data/` 已挂载到宿主机。
+
+用户存档、配置和插件仍位于 `data/`。`data/_updater/docker-versions/` 只是可由镜像 seed 恢复的程序副本，备份时可以排除；不要单独删除 `_updater/current.json`。传统的镜像更新方式始终可用，新镜像会使用与 GitHub Release 完全相同的 Docker 应用更新包作为 seed。
 
 如果你从本地源码构建镜像，请拉取新源码后运行：
 
@@ -61,4 +70,4 @@ docker compose up -d --build
 
 ### 更新失败
 
-不要删除 `data/`。便携版会尽量自动恢复到旧版本；源码版会尝试恢复更新前的程序文件。如果仍无法启动，可以从 GitHub Releases 重新下载对应版本，并保留日志用于排查。
+不要删除 `data/`。便携版和托管 Docker 会尽量自动恢复到旧版本；源码版会尝试恢复更新前的程序文件。如果仍无法启动，可以从 GitHub Releases 重新下载对应版本，并保留日志用于排查。

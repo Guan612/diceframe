@@ -5,7 +5,7 @@ import type { RuleSummary, WorldTemplateSummary } from '../src/api/types'
 const rules: RuleSummary[] = [
   { rule_id: 'freeform_fantasy', rule_name: '经典奇幻自由规则' },
   { rule_id: 'dnd5e', rule_name: 'D&D 5e Lite' },
-  { rule_id: 'dnd2024_srd', rule_name: '5E 2024 SRD 专业规则' },
+  { rule_id: 'dnd2024_srd', rule_name: '5E 2024 SRD 高级规则' },
 ]
 
 describe('recommendedRuleSummaries', () => {

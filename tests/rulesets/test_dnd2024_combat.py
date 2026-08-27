@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 
 from src.engine.game_instance import GameInstance
@@ -106,6 +107,58 @@ def test_catalog_preset_replaces_client_enemy_payload() -> None:
     )
     assert set(started["enemies"]) == {"goblin-warrior-1"}
     assert started["enemies"]["goblin-warrior-1"]["hp"] == 10
+
+
+def test_sandbox_hides_tutorial_presets_but_story_binding_can_use_them() -> None:
+    runtime = Dnd2024Runtime()
+    catalog = runtime.load_bundle("en").get(
+        "encounter_catalog", "srd_training_encounters",
+    )
+    assert catalog is not None
+    training = deepcopy(catalog["presets"][0])
+    training["id"] = "training_only"
+    training["difficulty"] = "tutorial"
+    catalog["presets"].append(training)
+
+    sandbox = Dnd2024CombatEngine(
+        runtime.load_bundle("en"), EncounterAccess.sandbox(), catalog,
+    )
+    assert "training_only" not in {item["id"] for item in sandbox.encounter_presets()}
+
+    story = Dnd2024CombatEngine(
+        runtime.load_bundle("en"),
+        EncounterAccess(
+            mode="story", status="pending", encounter_instance_id="story:test:step",
+            encounter_preset_id="training_only", origin_step_id="step",
+        ),
+        catalog,
+    )
+    assert "training_only" in {item["id"] for item in story.encounter_presets()}
+
+
+def test_available_weapons_use_the_materialized_bundle_locale_name() -> None:
+    runtime = Dnd2024Runtime()
+    instance = GameInstance(
+        game_key=("test", "dnd2024-combat-zh", "bot"),
+        rule_id="dnd2024_srd", gm_uid="gm", language="zh-CN",
+    )
+    choices = runtime.builder_choices(None, {"locale": "zh-CN"})
+    preset = next(item for item in choices["quick_presets"] if item["id"] == "stalwart_guardian")
+    character = runtime.finalize_character(
+        None, {**preset["draft"], "locale": "zh-CN", "name": "守卫"},
+    )
+    instance.players["gm"] = {"character_name": "守卫", "character_sheet": character}
+    assert instance.bind_ruleset_runtime(character["rule_binding"])
+    engine = Dnd2024CombatEngine(runtime.load_bundle("zh-CN"), EncounterAccess.sandbox())
+    _start(engine, instance)
+
+    attack = next(
+        item for item in engine.available_intents(instance, "gm")
+        if item["type"] == "attack"
+    )
+    greatsword = next(item for item in attack["weapons"] if item["weapon_ref"] == "item:greatsword")
+    assert greatsword["name"] == "巨剑"
+    assert greatsword["weapon_ref"] == "item:greatsword"
 
 
 def test_prepared_spell_consumes_slot_and_cannot_trust_client_damage() -> None:
@@ -332,7 +385,8 @@ def test_stable_actor_remains_unconscious_and_skips_death_save() -> None:
     _start(engine, instance)
     actions = engine.available_intents(instance, "gm")
 
-    assert [action["type"] for action in actions] == ["end_turn"]
+    assert "end_turn" in [action["type"] for action in actions]
+    assert "death_save" not in [action["type"] for action in actions]
     assert "unconscious" in canonical["conditions"]
 
 

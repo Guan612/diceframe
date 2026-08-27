@@ -6,8 +6,8 @@
     "name": "SRD Starter Combat Presets",
     "labels": {
       "presets": {
-        "goblin_patrol": {"name": "Goblin Patrol", "description": "One standard enemy that can switch between melee and ranged attacks."},
-        "crypt_pair": {"name": "Crypt Pair", "description": "A skeleton and wolf encounter for practicing target selection."}
+        "goblin_patrol": {"name": "Goblin Patrol", "description": "A goblin warrior able to fight at melee or ranged distance."},
+        "crypt_pair": {"name": "Crypt Defenders", "description": "A skeleton and wolf guarding a dark crypt together."}
       },
       "profiles": {
         "goblin_warrior": "Goblin Warrior",

@@ -11,7 +11,7 @@ from src.rules.rule_system import RuleSystem
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.rulesets.legacy_adapter import LegacyRulesetAdapter
 from src.rulesets.registry import RulesetRuntimeRegistry
-from src.webui.routes.games import register_games
+from src.webui.routes.games import _broadcast_ruleset_change, register_games
 from src.webui.services import ruleset_gameplay
 from src.webui.services._common import _parse_game_key
 
@@ -24,10 +24,33 @@ class _MemoryProbe:
         self.calls.append((game_key, delta, round_number))
 
 
+class _BroadcastProbe:
+    def __init__(self):
+        self.calls: list[tuple[str, dict]] = []
+
+    async def broadcast(self, game_key: str, payload: dict) -> None:
+        self.calls.append((game_key, payload))
+
+
+@pytest.mark.asyncio
+async def test_authoritative_ruleset_change_wakes_all_connected_clients() -> None:
+    pool = _BroadcastProbe()
+    request = SimpleNamespace(app={"connection_pool": pool})
+
+    await _broadcast_ruleset_change(request, "web|combat|bot", {
+        "ok": True, "gameplay": {"state_version": 9},
+    })
+
+    assert pool.calls == [("web|combat|bot", {
+        "type": "ruleset_state_changed", "state_version": 9,
+    })]
+
+
 class _M6Api:
     def __init__(self, registry: GameRegistry, runtime: Dnd2024Runtime, memory: _MemoryProbe):
         self._reg = registry
         self._mem = memory
+        self._adventure_loader = runtime._adventure_loader
         self._ruleset_registry = RulesetRuntimeRegistry([LegacyRulesetAdapter(), runtime])
         self._rule = RuleSystem({
             "rule_id": "dnd2024_srd",

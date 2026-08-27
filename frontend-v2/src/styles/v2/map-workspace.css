@@ -466,21 +466,21 @@
 
 .map-background-picker {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 10px;
-}
-
-.map-background-picker label {
-  display: grid;
-  min-width: 0;
   gap: 6px;
 }
 
-.map-background-picker label > span {
+.map-background-picker > label {
   color: var(--df-text-secondary);
   font-size: 12px;
   font-weight: 700;
+}
+
+.map-background-control-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
 }
 
 .map-background-picker select {
@@ -494,7 +494,7 @@
   line-height: 1.45;
 }
 
-.map-background-picker > button {
+.map-background-control-row > button {
   white-space: nowrap;
 }
 
@@ -581,14 +581,6 @@
 }
 
 @media (max-width: 520px) {
-  .map-background-picker {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .map-background-picker > button {
-    width: 100%;
-  }
-
   .map-workspace-main {
     grid-template-rows: minmax(240px, 55%) minmax(0, 45%);
   }

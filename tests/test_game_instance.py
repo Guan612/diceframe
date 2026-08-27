@@ -41,6 +41,20 @@ def test_versioned_ruleset_state_is_optional_and_round_trips() -> None:
     })
 
 
+def test_narrative_perspective_round_trips_and_old_saves_default_to_auto() -> None:
+    instance = GameInstance(game_key=("web", "perspective", "bot"))
+    instance.set_narrative_perspective("third_person")
+
+    restored = GameInstance.from_dict(instance.to_dict())
+    legacy_data = instance.to_dict()
+    legacy_data.pop("narrative_perspective")
+
+    assert restored.narrative_perspective == "third_person"
+    assert GameInstance.from_dict(legacy_data).narrative_perspective == "auto"
+    with pytest.raises(ValueError, match="叙事视角"):
+        instance.set_narrative_perspective("角色名")
+
+
 @pytest.mark.asyncio
 async def test_reset_preserves_exact_ruleset_and_adventure_bindings() -> None:
     instance = GameInstance(

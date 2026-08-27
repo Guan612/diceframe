@@ -112,6 +112,8 @@ http://localhost:9876
 
 Runtime data is stored in `data/`.
 
+After upgrading once to a baseline image with managed updates, ordinary application releases can be applied from **Settings → Version Update** with health-checked rollback. Python or system-runtime changes still require pulling a new image. DiceFrame does not mount or control the Docker socket.
+
 The `latest` image always tracks stable releases. Preview images are published under their explicit version tags and never replace `latest`. To try one, copy the full preview version from GitHub Releases, for example:
 
 ```bash

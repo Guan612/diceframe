@@ -12,6 +12,7 @@ from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
 from src.engine.puzzle import PuzzleState
 from src.rulesets.contracts import NarrativeCombatSignalRuntime
+from src.rulesets.dnd2024.advancement_access import apply_ai_rewards
 
 logger = logging.getLogger("trpg")
 
@@ -48,7 +49,10 @@ def apply_combat_command(instance: GameInstance, data: dict) -> None:
 
 
 def apply_ruleset_combat_signal(
-    instance: GameInstance, data: dict, runtime: Any | None,
+    instance: GameInstance,
+    data: dict,
+    runtime: Any | None,
+    proposal: dict[str, Any] | None = None,
 ) -> bool:
     """Let an authoritative runtime turn a GM combat marker into a tool request."""
 
@@ -57,7 +61,7 @@ def apply_ruleset_combat_signal(
         runtime, NarrativeCombatSignalRuntime,
     ):
         return False
-    return bool(runtime.apply_narrative_combat_signal(instance, signal))
+    return bool(runtime.apply_narrative_combat_signal(instance, signal, proposal))
 
 
 def apply_revive_commands(instance: GameInstance, data: dict) -> None:
@@ -82,6 +86,12 @@ def apply_revive_commands(instance: GameInstance, data: dict) -> None:
 
 
 def apply_growth_rewards(instance: GameInstance, data: dict, response: Any, rule: Any, progression: Any) -> None:
+    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
+    if runtime_id == "core:dnd2024":
+        messages = apply_ai_rewards(instance, data)
+        if messages:
+            response.narration = f"{response.narration or ''}\n\n" + "\n".join(messages)
+        return
     growth_system = rule.growth_system if rule else "xp_level"
     if growth_system == "skill_improvement":
         progression.skill_growth_checks(instance, data.get("growth_skills", []))

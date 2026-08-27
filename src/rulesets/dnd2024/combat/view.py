@@ -113,7 +113,13 @@ class CombatViewMixin:
             weapon_id = str(ref).removeprefix("item:")
             weapon = self.catalog.weapons.get(weapon_id)
             if weapon:
-                result.append({"weapon_ref": ref, "id": weapon_id, **deepcopy(weapon)})
+                item = self.bundle.get("item", weapon_id) or {}
+                result.append({
+                    "weapon_ref": ref,
+                    "id": weapon_id,
+                    **deepcopy(weapon),
+                    "name": str(item.get("name") or weapon.get("name") or weapon_id),
+                })
         return result
 
     def _available_spells(

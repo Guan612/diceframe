@@ -536,6 +536,7 @@ async function choosePreset(preset: RulesetQuickCharacterPreset): Promise<void> 
 function friendlyErrors(messages: string[]): string {
   const translations: Array<[string, string]> = [
     ['character name is required', '请先给角色起一个名字。'],
+    ['character creation currently supports level 1', '高级建卡器用于创建 1 级角色；已有高等级角色不需要重新建卡，请直接关闭并使用该角色，后续等级通过“职业升级”处理。'],
     ['class requires exactly', '职业技能的选择数量还不正确。'],
     ['choose exactly three different languages', '请选择通用语和另外两种不同的标准语言。'],
     ['all characters must know Common', '所有角色都需要掌握通用语。'],

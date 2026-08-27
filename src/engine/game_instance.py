@@ -227,6 +227,9 @@ class GameInstance:
     # 难度
     difficulty: str = "标准"  # 轻松 / 标准 / 硬核
 
+    # 叙事视角（展示偏好，不参与规则判定）
+    narrative_perspective: str = "auto"  # auto / immersive / third_person
+
     # 叙事语言
     language: str = DEFAULT_LANGUAGE  # "zh-CN" / "en"
 
@@ -335,6 +338,7 @@ class GameInstance:
         room_password: str | None = None,
         gm_uid: str | None = None,
         luck_timeout_seconds: int | None = None,
+        narrative_perspective: str | None = None,
     ) -> None:
         """集中更新入口与房间身份配置，保留旧存档字段。
 
@@ -352,6 +356,8 @@ class GameInstance:
             if not 0 <= int(luck_timeout_seconds) <= 3600:
                 raise ValueError("幸运超时需在 0..3600 秒之间（0=禁用）")
             self.luck_timeout_seconds = int(luck_timeout_seconds)
+        if narrative_perspective is not None:
+            self.set_narrative_perspective(narrative_perspective)
 
     def bind_ruleset_runtime(self, binding: dict[str, Any]) -> bool:
         """Bind versioned ruleset state once; reject mixed-runtime characters."""
@@ -432,6 +438,12 @@ class GameInstance:
         self.solo_mode = bool(solo_mode)
         if self.solo_mode and self.action_queue and self.state == GameState.ACTIVE_ACTION:
             self.ready_players.update(self.alive_players)
+
+    def set_narrative_perspective(self, perspective: str) -> None:
+        normalized = str(perspective or "auto").strip().casefold()
+        if normalized not in {"auto", "immersive", "third_person"}:
+            raise ValueError("叙事视角必须是 auto、immersive 或 third_person")
+        self.narrative_perspective = normalized
 
     def append_log_entry(self, entry: RoundLogEntry) -> None:
         self.log.append(entry)
@@ -1037,6 +1049,7 @@ class GameInstance:
             saved_world_name = self.world_name
             saved_group_name = self.group_name
             saved_solo = self.solo_mode
+            saved_narrative_perspective = self.narrative_perspective
             saved_language = normalize_language(self.language)
             saved_ruleset_runtime = copy.deepcopy(self.ruleset_runtime)
             saved_adventure_binding = copy.deepcopy(self.adventure_binding)
@@ -1089,6 +1102,7 @@ class GameInstance:
             self.world_name = saved_world_name
             self.group_name = saved_group_name
             self.solo_mode = saved_solo
+            self.narrative_perspective = saved_narrative_perspective
             self.language = saved_language
             self.seed_code = saved_seed
             logger.info("游戏已重置 (seed=%s) - game_key=%s", self.seed_code, self.game_key)
@@ -1141,6 +1155,7 @@ class GameInstance:
             "solo_mode": self.solo_mode,
             "seed_code": self.seed_code,
             "difficulty": self.difficulty,
+            "narrative_perspective": self.narrative_perspective,
             "language": normalize_language(self.language),
             "luck_timeout_seconds": self.luck_timeout_seconds,
             "entry_point": self.entry_point,
@@ -1305,6 +1320,7 @@ class GameInstance:
             solo_mode=data.get("solo_mode", False),
             seed_code=data.get("seed_code", ""),
             difficulty=data.get("difficulty", "标准"),
+            narrative_perspective=data.get("narrative_perspective", "auto"),
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
             luck_timeout_seconds=int(data.get("luck_timeout_seconds", 60) or 0),
             entry_point=data.get("entry_point", "web"),

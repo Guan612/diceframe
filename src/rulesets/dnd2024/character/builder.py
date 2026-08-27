@@ -31,7 +31,7 @@ class Dnd2024CharacterBuilder(CharacterValidationMixin, CharacterDerivationMixin
 
         def present(entity: dict[str, Any], kind: str) -> dict[str, Any]:
             entity_id = str(entity["id"])
-            return {
+            result = {
                 "ref": f"{kind}:{entity_id}",
                 "id": entity_id,
                 "name": entity.get("name", entity_id),
@@ -39,6 +39,41 @@ class Dnd2024CharacterBuilder(CharacterValidationMixin, CharacterDerivationMixin
                 "automation_level": entity["automation_level"],
                 "source_ref": entity["source_ref"],
             }
+            if kind == "equipment_package":
+                grants = entity.get("item_grants") or []
+                details: list[dict[str, Any]] = []
+                for grant in grants:
+                    if not isinstance(grant, dict):
+                        continue
+                    item_ref = str(grant.get("item_ref") or "")
+                    item_id = item_ref.split(":", 1)[-1]
+                    item = self.bundle.get("item", item_id) or {}
+                    quantity = int(grant.get("quantity", 1) or 1)
+                    details.append({
+                        "ref": item_ref,
+                        "name": item.get("name", item_id),
+                        "quantity": quantity,
+                    })
+                result["items"] = details
+                coins = int(entity.get("coins_gp", 0) or 0)
+                if details or coins:
+                    result["summary"] = (
+                        f"{len(details)} 项装备"
+                        + (f" · {coins} GP" if coins else "")
+                    )
+                    if details:
+                        names = [str(item["name"]) for item in details[:2]]
+                        suffix = (
+                            f" 等 {len(details)} 项" if self.bundle.locale.startswith("zh")
+                            else f" + {len(details) - 2} more"
+                        ) if len(details) > 2 else ""
+                        result["name"] = " · ".join(names) + suffix
+                    elif coins:
+                        result["name"] = (
+                            f"{coins} GP 购买" if self.bundle.locale.startswith("zh")
+                            else f"Purchase with {coins} GP"
+                        )
+            return result
 
         class_ref = str(draft.get("class_ref") or "")
         class_entity = self.bundle.get("class", _ref_id(class_ref, "class"))

@@ -68,8 +68,25 @@ class Dnd2024CombatEngine(
         version = int(state["version"])
         gm_uid = str(getattr(instance, "gm_uid", "") or "")
         if combat.get("status") != "active":
+            actions: list[dict[str, Any]] = []
+            request = state.get("encounter_request")
+            if (
+                isinstance(request, dict)
+                and request.get("status") == "pending"
+                and actor_id in instance.players
+                and actor_id != gm_uid
+            ):
+                ready_ids = {
+                    str(item) for item in request.get("ready_player_ids") or [] if str(item)
+                }
+                ready = actor_id in ready_ids
+                actions.append({
+                    "type": "encounter.unready" if ready else "encounter.ready",
+                    "label": "Cancel ready" if ready else "Ready",
+                    "expected_version": version,
+                })
             if actor_id != gm_uid or not self.encounter_access.can_start:
-                return []
+                return actions
             guided_preset_id = (
                 self.encounter_access.encounter_preset_id
                 if self.encounter_access.mode == "story"
@@ -82,30 +99,35 @@ class Dnd2024CombatEngine(
             if guided_preset_id:
                 action["encounter_preset_id"] = guided_preset_id
                 action["encounter_instance_id"] = self.encounter_access.encounter_instance_id
-            return [action]
+            actions.append(action)
+            return actions
+        communication = [{
+            "type": "combat.message", "label": "Combat message",
+            "expected_version": version,
+        }] if actor_id in instance.players else []
         current = self._current_actor(combat)
         if current.startswith("enemy:"):
-            return []
+            return communication
         requested = _player_actor(actor_id)
         if requested != current:
-            return []
+            return communication
         pending = [
             item for item in combat.get("pending_decisions", [])
             if item.get("assigned_to") == actor_id
         ]
         if pending:
-            return [{
+            return [*communication, {
                 "type": "decision.resolve", "label": "Resolve reaction",
                 "expected_version": version, "decisions": deepcopy(pending),
             }]
         actor = self._actor_view(instance, combat, current)
         if actor["hp"] <= 0 and actor["kind"] == "player":
             if "stable" in actor["conditions"]:
-                return [{
+                return [*communication, {
                     "type": "end_turn", "label": "End turn",
                     "expected_version": version, "actor_id": current,
                 }]
-            return [{
+            return [*communication, {
                 "type": "death_save", "label": "Death saving throw",
                 "expected_version": version, "actor_id": current,
             }]
@@ -156,7 +178,7 @@ class Dnd2024CombatEngine(
             actions.append({
                 "type": "combat.end", "label": "End combat", "expected_version": version,
             })
-        return actions
+        return [*communication, *actions]
 
     def next_automatic_intent(self, instance: Any) -> dict[str, Any] | None:
         """Choose one bounded server-owned enemy operation.
@@ -301,7 +323,13 @@ class Dnd2024CombatEngine(
             "submitted_by": str(intent.get("submitted_by") or ""),
         }]
         pending: dict[str, Any] | None = None
-        if intent_type == "combat.start":
+        if intent_type in {"encounter.ready", "encounter.unready"}:
+            events.append({
+                "type": "dnd2024.encounter.readiness.changed",
+                "player_id": str(intent.get("submitted_by") or ""),
+                "ready": intent_type == "encounter.ready",
+            })
+        elif intent_type == "combat.start":
             # The catalog is authoritative.  The client may select a preset, but
             # it must never be able to alter the enemy stat block in the event.
             resolved_intent = deepcopy(intent)
@@ -320,6 +348,12 @@ class Dnd2024CombatEngine(
             events.append(self._start_combat_event(instance, resolved_intent, rng))
         elif intent_type == "combat.end":
             events.append({"type": "dnd2024.combat.ended", "reason": "gm"})
+        elif intent_type == "combat.message":
+            events.append({
+                "type": "dnd2024.combat.message",
+                "actor_id": _player_actor(str(intent.get("submitted_by") or "")),
+                "text": str(intent.get("text") or "").strip(),
+            })
         elif intent_type == "attack":
             events.extend(self._attack_events(instance, combat, intent, rng))
         elif intent_type == "cast_spell":
@@ -459,6 +493,11 @@ class Dnd2024CombatEngine(
             if not isinstance(raw, dict):
                 continue
             preset = deepcopy(raw)
+            if (
+                self.encounter_access.mode == "sandbox"
+                and str(preset.get("difficulty") or "") == "tutorial"
+            ):
+                continue
             preset_id = str(preset.get("id") or "")
             text = preset_labels.get(preset_id, {})
             text = text if isinstance(text, dict) else {}

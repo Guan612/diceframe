@@ -185,6 +185,9 @@ function professionalLevel(card: CharacterSheet): number {
   const build = canonical?.build as JsonObject | undefined
   return Number(build?.level || card.level || 1)
 }
+function liveAdvancementRow(userId: string) {
+  return data.value?.advancement?.players.find(row => row.user_id === userId)
+}
 function currentRuleBinding(): Pick<CharacterCard, 'rule_id' | 'rule_name' | 'rule_version' | 'mechanics' | 'language'> {
   const rule = rules.value.find(candidate => candidate.rule_id === ruleId.value)
   return {
@@ -691,11 +694,16 @@ async function onWizardSubmit(c: CharacterSheet) {
             <p v-if="levelUpPoints(p) > 0" class="warn character-level-notice">
               {{ t('pointsToAllocate', { points: levelUpPoints(p) }) }}
             </p>
+            <p v-if="isProfessionalGame() && liveAdvancementRow(p.user_id)" class="muted character-level-notice">
+              <template v-if="liveAdvancementRow(p.user_id)?.entitled">{{ t('advancementGranted', { level: liveAdvancementRow(p.user_id)?.target_level || 0 }) }}</template>
+              <template v-else-if="data?.advancement?.mode === 'xp'">XP {{ liveAdvancementRow(p.user_id)?.xp || 0 }} / {{ liveAdvancementRow(p.user_id)?.next_level_xp || 0 }}</template>
+              <template v-else>{{ t('advancementWaiting') }}</template>
+            </p>
           </div>
         </div>
         <div class="actions current-character-actions">
-          <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('en') ? 'Character center' : '专业角色中心') : t('edit') }}</button>
-          <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('en') ? 'Class advancement' : '职业升级' }}</button>
+          <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('en') ? 'Character center' : '高级角色中心') : t('edit') }}</button>
+          <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20 && liveAdvancementRow(p.user_id)?.entitled" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('en') ? 'Class advancement' : '职业升级' }}</button>
           <button v-if="!isProfessionalGame() && levelUpPoints(p) > 0" class="primary" @click="openLevelUp(p)">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints(p) }) }}</button>
           <button @click="saveToCard(p)">{{ t('saveToSharedLibrary') }}</button>
           <button class="danger" @click="deleteCharacter(p)">{{ t('remove') }}</button>
@@ -770,7 +778,7 @@ async function onWizardSubmit(c: CharacterSheet) {
         </div>
         <div class="actions">
           <button v-if="isProfessionalCard(c) && professionalLevel(c) < 20" class="success" @click="advancementCard = c">{{ String(locale).startsWith('en') ? 'Level up' : '职业升级' }}</button>
-          <button @click="openCardEditor(c)">{{ isProfessionalCard(c) ? (String(locale).startsWith('en') ? 'Character center' : '专业角色中心') : t('editCard') }}</button>
+          <button @click="openCardEditor(c)">{{ isProfessionalCard(c) ? (String(locale).startsWith('en') ? 'Character center' : '高级角色中心') : t('editCard') }}</button>
           <button @click="exportSingleCard(c)">{{ t('export') }}</button>
           <button class="danger" @click="deleteCard(c)">{{ t('delete') }}</button>
         </div>
@@ -861,7 +869,7 @@ async function onWizardSubmit(c: CharacterSheet) {
       />
     </Modal>
 
-    <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('en') ? 'Professional character center' : '专业角色中心'" @close="professionalEdit = null">
+    <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('en') ? 'Advanced character center' : '高级角色中心'" @close="professionalEdit = null">
       <ProfessionalCharacterCenter
         :character="professionalEdit.character"
         :target="professionalEdit.target"

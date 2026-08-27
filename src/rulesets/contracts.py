@@ -127,8 +127,42 @@ class NarrativeCombatSignalRuntime(Protocol):
     """Optional bridge from a resolved narrative turn to structured combat UI."""
 
     def apply_narrative_combat_signal(
-        self, instance: Any, signal: str,
+        self, instance: Any, signal: str, proposal: dict[str, Any] | None = None,
     ) -> bool: ...
+
+
+@runtime_checkable
+class NarrativeCheckPolicyRuntime(Protocol):
+    """Optional policy for actions whose checks belong to a structured runtime."""
+
+    def deferred_narrative_check_action_ids(self, instance: Any) -> list[str]: ...
+
+
+@runtime_checkable
+class NarrativeDirectorRuntime(Protocol):
+    """Optional read-only director projection for a ruleset runtime."""
+
+    def director_proposal(
+        self, instance: Any, campaign: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class NarrativeDirectorAutomationRuntime(Protocol):
+    """Optional conversion from a Director proposal to an authoritative intent."""
+
+    def director_automatic_intent(
+        self, instance: Any, proposal: dict[str, Any],
+    ) -> dict[str, Any] | list[dict[str, Any]] | None: ...
+
+
+@runtime_checkable
+class NarrativeDirectorPlanningRuntime(Protocol):
+    """Optional semantic planning step owned by a ruleset runtime."""
+
+    async def plan_director_turn(
+        self, instance: Any, llm_client: Any,
+    ) -> dict[str, Any] | None: ...
 
 
 @runtime_checkable

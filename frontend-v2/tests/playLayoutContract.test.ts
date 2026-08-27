@@ -9,12 +9,16 @@ function source(relativePath: string): string {
 const playViewSource = source('../src/features/play/PlayView.vue')
 const gameSidebarSource = source('../src/components/GameSidebar.vue')
 const actionComposerSource = source('../src/components/ActionComposer.vue')
+const multiplayerSource = source('../src/components/play/MultiplayerPanel.vue')
 const mainSource = source('../src/main.ts')
+const globalCss = source('../src/styles.css')
 const layoutCss = source('../src/styles/v2/layout.css')
 const lightCss = source('../src/styles/v2/light.css')
 const rulesetWorkspaceCss = source('../src/styles/v2/ruleset-workspace.css')
 const campaignSource = source('../src/features/rulesets/dnd2024/campaign/Dnd2024CampaignPanel.vue')
 const combatSource = source('../src/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue')
+const overviewSource = source('../src/features/overview/OverviewView.vue')
+const overviewCss = source('../src/styles/v2/overview.css')
 
 describe('shared host and player play layout', () => {
   it('anchors mobile play internals to PlayView instead of the owner app shell', () => {
@@ -60,22 +64,21 @@ describe('shared host and player play layout', () => {
     expect(playViewSource.match(/<GameTimeline/g)).toHaveLength(1)
     expect(playViewSource.match(/<ActionComposer/g)).toHaveLength(1)
     expect(playViewSource).toContain('dialog-class="dnd-toolbox-dialog"')
-    expect(playViewSource).toContain('<template #after-perception>')
     expect(playViewSource).toContain("menu: 'DND5E工具'")
     expect(playViewSource).not.toContain('play-tools-menu')
-    const dndToolsStart = playViewSource.indexOf('class="panel sidebar-disclosure dnd5e-sidebar-tools"')
-    const dndTools = playViewSource.slice(dndToolsStart, playViewSource.indexOf('</details>', dndToolsStart))
-    expect(dndTools).toContain('rulesetToolCopy.campaign')
-    expect(dndTools).toContain('rulesetToolCopy.combat')
-    expect(dndTools).not.toContain("t('characters')")
-    expect(dndTools).not.toContain("t('mapTitle')")
-    expect(dndTools).not.toContain("t('sceneGallery')")
-    expect(dndTools).not.toContain("t('rule')")
-    expect(gameSidebarSource.indexOf('<slot name="after-perception" />')).toBeGreaterThan(gameSidebarSource.indexOf("t('characterPerception')"))
-    expect(gameSidebarSource.indexOf('<slot name="after-perception" />')).toBeLessThan(gameSidebarSource.indexOf("t('statusInfo')"))
+    expect(playViewSource).toContain('<template #tools>')
+    expect(playViewSource).toContain('class="ruleset-context-tools"')
+    expect(actionComposerSource).toContain('<slot name="tools" />')
+    expect(playViewSource).not.toContain('dnd5e-sidebar-tools')
+    expect(gameSidebarSource).toContain('<slot name="after-perception" />')
     expect(playViewSource).toContain("@click=\"openRulesetTool('campaign')\"")
     expect(playViewSource).toContain("@click=\"openRulesetTool('combat')\"")
     expect(playViewSource).toContain("activeRulesetTool.value = 'combat'")
+    expect(playViewSource).toContain('<DirectorProposalCard')
+    expect(playViewSource).not.toContain('<CombatLiveBar')
+    expect(playViewSource).toContain('<CombatMessageComposer')
+    expect(playViewSource).toContain('game.rulesetStateSignal.value')
+    expect(playViewSource).toContain('response.gameplay.director?.proposal')
     expect(playViewSource).toContain("step?.requires === 'combat_ended'")
     expect(playViewSource).toContain("response.gameplay.encounter_request?.status === 'pending'")
     expect(playViewSource).not.toContain('Dnd2024PlayWorkspace')
@@ -84,6 +87,15 @@ describe('shared host and player play layout', () => {
     expect(actionComposerSource).not.toContain('professional-mode-switch')
     expect(rulesetWorkspaceCss).toContain('.dialog.dnd-toolbox-dialog')
     expect(rulesetWorkspaceCss).toContain('.dnd-toolbox-tabs')
+    expect(rulesetWorkspaceCss).toMatch(/@media \(max-width: 800px\)[\s\S]*?\.ruleset-context-tools\s*\{[\s\S]*?position: fixed;/)
+    expect(rulesetWorkspaceCss).toMatch(/@media \(max-width: 800px\)[\s\S]*?\.ruleset-context-tools \.combat-tool-trigger\s*\{\s*display: none;/)
+    expect(rulesetWorkspaceCss).not.toMatch(/\.ruleset-context-tools \.campaign-tool-trigger\s*\{\s*display: none;/)
+  })
+
+  it('keeps player actions in two equal columns with away beside kick', () => {
+    expect(multiplayerSource.indexOf("t('away')")).toBeLessThan(multiplayerSource.indexOf("t('kick')"))
+    expect(globalCss).toMatch(/\.player-actions\{[^}]*display:grid;[^}]*grid-template-columns:repeat\(2,minmax\(0,1fr\)\);/)
+    expect(globalCss).toMatch(/\.player-actions button\{[^}]*width:100%;[^}]*min-width:0;/)
   })
 
   it('keeps professional controls touch-sized and honors reduced motion and light mode', () => {
@@ -94,5 +106,21 @@ describe('shared host and player play layout', () => {
       expect(componentSource).not.toContain(':global(body.light) ')
       expect(componentSource).toContain(':focus-visible')
     }
+  })
+
+  it('keeps overview save titles on one line while preserving the full title on hover', () => {
+    expect(overviewSource).toContain(':title="g.world_name || g.game_key"')
+    expect(overviewCss).toMatch(/\.game-card-body h2\s*\{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?white-space:\s*nowrap;/)
+    const titleRule = overviewCss.match(/\.game-card-body h2\s*\{([\s\S]*?)\n\}/)?.[1] || ''
+    expect(titleRule).not.toContain('-webkit-line-clamp')
+  })
+
+  it('keeps combat grid rows and the initiative strip from collapsing inside the toolbox', () => {
+    expect(combatSource).toMatch(/\.dnd-combat\s*\{[^}]*grid-auto-rows:\s*max-content;/)
+    expect(combatSource).toMatch(/\.dnd-combat\s*\{[^}]*align-content:\s*start;/)
+    expect(combatSource).toMatch(/\.initiative\s*\{[^}]*min-height:\s*34px;/)
+    expect(combatSource).toMatch(/\.initiative\s*\{[^}]*overflow-y:\s*hidden;/)
+    expect(combatSource).toContain("import CombatLiveBar from '@/components/play/CombatLiveBar.vue'")
+    expect(combatSource).toContain('<CombatLiveBar')
   })
 })

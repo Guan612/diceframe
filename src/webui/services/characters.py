@@ -268,6 +268,10 @@ def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
               "rule_meta": _get_rule_meta_for_game(api, inst)}
     if rule is not None:
         result["ruleset_runtime"] = api._ruleset_registry.describe(rule.template).to_dict()
+        if str(result["ruleset_runtime"].get("id") or "") == "core:dnd2024":
+            from src.rulesets.dnd2024.advancement_access import view as advancement_view
+
+            result["advancement"] = advancement_view(inst)
     return result
 
 

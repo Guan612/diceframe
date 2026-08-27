@@ -1,4 +1,4 @@
-import { flushPromises, shallowMount } from '@vue/test-utils'
+import { flushPromises, shallowMount, type VueWrapper } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -104,6 +104,13 @@ function installApiMock() {
   })
 }
 
+async function advanceToCharacters(wrapper: VueWrapper) {
+  await wrapper.get('.create-actions .primary').trigger('click')
+  await wrapper.vm.$nextTick()
+  await wrapper.get('.create-actions .primary').trigger('click')
+  await wrapper.vm.$nextTick()
+}
+
 describe('ruleset experience host integration', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -115,11 +122,99 @@ describe('ruleset experience host integration', () => {
     installApiMock()
   })
 
-  it('uses the professional host from runtime capability in CreateView', async () => {
+  it('separates game settings from content selection before character setup', async () => {
+    const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+
+    expect(wrapper.findAll('.create-step-nav-item')).toHaveLength(4)
+    expect(wrapper.find('.create-content-stage').exists()).toBe(true)
+    expect(wrapper.find('.create-game-settings-stage').exists()).toBe(false)
+
+    await wrapper.get('.create-actions .primary').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const settingsStage = wrapper.get('.create-game-settings-stage')
+    expect(settingsStage.text()).toContain('gameMode')
+    expect(settingsStage.text()).toContain('narrativePerspective')
+    expect(settingsStage.findAll('.narrative-perspective-cards button')).toHaveLength(2)
+    expect(settingsStage.text()).toContain('difficulty')
+    expect(settingsStage.text()).toContain('roomPassword')
+    expect(wrapper.findComponent({ name: 'AdventureSceneImagePicker' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'MapBackgroundPicker' }).exists()).toBe(true)
+    expect(wrapper.find('.create-character-stage').exists()).toBe(false)
+
+    await wrapper.get('.create-actions .primary').trigger('click')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.create-character-stage').exists()).toBe(true)
+
+    const previous = wrapper.findAll('.create-actions button').find(button => button.text() === 'previous')
+    expect(previous).toBeDefined()
+    await previous!.trigger('click')
+    expect(wrapper.find('.create-game-settings-stage').exists()).toBe(true)
+  })
+
+  it('offers narrative perspective for a legacy ruleset without showing D&D advancement', async () => {
+    mocks.professional = false
     const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
     await flushPromises()
 
     await wrapper.get('.create-actions .primary').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const settingsStage = wrapper.get('.create-game-settings-stage')
+    expect(settingsStage.text()).toContain('narrativePerspective')
+    expect(settingsStage.findAll('.narrative-perspective-cards button')).toHaveLength(2)
+    expect(settingsStage.text()).not.toContain('advancementMode')
+    expect(settingsStage.text()).not.toContain('advancementPolicy')
+  })
+
+  it('only shows settings supported by seed recreation', async () => {
+    const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+
+    await wrapper.get('input[placeholder="seedPlaceholder"]').setValue('seed-reference')
+    await wrapper.get('.create-actions .primary').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const settingsStage = wrapper.get('.create-game-settings-stage')
+    expect(settingsStage.text()).toContain('gameMode')
+    expect(settingsStage.text()).toContain('narrativePerspective')
+    expect(settingsStage.findAll('.narrative-perspective-cards button')).toHaveLength(2)
+    expect(settingsStage.text()).not.toContain('difficulty')
+    expect(settingsStage.text()).not.toContain('roomPassword')
+    expect(wrapper.findComponent({ name: 'AdventureSceneImagePicker' }).exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'MapBackgroundPicker' }).exists()).toBe(false)
+  })
+
+  it('submits narrative perspective when recreating from a seed', async () => {
+    const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+
+    await wrapper.get('input[placeholder="seedPlaceholder"]').setValue('seed-reference')
+    await wrapper.get('.create-actions .primary').trigger('click')
+    await wrapper.get('.narrative-perspective-cards button:nth-child(2)').trigger('click')
+    await wrapper.get('.create-actions .primary').trigger('click')
+    await wrapper.get('.create-character-actions .primary').trigger('click')
+    wrapper.findComponent({ name: 'RulesetExperienceHost' }).vm.$emit('submit', {
+      character_name: '重开角色',
+      rule_id: 'test-rule',
+      ruleset_character: { rule_binding: { runtime_id: 'core:dnd2024' } },
+    })
+    await wrapper.vm.$nextTick()
+    await wrapper.get('.create-actions .primary').trigger('click')
+    await wrapper.get('.create-actions .primary').trigger('click')
+    await flushPromises()
+
+    const createCall = mocks.api.mock.calls.find(call => call[0] === '/games/create-from-seed')
+    const body = JSON.parse(String(createCall?.[1]?.body || '{}'))
+    expect(body.narrative_perspective).toBe('third_person')
+  })
+
+  it('uses the professional host from runtime capability in CreateView', async () => {
+    const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+
+    await advanceToCharacters(wrapper)
     await wrapper.get('.create-character-actions .primary').trigger('click')
     await flushPromises()
 
@@ -131,7 +226,7 @@ describe('ruleset experience host integration', () => {
     const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
     await flushPromises()
 
-    await wrapper.get('.create-actions .primary').trigger('click')
+    await advanceToCharacters(wrapper)
     await wrapper.get('.create-character-actions .primary').trigger('click')
     const host = wrapper.findComponent({ name: 'RulesetExperienceHost' })
     host.vm.$emit('submit', {
@@ -163,7 +258,7 @@ describe('ruleset experience host integration', () => {
     const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
     await flushPromises()
 
-    await wrapper.get('.create-actions .primary').trigger('click')
+    await advanceToCharacters(wrapper)
     await wrapper.findAll('.create-character-actions button')[1].trigger('click')
     wrapper.findComponent({ name: 'CharacterCardPicker' }).vm.$emit('pick', mocks.cards[0])
     await wrapper.vm.$nextTick()
@@ -175,6 +270,7 @@ describe('ruleset experience host integration', () => {
 
     const createCall = mocks.api.mock.calls.find(call => call[0] === '/games/create')
     const body = JSON.parse(String(createCall?.[1]?.body || '{}'))
+    expect(body.narrative_perspective).toBe('immersive')
     expect(body.players[0].ruleset_character.rule_binding).toEqual({
       rule_id: 'test-rule', runtime_id: 'core:dnd2024',
     })
@@ -191,7 +287,7 @@ describe('ruleset experience host integration', () => {
     const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
     await flushPromises()
 
-    await wrapper.get('.create-actions .primary').trigger('click')
+    await advanceToCharacters(wrapper)
     await wrapper.findAll('.create-character-actions button')[1].trigger('click')
     wrapper.findComponent({ name: 'CharacterCardPicker' }).vm.$emit('pick', mocks.cards[0])
     await wrapper.vm.$nextTick()
@@ -207,7 +303,7 @@ describe('ruleset experience host integration', () => {
     const wrapper = shallowMount(CreateView, { global: { plugins: [createPinia()] } })
     await flushPromises()
 
-    await wrapper.get('.create-actions .primary').trigger('click')
+    await advanceToCharacters(wrapper)
     await wrapper.get('.create-character-actions .primary').trigger('click')
 
     expect(wrapper.findComponent({ name: 'CharacterWizard' }).exists()).toBe(true)

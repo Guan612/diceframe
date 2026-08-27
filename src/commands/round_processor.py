@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import time
 import uuid
 from collections.abc import Callable
@@ -50,7 +51,13 @@ from src.imagegen import (
     game_image_owner_id,
 )
 from src.memory.summarizer import needs_summary, summarize
-from src.rulesets.contracts import NarrativeStatePolicyRuntime
+from src.rulesets.contracts import (
+    NarrativeCheckPolicyRuntime,
+    NarrativeDirectorPlanningRuntime,
+    NarrativeDirectorRuntime,
+    NarrativeStatePolicyRuntime,
+)
+from src.rulesets.automation import apply_director_automation, summarize_automation_batches
 
 logger = logging.getLogger("trpg")
 
@@ -146,6 +153,30 @@ class RoundProcessor:
     def set_image_generation_service(self, service) -> None:
         self._image_generation = service
 
+    def _ruleset_runtime(self, instance: GameInstance) -> Any | None:
+        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+        runtime_id = str(binding.get("id") or "")
+        ruleset_registry = getattr(self._prompt, "ruleset_registry", None)
+        if ruleset_registry is None or not runtime_id:
+            return None
+        return ruleset_registry.get(
+            runtime_id, minimum_version=int(binding.get("version", 1) or 1),
+        )
+
+    def _deferred_check_indexes(self, instance: GameInstance) -> set[int]:
+        runtime = self._ruleset_runtime(instance)
+        if not isinstance(runtime, NarrativeCheckPolicyRuntime):
+            return set()
+        try:
+            action_ids = set(runtime.deferred_narrative_check_action_ids(instance))
+        except Exception:
+            logger.exception("Ruleset narrative check policy failed; keeping normal checks")
+            return set()
+        return {
+            index for index in range(len(instance.action_queue))
+            if f"action:{index}" in action_ids
+        }
+
     def prepare_round_checks(self, instance: GameInstance) -> list[dict]:
         """离线兼容路径：模型工具不可用时按旧规则意图结算检定。"""
         if instance.round_checks_prepared:
@@ -155,12 +186,14 @@ class RoundProcessor:
         actions_text = collect_actions_text(instance)
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
         instance.reset_round_checks()
+        deferred_indexes = self._deferred_check_indexes(instance)
         build_dice_constraint_block(
             instance,
             actions_text,
             rule_ctx.rule,
             rule_ctx.dice_system,
             self._dice,
+            skip_action_indexes=deferred_indexes,
         )
         for check in instance.last_checks:
             if not check.get("check_id"):
@@ -179,6 +212,7 @@ class RoundProcessor:
         actions_text = collect_actions_text(instance)
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
         instance.reset_round_checks()
+        deferred_indexes = self._deferred_check_indexes(instance)
         try:
             plan_started = time.perf_counter()
             planned, metadata = await plan_round_checks(instance, rule_ctx.rule, self.llm_client)
@@ -190,6 +224,13 @@ class RoundProcessor:
             if not metadata.get("available"):
                 logger.warning("模型工具不可用，进入离线检定兼容路径: %s", instance.game_key)
                 return self.prepare_round_checks(instance)
+            deferred_actions = {
+                id(instance.action_queue[index]) for index in deferred_indexes
+            }
+            planned = [
+                (action, request) for action, request in planned
+                if id(action) not in deferred_actions
+            ]
             for action, request in planned:
                 action["check_request"] = request
             if not metadata.get("skipped"):
@@ -205,6 +246,7 @@ class RoundProcessor:
                 rule_ctx.dice_system,
                 self._dice,
                 planned_only=True,
+                skip_action_indexes=deferred_indexes,
             )
         except Exception:
             logger.exception("AI 检定规划失败，进入离线检定兼容路径: %s", instance.game_key)
@@ -446,20 +488,41 @@ class RoundProcessor:
             self.llm_client, instance, gm_prompt, context, combat_model,
             dice_block, self.narrative_max_tokens, actions_text,
             on_delta=on_delta, on_reset=on_reset)
-        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
-        runtime_id = str(binding.get("id") or "")
-        ruleset_registry = getattr(self._prompt, "ruleset_registry", None)
-        runtime = None
-        if ruleset_registry is not None and runtime_id:
-            runtime = ruleset_registry.get(
-                runtime_id, minimum_version=int(binding.get("version", 1) or 1),
+        runtime = self._ruleset_runtime(instance)
+        if isinstance(runtime, NarrativeStatePolicyRuntime):
+            data["state_update"] = runtime.filter_narrative_state_update(
+                instance, dict(data.get("state_update") or {}),
             )
-            if isinstance(runtime, NarrativeStatePolicyRuntime):
-                data["state_update"] = runtime.filter_narrative_state_update(
-                    instance, dict(data.get("state_update") or {}),
-                )
+        director_proposal_data: dict[str, Any] = {}
+        if authoritative_combat and isinstance(runtime, NarrativeDirectorRuntime):
+            try:
+                director_result = runtime.director_proposal(instance)
+            except Exception:
+                logger.exception("D&D Director proposal failed; keeping narrative turn")
+                director_result = {}
+            candidate = director_result.get("proposal") if isinstance(director_result, dict) else {}
+            if isinstance(candidate, dict):
+                director_proposal_data = candidate
+        if isinstance(runtime, NarrativeDirectorPlanningRuntime):
+            try:
+                semantic_proposal = await runtime.plan_director_turn(instance, self.llm_client)
+            except Exception:
+                logger.exception("D&D semantic Director planning failed; keeping deterministic proposal")
+                semantic_proposal = None
+            if isinstance(semantic_proposal, dict):
+                director_proposal_data = semantic_proposal
         if authoritative_combat and explicit_attack:
             data["combat_command"] = "start"
+        # D&D Director may recognize an explicit hostile action even when the
+        # model omitted the legacy combat marker. This only creates the
+        # advisory tool signal; combat.start still validates the encounter.
+        if authoritative_combat and not data.get("combat_command"):
+            if (
+                director_proposal_data.get("kind") == "combat"
+                and director_proposal_data.get("mode") != "manual"
+                and float(director_proposal_data.get("confidence", 0) or 0) >= 0.85
+            ):
+                data["combat_command"] = "start"
         discard_unresolved_player_damage(instance, data.get("state_update", {}))
         initial_budget = int(getattr(response, "token_budget_initial", 0) or 0)
         used_budget = int(getattr(response, "token_budget_used", 0) or 0)
@@ -488,7 +551,18 @@ class RoundProcessor:
         apply_confirmed_items(instance, data)
         apply_puzzle_updates(instance, data)
         apply_combat_command(instance, data)
-        apply_ruleset_combat_signal(instance, data, runtime)
+        combat_requested = apply_ruleset_combat_signal(
+            instance, data, runtime, director_proposal_data,
+        )
+        automation_batches: list[dict[str, Any]] = []
+        if director_proposal_data and runtime is not None:
+            try:
+                automation_batches = apply_director_automation(
+                    runtime, instance, director_proposal_data, random.SystemRandom(),
+                )
+            except (ValueError, KeyError, TypeError):
+                # The advisory encounter request remains visible for GM review.
+                logger.exception("D&D Director automation was rejected; waiting for GM")
         apply_revive_commands(instance, data)
         apply_growth_rewards(instance, data, response, rule, self._progression)
         update_quick_actions(instance, data)
@@ -502,6 +576,26 @@ class RoundProcessor:
         apply_plot_update(instance, response)
         store_private_messages(instance, response)
         state_msgs = append_state_change_messages(instance, response, public_state_before, data)
+        request = (
+            instance.ruleset_state.get("encounter_request")
+            if isinstance(getattr(instance, "ruleset_state", None), dict)
+            else None
+        )
+        if combat_requested and isinstance(request, dict) and request.get("status") == "pending":
+            request_note = localized_text(instance.language, {
+                "en": "Combat is ready. Waiting for the GM to confirm initiative.",
+                "zh-CN": "战斗准备已就绪，等待 GM 确认进入先攻。",
+                "ja": "戦闘準備が整いました。GM のイニシアチブ開始確認を待っています。",
+            })
+            response.narration = f"{response.narration or ''}\n\n{request_note}".strip()
+            state_msgs.append(request_note)
+        if automation_batches:
+            automation_note = summarize_automation_batches(
+                automation_batches,
+                chinese=not str(getattr(instance, "language", "") or "").lower().startswith("en"),
+            )
+            response.narration = f"{response.narration or ''}\n\n{automation_note}".strip()
+            state_msgs.append(automation_note)
 
         instance.consume_gm_directives(set(consumed_directive_ids))
         await instance.finish_judgment(response.narration, pre_state_snapshot=round_pre_snapshot, state_changes=state_msgs)

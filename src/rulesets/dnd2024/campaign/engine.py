@@ -19,14 +19,18 @@ CAMPAIGN_INTENT_TYPES = frozenset({
     "session_zero.lock",
     "campaign.propose",
     "campaign.proposal.resolve",
+    "automation.set",
     "tutorial.start",
     "tutorial.choose",
+    "party_decision.submit",
+    "party_decision.resolve",
 })
 ENTITY_KINDS = frozenset({"task", "clue", "fact", "item", "relationship"})
 VISIBILITIES = frozenset({"public", "gm"})
 DIFFICULTIES = frozenset({"story", "standard", "challenging", "lethal"})
 PVP_POLICIES = frozenset({"disabled", "consent", "enabled"})
 CONTENT_RATINGS = frozenset({"family", "teen", "mature"})
+AUTOMATION_MODES = frozenset({"auto", "assist", "manual"})
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,119}$")
 
 
@@ -118,6 +122,7 @@ class Dnd2024CampaignEngine:
                 "pending_agreement": None,
                 "responses": {},
             },
+            "automation": {"mode": ""},
             "proposals": {},
             "entities": {kind: {} for kind in sorted(ENTITY_KINDS)},
             "tutorial": {
@@ -127,6 +132,12 @@ class Dnd2024CampaignEngine:
                 "history": [],
                 "hints_used": {},
                 "coach_enabled": True,
+            },
+            "party_decision": {
+                "status": "none",
+                "step_id": "",
+                "choice_ids": [],
+                "submitted": {},
             },
             "chapter_summaries": [],
         }
@@ -142,6 +153,15 @@ class Dnd2024CampaignEngine:
         if not isinstance(campaign, dict) or int(campaign.get("schema_version", 0) or 0) != 1:
             raise CampaignIntentError("unsupported D&D 2024 campaign state schema")
         campaign.setdefault("session_zero", self._initial_campaign()["session_zero"])
+        automation = campaign.setdefault("automation", {"mode": ""})
+        if not isinstance(automation, dict):
+            automation = {"mode": ""}
+            campaign["automation"] = automation
+        mode = str(automation.get("mode") or "")
+        if mode not in AUTOMATION_MODES:
+            automation["mode"] = (
+                "auto" if bool(getattr(instance, "solo_mode", False)) else "assist"
+            )
         world_binding = campaign.setdefault(
             "world_binding", deepcopy(self._initial_campaign()["world_binding"]),
         )
@@ -165,6 +185,20 @@ class Dnd2024CampaignEngine:
         campaign.setdefault("proposals", {})
         campaign.setdefault("entities", {kind: {} for kind in sorted(ENTITY_KINDS)})
         campaign.setdefault("tutorial", self._initial_campaign()["tutorial"])
+        party_decision = campaign.setdefault(
+            "party_decision", deepcopy(self._initial_campaign()["party_decision"]),
+        )
+        if not isinstance(party_decision, dict):
+            party_decision = deepcopy(self._initial_campaign()["party_decision"])
+            campaign["party_decision"] = party_decision
+        party_decision.setdefault("status", "none")
+        party_decision.setdefault("step_id", "")
+        party_decision.setdefault("choice_ids", [])
+        party_decision.setdefault("submitted", {})
+        if not isinstance(party_decision.get("choice_ids"), list):
+            party_decision["choice_ids"] = []
+        if not isinstance(party_decision.get("submitted"), dict):
+            party_decision["submitted"] = {}
         campaign.setdefault("chapter_summaries", [])
         tutorial = campaign.get("tutorial")
         top_binding = dict(getattr(instance, "adventure_binding", {}) or {})
@@ -269,6 +303,13 @@ class Dnd2024CampaignEngine:
             return actions
         if is_gm:
             actions.append({
+                "type": "automation.set",
+                "label": "Set AI GM automation",
+                "expected_version": version,
+                "options": sorted(AUTOMATION_MODES),
+                "current": str(campaign["automation"]["mode"]),
+            })
+            actions.append({
                 "type": "campaign.propose",
                 "label": "Propose campaign record",
                 "expected_version": version,
@@ -294,9 +335,41 @@ class Dnd2024CampaignEngine:
             })
         elif tutorial.get("status") == "active":
             step = self.steps.get(str(tutorial.get("current_step_id") or ""), {})
-            if is_player:
+            party_required = self._party_decision_required(instance, state)
+            if party_required and is_player:
+                party = state["campaign"]["party_decision"]
+                action = {
+                    "type": "party_decision.submit", "label": "Submit party decision",
+                    "expected_version": version,
+                    "choice_ids": deepcopy(
+                        party.get("choice_ids") or step.get("choice_ids") or []
+                    ),
+                }
+                if str(party.get("status") or "") == "open":
+                    action["step_id"] = str(party.get("step_id") or "")
+                    action["submitted"] = deepcopy(party.get("submitted") or {})
+                actions.append(action)
+            if party_required and is_gm:
+                party = state["campaign"]["party_decision"]
+                actions.append({
+                    "type": "party_decision.resolve", "label": "Resolve party decision",
+                    "expected_version": version,
+                    "choice_ids": deepcopy(
+                        party.get("choice_ids") or step.get("choice_ids") or []
+                    ),
+                    "submitted": deepcopy(party.get("submitted") or {}),
+                })
+            if is_player and not party_required:
                 actions.append({
                     "type": "tutorial.choose", "label": "Choose next step",
+                    "expected_version": version,
+                    "choice_ids": deepcopy(step.get("choice_ids") or []),
+                    "requirement_met": self._requirement_met(state, step),
+                })
+            elif is_gm and party_required:
+                # GM keeps a direct override for a stalled or exceptional table.
+                actions.append({
+                    "type": "tutorial.choose", "label": "Choose next step (GM override)",
                     "expected_version": version,
                     "choice_ids": deepcopy(step.get("choice_ids") or []),
                     "requirement_met": self._requirement_met(state, step),
@@ -413,6 +486,12 @@ class Dnd2024CampaignEngine:
                         "proposal_id": proposal["proposal_id"],
                     },
                 })
+        elif intent_type == "automation.set":
+            events.append({
+                "type": "dnd2024.automation.configured",
+                "mode": str(intent["mode"]),
+                "configured_by": submitted_by,
+            })
         elif intent_type == "tutorial.start":
             events.append({
                 "type": "dnd2024.tutorial.started",
@@ -423,6 +502,10 @@ class Dnd2024CampaignEngine:
             })
         elif intent_type == "tutorial.choose":
             events.extend(self._tutorial_choice_events(state, str(intent["choice_id"]), submitted_by))
+        elif intent_type == "party_decision.submit":
+            events.extend(self._party_submit_events(state, str(intent["choice_id"]), submitted_by))
+        elif intent_type == "party_decision.resolve":
+            events.extend(self._party_resolve_events(state, intent, submitted_by))
         expected = int(intent["expected_version"])
         batch = {
             "batch_id": stable_batch_id(intent, expected),
@@ -434,6 +517,84 @@ class Dnd2024CampaignEngine:
             "source_ref": "diceframe-original:dnd2024-campaign-runtime",
         }
         return {"ok": True, "event_batch": batch}
+
+    def _party_decision_required(
+        self, instance: Any, state: dict[str, Any] | None = None,
+    ) -> bool:
+        state = state if isinstance(state, dict) else self.initialize_state(instance)
+        campaign = state.get("campaign") or {}
+        party = campaign.get("party_decision") or {}
+        if str(party.get("status") or "") == "open":
+            return True
+        if bool(getattr(instance, "solo_mode", False)) or len(instance.players) <= 1:
+            return False
+        tutorial = campaign.get("tutorial") or {}
+        if tutorial.get("status") != "active":
+            return False
+        step = self.steps.get(str(tutorial.get("current_step_id") or ""))
+        return bool(step and len(step.get("choice_ids") or []) > 1)
+
+    def _party_submit_events(
+        self, state: dict[str, Any], choice_id: str, submitted_by: str,
+    ) -> list[dict[str, Any]]:
+        campaign = state["campaign"]
+        party = campaign["party_decision"]
+        tutorial = campaign["tutorial"]
+        step_id = str(tutorial.get("current_step_id") or "")
+        step = self.steps[step_id]
+        events: list[dict[str, Any]] = []
+        if str(party.get("status") or "") != "open":
+            events.append({
+                "type": "dnd2024.party_decision.opened",
+                "step_id": step_id,
+                "choice_ids": [str(item) for item in step.get("choice_ids") or []],
+            })
+        events.append({
+            "type": "dnd2024.party_decision.submitted",
+            "step_id": step_id,
+            "user_id": submitted_by,
+            "choice_id": choice_id,
+        })
+        return events
+
+    def _party_resolve_events(
+        self, state: dict[str, Any], intent: dict[str, Any], submitted_by: str,
+    ) -> list[dict[str, Any]]:
+        campaign = state["campaign"]
+        party = campaign["party_decision"]
+        tutorial = campaign["tutorial"]
+        step_id = str(tutorial.get("current_step_id") or "")
+        step = self.steps[step_id]
+        submitted = {
+            str(uid): str(choice)
+            for uid, choice in (party.get("submitted") or {}).items()
+        }
+        requested = str(intent.get("choice_id") or "")
+        tally: dict[str, int] = {}
+        for choice_id in submitted.values():
+            tally[choice_id] = tally.get(choice_id, 0) + 1
+        final_choice_id = requested
+        if not final_choice_id:
+            final_choice_id = max(
+                sorted(tally), key=tally.__getitem__,
+            )
+        events: list[dict[str, Any]] = []
+        if str(party.get("status") or "") != "open":
+            events.append({
+                "type": "dnd2024.party_decision.opened",
+                "step_id": step_id,
+                "choice_ids": [str(item) for item in step.get("choice_ids") or []],
+            })
+        events.append({
+            "type": "dnd2024.party_decision.resolved",
+            "step_id": step_id,
+            "final_choice_id": final_choice_id,
+            "submitted": submitted,
+            "tally": tally,
+            "resolved_by": submitted_by,
+        })
+        events.extend(self._tutorial_choice_events(state, final_choice_id, submitted_by))
+        return events
 
     def apply_batch(self, instance: Any, batch: dict[str, Any]) -> dict[str, Any]:
         state = self.initialize_state(instance)
@@ -483,6 +644,25 @@ class Dnd2024CampaignEngine:
         tutorial["current_step"] = self._step_view(step) if step else None
         if step:
             tutorial["requirement_met"] = self._requirement_met(state, step)
+        party = campaign.get("party_decision")
+        if isinstance(party, dict) and str(party.get("status") or "") == "open":
+            party_step = self.steps.get(str(party.get("step_id") or ""), step)
+            projected_choices = []
+            if party_step:
+                projected_choices = self._step_view(party_step).get("choices", [])
+            campaign["party_decision"] = {
+                "status": "open",
+                "step_id": str(party.get("step_id") or ""),
+                "choices": projected_choices,
+                "submitted": {
+                    str(uid): str(choice)
+                    for uid, choice in (party.get("submitted") or {}).items()
+                },
+                "submitted_count": len(party.get("submitted") or {}),
+                "total_players": len(instance.players),
+            }
+        else:
+            campaign.pop("party_decision", None)
         campaign["session_zero_defaults"] = self.default_agreement()
         return campaign
 
@@ -527,7 +707,7 @@ class Dnd2024CampaignEngine:
         session = state["campaign"]["session_zero"]
         if intent_type in {
             "session_zero.quick_start", "session_zero.propose", "session_zero.lock", "campaign.propose",
-            "campaign.proposal.resolve", "tutorial.start",
+            "campaign.proposal.resolve", "automation.set", "tutorial.start", "party_decision.resolve",
         } and not is_gm:
             raise CampaignIntentError("only the GM can perform this campaign operation")
         if intent_type == "session_zero.quick_start":
@@ -560,6 +740,11 @@ class Dnd2024CampaignEngine:
                 raise CampaignIntentError("campaign proposal is not pending")
             if intent.get("option") not in {"confirm", "reject"}:
                 raise CampaignIntentError("proposal option must be confirm or reject")
+        elif intent_type == "automation.set":
+            if session.get("status") != "locked":
+                raise CampaignIntentError("Session 0 must be locked before automation is configured")
+            if str(intent.get("mode") or "") not in AUTOMATION_MODES:
+                raise CampaignIntentError("automation mode must be auto, assist, or manual")
         elif intent_type == "tutorial.start":
             if self.adventure is None:
                 raise CampaignIntentError("no adventure package is bound to this game")
@@ -571,7 +756,7 @@ class Dnd2024CampaignEngine:
                 raise CampaignIntentError("starter adventure is not available")
         elif intent_type == "tutorial.choose":
             tutorial = state["campaign"]["tutorial"]
-            if tutorial.get("status") != "active" or not is_player:
+            if tutorial.get("status") != "active" or not (is_player or is_gm):
                 raise CampaignIntentError("the guided adventure is not active for this player")
             step = self.steps.get(str(tutorial.get("current_step_id") or ""))
             if step is None:
@@ -581,6 +766,50 @@ class Dnd2024CampaignEngine:
                 raise CampaignIntentError("choice is not available for the current tutorial step")
             if not self._requirement_met(state, step):
                 raise CampaignIntentError("complete the current tutorial objective first")
+            if is_player and self._party_decision_required(instance, state):
+                raise CampaignIntentError("multiplayer branch steps need the party decision flow")
+        elif intent_type == "party_decision.submit":
+            if not is_player:
+                raise CampaignIntentError("only a player can submit a party decision")
+            tutorial = state["campaign"]["tutorial"]
+            if tutorial.get("status") != "active":
+                raise CampaignIntentError("the guided adventure is not active")
+            step = self.steps.get(str(tutorial.get("current_step_id") or ""))
+            if step is None:
+                raise CampaignIntentError("the guided adventure step is invalid")
+            if not self._party_decision_required(instance, state):
+                raise CampaignIntentError("the current step does not need a party decision")
+            if not self._requirement_met(state, step):
+                raise CampaignIntentError("complete the current tutorial objective first")
+            choice_id = str(intent.get("choice_id") or "")
+            if choice_id not in step.get("choice_ids", []):
+                raise CampaignIntentError("choice is not available for the current tutorial step")
+            party = state["campaign"]["party_decision"]
+            if str(party.get("status") or "") == "open":
+                if str(party.get("step_id") or "") != str(step.get("id") or ""):
+                    raise CampaignIntentError("party decision is for a different tutorial step")
+                if submitted_by in (party.get("submitted") or {}):
+                    raise CampaignIntentError("this player has already submitted a party decision")
+        elif intent_type == "party_decision.resolve":
+            tutorial = state["campaign"]["tutorial"]
+            if tutorial.get("status") != "active":
+                raise CampaignIntentError("the guided adventure is not active")
+            step = self.steps.get(str(tutorial.get("current_step_id") or ""))
+            if step is None:
+                raise CampaignIntentError("the guided adventure step is invalid")
+            if not self._party_decision_required(instance, state):
+                raise CampaignIntentError("the current step does not need a party decision")
+            if not self._requirement_met(state, step):
+                raise CampaignIntentError("complete the current tutorial objective first")
+            party = state["campaign"]["party_decision"]
+            if str(party.get("status") or "") == "open" and not party.get("submitted"):
+                if len(instance.players) > 1:
+                    raise CampaignIntentError("at least one player intent is required before resolving")
+            choice_id = str(intent.get("choice_id") or "")
+            if not choice_id and not (party.get("submitted") or {}):
+                raise CampaignIntentError("a party choice is required before resolving")
+            if choice_id and choice_id not in step.get("choice_ids", []):
+                raise CampaignIntentError("choice is not available for the current tutorial step")
 
     @staticmethod
     def _all_players_accepted(instance: Any, session: dict[str, Any]) -> bool:
@@ -836,6 +1065,15 @@ class Dnd2024CampaignEngine:
                 session["agreement"].get("coach_enabled", True)
             )
             return
+        if event_type == "dnd2024.automation.configured":
+            mode = str(event.get("mode") or "")
+            if mode not in AUTOMATION_MODES:
+                raise EventBatchError("D&D automation mode is invalid")
+            campaign["automation"] = {
+                "mode": mode,
+                "configured_by": str(event.get("configured_by") or ""),
+            }
+            return
         if event_type == "dnd2024.campaign.proposal_created":
             proposal = {
                 key: deepcopy(value) for key, value in event.items() if key != "type"
@@ -856,6 +1094,40 @@ class Dnd2024CampaignEngine:
                 raise EventBatchError("campaign entity kind is invalid")
             campaign["entities"].setdefault(kind, {})[str(entity["id"])] = entity
             return
+        if event_type == "dnd2024.party_decision.opened":
+            party = campaign.setdefault("party_decision", {})
+            party.update({
+                "status": "open",
+                "step_id": str(event["step_id"]),
+                "choice_ids": [str(item) for item in event.get("choice_ids") or []],
+                "submitted": {},
+            })
+            return
+        if event_type == "dnd2024.party_decision.submitted":
+            party = campaign.setdefault("party_decision", {})
+            if str(party.get("status") or "") != "open":
+                raise EventBatchError("party decision is not open")
+            if str(party.get("step_id") or "") != str(event["step_id"]):
+                raise EventBatchError("party decision step does not match")
+            submitted = party.setdefault("submitted", {})
+            user_id = str(event["user_id"])
+            if user_id in submitted:
+                raise EventBatchError("player has already submitted a party decision")
+            choice_id = str(event["choice_id"])
+            if choice_id not in party.get("choice_ids") or user_id == "":
+                raise EventBatchError("party decision submission is invalid")
+            submitted[user_id] = choice_id
+            return
+        if event_type == "dnd2024.party_decision.resolved":
+            party = campaign.setdefault("party_decision", {})
+            if str(party.get("status") or "") != "open":
+                raise EventBatchError("party decision is not open")
+            if str(party.get("step_id") or "") != str(event["step_id"]):
+                raise EventBatchError("party decision step does not match")
+            party.update({
+                "status": "none", "step_id": "", "choice_ids": [], "submitted": {},
+            })
+            return
         if event_type == "dnd2024.tutorial.started":
             tutorial = campaign["tutorial"]
             tutorial.update({
@@ -872,6 +1144,9 @@ class Dnd2024CampaignEngine:
                 "recommended_world_id": str(event.get("recommended_world_id") or ""),
                 "compatibility": str(event.get("compatibility") or "compatible"),
                 "scene_source": str(event.get("scene_source") or "adventure"),
+            }
+            campaign["party_decision"] = {
+                "status": "none", "step_id": "", "choice_ids": [], "submitted": {},
             }
             return
         if event_type == "dnd2024.tutorial.coach_configured":
@@ -892,6 +1167,11 @@ class Dnd2024CampaignEngine:
                 "chosen_by": str(event["chosen_by"]),
             })
             tutorial["current_step_id"] = str(event.get("next_step_id") or "")
+            party = campaign.get("party_decision")
+            if isinstance(party, dict) and str(party.get("step_id") or "") == step_id:
+                party.update({
+                    "status": "none", "step_id": "", "choice_ids": [], "submitted": {},
+                })
             return
         if event_type == "dnd2024.chapter.summarized":
             summaries = campaign.setdefault("chapter_summaries", [])

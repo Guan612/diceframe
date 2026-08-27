@@ -40,7 +40,12 @@ def test_spell_catalog_locale_changes_labels_not_mechanics(runtime: Dnd2024Runti
 
     assert english.spells == chinese.spells
     assert english.get("spell:magic_missile")["name"] == "Magic Missile"
-    assert chinese.get("spell:magic_missile")["name"] == "Magic Missile"
+    assert chinese.get("spell:magic_missile")["name"] == "魔法飞弹"
+    assert chinese.get("spell:fireball")["name"] == "火球术"
+    assert all(
+        any(ord(character) > 127 for character in label)
+        for label in chinese.labels.values()
+    )
 
 
 def test_initial_wizard_spellbook_and_preparation_are_constrained(runtime: Dnd2024Runtime) -> None:

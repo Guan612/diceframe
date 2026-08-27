@@ -38,6 +38,7 @@ def create_trpg_subsystems(
     providers: list[ProviderConfig],
     default_provider: str,
     *,
+    adventures_dir: Path | None = None,
     embedding_enabled: bool = False,
     embedding_base_url: str = "",
     embedding_api_key: str = "",
@@ -81,7 +82,7 @@ def create_trpg_subsystems(
             proxy_url=proxy_url,
         )
 
-    ruleset_registry = build_default_ruleset_registry()
+    ruleset_registry = build_default_ruleset_registry(adventures_dir)
     handler = GameHandler(
         registry=registry,
         llm_client=llm_client,

@@ -23,7 +23,7 @@ const returnFocus = typeof document !== 'undefined' && document.activeElement in
   : null
 const dialogLabel = computed(() => props.language.toLowerCase().startsWith('en')
   ? 'Professional character builder'
-  : '专业角色创建器')
+  : '高级角色创建器')
 
 function onDialogKey(event: KeyboardEvent): void {
   if (props.embedded) return
@@ -97,7 +97,7 @@ watch(
     :tabindex="embedded ? undefined : -1"
     @keydown="onDialogKey"
   >
-    <div v-if="loading" class="ruleset-host-state" role="status">正在读取专业规则数据…</div>
+    <div v-if="loading" class="ruleset-host-state" role="status">正在读取高级规则数据…</div>
     <div v-else-if="error" class="ruleset-host-state error-banner" role="alert">
       <p>{{ error }}</p>
       <button @click="emit('cancel')">返回</button>

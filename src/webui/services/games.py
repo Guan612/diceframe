@@ -12,6 +12,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from src.compat.dnd2024_adventure_bindings import (
+    apply_unreleased_adventure_binding_migration,
+)
 from src.engine.character_utils import apply_resource_delta, get_resource, revive_character, wake_character
 from src.engine.checks import build_check_request, roll_check_request
 from src.engine.game_instance import GameState
@@ -24,6 +27,7 @@ from src.rules.rule_system import RuleSystem
 
 from src.webui.services._common import _GAME_KEY_SEP, _is_safe_world_id
 from src.webui.services import adventures
+from src.webui.services.ruleset_rest import public_rest_session
 
 if TYPE_CHECKING:
     from src.webui.api import WebAPI
@@ -131,6 +135,7 @@ def list_games(api: "WebAPI") -> dict[str, Any]:
             "seed_code": inst.seed_code,
             "language": normalize_language(getattr(inst, "language", DEFAULT_LANGUAGE)),
             "solo_mode": inst.solo_mode,
+            "narrative_perspective": getattr(inst, "narrative_perspective", "auto"),
             "gm_uid": inst.gm_uid or "",
             "ready_count": inst.multiplayer_status()["ready_count"],
             "alive_count": inst.multiplayer_status()["alive_count"],
@@ -178,8 +183,10 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
         ),
         "difficulty": inst.difficulty,
         "solo_mode": inst.solo_mode,
+        "narrative_perspective": getattr(inst, "narrative_perspective", "auto"),
         "max_players": inst.max_players,
         "multiplayer": inst.multiplayer_status(),
+        "rest_session": public_rest_session(inst),
         "plot_tracker": inst.plot_tracker.to_dict() if inst.plot_tracker else None,
         "recap": _public_recap(inst),
         "token_budget_bump": getattr(inst, "last_token_budget_bump", None),
@@ -199,6 +206,10 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
                     "对局规则运行时元数据不可用: %s", inst.game_key, exc_info=True,
                 )
         detail["ruleset_runtime"] = binding
+        if str(binding.get("id") or "") == "core:dnd2024":
+            from src.rulesets.dnd2024.advancement_access import view as advancement_view
+
+            detail["advancement"] = advancement_view(inst)
     return detail
 
 
@@ -532,6 +543,26 @@ async def set_solo_mode(api: "WebAPI", game_key: str, solo: bool) -> dict[str, A
     inst.set_solo_mode(solo)
     await api._reg.save(inst)
     return {"ok": True, "solo_mode": inst.solo_mode, "multiplayer": inst.multiplayer_status()}
+
+
+async def set_narrative_perspective(
+    api: "WebAPI", game_key: str, perspective: str,
+) -> dict[str, Any]:
+    inst = api._reg.get(api._parse_key(game_key))
+    if not inst:
+        return {"ok": False, "error": "游戏不存在"}
+    runtime_id = str((getattr(inst, "ruleset_runtime", {}) or {}).get("id") or "")
+    if runtime_id != "core:dnd2024":
+        return {"ok": False, "error": "当前规则不支持叙事视角设置"}
+    try:
+        inst.set_narrative_perspective(perspective)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    await api._reg.save(inst)
+    return {
+        "ok": True,
+        "narrative_perspective": inst.narrative_perspective,
+    }
 
 
 async def mark_game_health_event(
@@ -871,7 +902,10 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
                       language: str = DEFAULT_LANGUAGE,
                       scene_image: dict[str, Any] | None = None,
                       map_background: dict[str, Any] | None = None,
-                      adventure_id: str = "") -> dict[str, Any]:
+                      adventure_id: str = "",
+                      narrative_perspective: str = "auto",
+                      advancement_mode: str = "milestone",
+                      advancement_authority: str = "ai_gm") -> dict[str, Any]:
     if not api._handler or not api._reg:
         return {"ok": False, "error": "系统未就绪"}
     if config_error := api._llm_configuration_error(language):
@@ -882,6 +916,12 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
         return {"ok": False, "error": "非法 source_world_id"}
     if not players:
         return {"ok": False, "error": "请至少创建或选择 1 名队伍角色"}
+    try:
+        normalized_narrative_perspective = str(narrative_perspective or "auto").strip().casefold()
+        if normalized_narrative_perspective not in {"auto", "immersive", "third_person"}:
+            raise ValueError
+    except (AttributeError, ValueError):
+        return {"ok": False, "error": "叙事视角设置无效"}
 
     try:
         default_scene_image = api.resolve_default_scene_image(source_world_id or world_id, rule_id)
@@ -1031,7 +1071,20 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
         solo_mode=solo,
         entry_point="web",
         room_password=room_password or "",
+        narrative_perspective=normalized_narrative_perspective,
     )
+    if str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "") == "core:dnd2024":
+        from src.rulesets.dnd2024.advancement_access import configure as configure_advancement
+
+        try:
+            configure_advancement(instance, advancement_mode, advancement_authority)
+        except ValueError as exc:
+            _discard_incomplete_game(api, game_key, world_id)
+            return {
+                "ok": False,
+                "error_code": "INVALID_ADVANCEMENT_POLICY",
+                "error": str(exc),
+            }
 
     # 如果指定了外部世界书来源，复制条目
     if lorebook_world_id and lorebook_world_id != world_id and api._lore:
@@ -1196,7 +1249,8 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
                            players: list[dict] | None = None,
                            gm_uid: str = "",
                            language: str = "",
-                           scene_image: dict[str, Any] | None = None) -> dict[str, Any]:
+                           scene_image: dict[str, Any] | None = None,
+                           narrative_perspective: str = "") -> dict[str, Any]:
     if not api._handler or not api._reg:
         return {"ok": False, "error": "系统未就绪"}
     if config_error := api._llm_configuration_error(language):
@@ -1214,6 +1268,17 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
     world_name = target_inst.world_name
     resolved_language = normalize_language(language or getattr(target_inst, "language", DEFAULT_LANGUAGE))
     rule_id = _instance_rule_id(api, target_inst)
+    resolved_narrative_perspective = (
+        narrative_perspective
+        or getattr(target_inst, "narrative_perspective", "auto")
+        or "auto"
+    )
+    try:
+        normalized_narrative_perspective = str(resolved_narrative_perspective).strip().casefold()
+        if normalized_narrative_perspective not in {"auto", "immersive", "third_person"}:
+            raise ValueError
+    except (AttributeError, ValueError):
+        return {"ok": False, "error": "叙事视角设置无效"}
 
     # A seed restart is a new save, but it must keep the original save's rule
     # identity.  Professional sheets receive the same all-or-nothing preflight
@@ -1235,8 +1300,14 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
                 world_id,
                 resolved_language,
             )
-            if current_binding != target_adventure_binding:
+            migrated = apply_unreleased_adventure_binding_migration(
+                target_inst, current_binding,
+            )
+            if migrated is None:
                 raise ValueError("bound adventure package is missing or has changed")
+            if migrated:
+                await api._reg.save(target_inst)
+            target_adventure_binding = dict(target_inst.adventure_binding)
         if runtime and runtime.capabilities.character_builder == "professional":
             players = [
                 runtime.normalize_character_submission(
@@ -1287,7 +1358,22 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
             "error_code": "GAME_CREATE_FAILED",
             "error": "重开失败，未留下半成品存档，请重试。",
         }
-    instance.configure_session(solo_mode=solo)
+    instance.configure_session(
+        solo_mode=solo,
+        narrative_perspective=normalized_narrative_perspective,
+    )
+    if str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "") == "core:dnd2024":
+        from src.rulesets.dnd2024.advancement_access import (
+            configure as configure_advancement,
+            view as advancement_view,
+        )
+
+        inherited_policy = advancement_view(target_inst)
+        configure_advancement(
+            instance,
+            str(inherited_policy.get("mode") or "milestone"),
+            str(inherited_policy.get("authority") or "ai_gm"),
+        )
     if not instance.bind_adventure(target_adventure_binding):
         _discard_incomplete_game(api, game_key, world_id)
         return {

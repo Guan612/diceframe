@@ -1,6 +1,6 @@
 # Ruleset Bundle v1 内容包格式
 
-Ruleset Bundle 是为第一方专业规则运行时提供的版本化、离线内容快照。它与社区 Plugin Content V2 目的不同：Plugin Content V2 用于通用资源贡献，Ruleset Bundle 则绑定一个已安装的权威规则运行时。
+Ruleset Bundle 是为第一方高级规则运行时提供的版本化、离线内容快照。它与社区 Plugin Content V2 目的不同：Plugin Content V2 用于通用资源贡献，Ruleset Bundle 则绑定一个已安装的权威规则运行时。
 
 ## 目录
 
@@ -40,7 +40,7 @@ templates/rulesets/<directory_id>/
 - `bundle_id`：内容包 canonical ID。
 - `runtime_id`：可解释该包的内建运行时。
 - `ruleset_version`：体验和契约版本。
-- `content_version`：规则数据快照版本，会写入专业规则存档。
+- `content_version`：规则数据快照版本，会写入高级规则存档。
 - `license.attribution`：必须指向 bundle 内部的真实文件。
 
 ## Canonical Entity

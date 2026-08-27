@@ -18,7 +18,24 @@ class CombatReducerMixin:
         state = snapshot["ruleset_state"]
         combat = state["combat"]
         event_type = str(event["type"])
-        if event_type in {"intent.submitted", "check.resolved", "dnd2024.spell.cast"}:
+        if event_type in {
+            "intent.submitted", "check.resolved", "dnd2024.spell.cast",
+            "dnd2024.combat.message",
+        }:
+            return
+        if event_type == "dnd2024.encounter.readiness.changed":
+            request = state.get("encounter_request")
+            if not isinstance(request, dict) or request.get("status") != "pending":
+                raise EventBatchError("encounter readiness has no pending request")
+            player_id = str(event["player_id"])
+            ready_ids = {
+                str(item) for item in request.get("ready_player_ids") or [] if str(item)
+            }
+            if event.get("ready"):
+                ready_ids.add(player_id)
+            else:
+                ready_ids.discard(player_id)
+            request["ready_player_ids"] = sorted(ready_ids)
             return
         if event_type == "dnd2024.combat.started":
             state["combat"] = {

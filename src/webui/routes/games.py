@@ -213,6 +213,25 @@ async def api_set_solo_mode(request: web.Request) -> web.Response:
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
+async def api_set_narrative_perspective(request: web.Request) -> web.Response:
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+    if not is_game_gm(
+        inst,
+        request.get("user_id", ""),
+        bool(request.get("owner_authenticated", False)),
+    ):
+        return web.json_response({"ok": False, "error": "GM only"}, status=403)
+    body = await request.json()
+    result = await api.set_narrative_perspective(
+        gk, str(body.get("perspective", "") or ""),
+    )
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 async def api_set_luck_timeout(request: web.Request) -> web.Response:
     """GM 按局设置幸运超时秒数（0=禁用，异步局建议 0，实时局默认 60）。"""
     api = _get_api(request)
@@ -430,6 +449,9 @@ async def api_create_game(request: web.Request) -> web.Response:
         scene_image=body.get("scene_image"),
         map_background=body.get("map_background"),
         adventure_id=str(body.get("adventure_id", "") or ""),
+        narrative_perspective=str(body.get("narrative_perspective", "auto") or "auto"),
+        advancement_mode=str(body.get("advancement_mode", "milestone") or "milestone"),
+        advancement_authority=str(body.get("advancement_authority", "ai_gm") or "ai_gm"),
     )
     return web.json_response(result)
 
@@ -494,6 +516,24 @@ def _ruleset_requester_is_gm(request: web.Request, inst) -> bool:
     )
 
 
+async def _broadcast_ruleset_change(
+    request: web.Request, game_key: str, result: dict,
+) -> None:
+    """Wake every connected client after one persisted authoritative change."""
+
+    if not result.get("ok"):
+        return
+    pool = request.app.get("connection_pool")
+    if pool is None:
+        return
+    gameplay = result.get("gameplay")
+    gameplay = gameplay if isinstance(gameplay, dict) else {}
+    await pool.broadcast(game_key, {
+        "type": "ruleset_state_changed",
+        "state_version": int(gameplay.get("state_version", 0) or 0),
+    })
+
+
 async def api_ruleset_available_actions(request: web.Request) -> web.Response:
     api = _get_api(request)
     game_key = request.match_info["game_key"]
@@ -528,6 +568,7 @@ async def api_ruleset_submit_intent(request: web.Request) -> web.Response:
     result = await api.ruleset_submit_intent(
         game_key, requester_id, requester_is_gm, body,
     )
+    await _broadcast_ruleset_change(request, game_key, result)
     return web.json_response(result, status=_ruleset_gameplay_status(result))
 
 
@@ -557,6 +598,7 @@ async def api_ruleset_resolve_decision(request: web.Request) -> web.Response:
     result = await api.ruleset_submit_intent(
         game_key, requester_id, requester_is_gm, intent,
     )
+    await _broadcast_ruleset_change(request, game_key, result)
     return web.json_response(result, status=_ruleset_gameplay_status(result))
 
 
@@ -781,10 +823,17 @@ async def _api_live_character_advancement(
     inst = request.app["subsystems"].registry.get(api._parse_key(gk))
     if not inst:
         return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
-    if not can_modify_character(
-        request.get("user_id", ""), uid, inst.gm_uid,
-        owner=bool(request.get("owner_authenticated", False)),
-    ):
+    session_uid = request.get("user_id", "")
+    runtime_id = str((getattr(inst, "ruleset_runtime", {}) or {}).get("id") or "")
+    can_advance = (
+        session_uid == uid
+        if runtime_id == "core:dnd2024"
+        else can_modify_character(
+            session_uid, uid, inst.gm_uid,
+            owner=bool(request.get("owner_authenticated", False)),
+        )
+    )
+    if not can_advance:
         return web.json_response({"ok": False, "error": "无权修改他人角色卡"}, status=403)
     body = await request.json()
     method = getattr(ruleset_advancement, f"{action}_live")
@@ -807,8 +856,26 @@ async def api_live_character_advancement_apply(request: web.Request) -> web.Resp
     return await _api_live_character_advancement(request, "apply")
 
 
+async def api_live_advancement_control(request: web.Request) -> web.Response:
+    from src.webui.services import ruleset_advancement
+
+    game_key = request.match_info["game_key"]
+    _, denied = _gm_only_inst(request, game_key)
+    if denied is not None:
+        return denied
+    result = await ruleset_advancement.control_live(
+        _get_api(request), game_key, await request.json(),
+    )
+    await _broadcast_ruleset_change(request, game_key, result)
+    code = str(result.get("code") or "")
+    status = 200 if result.get("ok") else 404 if code in {
+        "GAME_NOT_FOUND", "CHARACTER_NOT_FOUND",
+    } else 422
+    return web.json_response(result, status=status)
+
+
 async def api_live_character_rest(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_rest import resolve_live
+    from src.webui.services.ruleset_rest import resolve_live, resolve_live_party
 
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
@@ -821,7 +888,13 @@ async def api_live_character_rest(request: web.Request) -> web.Response:
         owner=bool(request.get("owner_authenticated", False)),
     ):
         return web.json_response({"ok": False, "error": "无权修改他人角色卡"}, status=403)
-    result = await resolve_live(api, gk, uid, await request.json())
+    payload = await request.json()
+    result = await (
+        resolve_live_party(api, gk, uid, payload)
+        if not inst.solo_mode
+        else resolve_live(api, gk, uid, payload)
+    )
+    await _broadcast_ruleset_change(request, gk, result)
     code = str(result.get("code") or "")
     status = 200 if result.get("ok") else 404 if code in {"GAME_NOT_FOUND", "CHARACTER_NOT_FOUND"} else 409 if code == "STALE_CHARACTER_REVISION" else 422
     return web.json_response(result, status=status)
@@ -941,6 +1014,7 @@ async def api_create_from_seed(request: web.Request) -> web.Response:
         gm_uid=request.get("user_id", ""),
         language=str(body.get("language", "") or ""),
         scene_image=body.get("scene_image"),
+        narrative_perspective=str(body.get("narrative_perspective", "") or ""),
     )
     return web.json_response(result)
 
@@ -1055,6 +1129,10 @@ def register_games(app: web.Application) -> None:
     app.router.add_get("/api/games/{game_key}/health", api_game_health)
     app.router.add_post("/api/games/{game_key}/health/{event_id}/{action:resolve|ignore}", api_mark_health_event)
     app.router.add_post("/api/games/{game_key}/mode", api_set_solo_mode)
+    app.router.add_post(
+        "/api/games/{game_key}/settings/narrative-perspective",
+        api_set_narrative_perspective,
+    )
     app.router.add_post("/api/games/{game_key}/settings/luck-timeout", api_set_luck_timeout)
     app.router.add_post("/api/games/{game_key}/players/{user_id}/away", api_set_player_away)
     app.router.add_post("/api/games/{game_key}/player-access", api_set_player_access)
@@ -1095,6 +1173,10 @@ def register_games(app: web.Application) -> None:
     app.router.add_post(
         "/api/games/{game_key}/character/{user_id}/advancement/apply",
         api_live_character_advancement_apply,
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/advancement/control",
+        api_live_advancement_control,
     )
     app.router.add_post(
         "/api/games/{game_key}/character/{user_id}/rest",

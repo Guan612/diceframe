@@ -332,6 +332,59 @@ async def test_professional_seed_restart_keeps_rule_and_prevalidates_before_muta
 
 
 @pytest.mark.asyncio
+async def test_professional_seed_restart_migrates_known_unreleased_adventure_binding(
+    web_api,
+):
+    api, _lorebook, registry, _fake_llm, worlds_dir = web_api
+    (api._rules_dir / "dnd2024_srd.json").write_text(
+        json.dumps({
+            "rule_id": "dnd2024_srd",
+            "rule_name": "5E 2024 SRD 专业规则",
+            "dice_system": "d20",
+            "runtime": {"id": "core:dnd2024", "minimum_version": 1},
+            "attributes": [
+                {"key": key, "name": key.upper(), "min": 3, "max": 20}
+                for key in ("str", "dex", "con", "int", "wis", "cha")
+            ],
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    _write_world(worlds_dir, "dnd2024_adventure_world", default_rule="dnd2024_srd")
+    preset = api.ruleset_builder_choices(
+        "dnd2024_srd", {"locale": "zh-CN"}, "zh-CN",
+    )["choices"]["quick_presets"][0]
+    character = api.ruleset_builder_finalize(
+        "dnd2024_srd",
+        {**preset["draft"], "locale": "zh-CN", "name": "灰沼重开者"},
+        "zh-CN",
+    )["character"]
+    original = await api.create_game(
+        "dnd2024_adventure_world",
+        "灰沼兼容重开",
+        rule_id="dnd2024_srd",
+        adventure_id="core:lanterns_of_greymoor",
+        players=[character],
+    )
+    assert original["ok"] is True
+    original_instance = registry.get(api._parse_key(original["game_key"]))
+    current_binding = deepcopy(original_instance.adventure_binding)
+    old_digest = (
+        "sha256:363c6786c0e9460ec911d85460c49b610addf8e86cc86d136538daee24d6740c"
+    )
+    original_instance.adventure_binding["content_digest"] = old_digest
+    await registry.save(original_instance)
+
+    restarted = await api.create_from_seed(
+        original["seed_code"], players=[character], gm_uid="adventure_seed_gm",
+    )
+
+    assert restarted["ok"] is True
+    assert original_instance.adventure_binding == current_binding
+    recreated = registry.get(api._parse_key(restarted["game_key"]))
+    assert recreated.adventure_binding == current_binding
+
+
+@pytest.mark.asyncio
 async def test_generate_lorebook_entries_from_natural_language(web_api):
     api, lorebook, _registry, fake_llm, _worlds_dir = web_api
     lorebook.create_world("custom_world", "测试世界", description="用于批量生成测试")

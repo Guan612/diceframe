@@ -266,6 +266,26 @@ def prepare_package_tree(package_dir: Path, *, include_cloudflared: bool = False
         download_cloudflared(package_dir)
 
 
+def prepare_runtime_app_tree(app_dir: Path) -> None:
+    """Assemble runtime files plus temporary frontend sources for the build."""
+
+    if app_dir.exists():
+        shutil.rmtree(app_dir)
+    app_dir.mkdir(parents=True)
+    copy_file(ROOT / "web_server.py", app_dir / "web_server.py")
+    for rel in ("legal", "plugins", "prompts", "src", "templates"):
+        copy_tree(ROOT / rel, app_dir / rel)
+    frontend_dir = app_dir / "frontend-v2"
+    frontend_dir.mkdir(parents=True, exist_ok=True)
+    for rel in FRONTEND_FILES:
+        copy_file(ROOT / "frontend-v2" / rel, frontend_dir / rel)
+    for rel in FRONTEND_DIRS:
+        copy_tree(ROOT / "frontend-v2" / rel, frontend_dir / rel)
+    build_assistant_knowledge.build(
+        app_dir / "src" / "webui" / "assistant_knowledge_index.json"
+    )
+
+
 def build_frontend(package_dir: Path) -> None:
     frontend_dir = package_dir / "frontend-v2"
     npm = shutil.which("npm.cmd") or shutil.which("npm")

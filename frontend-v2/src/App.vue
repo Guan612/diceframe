@@ -8,7 +8,7 @@ import {
 import {
   HomeOutline, GameControllerOutline, PersonOutline, BookOutline,
   CloudOutline, DocumentTextOutline, OptionsOutline, SettingsOutline, MenuOutline,
-  ExtensionPuzzleOutline,
+  ExtensionPuzzleOutline, MapOutline,
 } from '@vicons/ionicons5'
 import { useTheme } from '@/composables/useTheme'
 import { initializeBackgroundImages } from '@/composables/useBackgroundImages'
@@ -38,6 +38,7 @@ const items = [
   { id: 'play', labelKey: 'navPlay', icon: GameControllerOutline },
   { id: 'characters', labelKey: 'navCharacters', icon: PersonOutline },
   { id: 'lorebook', labelKey: 'navLorebook', icon: BookOutline },
+  { id: 'adventures', labelKey: 'navAdventures', icon: MapOutline },
   { id: 'memory', labelKey: 'navMemory', icon: CloudOutline },
   { id: 'logs', labelKey: 'navLogs', icon: DocumentTextOutline },
   { id: 'rules', labelKey: 'navRules', icon: OptionsOutline },
@@ -48,7 +49,7 @@ const items = [
 const mobileItems = items.filter(item => (
   ['overview', 'play', 'characters', 'lorebook', 'settings'] as string[]
 ).includes(item.id))
-const utilityItems = items.filter(item => ['memory', 'logs', 'rules', 'plugins'].includes(item.id))
+const utilityItems = items.filter(item => ['adventures', 'memory', 'logs', 'rules', 'plugins'].includes(item.id))
 
 function menuTo(id: string) {
   if (id !== 'play') return { name: id }

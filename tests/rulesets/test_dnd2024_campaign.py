@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import random
+from types import SimpleNamespace
 import pytest
 
 from src.commands.round_effects import apply_ruleset_combat_signal
 from src.engine.game_instance import GameInstance
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.rulesets.dnd2024.play import resolve_story_encounter_access
+from src.rulesets.automation import apply_director_automation
 
 
 def _character(runtime: Dnd2024Runtime, preset_id: str, name: str) -> dict:
@@ -102,6 +104,7 @@ def test_solo_quick_start_uses_safe_defaults_and_enters_first_tutorial_step() ->
     actions = runtime.available_intents(instance, "gm")
 
     assert "session_zero.quick_start" in {item["type"] for item in actions}
+    assert runtime.gameplay_view(instance, "gm", True)["campaign"]["automation"]["mode"] == "auto"
     _submit(runtime, instance, "session_zero.quick_start")
 
     campaign = runtime.gameplay_view(instance, "gm", True)["campaign"]
@@ -113,6 +116,87 @@ def test_solo_quick_start_uses_safe_defaults_and_enters_first_tutorial_step() ->
     assert "session_zero.quick_start" not in {
         item["type"] for item in runtime.available_intents(instance, "gm")
     }
+
+
+def test_automation_mode_is_persisted_and_only_the_gm_can_change_it() -> None:
+    runtime, instance = _instance(multiplayer=True)
+    instance.solo_mode = False
+    _agreement(runtime, instance)
+
+    campaign = runtime.gameplay_view(instance, "ally", False)["campaign"]
+    assert campaign["automation"]["mode"] == "assist"
+    action = next(
+        item for item in runtime.available_intents(instance, "gm")
+        if item["type"] == "automation.set"
+    )
+    assert action["options"] == ["assist", "auto", "manual"]
+
+    denied = runtime.validate_intent(instance, {
+        "intent_id": "player-automation", "type": "automation.set",
+        "expected_version": instance.ruleset_state["version"],
+        "submitted_by": "ally", "mode": "manual",
+    })
+    assert denied["ok"] is False
+    assert "only the GM" in denied["error"]
+
+    changed = _submit(runtime, instance, "automation.set", mode="manual")
+    assert any(
+        event["type"] == "dnd2024.automation.configured"
+        for event in changed["event_batch"]["events"]
+    )
+    assert runtime.gameplay_view(instance, "ally", False)["campaign"]["automation"] == {
+        "mode": "manual", "configured_by": "gm",
+    }
+    assert runtime.director_proposal(instance)["proposal"]["mode"] == "manual"
+
+
+def test_auto_mode_starts_only_the_canonical_story_encounter() -> None:
+    runtime, instance = _instance(adventure=True)
+    instance.solo_mode = True
+    _agreement(runtime, instance)
+    _submit(runtime, instance, "tutorial.start", adventure_id="lanterns_of_greymoor")
+    _submit(runtime, instance, "tutorial.choose", choice_id="inspect_cold_ash")
+    _submit(runtime, instance, "tutorial.choose", choice_id="reassure_mira")
+    _submit(runtime, instance, "tutorial.choose", choice_id="follow_small_tracks")
+    instance.action_queue = [{"user_id": "gm", "text": "I attack the goblin."}]
+
+    proposal = runtime.director_proposal(instance)["proposal"]
+    assert proposal["mode"] == "auto"
+    assert proposal["encounter_preset_id"] == "first_skirmish"
+    assert runtime.apply_narrative_combat_signal(instance, "start") is True
+    batches = apply_director_automation(runtime, instance, proposal, random.Random(7))
+
+    assert batches[0]["intent_type"] == "combat.start"
+    combat = runtime.gameplay_view(instance, "gm", True)["combat"]
+    assert combat["status"] == "active"
+    assert combat["encounter_preset_id"] == "first_skirmish"
+    assert set(instance.ruleset_state["combat"]["enemies"]) == {"goblin-minion-1"}
+
+
+@pytest.mark.asyncio
+async def test_auto_mode_maps_free_text_to_a_valid_adventure_choice() -> None:
+    runtime, instance = _instance(adventure=True)
+    instance.solo_mode = True
+    _submit(runtime, instance, "session_zero.quick_start")
+    instance.action_queue = [{"user_id": "gm", "text": "I inspect the cold ash closely."}]
+
+    class _Planner:
+        async def call_tools(self, *args, **kwargs):
+            assert kwargs["tools"][0]["function"]["name"] == "dnd2024_adventure_choice"
+            return SimpleNamespace(
+                tool_calls=[{"name": "dnd2024_adventure_choice", "arguments": {
+                    "selections": [{"player_id": "gm", "choice_id": "inspect_cold_ash", "confidence": 0.96,
+                    "reason": "The action directly inspects the offered ash clue."}],
+                }}],
+                total_tokens=42, provider_used="test", native_tools=True,
+            )
+
+    proposal = await runtime.plan_director_turn(instance, _Planner())
+    assert proposal is not None and proposal["kind"] == "adventure_choice"
+    batches = apply_director_automation(runtime, instance, proposal, random.Random(7))
+    assert batches[0]["intent_type"] == "tutorial.choose"
+    campaign = runtime.gameplay_view(instance, "gm", True)["campaign"]
+    assert campaign["tutorial"]["current_step"]["id"] == "keepers_plea"
 
 
 def test_active_adventure_step_owns_scene_while_free_play_keeps_legacy_scene_tags() -> None:
@@ -142,6 +226,12 @@ def test_free_play_narrative_signal_wakes_and_can_start_authoritative_combat() -
     gameplay = runtime.gameplay_view(instance, "gm", True)
     assert gameplay["encounter_request"] == {
         "status": "pending", "source": "narrative", "round": 0,
+        "ready_player_ids": [],
+        "readiness": {
+            "ready_player_ids": [], "required_player_ids": [],
+            "ready_count": 0, "required_count": 0, "all_ready": True,
+            "players": [],
+        },
     }
     start = next(
         item for item in runtime.available_intents(instance, "gm")
@@ -157,6 +247,149 @@ def test_free_play_narrative_signal_wakes_and_can_start_authoritative_combat() -
     assert started["combat"]["status"] == "active"
     assert started["encounter_request"] is None
     assert start["requires"] == ["enemies"]
+
+
+def test_free_play_request_persists_only_a_valid_catalog_recommendation() -> None:
+    runtime, instance = _instance()
+    proposal = {
+        "kind": "combat", "mode": "assist", "confidence": 0.92,
+        "encounter_preset_id": "goblin_patrol",
+    }
+
+    assert runtime.apply_narrative_combat_signal(instance, "start", proposal) is True
+    request = runtime.gameplay_view(instance, "gm", True)["encounter_request"]
+    assert request == {
+        "status": "pending", "source": "narrative", "round": 0,
+        "encounter_preset_id": "goblin_patrol", "confidence": 0.92,
+        "ready_player_ids": [],
+        "readiness": {
+            "ready_player_ids": [], "required_player_ids": [],
+            "ready_count": 0, "required_count": 0, "all_ready": True,
+            "players": [],
+        },
+    }
+
+    runtime, instance = _instance()
+    assert runtime.apply_narrative_combat_signal(instance, "start", {
+        **proposal, "encounter_preset_id": "invented_enemy",
+    }) is True
+    assert "encounter_preset_id" not in instance.ruleset_state["encounter_request"]
+
+
+def test_multiplayer_encounter_readiness_is_authoritative_and_visible_to_gm() -> None:
+    runtime, instance = _instance(multiplayer=True)
+    assert runtime.apply_narrative_combat_signal(instance, "start", {
+        "kind": "combat", "mode": "assist", "confidence": 0.92,
+        "encounter_preset_id": "goblin_patrol",
+    }) is True
+
+    ally_actions = runtime.available_intents(instance, "ally")
+    assert [item["type"] for item in ally_actions] == ["encounter.ready"]
+    assert any(item["type"] == "combat.start" for item in runtime.available_intents(instance, "gm"))
+
+    _submit(runtime, instance, "encounter.ready", "ally")
+    request = runtime.gameplay_view(instance, "gm", True)["encounter_request"]
+    assert request["readiness"] == {
+        "ready_player_ids": ["ally"], "required_player_ids": ["ally"],
+        "ready_count": 1, "required_count": 1, "all_ready": True,
+        "players": [{"player_id": "ally", "name": "Mira", "ready": True}],
+    }
+    assert [item["type"] for item in runtime.available_intents(instance, "ally")] == [
+        "encounter.unready",
+    ]
+
+    _submit(runtime, instance, "encounter.unready", "ally")
+    request = runtime.gameplay_view(instance, "ally", False)["encounter_request"]
+    assert request["readiness"]["ready_count"] == 0
+    assert request["readiness"]["players"][0]["ready"] is False
+
+
+def test_combat_communication_is_shared_without_spending_turn_resources() -> None:
+    runtime, instance = _instance(multiplayer=True)
+    gameplay = runtime.gameplay_view(instance, "gm", True)
+    preset = next(item for item in gameplay["encounter_presets"] if item["id"] == "goblin_patrol")
+    _submit(
+        runtime, instance, "combat.start",
+        encounter_preset_id=preset["id"], enemies=preset["enemies"],
+    )
+    before = dict(instance.ruleset_state["combat"]["economy"])
+
+    _submit(runtime, instance, "combat.message", "ally", text="Fall back behind me!")
+
+    assert instance.ruleset_state["combat"]["economy"] == before
+    view = runtime.gameplay_view(instance, "gm", True)
+    message = view["recent_combat_events"][-1]
+    assert message == {
+        "type": "dnd2024.combat.message",
+        "actor_id": "player:ally",
+        "text": "Fall back behind me!",
+        "event_id": message["event_id"],
+        "batch_id": message["batch_id"],
+        "intent_type": "combat.message",
+        "state_version": 2,
+        "round": 1,
+        "turn_index": 0,
+        "actor_name": "Mira",
+    }
+    assert "combat.message" in {
+        item["type"] for item in runtime.available_intents(instance, "ally")
+    }
+
+
+def test_public_combat_feed_inherits_round_and_source_actor_for_damage() -> None:
+    runtime, instance = _instance()
+    instance.ruleset_state["combat"] = {
+        "enemies": {"goblin": {"name": "Goblin"}},
+    }
+    instance.event_ledger = [{
+        "batch_id": "start", "intent_type": "combat.start", "result_version": 1,
+        "events": [{"type": "dnd2024.combat.started", "round": 1}],
+    }, {
+        "batch_id": "attack", "intent_type": "attack", "result_version": 2,
+        "events": [
+            {"type": "intent.submitted", "actor_id": "enemy:goblin"},
+            {
+                "type": "resource.changed", "resource": "hp",
+                "target_id": "player:gm", "delta": -6, "amount": 6,
+            },
+        ],
+    }]
+
+    damage = runtime._recent_combat_events(instance)[-1]
+
+    assert damage["round"] == 1
+    assert damage["turn_index"] == 0
+    assert damage["actor_id"] == "enemy:goblin"
+    assert damage["actor_name"] == "Goblin"
+    assert damage["target_name"] == "Arden"
+
+
+def test_auto_mode_can_start_a_valid_free_play_catalog_encounter() -> None:
+    runtime, instance = _instance()
+    instance.solo_mode = True
+    _submit(runtime, instance, "session_zero.quick_start")
+    proposal = {
+        "kind": "combat", "mode": "auto", "confidence": 0.95,
+        "encounter_preset_id": "goblin_patrol",
+    }
+
+    assert runtime.apply_narrative_combat_signal(instance, "start", proposal) is True
+    batches = apply_director_automation(runtime, instance, proposal, random.Random(7))
+
+    assert batches[0]["intent_type"] == "combat.start"
+    combat = runtime.gameplay_view(instance, "gm", True)["combat"]
+    assert combat["status"] == "active"
+    assert combat["encounter_preset_id"] == "goblin_patrol"
+
+
+def test_loaded_but_inactive_adventure_does_not_replace_free_play_encounter_catalog() -> None:
+    runtime, instance = _instance(adventure=True)
+    gameplay = runtime.gameplay_view(instance, "gm", True)
+
+    assert gameplay["campaign"]["tutorial"]["status"] == "not_started"
+    assert {item["id"] for item in gameplay["encounter_presets"]} == {
+        "goblin_patrol", "crypt_pair",
+    }
 
 
 def test_campaign_step_grants_one_shot_authoritative_encounter_access() -> None:
@@ -247,6 +480,85 @@ def test_portable_adventure_binding_allows_a_different_world_with_review_status(
     assert instance.bind_adventure(package.binding("custom_world"))
     gameplay = runtime.gameplay_view(instance, "gm", True)
     assert gameplay["campaign"]["adventure_binding"]["compatibility"] == "review_required"
+
+
+def test_multiplayer_branch_collects_party_intents_before_advancing() -> None:
+    runtime, instance = _instance(multiplayer=True, adventure=True)
+    _agreement(runtime, instance)
+    _submit(runtime, instance, "tutorial.start", adventure_id="lanterns_of_greymoor")
+
+    player_actions = runtime.available_intents(instance, "ally")
+    assert any(item["type"] == "party_decision.submit" for item in player_actions)
+    assert not any(item["type"] == "tutorial.choose" for item in player_actions)
+    gm_actions = runtime.available_intents(instance, "gm")
+    assert any(item["type"] == "party_decision.resolve" for item in gm_actions)
+    assert any(item["type"] == "tutorial.choose" for item in gm_actions)
+
+    denied = runtime.validate_intent(instance, {
+        "intent_id": "player-direct-choice", "type": "tutorial.choose",
+        "expected_version": instance.ruleset_state["version"],
+        "submitted_by": "ally", "choice_id": "inspect_cold_ash",
+    })
+    assert denied["ok"] is False
+    assert "party decision flow" in denied["error"]
+
+    empty_resolve = runtime.validate_intent(instance, {
+        "intent_id": "empty-party-resolve", "type": "party_decision.resolve",
+        "expected_version": instance.ruleset_state["version"], "submitted_by": "gm",
+    })
+    assert empty_resolve["ok"] is False
+    assert "choice is required" in empty_resolve["error"]
+
+    _submit(runtime, instance, "party_decision.submit", "ally", choice_id="inspect_cold_ash")
+    view = runtime.gameplay_view(instance, "ally", False)["campaign"]
+    party = view["party_decision"]
+    assert party["status"] == "open"
+    assert party["submitted"] == {"ally": "inspect_cold_ash"}
+    assert party["submitted_count"] == 1
+    assert party["total_players"] == 2
+    assert {item["id"] for item in party["choices"]} == {
+        "inspect_cold_ash", "check_wagon_tracks",
+    }
+
+    duplicate = runtime.validate_intent(instance, {
+        "intent_id": "duplicate-party-submit", "type": "party_decision.submit",
+        "expected_version": instance.ruleset_state["version"],
+        "submitted_by": "ally", "choice_id": "check_wagon_tracks",
+    })
+    assert duplicate["ok"] is False
+    assert "already submitted" in duplicate["error"]
+
+    _submit(runtime, instance, "party_decision.submit", "gm", choice_id="check_wagon_tracks")
+    resolved = _submit(runtime, instance, "party_decision.resolve", "gm")
+    final_events = [event["type"] for event in resolved["event_batch"]["events"]]
+    assert "dnd2024.party_decision.resolved" in final_events
+    assert "dnd2024.tutorial.choice_applied" in final_events
+    campaign = runtime.gameplay_view(instance, "gm", True)["campaign"]
+    assert "party_decision" not in campaign
+    assert campaign["tutorial"]["current_step"]["id"] == "keepers_plea"
+    assert any(
+        event["type"] == "dnd2024.party_decision.resolved"
+        for batch in instance.event_ledger for event in batch["events"]
+    )
+
+
+def test_multiplayer_party_decision_tie_break_is_deterministic_and_gm_can_force() -> None:
+    runtime, instance = _instance(multiplayer=True, adventure=True)
+    _agreement(runtime, instance)
+    _submit(runtime, instance, "tutorial.start", adventure_id="lanterns_of_greymoor")
+    _submit(runtime, instance, "party_decision.submit", "gm", choice_id="inspect_cold_ash")
+    _submit(runtime, instance, "party_decision.submit", "ally", choice_id="check_wagon_tracks")
+    _submit(runtime, instance, "party_decision.resolve", "gm")
+    history = runtime.gameplay_view(instance, "gm", True)["campaign"]["tutorial"]["history"]
+    assert history[-1]["choice_id"] == "check_wagon_tracks"
+
+    runtime, instance = _instance(multiplayer=True, adventure=True)
+    _agreement(runtime, instance)
+    _submit(runtime, instance, "tutorial.start", adventure_id="lanterns_of_greymoor")
+    _submit(runtime, instance, "party_decision.submit", "ally", choice_id="inspect_cold_ash")
+    _submit(runtime, instance, "party_decision.resolve", "gm", choice_id="check_wagon_tracks")
+    history = runtime.gameplay_view(instance, "gm", True)["campaign"]["tutorial"]["history"]
+    assert history[-1]["choice_id"] == "check_wagon_tracks"
 
 
 def test_standard_professional_game_has_no_tutorial_actions() -> None:

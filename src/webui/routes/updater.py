@@ -27,9 +27,9 @@ async def api_update_download(request: web.Request) -> web.Response:
     if confirmed is not None:
         return confirmed
     kind = (request.query.get("kind") or "source").strip().lower()
-    if kind not in {"source", "portable"}:
+    if kind not in {"source", "portable", "docker"}:
         return web.json_response(
-            {"ok": False, "error": "kind 必须为 source 或 portable"},
+            {"ok": False, "error": "kind 必须为 source、portable 或 docker"},
             status=400,
         )
     result = await request.app["updater"].download_update(

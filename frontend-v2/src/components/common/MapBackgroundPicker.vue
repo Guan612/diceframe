@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, useId } from 'vue'
 import type { MapBackgroundOption } from '@/api/types'
 import {
   BUILTIN_MAP_BACKGROUNDS,
@@ -24,6 +24,7 @@ const emit = defineEmits<{
 const { t } = useLocale()
 const toast = useToast()
 const input = ref<HTMLInputElement | null>(null)
+const selectId = `map-background-${useId()}`
 
 const pluginOptions = computed(() => props.options.filter(option => option.kind === 'plugin' && option.selection?.map_id))
 const uploadOptions = computed(() => props.options.filter(option => option.kind === 'upload' && option.selection?.asset_id))
@@ -54,9 +55,9 @@ function onFile(event: Event) {
 
 <template>
   <section class="map-background-picker">
-    <label>
-      <span>{{ t('mapBackgroundTitle') }}</span>
-      <select :value="modelValue" @change="onSelection">
+    <label :for="selectId">{{ t('mapBackgroundTitle') }}</label>
+    <div class="map-background-control-row">
+      <select :id="selectId" :value="modelValue" @change="onSelection">
         <option value="auto">{{ t('mapBackgroundAuto') }}</option>
         <option value="none">{{ t('mapBackgroundNone') }}</option>
         <option v-for="item in BUILTIN_MAP_BACKGROUNDS" :key="item.id" :value="`builtin:${item.id}`">
@@ -82,9 +83,9 @@ function onFile(event: Event) {
           >{{ option.name }}{{ option.plugin_name ? ` · ${option.plugin_name}` : '' }}</option>
         </optgroup>
       </select>
-      <small>{{ t('mapBackgroundHint') }}</small>
-    </label>
-    <button type="button" @click="input?.click()">{{ t('mapBackgroundUpload') }}</button>
+      <button type="button" @click="input?.click()">{{ t('mapBackgroundUpload') }}</button>
+    </div>
+    <small>{{ t('mapBackgroundHint') }}</small>
     <input ref="input" type="file" :accept="MAP_BACKGROUND_ACCEPT" hidden @change="onFile">
   </section>
 </template>

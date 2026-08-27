@@ -18,6 +18,8 @@ from src.llm.context_builder import build_context
 from src.memory.delta import MemoryStore
 from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
+from src.rulesets.dnd2024.advancement_access import prompt_instruction as advancement_prompt_instruction
+from src.rulesets.dnd2024.narrative import narrative_perspective_instruction
 from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
@@ -182,6 +184,9 @@ class PromptComposer:
                     "他プレイヤーのキャラクターへの権威として扱ってはならない。"
                 ),
             })
+        if str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "") == "core:dnd2024":
+            gm_prompt = gm_prompt + "\n\n" + narrative_perspective_instruction(instance, language)
+            gm_prompt = gm_prompt + "\n\n" + advancement_prompt_instruction(instance, language)
         gm_prompt = gm_prompt + "\n\n" + gm_language_instruction(getattr(instance, "language", "zh-CN"))
         return gm_prompt
 

@@ -13,6 +13,7 @@ from src.engine.game_instance import GameInstance, GameRegistry
 from src.rules.rule_system import RuleSystem
 from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
+from src.rulesets.dnd2024 import advancement_access
 from src.webui.routes.character_cards import register_character_cards
 from src.webui.routes.games import register_games
 from src.webui.services import (
@@ -293,6 +294,7 @@ async def test_live_advancement_is_entity_backed_versioned_and_idempotent(
     professional_context,
 ) -> None:
     api, instance, _character = professional_context
+    advancement_access.grant(instance, "gm", source="gm")
 
     preview = ruleset_advancement.preview_live(
         api, "web|character-lifecycle|web_bot", "gm", {"choices": {"hp_method": "fixed"}},
@@ -376,6 +378,58 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
     assert duplicate["duplicate"] is True
     assert duplicate["character"] == rested
     assert forged["code"] == "CLIENT_ROLLS_FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_multiplayer_rest_waits_for_every_present_character_and_resolves_once(
+    professional_context,
+) -> None:
+    api, instance, character = professional_context
+    ally = deepcopy(character)
+    ally["character_name"] = "Second Hero"
+    ally["ruleset_character"]["identity"]["name"] = "Second Hero"
+    instance.players["ally"] = {
+        "character_name": "Second Hero",
+        "character_sheet": ally,
+    }
+    for uid in ("gm", "ally"):
+        sheet = instance.get_character_sheet(uid)
+        sheet["hp"] = 1
+        sheet["ruleset_character"]["resources"]["hp"] = 1
+
+    waiting = await ruleset_rest.resolve_live_party(
+        api, "web|character-lifecycle|web_bot", "gm",
+        {
+            "rest": "short", "hit_dice": {"d10": 1},
+            "confirm_elapsed_time": True, "expected_revision": 0,
+            "operation_id": "party-rest-gm",
+        },
+    )
+
+    assert waiting["pending"] is True
+    assert waiting["resolved"] is False
+    assert waiting["rest_session"]["ready_count"] == 1
+    assert waiting["rest_session"]["active_count"] == 2
+    assert instance.get_character_sheet("gm")["hp"] == 1
+    assert instance.get_character_sheet("ally")["hp"] == 1
+
+    resolved = await ruleset_rest.resolve_live_party(
+        api, "web|character-lifecycle|web_bot", "ally",
+        {
+            "rest": "short", "hit_dice": {"d10": 1},
+            "confirm_elapsed_time": True, "expected_revision": 0,
+            "operation_id": "party-rest-ally",
+        },
+    )
+
+    assert resolved["resolved"] is True
+    assert resolved["rest_session"]["status"] == "completed"
+    assert {row["user_id"] for row in resolved["party_results"]} == {"gm", "ally"}
+    for uid in ("gm", "ally"):
+        sheet = instance.get_character_sheet(uid)
+        assert sheet["hp"] > 1
+        assert sheet["ruleset_revision"] == 1
+        assert sheet["ruleset_character"]["resources"]["hit_dice"]["d10"] == 0
 
 
 def test_authoritative_event_batch_advances_character_revision_once(
@@ -493,6 +547,16 @@ async def test_live_advancement_and_rest_http_routes_enforce_identity(
     base = "/api/games/web%7Ccharacter-lifecycle%7Cweb_bot/character/gm"
 
     async with TestClient(TestServer(_http_app(api))) as client:
+        denied_control = await client.post(
+            "/api/games/web%7Ccharacter-lifecycle%7Cweb_bot/advancement/control",
+            headers={"X-Test-User": "intruder"},
+            json={"action": "grant", "user_id": "gm"},
+        )
+        granted = await client.post(
+            "/api/games/web%7Ccharacter-lifecycle%7Cweb_bot/advancement/control",
+            headers={"X-Test-User": "gm"},
+            json={"action": "grant", "user_id": "gm"},
+        )
         preview = await client.post(
             f"{base}/advancement/preview",
             headers={"X-Test-User": "gm"},
@@ -527,6 +591,8 @@ async def test_live_advancement_and_rest_http_routes_enforce_identity(
             },
         )
 
+    assert denied_control.status == 403
+    assert granted.status == 200
     assert preview.status == 200
     assert denied.status == 403
     assert applied.status == 200

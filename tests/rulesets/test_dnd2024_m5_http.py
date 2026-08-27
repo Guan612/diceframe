@@ -38,6 +38,7 @@ class _M5Api:
     def __init__(self, registry: GameRegistry, runtime: _EnabledRuntime):
         self._reg = registry
         self._runtime = runtime
+        self._adventure_loader = runtime._adventure_loader
         self._ruleset_registry = RulesetRuntimeRegistry([
             LegacyRulesetAdapter(), runtime,
         ])
@@ -117,6 +118,31 @@ def _app(registry: GameRegistry, runtime: _EnabledRuntime) -> web.Application:
     return app
 
 
+def _bound_instance_with_digest(
+    runtime: _EnabledRuntime, registry: GameRegistry, digest: str,
+) -> GameInstance:
+    instance = GameInstance(
+        game_key=("web", "m5-binding", "web_bot"), world_id="greymoor",
+        rule_id="dnd2024_srd", gm_uid="gm", language="en",
+    )
+    character = _character(runtime, "stalwart_guardian", "Guardian")
+    instance.players["gm"] = {
+        "character_name": "Guardian", "character_sheet": character,
+    }
+    assert instance.bind_ruleset_runtime(character["rule_binding"])
+    package = runtime._adventure_loader.resolve(
+        "core:lanterns_of_greymoor", "en",
+    )
+    assert instance.bind_adventure(package.binding("greymoor"))
+    runtime.gameplay_view(instance, "gm", True)
+    instance.adventure_binding["content_digest"] = digest
+    instance.ruleset_state["campaign"]["adventure_binding"][
+        "content_digest"
+    ] = digest
+    registry.register(instance)
+    return instance
+
+
 def _ready_story_encounter(runtime: _EnabledRuntime, instance: GameInstance) -> dict:
     instance.world_id = "greymoor"
     package = runtime._adventure_loader.resolve("core:lanterns_of_greymoor", "en")
@@ -142,6 +168,50 @@ def _ready_story_encounter(runtime: _EnabledRuntime, instance: GameInstance) -> 
         action for action in runtime.available_intents(instance, "gm")
         if action["type"] == "combat.start"
     )
+
+
+@pytest.mark.asyncio
+async def test_available_actions_migrates_known_unreleased_adventure_digest(
+    tmp_path,
+) -> None:
+    runtime = _EnabledRuntime()
+    registry = GameRegistry(tmp_path / "saves")
+    old_digest = (
+        "sha256:363c6786c0e9460ec911d85460c49b610addf8e86cc86d136538daee24d6740c"
+    )
+    instance = _bound_instance_with_digest(runtime, registry, old_digest)
+    path = "/api/games/web%7Cm5-binding%7Cweb_bot/available-actions"
+
+    async with TestClient(TestServer(_app(registry, runtime))) as client:
+        response = await client.get(path, headers={"X-Test-User": "gm"})
+        body = await response.json()
+
+    assert response.status == 200, body
+    expected = runtime._adventure_loader.resolve(
+        "core:lanterns_of_greymoor", "en",
+    ).binding("greymoor")
+    assert instance.adventure_binding == expected
+    recovered = await GameRegistry(tmp_path / "saves").load(instance.game_key)
+    assert recovered is not None
+    assert recovered.adventure_binding == expected
+
+
+@pytest.mark.asyncio
+async def test_available_actions_returns_structured_error_for_unknown_digest(
+    tmp_path,
+) -> None:
+    runtime = _EnabledRuntime()
+    registry = GameRegistry(tmp_path / "saves")
+    _bound_instance_with_digest(runtime, registry, "sha256:unknown")
+    path = "/api/games/web%7Cm5-binding%7Cweb_bot/available-actions"
+
+    async with TestClient(TestServer(_app(registry, runtime))) as client:
+        response = await client.get(path, headers={"X-Test-User": "gm"})
+        body = await response.json()
+
+    assert response.status == 422
+    assert body["ok"] is False
+    assert body["code"] == "INCOMPATIBLE_ADVENTURE"
 
 
 @pytest.mark.asyncio

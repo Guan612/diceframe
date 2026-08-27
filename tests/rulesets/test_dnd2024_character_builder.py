@@ -220,6 +220,9 @@ def test_builder_choices_are_constrained_by_selected_class(runtime, valid_draft)
     assert [item["ref"] for item in choices["equipment_packages"]] == [
         "equipment_package:fighter_a"
     ]
+    package = choices["equipment_packages"][0]
+    assert package["summary"] == ""
+    assert package["items"] == []
     assert all("source_ref" in item for item in choices["class_skills"])
 
 

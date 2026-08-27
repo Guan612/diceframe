@@ -12,6 +12,11 @@ from src.rulesets.contracts import RulesetCapabilities
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
+from src.rulesets.dnd2024.director import Dnd2024Director
+from src.rulesets.dnd2024.director.planner import (
+    plan_adventure_choice,
+    plan_encounter_preset,
+)
 from src.rulesets.dnd2024.play import EncounterAccess, resolve_story_encounter_access
 from src.rulesets.dnd2024.progression import (
     Dnd2024AdvancementEngine,
@@ -38,12 +43,19 @@ class Dnd2024Runtime:
         adventure_formats=(ADVENTURE_GRAPH_FORMAT,),
     )
 
-    def __init__(self, bundles_dir: str | Path | None = None):
+    def __init__(
+        self, bundles_dir: str | Path | None = None, *,
+        adventures_dir: str | Path | None = None,
+        director_mode: str = "assist",
+    ):
         default = Path(__file__).resolve().parents[3] / "templates" / "rulesets"
         self._loader = RulesetBundleLoader(bundles_dir or default)
         self._bundle_cache: dict[str, LoadedRulesetBundle] = {}
-        adventures = Path(__file__).resolve().parents[3] / "templates" / "adventures"
+        adventures = adventures_dir or (
+            Path(__file__).resolve().parents[3] / "templates" / "adventures"
+        )
         self._adventure_loader = AdventureBundleLoader(adventures)
+        self._director = Dnd2024Director(director_mode if director_mode in {"auto", "assist", "manual"} else "assist")
 
     def load_adventure(
         self, instance: Any, locale: str = "",
@@ -97,7 +109,12 @@ class Dnd2024Runtime:
         locale: str = "",
     ) -> Dnd2024CombatEngine:
         adventure = self.load_adventure(instance, locale)
-        catalogs = adventure.list("encounter_catalog") if adventure is not None else []
+        use_adventure_catalog = (
+            adventure is not None
+            and isinstance(access, EncounterAccess)
+            and access.mode == "story"
+        )
+        catalogs = adventure.list("encounter_catalog") if use_adventure_catalog else []
         if len(catalogs) > 1:
             raise ValueError("adventure package contains multiple encounter catalogs")
         catalog = catalogs[0] if catalogs else None
@@ -365,7 +382,10 @@ class Dnd2024Runtime:
     ) -> dict[str, Any]:
         prepared = deepcopy(intent)
         intent_type = str(prepared.get("type") or "")
-        if intent_type in {"combat.start", "combat.end", "decision.resolve"}:
+        if intent_type in {
+            "encounter.ready", "encounter.unready", "combat.start", "combat.end",
+            "combat.message", "decision.resolve",
+        }:
             prepared.pop("actor_id", None)
         elif not requester_is_gm:
             prepared["actor_id"] = f"player:{requester_id}"
@@ -475,11 +495,131 @@ class Dnd2024Runtime:
         combat_engine = self._combat_engine(instance, access, locale)
         view = combat_engine.gameplay_view(instance)
         request = instance.ruleset_state.get("encounter_request")
-        view["encounter_request"] = deepcopy(request) if isinstance(request, dict) else None
+        if isinstance(request, dict):
+            projected_request = deepcopy(request)
+            ready_ids = {
+                str(item) for item in request.get("ready_player_ids") or [] if str(item)
+            }
+            gm_uid = str(getattr(instance, "gm_uid", "") or "")
+            required_ids = [str(uid) for uid in instance.players if str(uid) != gm_uid]
+            projected_request["readiness"] = {
+                "ready_player_ids": sorted(ready_ids),
+                "required_player_ids": required_ids,
+                "ready_count": sum(uid in ready_ids for uid in required_ids),
+                "required_count": len(required_ids),
+                "all_ready": all(uid in ready_ids for uid in required_ids),
+                "players": [
+                    {
+                        "player_id": uid,
+                        "name": str(
+                            (instance.players.get(uid) or {}).get("character_name") or uid
+                        ),
+                        "ready": uid in ready_ids,
+                    }
+                    for uid in required_ids
+                ],
+            }
+            view["encounter_request"] = projected_request
+        else:
+            view["encounter_request"] = None
+        view["recent_combat_events"] = self._recent_combat_events(instance)
         view["campaign"] = campaign
+        director = self.director_proposal(instance, campaign)
+        # Gameplay clients need the recommendation, not the Director's
+        # bounded copy of every player action. Full context stays LLM-only.
+        view["director"] = {"proposal": deepcopy(director.get("proposal") or {})}
         return view
 
-    def apply_narrative_combat_signal(self, instance: Any, signal: str) -> bool:
+    @staticmethod
+    def _recent_combat_events(instance: Any) -> list[dict[str, Any]]:
+        """Project a bounded, presentation-safe public combat event feed."""
+
+        ledger = list(getattr(instance, "event_ledger", []) or [])
+        start_index = 0
+        for index in range(len(ledger) - 1, -1, -1):
+            if str((ledger[index] or {}).get("intent_type") or "") == "combat.start":
+                start_index = index
+                break
+        meaningful = {
+            "dnd2024.combat.started", "dnd2024.combat.ended",
+            "dnd2024.combat.message", "dnd2024.turn.advanced",
+            "dnd2024.position.changed", "dnd2024.spell.cast",
+            "check.resolved", "resource.changed", "condition.applied",
+            "condition.removed", "dnd2024.death_save.resolved",
+        }
+        allowed_fields = {
+            "type", "kind", "actor_id", "target_id", "text", "natural", "modifier",
+            "total", "target", "success", "critical", "delta", "amount", "damage_type",
+            "healing",
+            "distance", "round", "turn_index", "previous_actor_id", "condition", "reason",
+            "spell_ref", "resource", "roll", "successes", "failures", "stable", "dead",
+        }
+        combat = (
+            instance.ruleset_state.get("combat")
+            if isinstance(getattr(instance, "ruleset_state", None), dict) else {}
+        )
+        enemies = combat.get("enemies") if isinstance(combat, dict) else {}
+        enemies = enemies if isinstance(enemies, dict) else {}
+
+        def actor_name(actor_id: str) -> str:
+            if actor_id.startswith("player:"):
+                uid = actor_id.removeprefix("player:")
+                return str((instance.players.get(uid) or {}).get("character_name") or uid)
+            if actor_id.startswith("enemy:"):
+                enemy_id = actor_id.removeprefix("enemy:")
+                return str((enemies.get(enemy_id) or {}).get("name") or enemy_id)
+            return actor_id
+
+        result: list[dict[str, Any]] = []
+        current_round = 0
+        current_turn_index = 0
+        for batch in ledger[start_index:]:
+            if not isinstance(batch, dict):
+                continue
+            raw_events = batch.get("events") or []
+            batch_actor_id = next((
+                str(raw.get("actor_id") or "")
+                for raw in raw_events
+                if isinstance(raw, dict) and raw.get("type") == "intent.submitted"
+            ), "")
+            for event_index, raw in enumerate(raw_events):
+                if not isinstance(raw, dict) or str(raw.get("type") or "") not in meaningful:
+                    continue
+                event = {
+                    key: deepcopy(value) for key, value in raw.items() if key in allowed_fields
+                }
+                if event.get("round") is not None:
+                    current_round = int(event.get("round", 0) or 0)
+                if event.get("turn_index") is not None:
+                    current_turn_index = int(event.get("turn_index", 0) or 0)
+                event.setdefault("round", current_round)
+                event.setdefault("turn_index", current_turn_index)
+                if not event.get("actor_id") and batch_actor_id:
+                    event["actor_id"] = batch_actor_id
+                event.update({
+                    "event_id": f"{batch.get('batch_id', '')}:{event_index}",
+                    "batch_id": str(batch.get("batch_id") or ""),
+                    "intent_type": str(batch.get("intent_type") or ""),
+                    "state_version": int(batch.get("result_version", 0) or 0),
+                })
+                actor_id = str(event.get("actor_id") or "")
+                target_id = str(event.get("target_id") or "")
+                previous_id = str(event.get("previous_actor_id") or "")
+                if actor_id:
+                    event["actor_name"] = actor_name(actor_id)
+                if target_id:
+                    event["target_name"] = actor_name(target_id)
+                if previous_id:
+                    event["previous_actor_name"] = actor_name(previous_id)
+                result.append(event)
+        return result[-80:]
+
+    def apply_narrative_combat_signal(
+        self,
+        instance: Any,
+        signal: str,
+        proposal: dict[str, Any] | None = None,
+    ) -> bool:
         """Persist an advisory request that wakes the authoritative combat tool."""
 
         if str(signal or "").strip().casefold() not in {"start", "begin"}:
@@ -492,12 +632,44 @@ class Dnd2024Runtime:
         current = state.get("encounter_request")
         if isinstance(current, dict) and current.get("status") == "pending":
             return False
-        state["encounter_request"] = {
+        request = {
             "status": "pending",
             "source": "narrative",
             "round": int(getattr(instance, "round_number", 0) or 0),
+            "ready_player_ids": [],
         }
+        preset_id = str((proposal or {}).get("encounter_preset_id") or "")
+        if preset_id:
+            locale = str(getattr(instance, "language", "") or "")
+            campaign = self._campaign_engine(instance, locale).gameplay_view(instance)
+            access = self._encounter_access(instance, campaign)
+            preset = next(
+                (
+                    item for item in self._combat_engine(instance, access, locale).encounter_presets()
+                    if item.get("id") == preset_id
+                ),
+                None,
+            )
+            if preset is not None:
+                request["encounter_preset_id"] = preset_id
+                try:
+                    confidence = float((proposal or {}).get("confidence", 0) or 0)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                request["confidence"] = max(0.0, min(1.0, confidence))
+        state["encounter_request"] = request
         return True
+
+    def deferred_narrative_check_action_ids(self, instance: Any) -> list[str]:
+        """Keep opening attacks out of the generic check pipeline until initiative exists."""
+
+        proposal = self.director_proposal(instance).get("proposal") or {}
+        if (
+            proposal.get("kind") != "combat"
+            or float(proposal.get("confidence", 0) or 0) < 0.85
+        ):
+            return []
+        return [str(item) for item in proposal.get("action_ids") or [] if str(item)]
 
     def build_llm_view(self, instance: Any) -> dict[str, Any]:
         state = dict(instance.to_llm_view())
@@ -518,6 +690,7 @@ class Dnd2024Runtime:
         gameplay = self.gameplay_view(
             instance, str(getattr(instance, "gm_uid", "") or ""), True,
         )
+        director = self.director_proposal(instance, gameplay.get("campaign"))
         state["ruleset_authority"] = {
             "runtime_id": self.runtime_id,
             "state_version": gameplay["state_version"],
@@ -526,10 +699,132 @@ class Dnd2024Runtime:
             "latest_event_batch": (
                 deepcopy(instance.event_ledger[-1]) if instance.event_ledger else None
             ),
+            "director": director,
             "policy": "Narrate resolved events only; never invent or mutate mechanics.",
         }
         state.pop("combat_enemies", None)
         return state
+
+    def director_proposal(
+        self, instance: Any, campaign: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a read-only next-step proposal for the AI GM context/UI."""
+
+        if campaign is None:
+            campaign = self._campaign_engine(
+                instance, str(getattr(instance, "language", "") or ""),
+            ).gameplay_view(instance)
+        state = getattr(instance, "ruleset_state", {})
+        persisted_campaign = state.get("campaign") if isinstance(state, dict) else None
+        automation = campaign.get("automation") if isinstance(campaign, dict) else None
+        if not isinstance(automation, dict) and isinstance(persisted_campaign, dict):
+            automation = persisted_campaign.get("automation")
+        configured_mode = automation.get("mode") if isinstance(automation, dict) else None
+        if configured_mode in {"auto", "assist", "manual"} and configured_mode != self._director.mode:
+            return Dnd2024Director(configured_mode).propose_dict(instance, campaign)
+        return self._director.propose_dict(instance, campaign)
+
+    def director_automatic_intent(
+        self, instance: Any, proposal: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Start only a server-catalogued encounter in auto mode."""
+
+        if not isinstance(proposal, dict) or proposal.get("mode") != "auto":
+            return None
+        version = int(instance.ruleset_state.get("version", 0) or 0)
+        if proposal.get("kind") == "adventure_choice":
+            choice_id = str(proposal.get("choice_id") or "")
+            if not choice_id:
+                return None
+            return {
+                "intent_id": f"director:adventure:{version}:{choice_id}",
+                "type": "tutorial.choose",
+                "expected_version": version,
+                "submitted_by": str(getattr(instance, "gm_uid", "") or ""),
+                "choice_id": choice_id,
+            }
+        if proposal.get("kind") == "party_decision":
+            selections = proposal.get("selections")
+            if not isinstance(selections, list) or not selections:
+                return None
+            current = self._campaign_engine(
+                instance, str(getattr(instance, "language", "") or ""),
+            ).gameplay_view(instance)
+            party = current.get("party_decision") or {}
+            # The gameplay projection intentionally omits an unopened party
+            # decision. Treat that absence as the authoritative ``none`` state.
+            if str(party.get("status") or "none") not in {"none", "open"}:
+                return None
+            versioned: list[dict[str, Any]] = []
+            for index, selection in enumerate(selections):
+                if not isinstance(selection, dict):
+                    return None
+                choice_id = str(selection.get("choice_id") or "")
+                if not choice_id:
+                    return None
+                versioned.append({
+                    "intent_id": f"director:party:{version}:{index}:{choice_id}",
+                    "type": "party_decision.submit",
+                    "expected_version": version + index,
+                    "submitted_by": str(selection.get("player_id") or ""),
+                    "choice_id": choice_id,
+                })
+            versioned.append({
+                "intent_id": f"director:party:{version}:resolve",
+                "type": "party_decision.resolve",
+                "expected_version": version + len(versioned),
+                "submitted_by": str(getattr(instance, "gm_uid", "") or ""),
+            })
+            return versioned
+        if proposal.get("kind") != "combat":
+            return None
+        preset_id = str(proposal.get("encounter_preset_id") or "")
+        if not preset_id:
+            return None
+        locale = str(getattr(instance, "language", "") or "")
+        campaign = self._campaign_engine(instance, locale).gameplay_view(instance)
+        access = self._encounter_access(instance, campaign)
+        if access.status != "pending":
+            return None
+        if access.mode == "story" and access.encounter_preset_id != preset_id:
+            return None
+        if access.mode == "sandbox":
+            available = {
+                str(item.get("id") or "")
+                for item in self._combat_engine(instance, access, locale).encounter_presets()
+            }
+            if preset_id not in available:
+                return None
+        return {
+            "intent_id": (
+                f"director:combat:{version}:{access.encounter_instance_id}"
+                if access.encounter_instance_id
+                else f"director:combat:{version}:{preset_id}"
+            ),
+            "type": "combat.start",
+            "expected_version": version,
+            "submitted_by": str(getattr(instance, "gm_uid", "") or ""),
+            "encounter_preset_id": preset_id,
+        }
+
+    async def plan_director_turn(
+        self, instance: Any, llm_client: Any,
+    ) -> dict[str, Any] | None:
+        """Ask the model only for canonical adventure choices or encounter presets."""
+
+        campaign = self._campaign_engine(
+            instance, str(getattr(instance, "language", "") or ""),
+        ).gameplay_view(instance)
+        choice = await plan_adventure_choice(instance, campaign, llm_client)
+        if choice is not None:
+            return choice
+        proposal = self.director_proposal(instance, campaign).get("proposal") or {}
+        if proposal.get("kind") != "combat" or proposal.get("encounter_preset_id"):
+            return None
+        access = self._encounter_access(instance, campaign)
+        locale = str(getattr(instance, "language", "") or "")
+        presets = self._combat_engine(instance, access, locale).encounter_presets()
+        return await plan_encounter_preset(instance, proposal, presets, llm_client)
 
     def filter_narrative_state_update(
         self, instance: Any, update: dict[str, Any],

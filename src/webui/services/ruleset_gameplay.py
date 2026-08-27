@@ -8,11 +8,15 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from src.compat.dnd2024_adventure_bindings import (
+    apply_unreleased_adventure_binding_migration,
+)
 from src.webui.services.ruleset_builder import validate_draft_shape
 from src.rulesets.contracts import (
     AuthoritativeIntentHooks,
     AutomaticIntentRuntime,
 )
+from src.webui.services import adventures
 
 if TYPE_CHECKING:
     from src.webui.api import WebAPI
@@ -40,6 +44,10 @@ def _ruleset_timeline_text(batch: dict[str, Any], instance: Any) -> str:
         return "遭遇战结束：可以回到当前冒险继续剧情。" if chinese else "Encounter ended: return to the current adventure."
     if intent_type == "tutorial.choose":
         return "剧情选择已记录，当前冒险已推进。" if chinese else "Story choice recorded; the current adventure advanced."
+    if intent_type == "party_decision.submit":
+        return "已收到队伍成员的行动意图，等待队伍决策。" if chinese else "A party intent was received; waiting for the group decision."
+    if intent_type == "party_decision.resolve":
+        return "队伍决定已记录，当前冒险已推进。" if chinese else "The party decision was recorded; the current adventure advanced."
     if intent_type.startswith("session_zero."):
         return "开团约定已更新。" if chinese else "Session agreement updated."
     if intent_type.startswith("campaign."):
@@ -52,6 +60,8 @@ def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None
     chinese = not str(getattr(instance, "language", "") or "").lower().startswith("en")
     action_labels = {
         "tutorial.choose": ("推进当前剧情", "Advance the current story"),
+        "party_decision.submit": ("提交队伍决策意图", "Submit a party decision intent"),
+        "party_decision.resolve": ("结算队伍决定", "Resolve the party decision"),
         "tutorial.start": ("开始教学冒险", "Start the guided adventure"),
         "combat.start": ("进入剧情遭遇战", "Enter the story encounter"),
         "combat.end": ("结束遭遇战", "End the encounter"),
@@ -70,7 +80,7 @@ def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None
     elif "dnd2024.combat.ended" in event_types:
         action_text = ("结束剧情遭遇战", "Finish the story encounter")[0 if chinese else 1]
     else:
-        action_text = action_labels.get(intent_type, ("推进专业规则剧情", "Advance the rules story"))[0 if chinese else 1]
+        action_text = action_labels.get(intent_type, ("推进高级规则剧情", "Advance the rules story"))[0 if chinese else 1]
     submitted_by = next(
         (
             str(event.get("submitted_by") or "")
@@ -117,6 +127,7 @@ def _is_public_story_milestone(batch: dict[str, Any]) -> bool:
         "dnd2024.tutorial.started",
         "dnd2024.tutorial.choice_applied",
         "dnd2024.tutorial.completed",
+        "dnd2024.party_decision.resolved",
         "dnd2024.combat.started",
         "dnd2024.combat.ended",
     }))
@@ -177,6 +188,40 @@ def _response(
     return payload
 
 
+async def _ensure_compatible_adventure_binding(
+    api: "WebAPI", runtime: Any, instance: Any,
+) -> dict[str, Any] | None:
+    binding = dict(getattr(instance, "adventure_binding", {}) or {})
+    if not binding:
+        return None
+    try:
+        expected = adventures.resolve_binding_for_runtime(
+            api,
+            str(binding.get("adventure_id") or ""),
+            runtime,
+            str(getattr(instance, "world_id", "") or ""),
+            str(getattr(instance, "language", "") or ""),
+        )
+    except ValueError as exc:
+        return _error("INCOMPATIBLE_ADVENTURE", str(exc))
+    if binding == expected:
+        return None
+    if str(getattr(runtime, "runtime_id", "") or "") != "core:dnd2024":
+        return _error(
+            "INCOMPATIBLE_ADVENTURE",
+            "bound adventure package is missing or has changed",
+        )
+    migrated = apply_unreleased_adventure_binding_migration(instance, expected)
+    if migrated is None:
+        return _error(
+            "INCOMPATIBLE_ADVENTURE",
+            "bound adventure package is missing or has changed",
+        )
+    if migrated:
+        await api._reg.save(instance)
+    return None
+
+
 
 async def available_actions(
     api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool = False,
@@ -187,6 +232,11 @@ async def available_actions(
     if error:
         return error
     async with instance._lock:
+        binding_error = await _ensure_compatible_adventure_binding(
+            api, runtime, instance,
+        )
+        if binding_error:
+            return binding_error
         return _response(
             api, rule, runtime, instance, effective_requester,
             requester_is_gm=requester_is_gm,
@@ -216,6 +266,11 @@ async def submit_intent(
     )
 
     async with instance._lock:
+        binding_error = await _ensure_compatible_adventure_binding(
+            api, runtime, instance,
+        )
+        if binding_error:
+            return binding_error
         before = {
             "ruleset_state": deepcopy(instance.ruleset_state),
             "event_ledger": deepcopy(instance.event_ledger),

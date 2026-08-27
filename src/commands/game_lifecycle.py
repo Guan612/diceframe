@@ -18,6 +18,7 @@ from src.engine.character_utils import reset_character_for_restart
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
+from src.rulesets.dnd2024.narrative import narrative_perspective_instruction
 
 logger = logging.getLogger("trpg")
 
@@ -123,6 +124,11 @@ class GameLifecycle:
                         "120〜180 語程度のオープニングシーンを書き、プレイヤーキャラクター名を自然に言及すること。"
                     ),
                 },
+            )
+        runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
+        if runtime_id == "core:dnd2024":
+            opening_instruction += "\n\n" + narrative_perspective_instruction(
+                instance, instance.language,
             )
         welcome_context = (
             f"{gm_prompt}\n\n"
@@ -311,6 +317,7 @@ class GameLifecycle:
         seed = instance.seed_code
         rule_id = instance.rule_id
         solo = instance.solo_mode
+        narrative_perspective = instance.narrative_perspective
         language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
 
         await instance.reset(keep_seed=True)
@@ -318,7 +325,10 @@ class GameLifecycle:
             instance.game_key, world_id=world_id, world_name=world_name,
             group_name=group_name, seed_code=seed, rule_id=rule_id, language=language,
         )
-        instance.configure_session(solo_mode=solo)
+        instance.configure_session(
+            solo_mode=solo,
+            narrative_perspective=narrative_perspective,
+        )
         instance.replace_players(saved_players)
 
         if not instance.players:

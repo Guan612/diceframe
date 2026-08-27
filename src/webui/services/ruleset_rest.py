@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any
+from datetime import datetime, timezone
 
 from src.webui.services.ruleset_builder import validate_draft_shape
 
@@ -42,6 +43,103 @@ def resolve(
 
 def _failure(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message, **extra}
+
+
+def _saved_rest_session(instance: Any) -> dict[str, Any]:
+    state = getattr(instance, "ruleset_state", None)
+    if not isinstance(state, dict):
+        return {}
+    session = state.get("rest_session")
+    return session if isinstance(session, dict) else {}
+
+
+def _set_rest_session(instance: Any, session: dict[str, Any]) -> None:
+    state = getattr(instance, "ruleset_state", None)
+    if not isinstance(state, dict):
+        state = {}
+        instance.ruleset_state = state
+    state["rest_session"] = session
+
+
+def public_rest_session(instance: Any) -> dict[str, Any]:
+    """Return the shared rest proposal without exposing character sheets or rolls."""
+
+    session = _saved_rest_session(instance)
+    status = str(session.get("status") or "idle")
+    if status == "idle" and not session.get("participants"):
+        return {
+            "active": False,
+            "status": "idle",
+            "rest": None,
+            "ready_count": 0,
+            "active_count": 0,
+            "participants": [],
+        }
+    required = [str(uid) for uid in session.get("required_uids", []) if str(uid) in instance.players]
+    submitted = session.get("participants")
+    submitted = submitted if isinstance(submitted, dict) else {}
+    rows: list[dict[str, Any]] = []
+    for uid in required:
+        player = instance.players.get(uid) or {}
+        entry = submitted.get(uid)
+        rows.append({
+            "user_id": uid,
+            "character_name": str(player.get("character_name") or uid),
+            "status": "submitted" if isinstance(entry, dict) else "waiting",
+        })
+    ready_count = sum(row["status"] == "submitted" for row in rows)
+    return {
+        "active": status in {"collecting", "resolving"},
+        "status": status,
+        "rest": session.get("rest"),
+        "ready_count": ready_count,
+        "active_count": len(rows),
+        "participants": rows,
+        "resolved_at": session.get("resolved_at"),
+        "error": session.get("error", ""),
+    }
+
+
+def _rest_eligible_uids(instance: Any) -> list[str]:
+    """Only present, conscious characters need to opt into a party rest."""
+
+    return sorted(
+        uid for uid in instance.players
+        if uid not in instance.away_players
+        and instance.is_alive(uid)
+        and int(instance.get_character_sheet(uid).get("hp", 0) or 0) > 0
+    )
+
+
+def _validate_hit_dice_counts(character: dict[str, Any], requested: Any) -> dict[str, int]:
+    if requested is None:
+        return {}
+    if not isinstance(requested, dict):
+        raise ValueError("hit_dice must be a JSON object")
+    canonical = character.get("ruleset_character")
+    canonical = canonical if isinstance(canonical, dict) else character
+    available = canonical.get("resources", {}).get("hit_dice", {})
+    if not isinstance(available, dict):
+        raise ValueError("character hit dice are missing")
+    result: dict[str, int] = {}
+    for die, raw_count in requested.items():
+        if isinstance(raw_count, bool):
+            raise ValueError(f"hit_dice.{die} must be a non-negative integer")
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"hit_dice.{die} must be a non-negative integer") from exc
+        if count < 0 or count > int(available.get(die, -1)):
+            raise ValueError(f"not enough {die} Hit Point Dice")
+        try:
+            sides = int(str(die).removeprefix("d"))
+        except ValueError as exc:
+            raise ValueError(f"invalid hit die {die}") from exc
+        if sides < 2:
+            raise ValueError(f"invalid hit die {die}")
+        if count:
+            result[str(die)] = count
+    return result
 
 
 def _server_hit_die_rolls(character: dict[str, Any], requested: Any) -> dict[str, list[int]]:
@@ -180,3 +278,150 @@ async def resolve_live(
         "rest": rest, "events": deepcopy(result.get("events") or []),
         "source_ref": result.get("source_ref"), "character": deepcopy(updated),
     }
+
+
+async def resolve_live_party(
+    api: "WebAPI", game_key: str, user_id: str, body: Any,
+) -> dict[str, Any]:
+    """Collect one player's rest choice and resolve the whole present party together."""
+
+    parsed = validate_draft_shape(body)
+    rest = parsed.get("rest")
+    if rest not in {"short", "long"}:
+        return _failure("INVALID_REST", "休息类型必须是 short 或 long")
+    if "hit_die_rolls" in parsed:
+        return _failure("CLIENT_ROLLS_FORBIDDEN", "休息骰由服务端掷出；客户端只需提交要花费的生命骰数量")
+    if rest == "long" and parsed.get("hit_dice"):
+        return _failure("INVALID_REST", "长休不需要花费生命骰")
+    if parsed.get("confirm_elapsed_time") is not True:
+        return _failure("REST_CONFIRMATION_REQUIRED", "请先确认游戏时间会随本次休息推进")
+    operation_id = str(parsed.get("operation_id") or "").strip()
+    if not operation_id or len(operation_id) > 160:
+        return _failure("INVALID_OPERATION_ID", "休息操作必须提供有效的 operation_id")
+
+    instance = api._reg.get(api._parse_key(game_key))
+    if instance is None:
+        return _failure("GAME_NOT_FOUND", "游戏不存在")
+    rule = api._load_rule_for_game(instance)
+    if rule is None:
+        return _failure("RULE_NOT_FOUND", "当前游戏规则不存在")
+    try:
+        runtime = api._ruleset_registry.resolve(rule.template)
+    except (AttributeError, TypeError, ValueError) as exc:
+        return _failure("RULESET_RUNTIME_UNAVAILABLE", str(exc))
+    method = getattr(runtime, "complete_rest", None)
+    if not callable(method):
+        return _failure("RULESET_REST_UNAVAILABLE", "该规则尚未提供专业休息结算")
+    if instance.combat_active or instance.combat_state == "active":
+        return _failure("REST_NOT_AVAILABLE", "战斗进行中不能休息；请先结束战斗")
+
+    async with instance._lock:
+        if user_id not in instance.players:
+            return _failure("CHARACTER_NOT_FOUND", "角色不存在")
+        character = instance.get_character_sheet(user_id)
+        if int(character.get("hp", 0) or 0) < 1:
+            return _failure("REST_NOT_AVAILABLE", "至少需要 1 HP 才能发起或加入休息")
+        try:
+            hit_dice = _validate_hit_dice_counts(
+                character, parsed.get("hit_dice") if rest == "short" else {},
+            )
+        except ValueError as exc:
+            return _failure("INVALID_REST", str(exc))
+
+        session = _saved_rest_session(instance)
+        status = str(session.get("status") or "idle")
+        if status in {"idle", "completed", "error"}:
+            required = _rest_eligible_uids(instance)
+            if not required:
+                return _failure("REST_NOT_AVAILABLE", "当前没有可参加休息的存活角色")
+            session = {
+                "status": "collecting",
+                "rest": rest,
+                "required_uids": required,
+                "participants": {},
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+        elif str(session.get("rest") or "") != rest:
+            return _failure("REST_TYPE_MISMATCH", "队伍已经在准备另一种休息，请先完成或取消当前休息")
+
+        required = {
+            uid for uid in session.get("required_uids", [])
+            if uid in instance.players and uid not in instance.away_players
+            and instance.is_alive(uid)
+            and int(instance.get_character_sheet(uid).get("hp", 0) or 0) > 0
+        }
+        if user_id not in required:
+            return _failure("REST_NOT_AVAILABLE", "当前角色不在本次队伍休息范围内")
+        session["required_uids"] = sorted(required)
+        participants = session.setdefault("participants", {})
+        if not isinstance(participants, dict):
+            participants = {}
+            session["participants"] = participants
+        previous = participants.get(user_id)
+        if isinstance(previous, dict) and previous.get("operation_id") == operation_id:
+            return {
+                "ok": True, "pending": True, "duplicate": True,
+                "rest": rest, "rest_session": public_rest_session(instance),
+            }
+        revision = int(character.get("ruleset_revision", 0) or 0)
+        raw_expected = parsed.get("expected_revision")
+        try:
+            expected_revision = int(raw_expected)
+        except (TypeError, ValueError):
+            return _failure("INVALID_CHARACTER_REVISION", "休息操作必须提供有效的 expected_revision")
+        if expected_revision != revision:
+            return _failure("STALE_CHARACTER_REVISION", "角色已在其他位置更新，请刷新后重试", revision=revision)
+        participants[user_id] = {
+            "operation_id": operation_id,
+            "expected_revision": expected_revision,
+            "hit_dice": hit_dice,
+            "submitted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if not required.issubset(participants):
+            session["status"] = "collecting"
+            _set_rest_session(instance, session)
+            await api._reg.save(instance)
+            return {
+                "ok": True, "pending": True, "resolved": False, "rest": rest,
+                "rest_session": public_rest_session(instance),
+            }
+
+        session["status"] = "resolving"
+        _set_rest_session(instance, session)
+        before_players = {uid: deepcopy(instance.players[uid]) for uid in required}
+        results: dict[str, dict[str, Any]] = {}
+        for uid in sorted(required):
+            item = participants[uid]
+            result = await resolve_live(api, game_key, uid, {
+                "rest": rest,
+                "hit_dice": item.get("hit_dice", {}),
+                "confirm_elapsed_time": True,
+                "expected_revision": item.get("expected_revision"),
+                "operation_id": item.get("operation_id"),
+            })
+            if not result.get("ok"):
+                for restore_uid, player in before_players.items():
+                    instance.players[restore_uid] = player
+                session["status"] = "error"
+                session["error"] = str(result.get("error") or "队伍休息结算失败")
+                _set_rest_session(instance, session)
+                await api._reg.save(instance)
+                return _failure("PARTY_REST_FAILED", session["error"], rest_session=public_rest_session(instance))
+            results[uid] = result
+        session["status"] = "completed"
+        session["resolved_at"] = datetime.now(timezone.utc).isoformat()
+        session["error"] = ""
+        _set_rest_session(instance, session)
+        await api._reg.save(instance)
+        own = results.get(user_id) or {}
+        return {
+            **own,
+            "pending": False,
+            "resolved": True,
+            "party_results": [
+                {"user_id": uid, "character_name": instance.players[uid].get("character_name", uid),
+                 "events": deepcopy(results[uid].get("events") or [])}
+                for uid in sorted(results)
+            ],
+            "rest_session": public_rest_session(instance),
+        }

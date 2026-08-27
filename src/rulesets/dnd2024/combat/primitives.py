@@ -8,8 +8,9 @@ from typing import Any
 
 DICE_RE = re.compile(r"^(\d+)d(\d+)([+-]\d+)?$")
 INTENT_TYPES = frozenset({
-    "combat.start", "combat.end", "attack", "cast_spell", "move", "dash", "dodge",
-    "disengage", "end_turn", "death_save", "stabilize", "decision.resolve",
+    "encounter.ready", "encounter.unready", "combat.start", "combat.end", "combat.message",
+    "attack", "cast_spell", "move", "dash", "dodge", "disengage", "end_turn",
+    "death_save", "stabilize", "decision.resolve",
 })
 
 

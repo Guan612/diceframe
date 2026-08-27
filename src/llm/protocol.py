@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 KNOWN_PROTOCOL_TAGS = frozenset({
     "HP", "GOLD", "PAY", "SCENE", "SCENE_IMAGE", "NPC", "LOOT", "KEY_ITEM", "DECISION",
-    "QUEST", "USE", "WEAPON", "EQUIP", "PRIVATE", "XP", "SAN", "SAN_CHECK",
+    "QUEST", "USE", "WEAPON", "EQUIP", "PRIVATE", "XP", "MILESTONE", "SAN", "SAN_CHECK",
     "LUCK", "SKILL_GROWTH", "PUSH", "PUZZLE", "MANA", "SPELL", "QUICK_ACTIONS",
     "COMBAT", "REVIVE", "CONFIRMED", "MEMORY", "STAT",
 })

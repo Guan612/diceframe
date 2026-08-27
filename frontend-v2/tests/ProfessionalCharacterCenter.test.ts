@@ -42,7 +42,7 @@ describe('ProfessionalCharacterCenter', () => {
     })
   })
 
-  it('teaches the basic mental model and only submits profile fields', async () => {
+  it('only submits profile fields', async () => {
     const wrapper = mount(ProfessionalCharacterCenter, {
       props: {
         character,
@@ -61,8 +61,7 @@ describe('ProfessionalCharacterCenter', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('第一次玩，先记住三件事')
-    expect(wrapper.text()).toContain('描述你想做什么，不必先背规则')
+    expect(wrapper.text()).not.toContain('第一次玩，先记住三件事')
     await wrapper.get('.center-tabs button:nth-child(2)').trigger('click')
     await wrapper.get('input[required]').setValue('Arden Vale')
     const textareas = wrapper.findAll('textarea')
@@ -104,6 +103,13 @@ describe('ProfessionalCharacterCenter', () => {
     })
 
     await wrapper.get('.center-tabs button:nth-child(4)').trigger('click')
+    expect(wrapper.text()).toContain('生命骰')
+    expect(wrapper.text()).toContain('1 / 1')
+    const restOptions = wrapper.findAll('.rest-type-option')
+    expect(restOptions).toHaveLength(2)
+    expect(restOptions[0].classes()).toContain('selected')
+    expect(restOptions[0].get('input').attributes('type')).toBe('radio')
+    expect(restOptions[1].get('input').attributes('type')).toBe('radio')
     await wrapper.get('.hit-dice-grid input').setValue(1)
     await wrapper.get('.rest-confirm input').setValue(true)
     await wrapper.get('.rest-center > button').trigger('click')
@@ -119,6 +125,47 @@ describe('ProfessionalCharacterCenter', () => {
     expect(body.operation_id).toEqual(expect.any(String))
     expect(body).not.toHaveProperty('hit_die_rolls')
     expect(wrapper.emitted('saved')?.[0]?.[1]).toBe('rest')
+  })
+
+  it('shows party rest readiness and keeps the dialog open while waiting', async () => {
+    mocks.api.mockResolvedValueOnce({
+      ok: true,
+      pending: true,
+      resolved: false,
+      rest: 'short',
+      rest_session: {
+        active: true, status: 'collecting', rest: 'short', ready_count: 1, active_count: 2,
+        participants: [
+          { user_id: 'player/1', character_name: 'Arden', status: 'submitted' },
+          { user_id: 'player/2', character_name: 'Mira', status: 'waiting' },
+        ],
+      },
+    })
+    const wrapper = mount(ProfessionalCharacterCenter, {
+      props: {
+        character: { ...character, ruleset_revision: 3 },
+        target: 'game', gameKey: 'web|room|bot', userId: 'player/1',
+        ruleId: 'dnd2024_srd', language: 'zh-CN',
+        restSession: {
+          active: true, status: 'collecting', rest: 'short', ready_count: 0, active_count: 2,
+          participants: [
+            { user_id: 'player/1', character_name: 'Arden', status: 'waiting' },
+            { user_id: 'player/2', character_name: 'Mira', status: 'waiting' },
+          ],
+        },
+      },
+      global: { stubs: { PortraitPicker: true } },
+    })
+
+    expect(wrapper.get('.center-tabs button:nth-child(4)').classes()).toContain('active')
+    expect(wrapper.text()).toContain('队伍短休准备：0/2')
+    expect(wrapper.text()).toContain('Mira · 等待')
+    await wrapper.get('.rest-confirm input').setValue(true)
+    await wrapper.get('.rest-center > button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.emitted('rest-pending')).toHaveLength(1)
+    expect(wrapper.emitted('saved')).toBeUndefined()
   })
 
   it('keeps long profile text readable and renders spell slots as level cards', async () => {
@@ -154,9 +201,31 @@ describe('ProfessionalCharacterCenter', () => {
     await wrapper.get('.center-tabs button:nth-child(2)').trigger('click')
     expect((wrapper.findAll('textarea')[3].element as HTMLTextAreaElement).value).toContain('保护每一个')
     await wrapper.get('.center-tabs button:nth-child(4)').trigger('click')
-    expect(wrapper.findAll('.spell-slot-card')).toHaveLength(2)
+    expect(wrapper.findAll('.spell-slot-card')).toHaveLength(3)
     expect(wrapper.text()).toContain('1 环')
     expect(wrapper.text()).toContain('2 / 4')
     expect(wrapper.text()).not.toContain('slots_current')
+  })
+
+  it('keeps the action footer outside the only scrolling content region', async () => {
+    const wrapper = mount(ProfessionalCharacterCenter, {
+      props: {
+        character,
+        target: 'card',
+        cardId: 'card-1',
+        ruleId: 'dnd2024_srd',
+        language: 'zh-CN',
+      },
+      global: { stubs: { PortraitPicker: true } },
+    })
+
+    await wrapper.get('.center-tabs button:nth-child(2)').trigger('click')
+    const root = wrapper.get('.professional-character-center')
+    const scrollRegion = wrapper.get('.center-scroll-region')
+    const footer = wrapper.get('footer')
+
+    expect(scrollRegion.find('.profile-panel').exists()).toBe(true)
+    expect(scrollRegion.find('footer').exists()).toBe(false)
+    expect(footer.element.parentElement).toBe(root.element)
   })
 })

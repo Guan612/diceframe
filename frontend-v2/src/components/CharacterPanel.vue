@@ -9,8 +9,8 @@ import Modal from '@/components/ui/Modal.vue'
 import LevelUpDialog from '@/components/admin/LevelUpDialog.vue'
 import GeneratedImageThumbnail from '@/components/common/GeneratedImageThumbnail.vue'
 
-const props = defineProps<{ player?: Player; ruleMeta?: RuleMeta | null; portraitEditable?: boolean }>()
-const emit = defineEmits<{ 'portrait-click': []; 'allocate-level-up': [attrs: Record<string, number>] }>()
+const props = defineProps<{ player?: Player; ruleMeta?: RuleMeta | null; portraitEditable?: boolean; showAdvancedCenter?: boolean }>()
+const emit = defineEmits<{ 'portrait-click': []; 'allocate-level-up': [attrs: Record<string, number>]; 'open-character-center': [] }>()
 const { t } = useLocale()
 function label(item: unknown) { if (typeof item === 'string') return item; if (item && typeof item === 'object' && 'name' in item) return String((item as { name?: unknown }).name || JSON.stringify(item)); return JSON.stringify(item) }
 
@@ -184,6 +184,7 @@ function submitLevelUp(attrs: Record<string, number>) {
     <div class="chips character-attributes">
       <span v-for="a in attrs" :key="a.key">{{ a.name }} {{ a.value }}</span>
     </div>
+    <button v-if="showAdvancedCenter" type="button" class="character-center-trigger" @click="emit('open-character-center')">{{ t('advancedCharacterCenter') }}</button>
     <details class="character-detail-block"><summary>{{ t('skills') }}</summary>
       <div class="chips">
         <span v-for="(s, i) in cs.skills || []" :key="'s' + i" :title="skillTitle(s) || undefined">{{ label(s) }}<template v-if="typeof s === 'object' && s.value !== undefined"> {{ s.value }}</template></span>
@@ -272,6 +273,8 @@ function submitLevelUp(attrs: Record<string, number>) {
 .level-up-notice{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 0 4px;padding:7px 9px;border:1px solid var(--df-border-soft);border-radius:var(--df-radius-sm);background:var(--df-hover)}
 .level-up-notice span{color:var(--df-warning);font-size:12px;line-height:1.3}
 .level-up-notice button{padding:2px 10px;font-size:12px;white-space:nowrap}
+.character-center-trigger{display:flex;align-items:center;justify-content:center;width:100%;min-height:38px;margin:10px 0 4px;padding:7px 10px;border:1px solid var(--df-accent,#c79444);border-radius:var(--df-radius-sm);background:rgb(199 148 68 / 12%);color:var(--df-text);font-weight:700;cursor:pointer}
+.character-center-trigger:hover{background:rgb(199 148 68 / 22%)}
 .skill-detail-list {
   flex-direction: column;
   align-items: stretch;

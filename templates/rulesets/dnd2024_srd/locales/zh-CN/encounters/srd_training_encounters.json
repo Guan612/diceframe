@@ -6,8 +6,8 @@
     "name": "SRD 新手战斗预设",
     "labels": {
       "presets": {
-        "goblin_patrol": {"name": "哥布林巡逻兵", "description": "一名能切换近战和远程武器的标准敌人。"},
-        "crypt_pair": {"name": "地穴双敌", "description": "骷髅与狼的双目标遭遇，适合练习目标选择。"}
+        "goblin_patrol": {"name": "哥布林巡逻兵", "description": "一名能切换近战和远程武器的哥布林战士。"},
+        "crypt_pair": {"name": "地穴伏敌", "description": "一具骷髅与一头狼共同守卫着幽暗地穴。"}
       },
       "profiles": {
         "goblin_warrior": "哥布林战士",

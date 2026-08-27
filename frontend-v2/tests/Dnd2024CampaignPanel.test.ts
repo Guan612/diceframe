@@ -41,6 +41,7 @@ function response(state: 'new' | 'pending' | 'tutorial' = 'new') {
       },
       encounter_presets: [],
       campaign: {
+        automation: { mode: locked ? 'assist' : 'auto' },
         session_zero_defaults: defaults,
         session_zero: {
           status: locked ? 'locked' : state, revision: state === 'new' ? 0 : 1,
@@ -161,7 +162,7 @@ describe('D&D 2024 campaign panel', () => {
     wrapper.unmount()
   })
 
-  it('keeps the current objective and optional GM records inside the toolbox', async () => {
+  it('keeps a compact adventure status and removes the new-player lesson card', async () => {
     mocks.locale = 'zh-CN'
     mocks.fetch.mockResolvedValueOnce(response('tutorial'))
     const wrapper = mount(Dnd2024CampaignPanel, {
@@ -169,12 +170,14 @@ describe('D&D 2024 campaign panel', () => {
     })
     await flushPromises()
 
-    const tutorial = wrapper.get('.tutorial-card')
+    const adventure = wrapper.get('.adventure-card')
     const records = wrapper.get('.records-card')
-    expect(tutorial.text()).toContain('你不需要先学完整规则')
-    expect(tutorial.text()).toContain('你是谁')
-    expect(tutorial.text()).toContain('接下来做什么')
-    expect(tutorial.element.compareDocumentPosition(records.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(adventure.get('.adventure-status').text()).toContain('当前目标')
+    expect(adventure.text()).not.toContain('你不需要先学完整规则')
+    expect(adventure.text()).not.toContain('你是谁')
+    expect(adventure.text()).not.toContain('看不懂，给我提示')
+    expect(adventure.find('.step-card').exists()).toBe(false)
+    expect(adventure.element.compareDocumentPosition(records.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(wrapper.find('.composer').exists()).toBe(false)
     wrapper.unmount()
   })
@@ -195,7 +198,7 @@ describe('D&D 2024 campaign panel', () => {
 
     expect(wrapper.find('.adventure-composer').exists()).toBe(false)
     expect(wrapper.find('.composer').exists()).toBe(false)
-    expect(wrapper.get('.tutorial-card .campaign-primary').text()).toContain('开始《灰沼失灯记》')
+    expect(wrapper.get('.adventure-card .campaign-primary').text()).toContain('进入当前冒险')
     wrapper.unmount()
   })
 
@@ -214,7 +217,7 @@ describe('D&D 2024 campaign panel', () => {
     wrapper.unmount()
   })
 
-  it('shows coaching while keeping the post-combat choice disabled', async () => {
+  it('keeps only a collapsed GM recovery path when automation cannot advance', async () => {
     mocks.fetch.mockResolvedValueOnce(response('tutorial'))
     mocks.submit.mockResolvedValue(response('tutorial'))
     const wrapper = mount(Dnd2024CampaignPanel, {
@@ -222,12 +225,11 @@ describe('D&D 2024 campaign panel', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('The time shown is an estimate, not a countdown')
-    expect(wrapper.get('.choice-grid button').attributes('disabled')).toBeDefined()
-    await wrapper.get('.coach-row button').trigger('click')
-    await flushPromises()
+    expect(wrapper.get('.adventure-status').text()).toContain('Current objective')
+    expect(wrapper.get('.gm-fallback').attributes('open')).toBeUndefined()
+    expect(wrapper.get('.gm-fallback .choice-grid button').attributes('disabled')).toBeDefined()
     expect(mocks.submit).not.toHaveBeenCalled()
-    expect(wrapper.text()).toContain('Move or shoot.')
+    expect(wrapper.text()).not.toContain('Move or shoot.')
     wrapper.unmount()
   })
 
@@ -241,11 +243,34 @@ describe('D&D 2024 campaign panel', () => {
     })
     await flushPromises()
 
-    await wrapper.get('.choice-grid button').trigger('click')
+    await wrapper.get('.gm-fallback .choice-grid button').trigger('click')
     await flushPromises()
 
     expect(mocks.submit.mock.calls[0][1]).toMatchObject({ type: 'tutorial.choose' })
     expect(wrapper.emitted('navigate')).toEqual([['combat']])
+    wrapper.unmount()
+  })
+
+  it('lets the GM persist a shared AI GM automation mode', async () => {
+    const initial = response('tutorial') as any
+    initial.gameplay.campaign.automation = { mode: 'assist' }
+    initial.available_actions.push({
+      type: 'automation.set', label: 'Set automation', expected_version: 1,
+      options: ['auto', 'assist', 'manual'], current: 'assist',
+    })
+    mocks.fetch.mockResolvedValueOnce(initial)
+    mocks.submit.mockResolvedValueOnce(initial)
+    const wrapper = mount(Dnd2024CampaignPanel, {
+      props: { gameKey: 'web|campaign|bot', actorId: 'gm', isGm: true },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('.automation-card summary').text()).toContain('Assist')
+    await wrapper.findAll('.automation-options button')[2].trigger('click')
+    await flushPromises()
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({
+      type: 'automation.set', mode: 'manual', expected_version: 1,
+    })
     wrapper.unmount()
   })
 
@@ -265,10 +290,10 @@ describe('D&D 2024 campaign panel', () => {
     })
     await flushPromises()
 
-    expect(wrapper.get('.campaign-head').text()).toContain('Professional rules · Standard mode')
+    expect(wrapper.get('.campaign-head').text()).toContain('Advanced rules · Standard mode')
     expect(wrapper.get('.sandbox-card').text()).toContain('shared action composer')
     expect(wrapper.get('.sandbox-card').text()).toContain('Selected Worldbook')
-    expect(wrapper.find('.tutorial-card').exists()).toBe(false)
+    expect(wrapper.find('.adventure-card').exists()).toBe(false)
     expect(wrapper.find('.composer').exists()).toBe(false)
     expect(mocks.submit).not.toHaveBeenCalled()
     wrapper.unmount()
@@ -293,6 +318,69 @@ describe('D&D 2024 campaign panel', () => {
     expect(wrapper.get('.shared-context').text()).toContain('驿道入口')
     await wrapper.get('.shared-context button').trigger('click')
     expect(wrapper.emitted('open-map')).toEqual([[]])
+    wrapper.unmount()
+  })
+
+  it('keeps multiplayer branch choices out of the player toolbox', async () => {
+    const multiplayer = response('tutorial') as any
+    multiplayer.gameplay.campaign.tutorial.requirement_met = true
+    multiplayer.gameplay.campaign.tutorial.current_step.choices = [
+      { id: 'inspect_cold_ash', label: 'Inspect ash', description: 'Look closer.', next_step_id: 'keepers_plea' },
+      { id: 'check_wagon_tracks', label: 'Check tracks', description: 'Search the wagon.', next_step_id: 'keepers_plea' },
+    ]
+    multiplayer.gameplay.campaign.party_decision = {
+      status: 'open', step_id: 'mistbound_road',
+      choices: multiplayer.gameplay.campaign.tutorial.current_step.choices,
+      submitted: {}, submitted_count: 0, total_players: 2,
+    }
+    multiplayer.available_actions = [{
+      type: 'party_decision.submit', label: 'Submit', expected_version: 1,
+      choice_ids: ['inspect_cold_ash', 'check_wagon_tracks'], submitted: {},
+    }]
+    mocks.fetch.mockResolvedValueOnce(multiplayer)
+    const wrapper = mount(Dnd2024CampaignPanel, {
+      props: { gameKey: 'web|campaign|bot', actorId: 'ally', isGm: false },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.party-decision-card').exists()).toBe(false)
+    expect(wrapper.find('.gm-fallback').exists()).toBe(false)
+    expect(wrapper.find('.choice-grid').exists()).toBe(false)
+    expect(mocks.submit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('lets the GM resolve an open party decision with an explicit branch', async () => {
+    const multiplayer = response('tutorial') as any
+    multiplayer.gameplay.campaign.tutorial.requirement_met = true
+    multiplayer.gameplay.campaign.tutorial.current_step.choices = [
+      { id: 'inspect_cold_ash', label: 'Inspect ash', description: 'Look closer.', next_step_id: 'keepers_plea' },
+      { id: 'check_wagon_tracks', label: 'Check tracks', description: 'Search the wagon.', next_step_id: 'keepers_plea' },
+    ]
+    multiplayer.gameplay.campaign.party_decision = {
+      status: 'open', step_id: 'mistbound_road',
+      choices: multiplayer.gameplay.campaign.tutorial.current_step.choices,
+      submitted: { ally: 'inspect_cold_ash' }, submitted_count: 1, total_players: 2,
+    }
+    multiplayer.available_actions = [{
+      type: 'party_decision.resolve', label: 'Resolve', expected_version: 1,
+      choice_ids: ['inspect_cold_ash', 'check_wagon_tracks'],
+      submitted: { ally: 'inspect_cold_ash' },
+    }]
+    mocks.fetch.mockResolvedValueOnce(multiplayer)
+    const wrapper = mount(Dnd2024CampaignPanel, {
+      props: { gameKey: 'web|campaign|bot', actorId: 'gm', isGm: true },
+    })
+    await flushPromises()
+
+    const select = wrapper.get('.gm-fallback .party-resolve select')
+    await select.setValue('check_wagon_tracks')
+    await wrapper.get('.gm-fallback .party-resolve .campaign-primary').trigger('click')
+    await flushPromises()
+
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({
+      type: 'party_decision.resolve', choice_id: 'check_wagon_tracks', expected_version: 1,
+    })
     wrapper.unmount()
   })
 })

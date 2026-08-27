@@ -30,7 +30,9 @@ frontend-v2/dist/
 static-v2/assets/
 
 # 本地发行构建缓存与 zip 不属于镜像运行时
-dist/
+dist/*
+!dist/docker-update.zip
+!dist/docker-update.sha256
 
 # 移动客户端独立构建，不进入服务端镜像
 mobile/
