@@ -182,7 +182,7 @@ def test_multiplayer_prompt_gets_authority_scope(tmp_path, monkeypatch):
     assert "多人权限范围" not in composer.compose_gm_prompt(solo)
 
 
-def test_dnd_advanced_prompt_declares_public_narrative_perspective(tmp_path, monkeypatch):
+def test_generic_prompt_declares_public_narrative_perspective(tmp_path, monkeypatch):
     prompts = tmp_path / "prompts"
     rules = tmp_path / "rules"
     prompts.mkdir()
@@ -192,13 +192,12 @@ def test_dnd_advanced_prompt_declares_public_narrative_perspective(tmp_path, mon
     monkeypatch.setattr(composer_module, "_GM_PROMPT_CACHE", {})
 
     inst = _make_multi_instance()
-    inst.ruleset_runtime = {"id": "core:dnd2024"}
     prompt = PromptComposer(prompts, rules).compose_gm_prompt(inst)
     assert "叙事视角" in prompt
     assert "显示名作第三人称" in prompt
 
 
-def test_dnd_advanced_prompt_honors_explicit_immersive_perspective(tmp_path, monkeypatch):
+def test_generic_prompt_honors_explicit_immersive_perspective(tmp_path, monkeypatch):
     prompts = tmp_path / "prompts"
     rules = tmp_path / "rules"
     prompts.mkdir()
@@ -208,7 +207,6 @@ def test_dnd_advanced_prompt_honors_explicit_immersive_perspective(tmp_path, mon
     monkeypatch.setattr(composer_module, "_GM_PROMPT_CACHE", {})
 
     inst = _make_multi_instance()
-    inst.ruleset_runtime = {"id": "core:dnd2024"}
     inst.narrative_perspective = "immersive"
     prompt = PromptComposer(prompts, rules).compose_gm_prompt(inst)
 

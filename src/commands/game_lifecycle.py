@@ -17,8 +17,8 @@ from src.commands.tag_summary import summarize_tags
 from src.engine.character_utils import reset_character_for_restart
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
+from src.engine.narrative_perspective import narrative_perspective_instruction
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
-from src.rulesets.dnd2024.narrative import narrative_perspective_instruction
 
 logger = logging.getLogger("trpg")
 
@@ -125,11 +125,9 @@ class GameLifecycle:
                     ),
                 },
             )
-        runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-        if runtime_id == "core:dnd2024":
-            opening_instruction += "\n\n" + narrative_perspective_instruction(
-                instance, instance.language,
-            )
+        opening_instruction += "\n\n" + narrative_perspective_instruction(
+            instance, instance.language,
+        )
         welcome_context = (
             f"{gm_prompt}\n\n"
             f"【当前世界】\n"
