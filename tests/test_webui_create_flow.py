@@ -540,6 +540,7 @@ async def test_create_game_uses_created_character_before_opening(web_api):
     result = await api.create_game(
         "template_world",
         "模板世界",
+        narrative_perspective="third_person",
         players=[{
             "character_name": "艾琳",
             "race": "精灵",
@@ -555,6 +556,7 @@ async def test_create_game_uses_created_character_before_opening(web_api):
     assert [p["character_name"] for p in inst.players.values()] == ["艾琳"]
     assert "艾琳" in fake_llm.calls[-1]["user_message"]
     assert "精灵 游侠" in fake_llm.calls[-1]["user_message"]
+    assert "显示名作第三人称" in fake_llm.calls[-1]["user_message"]
     assert result["players"][0]["character_name"] == "艾琳"
 
 

@@ -1,7 +1,7 @@
-"""D&D 2024 public narration perspective policy.
+"""Ruleset-neutral public narration perspective policy.
 
-The persisted value is a canonical presentation preference.  It never changes
-ruleset identity or mechanics, and only the D&D runtime consumes it.
+The persisted value is a presentation preference. It applies to every
+ruleset and never changes canonical identity or mechanics.
 """
 
 from __future__ import annotations
@@ -20,11 +20,22 @@ NARRATIVE_PERSPECTIVES = frozenset({
 })
 
 
+def validate_narrative_perspective(value: Any) -> str:
+    """Return a canonical value or reject invalid user input."""
+
+    normalized = str(value or NARRATIVE_PERSPECTIVE_AUTO).strip().casefold()
+    if normalized not in NARRATIVE_PERSPECTIVES:
+        raise ValueError("叙事视角必须是 auto、immersive 或 third_person")
+    return normalized
+
+
 def normalize_narrative_perspective(value: Any) -> str:
     """Return a supported canonical value, preserving old saves as ``auto``."""
 
-    normalized = str(value or NARRATIVE_PERSPECTIVE_AUTO).strip().casefold()
-    return normalized if normalized in NARRATIVE_PERSPECTIVES else NARRATIVE_PERSPECTIVE_AUTO
+    try:
+        return validate_narrative_perspective(value)
+    except ValueError:
+        return NARRATIVE_PERSPECTIVE_AUTO
 
 
 def resolve_narrative_perspective(instance: Any) -> str:
@@ -43,7 +54,7 @@ def resolve_narrative_perspective(instance: Any) -> str:
 
 
 def narrative_perspective_instruction(instance: Any, language: str) -> str:
-    """Build the single authoritative D&D narration instruction."""
+    """Build the single ruleset-neutral narration instruction."""
 
     perspective = resolve_narrative_perspective(instance)
     if perspective == NARRATIVE_PERSPECTIVE_IMMERSIVE:
