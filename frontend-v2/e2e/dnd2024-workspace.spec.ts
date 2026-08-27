@@ -45,7 +45,7 @@ test('professional toolbox remains contained at phone, tablet, and desktop width
   for (const width of [320, 640, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     await openDndTable(page)
-    await page.getByTestId('dnd5e-campaign-tool').first().click()
+    await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
     await expect(page.locator('.campaign-panel')).toBeVisible()
 
     const geometry = await page.evaluate(() => {
@@ -70,6 +70,8 @@ test('professional toolbox remains contained at phone, tablet, and desktop width
     expect(geometry.workspaceBottom).toBeLessThanOrEqual(geometry.viewportHeight + 1)
     expect(geometry.minControlHeight).toBeGreaterThanOrEqual(28)
     expect(geometry.minCheckboxTargetHeight).toBeGreaterThanOrEqual(43)
+    await page.locator('.dnd-toolbox-dialog .modal-x').click()
+    await expect(page.locator('.dnd-toolbox-dialog')).toHaveCount(0)
   }
 })
 
@@ -81,7 +83,8 @@ test('professional rules keep one timeline and expose combat as a tool', async (
   await expect(page.locator('.composer')).toHaveCount(1)
   await expect(page.locator('.campaign-panel')).toHaveCount(0)
   await expect(page.locator('.dnd-combat')).toHaveCount(0)
-  await page.locator('[data-testid="dnd5e-combat-tool"]:visible').click()
+  await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
+  await page.locator('.dnd-toolbox-dialog').getByRole('button', { name: '战斗工具' }).click()
   await expect(page.locator('.dnd-combat')).toBeVisible()
   await expect(page.getByTestId('timeline')).toBeVisible()
   await expect(page.locator('.dnd-party-feed')).toHaveCount(0)
@@ -95,7 +98,7 @@ test('professional surfaces keep explicit labels and readable light-mode colors'
   })
   await openDndTable(page)
   await expect(page.locator('body')).toHaveClass(/light/)
-  await page.getByTestId('dnd5e-campaign-tool').first().click()
+  await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
 
   const unlabeled = await page.locator('.campaign-panel input').evaluateAll(inputs => inputs.filter(input => {
     const element = input as HTMLInputElement
@@ -134,10 +137,9 @@ test('professional surfaces keep explicit labels and readable light-mode colors'
 test('Chinese professional play area explains the route and localizes campaign enums', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await openDndTable(page)
-  await page.getByTestId('dnd5e-campaign-tool').first().click()
+  await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
   await expect(page.getByRole('heading', { name: '快速完成开团设置' })).toBeVisible()
-  await page.getByRole('button', { name: '采用推荐设置，立即开始' }).click()
-  await expect(page.getByRole('heading', { name: '开团准备' })).toBeVisible()
+  await expect(page.locator('.session-card summary')).toContainText('手动设置 / 多人开团')
 
   const agreement = page.locator('.agreement-grid')
   const tone = agreement.locator('label').filter({ hasText: /^基调/ }).locator('select')
