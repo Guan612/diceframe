@@ -54,6 +54,18 @@ def test_digest_covers_all_locales_even_when_loading_another_locale(tmp_path: Pa
     assert after != before
 
 
+def test_digest_is_independent_of_json_line_endings(tmp_path: Path) -> None:
+    loader, package = _copied_package(tmp_path)
+    before = loader.load("lanterns_of_greymoor", "zh-CN").content_digest
+    for path in package.rglob("*.json"):
+        content = path.read_bytes().replace(b"\r\n", b"\n")
+        path.write_bytes(content.replace(b"\n", b"\r\n"))
+
+    after = loader.load("lanterns_of_greymoor", "zh-CN").content_digest
+
+    assert after == before
+
+
 def test_adventure_locale_cannot_override_mechanics(tmp_path: Path) -> None:
     loader, package = _copied_package(tmp_path)
     locale_path = package / "locales" / "en" / "adventure.json"

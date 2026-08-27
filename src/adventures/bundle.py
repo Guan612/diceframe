@@ -350,5 +350,13 @@ class AdventureBundleLoader:
         digest = hashlib.sha256()
         for path in sorted(paths, key=lambda item: item.as_posix()):
             digest.update(path.relative_to(root).as_posix().encode("utf-8"))
-            digest.update(path.read_bytes())
+            value = json.loads(path.read_text(encoding="utf-8"))
+            digest.update(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+            )
         return f"sha256:{digest.hexdigest()}"
