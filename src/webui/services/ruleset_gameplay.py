@@ -8,9 +8,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from src.compat.dnd2024_adventure_bindings import (
-    apply_unreleased_adventure_binding_migration,
-)
+from src.migrations import migrate_instance
 from src.webui.services.ruleset_builder import validate_draft_shape
 from src.rulesets.contracts import (
     AuthoritativeIntentHooks,
@@ -211,7 +209,7 @@ async def _ensure_compatible_adventure_binding(
             "INCOMPATIBLE_ADVENTURE",
             "bound adventure package is missing or has changed",
         )
-    migrated = apply_unreleased_adventure_binding_migration(instance, expected)
+    migrated = migrate_instance(instance, adventure_expected=expected)
     if migrated is None:
         return _error(
             "INCOMPATIBLE_ADVENTURE",

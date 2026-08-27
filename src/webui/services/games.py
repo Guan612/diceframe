@@ -12,9 +12,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from src.compat.dnd2024_adventure_bindings import (
-    apply_unreleased_adventure_binding_migration,
-)
 from src.engine.character_utils import apply_resource_delta, get_resource, revive_character, wake_character
 from src.engine.checks import build_check_request, roll_check_request
 from src.engine.game_instance import GameState
@@ -23,6 +20,7 @@ from src.engine.health import health_payload, mark_health_event, record_health_e
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.commands.resource_triggers import check_resource_triggers
 from src.llm.parser import sanitize_narration
+from src.migrations import migrate_instance
 from src.rules.rule_system import RuleSystem
 
 from src.webui.services._common import _GAME_KEY_SEP, _is_safe_world_id
@@ -1300,9 +1298,7 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
                 world_id,
                 resolved_language,
             )
-            migrated = apply_unreleased_adventure_binding_migration(
-                target_inst, current_binding,
-            )
+            migrated = migrate_instance(target_inst, adventure_expected=current_binding)
             if migrated is None:
                 raise ValueError("bound adventure package is missing or has changed")
             if migrated:
