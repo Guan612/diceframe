@@ -114,7 +114,11 @@ class Dnd2024Runtime:
             and isinstance(access, EncounterAccess)
             and access.mode == "story"
         )
-        catalogs = adventure.list("encounter_catalog") if use_adventure_catalog else []
+        catalogs = (
+            adventure.list("encounter_catalog")
+            if use_adventure_catalog and adventure is not None
+            else []
+        )
         if len(catalogs) > 1:
             raise ValueError("adventure package contains multiple encounter catalogs")
         catalog = catalogs[0] if catalogs else None
@@ -726,7 +730,7 @@ class Dnd2024Runtime:
 
     def director_automatic_intent(
         self, instance: Any, proposal: dict[str, Any],
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any] | list[dict[str, Any]] | None:
         """Start only a server-catalogued encounter in auto mode."""
 
         if not isinstance(proposal, dict) or proposal.get("mode") != "auto":
