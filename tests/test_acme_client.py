@@ -311,29 +311,19 @@ async def test_provider_issue_ip_certificate_uses_shortlived_profile(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_challenge_responder_busy_port_reports_actionable_error():
-    # 同时占用 IPv4 与 IPv6 通配地址，模拟 Nginx 等常驻 80 端口的服务。
-    blockers = []
+async def test_challenge_responder_busy_port_reports_actionable_error(monkeypatch):
+    # 直接模拟监听失败，避免测试结果受不同系统的 IPv4/IPv6 双栈绑定语义影响。
     port = _free_port()
-    for host in ("0.0.0.0", "::"):
-        sock = socket.socket(
-            socket.AF_INET6 if ":" in host else socket.AF_INET
-        )
-        try:
-            sock.bind((host, port))
-            sock.listen(1)
-            blockers.append(sock)
-        except OSError:
-            sock.close()
-    try:
-        responder = _ChallengeResponder(port, {"token": "value"})
-        with pytest.raises(Exception) as excinfo:
-            await responder.start()
-        assert "端口" in str(excinfo.value) or "监听" in str(excinfo.value)
-        await responder.stop()
-    finally:
-        for sock in blockers:
-            sock.close()
+
+    async def fail_to_listen(_site):
+        raise OSError("address already in use")
+
+    monkeypatch.setattr(web.TCPSite, "start", fail_to_listen)
+    responder = _ChallengeResponder(port, {"token": "value"})
+    with pytest.raises(Exception) as excinfo:
+        await responder.start()
+    assert "端口" in str(excinfo.value) or "监听" in str(excinfo.value)
+    await responder.stop()
 
 
 def test_renewal_due_respects_remaining_lifetime(tmp_path: Path):
