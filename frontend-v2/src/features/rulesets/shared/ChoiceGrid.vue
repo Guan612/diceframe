@@ -16,6 +16,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>()
       v-for="choice in choices"
       :key="choice.ref"
       type="button"
+      :data-choice-ref="choice.ref"
       :class="['ruleset-choice-card', { selected: modelValue === choice.ref }]"
       :aria-pressed="modelValue === choice.ref"
       @click="emit('update:modelValue', choice.ref)"

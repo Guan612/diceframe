@@ -992,6 +992,7 @@ onBeforeUnmount(() => {
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"
+                data-testid="dnd5e-campaign-tool"
                 type="button"
                 :title="rulesetToolCopy.campaign"
                 :aria-label="rulesetToolCopy.campaign"
@@ -1000,6 +1001,7 @@ onBeforeUnmount(() => {
               <button
                 v-if="hasAuthoritativeCombat"
                 class="combat-tool-trigger"
+                data-testid="dnd5e-combat-tool"
                 type="button"
                 :title="rulesetToolCopy.combat"
                 :aria-label="rulesetToolCopy.combat"
@@ -1015,6 +1017,7 @@ onBeforeUnmount(() => {
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"
+                data-testid="dnd5e-campaign-tool"
                 type="button"
                 :title="rulesetToolCopy.campaign"
                 :aria-label="rulesetToolCopy.campaign"
@@ -1023,6 +1026,7 @@ onBeforeUnmount(() => {
               <button
                 v-if="hasAuthoritativeCombat"
                 class="combat-tool-trigger"
+                data-testid="dnd5e-combat-tool"
                 type="button"
                 :title="rulesetToolCopy.combat"
                 :aria-label="rulesetToolCopy.combat"
