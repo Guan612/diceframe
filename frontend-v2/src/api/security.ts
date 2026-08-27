@@ -8,6 +8,10 @@ export interface CertificateInfo {
   not_after: string
   fingerprint_sha256: string
   san: string[]
+  provider?: 'self_signed' | 'lets_encrypt' | string
+  identifier_type?: 'dns' | 'ip' | string
+  identifier?: string
+  renewal_status?: string
 }
 
 export interface SecurityTransportStatus {
@@ -17,6 +21,15 @@ export interface SecurityTransportStatus {
   tls_mode_source?: string
   degraded_error?: string
   certificate?: CertificateInfo
+  acme?: {
+    identifier_type: 'dns' | 'ip'
+    identifier: string
+    contact_email: string
+    challenge_type: 'http-01'
+    directory: 'production' | 'staging'
+    certificate_profile: string
+    http_challenge_port: number
+  }
 }
 
 export interface SecurityPrepareResponse {
@@ -25,6 +38,7 @@ export interface SecurityPrepareResponse {
   mode?: string
   token?: string
   certificate?: CertificateInfo
+  warnings?: string[]
 }
 
 export interface SecurityActivateResponse {
@@ -46,10 +60,17 @@ export interface SecurityRegenerateResponse {
 
 export const securityApi = {
   status: () => api<SecurityTransportStatus>('/system/security/transport'),
-  prepare: (mode: 'self_signed') =>
+  prepare: (mode: 'self_signed' | 'lets_encrypt', acme?: {
+    identifier_type: 'dns' | 'ip'
+    identifier: string
+    contact_email?: string
+    challenge_type?: 'http-01'
+    directory?: 'production' | 'staging'
+    http_challenge_port?: number
+  }) =>
     api<SecurityPrepareResponse>('/system/security/transport/prepare', {
       method: 'POST',
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode, ...(acme ? { acme } : {}) }),
     }),
   activate: (token: string) =>
     api<SecurityActivateResponse>('/system/security/transport/activate', {

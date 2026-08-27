@@ -19,6 +19,7 @@ from typing import Any
 import aiohttp
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 logger = logging.getLogger("trpg.web_transport")
 
@@ -192,8 +193,10 @@ class AcmeClient:
         protected_b64 = _b64url(json.dumps(protected, separators=(",", ":")).encode())
         payload_b64 = _b64url(payload_text.encode()) if payload_text else ""
         signing_input = f"{protected_b64}.{payload_b64}".encode("ascii")
-        # ES256：DER 编码的 ECDSA 签名（RFC 7518 §3.4）。
-        signature = self._key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+        # JOSE 的 ES256 签名不是 OpenSSL 默认的 DER，而是固定 32+32 字节的 R||S。
+        der_signature = self._key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+        r, s = decode_dss_signature(der_signature)
+        signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
         body = json.dumps(
             {
                 "protected": protected_b64,

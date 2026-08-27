@@ -143,7 +143,8 @@ class MockAcmeServer:
     async def _answer_challenge(self, request: web.Request) -> web.Response:
         protected, _payload, signature = self._parse_jose(await request.text())
         self._check_protected(protected)
-        assert len(_b64url_decode(signature)) >= 8, "签名不能为空"
+        # JOSE ES256 使用固定 64 字节的 R||S，不是 OpenSSL 的 DER 编码。
+        assert len(_b64url_decode(signature)) == 64, "ES256 签名必须是 64 字节 R||S"
         order = self.orders[request.match_info["authz_id"]]
 
         # CA 真实回源 challenge responder：内容必须是 token.thumbprint。

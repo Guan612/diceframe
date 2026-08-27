@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -22,11 +23,18 @@ def _get_service(request: web.Request):
     return request.app["security_transport"]
 
 
-def _target_origin(request: web.Request, scheme: str) -> str:
-    host = request.headers.get("Host") or request.host
-    if not host:
-        host = "127.0.0.1"
-    return f"{scheme}://{host}"
+def _target_origin(request: web.Request, scheme: str, target_host: str = "") -> str:
+    current = request.headers.get("Host") or request.host or "127.0.0.1"
+    try:
+        parsed = urlsplit(f"//{current}")
+        port = parsed.port
+        host = target_host or parsed.hostname or "127.0.0.1"
+    except ValueError:
+        port = None
+        host = target_host or current
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{scheme}://{host}{f':{port}' if port else ''}"
 
 
 async def _schedule_restart(request: web.Request) -> None:
@@ -46,10 +54,15 @@ async def api_security_transport_prepare(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body, dict):
         return web.json_response({"ok": False, "error": "请求体必须是 JSON 对象"}, status=400)
-    result = _get_service(request).prepare(str(body.get("mode") or ""))
+    result = await _get_service(request).prepare(
+        str(body.get("mode") or ""), body.get("acme")
+    )
     if result.get("ok"):
-        logger.info("连接安全：已准备本地 HTTPS 候选证书（指纹 %s...）",
-                    str(result.get("certificate", {}).get("fingerprint_sha256", ""))[:23])
+        logger.info(
+            "连接安全：已准备 %s 候选证书（指纹 %s...）",
+            result.get("mode"),
+            str(result.get("certificate", {}).get("fingerprint_sha256", ""))[:23],
+        )
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
@@ -64,7 +77,11 @@ async def api_security_transport_activate(request: web.Request) -> web.Response:
     if not result.get("ok"):
         return web.json_response(result, status=400)
     logger.info("连接安全：已启用 %s，等待重启生效", result.get("tls_mode"))
-    result["target_origin"] = _target_origin(request, str(result.get("target_scheme") or "http"))
+    result["target_origin"] = _target_origin(
+        request,
+        str(result.get("target_scheme") or "http"),
+        str(result.get("target_identifier") or ""),
+    )
     control = request.app["runtime_control"]
     if not control["restart_requested"]:
         control["restart_requested"] = True
@@ -104,6 +121,17 @@ async def api_security_self_signed_regenerate(request: web.Request) -> web.Respo
     return web.json_response(result)
 
 
+async def api_security_acme_renew(request: web.Request) -> web.Response:
+    denied = _require_confirmed_request(request)
+    if denied is not None:
+        return denied
+    result = await _get_service(request).renew_if_due()
+    result = result or {"status": "not_configured"}
+    if result.get("status") == "failed":
+        return web.json_response({"ok": False, **result}, status=502)
+    return web.json_response({"ok": True, **result})
+
+
 def register_security(app: web.Application) -> None:
     app.router.add_get("/api/system/security/transport", api_security_transport_get)
     app.router.add_post("/api/system/security/transport/prepare", api_security_transport_prepare)
@@ -112,4 +140,8 @@ def register_security(app: web.Application) -> None:
     app.router.add_post(
         "/api/system/security/certificates/self-signed/regenerate",
         api_security_self_signed_regenerate,
+    )
+    app.router.add_post(
+        "/api/system/security/certificates/acme/renew",
+        api_security_acme_renew,
     )

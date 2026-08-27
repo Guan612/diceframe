@@ -41,6 +41,24 @@ def _payload(response) -> dict:
     return json.loads(response.text)
 
 
+def test_target_origin_uses_certificate_address_and_keeps_game_port():
+    request = SimpleNamespace(headers={"Host": "203.0.113.24:18000"})
+
+    assert (
+        security_routes._target_origin(request, "https", "game.example.com")
+        == "https://game.example.com:18000"
+    )
+
+
+def test_target_origin_brackets_ipv6_certificate_address():
+    request = SimpleNamespace(headers={"Host": "diceframe.local:9876"})
+
+    assert (
+        security_routes._target_origin(request, "https", "2001:db8::20")
+        == "https://[2001:db8::20]:9876"
+    )
+
+
 async def _consume_restart(control) -> None:
     task = control.get("restart_task")
     if task is not None:
@@ -61,6 +79,32 @@ async def test_get_status_reports_http_by_default(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_status_returns_editable_acme_settings_without_key_material(tmp_path):
+    app, _, _, _ = _make_app(
+        tmp_path,
+        {
+            "web_transport": {
+                "tls_mode": "lets_encrypt",
+                "acme": {
+                    "identifier_type": "dns",
+                    "identifier": "game.example.com",
+                    "contact_email": "owner@example.com",
+                    "http_challenge_port": 8080,
+                },
+            }
+        },
+    )
+    response = await security_routes.api_security_transport_get(SimpleNamespace(app=app))
+    payload = _payload(response)
+
+    assert payload["acme"]["identifier"] == "game.example.com"
+    assert payload["acme"]["contact_email"] == "owner@example.com"
+    assert payload["acme"]["http_challenge_port"] == 8080
+    assert "account_key" not in payload["acme"]
+    assert "key_path" not in payload["acme"]
+
+
+@pytest.mark.asyncio
 async def test_prepare_without_confirmation_is_rejected(tmp_path):
     app, _, control, _ = _make_app(tmp_path)
     response = await security_routes.api_security_transport_prepare(_request(app, {"mode": "self_signed"}, confirm=False))
@@ -69,11 +113,64 @@ async def test_prepare_without_confirmation_is_rejected(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_prepare_lets_encrypt_is_rejected_as_not_available(tmp_path):
+async def test_prepare_lets_encrypt_requires_identifier(tmp_path):
     app, _, _, _ = _make_app(tmp_path)
     response = await security_routes.api_security_transport_prepare(_request(app, {"mode": "lets_encrypt"}))
     assert response.status == 400
-    assert "尚未开放" in _payload(response)["error"]
+    assert "标识不能为空" in _payload(response)["error"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_lets_encrypt_persists_canonical_acme_candidate(tmp_path, monkeypatch):
+    app, _, _, _ = _make_app(tmp_path)
+    service = app["security_transport"]
+    signed = service._self_signed_provider.prepare()
+
+    async def fake_issue(request):
+        assert request.identifier.type == "dns"
+        assert request.identifier.value == "game.example.com"
+        return SimpleNamespace(prepared=signed, warnings=[])
+
+    monkeypatch.setattr(service._acme_provider, "issue", fake_issue)
+    response = await security_routes.api_security_transport_prepare(
+        _request(
+            app,
+            {
+                "mode": "lets_encrypt",
+                "acme": {
+                    "identifier_type": "dns",
+                    "identifier": "Game.Example.COM.",
+                    "contact_email": "owner@example.com",
+                },
+            },
+        )
+    )
+    payload = _payload(response)
+    assert payload["ok"] is True
+    assert payload["mode"] == "lets_encrypt"
+    assert payload["token"]
+    assert payload["certificate"]["fingerprint_sha256"]
+    prep = service._preparations[payload["token"]]
+    assert prep["config"]["acme"]["identifier"] == "game.example.com"
+
+
+@pytest.mark.asyncio
+async def test_prepare_lets_encrypt_converts_network_failure_to_actionable_error(tmp_path, monkeypatch):
+    app, _, _, _ = _make_app(tmp_path)
+    service = app["security_transport"]
+
+    async def failed_issue(_request):
+        raise __import__("aiohttp").ClientConnectionError("CA unavailable")
+
+    monkeypatch.setattr(service._acme_provider, "issue", failed_issue)
+    response = await security_routes.api_security_transport_prepare(
+        _request(
+            app,
+            {"mode": "lets_encrypt", "acme": {"identifier_type": "dns", "identifier": "game.example.com"}},
+        )
+    )
+    assert response.status == 400
+    assert "证书申请失败" in _payload(response)["error"]
 
 
 @pytest.mark.asyncio

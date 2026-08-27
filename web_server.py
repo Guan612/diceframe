@@ -6,6 +6,7 @@ import hmac
 import logging
 import os
 import secrets as secrets_module
+import signal
 import sys
 from datetime import datetime, timezone
 
@@ -734,6 +735,39 @@ async def on_startup(app: web.Application) -> None:
     # 后台预热 DF 助手的远程文档索引（diceframe-content），失败静默回退内置索引
     from src.webui.assistant_knowledge import prefetch_remote_indexes
     app["_assistant_docs_task"] = asyncio.create_task(prefetch_remote_indexes())
+    app["_certificate_renewal_task"] = asyncio.create_task(
+        _certificate_renewal_loop(app), name="certificate-renewal"
+    )
+
+
+async def _certificate_renewal_loop(app: web.Application) -> None:
+    """检查并续期当前证书；只在启用 Let's Encrypt 时产生网络请求。"""
+    while True:
+        try:
+            service = app.get("security_transport")
+            result = await service.renew_if_due() if service else None
+            if result and result.get("status") == "failed":
+                logger.error("Let's Encrypt 证书续期失败：%s", result.get("error"))
+            elif result and result.get("status") == "missing":
+                logger.warning("Let's Encrypt 已配置但找不到当前证书，请在设置 → 安全重新申请")
+            elif result and result.get("status") == "renewed":
+                logger.info("Let's Encrypt 证书续期成功，准备重启加载新证书")
+                control = app["runtime_control"]
+                if not control["restart_requested"]:
+                    control["restart_requested"] = True
+                    control["restart_task"] = asyncio.create_task(
+                        _restart_after_certificate_renewal()
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Let's Encrypt 证书续期检查失败")
+        await asyncio.sleep(15 * 60)
+
+
+async def _restart_after_certificate_renewal() -> None:
+    await asyncio.sleep(0.5)
+    signal.raise_signal(signal.SIGINT)
 
 
 async def on_cleanup(app: web.Application) -> None:
@@ -753,6 +787,13 @@ async def on_cleanup(app: web.Application) -> None:
     save_task = app.get("_save_task")
     if save_task:
         save_task.cancel()
+    renewal_task = app.get("_certificate_renewal_task")
+    if renewal_task:
+        renewal_task.cancel()
+        try:
+            await renewal_task
+        except asyncio.CancelledError:
+            pass
     subsystems: TRPGSubsystems | None = app.get("subsystems")
     if subsystems:
         try:

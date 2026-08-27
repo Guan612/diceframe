@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from src.web_transport.certificates.base import CertificateError
@@ -125,6 +126,34 @@ class CertificateStore:
             return {}
         except (OSError, ValueError):
             return {}
+
+    def try_acquire_lock(self, name: str, stale_after_seconds: int = 3600) -> Path | None:
+        """通过 O_EXCL 提供跨进程的轻量互斥锁；返回 None 表示已有持有者。"""
+        self.ensure_layout()
+        lock_path = self.locks_dir / f"{name}.lock"
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w", encoding="ascii") as handle:
+                handle.write(str(os.getpid()))
+            return lock_path
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > stale_after_seconds:
+                    lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return None
+        except OSError as exc:
+            raise CertificateError(f"创建证书锁失败：{exc}") from exc
+
+    @staticmethod
+    def release_lock(lock_path: Path | None) -> None:
+        if lock_path is None:
+            return
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _restrict_private_file(path: Path) -> None:

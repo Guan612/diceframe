@@ -307,8 +307,225 @@
   );
 }
 
+.security-pane .security-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 15px 18px 12px;
+}
+
+.security-pane .security-guide-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-1) 72%, transparent);
+}
+
+.security-pane .security-guide-card > .n-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  color: var(--df-interactive-strong);
+  background: color-mix(in srgb, var(--df-interactive) 12%, var(--df-surface-2));
+  font-size: 20px;
+}
+
+.security-pane .security-guide-card-public > .n-icon {
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent-strong) 12%, var(--df-surface-2));
+}
+
+.security-pane .security-guide-card > div,
+.security-pane .security-guide-warning > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.security-pane .security-guide-kicker {
+  color: var(--df-text-muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.security-pane .security-guide-card strong,
+.security-pane .security-guide-warning strong {
+  color: var(--df-text-secondary);
+  font-size: 13px;
+}
+
+.security-pane .security-guide-card small,
+.security-pane .security-guide-warning small {
+  color: var(--df-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.security-pane .security-guide-warning {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  margin: 0 18px 16px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--df-warning, #f0a020) 30%, var(--df-border-soft));
+  border-radius: var(--df-radius-sm);
+  background: color-mix(in srgb, var(--df-warning, #f0a020) 8%, transparent);
+}
+
+.security-pane .security-guide-warning > .n-icon {
+  margin-top: 1px;
+  color: var(--df-warning, #f0a020);
+  font-size: 18px;
+}
+
 .security-pane .security-mode-unavailable {
   opacity: 0.72;
+}
+
+.security-pane .security-mode-lets-encrypt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding-block: 14px 16px;
+}
+
+.security-pane .security-mode-lets-encrypt > .security-mode-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.security-pane .security-mode-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.security-pane .security-mode-copy strong {
+  flex: none;
+  font-size: 14px;
+}
+
+.security-pane .security-mode-copy small {
+  max-width: 760px;
+  line-height: 1.55;
+}
+
+.security-pane .security-acme-workflow {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.7fr) minmax(300px, 1.5fr) minmax(170px, 0.8fr);
+  gap: 10px;
+  width: 100%;
+}
+
+.security-pane .security-acme-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--df-border-soft) 82%, transparent);
+  border-radius: var(--df-radius-sm);
+  background: color-mix(in srgb, var(--df-surface-1) 72%, transparent);
+}
+
+.security-pane .security-step-index {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--df-bg, #0b1016);
+  background: var(--df-accent-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.security-pane .security-step-content {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  width: 100%;
+}
+
+.security-pane .security-step-content strong {
+  flex: none;
+  font-size: 12px;
+}
+
+.security-pane .security-step-content small {
+  min-height: 30px;
+  line-height: 1.45;
+}
+
+.security-pane .security-acme-address-fields {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 0.8fr);
+  gap: 8px;
+}
+
+.security-pane .security-acme-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  width: 100%;
+}
+
+.security-pane .security-acme-actions small {
+  margin-right: auto;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .security-pane .security-guide-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .security-pane .security-acme-workflow {
+    grid-template-columns: 1fr;
+  }
+
+  .security-pane .security-step-content small {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .security-pane .security-mode-row {
+    grid-template-columns: 1fr;
+  }
+
+  .security-pane .security-mode-row > div:first-child,
+  .security-pane .security-mode-copy {
+    display: grid;
+    gap: 4px;
+  }
+
+  .security-pane .security-mode-actions,
+  .security-pane .security-acme-actions {
+    justify-content: stretch;
+  }
+
+  .security-pane .security-mode-actions .n-button,
+  .security-pane .security-acme-actions .n-button {
+    width: 100%;
+  }
+
+  .security-pane .security-acme-address-fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .security-pane .security-degraded {
@@ -316,7 +533,44 @@
 }
 
 .security-pane .security-no-cert {
-  margin: 12px 4px 0;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 13px 15px;
+  border: 1px dashed color-mix(in srgb, var(--df-accent) 38%, var(--df-border-soft));
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-1) 66%, transparent);
+}
+
+.security-pane .security-no-cert > .n-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--df-text-muted);
+  background: color-mix(in srgb, var(--df-accent) 9%, var(--df-surface-2));
+  font-size: 17px;
+}
+
+.security-pane .security-no-cert > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.security-pane .security-no-cert strong {
+  color: var(--df-text-secondary);
+  font-size: 12px;
+}
+
+.security-pane .security-no-cert small {
+  color: var(--df-text-muted);
+  font-size: 10px;
+  line-height: 1.55;
 }
 
 .security-pane .security-fingerprint {
