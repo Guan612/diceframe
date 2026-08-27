@@ -3,6 +3,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Net.Http;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -12,6 +16,12 @@ internal static class DiceFrameLauncher
     private const string DefaultPort = "18000";
     private static Process serverProcess;
     private static bool shuttingDown;
+    // 本机 DiceFrame endpoint 解析结果：数据目录 + 端口 → scheme 与自签指纹。
+    private static string launcherDataDir = "";
+    private static string launcherPort = DefaultPort;
+    // 仅对 Launcher → 本机 DiceFrame 生效的证书指纹固定；绝不做全局校验关闭。
+    private static string expectedCertFingerprint = "";
+    private static HttpClient localHttpClient;
 
     [STAThread]
     private static int Main(string[] args)
@@ -34,7 +44,10 @@ internal static class DiceFrameLauncher
         TryDelete(Path.Combine(installRoot, "DiceFrame.exe.old"));
 
         string port = ResolvePort(Path.Combine(dataDir, "config.json"));
-        string url = "http://127.0.0.1:" + port;
+        launcherDataDir = dataDir;
+        launcherPort = port;
+        InitLocalHttpClient();
+        string url = ResolveServerEndpoint().Url;
         string activeDir = ResolveActiveDirectory(installRoot, currentPointer);
         MigrateLegacyPortablePayload(
             installRoot,
@@ -163,6 +176,8 @@ internal static class DiceFrameLauncher
         {
             candidateProcess = StartServer(installRoot, candidateDir, dataDir);
             serverProcess = candidateProcess;
+            // 数据目录是共享的：候选版本启动后重新解析 scheme（HTTP/HTTPS）。
+            url = ResolveServerEndpoint().Url;
             if (!WaitForVersion(
                 candidateProcess,
                 url,
@@ -220,6 +235,7 @@ internal static class DiceFrameLauncher
         try
         {
             serverProcess = StartServer(installRoot, previousDir, dataDir);
+            url = ResolveServerEndpoint().Url;
             if (!WaitForServer(serverProcess, url, TimeSpan.FromSeconds(30)))
             {
                 WriteUpdateState(
@@ -619,26 +635,16 @@ internal static class DiceFrameLauncher
     {
         try
         {
-            HttpWebRequest request = CreateRequest(url);
-            request.AllowAutoRedirect = false;
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            using (
+                HttpResponseMessage response = localHttpClient
+                    .GetAsync(url, HttpCompletionOption.ResponseHeadersRead)
+                    .GetAwaiter()
+                    .GetResult()
+            )
             {
                 int statusCode = (int)response.StatusCode;
                 return statusCode >= 200 && statusCode < 500;
             }
-        }
-        catch (WebException ex)
-        {
-            HttpWebResponse response = ex.Response as HttpWebResponse;
-            if (response != null)
-            {
-                using (response)
-                {
-                    int statusCode = (int)response.StatusCode;
-                    return statusCode >= 200 && statusCode < 500;
-                }
-            }
-            return false;
         }
         catch
         {
@@ -648,31 +654,134 @@ internal static class DiceFrameLauncher
 
     private static string HttpGet(string url)
     {
-        HttpWebRequest request = CreateRequest(url);
-        using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-        using (StreamReader reader = new StreamReader(
-            response.GetResponseStream(),
-            Encoding.UTF8
-        ))
+        using (
+            HttpResponseMessage response = localHttpClient
+                .GetAsync(url)
+                .GetAwaiter()
+                .GetResult()
+        )
+        using (
+            StreamReader reader = new StreamReader(
+                response.Content.ReadAsStreamAsync().GetAwaiter().GetResult(),
+                Encoding.UTF8
+            )
+        )
         {
+            string body = reader.ReadToEnd();
             if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
             {
                 throw new WebException("HTTP " + (int)response.StatusCode);
             }
-            return reader.ReadToEnd();
+            return body;
         }
     }
 
-    private static HttpWebRequest CreateRequest(string url)
+    // ---- 本机 endpoint 与证书验证 ----
+
+    private sealed class ServerEndpoint
     {
-        HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-        request.Method = "GET";
-        request.Timeout = 1000;
-        request.ReadWriteTimeout = 1000;
-        request.CachePolicy = new System.Net.Cache.RequestCachePolicy(
+        public string Url;
+        public string Fingerprint;
+    }
+
+    /// <summary>
+    /// 统一解析本机 DiceFrame endpoint：HTTP 保持旧行为；本地 HTTPS 按指纹文件固定。
+    /// WaitForServer、更新健康检查、OpenBrowser 都走这里，不各自拼接 scheme。
+    /// </summary>
+    private static ServerEndpoint ResolveServerEndpoint()
+    {
+        string url = "http://127.0.0.1:" + launcherPort;
+        string fingerprint = "";
+        try
+        {
+            string configPath = Path.Combine(launcherDataDir, "config.json");
+            if (File.Exists(configPath))
+            {
+                string text = File.ReadAllText(configPath);
+                bool selfSigned = Regex
+                    .Match(text, "\"tls_mode\"\\s*:\\s*\"self_signed\"")
+                    .Success;
+                if (selfSigned)
+                {
+                    string fingerprintPath = Path.Combine(
+                        launcherDataDir,
+                        "certs",
+                        "self-signed",
+                        "fingerprint.txt"
+                    );
+                    if (File.Exists(fingerprintPath))
+                    {
+                        string recorded = File.ReadAllText(fingerprintPath).Trim();
+                        if (recorded.Length > 0)
+                        {
+                            url = "https://127.0.0.1:" + launcherPort;
+                            fingerprint = recorded;
+                        }
+                    }
+                    // 指纹文件缺失（例如服务端回退 HTTP）时保持 http：
+                    // 宁可健康检查失败，也不做未验证的 HTTPS 信任。
+                }
+            }
+        }
+        catch
+        {
+        }
+        expectedCertFingerprint = fingerprint;
+        return new ServerEndpoint { Url = url, Fingerprint = fingerprint };
+    }
+
+    private static void InitLocalHttpClient()
+    {
+        WebRequestHandler handler = new WebRequestHandler();
+        // 只影响本机 DiceFrame 请求的 handler；更新、GitHub 等其它流量不走它。
+        handler.ServerCertificateValidationCallback = delegate(
+            object sender,
+            X509Certificate certificate,
+            X509Chain chain,
+            SslPolicyErrors errors
+        )
+        {
+            return ValidateLocalCertificate(certificate, errors);
+        };
+        handler.CachePolicy = new System.Net.Cache.RequestCachePolicy(
             System.Net.Cache.RequestCacheLevel.NoCacheNoStore
         );
-        return request;
+        localHttpClient = new HttpClient(handler);
+        localHttpClient.Timeout = TimeSpan.FromSeconds(2);
+    }
+
+    private static bool ValidateLocalCertificate(
+        X509Certificate certificate,
+        SslPolicyErrors errors
+    )
+    {
+        if (errors == SslPolicyErrors.None)
+        {
+            // 系统信任链验证通过（未来的 Let's Encrypt 证书走这里）。
+            return true;
+        }
+        // 自签证书：只有指纹与本地记录完全一致时才信任。
+        string expected = expectedCertFingerprint;
+        if (expected.Length == 0 || certificate == null)
+        {
+            return false;
+        }
+        string normalized = expected.Replace(":", "").Replace("-", "").ToUpperInvariant();
+        return Sha256Hex(certificate.GetRawCertData()) == normalized;
+    }
+
+    private static string Sha256Hex(byte[] data)
+    {
+        using (SHA256 sha = SHA256.Create())
+        {
+            byte[] hash = sha.ComputeHash(data);
+            StringBuilder builder = new StringBuilder(hash.Length * 2);
+            foreach (byte value in hash)
+            {
+                builder.Append(value.ToString("X2"));
+            }
+            return builder.ToString();
+        }
     }
 
     private static void PromoteLauncher(string installRoot, string stagedLauncher)

@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NInput, NInputNumber, NSwitch, NTag, NIcon, NSpin, NProgress, NModal } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, NIcon, NSpin, NProgress, NModal } from 'naive-ui'
 import {
   ServerOutline, CubeOutline, CloudDownloadOutline,
   LockClosedOutline, OptionsOutline, InformationCircleOutline, ShareSocialOutline,
   KeyOutline, CopyOutline, EyeOutline, RefreshOutline, ColorPaletteOutline,
   ImageOutline, PowerOutline, MicOutline, SearchOutline, AddOutline,
   TrashOutline, CheckmarkCircleOutline, AlertCircleOutline, SparklesOutline,
-  VolumeHighOutline,
+  VolumeHighOutline, ShieldCheckmarkOutline,
 } from '@vicons/ionicons5'
 import { useSettingsStore, providerSecretKey } from '@/stores/useSettingsStore'
 import { useToast } from '@/composables/useToast'
@@ -21,6 +21,7 @@ import { asrLanguageFor, initializeAsr, startRecording, type RecordingSession } 
 import { ApiError, api, errorMessage } from '@/api/client'
 import { speechApi } from '@/api/speech'
 import { pluginApi } from '@/api/plugins'
+import { securityApi, type SecurityTransportStatus } from '@/api/security'
 import type { MessageKey } from '@/i18n'
 import type { SecretKey } from '@/stores/useSettingsStore'
 import type { AppConfig, HubPreferences, LoginAuditEntry, LoginAuditResponse, TestResult, TtsVoiceCatalog } from '@/api/types'
@@ -253,6 +254,7 @@ const sections: SettingsSection[] = [
   { id: 'sharing', labelKey: 'settingsSectionSharing', icon: ShareSocialOutline },
   { id: 'botapi', labelKey: 'settingsSectionBotApi', icon: KeyOutline },
   { id: 'appearance', labelKey: 'settingsSectionAppearance', icon: ColorPaletteOutline },
+  { id: 'security', labelKey: 'settingsSectionSecurity', icon: ShieldCheckmarkOutline },
   { id: 'access', labelKey: 'settingsSectionAccess', icon: LockClosedOutline },
   { id: 'advanced', labelKey: 'settingsSectionAdvanced', icon: OptionsOutline },
   { id: 'about', labelKey: 'settingsSectionAbout', icon: InformationCircleOutline },
@@ -984,6 +986,7 @@ onMounted(() => {
   void refreshStatus()
   void loadHubPreferences()
   void loadRuntimeLogStatus()
+  void loadSecurityStatus()
   syncRouteTarget()
 })
 watch(() => [route.query.section, route.query.focus], syncRouteTarget)
@@ -1027,7 +1030,183 @@ watch(section, () => {
 })
 watch(section, value => {
   if (value === 'access') void loadLoginHistory()
+  if (value === 'security') void loadSecurityStatus()
 })
+
+// ---- 连接安全（HTTP / HTTPS） ----
+const securityStatus = ref<SecurityTransportStatus | null>(null)
+const securityBusy = ref<'enable' | 'disable' | 'regenerate' | 'acme' | ''>('')
+const acmeIdentifierType = ref<'dns' | 'ip'>('dns')
+const acmeIdentifier = ref('')
+const acmeContactEmail = ref('')
+const acmeChallengePort = ref(80)
+
+async function loadSecurityStatus() {
+  try {
+    const status = await securityApi.status()
+    securityStatus.value = status
+    if (status.tls_mode === 'lets_encrypt' && status.acme) {
+      acmeIdentifierType.value = status.acme.identifier_type
+      acmeIdentifier.value = status.acme.identifier
+      acmeContactEmail.value = status.acme.contact_email
+      acmeChallengePort.value = status.acme.http_challenge_port
+    }
+  } catch {
+    securityStatus.value = null
+  }
+}
+
+async function copySecurityFingerprint() {
+  const fingerprint = securityStatus.value?.certificate?.fingerprint_sha256 || ''
+  if (!fingerprint) return
+  await copyToClipboard(fingerprint)
+  toast.success(t('securityFingerprintCopied'))
+}
+
+// 服务以新 scheme 重启后当前 origin 会失效，轮询目标 origin 就绪再跳转。
+async function waitAndNavigateToOrigin(targetOrigin: string): Promise<void> {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    try {
+      await fetch(`${targetOrigin}/api/system/update/health`, { mode: 'no-cors' })
+      break
+    } catch {
+      // 重启期间连接失败是预期行为，继续等待。
+    }
+  }
+  window.location.assign(targetOrigin)
+}
+
+async function enableLocalHttps() {
+  if (securityBusy.value) return
+  securityBusy.value = 'enable'
+  try {
+    const prepared = await securityApi.prepare('self_signed')
+    if (!prepared.ok || !prepared.token || !prepared.certificate) {
+      toast.error(prepared.error || t('securityPrepareFailed'))
+      return
+    }
+    const fingerprint = prepared.certificate.fingerprint_sha256
+    const confirmed = await confirm({
+      title: t('securityEnableLocalHttps'),
+      content: `${t('securityEnableConfirm')}\n${t('securityFingerprintLabel')}: ${fingerprint}`,
+      type: 'warning',
+      positiveText: t('securityEnableConfirmAction'),
+      negativeText: t('cancel'),
+    })
+    if (!confirmed) return
+    const activated = await securityApi.activate(prepared.token)
+    if (!activated.ok || !activated.target_origin) {
+      toast.error(activated.error || t('securityActivateFailed'))
+      return
+    }
+    toast.info(t('securitySwitchingOrigin', { origin: activated.target_origin }))
+    await waitAndNavigateToOrigin(activated.target_origin)
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    securityBusy.value = ''
+  }
+}
+
+async function enableLetsEncrypt() {
+  if (securityBusy.value) return
+  const identifier = acmeIdentifier.value.trim()
+  if (!identifier) {
+    toast.error(t('securityAcmeIdentifierRequired'))
+    return
+  }
+  securityBusy.value = 'acme'
+  try {
+    const prepared = await securityApi.prepare('lets_encrypt', {
+      identifier_type: acmeIdentifierType.value,
+      identifier,
+      contact_email: acmeContactEmail.value.trim(),
+      challenge_type: 'http-01',
+      http_challenge_port: Number(acmeChallengePort.value) || 80,
+    })
+    if (!prepared.ok || !prepared.token || !prepared.certificate) {
+      toast.error(prepared.error || t('securityAcmePrepareFailed'))
+      return
+    }
+    const warningText = prepared.warnings?.length ? `\n\n${prepared.warnings.join('\n')}` : ''
+    const confirmed = await confirm({
+      title: t('securityEnableLetsEncrypt'),
+      content: `${t('securityAcmeConfirm')}\n${t('securityCertValidity')}: ${prepared.certificate.not_after}${warningText}`,
+      type: 'warning',
+      positiveText: t('securityEnableConfirmAction'),
+      negativeText: t('cancel'),
+    })
+    if (!confirmed) return
+    const activated = await securityApi.activate(prepared.token)
+    if (!activated.ok || !activated.target_origin) {
+      toast.error(activated.error || t('securityActivateFailed'))
+      return
+    }
+    toast.info(t('securitySwitchingOrigin', { origin: activated.target_origin }))
+    await waitAndNavigateToOrigin(activated.target_origin)
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    securityBusy.value = ''
+  }
+}
+
+async function disableLocalHttps() {
+  if (securityBusy.value) return
+  const ok = await confirm({
+    title: t('securityDisableHttps'),
+    content: t('securityDisableConfirm'),
+    type: 'warning',
+    positiveText: t('securityDisableConfirmAction'),
+    negativeText: t('cancel'),
+  })
+  if (!ok) return
+  securityBusy.value = 'disable'
+  try {
+    const result = await securityApi.disable()
+    if (!result.ok || !result.target_origin) {
+      toast.error(result.error || t('securityDisableFailed'))
+      return
+    }
+    toast.info(t('securitySwitchingOrigin', { origin: result.target_origin }))
+    await waitAndNavigateToOrigin(result.target_origin)
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    securityBusy.value = ''
+  }
+}
+
+async function regenerateLocalCertificate() {
+  if (securityBusy.value) return
+  const ok = await confirm({
+    title: t('securityRegenerateCertificate'),
+    content: t('securityRegenerateConfirm'),
+    type: 'warning',
+    positiveText: t('securityRegenerateConfirmAction'),
+    negativeText: t('cancel'),
+  })
+  if (!ok) return
+  securityBusy.value = 'regenerate'
+  try {
+    const result = await securityApi.regenerate()
+    if (!result.ok) {
+      toast.error(result.error || t('securityRegenerateFailed'))
+      return
+    }
+    toast.success(t('securityRegenerateDone'))
+    await loadSecurityStatus()
+    if (result.restart_required) {
+      toast.info(t('securityRegenerateRestartHint'))
+    }
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    securityBusy.value = ''
+  }
+}
 
 function setStr(key: keyof AppConfig, v: string | number) { store.setConfigField(key, String(v).trim()) }
 function setSecret(key: SecretKey, v: string | number) { store.secrets[key] = String(v).trim() }
@@ -1895,6 +2074,185 @@ function redownloadUpdatePackage() {
             </div>
           </div>
 
+          <div v-show="section === 'security'" class="settings-pane advanced-settings-pane security-pane">
+            <section class="advanced-section advanced-section-wide security-guide">
+              <header class="advanced-section-head">
+                <NIcon :component="InformationCircleOutline" />
+                <div><h3>{{ t('securityGuideTitle') }}</h3></div>
+              </header>
+              <div class="security-guide-grid">
+                <article class="security-guide-card security-guide-card-lan">
+                  <NIcon :component="ServerOutline" />
+                  <div>
+                    <span class="security-guide-kicker">LAN</span>
+                  <strong>{{ t('securityGuideLan') }}</strong>
+                  <small>{{ t('securityGuideLanHint') }}</small>
+                  </div>
+                </article>
+                <article class="security-guide-card security-guide-card-public">
+                  <NIcon :component="ShareSocialOutline" />
+                  <div>
+                    <span class="security-guide-kicker">INTERNET</span>
+                  <strong>{{ t('securityGuidePublic') }}</strong>
+                  <small>{{ t('securityGuidePublicHint') }}</small>
+                  </div>
+                </article>
+              </div>
+              <div class="security-guide-warning">
+                <NIcon :component="AlertCircleOutline" />
+                <div>
+                  <strong>{{ t('securityGuideWarning') }}</strong>
+                  <small>{{ t('securityGuideWarningHint') }}</small>
+                </div>
+              </div>
+            </section>
+            <section class="advanced-section advanced-section-wide security-connection-section">
+              <header class="advanced-section-head">
+                <NIcon :component="ShieldCheckmarkOutline" />
+                <div><h3>{{ t('securityConnectionTitle') }}</h3><p>{{ t('securityConnectionHint') }}</p></div>
+              </header>
+              <p v-if="securityStatus?.degraded_error" class="error-text security-degraded">{{ securityStatus.degraded_error }}</p>
+              <div class="advanced-row security-mode-row">
+                <div>
+                  <strong>{{ t('securityModeHttp') }}</strong>
+                  <small>{{ t('securityModeHttpHint') }}</small>
+                </div>
+                <div class="security-mode-actions">
+                  <NTag v-if="securityStatus?.tls_mode === 'off'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
+                  <NButton v-else size="small" secondary :loading="securityBusy === 'disable'" :disabled="securityBusy !== ''" @click="disableLocalHttps">
+                    {{ t('securitySwitchToHttp') }}
+                  </NButton>
+                </div>
+              </div>
+              <div class="advanced-row security-mode-row">
+                <div>
+                  <strong>{{ t('securityModeSelfSigned') }}</strong>
+                  <small>{{ t('securityModeSelfSignedHint') }}</small>
+                </div>
+                <div class="security-mode-actions">
+                  <NTag v-if="securityStatus?.tls_mode === 'self_signed'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
+                  <NButton
+                    v-else
+                    size="small"
+                    type="primary"
+                    secondary
+                    :loading="securityBusy === 'enable'"
+                    :disabled="securityBusy !== ''"
+                    @click="enableLocalHttps"
+                  >{{ securityStatus?.tls_mode === 'lets_encrypt' ? t('securitySwitchToLocalHttps') : t('securityEnableLocalHttps') }}</NButton>
+                </div>
+              </div>
+              <div class="advanced-row security-mode-lets-encrypt">
+                <div class="security-mode-summary">
+                  <div class="security-mode-copy">
+                    <strong>{{ t('securityModeLetsEncrypt') }}</strong>
+                    <small>{{ t('securityModeLetsEncryptHint') }}</small>
+                  </div>
+                  <NTag v-if="securityStatus?.tls_mode === 'lets_encrypt'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
+                </div>
+                <div class="security-acme-workflow">
+                  <label class="security-acme-step">
+                    <span class="security-step-index">1</span>
+                    <span class="security-step-content">
+                      <strong>{{ t('securityAcmeStepType') }}</strong>
+                      <small>{{ t('securityAcmeStepTypeHint') }}</small>
+                      <NSelect v-model:value="acmeIdentifierType" size="small" :options="[
+                        { label: t('securityAcmeDomain'), value: 'dns' },
+                        { label: t('securityAcmePublicIp'), value: 'ip' },
+                      ]" />
+                    </span>
+                  </label>
+                  <label class="security-acme-step security-acme-address-step">
+                    <span class="security-step-index">2</span>
+                    <span class="security-step-content">
+                      <strong>{{ t('securityAcmeStepAddress') }}</strong>
+                      <small>{{ acmeIdentifierType === 'dns' ? t('securityAcmeDomainHint') : t('securityAcmeIpHint') }}</small>
+                      <span class="security-acme-address-fields">
+                        <NInput v-model:value="acmeIdentifier" size="small" :placeholder="acmeIdentifierType === 'dns' ? 'game.example.com' : t('securityAcmeIpPlaceholder')" />
+                        <NInput v-model:value="acmeContactEmail" size="small" :placeholder="t('securityAcmeEmailOptional')" />
+                      </span>
+                    </span>
+                  </label>
+                  <label class="security-acme-step">
+                    <span class="security-step-index">3</span>
+                    <span class="security-step-content">
+                      <strong>{{ t('securityAcmeStepVerify') }}</strong>
+                      <small>{{ t('securityAcmeStepVerifyHint') }}</small>
+                      <NInputNumber v-model:value="acmeChallengePort" size="small" :min="1" :max="65535" />
+                    </span>
+                  </label>
+                </div>
+                <div class="security-acme-actions">
+                  <small>{{ t('securityAcmeActionHint') }}</small>
+                  <NButton type="primary" :loading="securityBusy === 'acme'" :disabled="securityBusy !== ''" @click="enableLetsEncrypt">
+                    {{ securityStatus?.tls_mode === 'lets_encrypt' ? t('securityReissueLetsEncrypt') : t('securityEnableLetsEncrypt') }}
+                  </NButton>
+                </div>
+              </div>
+            </section>
+
+            <section class="advanced-section">
+              <header class="advanced-section-head">
+                <NIcon :component="LockClosedOutline" />
+                <div><h3>{{ t('securityAccessProtectionTitle') }}</h3><p>{{ t('securityAccessProtectionHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('settingsSectionAccess') }}</strong>
+                  <small>{{ t('securityAccessProtectionEntry') }}</small>
+                </div>
+                <NButton size="small" @click="section = 'access'">{{ t('securityAccessProtectionOpen') }}</NButton>
+              </div>
+            </section>
+
+            <section v-if="securityStatus?.certificate" class="advanced-section">
+              <header class="advanced-section-head">
+                <NIcon :component="ShieldCheckmarkOutline" />
+                <div><h3>{{ t('securityCertificateTitle') }}</h3><p>{{ t('securityCertificateHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityCertType') }}</strong><small>{{ securityStatus.tls_mode === 'lets_encrypt' ? t('securityModeLetsEncrypt') : t('securityModeSelfSigned') }}</small></div>
+              </div>
+              <div v-if="securityStatus.certificate.identifier" class="advanced-row">
+                <div><strong>{{ t('securityCertIdentifier') }}</strong><small>{{ securityStatus.certificate.identifier }}</small></div>
+              </div>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityCertIssuer') }}</strong><small>{{ securityStatus.certificate.issuer }}</small></div>
+              </div>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityCertValidity') }}</strong><small>{{ securityStatus.certificate.not_before }} → {{ securityStatus.certificate.not_after }}</small></div>
+              </div>
+              <div v-if="securityStatus.tls_mode === 'lets_encrypt'" class="advanced-row">
+                <div><strong>{{ t('securityCertRenewal') }}</strong><small>{{ securityStatus.certificate.renewal_status || t('securityCertRenewalUnknown') }}</small></div>
+              </div>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityFingerprintLabel') }}</strong><small class="security-fingerprint">{{ securityStatus.certificate.fingerprint_sha256 }}</small></div>
+                <div class="security-mode-actions">
+                  <NButton size="small" @click="copySecurityFingerprint">
+                    <template #icon><NIcon :component="CopyOutline" /></template>
+                    {{ t('securityCopyFingerprint') }}
+                  </NButton>
+                  <NButton
+                    v-if="securityStatus?.tls_mode === 'self_signed'"
+                    size="small"
+                    type="warning"
+                    secondary
+                    :loading="securityBusy === 'regenerate'"
+                    :disabled="securityBusy !== ''"
+                    @click="regenerateLocalCertificate"
+                  >{{ t('securityRegenerateCertificate') }}</NButton>
+                </div>
+              </div>
+            </section>
+            <div v-else-if="securityStatus && securityStatus.tls_mode === 'off'" class="security-no-cert">
+              <NIcon :component="KeyOutline" />
+              <div>
+                <strong>{{ t('securityFingerprintLabel') }}</strong>
+                <small>{{ t('securityNoCertificate') }}</small>
+              </div>
+            </div>
+          </div>
+
           <div v-show="section === 'access'" class="settings-pane">
             <h3>{{ t('accessPassword') }}</h3>
             <p class="muted">{{ t('accessPasswordHelp') }}</p>
@@ -1939,6 +2297,22 @@ function redownloadUpdatePackage() {
           </div>
 
           <div v-show="section === 'advanced'" class="settings-pane advanced-settings-pane">
+            <section class="advanced-section advanced-section-wide generation-section">
+              <header class="advanced-section-head">
+                <NIcon :component="OptionsOutline" />
+                <div><h3>{{ t('generationParams') }}</h3><p>{{ t('generationParamsHint') }}</p></div>
+              </header>
+              <div v-for="item in tokenFields" :key="item.key" class="advanced-row token-row">
+                <div><strong>{{ t(item.labelKey) }}</strong><small>{{ t(item.hintKey) }}</small></div>
+                <div class="token-input-wrap">
+                  <NInputNumber class="advanced-number" :value="Number(store.config[item.key] ?? 0)" :step="256" @update:value="setNum(item.key, $event)" />
+                  <span>Token</span>
+                </div>
+              </div>
+              <footer class="advanced-save-row">
+                <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
+              </footer>
+            </section>
             <section class="advanced-section runtime-logs-section">
               <header class="advanced-section-head">
                 <NIcon :component="TrashOutline" />
@@ -2067,22 +2441,6 @@ function redownloadUpdatePackage() {
                   {{ t('hubClearIdentity') }}
                 </NButton>
               </div>
-            </section>
-            <section class="advanced-section advanced-section-wide generation-section">
-              <header class="advanced-section-head">
-                <NIcon :component="OptionsOutline" />
-                <div><h3>{{ t('generationParams') }}</h3><p>{{ t('generationParamsHint') }}</p></div>
-              </header>
-              <div v-for="item in tokenFields" :key="item.key" class="advanced-row token-row">
-                <div><strong>{{ t(item.labelKey) }}</strong><small>{{ t(item.hintKey) }}</small></div>
-                <div class="token-input-wrap">
-                  <NInputNumber class="advanced-number" :value="Number(store.config[item.key] ?? 0)" :step="256" @update:value="setNum(item.key, $event)" />
-                  <span>Token</span>
-                </div>
-              </div>
-              <footer class="advanced-save-row">
-                <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
-              </footer>
             </section>
             <section class="advanced-section asr-section">
               <header class="advanced-section-head">

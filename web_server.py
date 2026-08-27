@@ -6,6 +6,7 @@ import hmac
 import logging
 import os
 import secrets as secrets_module
+import signal
 import sys
 from datetime import datetime, timezone
 
@@ -78,6 +79,7 @@ from src.webui.routes.pages import add_response_security_headers, register_pages
 from src.webui.login_audit import LOGIN_AUDIT_KEY, LoginAuditStore
 from src.webui.routes.bot import register_bot
 from src.webui.routes.plugins import register_plugins
+from src.webui.routes.security import register_security
 from src.webui.routes.announcements import register_announcements
 from src.webui.routes.hub import register_hub
 from src.webui.routes.legal import register_legal
@@ -90,6 +92,8 @@ from src.webui.routes.asr import register_asr
 from src.webui.routes.generated_images import register_generated_images
 from src.webui.services import updater as updater_svc
 from src.webui.services import legal as legal_svc
+from src.webui.services.security import SecurityTransportService
+from src.web_transport import build_server_transport, parse_web_transport
 
 logger = logging.getLogger("trpg")
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
@@ -155,6 +159,10 @@ API_FORMAT = (os.getenv("TRPG_LLM_API_FORMAT")
               or saved.get("api_format", "openai"))
 PORT = int(os.getenv("TRPG_WEB_PORT") or saved.get("web_port", 18000))
 HOST = os.getenv("TRPG_WEB_HOST") or saved.get("web_host", "0.0.0.0")
+# Web Transport（HTTP / HTTPS）由独立模块统一解析；旧配置缺少该字段等价于
+# {"tls_mode": "off"}，升级后行为不变。
+WEB_TRANSPORT_CONFIG = parse_web_transport(saved.get("web_transport"), os.environ)
+TRANSPORT = build_server_transport(WEB_TRANSPORT_CONFIG, DATA_DIR, PORT)
 WEB_CORS_ENV_VALUE = str(os.getenv("TRPG_WEB_CORS_ORIGINS") or "").strip()
 WEB_CORS_CONFIG_VALUE = WEB_CORS_ENV_VALUE or str(saved.get("web_cors_origins") or "")
 WEB_CORS_ORIGINS = parse_cors_origins(WEB_CORS_CONFIG_VALUE)
@@ -303,6 +311,9 @@ STATE = {
     "hub_telemetry_choice_made": bool(saved.get("hub_telemetry_choice_made", False)),
     **legal_svc.persisted_acceptance_state(saved),
     "legal_privacy_acknowledged_version": saved.get("legal_privacy_acknowledged_version", ""),
+    # 原样携带：save_config 白名单持久化该字段，防止其他设置保存时丢失；
+    # 对外视图走专用 /api/system/security/transport（脱敏）。
+    "web_transport": dict(saved.get("web_transport") or {}),
 }
 
 ROOT = Path(__file__).parent
@@ -339,7 +350,7 @@ def _mask_secret(value: str) -> dict:
 
 def _public_config() -> dict:
     public = {k: v for k, v in STATE.items()
-              if k not in ("api_key", "embedding_api_key", "fallback1_api_key", "fallback2_api_key", "tts_api_key", "asr_api_key", "imagegen_api_key", "access_token", "bot_token", "napcat_token", "proxy_url")
+              if k not in ("api_key", "embedding_api_key", "fallback1_api_key", "fallback2_api_key", "tts_api_key", "asr_api_key", "imagegen_api_key", "access_token", "bot_token", "napcat_token", "proxy_url", "web_transport")
               and not is_provider_secret_key(k)}
     public["ai_providers"] = [
         {**entry, "api_key": _mask_secret(STATE.get(provider_secret_key(entry["id"]), ""))}
@@ -676,7 +687,7 @@ async def on_startup(app: web.Application) -> None:
         DATA_DIR / "plugin-packages",
         DATA_DIR / "plugins",
         builtin_dir=ROOT / "plugins",
-        base_env={"TRPG_API_BASE": f"http://127.0.0.1:{PORT}"},
+        base_env={"TRPG_API_BASE": TRANSPORT.endpoint.url("127.0.0.1")},
         on_plugin_stopped=_on_plugin_stopped,
         hub_client=hub_client,
         ai_provider_resolver=lambda provider_id: resolve_provider(STATE, provider_id),
@@ -724,6 +735,39 @@ async def on_startup(app: web.Application) -> None:
     # 后台预热 DF 助手的远程文档索引（diceframe-content），失败静默回退内置索引
     from src.webui.assistant_knowledge import prefetch_remote_indexes
     app["_assistant_docs_task"] = asyncio.create_task(prefetch_remote_indexes())
+    app["_certificate_renewal_task"] = asyncio.create_task(
+        _certificate_renewal_loop(app), name="certificate-renewal"
+    )
+
+
+async def _certificate_renewal_loop(app: web.Application) -> None:
+    """检查并续期当前证书；只在启用 Let's Encrypt 时产生网络请求。"""
+    while True:
+        try:
+            service = app.get("security_transport")
+            result = await service.renew_if_due() if service else None
+            if result and result.get("status") == "failed":
+                logger.error("Let's Encrypt 证书续期失败：%s", result.get("error"))
+            elif result and result.get("status") == "missing":
+                logger.warning("Let's Encrypt 已配置但找不到当前证书，请在设置 → 安全重新申请")
+            elif result and result.get("status") == "renewed":
+                logger.info("Let's Encrypt 证书续期成功，准备重启加载新证书")
+                control = app["runtime_control"]
+                if not control["restart_requested"]:
+                    control["restart_requested"] = True
+                    control["restart_task"] = asyncio.create_task(
+                        _restart_after_certificate_renewal()
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Let's Encrypt 证书续期检查失败")
+        await asyncio.sleep(15 * 60)
+
+
+async def _restart_after_certificate_renewal() -> None:
+    await asyncio.sleep(0.5)
+    signal.raise_signal(signal.SIGINT)
 
 
 async def on_cleanup(app: web.Application) -> None:
@@ -743,6 +787,13 @@ async def on_cleanup(app: web.Application) -> None:
     save_task = app.get("_save_task")
     if save_task:
         save_task.cancel()
+    renewal_task = app.get("_certificate_renewal_task")
+    if renewal_task:
+        renewal_task.cancel()
+        try:
+            await renewal_task
+        except asyncio.CancelledError:
+            pass
     subsystems: TRPGSubsystems | None = app.get("subsystems")
     if subsystems:
         try:
@@ -1337,6 +1388,8 @@ app["runtime_control"] = {
     "restart_requested": False,
     "restart_task": None,
 }
+app["web_transport"] = TRANSPORT
+app["security_transport"] = SecurityTransportService(STATE, save_config, DATA_DIR, TRANSPORT)
 
 def register_routes(application: web.Application) -> None:
     """集中注册所有路由，按域分组。"""
@@ -1348,6 +1401,7 @@ def register_routes(application: web.Application) -> None:
     register_games(application)
     register_bot(application)
     register_plugins(application)
+    register_security(application)
     register_announcements(application)
     register_hub(application)
     register_legal(application)
@@ -1391,10 +1445,12 @@ register_routes(app)
 if __name__ == "__main__":
     runtime_log_path = configure_runtime_logging(DATA_DIR)
     logger.info("运行日志写入 %s（保留 %s 天）", runtime_log_path, RETENTION_DAYS)
-    print(f"DiceFrame WebUI: http://127.0.0.1:{PORT}  (host={HOST})")
+    if TRANSPORT.degraded_error:
+        logger.critical("%s", TRANSPORT.degraded_error)
+    print(f"DiceFrame WebUI: {TRANSPORT.endpoint.url('127.0.0.1')}  (host={HOST})")
     if not API_KEY:
         print("请在 WebUI 设置页填写 API Key")
-    web.run_app(app, host=HOST, port=PORT)
+    web.run_app(app, host=HOST, port=PORT, ssl_context=TRANSPORT.ssl_context)
     if app["runtime_control"]["restart_requested"]:
         logger.info("DiceFrame 清理完成，正在重新启动")
         os.execv(sys.executable, [sys.executable, *sys.argv])
