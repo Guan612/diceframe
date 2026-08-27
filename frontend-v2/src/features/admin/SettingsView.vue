@@ -8,7 +8,7 @@ import {
   KeyOutline, CopyOutline, EyeOutline, RefreshOutline, ColorPaletteOutline,
   ImageOutline, PowerOutline, MicOutline, SearchOutline, AddOutline,
   TrashOutline, CheckmarkCircleOutline, AlertCircleOutline, SparklesOutline,
-  VolumeHighOutline,
+  VolumeHighOutline, ShieldCheckmarkOutline,
 } from '@vicons/ionicons5'
 import { useSettingsStore, providerSecretKey } from '@/stores/useSettingsStore'
 import { useToast } from '@/composables/useToast'
@@ -21,6 +21,7 @@ import { asrLanguageFor, initializeAsr, startRecording, type RecordingSession } 
 import { ApiError, api, errorMessage } from '@/api/client'
 import { speechApi } from '@/api/speech'
 import { pluginApi } from '@/api/plugins'
+import { securityApi, type SecurityTransportStatus } from '@/api/security'
 import type { MessageKey } from '@/i18n'
 import type { SecretKey } from '@/stores/useSettingsStore'
 import type { AppConfig, HubPreferences, LoginAuditEntry, LoginAuditResponse, TestResult, TtsVoiceCatalog } from '@/api/types'
@@ -253,6 +254,7 @@ const sections: SettingsSection[] = [
   { id: 'sharing', labelKey: 'settingsSectionSharing', icon: ShareSocialOutline },
   { id: 'botapi', labelKey: 'settingsSectionBotApi', icon: KeyOutline },
   { id: 'appearance', labelKey: 'settingsSectionAppearance', icon: ColorPaletteOutline },
+  { id: 'security', labelKey: 'settingsSectionSecurity', icon: ShieldCheckmarkOutline },
   { id: 'access', labelKey: 'settingsSectionAccess', icon: LockClosedOutline },
   { id: 'advanced', labelKey: 'settingsSectionAdvanced', icon: OptionsOutline },
   { id: 'about', labelKey: 'settingsSectionAbout', icon: InformationCircleOutline },
@@ -984,6 +986,7 @@ onMounted(() => {
   void refreshStatus()
   void loadHubPreferences()
   void loadRuntimeLogStatus()
+  void loadSecurityStatus()
   syncRouteTarget()
 })
 watch(() => [route.query.section, route.query.focus], syncRouteTarget)
@@ -1027,7 +1030,129 @@ watch(section, () => {
 })
 watch(section, value => {
   if (value === 'access') void loadLoginHistory()
+  if (value === 'security') void loadSecurityStatus()
 })
+
+// ---- 连接安全（HTTP / HTTPS） ----
+const securityStatus = ref<SecurityTransportStatus | null>(null)
+const securityBusy = ref<'enable' | 'disable' | 'regenerate' | ''>('')
+
+async function loadSecurityStatus() {
+  try {
+    securityStatus.value = await securityApi.status()
+  } catch {
+    securityStatus.value = null
+  }
+}
+
+async function copySecurityFingerprint() {
+  const fingerprint = securityStatus.value?.certificate?.fingerprint_sha256 || ''
+  if (!fingerprint) return
+  await copyToClipboard(fingerprint)
+  toast.success(t('securityFingerprintCopied'))
+}
+
+// 服务以新 scheme 重启后当前 origin 会失效，轮询目标 origin 就绪再跳转。
+async function waitAndNavigateToOrigin(targetOrigin: string): Promise<void> {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    try {
+      await fetch(`${targetOrigin}/api/system/update/health`, { mode: 'no-cors' })
+      break
+    } catch {
+      // 重启期间连接失败是预期行为，继续等待。
+    }
+  }
+  window.location.assign(targetOrigin)
+}
+
+async function enableLocalHttps() {
+  if (securityBusy.value) return
+  securityBusy.value = 'enable'
+  try {
+    const prepared = await securityApi.prepare('self_signed')
+    if (!prepared.ok || !prepared.token || !prepared.certificate) {
+      toast.error(prepared.error || t('securityPrepareFailed'))
+      return
+    }
+    const fingerprint = prepared.certificate.fingerprint_sha256
+    const confirmed = await confirm({
+      title: t('securityEnableLocalHttps'),
+      content: `${t('securityEnableConfirm')}\n${t('securityFingerprintLabel')}: ${fingerprint}`,
+      type: 'warning',
+      positiveText: t('securityEnableConfirmAction'),
+      negativeText: t('cancel'),
+    })
+    if (!confirmed) return
+    const activated = await securityApi.activate(prepared.token)
+    if (!activated.ok || !activated.target_origin) {
+      toast.error(activated.error || t('securityActivateFailed'))
+      return
+    }
+    toast.info(t('securitySwitchingOrigin', { origin: activated.target_origin }))
+    await waitAndNavigateToOrigin(activated.target_origin)
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    securityBusy.value = ''
+  }
+}
+
+async function disableLocalHttps() {
+  if (securityBusy.value) return
+  const ok = await confirm({
+    title: t('securityDisableHttps'),
+    content: t('securityDisableConfirm'),
+    type: 'warning',
+    positiveText: t('securityDisableConfirmAction'),
+    negativeText: t('cancel'),
+  })
+  if (!ok) return
+  securityBusy.value = 'disable'
+  try {
+    const result = await securityApi.disable()
+    if (!result.ok || !result.target_origin) {
+      toast.error(result.error || t('securityDisableFailed'))
+      return
+    }
+    toast.info(t('securitySwitchingOrigin', { origin: result.target_origin }))
+    await waitAndNavigateToOrigin(result.target_origin)
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    securityBusy.value = ''
+  }
+}
+
+async function regenerateLocalCertificate() {
+  if (securityBusy.value) return
+  const ok = await confirm({
+    title: t('securityRegenerateCertificate'),
+    content: t('securityRegenerateConfirm'),
+    type: 'warning',
+    positiveText: t('securityRegenerateConfirmAction'),
+    negativeText: t('cancel'),
+  })
+  if (!ok) return
+  securityBusy.value = 'regenerate'
+  try {
+    const result = await securityApi.regenerate()
+    if (!result.ok) {
+      toast.error(result.error || t('securityRegenerateFailed'))
+      return
+    }
+    toast.success(t('securityRegenerateDone'))
+    await loadSecurityStatus()
+    if (result.restart_required) {
+      toast.info(t('securityRegenerateRestartHint'))
+    }
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    securityBusy.value = ''
+  }
+}
 
 function setStr(key: keyof AppConfig, v: string | number) { store.setConfigField(key, String(v).trim()) }
 function setSecret(key: SecretKey, v: string | number) { store.secrets[key] = String(v).trim() }
@@ -1893,6 +2018,105 @@ function redownloadUpdatePackage() {
               <div><strong>{{ t('pluginThemes') }}</strong><p>{{ t('pluginThemesHint') }}</p></div>
               <RouterLink to="/plugins">{{ t('settingsSectionPlugins') }}</RouterLink>
             </div>
+          </div>
+
+          <div v-show="section === 'security'" class="settings-pane advanced-settings-pane security-pane">
+            <section class="advanced-section">
+              <header class="advanced-section-head">
+                <NIcon :component="ShieldCheckmarkOutline" />
+                <div><h3>{{ t('securityConnectionTitle') }}</h3><p>{{ t('securityConnectionHint') }}</p></div>
+              </header>
+              <p v-if="securityStatus?.degraded_error" class="error-text security-degraded">{{ securityStatus.degraded_error }}</p>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('securityModeHttp') }}</strong>
+                  <small>{{ t('securityModeHttpHint') }}</small>
+                </div>
+                <NTag v-if="securityStatus?.tls_mode === 'off'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
+              </div>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('securityModeSelfSigned') }}</strong>
+                  <small>{{ t('securityModeSelfSignedHint') }}</small>
+                </div>
+                <div class="security-mode-actions">
+                  <NTag v-if="securityStatus?.tls_mode === 'self_signed'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
+                  <NButton
+                    v-else
+                    size="small"
+                    type="primary"
+                    secondary
+                    :loading="securityBusy === 'enable'"
+                    :disabled="securityBusy !== ''"
+                    @click="enableLocalHttps"
+                  >{{ t('securityEnableLocalHttps') }}</NButton>
+                  <NButton
+                    v-if="securityStatus?.tls_mode === 'self_signed'"
+                    size="small"
+                    type="warning"
+                    secondary
+                    :loading="securityBusy === 'disable'"
+                    :disabled="securityBusy !== ''"
+                    @click="disableLocalHttps"
+                  >{{ t('securityDisableHttps') }}</NButton>
+                </div>
+              </div>
+              <div class="advanced-row security-mode-unavailable">
+                <div>
+                  <strong>{{ t('securityModeLetsEncrypt') }}</strong>
+                  <small>{{ t('securityModeLetsEncryptHint') }}</small>
+                </div>
+                <NTag size="small" round>{{ t('securityModeComingSoon') }}</NTag>
+              </div>
+            </section>
+
+            <section class="advanced-section">
+              <header class="advanced-section-head">
+                <NIcon :component="LockClosedOutline" />
+                <div><h3>{{ t('securityAccessProtectionTitle') }}</h3><p>{{ t('securityAccessProtectionHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('settingsSectionAccess') }}</strong>
+                  <small>{{ t('securityAccessProtectionEntry') }}</small>
+                </div>
+                <NButton size="small" @click="section = 'access'">{{ t('securityAccessProtectionOpen') }}</NButton>
+              </div>
+            </section>
+
+            <section v-if="securityStatus?.certificate" class="advanced-section">
+              <header class="advanced-section-head">
+                <NIcon :component="ShieldCheckmarkOutline" />
+                <div><h3>{{ t('securityCertificateTitle') }}</h3><p>{{ t('securityCertificateHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityCertType') }}</strong><small>{{ t('securityModeSelfSigned') }}</small></div>
+              </div>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityCertIssuer') }}</strong><small>{{ securityStatus.certificate.issuer }}</small></div>
+              </div>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityCertValidity') }}</strong><small>{{ securityStatus.certificate.not_before }} → {{ securityStatus.certificate.not_after }}</small></div>
+              </div>
+              <div class="advanced-row">
+                <div><strong>{{ t('securityFingerprintLabel') }}</strong><small class="security-fingerprint">{{ securityStatus.certificate.fingerprint_sha256 }}</small></div>
+                <div class="security-mode-actions">
+                  <NButton size="small" @click="copySecurityFingerprint">
+                    <template #icon><NIcon :component="CopyOutline" /></template>
+                    {{ t('securityCopyFingerprint') }}
+                  </NButton>
+                  <NButton
+                    size="small"
+                    type="warning"
+                    secondary
+                    :loading="securityBusy === 'regenerate'"
+                    :disabled="securityBusy !== ''"
+                    @click="regenerateLocalCertificate"
+                  >{{ t('securityRegenerateCertificate') }}</NButton>
+                </div>
+              </div>
+            </section>
+            <p v-else-if="securityStatus && securityStatus.tls_mode === 'off'" class="muted security-no-cert">{{ t('securityNoCertificate') }}</p>
           </div>
 
           <div v-show="section === 'access'" class="settings-pane">

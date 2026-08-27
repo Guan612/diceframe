@@ -191,6 +191,9 @@ def build_launcher(output: Path, icon: Path) -> None:
             "/optimize+",
             "/target:exe",
             "/platform:x64",
+            # WebRequestHandler.ServerCertificateValidationCallback 需要显式引用。
+            "/r:System.Net.Http.dll",
+            "/r:System.Net.Http.WebRequest.dll",
             f"/win32icon:{icon}",
             f"/out:{output}",
             str(SOURCE),

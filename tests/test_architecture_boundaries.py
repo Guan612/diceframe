@@ -89,6 +89,33 @@ def test_standalone_adventure_loader_has_no_dnd_or_webui_dependency() -> None:
     assert not violations, "\n".join(violations)
 
 
+def test_web_transport_has_no_business_or_webui_dependency() -> None:
+    """TLS 只是 Web Transport 配置，业务层与 Web 层不得被其反向依赖。"""
+    directory = ROOT / "src" / "web_transport"
+    violations = []
+    for path in directory.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for imported in ("src.webui", "src.rules", "src.rulesets", "src.engine", "src.generation"):
+            if imported in text:
+                violations.append(f"{path.relative_to(ROOT)} imports {imported}")
+    assert not violations, "\n".join(violations)
+
+
+def test_game_layers_do_not_import_web_transport() -> None:
+    """游戏/规则/AI 等业务模块不得感知 HTTP/HTTPS 与证书。"""
+    directories = [
+        ROOT / "src" / name
+        for name in ("engine", "generation", "lorebook", "memory", "rules", "rulesets", "adventures")
+    ]
+    violations = []
+    for directory in directories:
+        for path in directory.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "src.web_transport" in text:
+                violations.append(f"{path.relative_to(ROOT)} imports src.web_transport")
+    assert not violations, "\n".join(violations)
+
+
 def test_v2_locale_authority_is_backend_materialized() -> None:
     rules_service = (ROOT / "src" / "webui" / "services" / "rules.py").read_text(encoding="utf-8")
     create_view = (ROOT / "frontend-v2" / "src" / "features" / "create" / "CreateView.vue").read_text(encoding="utf-8")

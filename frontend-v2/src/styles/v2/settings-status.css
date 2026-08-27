@@ -290,3 +290,30 @@
   border-top: 1px solid color-mix(in srgb, var(--df-border-soft) 70%, transparent);
   background: color-mix(in srgb, var(--df-surface-2) 54%, transparent);
 }
+
+/* 连接安全（HTTP / HTTPS）：模式行与证书指纹的展示契约。 */
+.security-pane .security-mode-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.security-pane .security-mode-unavailable {
+  opacity: 0.72;
+}
+
+.security-pane .security-degraded {
+  margin: 10px 18px 0;
+}
+
+.security-pane .security-no-cert {
+  margin: 12px 4px 0;
+}
+
+.security-pane .security-fingerprint {
+  word-break: break-all;
+  font-family: var(--df-font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  line-height: 1.5;
+}
