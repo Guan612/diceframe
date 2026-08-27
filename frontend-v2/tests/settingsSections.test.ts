@@ -53,6 +53,14 @@ describe('settings section links', () => {
     expect(settingsSource).toContain("t('contributors')")
   })
 
+  it('manages retained runtime logs without conflating them with game history', () => {
+    expect(settingsSource).toContain("api<RuntimeLogStatus>('/system/runtime-logs')")
+    expect(settingsSource).toContain("api<RuntimeLogStatus>('/system/runtime-logs/clear', { method: 'POST' })")
+    expect(settingsSource).toContain("t('runtimeLogsRetention'")
+    expect(settingsSource).toContain('class="advanced-section runtime-logs-section"')
+    expect(settingsSource).toContain('class="advanced-section test-timeout-section"')
+  })
+
   it('lays out About links four per row on desktop', () => {
     const polishCss = source('../src/styles/v2/settings-polish.css')
     const responsiveCss = source('../src/styles/v2/play-panels.css')
