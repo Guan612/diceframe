@@ -94,9 +94,12 @@ def test_metadata_never_contains_private_key(tmp_path: Path):
     assert len(fingerprint.replace(":", "")) == 64
 
 
-def test_lets_encrypt_mode_falls_back_to_http_with_visible_error(tmp_path: Path):
-    config = parse_web_transport({"tls_mode": "lets_encrypt"})
+def test_lets_encrypt_without_certificate_falls_back_to_http_with_visible_error(tmp_path: Path):
+    config = parse_web_transport(
+        {"tls_mode": "lets_encrypt", "acme": {"identifier_type": "dns", "identifier": "game.example.com"}}
+    )
     transport = build_server_transport(config, tmp_path, 18000)
     assert transport.ssl_context is None
     assert transport.scheme == "http"
-    assert "尚未开放" in transport.degraded_error
+    assert "回退 HTTP" in transport.degraded_error
+    assert "重新申请" in transport.degraded_error

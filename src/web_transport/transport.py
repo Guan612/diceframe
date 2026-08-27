@@ -4,6 +4,9 @@
 web_server 只应看到 ServerTransport：scheme、tls_mode、ssl_context 与
 endpoint。构建失败不抛异常——降级为 HTTP 并携带 degraded_error，由
 "安全"页醒目展示，绝不静默也不锁死服务。
+
+lets_encrypt 模式在启动期只加载现有证书（不联网签发）；签发与续期
+由安全页事务和续期 scheduler 负责。
 """
 
 from __future__ import annotations
@@ -13,10 +16,12 @@ import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.web_transport.certificates.acme import AcmeCertificateProvider
 from src.web_transport.certificates.base import CertificateError
 from src.web_transport.certificates.self_signed import SelfSignedCertificateProvider
 from src.web_transport.certificates.storage import CertificateStore
 from src.web_transport.config import (
+    TLS_MODE_LETS_ENCRYPT,
     TLS_MODE_OFF,
     TLS_MODE_SELF_SIGNED,
     WebTransportConfig,
@@ -68,26 +73,42 @@ def build_server_transport(config: WebTransportConfig, data_dir: Path, port: int
 
     activation_error = validate_activation(config)
     if activation_error:
-        # lets_encrypt / 自定义证书：schema 已解析但本版本不可启用。
+        # 配置本身无效（如 ACME 参数缺失）：保持 HTTP 并显式报错。
         logger.error("Web Transport 模式 %s 不可用：%s", config.tls_mode, activation_error)
         return http_transport(activation_error)
 
-    if config.tls_mode != TLS_MODE_SELF_SIGNED:
+    if config.tls_mode == TLS_MODE_SELF_SIGNED:
+        provider = SelfSignedCertificateProvider(store)
+        try:
+            prepared = provider.prepare()
+        except (CertificateError, OSError, ValueError) as exc:
+            # 保留当前可用模式（HTTP），在"安全"页显式报错，不静默也不锁死。
+            error = f"本地 HTTPS 启用失败，已暂时回退 HTTP：{exc}"
+            logger.critical("%s", error, exc_info=True)
+            return http_transport(error)
+    elif config.tls_mode == TLS_MODE_LETS_ENCRYPT:
+        provider = AcmeCertificateProvider(store)
+        try:
+            prepared = provider.load_live(
+                config.acme.identifier_type, config.acme.identifier
+            )
+        except (CertificateError, ssl.SSLError, OSError, ValueError) as exc:
+            error = f"Let's Encrypt 证书加载失败，已暂时回退 HTTP：{exc}"
+            logger.critical("%s", error, exc_info=True)
+            return http_transport(error)
+    else:
         return http_transport(f"不支持的连接模式：{config.tls_mode}")
 
-    provider = SelfSignedCertificateProvider(store)
     try:
-        prepared = provider.prepare()
         ssl_context = _build_ssl_context(prepared.cert_path, prepared.key_path)
-    except (CertificateError, ssl.SSLError, OSError, ValueError) as exc:
-        # 保留当前可用模式（HTTP），在"安全"页显式报错，不静默也不锁死。
-        error = f"本地 HTTPS 启用失败，已暂时回退 HTTP：{exc}"
+    except (ssl.SSLError, OSError, ValueError) as exc:
+        error = f"TLS 上下文构建失败，已暂时回退 HTTP：{exc}"
         logger.critical("%s", error, exc_info=True)
         return http_transport(error)
 
     return ServerTransport(
         scheme="https",
-        tls_mode=TLS_MODE_SELF_SIGNED,
+        tls_mode=config.tls_mode,
         ssl_context=ssl_context,
         endpoint=ServerEndpoint(scheme="https", port=port),
         provider=provider,

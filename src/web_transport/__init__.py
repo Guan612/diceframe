@@ -5,14 +5,25 @@
 本包也不得 import Web 层或任何业务模块（由架构边界测试守护）。
 """
 
+from src.web_transport.certificates.acme import (
+    AcmeCertificateProvider,
+    AcmeIdentifier as AcmeOrderIdentifier,
+    AcmeIssueRequest,
+    AcmeIssueResult,
+)
+from src.web_transport.certificates.acme_client import AcmeClient, AcmeError
 from src.web_transport.certificates.base import CertificateError, CertificateProvider, PreparedCertificate
 from src.web_transport.certificates.metadata import CertificateMetadata
 from src.web_transport.certificates.self_signed import SelfSignedCertificateProvider
 from src.web_transport.certificates.storage import CertificateStore
 from src.web_transport.config import (
+    IDENTIFIER_TYPE_DNS,
+    IDENTIFIER_TYPE_IP,
+    IP_CERTIFICATE_PROFILE,
     TLS_MODE_LETS_ENCRYPT,
     TLS_MODE_OFF,
     TLS_MODE_SELF_SIGNED,
+    AcmeSettings,
     WebTransportConfig,
     parse_web_transport,
     validate_activation,
@@ -22,6 +33,16 @@ from src.web_transport.endpoint import ServerEndpoint
 from src.web_transport.transport import ServerTransport, build_server_transport
 
 __all__ = [
+    "AcmeCertificateProvider",
+    "AcmeClient",
+    "AcmeError",
+    "AcmeIssueRequest",
+    "AcmeIssueResult",
+    "AcmeOrderIdentifier",
+    "AcmeSettings",
+    "IDENTIFIER_TYPE_DNS",
+    "IDENTIFIER_TYPE_IP",
+    "IP_CERTIFICATE_PROFILE",
     "CertificateError",
     "CertificateMetadata",
     "CertificateProvider",
