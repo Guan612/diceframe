@@ -14,7 +14,7 @@ function fieldset(page: Page, legend: string) {
   return page.locator('fieldset').filter({ has: page.locator('legend', { hasText: legend }) }).first()
 }
 
-async function chooseBuilderCard(page: Page, legend: string, name: string, refreshesChoices = false) {
+async function chooseBuilderCard(page: Page, legend: string, name: string | RegExp, refreshesChoices = false) {
   const response = refreshesChoices
     ? page.waitForResponse(item => item.request().method() === 'POST' && item.url().includes('/builder/choices'))
     : null
@@ -35,7 +35,7 @@ test('classic fantasy recommends the professional 2024 rules as the third card i
   await expect(cards.nth(2)).toContainText('5E 2024 SRD 高级规则')
   await expect(cards.nth(0).locator('small')).toHaveText('推荐')
   await expect(cards.nth(1).locator('small')).toHaveText('推荐')
-  await expect(cards.nth(2).locator('small')).toHaveText('专业')
+  await expect(cards.nth(2).locator('small.professional')).toHaveText('高级')
 
   const cardTops = await cards.evaluateAll(items => items.map(item => Math.round(item.getBoundingClientRect().top)))
   expect(new Set(cardTops).size).toBe(1)
@@ -45,7 +45,7 @@ test('professional toolbox remains contained at phone, tablet, and desktop width
   for (const width of [320, 640, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 })
     await openDndTable(page)
-    await page.getByText('专业工具', { exact: true }).click()
+    await page.getByText('DND5E工具', { exact: true }).click()
     await page.getByRole('button', { name: '冒险与战役' }).first().click()
     await expect(page.locator('.campaign-panel')).toBeVisible()
 
@@ -82,7 +82,7 @@ test('professional rules keep one timeline and expose combat as a tool', async (
   await expect(page.locator('.composer')).toHaveCount(1)
   await expect(page.locator('.campaign-panel')).toHaveCount(0)
   await expect(page.locator('.dnd-combat')).toHaveCount(0)
-  await page.getByText('专业工具', { exact: true }).click()
+  await page.getByText('DND5E工具', { exact: true }).click()
   await page.getByRole('button', { name: '战斗工具' }).first().click()
   await expect(page.locator('.dnd-combat')).toBeVisible()
   await expect(page.getByTestId('timeline')).toBeVisible()
@@ -97,7 +97,7 @@ test('professional surfaces keep explicit labels and readable light-mode colors'
   })
   await openDndTable(page)
   await expect(page.locator('body')).toHaveClass(/light/)
-  await page.getByText('专业工具', { exact: true }).click()
+  await page.getByText('DND5E工具', { exact: true }).click()
   await page.getByRole('button', { name: '冒险与战役' }).first().click()
 
   const unlabeled = await page.locator('.campaign-panel input').evaluateAll(inputs => inputs.filter(input => {
@@ -137,7 +137,8 @@ test('professional surfaces keep explicit labels and readable light-mode colors'
 test('Chinese professional play area explains the route and localizes campaign enums', async ({ page }) => {
   await page.setViewportSize({ width: 1200, height: 900 })
   await openDndTable(page)
-  await expect(page.locator('.dnd-play-status')).toContainText('先完成开团约定')
+  await expect(page.getByRole('heading', { name: '第一次玩？一分钟开始冒险' })).toBeVisible()
+  await page.getByRole('button', { name: '采用推荐设置，立即开始' }).click()
   await expect(page.getByRole('heading', { name: '开团准备' })).toBeVisible()
 
   const agreement = page.locator('.agreement-grid')
@@ -232,8 +233,8 @@ test('guided creation enforces proficiency limits and enters the saved game even
 
   await chooseBuilderCard(page, '物种专长', '警觉', true)
   await fieldset(page, '体型').locator('label').filter({ hasText: '中型' }).locator('input').check()
-  await chooseBuilderCard(page, '职业起始装备', '战士装备 A')
-  await chooseBuilderCard(page, '背景起始装备', '士兵装备 A')
+  await chooseBuilderCard(page, '职业起始装备', /战士装备\s*A|装备\s*A/)
+  await chooseBuilderCard(page, '背景起始装备', /士兵装备\s*A|装备\s*A/)
   const languages = fieldset(page, '语言')
   for (const language of ['矮人语', '精灵语']) {
     await languages.locator('label').filter({ hasText: language }).locator('input').check()
