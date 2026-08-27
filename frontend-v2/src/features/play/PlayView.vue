@@ -113,16 +113,26 @@ async function refreshRulesetPanels(): Promise<void> {
   rulesetRefreshKey.value += 1
   await game.refresh(true)
 }
+const isAdvancedDnd = computed(() => (
+  game.detail.value?.rule_id === 'dnd2024_srd'
+  && game.detail.value?.ruleset_runtime?.id === 'core:dnd2024'
+))
 const hasAuthoritativeCombat = computed(() => Boolean(
-  game.detail.value?.ruleset_runtime?.capabilities?.authoritative_intents
-  && game.detail.value?.ruleset_runtime?.capabilities?.deterministic_combat,
+  (
+    game.detail.value?.ruleset_runtime?.capabilities?.authoritative_intents
+    && game.detail.value?.ruleset_runtime?.capabilities?.deterministic_combat
+  )
+  || isAdvancedDnd.value,
 ))
 const hasRulesAwareCharacters = computed(() => (
   game.detail.value?.ruleset_runtime?.capabilities?.character_lifecycle === 'rules_aware'
 ))
 const hasCampaignGuidance = computed(() => Boolean(
-  game.detail.value?.ruleset_runtime?.capabilities?.session_zero
-  || game.detail.value?.ruleset_runtime?.capabilities?.tutorial_coach,
+  (
+    game.detail.value?.ruleset_runtime?.capabilities?.session_zero
+    || game.detail.value?.ruleset_runtime?.capabilities?.tutorial_coach
+  )
+  || isAdvancedDnd.value,
 ))
 type RulesetTool = 'campaign' | 'combat'
 const activeRulesetTool = ref<RulesetTool | ''>('')
@@ -130,7 +140,7 @@ const directorProposal = ref<RulesetDirectorProposal | null>(null)
 const rulesetGameplay = ref<RulesetGameplayView | null>(null)
 const rulesetCombatStatus = ref('none')
 const rulesetCampaignStatus = ref('')
-const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value)
+const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value || isAdvancedDnd.value)
 const rulesetToolCopy = computed(() => locale.value.startsWith('zh') ? {
   menu: 'DND5E工具', campaign: '冒险与战役', combat: '战斗工具', title: 'DND5E工具',
 } : {
