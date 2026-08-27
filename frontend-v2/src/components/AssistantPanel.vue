@@ -16,11 +16,11 @@ const draft = ref('')
 const listEl = ref<HTMLElement | null>(null)
 
 const quickQuestions = () => [
-  t('assistantQuickLogs'),
   t('assistantQuickApi'),
   t('assistantQuickPlugin'),
   t('assistantQuickPlayers'),
   t('assistantQuickTunnel'),
+  t('assistantQuickLogs'),
 ]
 
 function scrollToBottom() {
@@ -276,10 +276,8 @@ function ask(question: string) {
   text-align: left;
 }
 
-.assistant-quick-grid button:first-child {
+.assistant-quick-grid button:last-child {
   grid-column: 1 / -1;
-  border-color: color-mix(in srgb, var(--df-accent) 46%, var(--df-border-soft));
-  background: color-mix(in srgb, var(--df-accent) 10%, var(--df-control-bg));
 }
 
 .assistant-message {
