@@ -2021,6 +2021,30 @@ function redownloadUpdatePackage() {
           </div>
 
           <div v-show="section === 'security'" class="settings-pane advanced-settings-pane security-pane">
+            <section class="advanced-section security-guide">
+              <header class="advanced-section-head">
+                <NIcon :component="InformationCircleOutline" />
+                <div><h3>{{ t('securityGuideTitle') }}</h3><p>{{ t('securityGuideSubtitle') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('securityGuideLan') }}</strong>
+                  <small>{{ t('securityGuideLanHint') }}</small>
+                </div>
+              </div>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('securityGuidePublic') }}</strong>
+                  <small>{{ t('securityGuidePublicHint') }}</small>
+                </div>
+              </div>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('securityGuideWarning') }}</strong>
+                  <small>{{ t('securityGuideWarningHint') }}</small>
+                </div>
+              </div>
+            </section>
             <section class="advanced-section">
               <header class="advanced-section-head">
                 <NIcon :component="ShieldCheckmarkOutline" />

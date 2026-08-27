@@ -299,6 +299,14 @@
   flex: 0 0 auto;
 }
 
+.security-pane .security-guide .advanced-section-head {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--df-info, #18a058) 10%, transparent),
+    transparent
+  );
+}
+
 .security-pane .security-mode-unavailable {
   opacity: 0.72;
 }
