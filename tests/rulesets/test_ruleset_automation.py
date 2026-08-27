@@ -1,0 +1,41 @@
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+
+from src.rulesets.automation import apply_director_automation, summarize_automation_batches
+
+
+class _FailingRuntime:
+    def director_automatic_intent(self, instance, proposal):
+        return {"type": "start"}
+
+    def resolve_intent(self, instance, intent, rng):
+        return {"ok": True, "event_batch": {"intent_type": intent["type"]}}
+
+    def apply_event_batch(self, instance, batch):
+        instance.ruleset_state["changed"] = True
+        instance.players["p"]["hp"] = 0
+        instance.scene = "mutated scene"
+        raise ValueError("failed after mutation")
+
+
+def test_director_automation_rolls_back_partial_runtime_mutation():
+    instance = SimpleNamespace(
+        ruleset_state={"version": 1}, event_ledger=[], players={"p": {"hp": 10}},
+        combat_state="none", combat_active=False, initiative_order=[], initiative_current=0,
+        scene="original scene",
+    )
+    before = deepcopy((instance.ruleset_state, instance.players, instance.scene))
+    with pytest.raises(ValueError, match="failed after mutation"):
+        apply_director_automation(_FailingRuntime(), instance, {"kind": "combat"}, object())
+    assert (instance.ruleset_state, instance.players, instance.scene) == before
+
+
+def test_automation_batches_have_a_public_narration_summary():
+    batches = [{"events": [{"type": "dnd2024.tutorial.choice_applied"}]}]
+
+    assert summarize_automation_batches(batches) == "AI GM 已根据行动推进当前冒险节点。"
+    assert summarize_automation_batches(batches, chinese=False) == (
+        "The AI GM advanced the adventure node from the action."
+    )

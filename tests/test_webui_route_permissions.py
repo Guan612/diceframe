@@ -45,6 +45,10 @@ class FakeAPI:
         self.calls.append(("mode", game_key, solo))
         return {"ok": True, "solo_mode": solo}
 
+    async def set_narrative_perspective(self, game_key: str, perspective: str) -> dict:
+        self.calls.append(("narrative-perspective", game_key, perspective))
+        return {"ok": True, "narrative_perspective": perspective}
+
     def delete_game(self, game_key: str) -> dict:
         key = self._parse_key(game_key)
         save_dir = self.registry._save_path(key).parent
@@ -244,6 +248,30 @@ async def test_non_owner_session_cannot_convert_foreign_solo_save(tmp_path):
     assert response.status == 403
     assert response_json(response) == {"ok": False, "error": "GM only"}
     assert api.calls == []
+
+
+@pytest.mark.asyncio
+async def test_only_gm_can_change_narrative_perspective(tmp_path):
+    registry = FakeRegistry(tmp_path)
+    registry.items[("web", "room", "bot")] = SimpleNamespace(gm_uid="gm")
+    owner_request, owner_api = make_request(
+        registry, user_id="gm", body={"perspective": "third_person"},
+    )
+
+    owner_response = await games.api_set_narrative_perspective(owner_request)
+
+    assert owner_response.status == 200
+    assert owner_api.calls == [
+        ("narrative-perspective", "web|room|bot", "third_person"),
+    ]
+
+    player_request, player_api = make_request(
+        registry, user_id="player", body={"perspective": "immersive"},
+    )
+    player_response = await games.api_set_narrative_perspective(player_request)
+
+    assert player_response.status == 403
+    assert player_api.calls == []
 
 
 @pytest.mark.asyncio

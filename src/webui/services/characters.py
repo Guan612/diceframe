@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any
 
 from src.engine.character_utils import (
@@ -198,7 +199,11 @@ def character_schema(api: "WebAPI", rule_id: str, language: str = "") -> dict[st
     rule = api._load_rule_by_id(rule_id, language)
     if not rule:
         return {"ok": False, "error": f"规则不存在: {rule_id}"}
-    return {"ok": True, **_character_schema_for_rule(rule)}
+    return {
+        "ok": True,
+        **_character_schema_for_rule(rule),
+        "ruleset_runtime": api._ruleset_registry.describe(rule.template).to_dict(),
+    }
 
 
 def format_attribute_map(attributes: dict, rule_attrs: list[dict]) -> str:
@@ -256,11 +261,18 @@ def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
             }
     npcs = list(npcs_by_name.values())
     rule_attrs_total = _get_rule_attrs_total(api, inst)
-    return {"players": players, "npcs": npcs, "rule_attrs": rule_attrs,
-            "rule_attrs_total": rule_attrs_total,
-            "rule_classes": _get_rule_classes_for_game(api, inst),
-            "rule_special_stats": _get_rule_special_stats(api, inst),
-            "rule_meta": _get_rule_meta_for_game(api, inst)}
+    result = {"players": players, "npcs": npcs, "rule_attrs": rule_attrs,
+              "rule_attrs_total": rule_attrs_total,
+              "rule_classes": _get_rule_classes_for_game(api, inst),
+              "rule_special_stats": _get_rule_special_stats(api, inst),
+              "rule_meta": _get_rule_meta_for_game(api, inst)}
+    if rule is not None:
+        result["ruleset_runtime"] = api._ruleset_registry.describe(rule.template).to_dict()
+        if str(result["ruleset_runtime"].get("id") or "") == "core:dnd2024":
+            from src.rulesets.dnd2024.advancement_access import view as advancement_view
+
+            result["advancement"] = advancement_view(inst)
+    return result
 
 
 def _get_rule_classes_for_game(api: "WebAPI", inst) -> list[str]:
@@ -328,6 +340,16 @@ async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: 
     inst = api._reg.get(api._parse_key(game_key))
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
+    rule = api._load_rule_for_game(inst)
+    if rule is not None:
+        runtime = api._ruleset_registry.resolve(rule.template)
+        if getattr(runtime.capabilities, "character_lifecycle", "legacy") == "rules_aware":
+            return {
+                "ok": False,
+                "error_code": "RULESET_CHARACTER_OPERATION_REQUIRED",
+                "error": "专业规则角色不能使用旧版通用编辑接口",
+            }
+    updates = dict(updates)
     character_name = str(updates.pop("character_name", "")).strip()
     if character_name:
         inst.set_player_name(user_id, character_name)
@@ -407,7 +429,9 @@ async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: 
 
 
 def _validated_portrait(api: "WebAPI", portrait: Any) -> dict[str, str] | None:
-    if portrait is None:
+    # Existing saves use an empty object as "no explicit portrait". Treat it
+    # exactly like null so editing unrelated profile fields remains possible.
+    if portrait is None or portrait == {}:
         return None
     if not isinstance(portrait, dict):
         raise ValueError("头像数据无效")
@@ -619,6 +643,29 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
         }
     rule = api._load_rule_for_game(inst)
     rule_id = rule.rule_id if rule else "freeform_fantasy"
+    professional_character = False
+    if rule is not None:
+        runtime = api._ruleset_registry.resolve(rule.template)
+        professional_character = runtime.capabilities.character_builder == "professional"
+        if professional_character:
+            try:
+                character = runtime.normalize_character_submission(
+                    rule, character, getattr(inst, "language", ""),
+                )
+            except ValueError as exc:
+                return {
+                    "ok": False,
+                    "error_code": "INVALID_PROFESSIONAL_CHARACTER",
+                    "error": str(exc),
+                }
+            canonical = character.get("ruleset_character")
+            binding = canonical.get("rule_binding") if isinstance(canonical, dict) else None
+            if not isinstance(binding, dict) or not inst.bind_ruleset_runtime(binding):
+                return {
+                    "ok": False,
+                    "error_code": "INCOMPATIBLE_RULESET_CHARACTER",
+                    "error": "角色与当前游戏的专业规则版本不兼容",
+                }
     # 仅传了名字的轻量加入会自动生成默认角色卡。
     has_full_sheet = bool(character.get("attributes") or character.get("equipment") or character.get("skills"))
     if not has_full_sheet:
@@ -664,6 +711,10 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
         "portrait": character.get("portrait", {}),
         "attr_points_max": total_points,
     }
+    if professional_character:
+        cs["rule_binding"] = deepcopy(character["rule_binding"])
+        cs["ruleset_character"] = deepcopy(character["ruleset_character"])
+        cs["armor_class"] = int(character.get("armor_class", 10) or 10)
     # 初始化 special_stats（理智值/幸运值/内力等）
     try:
         if rule:

@@ -12,11 +12,14 @@ from typing import Any
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.game_instance import GameRegistry
 from src.lorebook.store import LorebookStore
+from src.adventures import AdventureBundleLoader
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
 from src.rules.loader import RuleBundleLoader
+from src.rulesets.builtin import build_default_ruleset_registry
+from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -109,16 +112,28 @@ class WebAPI:
     def __init__(self, registry: GameRegistry, lorebook: LorebookStore,
                  memory: MemoryStore, rules_dir: Path,
                  handler=None, llm_client=None, worlds_dir: Path | None = None,
+                 adventures_dir: Path | None = None,
                  character_gen_max_tokens: int = 2048,
                  text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
-                 speech_service=None, asr_service=None, imagegen_service=None):
+                 speech_service=None, asr_service=None, imagegen_service=None,
+                 ruleset_registry: RulesetRuntimeRegistry | None = None):
         self._reg = registry
         self._lore = lorebook
         self._mem = memory
         self._rules_dir = rules_dir
         self._handler = handler
+        handler_rulesets = getattr(handler, "ruleset_registry", None)
+        self._ruleset_registry: RulesetRuntimeRegistry = (
+            ruleset_registry or handler_rulesets or build_default_ruleset_registry()
+        )
         self._llm_client = llm_client
         self._worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
+        self._builtin_adventures_dir = (
+            Path(__file__).parent.parent.parent / "templates" / "adventures"
+        ).resolve()
+        self._adventure_loader = AdventureBundleLoader(
+            adventures_dir or self._builtin_adventures_dir
+        )
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._avatars_dir = self._reg.save_dir.parent / "avatars"
         self._scene_images_dir = self._reg.save_dir.parent / "scene-images"
@@ -601,6 +616,11 @@ class WebAPI:
     async def set_solo_mode(self, game_key: str, solo: bool) -> dict[str, Any]:
         return await games.set_solo_mode(self, game_key, solo)
 
+    async def set_narrative_perspective(
+        self, game_key: str, perspective: str,
+    ) -> dict[str, Any]:
+        return await games.set_narrative_perspective(self, game_key, perspective)
+
     async def mark_game_health_event(
         self,
         game_key: str,
@@ -797,7 +817,102 @@ class WebAPI:
     def delete_custom_rule(self, rule_id: str) -> dict[str, Any]:
         return rules.delete_custom_rule(self, rule_id)
 
+    def ruleset_experience(self, rule_id: str, language: str = "") -> dict[str, Any]:
+        return ruleset_builder.experience(self, rule_id, language)
+
+    def ruleset_builder_choices(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.choices(self, rule_id, draft, language)
+
+    def ruleset_builder_validate(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.validate(self, rule_id, draft, language)
+
+    def ruleset_builder_derive(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.derive(self, rule_id, draft, language)
+
+    def ruleset_builder_finalize(
+        self, rule_id: str, draft: Any, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_builder.finalize(self, rule_id, draft, language)
+
+    def ruleset_progression(
+        self, rule_id: str, class_ref: str, start_level: int = 1,
+        end_level: int = 20, language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_advancement.progression(
+            self, rule_id, class_ref, start_level, end_level, language,
+        )
+
+    def ruleset_advancement_preview(
+        self, rule_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_advancement.preview(self, rule_id, body, language)
+
+    def ruleset_advancement_apply(
+        self, rule_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_advancement.apply(self, rule_id, body, language)
+
+    def ruleset_rest_resolve(
+        self, rule_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return ruleset_rest.resolve(self, rule_id, body, language)
+
+    async def ruleset_available_actions(
+        self, game_key: str, requester_id: str, requester_is_gm: bool = False,
+    ) -> dict[str, Any]:
+        return await ruleset_gameplay.available_actions(
+            self, game_key, requester_id, requester_is_gm,
+        )
+
+    async def ruleset_submit_intent(
+        self, game_key: str, requester_id: str, requester_is_gm: bool,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await ruleset_gameplay.submit_intent(
+            self, game_key, requester_id, requester_is_gm, body,
+        )
+
     # ---- 世界模板 ----
+
+    def list_adventures(
+        self, rule_id: str = "", world_id: str = "", language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.list_adventures(self, rule_id, world_id, language)
+
+    def adventure_detail(self, adventure_id: str, language: str = "") -> dict[str, Any]:
+        return adventures.adventure_detail(self, adventure_id, language)
+
+    def copy_adventure(
+        self, adventure_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.copy_adventure(self, adventure_id, body, language)
+
+    def create_adventure(
+        self, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.create_adventure(self, body, language)
+
+    def update_adventure(
+        self, adventure_id: str, body: dict[str, Any], language: str = "",
+    ) -> dict[str, Any]:
+        return adventures.update_adventure(self, adventure_id, body, language)
+
+    def delete_adventure(self, adventure_id: str) -> dict[str, Any]:
+        return adventures.delete_adventure(self, adventure_id)
+
+    def export_adventure(self, adventure_id: str) -> tuple[str, bytes]:
+        return adventures.export_adventure(self, adventure_id)
+
+    def import_adventure(
+        self, payload: bytes, directory_id: str = "",
+    ) -> dict[str, Any]:
+        return adventures.import_adventure(self, payload, directory_id)
 
     def list_world_templates(self, language: str = "") -> dict[str, Any]:
         # 确保已启用插件的世界模板世界书已同步（幂等）
@@ -828,12 +943,18 @@ class WebAPI:
                            room_password: str = "",
                            language: str = "",
                            scene_image: dict[str, Any] | None = None,
-                           map_background: dict[str, Any] | None = None) -> dict[str, Any]:
+                           map_background: dict[str, Any] | None = None,
+                           adventure_id: str = "",
+                           narrative_perspective: str = "auto",
+                           advancement_mode: str = "milestone",
+                           advancement_authority: str = "ai_gm") -> dict[str, Any]:
         return await games.create_game(self, world_id, game_name, group_name, rule_id,
                                        solo, lorebook_world_id, difficulty, description,
                                        create_lorebook, blank_lorebook, source_world_id,
                                        players, custom_world, gm_uid, room_password,
-                                       language, scene_image, map_background)
+                                       language, scene_image, map_background, adventure_id,
+                                       narrative_perspective, advancement_mode,
+                                       advancement_authority)
 
     # ---- 重开引用码 ----
 
@@ -850,8 +971,12 @@ class WebAPI:
                                players: list[dict] | None = None,
                                gm_uid: str = "",
                                language: str = "",
-                               scene_image: dict[str, Any] | None = None) -> dict[str, Any]:
-        return await games.create_from_seed(self, seed_code, solo, players, gm_uid, language, scene_image)
+                               scene_image: dict[str, Any] | None = None,
+                               narrative_perspective: str = "") -> dict[str, Any]:
+        return await games.create_from_seed(
+            self, seed_code, solo, players, gm_uid, language, scene_image,
+            narrative_perspective,
+        )
 
     async def update_scene_image(
         self,

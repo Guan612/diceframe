@@ -30,6 +30,7 @@ export function useGame(){
   const currentGame = ref(routeGame() || readCurrentGame())
   const userId = ref(routeUser())
   const detail = ref<GameDetail|null>(null), players = ref<Player[]>([]), log = ref<LogEntry[]>([]), liveNarration = ref('')
+  const rulesetStateSignal = ref(0)
   const privateMessages = ref<PrivateMessage[]>([]), map = ref<MapData>({locations:[]}), lore = ref<LoreKeywords>({}), loreEntries = ref<LoreEntry[]>([]), loading=ref(false), error=ref('')
   let source:EventSource|null=null
   let unsubscribePeerEvents:(()=>void)|null=null
@@ -196,6 +197,12 @@ export function useGame(){
         if(effect==='baseline')return
         if(effect==='narration-delta'){liveNarration.value+=String(payload?.text||'');return}
         if(effect==='narration-reset'){liveNarration.value='';return}
+        if(payload?.type === 'ruleset_state_changed') {
+          rulesetStateSignal.value = Math.max(
+            rulesetStateSignal.value + 1,
+            Number(payload.state_version || 0),
+          )
+        }
         scheduleSilentRefresh()
       }
       source.onerror=()=>{
@@ -233,5 +240,5 @@ export function useGame(){
   // 须按最新条目的 round 判断，否则“GM 思考中”在正式输出落地后残留。
   watch(() => log.value[log.value.length - 1]?.round, (next, prev) => { if (next !== prev) liveNarration.value = '' })
   onBeforeUnmount(()=>{connectVersion++;source?.close();unsubscribePeerEvents?.();revokeMapBackgroundAsset(map.value);clearRefreshTimer();if(pollTimer)clearInterval(pollTimer);if(reconnectTimer)clearTimeout(reconnectTimer)})
-  return {currentGame,userId,actorId,detail,players,player,log,privateMessages,map,lore,loreEntries,loading,error,isGm,refresh,connect,selectGame,liveNarration}
+  return {currentGame,userId,actorId,detail,players,player,log,privateMessages,map,lore,loreEntries,loading,error,isGm,refresh,connect,selectGame,liveNarration,rulesetStateSignal}
 }

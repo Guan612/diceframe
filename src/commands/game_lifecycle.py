@@ -18,6 +18,7 @@ from src.engine.character_utils import reset_character_for_restart
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
+from src.rulesets.dnd2024.narrative import narrative_perspective_instruction
 
 logger = logging.getLogger("trpg")
 
@@ -124,6 +125,11 @@ class GameLifecycle:
                     ),
                 },
             )
+        runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
+        if runtime_id == "core:dnd2024":
+            opening_instruction += "\n\n" + narrative_perspective_instruction(
+                instance, instance.language,
+            )
         welcome_context = (
             f"{gm_prompt}\n\n"
             f"【当前世界】\n"
@@ -136,30 +142,51 @@ class GameLifecycle:
             f"{opening_instruction}"
         )
 
-        response = await self.llm_client.call(
-            system_prompt=gm_prompt,
-            user_message=welcome_context,
-            temperature=0.8,
-            max_tokens=self.narrative_max_tokens,
-        )
-        response = await repair_malformed_protocol_response(
-            self.llm_client,
-            response,
-            system_prompt=gm_prompt,
-            user_message=welcome_context,
-            language=instance.language,
-            temperature=0.8,
-            max_tokens=self.narrative_max_tokens,
-        )
-        response.content = normalize_tag_protocol(response.content)
-
-        narration = extract_narration_from_response(response)
-        if "---" in response.content:
-            narration = response.content.split("---", 1)[0].strip()
-        narration = sanitize_narration(narration)
-
-        # 开场标签同样需要落地到 instance：NPC 登记、场景、首次战利品等。
-        start_data = parse_tag_state(response.content, rule_ctx.combat_model)
+        response = None
+        try:
+            response = await self.llm_client.call(
+                system_prompt=gm_prompt,
+                user_message=welcome_context,
+                temperature=0.8,
+                max_tokens=self.narrative_max_tokens,
+            )
+            response = await repair_malformed_protocol_response(
+                self.llm_client,
+                response,
+                system_prompt=gm_prompt,
+                user_message=welcome_context,
+                language=instance.language,
+                temperature=0.8,
+                max_tokens=self.narrative_max_tokens,
+            )
+            response.content = normalize_tag_protocol(response.content)
+            narration = extract_narration_from_response(response)
+            if "---" in response.content:
+                narration = response.content.split("---", 1)[0].strip()
+            narration = sanitize_narration(narration)
+            # 开场标签同样需要落地到 instance：NPC 登记、场景、首次战利品等。
+            start_data = parse_tag_state(response.content, rule_ctx.combat_model)
+        except Exception:
+            logger.exception("开场叙事生成失败，已保存可继续的兜底开场")
+            narration = localized_text(
+                instance.language,
+                {
+                    "en": (
+                        f"{instance.world_name} is ready. The opening narration could not be "
+                        "generated, but your game and characters have been saved. Configure or "
+                        "retry the model service, then continue when you are ready."
+                    ),
+                    "zh-CN": (
+                        f"《{instance.world_name}》已经创建，角色与存档均已保存。"
+                        "本次开场叙事生成失败；请检查模型服务后继续游戏或重试。"
+                    ),
+                    "ja": (
+                        f"『{instance.world_name}』を作成し、キャラクターとセーブを保存しました。"
+                        "オープニング生成に失敗したため、モデル設定を確認してから続行または再試行してください。"
+                    ),
+                },
+            )
+            start_data = {}
         if start_data.get("state_update"):
             self.state_applier.apply_state_update(instance, start_data["state_update"])
         if start_data.get("plot_update") and instance.plot_tracker:
@@ -175,7 +202,8 @@ class GameLifecycle:
             {"en": "Game Start", "zh-CN": "游戏开始", "ja": "ゲーム開始"},
         )
         instance.set_scene(scene or start_label)
-        instance.record_llm_usage(response.total_tokens)
+        if response is not None:
+            instance.record_llm_usage(response.total_tokens)
         instance.append_log_entry({
             "round": 0,
             "actions": [{"user_id": "system", "text": start_label}],
@@ -263,13 +291,14 @@ class GameLifecycle:
         world_name = instance.world_name
         group_name = instance.group_name
         seed = instance.seed_code
+        rule_id = instance.rule_id
         language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
         await instance.reset(keep_seed=True)
         instance = await self.create_game(
             instance.game_key, world_id=world_id, world_name=world_name,
-            group_name=group_name, seed_code=seed, language=language,
+            group_name=group_name, seed_code=seed, rule_id=rule_id, language=language,
         )
-        await self.start_game(instance)
+        await self._start_reset_instance(instance)
         instance.record_llm_usage(calls=1)
         await self.registry.save(instance)
         return instance
@@ -286,21 +315,41 @@ class GameLifecycle:
         world_name = instance.world_name
         group_name = instance.group_name
         seed = instance.seed_code
+        rule_id = instance.rule_id
         solo = instance.solo_mode
+        narrative_perspective = instance.narrative_perspective
         language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
 
         await instance.reset(keep_seed=True)
         instance = await self.create_game(
             instance.game_key, world_id=world_id, world_name=world_name,
-            group_name=group_name, seed_code=seed, language=language,
+            group_name=group_name, seed_code=seed, rule_id=rule_id, language=language,
         )
-        instance.configure_session(solo_mode=solo)
+        instance.configure_session(
+            solo_mode=solo,
+            narrative_perspective=narrative_perspective,
+        )
         instance.replace_players(saved_players)
 
         if not instance.players:
             raise ValueError("重开世界需要至少 1 名角色")
 
-        await self.start_game(instance)
+        await self._start_reset_instance(instance)
         instance.record_llm_usage(calls=1)
         await self.registry.save(instance)
         return instance
+
+    async def _start_reset_instance(self, instance: GameInstance) -> str:
+        """Resume the gameplay stack already bound to this save."""
+
+        runtime_id = str((instance.ruleset_runtime or {}).get("id") or "")
+        if not runtime_id or runtime_id == "core:legacy":
+            return await self.start_game(instance)
+        await instance.activate()
+        self.registry.register(instance)
+        world = self.load_world_template(instance.world_id, instance.language) or {}
+        initial_scene = str(world.get("starter_scene") or instance.world_name or "").strip()
+        if initial_scene:
+            instance.set_scene(initial_scene)
+        await self.registry.save(instance)
+        return ""

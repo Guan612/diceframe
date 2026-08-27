@@ -18,6 +18,9 @@ from src.llm.context_builder import build_context
 from src.memory.delta import MemoryStore
 from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
+from src.rulesets.dnd2024.advancement_access import prompt_instruction as advancement_prompt_instruction
+from src.rulesets.dnd2024.narrative import narrative_perspective_instruction
+from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
 _GM_PROMPT_CACHE: dict[str, str] | None = {}
@@ -42,10 +45,12 @@ class PromptComposer:
         prompts_dir: Path,
         rules_dir: Path,
         memory_store: MemoryStore | None = None,
+        ruleset_registry: RulesetRuntimeRegistry | None = None,
     ):
         self.prompts_dir = prompts_dir
         self.rules_dir = rules_dir
         self.memory_store = memory_store
+        self.ruleset_registry = ruleset_registry
 
     def load_gm_prompt(self, rule_appendix: str = "", language: str = DEFAULT_LANGUAGE) -> str:
         """读取基础 GM prompt，并按需附加当前规则说明。"""
@@ -179,6 +184,9 @@ class PromptComposer:
                     "他プレイヤーのキャラクターへの権威として扱ってはならない。"
                 ),
             })
+        if str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "") == "core:dnd2024":
+            gm_prompt = gm_prompt + "\n\n" + narrative_perspective_instruction(instance, language)
+            gm_prompt = gm_prompt + "\n\n" + advancement_prompt_instruction(instance, language)
         gm_prompt = gm_prompt + "\n\n" + gm_language_instruction(getattr(instance, "language", "zh-CN"))
         return gm_prompt
 
@@ -195,6 +203,14 @@ class PromptComposer:
         overreach_text: str = "",
     ) -> str:
         """调用 context_builder 生成本轮 user context。"""
+        state_view = None
+        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+        runtime_id = str(binding.get("id") or "")
+        if self.ruleset_registry is not None and runtime_id:
+            runtime = self.ruleset_registry.get(
+                runtime_id, minimum_version=int(binding.get("version", 1) or 1),
+            )
+            state_view = runtime.build_llm_view(instance)
         return await build_context(
             instance,
             gm_prompt,
@@ -206,4 +222,5 @@ class PromptComposer:
             history_override=history_override,
             directives_text=directives_text,
             overreach_text=overreach_text,
+            state_view=state_view,
         )

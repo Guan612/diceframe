@@ -128,6 +128,29 @@ async def submit_action(
         return _result({"error": "游戏不存在，请刷新页面重新开始"}, 404)
     if actor_uid not in instance.players:
         return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
+    ruleset_registry = getattr(api, "_ruleset_registry", None)
+    if ruleset_registry is not None:
+        rule = api._load_rule_for_game(instance)
+        if rule is not None:
+            try:
+                runtime = ruleset_registry.resolve(rule.template)
+            except ValueError as exc:
+                return _result({
+                    "ok": False,
+                    "error_code": "RULESET_RUNTIME_UNAVAILABLE",
+                    "error": str(exc),
+                }, 409)
+            state = getattr(instance, "ruleset_state", {})
+            combat = state.get("combat") if isinstance(state, dict) else None
+            combat_active = isinstance(combat, dict) and combat.get("status") == "active"
+            if runtime.capabilities.authoritative_intents and (
+                not runtime.capabilities.narrative_turns or combat_active
+            ):
+                return _result({
+                    "ok": False,
+                    "error_code": "STRUCTURED_INTENT_REQUIRED",
+                    "error": "当前处于权威战斗，请在专业战斗工具中选择合法动作",
+                }, 409)
     if instance.is_dead(actor_uid):
         return _result({"error": "角色已死亡，无法提交行动"}, 403)
     if instance.state == GameState.ACTIVE_JUDGMENT:

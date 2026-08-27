@@ -10,6 +10,90 @@ from src.engine.health import health_payload, mark_health_event, record_health_e
 from src.commands.progression_resolver import ProgressionResolver
 
 
+def test_versioned_ruleset_state_is_optional_and_round_trips() -> None:
+    legacy = GameInstance(game_key=("web", "legacy", "bot"))
+    assert "ruleset_runtime" not in legacy.to_dict()
+
+    instance = GameInstance(game_key=("web", "professional", "bot"))
+    assert instance.bind_ruleset_runtime({
+        "runtime_id": "core:dnd2024",
+        "runtime_version": 1,
+        "content_version": "srd-5.2.1+r1",
+        "state_schema_version": 1,
+    })
+    instance.event_ledger.append({"batch_id": "test-batch"})
+
+    restored = GameInstance.from_dict(instance.to_dict())
+
+    assert restored.ruleset_runtime == {
+        "id": "core:dnd2024",
+        "version": 1,
+        "content_version": "srd-5.2.1+r1",
+        "state_schema_version": 1,
+    }
+    assert restored.ruleset_state == {"state_schema_version": 1}
+    assert restored.event_ledger == [{"batch_id": "test-batch"}]
+    assert not restored.bind_ruleset_runtime({
+        "runtime_id": "core:dnd2024",
+        "runtime_version": 2,
+        "content_version": "future",
+        "state_schema_version": 2,
+    })
+
+
+def test_narrative_perspective_round_trips_and_old_saves_default_to_auto() -> None:
+    instance = GameInstance(game_key=("web", "perspective", "bot"))
+    instance.set_narrative_perspective("third_person")
+
+    restored = GameInstance.from_dict(instance.to_dict())
+    legacy_data = instance.to_dict()
+    legacy_data.pop("narrative_perspective")
+
+    assert restored.narrative_perspective == "third_person"
+    assert GameInstance.from_dict(legacy_data).narrative_perspective == "auto"
+    with pytest.raises(ValueError, match="叙事视角"):
+        instance.set_narrative_perspective("角色名")
+
+
+@pytest.mark.asyncio
+async def test_reset_preserves_exact_ruleset_and_adventure_bindings() -> None:
+    instance = GameInstance(
+        game_key=("web", "professional-restart", "bot"),
+        world_id="greymoor",
+        rule_id="dnd2024_srd",
+    )
+    ruleset = {
+        "runtime_id": "core:dnd2024",
+        "runtime_version": 1,
+        "content_version": "srd-5.2.1+r5",
+        "state_schema_version": 1,
+    }
+    adventure = {
+        "adventure_id": "core:lanterns_of_greymoor",
+        "version": "1.0.0",
+        "format": "diceframe:adventure-graph-v1",
+        "content_digest": "sha256:test-binding",
+        "world_id": "greymoor",
+    }
+    assert instance.bind_ruleset_runtime(ruleset)
+    assert instance.bind_adventure(adventure)
+    instance.ruleset_state["version"] = 42
+    instance.event_ledger.append({"batch_id": "old-run"})
+
+    await instance.reset()
+
+    assert instance.rule_id == "dnd2024_srd"
+    assert instance.ruleset_runtime == {
+        "id": "core:dnd2024",
+        "version": 1,
+        "content_version": "srd-5.2.1+r5",
+        "state_schema_version": 1,
+    }
+    assert instance.adventure_binding == adventure
+    assert instance.ruleset_state == {"state_schema_version": 1}
+    assert instance.event_ledger == []
+
+
 @pytest.mark.asyncio
 class TestGameInstance:
     async def test_initial_state(self):

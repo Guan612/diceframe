@@ -42,7 +42,7 @@ QQ 交流群：1060613588
 - 语音朗读：系统音色零配置回退，也可连接在线或本地 OpenAI 兼容 TTS、GPT-SoVITS；服务已有的 voice ID 和个人参考 WAV 可直接使用，商店音色预设完全可选。
 - 系统生图：在模型路由中配置 OpenAI 兼容图像模型，为对话场景、角色头像、道具和地图背景生成图片；重大场景切换可在后台自动生成场景图。
 - QQ / [NapCat](https://github.com/NapNeko/NapCat) 插件：群聊绑定网页对局，支持行动、状态、前情、地图、感知、支付；检定由系统自动判断并掷骰。
-- 应用更新：便携版支持旁路安装、健康检查和失败回滚；源码、Git、Docker 按安装方式给出安全更新流程。
+- 应用更新：便携版和托管 Docker 支持旁路安装、健康检查和失败回滚；源码、Git 与基础镜像按安装方式给出安全更新流程。
 - Docker：提供 Linux/Docker 部署入口，运行数据挂载到 `data/`。
 
 ## 快速开始
@@ -73,6 +73,8 @@ http://localhost:9876
 ```
 
 Docker 会把运行数据挂载到当前目录的 `data/`。详细说明见 [DiceFrame 部署说明](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/deploy.md)。
+
+升级到支持托管更新的基线镜像后，普通应用版本可以直接在“设置 → 版本更新”中完成；Python 或系统运行时变化仍需拉取新镜像。程序不会挂载或控制 Docker socket。
 
 NAS 用户可以在 Docker 管理界面搜索 `diceframe` 拉取镜像，或在 [Docker Hub](https://hub.docker.com/r/falconku/diceframe) 查找。
 

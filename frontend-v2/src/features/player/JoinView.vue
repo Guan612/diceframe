@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/client'
-import type { CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSkill, GameDetail, PlayerCreateResponse, RuleAttribute, RuleMeta } from '@/api/types'
+import type { CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CharacterSkill, GameDetail, PlayerCreateResponse, RuleAttribute, RuleMeta, RulesetRuntimeMeta } from '@/api/types'
 import { rememberCurrentGame } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
 import { attrDisplayName, suggestedAttributes, skillPointCost } from '@/utils/ruleSchema'
@@ -14,6 +14,7 @@ import { usePeerSessionStore } from '@/peer/store/peerSession'
 import { friendlyPeerDetail } from '@/features/peer/friendlyDetail'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
+import RulesetExperienceHost from '@/features/rulesets/RulesetExperienceHost.vue'
 
 interface JoinSkill { name: string; value: string | number }
 interface JoinForm {
@@ -39,6 +40,9 @@ const attrs = ref<RuleAttribute[]>([])
 const attrTotal = ref(0)
 const ruleMeta = ref<RuleMeta>({})
 const cards = ref<CharacterCard[]>([])
+const rulesetRuntime = ref<RulesetRuntimeMeta | null>(null)
+const professionalInitial = ref<CharacterSheet | undefined>()
+const professionalHostKey = ref(0)
 const form = ref<JoinForm>({ character_name: '', race: '', class: '', hp: '', background: '', attributes: {}, skills: [{ name: '', value: '' }] })
 const error = ref(''), busy = ref(false)
 /** peer 会话恢复失败等场景的原始错误码转成人话；其它错误原样展示。 */
@@ -47,6 +51,9 @@ const sheetReady = ref(false)
 const needRoomPassword = ref(false), roomPasswordInput = ref('')
 const resumeUser = ref('')
 const backgroundLimit = 8000
+const usesProfessionalBuilder = computed(() => (
+  rulesetRuntime.value?.capabilities.character_builder === 'professional'
+))
 
 const fallbackAttrs = computed<RuleAttribute[]>(() => [
   { key: 'str', name: t('attrStrength'), min: 1, max: 100 },
@@ -171,11 +178,46 @@ async function loadGameData() {
     ])
     attrs.value = c.rule_attrs?.length ? c.rule_attrs : fallbackAttrs.value
     ruleMeta.value = c.rule_meta || {}
+    rulesetRuntime.value = c.ruleset_runtime || null
     attrTotal.value = Number(c.rule_attrs_total || ruleMeta.value.attribute_points || 0) || inferredAttrTotal.value
     form.value.attributes = suggestedAttributes(attrs.value, attrLimit.value)
     cards.value = k.cards || []
     sheetReady.value = true
   } catch (e: unknown) { error.value = errorMessage(e) }
+}
+
+async function applyProfessionalCard(event: Event) {
+  const select = event.target as HTMLSelectElement
+  if (select.value === '') return
+  const card = cards.value[Number(select.value)]
+  if (!card) return
+  if (characterCardNeedsConversion(card, ruleMeta.value.rule_id)) {
+    const ok = await confirm({
+      title: t('cardRuleMismatchTitle'),
+      content: t('cardRuleMismatchContent', {
+        source: characterCardRuleName(card, t('unboundRule')),
+        target: String(ruleMeta.value.rule_name || ruleMeta.value.rule_id || ''),
+      }),
+      positiveText: t('continueAndReview'),
+      negativeText: t('cancel'),
+      type: 'warning',
+    })
+    if (!ok) { select.value = ''; return }
+  }
+  professionalInitial.value = JSON.parse(JSON.stringify(card)) as CharacterCard
+  professionalHostKey.value += 1
+}
+
+async function createProfessional(character: CharacterSheet) {
+  busy.value = true; error.value = ''
+  try {
+    const r = await api<PlayerCreateResponse>(`/games/${encodeURIComponent(gameKey.value)}/players`, {
+      method: 'POST', body: JSON.stringify({ ...character, join_as_new: true }),
+    })
+    localStorage.setItem('trpg_play_user_' + gameKey.value, r.user_id)
+    rememberCurrentGame(gameKey.value, detail.value?.world_name || '')
+    router.replace({ name: 'play', query: { game: gameKey.value, user: r.user_id, share: '1' } })
+  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 
 function fillSuggestedAttrs() {
@@ -292,6 +334,18 @@ async function create() {
         </div>
       </div>
       <p v-if="error" class="error-banner">{{ displayError }}</p>
+    </section>
+
+    <section v-else-if="usesProfessionalBuilder" class="join-form professional-join-form">
+      <div class="sheet-head">
+        <div><h2>{{ t('createYourCharacter') }}</h2><p>{{ t('createCharacterHelp') }}</p></div>
+        <span class="badge badge-active">5E 2024 SRD</span>
+      </div>
+      <label v-if="cards.length" class="sheet-field">{{ t('chooseFromSharedLibrary') }}
+        <select @change="applyProfessionalCard"><option value="">{{ t('newCharacterCard') }}</option><option v-for="(c, i) in cards" :key="c.id || i" :value="i">{{ c.character_name }} · {{ c.race }} {{ c.class }}</option></select>
+      </label>
+      <p v-if="error" class="error-banner">{{ displayError }}</p>
+      <RulesetExperienceHost :key="professionalHostKey" embedded :rule-id="String(ruleMeta.rule_id || detail.rule_id || '')" :language="locale" :initial="professionalInitial" @submit="createProfessional" @cancel="router.push({ name: 'overview' })" />
     </section>
 
     <section v-else class="join-form player-sheet-form">

@@ -357,7 +357,7 @@
   }
 
   .create-step-nav {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .create-step-nav-item {
@@ -608,6 +608,7 @@
   .create-field-grid,
   .create-config-surface,
   .create-mode-cards,
+  .create-recommended-rules .rec-grid,
   .create-confirm-grid {
     grid-template-columns: minmax(0, 1fr);
   }

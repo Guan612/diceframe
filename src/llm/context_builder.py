@@ -235,6 +235,7 @@ async def build_context(
     history_override: list[dict] | None = None,
     directives_text: str = "",
     overreach_text: str = "",
+    state_view: dict | None = None,
 ) -> str:
     """将游戏状态拼接为完整的 LLM 上下文。
 
@@ -271,7 +272,7 @@ async def build_context(
     reserved_system_chars = min(len(gm_prompt_filled), budget_system)
 
     # 1. 游戏状态（LLM 精简视图，含属性修正）
-    state = instance.to_llm_view()
+    state = state_view if state_view is not None else instance.to_llm_view()
     state_json = json.dumps(state, ensure_ascii=False)
     # 超预算时压缩背包/关键物品为最近条目 + 计数，避免整段丢弃或硬截断 JSON
     if len(state_json) > budget_state:

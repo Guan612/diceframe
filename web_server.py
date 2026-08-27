@@ -17,6 +17,7 @@ from src.runtime_env import load_project_env
 load_project_env(Path(__file__).resolve().with_name(".env"))
 
 from src.common_factory import TRPGSubsystems, create_trpg_subsystems
+from src.adventures import sync_adventure_catalog
 from src.migrations.config import (
     DEFAULT_NARRATIVE_MAX_TOKENS,
     GENERATION_DEFAULTS_VERSION,
@@ -65,6 +66,7 @@ from src.webui.routes.avatars import register_avatars
 from src.webui.routes.scene_images import register_scene_images
 from src.webui.routes.maps import register_maps
 from src.webui.routes.rules import register_rules
+from src.webui.routes.adventures import register_adventures
 from src.webui.routes.worlds import register_worlds
 from src.webui.routes.generation import register_generation
 from src.webui.routes.games import register_games
@@ -306,14 +308,20 @@ ROOT = Path(__file__).parent
 PROMPTS_DIR = ROOT / "prompts"
 BUILTIN_RULES_DIR = ROOT / "templates" / "rules"
 BUILTIN_WORLDS_DIR = ROOT / "templates" / "worlds"
+BUILTIN_ADVENTURES_DIR = ROOT / "templates" / "adventures"
 RULES_DIR = DATA_DIR / "templates" / "rules"
 WORLDS_DIR = DATA_DIR / "templates" / "worlds"
+ADVENTURES_DIR = DATA_DIR / "templates" / "adventures"
 STATIC_V2_DIR = ROOT / "static-v2"
 
 _rule_sync = sync_template_catalog(BUILTIN_RULES_DIR, RULES_DIR, "rules")
 _world_sync = sync_template_catalog(BUILTIN_WORLDS_DIR, WORLDS_DIR, "worlds")
-if any(_rule_sync.values()) or any(_world_sync.values()):
-    logger.info("模板目录已同步到 data: rules=%s worlds=%s", _rule_sync, _world_sync)
+_adventure_sync = sync_adventure_catalog(BUILTIN_ADVENTURES_DIR, ADVENTURES_DIR)
+if any(_rule_sync.values()) or any(_world_sync.values()) or any(_adventure_sync.values()):
+    logger.info(
+        "模板目录已同步到 data: rules=%s worlds=%s adventures=%s",
+        _rule_sync, _world_sync, _adventure_sync,
+    )
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -490,6 +498,7 @@ def _build_subsystems(
     return create_trpg_subsystems(
         data_dir=DATA_DIR, prompts_dir=PROMPTS_DIR,
         rules_dir=RULES_DIR, worlds_dir=WORLDS_DIR,
+        adventures_dir=ADVENTURES_DIR,
         providers=providers, default_provider="default",
         embedding_enabled=emb_enabled,
         embedding_base_url=emb_base,
@@ -555,6 +564,7 @@ def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None 
         memory=subsystems.memory_store, rules_dir=RULES_DIR,
         handler=subsystems.handler, llm_client=subsystems.llm_client,
         worlds_dir=WORLDS_DIR,
+        adventures_dir=ADVENTURES_DIR,
         character_gen_max_tokens=int(runtime_config.get("character_gen_max_tokens", 4096)),
         text_gen_max_tokens=int(runtime_config.get("text_gen_max_tokens", 1024)),
         plugin_host=plugin_host,
@@ -562,6 +572,7 @@ def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None 
         speech_service=speech_service,
         asr_service=asr_service,
         imagegen_service=imagegen_service,
+        ruleset_registry=getattr(subsystems, "ruleset_registry", None),
     )
     # 配置状态引用就地更新，始终指向最新值（更新频道等运行时配置）
     api._config_state = STATE
@@ -837,6 +848,12 @@ async def auth_middleware(request: web.Request, handler):
         return await handler(request)
     if request.method == "GET" and request.path.startswith("/api/legal/"):
         return await handler(request)
+    # Professional player creation runs on public share/join pages before a
+    # player identity exists.  These five endpoints are stateless, bounded by
+    # the builder service's payload/depth/node limits, and never mutate a save.
+    # Keep rule management and every other /api/rules path owner-only.
+    if _is_public_ruleset_builder_request(request):
+        return await handler(request)
     # 启动器在更新切换期间没有用户令牌，只读取版本和进程号。
     if request.method == "GET" and request.path == "/api/system/update/health":
         return await handler(request)
@@ -861,6 +878,22 @@ _BOT_PUBLIC_ENDPOINTS = frozenset({
     "/api/generate-world",
     "/api/generate-text",
 })
+
+
+def _is_public_ruleset_builder_request(request: web.Request) -> bool:
+    parts = [part for part in request.path.split("/") if part]
+    if len(parts) == 4 and parts[:2] == ["api", "rules"]:
+        return request.method == "GET" and parts[3] in {"experience", "progression"}
+    return bool(
+        len(parts) == 5
+        and parts[:2] == ["api", "rules"]
+        and request.method == "POST"
+        and (
+            (parts[3] == "builder" and parts[4] in {"choices", "validate", "derive", "finalize"})
+            or (parts[3] == "advancement" and parts[4] in {"preview", "apply"})
+            or (parts[3] == "rest" and parts[4] == "resolve")
+        )
+    )
 
 
 def _bot_request_game_key(request: web.Request) -> str:
@@ -908,9 +941,9 @@ def _share_player_user_id(request: web.Request) -> str:
         return uid or request.get("user_id", "")
     if len(parts) >= 4:
         tail = parts[3]
-        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "avatars", "scene-image", "map-background-asset", "generated-images"}:
+        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "available-actions", "avatars", "scene-image", "map-background-asset", "generated-images"}:
             return uid or request.get("user_id", "")
-        if request.method == "POST" and tail in {"players", "action", "sse-ticket", "avatars", "scene-image", "generated-images"}:
+        if request.method == "POST" and tail in {"players", "action", "intents", "decisions", "sse-ticket", "avatars", "scene-image", "generated-images", "character"}:
             return uid or request.get("user_id", "")
         if (
             request.method == "POST"
@@ -919,7 +952,7 @@ def _share_player_user_id(request: web.Request) -> str:
             and parts[5] == "luck"
         ):
             return uid or request.get("user_id", "")
-        if request.method == "PUT" and tail == "character":
+        if request.method in {"PUT", "PATCH"} and tail == "character":
             return uid or request.get("user_id", "")
     return ""
 
@@ -1328,6 +1361,7 @@ def register_routes(application: web.Application) -> None:
     register_worlds(application)
     # rules
     register_rules(application)
+    register_adventures(application)
     # character cards
     register_character_cards(application)
     # character portraits

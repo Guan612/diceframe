@@ -59,3 +59,48 @@ async def test_login_succeeds_when_access_password_is_not_configured(tmp_path, m
         response = await client.post("/api/login")
 
     assert response.status == 200
+
+
+@pytest.mark.asyncio
+async def test_stateless_ruleset_builder_is_public_but_rule_management_is_not(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setitem(
+        web_server.STATE,
+        "access_token",
+        hash_access_password("correct-password"),
+    )
+    app = _login_app(tmp_path)
+
+    async def ok(_request: web.Request) -> web.Response:
+        return web.json_response({"ok": True})
+
+    app.router.add_get("/api/rules/{rule_id}/experience", ok)
+    for action in ("choices", "validate", "derive", "finalize"):
+        app.router.add_post(f"/api/rules/{{rule_id}}/builder/{action}", ok)
+    app.router.add_get("/api/rules/{rule_id}/progression", ok)
+    for action in ("preview", "apply"):
+        app.router.add_post(f"/api/rules/{{rule_id}}/advancement/{action}", ok)
+    app.router.add_post("/api/rules/{rule_id}/rest/resolve", ok)
+    app.router.add_get("/api/rules/{rule_id}", ok)
+
+    async with TestClient(TestServer(app)) as client:
+        experience = await client.get("/api/rules/dnd2024_srd/experience")
+        builder_statuses = [
+            (await client.post(f"/api/rules/dnd2024_srd/builder/{action}")).status
+            for action in ("choices", "validate", "derive", "finalize")
+        ]
+        progression = await client.get("/api/rules/dnd2024_srd/progression")
+        advancement_statuses = [
+            (await client.post(f"/api/rules/dnd2024_srd/advancement/{action}")).status
+            for action in ("preview", "apply")
+        ]
+        rest = await client.post("/api/rules/dnd2024_srd/rest/resolve")
+        rule_detail = await client.get("/api/rules/dnd2024_srd")
+
+    assert experience.status == 200
+    assert builder_statuses == [200, 200, 200, 200]
+    assert progression.status == 200
+    assert advancement_statuses == [200, 200]
+    assert rest.status == 200
+    assert rule_detail.status == 401

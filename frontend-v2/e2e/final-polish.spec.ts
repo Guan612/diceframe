@@ -19,6 +19,8 @@ test('template adventure confirmation identifies the selected world instead of A
   await page.goto('/#/create')
   await expect(page.locator('.create-mode-cards button').first()).toHaveClass(/active/)
   await page.locator('.create-actions .primary').click()
+  await expect(page.locator('.create-game-settings-stage')).toBeVisible()
+  await page.locator('.create-actions .primary').click()
   await expect(page.locator('.create-character-card')).toHaveCount(1)
   await page.locator('.create-actions .primary').click()
 
@@ -195,7 +197,12 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
   expect(modelLayout.scrollWidth).toBeLessThanOrEqual(modelLayout.clientWidth + 1)
   expect(modelLayout.display).toBe('grid')
   expect(modelLayout.headerBackground).toBe('none')
-  expect(capabilityLayout).toEqual({ display: 'grid', columns: 2, alignItems: 'start', columnCount: 2 })
+  expect(capabilityLayout).toEqual({
+    display: 'grid',
+    columns: testInfo.project.name === 'mobile' ? 1 : 2,
+    alignItems: 'start',
+    columnCount: 2,
+  })
 
   await page.goto('/#/settings?section=advanced')
   const timeoutSection = page.locator('.test-timeout-section')

@@ -8,7 +8,7 @@ test('two clients establish a direct data channel through Hub signaling', async 
   const guest = await context.newPage()
 
   await host.goto('/#/peer')
-  await host.getByLabel('要开放的多人冒险').selectOption({ index: 1 })
+  await host.getByLabel('要开放的多人冒险').selectOption('web|e2e-room|web_bot')
   await host.getByLabel('STUN 服务').selectOption('none')
   await host.locator('.peer-direct-consent input').check()
   await host.getByRole('button', { name: '创建临时直连房间' }).click()

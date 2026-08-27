@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { ChevronBack, ChevronForward, MapOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
+import { BookOutline, ChevronBack, ChevronForward, MapOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
 import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
 import { currentBackendUrl, isStandaloneFrontend } from '@/api/connection'
-import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CheckResult, CommandResponse, GameDetail, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
+import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
 import { useGame } from '@/composables/useGame'
@@ -19,8 +19,10 @@ import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLangu
 import { characterCardNeedsConversion, characterCardRuleName } from '@/utils/characterCards'
 import GameTimeline from '@/components/GameTimeline.vue'
 import ActionComposer from '@/components/ActionComposer.vue'
+import DirectorProposalCard from '@/components/play/DirectorProposalCard.vue'
+import CombatMessageComposer from '@/components/play/CombatMessageComposer.vue'
 import GameSidebar from '@/components/GameSidebar.vue'
-import RuleHelp from '@/components/RuleHelp.vue'
+import PlayHelpCenter from '@/components/PlayHelpCenter.vue'
 import HealthPanel from '@/components/HealthPanel.vue'
 import Modal from '@/components/ui/Modal.vue'
 import GmToolbar from '@/components/play/GmToolbar.vue'
@@ -30,8 +32,17 @@ import SceneGalleryModal from '@/components/play/SceneGalleryModal.vue'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePicker.vue'
 import MapBackgroundSettingsModal from '@/components/play/MapBackgroundSettingsModal.vue'
+import ProfessionalCharacterCenter from '@/features/rulesets/ProfessionalCharacterCenter.vue'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
+import { fetchRulesetAvailableActions } from '@/features/rulesets/dnd2024/api'
+
+const Dnd2024CombatPanel = defineAsyncComponent(
+  () => import('@/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue'),
+)
+const Dnd2024CampaignPanel = defineAsyncComponent(
+  () => import('@/features/rulesets/dnd2024/campaign/Dnd2024CampaignPanel.vue'),
+)
 
 defineOptions({ name: 'PlayView' })
 
@@ -56,6 +67,7 @@ const gmThinking = ref(false)
 const storyRecapBusy = ref(false)
 const luckBusyId = ref('')
 const showPortraitEditor = ref(false)
+const showCharacterCenter = ref(false)
 const portraitDraft = ref<CharacterPortrait | null>()
 const portraitBusy = ref(false)
 const playSceneImageUrl = ref(ruleSceneUrl())
@@ -96,6 +108,107 @@ function joinNames(names: string[]) { return names.filter(Boolean).join(t('listS
 function onLocaleChange(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
 
 const actorId = computed(() => game.actorId.value || game.player.value?.user_id || '')
+const rulesetRefreshKey = ref(0)
+async function refreshRulesetPanels(): Promise<void> {
+  rulesetRefreshKey.value += 1
+  await game.refresh(true)
+}
+const isAdvancedDnd = computed(() => (
+  game.detail.value?.rule_id === 'dnd2024_srd'
+  && game.detail.value?.ruleset_runtime?.id === 'core:dnd2024'
+))
+const hasAuthoritativeCombat = computed(() => Boolean(
+  (
+    game.detail.value?.ruleset_runtime?.capabilities?.authoritative_intents
+    && game.detail.value?.ruleset_runtime?.capabilities?.deterministic_combat
+  )
+  || isAdvancedDnd.value,
+))
+const hasRulesAwareCharacters = computed(() => (
+  game.detail.value?.ruleset_runtime?.capabilities?.character_lifecycle === 'rules_aware'
+))
+const hasCampaignGuidance = computed(() => Boolean(
+  (
+    game.detail.value?.ruleset_runtime?.capabilities?.session_zero
+    || game.detail.value?.ruleset_runtime?.capabilities?.tutorial_coach
+  )
+  || isAdvancedDnd.value,
+))
+type RulesetTool = 'campaign' | 'combat'
+const activeRulesetTool = ref<RulesetTool | ''>('')
+const directorProposal = ref<RulesetDirectorProposal | null>(null)
+const rulesetGameplay = ref<RulesetGameplayView | null>(null)
+const rulesetCombatStatus = ref('none')
+const rulesetCampaignStatus = ref('')
+const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value || isAdvancedDnd.value)
+const rulesetToolCopy = computed(() => locale.value.startsWith('zh') ? {
+  menu: 'DND5E工具', campaign: '冒险与战役', combat: '战斗工具', title: 'DND5E工具',
+} : {
+  menu: 'DND5E Tools', campaign: 'Adventure & campaign', combat: 'Combat tools', title: 'DND5E Tools',
+})
+
+function openRulesetTool(tool: RulesetTool): void {
+  activeRulesetTool.value = tool
+}
+
+function navigateRulesetTool(tool: RulesetTool): void {
+  if (tool === 'campaign' ? hasCampaignGuidance.value : hasAuthoritativeCombat.value) {
+    activeRulesetTool.value = tool
+  }
+}
+
+let rulesetToolPoll: number | undefined
+let rulesetToolSequence = 0
+let previousEncounterPhase = ''
+async function syncEncounterTool(): Promise<void> {
+  const gameKey = game.currentGame.value
+  if (!hasAuthoritativeCombat.value || !gameKey) return
+  const sequence = ++rulesetToolSequence
+  try {
+    const response = await fetchRulesetAvailableActions(gameKey)
+    if (sequence !== rulesetToolSequence || game.currentGame.value !== gameKey) return
+    rulesetGameplay.value = response.gameplay
+    directorProposal.value = response.gameplay.director?.proposal?.kind === 'narrative'
+      ? null
+      : response.gameplay.director?.proposal || null
+    rulesetCombatStatus.value = String(response.gameplay.combat?.status || 'none')
+    rulesetCampaignStatus.value = String(response.gameplay.campaign?.tutorial?.status || '')
+    const combatActive = response.gameplay.combat?.status === 'active'
+    const step = response.gameplay.campaign?.tutorial?.current_step
+    const narrativeEncounterPending = response.gameplay.encounter_request?.status === 'pending'
+    const encounterPending = Boolean(
+      step?.requires === 'combat_ended'
+      && !response.gameplay.campaign?.tutorial?.requirement_met,
+    )
+    const phase = combatActive ? 'active' : encounterPending || narrativeEncounterPending ? 'pending' : ''
+    if (phase && phase !== previousEncounterPhase) activeRulesetTool.value = 'combat'
+    previousEncounterPhase = phase
+  } catch {
+    if (sequence !== rulesetToolSequence || game.currentGame.value !== gameKey) return
+    // The normal play surface remains usable if the optional tool state cannot sync.
+    directorProposal.value = null
+    rulesetGameplay.value = null
+    rulesetCombatStatus.value = 'none'
+    rulesetCampaignStatus.value = ''
+  }
+}
+
+function resetRulesetToolPolling(): void {
+  rulesetToolSequence += 1
+  if (rulesetToolPoll) window.clearInterval(rulesetToolPoll)
+  rulesetToolPoll = undefined
+  previousEncounterPhase = ''
+  directorProposal.value = null
+  rulesetGameplay.value = null
+  rulesetCombatStatus.value = 'none'
+  rulesetCampaignStatus.value = ''
+  if (!hasAuthoritativeCombat.value || !game.currentGame.value) return
+  void syncEncounterTool()
+  rulesetToolPoll = window.setInterval(() => {
+    if (document.visibilityState !== 'hidden') void syncEncounterTool()
+  }, 30000)
+}
+const rulesetCombatActive = computed(() => rulesetGameplay.value?.combat?.status === 'active')
 const canEditOwnPortrait = computed(() => Boolean(
   actorId.value
   && game.player.value?.user_id === actorId.value
@@ -177,8 +290,9 @@ async function savePortrait() {
   if (!canEditOwnPortrait.value || !game.currentGame.value || !actorId.value) return
   portraitBusy.value = true
   try {
-    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, {
-      method: 'PUT',
+    const suffix = hasRulesAwareCharacters.value ? '/profile' : ''
+    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}${suffix}`, {
+      method: hasRulesAwareCharacters.value ? 'PATCH' : 'PUT',
       body: JSON.stringify({ portrait: portraitDraft.value ? { ...portraitDraft.value } : null }),
     })
     await game.refresh(true)
@@ -187,6 +301,15 @@ async function savePortrait() {
   } catch (error: unknown) {
     toast.error(errorMessage(error))
   } finally { portraitBusy.value = false }
+}
+
+async function onCharacterCenterSaved(_character?: CharacterSheet, reason?: 'profile' | 'rest') {
+  showCharacterCenter.value = false
+  await game.refresh(true)
+  toast.success(reason === 'rest' ? t('restCompleted') : t('characterProfileSaved'))
+}
+async function onCharacterCenterRestPending() {
+  await game.refresh(true)
 }
 
 let sceneImageSequence = 0
@@ -319,6 +442,23 @@ async function generateStoryRecap() {
 function onCommand(text: string) { command('gm-command', { command: text }) }
 function onPerception(uid: string, text: string) { command('private-message', { user_id: uid, text }) }
 function onMode() { command('mode', { solo: !game.detail.value?.solo_mode }) }
+function onNarrativePerspective(perspective: 'auto' | 'immersive' | 'third_person') {
+  command('settings/narrative-perspective', { perspective })
+}
+async function onAdvancementControl(payload: Record<string, string | number>) {
+  if (!game.currentGame.value) return
+  try {
+    const result = await api<{ ok?: boolean; error?: string }>(
+      `/games/${encodeURIComponent(game.currentGame.value)}/advancement/control`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    )
+    if (result.ok === false || result.error) throw new Error(result.error || t('operationFailed'))
+    await game.refresh(true)
+    toast.success(t('advancementSaved'))
+  } catch (cause: unknown) {
+    toast.error(errorMessage(cause))
+  }
+}
 function onAccess() { command('player-access', { open: game.detail.value?.player_access_open === false }) }
 
 function onRoomPassword() {
@@ -422,7 +562,14 @@ async function selectCard(card: CharacterCard) {
     return
   }
   try {
-    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, { method: 'PUT', body: JSON.stringify(card) })
+    if (hasRulesAwareCharacters.value) {
+      await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}/adopt-card`, {
+        method: 'POST',
+        body: JSON.stringify({ card_id: String(card.card_id || card.id || '') }),
+      })
+    } else {
+      await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, { method: 'PUT', body: JSON.stringify(card) })
+    }
     showCards.value = false
     await game.refresh()
   } catch (e: unknown) { toast.error(errorMessage(e)) }
@@ -591,6 +738,19 @@ watch(() => game.currentGame.value, (next, prev) => {
   if (next && next !== prev) loadPlayContext()
 })
 watch(
+  [() => game.currentGame.value, hasAuthoritativeCombat],
+  resetRulesetToolPolling,
+  { immediate: true },
+)
+watch(() => game.detail.value?.round_number, () => {
+  if (hasAuthoritativeCombat.value) void syncEncounterTool()
+})
+watch(() => game.rulesetStateSignal.value, () => {
+  if (!hasAuthoritativeCombat.value) return
+  rulesetRefreshKey.value += 1
+  void syncEncounterTool()
+})
+watch(
   [() => game.currentGame.value, () => JSON.stringify(game.detail.value?.scene_image || {})],
   () => { refreshPlaySceneImage() },
   { immediate: true },
@@ -608,6 +768,7 @@ watch(showGmThinking, (thinking) => {
   if (!thinking && game.liveNarration.value) game.liveNarration.value = ''
 })
 onBeforeUnmount(() => {
+  if (rulesetToolPoll) window.clearInterval(rulesetToolPoll)
   sceneImageSequence += 1
   revokeSceneImageUrl(playSceneImageUrl.value)
   revokeSceneImageUrl(sceneImageDefaultUrl.value)
@@ -647,7 +808,7 @@ onBeforeUnmount(() => {
         <button class="play-secondary-action" @click="openCards">{{ t('characters') }}</button>
         <button class="play-secondary-action play-map-action" @click="openMap">{{ t('mapTitle') }}</button>
         <button class="play-secondary-action" @click="showSceneGallery = true">{{ t('sceneGallery') }}</button>
-        <button class="play-secondary-action" @click="help = true">{{ t('rule') }}</button>
+        <button class="play-secondary-action" @click="help = true">{{ t('help') }}</button>
         <button class="play-secondary-action play-refresh" @click="game.refresh()">{{ t('refresh') }}</button>
       </div>
     </header>
@@ -673,12 +834,34 @@ onBeforeUnmount(() => {
         :rule-meta="ruleMeta"
         :collapsed="sidebarCollapsed"
         :portrait-editable="canEditOwnPortrait"
+        :show-advanced-center="hasRulesAwareCharacters"
         @lore-click="onLoreClick"
         @open-map="openMap"
         @toggle-sidebar="toggleSidebarPanel"
         @portrait-click="openPortraitEditor"
         @allocate-level-up="allocateLevelUp"
+        @open-character-center="showCharacterCenter = true"
       />
+
+      <Modal
+        v-if="showCharacterCenter && game.player.value && hasRulesAwareCharacters"
+        :title="t('advancedCharacterCenter')"
+        dialog-class="professional-character-dialog"
+        @close="showCharacterCenter = false"
+      >
+        <ProfessionalCharacterCenter
+          :character="game.player.value.character_sheet || {}"
+          target="game"
+          :rule-id="String(ruleMeta.rule_id || game.detail.value.rule_id || '')"
+          :language="String(locale)"
+          :game-key="game.currentGame.value"
+          :user-id="actorId"
+          :rest-session="game.detail.value.rest_session"
+          @saved="onCharacterCenterSaved"
+          @rest-pending="onCharacterCenterRestPending"
+          @cancel="showCharacterCenter = false"
+        />
+      </Modal>
 
       <Modal v-if="showPortraitEditor && game.player.value" :title="t('changeAvatar')" @close="showPortraitEditor = false">
         <PortraitPicker
@@ -710,6 +893,49 @@ onBeforeUnmount(() => {
         @saved="onMapBackgroundSaved"
       />
 
+      <Modal
+        v-if="activeRulesetTool"
+        :title="rulesetToolCopy.title"
+        dialog-class="dnd-toolbox-dialog"
+        @close="activeRulesetTool = ''"
+      >
+        <nav class="dnd-toolbox-tabs" :aria-label="rulesetToolCopy.menu">
+          <button
+            v-if="hasCampaignGuidance"
+            :class="{ active: activeRulesetTool === 'campaign' }"
+            @click="openRulesetTool('campaign')"
+          >{{ rulesetToolCopy.campaign }}</button>
+          <button
+            v-if="hasAuthoritativeCombat"
+            :class="{ active: activeRulesetTool === 'combat' }"
+            @click="openRulesetTool('combat')"
+          >{{ rulesetToolCopy.combat }}</button>
+        </nav>
+        <Dnd2024CampaignPanel
+          v-if="activeRulesetTool === 'campaign' && hasCampaignGuidance"
+          :game-key="game.currentGame.value"
+          :actor-id="actorId"
+          :character-name="game.player.value?.character_name || ''"
+          :scene-name="sceneTitle"
+          :world-name="game.detail.value.world_name || game.detail.value.world_id || ''"
+          :map="game.map.value"
+          :is-gm="game.isGm.value"
+          :refresh-key="rulesetRefreshKey"
+          @refresh="refreshRulesetPanels"
+          @navigate="navigateRulesetTool"
+          @open-map="openMap"
+        />
+        <Dnd2024CombatPanel
+          v-else-if="activeRulesetTool === 'combat' && hasAuthoritativeCombat"
+          :game-key="game.currentGame.value"
+          :actor-id="actorId"
+          :is-gm="game.isGm.value"
+          :refresh-key="rulesetRefreshKey"
+          @refresh="refreshRulesetPanels"
+          @navigate="navigateRulesetTool"
+        />
+      </Modal>
+
       <section class="play-main">
         <section class="scene-strip">
           <div class="scene-title">
@@ -723,6 +949,14 @@ onBeforeUnmount(() => {
             <span v-if="game.detail.value.world_id">{{ game.detail.value.world_id }}</span>
           </div>
         </section>
+
+        <DirectorProposalCard
+          v-if="directorProposal"
+          :proposal="directorProposal"
+          :is-gm="game.isGm.value"
+          @open-campaign="openRulesetTool('campaign')"
+          @open-combat="openRulesetTool('combat')"
+        />
 
         <GameTimeline
           :log="game.log.value"
@@ -746,7 +980,61 @@ onBeforeUnmount(() => {
         <div v-if="tableNotice" class="table-notice notice">{{ tableNotice }}</div>
         <p v-if="tokenBudgetHint" class="token-budget-hint" aria-live="polite">{{ tokenBudgetHint }}</p>
 
-        <ActionComposer :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh" />
+        <CombatMessageComposer
+          v-if="rulesetCombatActive && rulesetGameplay"
+          :game-key="game.currentGame.value"
+          :gameplay="rulesetGameplay"
+          @refresh="refreshRulesetPanels"
+          @open-combat="openRulesetTool('combat')"
+        >
+          <template #tools>
+            <div v-if="hasProfessionalTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+              <button
+                v-if="hasCampaignGuidance"
+                class="campaign-tool-trigger"
+                data-testid="dnd5e-campaign-tool"
+                type="button"
+                :title="rulesetToolCopy.campaign"
+                :aria-label="rulesetToolCopy.campaign"
+                @click="openRulesetTool('campaign')"
+              ><NIcon :component="BookOutline" /><span>{{ rulesetToolCopy.campaign }}</span></button>
+              <button
+                v-if="hasAuthoritativeCombat"
+                class="combat-tool-trigger"
+                data-testid="dnd5e-combat-tool"
+                type="button"
+                :title="rulesetToolCopy.combat"
+                :aria-label="rulesetToolCopy.combat"
+                @click="openRulesetTool('combat')"
+              ><NIcon :component="ShieldOutline" /><span>{{ rulesetToolCopy.combat }}</span></button>
+            </div>
+          </template>
+        </CombatMessageComposer>
+
+        <ActionComposer v-else :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh">
+          <template #tools>
+            <div v-if="hasProfessionalTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+              <button
+                v-if="hasCampaignGuidance"
+                class="campaign-tool-trigger"
+                data-testid="dnd5e-campaign-tool"
+                type="button"
+                :title="rulesetToolCopy.campaign"
+                :aria-label="rulesetToolCopy.campaign"
+                @click="openRulesetTool('campaign')"
+              ><NIcon :component="BookOutline" /><span>{{ rulesetToolCopy.campaign }}</span></button>
+              <button
+                v-if="hasAuthoritativeCombat"
+                class="combat-tool-trigger"
+                data-testid="dnd5e-combat-tool"
+                type="button"
+                :title="rulesetToolCopy.combat"
+                :aria-label="rulesetToolCopy.combat"
+                @click="openRulesetTool('combat')"
+              ><NIcon :component="ShieldOutline" /><span>{{ rulesetToolCopy.combat }}</span></button>
+            </div>
+          </template>
+        </ActionComposer>
       </section>
 
       <aside
@@ -769,6 +1057,8 @@ onBeforeUnmount(() => {
           @invite="invite"
           @bot-bind="copyBotBind"
           @mode="onMode"
+          @narrative-perspective="onNarrativePerspective"
+          @advancement-control="onAdvancementControl"
           @access="onAccess"
           @command="onCommand"
           @perception="onPerception"
@@ -792,6 +1082,7 @@ onBeforeUnmount(() => {
           @set-away="setAway"
           @copy-link="copyLink"
           @edit="onEdit"
+          @open-character-center="showCharacterCenter = true"
         />
 
         <HealthPanel v-if="game.isGm.value" :health="health" :detail="game.detail.value" :is-gm="game.isGm.value" @resolve="resolveHealth" />
@@ -839,7 +1130,16 @@ onBeforeUnmount(() => {
       :title="t('mobileConsoleLabel')"
       @click="toggleMobilePanel('controls')"
     ><NIcon :component="TerminalOutline" /></button>
-    <RuleHelp v-if="help" :meta="ruleMeta" @close="help = false" />
+    <PlayHelpCenter
+      v-if="help"
+      :meta="ruleMeta"
+      :is-dnd="hasProfessionalTools"
+      :scene="sceneTitle"
+      :combat-status="rulesetCombatStatus"
+      :campaign-status="rulesetCampaignStatus"
+      :multiplayer="game.detail.value?.solo_mode === false"
+      @close="help = false"
+    />
 
     <div v-if="showCards" class="modal" @click.self="showCards = false">
       <section class="dialog">

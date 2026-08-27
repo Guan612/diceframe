@@ -1,0 +1,608 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+import { api, apiBlob, errorMessage } from '@/api/client'
+import type {
+  AdventureDetailResponse, AdventureSummary, AdventuresResponse,
+} from '@/api/types'
+import { useConfirm } from '@/composables/useConfirm'
+import { useLocale } from '@/composables/useLocale'
+import { useToast } from '@/composables/useToast'
+import Modal from '@/components/ui/Modal.vue'
+
+const { locale, t } = useLocale()
+const { confirm } = useConfirm()
+const toast = useToast()
+const items = ref<AdventureSummary[]>([])
+const error = ref('')
+const busy = ref(false)
+const importInput = ref<HTMLInputElement | null>(null)
+const copySource = ref<AdventureSummary | null>(null)
+const copyForm = ref({ directory_id: '', adventure_id: '', name: '', summary: '', version: '1.0.0' })
+const editing = ref<AdventureSummary | null>(null)
+const filesJson = ref('')
+const editingFiles = ref<Record<string, unknown>>({})
+const createOpen = ref(false)
+const createSource = ref<'manual' | 'ai'>('manual')
+const createStep = ref<1 | 2>(1)
+const aiBusy = ref(false)
+const aiPrompt = ref('')
+const pendingAiDraft = ref<any | null>(null)
+const editingCreation = ref(false)
+const advancedOpen = ref(false)
+const createForm = ref({ directory_id: '', adventure_id: '', name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
+const editorForm = ref({ name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
+type EditorStep = { id: string; chapter_id: string; scene_ref: string; requires: string; title: string; narration: string; objective: string; hint: string }
+type EditorChoice = { id: string; step_id: string; next_step_id: string; label: string; description: string }
+type EditorChapter = { id: string; name: string }
+type EditorScene = { ref: string; name: string }
+const editorSteps = ref<EditorStep[]>([])
+const editorChoices = ref<EditorChoice[]>([])
+const editorChapters = ref<EditorChapter[]>([])
+const editorScenes = ref<EditorScene[]>([])
+
+const builtinCount = computed(() => items.value.filter(item => !item.custom).length)
+const customCount = computed(() => items.value.filter(item => item.custom).length)
+const boundCount = computed(() => items.value.filter(item => Number(item.in_use || 0) > 0).length)
+const editingFileGroups = computed(() => {
+  const files = Object.keys(editingFiles.value)
+  return [
+    { label: '身份与元数据', paths: files.filter(path => path === 'manifest.json' || path === 'adventure.json') },
+    { label: '剧情内容', paths: files.filter(path => path.startsWith('content/')) },
+    { label: '本地化文本', paths: files.filter(path => path.startsWith('locales/')) },
+  ].filter(group => group.paths.length)
+})
+
+async function load() {
+  error.value = ''
+  try {
+    const result = await api<AdventuresResponse>(
+      `/adventures?rule_id=dnd2024_srd&language=${encodeURIComponent(locale.value)}`,
+    )
+    items.value = result.adventures || []
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  }
+}
+
+onMounted(load)
+
+function safeStem(value: string) {
+  return value.toLowerCase().replace(/^[^a-z0-9]+/, '').replace(/[^a-z0-9_.-]+/g, '_').slice(0, 48) || 'adventure'
+}
+
+function openCopy(item: AdventureSummary) {
+  const stem = `custom_${safeStem(item.directory_id || item.adventure_id.split(':').pop() || '')}`
+  copySource.value = item
+  copyForm.value = {
+    directory_id: stem,
+    adventure_id: `user:${stem}`,
+    name: `${item.name} · ${t('adventureCopySuffix')}`,
+    summary: item.summary || '',
+    version: '1.0.0',
+  }
+}
+
+function openCreate(source: 'manual' | 'ai' = 'manual') {
+  createForm.value = { directory_id: '', adventure_id: '', name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 }
+  createSource.value = source
+  createStep.value = 1
+  aiPrompt.value = ''
+  pendingAiDraft.value = null
+  createOpen.value = true
+}
+
+function openAiDraft() {
+  openCreate('ai')
+}
+
+type AiDraft = { name?: string; summary?: string; chapters?: Array<{ name?: string; steps?: Array<{ title?: string; narration?: string; objective?: string; hint?: string; choices?: Array<{ label?: string; description?: string; nextStepIndex?: number | null }> }> }> }
+const aiDraftCounts = computed(() => {
+  const chapters = pendingAiDraft.value?.chapters || []
+  return {
+    chapters: chapters.length,
+    steps: chapters.reduce((total: number, chapter: { steps?: unknown[] }) => total + (chapter.steps?.length || 0), 0),
+  }
+})
+
+function applyAiDraft(draft: AiDraft) {
+  const chapters = Array.isArray(draft.chapters) ? draft.chapters : []
+  editorForm.value.name = String(draft.name || editorForm.value.name)
+  editorForm.value.summary = String(draft.summary || editorForm.value.summary)
+  const scenes = editorScenes.value
+  editorChapters.value = chapters.map((chapter, chapterIndex) => ({ id: `chapter_${chapterIndex + 1}`, name: String(chapter.name || `第 ${chapterIndex + 1} 章`) }))
+  editorSteps.value = []
+  editorChoices.value = []
+  const stepIds: string[] = []
+  chapters.forEach((chapter, chapterIndex) => (chapter.steps || []).forEach((step, stepIndex) => {
+    const id = `step_${chapterIndex + 1}_${stepIndex + 1}`
+    stepIds.push(id)
+    editorSteps.value.push({ id, chapter_id: `chapter_${chapterIndex + 1}`, scene_ref: scenes[editorSteps.value.length]?.ref || scenes[0]?.ref || '', requires: 'none', title: String(step.title || '未命名步骤'), narration: String(step.narration || ''), objective: String(step.objective || ''), hint: String(step.hint || '') })
+  }))
+  let choiceIndex = 0
+  let stepCursor = 0
+  chapters.forEach(chapter => (chapter.steps || []).forEach(step => {
+    const currentStep = stepIds[stepCursor] || stepIds[0]
+    stepCursor += 1
+    ;(step.choices || []).forEach(choice => {
+      const target = typeof choice.nextStepIndex === 'number' ? stepIds[choice.nextStepIndex] || '' : ''
+      editorChoices.value.push({ id: `choice_${++choiceIndex}`, step_id: currentStep, next_step_id: target, label: String(choice.label || '新选项'), description: String(choice.description || '') })
+    })
+  }))
+}
+
+async function generateDraft() {
+  if (!aiPrompt.value.trim()) return
+  aiBusy.value = true
+  error.value = ''
+  try {
+    const result = await api<{ ok: boolean; text?: string; error?: string }>('/generate-text', {
+      method: 'POST',
+      body: JSON.stringify({
+        language: locale.value,
+        prompt: `为一个 TRPG 冒险包起草剧情结构。用户需求：${aiPrompt.value.trim()}\n只输出 JSON，不要 Markdown，格式必须是：{"name":"","summary":"","chapters":[{"name":"","steps":[{"title":"","narration":"","objective":"","hint":"","choices":[{"label":"","description":"","nextStepIndex":null}]}]}]}`,
+        system_hint: '你是冒险设计助手。只输出符合用户要求的 JSON，不要解释，不要代码围栏。',
+      }),
+    })
+    if (!result.ok || !result.text) throw new Error(result.error || t('aiDraftFailed'))
+    const raw = result.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+    const draft = JSON.parse(raw) as AiDraft
+    const chapters = Array.isArray(draft.chapters) && draft.chapters.length ? draft.chapters : []
+    if (!chapters.length) throw new Error(t('aiDraftInvalid'))
+    createForm.value.name = String(draft.name || createForm.value.name)
+    createForm.value.summary = String(draft.summary || createForm.value.summary)
+    pendingAiDraft.value = draft
+    createStep.value = 2
+    toast.success(t('aiDraftReadyCreate'))
+  } catch (cause: unknown) {
+    error.value = cause instanceof SyntaxError ? t('aiDraftInvalid') : errorMessage(cause)
+  } finally {
+    aiBusy.value = false
+  }
+}
+
+async function createPackage() {
+  busy.value = true
+  error.value = ''
+  try {
+    if (!createForm.value.directory_id.trim()) {
+      createForm.value.directory_id = `adventure_${Date.now().toString(36)}`
+    }
+    if (!createForm.value.adventure_id.trim()) {
+      createForm.value.adventure_id = `user:${createForm.value.directory_id}`
+    }
+    const result = await api<{ adventure_id: string }>('/adventures', {
+      method: 'POST',
+      body: JSON.stringify({ ...createForm.value, language: locale.value }),
+    })
+    toast.success(t('adventureCreated'))
+    createOpen.value = false
+    await load()
+    const created = items.value.find(item => item.adventure_id === result.adventure_id)
+    if (created) {
+      const generated = pendingAiDraft.value
+      await openEditor(created, Boolean(generated))
+      if (pendingAiDraft.value) {
+        const draft = pendingAiDraft.value
+        pendingAiDraft.value = null
+        applyAiDraft(draft)
+      }
+    }
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function copyPackage() {
+  if (!copySource.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api(`/adventures/${encodeURIComponent(copySource.value.adventure_id)}/copy`, {
+      method: 'POST',
+      body: JSON.stringify({ ...copyForm.value, locale: locale.value }),
+    })
+    toast.success(t('adventureCopied'))
+    copySource.value = null
+    await load()
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function openEditor(item: AdventureSummary, asCreationStep = false) {
+  error.value = ''
+  try {
+    const result = await api<AdventureDetailResponse>(
+      `/adventures/${encodeURIComponent(item.adventure_id)}?language=${encodeURIComponent(locale.value)}`,
+    )
+    editing.value = item
+    editingCreation.value = asCreationStep
+    editingFiles.value = result.adventure.files
+    filesJson.value = JSON.stringify(result.adventure.files, null, 2)
+    advancedOpen.value = false
+    hydrateStructuredEditor()
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  }
+}
+
+function closeEditor() {
+  editing.value = null
+  editingCreation.value = false
+}
+
+async function cancelEditor() {
+  const draft = editingCreation.value ? editing.value : null
+  closeEditor()
+  if (!draft) return
+  try {
+    await api(`/adventures/${encodeURIComponent(draft.adventure_id)}`, { method: 'DELETE' })
+    await load()
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  }
+}
+
+function hydrateStructuredEditor() {
+  const files = editingFiles.value
+  const manifest = (files['manifest.json'] || {}) as Record<string, any>
+  const adventure = (files['adventure.json'] || {}) as Record<string, any>
+  const localePath = `locales/${locale.value}/adventure.json`
+  const localeFile = (files[localePath] || files['locales/zh-CN/adventure.json'] || {}) as Record<string, any>
+  const tutorial = (localeFile.fields?.tutorial || {}) as Record<string, any>
+  editorForm.value = {
+    name: String(tutorial.name || adventure.name || ''),
+    summary: String(tutorial.summary || adventure.summary || ''),
+    version: String(manifest.version || '1.0.0'),
+    world_policy: String(manifest.world_policy || 'portable'),
+    recommended_world_id: String(manifest.recommended_world_id || adventure.recommended_world_id || ''),
+    estimated_minutes: Number(adventure.estimated_minutes || 60),
+  }
+  const stepTexts = (tutorial.steps || {}) as Record<string, any>
+  const chapterTexts = (tutorial.chapters || {}) as Record<string, any>
+  editorChapters.value = (Array.isArray(adventure.chapters) ? adventure.chapters : []).map((chapter: any, index: number) => ({
+    id: String(chapter.id || `chapter_${index + 1}`), name: String(chapterTexts[chapter.id]?.name || `第 ${index + 1} 章`),
+  }))
+  editorScenes.value = Object.entries(files)
+    .filter(([path, value]) => path.startsWith('content/') && (value as any)?.kind === 'scene')
+    .map(([path, value]) => {
+      const scene = value as Record<string, any>
+      const sceneId = String(scene.id || path.split('/').pop()?.replace(/\.json$/, '') || '')
+      const sceneLocale = (files[`locales/${locale.value}/scenes/${sceneId}.json`] || files[`locales/zh-CN/scenes/${sceneId}.json`] || {}) as Record<string, any>
+      return { ref: `scene:${sceneId}`, name: String(sceneLocale.fields?.name || sceneId) }
+    })
+  editorSteps.value = (Array.isArray(adventure.steps) ? adventure.steps : []).map((step: any) => ({
+    id: String(step.id || ''), chapter_id: String(step.chapter_id || ''), scene_ref: String(step.scene_ref || ''),
+    requires: String(step.requires || 'none'),
+    title: String(stepTexts[step.id]?.title || '未命名步骤'), narration: String(stepTexts[step.id]?.narration || ''),
+    objective: String(stepTexts[step.id]?.objective || ''), hint: String(stepTexts[step.id]?.hint || ''),
+  }))
+  const choiceTexts = (tutorial.choices || {}) as Record<string, any>
+  editorChoices.value = (Array.isArray(adventure.choices) ? adventure.choices : []).map((choice: any) => ({
+    id: String(choice.id || ''), step_id: String(choice.step_id || ''), next_step_id: String(choice.next_step_id || ''),
+    label: String(choiceTexts[choice.id]?.label || choice.id || ''), description: String(choiceTexts[choice.id]?.description || ''),
+  }))
+}
+
+function syncStructuredEditor() {
+  const files = JSON.parse(JSON.stringify(editingFiles.value)) as Record<string, any>
+  const manifest = files['manifest.json'] as Record<string, any>
+  const adventure = files['adventure.json'] as Record<string, any>
+  const localePath = `locales/${locale.value}/adventure.json`
+  const localeFile = (files[localePath] || files['locales/zh-CN/adventure.json']) as Record<string, any>
+  const tutorial = (localeFile.fields ||= {}).tutorial ||= {}
+  manifest.version = editorForm.value.version.trim() || '1.0.0'
+  manifest.world_policy = editorForm.value.world_policy
+  manifest.recommended_world_id = editorForm.value.recommended_world_id.trim()
+  adventure.estimated_minutes = Math.max(1, Number(editorForm.value.estimated_minutes || 60))
+  const originalChapters = Array.isArray(adventure.chapters) ? adventure.chapters : []
+  adventure.chapters = editorChapters.value.map(chapter => {
+    const original = originalChapters.find((candidate: any) => candidate.id === chapter.id) || {}
+    return { ...original, id: chapter.id, step_ids: editorSteps.value.filter(step => step.chapter_id === chapter.id).map(step => step.id) }
+  })
+  adventure.start_step_id = editorSteps.value[0]?.id || adventure.start_step_id
+  adventure.steps = editorSteps.value.map(step => {
+    const original = (Array.isArray(adventure.steps) ? adventure.steps : []).find((candidate: any) => candidate.id === step.id) || {}
+    return { ...original, id: step.id, chapter_id: step.chapter_id, scene_ref: step.scene_ref, requires: step.requires, choice_ids: editorChoices.value.filter(choice => choice.step_id === step.id).map(choice => choice.id) }
+  })
+  adventure.choices = editorChoices.value.map(choice => {
+    const original = (Array.isArray(adventure.choices) ? adventure.choices : []).find((candidate: any) => candidate.id === choice.id) || {}
+    return { ...original, id: choice.id, step_id: choice.step_id, next_step_id: choice.next_step_id }
+  })
+  tutorial.name = editorForm.value.name.trim()
+  tutorial.summary = editorForm.value.summary.trim()
+  tutorial.chapters ||= {}
+  for (const chapter of editorChapters.value) tutorial.chapters[chapter.id] = { ...(tutorial.chapters[chapter.id] || {}), name: chapter.name }
+  const oldSteps = tutorial.steps || {}
+  tutorial.steps = Object.fromEntries(editorSteps.value.map(step => [step.id, { ...(oldSteps[step.id] || {}), title: step.title, narration: step.narration, objective: step.objective, hint: step.hint }]))
+  const oldChoices = tutorial.choices || {}
+  tutorial.choices = Object.fromEntries(editorChoices.value.map(choice => [choice.id, { ...(oldChoices[choice.id] || {}), label: choice.label, description: choice.description }]))
+  editingFiles.value = files
+  filesJson.value = JSON.stringify(files, null, 2)
+}
+
+function addStep() {
+  const id = `step_${editorSteps.value.length + 1}`
+  const chapterId = editorChapters.value[0]?.id || 'chapter_1'
+  if (!editorChapters.value.length) editorChapters.value.push({ id: chapterId, name: '第一章' })
+  editorSteps.value.push({ id, chapter_id: chapterId, scene_ref: '', requires: 'none', title: '新步骤', narration: '', objective: '', hint: '' })
+}
+
+function addChoice(stepId: string) {
+  const id = `choice_${editorChoices.value.length + 1}`
+  editorChoices.value.push({ id, step_id: stepId, next_step_id: '', label: '新选项', description: '' })
+}
+
+function addChapter() {
+  const id = `chapter_${editorChapters.value.length + 1}`
+  editorChapters.value.push({ id, name: `第 ${editorChapters.value.length + 1} 章` })
+}
+
+function removeChapter(chapterId: string) {
+  if (editorChapters.value.length <= 1) return
+  const fallback = editorChapters.value.find(chapter => chapter.id !== chapterId)?.id || ''
+  editorSteps.value.forEach(step => { if (step.chapter_id === chapterId) step.chapter_id = fallback })
+  editorChapters.value = editorChapters.value.filter(chapter => chapter.id !== chapterId)
+}
+
+function removeStep(stepId: string) {
+  if (editorSteps.value.length <= 1) return
+  editorSteps.value = editorSteps.value.filter(step => step.id !== stepId)
+  editorChoices.value = editorChoices.value.filter(choice => choice.step_id !== stepId && choice.next_step_id !== stepId)
+}
+
+function removeChoice(choiceId: string) {
+  editorChoices.value = editorChoices.value.filter(choice => choice.id !== choiceId)
+}
+
+async function savePackage() {
+  if (!editing.value) return
+  busy.value = true
+  error.value = ''
+  try {
+    if (!advancedOpen.value) syncStructuredEditor()
+    const files = JSON.parse(filesJson.value || '{}') as Record<string, unknown>
+    await api(`/adventures/${encodeURIComponent(editing.value.adventure_id)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ files, language: locale.value }),
+    })
+    toast.success(t('adventureUpdated'))
+    closeEditor()
+    await load()
+  } catch (cause: unknown) {
+    error.value = cause instanceof SyntaxError ? t('adventureJsonInvalid') : errorMessage(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function removePackage(item: AdventureSummary) {
+  const accepted = await confirm({
+    title: t('deleteAdventurePackage'),
+    content: t('deleteAdventurePackageConfirm', { name: item.name || item.adventure_id }),
+    positiveText: t('delete'),
+    type: 'error',
+  })
+  if (!accepted) return
+  try {
+    await api(`/adventures/${encodeURIComponent(item.adventure_id)}`, { method: 'DELETE' })
+    toast.success(t('deleted'))
+    await load()
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  }
+}
+
+async function exportPackage(item: AdventureSummary) {
+  try {
+    const response = await apiBlob(`/adventures/${encodeURIComponent(item.adventure_id)}/export`)
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${item.directory_id || 'adventure'}.dfadventure.zip`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  }
+}
+
+async function importPackage(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  const body = new FormData()
+  body.append('file', file)
+  busy.value = true
+  try {
+    await api('/adventures/import', { method: 'POST', body })
+    toast.success(t('adventureImported'))
+    await load()
+  } catch (cause: unknown) {
+    error.value = errorMessage(cause)
+  } finally {
+    busy.value = false
+  }
+}
+
+function policyLabel(policy: string) {
+  if (policy === 'fixed') return t('adventurePolicyFixed')
+  if (policy === 'agnostic') return t('adventurePolicyAgnostic')
+  return t('adventurePolicyPortable')
+}
+</script>
+
+<template>
+  <section class="view archive-page rules-page adventures-page">
+    <header class="view-title archive-hero">
+      <div>
+        <span class="section-kicker">{{ t('adventurePackagesKicker') }}</span>
+        <h1>{{ t('adventurePackageManagement') }}</h1>
+        <p class="muted">{{ t('adventurePackageManagementHint') }}</p>
+      </div>
+      <div class="actions adventure-header-actions">
+        <input ref="importInput" hidden type="file" accept=".zip,.dfadventure" @change="importPackage">
+        <button class="primary" @click="openCreate()">{{ t('newAdventurePackage') }}</button>
+        <button @click="openAiDraft">{{ t('aiGenerateAdventure') }}</button>
+        <button :disabled="busy" @click="importInput?.click()">{{ t('importAdventurePackage') }}</button>
+        <button @click="load">{{ t('refresh') }}</button>
+      </div>
+    </header>
+
+    <p v-if="error" class="error-banner">{{ error }}</p>
+
+    <div class="archive-stats">
+      <article><strong>{{ builtinCount }}</strong><span>{{ t('builtinAdventurePackages') }}</span></article>
+      <article><strong>{{ customCount }}</strong><span>{{ t('customAdventurePackages') }}</span></article>
+      <article><strong>{{ boundCount }}</strong><span>{{ t('boundAdventurePackages') }}</span></article>
+    </div>
+
+    <Modal v-if="createOpen" :title="createSource === 'ai' ? t('aiGenerateAdventure') : t('newAdventurePackage')" @close="createOpen = false">
+      <div v-if="createSource === 'ai'" class="adventure-create-progress" aria-label="AI adventure creation progress">
+        <span :class="{ active: createStep === 1 }">1 · {{ String(locale).startsWith('zh') ? '描述构想' : 'Describe' }}</span>
+        <span :class="{ active: createStep === 2 }">2 · {{ String(locale).startsWith('zh') ? '确认摘要' : 'Review' }}</span>
+        <span>3 · {{ String(locale).startsWith('zh') ? '结构化编辑' : 'Edit' }}</span>
+      </div>
+      <template v-if="createSource === 'ai' && createStep === 1">
+        <p class="muted">{{ t('aiGenerateAdventureHint') }}</p>
+        <label>{{ t('aiAdventurePrompt') }}<textarea v-model="aiPrompt" rows="7" :placeholder="t('aiAdventurePromptPlaceholder')"></textarea></label>
+      </template>
+      <template v-else>
+        <p class="muted">{{ createSource === 'ai' ? (String(locale).startsWith('zh') ? '草稿只会先进入结构化编辑器；确认保存前不会成为最终内容。' : 'The draft enters the structured editor before final validation and save.') : t('newAdventurePackageHint') }}</p>
+        <div v-if="createSource === 'ai'" class="adventure-ai-summary">
+          <strong>{{ createForm.name || t('newAdventureNamePlaceholder') }}</strong>
+          <span>{{ createForm.summary || t('noDescription') }}</span>
+          <small>{{ aiDraftCounts.chapters }} {{ String(locale).startsWith('zh') ? '章' : 'chapters' }} · {{ aiDraftCounts.steps }} {{ String(locale).startsWith('zh') ? '个步骤' : 'steps' }}</small>
+        </div>
+        <div class="grid-2">
+          <label v-if="createSource === 'manual'">{{ t('directoryId') }}<input v-model="createForm.directory_id" placeholder="my_adventure"></label>
+          <label v-if="createSource === 'manual'">{{ t('canonicalAdventureId') }}<input v-model="createForm.adventure_id" :placeholder="createForm.directory_id ? `user:${createForm.directory_id}` : 'user:my_adventure'"></label>
+          <label>{{ t('adventurePackageName') }}<input v-model="createForm.name" :placeholder="t('newAdventureNamePlaceholder')"></label>
+          <label>{{ t('version') }}<input v-model="createForm.version"></label>
+          <label>{{ t('adventureWorldPolicy') }}<select v-model="createForm.world_policy"><option value="portable">{{ t('adventurePolicyPortable') }}</option><option value="agnostic">{{ t('adventurePolicyAgnostic') }}</option><option value="fixed">{{ t('adventurePolicyFixed') }}</option></select></label>
+          <label>{{ t('estimatedMinutes') }}<input v-model.number="createForm.estimated_minutes" type="number" min="1" max="999"></label>
+          <label v-if="createForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<input v-model="createForm.recommended_world_id"></label>
+        </div>
+        <label>{{ t('summary') }}<textarea v-model="createForm.summary" rows="4"></textarea></label>
+      </template>
+      <template #actions>
+        <button @click="createOpen = false">{{ t('cancel') }}</button>
+        <button v-if="createSource === 'ai' && createStep === 2" @click="createStep = 1">{{ String(locale).startsWith('zh') ? '上一步' : 'Back' }}</button>
+        <button v-if="createSource === 'ai' && createStep === 1" class="primary" :disabled="aiBusy || !aiPrompt.trim()" @click="generateDraft">{{ aiBusy ? t('generating') : t('generateDraft') }}</button>
+        <button v-else class="primary" :disabled="busy || !createForm.name || (createSource === 'manual' && !createForm.directory_id)" @click="createPackage">{{ createSource === 'ai' ? (String(locale).startsWith('zh') ? '进入结构化编辑' : 'Open structured editor') : t('createAdventurePackage') }}</button>
+      </template>
+    </Modal>
+
+    <div class="adventure-boundary-note">
+      <strong>{{ t('worldbookAdventureBoundary') }}</strong>
+      <span>{{ t('worldbookAdventureBoundaryHint') }}</span>
+      <small>{{ t('adventurePackagesDndOnly') }}</small>
+    </div>
+
+    <div class="card-grid">
+      <article v-for="item in items" :key="item.adventure_id" class="rule-card adventure-package-card">
+        <div>
+          <header class="adventure-package-heading">
+            <div class="adventure-package-title-row">
+              <h2 :title="item.name || item.adventure_id">{{ item.name || item.adventure_id }}</h2>
+              <small :class="['badge', item.custom ? 'badge-active' : '']">{{ item.custom ? t('custom') : t('builtin') }}</small>
+            </div>
+            <div class="adventure-package-badges">
+              <small v-if="item.required_runtime?.id === 'core:dnd2024'" class="badge badge-beta">{{ t('advancedRulesBeta') }}</small>
+            </div>
+          </header>
+          <div class="rule-meta-row">
+            <span><strong>{{ t('version') }}</strong>{{ item.version }}</span>
+            <span><strong>{{ t('adventureWorldPolicy') }}</strong>{{ policyLabel(item.world_policy) }}</span>
+            <span><strong>{{ t('saveBindingCount') }}</strong>{{ item.in_use || 0 }}</span>
+            <span><strong>ID</strong>{{ item.adventure_id }}</span>
+          </div>
+          <p>{{ item.summary || t('noDescription') }}</p>
+          <small v-if="item.recommended_world_id" class="muted">{{ t('recommendedWorldBook') }}：{{ item.recommended_world_id }}</small>
+          <small v-if="item.in_use" class="adventure-lock-note">{{ t('adventureBoundReadOnly') }}</small>
+        </div>
+        <div class="actions adventure-package-actions">
+          <button @click="openCopy(item)">{{ t('copyAndEdit') }}</button>
+          <button @click="exportPackage(item)">{{ t('export') }}</button>
+          <button v-if="item.custom" :disabled="!item.editable" @click="openEditor(item)">{{ t('edit') }}</button>
+          <button v-if="item.custom" class="danger" :disabled="!item.editable" @click="removePackage(item)">{{ t('delete') }}</button>
+        </div>
+      </article>
+      <p v-if="!items.length" class="muted">{{ t('noAdventurePackages') }}</p>
+    </div>
+
+    <Modal v-if="copySource" :title="t('copyAdventurePackage')" @close="copySource = null">
+      <p class="muted">{{ t('copyAdventurePackageHint') }}</p>
+      <div class="grid-2">
+        <label>{{ t('directoryId') }}<input v-model="copyForm.directory_id"></label>
+        <label>{{ t('canonicalAdventureId') }}<input v-model="copyForm.adventure_id"></label>
+        <label>{{ t('adventurePackageName') }}<input v-model="copyForm.name"></label>
+        <label>{{ t('version') }}<input v-model="copyForm.version"></label>
+      </div>
+      <label>{{ t('summary') }}<textarea v-model="copyForm.summary" rows="4" /></label>
+      <template #actions>
+        <button @click="copySource = null">{{ t('cancel') }}</button>
+        <button class="primary" :disabled="busy" @click="copyPackage">{{ t('copyAdventurePackage') }}</button>
+      </template>
+    </Modal>
+
+    <Modal v-if="editing" :title="editingCreation ? `${t('editAdventurePackage')} · 3/3` : t('editAdventurePackage')" dialog-class="adventure-editor-dialog" @close="cancelEditor">
+      <p class="muted">{{ t('adventureStructuredEditorHint') }}</p>
+      <section class="adventure-editor-form">
+        <div class="grid-2">
+          <label>{{ t('adventurePackageName') }}<input v-model="editorForm.name"></label>
+          <label>{{ t('version') }}<input v-model="editorForm.version"></label>
+          <label>{{ t('adventureWorldPolicy') }}<select v-model="editorForm.world_policy"><option value="portable">{{ t('adventurePolicyPortable') }}</option><option value="agnostic">{{ t('adventurePolicyAgnostic') }}</option><option value="fixed">{{ t('adventurePolicyFixed') }}</option></select></label>
+          <label>{{ t('estimatedMinutes') }}<input v-model.number="editorForm.estimated_minutes" type="number" min="1" max="999"></label>
+          <label v-if="editorForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<input v-model="editorForm.recommended_world_id"></label>
+        </div>
+        <label>{{ t('summary') }}<textarea v-model="editorForm.summary" rows="3"></textarea></label>
+        <div v-for="chapter in editorChapters" :key="chapter.id" class="adventure-chapter-editor">
+          <div class="adventure-editor-section-head"><input v-model="chapter.name" :aria-label="t('adventureChapter')"><button v-if="editorChapters.length > 1" type="button" class="link-button danger-text" @click="removeChapter(chapter.id)">{{ t('deleteChapter') }}</button></div>
+          <div class="adventure-step-list">
+          <article v-for="step in editorSteps.filter(item => item.chapter_id === chapter.id)" :key="step.id" class="adventure-step-editor">
+            <header><strong>{{ step.title || t('unnamedStep') }}</strong><span class="editor-step-index">{{ t('step') }}</span><button type="button" class="link-button" @click="addChoice(step.id)">{{ t('addChoice') }}</button><button v-if="editorSteps.length > 1" type="button" class="link-button danger-text" @click="removeStep(step.id)">{{ t('deleteStep') }}</button></header>
+            <div class="grid-2">
+              <label>{{ t('stepTitle') }}<input v-model="step.title"></label>
+              <label>{{ t('sceneReference') }}<select v-model="step.scene_ref"><option value="">{{ t('sceneNotLinked') }}</option><option v-for="scene in editorScenes" :key="scene.ref" :value="scene.ref">{{ scene.name }}</option></select></label>
+            </div>
+            <label>{{ t('narration') }}<textarea v-model="step.narration" rows="2"></textarea></label>
+            <div class="grid-2">
+              <label>{{ t('objective') }}<input v-model="step.objective"></label>
+              <label>{{ t('hint') }}<input v-model="step.hint"></label>
+            </div>
+            <div v-for="choice in editorChoices.filter(item => item.step_id === step.id)" :key="choice.id" class="adventure-choice-editor">
+              <input v-model="choice.label" :placeholder="t('choiceLabel')"><select v-model="choice.next_step_id"><option value="">{{ t('endAdventure') }}</option><option v-for="target in editorSteps" :key="target.id" :value="target.id">{{ target.title || t('unnamedStep') }}</option></select><input v-model="choice.description" :placeholder="t('choiceDescription')"><button type="button" class="link-button danger-text" @click="removeChoice(choice.id)">{{ t('deleteChoice') }}</button>
+            </div>
+          </article>
+          <p v-if="!editorSteps.some(item => item.chapter_id === chapter.id)" class="muted">{{ t('noStepsInChapter') }}</p>
+          </div>
+        </div>
+        <div class="adventure-editor-actions"><button type="button" class="secondary" @click="addChapter">{{ t('addChapter') }}</button><button type="button" class="secondary" @click="addStep">{{ t('addStep') }}</button></div>
+      </section>
+      <section class="adventure-structure-summary">
+        <header><strong>冒险包结构</strong><span>{{ Object.keys(editingFiles).length }} 个 JSON 文件</span></header>
+        <div v-for="group in editingFileGroups" :key="group.label" class="adventure-file-group">
+          <b>{{ group.label }}（{{ group.paths.length }}）</b>
+          <span v-for="path in group.paths" :key="path">{{ path }}</span>
+        </div>
+        <small>冒险包由清单、剧情图、场景/NPC/遭遇等内容和多语言文本组成；规则结算仍由规则系统负责。</small>
+      </section>
+      <details :open="advancedOpen" class="adventure-advanced-editor">
+        <summary @click.prevent="advancedOpen = !advancedOpen">{{ t('advancedJsonEditor') }}</summary>
+        <p class="muted">{{ t('adventureEditorHint') }}</p>
+        <textarea v-model="filesJson" class="adventure-package-json" rows="24" spellcheck="false" />
+      </details>
+      <template #actions>
+        <button @click="cancelEditor">{{ editingCreation && String(locale).startsWith('zh') ? '取消并丢弃草稿' : t('cancel') }}</button>
+        <button class="primary" :disabled="busy" @click="savePackage">{{ t('validateAndSave') }}</button>
+      </template>
+    </Modal>
+  </section>
+</template>

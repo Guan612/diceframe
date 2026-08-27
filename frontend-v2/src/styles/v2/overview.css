@@ -339,21 +339,28 @@
 
 .game-card-body {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 11px;
   padding: 18px;
 }
 
 .game-card-body h2 {
-  display: -webkit-box;
-  min-height: 2.7em;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
   margin: 0;
   overflow: hidden;
   font-size: 23px;
   line-height: 1.35;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-card {
+  min-width: 0;
 }
 
 .game-card-body .scene-line {

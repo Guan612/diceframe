@@ -11,7 +11,8 @@ This page explains how to update DiceFrame itself. Plugins are updated separatel
 | Windows portable | Check, download, and apply updates from Settings |
 | Extracted source release | Apply the update from Settings, then restart manually |
 | Git checkout | Run `git pull` after receiving a new-version notification |
-| Docker / NAS | Pull the latest image after receiving a new-version notification |
+| Managed Docker / NAS | Download, apply, and automatically roll back from Settings |
+| Legacy Docker image or base-runtime update | Pull the latest image and recreate the container |
 
 Updating the application does not delete saves or settings. Backing up the complete `data/` folder before an upgrade is still recommended.
 
@@ -35,6 +36,12 @@ If you use a Git checkout, continue updating it with `git pull`.
 
 ## Docker and NAS
 
+Docker users must manually pull one baseline image that supports managed updates. Its stable launcher manages the current and previous application payloads under `data/_updater/docker-versions/`. After that migration, ordinary DiceFrame application releases can be downloaded and applied from **Settings → Version Update**. The container ID stays unchanged, and a candidate is committed only after its health check and probation period succeed; otherwise the launcher returns to the previous version.
+
+Every Docker Update manifest must explicitly declare `data_rollback_safe: true`, meaning data written by that release remains readable by the previous application version. Managed update rejects packages without that declaration and releases with irreversible data migrations. Those releases require a base-image upgrade with an explicit backup or migration procedure instead of pretending to be an automatically reversible ordinary update.
+
+Python ABI, system library, CA, font, or launcher protocol changes remain base-runtime updates and still require pulling a new image. DiceFrame never mounts the Docker socket and does not control the Docker daemon from inside the container.
+
 For a Docker Compose deployment, run:
 
 ```bash
@@ -46,6 +53,8 @@ docker compose up -d
 `no configuration file provided: not found` means the current directory has no Compose file. Change to the original deployment directory and retry. If the container was originally started with `docker run`, pull the new image and recreate it with the original ports, volumes, and environment variables instead of applying Compose commands.
 
 NAS users can use the device's container manager to check for updates, pull the latest image, and recreate the container. Make sure `data/` is mounted from the host.
+
+Saves, settings, and user plugins remain under `data/`. `data/_updater/docker-versions/` contains reconstructable application payloads and may be excluded from backups; do not remove `_updater/current.json` by itself. Traditional image updates remain supported, and each image uses the byte-identical Docker application update asset from the corresponding GitHub Release as its seed.
 
 For an image built from a local source checkout, pull the new source and run:
 
@@ -61,4 +70,4 @@ The temporary anonymous request quota for the mirrors and GitHub may be exhauste
 
 ### An update fails
 
-Do not delete `data/`. Portable installations attempt to return to the previous version automatically, while source installations attempt to restore the previous application files. If DiceFrame still cannot start, download the appropriate package again from GitHub Releases and keep the logs for diagnosis.
+Do not delete `data/`. Portable and managed-Docker installations attempt to return to the previous version automatically, while source installations attempt to restore the previous application files. If DiceFrame still cannot start, download the appropriate package again from GitHub Releases and keep the logs for diagnosis.

@@ -39,13 +39,16 @@ def test_copy_tree_keeps_core_ai_modules(monkeypatch, tmp_path):
     assert (target / "ai_providers.py").exists()
 
 
-def test_prepare_package_tree_excludes_docs(monkeypatch, tmp_path):
+def test_prepare_package_tree_excludes_non_server_projects(monkeypatch, tmp_path):
     root = tmp_path / "root"
     (root / "docs").mkdir(parents=True)
     (root / "docs" / "USER_GUIDE_CN.md").write_text("guide", encoding="utf-8")
+    (root / "mobile").mkdir(parents=True)
+    (root / "mobile" / "package.json").write_text("{}", encoding="utf-8")
     package = tmp_path / "package"
     monkeypatch.setattr(build_release, "ROOT", root)
 
     build_release.prepare_package_tree(package)
 
     assert not (package / "docs").exists()
+    assert not (package / "mobile").exists()

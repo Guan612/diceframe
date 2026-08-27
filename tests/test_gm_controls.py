@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
@@ -39,6 +41,35 @@ async def test_set_solo_mode_marks_pending_round_ready(tmp_path):
     assert result["ok"]
     assert inst.solo_mode is True
     assert inst.ready_players == {"gm", "p1"}
+
+
+@pytest.mark.asyncio
+async def test_narrative_perspective_is_dnd_only_and_persisted(tmp_path):
+    registry = GameRegistry(tmp_path)
+    key = ("web", "dnd-game", "bot")
+    inst = GameInstance(
+        game_key=key,
+        rule_id="dnd2024_srd",
+        ruleset_runtime={"id": "core:dnd2024"},
+    )
+    registry.register(inst)
+
+    result = await games.set_narrative_perspective(
+        DummyAPI(registry), _GAME_KEY_SEP.join(key), "third_person",
+    )
+
+    assert result == {"ok": True, "narrative_perspective": "third_person"}
+    persisted = GameInstance.from_dict(json.loads(registry._save_path(key).read_text(encoding="utf-8")))
+    assert persisted.narrative_perspective == "third_person"
+
+    generic_key = ("web", "generic-game", "bot")
+    generic = GameInstance(game_key=generic_key, rule_id="freeform_fantasy")
+    registry.register(generic)
+    rejected = await games.set_narrative_perspective(
+        DummyAPI(registry), _GAME_KEY_SEP.join(generic_key), "immersive",
+    )
+    assert rejected["ok"] is False
+    assert generic.narrative_perspective == "auto"
 
 
 @pytest.mark.asyncio

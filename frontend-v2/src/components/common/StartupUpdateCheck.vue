@@ -24,8 +24,9 @@ function settle() {
 }
 
 function shouldSkipCurrentRoute(): boolean {
-  if (route.name === 'login' || route.name === 'join') return true
-  if (route.name === 'play' && (route.query.user || route.query.share)) return true
+  // Never interrupt an active workflow: login, joining, character creation,
+  // and the table itself. Updates remain available from Settings -> About.
+  if (route.name === 'login' || route.name === 'join' || route.name === 'create' || route.name === 'play') return true
   return false
 }
 

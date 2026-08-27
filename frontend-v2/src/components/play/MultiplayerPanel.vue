@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { NIcon } from 'naive-ui'
-import { LinkOutline, CreateOutline, CloseCircleOutline } from '@vicons/ionicons5'
+import { LinkOutline, CreateOutline, CloseCircleOutline, BedOutline } from '@vicons/ionicons5'
 import type { GameDetail, Player } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
 import { playerColor } from '@/utils/play'
@@ -12,6 +12,7 @@ const emit = defineEmits<{
   'copy-link': [uid: string]
   edit: [uid: string]
   'set-away': [uid: string, away: boolean]
+  'open-character-center': []
 }>()
 const { t } = useLocale()
 
@@ -19,6 +20,8 @@ const actedSet = computed(() => new Set((props.detail.multiplayer?.submitted_act
 const actionByUser = computed(() => new Map((props.detail.multiplayer?.submitted_actions || []).map(a => [a.user_id, a])))
 const awaySet = computed(() => new Set((props.detail.multiplayer?.away_players || []).map(p => p.user_id)))
 const canKick = computed(() => props.isGm && props.players.length > 1)
+const restSession = computed(() => props.detail.rest_session)
+const myRestStatus = computed(() => restSession.value?.participants.find(row => row.user_id === props.currentUserId)?.status || '')
 function hasActed(p: Player) { return actedSet.value.has(p.user_id) }
 function needsDice(p: Player) { return Boolean(actionByUser.value.get(p.user_id)?.dice_pending) }
 function isAway(p: Player) { return awaySet.value.has(p.user_id) }
@@ -27,6 +30,21 @@ function isAway(p: Player) { return awaySet.value.has(p.user_id) }
 <template>
   <section class="multiplayer panel">
     <h2>{{ t('playerList') }}（{{ players.length }}）</h2>
+    <div v-if="restSession?.active" class="party-rest-alert" role="status">
+      <div class="party-rest-alert-head">
+        <NIcon :component="BedOutline" size="18" />
+        <strong>{{ restSession.rest === 'long' ? t('partyLongRest') : t('partyShortRest') }}</strong>
+        <span>{{ t('partyRestProgress', { ready: restSession.ready_count, total: restSession.active_count }) }}</span>
+      </div>
+      <div class="party-rest-members">
+        <span v-for="row in restSession.participants" :key="row.user_id" :class="row.status">
+          {{ row.character_name }} · {{ row.status === 'submitted' ? t('restReady') : t('restWaiting') }}
+        </span>
+      </div>
+      <button type="button" class="party-rest-open" @click="emit('open-character-center')">
+        {{ myRestStatus === 'submitted' ? t('viewPartyRest') : t('respondPartyRest') }}
+      </button>
+    </div>
     <ul class="player-list">
       <li v-for="p in players" :key="p.user_id" :style="{ '--pc': playerColor(p.user_id) }">
         <div class="player-head">

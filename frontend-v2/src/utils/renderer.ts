@@ -141,7 +141,7 @@ export function highlightKeywords(text:string,lore?:LoreKeywords):string{
 
 export interface GMBlock{paragraphs:string[];states:StateCard[];tags:Badge[]}
 const PROTOCOL_HEADING_RE=/^[\s#>*_`【[]*(?:状态[\s*_`]*(?:变更|变化|更新)|state[\s*_`-]*changes?)[\s#>*_`】\]:：-]*$/i
-const PROTOCOL_TAG_RE=/^(?:HP|GOLD|PAY|SCENE|NPC|LOOT|KEY_ITEM|DECISION|QUEST|USE|WEAPON|EQUIP|PRIVATE|XP|SAN|SAN_CHECK|LUCK|SKILL_GROWTH|PUSH|PUZZLE|MANA|SPELL|QUICK_ACTIONS|COMBAT|REVIVE|CONFIRMED|MEMORY|NONE)\s*(?::|$)/i
+const PROTOCOL_TAG_RE=/^(?:HP|GOLD|PAY|SCENE|NPC|LOOT|KEY_ITEM|DECISION|QUEST|USE|WEAPON|EQUIP|PRIVATE|XP|MILESTONE|SAN|SAN_CHECK|LUCK|SKILL_GROWTH|PUSH|PUZZLE|MANA|SPELL|QUICK_ACTIONS|COMBAT|REVIVE|CONFIRMED|MEMORY|NONE)\s*(?::|$)/i
 function normalizeProtocolSuffix(text:string):string{
   const source=String(text||'')
   if(source.includes('---'))return source

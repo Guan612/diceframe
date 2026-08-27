@@ -167,13 +167,23 @@ def build_dice_constraint_block(
     dice_resolver: Any,
     *,
     planned_only: bool = False,
+    skip_action_indexes: set[int] | None = None,
 ) -> str:
     """逐个结算玩家行动中的 CheckRequest；原始骰值只生成一次。"""
     if dice_system == "none":
         return ""
     blocks: list[str] = []
     legacy_roll_re = re.compile(r"\(系统掷骰:\s*(d20|d100)=(\d+)\)")
-    for action in instance.action_queue:
+    skipped = skip_action_indexes or set()
+    for action_index, action in enumerate(instance.action_queue):
+        if action_index in skipped:
+            action.pop("check_request", None)
+            action.pop("dice_value", None)
+            action.pop("dice_rolls", None)
+            action.pop("dice_system", None)
+            action.pop("dice_roll_source", None)
+            action.pop("dice_pending", None)
+            continue
         if action.get("user_id") not in instance.players:
             continue
         request = action.get("check_request")

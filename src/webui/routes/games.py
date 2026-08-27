@@ -213,6 +213,25 @@ async def api_set_solo_mode(request: web.Request) -> web.Response:
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
+async def api_set_narrative_perspective(request: web.Request) -> web.Response:
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+    if not is_game_gm(
+        inst,
+        request.get("user_id", ""),
+        bool(request.get("owner_authenticated", False)),
+    ):
+        return web.json_response({"ok": False, "error": "GM only"}, status=403)
+    body = await request.json()
+    result = await api.set_narrative_perspective(
+        gk, str(body.get("perspective", "") or ""),
+    )
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 async def api_set_luck_timeout(request: web.Request) -> web.Response:
     """GM 按局设置幸运超时秒数（0=禁用，异步局建议 0，实时局默认 60）。"""
     api = _get_api(request)
@@ -429,6 +448,10 @@ async def api_create_game(request: web.Request) -> web.Response:
         language=str(body.get("language", "") or ""),
         scene_image=body.get("scene_image"),
         map_background=body.get("map_background"),
+        adventure_id=str(body.get("adventure_id", "") or ""),
+        narrative_perspective=str(body.get("narrative_perspective", "auto") or "auto"),
+        advancement_mode=str(body.get("advancement_mode", "milestone") or "milestone"),
+        advancement_authority=str(body.get("advancement_authority", "ai_gm") or "ai_gm"),
     )
     return web.json_response(result)
 
@@ -462,6 +485,121 @@ async def api_action(request: web.Request) -> web.Response:
     except Exception:
         logger.exception("action 处理异常")
         return web.json_response({"narration": "处理请求时出错，请查看服务器日志", "advanced": False, "phase": "error"})
+
+
+def _ruleset_gameplay_status(result: dict) -> int:
+    if result.get("ok"):
+        return 200
+    code = str(result.get("code") or "")
+    if code in {"GAME_NOT_FOUND", "RULE_NOT_FOUND"}:
+        return 404
+    if code in {"AUTH_REQUIRED", "PLAYER_NOT_IN_GAME"}:
+        return 403
+    if code in {"RULESET_INTENTS_UNAVAILABLE", "RULESET_RUNTIME_UNAVAILABLE"}:
+        return 409
+    if code in {"SESSION_ZERO_REQUIRED", "COMBAT_ACTION_REQUIRED"}:
+        return 409
+    if code == "LLM_NOT_CONFIGURED":
+        return 503
+    if code == "LLM_REQUEST_FAILED":
+        return 502
+    return 422
+
+
+def _ruleset_requester_is_gm(request: web.Request, inst) -> bool:
+    if request.get("player_preview", False):
+        return False
+    return is_game_gm(
+        inst,
+        str(request.get("user_id", "") or ""),
+        bool(request.get("owner_authenticated", False)),
+    )
+
+
+async def _broadcast_ruleset_change(
+    request: web.Request, game_key: str, result: dict,
+) -> None:
+    """Wake every connected client after one persisted authoritative change."""
+
+    if not result.get("ok"):
+        return
+    pool = request.app.get("connection_pool")
+    if pool is None:
+        return
+    gameplay = result.get("gameplay")
+    gameplay = gameplay if isinstance(gameplay, dict) else {}
+    await pool.broadcast(game_key, {
+        "type": "ruleset_state_changed",
+        "state_version": int(gameplay.get("state_version", 0) or 0),
+    })
+
+
+async def api_ruleset_available_actions(request: web.Request) -> web.Response:
+    api = _get_api(request)
+    game_key = request.match_info["game_key"]
+    inst = request.app["subsystems"].registry.get(api._parse_key(game_key))
+    requester_id = str(request.get("user_id", "") or "")
+    requester_is_gm = _ruleset_requester_is_gm(request, inst)
+    result = await api.ruleset_available_actions(
+        game_key, requester_id, requester_is_gm,
+    )
+    return web.json_response(result, status=_ruleset_gameplay_status(result))
+
+
+async def api_ruleset_submit_intent(request: web.Request) -> web.Response:
+    api = _get_api(request)
+    game_key = request.match_info["game_key"]
+    inst = request.app["subsystems"].registry.get(api._parse_key(game_key))
+    requester_id = str(request.get("user_id", "") or "")
+    if request.get("player_preview", False) and not request.get("player_delegate", False):
+        return web.json_response({
+            "ok": False,
+            "code": "PREVIEW_MODE_FORBIDDEN",
+            "error": "当前是房主预览模式，请先开启允许代操作",
+        }, status=403)
+    requester_is_gm = _ruleset_requester_is_gm(request, inst)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return web.json_response(
+            {"ok": False, "code": "INVALID_JSON", "error": "请求体必须是 JSON 对象"},
+            status=400,
+        )
+    result = await api.ruleset_submit_intent(
+        game_key, requester_id, requester_is_gm, body,
+    )
+    await _broadcast_ruleset_change(request, game_key, result)
+    return web.json_response(result, status=_ruleset_gameplay_status(result))
+
+
+async def api_ruleset_resolve_decision(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    intent = {
+        **body,
+        "type": "decision.resolve",
+        "decision_id": request.match_info["decision_id"],
+    }
+    api = _get_api(request)
+    game_key = request.match_info["game_key"]
+    inst = request.app["subsystems"].registry.get(api._parse_key(game_key))
+    requester_id = str(request.get("user_id", "") or "")
+    if request.get("player_preview", False) and not request.get("player_delegate", False):
+        return web.json_response({
+            "ok": False,
+            "code": "PREVIEW_MODE_FORBIDDEN",
+            "error": "当前是房主预览模式，请先开启允许代操作",
+        }, status=403)
+    requester_is_gm = _ruleset_requester_is_gm(request, inst)
+    result = await api.ruleset_submit_intent(
+        game_key, requester_id, requester_is_gm, intent,
+    )
+    await _broadcast_ruleset_change(request, game_key, result)
+    return web.json_response(result, status=_ruleset_gameplay_status(result))
 
 
 async def api_luck_decision(request: web.Request) -> web.Response:
@@ -623,6 +761,145 @@ async def api_char_update(request: web.Request) -> web.Response:
     return web.json_response(await api.update_character(gk, uid, body))
 
 
+async def api_ruleset_character_profile_update(request: web.Request) -> web.Response:
+    """Patch non-mechanical profile data for a ruleset-authoritative character."""
+    from src.webui.services.ruleset_characters import update_live_character_profile
+
+    gk = request.match_info["game_key"]
+    uid = request.match_info["user_id"]
+    api = _get_api(request)
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
+    session_uid = request.get("user_id", "")
+    if not can_modify_character(
+        session_uid,
+        uid,
+        inst.gm_uid,
+        owner=bool(request.get("owner_authenticated", False)),
+    ):
+        return web.json_response({"ok": False, "error": "无权修改他人角色卡"}, status=403)
+    body = await request.json()
+    result = await update_live_character_profile(api, gk, uid, body)
+    if result.get("ok"):
+        return web.json_response(result)
+    code = str(result.get("error_code") or "")
+    status = 404 if code == "CHARACTER_NOT_FOUND" else 422
+    return web.json_response(result, status=status)
+
+
+async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response:
+    from src.webui.services.ruleset_characters import adopt_character_card
+
+    gk = request.match_info["game_key"]
+    uid = request.match_info["user_id"]
+    api = _get_api(request)
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
+    session_uid = request.get("user_id", "")
+    if not can_modify_character(
+        session_uid, uid, inst.gm_uid,
+        owner=bool(request.get("owner_authenticated", False)),
+    ):
+        return web.json_response({"ok": False, "error": "无权修改他人角色卡"}, status=403)
+    body = await request.json()
+    result = await adopt_character_card(api, gk, uid, str(body.get("card_id") or ""))
+    if result.get("ok"):
+        return web.json_response(result)
+    code = str(result.get("error_code") or "")
+    status = 404 if code == "CHARACTER_NOT_FOUND" else 422
+    return web.json_response(result, status=status)
+
+
+async def _api_live_character_advancement(
+    request: web.Request, action: str,
+) -> web.Response:
+    from src.webui.services import ruleset_advancement
+
+    gk = request.match_info["game_key"]
+    uid = request.match_info["user_id"]
+    api = _get_api(request)
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
+    session_uid = request.get("user_id", "")
+    runtime_id = str((getattr(inst, "ruleset_runtime", {}) or {}).get("id") or "")
+    can_advance = (
+        session_uid == uid
+        if runtime_id == "core:dnd2024"
+        else can_modify_character(
+            session_uid, uid, inst.gm_uid,
+            owner=bool(request.get("owner_authenticated", False)),
+        )
+    )
+    if not can_advance:
+        return web.json_response({"ok": False, "error": "无权修改他人角色卡"}, status=403)
+    body = await request.json()
+    method = getattr(ruleset_advancement, f"{action}_live")
+    try:
+        result = method(api, gk, uid, body)
+        if action == "apply":
+            result = await result
+    except ValueError as exc:
+        result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error": str(exc)}
+    code = str(result.get("code") or "")
+    status = 200 if result.get("ok") else 404 if code in {"GAME_NOT_FOUND", "CHARACTER_NOT_FOUND"} else 409 if code == "STALE_CHARACTER_REVISION" else 422
+    return web.json_response(result, status=status)
+
+
+async def api_live_character_advancement_preview(request: web.Request) -> web.Response:
+    return await _api_live_character_advancement(request, "preview")
+
+
+async def api_live_character_advancement_apply(request: web.Request) -> web.Response:
+    return await _api_live_character_advancement(request, "apply")
+
+
+async def api_live_advancement_control(request: web.Request) -> web.Response:
+    from src.webui.services import ruleset_advancement
+
+    game_key = request.match_info["game_key"]
+    _, denied = _gm_only_inst(request, game_key)
+    if denied is not None:
+        return denied
+    result = await ruleset_advancement.control_live(
+        _get_api(request), game_key, await request.json(),
+    )
+    await _broadcast_ruleset_change(request, game_key, result)
+    code = str(result.get("code") or "")
+    status = 200 if result.get("ok") else 404 if code in {
+        "GAME_NOT_FOUND", "CHARACTER_NOT_FOUND",
+    } else 422
+    return web.json_response(result, status=status)
+
+
+async def api_live_character_rest(request: web.Request) -> web.Response:
+    from src.webui.services.ruleset_rest import resolve_live, resolve_live_party
+
+    gk = request.match_info["game_key"]
+    uid = request.match_info["user_id"]
+    api = _get_api(request)
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
+    if not can_modify_character(
+        request.get("user_id", ""), uid, inst.gm_uid,
+        owner=bool(request.get("owner_authenticated", False)),
+    ):
+        return web.json_response({"ok": False, "error": "无权修改他人角色卡"}, status=403)
+    payload = await request.json()
+    result = await (
+        resolve_live_party(api, gk, uid, payload)
+        if not inst.solo_mode
+        else resolve_live(api, gk, uid, payload)
+    )
+    await _broadcast_ruleset_change(request, gk, result)
+    code = str(result.get("code") or "")
+    status = 200 if result.get("ok") else 404 if code in {"GAME_NOT_FOUND", "CHARACTER_NOT_FOUND"} else 409 if code == "STALE_CHARACTER_REVISION" else 422
+    return web.json_response(result, status=status)
+
+
 async def api_char_delete(request: web.Request) -> web.Response:
     denied = _require_confirmed_request(request)
     if denied is not None:
@@ -737,6 +1014,7 @@ async def api_create_from_seed(request: web.Request) -> web.Response:
         gm_uid=request.get("user_id", ""),
         language=str(body.get("language", "") or ""),
         scene_image=body.get("scene_image"),
+        narrative_perspective=str(body.get("narrative_perspective", "") or ""),
     )
     return web.json_response(result)
 
@@ -851,6 +1129,10 @@ def register_games(app: web.Application) -> None:
     app.router.add_get("/api/games/{game_key}/health", api_game_health)
     app.router.add_post("/api/games/{game_key}/health/{event_id}/{action:resolve|ignore}", api_mark_health_event)
     app.router.add_post("/api/games/{game_key}/mode", api_set_solo_mode)
+    app.router.add_post(
+        "/api/games/{game_key}/settings/narrative-perspective",
+        api_set_narrative_perspective,
+    )
     app.router.add_post("/api/games/{game_key}/settings/luck-timeout", api_set_luck_timeout)
     app.router.add_post("/api/games/{game_key}/players/{user_id}/away", api_set_player_away)
     app.router.add_post("/api/games/{game_key}/player-access", api_set_player_access)
@@ -858,6 +1140,11 @@ def register_games(app: web.Application) -> None:
     app.router.add_post("/api/games/create-from-seed", api_create_from_seed)
     app.router.add_post("/api/games/batch-delete", api_batch_delete_games)
     app.router.add_post("/api/games/{game_key}/action", api_action)
+    app.router.add_get("/api/games/{game_key}/available-actions", api_ruleset_available_actions)
+    app.router.add_post("/api/games/{game_key}/intents", api_ruleset_submit_intent)
+    app.router.add_post(
+        "/api/games/{game_key}/decisions/{decision_id}", api_ruleset_resolve_decision,
+    )
     app.router.add_post("/api/games/{game_key}/checks/{check_id}/luck", api_luck_decision)
     app.router.add_post("/api/games/{game_key}/advance", api_advance)
     app.router.add_post("/api/games/{game_key}/gm-command", api_gm_command)
@@ -871,6 +1158,30 @@ def register_games(app: web.Application) -> None:
     app.router.add_route("DELETE", "/api/games/{game_key}", api_delete_game)
     app.router.add_get("/api/games/{game_key}/export", api_export_game)
     app.router.add_route("PUT", "/api/games/{game_key}/character/{user_id}", api_char_update)
+    app.router.add_patch(
+        "/api/games/{game_key}/character/{user_id}/profile",
+        api_ruleset_character_profile_update,
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/character/{user_id}/adopt-card",
+        api_ruleset_character_adopt_card,
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/character/{user_id}/advancement/preview",
+        api_live_character_advancement_preview,
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/character/{user_id}/advancement/apply",
+        api_live_character_advancement_apply,
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/advancement/control",
+        api_live_advancement_control,
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/character/{user_id}/rest",
+        api_live_character_rest,
+    )
     app.router.add_route("DELETE", "/api/games/{game_key}/character/{user_id}", api_char_delete)
     app.router.add_route("PUT", "/api/games/{game_key}/npc/{npc_id}/portrait", api_npc_portrait_update)
     app.router.add_post("/api/games/{game_key}/players", api_player_create)

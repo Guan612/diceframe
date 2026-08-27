@@ -10,6 +10,7 @@
 @import './v2/logs.css';
 @import './v2/lorebook-memory.css';
 @import './v2/rules.css';
+@import './v2/adventures.css';
 @import './v2/alignment.css';
 @import './v2/settings-control-room.css';
 @import './v2/artwork.css';
@@ -25,3 +26,4 @@
 @import './v2/play-panels.css';
 @import './v2/map-workspace.css';
 @import './v2/peer.css';
+@import './v2/ruleset-workspace.css';

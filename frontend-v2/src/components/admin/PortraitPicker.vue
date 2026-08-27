@@ -177,6 +177,8 @@ async function generatePortrait() {
       >
         <PortraitImage :portrait="{ kind: 'builtin', id: choice.id }" :rule-id="ruleId" :name="name" :size="52" />
       </button>
+    </div>
+    <div class="portrait-actions">
       <button type="button" class="portrait-upload" :disabled="uploading" @click="input?.click()">
         {{ uploading ? t('uploading') : t('uploadCustomAvatar') }}
       </button>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import dataclass, field
@@ -133,6 +134,10 @@ class GameInstance:
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
+    ruleset_runtime: dict[str, Any] = field(default_factory=dict)
+    ruleset_state: dict[str, Any] = field(default_factory=dict)
+    adventure_binding: dict[str, Any] = field(default_factory=dict)
+    event_ledger: list[dict[str, Any]] = field(default_factory=list)
     scene_image: dict[str, str] = field(default_factory=dict)
     map_background: dict[str, str] = field(default_factory=dict)
     world_name: str = ""
@@ -221,6 +226,9 @@ class GameInstance:
 
     # 难度
     difficulty: str = "标准"  # 轻松 / 标准 / 硬核
+
+    # 叙事视角（展示偏好，不参与规则判定）
+    narrative_perspective: str = "auto"  # auto / immersive / third_person
 
     # 叙事语言
     language: str = DEFAULT_LANGUAGE  # "zh-CN" / "en"
@@ -330,6 +338,7 @@ class GameInstance:
         room_password: str | None = None,
         gm_uid: str | None = None,
         luck_timeout_seconds: int | None = None,
+        narrative_perspective: str | None = None,
     ) -> None:
         """集中更新入口与房间身份配置，保留旧存档字段。
 
@@ -347,6 +356,46 @@ class GameInstance:
             if not 0 <= int(luck_timeout_seconds) <= 3600:
                 raise ValueError("幸运超时需在 0..3600 秒之间（0=禁用）")
             self.luck_timeout_seconds = int(luck_timeout_seconds)
+        if narrative_perspective is not None:
+            self.set_narrative_perspective(narrative_perspective)
+
+    def bind_ruleset_runtime(self, binding: dict[str, Any]) -> bool:
+        """Bind versioned ruleset state once; reject mixed-runtime characters."""
+
+        normalized = {
+            "id": str(binding.get("runtime_id") or ""),
+            "version": int(binding.get("runtime_version", 0) or 0),
+            "content_version": str(binding.get("content_version") or ""),
+            "state_schema_version": int(binding.get("state_schema_version", 0) or 0),
+        }
+        if not all((
+            normalized["id"], normalized["version"],
+            normalized["content_version"], normalized["state_schema_version"],
+        )):
+            return False
+        if self.ruleset_runtime and self.ruleset_runtime != normalized:
+            return False
+        self.ruleset_runtime = normalized
+        if not self.ruleset_state:
+            self.ruleset_state = {
+                "state_schema_version": normalized["state_schema_version"],
+            }
+        return True
+
+    def bind_adventure(self, binding: dict[str, Any] | None) -> bool:
+        """Bind one immutable adventure package, or explicitly select sandbox."""
+
+        value = dict(binding or {})
+        if value:
+            required = {"adventure_id", "version", "format", "content_digest", "world_id"}
+            if set(value) != required or not all(str(value.get(key) or "") for key in required):
+                return False
+            if str(value["world_id"]) != str(self.world_id or ""):
+                return False
+        if self.adventure_binding and self.adventure_binding != value:
+            return False
+        self.adventure_binding = value
+        return True
 
     def set_scene_image(self, reference: dict[str, str]) -> None:
         """Set the portable adventure scene-image reference."""
@@ -389,6 +438,12 @@ class GameInstance:
         self.solo_mode = bool(solo_mode)
         if self.solo_mode and self.action_queue and self.state == GameState.ACTIVE_ACTION:
             self.ready_players.update(self.alive_players)
+
+    def set_narrative_perspective(self, perspective: str) -> None:
+        normalized = str(perspective or "auto").strip().casefold()
+        if normalized not in {"auto", "immersive", "third_person"}:
+            raise ValueError("叙事视角必须是 auto、immersive 或 third_person")
+        self.narrative_perspective = normalized
 
     def append_log_entry(self, entry: RoundLogEntry) -> None:
         self.log.append(entry)
@@ -994,7 +1049,10 @@ class GameInstance:
             saved_world_name = self.world_name
             saved_group_name = self.group_name
             saved_solo = self.solo_mode
+            saved_narrative_perspective = self.narrative_perspective
             saved_language = normalize_language(self.language)
+            saved_ruleset_runtime = copy.deepcopy(self.ruleset_runtime)
+            saved_adventure_binding = copy.deepcopy(self.adventure_binding)
             self.players.clear()
             self.npcs.clear()
             self.round_number = 0
@@ -1032,11 +1090,19 @@ class GameInstance:
             self.last_state_update = None
             self.last_token_budget_bump = None
             self.gm_directives.clear()
+            self.ruleset_runtime = saved_ruleset_runtime
+            self.ruleset_state = (
+                {"state_schema_version": int(saved_ruleset_runtime.get("state_schema_version", 1) or 1)}
+                if saved_ruleset_runtime else {}
+            )
+            self.adventure_binding = saved_adventure_binding
+            self.event_ledger.clear()
             self.state = GameState.CREATED
             self.world_id = saved_world_id
             self.world_name = saved_world_name
             self.group_name = saved_group_name
             self.solo_mode = saved_solo
+            self.narrative_perspective = saved_narrative_perspective
             self.language = saved_language
             self.seed_code = saved_seed
             logger.info("游戏已重置 (seed=%s) - game_key=%s", self.seed_code, self.game_key)
@@ -1059,6 +1125,7 @@ class GameInstance:
             "game_key": list(self.game_key),
             "world_id": self.world_id,
             "rule_id": self.rule_id,
+            "adventure_binding": self.adventure_binding,
             "scene_image": self.scene_image,
             "map_background": self.map_background,
             "world_name": self.world_name,
@@ -1088,6 +1155,7 @@ class GameInstance:
             "solo_mode": self.solo_mode,
             "seed_code": self.seed_code,
             "difficulty": self.difficulty,
+            "narrative_perspective": self.narrative_perspective,
             "language": normalize_language(self.language),
             "luck_timeout_seconds": self.luck_timeout_seconds,
             "entry_point": self.entry_point,
@@ -1118,6 +1186,10 @@ class GameInstance:
             "confirmed_items": self.confirmed_items,
             "private_log": self.private_log,
         }
+        if self.ruleset_runtime:
+            data["ruleset_runtime"] = self.ruleset_runtime
+            data["ruleset_state"] = self.ruleset_state
+            data["event_ledger"] = self.event_ledger
         if self.puzzle_manager and hasattr(self.puzzle_manager, "to_active_dict"):
             data["puzzles"] = self.puzzle_manager.to_active_dict()
         if self.plot_tracker and hasattr(self.plot_tracker, "to_dict"):
@@ -1217,6 +1289,10 @@ class GameInstance:
             # Empty marks a pre-rule_id save. The WebUI service resolves it from
             # the world template on first read and persists the migrated value.
             rule_id=data.get("rule_id", ""),
+            ruleset_runtime=data.get("ruleset_runtime") or {},
+            ruleset_state=data.get("ruleset_state") or {},
+            adventure_binding=data.get("adventure_binding") or {},
+            event_ledger=data.get("event_ledger") or [],
             scene_image=data.get("scene_image", {}),
             map_background=data.get("map_background", {}),
             world_name=data.get("world_name", ""),
@@ -1244,6 +1320,7 @@ class GameInstance:
             solo_mode=data.get("solo_mode", False),
             seed_code=data.get("seed_code", ""),
             difficulty=data.get("difficulty", "标准"),
+            narrative_perspective=data.get("narrative_perspective", "auto"),
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
             luck_timeout_seconds=int(data.get("luck_timeout_seconds", 60) or 0),
             entry_point=data.get("entry_point", "web"),

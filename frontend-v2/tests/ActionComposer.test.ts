@@ -99,4 +99,5 @@ describe('ActionComposer rollback refresh', () => {
     expect(JSON.parse(request.body || '{}')).toEqual({ text: '悄悄上楼' })
     expect(wrapper.find('.dice-result').exists()).toBe(false)
   })
+
 })

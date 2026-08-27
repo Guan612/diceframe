@@ -283,7 +283,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="game-card-body">
-            <h2>{{ g.world_name || g.game_key }}</h2>
+            <h2 :title="g.world_name || g.game_key">{{ g.world_name || g.game_key }}</h2>
             <p class="scene-line">{{ g.scene || t('notStarted') }}</p>
             <div class="game-card-meta">
               <span>{{ t('roundPrefix') }}{{ g.round_number || 0 }}{{ t('roundSuffix') }}</span>

@@ -12,6 +12,8 @@ export type PeerGameOperation =
   | 'player.rebind'
   | 'player.away'
   | 'action.submit'
+  | 'ruleset.actions'
+  | 'ruleset.intent'
   | 'luck.resolve'
   | 'payment.resolve'
   | 'character.update'
@@ -27,6 +29,8 @@ const GAME_OPERATIONS = new Set<PeerGameOperation>([
   'player.rebind',
   'player.away',
   'action.submit',
+  'ruleset.actions',
+  'ruleset.intent',
   'luck.resolve',
   'payment.resolve',
   'character.update',

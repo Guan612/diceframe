@@ -13,7 +13,7 @@ const updateStatus = ref<UpdateStatusResponse | null>(null)
 const reloadCountdown = ref<number | null>(null)
 let pollTimer: ReturnType<typeof setTimeout> | null = null
 let reloadTimer: ReturnType<typeof setTimeout> | null = null
-let reloadAfterPortableUpdate = false
+let reloadAfterLauncherUpdate = false
 
 const ACTIVE_STATES = new Set<UpdateStatusResponse['state']>(['downloading', 'verifying', 'applying', 'restarting'])
 const DOWNLOAD_STATES = new Set<UpdateStatusResponse['state']>(['downloading', 'verifying'])
@@ -21,14 +21,13 @@ const RELOAD_DELAY_SECONDS = 5
 const isDownloading = computed(() => DOWNLOAD_STATES.has(updateStatus.value?.state || 'idle'))
 const isUpdateBusy = computed(() => ACTIVE_STATES.has(updateStatus.value?.state || 'idle'))
 
-// 从更新弹窗的“去设置”进入时是否自动开始下载。仅在可写的 source/portable
-// 安装、确有新版、且无进行中任务时触发；docker/development/只读模式下
-// kind 为 null，不触发。
+// 从更新弹窗的“去设置”进入时是否自动开始下载。仅在可写的 source、
+// portable 或 docker-managed 安装、确有新版且无进行中任务时触发。
 // 注意：state/version 反映的是上次更新的持久化结果，检测到新版本时不会重置。
 // 若上次 state 残留为 done/staged（属于旧版本），不能据此拦截——否则弹窗“前往
 // 设置”后永远不自动下载。只拦截真正进行中的任务，避免并发下载。
 export function shouldAutoDownloadUpdate(
-  kind: 'source' | 'portable' | null,
+  kind: 'source' | 'portable' | 'docker' | null,
   state: string | undefined,
   focus: string,
   updateAvailable: boolean,
@@ -79,28 +78,28 @@ function startReloadCountdown(): void {
   reloadTimer = setTimeout(tick, 1000)
 }
 
-function observePortableUpdateCompletion(): void {
-  if (!reloadAfterPortableUpdate) return
+function observeLauncherUpdateCompletion(): void {
+  if (!reloadAfterLauncherUpdate) return
   const state = updateStatus.value?.state
   if (state === 'done') {
-    reloadAfterPortableUpdate = false
+    reloadAfterLauncherUpdate = false
     startReloadCountdown()
   } else if (state === 'failed' || state === 'rolled-back') {
-    reloadAfterPortableUpdate = false
+    reloadAfterLauncherUpdate = false
   }
 }
 
 async function refreshStatus(): Promise<void> {
   try {
     updateStatus.value = await api<UpdateStatusResponse>('/system/update/status')
-    observePortableUpdateCompletion()
+    observeLauncherUpdateCompletion()
   } catch {
     // 静默：UI 保留上次状态，避免轮询期间偶发错误刷屏
   }
   schedulePoll()
 }
 
-async function startDownload(kind: 'source' | 'portable'): Promise<UpdateDownloadResponse> {
+async function startDownload(kind: 'source' | 'portable' | 'docker'): Promise<UpdateDownloadResponse> {
   const result = await api<UpdateDownloadResponse>(`/system/update/download?kind=${kind}`, { method: 'POST' })
   if (result.ok) {
     await refreshStatus()
@@ -109,10 +108,10 @@ async function startDownload(kind: 'source' | 'portable'): Promise<UpdateDownloa
 }
 
 async function applyUpdate(): Promise<UpdateApplyResponse> {
-  const isPortable = updateStatus.value?.kind === 'portable'
+  const launcherManaged = updateStatus.value?.kind === 'portable' || updateStatus.value?.kind === 'docker'
   const result = await api<UpdateApplyResponse>('/system/update/apply', { method: 'POST' })
   if (result.ok) {
-    reloadAfterPortableUpdate = isPortable
+    reloadAfterLauncherUpdate = launcherManaged
     await refreshStatus()
   }
   return result

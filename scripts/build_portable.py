@@ -39,6 +39,7 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"(^|/)\.codex/"),
     re.compile(r"(^|/)\.claude/"),
     re.compile(r"(^|/)node_modules/"),
+    re.compile(r"(^|/)mobile/"),
     re.compile(r"(^|/)tests/"),
     re.compile(r"(^|/)frontend-v2/tests/"),
     re.compile(r"(^|/)frontend-v2/e2e/"),
