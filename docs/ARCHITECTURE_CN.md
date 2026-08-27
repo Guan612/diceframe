@@ -50,6 +50,8 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 
 `src/migrations/` 负责 persisted schema upgrade；`src/compat/` 负责 old external/runtime shape 到当前 canonical model 的兼容。V1 包通过适配器读取，不能把兼容分支散回正常业务逻辑。
 
+持久化 `GameInstance` 加载后的迁移统一经过 `src.migrations.migrate_instance` 编排入口。各数据域的具体迁移可以由 `src/compat/` 提供纯适配实现，但 service、route 和 runtime 不得直接分散调用域适配器。迁移必须幂等、可测试、按明确的版本/identity/digest 边界执行；无法证明安全迁移时 fail closed。新增功能应新增版本化迁移步骤，不修改已发布迁移的语义。
+
 ## 应用更新边界
 
 Windows source/portable 与托管 Docker 共用 `src/webui/services/updater.py` 的下载状态机，但安装提交权分离：source 使用备份事务，portable 由 Windows launcher 提交，Docker 候选只能由镜像内稳定的 `src/docker_launcher/` 在健康检查和观察期通过后提交。Docker 应用进程只能写相对候选路径的 restart signal，不得控制 Docker daemon、挂载 Docker socket或覆盖当前版本目录。

@@ -50,6 +50,8 @@ V2 resource IDs must already be canonical. The registry never silently normalize
 
 `src/migrations/` performs persisted schema upgrades. `src/compat/` adapts old external/runtime shapes to the current canonical model. V1 packages are read through adapters; compatibility branches do not move into normal business logic.
 
+Migrations for loaded persisted `GameInstance` data are orchestrated through the single `src.migrations.migrate_instance` entry point. Domain-specific migration implementations may live in `src/compat/` as pure adapters, but services, routes, and runtimes must not call those adapters directly. Every migration must be idempotent, tested, and bounded by an explicit version/identity/digest contract; uncertain migrations fail closed. New behavior adds a versioned migration step rather than changing the meaning of a released step.
+
 ## Application Update Boundary
 
 Windows source/portable and managed Docker share the download state machine in `src/webui/services/updater.py`, but installation authority is separated. Source updates use a backup transaction, portable candidates are committed by the Windows launcher, and Docker candidates are committed only by the stable image launcher under `src/docker_launcher/` after health and probation checks pass. A Docker application process may write only a restart signal containing a relative candidate path; it cannot control the Docker daemon, mount the Docker socket, or overwrite the current version directory.
