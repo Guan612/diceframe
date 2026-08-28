@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
+import { NIcon } from 'naive-ui'
+import { MicOutline, StopCircleOutline } from '@vicons/ionicons5'
 import { api } from '@/api/client'
 import type { ActionSubmitResponse, GameDetail } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
@@ -96,7 +98,9 @@ async function submit() {
         :aria-pressed="recording"
         :disabled="transcribing || (locked && !recording)"
         @click="toggleVoice()"
-      >{{ recording ? '⏹' : '🎤' }}</button>
+      >
+        <NIcon :component="recording ? StopCircleOutline : MicOutline" />
+      </button>
       <button class="primary" @click="submit()" :disabled="locked || !text.trim()">{{ busy ? t('processing') : t('action') }}</button>
     </div>
     <div v-if="notice" class="notice">{{ notice }}</div>
@@ -109,13 +113,16 @@ async function submit() {
 }
 
 .dictation-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 44px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--df-interactive) 38%, var(--df-border-soft));
   border-radius: var(--df-radius-md);
   color: var(--df-text-secondary);
   background: color-mix(in srgb, var(--df-interactive) 10%, var(--df-control-bg));
-  font-size: 16px;
+  font-size: 19px;
 }
 
 .dictation-toggle.active {

@@ -1,53 +1,71 @@
-# DiceFrame v2.4.0-beta.3
+# DiceFrame v2.4.0
 
 ## 中文
 
-DiceFrame v2.4.0-beta.3 是预览版更新，主要改进运行问题排查和更新包兼容性。
+DiceFrame v2.4.0 带来统一的多人跑团体验、高级 DND5E 规则支持、冒险包管理、移动端游玩能力，以及更可靠的更新和问题排查工具。
 
 ### 本次更新
 
-- **运行日志**：DiceFrame 会保留按天轮转的运行日志，默认保留最近 30 天；可在设置中查看、清除，并与对局记录分开管理。
-- **DF 助手排障**：可将脱敏后的运行日志交给 DF 助手分析，帮助定位常见启动、连接和服务调用问题。
-- **设置界面**：运行日志和连接超时相关设置重新整理，信息更容易找到。
-- **更新包校验**：Release 提供统一的 `SHA256SUMS` 清单，新版更新器和手动下载用户可据此校验所有压缩包。
+- **统一游玩流程**：剧情、公共消息、行动输入、队伍状态和 GM 控制台回到同一条对局流程；帮助内容不再打断正常游玩。
+- **高级 DND5E 规则**：加入角色创建、角色中心、法术与资源、休息、升级资格和规则校验，并由服务端维护权威状态。
+- **AI GM 与冒险推进**：支持根据玩家行动推进剧情、收集多人行动、处理检定和唤醒符合剧情的遭遇；GM 仍可随时裁定和接管。
+- **多人战斗**：提供先攻、回合、移动、攻击、伤害、敌方行动、准备状态和公共战斗历史的同步流程。玩家只能操作自己的角色，GM 管理遭遇和战役状态。
+- **冒险包**：支持可视化新建、复制、编辑、校验、导入、导出、删除和 AI 草稿。冒险包提供剧情结构，世界书继续负责世界背景；两者可以组合使用但不会互相覆盖。
+- **稳定重开**：对局会固定冒险包的 identity、版本和内容摘要；内容缺失或被修改时会明确报告，而不是静默切换到另一套场景。
+- **叙事视角**：创建对局时可选择第一人称或第三人称叙事，GM 也可在对局中调整；该能力适用于所有规则，而非 DND5E 专属设置。
+- **连接安全**：设置中新增“安全”页，可在 HTTP、本地自签名 HTTPS 与受信任 HTTPS 之间切换，并支持为域名或符合条件的公网 IP 申请和自动续期 Let’s Encrypt 证书。
+- **语音输入**：可配置 OpenAI 兼容的语音识别模型，在 HTTPS 或 localhost 环境中通过行动输入框旁的麦克风按钮把语音转为文字。
+- **移动端与联机**：改进移动端导航、对局界面、地图、角色和多人连接流程，并改善独立 Web 前端的连接体验。
+- **运行日志与排障**：新增按天轮转、默认保留 30 天的运行日志，可在设置中查看、清除或导出给开发者；DF 助手可以分析脱敏后的日志，帮助定位常见问题。
+- **模型请求控制**：普通模型请求超时可独立配置，不再与连接测试超时绑定，长篇生成与临时连通性检查可以使用不同等待时间。
+- **托管 Docker 更新**：容器内支持下载、校验、健康检查、观察期切换和失败回滚；当前与上一应用版本独立保存，业务数据不随版本切换。
+- **更新包校验**：Release 使用统一的 `SHA256SUMS` 清单，便于手动下载和新版更新器校验。
+- **兼容性**：DND5E 专属机制保持在高级 DND5E 规则边界内，不会自动改变传统规则、CoC、赛博朋克或 generic d20 的玩法。
 
-### 预览版提示
+### 升级提示
 
-- 这是预览版，可能包含未完成的改动或已知问题，不建议直接用于唯一的正式战役环境。
-- 升级前请备份完整的 `data/` 文件夹；运行日志位于安装目录的 `logs/`（托管 Docker 为持久化 `data/logs/`）。
-- 高级 DND5E 和冒险包仍处于测试阶段；传统规则、CoC、赛博朋克和 generic d20 不会自动启用 DND 专属机制。
-- 预览版 Docker 镜像使用显式版本标签，不会覆盖 `latest`。Docker Update 目前仅支持 `linux-amd64`。
+- 升级前请备份完整的 `data/` 文件夹。
+- Windows 便携版、源码包和托管 Docker 的更新方式保持不变；Docker 若涉及 Python ABI、系统库、字体或 launcher 协议变化，仍需更新基础镜像。
+- Docker Update 当前支持 `linux-amd64`。
 
 ### 下载与校验
 
-- Windows 便携版：`DiceFrame-v2.4.0-beta.3-windows-portable.zip`
-- Windows 源码包：`DiceFrame-v2.4.0-beta.3-windows.zip`
-- Docker 托管更新：`DiceFrame-v2.4.0-beta.3-docker-update-linux-amd64.zip`
-- 手动下载时，请使用 `SHA256SUMS` 统一校验。
-- 从 `2.3.2` 等旧版本自动升级时，旧更新器不识别 `SHA256SUMS`，因此会跳过包校验；升级功能仍可用，升级后新版更新器会恢复校验。
+- Windows 便携版：`DiceFrame-v2.4.0-windows-portable.zip`
+- Windows 源码包：`DiceFrame-v2.4.0-windows.zip`
+- Docker 托管更新：`DiceFrame-v2.4.0-docker-update-linux-amd64.zip`
+- 手动下载时，请使用 Release 中的 `SHA256SUMS` 统一校验。
 
 ## English
 
-DiceFrame v2.4.0-beta.3 is a preview release focused on runtime troubleshooting and update-package compatibility.
+DiceFrame v2.4.0 brings a unified multiplayer play flow, advanced DND5E rules, adventure-bundle management, improved mobile play, and more reliable updates and diagnostics.
 
 ### What's new
 
-- **Runtime logs**: DiceFrame keeps daily-rotated runtime logs for the latest 30 days by default. Logs can be viewed and cleared from Settings and remain separate from game history.
-- **DF Assistant diagnostics**: Redacted runtime logs can be sent to DF Assistant to help identify common startup, connection, and service-call problems.
-- **Settings**: Runtime-log and connection-timeout controls are grouped more clearly.
-- **Update checksums**: Each Release includes one unified `SHA256SUMS` manifest for all archives. Newer updaters and manual downloads can verify packages against it.
+- **Unified play flow**: Narrative, public messages, action input, party state, and the GM console now follow one play flow. Help content no longer interrupts normal play.
+- **Advanced DND5E rules**: Character creation, character center, spells and resources, rests, advancement eligibility, and rules validation are backed by authoritative server state.
+- **AI GM and adventure progression**: Player actions can advance the story, collect multiplayer actions, resolve checks, and awaken encounters that fit the current narrative. The GM can always adjudicate or take over.
+- **Multiplayer combat**: Initiative, turns, movement, attacks, damage, enemy actions, readiness, and public combat history are synchronized. Players control only their own characters while the GM manages encounters and campaigns.
+- **Adventure bundles**: Visual create, copy, edit, validate, import, export, delete, and AI-draft workflows are available. Adventure bundles provide optional story structure while lorebooks continue to define world context; they can be combined without overwriting each other.
+- **Deterministic resume**: Games pin an adventure identity, version, and content digest. Missing or changed content is reported explicitly instead of silently switching scenes.
+- **Narrative perspective**: Choose first- or third-person narration when creating a game, and let the GM adjust it during play. This setting works across all rulesets rather than being specific to DND5E.
+- **Connection security**: A new Security settings page can switch between HTTP, local self-signed HTTPS, and trusted HTTPS, with Let’s Encrypt issuance and automatic renewal for domains or eligible public IP addresses.
+- **Voice input**: Configure an OpenAI-compatible speech-recognition model and dictate actions from the microphone button beside the action composer when using HTTPS or localhost.
+- **Mobile and multiplayer connectivity**: Navigation, play, maps, characters, and peer connection flows are improved for mobile, along with standalone Web frontend connectivity.
+- **Runtime logs and diagnostics**: Daily-rotated runtime logs retain the latest 30 days by default and can be viewed, cleared, or exported for developers from Settings. DF Assistant can analyze redacted logs to help diagnose common issues.
+- **Model request controls**: Normal model request timeout is configurable independently from connection-test timeout, so long generations and quick connectivity checks can use different limits.
+- **Managed Docker updates**: Containers can download, verify, health-check, probation-test, switch, and roll back application versions while keeping current and previous payloads separate from business data.
+- **Update verification**: Releases use one unified `SHA256SUMS` manifest for manual downloads and newer updater clients.
+- **Compatibility**: DND5E-specific mechanics stay within the advanced DND5E rules boundary and do not automatically change traditional rules, CoC, cyberpunk, or generic d20 gameplay.
 
-### Preview notes
+### Upgrade notes
 
-- This is a preview release and may contain unfinished changes or known issues. Do not use it as the only copy of an important production campaign.
-- Back up the complete `data/` directory before upgrading. Runtime logs live under `logs/` (or persistent `data/logs/` for managed Docker).
-- Advanced DND5E and adventure bundles remain beta features. Traditional rules, CoC, cyberpunk, and generic d20 do not inherit D&D-specific mechanics.
-- Preview Docker images use explicit version tags and do not replace `latest`. Docker Update currently supports `linux-amd64` only.
+- Back up the complete `data/` directory before upgrading.
+- Windows portable, source-package, and managed-Docker update flows remain available. Python ABI, system-library, font, or launcher-protocol changes still require a base-image update for Docker.
+- Docker Update currently supports `linux-amd64`.
 
 ### Downloads and verification
 
-- Windows portable: `DiceFrame-v2.4.0-beta.3-windows-portable.zip`
-- Windows source: `DiceFrame-v2.4.0-beta.3-windows.zip`
-- Managed Docker update: `DiceFrame-v2.4.0-beta.3-docker-update-linux-amd64.zip`
-- For manual downloads, verify all archives with `SHA256SUMS`.
-- When upgrading automatically from `2.3.2` or another older version, the legacy updater does not understand `SHA256SUMS` and therefore skips package verification. The update still works; verification resumes after the new updater is installed.
+- Windows portable: `DiceFrame-v2.4.0-windows-portable.zip`
+- Windows source: `DiceFrame-v2.4.0-windows.zip`
+- Managed Docker update: `DiceFrame-v2.4.0-docker-update-linux-amd64.zip`
+- For manual downloads, verify all archives with the `SHA256SUMS` file attached to the Release.

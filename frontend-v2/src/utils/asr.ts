@@ -23,7 +23,9 @@ export async function initializeAsr(force = false): Promise<void> {
     const provider = config.asr_provider === 'openai-compatible' ? 'openai-compatible' : 'disabled'
     asrRuntimeConfig.value = {
       provider,
-      ready: provider === 'openai-compatible' && Boolean(String(config.asr_base_url || '').trim()),
+      ready: provider === 'openai-compatible' && Boolean(
+        String(config.asr_provider_ref || '').trim() || String(config.asr_base_url || '').trim(),
+      ),
     }
   }).catch(() => {
     asrRuntimeConfig.value = { provider: 'disabled', ready: false }
