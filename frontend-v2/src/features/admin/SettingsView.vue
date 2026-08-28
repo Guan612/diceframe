@@ -18,7 +18,7 @@ import { shouldAutoDownloadUpdate, updateStateForVersion, useUpdater } from '@/c
 import { useLocale } from '@/composables/useLocale'
 import { initializeTts, ttsRate, setTtsRate } from '@/utils/tts'
 import { asrLanguageFor, initializeAsr, startRecording, type RecordingSession } from '@/utils/asr'
-import { ApiError, api, errorMessage } from '@/api/client'
+import { ApiError, api, apiBlob, errorMessage } from '@/api/client'
 import { speechApi } from '@/api/speech'
 import { pluginApi } from '@/api/plugins'
 import { securityApi, type SecurityTransportStatus } from '@/api/security'
@@ -95,6 +95,7 @@ const hubPreferences = ref<HubPreferences | null>(null)
 const hubPrivacyBusy = ref(false)
 const runtimeLogStatus = ref<RuntimeLogStatus | null>(null)
 const runtimeLogBusy = ref(false)
+const runtimeLogExportBusy = ref(false)
 
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return '0 B'
@@ -1107,6 +1108,28 @@ async function enableLocalHttps() {
     toast.error(errorMessage(e))
   } finally {
     securityBusy.value = ''
+  }
+}
+
+async function exportRuntimeLogs() {
+  runtimeLogExportBusy.value = true
+  try {
+    const response = await apiBlob('/system/runtime-logs/export')
+    const disposition = response.headers.get('Content-Disposition') || ''
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || 'DiceFrame-runtime-logs.zip'
+    const url = URL.createObjectURL(await response.blob())
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+    toast.success(t('runtimeLogsExported'))
+  } catch (error: unknown) {
+    toast.error(errorMessage(error))
+  } finally {
+    runtimeLogExportBusy.value = false
   }
 }
 
@@ -2302,6 +2325,13 @@ function redownloadUpdatePackage() {
                 <NIcon :component="OptionsOutline" />
                 <div><h3>{{ t('generationParams') }}</h3><p>{{ t('generationParamsHint') }}</p></div>
               </header>
+              <div class="advanced-row token-row">
+                <div><strong>{{ t('modelRequestTimeout') }}</strong><small>{{ t('modelRequestTimeoutHint') }}</small></div>
+                <div class="token-input-wrap">
+                  <NInputNumber class="advanced-number" :value="Number(store.config.model_request_timeout_seconds ?? 120)" :min="10" :max="600" :step="10" @update:value="setNum('model_request_timeout_seconds', $event)" />
+                  <span>{{ t('secondsUnit') }}</span>
+                </div>
+              </div>
               <div v-for="item in tokenFields" :key="item.key" class="advanced-row token-row">
                 <div><strong>{{ t(item.labelKey) }}</strong><small>{{ t(item.hintKey) }}</small></div>
                 <div class="token-input-wrap">
@@ -2310,7 +2340,7 @@ function redownloadUpdatePackage() {
                 </div>
               </div>
               <footer class="advanced-save-row">
-                <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
+                <NButton type="primary" @click="save(['model_request_timeout_seconds', 'narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
               </footer>
             </section>
             <section class="advanced-section runtime-logs-section">
@@ -2323,9 +2353,19 @@ function redownloadUpdatePackage() {
                   <strong>{{ t('runtimeLogsRetention', { days: runtimeLogStatus?.retention_days || 30 }) }}</strong>
                   <small>{{ runtimeLogStatus ? t('runtimeLogsUsage', { count: runtimeLogStatus.file_count, size: formatBytes(runtimeLogStatus.total_bytes) }) : t('runtimeLogsUnavailable') }}</small>
                 </div>
-                <NButton type="error" secondary :loading="runtimeLogBusy" @click="clearRuntimeLogs">
+                <NButton type="error" secondary :disabled="runtimeLogExportBusy" :loading="runtimeLogBusy" @click="clearRuntimeLogs">
                   <template #icon><NIcon :component="TrashOutline" /></template>
                   {{ t('runtimeLogsClearAction') }}
+                </NButton>
+              </div>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('runtimeLogsExportAction') }}</strong>
+                  <small>{{ t('runtimeLogsExportHint') }}</small>
+                </div>
+                <NButton secondary :disabled="runtimeLogBusy || !runtimeLogStatus?.file_count" :loading="runtimeLogExportBusy" @click="exportRuntimeLogs">
+                  <template #icon><NIcon :component="CloudDownloadOutline" /></template>
+                  {{ t('runtimeLogsExportAction') }}
                 </NButton>
               </div>
             </section>

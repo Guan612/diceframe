@@ -122,7 +122,7 @@
 .desktop-nav-link.active,
 .desktop-nav-link.active:visited,
 .desktop-nav-link.active:hover {
-  color: var(--df-text);
+  color: var(--df-accent-strong);
   text-decoration: none;
   background: linear-gradient(180deg, transparent, var(--df-hover));
 }

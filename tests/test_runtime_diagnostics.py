@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 
-from src.runtime_diagnostics import MAX_CONTEXT_CHARS, assistant_runtime_log_context
+import pytest
+
+from src.runtime_diagnostics import MAX_CONTEXT_CHARS, assistant_runtime_log_context, build_runtime_log_archive
 from src.runtime_logging import LOG_FILENAME
 
 
@@ -48,3 +52,29 @@ def test_assistant_log_context_ignores_unrelated_files(monkeypatch, tmp_path: Pa
 
     assert context == ""
     assert count == 0
+
+
+def test_runtime_log_archive_contains_all_retained_logs_and_masks_secrets(monkeypatch, tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    monkeypatch.setenv("TRPG_LOG_DIR", str(log_dir))
+    (log_dir / "diceframe.log.2026-08-27").write_text("INFO old token=secret-old", encoding="utf-8")
+    (log_dir / LOG_FILENAME).write_text('ERROR api_key="sk-secret-value"', encoding="utf-8")
+    (log_dir / "plugin.log").write_text("must not export", encoding="utf-8")
+
+    payload, count = build_runtime_log_archive(tmp_path / "data")
+
+    assert count == 2
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert archive.namelist() == ["diceframe.log.2026-08-27", "diceframe.log"]
+        exported = "\n".join(archive.read(name).decode("utf-8") for name in archive.namelist())
+    assert "secret-old" not in exported
+    assert "sk-secret-value" not in exported
+    assert "[REDACTED]" in exported
+    assert "must not export" not in exported
+
+
+def test_runtime_log_archive_requires_at_least_one_log(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("TRPG_LOG_DIR", str(tmp_path / "missing"))
+    with pytest.raises(FileNotFoundError, match="没有可导出的运行日志"):
+        build_runtime_log_archive(tmp_path / "data")

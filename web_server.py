@@ -212,6 +212,8 @@ ANALYSIS_MAX_TOKENS = int(os.getenv("TRPG_ANALYSIS_MAX_TOKENS")
                           or saved.get("analysis_max_tokens", 1024))
 TEXT_GEN_MAX_TOKENS = int(os.getenv("TRPG_TEXT_GEN_MAX_TOKENS")
                           or saved.get("text_gen_max_tokens", 1024))
+MODEL_REQUEST_TIMEOUT_SECONDS = float(os.getenv("TRPG_MODEL_REQUEST_TIMEOUT_SECONDS")
+                                      or saved.get("model_request_timeout_seconds", 120))
 _ENV_PROXY_URL = env_proxy_url()
 _CONFIG_PROXY_URL = secrets.get("proxy_url") or saved.get("proxy_url", "")
 PROXY_ENABLED = bool(saved.get("proxy_enabled", bool(_ENV_PROXY_URL)))
@@ -275,6 +277,7 @@ STATE = {
     "imagegen_style_prefix": str(saved.get("imagegen_style_prefix", "")),
     "imagegen_timeout_seconds": float(saved.get("imagegen_timeout_seconds", 120)),
     "test_timeout_seconds": float(saved.get("test_timeout_seconds", 30)),
+    "model_request_timeout_seconds": MODEL_REQUEST_TIMEOUT_SECONDS,
     "narrative_max_tokens": NARRATIVE_MAX_TOKENS,
     "character_gen_max_tokens": CHARACTER_GEN_MAX_TOKENS,
     "summary_max_tokens": SUMMARY_MAX_TOKENS,
@@ -523,6 +526,7 @@ def _build_subsystems(
         summary_max_tokens=int(runtime_config.get("summary_max_tokens", 1024)),
         brief_max_tokens=int(runtime_config.get("brief_max_tokens", 1024)),
         analysis_max_tokens=int(runtime_config.get("analysis_max_tokens", 1024)),
+        model_request_timeout_seconds=float(runtime_config.get("model_request_timeout_seconds", 120)),
         reuse=reuse,
     )
 

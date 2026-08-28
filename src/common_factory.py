@@ -51,13 +51,19 @@ def create_trpg_subsystems(
     summary_max_tokens: int = 1024,
     brief_max_tokens: int = 1024,
     analysis_max_tokens: int = 1024,
+    model_request_timeout_seconds: float = 120,
     reuse: TRPGSubsystems | None = None,
 ) -> TRPGSubsystems:
     save_dir = data_dir / "saves"
 
     registry = reuse.registry if reuse is not None else GameRegistry(save_dir)
 
-    llm_client = LLMClient(providers=providers, default=default_provider, proxy_url=proxy_url)
+    llm_client = LLMClient(
+        providers=providers,
+        default=default_provider,
+        proxy_url=proxy_url,
+        request_timeout_seconds=model_request_timeout_seconds,
+    )
 
     if reuse is not None:
         lorebook_store = reuse.lorebook_store

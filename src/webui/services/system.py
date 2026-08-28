@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 
 from src.version import DEFAULT_UPDATE_REPOSITORY, __version__
+from src.runtime_diagnostics import build_runtime_log_archive
 from src.runtime_logging import clear_runtime_logs as clear_logs
 from src.runtime_logging import runtime_log_status as log_status
 
@@ -41,6 +42,10 @@ def runtime_log_status(api: "WebAPI") -> dict[str, Any]:
 
 def clear_runtime_logs(api: "WebAPI") -> dict[str, Any]:
     return clear_logs(_data_dir(api))
+
+
+def export_runtime_logs(api: "WebAPI") -> tuple[bytes, int]:
+    return build_runtime_log_archive(_data_dir(api))
 
 
 def _parse_version(value: str) -> tuple[tuple[int, int, int], tuple[str, ...] | None] | None:

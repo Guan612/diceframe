@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import re
+import zipfile
 from pathlib import Path
 
 from src.runtime_logging import LOG_FILENAME, resolve_runtime_log_dir
@@ -45,7 +47,7 @@ def redact_runtime_log_text(text: str) -> str:
     return _JWT_RE.sub("[REDACTED]", redacted)
 
 
-def _runtime_log_files(log_dir: Path) -> list[Path]:
+def _all_runtime_log_files(log_dir: Path) -> list[Path]:
     if not log_dir.exists():
         return []
     candidates = [
@@ -54,7 +56,11 @@ def _runtime_log_files(log_dir: Path) -> list[Path]:
         if path.is_file()
         and (path.name == LOG_FILENAME or path.name.startswith(f"{LOG_FILENAME}."))
     ]
-    return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)[:MAX_LOG_FILES]
+    return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def _runtime_log_files(log_dir: Path) -> list[Path]:
+    return _all_runtime_log_files(log_dir)[:MAX_LOG_FILES]
 
 
 def _read_tail(path: Path, byte_limit: int) -> str:
@@ -99,3 +105,17 @@ def assistant_runtime_log_context(data_dir: Path) -> tuple[str, int]:
     compact = compact.replace("<runtime-log-data>", "[runtime-log-data]")
     compact = compact.replace("</runtime-log-data>", "[/runtime-log-data]")
     return compact[-MAX_CONTEXT_CHARS:], len(files)
+
+
+def build_runtime_log_archive(data_dir: Path) -> tuple[bytes, int]:
+    """Build a shareable archive containing every retained DiceFrame log, with secrets masked."""
+    files = _all_runtime_log_files(resolve_runtime_log_dir(data_dir))
+    if not files:
+        raise FileNotFoundError("没有可导出的运行日志")
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in reversed(files):
+            text = path.read_text(encoding="utf-8", errors="replace")
+            archive.writestr(path.name, redact_runtime_log_text(text))
+    return output.getvalue(), len(files)
