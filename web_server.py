@@ -14,6 +14,7 @@ from aiohttp import web
 
 sys.path.insert(0, str(Path(__file__).parent))
 from src.runtime_env import load_project_env
+from src.runtime_asyncio import install_runtime_exception_handler
 from src.runtime_logging import RETENTION_DAYS, configure_runtime_logging
 
 load_project_env(Path(__file__).resolve().with_name(".env"))
@@ -1454,7 +1455,15 @@ if __name__ == "__main__":
     print(f"DiceFrame WebUI: {TRANSPORT.endpoint.url('127.0.0.1')}  (host={HOST})")
     if not API_KEY:
         print("请在 WebUI 设置页填写 API Key")
-    web.run_app(app, host=HOST, port=PORT, ssl_context=TRANSPORT.ssl_context)
+    runtime_loop = asyncio.new_event_loop()
+    install_runtime_exception_handler(runtime_loop)
+    web.run_app(
+        app,
+        host=HOST,
+        port=PORT,
+        ssl_context=TRANSPORT.ssl_context,
+        loop=runtime_loop,
+    )
     if app["runtime_control"]["restart_requested"]:
         logger.info("DiceFrame 清理完成，正在重新启动")
         os.execv(sys.executable, [sys.executable, *sys.argv])

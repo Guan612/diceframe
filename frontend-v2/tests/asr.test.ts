@@ -161,6 +161,11 @@ describe('voiceInputSupported', () => {
     expect(voiceInputSupported()).toBe(true)
   })
 
+  it('recognizes ASR configured through the shared provider routing', async () => {
+    await configureAsr({ asr_provider: 'openai-compatible', asr_provider_ref: 'siliconflow' })
+    expect(voiceInputSupported()).toBe(true)
+  })
+
   it('stays hidden on insecure origins', async () => {
     await configureAsr({ asr_provider: 'openai-compatible', asr_base_url: 'https://api.example.com/v1' })
     Object.defineProperty(window, 'isSecureContext', { value: false, configurable: true })

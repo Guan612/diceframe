@@ -27,6 +27,7 @@ src/webui/assistant_knowledge_index.json
 
 # 运行日志
 *.log
+logs/
 
 # 调试临时文件
 _play_js.txt
