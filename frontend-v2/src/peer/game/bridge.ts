@@ -43,6 +43,7 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'player.rebind': ['user_id'],
   'player.away': ['away'],
   'action.submit': ['text', 'selected_attribute', 'selected_skill', 'target_text'],
+  'kp.question': ['question'],
   'ruleset.actions': [],
   'ruleset.intent': [
     'intent_id', 'type', 'expected_version', 'actor_id', 'target_id', 'target_ids',
@@ -225,6 +226,7 @@ export class PeerHostGameBridge {
       })
     }
     if (operation === 'action.submit') return write('/action', payload)
+    if (operation === 'kp.question') return write('/kp-question', payload)
     if (operation === 'ruleset.actions') return read('/available-actions')
     if (operation === 'ruleset.intent') return write('/intents', payload)
     if (operation === 'luck.resolve') {
@@ -313,6 +315,7 @@ export class PeerRemoteGameClient {
     else if (method === 'GET' && parsed.tail === '/player-context') operation = 'game.player_context'
     else if (method === 'POST' && parsed.tail === '/players') operation = 'player.create'
     else if (method === 'POST' && parsed.tail === '/action') operation = 'action.submit'
+    else if (method === 'POST' && parsed.tail === '/kp-question') operation = 'kp.question'
     else if (method === 'GET' && parsed.tail === '/available-actions') operation = 'ruleset.actions'
     else if (method === 'POST' && parsed.tail === '/intents') operation = 'ruleset.intent'
     else {

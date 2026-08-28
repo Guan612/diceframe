@@ -1199,6 +1199,17 @@ export interface ActionSubmitResponse {
   [key: string]: unknown
 }
 
+export interface KpQuestionResponse {
+  ok: boolean
+  kind: 'kp_table_talk'
+  answer: string
+  advanced: false
+  action_consumed: false
+  round_number: number
+  provider_used?: string
+  total_tokens?: number
+}
+
 export interface LuckDecisionResponse extends ActionSubmitResponse {
   ok?: boolean
   error?: string

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { BookOutline, ChevronBack, ChevronForward, MapOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
+import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
 import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
 import { currentBackendUrl, isStandaloneFrontend } from '@/api/connection'
@@ -21,6 +21,7 @@ import GameTimeline from '@/components/GameTimeline.vue'
 import ActionComposer from '@/components/ActionComposer.vue'
 import DirectorProposalCard from '@/components/play/DirectorProposalCard.vue'
 import CombatMessageComposer from '@/components/play/CombatMessageComposer.vue'
+import KpQuestionDialog from '@/components/play/KpQuestionDialog.vue'
 import GameSidebar from '@/components/GameSidebar.vue'
 import PlayHelpCenter from '@/components/PlayHelpCenter.vue'
 import HealthPanel from '@/components/HealthPanel.vue'
@@ -58,6 +59,7 @@ const toast = useToast()
 const { confirm } = useConfirm()
 const { locale, setLocale, t } = useLocale()
 const help = ref(false), ruleMeta = ref<RuleMeta>({}), preview = ref(false), delegate = ref(false), cards = ref<CharacterCard[]>([]), showCards = ref(false), health = ref<HealthResponse>({ events: [] })
+const showKpQuestion = ref(false)
 const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref('')
 const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === '1')
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
@@ -108,6 +110,11 @@ function joinNames(names: string[]) { return names.filter(Boolean).join(t('listS
 function onLocaleChange(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
 
 const actorId = computed(() => game.actorId.value || game.player.value?.user_id || '')
+const canAskKp = computed(() => Boolean(
+  game.actorId.value
+  && game.players.value.some(player => player.user_id === game.actorId.value)
+  && (!preview.value || delegate.value),
+))
 const rulesetRefreshKey = ref(0)
 async function refreshRulesetPanels(): Promise<void> {
   rulesetRefreshKey.value += 1
@@ -843,6 +850,12 @@ onBeforeUnmount(() => {
         @open-character-center="showCharacterCenter = true"
       />
 
+      <KpQuestionDialog
+        v-if="showKpQuestion && canAskKp"
+        :game-key="game.currentGame.value"
+        @close="showKpQuestion = false"
+      />
+
       <Modal
         v-if="showCharacterCenter && game.player.value && hasRulesAwareCharacters"
         :title="t('advancedCharacterCenter')"
@@ -988,7 +1001,15 @@ onBeforeUnmount(() => {
           @open-combat="openRulesetTool('combat')"
         >
           <template #tools>
-            <div v-if="hasProfessionalTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+            <div v-if="hasProfessionalTools || canAskKp" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+              <button
+                v-if="canAskKp"
+                class="kp-question-tool-trigger"
+                type="button"
+                :title="t('kpQuestionHint')"
+                :aria-label="t('kpQuestionAction')"
+                @click="showKpQuestion = true"
+              ><NIcon :component="ChatbubbleEllipsesOutline" /><span>{{ t('kpQuestionAction') }}</span></button>
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"
@@ -1011,7 +1032,17 @@ onBeforeUnmount(() => {
           </template>
         </CombatMessageComposer>
 
-        <ActionComposer v-else :game-key="game.currentGame.value" :user-id="actorId" :detail="game.detail.value" :disabled="(preview && !delegate) || !!pendingLuckDecisions.length" @processing="gmThinking = $event" @refresh="game.refresh">
+        <ActionComposer
+          v-else
+          :game-key="game.currentGame.value"
+          :user-id="actorId"
+          :detail="game.detail.value"
+          :disabled="(preview && !delegate) || !!pendingLuckDecisions.length"
+          :kp-available="canAskKp"
+          @ask-kp="showKpQuestion = true"
+          @processing="gmThinking = $event"
+          @refresh="game.refresh"
+        >
           <template #tools>
             <div v-if="hasProfessionalTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
               <button
