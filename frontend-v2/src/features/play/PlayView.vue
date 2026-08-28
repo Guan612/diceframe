@@ -22,6 +22,7 @@ import ActionComposer from '@/components/ActionComposer.vue'
 import DirectorProposalCard from '@/components/play/DirectorProposalCard.vue'
 import CombatMessageComposer from '@/components/play/CombatMessageComposer.vue'
 import KpQuestionDialog from '@/components/play/KpQuestionDialog.vue'
+import TableTalkFeed from '@/components/play/TableTalkFeed.vue'
 import GameSidebar from '@/components/GameSidebar.vue'
 import PlayHelpCenter from '@/components/PlayHelpCenter.vue'
 import HealthPanel from '@/components/HealthPanel.vue'
@@ -854,6 +855,7 @@ onBeforeUnmount(() => {
         v-if="showKpQuestion && canAskKp"
         :game-key="game.currentGame.value"
         @close="showKpQuestion = false"
+        @shared="game.refresh(true)"
       />
 
       <Modal
@@ -993,6 +995,8 @@ onBeforeUnmount(() => {
         <div v-if="tableNotice" class="table-notice notice">{{ tableNotice }}</div>
         <p v-if="tokenBudgetHint" class="token-budget-hint" aria-live="polite">{{ tokenBudgetHint }}</p>
 
+        <TableTalkFeed :exchanges="game.tableTalk.value" />
+
         <CombatMessageComposer
           v-if="rulesetCombatActive && rulesetGameplay"
           :game-key="game.currentGame.value"
@@ -1038,13 +1042,19 @@ onBeforeUnmount(() => {
           :user-id="actorId"
           :detail="game.detail.value"
           :disabled="(preview && !delegate) || !!pendingLuckDecisions.length"
-          :kp-available="canAskKp"
-          @ask-kp="showKpQuestion = true"
           @processing="gmThinking = $event"
           @refresh="game.refresh"
         >
           <template #tools>
-            <div v-if="hasProfessionalTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+            <div v-if="hasProfessionalTools || canAskKp" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+              <button
+                v-if="canAskKp"
+                class="kp-question-tool-trigger"
+                type="button"
+                :title="t('kpQuestionHint')"
+                :aria-label="t('kpQuestionAction')"
+                @click="showKpQuestion = true"
+              ><NIcon :component="ChatbubbleEllipsesOutline" /><span>{{ t('kpQuestionAction') }}</span></button>
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"

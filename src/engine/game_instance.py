@@ -19,6 +19,7 @@ from src.engine.contracts import (
     PlayerData,
     RoundLogEntry,
     StoryRecap,
+    TableTalkExchange,
     TokenBudgetBump,
 )
 from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
@@ -171,6 +172,8 @@ class GameInstance:
     room_password: str = ""  # 房间密码（空=开放）；玩家凭此进入游戏，替代后台 access_token
     room_token: str = ""  # 玩家凭房间密码换取的会话凭证（random secrets，校验通过后颁发）
     private_log: dict[str, list[dict]] = field(default_factory=dict)  # user_id → 私聊历史
+    # 公开桌边问答与回合日志分离；正常 GM 上下文不会读取此字段。
+    table_talk: list[TableTalkExchange] = field(default_factory=list)
 
     # 场景
     scene: str = ""
@@ -493,6 +496,12 @@ class GameInstance:
 
     def append_private_message(self, uid: str, message: dict) -> None:
         self.private_log.setdefault(uid, []).append(message)
+
+    def append_table_talk(self, exchange: TableTalkExchange, *, limit: int = 50) -> None:
+        """Append a bounded public table-talk exchange without touching turn state."""
+        self.table_talk.append(exchange)
+        if len(self.table_talk) > limit:
+            del self.table_talk[:-limit]
 
     def add_gm_directive(self, directive: dict) -> None:
         self.gm_directives.append(directive)
@@ -1081,6 +1090,7 @@ class GameInstance:
             self.pending_payments.clear()
             self.confirmed_items.clear()
             self.private_log.clear()
+            self.table_talk.clear()
             self.last_check = None
             self.last_checks.clear()
             self.round_checks_prepared = False
@@ -1183,6 +1193,7 @@ class GameInstance:
             "gm_directives": self.gm_directives,
             "confirmed_items": self.confirmed_items,
             "private_log": self.private_log,
+            "table_talk": self.table_talk,
         }
         if self.ruleset_runtime:
             data["ruleset_runtime"] = self.ruleset_runtime
@@ -1348,6 +1359,10 @@ class GameInstance:
         inst.away_players = set(data.get("away_players", []))
         inst.confirmed_items = data.get("confirmed_items", [])
         inst.private_log = data.get("private_log", {})
+        inst.table_talk = [
+            item for item in (data.get("table_talk") or [])
+            if isinstance(item, dict) and item.get("visibility") == "party"
+        ][-50:]
         puzzles_data = data.get("puzzles")
         if puzzles_data:
             from src.engine.puzzle import PuzzleManager

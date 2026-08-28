@@ -507,6 +507,18 @@ def private_log_for_user(api: "WebAPI", game_key: str, user_id: str) -> dict[str
     return {"ok": True, "messages": _private_log_messages(inst, user_id)[-50:]}
 
 
+def table_talk(api: "WebAPI", game_key: str) -> dict[str, Any]:
+    """Return the bounded public table-talk channel, separate from round logs."""
+    inst = api._reg.get(api._parse_key(game_key))
+    if not inst:
+        return {"ok": False, "error": "游戏不存在"}
+    exchanges = [
+        dict(item) for item in (inst.table_talk or [])
+        if isinstance(item, dict) and item.get("visibility") == "party"
+    ]
+    return {"ok": True, "exchanges": exchanges[-50:]}
+
+
 def _private_log_messages(inst, only_user_id: str = "") -> list[dict[str, Any]]:
     def player_name(uid: str) -> str:
         return inst.players.get(uid, {}).get("character_name") or uid

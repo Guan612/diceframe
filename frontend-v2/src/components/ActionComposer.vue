@@ -7,8 +7,8 @@ import type { ActionSubmitResponse, GameDetail } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
 import { appendDictated, asrLanguageFor, initializeAsr, useVoiceInput, voiceInputSupported } from '@/utils/asr'
 
-const props = defineProps<{ gameKey: string; userId: string; detail: GameDetail; disabled?: boolean; kpAvailable?: boolean }>()
-const emit = defineEmits<{ refresh: []; processing: [value: boolean]; askKp: [] }>()
+const props = defineProps<{ gameKey: string; userId: string; detail: GameDetail; disabled?: boolean }>()
+const emit = defineEmits<{ refresh: []; processing: [value: boolean] }>()
 const { t, locale } = useLocale()
 
 const text = ref(''), busy = ref(false), notice = ref('')
@@ -77,13 +77,6 @@ async function submit() {
       <div class="composer-title-row">
         <strong>{{ t('composerTitle') }}</strong>
         <span v-if="hint" class="composer-hint">{{ hint }}</span>
-        <button
-          v-if="kpAvailable"
-          type="button"
-          class="kp-question-trigger"
-          :title="t('kpQuestionHint')"
-          @click="emit('askKp')"
-        >{{ t('kpQuestionAction') }}</button>
       </div>
       <slot name="tools" />
     </div>
@@ -117,17 +110,6 @@ async function submit() {
 <style scoped>
 .composer-row.has-dictation {
   grid-template-columns: minmax(0, 1fr) 44px 92px;
-}
-
-.kp-question-trigger {
-  flex: 0 0 auto;
-  min-height: 28px;
-  padding: 3px 9px;
-  border-color: color-mix(in srgb, var(--df-interactive) 38%, var(--df-border-soft));
-  color: var(--df-interactive-strong);
-  background: color-mix(in srgb, var(--df-interactive) 9%, var(--df-control-bg));
-  font-size: 12px;
-  white-space: nowrap;
 }
 
 .dictation-toggle {

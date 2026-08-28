@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.game_instance import GameRegistry
@@ -603,8 +603,9 @@ class WebAPI:
         game_key: str,
         actor_uid: str,
         question: str,
+        visibility: Literal["private", "party"] = "private",
     ) -> kp_questions.KPQuestionResult:
-        return await kp_questions.ask(self, game_key, actor_uid, question)
+        return await kp_questions.ask(self, game_key, actor_uid, question, visibility)
 
     async def resolve_luck_and_continue(
         self,
@@ -626,6 +627,9 @@ class WebAPI:
 
     def private_log_for_user(self, game_key: str, user_id: str) -> dict[str, Any]:
         return games.private_log_for_user(self, game_key, user_id)
+
+    def table_talk(self, game_key: str) -> dict[str, Any]:
+        return games.table_talk(self, game_key)
 
     def game_health(self, game_key: str, include_resolved: bool = False) -> dict[str, Any]:
         return games.game_health(self, game_key, include_resolved)

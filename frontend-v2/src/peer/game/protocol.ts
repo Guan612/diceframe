@@ -6,6 +6,7 @@ export type PeerGameOperation =
   | 'game.characters'
   | 'game.log'
   | 'game.private_log'
+  | 'game.table_talk'
   | 'game.map'
   | 'game.player_context'
   | 'player.create'
@@ -24,6 +25,7 @@ const GAME_OPERATIONS = new Set<PeerGameOperation>([
   'game.characters',
   'game.log',
   'game.private_log',
+  'game.table_talk',
   'game.map',
   'game.player_context',
   'player.create',

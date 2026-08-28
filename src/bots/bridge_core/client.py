@@ -97,7 +97,9 @@ class DiceFrameClient:
             "POST",
             f"/api/games/{quote(game_key, safe='')}/kp-question",
             actor=actor,
-            json={"question": question},
+            # Bot questions are asked in a group channel, so the answer must be
+            # generated from party-safe context and recorded for every player.
+            json={"question": question, "visibility": "party"},
         )
 
     async def advance(self, game_key: str, actor: str, *, force: bool = True) -> dict[str, Any]:

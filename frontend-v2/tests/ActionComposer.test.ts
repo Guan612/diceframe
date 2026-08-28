@@ -100,21 +100,4 @@ describe('ActionComposer rollback refresh', () => {
     expect(wrapper.find('.dice-result').exists()).toBe(false)
   })
 
-  it('exposes table talk as a separate event without submitting an action', async () => {
-    const wrapper = mount(ActionComposer, {
-      global: { plugins: [i18n] },
-      props: {
-        gameKey: 'web|room|bot',
-        userId: 'player-1',
-        detail: detail(false),
-        kpAvailable: true,
-      },
-    })
-
-    await wrapper.get('.kp-question-trigger').trigger('click')
-
-    expect(wrapper.emitted('askKp')).toHaveLength(1)
-    expect(mockedApi).not.toHaveBeenCalled()
-  })
-
 })

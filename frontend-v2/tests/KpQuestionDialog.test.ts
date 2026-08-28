@@ -31,6 +31,7 @@ describe('KpQuestionDialog', () => {
       advanced: false,
       action_consumed: false,
       round_number: 3,
+      visibility: 'private',
     })
     const wrapper = mount(KpQuestionDialog, {
       attachTo: document.body,
@@ -44,10 +45,33 @@ describe('KpQuestionDialog', () => {
 
     expect(mockedApi).toHaveBeenCalledWith('/games/web%7Croom%7Cbot/kp-question', {
       method: 'POST',
-      body: JSON.stringify({ question: '我认识这个符号吗？' }),
+      body: JSON.stringify({ question: '我认识这个符号吗？', visibility: 'private' }),
     })
     expect(document.body.textContent).toContain('你曾在学院的旧手稿中见过相似符号。')
     expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('explicitly asks with party-safe visibility and emits a refresh signal', async () => {
+    mockedApi.mockResolvedValue({
+      ok: true, kind: 'kp_table_talk', answer: '全队都见过这个标志。',
+      advanced: false, action_consumed: false, round_number: 3, visibility: 'party',
+    })
+    const wrapper = mount(KpQuestionDialog, {
+      attachTo: document.body,
+      global: { plugins: [i18n], stubs: { Teleport: true } },
+      props: { gameKey: 'web|room|bot' },
+    })
+
+    await wrapper.get('textarea').setValue('大家都认识这个标志吗？')
+    await wrapper.get('.kp-question-visibility input').setValue(true)
+    await wrapper.get('button.primary').trigger('click')
+    await flushPromises()
+
+    expect(JSON.parse(String(mockedApi.mock.calls[0]?.[1]?.body))).toEqual({
+      question: '大家都认识这个标志吗？', visibility: 'party',
+    })
+    expect(wrapper.emitted('shared')).toHaveLength(1)
     wrapper.unmount()
   })
 })

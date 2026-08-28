@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Literal
 
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.llm.client import LLMClient
@@ -214,9 +215,10 @@ class GameHandler:
         instance: GameInstance,
         actor_uid: str,
         question: str,
+        visibility: Literal["private", "party"] = "private",
     ) -> dict:
         """Answer table talk without entering the action or round pipeline."""
-        return await self._kp_questions.answer(instance, actor_uid, question)
+        return await self._kp_questions.answer(instance, actor_uid, question, visibility)
 
     # ---- 重置游戏 ----
 

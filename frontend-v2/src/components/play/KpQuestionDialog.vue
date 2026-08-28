@@ -6,13 +6,14 @@ import { useLocale } from '@/composables/useLocale'
 import Modal from '@/components/ui/Modal.vue'
 
 const props = defineProps<{ gameKey: string }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; shared: [] }>()
 const { t } = useLocale()
 
 const question = ref('')
 const answer = ref('')
 const error = ref('')
 const busy = ref(false)
+const shareWithParty = ref(false)
 
 async function submit(): Promise<void> {
   const text = question.value.trim()
@@ -23,9 +24,16 @@ async function submit(): Promise<void> {
   try {
     const response = await api<KpQuestionResponse>(
       `/games/${encodeURIComponent(props.gameKey)}/kp-question`,
-      { method: 'POST', body: JSON.stringify({ question: text }) },
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          question: text,
+          visibility: shareWithParty.value ? 'party' : 'private',
+        }),
+      },
     )
     answer.value = response.answer
+    if (response.visibility === 'party') emit('shared')
   } catch (cause: unknown) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -47,6 +55,13 @@ async function submit(): Promise<void> {
         autofocus
         @keydown.ctrl.enter.prevent="submit"
       />
+    </label>
+    <label class="kp-question-visibility">
+      <input v-model="shareWithParty" type="checkbox" :disabled="busy" />
+      <span>
+        <strong>{{ t('kpQuestionShare') }}</strong>
+        <small>{{ shareWithParty ? t('kpQuestionPartyBoundary') : t('kpQuestionPrivateBoundary') }}</small>
+      </span>
     </label>
     <div v-if="answer" class="kp-question-answer" aria-live="polite">
       <strong>{{ t('kpQuestionAnswer') }}</strong>
@@ -78,6 +93,21 @@ async function submit(): Promise<void> {
   display: grid;
   gap: 7px;
 }
+
+.kp-question-visibility {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 10px 11px;
+  border-radius: var(--df-radius-md);
+  background: var(--df-surface-raised);
+  cursor: pointer;
+}
+
+.kp-question-visibility input { margin-top: 3px; }
+.kp-question-visibility span { display: grid; gap: 2px; }
+.kp-question-visibility small { color: var(--df-text-secondary); line-height: 1.5; }
 
 .kp-question-field > span,
 .kp-question-answer > strong {

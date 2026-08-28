@@ -34,6 +34,7 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'game.characters': [],
   'game.log': ['page', 'per_page'],
   'game.private_log': [],
+  'game.table_talk': [],
   'game.map': [],
   'game.player_context': [],
   'player.create': [
@@ -43,7 +44,7 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'player.rebind': ['user_id'],
   'player.away': ['away'],
   'action.submit': ['text', 'selected_attribute', 'selected_skill', 'target_text'],
-  'kp.question': ['question'],
+  'kp.question': ['question', 'visibility'],
   'ruleset.actions': [],
   'ruleset.intent': [
     'intent_id', 'type', 'expected_version', 'actor_id', 'target_id', 'target_ids',
@@ -102,8 +103,12 @@ export class PeerHostGameBridge {
   ): Promise<Record<string, unknown>> {
     await this.admit(peerId)
     try {
-      const result = await this.dispatch(peerId, operation, sanitizePayload(operation, payload))
-      if (MUTATING_OPERATIONS.has(operation)) this.onMutation()
+      const sanitized = sanitizePayload(operation, payload)
+      const result = await this.dispatch(peerId, operation, sanitized)
+      if (
+        MUTATING_OPERATIONS.has(operation)
+        || (operation === 'kp.question' && sanitized.visibility === 'party')
+      ) this.onMutation()
       return result
     } finally {
       this.release(peerId)
@@ -219,6 +224,7 @@ export class PeerHostGameBridge {
     }
     if (!actorId) throw new Error('player_identity_required')
     if (operation === 'game.private_log') return read('/private-log')
+    if (operation === 'game.table_talk') return read('/table-talk')
     if (operation === 'game.map') return read('/map')
     if (operation === 'player.away') {
       return write(`/players/${encodeURIComponent(actorId)}/away`, {
@@ -311,6 +317,7 @@ export class PeerRemoteGameClient {
       operation = 'game.log'
       payload = Object.fromEntries(parsed.query)
     } else if (method === 'GET' && parsed.tail === '/private-log') operation = 'game.private_log'
+    else if (method === 'GET' && parsed.tail === '/table-talk') operation = 'game.table_talk'
     else if (method === 'GET' && parsed.tail === '/map') operation = 'game.map'
     else if (method === 'GET' && parsed.tail === '/player-context') operation = 'game.player_context'
     else if (method === 'POST' && parsed.tail === '/players') operation = 'player.create'
