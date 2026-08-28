@@ -52,6 +52,36 @@ test('phone shell uses a compact header and fixed bottom navigation', async ({ p
   expect(Math.abs(layout.viewportWidth - layout.bottomRight)).toBeLessThanOrEqual(1)
 })
 
+test('phone security setup stacks ACME guidance above the action button', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/settings?section=security')
+
+  const actions = page.locator('.security-acme-actions')
+  const hint = actions.locator('small')
+  const button = actions.getByRole('button', { name: '申请并启用' })
+  await expect(actions).toBeVisible()
+  await expect(hint).toContainText('填写完成后点击“申请并启用”')
+  await expect(page.getByText(/证书签发和自动续期都要求公网 TCP 80 可访问/)).toBeVisible()
+  await expect(button).toBeVisible()
+
+  const layout = await actions.evaluate(element => {
+    const hint = element.querySelector<HTMLElement>('small')!.getBoundingClientRect()
+    const button = element.querySelector<HTMLElement>('button')!.getBoundingClientRect()
+    const bounds = element.getBoundingClientRect()
+    return {
+      flexDirection: getComputedStyle(element).flexDirection,
+      hintBottom: hint.bottom,
+      buttonTop: button.top,
+      buttonWidth: button.width,
+      containerWidth: bounds.width,
+    }
+  })
+
+  expect(layout.flexDirection).toBe('column')
+  expect(layout.hintBottom).toBeLessThanOrEqual(layout.buttonTop)
+  expect(Math.abs(layout.containerWidth - layout.buttonWidth)).toBeLessThanOrEqual(1)
+})
+
 test('long admin pages keep the workspace background through all content', async ({ page }) => {
   const token = accessToken()
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)

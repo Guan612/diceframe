@@ -72,4 +72,16 @@ describe('settings section links', () => {
     expect(polishCss).toMatch(/\.about-links\s*\{[\s\S]*?grid-template-columns: repeat\(4, minmax\(0, 1fr\)\);/)
     expect(responsiveCss).toMatch(/\.about-detail-grid,\s+\.about-links\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\);/)
   })
+
+  it('stacks ACME guidance above its action on phones', () => {
+    const statusCss = source('../src/styles/v2/settings-status.css')
+    expect(statusCss).toMatch(/@media \(max-width: 560px\)[\s\S]*?\.security-pane \.security-acme-actions\s*\{[\s\S]*?flex-direction: column;/)
+    expect(statusCss).toMatch(/\.security-pane \.security-acme-actions small\s*\{[\s\S]*?margin-right: 0;/)
+  })
+
+  it('warns about self-signed mobile access and public port 80', () => {
+    const zhMessages = source('../src/i18n/messages/zh-CN.ts')
+    expect(zhMessages).toContain('移动端 App 当前无法连接使用自签名证书的服务器')
+    expect(zhMessages).toContain('证书签发和自动续期都要求公网 TCP 80 可访问')
+  })
 })
