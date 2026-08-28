@@ -515,7 +515,19 @@
 
   .security-pane .security-mode-actions,
   .security-pane .security-acme-actions {
-    justify-content: stretch;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .security-pane .security-acme-actions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .security-pane .security-acme-actions small {
+    width: 100%;
+    margin-right: 0;
   }
 
   .security-pane .security-mode-actions .n-button,
