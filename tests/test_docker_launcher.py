@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import stat
 import zipfile
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -124,6 +125,62 @@ def test_launcher_seed_checksum_is_bound_to_container_filename(tmp_path):
 
     assert manifest["version"] == "2.4.0"
     assert seed_dir.is_dir()
+
+
+def test_launcher_health_uses_manifest_path_and_normalizes_version(monkeypatch, tmp_path):
+    archive = _archive(tmp_path, "2.4.0")
+    checksum = tmp_path / "update.sha256"
+    checksum.write_text(
+        f"{contracts.file_sha256(archive)}  {archive.name}\n", encoding="utf-8",
+    )
+    launcher = DockerLauncher(tmp_path / "runtime", archive, checksum)
+    launcher.child = SimpleNamespace(poll=lambda: None)
+    requested: list[str] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok": true, "version": "v2.4.0"}'
+
+    def fake_urlopen(requested_url, timeout):
+        requested.append(requested_url)
+        assert timeout == 2
+        return Response()
+
+    monkeypatch.setattr("src.docker_launcher.launcher.urllib.request.urlopen", fake_urlopen)
+
+    assert launcher._health("2.4.0", "/custom/health") is True
+    assert requested == ["http://127.0.0.1:9876/custom/health"]
+
+
+def test_launcher_probation_tolerates_a_transient_probe_failure(monkeypatch, tmp_path):
+    archive = _archive(tmp_path, "2.4.0")
+    checksum = tmp_path / "update.sha256"
+    checksum.write_text(
+        f"{contracts.file_sha256(archive)}  {archive.name}\n", encoding="utf-8",
+    )
+    launcher = DockerLauncher(
+        tmp_path / "runtime", archive, checksum,
+        startup_timeout=9, poll_interval=0.5,
+    )
+    candidate = _package_tree(launcher.versions_dir, "2.4.0", probation=3)
+    launcher.child = SimpleNamespace(poll=lambda: None)
+    clock = [0.0]
+    results = iter([True, False, True, True, True, True, True])
+
+    monkeypatch.setattr("src.docker_launcher.launcher.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "src.docker_launcher.launcher.time.sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    monkeypatch.setattr(launcher, "_health", lambda *_args: next(results, True))
+
+    assert launcher._wait_healthy(candidate) is True
 
 
 def test_launcher_commits_healthy_candidate_and_rolls_back_failed_one(tmp_path, monkeypatch):

@@ -14,6 +14,11 @@ using System.Threading;
 internal static class DiceFrameLauncher
 {
     private const string DefaultPort = "18000";
+    private const int ReadyTimeoutSeconds = 60;
+    private const int ProbationDefaultSeconds = 90;
+    private const int ProbationMinSeconds = 10;
+    private const int ProbationMaxSeconds = 600;
+    private const int ProbationFailureGraceSeconds = 20;
     private static Process serverProcess;
     private static bool shuttingDown;
     // 本机 DiceFrame endpoint 解析结果：数据目录 + 端口 → scheme 与自签指纹。
@@ -80,7 +85,7 @@ internal static class DiceFrameLauncher
             return Fail("DiceFrame failed to start: " + ex.Message);
         }
 
-        if (WaitForServer(serverProcess, url, TimeSpan.FromSeconds(30)))
+        if (WaitForServer(serverProcess, url, TimeSpan.FromSeconds(ReadyTimeoutSeconds)))
         {
             OpenBrowser(url);
             Console.WriteLine("DiceFrame is running. Close this window to stop it.");
@@ -151,8 +156,11 @@ internal static class DiceFrameLauncher
         string version = JsonString(signal, "expected_version");
         string candidateDir = JsonString(signal, "candidate_dir");
         string launcherPath = JsonString(signal, "launcher_path");
-        int probationSeconds = JsonInt(signal, "probation_seconds", 60);
-        probationSeconds = Math.Max(5, Math.Min(probationSeconds, 300));
+        int probationSeconds = JsonInt(signal, "probation_seconds", ProbationDefaultSeconds);
+        probationSeconds = Math.Max(
+            ProbationMinSeconds,
+            Math.Min(probationSeconds, ProbationMaxSeconds)
+        );
 
         string validationError = ValidateCandidate(
             installRoot,
@@ -182,7 +190,7 @@ internal static class DiceFrameLauncher
                 candidateProcess,
                 url,
                 version,
-                TimeSpan.FromSeconds(30)
+                TimeSpan.FromSeconds(ReadyTimeoutSeconds)
             ))
             {
                 failure = candidateProcess.HasExited
@@ -236,7 +244,7 @@ internal static class DiceFrameLauncher
         {
             serverProcess = StartServer(installRoot, previousDir, dataDir);
             url = ResolveServerEndpoint().Url;
-            if (!WaitForServer(serverProcess, url, TimeSpan.FromSeconds(30)))
+            if (!WaitForServer(serverProcess, url, TimeSpan.FromSeconds(ReadyTimeoutSeconds)))
             {
                 WriteUpdateState(
                     updaterDir,
@@ -554,6 +562,8 @@ internal static class DiceFrameLauncher
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(seconds);
         DateTime nextHealthCheck = DateTime.MinValue;
+        DateTime failureStarted = DateTime.MinValue;
+        TimeSpan failureGrace = TimeSpan.FromSeconds(ProbationFailureGraceSeconds);
         while (DateTime.UtcNow < deadline)
         {
             if (process == null || process.HasExited)
@@ -562,9 +572,20 @@ internal static class DiceFrameLauncher
             }
             if (DateTime.UtcNow >= nextHealthCheck)
             {
-                if (!IsHealthyVersion(url, version))
+                if (IsHealthyVersion(url, version))
                 {
-                    return false;
+                    failureStarted = DateTime.MinValue;
+                }
+                else
+                {
+                    if (failureStarted == DateTime.MinValue)
+                    {
+                        failureStarted = DateTime.UtcNow;
+                    }
+                    else if (DateTime.UtcNow - failureStarted >= failureGrace)
+                    {
+                        return false;
+                    }
                 }
                 nextHealthCheck = DateTime.UtcNow.AddSeconds(2);
             }
