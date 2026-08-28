@@ -118,6 +118,15 @@ def test_story_recap_is_counted_as_an_ai_request():
     assert _is_ai_request(request) is True
 
 
+def test_kp_question_is_counted_as_an_ai_request():
+    request = type("Request", (), {
+        "path": "/api/games/room/kp-question",
+        "method": "POST",
+    })()
+
+    assert _is_ai_request(request) is True
+
+
 def test_server_speech_is_counted_as_an_ai_request():
     request = type("Request", (), {
         "path": "/api/games/room/speech",

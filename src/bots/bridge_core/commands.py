@@ -103,6 +103,26 @@ def advance_force(text: str) -> bool:
     return normalized not in {"尝试推进", "普通推进", "advance"}
 
 
+def kp_question(text: str) -> str | None:
+    """Return the table-talk question, or ``None`` when this is a normal action.
+
+    A separator is required so ordinary in-character actions such as ``询问守卫``
+    keep their existing meaning. ``询问 守卫是谁`` and ``询问：守卫是谁`` are
+    explicit out-of-character GM questions.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.lower() in {"询问", "ask", "ask kp"}:
+        return ""
+    match = re.match(
+        r"^(?:询问|ask(?:\s+kp)?)(?:\s+|[:：]\s*)(.+)$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else None
+
+
 def luck_decision(text: str) -> bool | None:
     """识别是否使用幸运；True=使用，False=保留失败。"""
     normalized = re.sub(r"\s+", "", str(text or "").strip().lower())

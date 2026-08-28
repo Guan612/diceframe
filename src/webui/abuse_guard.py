@@ -37,6 +37,7 @@ _AI_EXACT_PATHS = frozenset({
 })
 _AI_GAME_SUFFIXES = (
     "/action",
+    "/kp-question",
     "/advance",
     "/luck",
     "/stream-action",

@@ -487,6 +487,37 @@ async def api_action(request: web.Request) -> web.Response:
         return web.json_response({"narration": "处理请求时出错，请查看服务器日志", "advanced": False, "phase": "error"})
 
 
+async def api_kp_question(request: web.Request) -> web.Response:
+    """Answer player table talk without submitting an action or broadcasting a turn."""
+    api = _get_api(request)
+    game_key = request.match_info["game_key"]
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    question = str(body.get("question", "") or "").strip()
+    if len(question) > MAX_ACTION_CHARS:
+        return web.json_response({
+            "ok": False,
+            "code": "QUESTION_TOO_LONG",
+            "error": f"问题过长（上限 {MAX_ACTION_CHARS} 字）",
+        }, status=400)
+    if request.get("player_preview", False) and not request.get("player_delegate", False):
+        return web.json_response({
+            "ok": False,
+            "code": "PREVIEW_MODE_FORBIDDEN",
+            "error": "当前是房主预览模式，请先开启允许代操作",
+        }, status=403)
+    result = await api.ask_kp_question(
+        game_key,
+        str(request.get("user_id", "") or ""),
+        question,
+    )
+    return web.json_response(result["payload"], status=result["status"])
+
+
 def _ruleset_gameplay_status(result: dict) -> int:
     if result.get("ok"):
         return 200
@@ -1140,6 +1171,7 @@ def register_games(app: web.Application) -> None:
     app.router.add_post("/api/games/create-from-seed", api_create_from_seed)
     app.router.add_post("/api/games/batch-delete", api_batch_delete_games)
     app.router.add_post("/api/games/{game_key}/action", api_action)
+    app.router.add_post("/api/games/{game_key}/kp-question", api_kp_question)
     app.router.add_get("/api/games/{game_key}/available-actions", api_ruleset_available_actions)
     app.router.add_post("/api/games/{game_key}/intents", api_ruleset_submit_intent)
     app.router.add_post(

@@ -14,6 +14,7 @@ from src.commands.combat_resolver import CombatResolver
 from src.commands.dice_resolver import DiceResolver
 from src.commands.game_factory import GameFactory
 from src.commands.game_lifecycle import GameLifecycle
+from src.commands.kp_questions import KPQuestionResponder
 from src.commands.progression_resolver import ProgressionResolver
 from src.commands.prompt_composer import PromptComposer
 from src.commands.puzzle_processor import PuzzleProcessor
@@ -116,6 +117,14 @@ class GameHandler:
             brief_max_tokens,
         )
         self._story_recap = StoryRecapGenerator(self.llm_client, brief_max_tokens)
+        self._kp_questions = KPQuestionResponder(
+            self.llm_client,
+            self.matcher,
+            self._prompt,
+            self._load_world_template,
+            self._ensure_matcher_for_world,
+            max_tokens=min(768, max(128, brief_max_tokens)),
+        )
         self.narrative_max_tokens = narrative_max_tokens
         self.summary_max_tokens = summary_max_tokens
         self.brief_max_tokens = brief_max_tokens
@@ -199,6 +208,15 @@ class GameHandler:
     async def generate_story_recap(self, instance: GameInstance) -> dict:
         """Generate a public recap card from completed round logs."""
         return await self._story_recap.generate(instance)
+
+    async def answer_kp_question(
+        self,
+        instance: GameInstance,
+        actor_uid: str,
+        question: str,
+    ) -> dict:
+        """Answer table talk without entering the action or round pipeline."""
+        return await self._kp_questions.answer(instance, actor_uid, question)
 
     # ---- 重置游戏 ----
 

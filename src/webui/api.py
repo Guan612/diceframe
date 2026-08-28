@@ -19,7 +19,7 @@ from src.rules.loader import RuleBundleLoader
 from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, kp_questions, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -594,6 +594,14 @@ class WebAPI:
 
     async def submit_action(self, game_key: str, actor_uid: str, text: str, **kwargs) -> turns.TurnResult:
         return await turns.submit_action(self, game_key, actor_uid, text, **kwargs)
+
+    async def ask_kp_question(
+        self,
+        game_key: str,
+        actor_uid: str,
+        question: str,
+    ) -> kp_questions.KPQuestionResult:
+        return await kp_questions.ask(self, game_key, actor_uid, question)
 
     async def resolve_luck_and_continue(
         self,

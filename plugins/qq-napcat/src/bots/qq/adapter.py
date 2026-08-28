@@ -23,6 +23,7 @@ from src.bots.bridge_core.commands import (
     is_private_log,
     is_recap,
     is_return,
+    kp_question,
     luck_decision,
     luck_index,
     payment_decision,
@@ -94,6 +95,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
     _is_map = staticmethod(is_map)
     _is_away = staticmethod(is_away)
     _is_return = staticmethod(is_return)
+    _kp_question = staticmethod(kp_question)
     _away_target_query = staticmethod(away_target_query)
     _is_advance = staticmethod(is_advance)
     _advance_force = staticmethod(advance_force)
@@ -447,7 +449,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                         "Next: players send “@me join Character Name”.",
                         f"Available: {self._roster_names({'roster': result.get('players', [])}, language)}",
                         "Start playing: @me I inspect the area.",
-                        "Common: @me status / recap / map / help",
+                        "Common: @me ask <question> / status / recap / map / help",
                     ],
                     fallback=self._bind_success_text(result, language=language),
                     link_text=self._link_text("Web page", link, language),
@@ -462,7 +464,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                     "下一步：玩家发送“@我 加入 角色名”。",
                     f"可认领：{self._roster_names({'roster': result.get('players', [])})}",
                     "开始玩：@我 我调查四周。",
-                    "常用：@我 状态 / @我 前情 / @我 地图 / @我 帮助",
+                    "常用：@我 询问 <问题> / @我 状态 / @我 前情 / @我 地图 / @我 帮助",
                 ],
                 fallback=self._bind_success_text(result),
                 link_text=self._link_text("网页入口", link),
@@ -514,6 +516,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                         "Catch up: @me recap",
                         "Map: @me map",
                         "2. Act: @me I inspect the area",
+                        "Table talk without acting: @me ask <question>",
                         "3. Checks are adjudicated and rolled automatically after everyone acts",
                         "GM: @me advance",
                         "Step away: @me away; return: @me back",
@@ -535,6 +538,7 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
                     "补前情：@我 前情",
                     "看地图：@我 地图",
                     "2. 描述行动：@我 我观察四周",
+                    "桌外问 KP（不耗行动）：@我 询问 <问题>",
                     "3. 全员行动齐后，系统自动判断检定并掷骰",
                     "GM 推进：@我 推进 / @我 下一轮",
                     "临时离开：@我 暂离；回来：@我 回来",
@@ -553,6 +557,10 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
             return
         actor = player["user_id"]
         game_key = group["game_key"]
+        question = self._kp_question(text)
+        if question is not None:
+            await self._ask_kp_group(group_id, game_key, actor, question)
+            return
         payment_decision = self._payment_decision(text)
 
         if text.lower() in {"加点", "属性", "attributes", "stats"}:
@@ -607,6 +615,33 @@ class QQTRPGAdapter(QQDeliveryMixin, QQWebSyncMixin, QQCharacterFlowMixin, QQGam
             await self._send_action_result(group_id, game_key, actor, result)
         finally:
             self._group_action_inflight[game_key] = False
+
+    async def _ask_kp_group(
+        self,
+        group_id: str,
+        game_key: str,
+        actor: str,
+        question: str,
+    ) -> None:
+        language = self._group_language(self.store.group(group_id))
+        if not question:
+            await self._send_group_text(group_id, bridge_text(
+                language,
+                "请发送：@我 询问 <问题>。这不会消耗行动或推进剧情。",
+                "Send: @me ask <question>. This does not consume an action or advance the story.",
+            ))
+            return
+        await self._send_group_text(group_id, bridge_text(
+            language,
+            "KP 正在查看当前记录…",
+            "The GM is checking the current record…",
+        ))
+        result = await self.api.ask_kp(game_key, actor, question)
+        answer = str(result.get("answer") or "").strip()
+        await self._send_group_text(
+            group_id,
+            bridge_text(language, "KP：{answer}", "GM: {answer}", answer=answer),
+        )
 
     async def _action_with_group_thinking(self, group_id: str, game_key: str, actor: str,
                                           text: str, *, confirm: bool = False) -> dict[str, Any]:

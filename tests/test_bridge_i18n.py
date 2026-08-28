@@ -11,6 +11,9 @@ from src.bots.bridge_core.store import JsonBridgeStore
 
 
 class EnglishBridgeClient:
+    def __init__(self) -> None:
+        self.questions: list[tuple[str, str, str]] = []
+
     async def bind_game(self, game_key: str, bind_token: str) -> dict:
         assert bind_token == "bind-ok"
         return {
@@ -43,11 +46,21 @@ class EnglishBridgeClient:
     async def build_join_link(self, game_key: str, user: str = "") -> str:
         return f"https://table.example/#/join?game={game_key}&user={user}"
 
+    async def ask_kp(self, game_key: str, actor: str, question: str) -> dict:
+        self.questions.append((game_key, actor, question))
+        return {
+            "ok": True,
+            "answer": "You recognize the university seal, but nothing more.",
+            "advanced": False,
+            "action_consumed": False,
+        }
+
 
 @pytest.mark.asyncio
 async def test_english_binding_persists_language_and_drives_shared_replies(tmp_path: Path):
     store = JsonBridgeStore(tmp_path / "bridge.json")
-    service = DiceFrameBridgeService(EnglishBridgeClient(), store)  # type: ignore[arg-type]
+    client = EnglishBridgeClient()
+    service = DiceFrameBridgeService(client, store)  # type: ignore[arg-type]
 
     bound = await service.handle(BridgeInput("discord-channel", "gm-platform", "/df bind game-1 bind-ok"))
 
@@ -61,6 +74,10 @@ async def test_english_binding_persists_language_and_drives_shared_replies(tmp_p
 
     joined = await service.handle(BridgeInput("discord-channel", "player-platform", "/df join Erin"))
     assert joined.replies == ["Character claimed: Erin"]
+
+    question = await service.handle(BridgeInput("discord-channel", "player-platform", "/df ask what is this seal?"))
+    assert question.replies == ["GM: You recognize the university seal, but nothing more."]
+    assert client.questions == [("game-1", "player-1", "what is this seal?")]
 
     roll_notice = await service.handle(BridgeInput("discord-channel", "player-platform", "/df roll"))
     assert "Manual roll confirmation is no longer required" in roll_notice.replies[0]
@@ -83,4 +100,5 @@ def test_english_presenters_keep_platform_neutral_command_prefix():
 
     assert "/df join Character Name" in help_text
     assert "/df advance" in help_text
+    assert "/df ask <question>" in help_text
     assert format_action_result({}, "en") == "Action recorded."
