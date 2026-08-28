@@ -44,6 +44,21 @@ jobs:
         # 不加路径参数。全量 src/ 有历史类型债，用 files 白名单渐进扩展。
         run: python -m mypy
 
+      - name: Validate Windows portable dependency lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/validate_portable_lock.py
+          python -m pip download \
+            --dest "${RUNNER_TEMP}/diceframe-portable-lock" \
+            --only-binary=:all: \
+            --platform win_amd64 \
+            --python-version 3.11 \
+            --implementation cp \
+            --abi cp311 \
+            --require-hashes \
+            -r requirements-portable.lock
+
       - name: Run backend tests
         run: python -m pytest -q
 
