@@ -75,7 +75,7 @@ async def test_english_binding_persists_language_and_drives_shared_replies(tmp_p
     joined = await service.handle(BridgeInput("discord-channel", "player-platform", "/df join Erin"))
     assert joined.replies == ["Character claimed: Erin"]
 
-    question = await service.handle(BridgeInput("discord-channel", "player-platform", "/df ask what is this seal?"))
+    question = await service.handle(BridgeInput("discord-channel", "player-platform", "/df ask kp what is this seal?"))
     assert question.replies == ["GM: You recognize the university seal, but nothing more."]
     assert client.questions == [("game-1", "player-1", "what is this seal?")]
 
@@ -100,5 +100,5 @@ def test_english_presenters_keep_platform_neutral_command_prefix():
 
     assert "/df join Character Name" in help_text
     assert "/df advance" in help_text
-    assert "/df ask <question>" in help_text
+    assert "/df ask kp <question>" in help_text
     assert format_action_result({}, "en") == "Action recorded."

@@ -73,4 +73,4 @@ def test_builtin_qq_adapter_supports_read_only_kp_questions() -> None:
     ):
         assert marker in source or marker in readme_cn, f"缺少 KP 答疑标记: {marker!r}"
     assert "@Bot 询问 <问题>" in readme_cn
-    assert "@Bot ask <question>" in readme_en
+    assert "@Bot ask kp <question>" in readme_en

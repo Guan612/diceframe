@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -56,8 +57,20 @@ async def ask(
             "error": "KP 模型尚未配置或不可用",
         }, 503)
 
+    if instance._process_lock.locked():
+        return _result({
+            "ok": False,
+            "code": "GAME_PROCESSING",
+            "error": "游戏正在推进，请稍后再问",
+        }, 409)
+
+    # Capture one coherent, immutable view while holding the per-game lock.
+    # The model request runs after releasing it so Q&A never blocks a round.
+    async with instance._process_lock:
+        snapshot = instance.__class__.from_dict(copy.deepcopy(instance.to_dict()))
+
     try:
-        generated = await answerer(instance, actor_uid, question)
+        generated = await answerer(snapshot, actor_uid, question)
     except Exception:
         logger.exception("KP 桌外询问生成失败: game=%s actor=%s", game_key, actor_uid)
         return _result({
@@ -79,7 +92,7 @@ async def ask(
         "answer": answer,
         "advanced": False,
         "action_consumed": False,
-        "round_number": instance.round_number,
+        "round_number": snapshot.round_number,
         "provider_used": str((generated or {}).get("provider_used") or ""),
         "total_tokens": int((generated or {}).get("total_tokens", 0) or 0),
     })

@@ -24,7 +24,7 @@ Common commands:
 - `@Bot create character`: send character-creation guidance and the creation entry point in the group.
 - `@Bot AI character`: when AI-assisted creation is enabled, collect a description in direct messages, generate a draft for confirmation, then post the public draft to the group.
 - `@Bot join CharacterName`: claim an existing Web character.
-- `@Bot ask <question>`: ask the GM an out-of-character table-talk question. The answer uses the public story, current rules, and information the claimed character legitimately knows; it does not submit an action, advance the story, trigger a check, or consume the turn's action.
+- `@Bot ask kp <question>` or `@Bot ask: <question>`: ask the GM an out-of-character table-talk question. The answer uses the public story, current rules, and information the claimed character legitimately knows; it does not submit an action, advance the story, trigger a check, or consume the turn's action. Plain `ask <character> ...` remains an in-character action.
 - `@Bot recap`: show the public recap and recent turns.
 - `@Bot map`: show the current scene and known lorebook location links.
 - `@Bot status`: show the claimed character's HP, gold, inventory, and related summary.

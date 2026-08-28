@@ -106,21 +106,36 @@ def advance_force(text: str) -> bool:
 def kp_question(text: str) -> str | None:
     """Return the table-talk question, or ``None`` when this is a normal action.
 
-    A separator is required so ordinary in-character actions such as ``询问守卫``
-    keep their existing meaning. ``询问 守卫是谁`` and ``询问：守卫是谁`` are
-    explicit out-of-character GM questions.
+    Chinese accepts ``询问 <question>`` or ``询问: <question>``. English uses
+    the unambiguous ``ask kp <question>`` or ``ask: <question>`` forms so an
+    in-character action such as ``ask the guard ...`` remains an action.
+
+    Once an explicit command prefix is recognized, an empty remainder is
+    returned as ``""`` instead of falling back to the action pipeline.
     """
     raw = str(text or "").strip()
     if not raw:
         return None
-    if raw.lower() in {"询问", "ask", "ask kp"}:
-        return ""
-    match = re.match(
-        r"^(?:询问|ask(?:\s+kp)?)(?:\s+|[:：]\s*)(.+)$",
-        raw,
-        flags=re.IGNORECASE,
-    )
-    return match.group(1).strip() if match else None
+
+    chinese = re.match(r"^询问(?=$|\s|[:：])", raw)
+    if chinese:
+        remainder = raw[chinese.end():].lstrip()
+        if remainder.startswith((":", "：")):
+            remainder = remainder[1:].strip()
+        return remainder.strip()
+
+    ask_colon = re.match(r"^ask\s*[:：]", raw, flags=re.IGNORECASE)
+    if ask_colon:
+        return raw[ask_colon.end():].strip()
+
+    ask_kp = re.match(r"^ask\s+kp(?=$|\s|[:：])", raw, flags=re.IGNORECASE)
+    if ask_kp:
+        remainder = raw[ask_kp.end():].lstrip()
+        if remainder.startswith((":", "：")):
+            remainder = remainder[1:].strip()
+        return remainder.strip()
+
+    return None
 
 
 def luck_decision(text: str) -> bool | None:

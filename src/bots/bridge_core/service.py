@@ -425,7 +425,7 @@ class DiceFrameBridgeService:
             return bridge_text(
                 language,
                 f"请发送：{self._cmd('询问 <问题>')}。这不会消耗行动或推进剧情。",
-                f"Send: {self._cmd('ask <question>')}. This does not consume an action or advance the story.",
+                f"Send: {self._cmd('ask kp <question>')} or {self._cmd('ask: <question>')}. This does not consume an action or advance the story.",
             )
         group, game_key, actor = self._require_actor(message)
         language = self._group_language(group)

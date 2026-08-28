@@ -8,6 +8,7 @@ import pytest
 from src.bots.bridge_core.commands import kp_question
 from src.commands.kp_questions import KPQuestionResponder, build_kp_question_prompt
 from src.engine.game_instance import GameInstance
+from src.llm.context_builder import build_player_safe_context
 from src.webui.services.kp_questions import ask
 
 
@@ -39,10 +40,16 @@ def _instance() -> GameInstance:
 def test_kp_question_requires_an_explicit_separator() -> None:
     assert kp_question("询问 这个检定怎么判？") == "这个检定怎么判？"
     assert kp_question("询问：我知道教授的住址吗？") == "我知道教授的住址吗？"
-    assert kp_question("ask what can my character see?") == "what can my character see?"
+    assert kp_question("ask: what can my character see?") == "what can my character see?"
+    assert kp_question("ask kp what can my character see?") == "what can my character see?"
     assert kp_question("ask kp: is this a bonus action?") == "is this a bonus action?"
     assert kp_question("询问") == ""
+    assert kp_question("询问：") == ""
+    assert kp_question("ask:") == ""
+    assert kp_question("ask kp:") == ""
     assert kp_question("询问守卫后门在哪里") is None
+    assert kp_question("ask the guard where the cellar is") is None
+    assert kp_question("ask") is None
 
 
 class _Registry:
@@ -60,9 +67,11 @@ class _Registry:
 class _QuestionHandler:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.instances: list[GameInstance] = []
 
-    async def answer_kp_question(self, _instance, actor_uid: str, question: str) -> dict:
+    async def answer_kp_question(self, instance, actor_uid: str, question: str) -> dict:
         self.calls.append((actor_uid, question))
+        self.instances.append(instance)
         return {"answer": "你见过门上的密斯卡托尼克大学徽记。", "total_tokens": 42}
 
 
@@ -90,6 +99,7 @@ async def test_question_service_is_read_only_and_does_not_consume_action() -> No
     assert result["payload"]["action_consumed"] is False
     assert result["payload"]["round_number"] == 3
     assert api._handler.calls == [("p1", "我认识门上的徽记吗？")]
+    assert api._handler.instances[0] is not instance
     assert api._reg.save_calls == 0
     assert instance.to_dict() == before
 
@@ -109,31 +119,67 @@ async def test_question_service_requires_a_claimed_player() -> None:
     assert api._handler.calls == []
 
 
+@pytest.mark.asyncio
+async def test_question_service_rejects_while_the_game_is_processing() -> None:
+    instance = _instance()
+    api = _Api(instance)
+    await instance._process_lock.acquire()
+    try:
+        result = await ask(api, "game", "p1", "现在是什么情况？")
+    finally:
+        instance._process_lock.release()
+
+    assert result["status"] == 409
+    assert result["payload"]["code"] == "GAME_PROCESSING"
+    assert api._handler.calls == []
+
+
 class _Matcher:
     def match_with_recursive(self, question: str, **_kwargs):
         assert question == "我知道这枚徽记吗？"
         _kwargs["timed_state"]["question-only"] = {"status": "active", "remaining": 2}
-        return [{"name": "大学徽记", "content": "玩家在上一幕公开见过它。"}]
+        return [
+            {
+                "name": "大学徽记",
+                "content": "该角色在上一幕见过它。",
+                "visible_to": ["p1"],
+            },
+            {
+                "name": "地下室真相",
+                "content": "不可泄露的隐藏世界书内容。",
+                "visible_to": [],
+            },
+            {
+                "name": "另一角色的秘密",
+                "content": "只属于另一名角色。",
+                "visible_to": ["p2"],
+            },
+        ]
 
 
 class _PromptComposer:
     def __init__(self) -> None:
         self.system_prompt = ""
         self.player_message = ""
+        self.matches: list[dict] = []
+        self.actor_uid = ""
 
     def load_rule_context(self, _instance, _loader):
         return SimpleNamespace(rule_appendix="规则附录", world_data=None)
 
-    async def build_user_context(
+    async def build_player_safe_context(
         self,
         _instance,
         system_prompt,
-        _matches,
+        matches,
         player_message,
+        actor_uid,
         **_kwargs,
     ) -> str:
         self.system_prompt = system_prompt
         self.player_message = player_message
+        self.matches = matches
+        self.actor_uid = actor_uid
         return "只读上下文"
 
 
@@ -174,6 +220,9 @@ async def test_responder_uses_a_non_mutating_table_talk_prompt() -> None:
     assert "不得掷骰" in prompt.system_prompt
     assert "不得泄露隐藏世界书" in prompt.system_prompt
     assert "莱拉" in prompt.player_message
+    assert prompt.actor_uid == "p1"
+    assert [entry["name"] for entry in prompt.matches] == ["大学徽记"]
+    assert "不可泄露" not in str(prompt.matches)
     assert llm.call_args[1] == "只读上下文"
     assert llm.call_args[2]["temperature"] == 0.2
     assert instance.to_dict() == before
@@ -185,3 +234,53 @@ def test_prompt_treats_unknown_outcomes_as_future_actions() -> None:
     assert "游戏内行动" in prompt
     assert "不要替他执行或结算" in prompt
     assert "纯文本回答" in prompt
+
+
+@pytest.mark.asyncio
+async def test_player_safe_context_excludes_hidden_and_other_player_data() -> None:
+    instance = _instance()
+    instance.players["p1"]["character_sheet"].update({
+        "background": "提问者自己的秘密背景",
+        "inventory": ["提问者的银钥匙"],
+    })
+    instance.players["p2"]["character_sheet"].update({
+        "class": "不应暴露的职业",
+        "inventory": ["另一玩家的秘密道具"],
+    })
+    instance.log = [{
+        "round": 2,
+        "actions": [{"user_id": "p1", "text": "查看公开徽记"}],
+        "gm_response": "所有人都看见了大学徽记。",
+    }]
+    instance.summary = {"narrative": "队伍公开进入了旧宅。"}
+    instance.key_facts = [{"content": "旧宅正门已经锁上。"}]
+    instance.private_log = {
+        "p1": [{"round": 2, "text": "你独自闻到海水味。"}],
+        "p2": [{"round": 2, "text": "另一玩家看见了密道。"}],
+    }
+
+    context = await build_player_safe_context(
+        instance,
+        "安全系统提示",
+        [
+            {"name": "公开授权知识", "content": "角色可知", "visible_to": ["public"]},
+            {"name": "角色授权知识", "content": "只给莱拉", "visible_to": ["p1"]},
+            {"name": "隐藏知识", "content": "地下室真正藏着王冠", "visible_to": []},
+            {"name": "他人知识", "content": "另一角色的身世", "visible_to": ["p2"]},
+        ],
+        "询问地下室里有什么？",
+        "p1",
+        provider_name="test",
+    )
+
+    assert "提问者自己的秘密背景" in context
+    assert "提问者的银钥匙" in context
+    assert "另一玩家的秘密道具" not in context
+    assert "不应暴露的职业" not in context
+    assert "所有人都看见了大学徽记" in context
+    assert "你独自闻到海水味" in context
+    assert "另一玩家看见了密道" not in context
+    assert "公开授权知识" in context
+    assert "角色授权知识" in context
+    assert "地下室真正藏着王冠" not in context
+    assert "另一角色的身世" not in context

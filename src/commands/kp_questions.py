@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, localized_text
+from src.llm.context_builder import filter_player_visible_lorebook_entries
 from src.llm.parser import sanitize_narration
 
 
@@ -109,6 +110,7 @@ class KPQuestionResponder:
             # Table talk must observe those timers without changing them.
             timed_state=copy.deepcopy(instance.lorebook_timed_state),
         )
+        matches = filter_player_visible_lorebook_entries(matches, actor_uid, actor_name)
         rule_ctx = self.prompt_composer.load_rule_context(instance, self.load_world_template)
         system_prompt = build_kp_question_prompt(instance, actor_name, rule_ctx.rule_appendix)
         language = getattr(instance, "language", DEFAULT_LANGUAGE)
@@ -118,11 +120,12 @@ class KPQuestionResponder:
             "ja": f"【卓外 GM 質問】\n質問キャラクター：{actor_name}\n質問：{question}",
         })
         provider_name = self.llm_client.default if self.llm_client else ""
-        context = await self.prompt_composer.build_user_context(
+        context = await self.prompt_composer.build_player_safe_context(
             instance,
             system_prompt,
             matches,
             player_message,
+            actor_uid,
             provider_name=provider_name,
             world_data=rule_ctx.world_data,
         )
