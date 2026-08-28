@@ -35,9 +35,6 @@ dist/*
 !dist/docker-update.zip
 !dist/docker-update.sha256
 
-# 移动客户端独立构建，不进入服务端镜像
-mobile/
-
 .venv/
 venv/
 env/
