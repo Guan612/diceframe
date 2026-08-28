@@ -2267,13 +2267,18 @@ function redownloadUpdatePackage() {
                 </div>
               </div>
             </section>
-            <div v-else-if="securityStatus && securityStatus.tls_mode === 'off'" class="security-no-cert">
-              <NIcon :component="KeyOutline" />
-              <div>
-                <strong>{{ t('securityFingerprintLabel') }}</strong>
-                <small>{{ t('securityNoCertificate') }}</small>
+            <section v-else-if="securityStatus && securityStatus.tls_mode === 'off'" class="advanced-section security-certificate-placeholder">
+              <header class="advanced-section-head">
+                <NIcon :component="KeyOutline" />
+                <div><h3>{{ t('securityCertificateTitle') }}</h3><p>{{ t('securityCertificateHint') }}</p></div>
+              </header>
+              <div class="advanced-row">
+                <div>
+                  <strong>{{ t('securityFingerprintLabel') }}</strong>
+                  <small>{{ t('securityNoCertificate') }}</small>
+                </div>
               </div>
-            </div>
+            </section>
           </div>
 
           <div v-show="section === 'access'" class="settings-pane">
