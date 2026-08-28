@@ -152,6 +152,8 @@ The built-in QQ/NapCat plugin receives its DiceFrame Bot API Token automatically
 
 The Bot follows the bound game's language for help and primary operation messages, with native Chinese and English commands available.
 
+Players can ask the GM an out-of-character question with `@Bot ask kp <question>` or `@Bot ask: <question>`. Answers use only the public story, current rules, and information known to the claimed character; they do not submit an action, advance the story, trigger a check, or consume the turn's action. Plain `ask the guard ...` remains an in-character action. Chinese games use `@Bot 询问 <问题>`.
+
 The DiceFrame plugin store lets you browse and install community plugins published by their authors through GitHub Releases. Installing or updating always requires confirmation, with an additional risk warning when a plugin requests external-process access or expanded permissions. Locally or privately shared plugins can also be installed from `.dfplugin` files.
 
 DiceFrame Hub provides review information, version status, and details for the plugin store. Installed plugins and local games continue to work if Hub is temporarily unavailable. Anonymous usage statistics are disabled by default and can be managed under **Settings → Advanced → DiceFrame Hub and privacy**.
