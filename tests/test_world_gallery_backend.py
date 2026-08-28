@@ -37,6 +37,9 @@ class FakeLoreStore:
     def list_worlds(self) -> list[dict]:
         return list(self.worlds.values())
 
+    def delete_world(self, world_id: str) -> None:
+        self.worlds.pop(world_id, None)
+
 
 def make_api(tmp_path):
     return SimpleNamespace(_worlds_dir=tmp_path, _lore=FakeLoreStore(), _plugins=None)
@@ -57,6 +60,24 @@ BUILTIN_TEMPLATE = {
 
 
 # ---- clone_world_from_template ----
+
+def test_create_world_materializes_an_editable_user_template(tmp_path) -> None:
+    api = make_api(tmp_path)
+
+    result = worlds_service.create_world(api, "手动世界", "群岛与雾", "zh-CN")
+
+    assert result["ok"] is True
+    world_id = result["world_id"]
+    assert worlds_service._WORLD_TEMPLATE_ID_RE.fullmatch(world_id)
+    data = json.loads((tmp_path / f"{world_id}.json").read_text(encoding="utf-8"))
+    assert data["custom"] is True
+    assert data["world_name"] == "手动世界"
+    assert data["world_setting"] == "群岛与雾"
+    assert data["starter_lorebook"] == []
+
+    style = worlds_service.update_world_gm_style(api, world_id, {"tone": "诗意"})
+    assert style["ok"] is True
+
 
 def test_clone_creates_user_world_and_seeds_entries(tmp_path) -> None:
     api = make_api(tmp_path)
@@ -103,6 +124,33 @@ def test_clone_empty_template_id_fails(tmp_path) -> None:
     api = make_api(tmp_path)
     result = worlds_service.clone_world_from_template(api, "")
     assert result["ok"] is False
+
+
+def test_clone_rejects_noncanonical_traversal_id(tmp_path) -> None:
+    api = make_api(tmp_path)
+    outside = tmp_path.parent / "config.json"
+    outside.write_text(json.dumps(BUILTIN_TEMPLATE), encoding="utf-8")
+
+    result = worlds_service.clone_world_from_template(api, "../config")
+
+    assert result["ok"] is False
+    assert "id 不合法" in result["error"]
+    assert api._lore.list_worlds() == []
+
+
+def test_same_name_clones_get_distinct_ids_even_in_one_second(monkeypatch, tmp_path) -> None:
+    api = make_api(tmp_path)
+    write_template(tmp_path, "default_fantasy", BUILTIN_TEMPLATE)
+    monkeypatch.setattr(worlds_service.time, "time", lambda: 1_700_000_000)
+
+    first = worlds_service.clone_world_from_template(api, "default_fantasy", name="My Remix")
+    second = worlds_service.clone_world_from_template(api, "default_fantasy", name="My Remix")
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert first["world_id"] != second["world_id"]
+    assert (tmp_path / f"{first['world_id']}.json").is_file()
+    assert (tmp_path / f"{second['world_id']}.json").is_file()
 
 
 def test_clone_deprecated_template_fails(tmp_path) -> None:
@@ -177,6 +225,33 @@ def test_update_gm_style_unknown_world_fails(tmp_path) -> None:
     api = make_api(tmp_path)
     result = worlds_service.update_world_gm_style(api, "ghost", {"tone": "x"})
     assert result["ok"] is False
+
+
+def test_update_gm_style_materializes_legacy_lore_only_world(tmp_path) -> None:
+    api = make_api(tmp_path)
+    world_id = "custom_book_legacy_1700000000"
+    api._lore.create_world(world_id, "Legacy Manual World", description="Old lore", language="en")
+    api._lore.add_entry({
+        "id": "legacy_entry",
+        "world_id": world_id,
+        "name": "Old Harbor",
+        "type": "location",
+        "keywords": ["harbor"],
+        "content": "A foggy harbor.",
+    })
+
+    listed = worlds_service.list_worlds(api)["worlds"][0]
+    assert listed["gm_style"] == {
+        "tone": "", "verbosity": "normal", "custom_instructions": "",
+    }
+
+    result = worlds_service.update_world_gm_style(api, world_id, {"tone": "noir"})
+
+    assert result["ok"] is True
+    data = json.loads((tmp_path / f"{world_id}.json").read_text(encoding="utf-8"))
+    assert data["custom"] is True
+    assert data["gm_style"]["tone"] == "noir"
+    assert data["starter_lorebook"][0]["id"] == "legacy_entry"
 
 
 # ---- list_worlds 附带 gm_style ----

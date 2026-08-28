@@ -7,6 +7,8 @@ import json
 import logging
 import re
 import time
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
@@ -24,6 +26,7 @@ logger = logging.getLogger("trpg")
 _LOREBOOK_ENTRY_TYPES = {"npc", "location", "item", "event", "puzzle", "faction", "spell", "class", "other"}
 _LOREBOOK_TIERS = {"core", "background", "archived"}
 _MAX_GENERATED_LOREBOOK_CONTENT = 2000
+_WORLD_TEMPLATE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,119}$")
 _LEGACY_GAME_TEMPLATE_ID = re.compile(r"^.+_(?:copy|blank)_\d+$")
 _LEGACY_GAME_TEMPLATE_SUFFIXES = (
     "（复制世界书）",
@@ -31,6 +34,97 @@ _LEGACY_GAME_TEMPLATE_SUFFIXES = (
     " (Copied Lorebook)",
     " (Blank Lorebook)",
 )
+
+
+def _user_world_base(name: str) -> str:
+    """Build an ASCII display-derived prefix; the UUID remains the identity."""
+    return "".join(
+        ch if ch.isascii() and ch.isalnum() else "_"
+        for ch in str(name or "").lower()
+    ).strip("_")[:48] or "world"
+
+
+def _new_user_world_id(api: "WebAPI", name: str) -> str:
+    """Generate a canonical user-world identity that cannot collide by second."""
+    base = _user_world_base(name)
+    worlds_dir = api._worlds_dir
+    while True:
+        world_id = f"custom_book_{base}_{uuid.uuid4().hex}"
+        if api._lore.get_world(world_id) is not None:
+            continue
+        if worlds_dir and (worlds_dir / f"{world_id}.json").exists():
+            continue
+        return world_id
+
+
+def _template_path(
+    worlds_dir: Path,
+    template_id: str,
+    *,
+    require_canonical: bool = False,
+) -> Path | None:
+    """Resolve one template filename without allowing traversal outside its root."""
+    template_id = str(template_id or "").strip()
+    if not template_id or (require_canonical and not _WORLD_TEMPLATE_ID_RE.fullmatch(template_id)):
+        return None
+    root = worlds_dir.resolve()
+    candidate = (root / f"{template_id}.json").resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate
+
+
+def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _user_template_from_lore(api: "WebAPI", world_id: str) -> dict[str, Any] | None:
+    world = api._lore.get_world(world_id)
+    if not world:
+        return None
+    description = str(world.get("description") or "")
+    entries = api._lore.list_entries(world_id)
+    return {
+        "world_id": world_id,
+        "world_name": str(world.get("name") or world_id),
+        "custom": True,
+        "description": description,
+        "world_setting": description,
+        "starter_scene": description[:120],
+        "suggested_difficulty": "标准",
+        "language": normalize_language(str(world.get("language") or "")),
+        "default_rule": "freeform_fantasy",
+        "starter_lorebook": [
+            _entry_to_template_entry(entry)
+            for entry in entries
+            if isinstance(entry, dict)
+        ],
+    }
+
+
+def _ensure_user_world_template(api: "WebAPI", world_id: str) -> Path | None:
+    """Materialize legacy lore-only custom worlds at the editable template boundary."""
+    worlds_dir = api._worlds_dir
+    if not worlds_dir or not world_id.startswith(("custom_", "ai_")):
+        return None
+    path = _template_path(worlds_dir, world_id)
+    if path is None:
+        return None
+    if path.is_file():
+        return path if is_user_template_file(path, "worlds") else None
+    template = _user_template_from_lore(api, world_id)
+    if template is None:
+        return None
+    _write_json_atomic(path, template)
+    return path
 
 
 def list_worlds(api: "WebAPI") -> dict[str, Any]:
@@ -47,10 +141,17 @@ def create_world(api: "WebAPI", name: str, description: str = "",
     name = (name or "").strip()
     if not name:
         return {"ok": False, "error": "世界书名称不能为空"}
-    base = "".join(ch if ch.isalnum() else "_" for ch in name.lower()).strip("_") or "world"
-    world_id = f"custom_book_{base}_{int(time.time())}"
+    world_id = _new_user_world_id(api, name)
     language = normalize_language(language)
     api._lore.create_world(world_id, name, description=description or "", language=language)
+    try:
+        if _ensure_user_world_template(api, world_id) is None:
+            api._lore.delete_world(world_id)
+            return {"ok": False, "error": "自建世界模板创建失败"}
+    except OSError:
+        api._lore.delete_world(world_id)
+        logger.exception("创建自建世界模板失败: %s", world_id)
+        return {"ok": False, "error": "自建世界模板创建失败"}
     return {"ok": True, "world_id": world_id, "name": name, "language": language}
 
 
@@ -64,6 +165,8 @@ def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -
     template_id = str(template_id or "").strip()
     if not template_id:
         return {"ok": False, "error": "缺少要克隆的世界模板"}
+    if not _WORLD_TEMPLATE_ID_RE.fullmatch(template_id):
+        return {"ok": False, "error": "世界模板 id 不合法"}
     worlds_dir = api._worlds_dir
     if not worlds_dir:
         return {"ok": False, "error": "世界模板目录未配置"}
@@ -77,8 +180,7 @@ def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -
         new_name = str(source.get("world_name") or template_id).strip() + localized_text(
             language, {"en": " (Clone)", "zh-CN": "（克隆）", "ja": "（クローン）"},
         )
-    base = "".join(ch if ch.isalnum() else "_" for ch in new_name.lower()).strip("_") or "world"
-    world_id = f"custom_book_{base}_{int(time.time())}"
+    world_id = _new_user_world_id(api, new_name)
     template = {
         key: copy.deepcopy(value)
         for key, value in source.items()
@@ -89,11 +191,10 @@ def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -
     template["world_name"] = new_name
     template["custom"] = True
     template["language"] = language
-    worlds_dir.mkdir(parents=True, exist_ok=True)
-    path = worlds_dir / f"{world_id}.json"
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    path = _template_path(worlds_dir, world_id)
+    if path is None:
+        return {"ok": False, "error": "生成的世界模板 id 不合法"}
+    _write_json_atomic(path, template)
     ensure_world_from_template(api._lore, world_id, template)
     logger.info("已克隆世界模板: %s -> %s", template_id, world_id)
     return {"ok": True, "world_id": world_id, "name": new_name, "language": language}
@@ -109,8 +210,12 @@ def update_world_gm_style(api: "WebAPI", world_id: str, raw: Any) -> dict[str, A
     worlds_dir = api._worlds_dir
     if not worlds_dir:
         return {"ok": False, "error": "世界模板目录未配置"}
-    path = worlds_dir / f"{world_id}.json"
-    if not path.is_file() or not is_user_template_file(path, "worlds"):
+    try:
+        path = _ensure_user_world_template(api, world_id)
+    except OSError:
+        logger.exception("物化自建世界模板失败: %s", world_id)
+        return {"ok": False, "error": "世界模板创建失败"}
+    if path is None or not path.is_file() or not is_user_template_file(path, "worlds"):
         return {"ok": False, "error": "内置或插件世界不可修改，请先克隆为我的世界"}
     normalized = normalize_gm_style(raw)
     try:
@@ -120,9 +225,7 @@ def update_world_gm_style(api: "WebAPI", world_id: str, raw: Any) -> dict[str, A
     if not isinstance(data, dict):
         return {"ok": False, "error": "世界模板格式不正确"}
     data["gm_style"] = normalized
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    _write_json_atomic(path, data)
     return {"ok": True, "gm_style": normalized}
 
 
@@ -131,9 +234,9 @@ def _read_user_template_gm_style(api: "WebAPI", world_id: str) -> dict[str, str]
     worlds_dir = api._worlds_dir
     if not worlds_dir or not world_id:
         return None
-    path = worlds_dir / f"{world_id}.json"
-    if not path.is_file() or not is_user_template_file(path, "worlds"):
-        return None
+    path = _template_path(worlds_dir, world_id)
+    if path is None or not path.is_file() or not is_user_template_file(path, "worlds"):
+        return normalize_gm_style(None) if world_id.startswith(("custom_", "ai_")) else None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -147,7 +250,9 @@ def _load_clone_source(api: "WebAPI", template_id: str) -> dict[str, Any] | None
     """按 id 查找克隆源：优先运行时模板目录的 raw core，其次插件贡献。"""
     worlds_dir = api._worlds_dir
     if worlds_dir:
-        path = worlds_dir / f"{template_id}.json"
+        path = _template_path(worlds_dir, template_id, require_canonical=True)
+        if path is None:
+            return None
         if path.is_file():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -336,8 +441,8 @@ def _delete_user_template_file(api: "WebAPI", world_id: str) -> None:
     worlds_dir = api._worlds_dir
     if not worlds_dir:
         return
-    path = worlds_dir / f"{world_id}.json"
-    if not path.is_file() or not is_user_template_file(path, "worlds"):
+    path = _template_path(worlds_dir, world_id)
+    if path is None or not path.is_file() or not is_user_template_file(path, "worlds"):
         return
     try:
         path.unlink()
@@ -362,8 +467,8 @@ def _entry_to_template_entry(entry: dict[str, Any]) -> dict[str, Any]:
 def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
     """条目 CRUD 后把世界书当前条目回写到用户模板的 starter_lorebook。
 
-    仅对用户模板（ai_/custom_）生效；内置模板只读（启动覆盖）不回写；
-    手动建世界书（custom_book_*，无模板文件）不创建模板，保持现状。
+    仅对用户模板（ai_/custom_）生效；内置模板只读（启动覆盖）不回写。
+    旧版手动世界若尚无模板，会在首次保存 GM 风格时完成物化。
     只同步 starter_lorebook，不动 world_name/default_rule/scene_image 等元信息。
     """
     if not world_id:
@@ -371,8 +476,8 @@ def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
     worlds_dir = api._worlds_dir
     if not worlds_dir:
         return
-    path = worlds_dir / f"{world_id}.json"
-    if not path.is_file() or not is_user_template_file(path, "worlds"):
+    path = _template_path(worlds_dir, world_id)
+    if path is None or not path.is_file() or not is_user_template_file(path, "worlds"):
         return
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
