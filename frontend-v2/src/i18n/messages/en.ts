@@ -1031,7 +1031,7 @@ export const en = {
   publishedAt: 'Published',
   checkFailed: 'Check failed',
   repoNoReleaseMessage: 'No public Release in this repository.',
-  updateAvailableHelp: 'A new version is available. Keep the data/ directory before upgrading. Docker users should redeploy with the new source or image.',
+  updateAvailableHelp: 'A new version is available. Back up the complete data/ directory, then use the download and installation option for your current deployment below.',
   releaseNotes: 'Release Notes',
   checkUpdate: 'Check for Updates',
   openReleasePage: 'Open Release Page',
