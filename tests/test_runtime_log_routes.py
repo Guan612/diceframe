@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.webui.routes.system import api_clear_runtime_logs, api_runtime_log_status
+from src.webui.routes.system import api_clear_runtime_logs, api_export_runtime_logs, api_runtime_log_status
 
 
 class FakeAPI:
@@ -18,6 +18,9 @@ class FakeAPI:
     def clear_runtime_logs(self) -> dict:
         self.cleared = True
         return {"ok": True, "retention_days": 30, "file_count": 0, "total_bytes": 0}
+
+    def export_runtime_logs(self) -> tuple[bytes, int]:
+        return b"zip-content", 1
 
 
 def _payload(response) -> dict:
@@ -45,3 +48,13 @@ async def test_clear_runtime_logs_requires_explicit_confirmation():
     )
     assert confirmed.status == 200
     assert api.cleared is True
+
+
+@pytest.mark.asyncio
+async def test_export_runtime_logs_returns_download_archive():
+    response = await api_export_runtime_logs(SimpleNamespace(app={"api": FakeAPI()}))
+    assert response.status == 200
+    assert response.body == b"zip-content"
+    assert response.content_type == "application/zip"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Content-Disposition"].startswith('attachment; filename="DiceFrame-runtime-logs-')

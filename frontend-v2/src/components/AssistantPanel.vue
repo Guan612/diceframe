@@ -83,7 +83,6 @@ function ask(question: string) {
           </button>
         </div>
         <small>{{ t('assistantVersionHint') }}</small>
-        <small>{{ t('assistantLogPrivacyHint') }}</small>
       </div>
 
       <article
