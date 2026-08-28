@@ -1221,6 +1221,12 @@ export interface BotBindTokenResponse {
   [key: string]: unknown
 }
 
+export interface GmStyle {
+  tone?: string
+  verbosity?: 'brief' | 'normal' | 'detailed'
+  custom_instructions?: string
+}
+
 export interface WorldTemplateSummary {
   id?: string
   world_id?: string
@@ -1231,6 +1237,13 @@ export interface WorldTemplateSummary {
   recommended_rules?: string[]
   scene_image?: SceneImageRef
   language?: string
+  active_locale?: string
+  lorebook_count?: number
+  source?: 'builtin' | 'user' | 'plugin'
+  game_scoped?: boolean
+  plugin_id?: string
+  plugin_name?: string
+  gm_style?: GmStyle | null
   [key: string]: unknown
 }
 
@@ -1243,7 +1256,16 @@ export interface WorldSummary {
   entry_count?: number
   language?: string
   scene_image?: SceneImageRef
+  gm_style?: GmStyle | null
   [key: string]: unknown
+}
+
+export interface WorldCloneResponse {
+  ok: boolean
+  error?: string
+  world_id?: string
+  name?: string
+  language?: string
 }
 
 export interface WorldTemplatesResponse {

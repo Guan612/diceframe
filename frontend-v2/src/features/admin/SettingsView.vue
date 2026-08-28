@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
-import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, NIcon, NSpin, NProgress, NModal } from 'naive-ui'
+import { NButton, NInput, NInputNumber, NSelect, NSwitch, NTag, NIcon, NSpin, NProgress, NModal, NCollapse, NCollapseItem } from 'naive-ui'
 import {
   ServerOutline, CubeOutline, CloudDownloadOutline,
   LockClosedOutline, OptionsOutline, InformationCircleOutline, ShareSocialOutline,
@@ -255,8 +255,8 @@ const sections: SettingsSection[] = [
   { id: 'sharing', labelKey: 'settingsSectionSharing', icon: ShareSocialOutline },
   { id: 'botapi', labelKey: 'settingsSectionBotApi', icon: KeyOutline },
   { id: 'appearance', labelKey: 'settingsSectionAppearance', icon: ColorPaletteOutline },
-  { id: 'security', labelKey: 'settingsSectionSecurity', icon: ShieldCheckmarkOutline },
   { id: 'access', labelKey: 'settingsSectionAccess', icon: LockClosedOutline },
+  { id: 'security', labelKey: 'settingsSectionSecurity', icon: ShieldCheckmarkOutline },
   { id: 'advanced', labelKey: 'settingsSectionAdvanced', icon: OptionsOutline },
   { id: 'about', labelKey: 'settingsSectionAbout', icon: InformationCircleOutline },
 ]
@@ -1062,6 +1062,15 @@ async function copySecurityFingerprint() {
   if (!fingerprint) return
   await copyToClipboard(fingerprint)
   toast.success(t('securityFingerprintCopied'))
+}
+
+// HTTPS 启用后同端口换协议，旧 http:// 链接会失效；把当前地址一键复制给玩家。
+const currentOrigin = window.location.origin
+
+async function copyCurrentAddress() {
+  if (!currentOrigin) return
+  await copyToClipboard(currentOrigin)
+  toast.success(t('securityAddressCopied'))
 }
 
 // 服务以新 scheme 重启后当前 origin 会失效，轮询目标 origin 就绪再跳转。
@@ -2121,13 +2130,6 @@ function redownloadUpdatePackage() {
                   </div>
                 </article>
               </div>
-              <div class="security-guide-warning">
-                <NIcon :component="AlertCircleOutline" />
-                <div>
-                  <strong>{{ t('securityGuideWarning') }}</strong>
-                  <small>{{ t('securityGuideWarningHint') }}</small>
-                </div>
-              </div>
             </section>
             <section class="advanced-section advanced-section-wide security-connection-section">
               <header class="advanced-section-head">
@@ -2153,6 +2155,9 @@ function redownloadUpdatePackage() {
                   <small>{{ t('securityModeSelfSignedHint') }}</small>
                 </div>
                 <div class="security-mode-actions">
+                  <NTag v-if="securityStatus?.tls_mode === 'self_signed'" type="warning" size="small" round>
+                    {{ t('securityInsecureIndicator') }}
+                  </NTag>
                   <NTag v-if="securityStatus?.tls_mode === 'self_signed'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
                   <NButton
                     v-else
@@ -2165,6 +2170,44 @@ function redownloadUpdatePackage() {
                   >{{ securityStatus?.tls_mode === 'lets_encrypt' ? t('securitySwitchToLocalHttps') : t('securityEnableLocalHttps') }}</NButton>
                 </div>
               </div>
+              <NCollapse class="security-self-signed-guide" :display-directive="'show'">
+                <NCollapseItem :title="t('securitySelfSignedGuideTitle')" name="self-signed-guide">
+                  <div class="security-guide-warning">
+                    <NIcon :component="AlertCircleOutline" />
+                    <div>
+                      <strong>{{ t('securityGuideWarning') }}</strong>
+                      <small>{{ t('securityGuideWarningHint') }}</small>
+                    </div>
+                  </div>
+                  <p class="security-proxy-intro">{{ t('securityProxyIntro') }}</p>
+                  <ol class="security-proxy-steps">
+                    <li>
+                      <strong>{{ t('securityProxyStepDomain') }}</strong>
+                      <small>{{ t('securityProxyStepDomainHint') }}</small>
+                    </li>
+                    <li>
+                      <strong>{{ t('securityProxyStepCert') }}</strong>
+                      <small>{{ t('securityProxyStepCertHint') }}</small>
+                    </li>
+                    <li>
+                      <strong>{{ t('securityProxyStepProxy') }}</strong>
+                      <small>{{ t('securityProxyStepProxyHint') }}</small>
+                    </li>
+                  </ol>
+                  <div class="security-proxy-code">
+                    <code>docker run -d --name diceframe -p 127.0.0.1:9876:9876 -v ./data:/app/data ghcr.io/diceframe/diceframe:latest</code>
+                    <code>caddy reverse-proxy --from game.example.com --to 127.0.0.1:9876</code>
+                  </div>
+                  <div class="security-proxy-note">
+                    <NIcon :component="InformationCircleOutline" />
+                    <small>{{ t('securityProxyNote') }}</small>
+                  </div>
+                  <div class="security-proxy-note">
+                    <NIcon :component="ShareSocialOutline" />
+                    <small>{{ t('securityProxyTunnelNote') }}</small>
+                  </div>
+                </NCollapseItem>
+              </NCollapse>
               <div class="advanced-row security-mode-lets-encrypt">
                 <div class="security-mode-summary">
                   <div class="security-mode-copy">
@@ -2233,6 +2276,18 @@ function redownloadUpdatePackage() {
                 <NIcon :component="ShieldCheckmarkOutline" />
                 <div><h3>{{ t('securityCertificateTitle') }}</h3><p>{{ t('securityCertificateHint') }}</p></div>
               </header>
+              <div class="advanced-row security-address-row">
+                <div class="security-address-cell">
+                  <strong>{{ currentOrigin }}</strong>
+                  <small>{{ t('securityCurrentAddressHint') }}</small>
+                </div>
+                <div class="security-mode-actions">
+                  <NButton size="small" @click="copyCurrentAddress">
+                    <template #icon><NIcon :component="CopyOutline" /></template>
+                    {{ t('securityCopyAddress') }}
+                  </NButton>
+                </div>
+              </div>
               <div class="advanced-row">
                 <div><strong>{{ t('securityCertType') }}</strong><small>{{ securityStatus.tls_mode === 'lets_encrypt' ? t('securityModeLetsEncrypt') : t('securityModeSelfSigned') }}</small></div>
               </div>
@@ -2632,7 +2687,7 @@ function redownloadUpdatePackage() {
                 <a href="https://diceframe.com/docs?doc=guide" target="_blank" rel="noopener"><span>{{ t('guideDocs') }}</span><strong>diceframe.com/docs</strong></a>
                 <a href="https://github.com/diceframe/diceframe" target="_blank" rel="noopener"><span>{{ t('projectAddress') }}</span><strong>diceframe/diceframe</strong></a>
                 <a href="https://github.com/diceframe/diceframe/issues" target="_blank" rel="noopener"><span>{{ t('issueFeedback') }}</span><strong>{{ t('submitIssue') }}</strong></a>
-                <a href="https://github.com/diceframe/diceframe/blob/main/CONTRIBUTING.md" target="_blank" rel="noopener"><span>{{ t('contributingGuide') }}</span><strong>CONTRIBUTING.md</strong></a>
+                <a href="https://github.com/diceframe/diceframe-mobile/releases" target="_blank" rel="noopener"><span>{{ t('androidClient') }}</span><strong>diceframe-mobile</strong></a>
                 <a href="https://github.com/diceframe/diceframe/graphs/contributors" target="_blank" rel="noopener"><span>{{ t('contributors') }}</span><strong>{{ t('viewContributors') }}</strong></a>
                 <a href="/#/legal/terms" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalTermsTitle') }}</strong></a>
                 <a href="/#/legal/privacy" target="_blank" rel="noopener"><span>{{ t('legalDocumentLabel') }}</span><strong>{{ t('legalPrivacyTitle') }}</strong></a>

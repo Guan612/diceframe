@@ -14,6 +14,8 @@ services:
       TRPG_WEB_HOST: "0.0.0.0"
       TRPG_WEB_PORT: "9876"
       TRPG_DATA_DIR: "/app/data"
+      # The image already defaults to Asia/Shanghai; set TZ in .env to change it.
+      TZ: "${TZ:-Asia/Shanghai}"
 
       TRPG_LLM_API_KEY: "${TRPG_LLM_API_KEY:-}"
       TRPG_LLM_BASE_URL: "${TRPG_LLM_BASE_URL:-}"

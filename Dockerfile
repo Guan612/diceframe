@@ -27,6 +27,10 @@ RUN DICEFRAME_BUILD_VERSION="${VERSION}" python scripts/build_docker_update.py \
 
 FROM python:3.11-slim AS managed-runtime-base
 
+# Runtime log timestamps follow this zone; override with `docker run -e TZ=...`
+# or a TZ entry in .env for compose. Debian slim ships no tzdata, install it.
+ENV TZ=Asia/Shanghai
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TRPG_WEB_HOST=0.0.0.0 \
@@ -38,7 +42,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRPG_DOCKER_SEED_CHECKSUM=/opt/diceframe-seed/update.sha256
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends ca-certificates fonts-noto-cjk tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /app/data /app/plugins /opt/diceframe-launcher /opt/diceframe-seed
 

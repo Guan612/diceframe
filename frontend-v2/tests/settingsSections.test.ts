@@ -46,10 +46,10 @@ describe('settings section links', () => {
     expect(settingsSource).toContain("value: speechReady ? t('statusComplete') : speechPartial ? t('statusPartial') : t('statusNeedsSetup')")
   })
 
-  it('places contribution links in the About settings page', () => {
-    expect(settingsSource).toContain('https://github.com/diceframe/diceframe/blob/main/CONTRIBUTING.md')
+  it('places project and client links in the About settings page', () => {
+    expect(settingsSource).toContain('https://github.com/diceframe/diceframe-mobile/releases')
     expect(settingsSource).toContain('https://github.com/diceframe/diceframe/graphs/contributors')
-    expect(settingsSource).toContain("t('contributingGuide')")
+    expect(settingsSource).toContain("t('androidClient')")
     expect(settingsSource).toContain("t('contributors')")
   })
 
