@@ -1064,6 +1064,15 @@ async function copySecurityFingerprint() {
   toast.success(t('securityFingerprintCopied'))
 }
 
+// HTTPS 启用后同端口换协议，旧 http:// 链接会失效；把当前地址一键复制给玩家。
+const currentOrigin = window.location.origin
+
+async function copyCurrentAddress() {
+  if (!currentOrigin) return
+  await copyToClipboard(currentOrigin)
+  toast.success(t('securityAddressCopied'))
+}
+
 // 服务以新 scheme 重启后当前 origin 会失效，轮询目标 origin 就绪再跳转。
 async function waitAndNavigateToOrigin(targetOrigin: string): Promise<void> {
   const deadline = Date.now() + 30_000
@@ -2267,6 +2276,18 @@ function redownloadUpdatePackage() {
                 <NIcon :component="ShieldCheckmarkOutline" />
                 <div><h3>{{ t('securityCertificateTitle') }}</h3><p>{{ t('securityCertificateHint') }}</p></div>
               </header>
+              <div class="advanced-row security-address-row">
+                <div class="security-address-cell">
+                  <strong>{{ currentOrigin }}</strong>
+                  <small>{{ t('securityCurrentAddressHint') }}</small>
+                </div>
+                <div class="security-mode-actions">
+                  <NButton size="small" @click="copyCurrentAddress">
+                    <template #icon><NIcon :component="CopyOutline" /></template>
+                    {{ t('securityCopyAddress') }}
+                  </NButton>
+                </div>
+              </div>
               <div class="advanced-row">
                 <div><strong>{{ t('securityCertType') }}</strong><small>{{ securityStatus.tls_mode === 'lets_encrypt' ? t('securityModeLetsEncrypt') : t('securityModeSelfSigned') }}</small></div>
               </div>

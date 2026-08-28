@@ -532,6 +532,25 @@
   opacity: 0.72;
 }
 
+/* 当前访问地址行：地址醒目可复制，说明换行提示旧链接失效 */
+.security-pane .security-address-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.security-pane .security-address-cell strong {
+  color: var(--df-text-secondary);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.security-pane .security-address-cell small {
+  color: var(--df-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 /* 模式行标题与说明上下堆叠：说明文字较长时不再横向挤压 */
 .security-pane .security-mode-row > div:first-child {
   display: grid;
