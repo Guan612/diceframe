@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import functools
+import hashlib
+import http.client
 import json
 import os
+import re
 import shutil
 import signal
+import ssl
 import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -77,6 +81,94 @@ def _read_checksum(path: Path, filename: str) -> str:
     return matches[0]
 
 
+def _normalized_fingerprint(text: str) -> str:
+    """指纹文件存的是冒号分隔大写 hex；比较时统一成无分隔大写。"""
+    return re.sub(r"[:\-\s]", "", str(text or "")).upper()
+
+
+def _resolve_health_endpoint(data_dir: Path, env: dict[str, str] | None = None) -> tuple[str, str]:
+    """决定本机健康探测的 scheme 与期望的自签证书指纹。
+
+    与 Windows launcher 的 ResolveServerEndpoint 同一契约：默认 HTTP；
+    config.json 声明 self_signed 且 fingerprint.txt 存在时用 HTTPS 并按
+    指纹固定证书。指纹文件缺失说明证书从未生成（服务端会回退 HTTP），
+    保持 http。lets_encrypt 模式应用确实在说 HTTPS，探测改走 https。
+    TRPG_DOCKER_HEALTH_SCHEME 可显式覆盖（http/https），供特殊部署自救；
+    强制 https 只覆盖 scheme，self_signed 模式仍保留证书指纹固定。
+    """
+    env = env if env is not None else os.environ
+    forced = str(env.get("TRPG_DOCKER_HEALTH_SCHEME") or "").strip().lower()
+    transport = _read_json(data_dir / "config.json").get("web_transport") or {}
+    tls_mode = str(transport.get("tls_mode") or "").strip().lower() if isinstance(transport, dict) else ""
+    fingerprint = ""
+    if tls_mode == "self_signed":
+        try:
+            fingerprint = _normalized_fingerprint(
+                (data_dir / "certs" / "self-signed" / "fingerprint.txt").read_text(encoding="utf-8")
+            )
+        except OSError:
+            fingerprint = ""
+    if forced == "http":
+        return "http", ""
+    if forced == "https":
+        return "https", fingerprint
+    if tls_mode == "self_signed":
+        return ("https", fingerprint) if fingerprint else ("http", "")
+    if tls_mode == "lets_encrypt":
+        return "https", ""
+    return "http", ""
+
+
+def _chain_only_context() -> ssl.SSLContext:
+    """验证证书链但不校验主机名：回环探测对域名证书必然主机名不符。"""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    return context
+
+
+def _verify_pinned_certificate(der: bytes, expected: str) -> None:
+    actual = hashlib.sha256(der).hexdigest().upper()
+    if actual != expected:
+        raise ssl.SSLError(
+            f"健康探测证书指纹不匹配（实际 {actual[:12]}...，期望 {expected[:12]}...）"
+        )
+
+
+def _unverified_context() -> ssl.SSLContext:
+    """仅用于自签探测的载体上下文；真正的信任判定在指纹比对里。"""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """TLS 握手后按 fingerprint.txt 校验证书，替代系统信任链。"""
+
+    def __init__(self, *args: Any, fingerprint: str = "", **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._pinned_fingerprint = fingerprint
+
+    def connect(self) -> None:
+        super().connect()
+        der = self.sock.getpeercert(binary_form=True) or b""
+        _verify_pinned_certificate(der, self._pinned_fingerprint)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """把固定指纹注入本机探测连接（与 Windows launcher 同一契约）。"""
+
+    def __init__(self, fingerprint: str) -> None:
+        super().__init__(context=_unverified_context())
+        self._fingerprint = fingerprint
+
+    def https_open(self, req: urllib.request.Request) -> Any:  # type: ignore[override]
+        connection_factory = functools.partial(
+            _PinnedHTTPSConnection, fingerprint=self._fingerprint
+        )
+        return self.do_open(connection_factory, req, context=self._context)
+
+
 class DockerLauncher:
     def __init__(
         self,
@@ -89,6 +181,7 @@ class DockerLauncher:
         python: str = sys.executable,
         startup_timeout: float = 60.0,
         poll_interval: float = 0.5,
+        data_dir: Path | None = None,
     ) -> None:
         self.runtime_root = runtime_root.resolve()
         self.versions_dir = self.runtime_root / "docker-versions"
@@ -103,6 +196,11 @@ class DockerLauncher:
         self.python = python
         self.startup_timeout = startup_timeout
         self.poll_interval = poll_interval
+        # 健康探测的 scheme 由 data 目录里的 Web Transport 配置决定。
+        self.data_dir = (
+            Path(data_dir) if data_dir is not None
+            else Path(os.getenv("TRPG_DATA_DIR", "/app/data"))
+        )
         self.child: subprocess.Popen[bytes] | None = None
         self.active_dir: Path | None = None
         self.stopping = False
@@ -207,23 +305,44 @@ class DockerLauncher:
             self._last_health_error = "候选进程已退出"
             return False
         normalized_path = "/" + str(health_path or "").lstrip("/")
-        url = f"http://{self.host}:{self.port}{normalized_path}"
-        try:
-            with urllib.request.urlopen(url, timeout=2) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (OSError, ValueError, urllib.error.URLError) as exc:
-            self._last_health_error = f"{type(exc).__name__}: {exc}"
-            return False
-        reported = str(payload.get("version") or "").strip().lstrip("vV")
-        expected = str(expected_version or "").strip().lstrip("vV")
-        if not payload.get("ok"):
-            self._last_health_error = "健康接口返回 ok=false"
-            return False
-        if reported != expected:
-            self._last_health_error = f"版本不匹配（期望 {expected}，实际 {reported or '缺失'}）"
-            return False
-        self._last_health_error = ""
-        return True
+        scheme, fingerprint = _resolve_health_endpoint(self.data_dir)
+        attempts = ["https", "http"] if scheme == "https" else ["http"]
+        last_error = ""
+        for attempt_scheme in attempts:
+            url = f"{attempt_scheme}://{self.host}:{self.port}{normalized_path}"
+            try:
+                if attempt_scheme == "https":
+                    if fingerprint:
+                        opener = urllib.request.build_opener(
+                            _PinnedHTTPSHandler(fingerprint)
+                        )
+                    else:
+                        opener = urllib.request.build_opener(
+                            urllib.request.HTTPSHandler(context=_chain_only_context())
+                        )
+                    response = opener.open(url, timeout=2)
+                else:
+                    response = urllib.request.urlopen(url, timeout=2)
+                with response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except (OSError, ValueError, http.client.HTTPException) as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                continue
+            if not isinstance(payload, dict):
+                self._last_health_error = "健康接口响应不是 JSON 对象"
+                return False
+            reported = str(payload.get("version") or "").strip().lstrip("vV")
+            expected = str(expected_version or "").strip().lstrip("vV")
+            if not payload.get("ok"):
+                self._last_health_error = "健康接口返回 ok=false"
+                return False
+            if reported != expected:
+                self._last_health_error = f"版本不匹配（期望 {expected}，实际 {reported or '缺失'}）"
+                return False
+            self._last_health_error = ""
+            return True
+        self._last_health_error = last_error or "健康探测失败"
+        return False
 
     def _wait_healthy(self, directory: Path) -> bool:
         manifest = self._validate_dir(directory)

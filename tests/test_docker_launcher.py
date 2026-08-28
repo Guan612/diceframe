@@ -1,15 +1,31 @@
 from __future__ import annotations
 
+import contextlib
+import datetime
+import ipaddress
 import json
+import ssl
 import stat
+import threading
 import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import NameOID
 
 from src.docker_launcher import contracts
-from src.docker_launcher.launcher import DockerLauncher, _version_key
+from src.docker_launcher.launcher import (
+    DockerLauncher,
+    _normalized_fingerprint,
+    _resolve_health_endpoint,
+    _verify_pinned_certificate,
+    _version_key,
+)
 
 
 def _package_tree(root: Path, version: str = "2.4.0", probation: int = 0) -> Path:
@@ -237,3 +253,223 @@ def test_version_order_handles_prereleases():
     assert _version_key("2.4.0-beta.1") < _version_key("2.4.0")
     assert _version_key("2.4.0-beta.10") > _version_key("2.4.0-beta.2")
     assert _version_key("2.4.1") > _version_key("2.4.0")
+
+
+def _write_transport_config(data_dir: Path, tls_mode: str, fingerprint: str | None = None) -> None:
+    (data_dir / "certs" / "self-signed").mkdir(parents=True, exist_ok=True)
+    (data_dir / "config.json").write_text(
+        json.dumps({"web_transport": {"tls_mode": tls_mode}}), encoding="utf-8",
+    )
+    fingerprint_path = data_dir / "certs" / "self-signed" / "fingerprint.txt"
+    if fingerprint is None:
+        fingerprint_path.unlink(missing_ok=True)
+    else:
+        fingerprint_path.write_text(fingerprint, encoding="utf-8")
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        payload = json.dumps({"ok": True, "version": "v2.4.0"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_args) -> None:
+        pass
+
+
+class _QuietHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address) -> None:  # noqa: N802 - stdlib signature
+        pass  # TLS 探测打到明文端口（或反之）是这些测试的正常路径
+
+
+def _generate_self_signed() -> tuple[bytes, bytes, str]:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "diceframe-health-test")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_pem = certificate.public_bytes(serialization.Encoding.PEM)
+    key_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+    fingerprint = certificate.fingerprint(hashes.SHA256()).hex().upper()
+    return cert_pem, key_pem, fingerprint
+
+
+@contextlib.contextmanager
+def _health_server(tmp_path: Path, *, tls: bool):
+    fingerprint = ""
+    server = _QuietHTTPServer(("127.0.0.1", 0), _HealthHandler)
+    if tls:
+        cert_pem, key_pem, fingerprint = _generate_self_signed()
+        cert_file = tmp_path / "server.crt"
+        key_file = tmp_path / "server.key"
+        cert_file.write_bytes(cert_pem)
+        key_file.write_bytes(key_pem)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(str(cert_file), str(key_file))
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield SimpleNamespace(port=server.server_address[1], fingerprint=fingerprint)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _launcher_with_data(tmp_path: Path, data_dir: Path) -> DockerLauncher:
+    launcher = DockerLauncher(
+        tmp_path / "runtime", tmp_path / "seed.zip", tmp_path / "seed.sha256",
+        data_dir=data_dir,
+    )
+    launcher.child = SimpleNamespace(poll=lambda: None)
+    return launcher
+
+
+def test_resolve_health_endpoint_follows_transport_config(tmp_path):
+    data_dir = tmp_path / "data"
+
+    assert _resolve_health_endpoint(data_dir, {}) == ("http", "")
+
+    _write_transport_config(data_dir, "self_signed", fingerprint="AA:BB:CC:DD\n")
+    assert _resolve_health_endpoint(data_dir, {}) == ("https", "AABBCCDD")
+
+    _write_transport_config(data_dir, "self_signed", fingerprint=None)
+    assert _resolve_health_endpoint(data_dir, {}) == ("http", "")
+
+    _write_transport_config(data_dir, "self_signed", fingerprint="   \n")
+    assert _resolve_health_endpoint(data_dir, {}) == ("http", "")
+
+    _write_transport_config(data_dir, "lets_encrypt")
+    assert _resolve_health_endpoint(data_dir, {}) == ("https", "")
+
+    _write_transport_config(data_dir, "off")
+    assert _resolve_health_endpoint(data_dir, {}) == ("http", "")
+
+    (data_dir / "config.json").write_text(
+        json.dumps({"web_transport": "not-a-dict"}), encoding="utf-8",
+    )
+    assert _resolve_health_endpoint(data_dir, {}) == ("http", "")
+
+
+def test_resolve_health_endpoint_env_override_wins(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_transport_config(data_dir, "self_signed", fingerprint="AABB")
+    assert _resolve_health_endpoint(
+        data_dir, {"TRPG_DOCKER_HEALTH_SCHEME": "http"}
+    ) == ("http", "")
+    assert _resolve_health_endpoint(
+        data_dir, {"TRPG_DOCKER_HEALTH_SCHEME": "https"}
+    ) == ("https", "AABB")
+    assert _resolve_health_endpoint(
+        data_dir, {"TRPG_DOCKER_HEALTH_SCHEME": "ftp"}
+    ) == ("https", "AABB")
+
+
+def test_normalized_fingerprint_strips_separators():
+    assert _normalized_fingerprint("ab:cd-ef GH\n") == "ABCDEFGH"
+    assert _normalized_fingerprint("") == ""
+
+
+def test_verify_pinned_certificate_matches_and_rejects():
+    import hashlib
+
+    der = b"certificate-bytes"
+    good = hashlib.sha256(der).hexdigest().upper()
+    _verify_pinned_certificate(der, good)  # 匹配时不抛异常
+    with pytest.raises(ssl.SSLError):
+        _verify_pinned_certificate(der, "00" * 32)
+
+
+def test_launcher_health_falls_back_to_http_when_https_unreachable(monkeypatch, tmp_path):
+    from src.docker_launcher.launcher import _PinnedHTTPSHandler
+
+    data_dir = tmp_path / "data"
+    _write_transport_config(data_dir, "self_signed", fingerprint="AA" * 32)
+    launcher = _launcher_with_data(tmp_path, data_dir)
+
+    http_urls: list[str] = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok": true, "version": "2.4.0"}'
+
+    captured_handlers: list = []
+
+    def fake_build_opener(*handlers):
+        captured_handlers.extend(handlers)
+
+        def _raise(_url, timeout):
+            raise OSError("TLS nowhere")
+
+        return SimpleNamespace(open=_raise)
+
+    def fake_urlopen(url, timeout):
+        http_urls.append(url)
+        return Response()
+
+    monkeypatch.setattr("src.docker_launcher.launcher.urllib.request.build_opener", fake_build_opener)
+    monkeypatch.setattr("src.docker_launcher.launcher.urllib.request.urlopen", fake_urlopen)
+
+    assert launcher._health("2.4.0") is True
+    assert http_urls == ["http://127.0.0.1:9876/api/system/update/health"]
+    assert isinstance(captured_handlers[0], _PinnedHTTPSHandler)
+
+
+def test_launcher_health_accepts_pinned_self_signed_https(tmp_path):
+    data_dir = tmp_path / "data"
+    launcher = _launcher_with_data(tmp_path, data_dir)
+
+    with _health_server(tmp_path, tls=True) as server:
+        fingerprint = server.fingerprint
+        colon_fingerprint = ":".join(fingerprint[i:i + 2] for i in range(0, len(fingerprint), 2))
+        _write_transport_config(data_dir, "self_signed", fingerprint=colon_fingerprint + "\n")
+        assert fingerprint == _normalized_fingerprint(colon_fingerprint)
+        launcher.port = server.port
+        assert launcher._health("2.4.0") is True
+        assert launcher._last_health_error == ""
+
+
+def test_launcher_health_rejects_mismatched_fingerprint(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_transport_config(data_dir, "self_signed", fingerprint="BB" * 32)
+    launcher = _launcher_with_data(tmp_path, data_dir)
+
+    with _health_server(tmp_path, tls=True) as server:
+        launcher.port = server.port
+        assert launcher._health("2.4.0") is False
+
+
+def test_launcher_health_survives_degraded_http_fallback(tmp_path):
+    """配置声称 self_signed，但服务端证书加载失败回退 HTTP（原始 bug 场景）。"""
+    data_dir = tmp_path / "data"
+    _write_transport_config(data_dir, "self_signed", fingerprint="AA" * 32)
+    launcher = _launcher_with_data(tmp_path, data_dir)
+
+    with _health_server(tmp_path, tls=False) as server:
+        launcher.port = server.port
+        assert launcher._health("2.4.0") is True
