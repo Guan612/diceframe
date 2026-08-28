@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { NButton, NCheckbox, NCollapse, NCollapseItem, NIcon, NInput, NInputNumber, NSelect, NSwitch, NSpin, NTabPane, NTabs, NTag } from 'naive-ui'
 import { CloudDownloadOutline, RefreshOutline, TrashOutline } from '@vicons/ionicons5'
 import { useLocale } from '@/composables/useLocale'
@@ -50,6 +51,11 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useLocale()
+const pluginFileInput = ref<HTMLInputElement | null>(null)
+
+function openPluginFilePicker() {
+  pluginFileInput.value?.click()
+}
 
 function compatibleProviders(field: PluginField): AiProvider[] {
   const apiFormat = String(field.ui?.api_format || '').trim().toLowerCase()
@@ -124,16 +130,22 @@ function groupedFields(plugin: PluginInfo): PluginFieldSection[] {
         <p class="muted">{{ t('installPluginHelp') }}</p>
       </div>
       <div class="install-controls">
-        <input type="file" accept=".dfplugin" :aria-label="t('pluginZipAria')" @change="onPluginFile">
-        <NCheckbox :checked="overwriteInstall" @update:checked="(v) => emit('update:overwriteInstall', !!v)">{{ t('overwriteSameIdPlugin') }}</NCheckbox>
-        <NButton type="primary" :disabled="!installFile" :loading="busy === 'install'" @click="installPlugin">
-          <template #icon><NIcon :component="CloudDownloadOutline" /></template>
-          {{ t('install') }}
-        </NButton>
-        <NButton secondary :loading="busy === 'rescan'" @click="rescanLocalPlugins">
-          <template #icon><NIcon :component="RefreshOutline" /></template>
-          {{ t('rescanLocalPlugins') }}
-        </NButton>
+        <input ref="pluginFileInput" class="plugin-file-input" type="file" accept=".dfplugin" :aria-label="t('pluginZipAria')" @change="onPluginFile">
+        <NButton class="plugin-file-button" secondary @click="openPluginFilePicker">{{ t('chooseFile') }}</NButton>
+        <span class="plugin-file-name" :title="installFile?.name || t('pluginFileNotSelected')">
+          {{ installFile?.name || t('pluginFileNotSelected') }}
+        </span>
+        <NCheckbox class="install-overwrite" :checked="overwriteInstall" @update:checked="(v) => emit('update:overwriteInstall', !!v)">{{ t('overwriteSameIdPlugin') }}</NCheckbox>
+        <div class="install-actions">
+          <NButton type="primary" :disabled="!installFile" :loading="busy === 'install'" @click="installPlugin">
+            <template #icon><NIcon :component="CloudDownloadOutline" /></template>
+            {{ t('install') }}
+          </NButton>
+          <NButton secondary :loading="busy === 'rescan'" @click="rescanLocalPlugins">
+            <template #icon><NIcon :component="RefreshOutline" /></template>
+            {{ t('rescanLocalPlugins') }}
+          </NButton>
+        </div>
       </div>
     </section>
 
@@ -294,6 +306,54 @@ function groupedFields(plugin: PluginInfo): PluginFieldSection[] {
 
 .plugin-install p {
   margin: 4px 0 0;
+}
+
+.install-controls {
+  display: grid;
+  grid-template-columns: auto minmax(90px, 1fr) auto auto;
+  align-items: center;
+  justify-content: stretch;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.install-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plugin-file-input {
+  display: none;
+}
+
+.plugin-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--df-text-muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 620px) {
+  .install-controls {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .install-overwrite {
+    grid-column: 1 / -1;
+  }
+
+  .install-actions {
+    grid-column: 1 / -1;
+    justify-self: end;
+    width: 100%;
+  }
 }
 
 .plugin-tabs {

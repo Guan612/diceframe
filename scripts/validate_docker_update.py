@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import os
+import platform
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -25,6 +28,65 @@ FORBIDDEN_PARTS = {
 }
 
 
+def _native_runtime_matches_target() -> bool:
+    machine = platform.machine().lower()
+    return (
+        sys.platform.startswith("linux")
+        and machine in {"amd64", "x86_64"}
+        and sys.version_info[:2] == (3, 11)
+    )
+
+
+def validate_runtime_dependencies(package_root: Path) -> None:
+    """Ensure the bundled Linux runtime is complete and actually importable."""
+    site_packages = package_root / "runtime" / "site-packages"
+    missing: list[str] = []
+    for package_name in ("cffi", "pycparser"):
+        if not (site_packages / package_name).is_dir():
+            missing.append(package_name)
+    if not any(site_packages.glob("_cffi_backend*.so")):
+        missing.append("_cffi_backend")
+    if missing:
+        raise ValueError(
+            "Docker update runtime is missing required dependencies: "
+            + ", ".join(missing)
+        )
+
+    # The archive targets Linux AMD64 CPython 3.11. On the matching release
+    # runner, load the compiled modules too; other hosts still get the
+    # platform-neutral completeness checks above.
+    if not _native_runtime_matches_target():
+        return
+    command = [
+        sys.executable,
+        "-S",
+        "-c",
+        (
+            "import sys; "
+            "sys.path.insert(0, sys.argv[1]); "
+            "import _cffi_backend; "
+            "from cryptography import x509; "
+            "from cryptography.hazmat.bindings import _rust"
+        ),
+        str(site_packages.resolve()),
+    ]
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    result = subprocess.run(
+        command,
+        cwd=package_root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        message = detail[-1] if detail else f"exit code {result.returncode}"
+        raise ValueError(f"Docker update runtime import failed: {message}")
+
+
 def validate_archive(archive: Path, expected_version: str | None = None) -> dict:
     match = DOCKER_ASSET_RE.fullmatch(archive.name)
     if not match:
@@ -43,7 +105,9 @@ def validate_archive(archive: Path, expected_version: str | None = None) -> dict
         package_root = safe_extract_package(archive, temporary)
         if package_root.name != archive.stem:
             raise ValueError("Docker update top-level directory must match the asset name")
-        return validate_package_tree(package_root, expected_version=filename_version)
+        manifest = validate_package_tree(package_root, expected_version=filename_version)
+        validate_runtime_dependencies(package_root)
+        return manifest
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
 

@@ -296,6 +296,7 @@ def test_build_subsystems_resolves_llm_and_embedding_refs(monkeypatch):
         embedding_provider_ref="sf",
         embedding_enabled=True,
         embedding_model="bge-m3",
+        model_request_timeout_seconds=245,
         proxy_enabled=False, proxy_url="",
     )
 
@@ -307,6 +308,7 @@ def test_build_subsystems_resolves_llm_and_embedding_refs(monkeypatch):
     assert main.api_format == "anthropic"
     assert captured["embedding_base_url"] == "https://sf.example/v1"
     assert captured["embedding_api_key"] == "sk-sf"
+    assert captured["model_request_timeout_seconds"] == 245
 
 
 def test_build_subsystems_keeps_inline_fallback_when_ref_empty(monkeypatch):

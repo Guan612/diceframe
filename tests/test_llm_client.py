@@ -17,6 +17,37 @@ def test_length_retry_budgets_are_shared_one_two_four_times():
     assert length_retry_budgets(2048) == (2048, 4096, 8192)
 
 
+def test_llm_client_uses_configured_request_timeout():
+    client = LLMClient(
+        providers=[ProviderConfig(
+            provider_name="default",
+            base_url="https://api.example.com",
+            api_key="test-key",
+            model_name="test-model",
+        )],
+        default="default",
+        request_timeout_seconds=345,
+    )
+
+    assert client.request_timeout_seconds == 345
+    assert client.request_timeout.total == 345
+
+
+@pytest.mark.parametrize("timeout", [9, 601])
+def test_llm_client_rejects_invalid_request_timeout(timeout):
+    with pytest.raises(ValueError, match="模型请求超时"):
+        LLMClient(
+            providers=[ProviderConfig(
+                provider_name="default",
+                base_url="https://api.example.com",
+                api_key="test-key",
+                model_name="test-model",
+            )],
+            default="default",
+            request_timeout_seconds=timeout,
+        )
+
+
 class _FakeResponse:
     status = 200
     headers = {}

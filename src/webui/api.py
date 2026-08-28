@@ -480,6 +480,9 @@ class WebAPI:
     def clear_runtime_logs(self) -> dict[str, Any]:
         return system.clear_runtime_logs(self)
 
+    def export_runtime_logs(self) -> tuple[bytes, int]:
+        return system.export_runtime_logs(self)
+
     def _load_world_template(self, world_id: str, language: str = "") -> dict[str, Any] | None:
         """按 world_id 读取世界模板；不存在或非法时返回 None。"""
         if not self._worlds_dir:

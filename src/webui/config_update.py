@@ -57,6 +57,7 @@ CONFIG_KEYS = (
     "imagegen_enabled", "imagegen_auto_scene", "imagegen_provider", "imagegen_base_url",
     "imagegen_api_key", "imagegen_model", "imagegen_square_size", "imagegen_landscape_size",
     "imagegen_quality", "imagegen_style_prefix", "imagegen_timeout_seconds", "test_timeout_seconds",
+    "model_request_timeout_seconds",
     "ai_providers", *PROVIDER_REF_KEYS,
 )
 MODEL_RUNTIME_CONFIG_KEYS = frozenset({
@@ -65,6 +66,7 @@ MODEL_RUNTIME_CONFIG_KEYS = frozenset({
     "fallback1_enabled", "fallback1_base_url", "fallback1_model", "fallback1_api_format", "fallback1_api_key",
     "fallback2_enabled", "fallback2_base_url", "fallback2_model", "fallback2_api_format", "fallback2_api_key",
     "narrative_max_tokens", "summary_max_tokens", "brief_max_tokens", "analysis_max_tokens",
+    "model_request_timeout_seconds",
     "proxy_enabled", "proxy_url",
     "ai_providers", "llm_provider_ref", "fallback1_provider_ref", "fallback2_provider_ref",
     "embedding_provider_ref",
@@ -272,6 +274,11 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
                 timeout = float(raw)
                 if not 5 <= timeout <= 300:
                     return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "连接测试超时必须在 5–300 秒之间")
+                candidate[key] = timeout
+            elif key == "model_request_timeout_seconds":
+                timeout = float(raw)
+                if not 10 <= timeout <= 600:
+                    return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "模型请求超时必须在 10–600 秒之间")
                 candidate[key] = timeout
             elif key == "napcat_port":
                 port = int(raw)

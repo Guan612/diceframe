@@ -1,16 +1,37 @@
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { ref } from 'vue'
+import { mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import AssistantPanel from '../src/components/AssistantPanel.vue'
 
-function source(relativePath: string): string {
-  return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf-8')
-}
+const send = vi.fn().mockResolvedValue(undefined)
 
-const assistantPanelSource = source('../src/components/AssistantPanel.vue')
+vi.mock('@/composables/useLocale', () => ({
+  useLocale: () => ({
+    locale: ref('zh-CN'),
+    t: (key: string) => `translated:${key}`,
+  }),
+}))
+
+vi.mock('@/composables/useAssistant', () => ({
+  useAssistant: () => ({
+    messages: ref([]),
+    streaming: ref(false),
+    send,
+    stop: vi.fn(),
+    retryLast: vi.fn(),
+    clear: vi.fn(),
+  }),
+}))
 
 describe('DF Assistant runtime log entry', () => {
-  it('offers an explicit log check and explains external-model processing', () => {
-    expect(assistantPanelSource).toContain("t('assistantQuickLogs')")
-    expect(assistantPanelSource).toContain("t('assistantLogPrivacyHint')")
+  beforeEach(() => send.mockClear())
+
+  it('submits the runtime-log diagnostic action through the normal assistant request flow', async () => {
+    const wrapper = mount(AssistantPanel)
+
+    await wrapper.get('[data-assistant-intent="runtime-logs"]').trigger('click')
+
+    expect(send).toHaveBeenCalledOnce()
+    expect(send).toHaveBeenCalledWith(expect.any(String), 'zh-CN')
   })
 })

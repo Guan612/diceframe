@@ -87,7 +87,7 @@ class DockerLauncher:
         host: str = "127.0.0.1",
         port: int = 9876,
         python: str = sys.executable,
-        startup_timeout: float = 45.0,
+        startup_timeout: float = 60.0,
         poll_interval: float = 0.5,
     ) -> None:
         self.runtime_root = runtime_root.resolve()
@@ -106,6 +106,7 @@ class DockerLauncher:
         self.child: subprocess.Popen[bytes] | None = None
         self.active_dir: Path | None = None
         self.stopping = False
+        self._last_health_error = ""
         self.versions_dir.mkdir(parents=True, exist_ok=True)
 
     def _validate_dir(self, directory: Path, expected_version: str | None = None) -> dict[str, Any]:
@@ -197,33 +198,64 @@ class DockerLauncher:
         self.active_dir = directory
         return process
 
-    def _health(self, expected_version: str) -> bool:
+    def _health(
+        self,
+        expected_version: str,
+        health_path: str = "/api/system/update/health",
+    ) -> bool:
         if self.child is None or self.child.poll() is not None:
+            self._last_health_error = "候选进程已退出"
             return False
-        url = f"http://{self.host}:{self.port}/api/system/update/health"
+        normalized_path = "/" + str(health_path or "").lstrip("/")
+        url = f"http://{self.host}:{self.port}{normalized_path}"
         try:
             with urllib.request.urlopen(url, timeout=2) as response:
                 payload = json.loads(response.read().decode("utf-8"))
-        except (OSError, ValueError, urllib.error.URLError):
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            self._last_health_error = f"{type(exc).__name__}: {exc}"
             return False
-        return bool(payload.get("ok")) and str(payload.get("version")) == expected_version
+        reported = str(payload.get("version") or "").strip().lstrip("vV")
+        expected = str(expected_version or "").strip().lstrip("vV")
+        if not payload.get("ok"):
+            self._last_health_error = "健康接口返回 ok=false"
+            return False
+        if reported != expected:
+            self._last_health_error = f"版本不匹配（期望 {expected}，实际 {reported or '缺失'}）"
+            return False
+        self._last_health_error = ""
+        return True
 
     def _wait_healthy(self, directory: Path) -> bool:
         manifest = self._validate_dir(directory)
         expected = str(manifest["version"])
+        health_path = str(manifest["health_path"])
         deadline = time.monotonic() + self.startup_timeout
         while not self.stopping and time.monotonic() < deadline:
-            if self._health(expected):
+            if self._health(expected, health_path):
                 break
             if self.child is not None and self.child.poll() is not None:
                 return False
             time.sleep(self.poll_interval)
         else:
             return False
+
+        # A newly swapped process can briefly drop loopback connections while
+        # aiohttp finishes startup tasks. Do not roll back on one transient
+        # probe failure; a continuous outage for this bounded grace period is
+        # still treated as a failed candidate.
+        probation_failure_started: float | None = None
+        failure_grace = min(20.0, max(5.0, self.startup_timeout / 3.0))
         probation_deadline = time.monotonic() + float(manifest["probation_seconds"])
         while not self.stopping and time.monotonic() < probation_deadline:
-            if not self._health(expected):
-                return False
+            if self._health(expected, health_path):
+                probation_failure_started = None
+            else:
+                if self.child is not None and self.child.poll() is not None:
+                    return False
+                if probation_failure_started is None:
+                    probation_failure_started = time.monotonic()
+                elif time.monotonic() - probation_failure_started >= failure_grace:
+                    return False
             time.sleep(min(2.0, self.poll_interval))
         return not self.stopping
 
@@ -279,7 +311,10 @@ class DockerLauncher:
             return True
 
         self._stop_child()
+        detail = self._last_health_error
         error = f"candidate {candidate.name} failed its health check"
+        if detail:
+            error += f" ({detail})"
         if previous is not None:
             try:
                 self._spawn(previous)

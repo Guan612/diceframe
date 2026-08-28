@@ -44,7 +44,7 @@ async def test_set_solo_mode_marks_pending_round_ready(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_narrative_perspective_is_dnd_only_and_persisted(tmp_path):
+async def test_narrative_perspective_is_ruleset_neutral_and_persisted(tmp_path):
     registry = GameRegistry(tmp_path)
     key = ("web", "dnd-game", "bot")
     inst = GameInstance(
@@ -65,11 +65,11 @@ async def test_narrative_perspective_is_dnd_only_and_persisted(tmp_path):
     generic_key = ("web", "generic-game", "bot")
     generic = GameInstance(game_key=generic_key, rule_id="freeform_fantasy")
     registry.register(generic)
-    rejected = await games.set_narrative_perspective(
+    generic_result = await games.set_narrative_perspective(
         DummyAPI(registry), _GAME_KEY_SEP.join(generic_key), "immersive",
     )
-    assert rejected["ok"] is False
-    assert generic.narrative_perspective == "auto"
+    assert generic_result == {"ok": True, "narrative_perspective": "immersive"}
+    assert generic.narrative_perspective == "immersive"
 
 
 @pytest.mark.asyncio

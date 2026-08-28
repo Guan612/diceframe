@@ -456,22 +456,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .plugin-workspace .install-controls {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    justify-content: stretch;
-    min-width: 0;
-  }
-
   .plugin-workspace.plugin-workspace .toolbar-row {
     grid-template-columns: minmax(0, 1fr) 140px auto;
-  }
-
-  .plugin-workspace .install-controls > *,
-  .plugin-workspace .plugin-install input[type="file"] {
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
   }
 
   .plugin-workspace.plugin-workspace .market-grid {

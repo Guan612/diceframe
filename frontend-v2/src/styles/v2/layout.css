@@ -96,6 +96,10 @@
   transition: color .16s ease, background-color .16s ease;
 }
 
+.desktop-nav-link:visited {
+  color: var(--df-text-muted);
+}
+
 .desktop-nav-link::after {
   position: absolute;
   right: 14px;
@@ -109,9 +113,16 @@
   transition: opacity .16s ease, transform .16s ease;
 }
 
-.desktop-nav-link:hover,
-.desktop-nav-link.active {
+.desktop-nav-link:hover {
   color: var(--df-interactive-strong);
+  text-decoration: none;
+  background: linear-gradient(180deg, transparent, var(--df-hover));
+}
+
+.desktop-nav-link.active,
+.desktop-nav-link.active:visited,
+.desktop-nav-link.active:hover {
+  color: var(--df-accent-strong);
   text-decoration: none;
   background: linear-gradient(180deg, transparent, var(--df-hover));
 }

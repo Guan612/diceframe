@@ -16,6 +16,7 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.log
+logs/
 
 .env
 .env.*
@@ -33,9 +34,6 @@ static-v2/assets/
 dist/*
 !dist/docker-update.zip
 !dist/docker-update.sha256
-
-# 移动客户端独立构建，不进入服务端镜像
-mobile/
 
 .venv/
 venv/

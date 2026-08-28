@@ -103,6 +103,35 @@ async def test_model_runtime_reload_reuses_registry_and_closes_old_client_after_
 
 
 @pytest.mark.asyncio
+async def test_model_request_timeout_reload_rebuilds_model_runtime(monkeypatch):
+    old_runtime = _runtime()
+    new_runtime = _runtime(registry=old_runtime.registry, memory_store=old_runtime.memory_store)
+    app = {"subsystems": old_runtime, "api": object(), "plugin_host": None}
+    new_api = object()
+
+    def build(*, reuse=None, config=None):
+        assert reuse is old_runtime
+        assert config["model_request_timeout_seconds"] == 240
+        return new_runtime
+
+    monkeypatch.setattr(web_server, "save_config", lambda: None)
+    monkeypatch.setattr(web_server, "_build_subsystems", build)
+    monkeypatch.setattr(web_server, "_make_api", lambda runtime, plugin_host=None, config=None: new_api)
+    monkeypatch.setitem(web_server.STATE, "proxy_enabled", False)
+    monkeypatch.setitem(web_server.STATE, "proxy_url", "")
+
+    response = await web_server.api_config_post(
+        _ConfigRequest({"model_request_timeout_seconds": 240}, app)
+    )
+
+    assert response.status == 200
+    assert app["subsystems"] is new_runtime
+    assert app["subsystems"].registry is old_runtime.registry
+    assert app["api"] is new_api
+    assert old_runtime.llm_client.closed == 1
+
+
+@pytest.mark.asyncio
 async def test_api_token_limit_reload_rebuilds_api_without_replacing_subsystems(monkeypatch):
     runtime = _runtime()
     app = {"subsystems": runtime, "api": object(), "plugin_host": None}

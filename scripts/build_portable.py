@@ -39,7 +39,6 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"(^|/)\.codex/"),
     re.compile(r"(^|/)\.claude/"),
     re.compile(r"(^|/)node_modules/"),
-    re.compile(r"(^|/)mobile/"),
     re.compile(r"(^|/)tests/"),
     re.compile(r"(^|/)frontend-v2/tests/"),
     re.compile(r"(^|/)frontend-v2/e2e/"),
@@ -140,6 +139,14 @@ def install_python_runtime(
             "--require-hashes",
             "-r",
             str(PORTABLE_REQUIREMENTS),
+        ],
+        runtime_dir,
+    )
+    run(
+        [
+            str(python_exe),
+            "-c",
+            "import aiohttp, cryptography, edge_tts, PIL",
         ],
         runtime_dir,
     )
@@ -255,10 +262,15 @@ def validate_zip(output_zip: Path) -> None:
         raise RuntimeError("Portable zip should not contain frontend source files")
     build_release.validate_avatar_payload(infos, require_source=False)
     build_release.validate_background_payload(infos, require_source=False)
-    if not any("/python/Lib/site-packages/aiohttp/" in name for name in names):
-        raise RuntimeError("Portable zip is missing aiohttp")
-    if not any("/python/Lib/site-packages/PIL/" in name for name in names):
-        raise RuntimeError("Portable zip is missing Pillow")
+    required_runtime_packages = {
+        "aiohttp": "/python/Lib/site-packages/aiohttp/",
+        "cryptography": "/python/Lib/site-packages/cryptography/",
+        "edge-tts": "/python/Lib/site-packages/edge_tts/",
+        "Pillow": "/python/Lib/site-packages/PIL/",
+    }
+    for package, marker in required_runtime_packages.items():
+        if not any(marker in name for name in names):
+            raise RuntimeError(f"Portable zip is missing {package}")
 
 
 def make_zip(package_dir: Path, output_zip: Path) -> Path:

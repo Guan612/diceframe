@@ -61,6 +61,11 @@ describe('settings section links', () => {
     expect(settingsSource).toContain('class="advanced-section test-timeout-section"')
   })
 
+  it('keeps model request timeout separate from connection test timeout', () => {
+    expect(settingsSource).toContain("setNum('model_request_timeout_seconds'")
+    expect(settingsSource).toContain("setNum('test_timeout_seconds'")
+  })
+
   it('lays out About links four per row on desktop', () => {
     const polishCss = source('../src/styles/v2/settings-polish.css')
     const responsiveCss = source('../src/styles/v2/play-panels.css')

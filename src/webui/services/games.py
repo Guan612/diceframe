@@ -18,6 +18,7 @@ from src.engine.game_instance import GameState
 from src.engine.dice import d20_critical_thresholds, roll
 from src.engine.health import health_payload, mark_health_event, record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.narrative_perspective import validate_narrative_perspective
 from src.commands.resource_triggers import check_resource_triggers
 from src.llm.parser import sanitize_narration
 from src.migrations import migrate_instance
@@ -549,9 +550,6 @@ async def set_narrative_perspective(
     inst = api._reg.get(api._parse_key(game_key))
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
-    runtime_id = str((getattr(inst, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id != "core:dnd2024":
-        return {"ok": False, "error": "当前规则不支持叙事视角设置"}
     try:
         inst.set_narrative_perspective(perspective)
     except ValueError as exc:
@@ -915,10 +913,8 @@ async def create_game(api: "WebAPI", world_id: str, game_name: str = "",
     if not players:
         return {"ok": False, "error": "请至少创建或选择 1 名队伍角色"}
     try:
-        normalized_narrative_perspective = str(narrative_perspective or "auto").strip().casefold()
-        if normalized_narrative_perspective not in {"auto", "immersive", "third_person"}:
-            raise ValueError
-    except (AttributeError, ValueError):
+        normalized_narrative_perspective = validate_narrative_perspective(narrative_perspective)
+    except ValueError:
         return {"ok": False, "error": "叙事视角设置无效"}
 
     try:
@@ -1272,10 +1268,10 @@ async def create_from_seed(api: "WebAPI", seed_code: str, solo: bool = False,
         or "auto"
     )
     try:
-        normalized_narrative_perspective = str(resolved_narrative_perspective).strip().casefold()
-        if normalized_narrative_perspective not in {"auto", "immersive", "third_person"}:
-            raise ValueError
-    except (AttributeError, ValueError):
+        normalized_narrative_perspective = validate_narrative_perspective(
+            resolved_narrative_perspective,
+        )
+    except ValueError:
         return {"ok": False, "error": "叙事视角设置无效"}
 
     # A seed restart is a new save, but it must keep the original save's rule

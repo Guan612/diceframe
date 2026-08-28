@@ -25,6 +25,7 @@ from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
 from src.engine.character_utils import apply_resource_delta, get_resource
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.narrative_perspective import validate_narrative_perspective
 
 logger = logging.getLogger("trpg")
 
@@ -440,10 +441,7 @@ class GameInstance:
             self.ready_players.update(self.alive_players)
 
     def set_narrative_perspective(self, perspective: str) -> None:
-        normalized = str(perspective or "auto").strip().casefold()
-        if normalized not in {"auto", "immersive", "third_person"}:
-            raise ValueError("叙事视角必须是 auto、immersive 或 third_person")
-        self.narrative_perspective = normalized
+        self.narrative_perspective = validate_narrative_perspective(perspective)
 
     def append_log_entry(self, entry: RoundLogEntry) -> None:
         self.log.append(entry)
