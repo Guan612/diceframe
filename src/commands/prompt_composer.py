@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.compat.callbacks import load_world_template as load_world_template_compat
+from src.content.gm_style import render_gm_style_section
 from src.engine.game_instance import GameInstance
 from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, localized_text
 from src.engine.narrative_perspective import narrative_perspective_instruction
@@ -157,10 +158,18 @@ class PromptComposer:
         """swipe 与正常回合必须使用同一套存档规则。"""
         return self._load_rule_context(instance, load_world_template)
 
-    def compose_gm_prompt(self, instance: GameInstance, rule_appendix: str = "") -> str:
-        """构造系统 prompt：基础 prompt + 规则附录 + 剧情追踪 + 多人权限范围。"""
+    def compose_gm_prompt(
+        self,
+        instance: GameInstance,
+        rule_appendix: str = "",
+        world_data: dict | None = None,
+    ) -> str:
+        """构造系统 prompt：基础 prompt + 规则附录 + 世界 GM 风格 + 剧情追踪 + 多人权限范围。"""
         language = getattr(instance, "language", DEFAULT_LANGUAGE)
         gm_prompt = self.load_gm_prompt(rule_appendix, language)
+        style_section = render_gm_style_section(world_data, language)
+        if style_section:
+            gm_prompt = gm_prompt + "\n\n" + style_section
         plot_text = instance.plot_tracker.format_for_context() if instance.plot_tracker else ""
         if plot_text:
             gm_prompt = gm_prompt + "\n\n" + plot_text

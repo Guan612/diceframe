@@ -58,7 +58,9 @@ class GameLifecycle:
             self.ensure_matcher_for_world(instance.world_id, instance.language)
 
         rule_ctx = self.prompt.load_rule_context(instance, self.load_world_template)
-        gm_prompt = self.prompt.compose_gm_prompt(instance, rule_ctx.rule_appendix)
+        gm_prompt = self.prompt.compose_gm_prompt(
+            instance, rule_ctx.rule_appendix, world_data=rule_ctx.world_data,
+        )
         world_data = rule_ctx.world_data or {}
         world_description = world_data.get("description", "")
         world_setting = world_data.get("world_setting", "")

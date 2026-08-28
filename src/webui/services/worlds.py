@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
 import time
 from typing import TYPE_CHECKING, Any
 
-from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
+from src.content.gm_style import normalize_gm_style
 from src.content.worlds import load_world_template as load_content_world
 from src.generation import creator
+from src.lorebook.bootstrap import ensure_world_from_template
 from src.template_catalog import is_user_template_file
 
 if TYPE_CHECKING:
@@ -35,6 +38,7 @@ def list_worlds(api: "WebAPI") -> dict[str, Any]:
     for w in worlds:
         entries = api._lore.list_entries(w["id"])
         w["entry_count"] = len(entries)
+        w["gm_style"] = _read_user_template_gm_style(api, str(w.get("id") or ""))
     return {"worlds": worlds, "total": len(worlds)}
 
 
@@ -48,6 +52,124 @@ def create_world(api: "WebAPI", name: str, description: str = "",
     language = normalize_language(language)
     api._lore.create_world(world_id, name, description=description or "", language=language)
     return {"ok": True, "world_id": world_id, "name": name, "language": language}
+
+
+def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -> dict[str, Any]:
+    """把内置/插件/用户世界模板克隆为用户可编辑世界。
+
+    新世界沿用 custom_book_* id 约定与用户模板文件写入，条目 CRUD 随后
+    自动走 _sync_user_template_lorebook 回写，与手动自建世界同一条代码路径。
+    读取源模板时不做 locale overlay，克隆结果保持 canonical identity。
+    """
+    template_id = str(template_id or "").strip()
+    if not template_id:
+        return {"ok": False, "error": "缺少要克隆的世界模板"}
+    worlds_dir = api._worlds_dir
+    if not worlds_dir:
+        return {"ok": False, "error": "世界模板目录未配置"}
+    source = _load_clone_source(api, template_id)
+    if source is None:
+        return {"ok": False, "error": "世界模板不存在"}
+    language = normalize_language(str(source.get("language") or ""))
+    new_name = (name or "").strip()
+    if not new_name:
+        # 缺省名加「克隆」后缀，避免开团页世界下拉与源模板重名不可区分。
+        new_name = str(source.get("world_name") or template_id).strip() + localized_text(
+            language, {"en": " (Clone)", "zh-CN": "（克隆）", "ja": "（クローン）"},
+        )
+    base = "".join(ch if ch.isalnum() else "_" for ch in new_name.lower()).strip("_") or "world"
+    world_id = f"custom_book_{base}_{int(time.time())}"
+    template = {
+        key: copy.deepcopy(value)
+        for key, value in source.items()
+        if not key.startswith("_")
+    }
+    template.pop("deprecated", None)
+    template["world_id"] = world_id
+    template["world_name"] = new_name
+    template["custom"] = True
+    template["language"] = language
+    worlds_dir.mkdir(parents=True, exist_ok=True)
+    path = worlds_dir / f"{world_id}.json"
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(template, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    ensure_world_from_template(api._lore, world_id, template)
+    logger.info("已克隆世界模板: %s -> %s", template_id, world_id)
+    return {"ok": True, "world_id": world_id, "name": new_name, "language": language}
+
+
+def update_world_gm_style(api: "WebAPI", world_id: str, raw: Any) -> dict[str, Any]:
+    """保存世界级 GM 风格。仅用户模板可改；内置/插件世界提示先克隆。"""
+    world_id = str(world_id or "").strip()
+    if not world_id:
+        return {"ok": False, "error": "缺少世界 id"}
+    if api._lore.get_world(world_id) is None:
+        return {"ok": False, "error": "世界不存在"}
+    worlds_dir = api._worlds_dir
+    if not worlds_dir:
+        return {"ok": False, "error": "世界模板目录未配置"}
+    path = worlds_dir / f"{world_id}.json"
+    if not path.is_file() or not is_user_template_file(path, "worlds"):
+        return {"ok": False, "error": "内置或插件世界不可修改，请先克隆为我的世界"}
+    normalized = normalize_gm_style(raw)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "世界模板读取失败"}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "世界模板格式不正确"}
+    data["gm_style"] = normalized
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    return {"ok": True, "gm_style": normalized}
+
+
+def _read_user_template_gm_style(api: "WebAPI", world_id: str) -> dict[str, str] | None:
+    """用户模板的 gm_style（normalized）；无模板文件时 None。"""
+    worlds_dir = api._worlds_dir
+    if not worlds_dir or not world_id:
+        return None
+    path = worlds_dir / f"{world_id}.json"
+    if not path.is_file() or not is_user_template_file(path, "worlds"):
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return normalize_gm_style(data.get("gm_style"))
+
+
+def _load_clone_source(api: "WebAPI", template_id: str) -> dict[str, Any] | None:
+    """按 id 查找克隆源：优先运行时模板目录的 raw core，其次插件贡献。"""
+    worlds_dir = api._worlds_dir
+    if worlds_dir:
+        path = worlds_dir / f"{template_id}.json"
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            if isinstance(data, dict) and not data.get("deprecated"):
+                return data
+            return None
+    plugin_host = getattr(api, "_plugins", None)
+    if not plugin_host:
+        return None
+    for item in plugin_host.contributions.list("world_template"):
+        if item.path.stem != template_id:
+            continue
+        try:
+            data = plugin_host.load_world_template(item.key, "") or {}
+        except Exception:
+            logger.warning("插件世界模板读取失败: %s", item.path, exc_info=True)
+            return None
+        if isinstance(data, dict) and data and not data.get("deprecated"):
+            return data
+    return None
 
 
 def list_entries(api: "WebAPI", world_id: str, entry_type: str | None = None) -> dict[str, Any]:
@@ -351,8 +473,14 @@ def cleanup_orphan_game_templates(api: "WebAPI", world_id: str = "") -> int:
     return removed
 
 
-def _world_template_summary(data: dict[str, Any], fallback_id: str) -> dict[str, Any]:
+def _world_template_summary(data: dict[str, Any], fallback_id: str, source: str | None = None) -> dict[str, Any]:
     world_id = data.get("world_id", fallback_id)
+    if source is None:
+        source = (
+            "user"
+            if bool(data.get("custom")) or fallback_id.startswith(("custom_", "ai_"))
+            else "builtin"
+        )
     return {
         "world_id": world_id,
         "world_name": data.get("world_name", fallback_id),
@@ -364,6 +492,10 @@ def _world_template_summary(data: dict[str, Any], fallback_id: str) -> dict[str,
         "recommended_rules": _recommended_rules(data),
         "scene_image": data.get("scene_image"),
         "lorebook_count": len(data.get("starter_lorebook", [])),
+        "source": source,
+        "game_scoped": _is_game_scoped_template(data, str(world_id)),
+        # 仅用户模板暴露可编辑的 GM 风格；内置/插件只读，前端据此显示编辑区或锁定提示。
+        "gm_style": normalize_gm_style(data.get("gm_style")) if source == "user" else None,
     }
 
 
@@ -390,7 +522,7 @@ def _plugin_world_templates(api: "WebAPI", language: str = "") -> list[dict[str,
     for item in plugin_host.contributions.list("world_template"):
         try:
             data = plugin_host.load_world_template(item.key, language) or {}
-            summary = _world_template_summary(data, item.path.stem)
+            summary = _world_template_summary(data, item.path.stem, source="plugin")
             summary["plugin_id"] = item.plugin_id
             summary["plugin_name"] = item.plugin_name
             summary["readonly"] = True

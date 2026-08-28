@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/client'
 import type { AdventureSummary, AdventuresResponse, CharacterCard, CharacterCardsResponse, CharacterSheet, GameMutationResponse, GeneratedRuleResponse, GeneratedWorldResponse, RuleDetailResponse, RuleSummary, RuleTemplate, RulesResponse, SceneImageRef, WorldListResponse, WorldSummary, WorldTemplateSummary, WorldTemplatesResponse } from '@/api/types'
 import { useToast } from '@/composables/useToast'
@@ -42,6 +42,7 @@ const BLANK_LOREBOOK_SUFFIX_ZH = '\uff08\u7a7a\u767d\u4e16\u754c\u4e66\uff09'
 const COPIED_LOREBOOK_SUFFIX_ZH = '\uff08\u590d\u5236\u4e16\u754c\u4e66\uff09'
 
 const router = useRouter()
+const route = useRoute()
 const adventureManagerHref = computed(() => router.resolve({ name: 'adventures' }).href)
 const toast = useToast()
 const { locale, t } = useLocale()
@@ -309,6 +310,11 @@ onMounted(async () => {
   loreWorlds.value = lw.worlds || []
   cards.value = cs.cards || []
   world.value = worldIdOf(availableWorlds.value[0] || worlds.value[0] || {})
+  // 从世界画廊跳入时预填所选世界（仅当它仍在当前语言可用列表中）。
+  const preselectedWorld = String(route.query.world || '')
+  if (preselectedWorld && availableWorlds.value.some(item => worldIdOf(item) === preselectedWorld)) {
+    world.value = preselectedWorld
+  }
   const worldDefaultRule = String(activeWorldTemplate.value?.default_rule || '')
   rule.value = rules.value.some(item => item.rule_id === worldDefaultRule)
     ? worldDefaultRule

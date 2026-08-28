@@ -86,7 +86,9 @@ class SwipeGenerator:
         combat_model_s = rule_ctx.combat_model
         world_data = rule_ctx.world_data
 
-        gm_prompt = self.prompt.compose_gm_prompt(instance, rule_ctx.rule_appendix)
+        gm_prompt = self.prompt.compose_gm_prompt(
+            instance, rule_ctx.rule_appendix, world_data=rule_ctx.world_data,
+        )
 
         # 构建上下文（仅使用目标轮之前的日志），不临时改写共享 instance.log。
         provider_name = self.llm_client.default if self.llm_client else ""

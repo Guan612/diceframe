@@ -695,6 +695,12 @@ class WebAPI:
     def create_world(self, name: str, description: str = "", language: str = "") -> dict[str, Any]:
         return worlds.create_world(self, name, description, language)
 
+    def clone_world_from_template(self, template_id: str, name: str = "") -> dict[str, Any]:
+        return worlds.clone_world_from_template(self, template_id, name)
+
+    def update_world_gm_style(self, world_id: str, raw: dict | None = None) -> dict[str, Any]:
+        return worlds.update_world_gm_style(self, world_id, raw)
+
     def list_entries(self, world_id: str, entry_type: str | None = None) -> dict[str, Any]:
         return worlds.list_entries(self, world_id, entry_type)
 
