@@ -65,7 +65,7 @@ def write_manifest(package_dir: Path, version: str, commit: str) -> None:
         "entrypoint": "app/web_server.py",
         "site_packages": "runtime/site-packages",
         "health_path": "/api/system/update/health",
-        "probation_seconds": 60,
+        "probation_seconds": 90,
         "commit": commit,
     }
     (package_dir / "manifest.json").write_text(
