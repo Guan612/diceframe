@@ -1031,7 +1031,7 @@ export const zhCN = {
   publishedAt: '发布时间',
   checkFailed: '检查失败',
   repoNoReleaseMessage: '仓库暂无公开 Release。',
-  updateAvailableHelp: '有新版可用。升级前保留 data/ 目录；Docker 用户请用新版源码或镜像重新部署。',
+  updateAvailableHelp: '有新版可用。升级前请备份完整的 data/ 目录，并按下方当前部署方式完成下载与安装。',
   releaseNotes: '更新日志',
   checkUpdate: '检查更新',
   openReleasePage: '打开发布页',

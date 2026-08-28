@@ -1031,7 +1031,7 @@ export const ja = {
   publishedAt: '公開日時',
   checkFailed: '確認に失敗',
   repoNoReleaseMessage: 'リポジトリに公開 Release がありません。',
-  updateAvailableHelp: '新しいバージョンが利用可能です。アップグレード前に data/ ディレクトリを保持してください。Docker ユーザーは新しいソースコードかイメージで再デプロイしてください。',
+  updateAvailableHelp: '新しいバージョンが利用可能です。アップグレード前に data/ ディレクトリ全体をバックアップし、現在の配置方法に対応する下記のダウンロードとインストール手順を使用してください。',
   releaseNotes: 'リリースノート',
   checkUpdate: '更新を確認',
   openReleasePage: 'リリースページを開く',
