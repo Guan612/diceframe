@@ -24,6 +24,7 @@ Common commands:
 - `@Bot create character`: send character-creation guidance and the creation entry point in the group.
 - `@Bot AI character`: when AI-assisted creation is enabled, collect a description in direct messages, generate a draft for confirmation, then post the public draft to the group.
 - `@Bot join CharacterName`: claim an existing Web character.
+- `@Bot ask kp <question>` or `@Bot ask: <question>`: ask the GM an out-of-character table-talk question. The answer uses the public story, current rules, and information the claimed character legitimately knows; it does not submit an action, advance the story, trigger a check, or consume the turn's action. Plain `ask <character> ...` remains an in-character action.
 - `@Bot recap`: show the public recap and recent turns.
 - `@Bot map`: show the current scene and known lorebook location links.
 - `@Bot status`: show the claimed character's HP, gold, inventory, and related summary.
@@ -36,6 +37,8 @@ Common commands:
 - `@Bot <natural-language action>`: submit an action. If it starts GM generation, the Bot first reports that the GM is thinking.
 
 The round advances only after every active player has submitted an action, or when the GM explicitly uses `@Bot advance`; there is no round countdown. AI adjudicates checks at progression time, the server generates each roll once, and the Bot displays the result without player confirmation.
+
+`ask` and character actions are separate channels. Observation, negotiation, movement, and attempts still require a natural-language action. If an answer depends on an in-game attempt, the GM only explains what action could establish it and does not execute or resolve it during table talk. Answers are not written to the action queue, turn log, or save state, and do not reveal hidden information the character has not learned.
 
 Without a public Web address, invite, character-creation, and map commands still return readable group instructions or cards. With a public address they also include clickable links.
 

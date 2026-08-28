@@ -58,3 +58,19 @@ def test_builtin_qq_plugin_readme_en_has_no_manual_roll() -> None:
     for marker in ("@Bot roll", "confirm an action that is waiting for dice"):
         assert marker not in text, f"内置 README_EN 仍残留手动掷骰说明: {marker!r}"
     assert "without player confirmation" in text
+
+
+def test_builtin_qq_adapter_supports_read_only_kp_questions() -> None:
+    source = _read(ADAPTER)
+    readme_cn = _read(README_CN)
+    readme_en = _read(README_EN)
+
+    for marker in (
+        "_kp_question",
+        "self.api.ask_kp",
+        "桌外问 KP（不耗行动）",
+        "_ask_kp_group",
+    ):
+        assert marker in source or marker in readme_cn, f"缺少 KP 答疑标记: {marker!r}"
+    assert "@Bot 询问 <问题>" in readme_cn
+    assert "@Bot ask kp <question>" in readme_en

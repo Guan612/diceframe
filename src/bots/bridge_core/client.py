@@ -91,6 +91,15 @@ class DiceFrameClient:
             json=body,
         )
 
+    async def ask_kp(self, game_key: str, actor: str, question: str) -> dict[str, Any]:
+        """Ask the GM a read-only table-talk question."""
+        return await self._request(
+            "POST",
+            f"/api/games/{quote(game_key, safe='')}/kp-question",
+            actor=actor,
+            json={"question": question},
+        )
+
     async def advance(self, game_key: str, actor: str, *, force: bool = True) -> dict[str, Any]:
         return await self._request(
             "POST",

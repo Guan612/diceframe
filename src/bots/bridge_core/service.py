@@ -22,6 +22,7 @@ from src.bots.bridge_core.commands import (
     is_private_log,
     is_recap,
     is_return,
+    kp_question,
     luck_decision,
     luck_index,
     payment_decision,
@@ -183,6 +184,10 @@ class DiceFrameBridgeService:
         bind_match = re.match(r"^(?:绑定|bind)\s+(\S+)\s+(\S+)\s*$", text, re.IGNORECASE)
         if bind_match:
             return await self._bind(message, bind_match.group(1), bind_match.group(2))
+
+        question = kp_question(text)
+        if question is not None:
+            return await self._ask_kp(message, question)
 
         verb, rest = self._verb_and_rest(text)
         aliases = {
@@ -413,6 +418,20 @@ class DiceFrameBridgeService:
         language = self._group_language(group)
         result = await self.client.action(game_key, actor, text, confirm=confirm, source=self.config.action_source)
         return format_action_result(result, language)
+
+    async def _ask_kp(self, message: BridgeInput, question: str) -> str:
+        language = self._language(message)
+        if not question:
+            return bridge_text(
+                language,
+                f"请发送：{self._cmd('询问 <问题>')}。这不会消耗行动或推进剧情。",
+                f"Send: {self._cmd('ask kp <question>')} or {self._cmd('ask: <question>')}. This does not consume an action or advance the story.",
+            )
+        group, game_key, actor = self._require_actor(message)
+        language = self._group_language(group)
+        result = await self.client.ask_kp(game_key, actor, question)
+        answer = str(result.get("answer") or "").strip()
+        return bridge_text(language, "KP：{answer}", "GM: {answer}", answer=answer)
 
     async def _advance(self, message: BridgeInput, text: str) -> str:
         group, game_key, gm_uid = self._require_group(message.stream_id, self._language(message))

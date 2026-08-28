@@ -103,6 +103,41 @@ def advance_force(text: str) -> bool:
     return normalized not in {"尝试推进", "普通推进", "advance"}
 
 
+def kp_question(text: str) -> str | None:
+    """Return the table-talk question, or ``None`` when this is a normal action.
+
+    Chinese accepts ``询问 <question>`` or ``询问: <question>``. English uses
+    the unambiguous ``ask kp <question>`` or ``ask: <question>`` forms so an
+    in-character action such as ``ask the guard ...`` remains an action.
+
+    Once an explicit command prefix is recognized, an empty remainder is
+    returned as ``""`` instead of falling back to the action pipeline.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+
+    chinese = re.match(r"^询问(?=$|\s|[:：])", raw)
+    if chinese:
+        remainder = raw[chinese.end():].lstrip()
+        if remainder.startswith((":", "：")):
+            remainder = remainder[1:].strip()
+        return remainder.strip()
+
+    ask_colon = re.match(r"^ask\s*[:：]", raw, flags=re.IGNORECASE)
+    if ask_colon:
+        return raw[ask_colon.end():].strip()
+
+    ask_kp = re.match(r"^ask\s+kp(?=$|\s|[:：])", raw, flags=re.IGNORECASE)
+    if ask_kp:
+        remainder = raw[ask_kp.end():].lstrip()
+        if remainder.startswith((":", "：")):
+            remainder = remainder[1:].strip()
+        return remainder.strip()
+
+    return None
+
+
 def luck_decision(text: str) -> bool | None:
     """识别是否使用幸运；True=使用，False=保留失败。"""
     normalized = re.sub(r"\s+", "", str(text or "").strip().lower())

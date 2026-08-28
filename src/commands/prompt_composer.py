@@ -15,7 +15,10 @@ from src.compat.callbacks import load_world_template as load_world_template_comp
 from src.engine.game_instance import GameInstance
 from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, localized_text
 from src.engine.narrative_perspective import narrative_perspective_instruction
-from src.llm.context_builder import build_context
+from src.llm.context_builder import (
+    build_context,
+    build_player_safe_context as build_player_safe_llm_context,
+)
 from src.memory.delta import MemoryStore
 from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
@@ -223,4 +226,25 @@ class PromptComposer:
             directives_text=directives_text,
             overreach_text=overreach_text,
             state_view=state_view,
+        )
+
+    async def build_player_safe_context(
+        self,
+        instance: GameInstance,
+        gm_prompt: str,
+        lorebook_matches: list[dict],
+        player_message: str,
+        actor_uid: str,
+        provider_name: str = "",
+        world_data: dict | None = None,
+    ) -> str:
+        """Build the restricted context used only by player-facing GM Q&A."""
+        return await build_player_safe_llm_context(
+            instance,
+            gm_prompt,
+            lorebook_matches,
+            player_message,
+            actor_uid,
+            provider_name=provider_name,
+            lorebook_budget=world_data.get("lorebook_token_budget", 0) if world_data else 0,
         )
