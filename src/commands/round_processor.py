@@ -475,7 +475,7 @@ class RoundProcessor:
             format_overreach_block(instance) if overreach_guard_enabled() else ""
         )
 
-        gm_prompt = self._prompt.compose_gm_prompt(instance, rule_appendix)
+        gm_prompt = self._prompt.compose_gm_prompt(instance, rule_appendix, world_data=world_data)
         provider_name = self.llm_client.default if self.llm_client else ""
         context = await self._prompt.build_user_context(
             instance, gm_prompt, lorebook_matches, actions_text,

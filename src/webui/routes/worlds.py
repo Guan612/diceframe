@@ -20,6 +20,22 @@ async def api_world_create(request: web.Request) -> web.Response:
     ))
 
 
+async def api_world_clone_from_template(request: web.Request) -> web.Response:
+    body = await request.json()
+    result = _get_api(request).clone_world_from_template(
+        body.get("template_id", ""),
+        body.get("name", ""),
+    )
+    return web.json_response(result, status=200 if result.get("ok") else 404)
+
+
+async def api_world_gm_style_update(request: web.Request) -> web.Response:
+    body = await request.json()
+    world_id = request.match_info["world_id"]
+    result = _get_api(request).update_world_gm_style(world_id, body.get("gm_style"))
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 async def api_delete_world(request: web.Request) -> web.Response:
     denied = _require_confirmed_request(request)
     if denied is not None:
@@ -86,6 +102,8 @@ async def api_lorebook_delete(request: web.Request) -> web.Response:
 def register_worlds(app: web.Application) -> None:
     app.router.add_route("GET", "/api/worlds", api_worlds)
     app.router.add_route("POST", "/api/worlds", api_world_create)
+    app.router.add_route("POST", "/api/worlds/clone-from-template", api_world_clone_from_template)
+    app.router.add_route("PUT", "/api/worlds/{world_id}/gm-style", api_world_gm_style_update)
     app.router.add_route("DELETE", "/api/worlds/{world_id}", api_delete_world)
     app.router.add_get("/api/world-templates", api_world_templates)
     app.router.add_get("/api/lorebook/{world_id}", api_lorebook)
