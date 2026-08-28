@@ -378,7 +378,7 @@ def test_resolve_health_endpoint_env_override_wins(tmp_path):
     ) == ("http", "")
     assert _resolve_health_endpoint(
         data_dir, {"TRPG_DOCKER_HEALTH_SCHEME": "https"}
-    ) == ("https", "")
+    ) == ("https", "AABB")
     assert _resolve_health_endpoint(
         data_dir, {"TRPG_DOCKER_HEALTH_SCHEME": "ftp"}
     ) == ("https", "AABB")

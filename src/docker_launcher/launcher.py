@@ -93,22 +93,26 @@ def _resolve_health_endpoint(data_dir: Path, env: dict[str, str] | None = None) 
     config.json 声明 self_signed 且 fingerprint.txt 存在时用 HTTPS 并按
     指纹固定证书。指纹文件缺失说明证书从未生成（服务端会回退 HTTP），
     保持 http。lets_encrypt 模式应用确实在说 HTTPS，探测改走 https。
-    TRPG_DOCKER_HEALTH_SCHEME 可显式覆盖（http/https），供特殊部署自救。
+    TRPG_DOCKER_HEALTH_SCHEME 可显式覆盖（http/https），供特殊部署自救；
+    强制 https 只覆盖 scheme，self_signed 模式仍保留证书指纹固定。
     """
     env = env if env is not None else os.environ
     forced = str(env.get("TRPG_DOCKER_HEALTH_SCHEME") or "").strip().lower()
-    if forced in ("http", "https"):
-        return forced, ""
-
     transport = _read_json(data_dir / "config.json").get("web_transport") or {}
     tls_mode = str(transport.get("tls_mode") or "").strip().lower() if isinstance(transport, dict) else ""
+    fingerprint = ""
     if tls_mode == "self_signed":
         try:
             fingerprint = _normalized_fingerprint(
                 (data_dir / "certs" / "self-signed" / "fingerprint.txt").read_text(encoding="utf-8")
             )
         except OSError:
-            return "http", ""
+            fingerprint = ""
+    if forced == "http":
+        return "http", ""
+    if forced == "https":
+        return "https", fingerprint
+    if tls_mode == "self_signed":
         return ("https", fingerprint) if fingerprint else ("http", "")
     if tls_mode == "lets_encrypt":
         return "https", ""
