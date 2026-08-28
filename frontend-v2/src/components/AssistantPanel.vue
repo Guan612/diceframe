@@ -16,11 +16,11 @@ const draft = ref('')
 const listEl = ref<HTMLElement | null>(null)
 
 const quickQuestions = () => [
-  t('assistantQuickApi'),
-  t('assistantQuickPlugin'),
-  t('assistantQuickPlayers'),
-  t('assistantQuickTunnel'),
-  t('assistantQuickLogs'),
+  { id: 'api', prompt: t('assistantQuickApi') },
+  { id: 'plugin', prompt: t('assistantQuickPlugin') },
+  { id: 'players', prompt: t('assistantQuickPlayers') },
+  { id: 'tunnel', prompt: t('assistantQuickTunnel') },
+  { id: 'runtime-logs', prompt: t('assistantQuickLogs') },
 ]
 
 function scrollToBottom() {
@@ -78,8 +78,8 @@ function ask(question: string) {
         <strong>{{ t('assistantEmpty') }}</strong>
         <p>{{ t('assistantEmptyHint') }}</p>
         <div class="assistant-quick-grid">
-          <button v-for="question in quickQuestions()" :key="question" type="button" @click="ask(question)">
-            {{ question }}
+          <button v-for="question in quickQuestions()" :key="question.id" type="button" :data-assistant-intent="question.id" @click="ask(question.prompt)">
+            {{ question.prompt }}
           </button>
         </div>
         <small>{{ t('assistantVersionHint') }}</small>

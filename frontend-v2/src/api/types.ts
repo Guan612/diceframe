@@ -1786,6 +1786,7 @@ export interface AppConfig {
   imagegen_style_prefix?: string
   imagegen_timeout_seconds?: number
   test_timeout_seconds?: number
+  model_request_timeout_seconds?: number
   [key: string]: unknown
 }
 

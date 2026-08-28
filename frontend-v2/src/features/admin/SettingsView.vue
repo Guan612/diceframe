@@ -2325,6 +2325,13 @@ function redownloadUpdatePackage() {
                 <NIcon :component="OptionsOutline" />
                 <div><h3>{{ t('generationParams') }}</h3><p>{{ t('generationParamsHint') }}</p></div>
               </header>
+              <div class="advanced-row token-row">
+                <div><strong>{{ t('modelRequestTimeout') }}</strong><small>{{ t('modelRequestTimeoutHint') }}</small></div>
+                <div class="token-input-wrap">
+                  <NInputNumber class="advanced-number" :value="Number(store.config.model_request_timeout_seconds ?? 120)" :min="10" :max="600" :step="10" @update:value="setNum('model_request_timeout_seconds', $event)" />
+                  <span>{{ t('secondsUnit') }}</span>
+                </div>
+              </div>
               <div v-for="item in tokenFields" :key="item.key" class="advanced-row token-row">
                 <div><strong>{{ t(item.labelKey) }}</strong><small>{{ t(item.hintKey) }}</small></div>
                 <div class="token-input-wrap">
@@ -2333,7 +2340,7 @@ function redownloadUpdatePackage() {
                 </div>
               </div>
               <footer class="advanced-save-row">
-                <NButton type="primary" @click="save(['narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
+                <NButton type="primary" @click="save(['model_request_timeout_seconds', 'narrative_max_tokens', 'character_gen_max_tokens', 'summary_max_tokens', 'brief_max_tokens', 'analysis_max_tokens', 'text_gen_max_tokens'])">{{ t('saveAction') }}</NButton>
               </footer>
             </section>
             <section class="advanced-section runtime-logs-section">

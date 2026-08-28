@@ -113,12 +113,22 @@ class LLMClient:
     支持多供应商配置、自动重试、失败降级到备用模型。
     """
 
-    def __init__(self, providers: list[ProviderConfig], default: str, proxy_url: str = ""):
+    def __init__(
+        self,
+        providers: list[ProviderConfig],
+        default: str,
+        proxy_url: str = "",
+        request_timeout_seconds: float = 120,
+    ):
         if not providers:
             raise ValueError("至少需要配置一个模型供应商")
+        if not 10 <= float(request_timeout_seconds) <= 600:
+            raise ValueError("模型请求超时必须在 10–600 秒之间")
         self.providers = {p.provider_name: p for p in providers}
         self.default = default if default in self.providers else providers[0].provider_name
         self.proxy_url = proxy_url.strip()
+        self.request_timeout_seconds = float(request_timeout_seconds)
+        self.request_timeout = aiohttp.ClientTimeout(total=self.request_timeout_seconds)
         self._session: aiohttp.ClientSession | None = None
         self._native_tool_unsupported: set[str] = set()
         # 强制 tool_choice 被拒但 tool_choice=auto 可用的供应商（如思考模式模型）
@@ -299,7 +309,7 @@ class LLMClient:
             url,
             json=body,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=120),
+            timeout=self.request_timeout,
             **request_kwargs,
         ) as resp:
             if resp.status != 200:
@@ -369,7 +379,7 @@ class LLMClient:
             _anthropic_messages_url(provider.base_url),
             json=body,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=120),
+            timeout=self.request_timeout,
             **request_kwargs,
         ) as resp:
             if resp.status != 200:
@@ -624,7 +634,7 @@ class LLMClient:
         session = await self._get_session()
         request_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
         async with session.post(url, json=body, headers=headers,
-                                timeout=aiohttp.ClientTimeout(total=120),
+                                timeout=self.request_timeout,
                                 **request_kwargs) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
@@ -678,7 +688,7 @@ class LLMClient:
         session = await self._get_session()
         request_kwargs = {"proxy": self.proxy_url} if self.proxy_url else {}
         async with session.post(url, json=body, headers=headers,
-                                timeout=aiohttp.ClientTimeout(total=120),
+                                timeout=self.request_timeout,
                                 **request_kwargs) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
@@ -762,7 +772,7 @@ class LLMClient:
         finish_reason = "stop"
         total_tokens = 0
         async with session.post(url, json=body, headers=headers,
-                                timeout=aiohttp.ClientTimeout(total=120),
+                                timeout=self.request_timeout,
                                 **request_kwargs) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
@@ -843,7 +853,7 @@ class LLMClient:
         input_tokens = 0
         output_tokens = 0
         async with session.post(url, json=body, headers=headers,
-                                timeout=aiohttp.ClientTimeout(total=120),
+                                timeout=self.request_timeout,
                                 **request_kwargs) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
