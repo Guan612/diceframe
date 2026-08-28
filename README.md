@@ -150,6 +150,10 @@ npm run build:standalone
 
 新手玩法、多人流程、群聊命令和状态变动说明见 [DiceFrame 用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md)。
 
+### 移动端 App
+
+DiceFrame 提供独立的 Android 客户端，源码在 [diceframe-mobile](https://github.com/diceframe/diceframe-mobile) 仓库，安装包在 [Releases](https://github.com/diceframe/diceframe-mobile/releases) 页下载；使用问题、需求与贡献也请前往该仓库。
+
 ## 第一局怎么玩
 
 1. 打开 WebUI。

@@ -385,8 +385,177 @@
   font-size: 18px;
 }
 
+/* 自签证书行内的反代/自有证书教学折叠区 */
+.security-pane .security-self-signed-guide {
+  border-top: 1px solid color-mix(in srgb, var(--df-border-soft) 74%, transparent);
+}
+
+.security-pane .security-self-signed-guide .security-guide-warning {
+  margin: 2px 0 12px;
+}
+
+.security-pane .security-self-signed-guide .n-collapse-item__header {
+  min-height: 48px;
+  padding: 12px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--df-text-secondary);
+  background: color-mix(in srgb, var(--df-surface-2) 44%, transparent);
+}
+
+.security-pane .security-self-signed-guide .n-collapse-item__header:hover {
+  color: var(--df-text);
+  background: color-mix(in srgb, var(--df-surface-2) 68%, transparent);
+}
+
+/* Naive UI 对首个折叠项强制 padding-top: 0（cssr 注入顺序靠后，同级特异性会覆盖
+   上面的 padding），导致标题贴顶、垂直不居中；这里用更高特异性补回对称内边距。 */
+.security-pane .security-self-signed-guide .n-collapse-item:first-child > .n-collapse-item__header {
+  padding-top: 12px;
+}
+
+.security-pane .security-self-signed-guide .n-collapse-item-arrow {
+  margin-right: 6px;
+  color: var(--df-text-muted);
+  font-size: 16px;
+}
+
+.security-pane .security-self-signed-guide .n-collapse-item__content-wrapper {
+  padding: 0 18px 14px;
+}
+
+.security-pane .security-self-signed-guide .n-collapse-item__content-inner {
+  padding-top: 4px;
+}
+
+.security-pane .security-proxy-intro {
+  margin: 0 0 10px;
+  color: var(--df-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.security-pane .security-proxy-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: proxy-step;
+}
+
+.security-pane .security-proxy-steps > li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  counter-increment: proxy-step;
+}
+
+.security-pane .security-proxy-steps > li::before {
+  content: counter(proxy-step);
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  color: var(--df-text-muted);
+  background: color-mix(in srgb, var(--df-interactive) 14%, var(--df-surface-2));
+  font-size: 10px;
+  font-weight: 700;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.security-pane .security-proxy-steps > li strong {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.security-pane .security-proxy-steps > li small {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.security-pane .security-proxy-steps strong {
+  color: var(--df-text-secondary);
+  font-size: 12px;
+}
+
+.security-pane .security-proxy-steps small {
+  display: block;
+  color: var(--df-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.security-pane .security-proxy-code {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.security-pane .security-proxy-code code {
+  padding: 8px 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-sm);
+  background: color-mix(in srgb, var(--df-surface-2) 70%, transparent);
+  color: var(--df-text-secondary);
+  font-family: var(--df-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.security-pane .security-proxy-note {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.security-pane .security-proxy-note > .n-icon {
+  margin-top: 1px;
+  color: var(--df-interactive-strong);
+  font-size: 15px;
+}
+
+.security-pane .security-proxy-note small {
+  color: var(--df-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
 .security-pane .security-mode-unavailable {
   opacity: 0.72;
+}
+
+/* 当前访问地址行：地址醒目可复制，说明换行提示旧链接失效 */
+.security-pane .security-address-cell {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.security-pane .security-address-cell strong {
+  color: var(--df-text-secondary);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.security-pane .security-address-cell small {
+  color: var(--df-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* 模式行标题与说明上下堆叠：说明文字较长时不再横向挤压 */
+.security-pane .security-mode-row > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
 }
 
 .security-pane .security-mode-lets-encrypt {

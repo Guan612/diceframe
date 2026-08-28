@@ -93,6 +93,10 @@ npm run build:standalone
 
 See the [standalone WebUI deployment guide](https://diceframe.com/en/docs?doc=standalone) for Cloudflare Pages settings, backend HTTPS, the CORS allowlist, security guidance, and troubleshooting. Packaged Windows builds, Docker, and the server-served WebUI keep using the default same-origin mode and need no standalone configuration.
 
+### Mobile App
+
+DiceFrame offers a dedicated Android client. Its source lives in the [diceframe-mobile](https://github.com/diceframe/diceframe-mobile) repository and installers are published on its [Releases](https://github.com/diceframe/diceframe-mobile/releases) page; please direct usage questions, feature requests, and contributions there.
+
 ## Docker
 
 Run these commands from a cloned repository or extracted source release directory that contains `docker-compose.yml`:
