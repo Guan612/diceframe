@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/client'
 import type { AdventuresResponse, GmStyle, SceneImageRef, WorldCloneResponse, WorldListResponse, WorldSummary, WorldTemplateSummary, WorldTemplatesResponse } from '@/api/types'
-import { resolveSceneImageUrl, revokeSceneImageUrl } from '@/api/sceneImages'
+import { resolveSceneImageUrl, revokeSceneImageUrl, SCENE_IMAGE_ACCEPT, uploadSceneImage } from '@/api/sceneImages'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { useConfirm } from '@/composables/useConfirm'
 import { useToast } from '@/composables/useToast'
@@ -38,6 +38,37 @@ const busy = ref(false)
 const previewCard = ref<GalleryCard | null>(null)
 const styleForm = ref<GmStyle>({ ...DEFAULT_STYLE })
 const styleBusy = ref(false)
+const coverInput = ref<HTMLInputElement | null>(null)
+const coverTargetId = ref('')
+
+// 用户世界的头图：走创建页同一条 /scene-images 上传 + 模板写回路径
+function changeCover(card: GalleryCard) {
+  coverTargetId.value = card.id
+  coverInput.value?.click()
+}
+
+async function onCoverFilePicked(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  const worldId = coverTargetId.value
+  if (!file || !worldId || busy.value) return
+  busy.value = true
+  try {
+    const sceneImage = await uploadSceneImage(file)
+    const result = await api<{ ok: boolean; error?: string }>('/worlds/user-scene-image', {
+      method: 'POST',
+      body: JSON.stringify({ world_id: worldId, scene_image: sceneImage }),
+    })
+    if (!result.ok) throw new Error(result.error || 'cover-save-failed')
+    toast.success(t('worldsCoverUpdated'))
+    await load()
+  } catch (cause: unknown) {
+    toast.error(errorMessage(cause))
+  } finally {
+    busy.value = false
+  }
+}
 
 function templateCard(template: WorldTemplateSummary): GalleryCard | null {
   const id = String(template.world_id || template.id || '')
@@ -255,10 +286,21 @@ function coverStyle(card: GalleryCard): Record<string, string> {
             <button class="world-card-clone" :disabled="busy || card.source === 'user'" @click="cloneWorld(card)">
               {{ t('worldsActionClone') }}
             </button>
+            <button v-if="card.source === 'user'" :disabled="busy" @click="changeCover(card)">
+              {{ t('worldsActionChangeCover') }}
+            </button>
           </div>
         </div>
       </article>
     </div>
+
+    <input
+      ref="coverInput"
+      type="file"
+      :accept="SCENE_IMAGE_ACCEPT"
+      style="display: none"
+      @change="onCoverFilePicked"
+    >
 
     <Modal v-if="previewCard" :title="previewCard.name" @close="previewCard = null">
       <p v-if="previewCard.description" class="muted">{{ previewCard.description }}</p>

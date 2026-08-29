@@ -20,6 +20,8 @@ vi.mock('../src/api/client', async importOriginal => {
 vi.mock('../src/api/sceneImages', () => ({
   resolveSceneImageUrl: vi.fn(async () => 'blob:fake-cover'),
   revokeSceneImageUrl: vi.fn(),
+  SCENE_IMAGE_ACCEPT: 'image/jpeg,image/png,image/webp',
+  uploadSceneImage: vi.fn(async () => ({ kind: 'upload', asset_id: 'scene-test' })),
 }))
 vi.mock('../src/composables/useBackgroundImages', () => ({
   ruleSceneUrl: () => '',
