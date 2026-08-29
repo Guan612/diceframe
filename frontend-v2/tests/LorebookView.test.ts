@@ -267,4 +267,61 @@ describe('LorebookView perspective inspector', () => {
     expect(savedBody.visible_to).toEqual(['*'])
     wrapper.unmount()
   })
+
+  it('strips public markers typed into the named-characters field', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    const bodyButton = (text: string) =>
+      new DOMWrapper([...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === text)!)
+
+    await bodyButton('新增条目').trigger('click')
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+    // radio 语义：可被读屏识别当前档位
+    expect(modeButtons().map(b => b.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
+    expect(modeButtons()[0].getAttribute('aria-checked')).toBe('true')
+
+    await new DOMWrapper(modeButtons()[2]).trigger('click')
+    const names = document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]') as HTMLInputElement
+    await new DOMWrapper(names).setValue('*, public, 公开, u1, Alice')
+
+    await bodyButton('保存').trigger('click')
+    await flushPromises()
+
+    const savedCall = mocks.api.mock.calls.find(call =>
+      String(call[0]) === '/lorebook' && (call[1] as { method?: string }).method === 'POST',
+    )
+    const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
+    expect(savedBody.visible_to).toEqual(['u1', 'Alice'])
+    wrapper.unmount()
+  })
+
+  it('recognizes historical public aliases and canonicalizes on save', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    // 城门守卫夹具带着历史别名 ['public']：打开编辑器应识别为「全队公开」
+    const row = wrapper.findAll('.lore-row').find(r => r.text().includes('城门守卫'))!
+    await row.find('.memory-row-actions button').trigger('click')
+    await flushPromises()
+
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+    expect(modeButtons()[1].classList.contains('active')).toBe(true)
+
+    const save = new DOMWrapper(
+      [...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === '保存')!,
+    )
+    await save.trigger('click')
+    await flushPromises()
+
+    const savedCall = mocks.api.mock.calls.find(call =>
+      String(call[0]) === '/lorebook/a' && (call[1] as { method?: string }).method === 'PUT',
+    )
+    expect(savedCall).toBeTruthy()
+    const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
+    expect(savedBody.visible_to).toEqual(['*'])
+    wrapper.unmount()
+  })
 })

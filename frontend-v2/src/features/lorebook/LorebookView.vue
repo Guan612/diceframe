@@ -13,7 +13,7 @@ import Modal from '@/components/ui/Modal.vue'
 import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
 import { useLorePerspective } from './useLorePerspective'
-import { PUBLIC_VISIBILITY_MARKERS, visibilityModeOf, type LoreVisibilityMode } from './visibility'
+import { PUBLIC_VISIBILITY_MARKERS, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
 
 interface LoreEdit extends LoreEntry {
   tier?: string
@@ -172,10 +172,7 @@ function setVisibilityMode(mode: LoreVisibilityMode) {
   } else if (mode === 'gm') {
     loreEdit.value.visible_to = []
   } else {
-    const markers = new Set(PUBLIC_VISIBILITY_MARKERS.map(marker => marker.toLowerCase()))
-    loreEdit.value.visible_to = current.filter(
-      value => !markers.has(String(value).trim().toLowerCase()),
-    )
+    loreEdit.value.visible_to = sanitizeCharacterVisibility(current)
   }
 }
 
@@ -199,6 +196,19 @@ function toggleCharacterVisible(p: Player) {
   )
   const wasSelected = kept.length !== current.length
   loreEdit.value.visible_to = wasSelected ? kept : [...kept, uid]
+}
+// 手输路径同样过 sanitize：* / public / 公开 等 marker 不会混进「指定角色」档
+function setCharacterTargets(e: Event) {
+  if (!loreEdit.value) return
+  const values = (e.target as HTMLInputElement).value.split(/[,，、]/).map(x => x.trim()).filter(Boolean)
+  loreEdit.value.visible_to = sanitizeCharacterVisibility(values)
+}
+// 保存前按当前档位做最后一次归一化（defense-in-depth：未来 UI 改动也不漂移）
+function normalizeVisibilityForSave() {
+  if (!loreEdit.value) return
+  if (visibilityMode.value === 'gm') loreEdit.value.visible_to = []
+  else if (visibilityMode.value === 'public') loreEdit.value.visible_to = ['*']
+  else loreEdit.value.visible_to = sanitizeCharacterVisibility(loreEdit.value.visible_to || [])
 }
 
 function arrText(a: unknown) { return Array.isArray(a) ? a.join(t('listSeparator')) : '' }
@@ -242,6 +252,7 @@ function setArr(field: keyof LoreEdit, e: Event) {
 
 async function saveLore() {
   if (!loreEdit.value) return
+  normalizeVisibilityForSave()
   const entry: LoreEdit = { ...loreEdit.value, world_id: currentWorldId.value }
   const path = entry.id ? `/lorebook/${encodeURIComponent(entry.id)}` : '/lorebook'
   try {
@@ -495,15 +506,15 @@ async function importLore(e: Event) {
       <label>{{ t('recursiveTrigger') }}<input :value="arrText(loreEdit.triggers_recursive)" @input="setArr('triggers_recursive', $event)" :placeholder="t('recursiveTriggerPlaceholder')"></label>
       <label>{{ t('loreVisibilityLabel') }}</label>
       <div class="lore-filter-options" role="radiogroup" :aria-label="t('loreVisibilityLabel')">
-        <button type="button" :class="{ active: visibilityMode === 'gm' }" @click="setVisibilityMode('gm')">{{ t('loreAudienceGmSecret') }}</button>
-        <button type="button" :class="{ active: visibilityMode === 'public' }" @click="setVisibilityMode('public')">{{ t('loreVisibilityPublic') }}</button>
-        <button type="button" :class="{ active: visibilityMode === 'characters' }" @click="setVisibilityMode('characters')">{{ t('loreVisibilityCharacters') }}</button>
+        <button type="button" role="radio" :aria-checked="visibilityMode === 'gm'" :class="{ active: visibilityMode === 'gm' }" @click="setVisibilityMode('gm')">{{ t('loreAudienceGmSecret') }}</button>
+        <button type="button" role="radio" :aria-checked="visibilityMode === 'public'" :class="{ active: visibilityMode === 'public' }" @click="setVisibilityMode('public')">{{ t('loreVisibilityPublic') }}</button>
+        <button type="button" role="radio" :aria-checked="visibilityMode === 'characters'" :class="{ active: visibilityMode === 'characters' }" @click="setVisibilityMode('characters')">{{ t('loreVisibilityCharacters') }}</button>
       </div>
       <template v-if="visibilityMode === 'characters'">
         <div v-if="players.length" class="lore-filter-options" role="group" :aria-label="t('visibleCharacters')">
           <button v-for="p in players" :key="p.user_id" type="button" :class="{ active: isVisibleToPlayer(p) }" @click="toggleCharacterVisible(p)">{{ characterLabel(p) }}</button>
         </div>
-        <label>{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setArr('visible_to', $event)" :placeholder="t('visibleCharactersPlaceholder')"></label>
+        <label>{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setCharacterTargets" :placeholder="t('visibleCharactersPlaceholder')"></label>
       </template>
       <label>{{ t('connectedEntries') }}<input :value="arrText(loreEdit.connected_to)" @input="setArr('connected_to', $event)" :placeholder="t('connectedEntriesPlaceholder')"></label>
       <div class="grid-2"><label>{{ t('stickyRounds') }}<input type="number" v-model.number="loreEdit.sticky"></label><label>{{ t('cooldown') }}<input type="number" v-model.number="loreEdit.cooldown"></label></div>

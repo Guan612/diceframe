@@ -17,3 +17,17 @@ export function visibilityModeOf(values: readonly string[] | undefined): LoreVis
   const markers = new Set(PUBLIC_VISIBILITY_MARKERS.map(marker => marker.toLowerCase()))
   return list.some(value => markers.has(value)) ? 'public' : 'characters'
 }
+
+// 「指定角色」档不允许混入 public marker：手输 * / public / 公开 会被剥掉，
+// UI 档位与真实权限保持一致。trim、去空、大小写不敏感去重。
+export function sanitizeCharacterVisibility(values: readonly string[] | undefined): string[] {
+  const markers = new Set(PUBLIC_VISIBILITY_MARKERS.map(marker => marker.toLowerCase()))
+  const out: string[] = []
+  for (const raw of values || []) {
+    const value = String(raw).trim()
+    if (!value || markers.has(value.toLowerCase())) continue
+    if (out.some(existing => existing.toLowerCase() === value.toLowerCase())) continue
+    out.push(value)
+  }
+  return out
+}
