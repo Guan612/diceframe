@@ -376,4 +376,52 @@ describe('LorebookView perspective inspector', () => {
     expect(savedBody.visible_to).toEqual(['*'])
     wrapper.unmount()
   })
+
+  it('shows historical comma-separated visibility in the named-characters field', async () => {
+    // 老数据 visible_to 可能是逗号分隔字符串：编辑框必须真实显示，不能空白
+    const historical = {
+      entries: [
+        { id: 'd', world_id: 'w1', name: '旧版点名', type: 'npc', content: '历史字符串可见性', visible_to: 'Alice,Bob' },
+      ],
+    }
+    mocks.api.mockImplementation(async (path: string) => {
+      const p = String(path)
+      if (p.includes('/preview')) return previewFor(p)
+      if (p.includes('/characters')) return characters
+      if (p.includes('/games')) return games
+      if (p.includes('/lorebook/')) return historical
+      if (p.includes('/worlds')) return worlds
+      throw new Error(`unexpected path ${p}`)
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    const row = wrapper.findAll('.lore-row').find(r => r.text().includes('旧版点名'))!
+    await row.find('.memory-row-actions button').trigger('click')
+    await flushPromises()
+
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+    // "Alice,Bob" 不含公开标记：档位识别为「指定角色」
+    expect(modeButtons()[2].classList.contains('active')).toBe(true)
+    const names = document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]') as HTMLInputElement
+    expect(names).toBeTruthy()
+    expect(names.value).toBe('Alice、Bob')
+
+    const save = new DOMWrapper(
+      [...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === '保存')!,
+    )
+    await save.trigger('click')
+    await flushPromises()
+
+    const savedCall = mocks.api.mock.calls.find(call =>
+      String(call[0]) === '/lorebook/d' && (call[1] as { method?: string }).method === 'PUT',
+    )
+    expect(savedCall).toBeTruthy()
+    const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
+    // 历史字符串保存时 canonicalize 成 string[]，点名不能丢
+    expect(savedBody.visible_to).toEqual(['Alice', 'Bob'])
+    wrapper.unmount()
+  })
 })

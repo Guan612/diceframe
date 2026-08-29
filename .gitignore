@@ -9,6 +9,9 @@ __pycache__/
 *.pyo
 .venv/
 
+# 依赖目录（根目录曾被误提交 Vitest 缓存；frontend-v2 有自己的 .gitignore）
+node_modules/
+
 # IDE
 .idea/
 .vscode/

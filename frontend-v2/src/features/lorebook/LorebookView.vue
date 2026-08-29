@@ -225,6 +225,12 @@ function normalizeVisibilityForSave() {
 }
 
 function arrText(a: unknown) { return Array.isArray(a) ? a.join(t('listSeparator')) : '' }
+// 历史 visible_to 可能是逗号分隔字符串（"Alice,Bob"）：arrText 的 Array-only
+// 分支会把它渲染成空白，误导用户以为点名丢了。可见性输入框专用读取路径，
+// 与 visibilityModeOf 同走归一化；keywords / connected_to 等仍用 arrText。
+function visibilityTargetsText(value: unknown) {
+  return normalizeVisibilityValues(value).join(t('listSeparator'))
+}
 function normalizeLoreType(type: unknown): string {
   const text = String(type || 'other')
   return loreTypeOrder.includes(text as (typeof loreTypeOrder)[number]) ? text : 'other'
@@ -518,7 +524,7 @@ async function importLore(e: Event) {
         <div v-if="players.length" class="lore-filter-options" role="group" :aria-label="t('visibleCharacters')">
           <button v-for="p in players" :key="p.user_id" type="button" :class="{ active: isVisibleToPlayer(p) }" @click="toggleCharacterVisible(p)">{{ characterLabel(p) }}</button>
         </div>
-        <label>{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setCharacterTargets" :placeholder="t('visibleCharactersPlaceholder')"></label>
+        <label>{{ t('visibleCharacters') }}<input :value="visibilityTargetsText(loreEdit.visible_to)" @input="setCharacterTargets" :placeholder="t('visibleCharactersPlaceholder')"></label>
       </template>
       <label>{{ t('connectedEntries') }}<input :value="arrText(loreEdit.connected_to)" @input="setArr('connected_to', $event)" :placeholder="t('connectedEntriesPlaceholder')"></label>
       <div class="grid-2"><label>{{ t('stickyRounds') }}<input type="number" v-model.number="loreEdit.sticky"></label><label>{{ t('cooldown') }}<input type="number" v-model.number="loreEdit.cooldown"></label></div>

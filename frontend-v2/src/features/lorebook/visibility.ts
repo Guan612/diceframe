@@ -36,7 +36,9 @@ export function visibilityModeOf(value: unknown): LoreVisibilityMode {
   const list = normalizeVisibilityValues(value)
   if (!list.length) return 'gm'
   const markers = new Set(PUBLIC_VISIBILITY_MARKERS.map(marker => marker.toLowerCase()))
-  return list.some(item => markers.has(item)) ? 'public' : 'characters'
+  // 后端判定大小写不敏感（casefold），编辑端必须一致：历史 "PUBLIC" 一旦被
+  // 归成「指定角色」，保存时 sanitizer 会把它剥掉 → 静默变成 GM-only。
+  return list.some(item => markers.has(item.toLowerCase())) ? 'public' : 'characters'
 }
 
 // 「指定角色」档不允许混入 public marker：手输 * / public / 公开 会被剥掉，
