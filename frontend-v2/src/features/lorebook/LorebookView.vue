@@ -80,15 +80,31 @@ function matchesPerspectiveFilter(entry: LoreEntry): boolean {
 function resolveInspectorOpen(): boolean {
   // 「收起」的选择在任何屏宽都尊重；「展开」只在宽屏生效——
   // 否则宽屏上随手展开一次，手机每次进页面都会被抽屉自动遮挡。
-  const saved = localStorage.getItem('lore_inspector_open')
+  let saved: string | null = null
+  try {
+    saved = localStorage.getItem('lore_inspector_open')
+  } catch {
+    return true
+  }
   if (saved === '0') return false
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
   return !window.matchMedia('(max-width: 1100px)').matches
 }
 const inspectorOpen = ref(resolveInspectorOpen())
+function persistInspectorOpen(open: boolean) {
+  try {
+    localStorage.setItem('lore_inspector_open', open ? '1' : '0')
+  } catch {
+    // storage 不可用时仅当前 session 生效
+  }
+}
 function toggleInspector() {
   inspectorOpen.value = !inspectorOpen.value
-  localStorage.setItem('lore_inspector_open', inspectorOpen.value ? '1' : '0')
+  persistInspectorOpen(inspectorOpen.value)
+}
+function closeInspector() {
+  inspectorOpen.value = false
+  persistInspectorOpen(false)
 }
 
 function worldIdOf(w: WorldSummary | undefined): string { return String(w?.id || w?.world_id || '') }
@@ -445,7 +461,7 @@ async function importLore(e: Event) {
       <template #actions><button @click="loreEdit = null">{{ t('cancel') }}</button><button class="primary" @click="saveLore">{{ t('saveAction') }}</button></template>
     </Modal>
       </main>
-      <div v-if="inspectorOpen" class="lore-inspector-backdrop" @click="inspectorOpen = false"></div>
+      <div v-if="inspectorOpen" class="lore-inspector-backdrop" @click="closeInspector"></div>
       <LorePerspectiveInspector
         v-if="inspectorOpen"
         :players="players"
@@ -460,7 +476,7 @@ async function importLore(e: Event) {
         :filter="perspectiveFilter"
         @select-viewer="setViewer"
         @select-filter="perspectiveFilter = $event"
-        @close="inspectorOpen = false"
+        @close="closeInspector"
       />
     </div>
   </section>

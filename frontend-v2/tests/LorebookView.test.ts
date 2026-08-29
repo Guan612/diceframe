@@ -121,6 +121,43 @@ describe('LorebookView perspective inspector', () => {
     expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
   })
 
+  it('persists a manual close across remounts', async () => {
+    const first = mountView()
+    await flushPromises()
+    expect(first.find('.lore-perspective-inspector').exists()).toBe(true)
+
+    await first.find('.lore-inspector-close').trigger('click')
+    expect(first.find('.lore-perspective-inspector').exists()).toBe(false)
+    expect(localStorage.getItem('lore_inspector_open')).toBe('0')
+    first.unmount()
+
+    const second = mountView()
+    await flushPromises()
+    expect(second.find('.lore-perspective-inspector').exists()).toBe(false)
+    second.unmount()
+  })
+
+  it('does not auto-open on narrow screens even with a saved open', async () => {
+    localStorage.setItem('lore_inspector_open', '1')
+    stubNarrowViewport()
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
+  })
+
+  it('keeps mounting and closing when localStorage writes are rejected', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage denied')
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(true)
+    await wrapper.find('.lore-inspector-close').trigger('click')
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders audience badges and the summary from backend projections only', async () => {
     const wrapper = mountView()
     await flushPromises()
