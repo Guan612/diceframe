@@ -40,6 +40,7 @@ async def test_generate_lorebook_entries_from_natural_language(web_api):
                         "content": "雾气笼罩的走私港口，银钥会在码头仓库中安排秘密交易。",
                         "tier": "core",
                         "unreliable": False,
+                        "visibility": "public",
                     },
                     {
                         "name": "银钥会",
@@ -68,6 +69,11 @@ async def test_generate_lorebook_entries_from_natural_language(web_api):
     assert result["count"] == 2
     entries = lorebook.list_entries("custom_world")
     assert {e["name"] for e in entries} == {"黑港城", "银钥会"}
+    by_name = {e["name"]: e for e in entries}
+    # AI 标了 public 的常识条目写入 canonical 标记；未标的 fail-closed 成 GM 秘密
+    assert by_name["黑港城"]["visible_to"] == ["*"]
+    assert by_name["银钥会"].get("visible_to", []) == []
+    assert all("visibility" not in e for e in entries)
     assert next(e for e in entries if e["name"] == "银钥会")["keywords"][0] == "银钥会"
     assert fake_llm.calls[-1]["kwargs"]["json_mode"] is True
 

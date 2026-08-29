@@ -356,7 +356,7 @@ def _normalize_generated_entry(raw: dict, world_id: str, existing_ids: set[str],
     keywords = [str(k).strip() for k in keywords if str(k).strip()]
     if name not in keywords:
         keywords.insert(0, name)
-    return {
+    entry = {
         "id": _entry_id_from_name(world_id, name, existing_ids, index),
         "world_id": world_id,
         "name": name,
@@ -367,7 +367,10 @@ def _normalize_generated_entry(raw: dict, world_id: str, existing_ids: set[str],
         "unreliable": bool(raw.get("unreliable", False)),
         "match_mode": "any",
         "order": 100 + index,
+        "visibility": raw.get("visibility"),
     }
+    creator.apply_generated_visibility(entry)
+    return entry
 
 
 async def generate_lorebook_entries(api: "WebAPI", world_id: str, prompt: str,
