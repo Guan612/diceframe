@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import LorebookView from '../src/features/lorebook/LorebookView.vue'
 import { i18n } from '../src/i18n'
@@ -64,8 +64,11 @@ function previewFor(path: string) {
   }
 }
 
-function mountView() {
-  return mount(LorebookView, { global: { plugins: [i18n] } })
+function mountView(attachToBody = false) {
+  return mount(LorebookView, {
+    global: { plugins: [i18n] },
+    attachTo: attachToBody ? document.body : undefined,
+  })
 }
 
 describe('LorebookView perspective inspector', () => {
@@ -121,6 +124,43 @@ describe('LorebookView perspective inspector', () => {
     expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
   })
 
+  it('persists a manual close across remounts', async () => {
+    const first = mountView()
+    await flushPromises()
+    expect(first.find('.lore-perspective-inspector').exists()).toBe(true)
+
+    await first.find('.lore-inspector-close').trigger('click')
+    expect(first.find('.lore-perspective-inspector').exists()).toBe(false)
+    expect(localStorage.getItem('lore_inspector_open')).toBe('0')
+    first.unmount()
+
+    const second = mountView()
+    await flushPromises()
+    expect(second.find('.lore-perspective-inspector').exists()).toBe(false)
+    second.unmount()
+  })
+
+  it('does not auto-open on narrow screens even with a saved open', async () => {
+    localStorage.setItem('lore_inspector_open', '1')
+    stubNarrowViewport()
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
+  })
+
+  it('keeps mounting and closing when localStorage writes are rejected', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage denied')
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(true)
+    await wrapper.find('.lore-inspector-close').trigger('click')
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('renders audience badges and the summary from backend projections only', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -165,7 +205,7 @@ describe('LorebookView perspective inspector', () => {
     await flushPromises()
     expect(wrapper.findAll('.lore-row')).toHaveLength(3)
 
-    const filterButtons = wrapper.findAll('.lore-viewer-filter button')
+    const filterButtons = wrapper.findAll('.lore-filter-options button')
     await filterButtons.find(b => b.text() === '此视角可见')!.trigger('click')
     expect(wrapper.findAll('.lore-row')).toHaveLength(1)
     expect(wrapper.find('.lore-row').text()).toContain('城门守卫')
@@ -199,5 +239,126 @@ describe('LorebookView perspective inspector', () => {
     const previewCalls = mocks.api.mock.calls.map(call => String(call[0])).filter(p => p.includes('/preview'))
     expect(previewCalls.length).toBeGreaterThan(0)
     expect(previewCalls.every(p => p.includes('viewer=gm'))).toBe(true)
+  })
+
+  it('edits visibility through the explicit three-mode control', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    const bodyButton = (text: string) =>
+      new DOMWrapper([...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === text)!)
+
+    await bodyButton('新增条目').trigger('click')
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+    expect(modeButtons().map(b => b.textContent?.trim())).toEqual(['GM 秘密', '全队公开', '指定角色'])
+    expect(modeButtons()[0].classList.contains('active')).toBe(true)
+
+    // 新条目默认 GM 秘密：角色输入框不出现
+    expect(document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]')).toBeNull()
+
+    // 指定角色：输入框出现，队员 chips 点选写入 canonical uid
+    await new DOMWrapper(modeButtons()[2]).trigger('click')
+    const names = document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]')
+    expect(names).toBeTruthy()
+
+    const playerChips = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+      .filter(b => ['莱拉', '布兰'].includes(b.textContent?.trim() || ''))
+    expect(playerChips().map(b => b.textContent?.trim())).toEqual(['莱拉', '布兰'])
+    await new DOMWrapper(playerChips()[0]!).trigger('click')
+    expect(playerChips()[0]!.classList.contains('active')).toBe(true)
+
+    await bodyButton('保存').trigger('click')
+    await flushPromises()
+
+    const savedCall = mocks.api.mock.calls.find(call =>
+      String(call[0]) === '/lorebook' && (call[1] as { method?: string }).method === 'POST',
+    )
+    expect(savedCall).toBeTruthy()
+    const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
+    expect(savedBody.visible_to).toEqual(['u1'])
+    wrapper.unmount()
+  })
+
+  it('writes the canonical public marker when party-wide is picked', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    const bodyButton = (text: string) =>
+      new DOMWrapper([...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === text)!)
+
+    await bodyButton('新增条目').trigger('click')
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+    await new DOMWrapper(modeButtons()[1]).trigger('click')
+    await new DOMWrapper(modeButtons()[0]).trigger('click')
+    await new DOMWrapper(modeButtons()[1]).trigger('click')
+
+    await bodyButton('保存').trigger('click')
+    await flushPromises()
+
+    const savedCall = mocks.api.mock.calls.find(call =>
+      String(call[0]) === '/lorebook' && (call[1] as { method?: string }).method === 'POST',
+    )
+    const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
+    expect(savedBody.visible_to).toEqual(['*'])
+    wrapper.unmount()
+  })
+
+  it('strips public markers typed into the named-characters field', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    const bodyButton = (text: string) =>
+      new DOMWrapper([...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === text)!)
+
+    await bodyButton('新增条目').trigger('click')
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+    // radio 语义：可被读屏识别当前档位
+    expect(modeButtons().map(b => b.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
+    expect(modeButtons()[0].getAttribute('aria-checked')).toBe('true')
+
+    await new DOMWrapper(modeButtons()[2]).trigger('click')
+    const names = document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]') as HTMLInputElement
+    await new DOMWrapper(names).setValue('*, public, 公开, u1, Alice')
+
+    await bodyButton('保存').trigger('click')
+    await flushPromises()
+
+    const savedCall = mocks.api.mock.calls.find(call =>
+      String(call[0]) === '/lorebook' && (call[1] as { method?: string }).method === 'POST',
+    )
+    const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
+    expect(savedBody.visible_to).toEqual(['u1', 'Alice'])
+    wrapper.unmount()
+  })
+
+  it('recognizes historical public aliases and canonicalizes on save', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    // 城门守卫夹具带着历史别名 ['public']：打开编辑器应识别为「全队公开」
+    const row = wrapper.findAll('.lore-row').find(r => r.text().includes('城门守卫'))!
+    await row.find('.memory-row-actions button').trigger('click')
+    await flushPromises()
+
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
+    expect(modeButtons()[1].classList.contains('active')).toBe(true)
+
+    const save = new DOMWrapper(
+      [...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === '保存')!,
+    )
+    await save.trigger('click')
+    await flushPromises()
+
+    const savedCall = mocks.api.mock.calls.find(call =>
+      String(call[0]) === '/lorebook/a' && (call[1] as { method?: string }).method === 'PUT',
+    )
+    expect(savedCall).toBeTruthy()
+    const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
+    expect(savedBody.visible_to).toEqual(['*'])
+    wrapper.unmount()
   })
 })

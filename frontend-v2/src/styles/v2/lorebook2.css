@@ -97,6 +97,37 @@
 .lore-viewer-options button {
   padding: 5px 10px;
   font-size: 12px;
+  cursor: pointer;
+}
+
+/* 选中态与 .lore-type-tabs button.active 同一语言：accent 描边 + token 自适应浅底 */
+.lore-viewer-options button.active,
+.lore-filter-options button.active {
+  border-color: var(--df-accent);
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent) 18%, transparent);
+}
+
+/* base.css 的 body.light button:not(.primary)... 特异性 (0,4,1)，light 下会盖掉
+   上一条导致选中态不可见；用同一排除集反超（lorebook2.css 加载更晚）。 */
+body.light .lore-viewer-options button.active:not(.primary):not(.danger):not(.success),
+body.light .lore-filter-options button.active:not(.primary):not(.danger):not(.success) {
+  border-color: var(--df-accent);
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent) 18%, transparent);
+}
+
+/* #173 合入后与检查器侧的同名规则一致；单独合入本分支时编辑弹窗也依赖它 */
+.lore-filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lore-filter-options button {
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .lore-summary-list {
@@ -119,24 +150,23 @@
   word-break: break-word;
 }
 
-/* 视角过滤段与可见性徽标 */
-.lore-viewer-filter {
+/* 视角筛选段（渲染在「视角与可见性」检查器内）与可见性徽标 */
+.lore-filter-options {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
 }
 
-.lore-viewer-filter button {
+.lore-filter-options button {
   padding: 4px 10px;
   font-size: 12px;
 }
 
+/* 款式与同行的类型徽标（.memory-row-head .badge）一致，仅靠 audience 颜色区分 */
 .lore-visibility-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
+  padding: 1px 7px;
+  border-radius: 6px;
   font-size: 11px;
-  font-weight: 700;
   white-space: nowrap;
 }
 

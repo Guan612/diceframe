@@ -13,6 +13,7 @@ import Modal from '@/components/ui/Modal.vue'
 import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
 import { useLorePerspective } from './useLorePerspective'
+import { PUBLIC_VISIBILITY_MARKERS, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
 
 interface LoreEdit extends LoreEntry {
   tier?: string
@@ -71,11 +72,6 @@ function toggleEntrySelection(entry: LoreEntry) {
 }
 
 const perspectiveFilter = ref<'all' | 'visible' | 'hidden'>('all')
-const perspectiveFilters = computed(() => [
-  { id: 'all' as const, label: t('loreFilterAll') },
-  { id: 'visible' as const, label: t('loreSummaryVisible') },
-  { id: 'hidden' as const, label: t('loreFilterHidden') },
-])
 function matchesPerspectiveFilter(entry: LoreEntry): boolean {
   if (perspectiveFilter.value === 'all') return true
   const visible = projectionOf(entry.id)?.visible || false
@@ -83,16 +79,33 @@ function matchesPerspectiveFilter(entry: LoreEntry): boolean {
 }
 
 function resolveInspectorOpen(): boolean {
-  const saved = localStorage.getItem('lore_inspector_open')
-  if (saved) return saved === '1'
-  // 宽屏常驻展开；窄屏默认收起，避免一进页面就被抽屉盖住一半。
+  // 「收起」的选择在任何屏宽都尊重；「展开」只在宽屏生效——
+  // 否则宽屏上随手展开一次，手机每次进页面都会被抽屉自动遮挡。
+  let saved: string | null = null
+  try {
+    saved = localStorage.getItem('lore_inspector_open')
+  } catch {
+    return true
+  }
+  if (saved === '0') return false
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
   return !window.matchMedia('(max-width: 1100px)').matches
 }
 const inspectorOpen = ref(resolveInspectorOpen())
+function persistInspectorOpen(open: boolean) {
+  try {
+    localStorage.setItem('lore_inspector_open', open ? '1' : '0')
+  } catch {
+    // storage 不可用时仅当前 session 生效
+  }
+}
 function toggleInspector() {
   inspectorOpen.value = !inspectorOpen.value
-  localStorage.setItem('lore_inspector_open', inspectorOpen.value ? '1' : '0')
+  persistInspectorOpen(inspectorOpen.value)
+}
+function closeInspector() {
+  inspectorOpen.value = false
+  persistInspectorOpen(false)
 }
 
 function worldIdOf(w: WorldSummary | undefined): string { return String(w?.id || w?.world_id || '') }
@@ -155,6 +168,59 @@ function openLore(entry?: LoreEntry) {
     triggers_recursive: [], visible_to: [], connected_to: [], sticky: 0,
     cooldown: 0, delay: 0, order: 100, probability: 100, group: '', group_weight: 1,
   }
+  visibilityMode.value = visibilityModeOf(loreEdit.value.visible_to)
+}
+
+// 编辑表单的可见性三档：GM 秘密 / 全队公开 / 指定角色。
+// 切档直接改写 visible_to；「指定角色」保留点名条目、剥离公开标记，
+// 避免 ["*"] 被带进角色文本框造成档位与内容不一致。
+const visibilityMode = ref<LoreVisibilityMode>('gm')
+function setVisibilityMode(mode: LoreVisibilityMode) {
+  visibilityMode.value = mode
+  if (!loreEdit.value) return
+  const current = loreEdit.value.visible_to || []
+  if (mode === 'public') {
+    loreEdit.value.visible_to = ['*']
+  } else if (mode === 'gm') {
+    loreEdit.value.visible_to = []
+  } else {
+    loreEdit.value.visible_to = sanitizeCharacterVisibility(current)
+  }
+}
+
+// 指定角色：队员直接点选（写入 canonical uid），文本框兜底手动添加外部角色。
+function characterLabel(p: Player) { return String(p.character_name || p.user_id) }
+function isVisibleToPlayer(p: Player) {
+  if (!loreEdit.value) return false
+  const current = new Set((loreEdit.value.visible_to || []).map(value => value.trim().toLowerCase()))
+  const uid = String(p.user_id).trim().toLowerCase()
+  const name = String(p.character_name || '').trim().toLowerCase()
+  return current.has(uid) || (name !== '' && current.has(name))
+}
+function toggleCharacterVisible(p: Player) {
+  if (!loreEdit.value) return
+  const uid = String(p.user_id).trim()
+  const name = String(p.character_name || '').trim().toLowerCase()
+  const norm = (value: string) => value.trim().toLowerCase()
+  const current = loreEdit.value.visible_to || []
+  const kept = current.filter(
+    value => norm(value) !== uid.toLowerCase() && (name === '' || norm(value) !== name),
+  )
+  const wasSelected = kept.length !== current.length
+  loreEdit.value.visible_to = wasSelected ? kept : [...kept, uid]
+}
+// 手输路径同样过 sanitize：* / public / 公开 等 marker 不会混进「指定角色」档
+function setCharacterTargets(e: Event) {
+  if (!loreEdit.value) return
+  const values = (e.target as HTMLInputElement).value.split(/[,，、]/).map(x => x.trim()).filter(Boolean)
+  loreEdit.value.visible_to = sanitizeCharacterVisibility(values)
+}
+// 保存前按当前档位做最后一次归一化（defense-in-depth：未来 UI 改动也不漂移）
+function normalizeVisibilityForSave() {
+  if (!loreEdit.value) return
+  if (visibilityMode.value === 'gm') loreEdit.value.visible_to = []
+  else if (visibilityMode.value === 'public') loreEdit.value.visible_to = ['*']
+  else loreEdit.value.visible_to = sanitizeCharacterVisibility(loreEdit.value.visible_to || [])
 }
 
 function arrText(a: unknown) { return Array.isArray(a) ? a.join(t('listSeparator')) : '' }
@@ -198,6 +264,7 @@ function setArr(field: keyof LoreEdit, e: Event) {
 
 async function saveLore() {
   if (!loreEdit.value) return
+  normalizeVisibilityForSave()
   const entry: LoreEdit = { ...loreEdit.value, world_id: currentWorldId.value }
   const path = entry.id ? `/lorebook/${encodeURIComponent(entry.id)}` : '/lorebook'
   try {
@@ -378,15 +445,6 @@ async function importLore(e: Event) {
       </button>
     </div>
 
-    <div v-if="entries.length" class="lore-viewer-filter" role="group" :aria-label="t('loreViewerLabel')">
-      <button
-        v-for="f in perspectiveFilters"
-        :key="f.id"
-        :class="{ active: perspectiveFilter === f.id }"
-        @click="perspectiveFilter = f.id"
-      >{{ f.label }}</button>
-    </div>
-
     <div v-if="loreSections.length" class="lore-categories">
       <section v-for="section in loreSections" :key="section.type" class="lore-category-section">
         <header class="lore-category-head">
@@ -449,7 +507,18 @@ async function importLore(e: Event) {
       <label>{{ t('keywordMatchMode') }}<select v-model="loreEdit.match_mode"><option value="any">{{ t('matchAny') }}</option><option value="all">{{ t('matchAll') }}</option><option value="not_any">{{ t('matchNotAny') }}</option><option value="not_all">{{ t('matchNotAll') }}</option></select></label>
       <div class="check-row"><label><input type="checkbox" v-model="loreEdit.unreliable">{{ t('unreliableMemory') }}</label><label><input type="checkbox" v-model="loreEdit.sync_on_enter">{{ t('syncOnEnter') }}</label><label><input type="checkbox" v-model="loreEdit.is_constant">{{ t('constant') }}</label></div>
       <label>{{ t('recursiveTrigger') }}<input :value="arrText(loreEdit.triggers_recursive)" @input="setArr('triggers_recursive', $event)" :placeholder="t('recursiveTriggerPlaceholder')"></label>
-      <label>{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setArr('visible_to', $event)" :placeholder="t('visibleCharactersPlaceholder')"></label>
+      <label>{{ t('loreVisibilityLabel') }}</label>
+      <div class="lore-filter-options" role="radiogroup" :aria-label="t('loreVisibilityLabel')">
+        <button type="button" role="radio" :aria-checked="visibilityMode === 'gm'" :class="{ active: visibilityMode === 'gm' }" @click="setVisibilityMode('gm')">{{ t('loreAudienceGmSecret') }}</button>
+        <button type="button" role="radio" :aria-checked="visibilityMode === 'public'" :class="{ active: visibilityMode === 'public' }" @click="setVisibilityMode('public')">{{ t('loreVisibilityPublic') }}</button>
+        <button type="button" role="radio" :aria-checked="visibilityMode === 'characters'" :class="{ active: visibilityMode === 'characters' }" @click="setVisibilityMode('characters')">{{ t('loreVisibilityCharacters') }}</button>
+      </div>
+      <template v-if="visibilityMode === 'characters'">
+        <div v-if="players.length" class="lore-filter-options" role="group" :aria-label="t('visibleCharacters')">
+          <button v-for="p in players" :key="p.user_id" type="button" :class="{ active: isVisibleToPlayer(p) }" @click="toggleCharacterVisible(p)">{{ characterLabel(p) }}</button>
+        </div>
+        <label>{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setCharacterTargets" :placeholder="t('visibleCharactersPlaceholder')"></label>
+      </template>
       <label>{{ t('connectedEntries') }}<input :value="arrText(loreEdit.connected_to)" @input="setArr('connected_to', $event)" :placeholder="t('connectedEntriesPlaceholder')"></label>
       <div class="grid-2"><label>{{ t('stickyRounds') }}<input type="number" v-model.number="loreEdit.sticky"></label><label>{{ t('cooldown') }}<input type="number" v-model.number="loreEdit.cooldown"></label></div>
       <div class="grid-2"><label>{{ t('delay') }}<input type="number" v-model.number="loreEdit.delay"></label><label>{{ t('order') }}<input type="number" v-model.number="loreEdit.order"></label></div>
@@ -458,7 +527,7 @@ async function importLore(e: Event) {
       <template #actions><button @click="loreEdit = null">{{ t('cancel') }}</button><button class="primary" @click="saveLore">{{ t('saveAction') }}</button></template>
     </Modal>
       </main>
-      <div v-if="inspectorOpen" class="lore-inspector-backdrop" @click="inspectorOpen = false"></div>
+      <div v-if="inspectorOpen" class="lore-inspector-backdrop" @click="closeInspector"></div>
       <LorePerspectiveInspector
         v-if="inspectorOpen"
         :players="players"
@@ -470,8 +539,10 @@ async function importLore(e: Event) {
         :preview-error="previewError"
         :selected-entry="selectedEntry"
         :selected-projection="selectedProjection"
+        :filter="perspectiveFilter"
         @select-viewer="setViewer"
-        @close="inspectorOpen = false"
+        @select-filter="perspectiveFilter = $event"
+        @close="closeInspector"
       />
     </div>
   </section>
