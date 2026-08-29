@@ -34,7 +34,7 @@ describe('MultiplayerPanel party rest status', () => {
       },
     })
 
-    const alert = wrapper.get('.party-rest-alert')
+    const alert = wrapper.get('[role="status"]')
     expect(alert.text()).toContain('队伍短休')
     expect(alert.text()).toContain('已准备 1/2')
     expect(alert.text()).toContain('阿刁 · 已准备')
@@ -56,6 +56,6 @@ describe('MultiplayerPanel party rest status', () => {
       },
     })
 
-    expect(wrapper.find('.party-rest-alert').exists()).toBe(false)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
   })
 })

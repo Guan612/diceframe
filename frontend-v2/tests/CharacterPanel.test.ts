@@ -17,17 +17,20 @@ describe('CharacterPanel portrait editing', () => {
   }
 
   it('emits only when the current player may edit the portrait', async () => {
+    i18n.global.locale.value = 'zh-CN'
     const editable = mount(CharacterPanel, {
       global: { plugins: [i18n] },
       props: { player, ruleMeta: { rule_id: 'freeform_fantasy' }, portraitEditable: true },
     })
-    await editable.get('.portrait-edit-button').trigger('click')
+    const editButton = editable.get('button[title]')
+    expect(editButton.attributes('title')).toContain('头像')
+    await editButton.trigger('click')
     expect(editable.emitted('portrait-click')).toHaveLength(1)
 
     const readonly = mount(CharacterPanel, {
       global: { plugins: [i18n] },
       props: { player, ruleMeta: { rule_id: 'freeform_fantasy' }, portraitEditable: false },
     })
-    expect(readonly.find('.portrait-edit-button').exists()).toBe(false)
+    expect(readonly.find('button[title]').exists()).toBe(false)
   })
 })
