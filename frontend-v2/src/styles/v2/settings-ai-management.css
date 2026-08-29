@@ -488,6 +488,12 @@
   }
 }
 
+.provider-models-main-hint {
+  margin: 0 0 8px;
+  color: var(--df-text-muted);
+  font-size: 11px;
+}
+
 .provider-model-remove {
   position: relative;
   z-index: 4;
