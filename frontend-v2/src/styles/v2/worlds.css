@@ -14,9 +14,27 @@
   min-width: 0;
   min-height: 340px;
   overflow: hidden;
-  border: 1px solid var(--df-border-soft);
+  isolation: isolate;
+  border: 1px solid color-mix(in srgb, var(--df-border-soft) 78%, transparent);
   border-radius: 16px;
   background: var(--df-surface-1);
+  box-shadow:
+    0 22px 52px -34px rgba(0, 0, 0, 0.78),
+    0 8px 20px -16px rgba(0, 0, 0, 0.68),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+/* 整卡连续遮罩：信息区不再是一块独立的半透明黑面板。 */
+.world-card::after {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(110% 62% at 8% 100%, color-mix(in srgb, var(--df-accent) 18%, transparent), transparent 58%),
+    linear-gradient(180deg, transparent 32%, rgba(5, 7, 11, 0.08) 45%, rgba(5, 7, 11, 0.62) 72%, rgba(3, 5, 9, 0.96) 100%);
 }
 
 /* 封面铺满整卡，文字区用渐变遮罩压暗保证可读性。 */
@@ -27,6 +45,7 @@
   background-image: var(--df-world-cover, none);
   background-size: cover;
   background-position: center;
+  transition: transform 420ms cubic-bezier(0.2, 0.7, 0.2, 1), filter 220ms ease;
 }
 
 .world-card-badges {
@@ -63,20 +82,26 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 52px 14px 14px;
-  background: linear-gradient(180deg, rgba(8, 10, 14, 0.38), rgba(8, 10, 14, 0.76) 32%, rgba(8, 10, 14, 0.94));
+  padding: 72px 14px 14px;
+  background: transparent;
   color: #fff;
 }
 
 .world-card-body h2 {
   margin: 0;
-  /* base.css 全局 h2 用 --df-accent-strong（亮主题为深色），会覆盖继承白字，这里显式钉死。 */
-  color: #fff;
+  /* 跟随皮肤主题色；与白色混合后在暗色封面和亮色主题下都保持足够对比。 */
+  color: color-mix(in srgb, var(--df-accent) 78%, #fff);
   font-size: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-shadow: 0 1px 10px rgba(0, 0, 0, 0.85), 0 0 2px rgba(0, 0, 0, 0.7);
+}
+
+/* 亮色模式的全局 accent 为深色，适合浅色画布却不适合封面；封面标题固定用高亮金。 */
+:root[data-mode="light"] .world-card-body h2 {
+  color: #e8c66f;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.92), 0 0 3px rgba(0, 0, 0, 0.78);
 }
 
 .world-card-desc {
@@ -106,10 +131,11 @@
 }
 
 .world-card-actions button {
-  background: rgba(10, 12, 16, 0.55);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.055));
   color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 18px -14px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
 }
 
 .world-card-actions button.primary {
@@ -123,6 +149,29 @@
 
 .world-card-clone {
   grid-column: 1 / -1;
+}
+
+@media (hover: hover) {
+  .world-card:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--df-accent) 30%, var(--df-border-soft));
+    box-shadow:
+      0 30px 66px -36px rgba(0, 0, 0, 0.9),
+      0 14px 30px -20px color-mix(in srgb, var(--df-accent) 34%, transparent),
+      inset 0 1px 0 rgba(255, 255, 255, 0.11);
+  }
+
+  .world-card:hover .world-card-cover {
+    transform: scale(1.025);
+    filter: saturate(1.06) contrast(1.025);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .world-card,
+  .world-card-cover {
+    transition: none;
+  }
 }
 
 .world-style-editor {
