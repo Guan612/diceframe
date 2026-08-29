@@ -51,6 +51,21 @@ DiceFrame 需要同时支持快速增加功能、长期维护旧数据、多人�
 
 如果确实需要改变 MUST 级契约，应把它视为显式 breaking / product-contract change，提供版本、迁移、兼容或明确拒绝策略，而不是静默改变。
 
+需要区分两类 MUST：
+
+- API、schema、canonical identity、产品行为等**可版本化的产品契约**，可以按上述方式显式 breaking；
+- **安全不变量**不能仅因 intentional breaking change 被放宽，包括：
+
+```text
+unauthorized data access
+private / GM 数据泄露
+跨 actor 的未授权状态修改
+客户端取代服务端 authority
+secret 泄露
+```
+
+权限 / authority 架构本身 **MAY** 重构；但新模型 **MUST** 保持等价或更强的授权判定、actor 隔离与服务端 authority。安全不变量上的回归不是 breaking change，而是正确性缺陷——无论 PR 如何描述都必须修复，不能通过 versioning / migration 流程“合法化”。
+
 ---
 
 ## 3. Architecture is allowed to change
