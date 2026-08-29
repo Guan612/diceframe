@@ -9,7 +9,9 @@
   "starter_lorebook": [
     {
       "id": "npc_howard",
-      "visible_to": ["*"],
+      "visible_to": [
+        "*"
+      ],
       "name": "霍华德教授",
       "type": "npc",
       "keywords": [
@@ -19,13 +21,15 @@
         "发信人",
         "考古学教授"
       ],
-      "content": "密斯卡托尼克大学考古学系教授，45岁。你的远房表亲。半年前带队前往南太平洋波纳佩岛考古发掘，回来后人就变得沉默寡言。最近一个月完全失联——他的办公室被锁，同事说他请了病假。但据他邻居说，夜间偶尔看到他家的窗户亮着灯，窗帘紧闭。",
+      "content": "密斯卡托尼克大学考古学系教授，45岁。你的远房表亲。半年前带队前往南太平洋波纳佩岛考古发掘，回来后人就变得沉默寡言。最近一个月完全失联——他的办公室被锁，同事说他请了病假。",
       "tier": "core",
       "unreliable": false
     },
     {
       "id": "loc_arkham",
-      "visible_to": ["*"],
+      "visible_to": [
+        "*"
+      ],
       "name": "阿卡姆镇",
       "type": "location",
       "keywords": [
@@ -40,7 +44,9 @@
     },
     {
       "id": "loc_miskatonic",
-      "visible_to": ["*"],
+      "visible_to": [
+        "*"
+      ],
       "name": "密斯卡托尼克大学",
       "type": "location",
       "keywords": [
@@ -55,7 +61,9 @@
     },
     {
       "id": "loc_howard_house",
-      "visible_to": ["*"],
+      "visible_to": [
+        "*"
+      ],
       "name": "霍华德的住所",
       "type": "location",
       "keywords": [
@@ -64,9 +72,23 @@
         "房子",
         "窗户"
       ],
-      "content": "位于阿卡姆镇东区的一栋二层木制老宅，门牌号榆树街13号。院中草木杂乱，信箱塞满了未取的信件。邻居说最近夜间看到二楼书房的灯会亮起，但白天窗帘紧闭，敲门无人应答。后院有个上了锁的工具棚。",
+      "content": "位于阿卡姆镇东区的一栋二层木制老宅，门牌号榆树街13号。镇上人都知道这是霍华德教授的宅子；最近宅门紧闭，敲门始终无人应答。",
       "tier": "core",
       "unreliable": false
+    },
+    {
+      "id": "loc_howard_house_oddities",
+      "name": "霍华德住所的异常",
+      "type": "location",
+      "keywords": [
+        "住所异常",
+        "书房灯光",
+        "工具棚",
+        "榆树街"
+      ],
+      "content": "院中草木杂乱，信箱塞满了未取的信件。邻居说最近夜间看到二楼书房的灯会亮起，白天窗帘却始终紧闭。后院还有一间上了锁的工具棚。",
+      "tier": "background",
+      "visible_to": []
     },
     {
       "id": "npc_sheriff",
@@ -84,7 +106,9 @@
     },
     {
       "id": "event_fishermen_missing",
-      "visible_to": ["*"],
+      "visible_to": [
+        "*"
+      ],
       "name": "渔夫失踪事件",
       "type": "event",
       "keywords": [
@@ -99,7 +123,9 @@
     },
     {
       "id": "loc_fishing_port",
-      "visible_to": ["*"],
+      "visible_to": [
+        "*"
+      ],
       "name": "阿卡姆渔港",
       "type": "location",
       "keywords": [
@@ -108,9 +134,22 @@
         "码头",
         "海边"
       ],
-      "content": "阿卡姆镇东侧的渔港。空气中弥漫着鱼腥和海水的味道。码头上绑着几艘渔船，其中一艘船的船身上有奇怪的抓痕——不像是正常的磨损。港口的灯塔在夜间会自动亮起，但最近灯塔管理员声称看到海面上有「绿色的磷光」。",
+      "content": "阿卡姆镇东侧的渔港，空气中弥漫着鱼腥和海水的味道。近来渔民们都不太愿意出海，码头上比往常冷清了许多。",
       "tier": "core",
       "unreliable": false
+    },
+    {
+      "id": "loc_fishing_port_oddities",
+      "name": "渔港的异样",
+      "type": "event",
+      "keywords": [
+        "抓痕",
+        "磷光",
+        "灯塔"
+      ],
+      "content": "码头边一艘渔船的船身上有几道奇怪的抓痕——不像是正常的磨损。港口灯塔近来会在夜间自行亮起，守塔人声称曾在海面上看到「绿色的磷光」。",
+      "tier": "background",
+      "visible_to": []
     },
     {
       "id": "item_forbidden_book",
