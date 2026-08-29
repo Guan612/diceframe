@@ -21,9 +21,9 @@
 
 - [docs/ENGINEERING_RULES.md](docs/ENGINEERING_RULES.md)
 
-关键产品与测试契约：
+测试与高风险契约原则：
 
-- [docs/testing-contracts.md](docs/testing-contracts.md)
+- 见 [docs/ENGINEERING_RULES.md](docs/ENGINEERING_RULES.md) 的 Testing 章节（§15）
 
 这些规范不会冻结 DiceFrame 的当前架构。大型功能、模块拆分、迁移、breaking change 和架构重做都允许；要求是明确处理受影响的用户数据、兼容性、权限、持久化 identity、测试和文档。
 

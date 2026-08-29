@@ -48,7 +48,7 @@ N/A
 - [ ] 用户数据不会被无意覆盖或丢失
 - [ ] 权限 / private data 边界未退化
 - [ ] 若改 persisted identity，已处理旧引用
-- [ ] 若改关键产品契约，已更新对应测试 / `docs/testing-contracts.md`
+- [ ] 若改关键产品契约，已更新对应测试（Critical testing areas 见 `docs/ENGINEERING_RULES.md` §15）
 - [ ] 若架构事实发生变化，已更新 `docs/ARCHITECTURE_*.md`
 
 <!-- 不适用的项可以保持未勾选；这个清单用于提示风险，不是要求每个 PR 全部勾满。 -->
