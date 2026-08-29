@@ -36,6 +36,12 @@ async def api_world_gm_style_update(request: web.Request) -> web.Response:
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
+async def api_world_scene_image_set(request: web.Request) -> web.Response:
+    body = await request.json()
+    result = _get_api(request).set_user_world_scene_image(body.get("world_id", ""), body.get("scene_image"))
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 async def api_delete_world(request: web.Request) -> web.Response:
     denied = _require_confirmed_request(request)
     if denied is not None:
@@ -114,6 +120,7 @@ def register_worlds(app: web.Application) -> None:
     app.router.add_route("POST", "/api/worlds", api_world_create)
     app.router.add_route("POST", "/api/worlds/clone-from-template", api_world_clone_from_template)
     app.router.add_route("PUT", "/api/worlds/{world_id}/gm-style", api_world_gm_style_update)
+    app.router.add_post("/api/worlds/user-scene-image", api_world_scene_image_set)
     app.router.add_route("DELETE", "/api/worlds/{world_id}", api_delete_world)
     app.router.add_get("/api/world-templates", api_world_templates)
     app.router.add_get("/api/lorebook/{world_id}", api_lorebook)

@@ -705,6 +705,9 @@ class WebAPI:
     def update_world_gm_style(self, world_id: str, raw: dict | None = None) -> dict[str, Any]:
         return worlds.update_world_gm_style(self, world_id, raw)
 
+    def set_user_world_scene_image(self, world_id: str, scene_image: dict | None = None) -> dict[str, Any]:
+        return worlds.set_user_world_scene_image(self, world_id, scene_image)
+
     def list_entries(self, world_id: str, entry_type: str | None = None) -> dict[str, Any]:
         return worlds.list_entries(self, world_id, entry_type)
 

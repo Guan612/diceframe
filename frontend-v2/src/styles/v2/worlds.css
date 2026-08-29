@@ -1,5 +1,64 @@
 /* 世界画廊（/worlds）：全幅封面卡片、来源/冒险包徽章、GM 风格编辑区。 */
 
+.worlds-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 10px;
+}
+
+.worlds-sort {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--df-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.worlds-sort select {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  color: var(--df-text);
+  background: var(--df-control-bg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.worlds-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.worlds-pager button {
+  padding: 6px 14px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  color: var(--df-text);
+  background: var(--df-surface-1);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.worlds-pager button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--df-interactive) 45%, transparent);
+}
+
+.worlds-pager button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.worlds-pager span {
+  color: var(--df-text-muted);
+  font-size: 12px;
+}
+
 .worlds-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -122,7 +181,8 @@
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
 }
 
-/* 两列等宽按钮网格，克隆按钮整行，保证整齐。 */
+/* 两列等宽按钮网格；克隆按钮仅当排在末位（内置/插件卡的第三个按钮）时整行，
+   用户世界四按钮（用它开团/预览/克隆/更换头图）构成整齐的 2×2。 */
 .world-card-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -147,7 +207,7 @@
   opacity: 0.45;
 }
 
-.world-card-clone {
+.world-card-clone:last-child {
   grid-column: 1 / -1;
 }
 

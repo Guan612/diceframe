@@ -229,6 +229,52 @@ def update_world_gm_style(api: "WebAPI", world_id: str, raw: Any) -> dict[str, A
     return {"ok": True, "gm_style": normalized}
 
 
+_USER_SCENE_IMAGE_KINDS = {"builtin", "upload", "generated"}
+
+
+def set_user_world_scene_image(api: "WebAPI", world_id: str, scene_image: Any) -> dict[str, Any]:
+    """设置用户世界的头图引用。仅用户模板可改；插件世界的头图随插件内容提供，
+    请先克隆为我的世界（克隆副本即用户世界，可正常设置）。
+
+    引用形状与创建页上传一致：``{"kind": "upload"|"generated", "asset_id"}``
+    或 ``{"kind": "builtin", "id"}``；写回用户模板 JSON，画廊与创建页按
+    现有 scene-image 解析路径展示。
+    """
+    world_id = str(world_id or "").strip()
+    if not world_id:
+        return {"ok": False, "error": "缺少世界 id"}
+    if api._lore.get_world(world_id) is None:
+        return {"ok": False, "error": "世界不存在"}
+    worlds_dir = api._worlds_dir
+    if not worlds_dir:
+        return {"ok": False, "error": "世界模板目录未配置"}
+    try:
+        path = _ensure_user_world_template(api, world_id)
+    except OSError:
+        logger.exception("物化自建世界模板失败: %s", world_id)
+        return {"ok": False, "error": "世界模板创建失败"}
+    if path is None or not path.is_file() or not is_user_template_file(path, "worlds"):
+        return {"ok": False, "error": "内置或插件世界不可修改，请先克隆为我的世界"}
+    if not isinstance(scene_image, dict):
+        return {"ok": False, "error": "头图引用不合法"}
+    kind = str(scene_image.get("kind") or "")
+    if kind not in _USER_SCENE_IMAGE_KINDS:
+        return {"ok": False, "error": "头图引用不合法"}
+    if kind in {"upload", "generated"} and not str(scene_image.get("asset_id") or "").strip():
+        return {"ok": False, "error": "头图引用缺少 asset_id"}
+    if kind == "builtin" and not str(scene_image.get("id") or "").strip():
+        return {"ok": False, "error": "头图引用缺少 id"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "世界模板读取失败"}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "世界模板格式不正确"}
+    data["scene_image"] = scene_image
+    _write_json_atomic(path, data)
+    return {"ok": True, "scene_image": scene_image}
+
+
 def _read_user_template_gm_style(api: "WebAPI", world_id: str) -> dict[str, str] | None:
     """用户模板的 gm_style（normalized）；无模板文件时 None。"""
     worlds_dir = api._worlds_dir

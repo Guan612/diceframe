@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import src.commands.prompt_composer as prompt_composer_module
@@ -112,6 +113,65 @@ def test_clone_uses_custom_name(tmp_path) -> None:
     assert result["name"] == "My Remix"
     data = json.loads((tmp_path / f"{result['world_id']}.json").read_text(encoding="utf-8"))
     assert data["world_name"] == "My Remix"
+
+
+class _FakePluginContributions:
+    def __init__(self, items: list) -> None:
+        self._items = items
+
+    def list(self, kind: str = "") -> list:
+        return list(self._items) if kind == "world_template" else []
+
+
+class _FakePluginHost:
+    def __init__(self, templates: dict) -> None:
+        self._templates = templates
+        self.contributions = _FakePluginContributions([
+            SimpleNamespace(path=Path(f"{stem}.json"), key=stem)
+            for stem in templates
+        ])
+
+    def load_world_template(self, key: str, language: str):
+        return self._templates.get(key)
+
+
+def test_clone_world_from_plugin_template(tmp_path) -> None:
+    """插件世界在画廊里可以克隆为用户可编辑世界（与内置世界同一条路径）。"""
+    api = make_api(tmp_path)
+    plugin_world = dict(BUILTIN_TEMPLATE, world_id="hyouka_world", world_name="Hyouka")
+    api._plugins = _FakePluginHost({"hyouka_world": plugin_world})
+
+    result = worlds_service.clone_world_from_template(api, "hyouka_world")
+
+    assert result["ok"] is True, result
+    world_id = result["world_id"]
+    assert world_id.startswith("custom_book_")
+    data = json.loads((tmp_path / f"{world_id}.json").read_text(encoding="utf-8"))
+    assert data["world_name"] == "Hyouka（克隆）"
+    assert data["custom"] is True
+    assert "_internal_marker" not in data
+    assert api._lore.get_world(world_id)["language"] == "zh-CN"
+    assert len(api._lore.list_entries(world_id)) == 1
+
+
+def test_set_user_world_scene_image_writes_template(tmp_path) -> None:
+    """用户世界可设置头图引用；非法引用与内置世界被拒。"""
+    api = make_api(tmp_path)
+    created = worlds_service.create_world(api, "我的世界", "群岛与雾", "zh-CN")
+    world_id = created["world_id"]
+
+    ref = {"kind": "upload", "asset_id": "scene-123"}
+    result = worlds_service.set_user_world_scene_image(api, world_id, ref)
+
+    assert result["ok"] is True, result
+    data = json.loads((tmp_path / f"{world_id}.json").read_text(encoding="utf-8"))
+    assert data["scene_image"] == ref
+
+    assert worlds_service.set_user_world_scene_image(api, world_id, {"kind": "upload"})["ok"] is False
+    assert worlds_service.set_user_world_scene_image(api, world_id, {"kind": "plugin", "path": "x"})["ok"] is False
+
+    write_template(tmp_path, "default_fantasy", BUILTIN_TEMPLATE)
+    assert worlds_service.set_user_world_scene_image(api, "default_fantasy", ref)["ok"] is False
 
 
 def test_clone_missing_template_fails(tmp_path) -> None:
