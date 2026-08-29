@@ -846,6 +846,7 @@ export const zhCN = {
   providerModels: '模型目录',
   providerModelsHint: '从接口同步，或手动补充该服务商可用的模型。',
   providerModelSetMain: '设为主模型',
+  providerModelSaveFirst: '请先保存服务商',
   providerModelMainActive: '当前主模型',
   providerModelsCurrentMain: '当前主模型：{binding}',
   providerFetchModels: '获取模型列表',

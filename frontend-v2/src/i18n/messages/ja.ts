@@ -846,6 +846,7 @@ export const ja = {
   providerModels: 'モデル一覧',
   providerModelsHint: '接続先から同期するか、利用可能なモデル ID を手動で追加します。',
   providerModelSetMain: 'メインに設定',
+  providerModelSaveFirst: '先にプロバイダーを保存してください',
   providerModelMainActive: '現在のメイン',
   providerModelsCurrentMain: '現在のメインモデル: {binding}',
   providerFetchModels: 'モデル一覧を取得',

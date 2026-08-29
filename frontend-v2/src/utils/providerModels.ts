@@ -29,3 +29,42 @@ export function providerTestKind(
   if (capability === 'chat') return 'model'
   return null
 }
+
+export interface CatalogSavedProvider {
+  id: string
+  models?: string[]
+  model_capabilities?: Record<string, ModelCapability>
+}
+
+/** 目录行“设为主模型”的资格判定：只认**已持久化**的 provider library——
+ * provider 已保存、模型已在 saved models 里、保存后的能力是 chat。
+ * UI 草稿（新建 provider / 未保存的新模型 / 刚改未保存的能力）不算数，
+ * 否则 routing 会指向后端根本不存在的 provider/model 组合。 */
+export function catalogModelMainEligible(
+  savedProviders: CatalogSavedProvider[],
+  providerId: string,
+  modelName: string,
+): boolean {
+  const saved = savedProviders.find(provider => provider.id === providerId)
+  if (!saved) return false
+  if (!(saved.models || []).includes(modelName)) return false
+  return modelCapability(modelName, saved.model_capabilities?.[modelName]) === 'chat'
+}
+
+/** 把主模型切到目标 provider/model 并持久化；保存失败时把这两个字段
+ * 回滚为调用前的值（调用方负责提示，不做整页 config 重载）。 */
+export async function selectMainModelWithRollback(
+  config: Record<string, unknown>,
+  providerId: string,
+  modelName: string,
+  save: () => Promise<boolean>,
+): Promise<boolean> {
+  const previousProviderRef = String(config.llm_provider_ref || '')
+  const previousModel = String(config.model || '')
+  config.llm_provider_ref = providerId
+  config.model = modelName
+  if (await save()) return true
+  config.llm_provider_ref = previousProviderRef
+  config.model = previousModel
+  return false
+}

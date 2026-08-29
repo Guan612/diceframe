@@ -846,6 +846,7 @@ export const en = {
   providerModels: 'Model catalog',
   providerModelsHint: 'Sync from the endpoint or add supported model IDs manually.',
   providerModelSetMain: 'Set as main',
+  providerModelSaveFirst: 'Save the provider first',
   providerModelMainActive: 'Current main',
   providerModelsCurrentMain: 'Current main model: {binding}',
   providerFetchModels: 'Fetch models',

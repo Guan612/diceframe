@@ -34,8 +34,10 @@ import { useTheme } from '@/composables/useTheme'
 import { useBackgroundImages, type BackgroundSlot } from '@/composables/useBackgroundImages'
 import { currentBackendUrl, isStandaloneFrontend, normalizeBackendUrl, setBackendUrl } from '@/api/connection'
 import {
+  catalogModelMainEligible,
   modelCapability,
   providerTestKind,
+  selectMainModelWithRollback,
   type ModelCapability,
   type ProviderTestKind,
   type ProviderTestMode,
@@ -777,15 +779,28 @@ function catalogModelIsChat(provider: ProviderDraft, modelName: string): boolean
   return modelCapability(modelName, provider.model_capabilities?.[modelName]) === 'chat'
 }
 
+// 目录行快捷入口只对“已持久化且保存后能力为 chat”的模型开放；
+// 未保存的 provider/模型/能力改动请先点“保存服务商”。
+function catalogModelEligible(provider: ProviderDraft, modelName: string): boolean {
+  return catalogModelMainEligible(store.config.ai_providers || [], provider.id, modelName)
+}
+
 async function setCatalogModelAsMain(provider: ProviderDraft, modelName: string) {
   if (!providerLibrarySupported.value || modelRoutingSaving.value) return
   if (isCatalogModelMain(provider, modelName)) return
+  if (!catalogModelEligible(provider, modelName)) return
   catalogSetMainBusy.value = modelName
   try {
     setModelRoleProvider('llm_provider_ref', 'model', provider.id, 'chat')
     // 能力校验可能把模型重置成同列表第一项；尊重用户点击的目标
     setStr('model', modelName)
-    await saveModelRouting()
+    // 保存失败时 selectMainModelWithRollback 会把这两个字段回滚为点击前的值
+    await selectMainModelWithRollback(
+      store.config as Record<string, unknown>,
+      provider.id,
+      modelName,
+      () => saveModelRouting(),
+    )
   } finally {
     catalogSetMainBusy.value = ''
   }
@@ -803,10 +818,10 @@ const MODEL_ROUTING_CONFIG_KEYS = [
   'imagegen_style_prefix', 'imagegen_timeout_seconds',
 ]
 
-async function saveModelRouting() {
+async function saveModelRouting(): Promise<boolean> {
   if (!providerLibrarySupported.value) {
     toast.error(t('providerBackendOutdated'))
-    return
+    return false
   }
   modelRoutingSaving.value = true
   try {
@@ -814,8 +829,10 @@ async function saveModelRouting() {
     await Promise.all([initializeTts(true), initializeAsr(true), loadTtsVoices()])
     toast.success(t('modelRoutingSaved'))
     warnings.forEach(warning => toast.warning(warning))
+    return true
   } catch (error: unknown) {
     toast.error(errorMessage(error))
+    return false
   } finally {
     modelRoutingSaving.value = false
   }
@@ -1776,7 +1793,8 @@ function redownloadUpdatePackage() {
                             type="button"
                             class="provider-model-set-main"
                             :class="{ active: isCatalogModelMain(activeProvider, modelName) }"
-                            :disabled="modelRoutingSaving || catalogSetMainBusy !== ''"
+                            :disabled="modelRoutingSaving || catalogSetMainBusy !== '' || !catalogModelEligible(activeProvider, modelName)"
+                            :title="catalogModelEligible(activeProvider, modelName) ? '' : t('providerModelSaveFirst')"
                             @click="setCatalogModelAsMain(activeProvider, modelName)"
                           >
                             {{ isCatalogModelMain(activeProvider, modelName) ? t('providerModelMainActive') : t('providerModelSetMain') }}
