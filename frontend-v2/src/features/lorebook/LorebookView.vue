@@ -178,6 +178,27 @@ function setVisibilityMode(mode: LoreVisibilityMode) {
   }
 }
 
+// 指定角色：队员直接点选（写入 canonical uid），文本框兜底手动添加外部角色。
+function characterLabel(p: Player) { return String(p.character_name || p.user_id) }
+function isVisibleToPlayer(p: Player) {
+  if (!loreEdit.value) return false
+  const current = new Set(loreEdit.value.visible_to.map(value => value.trim().toLowerCase()))
+  const uid = String(p.user_id).trim().toLowerCase()
+  const name = String(p.character_name || '').trim().toLowerCase()
+  return current.has(uid) || (name !== '' && current.has(name))
+}
+function toggleCharacterVisible(p: Player) {
+  if (!loreEdit.value) return
+  const uid = String(p.user_id).trim()
+  const name = String(p.character_name || '').trim().toLowerCase()
+  const norm = (value: string) => value.trim().toLowerCase()
+  const kept = loreEdit.value.visible_to.filter(
+    value => norm(value) !== uid.toLowerCase() && (name === '' || norm(value) !== name),
+  )
+  const wasSelected = kept.length !== loreEdit.value.visible_to.length
+  loreEdit.value.visible_to = wasSelected ? kept : [...kept, uid]
+}
+
 function arrText(a: unknown) { return Array.isArray(a) ? a.join(t('listSeparator')) : '' }
 function normalizeLoreType(type: unknown): string {
   const text = String(type || 'other')
@@ -476,7 +497,12 @@ async function importLore(e: Event) {
         <button type="button" :class="{ active: visibilityMode === 'public' }" @click="setVisibilityMode('public')">{{ t('loreVisibilityPublic') }}</button>
         <button type="button" :class="{ active: visibilityMode === 'characters' }" @click="setVisibilityMode('characters')">{{ t('loreVisibilityCharacters') }}</button>
       </div>
-      <label v-if="visibilityMode === 'characters'">{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setArr('visible_to', $event)" :placeholder="t('visibleCharactersPlaceholder')"></label>
+      <template v-if="visibilityMode === 'characters'">
+        <div v-if="players.length" class="lore-filter-options" role="group" :aria-label="t('visibleCharacters')">
+          <button v-for="p in players" :key="p.user_id" type="button" :class="{ active: isVisibleToPlayer(p) }" @click="toggleCharacterVisible(p)">{{ characterLabel(p) }}</button>
+        </div>
+        <label>{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setArr('visible_to', $event)" :placeholder="t('visibleCharactersPlaceholder')"></label>
+      </template>
       <label>{{ t('connectedEntries') }}<input :value="arrText(loreEdit.connected_to)" @input="setArr('connected_to', $event)" :placeholder="t('connectedEntriesPlaceholder')"></label>
       <div class="grid-2"><label>{{ t('stickyRounds') }}<input type="number" v-model.number="loreEdit.sticky"></label><label>{{ t('cooldown') }}<input type="number" v-model.number="loreEdit.cooldown"></label></div>
       <div class="grid-2"><label>{{ t('delay') }}<input type="number" v-model.number="loreEdit.delay"></label><label>{{ t('order') }}<input type="number" v-model.number="loreEdit.order"></label></div>

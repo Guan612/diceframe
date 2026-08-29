@@ -220,11 +220,16 @@ describe('LorebookView perspective inspector', () => {
     // 新条目默认 GM 秘密：角色输入框不出现
     expect(document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]')).toBeNull()
 
-    // 指定角色：输入框出现，保存提交点名数组
+    // 指定角色：输入框出现，队员 chips 点选写入 canonical uid
     await new DOMWrapper(modeButtons()[2]).trigger('click')
     const names = document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]')
     expect(names).toBeTruthy()
-    await new DOMWrapper(names).setValue('莱拉, u2')
+
+    const playerChips = () => [...document.body.querySelectorAll('.lore-filter-options button')]
+      .filter(b => ['莱拉', '布兰'].includes(b.textContent?.trim() || ''))
+    expect(playerChips().map(b => b.textContent?.trim())).toEqual(['莱拉', '布兰'])
+    await new DOMWrapper(playerChips()[0]!).trigger('click')
+    expect(playerChips()[0]!.classList.contains('active')).toBe(true)
 
     await bodyButton('保存').trigger('click')
     await flushPromises()
@@ -234,7 +239,7 @@ describe('LorebookView perspective inspector', () => {
     )
     expect(savedCall).toBeTruthy()
     const savedBody = JSON.parse((savedCall![1] as { body: string }).body)
-    expect(savedBody.visible_to).toEqual(['莱拉', 'u2'])
+    expect(savedBody.visible_to).toEqual(['u1'])
     wrapper.unmount()
   })
 
