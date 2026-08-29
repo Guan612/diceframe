@@ -111,6 +111,19 @@ class StoryRecap(TypedDict, total=False):
     created_at: str
 
 
+class TableTalkExchange(TypedDict, total=False):
+    """A public, read-only player/GM exchange outside the turn log."""
+
+    id: str
+    actor_uid: str
+    actor_name: str
+    question: str
+    answer: str
+    round: int
+    created_at: str
+    visibility: Literal["party"]
+
+
 class RoundLogEntry(TypedDict, total=False):
     round: int
     actions: list[ActionRecord]

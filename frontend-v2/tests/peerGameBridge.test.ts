@@ -33,6 +33,11 @@ describe('peer host game bridge', () => {
       path: '/api/config',
     })
     await bridge.handle('p_abcdefghijk', 'action.submit', { text: '调查房间' })
+    await bridge.handle('p_abcdefghijk', 'kp.question', {
+      question: '我认识墙上的符号吗？',
+      visibility: 'party',
+      action: 'forged',
+    })
     await bridge.handle('p_abcdefghijk', 'ruleset.intent', {
       intent_id: 'intent-1', type: 'attack', expected_version: 2,
       actor_id: 'player:someone-else', target_id: 'enemy:goblin',
@@ -50,15 +55,20 @@ describe('peer host game bridge', () => {
     const actionBody = JSON.parse(String(calls[3].init?.body))
     expect(actionBody).toEqual({ text: '调查房间' })
     expect(calls[5].path).toBe(
+      '/games/web%7Cgame%7Chost/kp-question?user=player_123&share=1&delegate=1',
+    )
+    const questionBody = JSON.parse(String(calls[5].init?.body))
+    expect(questionBody).toEqual({ question: '我认识墙上的符号吗？', visibility: 'party' })
+    expect(calls[7].path).toBe(
       '/games/web%7Cgame%7Chost/intents?user=player_123&share=1&delegate=1',
     )
-    const intentBody = JSON.parse(String(calls[5].init?.body))
+    const intentBody = JSON.parse(String(calls[7].init?.body))
     expect(intentBody).toEqual({
       intent_id: 'intent-1', type: 'attack', expected_version: 2,
       actor_id: 'player:someone-else', target_id: 'enemy:goblin',
       weapon_ref: 'item:longsword',
     })
-    expect(changed).toHaveBeenCalledTimes(3)
+    expect(changed).toHaveBeenCalledTimes(4)
   })
 
   it('strips non-whitelisted fields from peer payloads', async () => {
@@ -170,6 +180,16 @@ describe('peer remote game client', () => {
     })
     expect(requestGame).toHaveBeenLastCalledWith(
       'h_abcdefghijk', 'ruleset.intent', { intent_id: 'i-1', type: 'end_turn' },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/kp-question', {
+      method: 'POST', body: JSON.stringify({ question: 'What do I know?', visibility: 'party' }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'kp.question', { question: 'What do I know?', visibility: 'party' },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/table-talk')
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'game.table_talk', {},
     )
     await expect(client.tryApi('/games/web%7Cgame%7Chost/export'))
       .rejects.toThrow('peer_game_operation_not_supported')

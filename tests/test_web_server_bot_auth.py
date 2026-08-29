@@ -345,6 +345,27 @@ async def test_share_link_player_can_use_ruleset_gameplay_endpoints(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_share_link_player_can_use_table_talk_endpoints(monkeypatch):
+    """桌边问答的读写端点必须沿用玩家分享链接身份。"""
+    monkeypatch.setitem(web_server.STATE, "access_token", hash_access_password("owner-secret"))
+    app = _make_sse_auth_app()
+    app.router.add_get("/api/games/{game_key}/table-talk", _identity)
+    app.router.add_post("/api/games/{game_key}/kp-question", _identity)
+    async with TestClient(TestServer(app)) as client:
+        query = {"user": "player-1", "share": "1", "delegate": "1"}
+        feed = await client.get(
+            "/api/games/web%7Croom%7Cbot/table-talk", params=query,
+        )
+        question = await client.post(
+            "/api/games/web%7Croom%7Cbot/kp-question", params=query,
+        )
+        bodies = [await feed.json(), await question.json()]
+
+    assert [feed.status, question.status] == [200, 200]
+    assert all(body["user_id"] == "player-1" for body in bodies)
+
+
+@pytest.mark.asyncio
 async def test_share_link_player_can_resolve_own_luck_decision(monkeypatch):
     """CoC 分享链接必须能调用嵌套的 /checks/{id}/luck 玩家端点。"""
     monkeypatch.setitem(web_server.STATE, "access_token", hash_access_password("owner-secret"))

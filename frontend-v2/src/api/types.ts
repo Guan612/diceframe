@@ -1199,6 +1199,35 @@ export interface ActionSubmitResponse {
   [key: string]: unknown
 }
 
+export interface KpQuestionResponse {
+  ok: boolean
+  kind: 'kp_table_talk'
+  answer: string
+  visibility: 'private' | 'party'
+  exchange?: TableTalkExchange | null
+  advanced: false
+  action_consumed: false
+  round_number: number
+  provider_used?: string
+  total_tokens?: number
+}
+
+export interface TableTalkExchange {
+  id: string
+  actor_uid: string
+  actor_name: string
+  question: string
+  answer: string
+  round: number
+  created_at: string
+  visibility: 'party'
+}
+
+export interface TableTalkResponse {
+  ok: boolean
+  exchanges: TableTalkExchange[]
+}
+
 export interface LuckDecisionResponse extends ActionSubmitResponse {
   ok?: boolean
   error?: string

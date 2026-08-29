@@ -2,7 +2,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, gameEventSource, hasAccessToken, isNotFoundError } from '@/api/client'
-import type { CharacterListResponse, GameDetail, GameLogResponse, LogEntry, LorebookResponse, LoreEntry, MapData, Player, PrivateLogResponse, PrivateMessage } from '@/api/types'
+import type { CharacterListResponse, GameDetail, GameLogResponse, LogEntry, LorebookResponse, LoreEntry, MapData, Player, PrivateLogResponse, PrivateMessage, TableTalkExchange, TableTalkResponse } from '@/api/types'
 import type { LoreKeywords } from '@/utils/renderer'
 import { clearCurrentGame, gameFromQuery, queryString, readCurrentGame, rememberCurrentGame } from '@/stores/gameContext'
 import { resolveMapBackgroundAsset, revokeMapBackgroundAsset } from '@/api/mapBackgrounds'
@@ -31,7 +31,7 @@ export function useGame(){
   const userId = ref(routeUser())
   const detail = ref<GameDetail|null>(null), players = ref<Player[]>([]), log = ref<LogEntry[]>([]), liveNarration = ref('')
   const rulesetStateSignal = ref(0)
-  const privateMessages = ref<PrivateMessage[]>([]), map = ref<MapData>({locations:[]}), lore = ref<LoreKeywords>({}), loreEntries = ref<LoreEntry[]>([]), loading=ref(false), error=ref('')
+  const privateMessages = ref<PrivateMessage[]>([]), tableTalk = ref<TableTalkExchange[]>([]), map = ref<MapData>({locations:[]}), lore = ref<LoreKeywords>({}), loreEntries = ref<LoreEntry[]>([]), loading=ref(false), error=ref('')
   let source:EventSource|null=null
   let unsubscribePeerEvents:(()=>void)|null=null
   let pollTimer:number|undefined
@@ -39,7 +39,7 @@ export function useGame(){
   let reconnectTimer:number|undefined
   let connectVersion=0
   let eventCursor=''
-  const signatures:Record<string,string> = { detail:'', players:'', log:'', privateMessages:'', map:'', loreEntries:'', lore:'' }
+  const signatures:Record<string,string> = { detail:'', players:'', log:'', privateMessages:'', tableTalk:'', map:'', loreEntries:'', lore:'' }
   // GM 判定与后端 is_game_gm 同口径：已登录 owner（管理员账号多人共用都算）或该局主 GM 会话。
   const isGm = computed(()=>!!detail.value && (hasAccessToken() || (!!userId.value && detail.value.gm_uid===userId.value)))
   const actorId = computed(() => userId.value || (isGm.value ? detail.value?.gm_uid || '' : ''))
@@ -89,6 +89,7 @@ export function useGame(){
     players.value = []
     log.value = []
     privateMessages.value = []
+    tableTalk.value = []
     revokeMapBackgroundAsset(map.value)
     map.value = { locations: [] }
     signatures.map = ''
@@ -116,11 +117,12 @@ export function useGame(){
     if(!gameKey)return
     if(!silent){loading.value=true; error.value=''}
     try{
-      const [d,c,l,p,m]=await Promise.all([
+      const [d,c,l,p,tt,m]=await Promise.all([
         api<GameDetail>(`/games/${encodeURIComponent(gameKey)}`),
         api<CharacterListResponse>(`/games/${encodeURIComponent(gameKey)}/characters`),
         api<GameLogResponse>(`/games/${encodeURIComponent(gameKey)}/log`),
         api<PrivateLogResponse>(`/games/${encodeURIComponent(gameKey)}/private-log`),
+        api<TableTalkResponse>(`/games/${encodeURIComponent(gameKey)}/table-talk`),
         api<MapData>(`/games/${encodeURIComponent(gameKey)}/map`)
       ])
       if(currentGame.value !== gameKey)return
@@ -128,6 +130,7 @@ export function useGame(){
       setIfChanged('players', players, c.players||[])
       setIfChanged('log', log, l.log||[])
       setIfChanged('privateMessages', privateMessages, p.messages||p.private_log||[])
+      setIfChanged('tableTalk', tableTalk, tt.exchanges||[])
       const nextMap = m || { locations: [] }
       const nextMapSignature = signature(nextMap)
       if (signatures.map !== nextMapSignature) {
@@ -240,5 +243,5 @@ export function useGame(){
   // 须按最新条目的 round 判断，否则“GM 思考中”在正式输出落地后残留。
   watch(() => log.value[log.value.length - 1]?.round, (next, prev) => { if (next !== prev) liveNarration.value = '' })
   onBeforeUnmount(()=>{connectVersion++;source?.close();unsubscribePeerEvents?.();revokeMapBackgroundAsset(map.value);clearRefreshTimer();if(pollTimer)clearInterval(pollTimer);if(reconnectTimer)clearTimeout(reconnectTimer)})
-  return {currentGame,userId,actorId,detail,players,player,log,privateMessages,map,lore,loreEntries,loading,error,isGm,refresh,connect,selectGame,liveNarration,rulesetStateSignal}
+  return {currentGame,userId,actorId,detail,players,player,log,privateMessages,tableTalk,map,lore,loreEntries,loading,error,isGm,refresh,connect,selectGame,liveNarration,rulesetStateSignal}
 }

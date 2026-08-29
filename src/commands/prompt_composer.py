@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.content.gm_style import render_gm_style_section
@@ -246,6 +246,7 @@ class PromptComposer:
         actor_uid: str,
         provider_name: str = "",
         world_data: dict | None = None,
+        visibility: Literal["private", "party"] = "private",
     ) -> str:
         """Build the restricted context used only by player-facing GM Q&A."""
         return await build_player_safe_llm_context(
@@ -256,4 +257,5 @@ class PromptComposer:
             actor_uid,
             provider_name=provider_name,
             lorebook_budget=world_data.get("lorebook_token_budget", 0) if world_data else 0,
+            visibility=visibility,
         )

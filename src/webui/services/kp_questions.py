@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import TYPE_CHECKING, Any, TypedDict
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from src.webui.api import WebAPI
@@ -26,8 +28,9 @@ async def ask(
     game_key: str,
     actor_uid: str,
     question: str,
+    visibility: Literal["private", "party"] = "private",
 ) -> KPQuestionResult:
-    """Answer a table-talk question without persisting or mutating the game."""
+    """Answer table talk outside the turn pipeline; persist only party exchanges."""
     instance = api._reg.get(api._parse_key(game_key))
     if not instance:
         return _result({
@@ -47,6 +50,12 @@ async def ask(
             "ok": False,
             "code": "EMPTY_QUESTION",
             "error": "请输入要询问 KP 的问题",
+        }, 400)
+    if visibility not in {"private", "party"}:
+        return _result({
+            "ok": False,
+            "code": "INVALID_VISIBILITY",
+            "error": "询问可见范围无效",
         }, 400)
     handler = getattr(api, "_handler", None)
     answerer = getattr(handler, "answer_kp_question", None)
@@ -70,7 +79,9 @@ async def ask(
         snapshot = instance.__class__.from_dict(copy.deepcopy(instance.to_dict()))
 
     try:
-        generated = await answerer(snapshot, actor_uid, question)
+        generated = await answerer(
+            snapshot, actor_uid, question, visibility=visibility,
+        )
     except Exception:
         logger.exception("KP 桌外询问生成失败: game=%s actor=%s", game_key, actor_uid)
         return _result({
@@ -86,10 +97,52 @@ async def ask(
             "code": "EMPTY_ANSWER",
             "error": "KP 没有返回可显示的回答，请重试",
         }, 502)
+    if api._reg.get(api._parse_key(game_key)) is not instance:
+        return _result({
+            "ok": False,
+            "code": "GAME_CHANGED",
+            "error": "询问期间游戏已被替换或删除，请刷新后重试",
+        }, 409)
+    exchange: dict[str, Any] | None = None
+    if visibility == "party":
+        actor = snapshot.players.get(actor_uid) or {}
+        exchange = {
+            "id": uuid4().hex,
+            "actor_uid": actor_uid,
+            "actor_name": str(actor.get("character_name") or actor_uid),
+            "question": question,
+            "answer": answer,
+            "round": snapshot.round_number,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "visibility": "party",
+        }
+        # The LLM call stays outside the lock. Only the small append/save step is
+        # serialized, so table talk cannot block or enter the turn pipeline.
+        try:
+            async with instance._process_lock:
+                instance.append_table_talk(exchange)
+                try:
+                    await api._reg.save(instance)
+                except Exception:
+                    instance.table_talk[:] = [
+                        item for item in instance.table_talk
+                        if item.get("id") != exchange["id"]
+                    ]
+                    raise
+        except Exception:
+            logger.exception("公开桌边问答保存失败: game=%s actor=%s", game_key, actor_uid)
+            return _result({
+                "ok": False,
+                "code": "TABLE_TALK_SAVE_FAILED",
+                "error": "公开回答暂时无法保存，请稍后重试",
+            }, 500)
+
     return _result({
         "ok": True,
         "kind": "kp_table_talk",
         "answer": answer,
+        "visibility": visibility,
+        "exchange": exchange,
         "advanced": False,
         "action_consumed": False,
         "round_number": snapshot.round_number,

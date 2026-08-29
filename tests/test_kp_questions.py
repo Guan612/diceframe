@@ -66,11 +66,13 @@ class _Registry:
 
 class _QuestionHandler:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []
         self.instances: list[GameInstance] = []
 
-    async def answer_kp_question(self, instance, actor_uid: str, question: str) -> dict:
-        self.calls.append((actor_uid, question))
+    async def answer_kp_question(
+        self, instance, actor_uid: str, question: str, visibility: str = "private",
+    ) -> dict:
+        self.calls.append((actor_uid, question, visibility))
         self.instances.append(instance)
         return {"answer": "你见过门上的密斯卡托尼克大学徽记。", "total_tokens": 42}
 
@@ -98,10 +100,28 @@ async def test_question_service_is_read_only_and_does_not_consume_action() -> No
     assert result["payload"]["advanced"] is False
     assert result["payload"]["action_consumed"] is False
     assert result["payload"]["round_number"] == 3
-    assert api._handler.calls == [("p1", "我认识门上的徽记吗？")]
+    assert api._handler.calls == [("p1", "我认识门上的徽记吗？", "private")]
     assert api._handler.instances[0] is not instance
     assert api._reg.save_calls == 0
     assert instance.to_dict() == before
+
+
+@pytest.mark.asyncio
+async def test_party_question_persists_only_the_separate_table_talk_exchange() -> None:
+    instance = _instance()
+    api = _Api(instance)
+
+    result = await ask(api, "game", "p1", "大家都知道这是什么吗？", "party")
+
+    assert result["status"] == 200
+    assert result["payload"]["visibility"] == "party"
+    assert result["payload"]["exchange"]["question"] == "大家都知道这是什么吗？"
+    assert api._handler.calls == [("p1", "大家都知道这是什么吗？", "party")]
+    assert api._reg.save_calls == 1
+    assert instance.table_talk[-1]["answer"].startswith("你见过")
+    assert instance.action_queue == [{"user_id": "p2", "text": "检查门锁"}]
+    assert instance.round_number == 3
+    assert "table_talk" not in instance.to_llm_view()
 
 
 @pytest.mark.asyncio
@@ -154,6 +174,11 @@ class _Matcher:
                 "content": "只属于另一名角色。",
                 "visible_to": ["p2"],
             },
+            {
+                "name": "全队知识",
+                "content": "所有人都已经看过这个大厅。",
+                "visible_to": ["party"],
+            },
         ]
 
 
@@ -163,6 +188,7 @@ class _PromptComposer:
         self.player_message = ""
         self.matches: list[dict] = []
         self.actor_uid = ""
+        self.visibility = ""
 
     def load_rule_context(self, _instance, _loader):
         return SimpleNamespace(rule_appendix="规则附录", world_data=None)
@@ -180,6 +206,7 @@ class _PromptComposer:
         self.player_message = player_message
         self.matches = matches
         self.actor_uid = actor_uid
+        self.visibility = str(_kwargs.get("visibility") or "")
         return "只读上下文"
 
 
@@ -221,11 +248,26 @@ async def test_responder_uses_a_non_mutating_table_talk_prompt() -> None:
     assert "不得泄露隐藏世界书" in prompt.system_prompt
     assert "莱拉" in prompt.player_message
     assert prompt.actor_uid == "p1"
-    assert [entry["name"] for entry in prompt.matches] == ["大学徽记"]
+    assert [entry["name"] for entry in prompt.matches] == ["大学徽记", "全队知识"]
+    assert prompt.visibility == "private"
     assert "不可泄露" not in str(prompt.matches)
     assert llm.call_args[1] == "只读上下文"
     assert llm.call_args[2]["temperature"] == 0.2
     assert instance.to_dict() == before
+
+
+@pytest.mark.asyncio
+async def test_party_responder_uses_only_public_lore() -> None:
+    prompt = _PromptComposer()
+    responder = KPQuestionResponder(
+        _LLM(), _Matcher(), prompt, lambda *_args: None, lambda *_args: None,
+    )
+
+    await responder.answer(_instance(), "p1", "我知道这枚徽记吗？", "party")
+
+    assert [entry["name"] for entry in prompt.matches] == ["全队知识"]
+    assert prompt.visibility == "party"
+    assert "共享给全队" in prompt.system_prompt
 
 
 def test_prompt_treats_unknown_outcomes_as_future_actions() -> None:
@@ -284,3 +326,34 @@ async def test_player_safe_context_excludes_hidden_and_other_player_data() -> No
     assert "角色授权知识" in context
     assert "地下室真正藏着王冠" not in context
     assert "另一角色的身世" not in context
+
+
+@pytest.mark.asyncio
+async def test_party_safe_context_excludes_questioner_private_knowledge() -> None:
+    instance = _instance()
+    instance.players["p1"]["character_sheet"].update({
+        "background": "提问者的秘密背景",
+        "inventory": ["提问者私藏的银钥匙"],
+    })
+    instance.private_log = {
+        "p1": [{"round": 2, "text": "只有你听见阁楼的脚步声。"}],
+    }
+
+    context = await build_player_safe_context(
+        instance,
+        "全队安全系统提示",
+        [
+            {"name": "全队知识", "content": "大家都看见了徽记", "visible_to": ["party"]},
+            {"name": "角色知识", "content": "只有莱拉知道", "visible_to": ["p1"]},
+        ],
+        "大家知道这是什么吗？",
+        "p1",
+        provider_name="test",
+        visibility="party",
+    )
+
+    assert "大家都看见了徽记" in context
+    assert "只有莱拉知道" not in context
+    assert "提问者的秘密背景" not in context
+    assert "提问者私藏的银钥匙" not in context
+    assert "只有你听见阁楼的脚步声" not in context

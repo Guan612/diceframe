@@ -378,6 +378,20 @@ async def api_private_log(request: web.Request) -> web.Response:
     return web.json_response(result, status=200 if result.get("ok") else 404)
 
 
+async def api_table_talk(request: web.Request) -> web.Response:
+    """Read the public table-talk channel for a player or the game GM."""
+    gk = request.match_info["game_key"]
+    api = _get_api(request)
+    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    if not inst:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+    session_uid = str(request.get("user_id", "") or "")
+    owner = bool(request.get("owner_authenticated", False))
+    if not is_game_gm(inst, session_uid, owner) and session_uid not in inst.players:
+        return web.json_response({"ok": False, "error": "未加入本局"}, status=403)
+    return web.json_response(api.table_talk(gk))
+
+
 async def api_player_context(request: web.Request) -> web.Response:
     return web.json_response({
         "ok": True,
@@ -498,6 +512,7 @@ async def api_kp_question(request: web.Request) -> web.Response:
     if not isinstance(body, dict):
         body = {}
     question = str(body.get("question", "") or "").strip()
+    visibility = str(body.get("visibility", "private") or "private")
     if len(question) > MAX_ACTION_CHARS:
         return web.json_response({
             "ok": False,
@@ -514,7 +529,12 @@ async def api_kp_question(request: web.Request) -> web.Response:
         game_key,
         str(request.get("user_id", "") or ""),
         question,
+        visibility,
     )
+    if result["status"] == 200 and result["payload"].get("visibility") == "party":
+        pool = request.app.get("connection_pool")
+        if pool is not None:
+            await pool.broadcast(game_key, {"type": "table_talk_changed"})
     return web.json_response(result["payload"], status=result["status"])
 
 
@@ -1172,6 +1192,7 @@ def register_games(app: web.Application) -> None:
     app.router.add_post("/api/games/batch-delete", api_batch_delete_games)
     app.router.add_post("/api/games/{game_key}/action", api_action)
     app.router.add_post("/api/games/{game_key}/kp-question", api_kp_question)
+    app.router.add_get("/api/games/{game_key}/table-talk", api_table_talk)
     app.router.add_get("/api/games/{game_key}/available-actions", api_ruleset_available_actions)
     app.router.add_post("/api/games/{game_key}/intents", api_ruleset_submit_intent)
     app.router.add_post(

@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from copy import deepcopy
+from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
@@ -468,15 +469,35 @@ def filter_player_visible_lorebook_entries(
     return result
 
 
-def _player_safe_state(instance: GameInstance, actor_uid: str) -> dict:
+def filter_public_lorebook_entries(entries: list[dict]) -> list[dict]:
+    """Select only lore explicitly marked as visible to the whole table."""
+    public = {marker.casefold() for marker in _PUBLIC_VISIBILITY_MARKERS}
+    result: list[dict] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        visible = {item.casefold() for item in _visibility_values(entry.get("visible_to"))}
+        if visible & public:
+            result.append(deepcopy(entry))
+    return result
+
+
+def _player_safe_state(
+    instance: GameInstance,
+    actor_uid: str,
+    visibility: Literal["private", "party"] = "private",
+) -> dict:
     actor = instance.players.get(actor_uid) or {}
     actor_sheet = actor.get("character_sheet")
-    actor_view = {
+    actor_view: dict[str, Any] = {
         "character_name": actor.get("character_name", ""),
         "attendance": "away" if actor_uid in instance.away_players else "active",
-        # The player may ask about every field on their own authoritative sheet.
-        "character_sheet": deepcopy(actor_sheet) if isinstance(actor_sheet, dict) else {},
     }
+    if visibility == "private":
+        # A private answer may use every field on the questioner's own sheet.
+        actor_view["character_sheet"] = (
+            deepcopy(actor_sheet) if isinstance(actor_sheet, dict) else {}
+        )
     party = [
         {
             "character_name": pdata.get("character_name", ""),
@@ -507,6 +528,7 @@ async def build_player_safe_context(
     actor_uid: str,
     provider_name: str = "",
     lorebook_budget: int = 0,
+    visibility: Literal["private", "party"] = "private",
 ) -> str:
     """Build a structurally player-safe context for read-only GM questions.
 
@@ -520,8 +542,10 @@ async def build_player_safe_context(
     language = getattr(instance, "language", "zh-CN")
     actor = instance.players.get(actor_uid) or {}
     actor_name = str(actor.get("character_name") or actor_uid)
-    safe_lore = filter_player_visible_lorebook_entries(
-        lorebook_entries, actor_uid, actor_name,
+    safe_lore = (
+        filter_public_lorebook_entries(lorebook_entries)
+        if visibility == "party"
+        else filter_player_visible_lorebook_entries(lorebook_entries, actor_uid, actor_name)
     )
 
     budget_system = int(max_total * _BUDGET_SYSTEM_PROMPT)
@@ -538,7 +562,9 @@ async def build_player_safe_context(
     sec_idx: dict[str, int] = {}
     reserved_system_chars = min(len(gm_prompt_filled), budget_system)
 
-    state_json = json.dumps(_player_safe_state(instance, actor_uid), ensure_ascii=False)
+    state_json = json.dumps(
+        _player_safe_state(instance, actor_uid, visibility), ensure_ascii=False,
+    )
     parts.append(
         localized_text(language, {
             "en": "## Player-Safe Game State",
@@ -593,7 +619,9 @@ async def build_player_safe_context(
         sec_idx["confirmed"] = len(parts) - 1
 
     own_private = []
-    for item in (instance.private_log or {}).get(actor_uid, []):
+    for item in (
+        (instance.private_log or {}).get(actor_uid, []) if visibility == "private" else []
+    ):
         if not isinstance(item, dict):
             continue
         text = sanitize_narration(str(item.get("text") or "")).strip()

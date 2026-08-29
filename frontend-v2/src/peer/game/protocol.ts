@@ -6,12 +6,14 @@ export type PeerGameOperation =
   | 'game.characters'
   | 'game.log'
   | 'game.private_log'
+  | 'game.table_talk'
   | 'game.map'
   | 'game.player_context'
   | 'player.create'
   | 'player.rebind'
   | 'player.away'
   | 'action.submit'
+  | 'kp.question'
   | 'ruleset.actions'
   | 'ruleset.intent'
   | 'luck.resolve'
@@ -23,12 +25,14 @@ const GAME_OPERATIONS = new Set<PeerGameOperation>([
   'game.characters',
   'game.log',
   'game.private_log',
+  'game.table_talk',
   'game.map',
   'game.player_context',
   'player.create',
   'player.rebind',
   'player.away',
   'action.submit',
+  'kp.question',
   'ruleset.actions',
   'ruleset.intent',
   'luck.resolve',

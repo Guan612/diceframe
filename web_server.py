@@ -998,9 +998,9 @@ def _share_player_user_id(request: web.Request) -> str:
         return uid or request.get("user_id", "")
     if len(parts) >= 4:
         tail = parts[3]
-        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "multiplayer", "sse", "map", "player-context", "available-actions", "avatars", "scene-image", "map-background-asset", "generated-images"}:
+        if request.method == "GET" and tail in {"characters", "character-cards", "log", "private-log", "table-talk", "multiplayer", "sse", "map", "player-context", "available-actions", "avatars", "scene-image", "map-background-asset", "generated-images"}:
             return uid or request.get("user_id", "")
-        if request.method == "POST" and tail in {"players", "action", "intents", "decisions", "sse-ticket", "avatars", "scene-image", "generated-images", "character"}:
+        if request.method == "POST" and tail in {"players", "action", "kp-question", "intents", "decisions", "sse-ticket", "avatars", "scene-image", "generated-images", "character"}:
             return uid or request.get("user_id", "")
         if (
             request.method == "POST"
