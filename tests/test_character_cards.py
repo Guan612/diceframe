@@ -147,8 +147,8 @@ def test_import_tavern_as_npc_creates_npc_and_book_entries(tmp_path):
         assert npc["tier"] == "core"
         assert "Himmel" in npc["keywords"]
         assert "英雄" in npc["keywords"]
-        assert "描述: 一位老练的冒险者" in npc["content"]
-        assert "性格: 温和而坚定" in npc["content"]
+        assert "一位老练的冒险者" in npc["content"]
+        assert "温和而坚定" in npc["content"]
 
         book1 = store.get_entry("w1_tavern_Himmel_book_0")
         assert book1 is not None

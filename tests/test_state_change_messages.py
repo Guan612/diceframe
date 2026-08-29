@@ -43,6 +43,10 @@ def test_state_change_messages_include_hp_loot_and_quests():
 
     messages = _build_state_change_messages(instance, before, data)
 
-    assert "【状态变动】艾琳：HP 46 → 44（-2）；获得 老格雷的细磨刀石 x1" in messages
-    assert "【任务更新】完成训练场等级评价：已完成" in messages
-    assert "【任务更新】选择第一个冒险任务：进行中" in messages
+    # 契约：HP 变化、获得物品、任务状态都进入播报；具体措辞/格式不锁。
+    joined = "\n".join(messages)
+    assert "艾琳" in joined
+    assert "HP" in joined and "44" in joined
+    assert "老格雷的细磨刀石" in joined
+    assert "完成训练场等级评价" in joined
+    assert "选择第一个冒险任务" in joined

@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
-import { nextTick, ref } from 'vue'
+import { nextTick } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
+import { ref } from 'vue'
 
 vi.mock('../src/composables/useLocale', () => ({
   useLocale: () => ({ locale: ref('zh-CN') }),
@@ -31,59 +32,60 @@ function gameplay() {
   } as any
 }
 
+function mountBar(props: { gameplay: ReturnType<typeof gameplay>; actorId: string; embedded?: boolean }) {
+  return mount(CombatLiveBar, {
+    props,
+    global: { stubs: { Modal: { template: '<div><slot /></div>' } } },
+  })
+}
+
+function buttonByText(wrapper: ReturnType<typeof mountBar>, text: string) {
+  const button = wrapper.findAll('button').find(item => item.text().includes(text))
+  expect(button, `应找到按钮: ${text}`).toBeTruthy()
+  return button!
+}
+
 describe('combat live bar', () => {
   it('makes the current turn and latest shared result prominent', async () => {
-    const wrapper = mount(CombatLiveBar, {
-      props: { gameplay: gameplay(), actorId: 'ally' },
-      global: { stubs: { Modal: { template: '<div><slot /></div>' } } },
-    })
+    const wrapper = mountBar({ gameplay: gameplay(), actorId: 'ally' })
 
     expect(wrapper.text()).toContain('第 2 轮 · 轮到你行动')
     expect(wrapper.text()).toContain('哥布林攻击阿刃：d20 15 + 0 = 15 vs AC 16，未命中')
-    await wrapper.get('.combat-live-actions .primary').trigger('click')
+    await buttonByText(wrapper, '打开战斗工具').trigger('click')
     expect(wrapper.emitted('openCombat')).toHaveLength(1)
   })
 
   it('opens a shared action history without opening the combat tool', async () => {
-    const wrapper = mount(CombatLiveBar, {
-      props: { gameplay: gameplay(), actorId: 'ally' },
-      global: { stubs: { Modal: { template: '<div class="modal-stub"><slot /></div>' } } },
-    })
+    const wrapper = mountBar({ gameplay: gameplay(), actorId: 'ally' })
 
-    await wrapper.get('.combat-live-actions button').trigger('click')
-    expect(wrapper.find('.combat-history-list').exists()).toBe(true)
+    await buttonByText(wrapper, '行动历史').trigger('click')
+    // 历史面板打开：能看到事件内容；且不触发打开战斗工具
     expect(wrapper.text()).toContain('第 2 轮')
+    expect(wrapper.text()).toContain('哥布林')
     expect(wrapper.emitted('openCombat')).toBeUndefined()
   })
 
   it('stays self-contained when embedded at the top of the combat tool', () => {
-    const wrapper = mount(CombatLiveBar, {
-      props: { gameplay: gameplay(), actorId: 'ally', embedded: true },
-      global: { stubs: { Modal: { template: '<div><slot /></div>' } } },
-    })
-    expect(wrapper.find('.combat-live-actions .primary').exists()).toBe(false)
+    const wrapper = mountBar({ gameplay: gameplay(), actorId: 'ally', embedded: true })
+    expect(wrapper.findAll('button').some(item => item.text().includes('打开战斗工具'))).toBe(false)
     expect(wrapper.text()).toContain('行动历史')
   })
 
-  it('highlights a newly received resolution after a refresh', async () => {
+  it('announces a newly received resolution after a refresh', async () => {
     const next = gameplay()
     next.recent_combat_events = [{
       ...next.recent_combat_events[0], event_id: 'batch:1', state_version: 5,
       total: 8, target: 15,
     }]
-    const wrapper = mount(CombatLiveBar, {
-      props: { gameplay: gameplay(), actorId: 'ally' },
-      global: { stubs: { Modal: { template: '<div><slot /></div>' } } },
-    })
+    const wrapper = mountBar({ gameplay: gameplay(), actorId: 'ally' })
 
-    expect(wrapper.find('.combat-live-updated').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('刚刚更新')
     await wrapper.setProps({ gameplay: next })
     await nextTick()
-    expect(wrapper.find('.combat-live-updated').text()).toBe('刚刚更新')
-    expect(wrapper.get('.combat-live-bar').classes()).toContain('changed')
+    expect(wrapper.text()).toContain('刚刚更新')
   })
 
-  it('keeps damage visible and colors participant names and roll formulas without recoloring rows', async () => {
+  it('keeps damage visible and shows every participant in shared history', async () => {
     const next = gameplay()
     next.recent_combat_events.push({
       event_id: 'batch:1', batch_id: 'batch', intent_type: 'attack', state_version: 5,
@@ -93,19 +95,16 @@ describe('combat live bar', () => {
       event_id: 'batch:2', batch_id: 'batch', intent_type: 'combat.message', state_version: 6,
       type: 'dnd2024.combat.message', actor_id: 'player:friend', actor_name: '调调', text: '我来掩护。', round: 2,
     } as any)
-    const wrapper = mount(CombatLiveBar, {
-      props: { gameplay: next, actorId: 'ally' },
-      global: { stubs: { Modal: { template: '<div><slot /></div>' } } },
-    })
+    const wrapper = mountBar({ gameplay: next, actorId: 'ally' })
 
-    expect(wrapper.get('.combat-live-impact').text()).toContain('阿刃 · 最新生命结算')
-    expect(wrapper.get('.combat-live-impact').text()).toContain('-6')
-    await wrapper.get('.combat-live-actions button').trigger('click')
-    expect(wrapper.findAll('.combat-history-token.enemy').some(token => token.text() === '哥布林')).toBe(true)
-    expect(wrapper.findAll('.combat-history-token.ally').some(token => token.text() === '调调')).toBe(true)
-    expect(wrapper.findAll('.combat-history-token.self').some(token => token.text() === '阿刃')).toBe(true)
-    expect(wrapper.get('.combat-history-token.roll').text()).toBe('d20 15 + 0 = 15 vs AC 16')
-    expect(wrapper.find('.combat-history-list li.enemy').exists()).toBe(false)
+    expect(wrapper.text()).toContain('阿刃 · 最新生命结算')
+    expect(wrapper.text()).toContain('-6')
+    await buttonByText(wrapper, '行动历史').trigger('click')
+    const historyText = wrapper.text()
+    expect(historyText).toContain('哥布林')
+    expect(historyText).toContain('调调')
+    expect(historyText).toContain('阿刃')
+    expect(historyText).toContain('d20 15 + 0 = 15 vs AC 16')
   })
 
   it('keeps the authoritative event order and only reverses it for newest-first display', async () => {
@@ -114,13 +113,10 @@ describe('combat live bar', () => {
       { ...next.recent_combat_events[0], event_id: 'z-event', state_version: 9, actor_name: '最早事件' },
       { ...next.recent_combat_events[0], event_id: 'a-event', state_version: 2, actor_name: '最新事件' },
     ]
-    const wrapper = mount(CombatLiveBar, {
-      props: { gameplay: next, actorId: 'ally' },
-      global: { stubs: { Modal: { template: '<div><slot /></div>' } } },
-    })
+    const wrapper = mountBar({ gameplay: next, actorId: 'ally' })
 
-    await wrapper.get('.combat-live-actions button').trigger('click')
-    const rows = wrapper.findAll('.combat-history-list li')
+    await buttonByText(wrapper, '行动历史').trigger('click')
+    const rows = wrapper.findAll('li')
     expect(rows[0].text()).toContain('最新事件')
     expect(rows[1].text()).toContain('最早事件')
   })

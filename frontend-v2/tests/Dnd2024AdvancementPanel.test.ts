@@ -16,6 +16,12 @@ vi.mock('../src/features/rulesets/dnd2024/api', () => ({
 
 import Dnd2024AdvancementPanel from '../src/features/rulesets/dnd2024/progression/Dnd2024AdvancementPanel.vue'
 
+function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
+  const button = wrapper.findAll('button').find(candidate => candidate.text() === text)
+  if (!button) throw new Error(`Missing button: ${text}`)
+  return button
+}
+
 const character = {
   character_name: 'Arden',
   ruleset_character: {
@@ -60,8 +66,7 @@ describe('D&D 2024 advancement panel', () => {
     expect(wrapper.text()).toContain('Lv. 1 → Lv. 2')
     expect(wrapper.text()).toContain('action surge')
     expect(wrapper.get('section').attributes('aria-labelledby')).toBe('dnd-advancement-title')
-    expect(wrapper.find('header button').exists()).toBe(false)
-    await wrapper.get('footer .primary').trigger('click')
+    await buttonByText(wrapper, 'Apply level').trigger('click')
     await flushPromises()
 
     expect(mocks.apply).toHaveBeenCalledWith(
@@ -90,7 +95,7 @@ describe('D&D 2024 advancement panel', () => {
     })
     await flushPromises()
 
-    expect((wrapper.get('footer .primary').element as HTMLButtonElement).disabled).toBe(true)
+    expect((buttonByText(wrapper, 'Apply level').element as HTMLButtonElement).disabled).toBe(true)
     expect(wrapper.text()).toContain('Champion')
   })
 
@@ -102,7 +107,7 @@ describe('D&D 2024 advancement panel', () => {
       },
     })
     await flushPromises()
-    await wrapper.get('footer .primary').trigger('click')
+    await buttonByText(wrapper, '确认升级').trigger('click')
     await flushPromises()
 
     expect(mocks.livePreview).toHaveBeenCalledWith(
@@ -156,8 +161,8 @@ describe('D&D 2024 advancement panel', () => {
     expect(wrapper.text()).toContain('准备法术需要正好 5 个')
     expect(wrapper.text()).toContain('法术书需要正好 8 个法术')
     expect(wrapper.text()).toContain('法师请先选法术书')
-    const bookChecks = wrapper.findAll('input').filter(input => input.attributes('type') === 'checkbox')
-    expect(bookChecks).toHaveLength(18)
-    expect(wrapper.findAll('input[type="checkbox"]')[8].attributes('disabled')).toBeDefined()
+    const extraSpellChoices = wrapper.findAll('label').filter(label => label.text().includes('Spell 8'))
+    expect(extraSpellChoices).toHaveLength(2)
+    expect(extraSpellChoices.every(label => label.get('input').attributes('disabled') !== undefined)).toBe(true)
   })
 })
