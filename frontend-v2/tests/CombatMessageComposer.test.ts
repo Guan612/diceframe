@@ -21,7 +21,7 @@ describe('combat message composer', () => {
       },
     })
     await wrapper.get('textarea').setValue('我来挡住它！')
-    await wrapper.get('button.primary').trigger('click')
+    await wrapper.findAll('button').find(button => button.text().includes('发送发言'))!.trigger('click')
     await flushPromises()
 
     expect(submit).toHaveBeenCalledOnce()

@@ -62,44 +62,62 @@ async def test_saving_public_base_url_keeps_active_runtime(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_model_runtime_reload_reuses_registry_and_closes_old_client_after_swap(monkeypatch):
-    old_runtime = _runtime()
-    new_runtime = _runtime(
-        registry=old_runtime.registry,
-        memory_store=old_runtime.memory_store,
-    )
-    app = {"subsystems": old_runtime, "api": object(), "plugin_host": None}
-    built_with = []
-    new_api = object()
-
-    def build(*, reuse=None, config=None):
-        built_with.append(reuse)
-        assert app["subsystems"] is old_runtime
-        assert config["model"] == "new-model"
-        return new_runtime
-
-    def make_api(runtime, plugin_host=None, config=None):
-        assert runtime is new_runtime
-        assert config["model"] == "new-model"
-        return new_api
-
+async def test_model_runtime_reload_reuses_live_stores_and_closes_old_client(monkeypatch, tmp_path):
+    """通过真实 factory + API facade 验证热重载，而不是伪造 subsystem。"""
+    original_state = dict(web_server.STATE)
+    runtime_root = tmp_path / "runtime"
+    for name in ("prompts", "rules", "worlds", "adventures"):
+        (runtime_root / name).mkdir(parents=True)
+    monkeypatch.setattr(web_server, "DATA_DIR", runtime_root / "data")
+    monkeypatch.setattr(web_server, "PROMPTS_DIR", runtime_root / "prompts")
+    monkeypatch.setattr(web_server, "RULES_DIR", runtime_root / "rules")
+    monkeypatch.setattr(web_server, "WORLDS_DIR", runtime_root / "worlds")
+    monkeypatch.setattr(web_server, "ADVENTURES_DIR", runtime_root / "adventures")
     monkeypatch.setattr(web_server, "save_config", lambda: None)
-    monkeypatch.setattr(web_server, "_build_subsystems", build)
-    monkeypatch.setattr(web_server, "_make_api", make_api)
-    monkeypatch.setitem(web_server.STATE, "proxy_enabled", False)
-    monkeypatch.setitem(web_server.STATE, "proxy_url", "")
 
-    response = await web_server.api_config_post(
-        _ConfigRequest({"model": "new-model"}, app)
-    )
+    baseline = dict(original_state)
+    baseline.update({
+        "ai_providers": [],
+        "llm_provider_ref": "",
+        "base_url": "https://api.example/v1",
+        "api_key": "test-key",
+        "model": "old-model",
+        "proxy_enabled": False,
+        "proxy_url": "",
+        "embedding_enabled": False,
+    })
+    web_server.STATE.clear()
+    web_server.STATE.update(baseline)
+    old_runtime = web_server._build_subsystems(config=baseline)
+    old_session = await old_runtime.llm_client._get_session()
+    app = {
+        "subsystems": old_runtime,
+        "api": web_server._make_api(old_runtime, config=baseline),
+        "plugin_host": None,
+    }
 
-    assert response.status == 200
-    assert built_with == [old_runtime]
-    assert app["subsystems"] is new_runtime
-    assert app["subsystems"].registry is old_runtime.registry
-    assert app["api"] is new_api
-    assert old_runtime.llm_client.closed == 1
-    assert new_runtime.llm_client.closed == 0
+    try:
+        response = await web_server.api_config_post(
+            _ConfigRequest({"model": "new-model"}, app)
+        )
+
+        assert response.status == 200
+        new_runtime = app["subsystems"]
+        assert new_runtime is not old_runtime
+        assert new_runtime.registry is old_runtime.registry
+        assert new_runtime.lorebook_store is old_runtime.lorebook_store
+        assert new_runtime.memory_store is old_runtime.memory_store
+        assert new_runtime.handler.registry is old_runtime.registry
+        assert new_runtime.llm_client.providers["default"].model_name == "new-model"
+        assert app["api"]._reg is old_runtime.registry
+        assert old_session.closed is True
+    finally:
+        active_runtime = app["subsystems"]
+        await active_runtime.llm_client.close()
+        active_runtime.lorebook_store.close()
+        active_runtime.memory_store.close()
+        web_server.STATE.clear()
+        web_server.STATE.update(original_state)
 
 
 @pytest.mark.asyncio

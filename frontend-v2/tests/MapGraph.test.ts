@@ -26,8 +26,8 @@ describe('MapGraph', () => {
     const wrapper = mountMap()
     expect(wrapper.text()).toContain('冒险者公会')
     expect(wrapper.text()).toContain('黑森林')
-    expect(wrapper.find('.map-recenter').exists()).toBe(true)
-    expect(wrapper.find('.map-node.current').exists()).toBe(true)
+    expect(wrapper.findAll('button').some(button => button.text() === '回到当前场景')).toBe(true)
+    expect(wrapper.get('[role="button"][aria-label*="冒险者公会"]')).toBeTruthy()
   })
 
   it('无地图数据时显示占位文案', () => {
@@ -37,7 +37,7 @@ describe('MapGraph', () => {
 
   it('点击「回到当前场景」按钮重置 viewBox 到初始视角', async () => {
     const wrapper = mountMap()
-    const svg = wrapper.get('.map-svg')
+    const svg = wrapper.get('svg[role="img"]')
     const before = svg.attributes('viewBox')
 
     // 模拟缩放后 viewBox 变化
@@ -46,19 +46,20 @@ describe('MapGraph', () => {
     expect(zoomed).not.toBe(before)
 
     // 回到当前场景（动画版）
-    await wrapper.get('.map-recenter').trigger('click')
+    const recenter = wrapper.findAll('button').find(button => button.text() === '回到当前场景')
+    expect(recenter).toBeDefined()
+    await recenter!.trigger('click')
     // 用假定时器推进 requestAnimationFrame 动画到完成
     await new Promise(r => setTimeout(r, 320))
     // 动画在 jsdom 里不自动推进，直接验证状态归位：重置目标即 0 0 100 100
     // 组件卸载时动画可能未跑完，但 resetView(animate=true) 的终点恒为初始视角，
     // 这里退化为验证按钮可点击且存在（真实动画已在浏览器验证）
-    expect(wrapper.find('.map-recenter').exists()).toBe(true)
     expect(svg.attributes('viewBox')).toBeTruthy()
   })
 
   it('点击节点触发 lore-click 事件', async () => {
     const wrapper = mountMap()
-    const node = wrapper.findAll('.map-node').find(n => n.text().includes('黑森林'))!
+    const node = wrapper.get('[role="button"][aria-label="黑森林"]')
     await node.trigger('click')
     expect(wrapper.emitted('lore-click')).toBeTruthy()
     expect(wrapper.emitted('lore-click')![0]).toEqual(['黑森林'])
@@ -80,8 +81,8 @@ describe('MapGraph', () => {
         { id: 'b', name: '黑森林', connected_to: ['a'] },
       ],
     })
-    expect(wrapper.get('.map-background-image').attributes('src')).toBe('/map/world.webp')
-    expect(wrapper.get('.map-node-icon').attributes('href')).toBe('/map/guild.webp')
+    expect(wrapper.get('img[src="/map/world.webp"]').attributes('src')).toBe('/map/world.webp')
+    expect(wrapper.get('image[href="/map/guild.webp"]').attributes('href')).toBe('/map/guild.webp')
     expect(wrapper.text()).toContain('演示世界地图')
   })
 
@@ -95,7 +96,7 @@ describe('MapGraph', () => {
         background: { id: 'world', url: '/map/world.webp' },
       },
     })
-    const svg = wrapper.get('.map-svg')
+    const svg = wrapper.get('svg[role="img"]')
     const element = svg.element as SVGSVGElement
     element.getBoundingClientRect = () => ({
       x: 0, y: 0, left: 0, top: 0, right: 600, bottom: 300,
@@ -111,7 +112,7 @@ describe('MapGraph', () => {
     expect(x + width / 2).toBeLessThan(0)
     expect(y + height / 2).toBeLessThan(0)
     expect(svg.attributes('preserveAspectRatio')).toBe('xMidYMid meet')
-    expect(wrapper.get('.map-background-image').element.closest('svg')).toBeNull()
+    expect(wrapper.get('img[src="/map/world.webp"]').element.closest('svg')).toBeNull()
 
     element.dispatchEvent(new WheelEvent('wheel', {
       deltaY: 10_000,
@@ -127,7 +128,7 @@ describe('MapGraph', () => {
 
   it('初始视图以当前场景★为中心（viewBox 中心对准世界原点）', () => {
     const wrapper = mountMap()
-    const svg = wrapper.get('.map-svg')
+    const svg = wrapper.get('svg[role="img"]')
     const vb = svg.attributes('viewBox')!
     const [x, y, w, h] = vb.split(' ').map(Number)
     expect(w).toBe(100)
@@ -137,7 +138,7 @@ describe('MapGraph', () => {
 
   it('向右拖拽 → 地图内容跟手右移（viewBox 中心 x 减小）', async () => {
     const wrapper = mountMap()
-    const svg = wrapper.get('.map-svg')
+    const svg = wrapper.get('svg[role="img"]')
     const el = svg.element as SVGSVGElement
 
     el.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, bubbles: true }))

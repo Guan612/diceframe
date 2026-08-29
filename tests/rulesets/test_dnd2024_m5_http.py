@@ -18,6 +18,8 @@ from src.webui.services import ruleset_gameplay
 from src.webui.services.turns import submit_action
 from src.webui.services._common import _parse_game_key
 
+from dnd2024_http_common import GameplayApiShim, quick_character
+
 
 class _EnabledRuntime(Dnd2024Runtime):
     capabilities = RulesetCapabilities(
@@ -34,26 +36,10 @@ class _EnabledRuntime(Dnd2024Runtime):
     )
 
 
-class _M5Api:
+class _M5Api(GameplayApiShim):
     def __init__(self, registry: GameRegistry, runtime: _EnabledRuntime):
-        self._reg = registry
+        super().__init__(registry, runtime)
         self._runtime = runtime
-        self._adventure_loader = runtime._adventure_loader
-        self._ruleset_registry = RulesetRuntimeRegistry([
-            LegacyRulesetAdapter(), runtime,
-        ])
-        self._rule = RuleSystem({
-            "rule_id": "dnd2024_srd",
-            "runtime": {"id": "core:dnd2024", "minimum_version": 1},
-        })
-
-    @staticmethod
-    def _parse_key(game_key: str):
-        return _parse_game_key(game_key)
-
-    def _load_rule_for_game(self, instance):
-        del instance
-        return self._rule
 
     @staticmethod
     def _load_world_template(world_id, locale=""):
@@ -67,27 +53,9 @@ class _M5Api:
             "starter_lorebook": [],
         }
 
-    async def ruleset_available_actions(
-        self, game_key: str, requester_id: str, requester_is_gm: bool = False,
-    ):
-        return await ruleset_gameplay.available_actions(
-            self, game_key, requester_id, requester_is_gm,
-        )
-
-    async def ruleset_submit_intent(
-        self, game_key: str, requester_id: str, requester_is_gm: bool, body,
-    ):
-        return await ruleset_gameplay.submit_intent(
-            self, game_key, requester_id, requester_is_gm, body,
-        )
-
 
 def _character(runtime: Dnd2024Runtime, preset_id: str, name: str) -> dict:
-    choices = runtime.builder_choices(None, {"locale": "en"})
-    preset = next(item for item in choices["quick_presets"] if item["id"] == preset_id)
-    return runtime.finalize_character(
-        None, {**preset["draft"], "locale": "en", "name": name},
-    )
+    return quick_character(runtime, preset_id, name)
 
 
 def _enemy() -> dict:

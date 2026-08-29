@@ -15,6 +15,8 @@ from src.webui.routes.games import _broadcast_ruleset_change, register_games
 from src.webui.services import ruleset_gameplay
 from src.webui.services._common import _parse_game_key
 
+from dnd2024_http_common import GameplayApiShim, quick_character
+
 
 class _MemoryProbe:
     def __init__(self):
@@ -46,46 +48,12 @@ async def test_authoritative_ruleset_change_wakes_all_connected_clients() -> Non
     })]
 
 
-class _M6Api:
-    def __init__(self, registry: GameRegistry, runtime: Dnd2024Runtime, memory: _MemoryProbe):
-        self._reg = registry
-        self._mem = memory
-        self._adventure_loader = runtime._adventure_loader
-        self._ruleset_registry = RulesetRuntimeRegistry([LegacyRulesetAdapter(), runtime])
-        self._rule = RuleSystem({
-            "rule_id": "dnd2024_srd",
-            "runtime": {"id": "core:dnd2024", "minimum_version": 1},
-        })
-
-    @staticmethod
-    def _parse_key(game_key: str):
-        return _parse_game_key(game_key)
-
-    def _load_rule_for_game(self, instance):
-        del instance
-        return self._rule
-
-    async def ruleset_available_actions(
-        self, game_key: str, requester_id: str, requester_is_gm: bool = False,
-    ):
-        return await ruleset_gameplay.available_actions(
-            self, game_key, requester_id, requester_is_gm,
-        )
-
-    async def ruleset_submit_intent(
-        self, game_key: str, requester_id: str, requester_is_gm: bool, body,
-    ):
-        return await ruleset_gameplay.submit_intent(
-            self, game_key, requester_id, requester_is_gm, body,
-        )
+class _M6Api(GameplayApiShim):
+    pass
 
 
 def _character(runtime: Dnd2024Runtime) -> dict:
-    choices = runtime.builder_choices(None, {"locale": "en"})
-    preset = next(item for item in choices["quick_presets"] if item["id"] == "stalwart_guardian")
-    return runtime.finalize_character(
-        None, {**preset["draft"], "locale": "en", "name": "HTTP Guide"},
-    )
+    return quick_character(runtime, "stalwart_guardian", "HTTP Guide")
 
 
 def _app(registry: GameRegistry, runtime: Dnd2024Runtime, memory: _MemoryProbe) -> web.Application:

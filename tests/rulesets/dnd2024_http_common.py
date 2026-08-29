@@ -1,0 +1,65 @@
+"""dnd2024 HTTP 契约测试共享 harness（m4/m5/m6 抽共享）。
+
+只收敛真正重复的部分：ruleset_gameplay 服务所需的最小 WebAPI shim、
+legacy adapter + runtime registry 组装、快速角色构建。各里程碑特有的
+路由装配与探针仍留在各自测试文件里。
+"""
+
+from __future__ import annotations
+
+from src.engine.game_instance import GameRegistry
+from src.rules.rule_system import RuleSystem
+from src.rulesets.dnd2024.runtime import Dnd2024Runtime
+from src.rulesets.legacy_adapter import LegacyRulesetAdapter
+from src.rulesets.registry import RulesetRuntimeRegistry
+from src.webui.services import ruleset_gameplay
+from src.webui.services._common import _parse_game_key
+
+
+class GameplayApiShim:
+    """走真实 ruleset_gameplay 服务与 HTTP 路由的最小 WebAPI 替身。"""
+
+    def __init__(self, registry: GameRegistry, runtime: Dnd2024Runtime, memory=None):
+        self._reg = registry
+        self._mem = memory
+        self._adventure_loader = runtime._adventure_loader
+        self._ruleset_registry = RulesetRuntimeRegistry([LegacyRulesetAdapter(), runtime])
+        self._rule = RuleSystem({
+            "rule_id": "dnd2024_srd",
+            "runtime": {"id": "core:dnd2024", "minimum_version": 1},
+        })
+
+    @staticmethod
+    def _parse_key(game_key: str):
+        return _parse_game_key(game_key)
+
+    def _load_rule_for_game(self, instance):
+        del instance
+        return self._rule
+
+    async def ruleset_available_actions(
+        self, game_key: str, requester_id: str, requester_is_gm: bool = False,
+    ):
+        return await ruleset_gameplay.available_actions(
+            self, game_key, requester_id, requester_is_gm,
+        )
+
+    async def ruleset_submit_intent(
+        self, game_key: str, requester_id: str, requester_is_gm: bool, body,
+    ):
+        return await ruleset_gameplay.submit_intent(
+            self, game_key, requester_id, requester_is_gm, body,
+        )
+
+
+def quick_character(
+    runtime: Dnd2024Runtime,
+    preset_id: str = "stalwart_guardian",
+    name: str = "HTTP Test",
+) -> dict:
+    """用真实 builder 从快速预设生成一个合法角色。"""
+    choices = runtime.builder_choices(None, {"locale": "en"})
+    preset = next(item for item in choices["quick_presets"] if item["id"] == preset_id)
+    return runtime.finalize_character(
+        None, {**preset["draft"], "locale": "en", "name": name},
+    )

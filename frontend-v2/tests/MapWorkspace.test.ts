@@ -22,9 +22,9 @@ describe('MapWorkspace', () => {
 
     expect(wrapper.text()).toContain('冒险的起点。')
     expect(wrapper.text()).toContain('当前位置')
-    expect(wrapper.get('.map-workspace-title-icon').find('.n-icon').exists()).toBe(true)
-    await wrapper.get('.map-search input').setValue('大学')
-    expect(wrapper.findAll('.map-location-list-item')).toHaveLength(1)
+    expect(wrapper.get('[role="dialog"]').attributes('aria-label')).toBe('场景地图')
+    await wrapper.get('input[placeholder="搜索地点或关键词"]').setValue('大学')
+    expect(wrapper.get('[aria-label="地点列表"]').findAll('button')).toHaveLength(1)
     expect(wrapper.text()).toContain('密斯卡托尼克大学')
   })
 
@@ -33,7 +33,7 @@ describe('MapWorkspace', () => {
       global: { plugins: [i18n], stubs: { Teleport: true } },
       props: { map },
     })
-    await wrapper.get('.map-workspace-close').trigger('click')
+    await wrapper.get('button[aria-label="关闭"]').trigger('click')
     expect(wrapper.emitted('close')).toBeTruthy()
   })
 })

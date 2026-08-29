@@ -727,3 +727,50 @@ async def test_pending_attack_luck_never_applies_hp_damage() -> None:
     assert result == ("", None)
     assert instance.npcs["goblin"]["hp"] == hp_before
     assert "combat_outcome" not in instance.action_queue[0]
+
+
+class TestCombatModelBehaviors:
+    """原 test_combat_integration 中独有的战斗模型行为契约（合并而来）。"""
+
+    def test_narrative_model_deals_no_damage(self):
+        result = resolve_attack(
+            "战士",
+            {"character_name": "哥布林", "hp": 20, "armor": 2},
+            {"name": "长剑", "damage": 7},
+            combat_model="narrative",
+            check_result=_result("attack-a", "a", "npc:goblin"),
+        )
+        assert result.damage == 0
+        assert "叙事模式" in result.description
+
+    def test_unarmed_attack_still_deals_minimum_damage(self):
+        result = resolve_attack(
+            "战士",
+            {"character_name": "哥布林", "hp": 20, "armor": 0},
+            None,
+            attr_value=10,
+            combat_model="hp_based",
+            check_result=_result("attack-a", "a", "npc:goblin"),
+        )
+        assert result.damage >= 1
+
+    def test_kill_clamps_target_hp_to_zero_with_downed_narration(self):
+        result = resolve_attack(
+            "战士",
+            {"character_name": "哥布林", "hp": 2, "armor": 0},
+            {"name": "巨剑", "damage": 10},
+            attr_value=18,
+            combat_model="hp_based",
+            check_result=_result("attack-a", "a", "npc:goblin", roll=20, critical=True),
+        )
+        assert result.target_hp_after == 0
+        assert "倒地" in result.description or "昏迷" in result.description
+
+    def test_missing_check_result_fails_closed_without_hp_mutation(self):
+        target = {"character_name": "哥布林", "hp": 20, "max_hp": 20, "armor": 0}
+
+        result = resolve_attack("战士", target, {"name": "长剑", "damage": 7})
+
+        assert result.damage == 0
+        assert target["hp"] == 20
+        assert "缺少服务端攻击检定" in result.description
