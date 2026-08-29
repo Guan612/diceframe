@@ -13,6 +13,7 @@ import Modal from '@/components/ui/Modal.vue'
 import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
 import { useLorePerspective } from './useLorePerspective'
+import { PUBLIC_VISIBILITY_MARKERS, visibilityModeOf, type LoreVisibilityMode } from './visibility'
 
 interface LoreEdit extends LoreEntry {
   tier?: string
@@ -154,6 +155,26 @@ function openLore(entry?: LoreEntry) {
     match_mode: 'any', unreliable: false, sync_on_enter: false, is_constant: false,
     triggers_recursive: [], visible_to: [], connected_to: [], sticky: 0,
     cooldown: 0, delay: 0, order: 100, probability: 100, group: '', group_weight: 1,
+  }
+  visibilityMode.value = visibilityModeOf(loreEdit.value.visible_to)
+}
+
+// 编辑表单的可见性三档：GM 秘密 / 全队公开 / 指定角色。
+// 切档直接改写 visible_to；「指定角色」保留点名条目、剥离公开标记，
+// 避免 ["*"] 被带进角色文本框造成档位与内容不一致。
+const visibilityMode = ref<LoreVisibilityMode>('gm')
+function setVisibilityMode(mode: LoreVisibilityMode) {
+  visibilityMode.value = mode
+  if (!loreEdit.value) return
+  if (mode === 'public') {
+    loreEdit.value.visible_to = ['*']
+  } else if (mode === 'gm') {
+    loreEdit.value.visible_to = []
+  } else {
+    const markers = new Set(PUBLIC_VISIBILITY_MARKERS.map(marker => marker.toLowerCase()))
+    loreEdit.value.visible_to = loreEdit.value.visible_to.filter(
+      value => !markers.has(String(value).trim().toLowerCase()),
+    )
   }
 }
 
@@ -449,7 +470,13 @@ async function importLore(e: Event) {
       <label>{{ t('keywordMatchMode') }}<select v-model="loreEdit.match_mode"><option value="any">{{ t('matchAny') }}</option><option value="all">{{ t('matchAll') }}</option><option value="not_any">{{ t('matchNotAny') }}</option><option value="not_all">{{ t('matchNotAll') }}</option></select></label>
       <div class="check-row"><label><input type="checkbox" v-model="loreEdit.unreliable">{{ t('unreliableMemory') }}</label><label><input type="checkbox" v-model="loreEdit.sync_on_enter">{{ t('syncOnEnter') }}</label><label><input type="checkbox" v-model="loreEdit.is_constant">{{ t('constant') }}</label></div>
       <label>{{ t('recursiveTrigger') }}<input :value="arrText(loreEdit.triggers_recursive)" @input="setArr('triggers_recursive', $event)" :placeholder="t('recursiveTriggerPlaceholder')"></label>
-      <label>{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setArr('visible_to', $event)" :placeholder="t('visibleCharactersPlaceholder')"></label>
+      <label>{{ t('loreVisibilityLabel') }}</label>
+      <div class="lore-filter-options" role="radiogroup" :aria-label="t('loreVisibilityLabel')">
+        <button type="button" :class="{ active: visibilityMode === 'gm' }" @click="setVisibilityMode('gm')">{{ t('loreAudienceGmSecret') }}</button>
+        <button type="button" :class="{ active: visibilityMode === 'public' }" @click="setVisibilityMode('public')">{{ t('loreVisibilityPublic') }}</button>
+        <button type="button" :class="{ active: visibilityMode === 'characters' }" @click="setVisibilityMode('characters')">{{ t('loreVisibilityCharacters') }}</button>
+      </div>
+      <label v-if="visibilityMode === 'characters'">{{ t('visibleCharacters') }}<input :value="arrText(loreEdit.visible_to)" @input="setArr('visible_to', $event)" :placeholder="t('visibleCharactersPlaceholder')"></label>
       <label>{{ t('connectedEntries') }}<input :value="arrText(loreEdit.connected_to)" @input="setArr('connected_to', $event)" :placeholder="t('connectedEntriesPlaceholder')"></label>
       <div class="grid-2"><label>{{ t('stickyRounds') }}<input type="number" v-model.number="loreEdit.sticky"></label><label>{{ t('cooldown') }}<input type="number" v-model.number="loreEdit.cooldown"></label></div>
       <div class="grid-2"><label>{{ t('delay') }}<input type="number" v-model.number="loreEdit.delay"></label><label>{{ t('order') }}<input type="number" v-model.number="loreEdit.order"></label></div>

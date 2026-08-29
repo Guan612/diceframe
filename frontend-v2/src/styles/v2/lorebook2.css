@@ -132,11 +132,11 @@
   font-size: 12px;
 }
 
+/* 款式与同行的类型徽标（.memory-row-head .badge）一致，仅靠 audience 颜色区分 */
 .lore-visibility-badge {
-  padding: 1px 8px;
-  border-radius: 999px;
+  padding: 1px 7px;
+  border-radius: 6px;
   font-size: 11px;
-  font-weight: 700;
   white-space: nowrap;
 }
 
