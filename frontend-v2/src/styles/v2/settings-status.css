@@ -322,6 +322,13 @@
   font-size: 11px;
 }
 
+/* 单位列定宽：每行 .advanced-row 是独立 grid，第二列按内容自适应，
+   单位文字宽窄不一（秒 / Token）会让各行输入框与单位的横向位置漂移。
+   固定单位列宽度后所有行共享同一列边界，输入框与单位纵向对齐。 */
+.token-input-wrap > span {
+  min-width: 42px;
+}
+
 .advanced-save-row {
   display: flex;
   justify-content: flex-end;
