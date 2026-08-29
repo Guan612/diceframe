@@ -1148,6 +1148,7 @@ export const zhCN = {
   assistantEmpty: '你好!我是 DiceFrame 新手向导。',
   assistantEmptyHint: '可以问我怎么配置模型、创建游戏、使用插件等。',
   toggleAssistant: '收起/展开助手',
+  assistantBubbleText: '有什么需要帮助的吗？',
   assistantSubtitle: '查询官方文档、插件并协助排查运行问题',
   assistantQuickLogs: '检查运行日志，帮我找出问题',
   assistantQuickApi: '怎样配置模型 API？',
