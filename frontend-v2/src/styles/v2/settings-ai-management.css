@@ -416,13 +416,17 @@
 .provider-model-set-main {
   position: relative;
   z-index: 4;
-  padding: 5px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 29px;
+  padding: 0 9px;
   border: 1px solid var(--df-border-soft);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--df-text-secondary);
+  border-radius: 7px;
+  background: var(--df-control-bg);
+  color: var(--df-text-primary);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
