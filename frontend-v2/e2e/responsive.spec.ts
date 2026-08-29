@@ -56,6 +56,9 @@ test('phone security setup stacks ACME guidance above the action button', async 
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/#/settings?section=security')
 
+  // Let's Encrypt 申请流程默认折叠在「申请配置」里：先展开再断言
+  await page.locator('.security-lets-encrypt-setup .n-collapse-item__header').click()
+
   const actions = page.locator('.security-acme-actions')
   const hint = actions.locator('small')
   const button = actions.getByRole('button', { name: '申请并启用' })

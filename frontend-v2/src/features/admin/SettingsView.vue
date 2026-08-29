@@ -1098,9 +1098,15 @@ async function enableLocalHttps() {
       return
     }
     const fingerprint = prepared.certificate.fingerprint_sha256
+    const confirmLines = [
+      t('securityEnableConfirmIntro'),
+      t('securityEnableConfirmAddress'),
+      t('securityEnableConfirmTrust'),
+      t('securityEnableConfirmMobileApp'),
+    ].map((line, index) => `${index + 1}. ${line}`)
     const confirmed = await confirm({
       title: t('securityEnableLocalHttps'),
-      content: `${t('securityEnableConfirm')}\n${t('securityFingerprintLabel')}: ${fingerprint}`,
+      content: `${confirmLines.join('\n')}\n\n${t('securityFingerprintLabel')}: ${fingerprint}`,
       type: 'warning',
       positiveText: t('securityEnableConfirmAction'),
       negativeText: t('cancel'),
@@ -2216,44 +2222,48 @@ function redownloadUpdatePackage() {
                   </div>
                   <NTag v-if="securityStatus?.tls_mode === 'lets_encrypt'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
                 </div>
-                <div class="security-acme-workflow">
-                  <label class="security-acme-step">
-                    <span class="security-step-index">1</span>
-                    <span class="security-step-content">
-                      <strong>{{ t('securityAcmeStepType') }}</strong>
-                      <small>{{ t('securityAcmeStepTypeHint') }}</small>
-                      <NSelect v-model:value="acmeIdentifierType" size="small" :options="[
-                        { label: t('securityAcmeDomain'), value: 'dns' },
-                        { label: t('securityAcmePublicIp'), value: 'ip' },
-                      ]" />
-                    </span>
-                  </label>
-                  <label class="security-acme-step security-acme-address-step">
-                    <span class="security-step-index">2</span>
-                    <span class="security-step-content">
-                      <strong>{{ t('securityAcmeStepAddress') }}</strong>
-                      <small>{{ acmeIdentifierType === 'dns' ? t('securityAcmeDomainHint') : t('securityAcmeIpHint') }}</small>
-                      <span class="security-acme-address-fields">
-                        <NInput v-model:value="acmeIdentifier" size="small" :placeholder="acmeIdentifierType === 'dns' ? 'game.example.com' : t('securityAcmeIpPlaceholder')" />
-                        <NInput v-model:value="acmeContactEmail" size="small" :placeholder="t('securityAcmeEmailOptional')" />
-                      </span>
-                    </span>
-                  </label>
-                  <label class="security-acme-step">
-                    <span class="security-step-index">3</span>
-                    <span class="security-step-content">
-                      <strong>{{ t('securityAcmeStepVerify') }}</strong>
-                      <small>{{ t('securityAcmeStepVerifyHint') }}</small>
-                      <NInputNumber v-model:value="acmeChallengePort" size="small" :min="1" :max="65535" />
-                    </span>
-                  </label>
-                </div>
-                <div class="security-acme-actions">
-                  <small>{{ t('securityAcmeActionHint') }}</small>
-                  <NButton type="primary" :loading="securityBusy === 'acme'" :disabled="securityBusy !== ''" @click="enableLetsEncrypt">
-                    {{ securityStatus?.tls_mode === 'lets_encrypt' ? t('securityReissueLetsEncrypt') : t('securityEnableLetsEncrypt') }}
-                  </NButton>
-                </div>
+                <NCollapse class="security-lets-encrypt-setup" :display-directive="'show'">
+                  <NCollapseItem :title="t('securityAcmeSetupTitle')" name="lets-encrypt-setup">
+                    <div class="security-acme-workflow">
+                      <label class="security-acme-step">
+                        <span class="security-step-index">1</span>
+                        <span class="security-step-content">
+                          <strong>{{ t('securityAcmeStepType') }}</strong>
+                          <small>{{ t('securityAcmeStepTypeHint') }}</small>
+                          <NSelect v-model:value="acmeIdentifierType" size="small" :options="[
+                            { label: t('securityAcmeDomain'), value: 'dns' },
+                            { label: t('securityAcmePublicIp'), value: 'ip' },
+                          ]" />
+                        </span>
+                      </label>
+                      <label class="security-acme-step security-acme-address-step">
+                        <span class="security-step-index">2</span>
+                        <span class="security-step-content">
+                          <strong>{{ t('securityAcmeStepAddress') }}</strong>
+                          <small>{{ acmeIdentifierType === 'dns' ? t('securityAcmeDomainHint') : t('securityAcmeIpHint') }}</small>
+                          <span class="security-acme-address-fields">
+                            <NInput v-model:value="acmeIdentifier" size="small" :placeholder="acmeIdentifierType === 'dns' ? 'game.example.com' : t('securityAcmeIpPlaceholder')" />
+                            <NInput v-model:value="acmeContactEmail" size="small" :placeholder="t('securityAcmeEmailOptional')" />
+                          </span>
+                        </span>
+                      </label>
+                      <label class="security-acme-step">
+                        <span class="security-step-index">3</span>
+                        <span class="security-step-content">
+                          <strong>{{ t('securityAcmeStepVerify') }}</strong>
+                          <small>{{ t('securityAcmeStepVerifyHint') }}</small>
+                          <NInputNumber v-model:value="acmeChallengePort" size="small" :min="1" :max="65535" />
+                        </span>
+                      </label>
+                    </div>
+                    <div class="security-acme-actions">
+                      <small>{{ t('securityAcmeActionHint') }}</small>
+                      <NButton type="primary" :loading="securityBusy === 'acme'" :disabled="securityBusy !== ''" @click="enableLetsEncrypt">
+                        {{ securityStatus?.tls_mode === 'lets_encrypt' ? t('securityReissueLetsEncrypt') : t('securityEnableLetsEncrypt') }}
+                      </NButton>
+                    </div>
+                  </NCollapseItem>
+                </NCollapse>
               </div>
             </section>
 
