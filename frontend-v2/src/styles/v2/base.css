@@ -150,6 +150,22 @@ select {
   background: var(--df-control-bg);
 }
 
+/* 勾选框/单选框是原生紧凑控件：旧全局规则（styles.css 的
+   input{width:100%;border;padding}）把每个勾渲染成满宽大框，
+   各页面曾被迫逐处手写 width:auto/16px/22px 补救。本规则在
+   设计系统层一次声明，特异性高于元素选择器，覆盖全部现有与
+   未来的 checkbox/radio；个别页面的定制尺寸（如 22px 方块）
+   仍按原样生效。 */
+input[type='checkbox'],
+input[type='radio'] {
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  accent-color: var(--df-accent);
+}
+
 input:focus,
 textarea:focus,
 select:focus {
