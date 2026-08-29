@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { MicOutline, StopCircleOutline } from '@vicons/ionicons5'
+import { MicOutline, StopCircleOutline, CloseOutline } from '@vicons/ionicons5'
 import { api } from '@/api/client'
 import type { ActionSubmitResponse, GameDetail } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
@@ -35,6 +35,11 @@ const dictationError = computed(() => {
   if (errorCode.value === 'asr-failed') return t('asrFailed')
   return serverMessage.value
 })
+
+// 用户可手动关掉错误条；新错误出现时重新显示
+const dictationErrorDismissed = ref(false)
+watch(dictationError, value => { if (!value) dictationErrorDismissed.value = false })
+function dismissDictationError() { dictationErrorDismissed.value = true }
 
 onMounted(() => { void initializeAsr() })
 
@@ -83,7 +88,12 @@ async function submit() {
     <div class="quick-actions" :aria-label="t('quickActions')">
       <button v-for="action in quickActions" :key="action" :disabled="locked" @click="text = action">{{ action }}</button>
     </div>
-    <div v-if="dictationError" class="dictation-status error">{{ dictationError }}</div>
+    <div v-if="dictationError && !dictationErrorDismissed" class="dictation-status error">
+      <span class="dictation-error-copy">{{ dictationError }}</span>
+      <button type="button" class="dictation-error-close" :aria-label="t('close')" @click="dismissDictationError">
+        <NIcon :component="CloseOutline" />
+      </button>
+    </div>
     <div v-else-if="recording" class="dictation-status">{{ t('asrRecording', { seconds: elapsedSeconds }) }}</div>
     <div v-else-if="transcribing" class="dictation-status">{{ t('asrTranscribing') }}</div>
     <div class="composer-row" :class="{ 'has-dictation': micAvailable }">
@@ -148,9 +158,38 @@ async function submit() {
 }
 
 .dictation-status.error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   border-color: color-mix(in srgb, var(--df-danger) 38%, var(--df-border-soft));
   color: var(--df-danger-strong);
   background: color-mix(in srgb, var(--df-danger) 8%, transparent);
+}
+
+.dictation-error-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dictation-error-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.dictation-error-close:hover {
+  background: color-mix(in srgb, var(--df-danger) 16%, transparent);
 }
 
 @media (max-width: 800px) {
