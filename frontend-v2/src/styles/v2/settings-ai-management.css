@@ -330,7 +330,7 @@
 .provider-model-row {
   position: relative;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) minmax(112px, 150px) 32px;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(108px, 140px) auto 32px;
   align-items: center;
   gap: 9px;
   min-height: 53px;
@@ -411,6 +411,37 @@
   color: var(--df-text-primary);
   background: var(--df-control-bg);
   font-size: 11px;
+}
+
+.provider-model-set-main {
+  position: relative;
+  z-index: 4;
+  padding: 5px 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--df-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.provider-model-set-main:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--df-interactive) 45%, transparent);
+  color: var(--df-text);
+  background: color-mix(in srgb, var(--df-interactive) 8%, transparent);
+}
+
+.provider-model-set-main.active {
+  border-color: color-mix(in srgb, var(--df-accent) 45%, transparent);
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent) 12%, transparent);
+  cursor: default;
+}
+
+.provider-model-set-main:disabled {
+  opacity: .55;
+  cursor: wait;
 }
 
 .provider-model-remove {

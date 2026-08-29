@@ -765,6 +765,32 @@ function setModelRoleProvider(
   if (!models.includes(current)) setStr(modelKey, models[0] || '')
 }
 
+// 模型目录行内“设为主模型”：复用模型配置页同一条保存路径，
+// 免去在两个设置页之间来回切换。
+const catalogSetMainBusy = ref('')
+
+function isCatalogModelMain(provider: ProviderDraft, modelName: string): boolean {
+  return store.config.llm_provider_ref === provider.id && store.config.model === modelName
+}
+
+function catalogModelIsChat(provider: ProviderDraft, modelName: string): boolean {
+  return modelCapability(modelName, provider.model_capabilities?.[modelName]) === 'chat'
+}
+
+async function setCatalogModelAsMain(provider: ProviderDraft, modelName: string) {
+  if (!providerLibrarySupported.value || modelRoutingSaving.value) return
+  if (isCatalogModelMain(provider, modelName)) return
+  catalogSetMainBusy.value = modelName
+  try {
+    setModelRoleProvider('llm_provider_ref', 'model', provider.id, 'chat')
+    // 能力校验可能把模型重置成同列表第一项；尊重用户点击的目标
+    setStr('model', modelName)
+    await saveModelRouting()
+  } finally {
+    catalogSetMainBusy.value = ''
+  }
+}
+
 const MODEL_ROUTING_CONFIG_KEYS = [
   'llm_provider_ref', 'model',
   'fallback1_enabled', 'fallback1_provider_ref', 'fallback1_model',
@@ -1715,6 +1741,9 @@ function redownloadUpdatePackage() {
                     </NButton>
                   </div>
 
+                  <p class="provider-models-main-hint">
+                    {{ t('providerModelsCurrentMain', { binding: modelBindingSummary(store.config.llm_provider_ref, store.config.model) }) }}
+                  </p>
                   <div v-if="activeProviderModelGroups.length" class="provider-model-groups">
                     <section v-for="group in activeProviderModelGroups" :key="group.name" class="provider-model-group">
                       <header>
@@ -1742,6 +1771,16 @@ function redownloadUpdatePackage() {
                               <option value="asr">{{ t('modelCapabilityAsr') }}</option>
                             </select>
                           </label>
+                          <button
+                            v-if="catalogModelIsChat(activeProvider, modelName)"
+                            type="button"
+                            class="provider-model-set-main"
+                            :class="{ active: isCatalogModelMain(activeProvider, modelName) }"
+                            :disabled="modelRoutingSaving || catalogSetMainBusy !== ''"
+                            @click="setCatalogModelAsMain(activeProvider, modelName)"
+                          >
+                            {{ isCatalogModelMain(activeProvider, modelName) ? t('providerModelMainActive') : t('providerModelSetMain') }}
+                          </button>
                           <button
                             type="button"
                             class="provider-model-remove"
