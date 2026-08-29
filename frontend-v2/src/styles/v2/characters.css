@@ -249,6 +249,12 @@
   background: linear-gradient(145deg, var(--df-surface-2), var(--df-surface-1));
 }
 
+/* 职业卡（5E 2024 等）比普通卡多「职业升级/高级角色中心」按钮，动作区会折行；
+   把动作区钉在卡片底部，折行向上生长，各卡的按钮行保持同一底边。 */
+.library-character-card .actions {
+  margin-top: auto;
+}
+
 .library-character-card .character-card-summary {
   align-items: flex-start;
 }
