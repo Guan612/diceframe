@@ -1172,6 +1172,7 @@ export const en = {
   assistantEmpty: 'Hi! I am the DiceFrame newbie guide.',
   assistantEmptyHint: 'Ask me how to configure the model, create a game, use plugins, etc.',
   toggleAssistant: 'Toggle assistant',
+  assistantBubbleText: 'Need any help? Ask the DF assistant.',
   assistantSubtitle: 'Searches docs and plugins, and helps troubleshoot runtime issues',
   assistantQuickLogs: 'Check runtime logs and find the problem',
   assistantQuickApi: 'How do I configure the model API?',

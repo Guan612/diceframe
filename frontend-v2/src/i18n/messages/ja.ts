@@ -1172,6 +1172,7 @@ export const ja = {
   assistantEmpty: 'こんにちは！DiceFrame 初心者ガイドです。',
   assistantEmptyHint: 'モデルの設定方法、ゲームの作成、プラグインの使い方などについて質問できます。',
   toggleAssistant: 'アシスタントを開閉',
+  assistantBubbleText: '何かお手伝いしますか？',
   assistantSubtitle: '公式ドキュメントやプラグインを検索し、実行時の問題を調査',
   assistantQuickLogs: '実行ログを確認して問題を特定',
   assistantQuickApi: 'モデル API はどう設定する？',

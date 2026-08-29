@@ -10,6 +10,7 @@
   "starter_lorebook": [
     {
       "id": "tavern_place",
+      "visible_to": ["*"],
       "name": "十字路口酒馆",
       "type": "location",
       "content": "两层木石结构，一楼是大厅和吧台，二楼是客房。后院有马厍和仓库。老板名叫老莫，是个退休的冒险者。",
@@ -17,6 +18,7 @@
     },
     {
       "id": "tavern_owner",
+      "visible_to": ["*"],
       "name": "老莫",
       "type": "npc",
       "content": "酒馆老板，五十多岁，左臂有旧伤。不问客人来路，但记得每个老顾客的喜好。偶尔会给有缘人透露一些情报。",
