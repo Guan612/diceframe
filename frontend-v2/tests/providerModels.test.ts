@@ -57,3 +57,24 @@ describe('selectMainModelWithRollback', () => {
     expect(config.model).toBe('model-b')
   })
 })
+
+// 结构守卫：rollback 依赖“在任何 mutation 之前捕获旧值”。如果生产代码在
+// 调用 helper 之前就改了 config（先 mutate 再 capture），回滚会还原成中间
+// 态而不是真正的旧值——这里锁死快捷入口的所有 config 赋值必须发生在
+// selectMainModelWithRollback 内部。
+describe('setCatalogModelAsMain wiring structure guard', () => {
+  it('delegates every config mutation to selectMainModelWithRollback', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(
+      new URL('../src/features/admin/SettingsView.vue', import.meta.url),
+      'utf-8',
+    )
+    const start = source.indexOf('async function setCatalogModelAsMain')
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, source.indexOf('\n}', start))
+
+    expect(body).toContain('selectMainModelWithRollback(')
+    expect(body).not.toMatch(/setModelRoleProvider\(/)
+    expect(body).not.toMatch(/setStr\(/)
+  })
+})

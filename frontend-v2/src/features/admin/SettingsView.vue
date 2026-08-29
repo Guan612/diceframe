@@ -791,10 +791,11 @@ async function setCatalogModelAsMain(provider: ProviderDraft, modelName: string)
   if (!catalogModelEligible(provider, modelName)) return
   catalogSetMainBusy.value = modelName
   try {
-    setModelRoleProvider('llm_provider_ref', 'model', provider.id, 'chat')
-    // 能力校验可能把模型重置成同列表第一项；尊重用户点击的目标
-    setStr('model', modelName)
-    // 保存失败时 selectMainModelWithRollback 会把这两个字段回滚为点击前的值
+    // 资格已确认（provider 已保存 + 模型已保存 + 保存后能力为 chat），
+    // 赋值统一交给 selectMainModelWithRollback：它在任何修改发生**之前**
+    // 捕获旧主模型，保存失败才能真正回滚。这里不得提前 mutate config，
+    // 否则捕获到的“旧值”是被污染的中间态（tests/providerModels.test.ts
+    // 的结构守卫锁死了这一条）。
     await selectMainModelWithRollback(
       store.config as Record<string, unknown>,
       provider.id,
