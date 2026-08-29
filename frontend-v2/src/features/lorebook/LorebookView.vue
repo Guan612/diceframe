@@ -166,13 +166,14 @@ const visibilityMode = ref<LoreVisibilityMode>('gm')
 function setVisibilityMode(mode: LoreVisibilityMode) {
   visibilityMode.value = mode
   if (!loreEdit.value) return
+  const current = loreEdit.value.visible_to || []
   if (mode === 'public') {
     loreEdit.value.visible_to = ['*']
   } else if (mode === 'gm') {
     loreEdit.value.visible_to = []
   } else {
     const markers = new Set(PUBLIC_VISIBILITY_MARKERS.map(marker => marker.toLowerCase()))
-    loreEdit.value.visible_to = loreEdit.value.visible_to.filter(
+    loreEdit.value.visible_to = current.filter(
       value => !markers.has(String(value).trim().toLowerCase()),
     )
   }
@@ -182,7 +183,7 @@ function setVisibilityMode(mode: LoreVisibilityMode) {
 function characterLabel(p: Player) { return String(p.character_name || p.user_id) }
 function isVisibleToPlayer(p: Player) {
   if (!loreEdit.value) return false
-  const current = new Set(loreEdit.value.visible_to.map(value => value.trim().toLowerCase()))
+  const current = new Set((loreEdit.value.visible_to || []).map(value => value.trim().toLowerCase()))
   const uid = String(p.user_id).trim().toLowerCase()
   const name = String(p.character_name || '').trim().toLowerCase()
   return current.has(uid) || (name !== '' && current.has(name))
@@ -192,10 +193,11 @@ function toggleCharacterVisible(p: Player) {
   const uid = String(p.user_id).trim()
   const name = String(p.character_name || '').trim().toLowerCase()
   const norm = (value: string) => value.trim().toLowerCase()
-  const kept = loreEdit.value.visible_to.filter(
+  const current = loreEdit.value.visible_to || []
+  const kept = current.filter(
     value => norm(value) !== uid.toLowerCase() && (name === '' || norm(value) !== name),
   )
-  const wasSelected = kept.length !== loreEdit.value.visible_to.length
+  const wasSelected = kept.length !== current.length
   loreEdit.value.visible_to = wasSelected ? kept : [...kept, uid]
 }
 
