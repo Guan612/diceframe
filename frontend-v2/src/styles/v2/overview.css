@@ -1,62 +1,3 @@
-/* Layout pass: the v2 shell is a game workspace, not a recolored admin panel. */
-.app-header-inner {
-  width: min(1680px, 100%);
-  min-height: 68px;
-}
-
-.app-brand {
-  min-width: 174px;
-  padding-right: 20px;
-  border-right: 1px solid var(--df-border-soft);
-}
-
-.desktop-nav-link {
-  min-width: 84px;
-  font-size: 14px;
-}
-
-.desktop-nav-link.active {
-  border: 1px solid var(--df-border-soft);
-  border-width: 0 1px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--df-accent) 13%, transparent), transparent);
-}
-
-.operator-chip {
-  display: flex;
-  align-items: center;
-  min-width: 110px;
-}
-
-.operator-copy {
-  display: grid;
-  min-width: 0;
-}
-
-.operator-copy strong {
-  max-width: 116px;
-  overflow: hidden;
-  color: var(--df-text-secondary);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.operator-copy small {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--df-success-strong);
-  font-size: 10px;
-}
-
-.operator-copy small i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 8px currentColor;
-}
-
 .overview-page {
   width: min(1560px, 100%);
   padding-top: clamp(26px, 3vw, 46px);
@@ -592,11 +533,6 @@
 .corner-bl { bottom: 2px; left: 2px; border-bottom: 2px solid; border-left: 2px solid; }
 .corner-br { right: 2px; bottom: 2px; border-right: 2px solid; border-bottom: 2px solid; }
 
-@media (max-width: 1260px) {
-  .app-brand { min-width: 146px; padding-right: 12px; }
-  .operator-chip { display: none; }
-}
-
 @media (max-width: 900px) {
   .overview-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -608,9 +544,6 @@
 }
 
 @media (max-width: 800px) {
-  .app-header-inner { min-height: 51px; }
-  .app-brand { min-width: 0; border-right: 0; }
-  .operator-chip { display: none; }
   .app-workspace { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
   .app-workspace button,
   .app-workspace [role="button"] { scroll-margin-block: 72px; }
