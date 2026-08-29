@@ -71,11 +71,6 @@ function toggleEntrySelection(entry: LoreEntry) {
 }
 
 const perspectiveFilter = ref<'all' | 'visible' | 'hidden'>('all')
-const perspectiveFilters = computed(() => [
-  { id: 'all' as const, label: t('loreFilterAll') },
-  { id: 'visible' as const, label: t('loreSummaryVisible') },
-  { id: 'hidden' as const, label: t('loreFilterHidden') },
-])
 function matchesPerspectiveFilter(entry: LoreEntry): boolean {
   if (perspectiveFilter.value === 'all') return true
   const visible = projectionOf(entry.id)?.visible || false
@@ -83,9 +78,10 @@ function matchesPerspectiveFilter(entry: LoreEntry): boolean {
 }
 
 function resolveInspectorOpen(): boolean {
+  // 「收起」的选择在任何屏宽都尊重；「展开」只在宽屏生效——
+  // 否则宽屏上随手展开一次，手机每次进页面都会被抽屉自动遮挡。
   const saved = localStorage.getItem('lore_inspector_open')
-  if (saved) return saved === '1'
-  // 宽屏常驻展开；窄屏默认收起，避免一进页面就被抽屉盖住一半。
+  if (saved === '0') return false
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
   return !window.matchMedia('(max-width: 1100px)').matches
 }
@@ -378,15 +374,6 @@ async function importLore(e: Event) {
       </button>
     </div>
 
-    <div v-if="entries.length" class="lore-viewer-filter" role="group" :aria-label="t('loreViewerLabel')">
-      <button
-        v-for="f in perspectiveFilters"
-        :key="f.id"
-        :class="{ active: perspectiveFilter === f.id }"
-        @click="perspectiveFilter = f.id"
-      >{{ f.label }}</button>
-    </div>
-
     <div v-if="loreSections.length" class="lore-categories">
       <section v-for="section in loreSections" :key="section.type" class="lore-category-section">
         <header class="lore-category-head">
@@ -470,7 +457,9 @@ async function importLore(e: Event) {
         :preview-error="previewError"
         :selected-entry="selectedEntry"
         :selected-projection="selectedProjection"
+        :filter="perspectiveFilter"
         @select-viewer="setViewer"
+        @select-filter="perspectiveFilter = $event"
         @close="inspectorOpen = false"
       />
     </div>

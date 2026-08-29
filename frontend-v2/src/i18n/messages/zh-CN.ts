@@ -54,6 +54,7 @@ export const zhCN = {
   lorePerspectiveTitle: '视角与可见性',
   loreInspectorToggle: '视角',
   loreViewerLabel: '当前视角',
+  loreFilterLabel: '条目筛选',
   loreViewerGm: 'GM 全知',
   loreViewerParty: '全队',
   loreViewerLockedStandalone: '未连接存档，暂不支持角色视角。',

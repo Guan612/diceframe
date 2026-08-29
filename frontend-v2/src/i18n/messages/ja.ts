@@ -54,6 +54,7 @@ export const ja = {
   lorePerspectiveTitle: '視点と可視性',
   loreInspectorToggle: '視点',
   loreViewerLabel: '現在の視点',
+  loreFilterLabel: '項目フィルター',
   loreViewerGm: 'GM 全知',
   loreViewerParty: 'パーティ全体',
   loreViewerLockedStandalone: 'セーブ未接続のため、キャラクター視点は利用できません。',

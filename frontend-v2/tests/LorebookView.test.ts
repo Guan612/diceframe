@@ -165,7 +165,7 @@ describe('LorebookView perspective inspector', () => {
     await flushPromises()
     expect(wrapper.findAll('.lore-row')).toHaveLength(3)
 
-    const filterButtons = wrapper.findAll('.lore-viewer-filter button')
+    const filterButtons = wrapper.findAll('.lore-filter-options button')
     await filterButtons.find(b => b.text() === '此视角可见')!.trigger('click')
     expect(wrapper.findAll('.lore-row')).toHaveLength(1)
     expect(wrapper.find('.lore-row').text()).toContain('城门守卫')

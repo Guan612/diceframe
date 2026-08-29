@@ -54,6 +54,7 @@ export const en = {
   lorePerspectiveTitle: 'Perspective & Visibility',
   loreInspectorToggle: 'Perspective',
   loreViewerLabel: 'Current perspective',
+  loreFilterLabel: 'Entry filter',
   loreViewerGm: 'GM omniscient',
   loreViewerParty: 'Whole party',
   loreViewerLockedStandalone: 'No save connected, so character perspectives are unavailable.',

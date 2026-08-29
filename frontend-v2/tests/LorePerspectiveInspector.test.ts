@@ -29,6 +29,7 @@ function factory(overrides: Record<string, unknown> = {}) {
       previewError: '',
       selectedEntry: null,
       selectedProjection: null,
+      filter: 'all',
       ...overrides,
     },
   })
@@ -46,6 +47,16 @@ describe('LorePerspectiveInspector', () => {
 
     await buttons[2].trigger('click')
     expect(wrapper.emitted('select-viewer')).toEqual([['u1']])
+  })
+
+  it('filters entries from inside the inspector', async () => {
+    const wrapper = factory({ filter: 'visible' })
+    const filterButtons = wrapper.findAll('.lore-filter-options button')
+    expect(filterButtons.map(b => b.text())).toEqual(['全部条目', '此视角可见', '此视角未知'])
+    expect(filterButtons[1].classes()).toContain('active')
+
+    await filterButtons[2].trigger('click')
+    expect(wrapper.emitted('select-filter')).toEqual([['hidden']])
   })
 
   it('marks the current viewer active', () => {
