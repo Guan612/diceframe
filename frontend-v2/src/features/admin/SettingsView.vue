@@ -8,7 +8,7 @@ import {
   KeyOutline, CopyOutline, EyeOutline, RefreshOutline, ColorPaletteOutline,
   ImageOutline, PowerOutline, MicOutline, SearchOutline, AddOutline,
   TrashOutline, CheckmarkCircleOutline, AlertCircleOutline, SparklesOutline,
-  VolumeHighOutline, ShieldCheckmarkOutline,
+  VolumeHighOutline, ShieldCheckmarkOutline, ChevronDownOutline,
 } from '@vicons/ionicons5'
 import { useSettingsStore, providerSecretKey } from '@/stores/useSettingsStore'
 import { useToast } from '@/composables/useToast'
@@ -260,6 +260,53 @@ const sections: SettingsSection[] = [
   { id: 'advanced', labelKey: 'settingsSectionAdvanced', icon: OptionsOutline },
   { id: 'about', labelKey: 'settingsSectionAbout', icon: InformationCircleOutline },
 ]
+
+// 窄屏（平板/手机）下节列表收成一行「当前节」，点开才展开完整目录；
+// 宽屏保持常驻侧栏。用户的选择记到 localStorage。
+const SETTINGS_NAV_OPEN_KEY = 'settings_nav_open'
+const settingsNavNarrow = ref(false)
+const settingsNavOpen = ref(false)
+const activeSection = computed(() => sections.find(s => s.id === section.value) || sections[0])
+
+function applySettingsNavWidth(media: MediaQueryList | null) {
+  if (!media) return
+  settingsNavNarrow.value = media.matches
+  if (!media.matches) settingsNavOpen.value = false
+}
+
+function watchSettingsNavWidth() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+  const media = window.matchMedia('(max-width: 980px)')
+  applySettingsNavWidth(media)
+  const listener = (event: MediaQueryListEvent) => applySettingsNavWidth(event.matches ? media : null)
+  if (typeof media.addEventListener === 'function') media.addEventListener('change', listener)
+  else if (typeof media.addListener === 'function') media.addListener(listener)
+}
+
+function toggleSettingsNav() {
+  settingsNavOpen.value = !settingsNavOpen.value
+  try {
+    localStorage.setItem(SETTINGS_NAV_OPEN_KEY, settingsNavOpen.value ? '1' : '0')
+  } catch {
+    // storage 不可用时仅当前 session 生效
+  }
+}
+
+function resolveSettingsNavOpen() {
+  try {
+    return localStorage.getItem(SETTINGS_NAV_OPEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+settingsNavOpen.value = resolveSettingsNavOpen()
+watchSettingsNavWidth()
+
+function selectSettingsSection(id: SettingsSectionId) {
+  section.value = id
+  if (settingsNavNarrow.value) settingsNavOpen.value = false
+}
 
 function queryValue(value: unknown): string {
   return String(Array.isArray(value) ? (value[0] || '') : (value || ''))
@@ -1497,12 +1544,27 @@ function redownloadUpdatePackage() {
       </section>
     </div>
     <div class="settings-layout">
-      <aside class="settings-nav">
+      <aside
+        class="settings-nav"
+        :class="{ collapsed: settingsNavNarrow && !settingsNavOpen, expanded: settingsNavNarrow && settingsNavOpen }"
+      >
+        <button
+          v-if="settingsNavNarrow"
+          type="button"
+          class="nav-item settings-nav-toggle"
+          :aria-expanded="settingsNavOpen"
+          @click="toggleSettingsNav"
+        >
+          <NIcon :component="activeSection.icon" />
+          <span>{{ t(activeSection.labelKey) }}</span>
+          <NIcon :component="ChevronDownOutline" class="settings-nav-chevron" :class="{ open: settingsNavOpen }" />
+        </button>
         <button
           v-for="s in sections"
+          v-show="!settingsNavNarrow || settingsNavOpen"
           :key="s.id"
           :class="['nav-item', { active: section === s.id }]"
-          @click="section = s.id"
+          @click="selectSettingsSection(s.id)"
         >
           <NIcon :component="s.icon" />
           <span>{{ t(s.labelKey) }}</span>

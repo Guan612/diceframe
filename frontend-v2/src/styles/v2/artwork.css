@@ -126,3 +126,38 @@ body.light .play-main {
     min-height: 40px;
   }
 }
+
+/* 设置节导航：窄屏默认收成一行「当前节」，点开展开完整目录（localStorage 记忆）。
+   置于本文件末尾以覆盖 layout/control-room 的横排与 min-height 规则。 */
+.settings-nav .settings-nav-toggle { display: none; }
+.settings-nav.collapsed { min-height: 0; padding-block: 0; }
+.settings-nav.collapsed .nav-item:not(.settings-nav-toggle) { display: none; }
+
+@media (max-width: 980px) {
+  .settings-nav .settings-nav-toggle {
+    display: flex;
+    flex: 1 1 auto;
+    width: 100%;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    padding-inline: 13px;
+    text-align: left;
+    border: 1px solid var(--df-border-soft);
+    border-radius: var(--df-radius-md);
+    background: var(--df-surface-1);
+    color: var(--df-text);
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .settings-nav .settings-nav-chevron {
+    margin-left: auto;
+    transition: transform .18s ease;
+  }
+
+  .settings-nav .settings-nav-chevron.open { transform: rotate(180deg); }
+
+  .settings-nav.expanded { flex-direction: column; overflow: visible; min-height: 0; }
+  .settings-nav.expanded .nav-item { flex: 1 1 auto; width: 100%; }
+}
