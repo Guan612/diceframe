@@ -10,13 +10,44 @@
 - 插件和内容包请遵循 [插件开发指南](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md) 及 [插件审核规则](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md)。
 - Android 客户端在独立仓库 [diceframe-mobile](https://github.com/diceframe/diceframe-mobile)，其 Bug、需求与代码贡献请提交到该仓库；APK 等发布物见 [Releases](https://github.com/diceframe/diceframe-mobile/releases)。
 
+## 架构与工程规范
+
+当前实现的架构事实来源：
+
+- [docs/ARCHITECTURE_CN.md](docs/ARCHITECTURE_CN.md)
+- [docs/ARCHITECTURE_EN.md](docs/ARCHITECTURE_EN.md)
+
+修改代码时遵循：
+
+- [docs/ENGINEERING_RULES.md](docs/ENGINEERING_RULES.md)
+
+关键产品与测试契约：
+
+- [docs/testing-contracts.md](docs/testing-contracts.md)
+
+这些规范不会冻结 DiceFrame 的当前架构。大型功能、模块拆分、迁移、breaking change 和架构重做都允许；要求是明确处理受影响的用户数据、兼容性、权限、持久化 identity、测试和文档。
+
 ## 修改原则
 
-- 保持 Web API 字段向后兼容；前端和未来的 Bot 都可能消费这些接口。
+- 保持 Web API 字段向后兼容；如确需 breaking change，应明确版本、迁移、兼容或拒绝策略。
 - 新功能同时补齐必要的测试、用户手册和迁移说明。
-- 复用现有分层、服务和共享 helper，不在核心层引入 WebUI 依赖。
+- 默认复用现有分层、服务和共享 helper；如现有架构不再合适，可以通过明确的架构改动重新设计。
 - 不提交运行时存档、个人数据、API Key、构建产物或本机配置。
 - 自动化账号（例如 `claude[bot]`、`github-actions[bot]`、`web-flow`）的提交记录保持原样，不通过改作者信息来隐藏或冒充人工贡献。
+
+## Pull Request
+
+DiceFrame 不设置 PR 最大行数或最大文件数。
+
+优先：
+
+> 最小完整改动，而不是最小代码行数。
+
+如果 migration、backend、frontend、tests 和 docs 构成一个不可合理拆分的完整变化，可以放在同一个 PR。
+
+如果两个改动能够独立产生价值、独立验证、独立回滚，则应尽量分开。
+
+PR 模板中的风险勾选用于提醒 reviewer 关注 API、存档、权限、多人、规则和架构等风险面，不是额外审批流程。
 
 ## 本地验证
 
@@ -33,6 +64,12 @@ npm run build
 后端改动请按仓库现有测试配置运行对应的 Python 测试；涉及真实浏览器交互时，再补充 Playwright 验证。
 
 Pull Request 上的 Browser smoke 会保留完整日志，但浏览器或运行环境波动不会单独阻塞贡献；类型检查、单元测试、构建和后端检查仍是合并门槛。合并到 `main` 前会再次严格执行浏览器冒烟。
+
+## AI-assisted development
+
+允许使用 Codex、Claude、ChatGPT 等工具辅助开发。
+
+AI 生成代码与人工代码遵守同样的架构、数据、安全和测试要求。提交者仍需要理解实际改动，并验证 AI 没有凭空创造字段、API、兼容行为或迁移语义。
 
 ## 贡献者名单
 
