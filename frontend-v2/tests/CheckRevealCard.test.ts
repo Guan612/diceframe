@@ -1,16 +1,14 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import CheckRevealCard from '../src/components/play/CheckRevealCard.vue'
-
-vi.mock('../src/composables/useLocale', () => ({
-  useLocale: () => ({
-    t: (key: string, params?: Record<string, unknown>) => params ? `${key}:${JSON.stringify(params)}` : key,
-  }),
-}))
+import { i18n } from '../src/i18n'
 
 describe('CheckRevealCard', () => {
+  beforeEach(() => { i18n.global.locale.value = 'zh-CN' })
+
   it('renders a rule-aware d20 result and details', () => {
     const wrapper = mount(CheckRevealCard, {
+      global: { plugins: [i18n] },
       props: {
         check: {
           check_id: 'c1', actor_name: '阿岚', label: '力量检定', dice: 'd20',
@@ -20,16 +18,16 @@ describe('CheckRevealCard', () => {
       },
     })
     expect(wrapper.text()).toContain('d20=14 + 3 = 17 / DC 15')
-    expect(wrapper.classes()).toContain('success')
-    expect(wrapper.text()).toContain('checkSuccess')
-    expect(wrapper.find('details').text()).toContain('checkDiceFaces:{"rolls":"14"}')
-    expect(wrapper.find('details').text()).toContain('checkCalculation:{"calculation":"d20=14 + 3 = 17 / DC 15"}')
-    expect(wrapper.find('details').text()).toContain('checkVerdictDetail:{"verdict":"checkSuccess"}')
+    expect(wrapper.text()).toContain('成功')
+    expect(wrapper.get('article').attributes('aria-label')).toContain('阿岚')
+    expect(wrapper.find('details').text()).toContain('14')
+    expect(wrapper.find('details').text()).toContain('d20=14 + 3 = 17 / DC 15')
   })
 
   it('reveals the server result after the roll animation', async () => {
     vi.useFakeTimers()
     const wrapper = mount(CheckRevealCard, {
+      global: { plugins: [i18n] },
       props: {
         animate: true,
         check: {
@@ -38,10 +36,10 @@ describe('CheckRevealCard', () => {
         },
       },
     })
-    expect(wrapper.text()).toContain('diceRolling')
+    expect(wrapper.text()).toContain('掷骰中')
     await vi.advanceTimersByTimeAsync(720)
     expect(wrapper.text()).toContain('d100=1 / 65%')
-    expect(wrapper.classes()).toContain('critical')
+    expect(wrapper.text()).toContain('大成功')
     vi.useRealTimers()
   })
 })

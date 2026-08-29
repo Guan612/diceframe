@@ -16,6 +16,7 @@ import {
 } from '@vicons/ionicons5'
 import AssistantPanel from '@/components/AssistantPanel.vue'
 import PeerConnectModal from '@/features/peer/PeerConnectModal.vue'
+import AssistantGreetingBubble from './AssistantGreetingBubble.vue'
 import { useAssistant } from '@/composables/useAssistant'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
@@ -27,6 +28,7 @@ const assistantOpen = ref(false)
 const peerModalOpen = ref(false)
 const { stop: stopAssistant } = useAssistant()
 watch(assistantOpen, (open) => { if (!open) stopAssistant() })
+
 const toast = useToast()
 const { confirm } = useConfirm()
 const { locale, t } = useLocale()
@@ -324,6 +326,7 @@ onBeforeUnmount(() => {
         </NDrawerContent>
       </NDrawer>
       <PeerConnectModal v-model:show="peerModalOpen" />
+      <AssistantGreetingBubble @open="assistantOpen = true" />
       <button
         class="overview-assistant-fab"
         @click="assistantOpen = true"

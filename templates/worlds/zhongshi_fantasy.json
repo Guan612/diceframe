@@ -9,6 +9,7 @@
   "starter_lorebook": [
     {
       "id": "loc_qingshi",
+      "visible_to": ["*"],
       "name": "青石镇",
       "type": "location",
       "keywords": [
@@ -23,6 +24,7 @@
     },
     {
       "id": "npc_teahouse_owner",
+      "visible_to": ["*"],
       "name": "柳掌柜",
       "type": "npc",
       "keywords": [
@@ -37,6 +39,7 @@
     },
     {
       "id": "loc_kumu_cliff",
+      "visible_to": ["*"],
       "name": "枯木崖",
       "type": "location",
       "keywords": [
@@ -51,6 +54,7 @@
     },
     {
       "id": "faction_kunlun_sword_sect",
+      "visible_to": ["*"],
       "name": "昆仑剑宗",
       "type": "faction",
       "keywords": [
@@ -65,6 +69,7 @@
     },
     {
       "id": "npc_herbalist",
+      "visible_to": ["*"],
       "name": "采药人老王",
       "type": "npc",
       "keywords": [
@@ -93,6 +98,7 @@
     },
     {
       "id": "event_strange_light",
+      "visible_to": ["*"],
       "name": "枯木崖异光",
       "type": "event",
       "keywords": [

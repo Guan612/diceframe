@@ -76,6 +76,8 @@ ERROR_CODE_MAP: dict[str, str] = {
     "非法 source_world_id": "invalid_world_id",
     "未指定合法的 world_id": "invalid_world_id",
     "目标世界书不存在": "lorebook_not_found",
+    "世界不存在": "world_not_found",
+    "视角无效": "invalid_viewer",
     # 系统
     "系统未启动": "system_not_started",
     "修正值不能为 0": "delta_zero",

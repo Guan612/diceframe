@@ -19,7 +19,7 @@ from src.rules.loader import RuleBundleLoader
 from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, kp_questions, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, knowledge, kp_questions, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -728,6 +728,14 @@ class WebAPI:
 
     def delete_world(self, world_id: str) -> dict[str, Any]:
         return worlds.delete_world(self, world_id)
+
+    def preview_lore_visibility(
+        self,
+        world_id: str,
+        viewer: str,
+        game_key: str | None = None,
+    ) -> dict[str, Any]:
+        return knowledge.preview(self, world_id, viewer, game_key)
 
     def _rebuild_lorebook_index(self, world_id: str) -> None:
         worlds.rebuild_lorebook_index(self, world_id)

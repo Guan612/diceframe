@@ -11,6 +11,8 @@ from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.routes.rules import register_rules
 from src.webui.services import ruleset_advancement, ruleset_rest
 
+from dnd2024_http_common import quick_character
+
 
 class _M4Api:
     def __init__(self, runtime: Dnd2024Runtime):
@@ -47,11 +49,7 @@ class _M4Api:
 
 
 def _quick_fighter(runtime: Dnd2024Runtime) -> dict:
-    choices = runtime.builder_choices(None, {"locale": "en"})
-    preset = next(item for item in choices["quick_presets"] if item["id"] == "stalwart_guardian")
-    return runtime.finalize_character(
-        None, {**preset["draft"], "locale": "en", "name": "HTTP M4"},
-    )
+    return quick_character(runtime, "stalwart_guardian", "HTTP M4")
 
 
 @pytest.mark.asyncio

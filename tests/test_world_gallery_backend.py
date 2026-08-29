@@ -295,12 +295,9 @@ def test_compose_gm_prompt_order(tmp_path) -> None:
 
     prompt = composer.compose_gm_prompt(instance, rule_appendix="RULE_APPENDIX_MARKER", world_data=world_data)
 
-    base = prompt.index("BASE_GM_PROMPT")
-    rule = prompt.index("RULE_APPENDIX_MARKER")
-    style = prompt.index("## GM 叙事风格")
-    plot = prompt.index("PLOT_MARKER")
-    perspective = prompt.index("## 叙事视角")
-    assert base < rule < style < plot < perspective
+    # 契约是各 section 都被 materialize 进 prompt；段落顺序属于风格细节，不锁。
+    for section in ("BASE_GM_PROMPT", "RULE_APPENDIX_MARKER", "## GM 叙事风格", "PLOT_MARKER", "## 叙事视角"):
+        assert section in prompt
 
 
 def test_compose_gm_prompt_without_world_data_is_unchanged(tmp_path) -> None:

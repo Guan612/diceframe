@@ -13,6 +13,7 @@
   "starter_lorebook": [
     {
       "id": "region_greymoor",
+      "visible_to": ["*"],
       "name": "灰沼",
       "type": "region",
       "keywords": ["灰沼", "沼泽", "边境", "薄雾"],
@@ -22,6 +23,7 @@
     },
     {
       "id": "loc_mistbound_road",
+      "visible_to": ["*"],
       "name": "灰沼驿道",
       "type": "location",
       "keywords": ["灰沼驿道", "驿道", "货车", "车辙"],
@@ -31,6 +33,7 @@
     },
     {
       "id": "faction_waykeepers",
+      "visible_to": ["*"],
       "name": "守灯人",
       "type": "faction",
       "keywords": ["守灯人", "路灯", "引路灯", "巡灯"],
@@ -40,6 +43,7 @@
     },
     {
       "id": "npc_mira",
+      "visible_to": ["*"],
       "name": "米拉",
       "type": "npc",
       "keywords": ["米拉", "年轻守灯人", "守灯学徒"],

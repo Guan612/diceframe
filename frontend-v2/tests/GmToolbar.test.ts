@@ -1,7 +1,16 @@
 import { mount } from '@vue/test-utils'
+import type { VueWrapper } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import { i18n } from '../src/i18n'
 import GmToolbar from '../src/components/play/GmToolbar.vue'
+
+function findSelectWithOption(wrapper: VueWrapper, value: string) {
+  const select = wrapper.findAll('select').find(
+    item => Array.from(item.element.options).some(option => option.value === value),
+  )
+  expect(select, `应找到含选项 ${value} 的下拉框`).toBeTruthy()
+  return select!
+}
 
 describe('GmToolbar',()=>{
   it('emits one recap request and exposes its busy state',async()=>{
@@ -13,8 +22,8 @@ describe('GmToolbar',()=>{
       recapBusy:false,
     }})
 
-    const button=wrapper.get('button:nth-of-type(3)')
-    expect(button.text()).toContain('Story Recap')
+    const button=wrapper.findAll('button').find(item => item.text().includes('Story Recap'))!
+    expect(button).toBeTruthy()
     await button.trigger('click')
     expect(wrapper.emitted('recap')).toHaveLength(1)
 
@@ -43,7 +52,7 @@ describe('GmToolbar',()=>{
       isGm:true,
     }})
 
-    const select=wrapper.get('.gm-narrative-setting select')
+    const select=findSelectWithOption(wrapper,'immersive')
     expect((select.element as HTMLSelectElement).value).toBe('immersive')
     await select.setValue('third_person')
     expect(wrapper.emitted('narrative-perspective')).toEqual([['third_person']])
@@ -72,14 +81,17 @@ describe('GmToolbar',()=>{
       isGm:true,
     }})
 
-    const section=wrapper.get('.gm-advancement-section')
-    const selects=section.findAll('select')
-    await selects[0].setValue('xp')
+    const modeSelect=findSelectWithOption(wrapper,'xp')
+    await modeSelect.setValue('xp')
     expect(wrapper.emitted('advancement-control')?.[0]).toEqual([{
       action:'configure',mode:'xp',authority:'gm',
     }])
 
-    await section.get('button').trigger('click')
+    // 升级区域唯一的按钮是玩家行的授予按钮
+    const section=(modeSelect.element.closest('details') as HTMLElement)
+    const grantButton=Array.from(section.querySelectorAll('button'))[0] as HTMLButtonElement
+    grantButton.click()
+    await wrapper.vm.$nextTick()
     expect(wrapper.emitted('advancement-control')?.[1]).toEqual([{
       action:'grant',user_id:'hero',
     }])

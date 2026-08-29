@@ -9,6 +9,7 @@
   "starter_lorebook": [
     {
       "id": "npc_receptionist",
+      "visible_to": ["*"],
       "name": "公会接待员·莉莉",
       "type": "npc",
       "keywords": [
@@ -22,6 +23,7 @@
     },
     {
       "id": "loc_guild_hq",
+      "visible_to": ["*"],
       "name": "冒险者公会总部",
       "type": "location",
       "keywords": [
@@ -36,6 +38,7 @@
     },
     {
       "id": "loc_royal_capital",
+      "visible_to": ["*"],
       "name": "王都·圣剑城",
       "type": "location",
       "keywords": [
@@ -50,6 +53,7 @@
     },
     {
       "id": "loc_slime_sewer",
+      "visible_to": ["*"],
       "name": "王都下水道",
       "type": "location",
       "keywords": [
@@ -64,6 +68,7 @@
     },
     {
       "id": "faction_demon_lord_remnants",
+      "visible_to": ["*"],
       "name": "魔王军残党",
       "type": "faction",
       "keywords": [
@@ -78,6 +83,7 @@
     },
     {
       "id": "npc_old_warrior",
+      "visible_to": ["*"],
       "name": "退役冒险者·老格雷",
       "type": "npc",
       "keywords": [
@@ -92,6 +98,7 @@
     },
     {
       "id": "event_monster_activity",
+      "visible_to": ["*"],
       "name": "魔物异常活跃",
       "type": "event",
       "keywords": [

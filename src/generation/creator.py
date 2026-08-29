@@ -22,6 +22,18 @@ _BANNED_RACES = (
 )
 _BANNED_RACES_LOWER = tuple(b.lower() for b in _BANNED_RACES)
 
+
+def apply_generated_visibility(entry: dict) -> None:
+    """把 AI 输出的 visibility 建议归一化成 visible_to。
+
+    只认枚举值 "public"（全队可见，写 canonical 标记 "*"）；缺失、写错、
+    或模型自由发挥一律 fail-closed 成 GM 秘密。点名到具体角色的分配是
+    游戏内决策，不由生成时的模型代劳。entry 上的原始 visibility 字段
+    一并消费掉，避免混进存储与回显。
+    """
+    public = str(entry.pop("visibility", "") or "").strip().lower() == "public"
+    entry["visible_to"] = ["*"] if public else []
+
 _WORLD_SYSTEM_PROMPT = """你是一个TRPG世界构建师。根据用户的一句话描述，生成一个完整的世界设定。
 
 输出格式（严格JSON，不要包含任何JSON之外的文本）：
@@ -33,8 +45,8 @@ _WORLD_SYSTEM_PROMPT = """你是一个TRPG世界构建师。根据用户的一�
   "suggested_difficulty": "标准",
   "default_rule": "{rule_id}",
    "starter_lorebook": [
-     {{"id": "{world_prefix}_npc_1", "name": "NPC名", "type": "npc", "keywords": ["关键词"], "content": "条目描述", "tier": "core", "unreliable": false}},
-     {{"id": "{world_prefix}_loc_1", "name": "地点名", "type": "location", "keywords": ["关键词"], "content": "条目描述", "tier": "core"}}
+     {{"id": "{world_prefix}_npc_1", "name": "NPC名", "type": "npc", "keywords": ["关键词"], "content": "条目描述", "tier": "core", "unreliable": false, "visibility": "public"}},
+     {{"id": "{world_prefix}_loc_1", "name": "地点名", "type": "location", "keywords": ["关键词"], "content": "条目描述", "tier": "core", "visibility": "public"}}
    ]
  }
 
@@ -42,6 +54,11 @@ _WORLD_SYSTEM_PROMPT = """你是一个TRPG世界构建师。根据用户的一�
  - starter_lorebook包含3-5条初始条目（至少1个NPC、1个地点、1个事件）
  - id格式：{world_prefix}_npc_1、{world_prefix}_loc_1 等
  - tier设为"core"表示核心条目
+ - visibility 只有两个值："public"（玩家常识）与 "secret"（GM 秘密），拿不准就用 "secret"。
+ - visibility="public" 是对整段 content 的整体授权：public 条目的全部内容都必须允许玩家无需调查直接知道。
+ - public 条目中禁止混入隐藏动机、真实身份、剧情底牌、阴谋、尚未发现的线索、隐藏入口、未调查出的现场事实、未来揭示或任何 GM-only 信息。
+ - 同一人物或地点同时有公开信息和秘密信息时，必须拆成两个独立条目：一条 public 只写公开信息，另一条 secret 只写秘密信息。
+ - 只要整段里有任何一句不该让玩家立即知道，整条就必须是 secret。
  - 所有文本使用流畅中文"""
 
 _WORLD_SYSTEM_PROMPT_EN = """You are a TRPG world builder. Generate a complete playable world setting from the user's short description.
@@ -55,8 +72,8 @@ Output format (strict JSON, no text outside JSON):
   "suggested_difficulty": "标准",
   "default_rule": "{rule_id}",
    "starter_lorebook": [
-     {{"id": "{world_prefix}_npc_1", "name": "NPC name", "type": "npc", "keywords": ["trigger keyword"], "content": "entry content in English", "tier": "core", "unreliable": false}},
-     {{"id": "{world_prefix}_loc_1", "name": "Location name", "type": "location", "keywords": ["trigger keyword"], "content": "entry content in English", "tier": "core"}}
+     {{"id": "{world_prefix}_npc_1", "name": "NPC name", "type": "npc", "keywords": ["trigger keyword"], "content": "entry content in English", "tier": "core", "unreliable": false, "visibility": "public"}},
+     {{"id": "{world_prefix}_loc_1", "name": "Location name", "type": "location", "keywords": ["trigger keyword"], "content": "entry content in English", "tier": "core", "visibility": "public"}}
    ]
  }
 
@@ -64,6 +81,11 @@ Requirements:
 - starter_lorebook must include 3-5 initial entries, including at least 1 NPC, 1 location, and 1 event.
 - Use IDs like {world_prefix}_npc_1 and {world_prefix}_loc_1.
 - Use tier "core" for central entries.
+- visibility has exactly two values: "public" for common player knowledge and "secret" for GM-only material. When unsure, use "secret".
+- visibility="public" authorizes the ENTIRE entry content: every part of a public entry must be knowable by players without investigation.
+- Never mix hidden motives, secret identities, plot twists, conspiracies, undiscovered clues, hidden entrances, un-investigated on-scene facts, future reveals, or any GM-only information into a public entry.
+- When one person or place has both public and secret information, split it into two separate entries: one public entry with only common knowledge, one secret entry with only the hidden information.
+- If any sentence should not be known to players immediately, the whole entry must be secret.
 - All player-facing text must be natural English.
 - Keep JSON keys and enum values exactly as specified."""
 
@@ -126,7 +148,8 @@ _LOREBOOK_ENTRIES_SYSTEM_PROMPT = """你是TRPG世界书编辑。用户会用自
       "keywords": ["用于触发的关键词", "别名"],
       "content": "80-180字，说明这个条目对跑团叙事的作用、关系和可用细节",
       "tier": "core|background",
-      "unreliable": false
+      "unreliable": false,
+      "visibility": "public"
     }
   ]
 }
@@ -137,6 +160,11 @@ _LOREBOOK_ENTRIES_SYSTEM_PROMPT = """你是TRPG世界书编辑。用户会用自
 - keywords 包含名称、简称、别称，避免空数组。
 - type 只能使用上述枚举。
 - tier 仅核心设定用 core，其余用 background。
+- visibility 只有两个值："public"（玩家常识）与 "secret"（GM 秘密），拿不准就用 "secret"。
+- visibility="public" 是对整段 content 的整体授权：public 条目的全部内容都必须允许玩家无需调查直接知道。
+- public 条目中禁止混入隐藏动机、真实身份、剧情底牌、阴谋、尚未发现的线索、隐藏入口、未调查出的现场事实、未来揭示或任何 GM-only 信息。
+- 同一人物或地点同时有公开信息和秘密信息时，必须拆成两个独立条目：一条 public 只写公开信息，另一条 secret 只写秘密信息。
+- 只要整段里有任何一句不该让玩家立即知道，整条就必须是 secret。
 - 不要编造压倒性神器或无解设定；内容应方便 GM 在剧情中调用。
 - 所有文本使用中文。"""
 
@@ -151,7 +179,8 @@ Convert the description into structured lorebook entries. Output strict JSON onl
       "keywords": ["trigger keyword", "alias"],
       "content": "80-180 words explaining how this entry matters to play, its relationships, and usable details",
       "tier": "core|background",
-      "unreliable": false
+      "unreliable": false,
+      "visibility": "public"
     }
   ]
 }
@@ -162,6 +191,11 @@ Requirements:
 - keywords must include names, short names, and aliases. Do not leave them empty.
 - type must use only the listed enum values.
 - Use core only for central setting material; use background for the rest.
+- visibility has exactly two values: "public" for common player knowledge and "secret" for GM-only material. When unsure, use "secret".
+- visibility="public" authorizes the ENTIRE entry content: every part of a public entry must be knowable by players without investigation.
+- Never mix hidden motives, secret identities, plot twists, conspiracies, undiscovered clues, hidden entrances, un-investigated on-scene facts, future reveals, or any GM-only information into a public entry.
+- When one person or place has both public and secret information, split it into two separate entries: one public entry with only common knowledge, one secret entry with only the hidden information.
+- If any sentence should not be known to players immediately, the whole entry must be secret.
 - Do not invent overwhelming artifacts or unsolvable facts. Entries should be easy for the GM to use.
 - All player-facing text must be natural English."""
 
@@ -497,8 +531,8 @@ async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fanta
   "suggested_difficulty": "标准",
   "default_rule": "{rule_id}",
    "starter_lorebook": [
-     {{"id": "{world_prefix}_npc_1", "name": "NPC名", "type": "npc", "keywords": ["トリガーキーワード"], "content": "日本語のエントリ内容", "tier": "core", "unreliable": false}},
-     {{"id": "{world_prefix}_loc_1", "name": "場所名", "type": "location", "keywords": ["トリガーキーワード"], "content": "日本語のエントリ内容", "tier": "core"}}
+     {{"id": "{world_prefix}_npc_1", "name": "NPC名", "type": "npc", "keywords": ["トリガーキーワード"], "content": "日本語のエントリ内容", "tier": "core", "unreliable": false, "visibility": "public"}},
+     {{"id": "{world_prefix}_loc_1", "name": "場所名", "type": "location", "keywords": ["トリガーキーワード"], "content": "日本語のエントリ内容", "tier": "core", "visibility": "public"}}
    ]
  }
 
@@ -506,6 +540,11 @@ async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fanta
 - starter_lorebook には 3〜5 件の初期エントリを含める（NPC 1件・場所 1件・イベント 1件以上）。
 - ID は {world_prefix}_npc_1、{world_prefix}_loc_1 のような形式にする。
 - 中心となるエントリの tier は "core" にする。
+- visibility は 2 値のみ："public"（プレイヤーの常識）と "secret"（GM 秘密）。迷ったら secret。
+- visibility="public" はエントリ content 全体への許可です：public エントリの内容は、調査なしにプレイヤーが知っていてよい情報だけにする。
+- public エントリに隠された動機・正体・伏線・陰謀・未発見の手がかり・隠し入口・未調査の現場事実・未来の暴露・GM 専用情報を混ぜてはいけない。
+- 同じ人物や場所に公開情報と秘密情報が両方ある場合は、2 つの独立したエントリに分割する：1 つは公開情報のみの public、もう 1 つは隠された情報のみの secret。
+- ひとつでも即座に知られてはならない文があるなら、エントリ全体を secret にする。
 - プレイヤー向けのテキストはすべて自然な日本語にする。
 - JSON のキーと enum 値は指定どおりに保つ。""",
     })
@@ -539,6 +578,8 @@ async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fanta
         eid = entry.get("id", "")
         if not eid.startswith(world_prefix):
             entry["id"] = f"{world_prefix}_{eid}"
+        # visibility 建议先归一化，落盘的世界模板 JSON 同步保留 visible_to
+        apply_generated_visibility(entry)
 
     if worlds_dir:
         worlds_dir.mkdir(parents=True, exist_ok=True)
@@ -733,7 +774,8 @@ async def generate_lorebook_entries(
       "keywords": ["トリガーキーワード", "別名"],
       "content": "このエントリがプレイにどう関わるか・関連性・使える詳細を説明した80〜180文字",
       "tier": "core|background",
-      "unreliable": false
+      "unreliable": false,
+      "visibility": "public"
     }
   ]
 }
@@ -744,6 +786,11 @@ async def generate_lorebook_entries(
 - keywords には名前・略称・別名を含め、空配列にしない。
 - type は列挙された値のみを使う。
 - core は中心設定のみに使い、それ以外は background にする。
+- visibility は 2 値のみ："public"（プレイヤーの常識）と "secret"（GM 秘密）。迷ったら secret。
+- visibility="public" はエントリ content 全体への許可です：public エントリの内容は、調査なしにプレイヤーが知っていてよい情報だけにする。
+- public エントリに隠された動機・正体・伏線・陰謀・未発見の手がかり・隠し入口・未調査の現場事実・未来の暴露・GM 専用情報を混ぜてはいけない。
+- 同じ人物や場所に公開情報と秘密情報が両方ある場合は、2 つの独立したエントリに分割する：1 つは公開情報のみの public、もう 1 つは隠された情報のみの secret。
+- ひとつでも即座に知られてはならない文があるなら、エントリ全体を secret にする。
 - 圧倒的なアーティファクトや解けない設定を創作しない。GM がシナリオで使いやすい内容にする。
 - プレイヤー向けのテキストはすべて自然な日本語にする。""",
         }),

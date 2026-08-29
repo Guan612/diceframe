@@ -33,6 +33,12 @@ describe('ActionComposer rollback refresh', () => {
     mockedApi.mockReset()
   })
 
+  function actionButton(wrapper: ReturnType<typeof mount>) {
+    const button = wrapper.findAll('button').find(candidate => candidate.text() === '行动')
+    if (!button) throw new Error('未找到行动按钮')
+    return button
+  }
+
   it('never restores the removed player-side dice gate, including old phase responses', async () => {
     mockedApi.mockResolvedValue({ phase: 'dice', message: '需要掷骰' })
     const wrapper = mount(ActionComposer, {
@@ -45,17 +51,16 @@ describe('ActionComposer rollback refresh', () => {
     })
 
     await wrapper.get('textarea').setValue('检查门锁')
-    await wrapper.get('.composer-row button').trigger('click')
+    await actionButton(wrapper).trigger('click')
     await flushPromises()
-    expect(wrapper.find('.dice-prompt').exists()).toBe(false)
-    expect(wrapper.find('.notice').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('需要掷骰')
+    expect(wrapper.text()).toContain('行动已记录')
 
     await wrapper.setProps({ detail: detail(true) })
     await wrapper.setProps({ detail: detail(false) })
 
-    expect(wrapper.find('.dice-prompt').exists()).toBe(false)
     expect(wrapper.find('textarea').exists()).toBe(true)
-    expect(wrapper.find('.notice').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('行动已记录')
   })
 
   it('clears stale submission feedback when the round moves backward', async () => {
@@ -70,13 +75,13 @@ describe('ActionComposer rollback refresh', () => {
     })
 
     await wrapper.get('textarea').setValue('观察走廊')
-    await wrapper.get('.composer-row button').trigger('click')
+    await actionButton(wrapper).trigger('click')
     await flushPromises()
-    expect(wrapper.find('.notice').exists()).toBe(true)
+    expect(wrapper.text()).toContain('行动已记录')
 
     await wrapper.setProps({ detail: detail(false, 3) })
 
-    expect(wrapper.find('.notice').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('行动已记录')
     expect(wrapper.find('textarea').exists()).toBe(true)
   })
 
@@ -92,12 +97,10 @@ describe('ActionComposer rollback refresh', () => {
     })
 
     await wrapper.get('textarea').setValue('悄悄上楼')
-    await wrapper.get('.composer-row button').trigger('click')
+    await actionButton(wrapper).trigger('click')
     await flushPromises()
-    expect(wrapper.find('.dice-prompt').exists()).toBe(false)
     const request = mockedApi.mock.calls[0]?.[1] as { body?: string }
     expect(JSON.parse(request.body || '{}')).toEqual({ text: '悄悄上楼' })
-    expect(wrapper.find('.dice-result').exists()).toBe(false)
   })
 
 })

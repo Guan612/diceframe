@@ -17,27 +17,24 @@ describe('PortraitImage', () => {
     const wrapper = mount(PortraitImage, {
       props: { name: '爱丽丝', size: 64 },
     })
-    expect(wrapper.find('.portrait-empty').exists()).toBe(true)
-    expect(wrapper.find('.portrait-empty').text()).toBe('爱丽')
-    expect(wrapper.find('.portrait-builtin').exists()).toBe(false)
+    expect(wrapper.text()).toBe('爱丽')
+    expect(wrapper.html()).not.toContain('avatars/')
   })
 
   it('renders the builtin image for a valid explicit builtin portrait', () => {
     const wrapper = mount(PortraitImage, {
       props: { name: '鲍勃', size: 64, portrait: { kind: 'builtin', id: 'dnd5e:0' }, ruleId: 'dnd5e' },
     })
-    expect(wrapper.find('.portrait-builtin').exists()).toBe(true)
-    expect(wrapper.find('.portrait-empty').exists()).toBe(false)
-    expect(wrapper.find('.portrait-builtin').attributes('style')).toContain('avatars/v3/dnd5e/realistic-1.jpg')
-    expect(wrapper.find('.portrait-builtin').attributes('style')).toContain('background-size: cover')
+    expect(wrapper.html()).toContain('avatars/v3/dnd5e/realistic-1.jpg')
+    expect(wrapper.html()).toContain('background-size: cover')
   })
 
   it('renders an empty placeholder for an invalid builtin id instead of falling back to auto-assignment', () => {
     const wrapper = mount(PortraitImage, {
       props: { name: '卡罗尔', size: 64, portrait: { kind: 'builtin', id: 'dnd5e:999' }, ruleId: 'dnd5e' },
     })
-    expect(wrapper.find('.portrait-empty').exists()).toBe(true)
-    expect(wrapper.find('.portrait-builtin').exists()).toBe(false)
+    expect(wrapper.text()).toBe('卡罗')
+    expect(wrapper.html()).not.toContain('avatars/')
   })
 
   it('loads a declared content-pack portrait through the configured backend', async () => {
@@ -79,7 +76,7 @@ describe('PortraitImage', () => {
     const init = fetchMock.mock.calls[0][1] as RequestInit
     expect(new Headers(init.headers).get('Authorization')).toBe('Bearer owner-token')
     expect(wrapper.find('img').attributes('src')).toBe('blob:plugin-portrait')
-    expect(wrapper.find('.portrait-empty').exists()).toBe(false)
+    expect(wrapper.text()).toBe('')
     wrapper.unmount()
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:plugin-portrait')
   })

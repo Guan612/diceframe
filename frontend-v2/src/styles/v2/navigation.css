@@ -175,9 +175,11 @@
   .mobile-bottom-nav {
     position: fixed;
     z-index: 55;
-    right: 0;
     bottom: 0;
     left: 0;
+    /* 100vw 含滚动条宽度：窄窗下经典滚动条占位时，底栏直接盖住那条空缺，
+       不再给滚动条让位。真机的悬浮滚动条下 100vw 等于版式宽度，渲染不变。 */
+    width: 100vw;
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     min-height: calc(64px + env(safe-area-inset-bottom));

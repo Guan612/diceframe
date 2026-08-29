@@ -13,6 +13,12 @@ vi.mock('../src/api/client', () => {
 
 const mockedApi = vi.mocked(api)
 
+function buttonByText(wrapper: ReturnType<typeof mount>, text: string) {
+  const button = wrapper.findAll('button').find(candidate => candidate.text() === text)
+  if (!button) throw new Error(`未找到按钮：${text}`)
+  return button
+}
+
 describe('KpQuestionDialog', () => {
   beforeEach(() => {
     i18n.global.locale.value = 'zh-CN'
@@ -40,7 +46,7 @@ describe('KpQuestionDialog', () => {
     })
 
     await wrapper.get('textarea').setValue('我认识这个符号吗？')
-    await wrapper.get('button.primary').trigger('click')
+    await buttonByText(wrapper, '询问').trigger('click')
     await flushPromises()
 
     expect(mockedApi).toHaveBeenCalledWith('/games/web%7Croom%7Cbot/kp-question', {
@@ -64,8 +70,8 @@ describe('KpQuestionDialog', () => {
     })
 
     await wrapper.get('textarea').setValue('大家都认识这个标志吗？')
-    await wrapper.get('.kp-question-visibility input').setValue(true)
-    await wrapper.get('button.primary').trigger('click')
+    await wrapper.get('input[type="checkbox"]').setValue(true)
+    await buttonByText(wrapper, '询问').trigger('click')
     await flushPromises()
 
     expect(JSON.parse(String(mockedApi.mock.calls[0]?.[1]?.body))).toEqual({
