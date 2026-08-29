@@ -18,7 +18,7 @@ It brings the Web UI, character sheets, lorebooks, dice checks, state changes, c
 
 ## What It Does
 
-- Web UI for creating games, joining tables, managing characters, lorebooks, rules, logs, and settings.
+- A Web UI organized around Overview, Play, Characters, Content, and Management. Content contains Lorebook, Worlds, Adventures, and Rules; Management contains Memory, Logs, Plugins, and Settings.
 - Solo and multiplayer play, with invite links, waiting states, away players, GM force-advance, SSE updates, and experimental WebRTC player direct connect through one-time link codes.
 - Layered resolution for D&D 5e-inspired Lite, custom d20, CoC 7e-inspired d100, and no-dice narrative rules, including rule-declared advantage/disadvantage, CoC bonus/penalty dice, HP, gold, items, XP, death, revival, and scene changes.
 - Lorebook entries for NPCs, locations, items, events, puzzles, and factions.
@@ -38,9 +38,9 @@ GitHub maintains the [Contributors](https://github.com/diceframe/diceframe/graph
 
 ### Windows Portable
 
-Download the latest `DiceFrame-vX.Y.Z-windows-portable.zip` from [Releases](https://github.com/diceframe/diceframe/releases/latest), extract it, and run `DiceFrame.exe`. In Settings, first add an AI provider with its name, API format, Base URL, API key, and model catalog. Then use Model routing to assign the main model, fallbacks, embedding, TTS, ASR, and image generation roles.
+Download the latest `DiceFrame-vX.Y.Z-windows-portable.zip` from [Releases](https://github.com/diceframe/diceframe/releases/latest), extract it, and run `DiceFrame.exe`. Open **Management → Settings → Model API**, then add an AI provider with its name, API format, Base URL, API key, and model catalog. Use **Management → Settings → Model routing** to assign the main model, fallbacks, embedding, TTS, ASR, and image-generation roles.
 
-Windows portable builds can check for and apply updates from Settings.
+Windows portable builds can check for and apply updates from the Version Update section under **Management → Settings → About**.
 
 ### From Source
 
@@ -70,7 +70,7 @@ Open:
 http://localhost:18000
 ```
 
-On first launch, add the endpoint and model catalog under AI Providers, then assign the main model, fallbacks, and optional AI roles under Model routing. Existing inline Base URL, model, and API key settings from older versions remain supported. Environment variables remain available as well:
+On first launch, add the endpoint and model catalog under **Management → Settings → Model API → AI Providers**, then assign the main model, fallbacks, and optional AI roles under **Model routing**. Existing inline Base URL, model, and API key settings from older versions remain supported. Environment variables remain available as well:
 
 ```bash
 TRPG_LLM_API_KEY=your_key
@@ -116,7 +116,7 @@ http://localhost:9876
 
 Runtime data is stored in `data/`.
 
-After upgrading once to a baseline image with managed updates, ordinary application releases can be applied from **Settings → Version Update** with health-checked rollback. Python or system-runtime changes still require pulling a new image. DiceFrame does not mount or control the Docker socket.
+After upgrading once to a baseline image with managed updates, ordinary application releases can be applied from the Version Update section under **Management → Settings → About**, with health-checked rollback. Python or system-runtime changes still require pulling a new image. DiceFrame does not mount or control the Docker socket.
 
 The `latest` image always tracks stable releases. Preview images are published under their explicit version tags and never replace `latest`. To try one, copy the full preview version from GitHub Releases, for example:
 
@@ -152,7 +152,7 @@ More player-facing help is in the [DiceFrame user guide](https://github.com/dice
 
 ## Plugins and Chat Adapters
 
-The built-in QQ/NapCat plugin receives its DiceFrame Bot API Token automatically; users configure only the NapCat connection. External bridges such as MaiBot copy the service URL and token from Settings → Bot API.
+The built-in QQ/NapCat plugin receives its DiceFrame Bot API Token automatically; users configure only the NapCat connection under **Management → Plugins**. External bridges such as MaiBot copy the service URL and token from **Management → Settings → Bot API**.
 
 The Bot follows the bound game's language for help and primary operation messages, with native Chinese and English commands available.
 
@@ -160,7 +160,7 @@ Players can ask the GM an out-of-character question with `@Bot ask kp <question>
 
 The DiceFrame plugin store lets you browse and install community plugins published by their authors through GitHub Releases. Installing or updating always requires confirmation, with an additional risk warning when a plugin requests external-process access or expanded permissions. Locally or privately shared plugins can also be installed from `.dfplugin` files.
 
-DiceFrame Hub provides review information, version status, and details for the plugin store. Installed plugins and local games continue to work if Hub is temporarily unavailable. Anonymous usage statistics are disabled by default and can be managed under **Settings → Advanced → DiceFrame Hub and privacy**.
+DiceFrame Hub provides review information, version status, and details for the plugin store under **Management → Plugins**. Installed plugins and local games continue to work if Hub is temporarily unavailable. Anonymous usage statistics are disabled by default and can be managed under **Management → Settings → Advanced → DiceFrame Hub and privacy**.
 
 To develop or publish a plugin, see the [plugin development guide](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-development.md) and [plugin registry and review rules](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-registry.md).
 

@@ -5,11 +5,11 @@
 这是 DiceFrame 的 QQ / NapCat 群聊适配器插件，通过 NapCat WebSocket 服务器把群聊连接到 DiceFrame。独立于主程序发布，可从插件商店安装；运行代码（`src/bots/qq/`）随本仓库提供，依赖 DiceFrame 主程序的 Bot Bridge 核心（`bridge_core`）。本版本起卡片渲染复用主程序 `bridge_core` 渲染器，需搭配含该渲染器的 DiceFrame 主程序（v2.0.0 及以上）。
 
 1. 在 NapCat 进入“网络设置 → 网络配置 → WebSocket 服务器”，启用服务并记下端口和 access_token。
-2. 在 DiceFrame 设置的插件页填写连接配置并启用。
+2. 在 DiceFrame 的“管理 → 插件”中打开 QQ / NapCat，填写连接配置并启用。
 3. 在房主页复制 Bot 绑定命令并发送到目标群聊。
 4. 玩家发送 `@Bot 加入 角色名` 后可用自然语言行动。
 
-内置插件不需要填写 DiceFrame Bot API Token。该凭证由 DiceFrame 自动生成并注入；插件页只需要配置 NapCat 自身的 WebSocket 地址、端口和 access_token。
+内置插件不需要填写 DiceFrame Bot API Token。该凭证由 DiceFrame 自动生成并注入；“管理 → 插件”中的 QQ / NapCat 配置只需要填写 NapCat 自身的 WebSocket 地址、端口和 access_token。
 
 安装并启用 `bot-extension` 插件后，QQ 消息会自动经过相同的命令、回复和渲染扩展；扩展失败时仍使用本页所述的内置命令和卡片。
 
@@ -62,4 +62,4 @@ AI 辅助车卡默认开启，但只有玩家明确发送 `@Bot AI车卡` 才会
 
 - Bot 会把帮助、状态、车卡教程等图片临时保存到 `data/bot/cards`。
 - 插件配置里可以设置“卡片缓存保留时长”和“最多保留张数”，发送新卡片时会自动清理旧的 `card_*.png`。
-- 设置页提供“清理卡片缓存”按钮，可立即删除这些临时 PNG；不会删除游戏存档、角色卡或其他图片。
+- “管理 → 插件”中的 QQ / NapCat 设置提供“清理卡片缓存”按钮，可立即删除这些临时 PNG；不会删除游戏存档、角色卡或其他图片。

@@ -16,8 +16,8 @@ The first start downloads the image and model. When ready, open `http://127.0.0.
 
 ## Configure DiceFrame
 
-1. For local development, package this directory as `.dfplugin` and choose it under Settings → Plugins → Local Install. Enable the plugin after installation.
-2. Open Settings → Advanced → Text-to-speech.
+1. For local development, package this directory as `.dfplugin` and choose it under **Management → Plugins → Local Install**. Enable the plugin after installation.
+2. Open **Management → Settings → Advanced → Text-to-speech**.
 3. Select OpenAI compatible and set Base URL to `http://127.0.0.1:8880/v1`.
 4. Leave API Key empty, set the model to `kokoro`, and choose `MP3`.
 5. Select one of the contributed voices under Role voice mapping, then use Save and test.

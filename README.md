@@ -33,7 +33,7 @@ QQ 交流群：1060613588
 
 ## 功能概览
 
-- WebUI：创建游戏、加入游戏、角色管理、世界书、规则编辑、日志回看、设置页。
+- WebUI：顶部以“总览 / 游玩 / 角色 / 内容 / 管理”组织主要工作区；内容区包含世界书、世界、冒险包和规则，管理区包含记忆、日志、插件和设置。
 - 多人桌：邀请链接、玩家等待、暂离/回来、GM 强制推进、SSE 实时同步；实验性玩家直连可通过一次性链接码建立 WebRTC 对局。
 - 骰子与状态：D&D 5e 轻量规则、自定义 d20、CoC 7e 轻量 d100 与无骰叙事分层处理；支持规则声明的优势/劣势、CoC 奖惩骰，以及 HP、理智、金币、物品、经验、死亡/复活等状态标签。
 - 世界书：NPC、地点、物品、事件、谜题、势力等条目，按关键词注入上下文。
@@ -53,9 +53,9 @@ QQ 交流群：1060613588
 
 [前往 Releases 下载最新版](https://github.com/diceframe/diceframe/releases/latest)
 
-下载最新的 `DiceFrame-vX.Y.Z-windows-portable.zip`，解压后运行 `DiceFrame.exe`。首次打开后，先在“设置 → AI 服务商”添加服务商名称、API 格式、Base URL、API Key 和可用模型，再到“模型配置”为主模型、备用模型、向量记忆、TTS、ASR 和生图选择实际使用的服务商与模型。向量记忆的开关、输入上限和连接测试也集中在该页的向量模型卡片中。
+下载最新的 `DiceFrame-vX.Y.Z-windows-portable.zip`，解压后运行 `DiceFrame.exe`。首次打开后，先进入“管理 → 设置 → 模型接口”，在“AI 服务商”中添加服务商名称、API 格式、Base URL、API Key 和可用模型，再进入“管理 → 设置 → 模型配置”为主模型、备用模型、向量记忆、TTS、ASR 和生图选择实际使用的服务商与模型。向量记忆的开关、输入上限和连接测试也集中在该页的向量模型卡片中。
 
-Windows 便携版可以在设置页检查并应用更新。
+Windows 便携版可以在“管理 → 设置 → 关于”的版本更新区检查并应用更新。
 
 ### Docker 运行
 
@@ -74,7 +74,7 @@ http://localhost:9876
 
 Docker 会把运行数据挂载到当前目录的 `data/`。详细说明见 [DiceFrame 部署说明](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/deploy.md)。
 
-升级到支持托管更新的基线镜像后，普通应用版本可以直接在“设置 → 版本更新”中完成；Python 或系统运行时变化仍需拉取新镜像。程序不会挂载或控制 Docker socket。
+升级到支持托管更新的基线镜像后，普通应用版本可以直接在“管理 → 设置 → 关于”的版本更新区完成；Python 或系统运行时变化仍需拉取新镜像。程序不会挂载或控制 Docker socket。
 
 NAS 用户可以在 Docker 管理界面搜索 `diceframe` 拉取镜像，或在 [Docker Hub](https://hub.docker.com/r/falconku/diceframe) 查找。
 
@@ -103,7 +103,7 @@ docker compose up -d
 - Node.js 20.19+，或 22.12+
 - 一个兼容 OpenAI Chat Completions API 的模型服务
 
-可以使用 DeepSeek、硅基流动、OpenAI、Ollama 等服务。只要它提供 OpenAI 兼容接口，就可以在设置页里配置。
+可以使用 DeepSeek、硅基流动、OpenAI、Ollama 等服务。只要它提供 OpenAI 兼容接口，就可以在“管理 → 设置 → 模型接口”里配置。
 
 第一次从 GitHub 克隆后，需要先构建前端：
 
@@ -125,7 +125,7 @@ python web_server.py
 http://localhost:18000
 ```
 
-第一次进入设置页，先在“AI 服务商”添加连接信息与模型目录，再到“模型配置”分配主模型、备用模型和各项 AI 能力；向量记忆不再使用独立选项卡，开关、输入上限和测试与向量模型配置放在一起。旧版已经保存的内联 API 地址、模型名和 API Key 仍可继续使用；环境变量方式也保持兼容：
+第一次进入“管理 → 设置”，先在“模型接口”的“AI 服务商”中添加连接信息与模型目录，再到“模型配置”分配主模型、备用模型和各项 AI 能力；向量记忆不再使用独立选项卡，开关、输入上限和测试与向量模型配置放在一起。旧版已经保存的内联 API 地址、模型名和 API Key 仍可继续使用；环境变量方式也保持兼容：
 
 ```bash
 TRPG_LLM_API_KEY=your_key
@@ -157,8 +157,8 @@ DiceFrame 提供独立的 Android 客户端，源码在 [diceframe-mobile](https
 ## 第一局怎么玩
 
 1. 打开 WebUI。
-2. 去“设置 → AI 服务商”添加连接与模型目录，再到“模型配置”选择主模型。
-3. 进入“创建”，选择游戏语言。
+2. 进入“管理 → 设置 → 模型接口”添加连接与模型目录，再到“模型配置”选择主模型。
+3. 回到“总览”，点击“创建新冒险”并选择游戏语言。
 4. 选择模板世界、AI 生成世界，或自己填写世界设定。
 5. 选择规则和难度。
 6. 创建角色，或用 AI 生成一个角色草稿后再手动改。
@@ -173,13 +173,13 @@ DiceFrame 提供独立的 Android 客户端，源码在 [diceframe-mobile](https
 
 基本流程：
 
-1. 在 WebUI 设置页打开插件配置。
+1. 进入“管理 → 插件”，打开 `QQ / NapCat` 的插件配置。
 2. 配置 NapCat 的 WebSocket 地址、端口和 token。
 3. 启用 `QQ / NapCat` 插件。
 4. 在游戏页复制 Bot 绑定命令。
 5. 到群里发送绑定命令，把网页游戏和群聊关联起来。
 
-DiceFrame Bot API Token 由宿主自动生成并注入，内置 QQ / NapCat 无需填写。外部 MaiBot Bridge 等适配器可在“设置 → Bot API”复制服务地址和 Token。
+DiceFrame Bot API Token 由宿主自动生成并注入，内置 QQ / NapCat 无需填写。外部 MaiBot Bridge 等适配器可在“管理 → 设置 → Bot API”复制服务地址和 Token。
 
 Bot 会跟随绑定对局的语言显示帮助和主要操作提示；中文与英文对局都可直接使用对应语言的命令。
 
@@ -204,7 +204,7 @@ Bot 会跟随绑定对局的语言显示帮助和主要操作提示；中文与�
 
 DiceFrame 插件商店可以浏览和安装社区插件。插件由作者通过 GitHub Release 发布；安装和更新都需要用户确认，插件申请运行外部进程或扩大权限时会额外提示风险。本地或私下分享的插件也可以通过 `.dfplugin` 文件安装。
 
-DiceFrame Hub 为插件商店提供审核信息、版本状态和详情。Hub 暂时不可用时，已安装插件和本地游戏不受影响。匿名使用统计默认关闭，可以在“设置 → 高级参数 → DiceFrame Hub 与隐私”中管理。
+DiceFrame Hub 为插件商店提供审核信息、版本状态和详情。Hub 暂时不可用时，已安装插件和本地游戏不受影响。匿名使用统计默认关闭，可以在“管理 → 设置 → 高级参数 → DiceFrame Hub 与隐私”中管理。
 
 如果你想开发或发布插件，请阅读[插件开发指南](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md)和[插件索引与审核规则](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md)。
 

@@ -1,7 +1,7 @@
 /* 分区工作区只负责跨页面的空间关系；各功能页继续拥有自己的数据与编辑样式。 */
 .content-workspace {
   display: grid;
-  grid-template-columns: clamp(210px, 18vw, 268px) minmax(0, 1fr);
+  grid-template-columns: clamp(76px, 6.25vw, 84px) minmax(0, 1fr);
   min-height: calc(100dvh - 68px);
   background:
     radial-gradient(circle at 0 0, color-mix(in srgb, var(--df-accent) 8%, transparent), transparent 28%),
@@ -17,9 +17,9 @@
   height: calc(100dvh - 68px);
   min-height: 0;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
   overflow: auto;
-  padding: 26px 18px 18px;
+  padding: 20px 7px 18px;
   border-right: 1px solid var(--df-border-soft);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--df-surface-1) 96%, transparent), color-mix(in srgb, var(--df-surface-2) 90%, transparent));
@@ -29,8 +29,8 @@
 
 .content-workspace-heading {
   display: grid;
-  gap: 4px;
-  padding: 0 8px 14px;
+  place-items: center;
+  padding: 0 2px 12px;
   border-bottom: 1px solid var(--df-border-soft);
 }
 
@@ -45,7 +45,7 @@
 .content-workspace-heading > strong {
   color: var(--df-accent-strong);
   font-family: var(--df-font-title);
-  font-size: clamp(20px, 1.7vw, 26px);
+  font-size: 16px;
 }
 
 .content-workspace-flow > small {
@@ -62,11 +62,12 @@
 .content-workspace-nav > a {
   position: relative;
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-columns: 1fr;
+  grid-template-rows: 24px auto;
   align-items: center;
-  gap: 9px;
+  gap: 4px;
   min-height: 58px;
-  padding: 8px 10px;
+  padding: 7px 3px;
   border: 1px solid transparent;
   border-radius: var(--df-radius-md);
   color: var(--df-text-secondary);
@@ -78,7 +79,7 @@
   border-color: var(--df-border-soft);
   color: var(--df-interactive-strong);
   background: var(--df-hover);
-  transform: translateX(2px);
+  transform: translateY(-1px);
 }
 
 .content-workspace-nav > a.active {
@@ -91,31 +92,28 @@
 }
 
 .content-workspace-nav > a > .n-icon {
+  justify-self: center;
   font-size: 22px;
 }
 
 .content-workspace-nav > a > span {
   display: grid;
-  gap: 2px;
+  place-items: center;
   min-width: 0;
 }
 
 .content-workspace-nav > a strong {
-  font-size: 13px;
+  font-size: 10px;
+  text-align: center;
 }
 
 .content-workspace-nav > a small {
-  overflow: hidden;
-  color: var(--df-text-muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .content-workspace-flow {
-  display: grid;
+  display: none;
   gap: 8px;
-  margin-top: auto;
   padding: 13px;
   border: 1px solid var(--df-border-soft);
   border-radius: var(--df-radius-md);
@@ -147,15 +145,12 @@
 .content-workspace-session {
   display: grid;
   gap: 7px;
-  padding: 0 4px;
+  margin-top: auto;
+  padding: 0 3px;
 }
 
 .content-workspace-session > span {
-  overflow: hidden;
-  color: var(--df-text-muted);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .content-workspace-session > a {
@@ -171,6 +166,18 @@
   text-decoration: none;
 }
 
+.content-workspace-session > a > .n-icon {
+  font-size: 20px;
+}
+
+.content-workspace-session > a > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
 .content-workspace-main {
   min-width: 0;
 }
@@ -182,11 +189,11 @@
 
 @media (max-width: 1000px) and (min-width: 801px) {
   .content-workspace {
-    grid-template-columns: clamp(174px, 21vw, 206px) minmax(0, 1fr);
+    grid-template-columns: clamp(72px, 8vw, 80px) minmax(0, 1fr);
   }
 
   .content-workspace-rail {
-    padding-inline: 12px;
+    padding-inline: 6px;
   }
 
   .content-workspace-flow {

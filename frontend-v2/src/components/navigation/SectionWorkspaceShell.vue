@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { NIcon } from 'naive-ui'
+import { GameControllerOutline } from '@vicons/ionicons5'
 import type { MessageKey } from '@/i18n'
 import { appNavGroups, navGroupItems, type AppNavGroupId, type AppNavItemId } from '@/navigation/appNavigation'
 import { useLocale } from '@/composables/useLocale'
@@ -71,7 +72,14 @@ function hintKey(id: AppNavItemId): MessageKey {
 
       <footer class="content-workspace-session">
         <span>{{ currentGame ? `${t('currentTable')} ${currentGame.slice(0, 8)}` : t('lobby') }}</span>
-        <RouterLink :to="playTarget">{{ t('contentWorkspaceEnterPlay') }}</RouterLink>
+        <RouterLink
+          :to="playTarget"
+          :title="t('contentWorkspaceEnterPlay')"
+          :aria-label="t('contentWorkspaceEnterPlay')"
+        >
+          <NIcon :component="GameControllerOutline" />
+          <span>{{ t('contentWorkspaceEnterPlay') }}</span>
+        </RouterLink>
       </footer>
     </aside>
 

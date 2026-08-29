@@ -11,7 +11,6 @@ export const ja = {
   navWorlds: 'ワールド',
   navContent: 'コンテンツ',
   navManagement: '管理',
-  navMore: 'その他',
   contentWorkspaceLorebookHint: '資料、人物、隠された真実',
   contentWorkspaceWorldsHint: '舞台、カバー、語り口',
   contentWorkspaceAdventuresHint: '章、シーン、物語構造',

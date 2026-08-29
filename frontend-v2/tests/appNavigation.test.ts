@@ -21,8 +21,10 @@ describe('app navigation', () => {
   it('keeps content and management route identity independent of labels', () => {
     expect(appNavGroups.find(group => group.id === 'content')?.itemIds)
       .toEqual(['lorebook', 'worlds', 'adventures', 'rules'])
+    expect(appNavGroups.find(group => group.id === 'content')?.defaultItemId).toBe('lorebook')
     expect(appNavGroups.find(group => group.id === 'management')?.itemIds)
       .toEqual(['memory', 'logs', 'plugins', 'settings'])
+    expect(appNavGroups.find(group => group.id === 'management')?.defaultItemId).toBe('settings')
     expect(navGroupForRoute('worlds')).toBe('content')
     expect(navGroupForRoute('settings')).toBe('management')
     expect(navGroupForRoute('overview')).toBeNull()
@@ -35,8 +37,8 @@ describe('app navigation', () => {
 
     expect(layoutCss).not.toContain('.desktop-nav')
     expect(layoutCss).not.toContain('.mobile-bottom-nav')
-    expect(navigationCss).toContain('.desktop-nav-menu')
-    expect(navigationCss).toContain('.mobile-nav-panel')
+    expect(navigationCss).not.toContain('.desktop-nav-menu')
+    expect(navigationCss).not.toContain('.mobile-nav-panel')
     expect(entryCss).toContain("@import './v2/navigation.css';")
   })
 })

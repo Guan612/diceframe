@@ -11,7 +11,6 @@ export const zhCN = {
   navWorlds: '世界',
   navContent: '内容',
   navManagement: '管理',
-  navMore: '更多',
   contentWorkspaceLorebookHint: '资料、人物与隐藏真相',
   contentWorkspaceWorldsHint: '舞台、封面与叙事风格',
   contentWorkspaceAdventuresHint: '章节、场景与剧情结构',
