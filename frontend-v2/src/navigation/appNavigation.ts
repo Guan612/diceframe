@@ -39,6 +39,7 @@ export type AppNavGroup = {
   id: AppNavGroupId
   labelKey: MessageKey
   icon: Component
+  defaultItemId: AppNavItemId
   itemIds: readonly AppNavItemId[]
 }
 
@@ -62,12 +63,14 @@ export const appNavGroups = [
     id: 'content',
     labelKey: 'navContent',
     icon: BookOutline,
+    defaultItemId: 'lorebook',
     itemIds: ['lorebook', 'worlds', 'adventures', 'rules'],
   },
   {
     id: 'management',
     labelKey: 'navManagement',
     icon: SettingsOutline,
+    defaultItemId: 'settings',
     itemIds: ['memory', 'logs', 'plugins', 'settings'],
   },
 ] as const satisfies readonly AppNavGroup[]

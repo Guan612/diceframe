@@ -7,7 +7,7 @@ This is a minimal DiceFrame `tool` plugin demonstrating:
 - Normal settings injected through a declared environment variable.
 - Text and structured-data results.
 
-Copy this directory to `plugins/echo-tool/`, choose **Settings → Plugins → Rescan local folder**, enable it, then test it from the **Tools** tab with:
+Copy this directory to `plugins/echo-tool/`, choose **Management → Plugins → Rescan local folder**, enable it, then test it from the plugin's **Tools** tab with:
 
 ```json
 {"text": "Hello, DiceFrame"}

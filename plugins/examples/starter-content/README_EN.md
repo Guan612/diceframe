@@ -10,7 +10,7 @@ This DiceFrame `content-pack` example contributes a rule, world template, charac
 python scripts\package_plugin.py plugins\examples\starter-content --overwrite
 ```
 
-The zip is written to `dist/plugins/` and can be installed under Settings → Plugins → Install plugin.
+The zip is written to `dist/plugins/` and can be installed under **Management → Plugins → Local Install**.
 
 ## Current Behavior
 

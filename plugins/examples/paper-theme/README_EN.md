@@ -10,6 +10,6 @@ This DiceFrame example demonstrates how a `theme` plugin contributes safe CSS cu
 python scripts\package_plugin.py plugins\examples\paper-theme --overwrite
 ```
 
-After installation and enablement, select `Paper Theme` under Settings → Plugins → Themes.
+After installation and enablement, select `Paper Theme` under **Management → Plugins → Themes**.
 
 Theme plugins currently support filtered CSS variables only. They cannot inject scripts, Vue components, or arbitrary CSS files.

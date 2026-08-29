@@ -5,7 +5,7 @@
 This is the QQ/NapCat chat adapter plugin for DiceFrame, connecting group chats to DiceFrame through a NapCat WebSocket server. Published independently and installable from the plugin store; its runtime code (`src/bots/qq/`) ships with this repository and depends on DiceFrame's Bot Bridge core (`bridge_core`). Starting with this version, card rendering reuses the main program's `bridge_core` renderer, so it requires a DiceFrame main program that includes that renderer (v2.0.0 or later).
 
 1. In NapCat, open Network Settings → Network Configuration → WebSocket Server, enable it, and note the port and access token.
-2. Enter those connection values on the DiceFrame plugin settings page and enable the plugin.
+2. Open QQ / NapCat under **Management → Plugins**, enter those connection values, and enable the plugin.
 3. Copy the Bot binding command from the GM game page and send it to the target group.
 4. Players claim a character with `@Bot join CharacterName`, then submit natural-language actions.
 
@@ -62,4 +62,4 @@ Image-card cache:
 
 - Help, status, and character-guide images are temporarily stored under `data/bot/cards`.
 - Settings control retention time and maximum count; creating a card removes old `card_*.png` files.
-- The settings page can clear those temporary PNG files immediately without deleting saves, character cards, or unrelated images.
+- The QQ / NapCat settings under **Management → Plugins** can clear those temporary PNG files immediately without deleting saves, character cards, or unrelated images.
