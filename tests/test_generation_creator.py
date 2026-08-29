@@ -84,3 +84,22 @@ def test_unique_world_id_avoids_collision(tmp_path):
     (tmp_path / "ai_world_2.json").write_text("{}", encoding="utf-8")
     assert _unique_world_id("ai_world", tmp_path) == "ai_world_3"
     assert _unique_world_id("ai_fresh", tmp_path) == "ai_fresh"
+
+
+def test_apply_generated_visibility_public_secret_and_fail_closed():
+    """AI 的 visibility 建议只认 public 枚举；缺失/写错/自由发挥一律 GM 秘密。"""
+    from src.generation.creator import apply_generated_visibility
+
+    public = {"name": "金狮酒馆", "visibility": "public"}
+    apply_generated_visibility(public)
+    assert public["visible_to"] == ["*"]
+    assert "visibility" not in public  # 原始建议字段被消费，不进存储
+
+    for bad in ({"name": "x", "visibility": "secret"},
+                {"name": "x", "visibility": "公开"},   # 中文别名不认：枚举语言无关
+                {"name": "x", "visibility": ""},
+                {"name": "x"},                          # 缺失
+                {"name": "x", "visibility": ["*"]}):    # 自由发挥
+        apply_generated_visibility(bad)
+        assert bad["visible_to"] == [], bad
+        assert "visibility" not in bad
