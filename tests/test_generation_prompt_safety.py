@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pytest
 
+from webapi_harness import web_api  # noqa: F401  # pytest fixture
+
 REQUIRED_INVARIANTS = {
     "zh-CN": ["整段 content 的整体授权", "禁止混入", "两个独立条目", "整条就必须是 secret"],
     "en": ["ENTIRE entry content", "Never mix", "two separate entries", "whole entry must be secret"],
@@ -39,7 +41,8 @@ def _assert_invariants(prompt: str, lang: str) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("lang", ["zh-CN", "en", "ja"])
 async def test_lore_generation_prompt_carries_safety_invariants(web_api, lang):
-    api, _lorebook, _registry, fake_llm, _worlds_dir = web_api
+    api, lorebook, _registry, fake_llm, _worlds_dir = web_api
+    lorebook.create_world("template_world", "测试世界", description="prompt 安全契约测试")
     await api.generate_lorebook_entries("template_world", "一座雾港城市与走私集团", language=lang)
     prompts = [c["system_prompt"] for c in fake_llm.calls]
     _assert_invariants(_prompt_with(LORE_MARKERS, prompts), lang)
