@@ -1788,17 +1788,19 @@ function redownloadUpdatePackage() {
                               <option value="asr">{{ t('modelCapabilityAsr') }}</option>
                             </select>
                           </label>
-                          <button
-                            v-if="catalogModelIsChat(activeProvider, modelName)"
-                            type="button"
-                            class="provider-model-set-main"
-                            :class="{ active: isCatalogModelMain(activeProvider, modelName) }"
-                            :disabled="modelRoutingSaving || catalogSetMainBusy !== '' || !catalogModelEligible(activeProvider, modelName)"
-                            :title="catalogModelEligible(activeProvider, modelName) ? '' : t('providerModelSaveFirst')"
-                            @click="setCatalogModelAsMain(activeProvider, modelName)"
-                          >
-                            {{ isCatalogModelMain(activeProvider, modelName) ? t('providerModelMainActive') : t('providerModelSetMain') }}
-                          </button>
+                          <div v-if="catalogModelIsChat(activeProvider, modelName)" class="provider-model-main">
+                            <span>{{ t('statusMainModel') }}</span>
+                            <button
+                              type="button"
+                              class="provider-model-set-main"
+                              :class="{ active: isCatalogModelMain(activeProvider, modelName) }"
+                              :disabled="modelRoutingSaving || catalogSetMainBusy !== '' || !catalogModelEligible(activeProvider, modelName)"
+                              :title="catalogModelEligible(activeProvider, modelName) ? '' : t('providerModelSaveFirst')"
+                              @click="setCatalogModelAsMain(activeProvider, modelName)"
+                            >
+                              {{ isCatalogModelMain(activeProvider, modelName) ? t('providerModelMainActive') : t('providerModelSetMain') }}
+                            </button>
+                          </div>
                           <button
                             type="button"
                             class="provider-model-remove"
