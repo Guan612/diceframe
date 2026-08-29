@@ -97,6 +97,28 @@
 .lore-viewer-options button {
   padding: 5px 10px;
   font-size: 12px;
+  cursor: pointer;
+}
+
+/* 选中态与 .lore-type-tabs button.active 同一语言：accent 描边 + token 自适应浅底 */
+.lore-viewer-options button.active,
+.lore-filter-options button.active {
+  border-color: var(--df-accent);
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent) 18%, transparent);
+}
+
+/* #173 合入后与检查器侧的同名规则一致；单独合入本分支时编辑弹窗也依赖它 */
+.lore-filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lore-filter-options button {
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .lore-summary-list {
