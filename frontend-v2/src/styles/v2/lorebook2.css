@@ -108,6 +108,15 @@
   background: color-mix(in srgb, var(--df-accent) 18%, transparent);
 }
 
+/* base.css 的 body.light button:not(.primary)... 特异性 (0,4,1)，light 下会盖掉
+   上一条导致选中态不可见；用同一排除集反超（lorebook2.css 加载更晚）。 */
+body.light .lore-viewer-options button.active:not(.primary):not(.danger):not(.success),
+body.light .lore-filter-options button.active:not(.primary):not(.danger):not(.success) {
+  border-color: var(--df-accent);
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent) 18%, transparent);
+}
+
 /* #173 合入后与检查器侧的同名规则一致；单独合入本分支时编辑弹窗也依赖它 */
 .lore-filter-options {
   display: flex;
