@@ -35,14 +35,16 @@ describe('SectionWorkspaceShell', () => {
     expect(wrapper.text()).toContain('content')
   })
 
-  it('reuses the same shell for management tools with a concise title', async () => {
+  it('reuses the same shell for management tools', async () => {
     const wrapper = await mountShell('settings', 'management')
     const links = wrapper.get('nav[aria-label="管理"]').findAll('a')
 
-    expect(wrapper.get('header').text()).toBe('管理')
+    expect(wrapper.find('.content-workspace-nav').attributes('aria-label')).toBe('管理')
+    expect(wrapper.find('.content-workspace-heading').exists()).toBe(false)
     expect(links.map(link => link.attributes('href'))).toEqual([
       '/memory', '/logs', '/plugins', '/settings',
     ])
     expect(links[3].attributes('aria-current')).toBe('page')
+    expect(wrapper.find('.content-workspace-flow').exists()).toBe(false)
   })
 })
