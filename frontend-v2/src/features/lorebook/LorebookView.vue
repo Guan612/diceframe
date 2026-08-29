@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/client'
-import type { CharacterListResponse, GameSummary, GamesResponse, LorebookResponse, LoreEntry, LoreGenerateResponse, Player, RuleMeta, WorldCreateResponse, WorldListResponse, WorldSummary } from '@/api/types'
+import type { CharacterListResponse, GameSummary, GamesResponse, LorebookResponse, LoreEntry, LoreGenerateResponse, Player, WorldCreateResponse, WorldListResponse, WorldSummary } from '@/api/types'
 import { readCurrentGame } from '@/stores/gameContext'
+import { activePeerGameClient } from '@/peer/game/bridge'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import type { MessageKey } from '@/i18n'
 import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
 import Modal from '@/components/ui/Modal.vue'
-import CharacterPanel from '@/components/CharacterPanel.vue'
+import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
+import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
+import { useLorePerspective } from './useLorePerspective'
 
 interface LoreEdit extends LoreEntry {
   tier?: string
@@ -45,14 +48,52 @@ const loreEdit = ref<LoreEdit | null>(null)
 const generatePrompt = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const showNewWorld = ref(false)
-const activePlayer = ref<Player | null>(null)
-const activeRuleMeta = ref<RuleMeta>({})
+const players = ref<Player[]>([])
 const newWorld = ref({ name: '', description: '', language: locale.value })
 const entries = computed(() => data.value.entries || [])
 const languageWorlds = computed(() => filterByContentLanguage(worlds.value, worldLanguage.value))
 const currentWorld = computed(() => worlds.value.find(w => worldIdOf(w) === currentWorldId.value))
 const activeLoreType = ref('all')
 const loreTypeOrder = ['npc', 'location', 'faction', 'item', 'event', 'puzzle', 'spell', 'class', 'other'] as const
+
+const { viewer, viewerFallback, characterViewerLocked, setViewer, preview, previewError, projectionOf, refreshPreview } = useLorePerspective(currentWorldId, game, players)
+const lockedReason = computed<'standalone' | 'peer' | ''>(() => {
+  if (!characterViewerLocked.value) return ''
+  return game.value && activePeerGameClient() ? 'peer' : 'standalone'
+})
+
+const selectedEntryId = ref('')
+const selectedEntry = computed(() => entries.value.find(e => e.id && e.id === selectedEntryId.value) || null)
+const selectedProjection = computed(() => projectionOf(selectedEntryId.value))
+function toggleEntrySelection(entry: LoreEntry) {
+  if (!entry.id) return
+  selectedEntryId.value = selectedEntryId.value === entry.id ? '' : entry.id
+}
+
+const perspectiveFilter = ref<'all' | 'visible' | 'hidden'>('all')
+const perspectiveFilters = computed(() => [
+  { id: 'all' as const, label: t('loreFilterAll') },
+  { id: 'visible' as const, label: t('loreSummaryVisible') },
+  { id: 'hidden' as const, label: t('loreFilterHidden') },
+])
+function matchesPerspectiveFilter(entry: LoreEntry): boolean {
+  if (perspectiveFilter.value === 'all') return true
+  const visible = projectionOf(entry.id)?.visible || false
+  return perspectiveFilter.value === 'visible' ? visible : !visible
+}
+
+function resolveInspectorOpen(): boolean {
+  const saved = localStorage.getItem('lore_inspector_open')
+  if (saved) return saved === '1'
+  // 宽屏常驻展开；窄屏默认收起，避免一进页面就被抽屉盖住一半。
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+  return !window.matchMedia('(max-width: 1100px)').matches
+}
+const inspectorOpen = ref(resolveInspectorOpen())
+function toggleInspector() {
+  inspectorOpen.value = !inspectorOpen.value
+  localStorage.setItem('lore_inspector_open', inspectorOpen.value ? '1' : '0')
+}
 
 function worldIdOf(w: WorldSummary | undefined): string { return String(w?.id || w?.world_id || '') }
 function worldNameOf(w: WorldSummary | undefined): string { return String(w?.name || w?.world_name || w?.id || '') }
@@ -73,8 +114,7 @@ async function loadWorlds() {
         api<GamesResponse>('/games'),
         api<CharacterListResponse>(`/games/${encodeURIComponent(game.value)}/characters`).catch(() => ({ players: [] } as CharacterListResponse)),
       ])
-      activePlayer.value = characters.players?.[0] || null
-      activeRuleMeta.value = characters.rule_meta || {}
+      players.value = characters.players || []
       const cur = (games.games || []).find((g: GameSummary) => g.game_key === game.value)
       if (cur?.world_id) {
         currentWorldId.value = cur.world_id
@@ -147,7 +187,7 @@ const loreSections = computed(() => {
     .map(type => ({
       type,
       label: typeLabel(type),
-      entries: entries.value.filter(entry => normalizeLoreType(entry.type) === type),
+      entries: entries.value.filter(entry => normalizeLoreType(entry.type) === type && matchesPerspectiveFilter(entry)),
     }))
     .filter(section => selected !== 'all' || section.entries.length)
 })
@@ -166,6 +206,7 @@ async function saveLore() {
     loreEdit.value = null
     await loadLore()
     await loadWorlds()
+    await refreshPreview()
   } catch (e: unknown) { error.value = errorMessage(e) }
 }
 
@@ -176,8 +217,10 @@ async function deleteLore(entry: LoreEntry) {
   try {
     await api<unknown>(`/lorebook/${encodeURIComponent(entry.id)}`, { method: 'DELETE' })
     toast.success(t('deleted'))
+    if (selectedEntryId.value === entry.id) selectedEntryId.value = ''
     await loadLore()
     await loadWorlds()
+    await refreshPreview()
   } catch (e: unknown) { error.value = errorMessage(e) }
 }
 
@@ -193,6 +236,7 @@ async function generateLore() {
     generatePrompt.value = ''
     await loadLore()
     await loadWorlds()
+    await refreshPreview()
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 
@@ -221,6 +265,7 @@ async function deleteWorld() {
     await api<unknown>(`/worlds/${encodeURIComponent(currentWorldId.value)}`, { method: 'DELETE' })
     toast.success(t('worldDeleted'))
     currentWorldId.value = ''
+    selectedEntryId.value = ''
     await loadWorlds()
     if (languageWorlds.value.length) currentWorldId.value = worldIdOf(languageWorlds.value[0])
     else data.value = { entries: [] }
@@ -228,8 +273,8 @@ async function deleteWorld() {
 }
 
 function exportLore() {
-  const entries = data.value.entries || []
-  const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' })
+  const list = data.value.entries || []
+  const blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -244,16 +289,17 @@ async function importLore(e: Event) {
   if (!file) return
   try {
     const text = await file.text()
-    const entries = JSON.parse(text) as unknown
-    if (!Array.isArray(entries)) throw new Error(t('jsonArrayRequired'))
-    for (const en of entries) {
+    const imported = JSON.parse(text) as unknown
+    if (!Array.isArray(imported)) throw new Error(t('jsonArrayRequired'))
+    for (const en of imported) {
       if (!en || typeof en !== 'object') continue
       await api<unknown>('/lorebook', { method: 'POST', body: JSON.stringify({ ...en, world_id: currentWorldId.value, id: undefined }) })
     }
-    toast.success(t('importedEntries', { count: entries.length }))
+    toast.success(t('importedEntries', { count: imported.length }))
     await loadLore()
     await loadWorlds()
-  } catch (e: unknown) { error.value = `${t('importFailed')}: ${errorMessage(e)}` } finally {
+    await refreshPreview()
+  } catch (err: unknown) { error.value = `${t('importFailed')}: ${errorMessage(err)}` } finally {
     if (fileInput.value) fileInput.value.value = ''
   }
 }
@@ -261,11 +307,7 @@ async function importLore(e: Event) {
 
 <template>
   <section class="view archive-page lorebook-page">
-    <div class="lorebook-shell" :class="{ 'no-rail': !(game && activePlayer) }">
-      <aside v-if="game && activePlayer" class="lorebook-character-rail">
-        <span class="lorebook-rail-label">{{ t('loreCurrentCharacter') }}</span>
-        <CharacterPanel :player="activePlayer" :rule-meta="activeRuleMeta" />
-      </aside>
+    <div class="lorebook-shell" :class="{ 'inspector-open': inspectorOpen }">
       <main class="lorebook-workspace">
     <header class="view-title archive-hero">
       <div>
@@ -274,7 +316,10 @@ async function importLore(e: Event) {
         <p v-if="game">{{ t('currentSave') }}: {{ game }}</p>
         <p v-else class="muted">{{ t('standaloneLorebookHint') }}</p>
       </div>
-      <button @click="loadWorlds">{{ t('refresh') }}</button>
+      <div class="lore-header-actions">
+        <button @click="toggleInspector">{{ t('loreInspectorToggle') }}</button>
+        <button @click="loadWorlds">{{ t('refresh') }}</button>
+      </div>
     </header>
 
     <p v-if="error" class="error-banner">{{ error }}</p>
@@ -333,6 +378,15 @@ async function importLore(e: Event) {
       </button>
     </div>
 
+    <div v-if="entries.length" class="lore-viewer-filter" role="group" :aria-label="t('loreViewerLabel')">
+      <button
+        v-for="f in perspectiveFilters"
+        :key="f.id"
+        :class="{ active: perspectiveFilter === f.id }"
+        @click="perspectiveFilter = f.id"
+      >{{ f.label }}</button>
+    </div>
+
     <div v-if="loreSections.length" class="lore-categories">
       <section v-for="section in loreSections" :key="section.type" class="lore-category-section">
         <header class="lore-category-head">
@@ -340,10 +394,17 @@ async function importLore(e: Event) {
           <span>{{ t('loreCategoryCount', { count: section.entries.length }) }}</span>
         </header>
         <div class="memory-list lore-list">
-          <article v-for="e in section.entries" :key="e.id || e.name" class="memory-row lore-row">
+          <article
+            v-for="e in section.entries"
+            :key="e.id || e.name"
+            class="memory-row lore-row"
+            :class="{ selected: e.id && e.id === selectedEntryId }"
+            @click="toggleEntrySelection(e)"
+          >
             <div class="memory-row-main">
               <div class="memory-row-head">
                 <strong>{{ e.name || t('unnamedLoreEntry') }}</strong>
+                <LoreVisibilityBadge :projection="projectionOf(e.id)" />
                 <span class="badge">{{ typeLabel(e.type) }}</span>
                 <span class="badge" :class="{ low: e.tier === 'archived' }">{{ tierLabel(e.tier) }}</span>
                 <span v-if="e.unreliable" class="badge low">{{ t('unreliable') }}</span>
@@ -356,8 +417,8 @@ async function importLore(e: Event) {
               </p>
             </div>
             <div class="memory-row-actions">
-              <button @click="openLore(e)">{{ t('edit') }}</button>
-              <button class="danger" @click="deleteLore(e)">{{ t('delete') }}</button>
+              <button @click.stop="openLore(e)">{{ t('edit') }}</button>
+              <button class="danger" @click.stop="deleteLore(e)">{{ t('delete') }}</button>
             </div>
           </article>
         </div>
@@ -397,6 +458,21 @@ async function importLore(e: Event) {
       <template #actions><button @click="loreEdit = null">{{ t('cancel') }}</button><button class="primary" @click="saveLore">{{ t('saveAction') }}</button></template>
     </Modal>
       </main>
+      <div v-if="inspectorOpen" class="lore-inspector-backdrop" @click="inspectorOpen = false"></div>
+      <LorePerspectiveInspector
+        v-if="inspectorOpen"
+        :players="players"
+        :viewer="viewer"
+        :viewer-fallback="viewerFallback"
+        :character-viewer-locked="characterViewerLocked"
+        :locked-reason="lockedReason"
+        :preview="preview"
+        :preview-error="previewError"
+        :selected-entry="selectedEntry"
+        :selected-projection="selectedProjection"
+        @select-viewer="setViewer"
+        @close="inspectorOpen = false"
+      />
     </div>
   </section>
 </template>

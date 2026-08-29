@@ -401,6 +401,34 @@ export interface LorebookResponse {
   [key: string]: unknown
 }
 
+export interface LoreProjection {
+  visible: boolean
+  audience: 'public' | 'character' | 'gm'
+  subjects: string[]
+}
+
+export interface LorePreviewViewer {
+  kind: 'gm' | 'party' | 'character'
+  uid?: string
+  name?: string
+}
+
+export interface LorePreviewSummary {
+  total: number
+  visible: number
+  public: number
+  character_only: number
+  gm_secret: number
+}
+
+export interface LorePreviewResponse {
+  ok?: boolean
+  world_id?: string
+  viewer?: LorePreviewViewer
+  projections?: Record<string, LoreProjection>
+  summary?: LorePreviewSummary
+}
+
 export interface GameSummary {
   game_key: string
   world_name?: string

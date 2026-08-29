@@ -58,6 +58,16 @@ async def api_lorebook(request: web.Request) -> web.Response:
     return web.json_response(_get_api(request).list_entries(request.match_info["world_id"]))
 
 
+async def api_lorebook_preview(request: web.Request) -> web.Response:
+    """按视角只读投影世界书条目可见性（不返回条目正文，只返回判定结果）。"""
+    result = _get_api(request).preview_lore_visibility(
+        request.match_info["world_id"],
+        request.query.get("viewer", ""),
+        request.query.get("game_key") or None,
+    )
+    return web.json_response(result["payload"], status=result["status"])
+
+
 async def api_lorebook_create(request: web.Request) -> web.Response:
     body = await request.json()
     if len(str(body.get("content", ""))) > MAX_LOREBOOK_CHARS:
@@ -107,6 +117,7 @@ def register_worlds(app: web.Application) -> None:
     app.router.add_route("DELETE", "/api/worlds/{world_id}", api_delete_world)
     app.router.add_get("/api/world-templates", api_world_templates)
     app.router.add_get("/api/lorebook/{world_id}", api_lorebook)
+    app.router.add_get("/api/lorebook/{world_id}/preview", api_lorebook_preview)
     app.router.add_post("/api/lorebook", api_lorebook_create)
     app.router.add_post("/api/lorebook/{world_id}/generate", api_lorebook_generate)
     app.router.add_route("PUT", "/api/lorebook/{entry_id}", api_lorebook_update)

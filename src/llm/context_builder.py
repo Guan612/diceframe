@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.knowledge.visibility import PUBLIC_VISIBILITY_MARKERS, visibility_values
 from src.llm.parser import sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -419,27 +420,6 @@ async def build_context(
     return context
 
 
-_PUBLIC_VISIBILITY_MARKERS = {
-    "*", "all", "everyone", "public", "party", "players",
-    "公开", "所有人", "全体玩家",
-}
-
-
-def _visibility_values(value: object) -> list[str]:
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return []
-        try:
-            decoded = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            decoded = [part.strip() for part in raw.split(",")]
-        value = decoded
-    if not isinstance(value, (list, tuple, set)):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
 def filter_player_visible_lorebook_entries(
     entries: list[dict],
     actor_uid: str,
@@ -458,12 +438,12 @@ def filter_player_visible_lorebook_entries(
     allowed = {str(actor_uid).strip().casefold()}
     if actor_name:
         allowed.add(str(actor_name).strip().casefold())
-    public = {marker.casefold() for marker in _PUBLIC_VISIBILITY_MARKERS}
+    public = {marker.casefold() for marker in PUBLIC_VISIBILITY_MARKERS}
     result: list[dict] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        visible = {item.casefold() for item in _visibility_values(entry.get("visible_to"))}
+        visible = {item.casefold() for item in visibility_values(entry.get("visible_to"))}
         if visible & (allowed | public):
             result.append(deepcopy(entry))
     return result
@@ -471,12 +451,12 @@ def filter_player_visible_lorebook_entries(
 
 def filter_public_lorebook_entries(entries: list[dict]) -> list[dict]:
     """Select only lore explicitly marked as visible to the whole table."""
-    public = {marker.casefold() for marker in _PUBLIC_VISIBILITY_MARKERS}
+    public = {marker.casefold() for marker in PUBLIC_VISIBILITY_MARKERS}
     result: list[dict] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        visible = {item.casefold() for item in _visibility_values(entry.get("visible_to"))}
+        visible = {item.casefold() for item in visibility_values(entry.get("visible_to"))}
         if visible & public:
             result.append(deepcopy(entry))
     return result
