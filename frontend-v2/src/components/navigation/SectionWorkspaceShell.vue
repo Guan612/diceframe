@@ -3,14 +3,15 @@ import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { NIcon } from 'naive-ui'
 import type { MessageKey } from '@/i18n'
-import { appNavGroups, navGroupItems, type AppNavItemId } from '@/navigation/appNavigation'
+import { appNavGroups, navGroupItems, type AppNavGroupId, type AppNavItemId } from '@/navigation/appNavigation'
 import { useLocale } from '@/composables/useLocale'
 import { readCurrentGame } from '@/stores/gameContext'
 
 const route = useRoute()
 const { t } = useLocale()
-const contentGroup = appNavGroups.find(group => group.id === 'content')!
-const contentItems = navGroupItems(contentGroup)
+const props = defineProps<{ groupId: AppNavGroupId }>()
+const group = computed(() => appNavGroups.find(candidate => candidate.id === props.groupId)!)
+const items = computed(() => navGroupItems(group.value))
 const currentGame = computed(() => String(route.query.game || readCurrentGame() || ''))
 const playTarget = computed(() => currentGame.value
   ? { name: 'play', query: { game: currentGame.value } }
@@ -21,21 +22,27 @@ const hintKeys: Partial<Record<AppNavItemId, MessageKey>> = {
   worlds: 'contentWorkspaceWorldsHint',
   adventures: 'contentWorkspaceAdventuresHint',
   rules: 'contentWorkspaceRulesHint',
+  memory: 'sectionWorkspaceMemoryHint',
+  logs: 'sectionWorkspaceLogsHint',
+  plugins: 'sectionWorkspacePluginsHint',
+  settings: 'sectionWorkspaceSettingsHint',
+}
+
+function hintKey(id: AppNavItemId): MessageKey {
+  return hintKeys[id] || 'sectionWorkspaceDefaultHint'
 }
 </script>
 
 <template>
-  <div class="content-workspace">
+  <div class="content-workspace" :data-workspace="groupId">
     <aside class="content-workspace-rail">
       <header class="content-workspace-heading">
-        <span>{{ t('contentWorkspaceKicker') }}</span>
-        <strong>{{ t('contentWorkspaceTitle') }}</strong>
-        <small>{{ t('contentWorkspaceHint') }}</small>
+        <strong>{{ t(group.labelKey) }}</strong>
       </header>
 
-      <nav class="content-workspace-nav" :aria-label="t('contentWorkspaceTitle')">
+      <nav class="content-workspace-nav" :aria-label="t(group.labelKey)">
         <RouterLink
-          v-for="item in contentItems"
+          v-for="item in items"
           :key="item.id"
           :to="{ name: item.id }"
           :class="{ active: route.name === item.id }"
@@ -43,12 +50,12 @@ const hintKeys: Partial<Record<AppNavItemId, MessageKey>> = {
           <NIcon :component="item.icon" />
           <span>
             <strong>{{ t(item.labelKey) }}</strong>
-            <small>{{ t(hintKeys[item.id] || 'contentWorkspaceHint') }}</small>
+            <small>{{ t(hintKey(item.id)) }}</small>
           </span>
         </RouterLink>
       </nav>
 
-      <section class="content-workspace-flow" :aria-label="t('contentWorkspaceRelation')">
+      <section v-if="groupId === 'content'" class="content-workspace-flow" :aria-label="t('contentWorkspaceRelation')">
         <span>{{ t('contentWorkspaceRelation') }}</span>
         <div>
           <b>{{ t('navLorebook') }}</b>

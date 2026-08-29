@@ -1,4 +1,4 @@
-/* 内容工作区只负责跨内容页的空间关系；各功能页继续拥有自己的数据与编辑样式。 */
+/* 分区工作区只负责跨页面的空间关系；各功能页继续拥有自己的数据与编辑样式。 */
 .content-workspace {
   display: grid;
   grid-template-columns: clamp(210px, 18vw, 268px) minmax(0, 1fr);
@@ -34,7 +34,6 @@
   border-bottom: 1px solid var(--df-border-soft);
 }
 
-.content-workspace-heading > span,
 .content-workspace-flow > span {
   color: var(--df-interactive-strong);
   font-size: 10px;
@@ -49,7 +48,6 @@
   font-size: clamp(20px, 1.7vw, 26px);
 }
 
-.content-workspace-heading > small,
 .content-workspace-flow > small {
   color: var(--df-text-muted);
   font-size: 11px;
@@ -191,7 +189,6 @@
     padding-inline: 12px;
   }
 
-  .content-workspace-heading > small,
   .content-workspace-flow {
     display: none;
   }

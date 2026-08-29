@@ -20,7 +20,7 @@ import BrandLogo from '@/components/BrandLogo.vue'
 import NaiveBridge from '@/components/common/NaiveBridge.vue'
 import StartupPrivacyChoice from '@/components/common/StartupPrivacyChoice.vue'
 import StartupUpdateCheck from '@/components/common/StartupUpdateCheck.vue'
-import ContentWorkspaceShell from '@/components/navigation/ContentWorkspaceShell.vue'
+import SectionWorkspaceShell from '@/components/navigation/SectionWorkspaceShell.vue'
 import { readCurrentGame } from '@/stores/gameContext'
 import { isPublicRoute } from '@/router'
 import {
@@ -57,7 +57,7 @@ const currentGameBadge = computed(() => String(route.query.game || readCurrentGa
 const currentGameText = computed(() => currentGameBadge.value ? `${t('currentTable')} ${currentGameBadge.value}` : t('lobby'))
 const publicRoute = computed(() => isPublicRoute(route))
 const fullscreen = publicRoute
-const contentWorkspace = computed(() => navGroupForRoute(activeKey.value) === 'content')
+const workspaceGroup = computed(() => navGroupForRoute(activeKey.value))
 const desktopNav = ref<HTMLElement | null>(null)
 const openDesktopGroup = ref<AppNavGroupId | null>(null)
 const openMobileGroup = ref<AppNavGroupId | null>(null)
@@ -315,9 +315,9 @@ watch(() => route.fullPath, () => {
 
               <main class="app-workspace">
                 <RouterView v-slot="{ Component }">
-                  <ContentWorkspaceShell v-if="contentWorkspace">
+                  <SectionWorkspaceShell v-if="workspaceGroup" :group-id="workspaceGroup">
                     <component :is="Component" />
-                  </ContentWorkspaceShell>
+                  </SectionWorkspaceShell>
                   <KeepAlive v-else :include="['PlayView']">
                     <component :is="Component" />
                   </KeepAlive>
