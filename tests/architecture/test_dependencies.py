@@ -75,7 +75,8 @@ def _assert_boundary(
     violations: list[str] = []
     for name in directories:
         for path in sorted((SRC / name).rglob("*.py")):
-            if path.name in skip_files:
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in skip_files:
                 continue
             for module in sorted(_imported_modules(path)):
                 for banned in forbidden:
@@ -100,7 +101,7 @@ def test_core_domains_do_not_depend_on_compat_adapters_webui_or_rulesets() -> No
             "src.webui",
             "src.rulesets.dnd2024",
         ),
-        skip_files=("loader.py",),
+        skip_files=("src/rules/loader.py",),
     )
 
 
