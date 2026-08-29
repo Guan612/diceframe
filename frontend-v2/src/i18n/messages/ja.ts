@@ -36,6 +36,8 @@ export const ja = {
   worldsCoverUpdated: '表紙を更新しました',
   worldsSortLabel: '並べ替え',
   worldsSortDefault: 'デフォルト',
+  worldsSortUserFirst: '自作ワールド優先',
+  worldsSortBuiltinFirst: '内蔵ワールド優先',
   worldsSortName: '名前順',
   worldsSortEntries: 'エントリー数順',
   worldsPagePrev: '前へ',

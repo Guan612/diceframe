@@ -36,6 +36,8 @@ export const zhCN = {
   worldsCoverUpdated: '头图已更新',
   worldsSortLabel: '排序',
   worldsSortDefault: '默认',
+  worldsSortUserFirst: '自建优先',
+  worldsSortBuiltinFirst: '内置优先',
   worldsSortName: '按名称',
   worldsSortEntries: '按条目数',
   worldsPagePrev: '上一页',

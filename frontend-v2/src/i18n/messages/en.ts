@@ -36,6 +36,8 @@ export const en = {
   worldsCoverUpdated: 'Cover updated',
   worldsSortLabel: 'Sort',
   worldsSortDefault: 'Default',
+  worldsSortUserFirst: 'My worlds first',
+  worldsSortBuiltinFirst: 'Built-in first',
   worldsSortName: 'By name',
   worldsSortEntries: 'By entry count',
   worldsPagePrev: 'Prev',

@@ -142,15 +142,20 @@ async function load() {
 }
 
 // 排序 + 客户端翻页：世界数量在几十量级，前端分页足够
-type WorldsSortMode = 'default' | 'name' | 'entries'
+type WorldsSortMode = 'default' | 'user-first' | 'builtin-first' | 'name' | 'entries'
 const WORLDS_PAGE_SIZE = 12
 const worldsSort = ref<WorldsSortMode>('default')
 const worldsPage = ref(1)
+
+const SOURCE_RANK_USER_FIRST: Record<GalleryCard['source'], number> = { user: 0, plugin: 1, builtin: 2 }
+const SOURCE_RANK_BUILTIN_FIRST: Record<GalleryCard['source'], number> = { builtin: 0, plugin: 1, user: 2 }
 
 const sortedCards = computed(() => {
   const list = [...cards.value]
   if (worldsSort.value === 'name') list.sort((a, b) => a.name.localeCompare(b.name, locale.value))
   if (worldsSort.value === 'entries') list.sort((a, b) => b.lorebookCount - a.lorebookCount || a.name.localeCompare(b.name, locale.value))
+  if (worldsSort.value === 'user-first') list.sort((a, b) => SOURCE_RANK_USER_FIRST[a.source] - SOURCE_RANK_USER_FIRST[b.source])
+  if (worldsSort.value === 'builtin-first') list.sort((a, b) => SOURCE_RANK_BUILTIN_FIRST[a.source] - SOURCE_RANK_BUILTIN_FIRST[b.source])
   return list
 })
 const worldsTotalPages = computed(() => Math.max(1, Math.ceil(sortedCards.value.length / WORLDS_PAGE_SIZE)))
@@ -299,6 +304,8 @@ function coverStyle(card: GalleryCard): Record<string, string> {
         <span>{{ t('worldsSortLabel') }}</span>
         <select :value="worldsSort" @change="onWorldsSortChange">
           <option value="default">{{ t('worldsSortDefault') }}</option>
+          <option value="user-first">{{ t('worldsSortUserFirst') }}</option>
+          <option value="builtin-first">{{ t('worldsSortBuiltinFirst') }}</option>
           <option value="name">{{ t('worldsSortName') }}</option>
           <option value="entries">{{ t('worldsSortEntries') }}</option>
         </select>
