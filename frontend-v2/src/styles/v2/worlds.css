@@ -89,8 +89,8 @@
 
 .world-card-body h2 {
   margin: 0;
-  /* base.css 全局 h2 用 --df-accent-strong（亮主题为深色），会覆盖继承白字，这里显式钉死。 */
-  color: #fff;
+  /* 跟随皮肤主题色；与白色混合后在暗色封面和亮色主题下都保持足够对比。 */
+  color: color-mix(in srgb, var(--df-accent) 78%, #fff);
   font-size: 17px;
   overflow: hidden;
   text-overflow: ellipsis;
