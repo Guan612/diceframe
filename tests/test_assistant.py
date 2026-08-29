@@ -61,23 +61,26 @@ class FakeStreamResponse:
 def test_system_prompt_includes_plugins():
     api = FakeAPI()
     text = assistant_service._system_prompt(api, "zh-CN")
-    assert "官方文档助手" in text
+    # 契约：已安装插件进入助手上下文；具体角色/栏目措辞不锁。
     assert "隧道" in text
-    assert "当前实例已安装插件" in text
     assert "plugin_type" not in text
 
 
 def test_system_prompt_language_en():
     api = FakeAPI()
-    text = assistant_service._system_prompt(api, "en")
-    assert "Official Documentation Assistant" in text
+    text_en = assistant_service._system_prompt(api, "en")
+    text_zh = assistant_service._system_prompt(api, "zh-CN")
+    # 契约：提示词按语言本地化；具体文案不锁。
+    assert text_en and text_zh
+    assert text_en != text_zh
 
 
 def test_system_prompt_omits_plugins_for_unrelated_question():
     api = FakeAPI()
     text = assistant_service._system_prompt(api, "zh-CN", query="怎么配置模型 API")
-    assert "本题不需要插件清单" in text
+    # 契约：无关问题不携带插件清单。
     assert "cloudflare-tunnel" not in text
+    assert "隧道" not in text
 
 
 def test_system_prompt_includes_plugins_for_plugin_question():

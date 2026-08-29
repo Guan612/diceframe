@@ -1,4 +1,5 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
+import type { VueWrapper } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -44,6 +45,38 @@ const choices = {
   }],
 }
 
+function mountBuilder(props: Record<string, unknown>) {
+  return mount(Dnd2024CharacterBuilder, {
+    global: { plugins: [createPinia()] },
+    props: {
+      ruleId: 'dnd2024_srd', language: 'zh-CN',
+      experience: {
+        profile: 'dnd2024', builder_mode: 'professional',
+        modes: ['quick', 'guided', 'expert'], content_version: 'srd-5.2.1+r4', locale: 'zh-CN',
+      },
+      ...props,
+    },
+  })
+}
+
+function buttonByText(wrapper: VueWrapper, text: string) {
+  const button = wrapper.findAll('button').find(item => item.text().includes(text))
+  expect(button, `应找到按钮: ${text}`).toBeTruthy()
+  return button!
+}
+
+// 用真实交互走到引导模式指定步骤：选预设 → 填名字 → 切引导 → 点「下一步」
+async function reachGuidedStep(wrapper: VueWrapper, step: number, nextLabel = '下一步') {
+  await wrapper.findAll('button').find(item => item.text().includes('可靠守护者'))!.trigger('click')
+  const nameInput = wrapper.findAll('label').find(item => item.text().includes('角色名'))!.find('input')
+  await nameInput.setValue('阿岚')
+  await wrapper.findAll('[role="tab"]').find(item => item.text() === '引导创建')!.trigger('click')
+  for (let current = 1; current < step; current += 1) {
+    await buttonByText(wrapper, nextLabel).trigger('click')
+    await wrapper.vm.$nextTick()
+  }
+}
+
 describe('D&D 2024 professional character builder', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -58,21 +91,13 @@ describe('D&D 2024 professional character builder', () => {
   })
 
   it('finishes a server-validated quick preset with only a required name', async () => {
-    const wrapper = mount(Dnd2024CharacterBuilder, {
-      global: { plugins: [createPinia()] },
-      props: {
-        ruleId: 'dnd2024_srd', language: 'zh-CN',
-        experience: {
-          profile: 'dnd2024', builder_mode: 'professional',
-          modes: ['quick', 'guided', 'expert'], content_version: 'srd-5.2.1+r2', locale: 'zh-CN',
-        },
-      },
-    })
+    const wrapper = mountBuilder({})
     await flushPromises()
 
-    await wrapper.get('.preset-card').trigger('click')
-    await wrapper.get('.name-field input').setValue('阿岚')
-    await wrapper.get('.quick-actions .primary').trigger('click')
+    await wrapper.findAll('button').find(item => item.text().includes('可靠守护者'))!.trigger('click')
+    const nameInput = wrapper.findAll('label').find(item => item.text().includes('角色名'))!.find('input')
+    await nameInput.setValue('阿岚')
+    await buttonByText(wrapper, '完成并使用这个角色').trigger('click')
     await flushPromises()
 
     expect(mocks.validate).toHaveBeenCalledOnce()
@@ -85,51 +110,35 @@ describe('D&D 2024 professional character builder', () => {
   })
 
   it('exposes quick, guided, and expert modes without loading arbitrary components', async () => {
-    const wrapper = mount(Dnd2024CharacterBuilder, {
-      global: { plugins: [createPinia()] },
-      props: {
-        ruleId: 'dnd2024_srd', language: 'zh-CN',
-        experience: {
-          profile: 'dnd2024', builder_mode: 'professional',
-          modes: ['quick', 'guided', 'expert'], content_version: 'srd-5.2.1+r2', locale: 'zh-CN',
-        },
-      },
-    })
+    const wrapper = mountBuilder({})
     await flushPromises()
 
-    const labels = wrapper.findAll('.mode-tabs button').map(button => button.text())
-    expect(labels).toEqual(['快速创建', '引导创建', '专家创建'])
-    await wrapper.findAll('.mode-tabs button')[2].trigger('click')
-    expect(wrapper.find('.guided-builder').exists()).toBe(true)
+    const tabs = wrapper.findAll('[role="tab"]')
+    expect(tabs.map(tab => tab.text())).toEqual(['快速创建', '引导创建', '专家创建'])
+    await tabs[2].trigger('click')
+    // 模式切换后工作区指向对应模式面板
+    expect(wrapper.get('[role="tabpanel"]').attributes('aria-labelledby')).toBe('builder-mode-expert')
   })
 
   it('explains standard alignment abbreviations and localizes common builder enums', async () => {
-    const wrapper = mount(Dnd2024CharacterBuilder, {
-      global: { plugins: [createPinia()] },
-      props: {
-        ruleId: 'dnd2024_srd', language: 'zh-CN',
-        experience: {
-          profile: 'dnd2024', builder_mode: 'professional',
-          modes: ['quick', 'guided', 'expert'], content_version: 'srd-5.2.1+r4', locale: 'zh-CN',
-        },
-      },
-    })
+    const wrapper = mountBuilder({})
     await flushPromises()
-    expect(wrapper.get('.preset-card small').text()).toBe('新手友好')
+    // 预设卡片展示数据自带的简介与推荐理由
+    const preset = wrapper.findAll('button').find(item => item.text().includes('可靠守护者'))!
+    expect(preset.text()).toContain('直观而坚韧。')
+    expect(preset.text()).toContain('适合第一次进入战斗。')
 
-    ;(wrapper.vm as unknown as { mode: string; step: number }).mode = 'guided'
-    ;(wrapper.vm as unknown as { mode: string; step: number }).step = 1
-    await wrapper.vm.$nextTick()
+    await reachGuidedStep(wrapper, 1)
     const alignment = wrapper.findAll('label').find(item => item.text().includes('阵营（'))!
     expect(alignment.findAll('option').map(item => item.text())).toEqual([
       'LG · 守序善良', 'NG · 中立善良', 'CG · 混乱善良',
       'LN · 守序中立', 'N · 绝对中立', 'CN · 混乱中立',
     ])
-    expect(alignment.get('.field-help').text()).toContain('缩写与常见 D&D 资料一致')
+    expect(alignment.text()).toContain('缩写与常见 D&D 资料一致')
 
-    ;(wrapper.vm as unknown as { mode: string; step: number }).step = 2
+    await buttonByText(wrapper, '下一步').trigger('click')
     await wrapper.vm.$nextTick()
-    expect(wrapper.get('.ability-methods').text()).toContain('标准数组')
+    expect(wrapper.get('[role="tabpanel"]').text()).toContain('标准数组')
   })
 
   it('exposes keyboard-operable builder tabs with an explicit active mode', async () => {
@@ -164,6 +173,10 @@ describe('D&D 2024 professional character builder', () => {
       rule_id: 'dnd2024_srd',
       choices: {
         ...choices,
+        quick_presets: [{
+          ...choices.quick_presets[0],
+          draft: { ...legalDraft, class_skill_refs: [], species_skill_refs: [] },
+        }],
         class_skills: [
           { ref: 'skill:perception', id: 'perception', name: '察觉' },
           { ref: 'skill:survival', id: 'survival', name: '求生' },
@@ -176,20 +189,9 @@ describe('D&D 2024 professional character builder', () => {
         species_skill_count: 1,
       },
     })
-    const wrapper = mount(Dnd2024CharacterBuilder, {
-      global: { plugins: [createPinia()] },
-      props: {
-        ruleId: 'dnd2024_srd', language: 'zh-CN',
-        experience: {
-          profile: 'dnd2024', builder_mode: 'professional',
-          modes: ['quick', 'guided', 'expert'], content_version: 'srd-5.2.1+r4', locale: 'zh-CN',
-        },
-      },
-    })
+    const wrapper = mountBuilder({})
     await flushPromises()
-    ;(wrapper.vm as unknown as { mode: string; step: number }).mode = 'guided'
-    ;(wrapper.vm as unknown as { mode: string; step: number }).step = 3
-    await wrapper.vm.$nextTick()
+    await reachGuidedStep(wrapper, 3)
 
     const fieldsets = wrapper.findAll('fieldset')
     const classSkills = fieldsets.find(item => item.text().includes('职业技能'))!
@@ -241,9 +243,11 @@ describe('D&D 2024 professional character builder', () => {
         ruleId: 'dnd2024_srd', language: 'en',
         initial: {
           character_name: 'Arden', ruleset_character: {
-            locale: 'en', identity: { name: 'Arden' },
+            locale: 'en',
+            identity: { name: 'Arden', species_ref: 'species:human', background_ref: 'background:sage' },
             build: {
               class_levels: [{ class_ref: 'class:wizard', level: 1 }],
+              base_abilities: { str: 8, dex: 14, con: 13, int: 15, wis: 12, cha: 10 },
               class_spell_choices: {
                 cantrip_refs: ['spell:light'], spellbook_refs: ['spell:sleep', 'spell:shield'],
                 prepared_spell_refs: ['spell:sleep'],
@@ -258,14 +262,24 @@ describe('D&D 2024 professional character builder', () => {
       },
     })
     await flushPromises()
-    ;(wrapper.vm as unknown as { step: number }).step = 3
+    // 通过真实导航走到第 3 步（initial 已提供完整草稿，服务端校验可通过）
+    await buttonByText(wrapper, 'Next').trigger('click')
+    await wrapper.vm.$nextTick()
+    await buttonByText(wrapper, 'Next').trigger('click')
     await wrapper.vm.$nextTick()
 
-    const spellbookBoxes = wrapper.findAll('.spell-group').find(group => group.text().includes('Spellbook'))!.findAll('input')
-    await spellbookBoxes[0].setValue(false)
+    // 按标题文本定位法术分组，不依赖样式类名
+    const groupInputs = (title: string) => {
+      const header = wrapper.findAll('b').find(item => item.text().includes(title))!
+      const container = header.element.parentElement as HTMLElement
+      return Array.from(container.querySelectorAll('input')) as HTMLInputElement[]
+    }
+    const spellbook = groupInputs('Spellbook')
+    await new DOMWrapper(spellbook[0]).setValue(false)
+    await wrapper.vm.$nextTick()
 
-    const prepared = wrapper.findAll('.spell-group').find(group => group.text().includes('Prepared spells'))!
-    expect((prepared.findAll('input')[0].element as HTMLInputElement).disabled).toBe(true)
-    expect(prepared.findAll('input')[0].element.checked).toBe(false)
+    const prepared = groupInputs('Prepared spells')
+    expect(prepared[0].disabled).toBe(true)
+    expect(prepared[0].checked).toBe(false)
   })
 })

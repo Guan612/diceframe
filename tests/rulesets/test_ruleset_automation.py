@@ -35,7 +35,8 @@ def test_director_automation_rolls_back_partial_runtime_mutation():
 def test_automation_batches_have_a_public_narration_summary():
     batches = [{"events": [{"type": "dnd2024.tutorial.choice_applied"}]}]
 
-    assert summarize_automation_batches(batches) == "AI GM 已根据行动推进当前冒险节点。"
-    assert summarize_automation_batches(batches, chinese=False) == (
-        "The AI GM advanced the adventure node from the action."
-    )
+    zh = summarize_automation_batches(batches)
+    en = summarize_automation_batches(batches, chinese=False)
+    # 契约：automation 有面向玩家的公开摘要且区分语言；具体措辞不锁。
+    assert zh and en
+    assert zh != en

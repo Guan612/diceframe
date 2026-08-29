@@ -37,9 +37,10 @@ def test_valid_hashed_access_password_still_verifies():
 
 
 @pytest.mark.asyncio
-async def test_empty_password_field_does_not_delete_initial_password_file(monkeypatch):
-    deleted = []
-    monkeypatch.setattr(web_server, "_delete_access_token_file", lambda: deleted.append(True))
+async def test_empty_password_field_does_not_delete_initial_password_file(tmp_path, monkeypatch):
+    token_file = tmp_path / "access_token.txt"
+    token_file.write_text("initial-password", encoding="utf-8")
+    monkeypatch.setattr(web_server, "ACCESS_TOKEN_FILE", token_file)
     monkeypatch.setattr(web_server, "save_config", lambda: None)
     monkeypatch.setitem(web_server.STATE, "proxy_enabled", False)
 
@@ -48,13 +49,14 @@ async def test_empty_password_field_does_not_delete_initial_password_file(monkey
 
     assert response.status == 200
     assert body["access_password_changed"] is False
-    assert deleted == []
+    assert token_file.exists()
 
 
 @pytest.mark.asyncio
-async def test_new_password_deletes_obsolete_initial_password_file(monkeypatch):
-    deleted = []
-    monkeypatch.setattr(web_server, "_delete_access_token_file", lambda: deleted.append(True))
+async def test_new_password_deletes_obsolete_initial_password_file(tmp_path, monkeypatch):
+    token_file = tmp_path / "access_token.txt"
+    token_file.write_text("initial-password", encoding="utf-8")
+    monkeypatch.setattr(web_server, "ACCESS_TOKEN_FILE", token_file)
     monkeypatch.setattr(web_server, "save_config", lambda: None)
     monkeypatch.setitem(web_server.STATE, "proxy_enabled", False)
     monkeypatch.setitem(web_server.STATE, "access_token", hash_access_password("old-password"))
@@ -64,5 +66,5 @@ async def test_new_password_deletes_obsolete_initial_password_file(monkeypatch):
 
     assert response.status == 200
     assert body["access_password_changed"] is True
-    assert deleted == [True]
+    assert not token_file.exists()
     assert verify_access_password("new-password", web_server.STATE["access_token"])

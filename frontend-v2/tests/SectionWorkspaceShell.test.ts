@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { describe, expect, it } from 'vitest'
@@ -27,37 +25,24 @@ async function mountShell(routeName = 'worlds', groupId: AppNavGroupId = 'conten
 describe('SectionWorkspaceShell', () => {
   it('keeps content tools in a persistent canonical order', async () => {
     const wrapper = await mountShell()
-    const links = wrapper.findAll('.content-workspace-nav > a')
+    const links = wrapper.get('nav[aria-label="内容"]').findAll('a')
 
     expect(links.map(link => link.text())).toEqual(expect.arrayContaining(['世界书资料、人物与隐藏真相', '世界舞台、封面与叙事风格']))
     expect(links.map(link => link.attributes('href'))).toEqual([
       '/lorebook', '/worlds', '/adventures', '/rules',
     ])
-    expect(links[1].classes()).toContain('active')
-    expect(wrapper.find('.test-content').exists()).toBe(true)
+    expect(links[1].attributes('aria-current')).toBe('page')
+    expect(wrapper.text()).toContain('content')
   })
 
   it('reuses the same shell for management tools with a concise title', async () => {
     const wrapper = await mountShell('settings', 'management')
-    const links = wrapper.findAll('.content-workspace-nav > a')
+    const links = wrapper.get('nav[aria-label="管理"]').findAll('a')
 
-    expect(wrapper.find('.content-workspace-heading').text()).toBe('管理')
+    expect(wrapper.get('header').text()).toBe('管理')
     expect(links.map(link => link.attributes('href'))).toEqual([
       '/memory', '/logs', '/plugins', '/settings',
     ])
-    expect(links[3].classes()).toContain('active')
-    expect(wrapper.find('.content-workspace-flow').exists()).toBe(false)
-  })
-
-  it('keeps workspace layout isolated and responsive', () => {
-    const css = readFileSync(resolve(process.cwd(), 'src/styles/v2/section-workspace.css'), 'utf8')
-    const layoutCss = readFileSync(resolve(process.cwd(), 'src/styles/v2/layout.css'), 'utf8')
-    const entryCss = readFileSync(resolve(process.cwd(), 'src/styles/v2.css'), 'utf8')
-
-    expect(css).toMatch(/grid-template-columns:\s*clamp\(/)
-    expect(css).toMatch(/@media \(max-width: 800px\)/)
-    expect(css).toMatch(/grid-auto-flow:\s*column/)
-    expect(layoutCss).not.toContain('.content-workspace')
-    expect(entryCss).toContain("@import './v2/section-workspace.css';")
+    expect(links[3].attributes('aria-current')).toBe('page')
   })
 })

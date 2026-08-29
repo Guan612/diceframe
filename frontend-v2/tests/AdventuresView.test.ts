@@ -39,6 +39,19 @@ const packages = {
   ],
 }
 
+function dialogByTitle(title: string): HTMLElement {
+  const dialog = Array.from(document.body.querySelectorAll<HTMLElement>('section'))
+    .find(section => section.querySelector('h2')?.textContent?.trim() === title)
+  if (!dialog) throw new Error(`未找到对话框：${title}`)
+  return dialog
+}
+
+function articleByText(wrapper: ReturnType<typeof mount>, text: string) {
+  const article = wrapper.findAll('article').find(candidate => candidate.text().includes(text))
+  if (!article) throw new Error(`未找到卡片：${text}`)
+  return article
+}
+
 describe('AdventuresView', () => {
   beforeEach(() => {
     mocks.api.mockReset()
@@ -59,10 +72,7 @@ describe('AdventuresView', () => {
     expect(wrapper.text()).toContain('灰沼失灯记')
     expect(wrapper.text()).toContain('长期战役')
     expect(wrapper.text()).toContain('该版本已被存档引用')
-    const cards = wrapper.findAll('.adventure-package-card')
-    expect(cards.every(card => card.find('.adventure-package-title-row h2').attributes('title'))).toBe(true)
-    expect(cards.every(card => card.find('.adventure-package-badges').exists())).toBe(true)
-    const boundCard = wrapper.findAll('.adventure-package-card')[1]
+    const boundCard = articleByText(wrapper, '长期战役')
     const edit = boundCard.findAll('button').find(button => button.text() === '编辑')
     const remove = boundCard.findAll('button').find(button => button.text() === '删除')
     expect(edit?.attributes('disabled')).toBeDefined()
@@ -73,9 +83,12 @@ describe('AdventuresView', () => {
     const wrapper = mount(AdventuresView, { global: { plugins: [i18n] } })
     await flushPromises()
 
-    await wrapper.find('.adventure-package-card button').trigger('click')
+    const copy = articleByText(wrapper, '灰沼失灯记').findAll('button')
+      .find(button => button.text() === '复制并编辑')
+    expect(copy).toBeDefined()
+    await copy!.trigger('click')
 
-    const inputs = document.querySelectorAll<HTMLInputElement>('.dialog input')
+    const inputs = dialogByTitle('复制冒险包').querySelectorAll<HTMLInputElement>('input')
     expect(inputs[0]?.value).toBe('custom_lanterns_of_greymoor')
     expect(inputs[1]?.value).toBe('user:custom_lanterns_of_greymoor')
   })
@@ -95,21 +108,21 @@ describe('AdventuresView', () => {
 
     const aiButton = wrapper.findAll('button').find(button => button.text() === 'AI 生成冒险草稿')
     await aiButton?.trigger('click')
-    expect(document.querySelectorAll('.dialog')).toHaveLength(1)
-    const prompt = document.querySelector<HTMLTextAreaElement>('.dialog textarea')
+    const draftDialog = dialogByTitle('AI 生成冒险草稿')
+    const prompt = draftDialog.querySelector<HTMLTextAreaElement>('textarea')
     expect(prompt).not.toBeNull()
     if (prompt) {
       prompt.value = '一个发生在雾港的三章调查冒险'
       prompt.dispatchEvent(new Event('input'))
     }
     await wrapper.vm.$nextTick()
-    const generate = Array.from(document.querySelectorAll<HTMLButtonElement>('.dialog button'))
+    const generate = Array.from(draftDialog.querySelectorAll<HTMLButtonElement>('button'))
       .find(button => button.textContent?.includes('生成草稿'))
     generate?.click()
     await flushPromises()
 
-    expect(document.querySelectorAll('.dialog')).toHaveLength(1)
-    expect(document.querySelector('.dialog')?.textContent).toContain('雾港失踪案')
-    expect(document.querySelector('.dialog')?.textContent).toContain('1 章 · 1 个步骤')
+    expect(dialogByTitle('AI 生成冒险草稿')).toBe(draftDialog)
+    expect(draftDialog.textContent).toContain('雾港失踪案')
+    expect(draftDialog.textContent).toContain('1 章 · 1 个步骤')
   })
 })

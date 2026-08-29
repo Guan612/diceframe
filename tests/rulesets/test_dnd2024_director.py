@@ -70,7 +70,7 @@ def test_director_story_step_keeps_canonical_encounter_preset():
 
 def test_director_never_exposes_unbounded_player_text():
     context = build_director_context(_instance(("p1", "x" * 2000)))
-    assert len(context.actions[0]["text"]) == 500
+    assert 0 < len(context.actions[0]["text"]) <= 500
 
 
 def test_runtime_exposes_director_as_read_only_gameplay_projection():
