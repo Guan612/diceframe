@@ -29,6 +29,16 @@ describe('visibilityModeOf', () => {
     expect(visibilityModeOf(null)).toBe('gm')
     expect(visibilityModeOf(['u1', 'Alice'])).toBe('characters')
   })
+
+  it('matches public markers case-insensitively like the backend', () => {
+    expect(visibilityModeOf('PUBLIC')).toBe('public')
+    expect(visibilityModeOf('Public')).toBe('public')
+    expect(visibilityModeOf('PLAYERS')).toBe('public')
+    expect(visibilityModeOf('Players')).toBe('public')
+    expect(visibilityModeOf(['PUBLIC'])).toBe('public')
+    expect(visibilityModeOf(['All'])).toBe('public')
+    expect(visibilityModeOf('公开, Alice')).toBe('public')
+  })
 })
 
 describe('sanitizeCharacterVisibility', () => {
@@ -36,5 +46,10 @@ describe('sanitizeCharacterVisibility', () => {
     expect(sanitizeCharacterVisibility('*, public, 公开, u1, Alice')).toEqual(['u1', 'Alice'])
     expect(sanitizeCharacterVisibility(['u1', '*', '公开', 'Alice'])).toEqual(['u1', 'Alice'])
     expect(sanitizeCharacterVisibility('*')).toEqual([])
+  })
+
+  it('strips case variants of public markers without dropping real names', () => {
+    expect(sanitizeCharacterVisibility(['PUBLIC', 'Alice'])).toEqual(['Alice'])
+    expect(sanitizeCharacterVisibility(['Public', 'Players', 'Alice'])).toEqual(['Alice'])
   })
 })
