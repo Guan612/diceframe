@@ -11,6 +11,7 @@
   "starter_lorebook": [
     {
       "id": "npc_old_tom",
+      "visible_to": ["*"],
       "name": "Old Tom",
       "type": "npc",
       "keywords": ["Old Tom", "innkeeper", "Golden Lion Inn"],
@@ -20,6 +21,7 @@
     },
     {
       "id": "loc_golden_lion_inn",
+      "visible_to": ["*"],
       "name": "Golden Lion Inn",
       "type": "location",
       "keywords": ["Golden Lion Inn", "inn", "tavern", "guild board"],
@@ -29,6 +31,7 @@
     },
     {
       "id": "loc_stonebridge",
+      "visible_to": ["*"],
       "name": "Stonebridge",
       "type": "location",
       "keywords": ["Stonebridge", "town", "adventurers' guild"],
@@ -38,6 +41,7 @@
     },
     {
       "id": "loc_blackpine_forest",
+      "visible_to": ["*"],
       "name": "Blackpine Forest",
       "type": "location",
       "keywords": ["Blackpine Forest", "forest", "northern woods"],
@@ -47,6 +51,7 @@
     },
     {
       "id": "faction_adventurers_guild",
+      "visible_to": ["*"],
       "name": "Adventurers' Guild",
       "type": "faction",
       "keywords": ["Adventurers' Guild", "guild", "quest board", "jobs"],
@@ -56,6 +61,7 @@
     },
     {
       "id": "event_forest_disturbance",
+      "visible_to": ["*"],
       "name": "Forest Disturbance",
       "type": "event",
       "keywords": ["forest disturbance", "missing hunters", "strange lights"],

@@ -9,6 +9,9 @@
   "starter_lorebook": [
     {
       "id": "loc_shibuya_market",
+      "visible_to": [
+        "*"
+      ],
       "name": "涉谷地下市场",
       "type": "location",
       "keywords": [
@@ -17,12 +20,28 @@
         "黑市",
         "涉谷区"
       ],
-      "content": "新东京涉谷区地下的三层非法市场。地面上是光鲜的购物中心，地下则是另外一番景象。这里有贩卖二手义体的黑诊所、走私电子零件的摊位、以及各种不正规的情报贩子。市场入口藏在一家拉面店的后厨。第B2层有一家名为「红眼」的老酒馆，是黑客和佣兵们接头的地点。",
+      "content": "新东京涉谷区地下藏着三层的非法市场：二手义体的黑诊所、走私电子零件的摊位，以及各式情报贩子。圈外人多半当它是都市传说，混迹地下的人却都知道确有其事。",
       "tier": "core",
       "unreliable": false
     },
     {
+      "id": "loc_shibuya_market_entrance",
+      "name": "涉谷市场的入口",
+      "type": "location",
+      "keywords": [
+        "市场入口",
+        "拉面店",
+        "红眼酒馆"
+      ],
+      "content": "市场的入口藏在一家拉面店的后厨。B2 层有一家名为「红眼」的老酒馆，是黑客和佣兵们接头的地点。",
+      "tier": "background",
+      "visible_to": []
+    },
+    {
       "id": "loc_red_eye_bar",
+      "visible_to": [
+        "*"
+      ],
       "name": "红眼酒馆",
       "type": "location",
       "keywords": [
@@ -80,6 +99,9 @@
     },
     {
       "id": "loc_cloud_tower",
+      "visible_to": [
+        "*"
+      ],
       "name": "云顶塔",
       "type": "location",
       "keywords": [
@@ -94,6 +116,9 @@
     },
     {
       "id": "npc_market_doctor",
+      "visible_to": [
+        "*"
+      ],
       "name": "义体医生赤井",
       "type": "npc",
       "keywords": [

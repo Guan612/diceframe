@@ -14,6 +14,7 @@
   "starter_lorebook": [
     {
       "id": "npc_innkeeper",
+      "visible_to": ["*"],
       "name": "老汤姆",
       "type": "npc",
       "keywords": [
@@ -28,6 +29,7 @@
     },
     {
       "id": "loc_golden_lion_inn",
+      "visible_to": ["*"],
       "name": "金狮酒馆",
       "type": "location",
       "keywords": [
@@ -42,6 +44,7 @@
     },
     {
       "id": "loc_stonebridge",
+      "visible_to": ["*"],
       "name": "石桥镇",
       "type": "location",
       "keywords": [
@@ -56,6 +59,7 @@
     },
     {
       "id": "loc_blackpine_forest",
+      "visible_to": ["*"],
       "name": "黑松林",
       "type": "location",
       "keywords": [
@@ -70,6 +74,7 @@
     },
     {
       "id": "faction_adventurer_guild",
+      "visible_to": ["*"],
       "name": "冒险者公会",
       "type": "faction",
       "keywords": [
@@ -84,6 +89,7 @@
     },
     {
       "id": "npc_blacksmith",
+      "visible_to": ["*"],
       "name": "铁匠杜兰",
       "type": "npc",
       "keywords": [
@@ -99,6 +105,7 @@
     },
     {
       "id": "event_forest_disturbance",
+      "visible_to": ["*"],
       "name": "森林异动",
       "type": "event",
       "keywords": [
