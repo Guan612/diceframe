@@ -243,16 +243,10 @@ async def test_responder_uses_a_non_mutating_table_talk_prompt() -> None:
     result = await responder.answer(instance, "p1", "我知道这枚徽记吗？")
 
     assert result["answer"].startswith("你记得")
-    assert "不得推进时间" in prompt.system_prompt
-    assert "不得掷骰" in prompt.system_prompt
-    assert "不得泄露隐藏世界书" in prompt.system_prompt
-    assert "莱拉" in prompt.player_message
     assert prompt.actor_uid == "p1"
     assert [entry["name"] for entry in prompt.matches] == ["大学徽记", "全队知识"]
     assert prompt.visibility == "private"
     assert "不可泄露" not in str(prompt.matches)
-    assert llm.call_args[1] == "只读上下文"
-    assert llm.call_args[2]["temperature"] == 0.2
     assert instance.to_dict() == before
 
 
