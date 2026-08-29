@@ -321,13 +321,6 @@
   }
 }
 
-@media (min-width: 981px) and (max-width: 1260px) {
-  .desktop-nav-link { min-width: 60px; padding-inline: 7px; font-size: 11px; }
-  .desktop-nav-link span { display: inline; }
-  .app-header-inner { gap: 6px; padding-inline: 10px; }
-  .desktop-locale select { min-width: 56px; }
-}
-
 @media (min-width: 801px) {
   .game-grid {
     grid-template-columns: repeat(2, minmax(420px, 480px));
