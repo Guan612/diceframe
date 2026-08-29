@@ -1,58 +1,143 @@
-/* Lorebook: persistent character context beside a dense reference desk. */
+/* Lorebook: content column + right-side perspective & visibility inspector. */
 .lorebook-shell {
   display: grid;
-  grid-template-columns: 278px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }
 
-/* 无角色栏（未进入存档或未选角色）时单列，避免 grid 只剩 278px 左列大片空白 */
-.lorebook-shell.no-rail {
-  grid-template-columns: minmax(0, 1fr);
+.lorebook-shell.inspector-open {
+  grid-template-columns: minmax(0, 1fr) 280px;
 }
 
-.lorebook-character-rail {
+.lorebook-workspace {
+  min-width: 0;
+}
+
+.lore-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 右侧检查器：常驻、可折叠；窄屏降级为抽屉（见文件末尾媒体查询） */
+.lore-perspective-inspector {
   position: sticky;
   top: 86px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   max-height: calc(100dvh - 105px);
   overflow: auto;
-  padding: 10px;
+  padding: 12px;
   border: 1px solid color-mix(in srgb, var(--df-accent) 30%, var(--df-border-soft));
   border-radius: var(--df-radius-lg);
   background: linear-gradient(180deg, var(--df-surface-1), var(--df-surface-2));
   box-shadow: var(--df-shadow);
 }
 
-.lorebook-rail-label {
-  display: block;
+.lore-inspector-head h2 {
+  margin: 0;
   padding: 4px 5px 10px;
   color: var(--df-accent-strong);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .12em;
+  text-transform: uppercase;
 }
 
-.lorebook-character-rail .character {
-  padding: 12px;
-  border: 1px solid var(--df-border-soft);
-  border-radius: var(--df-radius-md);
-  background:
-    linear-gradient(180deg, transparent, var(--df-surface-1) 42%),
-    var(--df-bg-ruins-image) center top / 100% auto no-repeat;
+.lore-inspector-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--df-border-soft);
 }
 
-.lorebook-character-rail .character-profile {
-  padding-top: 55px;
+.lore-inspector-label {
+  color: var(--df-accent-strong);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
 }
 
-.lorebook-character-rail .portrait-image {
-  width: 78px !important;
-  height: 94px !important;
-  border-radius: 7px;
+.lore-viewer-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
-.lorebook-workspace {
-  min-width: 0;
+.lore-viewer-options button {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.lore-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lore-summary-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.lore-selected-name {
+  word-break: break-word;
+}
+
+/* 视角过滤段与可见性徽标 */
+.lore-viewer-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.lore-viewer-filter button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.lore-visibility-badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.lore-visibility-badge.audience-public {
+  border: 1px solid color-mix(in srgb, var(--df-success) 55%, transparent);
+  color: var(--df-success);
+  background: color-mix(in srgb, var(--df-success) 12%, transparent);
+}
+
+.lore-visibility-badge.audience-character {
+  border: 1px solid color-mix(in srgb, var(--df-accent) 55%, transparent);
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent) 12%, transparent);
+}
+
+.lore-visibility-badge.audience-gm {
+  border: 1px solid color-mix(in srgb, var(--df-danger) 45%, transparent);
+  color: var(--df-danger);
+  background: color-mix(in srgb, var(--df-danger) 10%, transparent);
+}
+
+.lore-row {
+  cursor: pointer;
+}
+
+.lore-row.selected {
+  border-color: color-mix(in srgb, var(--df-accent) 55%, var(--df-border-soft));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--df-accent) 18%, transparent);
 }
 
 .lorebook-page .lore-world-bar {
@@ -181,4 +266,22 @@
 
 .reference-logs-page .log-entry-body {
   padding: 14px 18px 17px;
+}
+
+/* 窄屏：检查器从常驻右栏降级为右侧抽屉，由工具栏按钮开关 */
+@media (max-width: 1100px) {
+  .lorebook-shell.inspector-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lore-perspective-inspector {
+    position: fixed;
+    z-index: 60;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, 88vw);
+    max-height: none;
+    border-radius: 0;
+  }
 }
