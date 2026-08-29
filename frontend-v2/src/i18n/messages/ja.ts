@@ -57,6 +57,7 @@ export const ja = {
   loreVisibilityLabel: '可視性',
   loreVisibilityPublic: '全員に公開',
   loreVisibilityCharacters: 'キャラ指定',
+  loreFilterLabel: '項目フィルター',
   loreViewerGm: 'GM 全知',
   loreViewerParty: 'パーティ全体',
   loreViewerLockedStandalone: 'セーブ未接続のため、キャラクター視点は利用できません。',

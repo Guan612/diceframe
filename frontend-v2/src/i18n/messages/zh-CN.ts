@@ -57,6 +57,7 @@ export const zhCN = {
   loreVisibilityLabel: '可见性',
   loreVisibilityPublic: '全队公开',
   loreVisibilityCharacters: '指定角色',
+  loreFilterLabel: '条目筛选',
   loreViewerGm: 'GM 全知',
   loreViewerParty: '全队',
   loreViewerLockedStandalone: '未连接存档，暂不支持角色视角。',

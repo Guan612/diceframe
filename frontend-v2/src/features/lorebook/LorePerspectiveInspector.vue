@@ -13,9 +13,14 @@ defineProps<{
   previewError: string
   selectedEntry: LoreEntry | null
   selectedProjection: LoreProjection | null
+  filter: 'all' | 'visible' | 'hidden'
 }>()
 
-const emit = defineEmits<{ (e: 'select-viewer', viewer: string): void; (e: 'close'): void }>()
+const emit = defineEmits<{
+  (e: 'select-viewer', viewer: string): void
+  (e: 'select-filter', filter: 'all' | 'visible' | 'hidden'): void
+  (e: 'close'): void
+}>()
 const { t } = useLocale()
 
 function playerLabel(p: Player): string {
@@ -45,6 +50,15 @@ function playerLabel(p: Player): string {
       </div>
       <p v-if="characterViewerLocked" class="muted small">{{ t(lockedReason === 'peer' ? 'loreViewerLockedPeer' : 'loreViewerLockedStandalone') }}</p>
       <p v-else-if="viewerFallback" class="muted small">{{ t('loreViewerFallbackHint') }}</p>
+    </section>
+
+    <section class="lore-inspector-block">
+      <span class="lore-inspector-label">{{ t('loreFilterLabel') }}</span>
+      <div class="lore-filter-options" role="group" :aria-label="t('loreFilterLabel')">
+        <button :class="{ active: filter === 'all' }" @click="emit('select-filter', 'all')">{{ t('loreFilterAll') }}</button>
+        <button :class="{ active: filter === 'visible' }" @click="emit('select-filter', 'visible')">{{ t('loreSummaryVisible') }}</button>
+        <button :class="{ active: filter === 'hidden' }" @click="emit('select-filter', 'hidden')">{{ t('loreFilterHidden') }}</button>
+      </div>
     </section>
 
     <section class="lore-inspector-block">

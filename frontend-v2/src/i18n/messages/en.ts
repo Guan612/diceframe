@@ -57,6 +57,7 @@ export const en = {
   loreVisibilityLabel: 'Visibility',
   loreVisibilityPublic: 'Everyone at the table',
   loreVisibilityCharacters: 'Named characters',
+  loreFilterLabel: 'Entry filter',
   loreViewerGm: 'GM omniscient',
   loreViewerParty: 'Whole party',
   loreViewerLockedStandalone: 'No save connected, so character perspectives are unavailable.',

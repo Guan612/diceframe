@@ -150,15 +150,14 @@ body.light .lore-filter-options button.active:not(.primary):not(.danger):not(.su
   word-break: break-word;
 }
 
-/* 视角过滤段与可见性徽标 */
-.lore-viewer-filter {
+/* 视角筛选段（渲染在「视角与可见性」检查器内）与可见性徽标 */
+.lore-filter-options {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 8px;
 }
 
-.lore-viewer-filter button {
+.lore-filter-options button {
   padding: 4px 10px;
   font-size: 12px;
 }
