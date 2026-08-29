@@ -10,6 +10,7 @@
   "starter_lorebook": [
     {
       "id": "npc_professor_howard",
+      "visible_to": ["*"],
       "name": "Professor Howard",
       "type": "npc",
       "keywords": ["Howard", "professor", "cousin", "sender", "archaeology professor"],
@@ -19,6 +20,7 @@
     },
     {
       "id": "loc_arkham",
+      "visible_to": ["*"],
       "name": "Arkham",
       "type": "location",
       "keywords": ["Arkham", "town", "college town", "Massachusetts"],
@@ -28,6 +30,7 @@
     },
     {
       "id": "loc_miskatonic_university",
+      "visible_to": ["*"],
       "name": "Miskatonic University",
       "type": "location",
       "keywords": ["Miskatonic University", "university", "library", "restricted books"],
@@ -37,6 +40,7 @@
     },
     {
       "id": "loc_howard_residence",
+      "visible_to": ["*"],
       "name": "Howard's Residence",
       "type": "location",
       "keywords": ["Howard's home", "residence", "house", "windows"],
@@ -55,6 +59,7 @@
     },
     {
       "id": "event_missing_fishermen",
+      "visible_to": ["*"],
       "name": "Missing Fishermen",
       "type": "event",
       "keywords": ["missing", "fishermen", "deep sea"],
@@ -64,6 +69,7 @@
     },
     {
       "id": "loc_arkham_fishing_port",
+      "visible_to": ["*"],
       "name": "Arkham Fishing Port",
       "type": "location",
       "keywords": ["fishing port", "harbor", "dock", "seaside"],

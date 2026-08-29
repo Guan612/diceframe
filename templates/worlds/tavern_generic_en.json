@@ -11,6 +11,7 @@
   "starter_lorebook": [
     {
       "id": "loc_crossroads_inn",
+      "visible_to": ["*"],
       "name": "Crossroads Inn",
       "type": "location",
       "content": "A two-story timber-and-stone building. The first floor holds the common room and bar; the second floor has guest rooms. The back yard contains a stable and a storehouse. The innkeeper is named Old Mo, a retired adventurer.",
@@ -18,6 +19,7 @@
     },
     {
       "id": "npc_old_mo",
+      "visible_to": ["*"],
       "name": "Old Mo",
       "type": "npc",
       "content": "The innkeeper, in his fifties, with an old wound on his left arm. He never asks guests where they come from, but he remembers every regular's preferences.",

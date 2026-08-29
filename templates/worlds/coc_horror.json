@@ -9,6 +9,7 @@
   "starter_lorebook": [
     {
       "id": "npc_howard",
+      "visible_to": ["*"],
       "name": "霍华德教授",
       "type": "npc",
       "keywords": [
@@ -24,6 +25,7 @@
     },
     {
       "id": "loc_arkham",
+      "visible_to": ["*"],
       "name": "阿卡姆镇",
       "type": "location",
       "keywords": [
@@ -38,6 +40,7 @@
     },
     {
       "id": "loc_miskatonic",
+      "visible_to": ["*"],
       "name": "密斯卡托尼克大学",
       "type": "location",
       "keywords": [
@@ -52,6 +55,7 @@
     },
     {
       "id": "loc_howard_house",
+      "visible_to": ["*"],
       "name": "霍华德的住所",
       "type": "location",
       "keywords": [
@@ -80,6 +84,7 @@
     },
     {
       "id": "event_fishermen_missing",
+      "visible_to": ["*"],
       "name": "渔夫失踪事件",
       "type": "event",
       "keywords": [
@@ -94,6 +99,7 @@
     },
     {
       "id": "loc_fishing_port",
+      "visible_to": ["*"],
       "name": "阿卡姆渔港",
       "type": "location",
       "keywords": [

@@ -10,6 +10,7 @@
   "starter_lorebook": [
     {
       "id": "loc_bluestone_town",
+      "visible_to": ["*"],
       "name": "Bluestone Town",
       "type": "location",
       "keywords": ["Bluestone Town", "town", "frontier", "market"],
@@ -19,6 +20,7 @@
     },
     {
       "id": "npc_shopkeeper_liu",
+      "visible_to": ["*"],
       "name": "Shopkeeper Liu",
       "type": "npc",
       "keywords": ["Shopkeeper Liu", "teahouse owner", "Clear Breeze Teahouse", "shopkeeper"],
@@ -28,6 +30,7 @@
     },
     {
       "id": "loc_deadwood_cliff",
+      "visible_to": ["*"],
       "name": "Deadwood Cliff",
       "type": "location",
       "keywords": ["Deadwood Cliff", "cliff", "monster", "strange light"],
@@ -37,6 +40,7 @@
     },
     {
       "id": "faction_kunlun_sword_sect",
+      "visible_to": ["*"],
       "name": "Kunlun Sword Sect",
       "type": "faction",
       "keywords": ["Kunlun Sword Sect", "Sword Sect", "Kunlun", "swordsmanship"],
@@ -46,6 +50,7 @@
     },
     {
       "id": "npc_old_wang_herbalist",
+      "visible_to": ["*"],
       "name": "Old Wang the Herbalist",
       "type": "npc",
       "keywords": ["herbalist", "Old Wang", "Uncle Wang", "witness"],
@@ -64,6 +69,7 @@
     },
     {
       "id": "event_deadwood_cliff_strange_light",
+      "visible_to": ["*"],
       "name": "Strange Light at Deadwood Cliff",
       "type": "event",
       "keywords": ["strange light", "green light", "monster sighting", "uncanny events"],

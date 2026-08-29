@@ -9,6 +9,7 @@
   "starter_lorebook": [
     {
       "id": "loc_shibuya_market",
+      "visible_to": ["*"],
       "name": "涉谷地下市场",
       "type": "location",
       "keywords": [
@@ -23,6 +24,7 @@
     },
     {
       "id": "loc_red_eye_bar",
+      "visible_to": ["*"],
       "name": "红眼酒馆",
       "type": "location",
       "keywords": [
@@ -80,6 +82,7 @@
     },
     {
       "id": "loc_cloud_tower",
+      "visible_to": ["*"],
       "name": "云顶塔",
       "type": "location",
       "keywords": [
@@ -94,6 +97,7 @@
     },
     {
       "id": "npc_market_doctor",
+      "visible_to": ["*"],
       "name": "义体医生赤井",
       "type": "npc",
       "keywords": [

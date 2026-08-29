@@ -10,6 +10,7 @@
   "starter_lorebook": [
     {
       "id": "npc_receptionist_lily",
+      "visible_to": ["*"],
       "name": "Guild Receptionist Lily",
       "type": "npc",
       "keywords": ["Lily", "receptionist", "guild receptionist"],
@@ -19,6 +20,7 @@
     },
     {
       "id": "loc_guild_hq",
+      "visible_to": ["*"],
       "name": "Adventurers' Guild Headquarters",
       "type": "location",
       "keywords": ["guild", "Adventurers' Guild", "hall", "headquarters"],
@@ -28,6 +30,7 @@
     },
     {
       "id": "loc_royal_capital",
+      "visible_to": ["*"],
       "name": "Royal Capital: Holy Sword City",
       "type": "location",
       "keywords": ["royal capital", "Holy Sword City", "capital", "castle"],
@@ -37,6 +40,7 @@
     },
     {
       "id": "loc_slime_sewer",
+      "visible_to": ["*"],
       "name": "Royal Capital Sewers",
       "type": "location",
       "keywords": ["sewers", "underground", "slimes", "labyrinth"],
@@ -46,6 +50,7 @@
     },
     {
       "id": "faction_demon_lord_remnants",
+      "visible_to": ["*"],
       "name": "Demon Lord's Army Remnants",
       "type": "faction",
       "keywords": ["Demon Lord", "Demon Lord's Army", "remnants", "monsters"],
@@ -55,6 +60,7 @@
     },
     {
       "id": "npc_old_warrior_grey",
+      "visible_to": ["*"],
       "name": "Retired Adventurer Old Grey",
       "type": "npc",
       "keywords": ["Old Grey", "retired adventurer", "tavern", "veteran"],
@@ -64,6 +70,7 @@
     },
     {
       "id": "event_monster_activity",
+      "visible_to": ["*"],
       "name": "Abnormal Monster Activity",
       "type": "event",
       "keywords": ["monsters", "abnormal", "activity", "labyrinth"],

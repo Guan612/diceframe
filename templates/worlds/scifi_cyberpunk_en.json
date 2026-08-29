@@ -10,6 +10,7 @@
   "starter_lorebook": [
     {
       "id": "loc_shibuya_market",
+      "visible_to": ["*"],
       "name": "Shibuya Underground Market",
       "type": "location",
       "keywords": ["Shibuya", "underground market", "black market", "Shibuya district"],
@@ -19,6 +20,7 @@
     },
     {
       "id": "loc_red_eye_bar",
+      "visible_to": ["*"],
       "name": "Red Eye Bar",
       "type": "location",
       "keywords": ["Red Eye", "bar", "meet point", "tavern"],
@@ -55,6 +57,7 @@
     },
     {
       "id": "loc_cloudspire",
+      "visible_to": ["*"],
       "name": "Cloudspire",
       "type": "location",
       "keywords": ["Cloudspire", "upper city", "rich district", "corporate headquarters"],
@@ -64,6 +67,7 @@
     },
     {
       "id": "npc_dr_akai",
+      "visible_to": ["*"],
       "name": "Dr. Akai",
       "type": "npc",
       "keywords": ["ripperdoc", "Akai", "black clinic", "doctor"],
