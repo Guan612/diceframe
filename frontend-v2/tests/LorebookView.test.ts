@@ -87,6 +87,38 @@ describe('LorebookView perspective inspector', () => {
 
   afterEach(() => {
     document.body.innerHTML = ''
+    vi.unstubAllGlobals()
+  })
+
+  function stubNarrowViewport() {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  }
+
+  it('collapses the inspector by default on narrow screens and opens on demand', async () => {
+    stubNarrowViewport()
+    const wrapper = mountView()
+    await flushPromises()
+    await flushPromises()
+
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
+    expect(wrapper.find('.lore-inspector-backdrop').exists()).toBe(false)
+
+    const toggle = wrapper.findAll('.lore-header-actions button').find(b => b.text() === '视角')
+    await toggle!.trigger('click')
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(true)
+    expect(wrapper.find('.lore-inspector-backdrop').exists()).toBe(true)
+
+    await wrapper.find('.lore-inspector-backdrop').trigger('click')
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
   })
 
   it('renders audience badges and the summary from backend projections only', async () => {

@@ -99,4 +99,10 @@ describe('LorePerspectiveInspector', () => {
     const wrapper = factory()
     expect(wrapper.text()).toContain('点击列表中的条目')
   })
+
+  it('emits close when the header close button is clicked', async () => {
+    const wrapper = factory()
+    await wrapper.find('.lore-inspector-close').trigger('click')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
 })

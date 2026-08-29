@@ -15,7 +15,7 @@ defineProps<{
   selectedProjection: LoreProjection | null
 }>()
 
-const emit = defineEmits<{ (e: 'select-viewer', viewer: string): void }>()
+const emit = defineEmits<{ (e: 'select-viewer', viewer: string): void; (e: 'close'): void }>()
 const { t } = useLocale()
 
 function playerLabel(p: Player): string {
@@ -27,6 +27,7 @@ function playerLabel(p: Player): string {
   <aside class="lore-perspective-inspector">
     <header class="lore-inspector-head">
       <h2>{{ t('lorePerspectiveTitle') }}</h2>
+      <button class="lore-inspector-close" @click="emit('close')" :aria-label="t('close')">×</button>
     </header>
 
     <section class="lore-inspector-block">

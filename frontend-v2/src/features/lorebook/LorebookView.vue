@@ -82,7 +82,14 @@ function matchesPerspectiveFilter(entry: LoreEntry): boolean {
   return perspectiveFilter.value === 'visible' ? visible : !visible
 }
 
-const inspectorOpen = ref(localStorage.getItem('lore_inspector_open') !== '0')
+function resolveInspectorOpen(): boolean {
+  const saved = localStorage.getItem('lore_inspector_open')
+  if (saved) return saved === '1'
+  // 宽屏常驻展开；窄屏默认收起，避免一进页面就被抽屉盖住一半。
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+  return !window.matchMedia('(max-width: 1100px)').matches
+}
+const inspectorOpen = ref(resolveInspectorOpen())
 function toggleInspector() {
   inspectorOpen.value = !inspectorOpen.value
   localStorage.setItem('lore_inspector_open', inspectorOpen.value ? '1' : '0')
@@ -451,6 +458,7 @@ async function importLore(e: Event) {
       <template #actions><button @click="loreEdit = null">{{ t('cancel') }}</button><button class="primary" @click="saveLore">{{ t('saveAction') }}</button></template>
     </Modal>
       </main>
+      <div v-if="inspectorOpen" class="lore-inspector-backdrop" @click="inspectorOpen = false"></div>
       <LorePerspectiveInspector
         v-if="inspectorOpen"
         :players="players"
@@ -463,6 +471,7 @@ async function importLore(e: Event) {
         :selected-entry="selectedEntry"
         :selected-projection="selectedProjection"
         @select-viewer="setViewer"
+        @close="inspectorOpen = false"
       />
     </div>
   </section>

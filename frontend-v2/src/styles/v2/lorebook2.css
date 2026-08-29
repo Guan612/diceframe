@@ -35,14 +35,41 @@
   box-shadow: var(--df-shadow);
 }
 
+.lore-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 5px 10px;
+}
+
 .lore-inspector-head h2 {
   margin: 0;
-  padding: 4px 5px 10px;
   color: var(--df-accent-strong);
   font-size: 10px;
   font-weight: 800;
   letter-spacing: .12em;
   text-transform: uppercase;
+}
+
+.lore-inspector-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: transparent;
+  color: var(--df-accent-strong);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* 窄屏抽屉的遮罩，仅抽屉模式下显示 */
+.lore-inspector-backdrop {
+  display: none;
 }
 
 .lore-inspector-block {
@@ -274,6 +301,14 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .lore-inspector-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    display: block;
+    background: rgba(0, 0, 0, .35);
+  }
+
   .lore-perspective-inspector {
     position: fixed;
     z-index: 60;
@@ -283,5 +318,9 @@
     width: min(320px, 88vw);
     max-height: none;
     border-radius: 0;
+  }
+
+  .lore-perspective-inspector .lore-inspector-close {
+    display: inline-flex;
   }
 }
