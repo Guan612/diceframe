@@ -141,6 +141,33 @@ async function load() {
   }
 }
 
+// 排序 + 客户端翻页：世界数量在几十量级，前端分页足够
+type WorldsSortMode = 'default' | 'name' | 'entries'
+const WORLDS_PAGE_SIZE = 12
+const worldsSort = ref<WorldsSortMode>('default')
+const worldsPage = ref(1)
+
+const sortedCards = computed(() => {
+  const list = [...cards.value]
+  if (worldsSort.value === 'name') list.sort((a, b) => a.name.localeCompare(b.name, locale.value))
+  if (worldsSort.value === 'entries') list.sort((a, b) => b.lorebookCount - a.lorebookCount || a.name.localeCompare(b.name, locale.value))
+  return list
+})
+const worldsTotalPages = computed(() => Math.max(1, Math.ceil(sortedCards.value.length / WORLDS_PAGE_SIZE)))
+const pagedCards = computed(() => {
+  const page = Math.min(Math.max(1, worldsPage.value), worldsTotalPages.value)
+  return sortedCards.value.slice((page - 1) * WORLDS_PAGE_SIZE, page * WORLDS_PAGE_SIZE)
+})
+
+watch(worldsSort, () => { worldsPage.value = 1 })
+watch(worldsTotalPages, total => {
+  if (worldsPage.value > total) worldsPage.value = total
+})
+
+function onWorldsSortChange(event: Event) {
+  worldsSort.value = (event.target as HTMLSelectElement).value as WorldsSortMode
+}
+
 let coverSequence = 0
 async function loadCovers(list: GalleryCard[]) {
   const sequence = ++coverSequence
@@ -267,8 +294,18 @@ function coverStyle(card: GalleryCard): Record<string, string> {
 
     <p v-if="error" class="notice">{{ error }}</p>
 
+    <div class="worlds-toolbar">
+      <label class="worlds-sort">
+        <span>{{ t('worldsSortLabel') }}</span>
+        <select :value="worldsSort" @change="onWorldsSortChange">
+          <option value="default">{{ t('worldsSortDefault') }}</option>
+          <option value="name">{{ t('worldsSortName') }}</option>
+          <option value="entries">{{ t('worldsSortEntries') }}</option>
+        </select>
+      </label>
+    </div>
     <div class="worlds-grid">
-      <article v-for="card in cards" :key="card.id" class="world-card">
+      <article v-for="card in pagedCards" :key="card.id" class="world-card">
         <div class="world-card-cover" :style="coverStyle(card)" />
         <div class="world-card-badges">
           <span class="world-card-badge" :class="`world-card-badge-${card.source}`">{{ sourceLabel(card) }}</span>
@@ -292,6 +329,12 @@ function coverStyle(card: GalleryCard): Record<string, string> {
           </div>
         </div>
       </article>
+    </div>
+
+    <div v-if="worldsTotalPages > 1" class="worlds-pager">
+      <button type="button" :disabled="worldsPage <= 1" @click="worldsPage--">{{ t('worldsPagePrev') }}</button>
+      <span>{{ t('worldsPageOf', { page: Math.min(Math.max(1, worldsPage), worldsTotalPages), total: worldsTotalPages }) }}</span>
+      <button type="button" :disabled="worldsPage >= worldsTotalPages" @click="worldsPage++">{{ t('worldsPageNext') }}</button>
     </div>
 
     <input

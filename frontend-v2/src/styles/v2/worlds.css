@@ -1,5 +1,62 @@
 /* 世界画廊（/worlds）：全幅封面卡片、来源/冒险包徽章、GM 风格编辑区。 */
 
+.worlds-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin: 0 0 10px;
+}
+
+.worlds-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--df-text-muted);
+  font-size: 12px;
+}
+
+.worlds-sort select {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  color: var(--df-text);
+  background: var(--df-control-bg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.worlds-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.worlds-pager button {
+  padding: 6px 14px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  color: var(--df-text);
+  background: var(--df-surface-1);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.worlds-pager button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--df-interactive) 45%, transparent);
+}
+
+.worlds-pager button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.worlds-pager span {
+  color: var(--df-text-muted);
+  font-size: 12px;
+}
+
 .worlds-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
