@@ -213,7 +213,7 @@ describe('LorebookView perspective inspector', () => {
       new DOMWrapper([...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === text)!)
 
     await bodyButton('新增条目').trigger('click')
-    const modeButtons = () => [...document.body.querySelectorAll('.lore-filter-options button')]
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
     expect(modeButtons().map(b => b.textContent?.trim())).toEqual(['GM 秘密', '全队公开', '指定角色'])
     expect(modeButtons()[0].classList.contains('active')).toBe(true)
 
@@ -225,7 +225,7 @@ describe('LorebookView perspective inspector', () => {
     const names = document.body.querySelector('input[placeholder="逗号分隔角色名或 uid"]')
     expect(names).toBeTruthy()
 
-    const playerChips = () => [...document.body.querySelectorAll('.lore-filter-options button')]
+    const playerChips = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
       .filter(b => ['莱拉', '布兰'].includes(b.textContent?.trim() || ''))
     expect(playerChips().map(b => b.textContent?.trim())).toEqual(['莱拉', '布兰'])
     await new DOMWrapper(playerChips()[0]!).trigger('click')
@@ -252,7 +252,7 @@ describe('LorebookView perspective inspector', () => {
       new DOMWrapper([...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === text)!)
 
     await bodyButton('新增条目').trigger('click')
-    const modeButtons = () => [...document.body.querySelectorAll('.lore-filter-options button')]
+    const modeButtons = () => [...document.body.querySelectorAll('.dialog .lore-filter-options button')]
     await new DOMWrapper(modeButtons()[1]).trigger('click')
     await new DOMWrapper(modeButtons()[0]).trigger('click')
     await new DOMWrapper(modeButtons()[1]).trigger('click')
