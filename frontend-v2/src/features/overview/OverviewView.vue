@@ -16,6 +16,7 @@ import {
 } from '@vicons/ionicons5'
 import AssistantPanel from '@/components/AssistantPanel.vue'
 import PeerConnectModal from '@/features/peer/PeerConnectModal.vue'
+import AssistantGreetingBubble from './AssistantGreetingBubble.vue'
 import { useAssistant } from '@/composables/useAssistant'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
@@ -27,18 +28,6 @@ const assistantOpen = ref(false)
 const peerModalOpen = ref(false)
 const { stop: stopAssistant } = useAssistant()
 watch(assistantOpen, (open) => { if (!open) stopAssistant() })
-
-// 助手引导气泡：点气泡或 × 都算处理过，关闭后不再出现（localStorage 持久化）。
-const ASSISTANT_BUBBLE_DISMISSED_KEY = 'overview_assistant_bubble_dismissed'
-const assistantBubbleClosed = ref(localStorage.getItem(ASSISTANT_BUBBLE_DISMISSED_KEY) === '1')
-function dismissAssistantBubble() {
-  assistantBubbleClosed.value = true
-  localStorage.setItem(ASSISTANT_BUBBLE_DISMISSED_KEY, '1')
-}
-function openAssistantFromBubble() {
-  dismissAssistantBubble()
-  assistantOpen.value = true
-}
 
 const toast = useToast()
 const { confirm } = useConfirm()
@@ -337,10 +326,7 @@ onBeforeUnmount(() => {
         </NDrawerContent>
       </NDrawer>
       <PeerConnectModal v-model:show="peerModalOpen" />
-      <div v-if="!assistantBubbleClosed" class="overview-assistant-bubble-wrap">
-        <button type="button" class="overview-assistant-bubble" @click="openAssistantFromBubble">{{ t('assistantBubbleText') }}</button>
-        <button type="button" class="overview-assistant-bubble-close" :aria-label="t('close')" @click="dismissAssistantBubble">×</button>
-      </div>
+      <AssistantGreetingBubble @open="assistantOpen = true" />
       <button
         class="overview-assistant-fab"
         @click="assistantOpen = true"
@@ -402,72 +388,12 @@ onBeforeUnmount(() => {
   color: var(--df-interactive-strong);
 }
 
-/* 助手引导气泡：贴在悬浮圆钮左侧、垂直居中，不占上方空间。
-   点气泡进入助手，× 关闭后不再出现。 */
-.overview-assistant-bubble-wrap {
-  position: fixed;
-  right: calc(18px + 48px + 10px);
-  bottom: calc(30px + env(safe-area-inset-bottom));
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 9px 10px 9px 13px;
-  border: 1px solid color-mix(in srgb, var(--df-accent-strong) 45%, var(--df-border-soft));
-  border-radius: 12px;
-  background: linear-gradient(180deg, var(--df-surface-raised), var(--df-surface-2));
-  color: var(--df-text);
-  box-shadow: var(--df-shadow);
-  animation: assistant-bubble-in .18s ease-out;
-}
-
-.overview-assistant-bubble {
-  border: 0;
-  padding: 0;
-  background: none;
-  color: var(--df-text);
-  font-size: 13px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.overview-assistant-bubble:hover {
-  color: var(--df-interactive-strong);
-}
-
-.overview-assistant-bubble-close {
-  border: 0;
-  padding: 0 2px;
-  background: none;
-  color: var(--df-text-muted);
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.overview-assistant-bubble-close:hover {
-  color: var(--df-text);
-}
-
-@keyframes assistant-bubble-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-}
-
 @media (max-width: 700px) {
   .overview-assistant-fab {
     right: 14px;
     bottom: calc(72px + env(safe-area-inset-bottom));
     width: 44px;
     height: 44px;
-  }
-
-  .overview-assistant-bubble-wrap {
-    right: calc(14px + 44px + 8px);
-    bottom: calc(76px + env(safe-area-inset-bottom));
-    max-width: calc(100vw - 28px);
   }
 
   /* Mobile keeps the entry silent: no onboarding/help speech bubble. */
