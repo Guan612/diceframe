@@ -402,11 +402,12 @@ onBeforeUnmount(() => {
   color: var(--df-interactive-strong);
 }
 
-/* 助手引导气泡：悬在悬浮圆钮上方，点气泡进入助手，× 关闭后不再出现 */
+/* 助手引导气泡：贴在悬浮圆钮左侧、垂直居中，不占上方空间。
+   点气泡进入助手，× 关闭后不再出现。 */
 .overview-assistant-bubble-wrap {
   position: fixed;
-  right: 18px;
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  right: calc(18px + 48px + 10px);
+  bottom: calc(30px + env(safe-area-inset-bottom));
   z-index: 20;
   display: flex;
   align-items: center;
@@ -464,8 +465,8 @@ onBeforeUnmount(() => {
   }
 
   .overview-assistant-bubble-wrap {
-    right: 14px;
-    bottom: calc(126px + env(safe-area-inset-bottom));
+    right: calc(14px + 44px + 8px);
+    bottom: calc(76px + env(safe-area-inset-bottom));
     max-width: calc(100vw - 28px);
   }
 
