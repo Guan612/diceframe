@@ -37,10 +37,6 @@ function hintKey(id: AppNavItemId): MessageKey {
 <template>
   <div class="content-workspace" :data-workspace="groupId">
     <aside class="content-workspace-rail">
-      <header class="content-workspace-heading">
-        <strong>{{ t(group.labelKey) }}</strong>
-      </header>
-
       <nav class="content-workspace-nav" :aria-label="t(group.labelKey)">
         <RouterLink
           v-for="item in items"
