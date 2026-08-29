@@ -122,7 +122,8 @@
   text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
 }
 
-/* 两列等宽按钮网格，克隆按钮整行，保证整齐。 */
+/* 两列等宽按钮网格；克隆按钮仅当排在末位（内置/插件卡的第三个按钮）时整行，
+   用户世界四按钮（用它开团/预览/克隆/更换头图）构成整齐的 2×2。 */
 .world-card-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -147,7 +148,7 @@
   opacity: 0.45;
 }
 
-.world-card-clone {
+.world-card-clone:last-child {
   grid-column: 1 / -1;
 }
 
