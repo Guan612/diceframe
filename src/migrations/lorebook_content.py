@@ -8,12 +8,17 @@ user_version`` 驱动）分工不同，本模块处理的是**内容**迁移，�
 bootstrap / seed 阶段编排，本模块只负责判定与升级：
 
     数据库条目与重审计前官方默认快照逐字段完全一致（用户从未编辑）
-        → 升级为当前模板版本
+        → 升级到本次迁移发布时冻结的目标状态
     用户改过任意一个受保护字段
         → 跳过，绝不触碰（用户数据绝不能被系统模板覆盖）
 
 升级完成后条目不再等于旧官方快照，天然幂等。这是有条件的一次性官方默认
 数据升级，不是模板同步系统。
+
+迁移目标是**冻结**的（``LEGACY_BUNDLED_UPDATES``）：只包含重审计当时有意
+改变的字段，取值定格在本次迁移发布时。未来模板内容变化属于**新的**迁移，
+不得追溯改写本次结果——否则同一旧版本会因执行时机不同而迁移到不同状态，
+违反“已发布迁移的历史语义不应被静默改写”。
 """
 
 from __future__ import annotations
@@ -61,9 +66,9 @@ _LIST_FIELDS = frozenset({"keywords", "triggers_recursive", "visible_to", "conne
 _BOOL_FIELDS = frozenset({"unreliable", "sync_on_enter", "is_constant"})
 _INT_FIELDS = frozenset({"sticky", "cooldown", "delay", "order", "probability", "group_weight"})
 
-# world_id -> entry_id -> 重审计**之前**的官方默认条目快照（稀疏存储：缺失
-# 字段即 schema 默认值）。只记录相对当前模板发生过变化的条目；从未变化的
-# 条目无需迁移。
+# world_id -> entry_id -> 重审计**之前**的官方默认条目快照（完整 before
+# 状态；稀疏存储，缺失字段即 schema 默认值）。仅用于 pristine / 用户编辑
+# 判定，不参与升级目标。
 LEGACY_BUNDLED_ENTRIES: dict[str, dict[str, dict[str, Any]]] = {
     'coc_horror': {
         'event_fishermen_missing': {
@@ -549,6 +554,248 @@ LEGACY_BUNDLED_ENTRIES: dict[str, dict[str, dict[str, Any]]] = {
     },
 }
 
+# world_id -> entry_id -> 本次迁移发布时冻结的 after / update payload。
+# 只包含重审计当时有意改变的字段（公开化条目为 visible_to；拆分/裁剪条目
+# 为 content + visible_to），取值定格在迁移发布时的官方版本。升级目标不取
+# 自实时模板：未来模板变化属于新的迁移，不得追溯改变已发布迁移的结果。
+LEGACY_BUNDLED_UPDATES: dict[str, dict[str, dict[str, Any]]] = {
+    'coc_horror': {
+        'event_fishermen_missing': {
+            'visible_to': ['*'],
+        },
+        'loc_arkham': {
+            'visible_to': ['*'],
+        },
+        'loc_fishing_port': {
+            'content': '阿卡姆镇东侧的渔港，空气中弥漫着鱼腥和海水的味道。近来渔民们都不太愿意出海，码头上比往常冷清了许多。',
+            'visible_to': ['*'],
+        },
+        'loc_howard_house': {
+            'content': '位于阿卡姆镇东区的一栋二层木制老宅，门牌号榆树街13号。镇上人都知道这是霍华德教授的宅子；最近宅门紧闭，敲门始终无人应答。',
+            'visible_to': ['*'],
+        },
+        'loc_miskatonic': {
+            'visible_to': ['*'],
+        },
+        'npc_howard': {
+            'content': '密斯卡托尼克大学考古学系教授，45岁。你的远房表亲。半年前带队前往南太平洋波纳佩岛考古发掘，回来后人就变得沉默寡言。最近一个月完全失联——他的办公室被锁，同事说他请了病假。',
+            'visible_to': ['*'],
+        },
+    },
+    'coc_horror_en': {
+        'event_missing_fishermen': {
+            'visible_to': ['*'],
+        },
+        'loc_arkham': {
+            'visible_to': ['*'],
+        },
+        'loc_arkham_fishing_port': {
+            'content': 'The fishing port on the east side of Arkham. The air hangs thick with the smell of fish and saltwater. Lately the fishermen have been reluctant to put out to sea, and the docks are quieter than usual.',
+            'visible_to': ['*'],
+        },
+        'loc_howard_residence': {
+            'content': "A two-story wooden house on the east side of Arkham, 13 Elm Street. Everyone in town knows it as Professor Howard's house; lately the house has stayed shut, with no answer at the door.",
+            'visible_to': ['*'],
+        },
+        'loc_miskatonic_university': {
+            'visible_to': ['*'],
+        },
+        'npc_professor_howard': {
+            'content': 'A professor of archaeology at Miskatonic University, 45 years old. Your distant cousin. Six months ago he led an expedition to the island of Pohnpei in the South Pacific; since returning he has grown withdrawn and taciturn. For the past month he has been entirely out of reach: his office is locked, and colleagues say he is on sick leave.',
+            'visible_to': ['*'],
+        },
+    },
+    'default_fantasy': {
+        'event_forest_disturbance': {
+            'visible_to': ['*'],
+        },
+        'faction_adventurer_guild': {
+            'visible_to': ['*'],
+        },
+        'loc_blackpine_forest': {
+            'visible_to': ['*'],
+        },
+        'loc_golden_lion_inn': {
+            'visible_to': ['*'],
+        },
+        'loc_stonebridge': {
+            'visible_to': ['*'],
+        },
+        'npc_blacksmith': {
+            'visible_to': ['*'],
+        },
+        'npc_innkeeper': {
+            'visible_to': ['*'],
+        },
+    },
+    'default_fantasy_en': {
+        'event_forest_disturbance': {
+            'visible_to': ['*'],
+        },
+        'faction_adventurers_guild': {
+            'visible_to': ['*'],
+        },
+        'loc_blackpine_forest': {
+            'visible_to': ['*'],
+        },
+        'loc_golden_lion_inn': {
+            'visible_to': ['*'],
+        },
+        'loc_stonebridge': {
+            'visible_to': ['*'],
+        },
+        'npc_old_tom': {
+            'visible_to': ['*'],
+        },
+    },
+    'greymoor': {
+        'faction_waykeepers': {
+            'visible_to': ['*'],
+        },
+        'loc_mistbound_road': {
+            'visible_to': ['*'],
+        },
+        'npc_mira': {
+            'visible_to': ['*'],
+        },
+        'region_greymoor': {
+            'visible_to': ['*'],
+        },
+    },
+    'jp_isekai': {
+        'event_monster_activity': {
+            'visible_to': ['*'],
+        },
+        'faction_demon_lord_remnants': {
+            'visible_to': ['*'],
+        },
+        'loc_guild_hq': {
+            'visible_to': ['*'],
+        },
+        'loc_royal_capital': {
+            'visible_to': ['*'],
+        },
+        'loc_slime_sewer': {
+            'visible_to': ['*'],
+        },
+        'npc_old_warrior': {
+            'visible_to': ['*'],
+        },
+        'npc_receptionist': {
+            'visible_to': ['*'],
+        },
+    },
+    'jp_isekai_en': {
+        'event_monster_activity': {
+            'visible_to': ['*'],
+        },
+        'faction_demon_lord_remnants': {
+            'visible_to': ['*'],
+        },
+        'loc_guild_hq': {
+            'visible_to': ['*'],
+        },
+        'loc_royal_capital': {
+            'visible_to': ['*'],
+        },
+        'loc_slime_sewer': {
+            'visible_to': ['*'],
+        },
+        'npc_old_warrior_grey': {
+            'visible_to': ['*'],
+        },
+        'npc_receptionist_lily': {
+            'visible_to': ['*'],
+        },
+    },
+    'scifi_cyberpunk': {
+        'loc_cloud_tower': {
+            'visible_to': ['*'],
+        },
+        'loc_red_eye_bar': {
+            'visible_to': ['*'],
+        },
+        'loc_shibuya_market': {
+            'content': '新东京涉谷区地下藏着三层的非法市场：二手义体的黑诊所、走私电子零件的摊位，以及各式情报贩子。圈外人多半当它是都市传说，混迹地下的人却都知道确有其事。',
+            'visible_to': ['*'],
+        },
+        'npc_market_doctor': {
+            'visible_to': ['*'],
+        },
+    },
+    'scifi_cyberpunk_en': {
+        'loc_cloudspire': {
+            'visible_to': ['*'],
+        },
+        'loc_red_eye_bar': {
+            'visible_to': ['*'],
+        },
+        'loc_shibuya_market': {
+            'content': "Three illegal levels buried beneath Shibuya's shopping district. Up top, the malls gleam; down here, the real business runs--black clinics selling second-hand cyberware, stalls hawking smuggled components, and brokers dealing in information that never appears on a feed. Outsiders call it an urban legend; the underground knows better.",
+            'visible_to': ['*'],
+        },
+        'npc_dr_akai': {
+            'visible_to': ['*'],
+        },
+    },
+    'tavern_generic': {
+        'tavern_owner': {
+            'visible_to': ['*'],
+        },
+        'tavern_place': {
+            'visible_to': ['*'],
+        },
+    },
+    'tavern_generic_en': {
+        'loc_crossroads_inn': {
+            'visible_to': ['*'],
+        },
+        'npc_old_mo': {
+            'visible_to': ['*'],
+        },
+    },
+    'zhongshi_fantasy': {
+        'event_strange_light': {
+            'visible_to': ['*'],
+        },
+        'faction_kunlun_sword_sect': {
+            'visible_to': ['*'],
+        },
+        'loc_kumu_cliff': {
+            'visible_to': ['*'],
+        },
+        'loc_qingshi': {
+            'visible_to': ['*'],
+        },
+        'npc_herbalist': {
+            'visible_to': ['*'],
+        },
+        'npc_teahouse_owner': {
+            'visible_to': ['*'],
+        },
+    },
+    'zhongshi_fantasy_en': {
+        'event_deadwood_cliff_strange_light': {
+            'visible_to': ['*'],
+        },
+        'faction_kunlun_sword_sect': {
+            'visible_to': ['*'],
+        },
+        'loc_bluestone_town': {
+            'visible_to': ['*'],
+        },
+        'loc_deadwood_cliff': {
+            'visible_to': ['*'],
+        },
+        'npc_old_wang_herbalist': {
+            'visible_to': ['*'],
+        },
+        'npc_shopkeeper_liu': {
+            'visible_to': ['*'],
+        },
+    },
+}
+
 
 def _canonical_field(field: str, value: Any) -> Any:
     """把一个字段归一化成持久化形状；只吸收 schema 默认值差异。"""
@@ -588,14 +835,21 @@ def _canonical_entry(source: dict[str, Any]) -> dict[str, Any]:
 
 
 def maybe_upgrade_bundled_entry(lorebook_store: Any, world_id: str, entry_id: str, bundled: dict[str, Any]) -> None:
-    """存量条目仍是重审计前官方默认（用户从未编辑）时，升级到当前模板版本。
+    """存量条目仍是重审计前官方默认（用户从未编辑）时，升级到冻结的迁移目标。
 
     由 bootstrap / seed 阶段对每个模板条目调用。zh/en 模板共享条目 id 时，
     后 seed 的一方在 ``ensure_world_from_template`` 里被改名成
     ``f"{world_id}_{entry_id}"``，这里同样要在改名后的行上完成升级。
+
+    ``bundled``（当前实时模板条目）**不参与**升级目标：目标一律来自
+    ``LEGACY_BUNDLED_UPDATES`` 的冻结 payload。该参数仅为维持调用点签名
+    稳定而保留，这样未来模板如何演进都不会影响本次已发布迁移的结果。
     """
     legacy = LEGACY_BUNDLED_ENTRIES.get(world_id, {}).get(entry_id)
     if legacy is None:
+        return
+    updates = LEGACY_BUNDLED_UPDATES.get(world_id, {}).get(entry_id)
+    if not updates:
         return
     db_id = entry_id
     existing = lorebook_store.get_entry(db_id)
@@ -608,9 +862,6 @@ def maybe_upgrade_bundled_entry(lorebook_store: Any, world_id: str, entry_id: st
     stored = _canonical_entry(existing)
     if any(stored[field] != recorded[field] for field in PROTECTED_FIELDS):
         return  # 任一字段偏离旧官方默认：用户编辑过或已是新版 → 保留现状
-    target = _canonical_entry(bundled)
-    updates = {field: target[field] for field in PROTECTED_FIELDS if target[field] != recorded[field]}
-    if not updates:
-        return
-    lorebook_store.update_entry(db_id, updates)
-    logger.info("内置世界书条目已升级到当前模板版本: %s/%s", world_id, db_id)
+    payload = {field: _canonical_field(field, value) for field, value in updates.items()}
+    lorebook_store.update_entry(db_id, payload)
+    logger.info("内置世界书条目已升级到已发布迁移目标: %s/%s", world_id, db_id)

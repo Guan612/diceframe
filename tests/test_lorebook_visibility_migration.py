@@ -11,6 +11,7 @@ from src.lorebook.bootstrap import ensure_world_from_template, seed_builtin_worl
 from src.lorebook.store import LorebookStore
 from src.migrations.lorebook_content import (
     LEGACY_BUNDLED_ENTRIES,
+    LEGACY_BUNDLED_UPDATES,
     PROTECTED_FIELDS,
     _canonical_entry,
     maybe_upgrade_bundled_entry,
@@ -59,6 +60,9 @@ LEGACY_PUB_SNAPSHOT = {
     "tier": "core",
 }
 
+# #170 发布时冻结的 after payload：只含当时有意改变的字段，与实时模板无关
+DEMO_PUB_UPDATE = {"content": "新版本公开正文", "visible_to": ["*"]}
+
 # 用户可能只改一个非 content / visible_to 字段，迁移同样必须让路
 USER_EDITS = {
     "name": "老板娘",
@@ -85,6 +89,10 @@ def _register_legacy(world_id: str, entry_id: str, snapshot: dict) -> None:
     LEGACY_BUNDLED_ENTRIES.setdefault(world_id, {})[entry_id] = dict(snapshot)
 
 
+def _register_update(world_id: str, entry_id: str, payload: dict) -> None:
+    LEGACY_BUNDLED_UPDATES.setdefault(world_id, {})[entry_id] = dict(payload)
+
+
 @pytest.fixture()
 def store(tmp_path):
     store = LorebookStore(tmp_path / "lorebook.db")
@@ -96,14 +104,21 @@ def store(tmp_path):
 @pytest.fixture(autouse=True)
 def clean_legacy_registry():
     """测试注入的 demo 快照不污染真实清单；真实清单在用例间保持只读。"""
-    saved = {k: v for k, v in LEGACY_BUNDLED_ENTRIES.items() if k.startswith("demo")}
-    for key in saved:
+    saved_entries = {k: v for k, v in LEGACY_BUNDLED_ENTRIES.items() if k.startswith("demo")}
+    saved_updates = {k: v for k, v in LEGACY_BUNDLED_UPDATES.items() if k.startswith("demo")}
+    for key in saved_entries:
         LEGACY_BUNDLED_ENTRIES.pop(key, None)
+    for key in saved_updates:
+        LEGACY_BUNDLED_UPDATES.pop(key, None)
     yield
     for key in list(LEGACY_BUNDLED_ENTRIES):
         if key.startswith("demo"):
             LEGACY_BUNDLED_ENTRIES.pop(key, None)
-    LEGACY_BUNDLED_ENTRIES.update(saved)
+    for key in list(LEGACY_BUNDLED_UPDATES):
+        if key.startswith("demo"):
+            LEGACY_BUNDLED_UPDATES.pop(key, None)
+    LEGACY_BUNDLED_ENTRIES.update(saved_entries)
+    LEGACY_BUNDLED_UPDATES.update(saved_updates)
 
 
 def _seed_old_state(store: LorebookStore) -> None:
@@ -131,6 +146,7 @@ def _old_entry_from_snapshot(world_id: str, entry_id: str) -> dict:
 
 def test_unchanged_old_entry_upgrades_and_new_secret_entry_is_added(store):
     _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
     _seed_old_state(store)
 
     inserted = ensure_world_from_template(store, "demo_world", TEMPLATE)
@@ -145,6 +161,7 @@ def test_unchanged_old_entry_upgrades_and_new_secret_entry_is_added(store):
 
 def test_user_edited_content_is_never_touched(store):
     _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
     store.create_world("demo_world", "测试世界")
     store.add_entry({
         "id": "npc_pub", "world_id": "demo_world", "name": "酒馆老板",
@@ -161,6 +178,7 @@ def test_user_edited_content_is_never_touched(store):
 
 def test_user_visibility_decision_is_respected(store):
     _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
     store.create_world("demo_world", "测试世界")
     store.add_entry({
         "id": "npc_pub", "world_id": "demo_world", "name": "酒馆老板",
@@ -179,6 +197,7 @@ def test_user_visibility_decision_is_respected(store):
 def test_user_edited_metadata_field_is_never_touched(store, field, value):
     """只改 name / keywords / type / tier / 触发元数据等任意一个字段 → 迁移让路。"""
     _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
     store.create_world("demo_world", "测试世界")
     entry = {
         "id": "npc_pub", "world_id": "demo_world", "name": "酒馆老板",
@@ -198,6 +217,7 @@ def test_user_edited_metadata_field_is_never_touched(store, field, value):
 
 def test_migration_is_idempotent(store):
     _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
     _seed_old_state(store)
 
     ensure_world_from_template(store, "demo_world", TEMPLATE)
@@ -221,9 +241,13 @@ def test_fresh_install_seeds_current_template(store):
 def test_renamed_cross_language_copy_is_upgraded(store):
     """zh/en 模板共享条目 id 时，后 seed 的一方被改名前缀存储，迁移也要覆盖。"""
     _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
     _register_legacy("demo_world_en", "npc_pub", {
         "name": "Innkeeper", "type": "npc", "keywords": ["innkeeper"],
         "content": "old public content", "tier": "core",
+    })
+    _register_update("demo_world_en", "npc_pub", {
+        "content": "new public content", "visible_to": ["*"],
     })
     store.create_world("demo_world", "测试世界")
     store.add_entry({
@@ -349,9 +373,87 @@ def test_legacy_snapshot_registry_matches_current_templates():
             )
 
 
+def test_frozen_update_registry_pairs_with_before_snapshots():
+    """冻结 payload 与 before 快照一一配对，且每个字段都确实改变目标状态。"""
+    assert set(LEGACY_BUNDLED_UPDATES) == set(LEGACY_BUNDLED_ENTRIES)
+    for world_id, entries in LEGACY_BUNDLED_UPDATES.items():
+        assert set(entries) == set(LEGACY_BUNDLED_ENTRIES[world_id]), world_id
+        for entry_id, payload in entries.items():
+            assert payload, f"{world_id}/{entry_id}: empty payload"
+            recorded = _canonical_entry(LEGACY_BUNDLED_ENTRIES[world_id][entry_id])
+            for field, value in payload.items():
+                assert field in PROTECTED_FIELDS, f"{world_id}/{entry_id}: unknown field {field}"
+                canonical = _canonical_entry({field: value})[field]
+                assert canonical != recorded[field], (
+                    f"{world_id}/{entry_id}: payload {field} would be a no-op"
+                )
+
+
+def test_frozen_target_ignores_future_template_changes(store):
+    """回归：未来模板演进不得追溯改写已发布迁移的结果。
+
+    即使传入模板把 name / keywords / order / content 改成未来版本，旧官方
+    条目也必须迁移到迁移发布时冻结的 after 状态，而不是未来模板状态。
+    """
+    _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
+    _register_legacy("demo_world", "loc_future", {
+        "name": "旧地点", "type": "location", "keywords": ["旧地点"],
+        "content": "旧版官方地点正文", "tier": "core",
+    })
+    _register_update("demo_world", "loc_future", {"visible_to": ["*"]})
+
+    store.create_world("demo_world", "测试世界")
+    store.add_entry({
+        "id": "npc_pub", "world_id": "demo_world", "name": "酒馆老板",
+        "type": "npc", "keywords": ["老板"], "content": OLD_PUB_CONTENT,
+        "tier": "core", "visible_to": [],
+    })
+    store.add_entry({
+        "id": "loc_future", "world_id": "demo_world", "name": "旧地点",
+        "type": "location", "keywords": ["旧地点"], "content": "旧版官方地点正文",
+        "tier": "core", "visible_to": [],
+    })
+
+    future_template = {
+        "world_id": "demo_world",
+        "world_name": "测试世界",
+        "language": "zh-CN",
+        "starter_lorebook": [
+            {
+                "id": "npc_pub", "name": "未来模板改名", "type": "npc",
+                "keywords": ["未来关键词"], "content": "未来模板的新正文",
+                "tier": "core", "order": 7, "visible_to": ["*"],
+            },
+            {
+                "id": "loc_future", "name": "未来模板地点", "type": "location",
+                "keywords": ["未来"], "content": "未来模板地点正文",
+                "tier": "background", "visible_to": ["*"],
+            },
+        ],
+    }
+
+    ensure_world_from_template(store, "demo_world", future_template)
+
+    pub = _entry_of(store, "npc_pub")
+    assert pub["visible_to"] == ["*"]
+    # 冻结 after 状态：内容来自 payload，不是未来模板的重写正文
+    assert pub["content"] == "新版本公开正文"
+    # payload 未涉及的字段不被未来模板牵动
+    assert pub["name"] == "酒馆老板"
+    assert pub["keywords"] == ["老板"]
+    assert pub["order"] == 100
+
+    loc = _entry_of(store, "loc_future")
+    assert loc["visible_to"] == ["*"]
+    # visibility-only payload：未来模板的新正文不得覆盖存量官方正文
+    assert loc["content"] == "旧版官方地点正文"
+
+
 def test_maybe_upgrade_ignores_unknown_and_foreign_entries(store):
     """不在清单内 / 属于别的世界的条目一律不动。"""
     _register_legacy("demo_world", "npc_pub", LEGACY_PUB_SNAPSHOT)
+    _register_update("demo_world", "npc_pub", DEMO_PUB_UPDATE)
     store.create_world("other_world", "别的世界")
     store.add_entry({
         "id": "npc_pub", "world_id": "other_world", "name": "酒馆老板",
