@@ -229,6 +229,59 @@ def test_content_pack_scene_image_assets_are_exposed_as_plugin_references(tmp_pa
     }
 
 
+def test_content_pack_hash_named_scene_assets_are_normalized_on_install(tmp_path):
+    """作者用哈希/原名/中文命名图片也能安装：资产身份自动规范化，路径引用不变。"""
+    plugins = tmp_path / "plugins"
+    write_plugin(
+        plugins,
+        "hash-pack",
+        plugin_type="content-pack",
+        entrypoint=False,
+        manifest_extra={"contributes": {
+            "world_templates": ["content/worlds/*.json"],
+            "scene_images": ["assets/scenes/*"],
+        }},
+    )
+    pack = plugins / "hash-pack"
+    (pack / "content" / "worlds").mkdir(parents=True)
+    scenes = pack / "assets" / "scenes"
+    scenes.mkdir(parents=True)
+    world_hash = "311efe3bc91c167568bacb6bd7cc0e7e78c016a7763e4502f7ce4e67de4d6d4c"
+    (scenes / f"{world_hash}.webp").write_bytes(b"RIFF-hash-world")
+    (scenes / "valley.webp").write_bytes(b"RIFF-plain")
+    (scenes / "背景 一.png").write_bytes(b"PNG-cn-1")
+    (scenes / "背景 二.png").write_bytes(b"PNG-cn-2")
+    (pack / "content" / "worlds" / "valley.json").write_text(json.dumps({
+        "world_id": "valley",
+        "world_name": "Valley",
+        "default_rule": "freeform_fantasy",
+        "scene_image": {"kind": "asset", "path": f"assets/scenes/{world_hash}.webp"},
+    }), encoding="utf-8")
+    config_dir = tmp_path / "data" / "hash-pack"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
+
+    host = PluginHost(plugins, tmp_path / "data")
+    host.discover()
+
+    assets = {item.relative_path: item for item in host.contributions.list("scene_image_asset")}
+    assert f"assets/scenes/{world_hash}.webp" in assets
+    # 数字开头的哈希名：规范化为字母开头 + 原名短哈希后缀
+    assert assets[f"assets/scenes/{world_hash}.webp"].ref.local_id.startswith("n311efe")
+    # 已经合法的名字原样保留（存量身份不漂移）
+    assert assets["assets/scenes/valley.webp"].ref.local_id == "valley"
+    # 中文/空格名各自得到唯一身份，不互相覆盖
+    cn_ids = {item.ref.local_id for path, item in assets.items() if path.endswith(".png")}
+    assert len(cn_ids) == 2
+    # 路径引用解析不受身份规范化影响
+    world = host.load_world_template("valley")
+    assert world["scene_image"] == {
+        "kind": "plugin",
+        "plugin_id": "hash-pack",
+        "path": f"assets/scenes/{world_hash}.webp",
+    }
+
+
 def test_content_pack_manifest_declares_scene_image_assets():
     manifest = plugin_service.build_content_pack_manifest(
         "scene-pack", "Scene Pack", "1.0.0", "", True, True, False,

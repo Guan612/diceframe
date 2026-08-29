@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from src.content.contracts import ResourceRef, canonical_id
+from src.content.contracts import ResourceRef, asset_local_id, canonical_id
 
 from .map_validation import (
     MAP_IMAGE_KINDS,
@@ -46,12 +46,15 @@ class PluginContribution:
     @property
     def ref(self) -> ResourceRef:
         # Asset paths are legacy local keys; retain the original key while
-        # exposing a canonical identity for the V2 registry.
-        local_id = (
-            canonical_id(self.key)
-            if self.content_schema_version >= 2 and self.kind in _V2_CANONICAL_KINDS
-            else re.sub(r"[^a-zA-Z0-9_-]", "_", self.key).lower().strip("_") or "asset"
-        )
+        # exposing a canonical identity for the V2 registry. Asset file names
+        # are free-form author input (assets are referenced by path, not by
+        # id), so their identity is auto-normalized instead of enforced.
+        if self.kind.endswith("_asset"):
+            local_id = asset_local_id(self.key)
+        elif self.content_schema_version >= 2 and self.kind in _V2_CANONICAL_KINDS:
+            local_id = canonical_id(self.key)
+        else:
+            local_id = re.sub(r"[^a-zA-Z0-9_-]", "_", self.key).lower().strip("_") or "asset"
         return ResourceRef(f"plugin:{self.plugin_id}", self.kind, local_id)
 
     def to_dict(self) -> dict[str, Any]:
