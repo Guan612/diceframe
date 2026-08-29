@@ -65,10 +65,8 @@ describe('selectMainModelWithRollback', () => {
 describe('setCatalogModelAsMain wiring structure guard', () => {
   it('delegates every config mutation to selectMainModelWithRollback', async () => {
     const { readFileSync } = await import('node:fs')
-    const source = readFileSync(
-      new URL('../src/features/admin/SettingsView.vue', import.meta.url),
-      'utf-8',
-    )
+    const { resolve } = await import('node:path')
+    const source = readFileSync(resolve('src/features/admin/SettingsView.vue'), 'utf-8')
     const start = source.indexOf('async function setCatalogModelAsMain')
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, source.indexOf('\n}', start))
