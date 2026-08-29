@@ -8,7 +8,7 @@
 2. 工程修改规则：
    - [docs/ENGINEERING_RULES.md](docs/ENGINEERING_RULES.md)
 3. 涉及权限、存档、迁移、多人、规则等高风险行为时：
-   - [docs/testing-contracts.md](docs/testing-contracts.md)
+   - [docs/ENGINEERING_RULES.md](docs/ENGINEERING_RULES.md) 的 Testing 章节（§15）
 4. 涉及已有重大架构决策时：
    - [docs/adr/](docs/adr/)
 

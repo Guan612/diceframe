@@ -7,9 +7,7 @@
 > - `docs/ARCHITECTURE_CN.md`
 > - `docs/ARCHITECTURE_EN.md`
 >
-> 测试与产品关键契约见：
->
-> - `docs/testing-contracts.md`
+> 测试与产品关键契约的原则见下方第 15 节。
 
 ## 1. 目的
 
@@ -522,12 +520,22 @@ Frontend **SHOULD NOT** 重复实现一套与 backend 不同的核心 mechanics 
 
 前提是对应 contract 的有效覆盖仍然存在。
 
-涉及关键契约时，以 `docs/testing-contracts.md` 为事实来源。
+测试保护行为契约，不维护“某契约必须对应某个具体测试文件名”的人工映射表——测试改名、合并、重构不应要求同步维护一张 Markdown 清单。
 
-新增高风险产品契约时 **SHOULD**：
+### 15.1 Critical testing areas
 
-1. 增加对应测试；
-2. 如果它属于长期关键契约，补入 `testing-contracts.md`。
+以下高风险领域的行为契约必须始终有有效测试覆盖；测试可以合并、改写、移动，但覆盖不能消失：
+
+- Authentication / permission / private-data isolation
+- Persisted data / save / migration
+- Multiplayer actor / game / turn / concurrency isolation
+- Ruleset mechanics / canonical identity
+- LLM 输出不绕过 authoritative state path
+- Plugin / imported content / path safety
+- Transport / token / secret leakage
+- Upgrade / rollback / integrity
+
+新增高风险产品契约时 **SHOULD** 增加对应测试；改动落在上述领域时，同时确认旧覆盖没有因重构丢失。
 
 不要为了测试而保留一个已经不合理的内部 helper / class / 文件结构。
 

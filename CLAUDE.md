@@ -8,7 +8,7 @@ Before modifying the repository, read the documents relevant to the task:
 2. Engineering change rules:
    - [docs/ENGINEERING_RULES.md](docs/ENGINEERING_RULES.md)
 3. For permissions, persistence, migrations, multiplayer, rules, or other high-risk contracts:
-   - [docs/testing-contracts.md](docs/testing-contracts.md)
+   - The Testing section of [docs/ENGINEERING_RULES.md](docs/ENGINEERING_RULES.md) (§15)
 4. For existing long-lived architecture decisions:
    - [docs/adr/](docs/adr/)
 
