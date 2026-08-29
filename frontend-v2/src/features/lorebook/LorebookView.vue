@@ -13,7 +13,7 @@ import Modal from '@/components/ui/Modal.vue'
 import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
 import { useLorePerspective } from './useLorePerspective'
-import { PUBLIC_VISIBILITY_MARKERS, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
+import { normalizeVisibilityValues, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
 
 interface LoreEdit extends LoreEntry {
   tier?: string
@@ -81,11 +81,12 @@ function matchesPerspectiveFilter(entry: LoreEntry): boolean {
 function resolveInspectorOpen(): boolean {
   // 「收起」的选择在任何屏宽都尊重；「展开」只在宽屏生效——
   // 否则宽屏上随手展开一次，手机每次进页面都会被抽屉自动遮挡。
+  // storage 读取失败视为无保存值，继续走屏宽判断（手机默认收起）。
   let saved: string | null = null
   try {
     saved = localStorage.getItem('lore_inspector_open')
   } catch {
-    return true
+    saved = null
   }
   if (saved === '0') return false
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
@@ -192,7 +193,7 @@ function setVisibilityMode(mode: LoreVisibilityMode) {
 function characterLabel(p: Player) { return String(p.character_name || p.user_id) }
 function isVisibleToPlayer(p: Player) {
   if (!loreEdit.value) return false
-  const current = new Set((loreEdit.value.visible_to || []).map(value => value.trim().toLowerCase()))
+  const current = new Set(normalizeVisibilityValues(loreEdit.value.visible_to).map(value => value.toLowerCase()))
   const uid = String(p.user_id).trim().toLowerCase()
   const name = String(p.character_name || '').trim().toLowerCase()
   return current.has(uid) || (name !== '' && current.has(name))
@@ -202,7 +203,7 @@ function toggleCharacterVisible(p: Player) {
   const uid = String(p.user_id).trim()
   const name = String(p.character_name || '').trim().toLowerCase()
   const norm = (value: string) => value.trim().toLowerCase()
-  const current = loreEdit.value.visible_to || []
+  const current = normalizeVisibilityValues(loreEdit.value.visible_to)
   const kept = current.filter(
     value => norm(value) !== uid.toLowerCase() && (name === '' || norm(value) !== name),
   )

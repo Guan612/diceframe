@@ -148,6 +148,21 @@ describe('LorebookView perspective inspector', () => {
     expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
   })
 
+  it('defaults to collapsed on narrow screens when localStorage reads throw', async () => {
+    const realGetItem = Storage.prototype.getItem
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function (
+      this: Storage,
+      key: string,
+    ) {
+      if (key === 'lore_inspector_open') throw new Error('storage denied')
+      return realGetItem.call(this, key)
+    })
+    stubNarrowViewport()
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.find('.lore-perspective-inspector').exists()).toBe(false)
+  })
+
   it('keeps mounting and closing when localStorage writes are rejected', async () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('storage denied')
