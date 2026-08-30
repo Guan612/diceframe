@@ -287,7 +287,7 @@ async function create() {
       <div class="join-title-block">
         <BrandLogo :size="36" />
         <div class="join-title-copy">
-          <span class="section-kicker">{{ t('playerSlot') }}</span>
+          <span class="section-kicker">PLAYER SLOT</span>
           <h1>{{ detail.world_name || t('joinGame') }}</h1>
           <p>{{ detail.scene || t('createCharacterStartAdventure') }}</p>
         </div>
