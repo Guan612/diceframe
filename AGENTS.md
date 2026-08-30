@@ -23,3 +23,8 @@
 - migration correctness > migration completeness；无法证明安全时 fail closed。
 - 系统模板不得无条件覆盖用户数据。
 - AI 可以改架构，但不能靠猜测创造字段、API 或迁移语义。
+- 新增行为前先识别 owning module；不要仅因为 central View / route / facade 能拿到所有状态，就把独立职责继续堆进去。
+- Orchestrator 负责组合与委托，feature/domain module 负责实现；存量肥大文件是渐进治理对象，不是新代码继续堆积的先例。
+- 新 provider / ruleset / plugin / transport 实现优先通过 capability / adapter / registry / public contract 扩展，避免在 generic path 增加具体实现分支。
+- 新 route 不得新增 `api._*` / `registry._*` 等私有成员穿透；新 service 优先使用显式依赖，不把完整 `WebAPI` 当 service locator。
+- 提交前检查最终 changed-file list，确认没有其它任务、其它测试或 AI 工作区残留串入当前 PR。
