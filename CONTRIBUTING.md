@@ -32,6 +32,9 @@
 - 保持 Web API 字段向后兼容；如确需 breaking change，应明确版本、迁移、兼容或拒绝策略。
 - 新功能同时补齐必要的测试、用户手册和迁移说明。
 - 默认复用现有分层、服务和共享 helper；如现有架构不再合适，可以通过明确的架构改动重新设计。
+- 新增行为应放在明确的 owning module；页面壳、route、WebAPI/facade 等编排层以组合和委托为主，不应因为方便访问全局状态而持续吸收独立业务职责。
+- 存量大型/高耦合模块按计划渐进拆分，不要求贡献者在无关 PR 中顺手重构；但已有技术债也不应被当作新增同类耦合的先例。
+- 新的 provider、ruleset、plugin、transport 等实现优先复用 capability / adapter / registry / generic connector，而不是把具体实现分支追加到通用路径。
 - 不提交运行时存档、个人数据、API Key、构建产物或本机配置。
 - 自动化账号（例如 `claude[bot]`、`github-actions[bot]`、`web-flow`）的提交记录保持原样，不通过改作者信息来隐藏或冒充人工贡献。
 
@@ -70,6 +73,8 @@ Pull Request 上的 Browser smoke 会保留完整日志，但浏览器或运行�
 允许使用 Codex、Claude、ChatGPT 等工具辅助开发。
 
 AI 生成代码与人工代码遵守同样的架构、数据、安全和测试要求。提交者仍需要理解实际改动，并验证 AI 没有凭空创造字段、API、兼容行为或迁移语义。
+
+AI 辅助修改在提交前应检查最终 diff / changed-file list，移除与当前任务无关的测试、注释、日志、格式化或其它工作区残留；AI review 的建议应先验证是否适用于当前仓库，而不是机械执行。
 
 ## 贡献者名单
 

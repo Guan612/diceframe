@@ -21,6 +21,19 @@
 - [ ] Plugin / Content / Extension Contract
 - [ ] UI only
 
+## Module / Boundary
+
+<!--
+这个变化主要属于哪个 feature / service / runtime / contract？
+如果修改的是已知大型 orchestration / legacy hotspot：
+- 这是原有职责内的小改动；
+- 还是新增了一个独立职责？
+- 如果暂时原地实现，原因是什么？
+纯文档 / 样式小改可写 N/A。
+-->
+
+N/A
+
 ## Design / Migration Notes
 
 <!--
