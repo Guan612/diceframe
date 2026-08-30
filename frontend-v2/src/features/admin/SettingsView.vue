@@ -268,17 +268,19 @@ const settingsNavNarrow = ref(false)
 const settingsNavOpen = ref(false)
 const activeSection = computed(() => sections.find(s => s.id === section.value) || sections[0])
 
-function applySettingsNavWidth(media: MediaQueryList | null) {
-  if (!media) return
-  settingsNavNarrow.value = media.matches
-  if (!media.matches) settingsNavOpen.value = false
+function applySettingsNavWidth(matches: boolean) {
+  settingsNavNarrow.value = matches
+  // 拖回宽屏时收起展开状态，再次进入窄屏从折叠默认开始
+  if (!matches) settingsNavOpen.value = false
 }
 
 function watchSettingsNavWidth() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
   const media = window.matchMedia('(max-width: 980px)')
-  applySettingsNavWidth(media)
-  const listener = (event: MediaQueryListEvent) => applySettingsNavWidth(event.matches ? media : null)
+  applySettingsNavWidth(media.matches)
+  // 注意：窄→宽的 change 事件 matches=false，必须把 narrow 置回 false，
+  // 否则拖大窗口后节列表永远隐藏（resize 回宽屏侧栏消失的来源）。
+  const listener = (event: MediaQueryListEvent) => applySettingsNavWidth(event.matches)
   if (typeof media.addEventListener === 'function') media.addEventListener('change', listener)
   else if (typeof media.addListener === 'function') media.addListener(listener)
 }
