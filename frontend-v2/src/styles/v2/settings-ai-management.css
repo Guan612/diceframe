@@ -330,7 +330,7 @@
 .provider-model-row {
   position: relative;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) minmax(112px, 150px) 32px;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(108px, 140px) auto 32px;
   align-items: center;
   gap: 9px;
   min-height: 53px;
@@ -413,6 +413,87 @@
   font-size: 11px;
 }
 
+.provider-model-set-main {
+  position: relative;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 29px;
+  padding: 0 9px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 7px;
+  background: var(--df-control-bg);
+  color: var(--df-text-primary);
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 与“手动类型”列同构：小标签在上、控件在下，两列基线对齐 */
+.provider-model-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  align-content: end;
+}
+
+.provider-model-main > span {
+  color: var(--df-text-muted);
+  font-size: 9px;
+}
+
+.provider-model-main .provider-model-set-main {
+  width: 100%;
+}
+
+.provider-model-set-main:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--df-interactive) 45%, transparent);
+  color: var(--df-text);
+  background: color-mix(in srgb, var(--df-interactive) 8%, transparent);
+}
+
+.provider-model-set-main.active {
+  border-color: color-mix(in srgb, var(--df-accent) 45%, transparent);
+  color: var(--df-accent-strong);
+  background: color-mix(in srgb, var(--df-accent) 12%, transparent);
+  cursor: default;
+}
+
+.provider-model-set-main:disabled {
+  opacity: .55;
+  cursor: wait;
+}
+
+/* 手机宽度：一行放不下五个元素，改为「名字 / 能力下拉 / 设为主模型」三段纵排 */
+@media (max-width: 560px) {
+  .provider-model-row {
+    grid-template-columns: 34px minmax(0, 1fr) 32px;
+    grid-template-areas:
+      "orbit copy   remove"
+      "cap   cap    remove"
+      "main  main   main";
+    align-items: start;
+  }
+
+  .provider-model-row .provider-model-orbit { grid-area: orbit; }
+  .provider-model-row .provider-model-copy { grid-area: copy; }
+  .provider-model-row .provider-model-capability { grid-area: cap; }
+  .provider-model-row .provider-model-main { grid-area: main; }
+  .provider-model-row .provider-model-remove { grid-area: remove; align-self: start; }
+
+  .provider-model-row .provider-model-main .provider-model-set-main {
+    width: 100%;
+    height: 32px;
+  }
+}
+
+.provider-models-main-hint {
+  margin: 0 0 8px;
+  color: var(--df-text-muted);
+  font-size: 11px;
+}
+
 .provider-model-remove {
   position: relative;
   z-index: 4;
@@ -446,6 +527,15 @@
   grid-template-columns: minmax(0, 1fr) 150px auto;
   align-items: end;
   gap: 12px 20px;
+}
+
+/* 测试行三个控件同高：输入框 / 下拉 / 按钮顶底都对齐 */
+.provider-test-section .provider-field :is(.n-input, select) {
+  min-height: 40px;
+}
+
+.provider-test-section .provider-test-actions .n-button {
+  height: 40px;
 }
 
 .provider-test-section .test-result {

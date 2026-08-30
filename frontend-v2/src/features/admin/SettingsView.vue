@@ -34,8 +34,10 @@ import { useTheme } from '@/composables/useTheme'
 import { useBackgroundImages, type BackgroundSlot } from '@/composables/useBackgroundImages'
 import { currentBackendUrl, isStandaloneFrontend, normalizeBackendUrl, setBackendUrl } from '@/api/connection'
 import {
+  catalogModelMainEligible,
   modelCapability,
   providerTestKind,
+  selectMainModelWithRollback,
   type ModelCapability,
   type ProviderTestKind,
   type ProviderTestMode,
@@ -767,6 +769,46 @@ function setModelRoleProvider(
   if (!models.includes(current)) setStr(modelKey, models[0] || '')
 }
 
+// 模型目录行内“设为主模型”：复用模型配置页同一条保存路径，
+// 免去在两个设置页之间来回切换。
+const catalogSetMainBusy = ref('')
+
+function isCatalogModelMain(provider: ProviderDraft, modelName: string): boolean {
+  return store.config.llm_provider_ref === provider.id && store.config.model === modelName
+}
+
+function catalogModelIsChat(provider: ProviderDraft, modelName: string): boolean {
+  return modelCapability(modelName, provider.model_capabilities?.[modelName]) === 'chat'
+}
+
+// 目录行快捷入口只对“已持久化且保存后能力为 chat”的模型开放；
+// 未保存的 provider/模型/能力改动请先点“保存服务商”。
+function catalogModelEligible(provider: ProviderDraft, modelName: string): boolean {
+  return catalogModelMainEligible(store.config.ai_providers || [], provider.id, modelName)
+}
+
+async function setCatalogModelAsMain(provider: ProviderDraft, modelName: string) {
+  if (!providerLibrarySupported.value || modelRoutingSaving.value) return
+  if (isCatalogModelMain(provider, modelName)) return
+  if (!catalogModelEligible(provider, modelName)) return
+  catalogSetMainBusy.value = modelName
+  try {
+    // 资格已确认（provider 已保存 + 模型已保存 + 保存后能力为 chat），
+    // 赋值统一交给 selectMainModelWithRollback：它在任何修改发生**之前**
+    // 捕获旧主模型，保存失败才能真正回滚。这里不得提前 mutate config，
+    // 否则捕获到的“旧值”是被污染的中间态（tests/providerModels.test.ts
+    // 的结构守卫锁死了这一条）。
+    await selectMainModelWithRollback(
+      store.config as Record<string, unknown>,
+      provider.id,
+      modelName,
+      () => saveModelRouting(),
+    )
+  } finally {
+    catalogSetMainBusy.value = ''
+  }
+}
+
 const MODEL_ROUTING_CONFIG_KEYS = [
   'llm_provider_ref', 'model',
   'fallback1_enabled', 'fallback1_provider_ref', 'fallback1_model',
@@ -779,10 +821,10 @@ const MODEL_ROUTING_CONFIG_KEYS = [
   'imagegen_style_prefix', 'imagegen_timeout_seconds',
 ]
 
-async function saveModelRouting() {
+async function saveModelRouting(): Promise<boolean> {
   if (!providerLibrarySupported.value) {
     toast.error(t('providerBackendOutdated'))
-    return
+    return false
   }
   modelRoutingSaving.value = true
   try {
@@ -790,8 +832,10 @@ async function saveModelRouting() {
     await Promise.all([initializeTts(true), initializeAsr(true), loadTtsVoices()])
     toast.success(t('modelRoutingSaved'))
     warnings.forEach(warning => toast.warning(warning))
+    return true
   } catch (error: unknown) {
     toast.error(errorMessage(error))
+    return false
   } finally {
     modelRoutingSaving.value = false
   }
@@ -1717,6 +1761,9 @@ function redownloadUpdatePackage() {
                     </NButton>
                   </div>
 
+                  <p class="provider-models-main-hint">
+                    {{ t('providerModelsCurrentMain', { binding: modelBindingSummary(store.config.llm_provider_ref, store.config.model) }) }}
+                  </p>
                   <div v-if="activeProviderModelGroups.length" class="provider-model-groups">
                     <section v-for="group in activeProviderModelGroups" :key="group.name" class="provider-model-group">
                       <header>
@@ -1744,6 +1791,19 @@ function redownloadUpdatePackage() {
                               <option value="asr">{{ t('modelCapabilityAsr') }}</option>
                             </select>
                           </label>
+                          <div v-if="catalogModelIsChat(activeProvider, modelName)" class="provider-model-main">
+                            <span>{{ t('statusMainModel') }}</span>
+                            <button
+                              type="button"
+                              class="provider-model-set-main"
+                              :class="{ active: isCatalogModelMain(activeProvider, modelName) }"
+                              :disabled="modelRoutingSaving || catalogSetMainBusy !== '' || !catalogModelEligible(activeProvider, modelName)"
+                              :title="catalogModelEligible(activeProvider, modelName) ? '' : t('providerModelSaveFirst')"
+                              @click="setCatalogModelAsMain(activeProvider, modelName)"
+                            >
+                              {{ isCatalogModelMain(activeProvider, modelName) ? t('providerModelMainActive') : t('providerModelSetMain') }}
+                            </button>
+                          </div>
                           <button
                             type="button"
                             class="provider-model-remove"
