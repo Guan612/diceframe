@@ -364,6 +364,27 @@ def test_public_combat_feed_inherits_round_and_source_actor_for_damage() -> None
     assert damage["target_name"] == "Arden"
 
 
+def test_public_combat_feed_keeps_death_save_hp_and_combat_end_reason() -> None:
+    runtime, instance = _instance()
+    instance.event_ledger = [{
+        "batch_id": "death-save", "intent_type": "death_save", "result_version": 3,
+        "events": [{
+            "type": "dnd2024.death_save.resolved", "actor_id": "player:gm",
+            "roll": 20, "successes": 0, "failures": 0, "hp": 1,
+        }],
+    }, {
+        "batch_id": "incapacitated", "intent_type": "end_turn", "result_version": 4,
+        "events": [{
+            "type": "dnd2024.combat.ended", "reason": "party_incapacitated",
+        }],
+    }]
+
+    events = runtime._recent_combat_events(instance)
+
+    assert events[0]["hp"] == 1
+    assert events[1]["reason"] == "party_incapacitated"
+
+
 def test_auto_mode_can_start_a_valid_free_play_catalog_encounter() -> None:
     runtime, instance = _instance()
     instance.solo_mode = True

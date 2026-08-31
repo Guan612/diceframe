@@ -1066,8 +1066,10 @@ export interface RulesetCombatEvent extends JsonObject {
   critical?: boolean
   delta?: number
   amount?: number
+  hp?: number
   damage_type?: string
   distance?: number
+  reason?: string
 }
 
 export interface RulesetPartyDecision extends JsonObject {

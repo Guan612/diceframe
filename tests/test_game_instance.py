@@ -769,6 +769,47 @@ def test_reset_character_for_restart_preserves_zero_gold():
     assert "status" not in cs
 
 
+def test_reset_character_for_restart_clears_canonical_dnd_death_state():
+    cs = {
+        "hp": 0,
+        "max_hp": 12,
+        "deceased": True,
+        "ruleset_character": {
+            "resources": {"hp": 0, "max_hp": 12},
+            "conditions": {
+                "unconscious": {"source": "zero_hp"},
+                "dead": {"source": "death_saves"},
+                "death_saves": {"successes": 0, "failures": 3},
+            },
+        },
+    }
+
+    reset_character_for_restart(cs)
+
+    assert cs["hp"] == 12
+    assert cs["deceased"] is False
+    assert cs["ruleset_character"]["resources"]["hp"] == 12
+    assert cs["ruleset_character"]["conditions"] == {}
+
+
+def test_reset_character_for_restart_clears_nested_generic_runtime_state():
+    cs = {
+        "hp": 0,
+        "max_hp": 9,
+        "ruleset_character": {
+            "resources": {"hp": {"current": 0, "max": 9}},
+            "conditions": {"dead": {"source": "zero_hp"}},
+            "deceased": True,
+        },
+    }
+
+    reset_character_for_restart(cs)
+
+    assert cs["ruleset_character"]["resources"]["hp"] == {"current": 9, "max": 9}
+    assert cs["ruleset_character"]["conditions"] == {}
+    assert cs["ruleset_character"]["deceased"] is False
+
+
 def test_level_up_syncs_legacy_hp_and_resource_hp(tmp_path):
     inst = GameInstance(game_key=("web", "hp_sync", "bot"))
     inst.players["u1"] = {

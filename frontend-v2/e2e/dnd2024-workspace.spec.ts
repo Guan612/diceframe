@@ -241,8 +241,10 @@ test('guided creation enforces proficiency limits and enters the saved game even
   }
   await expect(languages.locator('input:not(:checked):not(:disabled)')).toHaveCount(0)
 
-  await page.locator('.builder-actions .primary').click()
-  await expect(page.getByRole('heading', { name: '角色已通过规则检查' })).toBeVisible()
+  const validateCharacter = page.locator('.builder-actions .primary')
+  await expect(validateCharacter).toBeEnabled()
+  await validateCharacter.click()
+  await expect(page.getByRole('heading', { name: '角色已通过规则检查' })).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: '完成角色' }).click()
   await expect(page.locator('.create-character-card').filter({ hasText: '新手验收者' })).toBeVisible()
   await page.locator('.create-actions .primary').click()

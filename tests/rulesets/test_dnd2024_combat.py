@@ -390,6 +390,56 @@ def test_stable_actor_remains_unconscious_and_skips_death_save() -> None:
     assert "unconscious" in canonical["conditions"]
 
 
+def test_last_stable_player_ends_combat_instead_of_looping_enemy_turns() -> None:
+    engine, instance = _instance()
+    canonical = instance.get_character_sheet("gm")["ruleset_character"]
+    canonical["resources"]["hp"] = 0
+    canonical["conditions"] = {
+        "unconscious": {"source": "zero_hp"},
+        "stable": {"duration": "until_healed"},
+        "death_saves": {"successes": 3, "failures": 0},
+    }
+    _start(engine, instance)
+
+    ended = engine.resolve_intent(instance, {
+        "intent_id": "stable-player-end", "type": "end_turn", "expected_version": 1,
+        "submitted_by": "gm", "actor_id": "player:gm",
+    }, SequenceRng([]))
+    assert ended["ok"] is True
+    assert ended["event_batch"]["events"][-1] == {
+        "type": "dnd2024.combat.ended", "reason": "party_incapacitated",
+    }
+
+    engine.apply_batch(instance, ended["event_batch"])
+    assert instance.ruleset_state["combat"]["status"] == "ended"
+    assert instance.ruleset_state["combat"]["outcome"] == "party_incapacitated"
+    assert engine.next_automatic_intent(instance) is None
+
+
+def test_stable_player_does_not_end_combat_while_a_teammate_can_act() -> None:
+    engine, instance = _instance()
+    runtime = Dnd2024Runtime()
+    ally = _character(runtime, "stalwart_guardian", "Mira")
+    instance.players["zz-ally"] = {"character_name": "Mira", "character_sheet": ally}
+    canonical = instance.get_character_sheet("gm")["ruleset_character"]
+    canonical["resources"]["hp"] = 0
+    canonical["conditions"] = {
+        "unconscious": {"source": "zero_hp"},
+        "stable": {"duration": "until_healed"},
+        "death_saves": {"successes": 3, "failures": 0},
+    }
+    _start(engine, instance)
+
+    ended = engine.resolve_intent(instance, {
+        "intent_id": "stable-player-pass", "type": "end_turn", "expected_version": 1,
+        "submitted_by": "gm", "actor_id": "player:gm",
+    }, SequenceRng([]))
+
+    assert ended["ok"] is True
+    assert ended["event_batch"]["events"][-1]["type"] == "dnd2024.turn.advanced"
+    assert ended["event_batch"]["events"][-1]["actor_id"] == "player:zz-ally"
+
+
 def test_enemy_turn_is_declared_by_server_and_returns_control_to_player() -> None:
     engine, instance = _instance()
     _start(engine, instance, position=5)
