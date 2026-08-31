@@ -73,6 +73,14 @@ const editorGraphIssues = computed(() => {
   return [...new Set(issues)]
 })
 
+const editorFlowPreview = computed(() => editorSteps.value.map((step, index) => ({
+  step,
+  index,
+  outgoing: editorChoices.value
+    .filter(choice => choice.step_id === step.id)
+    .map(choice => ({ label: choice.label || '继续', target: editorSteps.value.find(item => item.id === choice.next_step_id)?.title || (choice.next_step_id ? choice.next_step_id : '结局') })),
+})))
+
 const builtinCount = computed(() => items.value.filter(item => !item.custom).length)
 const customCount = computed(() => items.value.filter(item => item.custom).length)
 const boundCount = computed(() => items.value.filter(item => Number(item.in_use || 0) > 0).length)
@@ -863,6 +871,23 @@ function policyLabel(policy: string) {
           </article>
         </section>
         <div v-if="editorPanel === 'flow'" class="adventure-editor-panel-content adventure-flow-panel">
+        <section class="adventure-flow-map" aria-label="Adventure flow overview">
+          <header><strong>{{ String(locale).startsWith('zh') ? '流程概览' : 'Flow overview' }}</strong><small>{{ String(locale).startsWith('zh') ? '先看结构，再编辑下面的节点。' : 'Understand the structure before editing node details.' }}</small></header>
+          <div class="adventure-flow-track">
+            <template v-for="item in editorFlowPreview" :key="item.step.id">
+              <article :class="['adventure-flow-node', { start: item.step.id === editorStartStepId }]">
+                <small>{{ item.index + 1 }} · {{ item.step.chapter_id }}</small>
+                <strong>{{ item.step.title || t('unnamedStep') }}</strong>
+                <span v-if="item.step.id === editorStartStepId">{{ String(locale).startsWith('zh') ? '起点' : 'Start' }}</span>
+                <div v-if="item.outgoing.length" class="adventure-flow-edges">
+                  <i v-for="edge in item.outgoing" :key="`${item.step.id}-${edge.label}-${edge.target}`">{{ edge.label }} → {{ edge.target }}</i>
+                </div>
+                <em v-else>{{ String(locale).startsWith('zh') ? '结局' : 'End' }}</em>
+              </article>
+              <b v-if="item.index < editorFlowPreview.length - 1" class="adventure-flow-arrow" aria-hidden="true">→</b>
+            </template>
+          </div>
+        </section>
         <div v-for="chapter in editorChapters" :key="chapter.id" class="adventure-chapter-editor">
           <div class="adventure-editor-section-head"><input v-model="chapter.name" :aria-label="t('adventureChapter')"><button v-if="editorChapters.length > 1" type="button" class="link-button danger-text" @click="removeChapter(chapter.id)">{{ t('deleteChapter') }}</button></div>
           <div class="adventure-step-list">

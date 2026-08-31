@@ -228,6 +228,85 @@
   gap: 12px;
 }
 
+.adventure-flow-map {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 24%, var(--df-border-soft));
+  border-radius: 10px;
+  background: var(--df-surface-2);
+}
+
+.adventure-flow-map > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.adventure-flow-map > header small {
+  color: var(--df-text-muted);
+}
+
+.adventure-flow-track {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.adventure-flow-node {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  flex: 0 0 170px;
+  min-height: 92px;
+  padding: 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  background: var(--df-surface-1);
+}
+
+.adventure-flow-node.start {
+  border-color: var(--df-accent);
+  box-shadow: inset 3px 0 0 var(--df-accent);
+}
+
+.adventure-flow-node > small,
+.adventure-flow-node > em {
+  color: var(--df-text-muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.adventure-flow-node > span {
+  color: var(--df-accent-strong);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.adventure-flow-edges {
+  display: grid;
+  gap: 3px;
+  margin-top: 2px;
+}
+
+.adventure-flow-edges i {
+  overflow: hidden;
+  color: var(--df-text-muted);
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adventure-flow-arrow {
+  align-self: center;
+  color: var(--df-text-muted);
+  font-size: 18px;
+}
+
 .adventure-editor-diagnostics {
   display: grid;
   gap: 6px;
