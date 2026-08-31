@@ -419,7 +419,9 @@ function addStep() {
   const id = `step_${Date.now().toString(36)}`
   const chapterId = editorChapters.value[0]?.id || 'chapter_1'
   if (!editorChapters.value.length) editorChapters.value.push({ id: chapterId, name: '第一章' })
+  const previous = [...editorSteps.value].reverse().find(step => step.chapter_id === chapterId)
   editorSteps.value.push({ id, chapter_id: chapterId, scene_ref: '', requires: 'none', encounter_preset_id: '', title: '新步骤', narration: '', objective: '', hint: '' })
+  if (previous) connectStepAfter(previous.id, id)
 }
 
 function newStep(chapterId: string): EditorStep {
@@ -432,6 +434,37 @@ function insertStep(stepId: string, offset: -1 | 1) {
   const source = editorSteps.value[index]
   const step = newStep(source.chapter_id)
   editorSteps.value.splice(index + (offset > 0 ? 1 : 0), 0, step)
+  if (offset < 0) connectStepBefore(source.id, step.id)
+  else connectStepAfter(source.id, step.id)
+}
+
+function makeChoice(stepId: string, nextStepId: string, label = '继续'): EditorChoice {
+  return { id: `choice_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`, step_id: stepId, next_step_id: nextStepId, label, description: '' }
+}
+
+/** Keep the graph connected when a user inserts a step in the visual order. */
+function connectStepBefore(sourceId: string, insertedId: string) {
+  const incoming = editorChoices.value.filter(choice => choice.next_step_id === sourceId)
+  if (incoming.length) {
+    incoming.forEach(choice => { choice.next_step_id = insertedId })
+  } else if (editorStartStepId.value === sourceId) {
+    editorStartStepId.value = insertedId
+  }
+  editorChoices.value.push(makeChoice(insertedId, sourceId))
+}
+
+function connectStepAfter(sourceId: string, insertedId: string) {
+  const outgoing = editorChoices.value.filter(choice => choice.step_id === sourceId)
+  if (!outgoing.length) {
+    editorChoices.value.push(makeChoice(sourceId, insertedId))
+    return
+  }
+  const continuations = outgoing.map(choice => ({
+    ...makeChoice(insertedId, choice.next_step_id, choice.label || '继续'),
+    description: choice.description,
+  }))
+  outgoing.forEach(choice => { choice.next_step_id = insertedId })
+  editorChoices.value.push(...continuations)
 }
 
 function moveStep(stepId: string, direction: -1 | 1) {

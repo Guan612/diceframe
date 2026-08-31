@@ -97,3 +97,41 @@ def test_adventure_step_must_reference_a_catalogued_encounter(tmp_path: Path) ->
 
     with pytest.raises(AdventureBundleError, match="encounter preset is missing"):
         loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        (lambda adventure: adventure["steps"].append(dict(adventure["steps"][0])), "duplicate adventure step id"),
+        (lambda adventure: adventure["chapters"][0]["step_ids"].remove("keepers_plea"), "not listed in a chapter"),
+        (lambda adventure: adventure["chapters"][0]["step_ids"].append("thorn_ambush"), "chapter membership mismatch"),
+        (lambda adventure: adventure["choices"].append(dict(adventure["choices"][0])), "duplicate adventure choice id"),
+        (lambda adventure: adventure["choices"][0].update({"step_id": "missing_step"}), "choice is invalid"),
+    ],
+)
+def test_adventure_graph_rejects_editor_integrity_errors(
+    tmp_path: Path, mutation, message: str,
+) -> None:
+    loader, package = _copied_package(tmp_path)
+    adventure_path = package / "adventure.json"
+    adventure = json.loads(adventure_path.read_text(encoding="utf-8"))
+    mutation(adventure)
+    adventure_path.write_text(json.dumps(adventure), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError, match=message):
+        loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+def test_adventure_graph_rejects_disconnected_step(tmp_path: Path) -> None:
+    loader, package = _copied_package(tmp_path)
+    adventure_path = package / "adventure.json"
+    adventure = json.loads(adventure_path.read_text(encoding="utf-8"))
+    adventure["steps"].append({
+        "id": "orphan_step", "chapter_id": "old_shrine", "scene_ref": "",
+        "requires": "none", "choice_ids": [],
+    })
+    adventure["chapters"][2]["step_ids"].append("orphan_step")
+    adventure_path.write_text(json.dumps(adventure), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError, match="unreachable from start"):
+        loader.load("lanterns_of_greymoor", "zh-CN")

@@ -278,18 +278,42 @@ class AdventureBundleLoader:
         if len(adventures) != 1:
             raise AdventureBundleError("adventure package must contain one adventure entity")
         adventure = next(iter(adventures.values()))
-        chapters = {
-            str(item.get("id") or ""): item
-            for item in adventure.get("chapters") or [] if isinstance(item, dict)
-        }
-        steps = {
-            str(item.get("id") or ""): item
-            for item in adventure.get("steps") or [] if isinstance(item, dict)
-        }
-        choices = {
-            str(item.get("id") or ""): item
-            for item in adventure.get("choices") or [] if isinstance(item, dict)
-        }
+        raw_chapters = adventure.get("chapters")
+        raw_steps = adventure.get("steps")
+        raw_choices = adventure.get("choices")
+        if not isinstance(raw_chapters, list) or not raw_chapters:
+            raise AdventureBundleError("adventure chapters must be a non-empty array")
+        if not isinstance(raw_steps, list) or not raw_steps:
+            raise AdventureBundleError("adventure steps must be a non-empty array")
+        if not isinstance(raw_choices, list):
+            raise AdventureBundleError("adventure choices must be an array")
+
+        chapters: dict[str, dict[str, Any]] = {}
+        for item in raw_chapters:
+            if not isinstance(item, dict):
+                raise AdventureBundleError("adventure chapter must be an object")
+            chapter_id = _required_text(item.get("id"), "adventure chapter id", _ID_RE)
+            if chapter_id in chapters:
+                raise AdventureBundleError(f"duplicate adventure chapter id: {chapter_id}")
+            chapters[chapter_id] = item
+
+        steps: dict[str, dict[str, Any]] = {}
+        for item in raw_steps:
+            if not isinstance(item, dict):
+                raise AdventureBundleError("adventure step must be an object")
+            step_id = _required_text(item.get("id"), "adventure step id", _ID_RE)
+            if step_id in steps:
+                raise AdventureBundleError(f"duplicate adventure step id: {step_id}")
+            steps[step_id] = item
+
+        choices: dict[str, dict[str, Any]] = {}
+        for item in raw_choices:
+            if not isinstance(item, dict):
+                raise AdventureBundleError("adventure choice must be an object")
+            choice_id = _required_text(item.get("id"), "adventure choice id", _ID_RE)
+            if choice_id in choices:
+                raise AdventureBundleError(f"duplicate adventure choice id: {choice_id}")
+            choices[choice_id] = item
         encounter_ids = {
             str(preset.get("id") or "")
             for catalog in entities.get("encounter_catalog", {}).values()
@@ -298,9 +322,30 @@ class AdventureBundleLoader:
         }
         if str(adventure.get("start_step_id") or "") not in steps:
             raise AdventureBundleError("adventure start_step_id is invalid")
+
+        # Chapter membership is authoritative in both directions.  This
+        # catches editor reorder/insert mistakes where a step is silently
+        # omitted from its chapter or listed under the wrong chapter.
+        chapter_step_ids: set[str] = set()
+        for chapter_id, chapter in chapters.items():
+            listed = chapter.get("step_ids")
+            if not isinstance(listed, list):
+                raise AdventureBundleError(f"adventure chapter step_ids must be an array: {chapter_id}")
+            for step_id_raw in listed:
+                step_id = _required_text(step_id_raw, "adventure chapter step id", _ID_RE)
+                if step_id in chapter_step_ids:
+                    raise AdventureBundleError(f"adventure step appears in multiple chapters: {step_id}")
+                step = steps.get(step_id)
+                if step is None:
+                    raise AdventureBundleError(f"adventure chapter step is missing: {step_id}")
+                if str(step.get("chapter_id") or "") != chapter_id:
+                    raise AdventureBundleError(f"adventure chapter membership mismatch: {step_id}")
+                chapter_step_ids.add(step_id)
+        if chapter_step_ids != set(steps):
+            missing = sorted(set(steps).difference(chapter_step_ids))[0]
+            raise AdventureBundleError(f"adventure step is not listed in a chapter: {missing}")
+
         for step_id, step in steps.items():
-            if not _ID_RE.fullmatch(step_id):
-                raise AdventureBundleError(f"adventure step id is invalid: {step_id}")
             if str(step.get("chapter_id") or "") not in chapters:
                 raise AdventureBundleError(f"adventure step has no chapter: {step_id}")
             scene_ref = str(step.get("scene_ref") or "")
@@ -311,16 +356,41 @@ class AdventureBundleLoader:
                 raise AdventureBundleError(
                     f"adventure encounter preset is missing: {encounter_id}"
                 )
-            for choice_id in step.get("choice_ids") or []:
+            choice_ids = step.get("choice_ids") or []
+            if not isinstance(choice_ids, list):
+                raise AdventureBundleError(f"adventure step choice_ids must be an array: {step_id}")
+            if len({str(choice_id) for choice_id in choice_ids}) != len(choice_ids):
+                raise AdventureBundleError(f"adventure step has duplicate choices: {step_id}")
+            for choice_id in choice_ids:
                 choice = choices.get(str(choice_id))
                 if choice is None or choice.get("step_id") != step_id:
                     raise AdventureBundleError(f"adventure choice is invalid: {choice_id}")
         for choice_id, choice in choices.items():
-            if not _ID_RE.fullmatch(choice_id):
-                raise AdventureBundleError(f"adventure choice id is invalid: {choice_id}")
+            source_step = str(choice.get("step_id") or "")
+            if source_step not in steps:
+                raise AdventureBundleError(f"adventure choice source step is missing: {choice_id}")
+            if choice_id not in {str(item) for item in (steps[source_step].get("choice_ids") or [])}:
+                raise AdventureBundleError(f"adventure choice is not listed by source step: {choice_id}")
             next_step = str(choice.get("next_step_id") or "")
             if next_step and next_step not in steps:
                 raise AdventureBundleError(f"adventure next step is missing: {next_step}")
+
+        # Detect completely disconnected editor nodes.  Conditional gates may
+        # prevent a step at runtime, but every authored node must still have a
+        # structural path from the declared start step.
+        reachable = {str(adventure.get("start_step_id") or "")}
+        changed = True
+        while changed:
+            changed = False
+            for choice in choices.values():
+                if str(choice.get("step_id") or "") in reachable:
+                    next_step = str(choice.get("next_step_id") or "")
+                    if next_step and next_step not in reachable:
+                        reachable.add(next_step)
+                        changed = True
+        unreachable = sorted(set(steps).difference(reachable))
+        if unreachable:
+            raise AdventureBundleError(f"adventure step is unreachable from start: {unreachable[0]}")
         for scene in entities.get("scene", {}).values():
             for ref in [scene.get("map_location_ref"), *(scene.get("npc_refs") or [])]:
                 if ref and not self._has_ref(entities, str(ref)):
