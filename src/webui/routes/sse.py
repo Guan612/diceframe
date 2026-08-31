@@ -27,7 +27,7 @@ async def api_sse_ticket(request: web.Request) -> web.Response:
     game_key = request.match_info["game_key"]
     user_id = request.get("user_id", "")
     api = _get_api(request)
-    inst = request.app["subsystems"].registry.get(api._parse_key(game_key))
+    inst = api.get_game_instance(game_key)
     if not inst:
         return web.json_response({"error": "not found"}, status=404)
     if not user_id or user_id not in inst.players:
@@ -39,7 +39,7 @@ async def api_sse_ticket(request: web.Request) -> web.Response:
 async def sse_stream(request: web.Request) -> web.StreamResponse:
     api = _get_api(request)
     gk = request.match_info["game_key"]
-    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    inst = api.get_game_instance(gk)
     if not inst:
         return web.json_response({"error": "not found"}, status=404)
 
@@ -53,7 +53,7 @@ async def sse_stream(request: web.Request) -> web.StreamResponse:
     max_idle = 60
     try:
         for _ in range(max_idle * 2):
-            current = request.app["subsystems"].registry.get(api._parse_key(gk))
+            current = api.get_game_instance(gk)
             if not current:
                 await response.write(b"event: end\ndata: game_ended\n\n")
                 break
@@ -82,7 +82,7 @@ async def sse_stream_action(request: web.Request) -> web.StreamResponse:
     selected_skill = str(body.get("selected_skill", "") or "")
     target_text = str(body.get("target_text", "") or "")
 
-    inst = request.app["subsystems"].registry.get(api._parse_key(gk))
+    inst = api.get_game_instance(gk)
     if not inst:
         return web.json_response({"error": "not found"}, status=404)
     user_id = request.get("user_id", "")
@@ -149,9 +149,8 @@ async def sse_play(request: web.Request) -> web.StreamResponse:
     game_key = request.match_info["game_key"]
     user_id = request.get("user_id", "")
     pool: ConnectionPool = request.app["connection_pool"]
-    subsystems = request.app["subsystems"]
     api = _get_api(request)
-    inst = subsystems.registry.get(api._parse_key(game_key))
+    inst = api.get_game_instance(game_key)
     if not inst:
         raise web.HTTPNotFound()
     if not user_id or user_id not in inst.players:
@@ -194,7 +193,7 @@ async def sse_play(request: web.Request) -> web.StreamResponse:
                 {"type": "baseline"},
             )
         while True:
-            current = subsystems.registry.get(api._parse_key(game_key))
+            current = api.get_game_instance(game_key)
             if not current:
                 break
             inst = current

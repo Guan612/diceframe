@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from src.engine.game_instance import GameInstance, GameRegistry
-from src.webui.services.games import list_games
+from src.webui.services.game_queries import list_games
 
 
 def test_list_games_returns_most_recent_activity_first(tmp_path):

@@ -6,11 +6,11 @@ import {
   ServerOutline, CubeOutline, CloudDownloadOutline,
   LockClosedOutline, OptionsOutline, InformationCircleOutline, ShareSocialOutline,
   KeyOutline, CopyOutline, EyeOutline, RefreshOutline, ColorPaletteOutline,
-  ImageOutline, PowerOutline, MicOutline, SearchOutline, AddOutline,
+  ImageOutline, PowerOutline, MicOutline,
   TrashOutline, CheckmarkCircleOutline, AlertCircleOutline, SparklesOutline,
   VolumeHighOutline, ShieldCheckmarkOutline, ChevronDownOutline,
 } from '@vicons/ionicons5'
-import { useSettingsStore, providerSecretKey } from '@/stores/useSettingsStore'
+import { useSettingsStore } from '@/stores/useSettingsStore'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useUpdateCheck } from '@/composables/useUpdateCheck'
@@ -27,27 +27,22 @@ import type { SecretKey } from '@/stores/useSettingsStore'
 import type { AppConfig, HubPreferences, LoginAuditEntry, LoginAuditResponse, TestResult, TtsVoiceCatalog } from '@/api/types'
 import TestResultCard from '@/components/admin/TestResultCard.vue'
 import TtsVoiceProfiles from '@/components/admin/TtsVoiceProfiles.vue'
+import ProviderLibrary from '@/features/admin/settings/ProviderLibrary.vue'
+import ProviderCatalogModal from '@/features/admin/settings/ProviderCatalogModal.vue'
+import ModelRoutingPane from '@/features/admin/settings/ModelRoutingPane.vue'
+import ProviderModelRow from '@/features/admin/settings/ProviderModelRow.vue'
+import ProviderTestSection from '@/features/admin/settings/ProviderTestSection.vue'
 import HelpButton from '@/components/common/HelpButton.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { useTheme } from '@/composables/useTheme'
 import { useBackgroundImages, type BackgroundSlot } from '@/composables/useBackgroundImages'
+import { useProviderModelSettings } from '@/composables/useProviderModelSettings'
 import { currentBackendUrl, isStandaloneFrontend, normalizeBackendUrl, setBackendUrl } from '@/api/connection'
-import {
-  catalogModelMainEligible,
-  modelCapability,
-  providerTestKind,
-  selectMainModelWithRollback,
-  type ModelCapability,
-  type ProviderTestKind,
-  type ProviderTestMode,
-} from '@/utils/providerModels'
 import { isSettingsSectionAvailable, normalizeSettingsSection, type SettingsSectionId } from '@/utils/settingsSections'
 
 type StatusTone = 'default' | 'success' | 'warning' | 'error' | 'info'
 type UpdatePackageKind = 'source' | 'portable' | 'docker'
-type ModelCatalogFilter = 'all' | ModelCapability
-type ProviderModelGroup = { name: string; models: string[] }
 type SystemStatusItem = { label: string; value: string; detail: string; tone: StatusTone; icon: Component }
 type RoutingStatusItem = SystemStatusItem & { enabled: boolean; order: number }
 type SettingsSection = { id: SettingsSectionId; labelKey: MessageKey; icon: Component }
@@ -357,19 +352,6 @@ async function loadTtsVoices() {
   catch { ttsVoices.value = null }
 }
 
-const EDGE_TTS_DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural'
-
-function setTtsProvider(value: string) {
-  setStr('tts_provider', value)
-  if (value === 'browser' || value === 'edge-tts') setStr('tts_provider_ref', '')
-  const currentVoice = String(store.config.tts_default_voice || '')
-  if (value === 'edge-tts' && !currentVoice.endsWith('Neural')) {
-    setStr('tts_default_voice', EDGE_TTS_DEFAULT_VOICE)
-  } else if (value === 'openai-compatible' && currentVoice.endsWith('Neural')) {
-    setStr('tts_default_voice', 'alloy')
-  }
-}
-
 const TTS_CONFIG_KEYS = [
   'tts_audio_format', 'tts_default_voice', 'tts_gm_voice', 'tts_player_voice',
   'tts_timeout_seconds', 'tts_cache_mb',
@@ -419,433 +401,63 @@ let asrTestSession: RecordingSession | null = null
 
 const ASR_CONFIG_KEYS = ['asr_timeout_seconds']
 
-function setAsrProvider(value: string) {
-  setStr('asr_provider', value)
-  if (value === 'disabled') setStr('asr_provider_ref', '')
-}
-
-// AI 服务商凭据库：草稿在本地编辑，保存时整体提交；secret 走 store.secrets 动态键。
-interface ProviderDraft {
-  id: string
-  name: string
-  base_url: string
-  api_format: string
-  models: string[]
-  model_capabilities: Record<string, ModelCapability>
-  configuredMasked: string
-}
-const providerDrafts = ref<ProviderDraft[]>([])
-const providerTestModels = ref<Record<string, string>>({})
-const providerTestModes = ref<Record<string, ProviderTestMode>>({})
-const providerSearch = ref('')
-const activeProviderId = ref('')
-const providerSaving = ref(false)
-const providerTestingId = ref('')
-const providerFetchingModelsId = ref('')
-const providerTestedId = ref('')
-const providerTestedKind = ref<ProviderTestKind>('model')
-const providerTestResult = ref<TestResult | null>(null)
-const providerCatalogOpen = ref(false)
-const providerCatalogProviderId = ref('')
-const providerCatalogModels = ref<Record<string, string[]>>({})
-const providerCatalogSearch = ref('')
-const providerCatalogFilter = ref<ModelCatalogFilter>('all')
-const providerCatalogCustomModel = ref('')
-const modelRoutingSaving = ref(false)
-
-const providerLibrarySupported = computed(() => Object.prototype.hasOwnProperty.call(store.config, 'ai_providers'))
-const savedProviderIds = computed(() => new Set((store.config.ai_providers || []).map(p => p.id)))
-const openAiProviders = computed(() => (store.config.ai_providers || []).filter(p => p.api_format === 'openai'))
-const filteredProviderDrafts = computed(() => {
-  const query = providerSearch.value.trim().toLowerCase()
-  if (!query) return providerDrafts.value
-  return providerDrafts.value.filter(provider => (
-    `${provider.name} ${provider.base_url} ${provider.models.join(' ')}`.toLowerCase().includes(query)
-  ))
-})
-const activeProvider = computed(() => (
-  providerDrafts.value.find(provider => provider.id === activeProviderId.value) || null
-))
-const activeCatalogProvider = computed(() => (
-  providerDrafts.value.find(provider => provider.id === providerCatalogProviderId.value) || null
-))
-const activeProviderModelGroups = computed(() => groupProviderModels(activeProvider.value?.models || []))
-const providerCatalogSourceModels = computed(() => (
-  providerCatalogModels.value[providerCatalogProviderId.value] || []
-))
-const providerCatalogFilteredModels = computed(() => {
-  const query = providerCatalogSearch.value.trim().toLowerCase()
-  return providerCatalogSourceModels.value.filter(model => {
-    const matchesQuery = !query || model.toLowerCase().includes(query)
-    const matchesCapability = providerCatalogFilter.value === 'all'
-      || draftModelCapability(activeCatalogProvider.value, model) === providerCatalogFilter.value
-    return matchesQuery && matchesCapability
-  })
-})
-const providerCatalogGroups = computed(() => groupProviderModels(providerCatalogFilteredModels.value))
-const providerCatalogFilters = computed(() => {
-  const models = providerCatalogSourceModels.value
-  const filters: { id: ModelCatalogFilter; label: string; count: number }[] = [
-    { id: 'all', label: t('modelPickerAll'), count: models.length },
-    { id: 'chat', label: t('modelCapabilityChat'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'chat').length },
-    { id: 'image', label: t('modelCapabilityImage'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'image').length },
-    { id: 'embedding', label: t('modelCapabilityEmbedding'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'embedding').length },
-    { id: 'tts', label: t('modelCapabilityTts'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'tts').length },
-    { id: 'asr', label: t('modelCapabilityAsr'), count: models.filter(model => draftModelCapability(activeCatalogProvider.value, model) === 'asr').length },
-  ]
-  return filters
-})
-
-function syncProviderDrafts(list: AppConfig['ai_providers']) {
-  providerDrafts.value = (list || []).map(p => ({
-    id: p.id,
-    name: p.name,
-    base_url: p.base_url,
-    api_format: String(p.api_format || 'openai'),
-    models: [...new Set((p.models || []).map(model => String(model).trim()).filter(Boolean))],
-    model_capabilities: { ...(p.model_capabilities || {}) },
-    configuredMasked: p.api_key?.configured ? p.api_key.masked : '',
-  }))
-  if (!providerDrafts.value.some(provider => provider.id === activeProviderId.value)) {
-    activeProviderId.value = providerDrafts.value[0]?.id || ''
-  }
-}
-watch(() => store.config.ai_providers, syncProviderDrafts, { immediate: true })
-
-function addProviderDraft() {
-  if (!providerLibrarySupported.value) {
-    toast.error(t('providerBackendOutdated'))
-    return
-  }
-  const provider = {
-    id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-    name: '', base_url: '', api_format: 'openai', models: [], model_capabilities: {}, configuredMasked: '',
-  }
-  providerDrafts.value.push(provider)
-  activeProviderId.value = provider.id
-}
-function removeProviderDraft(index: number) {
-  const [removed] = providerDrafts.value.splice(index, 1)
-  if (removed?.id === activeProviderId.value) {
-    activeProviderId.value = providerDrafts.value[Math.min(index, providerDrafts.value.length - 1)]?.id || ''
-  }
-}
-function setProviderSecret(id: string, v: string | number) {
-  store.secrets[providerSecretKey(id)] = String(v).trim()
-}
-
-async function saveProvidersList() {
-  if (!providerLibrarySupported.value) {
-    toast.error(t('providerBackendOutdated'))
-    return
-  }
-  providerSaving.value = true
-  try {
-    const warnings = await store.saveProviders(
-      providerDrafts.value.map(d => ({
-        id: d.id, name: d.name, base_url: d.base_url, api_format: d.api_format, models: d.models,
-        model_capabilities: d.model_capabilities,
-      })),
-    )
-    toast.success(t('settingsSaved'))
-    warnings.forEach(warning => toast.warning(warning))
-  } catch (e: unknown) {
-    toast.error(errorMessage(e))
-  } finally {
-    providerSaving.value = false
-  }
-}
-
-async function testProviderDraft(draft: ProviderDraft, testModel: string) {
-  providerTestingId.value = draft.id
-  providerTestResult.value = null
-  const model = testModel.trim() || String(store.config.model || 'gpt-4o-mini')
-  const kind = providerTestKind(
-    model,
-    providerTestModes.value[draft.id] || 'auto',
-    draft.model_capabilities[model],
-  )
-  if (!kind) {
-    providerTestedId.value = draft.id
-    providerTestedKind.value = 'model'
-    providerTestResult.value = { ok: false, error: t('providerTestUnsupported') }
-    providerTestingId.value = ''
-    return
-  }
-  try {
-    providerTestResult.value = await store.testProvider({
-      // 已保存的服务商可让服务端取凭据；新草稿只带明文输入。
-      providerId: savedProviderIds.value.has(draft.id) ? draft.id : undefined,
-      baseUrl: draft.base_url,
-      apiKey: store.secrets[providerSecretKey(draft.id)]?.trim() || '',
-      apiFormat: draft.api_format,
-      model,
-      kind,
-    })
-    providerTestedId.value = draft.id
-    providerTestedKind.value = kind
-  } catch (e: unknown) {
-    toast.error(errorMessage(e))
-  } finally {
-    providerTestingId.value = ''
-  }
-}
-
-async function fetchProviderModels(draft: ProviderDraft) {
-  providerFetchingModelsId.value = draft.id
-  try {
-    const result = await store.fetchProviderModels({
-      providerId: savedProviderIds.value.has(draft.id) ? draft.id : undefined,
-      baseUrl: draft.base_url,
-      apiKey: store.secrets[providerSecretKey(draft.id)]?.trim() || '',
-      apiFormat: draft.api_format,
-    })
-    if (!result.ok) throw new Error(result.error || t('operationFailed'))
-    providerCatalogModels.value[draft.id] = [...new Set([
-      ...draft.models,
-      ...result.models.map(model => String(model).trim()).filter(Boolean),
-    ])]
-    toast.success(t('providerModelsFetched', { count: providerCatalogModels.value[draft.id].length }))
-  } catch (e: unknown) {
-    toast.error(errorMessage(e))
-  } finally {
-    providerFetchingModelsId.value = ''
-  }
-}
-
-async function openProviderCatalog(draft: ProviderDraft) {
-  providerCatalogProviderId.value = draft.id
-  providerCatalogSearch.value = ''
-  providerCatalogFilter.value = 'all'
-  providerCatalogCustomModel.value = ''
-  providerCatalogOpen.value = true
-  if (!providerCatalogModels.value[draft.id]) {
-    providerCatalogModels.value[draft.id] = [...draft.models]
-    await fetchProviderModels(draft)
-  }
-}
-
-function addProviderModel(draft: ProviderDraft, value: string) {
-  const model = String(value || '').trim()
-  if (!model) return
-  if (!draft.models.includes(model)) draft.models.push(model)
-}
-
-function addCustomProviderModel() {
-  if (!activeCatalogProvider.value) return
-  addProviderModel(activeCatalogProvider.value, providerCatalogCustomModel.value)
-  const id = activeCatalogProvider.value.id
-  providerCatalogModels.value[id] = [...new Set([...(providerCatalogModels.value[id] || []), providerCatalogCustomModel.value.trim()].filter(Boolean))]
-  providerCatalogCustomModel.value = ''
-}
-
-function toggleCatalogModel(model: string) {
-  if (!activeCatalogProvider.value) return
-  if (activeCatalogProvider.value.models.includes(model)) removeProviderModel(activeCatalogProvider.value, model)
-  else addProviderModel(activeCatalogProvider.value, model)
-}
-
-function addAllCatalogModels() {
-  if (!activeCatalogProvider.value) return
-  activeCatalogProvider.value.models = [...new Set([
-    ...activeCatalogProvider.value.models,
-    ...providerCatalogFilteredModels.value,
-  ])]
-}
-
-function isCatalogModelSelected(model: string): boolean {
-  return Boolean(activeCatalogProvider.value?.models.includes(model))
-}
-
-function removeProviderModel(draft: ProviderDraft, model: string) {
-  draft.models = draft.models.filter(item => item !== model)
-  delete draft.model_capabilities[model]
-}
-
-function draftModelCapability(draft: ProviderDraft | null, model: string): ModelCapability {
-  return modelCapability(model, draft?.model_capabilities[model])
-}
-
-function draftModelCapabilitySelection(draft: ProviderDraft | null, model: string): ModelCapability | 'auto' {
-  return draft?.model_capabilities[model] || 'auto'
-}
-
-function setDraftModelCapability(draft: ProviderDraft, model: string, capability: string) {
-  if (capability === 'auto') {
-    delete draft.model_capabilities[model]
-    return
-  }
-  if (!['chat', 'image', 'embedding', 'tts', 'asr'].includes(capability)) return
-  draft.model_capabilities[model] = capability as ModelCapability
-}
-
-function providerHasKey(draft: ProviderDraft): boolean {
-  return Boolean(draft.configuredMasked || store.secrets[providerSecretKey(draft.id)]?.trim())
-}
-
-function providerDraftReady(draft: ProviderDraft): boolean {
-  return Boolean(draft.base_url.trim() && providerHasKey(draft))
-}
-
-function setActiveProviderTestModel(value: string | number) {
-  if (!activeProvider.value) return
-  providerTestModels.value[activeProvider.value.id] = String(value)
-}
-
-function setActiveProviderTestMode(value: string) {
-  if (!activeProvider.value || !['auto', 'model', 'embedding'].includes(value)) return
-  providerTestModes.value[activeProvider.value.id] = value as ProviderTestMode
-}
-
-function providerTestActionLabel(model: string, mode: ProviderTestMode): string {
-  return providerTestKind(model, mode) === 'embedding' ? t('testEmbeddingConnection') : t('testConnection')
-}
-
-function providerMark(draft: ProviderDraft): string {
-  return (draft.name || draft.id).trim().slice(0, 1).toUpperCase()
-}
-
-function providerStyle(providerId: string) {
-  let hash = 0
-  for (const character of providerId) hash = ((hash << 5) - hash) + character.charCodeAt(0)
-  return { '--provider-hue': String(Math.abs(hash) % 360) }
-}
-
-function modelCapabilityLabels(model: string, override?: string): string[] {
-  const capability = modelCapability(model, override)
-  const labels = [override ? t('modelCapabilityManualOverride') : t('modelCapabilityAuto')]
-  if (capability === 'image') return [...labels, t('modelCapabilityImage')]
-  if (capability === 'embedding') return [...labels, t('modelCapabilityEmbedding')]
-  if (capability === 'tts') return [...labels, t('modelCapabilityTts')]
-  if (capability === 'asr') return [...labels, t('modelCapabilityAsr')]
-
-  labels.push(t('modelCapabilityChat'))
-  const value = model.toLowerCase()
-  if (/(reason|thinking|deepseek-r|(^|[-_.])r1|(^|[-_.])o[134])/.test(value)) {
-    labels.push(t('modelCapabilityReasoning'))
-  }
-  return labels
-}
-
-function groupProviderModels(models: string[]): ProviderModelGroup[] {
-  const groups = new Map<string, string[]>()
-  for (const model of models) {
-    const slash = model.indexOf('/')
-    const name = slash > 0 ? model.slice(0, slash) : t('providerOtherModels')
-    const items = groups.get(name) || []
-    items.push(model)
-    groups.set(name, items)
-  }
-  return [...groups.entries()].map(([name, items]) => ({ name, models: items }))
-}
-
-function providerById(id: string) {
-  return (store.config.ai_providers || []).find(p => p.id === id)
-}
-
-function savedProviderModels(providerId: string, capability?: ModelCapability): string[] {
-  const provider = providerById(providerId)
-  const models = provider?.models || []
-  return capability
-    ? models.filter(model => modelCapability(model, provider?.model_capabilities?.[model]) === capability)
-    : models
-}
-
-function modelBindingSummary(providerId: unknown, model: unknown): string {
-  const provider = providerById(String(providerId || ''))
-  if (!provider) return t('modelRoutingUnassigned')
-  return `${provider.name || provider.id} · ${String(model || t('modelUnset'))}`
-}
-
-function setModelRoleProvider(
-  refKey: keyof AppConfig,
-  modelKey: keyof AppConfig,
-  providerId: string,
-  capability: ModelCapability,
-) {
-  setStr(refKey, providerId)
-  const models = savedProviderModels(providerId, capability)
-  const current = String((store.config as Record<string, unknown>)[modelKey] || '')
-  if (!models.includes(current)) setStr(modelKey, models[0] || '')
-}
-
-// 模型目录行内“设为主模型”：复用模型配置页同一条保存路径，
-// 免去在两个设置页之间来回切换。
-const catalogSetMainBusy = ref('')
-
-function isCatalogModelMain(provider: ProviderDraft, modelName: string): boolean {
-  return store.config.llm_provider_ref === provider.id && store.config.model === modelName
-}
-
-function catalogModelIsChat(provider: ProviderDraft, modelName: string): boolean {
-  return modelCapability(modelName, provider.model_capabilities?.[modelName]) === 'chat'
-}
-
-// 目录行快捷入口只对“已持久化且保存后能力为 chat”的模型开放；
-// 未保存的 provider/模型/能力改动请先点“保存服务商”。
-function catalogModelEligible(provider: ProviderDraft, modelName: string): boolean {
-  return catalogModelMainEligible(store.config.ai_providers || [], provider.id, modelName)
-}
-
-async function setCatalogModelAsMain(provider: ProviderDraft, modelName: string) {
-  if (!providerLibrarySupported.value || modelRoutingSaving.value) return
-  if (isCatalogModelMain(provider, modelName)) return
-  if (!catalogModelEligible(provider, modelName)) return
-  catalogSetMainBusy.value = modelName
-  try {
-    // 资格已确认（provider 已保存 + 模型已保存 + 保存后能力为 chat），
-    // 赋值统一交给 selectMainModelWithRollback：它在任何修改发生**之前**
-    // 捕获旧主模型，保存失败才能真正回滚。这里不得提前 mutate config，
-    // 否则捕获到的“旧值”是被污染的中间态（tests/providerModels.test.ts
-    // 的结构守卫锁死了这一条）。
-    await selectMainModelWithRollback(
-      store.config as Record<string, unknown>,
-      provider.id,
-      modelName,
-      () => saveModelRouting(),
-    )
-  } finally {
-    catalogSetMainBusy.value = ''
-  }
-}
-
-const MODEL_ROUTING_CONFIG_KEYS = [
-  'llm_provider_ref', 'model',
-  'fallback1_enabled', 'fallback1_provider_ref', 'fallback1_model',
-  'fallback2_enabled', 'fallback2_provider_ref', 'fallback2_model',
-  'embedding_enabled', 'embedding_provider_ref', 'embedding_model', 'embedding_max_input',
-  'tts_provider', 'tts_provider_ref', 'tts_model',
-  'asr_provider', 'asr_provider_ref', 'asr_model',
-  'imagegen_enabled', 'imagegen_auto_scene', 'imagegen_provider_ref', 'imagegen_model',
-  'imagegen_square_size', 'imagegen_landscape_size', 'imagegen_quality',
-  'imagegen_style_prefix', 'imagegen_timeout_seconds',
-]
-
-async function saveModelRouting(): Promise<boolean> {
-  if (!providerLibrarySupported.value) {
-    toast.error(t('providerBackendOutdated'))
-    return false
-  }
-  modelRoutingSaving.value = true
-  try {
-    const warnings = await store.saveSection(MODEL_ROUTING_CONFIG_KEYS)
+const {
+  providerDrafts,
+  providerTestModels,
+  providerTestModes,
+  providerSearch,
+  activeProviderId,
+  providerSaving,
+  providerTestingId,
+  providerFetchingModelsId,
+  providerTestedId,
+  providerTestedKind,
+  providerTestResult,
+  providerCatalogOpen,
+  modelRoutingSaving,
+  catalogAssignmentBusy,
+  providerLibrarySupported,
+  readyProviderIds,
+  activeProvider,
+  activeCatalogProvider,
+  activeProviderModelGroups,
+  providerCatalogSourceModels,
+  addProviderDraft,
+  removeProviderDraft,
+  setProviderSecret,
+  providerSecretValue,
+  saveProvidersList,
+  testProviderDraft,
+  fetchProviderModels,
+  openProviderCatalog,
+  addCustomProviderModel,
+  toggleCatalogModel,
+  addAllCatalogModels,
+  removeProviderModel,
+  draftModelCapabilitySelection,
+  setDraftModelCapability,
+  providerModelCapabilityOptions,
+  providerTestModeOptions,
+  providerDraftReady,
+  setActiveProviderTestModel,
+  setActiveProviderTestMode,
+  providerTestActionLabel,
+  providerMark,
+  providerStyle,
+  modelCapabilityLabels,
+  providerById,
+  modelBindingSummary,
+  catalogModelAssignmentOptions,
+  catalogModelAssignmentValue,
+  catalogModelCanAssign,
+  assignCatalogModelRole,
+  saveModelRouting,
+  setModelRoutingBool,
+} = useProviderModelSettings({
+  refreshModelRuntimes: async () => {
     await Promise.all([initializeTts(true), initializeAsr(true), loadTtsVoices()])
-    toast.success(t('modelRoutingSaved'))
-    warnings.forEach(warning => toast.warning(warning))
-    return true
-  } catch (error: unknown) {
-    toast.error(errorMessage(error))
-    return false
-  } finally {
-    modelRoutingSaving.value = false
-  }
-}
-
-async function setModelRoutingBool(key: keyof AppConfig, value: boolean) {
-  if (modelRoutingSaving.value) return
-  setBool(key, value)
-  await saveModelRouting()
-}
+  },
+})
 
 async function saveAsr(showToast = true): Promise<boolean> {
   try {
@@ -1652,37 +1264,14 @@ function redownloadUpdatePackage() {
             </div>
 
             <div class="ai-provider-workspace">
-              <aside class="provider-library">
-                <div class="provider-search-box">
-                  <NIcon :component="SearchOutline" />
-                  <input v-model="providerSearch" :placeholder="t('providerSearch')">
-                </div>
-                <div class="provider-list">
-                  <button
-                    v-for="p in filteredProviderDrafts"
-                    :key="p.id"
-                    type="button"
-                    :class="['provider-list-item', { active: activeProviderId === p.id }]"
-                    @click="activeProviderId = p.id"
-                  >
-                    <span class="provider-avatar" :style="providerStyle(p.id)">{{ providerMark(p) }}</span>
-                    <span class="provider-list-copy">
-                      <strong>{{ p.name || p.base_url || t('providerNamePlaceholder') }}</strong>
-                      <small>{{ t('providerCatalogCount', { count: p.models.length }) }}</small>
-                    </span>
-                    <i :class="{ ready: providerDraftReady(p) }" />
-                  </button>
-                  <p v-if="providerDrafts.length && !filteredProviderDrafts.length" class="provider-list-empty">
-                    {{ t('providerSearchEmpty') }}
-                  </p>
-                </div>
-                <footer class="provider-library-footer">
-                  <button type="button" :disabled="!providerLibrarySupported" @click="addProviderDraft">
-                    <NIcon :component="AddOutline" />
-                    {{ t('providerAdd') }}
-                  </button>
-                </footer>
-              </aside>
+              <ProviderLibrary
+                v-model:active-provider-id="activeProviderId"
+                v-model:search="providerSearch"
+                :providers="providerDrafts"
+                :ready-provider-ids="readyProviderIds"
+                :can-add="providerLibrarySupported"
+                @add="addProviderDraft"
+              />
 
               <section v-if="activeProvider" class="provider-editor">
                 <header class="provider-editor-head">
@@ -1727,7 +1316,7 @@ function redownloadUpdatePackage() {
                     <label class="provider-field provider-field-wide">
                       <span>API Key</span>
                       <NInput
-                        :value="store.secrets[providerSecretKey(activeProvider.id)] ?? ''"
+                        :value="providerSecretValue(activeProvider.id)"
                         type="password"
                         show-password-on="click"
                         :placeholder="activeProvider.configuredMasked ? t('secretConfiguredPlaceholder', { masked: activeProvider.configuredMasked }) : ''"
@@ -1771,92 +1360,48 @@ function redownloadUpdatePackage() {
                         <span>{{ group.models.length }}</span>
                       </header>
                       <div class="provider-model-list">
-                        <article v-for="modelName in group.models" :key="modelName" class="provider-model-row">
-                          <span class="provider-model-orbit"><i /><i /></span>
-                          <div class="provider-model-copy">
-                            <strong>{{ modelName }}</strong>
-                            <small>{{ modelCapabilityLabels(modelName, activeProvider.model_capabilities[modelName]).join(' · ') }}</small>
-                          </div>
-                          <label class="provider-model-capability">
-                            <span>{{ t('modelCapabilityManual') }}</span>
-                            <select
-                              :value="draftModelCapabilitySelection(activeProvider, modelName)"
-                              @change="setDraftModelCapability(activeProvider, modelName, eventValue($event))"
-                            >
-                              <option value="auto">{{ t('modelCapabilityAuto') }}</option>
-                              <option value="chat">{{ t('modelCapabilityChat') }}</option>
-                              <option value="image">{{ t('modelCapabilityImage') }}</option>
-                              <option value="embedding">{{ t('modelCapabilityEmbedding') }}</option>
-                              <option value="tts">{{ t('modelCapabilityTts') }}</option>
-                              <option value="asr">{{ t('modelCapabilityAsr') }}</option>
-                            </select>
-                          </label>
-                          <div v-if="catalogModelIsChat(activeProvider, modelName)" class="provider-model-main">
-                            <span>{{ t('statusMainModel') }}</span>
-                            <button
-                              type="button"
-                              class="provider-model-set-main"
-                              :class="{ active: isCatalogModelMain(activeProvider, modelName) }"
-                              :disabled="modelRoutingSaving || catalogSetMainBusy !== '' || !catalogModelEligible(activeProvider, modelName)"
-                              :title="catalogModelEligible(activeProvider, modelName) ? '' : t('providerModelSaveFirst')"
-                              @click="setCatalogModelAsMain(activeProvider, modelName)"
-                            >
-                              {{ isCatalogModelMain(activeProvider, modelName) ? t('providerModelMainActive') : t('providerModelSetMain') }}
-                            </button>
-                          </div>
-                          <button
-                            type="button"
-                            class="provider-model-remove"
-                            :title="t('providerRemove')"
-                            @click="removeProviderModel(activeProvider, modelName)"
-                          >
-                            <NIcon :component="TrashOutline" />
-                          </button>
-                        </article>
+                        <ProviderModelRow
+                          v-for="modelName in group.models"
+                          :key="modelName"
+                          :model-name="modelName"
+                          :capability-summary="modelCapabilityLabels(modelName, activeProvider.model_capabilities[modelName]).join(' · ')"
+                          :manual-value="draftModelCapabilitySelection(activeProvider, modelName)"
+                          :manual-options="providerModelCapabilityOptions"
+                          :assignment-value="catalogModelAssignmentValue(activeProvider, modelName)"
+                          :assignment-options="catalogModelAssignmentOptions(activeProvider, modelName)"
+                          :assignment-placeholder="t('providerModelAssignPlaceholder')"
+                          :assignment-loading="catalogAssignmentBusy === `${activeProvider.id}:${modelName}`"
+                          :assignment-disabled="modelRoutingSaving || catalogAssignmentBusy !== '' || !catalogModelCanAssign(activeProvider, modelName)"
+                          :assignment-title="catalogModelCanAssign(activeProvider, modelName) ? '' : t('providerModelAssignmentUnavailable')"
+                          :remove-title="t('providerRemove')"
+                          @update:manual-value="setDraftModelCapability(activeProvider, modelName, $event)"
+                          @update:assignment-value="assignCatalogModelRole(activeProvider, modelName, $event)"
+                          @remove="removeProviderModel(activeProvider, modelName)"
+                        />
                       </div>
                     </section>
                   </div>
                   <p v-else class="provider-model-empty">{{ t('providerNoModels') }}</p>
                 </section>
 
-                <section class="provider-editor-section provider-test-section">
-                  <label class="provider-field">
-                    <span>{{ t('providerTestModel') }}</span>
-                    <NInput
-                      :value="providerTestModels[activeProvider.id] ?? ''"
-                      :placeholder="activeProvider.models[0] || String(store.config.model || 'gpt-4o-mini')"
-                      @update:value="setActiveProviderTestModel"
-                    />
-                  </label>
-                  <label class="provider-field">
-                    <span>{{ t('providerTestType') }}</span>
-                    <select
-                      :value="providerTestModes[activeProvider.id] || 'auto'"
-                      @change="setActiveProviderTestMode(eventValue($event))"
-                    >
-                      <option value="auto">{{ t('providerTestAuto') }}</option>
-                      <option value="model">{{ t('providerTestChat') }}</option>
-                      <option value="embedding">{{ t('providerTestEmbedding') }}</option>
-                    </select>
-                  </label>
-                  <div class="provider-test-actions">
-                    <NButton
-                      :loading="providerTestingId === activeProvider.id"
-                      @click="testProviderDraft(activeProvider, providerTestModels[activeProvider.id] || activeProvider.models[0] || '')"
-                    >{{ providerTestActionLabel(providerTestModels[activeProvider.id] || activeProvider.models[0] || String(store.config.model || 'gpt-4o-mini'), providerTestModes[activeProvider.id] || 'auto') }}</NButton>
-                    <NButton type="primary" :loading="providerSaving" :disabled="!providerLibrarySupported" @click="saveProvidersList">{{ t('providerSave') }}</NButton>
-                    <NButton
-                      quaternary
-                      type="error"
-                      @click="removeProviderDraft(providerDrafts.findIndex(provider => provider.id === activeProvider?.id))"
-                    >{{ t('providerRemove') }}</NButton>
-                  </div>
-                  <TestResultCard
-                    v-if="providerTestedId === activeProvider.id && providerTestResult"
-                    :result="providerTestResult"
-                    :kind="providerTestedKind"
-                  />
-                </section>
+                <ProviderTestSection
+                  :model-value="providerTestModels[activeProvider.id] ?? ''"
+                  :model-placeholder="activeProvider.models[0] || String(store.config.model || 'gpt-4o-mini')"
+                  :mode-value="providerTestModes[activeProvider.id] || 'auto'"
+                  :mode-options="providerTestModeOptions"
+                  :action-label="providerTestActionLabel(providerTestModels[activeProvider.id] || activeProvider.models[0] || String(store.config.model || 'gpt-4o-mini'), providerTestModes[activeProvider.id] || 'auto')"
+                  :testing="providerTestingId === activeProvider.id"
+                  :saving="providerSaving"
+                  :can-save="providerLibrarySupported"
+                  :show-result="providerTestedId === activeProvider.id"
+                  :result="providerTestResult"
+                  :result-kind="providerTestedKind"
+                  @update:model-value="setActiveProviderTestModel"
+                  @update:mode-value="setActiveProviderTestMode"
+                  @test="testProviderDraft(activeProvider, providerTestModels[activeProvider.id] || activeProvider.models[0] || '')"
+                  @save="saveProvidersList"
+                  @remove="removeProviderDraft(providerDrafts.findIndex(provider => provider.id === activeProvider?.id))"
+                />
               </section>
 
               <section v-else class="provider-editor provider-editor-empty">
@@ -1871,188 +1416,28 @@ function redownloadUpdatePackage() {
 
           </div>
 
-          <NModal
+          <ProviderCatalogModal
             v-model:show="providerCatalogOpen"
-            preset="card"
-            class="provider-catalog-modal"
-            :title="t('providerCatalogTitle', { name: activeCatalogProvider?.name || activeCatalogProvider?.id || '' })"
-          >
-            <div class="provider-catalog-tools">
-              <label class="provider-catalog-search">
-                <NIcon :component="SearchOutline" />
-                <input v-model="providerCatalogSearch" :placeholder="t('modelPickerSearch')">
-              </label>
-              <NButton
-                :loading="providerFetchingModelsId === activeCatalogProvider?.id"
-                :disabled="!activeCatalogProvider"
-                @click="activeCatalogProvider && fetchProviderModels(activeCatalogProvider)"
-              >
-                <template #icon><NIcon :component="RefreshOutline" /></template>
-                {{ t('providerRefreshCatalog') }}
-              </NButton>
-            </div>
-            <div class="provider-catalog-filters">
-              <button
-                v-for="filter in providerCatalogFilters"
-                :key="filter.id"
-                type="button"
-                :class="{ active: providerCatalogFilter === filter.id }"
-                @click="providerCatalogFilter = filter.id"
-              >
-                {{ filter.label }} <span>{{ filter.count }}</span>
-              </button>
-            </div>
-            <div class="provider-catalog-body">
-              <section v-for="group in providerCatalogGroups" :key="group.name" class="provider-catalog-group">
-                <header><strong>{{ group.name }}</strong><span>{{ group.models.length }}</span></header>
-                <button
-                  v-for="modelName in group.models"
-                  :key="modelName"
-                  type="button"
-                  :class="['provider-catalog-row', { selected: isCatalogModelSelected(modelName) }]"
-                  @click="toggleCatalogModel(modelName)"
-                >
-                  <span class="provider-model-orbit"><i /><i /></span>
-                  <span class="provider-catalog-copy">
-                    <strong>{{ modelName }}</strong>
-                    <small>{{ modelCapabilityLabels(modelName, activeCatalogProvider?.model_capabilities[modelName]).join(' · ') }}</small>
-                  </span>
-                  <span class="provider-catalog-toggle">{{ isCatalogModelSelected(modelName) ? '−' : '+' }}</span>
-                </button>
-              </section>
-              <p v-if="!providerCatalogGroups.length" class="provider-model-empty">{{ t('modelPickerEmpty') }}</p>
-            </div>
-            <footer class="provider-catalog-footer">
-              <div class="provider-catalog-custom">
-                <input v-model="providerCatalogCustomModel" :placeholder="t('providerModelPlaceholder')" @keydown.enter.prevent="addCustomProviderModel">
-                <button type="button" @click="addCustomProviderModel">{{ t('providerAddModel') }}</button>
-              </div>
-              <NButton :disabled="!providerCatalogFilteredModels.length" @click="addAllCatalogModels">
-                {{ t('providerAddAllModels') }}
-              </NButton>
-            </footer>
-          </NModal>
+            :provider="activeCatalogProvider"
+            :models="providerCatalogSourceModels"
+            :loading="providerFetchingModelsId === activeCatalogProvider?.id"
+            @refresh="activeCatalogProvider && fetchProviderModels(activeCatalogProvider)"
+            @toggle="toggleCatalogModel"
+            @add-custom="addCustomProviderModel"
+            @add-all="addAllCatalogModels"
+          />
 
-          <div v-show="section === 'models'" class="settings-pane model-routing-pane">
-            <header class="model-routing-header">
-              <div>
-                <h3>{{ t('modelRoutingTitle') }}</h3>
-                <p>{{ t('modelRoutingHint') }}</p>
-              </div>
-              <div class="model-routing-actions">
-                <HelpButton :title="t('modelRoutingHelpTitle')">
-                  <h4>{{ t('modelRoutingHelpMainTitle') }}</h4>
-                  <p>{{ t('modelRoutingHelpMainText') }}</p>
-                  <h4>{{ t('modelRoutingHelpFallbackTitle') }}</h4>
-                  <p>{{ t('modelRoutingHelpFallbackText') }}</p>
-                  <h4>{{ t('modelRoutingHelpOptionalTitle') }}</h4>
-                  <p>{{ t('modelRoutingHelpOptionalText') }}</p>
-                  <h4>{{ t('modelRoutingHelpExampleTitle') }}</h4>
-                  <p>{{ t('modelRoutingHelpExampleText') }}</p>
-                </HelpButton>
-                <NButton class="model-routing-save" type="success" :loading="modelRoutingSaving" :disabled="!providerLibrarySupported" @click="saveModelRouting">
-                  <template #icon><NIcon :component="CheckmarkCircleOutline" /></template>
-                  {{ t('modelRoutingSave') }}
-                </NButton>
-              </div>
-            </header>
-
-            <div v-if="!providerLibrarySupported" class="provider-backend-warning compact">
-              <NIcon :component="AlertCircleOutline" />
-              <div><strong>{{ t('providerBackendOutdatedTitle') }}</strong><p>{{ t('providerBackendOutdated') }}</p></div>
-            </div>
-            <div v-else-if="!(store.config.ai_providers || []).length" class="model-routing-empty">
-              <NIcon :component="ServerOutline" />
-              <div><strong>{{ t('modelRoutingNoProviders') }}</strong><p>{{ t('modelRoutingNoProvidersHint') }}</p></div>
-              <NButton @click="section = 'api'">{{ t('providerAdd') }}</NButton>
-            </div>
-
-            <div
-              v-if="providerLibrarySupported && (store.config.ai_providers || []).length"
-              class="model-routing-grid"
-              :class="{ 'is-saving': modelRoutingSaving }"
-            >
-              <article class="model-role-card model-role-card-main">
-                <header><NIcon :component="SparklesOutline" /><div><h4>{{ t('modelRoleMain') }}</h4><p>{{ t('modelRoleMainHint') }}</p></div></header>
-                <label><span>{{ t('providerName') }}</span><select :value="store.config.llm_provider_ref || ''" @change="setModelRoleProvider('llm_provider_ref', 'model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                <label><span>{{ t('model') }}</span><select :value="store.config.model || ''" :disabled="!store.config.llm_provider_ref" @change="setStr('model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.llm_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                <div class="model-fallback-grid">
-                  <section class="model-fallback-slot">
-                    <header><strong>{{ t('fallbackSlot1') }}</strong><NSwitch :value="!!store.config.fallback1_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('fallback1_enabled', $event)" /></header>
-                    <label><span>{{ t('providerName') }}</span><select :value="store.config.fallback1_provider_ref || ''" :disabled="!store.config.fallback1_enabled" @change="setModelRoleProvider('fallback1_provider_ref', 'fallback1_model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                    <label><span>{{ t('model') }}</span><select :value="store.config.fallback1_model || ''" :disabled="!store.config.fallback1_enabled || !store.config.fallback1_provider_ref" @change="setStr('fallback1_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.fallback1_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                  </section>
-                  <section class="model-fallback-slot">
-                    <header><strong>{{ t('fallbackSlot2') }}</strong><NSwitch :value="!!store.config.fallback2_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('fallback2_enabled', $event)" /></header>
-                    <label><span>{{ t('providerName') }}</span><select :value="store.config.fallback2_provider_ref || ''" :disabled="!store.config.fallback2_enabled" @change="setModelRoleProvider('fallback2_provider_ref', 'fallback2_model', eventValue($event), 'chat')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                    <label><span>{{ t('model') }}</span><select :value="store.config.fallback2_model || ''" :disabled="!store.config.fallback2_enabled || !store.config.fallback2_provider_ref" @change="setStr('fallback2_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.fallback2_provider_ref || ''), 'chat')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                  </section>
-                </div>
-              </article>
-
-              <div class="model-capability-grid">
-                <div class="model-capability-column">
-                  <article class="model-role-card model-role-card-embedding">
-                    <header>
-                      <NIcon :component="CubeOutline" />
-                      <div><h4>{{ t('modelRoleEmbedding') }}</h4><p>{{ t('modelRoleEmbeddingHint') }}</p></div>
-                      <HelpButton :title="t('embeddingHelpTitle')">
-                        <h4>{{ t('embeddingHelpWhatTitle') }}</h4>
-                        <p>{{ t('embeddingHelpWhatText') }}</p>
-                        <h4>{{ t('embeddingHelpChooseTitle') }}</h4>
-                        <p>{{ t('embeddingHelpChooseBefore') }} <code>bge-m3</code>{{ t('embeddingHelpChooseAfter') }} <code>text-embedding-3-small</code>, <code>gte-large</code>, <code>nomic-embed-text</code>{{ t('embeddingHelpChooseSuffix') }}</p>
-                        <h4>{{ t('embeddingHelpConfigTitle') }}</h4>
-                        <p>{{ t('embeddingHelpCentralized') }}</p>
-                        <h4>{{ t('test') }}</h4>
-                        <p>{{ t('embeddingHelpTest') }}</p>
-                      </HelpButton>
-                    </header>
-                    <label class="model-role-enabled"><span>{{ t('vectorMemory') }}</span><NSwitch :value="!!store.config.embedding_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('embedding_enabled', $event)" /></label>
-                    <label><span>{{ t('providerName') }}</span><select :value="store.config.embedding_provider_ref || ''" :disabled="!store.config.embedding_enabled" @change="setModelRoleProvider('embedding_provider_ref', 'embedding_model', eventValue($event), 'embedding')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                    <label><span>{{ t('model') }}</span><select :value="store.config.embedding_model || ''" :disabled="!store.config.embedding_enabled || !store.config.embedding_provider_ref" @change="setStr('embedding_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.embedding_provider_ref || ''), 'embedding')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                    <label><span>{{ t('maxInput') }}</span><NInputNumber :value="store.config.embedding_max_input ?? 0" :min="0" :disabled="!store.config.embedding_enabled" @update:value="setNum('embedding_max_input', $event)" /></label>
-                    <p class="model-role-field-hint">{{ t('maxInputHint') }}</p>
-                    <div class="model-role-actions">
-                      <NButton :loading="testing && testKind === 'embedding'" :disabled="!store.config.embedding_enabled" @click="runTest('embedding')">{{ t('testEmbeddingConnection') }}</NButton>
-                    </div>
-                    <TestResultCard v-if="testKind === 'embedding' && testResult" :result="testResult" kind="embedding" />
-                  </article>
-
-                  <article class="model-role-card">
-                    <header><NIcon :component="VolumeHighOutline" /><div><h4>{{ t('modelRoleTts') }}</h4><p>{{ t('modelRoleTtsHint') }}</p></div></header>
-                    <label><span>{{ t('modelRoutingMode') }}</span><select :value="store.config.tts_provider || 'browser'" @change="setTtsProvider(eventValue($event))"><option value="browser">{{ t('ttsProviderBrowser') }}</option><option value="edge-tts">{{ t('ttsProviderEdge') }}</option><option value="openai-compatible">{{ t('ttsProviderOpenAI') }}</option><option value="gpt-sovits">GPT-SoVITS</option></select></label>
-                    <template v-if="ttsProvider === 'openai-compatible' || ttsProvider === 'gpt-sovits'">
-                      <label><span>{{ t('providerName') }}</span><select :value="store.config.tts_provider_ref || ''" @change="setModelRoleProvider('tts_provider_ref', 'tts_model', eventValue($event), 'tts')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                      <label><span>{{ t('model') }}</span><select :value="store.config.tts_model || ''" :disabled="!store.config.tts_provider_ref" @change="setStr('tts_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.tts_provider_ref || ''), 'tts')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                    </template>
-                  </article>
-                </div>
-
-                <div class="model-capability-column">
-                  <article class="model-role-card">
-                    <header><NIcon :component="ImageOutline" /><div><h4>{{ t('modelRoleImagegen') }}</h4><p>{{ t('modelRoleImagegenHint') }}</p></div></header>
-                    <label class="model-role-enabled"><span>{{ t('enabled') }}</span><NSwitch :value="!!store.config.imagegen_enabled" :disabled="modelRoutingSaving" @update:value="setModelRoutingBool('imagegen_enabled', $event)" /></label>
-                    <label class="model-role-enabled"><span>{{ t('imagegenAutoScene') }}</span><NSwitch :value="!!store.config.imagegen_auto_scene" :disabled="modelRoutingSaving || !store.config.imagegen_enabled" @update:value="setModelRoutingBool('imagegen_auto_scene', $event)" /></label>
-                    <label><span>{{ t('providerName') }}</span><select :value="store.config.imagegen_provider_ref || ''" :disabled="!store.config.imagegen_enabled" @change="setModelRoleProvider('imagegen_provider_ref', 'imagegen_model', eventValue($event), 'image')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in openAiProviders" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                    <label><span>{{ t('model') }}</span><select :value="store.config.imagegen_model || ''" :disabled="!store.config.imagegen_enabled || !store.config.imagegen_provider_ref" @change="setStr('imagegen_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.imagegen_provider_ref || ''), 'image')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                    <label><span>{{ t('imagegenStylePrefix') }}</span><NInput :value="String(store.config.imagegen_style_prefix || '')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_style_prefix', $event)" /></label>
-                    <label><span>{{ t('imagegenSquareSize') }}</span><NInput :value="String(store.config.imagegen_square_size || '1024x1024')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_square_size', $event)" /></label>
-                    <label><span>{{ t('imagegenLandscapeSize') }}</span><NInput :value="String(store.config.imagegen_landscape_size || '1792x1024')" :disabled="!store.config.imagegen_enabled" @update:value="setStr('imagegen_landscape_size', $event)" /></label>
-                    <label><span>{{ t('imagegenTimeout') }}</span><NInputNumber :value="Number(store.config.imagegen_timeout_seconds || 120)" :min="5" :max="300" :disabled="!store.config.imagegen_enabled" @update:value="setNum('imagegen_timeout_seconds', $event)" /></label>
-                  </article>
-
-                  <article class="model-role-card">
-                    <header><NIcon :component="MicOutline" /><div><h4>{{ t('modelRoleAsr') }}</h4><p>{{ t('modelRoleAsrHint') }}</p></div></header>
-                    <label><span>{{ t('modelRoutingMode') }}</span><select :value="store.config.asr_provider || 'disabled'" @change="setAsrProvider(eventValue($event))"><option value="disabled">{{ t('asrProviderDisabled') }}</option><option value="openai-compatible">{{ t('asrProviderOpenAI') }}</option></select></label>
-                    <template v-if="asrProvider === 'openai-compatible'">
-                      <label><span>{{ t('providerName') }}</span><select :value="store.config.asr_provider_ref || ''" @change="setModelRoleProvider('asr_provider_ref', 'asr_model', eventValue($event), 'asr')"><option value="">{{ t('modelRoutingChooseProvider') }}</option><option v-for="p in store.config.ai_providers || []" :key="p.id" :value="p.id">{{ p.name || p.id }}</option></select></label>
-                      <label><span>{{ t('model') }}</span><select :value="store.config.asr_model || ''" :disabled="!store.config.asr_provider_ref" @change="setStr('asr_model', eventValue($event))"><option value="">{{ t('modelRoutingChooseModel') }}</option><option v-for="modelName in savedProviderModels(String(store.config.asr_provider_ref || ''), 'asr')" :key="modelName" :value="modelName">{{ modelName }}</option></select></label>
-                    </template>
-                  </article>
-                </div>
-              </div>
-            </div>
-          </div>
+          <ModelRoutingPane
+            v-show="section === 'models'"
+            :supported="providerLibrarySupported"
+            :saving="modelRoutingSaving"
+            :embedding-testing="testing && testKind === 'embedding'"
+            :embedding-result="testKind === 'embedding' ? testResult : null"
+            @save="saveModelRouting"
+            @open-providers="section = 'api'"
+            @toggle-and-save="setModelRoutingBool"
+            @test-embedding="runTest('embedding')"
+          />
 
           <div v-show="section === 'network'" class="settings-pane">
             <h3>{{ t('networkProxy') }}</h3>

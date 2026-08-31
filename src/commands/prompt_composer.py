@@ -23,7 +23,7 @@ from src.llm.context_builder import (
 from src.memory.delta import MemoryStore
 from src.rules.loader import RuleBundleLoader
 from src.rules.rule_system import RuleSystem
-from src.rulesets.dnd2024.advancement_access import prompt_instruction as advancement_prompt_instruction
+from src.rulesets.contracts import NarrativeAdvancementRuntime
 from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
@@ -55,6 +55,15 @@ class PromptComposer:
         self.rules_dir = rules_dir
         self.memory_store = memory_store
         self.ruleset_registry = ruleset_registry
+
+    def _runtime(self, instance: GameInstance):
+        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+        runtime_id = str(binding.get("id") or "")
+        if self.ruleset_registry is None or not runtime_id:
+            return None
+        return self.ruleset_registry.get(
+            runtime_id, minimum_version=int(binding.get("version", 1) or 1),
+        )
 
     def load_gm_prompt(self, rule_appendix: str = "", language: str = DEFAULT_LANGUAGE) -> str:
         """读取基础 GM prompt，并按需附加当前规则说明。"""
@@ -197,8 +206,11 @@ class PromptComposer:
                 ),
             })
         gm_prompt = gm_prompt + "\n\n" + narrative_perspective_instruction(instance, language)
-        if str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "") == "core:dnd2024":
-            gm_prompt = gm_prompt + "\n\n" + advancement_prompt_instruction(instance, language)
+        runtime = self._runtime(instance)
+        if isinstance(runtime, NarrativeAdvancementRuntime):
+            advancement_prompt = runtime.narrative_advancement_prompt(instance, language)
+            if advancement_prompt:
+                gm_prompt = gm_prompt + "\n\n" + advancement_prompt
         gm_prompt = gm_prompt + "\n\n" + gm_language_instruction(getattr(instance, "language", "zh-CN"))
         return gm_prompt
 
@@ -216,12 +228,8 @@ class PromptComposer:
     ) -> str:
         """调用 context_builder 生成本轮 user context。"""
         state_view = None
-        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
-        runtime_id = str(binding.get("id") or "")
-        if self.ruleset_registry is not None and runtime_id:
-            runtime = self.ruleset_registry.get(
-                runtime_id, minimum_version=int(binding.get("version", 1) or 1),
-            )
+        runtime = self._runtime(instance)
+        if runtime is not None:
             state_view = runtime.build_llm_view(instance)
         return await build_context(
             instance,

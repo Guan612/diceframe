@@ -10,6 +10,10 @@ import pytest
 from src.imagegen import ImageGenerationError, ImageGenerationResult
 from src.webui.routes import generated_images
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
+from src.webui.services.generated_images import (
+    GeneratedImageDependencies,
+    GeneratedImageService,
+)
 
 
 ASSET_ID = "a" * 64
@@ -92,12 +96,38 @@ class _FakeApi:
         self._imagegen = _FakeImageGenerationService(file_path, error=error)
         self._reg = _Registry(_FakeInstance())
         self.background_updates = []
+        self.generated_images = GeneratedImageService(GeneratedImageDependencies(
+            imagegen=self._imagegen,
+            get_instance=self.get_game_instance,
+            update_map_background=self.update_map_background,
+        ))
 
     def _parse_key(self, game_key):
         return tuple(game_key.split("|"))
 
+    def get_game_instance(self, game_key):
+        return self._reg.get(self._parse_key(game_key))
+
     def generated_image_file(self, asset_id):
-        return self._imagegen.assets.file(asset_id)
+        return self.generated_images.image_file(asset_id)
+
+    def image_generation_status(self):
+        return self.generated_images.public_config()
+
+    async def generate_generated_image(self, **request):
+        return await self.generated_images.generate_image(**request)
+
+    def list_game_generated_images(self, game_key, user_id, *, purpose=""):
+        return self.generated_images.list_game_images(
+            game_key, user_id, purpose=purpose,
+        )
+
+    async def use_generated_image_as_map_background(
+        self, game_key, user_id, asset_id,
+    ):
+        return await self.generated_images.use_as_map_background(
+            game_key, user_id, asset_id,
+        )
 
     async def update_map_background(self, game_key, selection):
         self.background_updates.append((game_key, selection))

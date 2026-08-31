@@ -9,13 +9,9 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import aiohttp
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 
 GITHUB_CONTENT_BASE_URL = "https://raw.githubusercontent.com/diceframe/diceframe-content/main/content"
 DEFAULT_BASE_URL = GITHUB_CONTENT_BASE_URL
@@ -48,16 +44,15 @@ def _validate_path(path: str) -> str:
     return value
 
 
-def _cache_file(api: "WebAPI", path: str) -> Path | None:
-    directory = getattr(api, "_content_cache_dir", None)
-    if not isinstance(directory, Path):
+def _cache_file(cache_dir: Path | None, path: str) -> Path | None:
+    if cache_dir is None:
         return None
     digest = hashlib.sha256(path.encode("utf-8")).hexdigest()
-    return directory / f"{digest}.cache"
+    return cache_dir / f"{digest}.cache"
 
 
-def _read_disk_cache(api: "WebAPI", path: str) -> str:
-    target = _cache_file(api, path)
+def _read_disk_cache(cache_dir: Path | None, path: str) -> str:
+    target = _cache_file(cache_dir, path)
     if target is None:
         return ""
     try:
@@ -66,8 +61,8 @@ def _read_disk_cache(api: "WebAPI", path: str) -> str:
         return ""
 
 
-def _write_disk_cache(api: "WebAPI", path: str, text: str) -> None:
-    target = _cache_file(api, path)
+def _write_disk_cache(cache_dir: Path | None, path: str, text: str) -> None:
+    target = _cache_file(cache_dir, path)
     if target is None:
         return
     try:
@@ -77,12 +72,12 @@ def _write_disk_cache(api: "WebAPI", path: str, text: str) -> None:
         return
 
 
-def disk_cache_age_seconds(api: "WebAPI", path: str) -> float | None:
+def disk_cache_age_seconds(cache_dir: Path | None, path: str) -> float | None:
     """公共内容磁盘缓存文件的年龄（秒）；无缓存或不可读时返回 None。
 
     供公告等服务判断返回正文是否来自缓存，而不是刚同步的在线内容。
     """
-    target = _cache_file(api, path)
+    target = _cache_file(cache_dir, path)
     if target is None:
         return None
     try:
@@ -92,7 +87,7 @@ def disk_cache_age_seconds(api: "WebAPI", path: str) -> float | None:
 
 
 async def fetch_text(
-    api: "WebAPI",
+    cache_dir: Path | None,
     path: str,
     *,
     force_refresh: bool = False,
@@ -105,7 +100,7 @@ async def fetch_text(
     if allow_cached and not force_refresh and cached and now - float(cached["fetched_at"]) < _SUCCESS_TTL:
         return str(cached["text"])
     if allow_cached and not force_refresh and now < _FAILURE_UNTIL.get(key, 0):
-        return str(cached["text"]) if cached else _read_disk_cache(api, key)
+        return str(cached["text"]) if cached else _read_disk_cache(cache_dir, key)
 
     task = _INFLIGHT.get(key)
     if task is None:
@@ -129,24 +124,24 @@ async def fetch_text(
     if text:
         _CACHE[key] = {"text": text, "fetched_at": now}
         _FAILURE_UNTIL.pop(key, None)
-        _write_disk_cache(api, key, text)
+        _write_disk_cache(cache_dir, key, text)
         return text
 
     _FAILURE_UNTIL[key] = now + _FAILURE_TTL
     if allow_cached:
-        return str(cached["text"]) if cached else _read_disk_cache(api, key)
+        return str(cached["text"]) if cached else _read_disk_cache(cache_dir, key)
     return ""
 
 
 async def fetch_json(
-    api: "WebAPI",
+    cache_dir: Path | None,
     path: str,
     *,
     force_refresh: bool = False,
     allow_cached: bool = True,
 ) -> dict[str, Any] | None:
     text = await fetch_text(
-        api,
+        cache_dir,
         path,
         force_refresh=force_refresh,
         allow_cached=allow_cached,
@@ -187,3 +182,44 @@ async def _fetch_one(session: aiohttp.ClientSession, url: str) -> str:
             return text if text.strip() else ""
     except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeDecodeError):
         return ""
+
+
+class PublicContentService:
+    """Bounded public-content fetcher rooted at one optional disk cache."""
+
+    def __init__(self, cache_dir: Path | None = None) -> None:
+        self._cache_dir = cache_dir
+
+    async def fetch_text(
+        self,
+        path: str,
+        *,
+        force_refresh: bool = False,
+        allow_cached: bool = True,
+    ) -> str:
+        return await fetch_text(
+            self._cache_dir,
+            path,
+            force_refresh=force_refresh,
+            allow_cached=allow_cached,
+        )
+
+    async def fetch_json(
+        self,
+        path: str,
+        *,
+        force_refresh: bool = False,
+        allow_cached: bool = True,
+    ) -> dict[str, Any] | None:
+        return await fetch_json(
+            self._cache_dir,
+            path,
+            force_refresh=force_refresh,
+            allow_cached=allow_cached,
+        )
+
+    def disk_cache_age(self, path: str) -> float | None:
+        return disk_cache_age_seconds(self._cache_dir, path)
+
+    def cache_file(self, path: str) -> Path | None:
+        return _cache_file(self._cache_dir, path)

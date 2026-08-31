@@ -160,7 +160,7 @@ def _patch_stream(monkeypatch, inst: GameInstance) -> None:
     monkeypatch.setattr(
         sse_routes,
         "_get_api",
-        lambda _request: SimpleNamespace(_parse_key=lambda _key: inst.game_key),
+        lambda _request: SimpleNamespace(get_game_instance=lambda _key: inst),
     )
     monkeypatch.setattr(sse_routes.web, "StreamResponse", _FakeStreamResponse)
     monkeypatch.setattr(sse_routes.asyncio, "sleep", _stop_stream)

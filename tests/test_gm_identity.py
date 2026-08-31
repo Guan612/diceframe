@@ -13,6 +13,9 @@ class DummyAPI:
     def _parse_key(self, game_key: str) -> tuple:
         return tuple(game_key.split(_GAME_KEY_SEP))
 
+    def get_game_instance(self, game_key: str):
+        return self._reg.get(self._parse_key(game_key))
+
 
 class FakeRequest(dict):
     def __init__(self, app, **kwargs):

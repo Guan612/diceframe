@@ -6,7 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.webui.services.knowledge import preview
+from src.webui.services.knowledge import (
+    LorePreviewDependencies,
+    LorePreviewService,
+)
 
 
 class _FakeLoreStore:
@@ -27,49 +30,49 @@ class _FakeLoreStore:
         return list(self.entries)
 
 
-def _make_api(players: dict | None = None):
+def _make_service(players: dict | None = None) -> LorePreviewService:
     instance = SimpleNamespace(players=players or {})
     registry = SimpleNamespace(get=lambda _key: instance if players is not None else None)
-    return SimpleNamespace(
-        _lore=_FakeLoreStore(),
-        _reg=registry,
-        _parse_key=lambda key: key,
-    )
+    return LorePreviewService(LorePreviewDependencies(
+        lorebook=_FakeLoreStore(),
+        get_instance=registry.get,
+        parse_game_key=lambda key: (key,),
+    ))
 
 
 def test_invalid_viewer_returns_400() -> None:
-    result = preview(_make_api(None), "w1", "")
+    result = _make_service(None).preview("w1", "")
     assert result["status"] == 400
     assert result["payload"]["code"] == "INVALID_VIEWER"
 
 
 def test_unknown_world_returns_404() -> None:
-    result = preview(_make_api(None), "missing", "gm")
+    result = _make_service(None).preview("missing", "gm")
     assert result["status"] == 404
     assert result["payload"]["code"] == "WORLD_NOT_FOUND"
 
 
 def test_character_viewer_requires_game_key() -> None:
-    result = preview(_make_api(None), "w1", "u1")
+    result = _make_service(None).preview("w1", "u1")
     assert result["status"] == 400
     assert result["payload"]["code"] == "INVALID_VIEWER"
 
 
 def test_character_viewer_unknown_game_returns_404() -> None:
-    result = preview(_make_api(None), "w1", "u1", "g-missing")
+    result = _make_service(None).preview("w1", "u1", "g-missing")
     assert result["status"] == 404
     assert result["payload"]["code"] == "GAME_NOT_FOUND"
 
 
 def test_character_viewer_not_in_game_returns_403() -> None:
-    api = _make_api({"u1": {"user_id": "u1", "character_name": "莱拉"}})
-    result = preview(api, "w1", "uX", "g1")
+    service = _make_service({"u1": {"user_id": "u1", "character_name": "莱拉"}})
+    result = service.preview("w1", "uX", "g1")
     assert result["status"] == 403
     assert result["payload"]["code"] == "PLAYER_NOT_IN_GAME"
 
 
 def test_gm_viewer_sees_all_entries() -> None:
-    result = preview(_make_api(None), "w1", "gm")
+    result = _make_service(None).preview("w1", "gm")
     assert result["status"] == 200
     payload = result["payload"]
     assert payload["ok"] is True
@@ -85,7 +88,7 @@ def test_gm_viewer_sees_all_entries() -> None:
 
 
 def test_party_viewer_sees_only_public_entries() -> None:
-    result = preview(_make_api(None), "w1", "party")
+    result = _make_service(None).preview("w1", "party")
     payload = result["payload"]
     assert payload["summary"]["visible"] == 1
     assert payload["projections"]["a"]["visible"] is True
@@ -94,8 +97,8 @@ def test_party_viewer_sees_only_public_entries() -> None:
 
 
 def test_character_viewer_derives_name_from_instance() -> None:
-    api = _make_api({"u1": {"user_id": "u1", "character_name": "莱拉"}})
-    result = preview(api, "w1", "u1", "g1")
+    service = _make_service({"u1": {"user_id": "u1", "character_name": "莱拉"}})
+    result = service.preview("w1", "u1", "g1")
     assert result["status"] == 200
     payload = result["payload"]
     assert payload["viewer"] == {"kind": "character", "uid": "u1", "name": "莱拉"}
@@ -104,7 +107,7 @@ def test_character_viewer_derives_name_from_instance() -> None:
 
 
 def test_character_viewer_falls_back_to_uid_without_name() -> None:
-    api = _make_api({"u1": {"user_id": "u1"}})
-    result = preview(api, "w1", "u1", "g1")
+    service = _make_service({"u1": {"user_id": "u1"}})
+    result = service.preview("w1", "u1", "g1")
     assert result["status"] == 200
     assert result["payload"]["viewer"]["name"] == "u1"

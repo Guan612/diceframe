@@ -88,8 +88,8 @@ function close(): void {
             <NIcon :component="ArrowBackOutline" />{{ t('peerIntroBack') }}
           </button>
           <div>
-            <span class="peer-experimental-badge"><NIcon :component="FlaskOutline" />{{ t('peerExperimentalBadge') }}</span>
             <h2>{{ t('peerLaunchModalTitle') }}</h2>
+            <span class="peer-experimental-badge"><NIcon :component="FlaskOutline" />{{ t('peerExperimentalBadge') }}</span>
           </div>
         </header>
         <div class="peer-modal-scroll">
@@ -277,7 +277,7 @@ function close(): void {
     gap: 8px;
     padding: 10px 62px 10px 12px;
   }
-  .peer-modal-toolbar > div { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .peer-modal-toolbar > div { flex-wrap: wrap; gap: 6px 10px; }
   .peer-modal-toolbar h2 { font-size: 20px; }
   .peer-modal-back { min-height: 30px; padding: 4px 8px; }
   .peer-modal-scroll { padding-bottom: env(safe-area-inset-bottom); }

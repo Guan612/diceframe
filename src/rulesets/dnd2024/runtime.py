@@ -9,6 +9,7 @@ from typing import Any
 from src.adventures import ADVENTURE_GRAPH_FORMAT, AdventureBundleLoader, LoadedAdventureBundle
 from src.rulesets.bundle import LoadedRulesetBundle, RulesetBundleLoader
 from src.rulesets.contracts import RulesetCapabilities
+from src.rulesets.dnd2024 import advancement_access
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
@@ -93,6 +94,31 @@ class Dnd2024Runtime:
             )
         self._bundle_cache[cache_key] = bundle
         return bundle
+
+    def narrative_advancement_prompt(self, instance: Any, locale: str) -> str:
+        """Expose D&D advancement instructions through the generic runtime boundary."""
+
+        return advancement_access.prompt_instruction(instance, locale)
+
+    def apply_narrative_advancement_rewards(
+        self, instance: Any, update: dict[str, Any],
+    ) -> list[str]:
+        """Apply AI-authored advancement tags under the configured authority policy."""
+
+        return advancement_access.apply_ai_rewards(instance, update)
+
+    def game_detail_projection(self, instance: Any) -> dict[str, Any]:
+        """Contribute D&D-only detail fields through the generic read boundary."""
+
+        return {"advancement": advancement_access.project(instance)}
+
+    def configure_live_advancement(
+        self, instance: Any, mode: str, authority: str,
+    ) -> dict[str, Any]:
+        return advancement_access.configure(instance, mode, authority)
+
+    def live_advancement_policy(self, instance: Any) -> dict[str, Any]:
+        return advancement_access.project(instance)
 
     def _campaign_engine(
         self, instance: Any, locale: str = "",

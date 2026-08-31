@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, TypedDict
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol, TypedDict
 
 from src.knowledge.projection import Viewer, project_entries
 from src.knowledge.visibility import classify_audience
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 logger = logging.getLogger("trpg")
+GameKey = tuple[str, ...]
+
+
+class LorePreviewStore(Protocol):
+    def get_world(self, world_id: str) -> dict[str, Any] | None: ...
+    def list_entries(self, world_id: str) -> list[dict[str, Any]]: ...
+
+
+@dataclass(frozen=True)
+class LorePreviewDependencies:
+    lorebook: LorePreviewStore | None
+    get_instance: Callable[[GameKey], Any | None]
+    parse_game_key: Callable[[str], GameKey]
 
 
 class LorePreviewResult(TypedDict):
@@ -24,7 +35,7 @@ def _result(payload: dict[str, Any], status: int = 200) -> LorePreviewResult:
 
 
 def preview(
-    api: "WebAPI",
+    dependencies: LorePreviewDependencies,
     world_id: str,
     viewer: str,
     game_key: str | None = None,
@@ -38,7 +49,7 @@ def preview(
     if not viewer:
         return _result({"ok": False, "code": "INVALID_VIEWER", "error": "视角无效"}, 400)
 
-    world = api._lore.get_world(world_id) if api._lore else None
+    world = dependencies.lorebook.get_world(world_id) if dependencies.lorebook else None
     if not world:
         return _result({"ok": False, "code": "WORLD_NOT_FOUND", "error": "世界不存在"}, 404)
 
@@ -47,7 +58,7 @@ def preview(
     else:
         if not game_key:
             return _result({"ok": False, "code": "INVALID_VIEWER", "error": "视角无效"}, 400)
-        instance = api._reg.get(api._parse_key(game_key))
+        instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
         if not instance:
             return _result({"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}, 404)
         player = instance.players.get(viewer)
@@ -55,7 +66,8 @@ def preview(
             return _result({"ok": False, "code": "PLAYER_NOT_IN_GAME", "error": "未加入本局"}, 403)
         resolved = Viewer("character", viewer, str(player.get("character_name") or viewer))
 
-    entries = api._lore.list_entries(world_id)
+    assert dependencies.lorebook is not None
+    entries = dependencies.lorebook.list_entries(world_id)
     projections = project_entries(entries, resolved)
     audience_counts = {"public": 0, "character": 0, "gm": 0}
     for entry in entries:
@@ -74,3 +86,15 @@ def preview(
         "projections": projections,
         "summary": summary,
     })
+
+
+class LorePreviewService:
+    """Read-only lore visibility projections with explicit data boundaries."""
+
+    def __init__(self, dependencies: LorePreviewDependencies) -> None:
+        self._dependencies = dependencies
+
+    def preview(
+        self, world_id: str, viewer: str, game_key: str | None = None,
+    ) -> LorePreviewResult:
+        return preview(self._dependencies, world_id, viewer, game_key)

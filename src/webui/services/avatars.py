@@ -8,13 +8,9 @@ import hashlib
 import io
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from PIL import Image, ImageOps, UnidentifiedImageError
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 
 MAX_UPLOAD_BYTES = 3 * 1024 * 1024
 MAX_IMAGE_PIXELS = 16_000_000
@@ -22,7 +18,9 @@ AVATAR_SIZE = 256
 ASSET_ID_RE = re.compile(r"^[a-f0-9]{64}$")
 
 
-def save_avatar_upload(api: "WebAPI", file_data: str, file_name: str = "") -> dict[str, Any]:
+def save_avatar_upload(
+    avatars_dir: Path, file_data: str, file_name: str = "",
+) -> dict[str, Any]:
     if not file_data:
         return {"ok": False, "error": "未提供头像文件"}
     if len(file_data) > (MAX_UPLOAD_BYTES * 4 // 3) + 16:
@@ -52,7 +50,7 @@ def save_avatar_upload(api: "WebAPI", file_data: str, file_name: str = "") -> di
 
     payload = output.getvalue()
     asset_id = hashlib.sha256(payload).hexdigest()
-    path = api._avatars_dir / f"{asset_id}.webp"
+    path = avatars_dir / f"{asset_id}.webp"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         tmp_path = path.with_suffix(".webp.tmp")
@@ -65,16 +63,15 @@ def save_avatar_upload(api: "WebAPI", file_data: str, file_name: str = "") -> di
     }
 
 
-def avatar_file(api: "WebAPI", asset_id: str) -> Path | None:
+def avatar_file(avatars_dir: Path, asset_id: str) -> Path | None:
     if not ASSET_ID_RE.fullmatch(asset_id):
         return None
-    path = api._avatars_dir / f"{asset_id}.webp"
+    path = avatars_dir / f"{asset_id}.webp"
     return path if path.is_file() else None
 
 
-def list_user_avatars(api: "WebAPI") -> dict[str, Any]:
+def list_user_avatars(avatars_dir: Path) -> dict[str, Any]:
     """列出所有用户上传的头像（按 asset_id 排序）。"""
-    avatars_dir = api._avatars_dir
     if not avatars_dir or not avatars_dir.is_dir():
         return {"avatars": [], "total": 0}
     items: list[dict[str, Any]] = []
@@ -86,11 +83,11 @@ def list_user_avatars(api: "WebAPI") -> dict[str, Any]:
     return {"avatars": items, "total": len(items)}
 
 
-def delete_avatar(api: "WebAPI", asset_id: str) -> dict[str, Any]:
+def delete_avatar(avatars_dir: Path, asset_id: str) -> dict[str, Any]:
     """删除用户上传的头像文件。不检查引用，删后引用处显示占位。"""
     if not ASSET_ID_RE.fullmatch(asset_id):
         return {"ok": False, "error": "无效的头像 ID"}
-    path = api._avatars_dir / f"{asset_id}.webp"
+    path = avatars_dir / f"{asset_id}.webp"
     if not path.is_file():
         return {"ok": False, "error": "头像不存在"}
     try:
@@ -98,3 +95,24 @@ def delete_avatar(api: "WebAPI", asset_id: str) -> dict[str, Any]:
     except OSError:
         return {"ok": False, "error": "删除头像失败"}
     return {"ok": True}
+
+
+class AvatarService:
+    """Content-addressed avatar storage rooted at one explicit directory."""
+
+    def __init__(self, avatars_dir: Path) -> None:
+        self._avatars_dir = avatars_dir
+
+    def save_upload(
+        self, file_data: str, file_name: str = "",
+    ) -> dict[str, Any]:
+        return save_avatar_upload(self._avatars_dir, file_data, file_name)
+
+    def file(self, asset_id: str) -> Path | None:
+        return avatar_file(self._avatars_dir, asset_id)
+
+    def list_user_avatars(self) -> dict[str, Any]:
+        return list_user_avatars(self._avatars_dir)
+
+    def delete(self, asset_id: str) -> dict[str, Any]:
+        return delete_avatar(self._avatars_dir, asset_id)

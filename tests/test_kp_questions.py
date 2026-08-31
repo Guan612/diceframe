@@ -9,7 +9,10 @@ from src.bots.bridge_core.commands import kp_question
 from src.commands.kp_questions import KPQuestionResponder, build_kp_question_prompt
 from src.engine.game_instance import GameInstance
 from src.llm.context_builder import build_player_safe_context
-from src.webui.services.kp_questions import ask
+from src.webui.services.kp_questions import (
+    KPQuestionDependencies,
+    KPQuestionService,
+)
 
 
 def _instance() -> GameInstance:
@@ -81,10 +84,11 @@ class _Api:
     def __init__(self, instance: GameInstance | None) -> None:
         self._reg = _Registry(instance)
         self._handler = _QuestionHandler()
-
-    @staticmethod
-    def _parse_key(_game_key: str):
-        return ("web", "questions", "bot")
+        self.questions = KPQuestionService(KPQuestionDependencies(
+            registry=self._reg,
+            parse_game_key=lambda _game_key: ("web", "questions", "bot"),
+            answer_question=self._handler.answer_kp_question,
+        ))
 
 
 @pytest.mark.asyncio
@@ -93,7 +97,7 @@ async def test_question_service_is_read_only_and_does_not_consume_action() -> No
     api = _Api(instance)
     before = copy.deepcopy(instance.to_dict())
 
-    result = await ask(api, "game", "p1", "我认识门上的徽记吗？")
+    result = await api.questions.ask("game", "p1", "我认识门上的徽记吗？")
 
     assert result["status"] == 200
     assert result["payload"]["kind"] == "kp_table_talk"
@@ -111,7 +115,9 @@ async def test_party_question_persists_only_the_separate_table_talk_exchange() -
     instance = _instance()
     api = _Api(instance)
 
-    result = await ask(api, "game", "p1", "大家都知道这是什么吗？", "party")
+    result = await api.questions.ask(
+        "game", "p1", "大家都知道这是什么吗？", "party",
+    )
 
     assert result["status"] == 200
     assert result["payload"]["visibility"] == "party"
@@ -129,8 +135,8 @@ async def test_question_service_requires_a_claimed_player() -> None:
     instance = _instance()
     api = _Api(instance)
 
-    denied = await ask(api, "game", "stranger", "这里是哪？")
-    empty = await ask(api, "game", "p1", "  ")
+    denied = await api.questions.ask("game", "stranger", "这里是哪？")
+    empty = await api.questions.ask("game", "p1", "  ")
 
     assert denied["status"] == 403
     assert denied["payload"]["code"] == "PLAYER_NOT_IN_GAME"
@@ -145,7 +151,7 @@ async def test_question_service_rejects_while_the_game_is_processing() -> None:
     api = _Api(instance)
     await instance._process_lock.acquire()
     try:
-        result = await ask(api, "game", "p1", "现在是什么情况？")
+        result = await api.questions.ask("game", "p1", "现在是什么情况？")
     finally:
         instance._process_lock.release()
 

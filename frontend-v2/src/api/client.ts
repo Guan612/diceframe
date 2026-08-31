@@ -166,7 +166,9 @@ export function hasAccessToken(): boolean { return !!localStorage.getItem(access
 
 export type OwnerAccessStatus = 'allowed' | 'login-required' | 'unavailable'
 
-export async function checkOwnerAccess(): Promise<OwnerAccessStatus> {
+let ownerAccessProbe: Promise<OwnerAccessStatus> | null = null
+
+async function probeOwnerAccess(): Promise<OwnerAccessStatus> {
   try {
     const response = await fetchWithConnectionRecovery(buildApiUrl('/me'), {
       headers: authHeaders(undefined, false),
@@ -177,6 +179,17 @@ export async function checkOwnerAccess(): Promise<OwnerAccessStatus> {
     return response.ok ? 'allowed' : 'unavailable'
   } catch {
     return isStandaloneFrontend() && !currentBackendUrl() ? 'login-required' : 'unavailable'
+  }
+}
+
+export async function checkOwnerAccess(): Promise<OwnerAccessStatus> {
+  if (ownerAccessProbe) return ownerAccessProbe
+  const probe = probeOwnerAccess()
+  ownerAccessProbe = probe
+  try {
+    return await probe
+  } finally {
+    if (ownerAccessProbe === probe) ownerAccessProbe = null
   }
 }
 

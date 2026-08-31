@@ -19,7 +19,7 @@ from src.webui.session import SessionManager
 
 from webapi_harness import FakeLLMClient, web_api, write_world
 
-def test_game_rule_loading_prefers_saved_rule_and_migrates_legacy_save(web_api):
+def test_game_rule_loading_prefers_saved_rule_and_projects_legacy_save(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     (api._rules_dir / "saved_custom.json").write_text(
         json.dumps({
@@ -44,12 +44,17 @@ def test_game_rule_loading_prefers_saved_rule_and_migrates_legacy_save(web_api):
     legacy.world_id = "template_world"
     legacy.rule_id = ""
 
-    api.list_games()
+    listed = api.list_games()
 
-    assert legacy.rule_id == "freeform_fantasy"
-    migrated = api._load_rule_for_game(legacy)
-    assert migrated is not None
-    assert migrated.rule_id == "freeform_fantasy"
+    legacy_view = next(
+        game for game in listed["games"]
+        if game["game_key"] == "web|legacy-rule|bot"
+    )
+    assert legacy_view["rule_id"] == "freeform_fantasy"
+    assert legacy.rule_id == ""
+    loaded_legacy = api._load_rule_for_game(legacy)
+    assert loaded_legacy is not None
+    assert loaded_legacy.rule_id == "freeform_fantasy"
 
 
 def test_save_custom_rule_copies_existing_rule_template(web_api):

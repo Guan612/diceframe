@@ -5,6 +5,13 @@ import pytest
 from src.webui.services import legal
 
 
+def _service(api) -> legal.LegalService:
+    return legal.LegalService(legal.LegalDependencies(
+        fetch_public_json=api.fetch_public_content_json,
+        fetch_public_text=api.fetch_public_content_text,
+    ))
+
+
 @pytest.mark.parametrize("document_name", ["terms", "privacy"])
 @pytest.mark.parametrize("language", ["zh-CN", "en"])
 def test_bundled_legal_documents_are_complete(document_name, language):
@@ -107,7 +114,7 @@ async def test_online_document_is_used_only_when_it_matches_manifest_hash():
                         return legal._bundled_text(document_name, language)
             return ""
 
-    result = await legal.document(Api(), "terms", "zh-CN")
+    result = await _service(Api()).document("terms", "zh-CN")
     assert result["source"] == "online"
     assert result["sha256"] == documents["terms"]["languages"]["zh"]["sha256"]
 
@@ -124,7 +131,7 @@ async def test_bad_online_document_is_not_shown_as_a_bundled_snapshot():
             return "tampered"
 
     with pytest.raises(legal.LegalContentUnavailable, match="校验失败"):
-        await legal.document(Api(), "privacy", "en")
+        await _service(Api()).document("privacy", "en")
 
 
 @pytest.mark.asyncio
@@ -143,8 +150,8 @@ async def test_older_online_manifest_cannot_downgrade_bundled_legal_documents():
         async def fetch_public_content_text(self, _path, **_kwargs):
             raise AssertionError("older online content must not replace the bundled policy")
 
-    documents = await legal.current_documents(Api())
-    result = await legal.document(Api(), "privacy", "zh-CN")
+    documents = await _service(Api()).current_documents()
+    result = await _service(Api()).document("privacy", "zh-CN")
     assert documents["privacy"]["version"] == "1.2"
     assert result["source"] == "bundled"
     assert result["version"] == "1.2"

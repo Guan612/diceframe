@@ -11,7 +11,15 @@ from src.webui.services import maps as map_service
 
 class MapBackgroundApi:
     def __init__(self, tmp_path):
-        self._map_backgrounds_dir = tmp_path / "map-backgrounds"
+        self.map_backgrounds = map_backgrounds.MapBackgroundService(
+            tmp_path / "map-backgrounds", lambda _asset_id: None,
+        )
+
+    def validate_map_background_selection(self, selection):
+        return self.map_backgrounds.validate(selection)
+
+    def map_background_file(self, asset_id):
+        return self.map_backgrounds.file(asset_id)
 
 
 def png_payload(size=(1200, 800), color=(27, 48, 68)) -> str:
@@ -23,12 +31,12 @@ def png_payload(size=(1200, 800), color=(27, 48, 68)) -> str:
 def test_map_background_upload_preserves_aspect_ratio_and_deduplicates(tmp_path):
     api = MapBackgroundApi(tmp_path)
 
-    first = map_backgrounds.save_map_background_upload(api, png_payload(), "map.png")
-    second = map_backgrounds.save_map_background_upload(api, png_payload(), "copy.png")
+    first = api.map_backgrounds.save_upload(png_payload(), "map.png")
+    second = api.map_backgrounds.save_upload(png_payload(), "copy.png")
 
     assert first["ok"] is True
     assert first["map_background"] == second["map_background"]
-    path = map_backgrounds.resolve_map_background_file(api, first["map_background"])
+    path = api.map_backgrounds.resolve_file(first["map_background"])
     assert path is not None
     with Image.open(path) as image:
         assert image.size == (1200, 800)
@@ -42,8 +50,7 @@ def test_map_background_upload_preserves_aspect_ratio_and_deduplicates(tmp_path)
 ])
 def test_builtin_map_background_selections_are_valid(tmp_path, asset_id):
     api = MapBackgroundApi(tmp_path)
-    assert map_backgrounds.validate_map_background_selection(
-        api,
+    assert api.map_backgrounds.validate(
         {"kind": "builtin", "id": asset_id},
     ) == {"kind": "builtin", "id": asset_id}
 
@@ -51,8 +58,7 @@ def test_builtin_map_background_selections_are_valid(tmp_path, asset_id):
 def test_map_background_selection_rejects_external_urls(tmp_path):
     api = MapBackgroundApi(tmp_path)
     with pytest.raises(ValueError):
-        map_backgrounds.validate_map_background_selection(
-            api,
+        api.map_backgrounds.validate(
             {"kind": "url", "url": "https://example.com/map.png"},
         )
 
@@ -74,13 +80,6 @@ class GameMapApi(MapBackgroundApi):
     def _parse_key(game_key):
         return ("web", game_key, "web_bot")
 
-    def validate_map_background_selection(self, selection):
-        return map_backgrounds.validate_map_background_selection(self, selection)
-
-    def map_background_file(self, asset_id):
-        return map_backgrounds.map_background_file(self, asset_id)
-
-
 def test_existing_game_can_disable_or_replace_automatic_background(tmp_path):
     disabled = map_service.get_map_locations(GameMapApi(tmp_path, {"kind": "none"}), "save-1")
     occult = map_service.get_map_locations(
@@ -95,7 +94,7 @@ def test_existing_game_can_disable_or_replace_automatic_background(tmp_path):
 
 def test_uploaded_background_uses_game_scoped_asset_url(tmp_path):
     api = GameMapApi(tmp_path, {"kind": "auto"})
-    uploaded = map_backgrounds.save_map_background_upload(api, png_payload(), "map.png")
+    uploaded = api.map_backgrounds.save_upload(png_payload(), "map.png")
     api.instance.map_background = uploaded["map_background"]
 
     result = map_service.get_map_locations(api, "save-1")

@@ -25,9 +25,7 @@ from src.webui.routes.hub import (
     api_hub_rendezvous_room_create,
 )
 from src.webui.services import legal
-from src.webui.services.hub import plugin_readme
-from src.webui.services.hub import preferences as hub_preferences
-from src.webui.services.hub import update_preferences as update_hub_preferences
+from src.webui.services.hub import HubDependencies, HubService
 from src.version import __version__
 
 
@@ -48,6 +46,20 @@ class _LegalApi:
 
     def record_legal_acceptance(self, state, **kwargs):
         return legal.record_acceptance(state, **kwargs)
+
+
+def _hub_service(api: _LegalApi) -> HubService:
+    return HubService(HubDependencies(
+        client=getattr(api, "_hub", None),
+        plugin_host=getattr(api, "_plugins", None),
+        config_state=lambda: getattr(api, "_config_state", {}),
+        save_config=getattr(api, "_save_config", lambda: None),
+        current_legal_documents=api.current_legal_documents,
+        legal_bundle_version=api.legal_bundle_version,
+        legal_acceptance_payload=api.legal_acceptance_payload,
+        legal_accepted=api.legal_accepted,
+        record_legal_acceptance=api.record_legal_acceptance,
+    ))
 
 
 async def _serve(routes: list[tuple[str, str, object]]):
@@ -83,7 +95,7 @@ async def test_hub_preferences_default_telemetry_off_until_active_consent(tmp_pa
     documents = legal.bundled_documents()
 
     Api._legal_documents = documents
-    result = await hub_preferences(Api())
+    result = await _hub_service(Api()).preferences()
 
     assert result["telemetry_enabled"] is False
     assert result["choice_made"] is False
@@ -103,7 +115,9 @@ async def test_first_start_records_legal_acceptance_without_requiring_hub():
 
     Api._legal_documents = documents
     api = Api()
-    result = await update_hub_preferences(api, False, legal.acceptance_payload(documents, "zh-CN"))
+    result = await _hub_service(api).update_preferences(
+        False, legal.acceptance_payload(documents, "zh-CN"),
+    )
 
     assert result["telemetry_enabled"] is False
     assert result["choice_made"] is True
@@ -121,7 +135,7 @@ async def test_telemetry_cannot_be_enabled_before_current_privacy_acceptance():
             return None
 
     with pytest.raises(ValueError, match="隐私政策"):
-        await update_hub_preferences(Api(), True)
+        await _hub_service(Api()).update_preferences(True)
 
 
 @pytest.mark.asyncio
@@ -682,7 +696,7 @@ class _FakePlugins:
         self.marketplace = _FakeMarketplace([item] if item is not None else (items or []))
 
 
-class _FakeHubApi:
+class _FakeHubApi(_LegalApi):
     def __init__(self, hub_client, plugins):
         self._hub = hub_client
         self._plugins = plugins
@@ -705,7 +719,7 @@ async def test_plugin_readme_hub_success_writes_disk_cache(tmp_path):
     client = HubClient(tmp_path, base_url=base_url)
     api = _FakeHubApi(client, _FakePlugins(item=_sample_item()))
     try:
-        result = await plugin_readme(api, "sample")
+        result = await _hub_service(api).plugin_readme("sample")
         assert result["ok"] is True
         assert result["html"] == "<p>hello</p>"
         assert result["source"]["hub"] is True
@@ -731,13 +745,13 @@ async def test_plugin_readme_hub_down_hits_stale_disk_cache(tmp_path):
     client = HubClient(tmp_path, base_url=base_url)
     api = _FakeHubApi(client, _FakePlugins(item=_sample_item()))
     try:
-        fresh = await plugin_readme(api, "sample")
+        fresh = await _hub_service(api).plugin_readme("sample")
         assert fresh["ok"] is True
         assert fresh["html"] == "<p>cached</p>"
         await runner.cleanup()
 
         # Hub 关闭后再次读取，命中磁盘缓存并标记 stale，不能冒充刚同步。
-        stale = await plugin_readme(api, "sample")
+        stale = await _hub_service(api).plugin_readme("sample")
         assert stale["ok"] is True
         assert stale["html"] == "<p>cached</p>"
         assert stale["source"]["cached"] is True
@@ -755,7 +769,7 @@ async def test_plugin_readme_falls_back_to_author_github_raw(tmp_path):
         _FakePlugins(item=_sample_item(), mirrors=mirror),
     )
     try:
-        result = await plugin_readme(api, "sample")
+        result = await _hub_service(api).plugin_readme("sample")
         assert result["ok"] is True
         assert result["html"] == ""
         assert result["markdown"] == "# Sample\nreadme from author"
@@ -774,7 +788,7 @@ async def test_plugin_readme_rejects_non_github_private_and_oversized(tmp_path):
             client,
             _FakePlugins(item=_sample_item(repository_url="https://example.com/plugin")),
         )
-        result = await plugin_readme(bad_api, "sample")
+        result = await _hub_service(bad_api).plugin_readme("sample")
         assert result["ok"] is False
         assert result["source"]["github"] is False
 
@@ -786,7 +800,7 @@ async def test_plugin_readme_rejects_non_github_private_and_oversized(tmp_path):
             client,
             _FakePlugins(item=_sample_item(), mirrors=oversized),
         )
-        result = await plugin_readme(big_api, "sample")
+        result = await _hub_service(big_api).plugin_readme("sample")
         assert result["ok"] is False
         assert result["source"]["github"] is False
 

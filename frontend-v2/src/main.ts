@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import router from './router'
 import { i18n } from './i18n'
+import { installRuntimeRecovery } from './runtimeRecovery'
 import './styles/tokens.css'
 import './styles.css'
 import './styles/v2.css'
@@ -21,6 +22,11 @@ window.visualViewport?.addEventListener('resize', syncViewportHeight)
 window.visualViewport?.addEventListener('scroll', syncViewportHeight)
 
 const app = createApp(App).use(createPinia()).use(router).use(i18n)
+
+// A production rebuild replaces hashed lazy chunks. An already-open tab can
+// still reference the previous names, so recover once instead of leaving a
+// menu navigation apparently inert.
+installRuntimeRecovery(router)
 
 // Hash history resolves asynchronously on a direct deep link. Mounting before
 // that point briefly treats /join and player /play links as owner routes and

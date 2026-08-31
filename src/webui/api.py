@@ -19,7 +19,8 @@ from src.rules.loader import RuleBundleLoader
 from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, generation, games, knowledge, kp_questions, logs, map_backgrounds, maps, memory, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
@@ -40,7 +41,7 @@ class WebAPI:
     """
 
     async def legal_document(self, document_name: str, language: str) -> dict[str, Any]:
-        return await legal.document(self, document_name, language)
+        return await self._legal.document(document_name, language)
 
     async def fetch_public_content_text(
         self,
@@ -49,8 +50,7 @@ class WebAPI:
         force_refresh: bool = False,
         allow_cached: bool = True,
     ) -> str:
-        return await content.fetch_text(
-            self,
+        return await self._content.fetch_text(
             path,
             force_refresh=force_refresh,
             allow_cached=allow_cached,
@@ -58,7 +58,7 @@ class WebAPI:
 
     def public_content_disk_age(self, path: str) -> float | None:
         """公共内容磁盘缓存文件的年龄（秒）；无缓存返回 None。"""
-        return content.disk_cache_age_seconds(self, path)
+        return self._content.disk_cache_age(path)
 
     async def fetch_public_content_json(
         self,
@@ -67,15 +67,14 @@ class WebAPI:
         force_refresh: bool = False,
         allow_cached: bool = True,
     ) -> dict[str, Any] | None:
-        return await content.fetch_json(
-            self,
+        return await self._content.fetch_json(
             path,
             force_refresh=force_refresh,
             allow_cached=allow_cached,
         )
 
     async def current_legal_documents(self) -> dict[str, Any]:
-        return await legal.current_documents(self)
+        return await self._legal.current_documents()
 
     def legal_acceptance_payload(
         self,
@@ -116,7 +115,8 @@ class WebAPI:
                  character_gen_max_tokens: int = 2048,
                  text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
                  speech_service=None, asr_service=None, imagegen_service=None,
-                 ruleset_registry: RulesetRuntimeRegistry | None = None):
+                 ruleset_registry: RulesetRuntimeRegistry | None = None,
+                 content_cache_dir: Path | None = None):
         self._reg = registry
         self._lore = lorebook
         self._mem = memory
@@ -135,16 +135,211 @@ class WebAPI:
             adventures_dir or self._builtin_adventures_dir
         )
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
-        self._avatars_dir = self._reg.save_dir.parent / "avatars"
-        self._scene_images_dir = self._reg.save_dir.parent / "scene-images"
-        self._map_backgrounds_dir = self._reg.save_dir.parent / "map-backgrounds"
+        self._content = content.PublicContentService(content_cache_dir)
+        self._legal = legal.LegalService(
+            legal.LegalDependencies(
+                fetch_public_json=self.fetch_public_content_json,
+                fetch_public_text=self.fetch_public_content_text,
+            )
+        )
+        self._avatars = avatars.AvatarService(self._reg.save_dir.parent / "avatars")
+        self._scene_images = scene_images.SceneImageService(
+            scene_images.SceneImageDependencies(
+                images_dir=self._reg.save_dir.parent / "scene-images",
+                load_world_template=self._load_world_template,
+                get_rule_template=self.get_rule_template,
+                generated_image_file=lambda asset_id: self.generated_image_file(asset_id),
+                plugin_asset_path=self.plugin_asset_path,
+            )
+        )
+        self._map_backgrounds = map_backgrounds.MapBackgroundService(
+            self._reg.save_dir.parent / "map-backgrounds",
+            lambda asset_id: self.generated_image_file(asset_id),
+        )
+        self._memory_service = memory_service.MemoryService(
+            memory_service.MemoryDependencies(
+                repository=self._mem,
+                parse_game_key=_parse_game_key,
+            )
+        )
+        self._bot_access = bot_access.BotAccessService(
+            bot_access.BotAccessDependencies(
+                registry=self._reg,
+                parse_game_key=_parse_game_key,
+            )
+        )
+        self._game_logs = logs.GameLogService(
+            logs.LogDependencies(
+                registry=self._reg,
+                parse_game_key=_parse_game_key,
+            )
+        )
+        self._tavern_import = tavern.TavernImportService(
+            tavern.TavernImportDependencies(
+                lorebook=self._lore,
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                rebuild_lorebook_index=self._rebuild_lorebook_index,
+            )
+        )
+        self._game_packages = game_packages.GamePackageService(
+            game_packages.GamePackageDependencies(
+                parse_game_key=_parse_game_key,
+                get_instance=self._reg.get,
+                state_path_for=self._reg.save_package_state_path,
+                import_save_zip=self._reg.import_save_zip,
+                resolve_scene_image_file=self.resolve_scene_image_file,
+                resolve_map_background_file=self.resolve_map_background_file,
+                save_scene_image_upload=self.save_scene_image_upload,
+                save_map_background_upload=self.save_map_background_upload,
+            )
+        )
+        self._game_controls = game_controls.GameControlService(
+            game_controls.GameControlDependencies(
+                parse_game_key=_parse_game_key,
+                get_instance=self._reg.get,
+                save_instance=self._reg.save,
+                load_rule=self._load_rule_for_game,
+            )
+        )
+        self._game_master = game_master.GameMasterService(
+            game_master.GameMasterDependencies(
+                parse_game_key=_parse_game_key,
+                get_instance=self._reg.get,
+                save_instance=self._reg.save,
+                load_rule=self._load_rule_for_game,
+                generate_recap=(
+                    self._handler.generate_story_recap
+                    if self._handler is not None
+                    else None
+                ),
+            )
+        )
+        self._game_media = game_media.GameMediaService(
+            game_media.GameMediaDependencies(
+                parse_game_key=_parse_game_key,
+                get_instance=self._reg.get,
+                save_instance=self._reg.save,
+                load_world_template=(
+                    self._load_world_template if self._worlds_dir else None
+                ),
+                get_lore_world=(
+                    self._lore.get_world if self._lore is not None else None
+                ),
+                refresh_lorebook_index=(
+                    self._refresh_game_lorebook_index
+                    if self._handler is not None
+                    else None
+                ),
+                resolve_rule_id=self._project_game_rule_id,
+                resolve_default_scene_image=self.resolve_default_scene_image,
+                materialize_scene_image=self.materialize_scene_image,
+            )
+        )
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._bot_extensions = bot_extensions.BotExtensionService(
+            bot_extensions.BotExtensionDependencies(plugin_host=plugin_host)
+        )
         self._hub = hub_client
+        self._hub_service = hub.HubService(
+            hub.HubDependencies(
+                client=hub_client,
+                plugin_host=plugin_host,
+                config_state=lambda: getattr(self, "_config_state", {}),
+                save_config=lambda: getattr(self, "_save_config")(),
+                current_legal_documents=self.current_legal_documents,
+                legal_bundle_version=self.legal_bundle_version,
+                legal_acceptance_payload=self.legal_acceptance_payload,
+                legal_accepted=self.legal_accepted,
+                record_legal_acceptance=self.record_legal_acceptance,
+            )
+        )
         self._speech = speech_service
+        self._web_speech = speech.WebSpeechService(
+            speech.SpeechDependencies(
+                backend=speech_service,
+                plugin_host=plugin_host,
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+            )
+        )
         self._asr = asr_service
         self._imagegen = imagegen_service
+        self._system = system.SystemService(
+            system.SystemDependencies(
+                data_dir=self._reg.save_dir.parent,
+                config_state=lambda: getattr(self, "_config_state", {}) or {},
+                proxy_url=lambda: str(
+                    getattr(self._llm_client, "proxy_url", "") or ""
+                ),
+                mirrors=lambda: getattr(self._plugins, "mirrors", None),
+            )
+        )
+        self._announcements = announcements.AnnouncementService(
+            announcements.AnnouncementDependencies(
+                fetch_public_text=self.fetch_public_content_text,
+                disk_cache_age=self.public_content_disk_age,
+            )
+        )
+        self._web_asr = asr.WebAsrService(
+            asr.AsrDependencies(
+                backend=self._asr,
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+            )
+        )
+        self._lore_preview = knowledge.LorePreviewService(
+            knowledge.LorePreviewDependencies(
+                lorebook=self._lore,
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+            )
+        )
+        kp_answerer = (
+            getattr(self._handler, "answer_kp_question", None)
+            if self._handler is not None
+            else None
+        )
+        self._kp_questions = kp_questions.KPQuestionService(
+            kp_questions.KPQuestionDependencies(
+                registry=self._reg,
+                parse_game_key=_parse_game_key,
+                answer_question=kp_answerer if callable(kp_answerer) else None,
+            )
+        )
+        self._generated_images = generated_images.GeneratedImageService(
+            generated_images.GeneratedImageDependencies(
+                imagegen=imagegen_service,
+                get_instance=self.get_game_instance,
+                update_map_background=self.update_map_background,
+            )
+        )
+        self._game_lifecycle = game_lifecycle.GameLifecycleService(
+            game_lifecycle.GameLifecycleDependencies(
+                registry=self._reg,
+                handler=self._handler,
+                rulesets=self._ruleset_registry,
+                lorebook=self._lore,
+                worlds_dir=self._worlds_dir,
+                rules_dir=self._rules_dir,
+                parse_game_key=_parse_game_key,
+                llm_configuration_error=self._llm_configuration_error,
+                load_rule_by_id=self._load_rule_by_id,
+                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
+                    self, adventure_id, runtime, world_id, language,
+                ),
+                resolve_default_scene_image=self.resolve_default_scene_image,
+                materialize_scene_image=self.materialize_scene_image,
+                validate_map_background=self.validate_map_background_selection,
+                create_player=lambda *args, **kwargs: self.create_player(*args, **kwargs),
+                cleanup_orphan_game_templates=self.cleanup_orphan_game_templates,
+                refresh_lorebook_index=self._refresh_game_lorebook_index,
+                project_rule_id=lambda instance: game_queries.projected_rule_id(self, instance),
+                clean_public_narration=game_queries.clean_public_narration,
+            )
+        )
         if self._plugins and self._handler and hasattr(self._handler, "set_plugin_host"):
             self._handler.set_plugin_host(self._plugins)
 
@@ -210,10 +405,10 @@ class WebAPI:
         return plugins.list_plugins(self)
 
     async def get_official_announcement(self, language: str = "zh-CN") -> dict[str, Any]:
-        return await announcements.fetch_official_announcement(self, language)
+        return await self._announcements.fetch(language)
 
     async def hub_preferences(self, language: str = "zh-CN") -> dict[str, Any]:
-        return await hub.preferences(self, language)
+        return await self._hub_service.preferences(language)
 
     async def update_hub_preferences(
         self,
@@ -221,33 +416,35 @@ class WebAPI:
         legal_acceptance: dict[str, Any] | None = None,
         language: str = "zh-CN",
     ) -> dict[str, Any]:
-        return await hub.update_preferences(self, telemetry_enabled, legal_acceptance, language)
+        return await self._hub_service.update_preferences(
+            telemetry_enabled, legal_acceptance, language,
+        )
 
     async def delete_hub_identity(self) -> dict[str, Any]:
-        return await hub.delete_identity(self)
+        return await self._hub_service.delete_identity()
 
     async def create_rendezvous_room(self, peer_count: int) -> dict[str, Any]:
-        return await hub.create_rendezvous_room(self, peer_count)
+        return await self._hub_service.create_rendezvous_room(peer_count)
 
     async def rendezvous_config(self) -> dict[str, Any]:
-        return await hub.rendezvous_config(self)
+        return await self._hub_service.rendezvous_config()
 
     async def hub_plugin_detail(self, plugin_id: str) -> dict[str, Any]:
-        return await hub.plugin_detail(self, plugin_id)
+        return await self._hub_service.plugin_detail(plugin_id)
 
     async def hub_plugin_readme(self, plugin_id: str) -> dict[str, Any]:
-        return await hub.plugin_readme(self, plugin_id)
+        return await self._hub_service.plugin_readme(plugin_id)
 
     async def hub_plugin_ratings(self, plugin_id: str) -> dict[str, Any]:
-        return await hub.plugin_ratings(self, plugin_id)
+        return await self._hub_service.plugin_ratings(plugin_id)
 
     async def set_hub_plugin_like(self, plugin_id: str, liked: bool) -> dict[str, Any]:
-        return await hub.set_plugin_like(self, plugin_id, liked)
+        return await self._hub_service.set_plugin_like(plugin_id, liked)
 
     async def set_hub_plugin_rating(
         self, plugin_id: str, stars: int | None, tags: list[str] | None = None
     ) -> dict[str, Any]:
-        return await hub.set_plugin_rating(self, plugin_id, stars, tags)
+        return await self._hub_service.set_plugin_rating(plugin_id, stars, tags)
 
     async def assistant_chat(self, response, messages: list[dict], language: str = "zh-CN") -> None:
         return await assistant.chat_stream(self, response, messages, language)
@@ -256,10 +453,10 @@ class WebAPI:
         return plugins.list_plugin_types(self)
 
     def list_speech_voices(self) -> dict[str, Any]:
-        return speech.list_voices(self)
+        return self._web_speech.list_voices()
 
     def list_personal_speech_profiles(self) -> dict[str, Any]:
-        return speech.list_personal_profiles(self)
+        return self._web_speech.list_personal_profiles()
 
     def save_personal_speech_profile(
         self,
@@ -269,8 +466,7 @@ class WebAPI:
         file_data: str = "",
         file_name: str = "",
     ) -> dict[str, Any]:
-        return speech.save_personal_profile(
-            self,
+        return self._web_speech.save_personal_profile(
             profile_id,
             values,
             file_data=file_data,
@@ -278,7 +474,7 @@ class WebAPI:
         )
 
     def delete_personal_speech_profile(self, profile_id: str) -> dict[str, Any]:
-        return speech.delete_personal_profile(self, profile_id)
+        return self._web_speech.delete_personal_profile(profile_id)
 
     async def synthesize_speech(
         self,
@@ -290,7 +486,9 @@ class WebAPI:
         speed: float = 1.0,
         owner: bool = False,
     ):
-        return await speech.synthesize(self, game_key, user_id, text, voice, language, speed, owner=owner)
+        return await self._web_speech.synthesize(
+            game_key, user_id, text, voice, language, speed, owner,
+        )
 
     async def test_speech(
         self,
@@ -299,7 +497,9 @@ class WebAPI:
         language: str = "zh-CN",
         speed: float = 1.0,
     ):
-        return await speech.test_synthesis(self, text, voice, language, speed)
+        return await self._web_speech.test_synthesis(
+            text, voice, language, speed,
+        )
 
     async def transcribe_speech(
         self,
@@ -310,10 +510,14 @@ class WebAPI:
         language: str = "",
         owner: bool = False,
     ):
-        return await asr.transcribe(self, game_key, user_id, audio, content_type, language, owner=owner)
+        return await self._web_asr.transcribe(
+            game_key, user_id, audio, content_type, language, owner,
+        )
 
     async def test_transcription(self, audio: bytes, content_type: str, language: str = ""):
-        return await asr.test_transcription(self, audio, content_type, language)
+        return await self._web_asr.test_transcription(
+            audio, content_type, language,
+        )
 
     async def rescan_plugins(self) -> dict[str, Any]:
         return await plugins.rescan_plugins(self)
@@ -472,16 +676,16 @@ class WebAPI:
         return plugins.plugin_asset_path(self, plugin_id, relative_path)
 
     async def check_updates(self, include_prerelease: bool | None = None) -> dict[str, Any]:
-        return await system.check_updates(self, include_prerelease)
+        return await self._system.check_updates(include_prerelease)
 
     def runtime_log_status(self) -> dict[str, Any]:
-        return system.runtime_log_status(self)
+        return self._system.runtime_log_status()
 
     def clear_runtime_logs(self) -> dict[str, Any]:
-        return system.clear_runtime_logs(self)
+        return self._system.clear_runtime_logs()
 
     def export_runtime_logs(self) -> tuple[bytes, int]:
-        return system.export_runtime_logs(self)
+        return self._system.export_runtime_logs()
 
     def _load_world_template(self, world_id: str, language: str = "") -> dict[str, Any] | None:
         """按 world_id 读取世界模板；不存在或非法时返回 None。"""
@@ -510,6 +714,9 @@ class WebAPI:
         )
         return self._load_rule_by_id(rule_id, language)
 
+    def _project_game_rule_id(self, instance) -> str:
+        return game_queries.projected_rule_id(self, instance)
+
     def _load_rule_by_id(self, rule_id: str, language: str = "") -> RuleSystem | None:
         rule_id = (rule_id or "").strip()
         if not rule_id or not rules.is_valid_rule_id(rule_id):
@@ -532,43 +739,74 @@ class WebAPI:
     # ---- 游戏总览 ----
 
     def list_games(self) -> dict[str, Any]:
-        return games.list_games(self)
+        return game_queries.list_games(self)
 
     def game_detail(self, game_key: str) -> dict[str, Any] | None:
-        return games.game_detail(self, game_key)
+        return game_queries.game_detail(self, game_key)
+
+    def get_game_instance(self, game_key: str):
+        """Resolve a public game key without exposing registry/parser internals."""
+
+        return self._reg.get(_parse_game_key(game_key))
+
+    async def save_game_instance(self, instance) -> None:
+        """Persist an already-authorized aggregate through the application facade."""
+
+        await self._reg.save(instance)
+
+    async def generate_game_swipe(self, instance, round_number: int) -> str:
+        """Generate an alternate narration without exposing the command handler."""
+
+        return await self._handler.generate_swipe(instance, round_number)
+
+    def saved_game_access(self, game_key: str) -> dict[str, Any]:
+        return self._game_packages.saved_game_access(game_key)
+
+    def export_game_package(self, game_key: str) -> dict[str, Any]:
+        return self._game_packages.export_game_package(game_key)
+
+    async def import_game_package(self, payload: bytes) -> dict[str, Any]:
+        return await self._game_packages.import_game_package(payload)
 
     def delete_game(self, game_key: str) -> dict[str, Any]:
-        return games.delete_game(self, game_key)
+        return self._game_lifecycle.delete_game(game_key)
 
     async def get_bot_bind_token(self, game_key: str, rotate: bool = False) -> dict[str, Any]:
-        return await bot_access.get_bind_token(self, game_key, rotate)
+        return await self._bot_access.get_bind_token(game_key, rotate)
 
     async def verify_bot_bind_game(self, game_key: str, bind_token: str) -> dict[str, Any]:
-        return await bot_access.verify_bind_game(self, game_key, bind_token)
+        return await self._bot_access.verify_bind_game(game_key, bind_token)
 
     def bot_actor_allowed(self, game_key: str, user_id: str) -> bool:
-        return bot_access.actor_allowed(self, game_key, user_id)
+        return self._bot_access.actor_allowed(game_key, user_id)
 
     def bot_extension_capabilities(self) -> dict[str, Any]:
-        return bot_extensions.capabilities(self)
+        return self._bot_extensions.capabilities()
 
     async def apply_bot_extensions(self, stage: str, payload: dict[str, Any]) -> dict[str, Any]:
-        return await bot_extensions.apply(self, stage, payload)
+        return await self._bot_extensions.apply(stage, payload)
 
     def bot_extension_asset_path(self, plugin_id: str, relative_path: str) -> Path:
-        return bot_extensions.asset_path(self, plugin_id, relative_path)
+        return self._bot_extensions.asset_path(plugin_id, relative_path)
 
     def bot_bridge_card_path(self, name: str) -> Path:
-        return bot_extensions.bridge_card_path(self, name)
+        return self._bot_extensions.bridge_card_path(name)
 
     def multiplayer_status(self, game_key: str) -> dict[str, Any]:
-        return games.multiplayer_status(self, game_key)
+        return game_queries.multiplayer_status(self, game_key)
+
+    def player_context(
+        self, *, preview: bool = False, delegate: bool = False, user_id: str = "",
+    ) -> dict[str, Any]:
+        return game_queries.player_context(
+            preview=preview, delegate=delegate, user_id=user_id,
+        )
 
     async def set_player_away(self, game_key: str, user_id: str, away: bool) -> dict[str, Any]:
-        return await games.set_player_away(self, game_key, user_id, away)
+        return await self._game_controls.set_player_away(game_key, user_id, away)
 
     async def set_player_access(self, game_key: str, open_access: bool) -> dict[str, Any]:
-        return await games.set_player_access(self, game_key, open_access)
+        return await self._game_controls.set_player_access(game_key, open_access)
 
     def check_request_for_action(
         self,
@@ -579,21 +817,23 @@ class WebAPI:
         selected_skill: str = "",
         target_text: str = "",
     ) -> dict[str, Any] | None:
-        return games.check_request_for_action(
-            self, game_key, user_id, text, selected_attribute, selected_skill, target_text
+        return self._game_controls.check_request_for_action(
+            game_key, user_id, text, selected_attribute, selected_skill, target_text
         )
 
     def roll_for_game(self, game_key: str) -> dict[str, Any]:
-        return games.roll_for_game(self, game_key)
+        return self._game_controls.roll_for_game(game_key)
 
     async def resolve_pending_dice_for_game(self, game_key: str, user_id: str = "", source: str = "system") -> dict[str, Any]:
-        return await games.resolve_pending_dice_for_game(self, game_key, user_id, source)
+        return await self._game_controls.resolve_pending_dice(game_key, user_id, source)
 
     async def resolve_luck_decision(self, game_key: str, check_id: str, actor_uid: str, spend: bool) -> dict[str, Any]:
-        return await games.resolve_luck_decision(self, game_key, check_id, actor_uid, spend)
+        return await self._game_controls.resolve_luck_decision(
+            game_key, check_id, actor_uid, spend,
+        )
 
     async def decline_pending_luck(self, game_key: str) -> dict[str, Any]:
-        return await games.decline_pending_luck(self, game_key)
+        return await self._game_controls.decline_pending_luck(game_key)
 
     async def submit_action(self, game_key: str, actor_uid: str, text: str, **kwargs) -> turns.TurnResult:
         return await turns.submit_action(self, game_key, actor_uid, text, **kwargs)
@@ -605,7 +845,9 @@ class WebAPI:
         question: str,
         visibility: Literal["private", "party"] = "private",
     ) -> kp_questions.KPQuestionResult:
-        return await kp_questions.ask(self, game_key, actor_uid, question, visibility)
+        return await self._kp_questions.ask(
+            game_key, actor_uid, question, visibility,
+        )
 
     async def resolve_luck_and_continue(
         self,
@@ -623,24 +865,26 @@ class WebAPI:
         return await turns.advance_round(self, game_key, actor_uid, **kwargs)
 
     def private_log(self, game_key: str) -> dict[str, Any]:
-        return games.private_log(self, game_key)
+        return game_queries.private_log(self, game_key)
 
     def private_log_for_user(self, game_key: str, user_id: str) -> dict[str, Any]:
-        return games.private_log_for_user(self, game_key, user_id)
+        return game_queries.private_log_for_user(self, game_key, user_id)
 
     def table_talk(self, game_key: str) -> dict[str, Any]:
-        return games.table_talk(self, game_key)
+        return game_queries.table_talk(self, game_key)
 
     def game_health(self, game_key: str, include_resolved: bool = False) -> dict[str, Any]:
-        return games.game_health(self, game_key, include_resolved)
+        return game_queries.game_health(self, game_key, include_resolved)
 
     async def set_solo_mode(self, game_key: str, solo: bool) -> dict[str, Any]:
-        return await games.set_solo_mode(self, game_key, solo)
+        return await self._game_controls.set_solo_mode(game_key, solo)
 
     async def set_narrative_perspective(
         self, game_key: str, perspective: str,
     ) -> dict[str, Any]:
-        return await games.set_narrative_perspective(self, game_key, perspective)
+        return await self._game_controls.set_narrative_perspective(
+            game_key, perspective,
+        )
 
     async def mark_game_health_event(
         self,
@@ -650,19 +894,21 @@ class WebAPI:
         resolved: bool = False,
         ignored: bool = False,
     ) -> dict[str, Any]:
-        return await games.mark_game_health_event(self, game_key, event_id, resolved=resolved, ignored=ignored)
+        return await self._game_controls.mark_health_event(
+            game_key, event_id, resolved=resolved, ignored=ignored,
+        )
 
     async def gm_command(self, game_key: str, command: str, mode: str = "note") -> dict[str, Any]:
-        return await games.gm_command(self, game_key, command, mode)
+        return await self._game_master.command(game_key, command, mode)
 
     async def rollback_round(self, game_key: str) -> dict[str, Any]:
-        return await games.rollback_round(self, game_key)
+        return await self._game_master.rollback_round(game_key)
 
     async def generate_story_recap(self, game_key: str) -> dict[str, Any]:
-        return await games.generate_story_recap(self, game_key)
+        return await self._game_master.generate_story_recap(game_key)
 
     async def gm_private_message(self, game_key: str, user_id: str, text: str) -> dict[str, Any]:
-        return await games.gm_private_message(self, game_key, user_id, text)
+        return await self._game_master.private_message(game_key, user_id, text)
 
     # ---- 角色卡库 ----
 
@@ -738,10 +984,14 @@ class WebAPI:
         viewer: str,
         game_key: str | None = None,
     ) -> dict[str, Any]:
-        return knowledge.preview(self, world_id, viewer, game_key)
+        return self._lore_preview.preview(world_id, viewer, game_key)
 
     def _rebuild_lorebook_index(self, world_id: str) -> None:
         worlds.rebuild_lorebook_index(self, world_id)
+
+    def _refresh_game_lorebook_index(self, world_id: str) -> None:
+        self._handler._last_matcher_world_id = None
+        self._rebuild_lorebook_index(world_id)
 
     # ---- 角色管理 ----
 
@@ -771,58 +1021,76 @@ class WebAPI:
         return await characters.create_player(self, game_key, character, force_uid, assign_new_id)
 
     def save_avatar_upload(self, file_data: str, file_name: str = "") -> dict[str, Any]:
-        return avatars.save_avatar_upload(self, file_data, file_name)
+        return self._avatars.save_upload(file_data, file_name)
 
     def avatar_file(self, asset_id: str) -> Path | None:
-        return avatars.avatar_file(self, asset_id)
+        return self._avatars.file(asset_id)
 
     def list_user_avatars(self) -> dict[str, Any]:
-        return avatars.list_user_avatars(self)
+        return self._avatars.list_user_avatars()
 
     def delete_avatar(self, asset_id: str) -> dict[str, Any]:
-        return avatars.delete_avatar(self, asset_id)
+        return self._avatars.delete(asset_id)
+
+    def image_generation_status(self) -> dict[str, Any]:
+        return self._generated_images.public_config()
+
+    async def generate_generated_image(self, **request: Any) -> dict[str, Any]:
+        return await self._generated_images.generate_image(**request)
+
+    def list_game_generated_images(
+        self, game_key: str, user_id: str, *, purpose: str = "",
+    ) -> list[dict[str, Any]]:
+        return self._generated_images.list_game_images(
+            game_key, user_id, purpose=purpose,
+        )
+
+    async def use_generated_image_as_map_background(
+        self, game_key: str, user_id: str, asset_id: str,
+    ) -> dict[str, Any]:
+        return await self._generated_images.use_as_map_background(
+            game_key, user_id, asset_id,
+        )
 
     def generated_image_file(self, asset_id: str) -> Path | None:
-        if self._imagegen is None:
-            return None
-        return self._imagegen.assets.file(asset_id)
+        return self._generated_images.image_file(asset_id)
 
     def save_scene_image_upload(self, file_data: str, file_name: str = "") -> dict[str, Any]:
-        return scene_images.save_scene_image_upload(self, file_data, file_name)
+        return self._scene_images.save_upload(file_data, file_name)
 
     def scene_image_file(self, asset_id: str) -> Path | None:
-        return scene_images.scene_image_file(self, asset_id)
+        return self._scene_images.file(asset_id)
 
     def validate_scene_image_ref(self, reference: Any) -> dict[str, str]:
-        return scene_images.validate_scene_image_ref(self, reference)
+        return self._scene_images.validate(reference)
 
     def resolve_default_scene_image(self, world_id: str = "", rule_id: str = "") -> dict[str, str]:
-        return scene_images.resolve_default_scene_image(self, world_id, rule_id)
+        return self._scene_images.resolve_default(world_id, rule_id)
 
     def materialize_scene_image(self, reference: Any) -> dict[str, str]:
-        return scene_images.materialize_scene_image(self, reference)
+        return self._scene_images.materialize(reference)
 
     def resolve_scene_image_file(self, reference: Any) -> Path | None:
-        return scene_images.resolve_scene_image_file(self, reference)
+        return self._scene_images.resolve_file(reference)
 
     def package_scene_image(
         self,
         reference: Any,
         files: dict[str, str | bytes],
     ) -> dict[str, str] | None:
-        return scene_images.package_scene_image(self, reference, files)
+        return self._scene_images.package(reference, files)
 
     def save_map_background_upload(self, file_data: str, file_name: str = "") -> dict[str, Any]:
-        return map_backgrounds.save_map_background_upload(self, file_data, file_name)
+        return self._map_backgrounds.save_upload(file_data, file_name)
 
     def map_background_file(self, asset_id: str) -> Path | None:
-        return map_backgrounds.map_background_file(self, asset_id)
+        return self._map_backgrounds.file(asset_id)
 
     def validate_map_background_selection(self, selection: Any) -> dict[str, str]:
-        return map_backgrounds.validate_map_background_selection(self, selection)
+        return self._map_backgrounds.validate(selection)
 
     def resolve_map_background_file(self, selection: Any) -> Path | None:
-        return map_backgrounds.resolve_map_background_file(self, selection)
+        return self._map_backgrounds.resolve_file(selection)
 
     # ---- 剧情日志 ----
 
@@ -833,10 +1101,12 @@ class WebAPI:
         per_page: int = 50,
         include_internal: bool = False,
     ) -> dict[str, Any]:
-        return logs.get_log(self, game_key, page, per_page, include_internal)
+        return self._game_logs.get_log(
+            game_key, page, per_page, include_internal,
+        )
 
     def get_statistics(self, game_key: str) -> dict[str, Any]:
-        return logs.get_statistics(self, game_key)
+        return self._game_logs.get_statistics(game_key)
 
     # ---- 规则配置 ----
 
@@ -986,24 +1256,31 @@ class WebAPI:
                            narrative_perspective: str = "auto",
                            advancement_mode: str = "milestone",
                            advancement_authority: str = "ai_gm") -> dict[str, Any]:
-        return await games.create_game(self, world_id, game_name, group_name, rule_id,
-                                       solo, lorebook_world_id, difficulty, description,
-                                       create_lorebook, blank_lorebook, source_world_id,
-                                       players, custom_world, gm_uid, room_password,
-                                       language, scene_image, map_background, adventure_id,
-                                       narrative_perspective, advancement_mode,
-                                       advancement_authority)
+        return await self._game_lifecycle.create_game(
+            world_id=world_id, game_name=game_name, group_name=group_name,
+            rule_id=rule_id, solo=solo, lorebook_world_id=lorebook_world_id,
+            difficulty=difficulty, description=description,
+            create_lorebook=create_lorebook, blank_lorebook=blank_lorebook,
+            source_world_id=source_world_id, players=players,
+            custom_world=custom_world, gm_uid=gm_uid,
+            room_password=room_password, language=language,
+            scene_image=scene_image, map_background=map_background,
+            adventure_id=adventure_id,
+            narrative_perspective=narrative_perspective,
+            advancement_mode=advancement_mode,
+            advancement_authority=advancement_authority,
+        )
 
     # ---- 重开引用码 ----
 
     async def reset_game(self, game_key: str) -> dict[str, Any]:
-        return await games.reset_game(self, game_key)
+        return await self._game_lifecycle.reset_game(game_key)
 
     async def restart_game(self, game_key: str) -> dict[str, Any]:
-        return await games.restart_game(self, game_key)
+        return await self._game_lifecycle.restart_game(game_key)
 
     async def switch_world(self, game_key: str, world_id: str) -> dict[str, Any]:
-        return await games.switch_world(self, game_key, world_id)
+        return await self._game_media.switch_world(game_key, world_id)
 
     async def create_from_seed(self, seed_code: str, solo: bool = False,
                                players: list[dict] | None = None,
@@ -1011,9 +1288,10 @@ class WebAPI:
                                language: str = "",
                                scene_image: dict[str, Any] | None = None,
                                narrative_perspective: str = "") -> dict[str, Any]:
-        return await games.create_from_seed(
-            self, seed_code, solo, players, gm_uid, language, scene_image,
-            narrative_perspective,
+        return await self._game_lifecycle.create_from_seed(
+            seed_code=seed_code, solo=solo, players=players, gm_uid=gm_uid,
+            language=language, scene_image=scene_image,
+            narrative_perspective=narrative_perspective,
         )
 
     async def update_scene_image(
@@ -1023,7 +1301,9 @@ class WebAPI:
         *,
         use_default: bool = False,
     ) -> dict[str, Any]:
-        return await games.update_scene_image(self, game_key, reference, use_default=use_default)
+        return await self._game_media.update_scene_image(
+            game_key, reference, use_default=use_default,
+        )
 
     async def update_map_background(
         self,
@@ -1059,17 +1339,19 @@ class WebAPI:
 
     def list_memories(self, game_key: str, keyword: str = "",
                       limit: int = 20, offset: int = 0) -> dict[str, Any]:
-        return memory.list_memories(self, game_key, keyword, limit, offset)
+        return self._memory_service.list(game_key, keyword, limit, offset)
 
     async def update_memory(self, game_key: str, entry_id: int, updates: dict[str, Any]) -> dict[str, Any]:
-        return await memory.update_memory(self, game_key, entry_id, updates)
+        return await self._memory_service.update(game_key, entry_id, updates)
 
     async def delete_memory(self, game_key: str, entry_id: int) -> dict[str, Any]:
-        return await memory.delete_memory(self, game_key, entry_id)
+        return await self._memory_service.delete(game_key, entry_id)
 
     async def import_tavern_card(self, file_path: str = "", file_data: str = "",
                                  file_name: str = "card.png", game_key: str = "") -> dict[str, Any]:
-        return await tavern.import_tavern_card(self, file_path, file_data, file_name, game_key)
+        return await self._tavern_import.import_card(
+            file_path, file_data, file_name, game_key,
+        )
 
     # ----
 

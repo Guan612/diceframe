@@ -135,6 +135,7 @@ def prepare_e2e_data(data_dir: Path) -> Path:
         state=GameState.ACTIVE_ACTION,
         solo_mode=False,
         gm_uid="e2e-gm",
+        max_players=2,
         scene="灰沼村议事厅",
         rule_id="dnd2024_srd",
         language="zh-CN",

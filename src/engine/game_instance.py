@@ -1426,6 +1426,11 @@ class GameRegistry:
         """构造存档路径（逻辑见 src/engine/persistence.py，P2-G Step 2）。"""
         return persistence._save_path(self, game_key)
 
+    def save_package_state_path(self, game_key: tuple) -> Path:
+        """Return the state path used by the portable save-package boundary."""
+
+        return persistence._save_path(self, game_key)
+
     async def save(self, instance: GameInstance) -> None:
         """写入存档（逻辑见 persistence）。"""
         await persistence.save(self, instance)

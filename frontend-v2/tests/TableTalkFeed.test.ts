@@ -26,4 +26,30 @@ describe('TableTalkFeed', () => {
     await wrapper.get('button').trigger('click')
     expect(wrapper.text()).toContain('问题 1')
   })
+
+  it('can dismiss the feed and shows it again for a new exchange', async () => {
+    i18n.global.locale.value = 'zh-CN'
+    const first = {
+      id: 'q-1',
+      actor_uid: 'p1',
+      actor_name: '莱拉',
+      question: '发生了什么？',
+      answer: '你目前只知道这些。',
+      round: 1,
+      created_at: '',
+      visibility: 'party' as const,
+    }
+    const wrapper = mount(TableTalkFeed, {
+      global: { plugins: [i18n] },
+      props: { exchanges: [first] },
+    })
+
+    await wrapper.get('button[aria-label="关闭"]').trigger('click')
+    expect(wrapper.find('.table-talk-feed').exists()).toBe(false)
+
+    await wrapper.setProps({
+      exchanges: [first, { ...first, id: 'q-2', question: '又有新问题吗？' }],
+    })
+    expect(wrapper.find('.table-talk-feed').exists()).toBe(true)
+  })
 })

@@ -13,10 +13,6 @@ import json
 
 import pytest
 
-from src.webui.services.games import gm_private_message
-from src.webui.services.logs import get_log
-
-
 SECRET = "只有乙能看见的暗门机关"
 
 
@@ -48,7 +44,7 @@ async def test_private_message_reaches_only_its_owner(game_env, create_two_playe
     # 公开叙事不携带私有内容
     assert SECRET not in narration
     # 日志视图（玩家可见面）不泄露私有内容
-    assert SECRET not in json.dumps(get_log(game_env["api"], game_key), ensure_ascii=False)
+    assert SECRET not in json.dumps(game_env["api"].get_log(game_key), ensure_ascii=False)
 
 
 @pytest.mark.asyncio
@@ -77,10 +73,12 @@ async def test_gm_whisper_is_player_scoped_and_rejects_outsiders(game_env, creat
     game_key, _gm_uid, player_uid = await create_two_player_game()
     api = game_env["api"]
 
-    ok = await gm_private_message(api, game_key, player_uid, "GM 对乙的悄悄话")
+    ok = await api.gm_private_message(game_key, player_uid, "GM 对乙的悄悄话")
     assert ok["ok"] is True
 
-    rejected = await gm_private_message(api, game_key, "ghost_uid", "不存在的玩家")
+    rejected = await api.gm_private_message(
+        game_key, "ghost_uid", "不存在的玩家",
+    )
     assert rejected["ok"] is False
 
     inst = game_env["registry"].get(api._parse_key(game_key))

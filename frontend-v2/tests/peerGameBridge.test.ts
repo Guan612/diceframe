@@ -109,6 +109,87 @@ describe('peer host game bridge', () => {
     expect(luckBody).toEqual({ spend: true })
   })
 
+  it('forwards the canonical professional character for authoritative host validation', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    const executor: PeerLocalApiExecutor = async (path, init) => {
+      calls.push({ path, init })
+      if (path === '/games/web%7Cgame%7Chost') {
+        return {
+          game_key: 'web|game|host',
+          player_access_open: true,
+          player_count: 1,
+          max_players: 2,
+        }
+      }
+      if (path === '/games/web%7Cgame%7Chost/players') {
+        return { ok: true, user_id: 'player_123' }
+      }
+      return { ok: true }
+    }
+    const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined)
+    const canonical = {
+      rule_binding: {
+        rule_id: 'dnd2024_srd',
+        runtime_id: 'core:dnd2024',
+        runtime_version: 1,
+      },
+      identity: { name: '守护者' },
+      build: { level: 1 },
+      derived: { armor_class: 999 },
+    }
+
+    await bridge.handle('p_abcdefghijk', 'player.create', {
+      character_name: '守护者',
+      ruleset_character: canonical,
+      user_id: 'attempted-impersonation',
+      role: 'gm',
+    })
+
+    const createBody = JSON.parse(String(calls[1].init?.body))
+    expect(createBody.ruleset_character).toEqual(canonical)
+    expect(createBody.user_id).toBeUndefined()
+    expect(createBody.role).toBeUndefined()
+    expect(createBody.join_as_new).toBe(true)
+  })
+
+  it('keeps professional character operations bound to the peer actor', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    const executor: PeerLocalApiExecutor = async (path, init) => {
+      calls.push({ path, init })
+      if (path === '/games/web%7Cgame%7Chost') {
+        return { game_key: 'web|game|host', player_access_open: true }
+      }
+      return { ok: true }
+    }
+    const changed = vi.fn()
+    const bridge = new PeerHostGameBridge(
+      'web|game|host', executor, changed, {}, { p_abcdefghijk: 'player_bound' },
+    )
+
+    await bridge.handle('p_abcdefghijk', 'character.profile', {
+      character_name: '守护者', profile: { backstory: '守住城门' }, user_id: 'player_forged',
+    })
+    await bridge.handle('p_abcdefghijk', 'character.rest', {
+      rest: 'short', hit_dice: { d10: 1 }, expected_revision: 3, operation_id: 'rest-1',
+      user_id: 'player_forged',
+    })
+
+    expect(calls[1].path).toBe(
+      '/games/web%7Cgame%7Chost/character/player_bound/profile?user=player_bound&share=1&delegate=1',
+    )
+    expect(calls[1].init?.method).toBe('PATCH')
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({
+      character_name: '守护者', profile: { backstory: '守住城门' },
+    })
+    expect(calls[3].path).toBe(
+      '/games/web%7Cgame%7Chost/character/player_bound/rest?user=player_bound&share=1&delegate=1',
+    )
+    expect(JSON.parse(String(calls[3].init?.body))).toEqual({
+      rest: 'short', hit_dice: { d10: 1 }, expected_revision: 3, operation_id: 'rest-1',
+    })
+    expect(changed).toHaveBeenCalledTimes(2)
+  })
+
   it('allows only player-side Session 0 and tutorial intent fields', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     const executor: PeerLocalApiExecutor = async (path, init) => {
@@ -180,6 +261,40 @@ describe('peer remote game client', () => {
     })
     expect(requestGame).toHaveBeenLastCalledWith(
       'h_abcdefghijk', 'ruleset.intent', { intent_id: 'i-1', type: 'end_turn' },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/decisions/decision-1', {
+      method: 'POST', body: JSON.stringify({ intent_id: 'i-2', option: 'accept' }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'ruleset.decision',
+      { intent_id: 'i-2', option: 'accept', decision_id: 'decision-1' },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/character/player_forged/profile', {
+      method: 'PATCH', body: JSON.stringify({ character_name: '守护者', profile: { notes: 'safe' } }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'character.profile',
+      { character_name: '守护者', profile: { notes: 'safe' } },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/character/player_forged/rest', {
+      method: 'POST', body: JSON.stringify({ rest: 'long', operation_id: 'rest-1' }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'character.rest', { rest: 'long', operation_id: 'rest-1' },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/character/player_forged/advancement/preview', {
+      method: 'POST', body: JSON.stringify({ choices: { feat_ref: 'feat:alert' } }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'character.advancement.preview',
+      { choices: { feat_ref: 'feat:alert' } },
+    )
+    await client.tryApi('/games/web%7Cgame%7Chost/character/player_forged/advancement/apply', {
+      method: 'POST', body: JSON.stringify({ choices: {}, expected_revision: 3, operation_id: 'advance-1' }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith(
+      'h_abcdefghijk', 'character.advancement.apply',
+      { choices: {}, expected_revision: 3, operation_id: 'advance-1' },
     )
     await client.tryApi('/games/web%7Cgame%7Chost/kp-question', {
       method: 'POST', body: JSON.stringify({ question: 'What do I know?', visibility: 'party' }),

@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 import aiohttp
 
@@ -14,9 +15,6 @@ from src.version import DEFAULT_UPDATE_REPOSITORY, __version__
 from src.runtime_diagnostics import build_runtime_log_archive
 from src.runtime_logging import clear_runtime_logs as clear_logs
 from src.runtime_logging import runtime_log_status as log_status
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
 
 logger = logging.getLogger("trpg")
 
@@ -32,20 +30,24 @@ class NoReleaseError(RuntimeError):
     """Raised when the repository exists but has no public releases yet."""
 
 
-def _data_dir(api: "WebAPI") -> Path:
-    return api._reg.save_dir.parent
+@dataclass(frozen=True)
+class SystemDependencies:
+    data_dir: Path
+    config_state: Callable[[], dict[str, Any]]
+    proxy_url: Callable[[], str]
+    mirrors: Callable[[], Any | None]
 
 
-def runtime_log_status(api: "WebAPI") -> dict[str, Any]:
-    return log_status(_data_dir(api))
+def runtime_log_status(data_dir: Path) -> dict[str, Any]:
+    return log_status(data_dir)
 
 
-def clear_runtime_logs(api: "WebAPI") -> dict[str, Any]:
-    return clear_logs(_data_dir(api))
+def clear_runtime_logs(data_dir: Path) -> dict[str, Any]:
+    return clear_logs(data_dir)
 
 
-def export_runtime_logs(api: "WebAPI") -> tuple[bytes, int]:
-    return build_runtime_log_archive(_data_dir(api))
+def export_runtime_logs(data_dir: Path) -> tuple[bytes, int]:
+    return build_runtime_log_archive(data_dir)
 
 
 def _parse_version(value: str) -> tuple[tuple[int, int, int], tuple[str, ...] | None] | None:
@@ -89,7 +91,10 @@ def is_newer_version(latest: str, current: str) -> bool:
     return _compare_prerelease(latest_prerelease, current_prerelease) > 0
 
 
-async def check_updates(api: "WebAPI", include_prerelease: bool | None = None) -> dict[str, Any]:
+async def check_updates(
+    dependencies: SystemDependencies,
+    include_prerelease: bool | None = None,
+) -> dict[str, Any]:
     repo = str(os.getenv("TRPG_UPDATE_REPOSITORY") or DEFAULT_UPDATE_REPOSITORY).strip()
     if not repo or "/" not in repo:
         return {
@@ -101,14 +106,16 @@ async def check_updates(api: "WebAPI", include_prerelease: bool | None = None) -
         }
 
     if include_prerelease is None:
-        config_state = getattr(api, "_config_state", None) or {}
+        config_state = dependencies.config_state()
         include_prerelease = str(config_state.get("update_channel") or "stable") == "preview"
     channel = "preview" if include_prerelease else "stable"
 
     check_source: dict[str, Any] = {"mode": "github-api", "mirror_name": "GitHub API"}
     try:
-        proxy_url = str(getattr(getattr(api, "_llm_client", None), "proxy_url", "") or "")
-        release, check_source = await _fetch_release_for_api(api, repo, include_prerelease, proxy_url)
+        proxy_url = dependencies.proxy_url()
+        release, check_source = await _fetch_release_with_mirrors(
+            dependencies.mirrors(), repo, include_prerelease, proxy_url,
+        )
     except NoReleaseError as exc:
         return {
             "ok": True,
@@ -197,14 +204,12 @@ async def _fetch_release(repo: str, include_prerelease: bool, proxy_url: str = "
     raise RuntimeError("没有可用的 Release")
 
 
-async def _fetch_release_for_api(
-    api: "WebAPI",
+async def _fetch_release_with_mirrors(
+    mirrors: Any | None,
     repo: str,
     include_prerelease: bool,
     proxy_url: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    plugin_host = getattr(api, "_plugins", None)
-    mirrors = getattr(plugin_host, "mirrors", None)
     api_path = f"/repos/{repo}/releases"
     if not include_prerelease:
         api_path += "/latest"
@@ -247,3 +252,24 @@ def _install_hint(repo: str) -> dict[str, str]:
         "docker": "Compose 部署请先进入存放 docker-compose.yml 的目录，再拉取镜像并重新 docker compose up -d；docker run 部署需重新创建容器，源码镜像需用新版源码重新 build。",
         "source": f"源码用户可从 https://github.com/{repo}/releases 下载新版，升级前先备份 data/。",
     }
+
+
+class SystemService:
+    """Runtime diagnostics and release checks with explicit host dependencies."""
+
+    def __init__(self, dependencies: SystemDependencies) -> None:
+        self._dependencies = dependencies
+
+    async def check_updates(
+        self, include_prerelease: bool | None = None,
+    ) -> dict[str, Any]:
+        return await check_updates(self._dependencies, include_prerelease)
+
+    def runtime_log_status(self) -> dict[str, Any]:
+        return runtime_log_status(self._dependencies.data_dir)
+
+    def clear_runtime_logs(self) -> dict[str, Any]:
+        return clear_runtime_logs(self._dependencies.data_dir)
+
+    def export_runtime_logs(self) -> tuple[bytes, int]:
+        return export_runtime_logs(self._dependencies.data_dir)

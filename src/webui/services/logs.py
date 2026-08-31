@@ -3,22 +3,32 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol
 
 from src.llm.parser import sanitize_narration
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+GameKey = tuple[str, ...]
+
+
+class LogRegistry(Protocol):
+    def get(self, game_key: GameKey) -> Any | None: ...
+
+
+@dataclass(frozen=True)
+class LogDependencies:
+    registry: LogRegistry
+    parse_game_key: Callable[[str], GameKey]
 
 
 def get_log(
-    api: "WebAPI",
+    dependencies: LogDependencies,
     game_key: str,
     page: int = 1,
     per_page: int = 50,
     include_internal: bool = False,
 ) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+    inst = dependencies.registry.get(dependencies.parse_game_key(game_key))
     if not inst:
         return {"log": [], "total": 0, "page": page}
     log = inst.log
@@ -55,8 +65,8 @@ def get_log(
     }
 
 
-def get_statistics(api: "WebAPI", game_key: str) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+def get_statistics(dependencies: LogDependencies, game_key: str) -> dict[str, Any]:
+    inst = dependencies.registry.get(dependencies.parse_game_key(game_key))
     if not inst:
         return {}
     battles = sum(1 for e in inst.log if "combat" in e.get("actions", ""))
@@ -80,3 +90,24 @@ def get_statistics(api: "WebAPI", game_key: str) -> dict[str, Any]:
         "total_tokens": inst.total_tokens,
         "player_stats": list(player_stats.values()),
     }
+
+
+class GameLogService:
+    """Read-only public log and statistics projections."""
+
+    def __init__(self, dependencies: LogDependencies) -> None:
+        self._dependencies = dependencies
+
+    def get_log(
+        self,
+        game_key: str,
+        page: int = 1,
+        per_page: int = 50,
+        include_internal: bool = False,
+    ) -> dict[str, Any]:
+        return get_log(
+            self._dependencies, game_key, page, per_page, include_internal,
+        )
+
+    def get_statistics(self, game_key: str) -> dict[str, Any]:
+        return get_statistics(self._dependencies, game_key)

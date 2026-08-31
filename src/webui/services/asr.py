@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol
 
-from src.asr import TranscriptionRequest
+from src.asr import TranscriptionRequest, TranscriptionResult
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+
+GameKey = tuple[str, ...]
+
+
+class TranscriptionBackend(Protocol):
+    async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult: ...
+
+
+@dataclass(frozen=True)
+class AsrDependencies:
+    backend: TranscriptionBackend
+    get_instance: Callable[[GameKey], Any | None]
+    parse_game_key: Callable[[str], GameKey]
 
 
 async def transcribe(
-    api: "WebAPI",
+    dependencies: AsrDependencies,
     game_key: str,
     user_id: str,
     audio: bytes,
@@ -19,24 +31,57 @@ async def transcribe(
     language: str = "",
     owner: bool = False,
 ) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+    inst = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if inst is None:
         raise KeyError("游戏不存在")
     if not user_id or not (owner or user_id == inst.gm_uid or user_id in inst.players):
         raise PermissionError("当前身份不属于本局游戏")
-    result = await api._asr.transcribe(
+    result = await dependencies.backend.transcribe(
         TranscriptionRequest(audio=audio, content_type=content_type, language=language),
     )
     return {"ok": True, **result.public_dict()}
 
 
 async def test_transcription(
-    api: "WebAPI",
+    dependencies: AsrDependencies,
     audio: bytes,
     content_type: str,
     language: str = "",
 ) -> dict[str, Any]:
-    result = await api._asr.transcribe(
+    result = await dependencies.backend.transcribe(
         TranscriptionRequest(audio=audio, content_type=content_type, language=language),
     )
     return {"ok": True, **result.public_dict()}
+
+
+class WebAsrService:
+    """Game membership checks around the configured transcription backend."""
+
+    def __init__(self, dependencies: AsrDependencies) -> None:
+        self._dependencies = dependencies
+
+    async def transcribe(
+        self,
+        game_key: str,
+        user_id: str,
+        audio: bytes,
+        content_type: str,
+        language: str = "",
+        owner: bool = False,
+    ) -> dict[str, Any]:
+        return await transcribe(
+            self._dependencies,
+            game_key,
+            user_id,
+            audio,
+            content_type,
+            language,
+            owner,
+        )
+
+    async def test_transcription(
+        self, audio: bytes, content_type: str, language: str = "",
+    ) -> dict[str, Any]:
+        return await test_transcription(
+            self._dependencies, audio, content_type, language,
+        )

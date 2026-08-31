@@ -23,14 +23,22 @@ def reset_state(monkeypatch):
 
 class FakeAPI:
     def __init__(self, content_cache_dir=None):
-        self._content_cache_dir = content_cache_dir
-        self._plugins = None
+        self.content = content_service.PublicContentService(content_cache_dir)
 
     async def fetch_public_content_text(self, path, **kwargs):
-        return await content_service.fetch_text(self, path, **kwargs)
+        return await self.content.fetch_text(path, **kwargs)
 
     def public_content_disk_age(self, path):
-        return content_service.disk_cache_age_seconds(self, path)
+        return self.content.disk_cache_age(path)
+
+
+def _announcement_service(api: FakeAPI) -> announcements_service.AnnouncementService:
+    return announcements_service.AnnouncementService(
+        announcements_service.AnnouncementDependencies(
+            fetch_public_text=api.fetch_public_content_text,
+            disk_cache_age=api.public_content_disk_age,
+        )
+    )
 
 
 def _remote(text_by_path):
@@ -49,7 +57,7 @@ async def test_online_success_returns_content_and_hash(tmp_path, monkeypatch):
     )
     api = FakeAPI(content_cache_dir=tmp_path)
 
-    result = await announcements_service.fetch_official_announcement(api, "zh-CN")
+    result = await _announcement_service(api).fetch("zh-CN")
 
     assert result["fetched"] is True
     assert result["content"] == "# 你好\n公告"
@@ -68,8 +76,8 @@ async def test_memory_hit_skips_network(tmp_path, monkeypatch):
     monkeypatch.setattr(content_service, "_fetch_remote", counting_remote)
     api = FakeAPI(content_cache_dir=tmp_path)
 
-    first = await announcements_service.fetch_official_announcement(api, "zh-CN")
-    second = await announcements_service.fetch_official_announcement(api, "zh-CN")
+    first = await _announcement_service(api).fetch("zh-CN")
+    second = await _announcement_service(api).fetch("zh-CN")
 
     assert first == second
     assert calls["n"] == 1  # 第二次命中公告内存缓存
@@ -82,7 +90,7 @@ async def test_restart_offline_serves_disk_cache_and_marks_stale(tmp_path, monke
         _remote({"announcements/zh.md": "上次公告"}),
     )
     api = FakeAPI(content_cache_dir=tmp_path)
-    fresh = await announcements_service.fetch_official_announcement(api, "zh-CN")
+    fresh = await _announcement_service(api).fetch("zh-CN")
     assert fresh["content"] == "上次公告"
     assert fresh["stale"] is False
 
@@ -91,13 +99,13 @@ async def test_restart_offline_serves_disk_cache_and_marks_stale(tmp_path, monke
     monkeypatch.setattr(content_service, "_CACHE", {})
     monkeypatch.setattr(content_service, "_FAILURE_UNTIL", {})
     monkeypatch.setattr(content_service, "_INFLIGHT", {})
-    cache_path = content_service._cache_file(api, "announcements/zh.md")
+    cache_path = api.content.cache_file("announcements/zh.md")
     assert cache_path is not None and cache_path.exists()
     old = time.time() - 7200
     os.utime(cache_path, (old, old))
     monkeypatch.setattr(content_service, "_fetch_remote", _remote({}))
 
-    result = await announcements_service.fetch_official_announcement(api, "zh-CN")
+    result = await _announcement_service(api).fetch("zh-CN")
 
     assert result["fetched"] is True
     assert result["content"] == "上次公告"
@@ -109,7 +117,7 @@ async def test_offline_without_cache_returns_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(content_service, "_fetch_remote", _remote({}))
     api = FakeAPI(content_cache_dir=tmp_path)
 
-    result = await announcements_service.fetch_official_announcement(api, "zh-CN")
+    result = await _announcement_service(api).fetch("zh-CN")
 
     assert result == {"content": "", "hash": "", "fetched": False, "stale": False}
 
@@ -125,15 +133,15 @@ async def test_zh_and_en_are_isolated(tmp_path, monkeypatch):
     )
     api = FakeAPI(content_cache_dir=tmp_path)
 
-    zh = await announcements_service.fetch_official_announcement(api, "zh-CN")
-    en = await announcements_service.fetch_official_announcement(api, "en")
+    zh = await _announcement_service(api).fetch("zh-CN")
+    en = await _announcement_service(api).fetch("en")
 
     assert zh["content"] == "中文公告"
     assert en["content"] == "English notice"
     assert zh["hash"] != en["hash"]
     # 再次请求仍保持隔离（各自命中自己的缓存）。
-    assert (await announcements_service.fetch_official_announcement(api, "zh-CN")) == zh
-    assert (await announcements_service.fetch_official_announcement(api, "en")) == en
+    assert (await _announcement_service(api).fetch("zh-CN")) == zh
+    assert (await _announcement_service(api).fetch("en")) == en
 
 
 @pytest.mark.asyncio
@@ -149,8 +157,8 @@ async def test_concurrent_requests_share_one_fetch(tmp_path, monkeypatch):
     api = FakeAPI(content_cache_dir=tmp_path)
 
     first, second = await asyncio.gather(
-        announcements_service.fetch_official_announcement(api, "zh-CN"),
-        announcements_service.fetch_official_announcement(api, "zh-CN"),
+        _announcement_service(api).fetch("zh-CN"),
+        _announcement_service(api).fetch("zh-CN"),
     )
 
     assert calls["n"] == 1  # content.py 单飞合并并发请求
@@ -166,7 +174,7 @@ async def test_stale_memory_cache_survives_upstream_failure(tmp_path, monkeypatc
     monkeypatch.setattr(content_service, "_fetch_remote", _remote({}))
     api = FakeAPI(content_cache_dir=tmp_path)
 
-    result = await announcements_service.fetch_official_announcement(api, "zh-CN")
+    result = await _announcement_service(api).fetch("zh-CN")
 
     assert result == {"content": "旧公告", "hash": "old", "fetched": True, "stale": True}
 

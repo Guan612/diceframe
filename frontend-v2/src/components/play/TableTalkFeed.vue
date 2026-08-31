@@ -6,21 +6,40 @@ import { useLocale } from '@/composables/useLocale'
 const props = defineProps<{ exchanges: TableTalkExchange[] }>()
 const { t } = useLocale()
 const expanded = ref(false)
+const dismissedThrough = ref<string | null>(null)
+const latestExchangeId = computed(() => props.exchanges.at(-1)?.id ?? null)
+const showFeed = computed(() => (
+  props.exchanges.length > 0 && dismissedThrough.value !== latestExchangeId.value
+))
 const visible = computed(() => (
   expanded.value ? props.exchanges : props.exchanges.slice(-2)
 ))
+
+function dismiss(): void {
+  dismissedThrough.value = latestExchangeId.value
+  expanded.value = false
+}
 </script>
 
 <template>
-  <section v-if="exchanges.length" class="table-talk-feed" aria-live="polite">
+  <section v-if="showFeed" class="table-talk-feed" aria-live="polite">
     <header>
       <strong>{{ t('tableTalkTitle') }}</strong>
-      <button
-        v-if="exchanges.length > 2"
-        type="button"
-        class="text-button"
-        @click="expanded = !expanded"
-      >{{ expanded ? t('tableTalkCollapse') : t('tableTalkExpand', { count: exchanges.length }) }}</button>
+      <div class="table-talk-actions">
+        <button
+          v-if="exchanges.length > 2"
+          type="button"
+          class="text-button"
+          @click="expanded = !expanded"
+        >{{ expanded ? t('tableTalkCollapse') : t('tableTalkExpand', { count: exchanges.length }) }}</button>
+        <button
+          type="button"
+          class="table-talk-close"
+          :title="t('close')"
+          :aria-label="t('close')"
+          @click="dismiss"
+        >×</button>
+      </div>
     </header>
     <article v-for="exchange in visible" :key="exchange.id" class="table-talk-exchange">
       <p class="table-talk-question">
@@ -52,12 +71,31 @@ const visible = computed(() => (
   font-size: 12px;
 }
 
+.table-talk-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .text-button {
   padding: 2px 0;
   border: 0;
   color: var(--df-interactive-strong);
   background: transparent;
   font-size: 12px;
+}
+
+.table-talk-close {
+  padding: 0 2px;
+  border: 0;
+  color: var(--df-text-secondary);
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.table-talk-close:hover {
+  color: var(--df-text);
 }
 
 .table-talk-exchange {

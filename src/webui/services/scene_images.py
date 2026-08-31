@@ -7,14 +7,11 @@ import binascii
 import hashlib
 import io
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 from PIL import Image, ImageOps, UnidentifiedImageError
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 
 MAX_SCENE_IMAGE_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_SCENE_IMAGE_PIXELS = 24_000_000
@@ -34,6 +31,15 @@ BUILTIN_SCENE_IMAGE_PATHS: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class SceneImageDependencies:
+    images_dir: Path
+    load_world_template: Callable[[str], dict[str, Any] | None]
+    get_rule_template: Callable[[str], dict[str, Any]]
+    generated_image_file: Callable[[str], Path | None]
+    plugin_asset_path: Callable[[str, str], Path]
+
+
 def builtin_scene_image_ref(rule_id: str = "") -> dict[str, str]:
     image_id = str(rule_id or "").strip()
     if image_id not in BUILTIN_SCENE_IMAGE_PATHS:
@@ -41,7 +47,7 @@ def builtin_scene_image_ref(rule_id: str = "") -> dict[str, str]:
     return {"kind": "builtin", "id": image_id}
 
 
-def save_scene_image_upload(api: "WebAPI", file_data: str, file_name: str = "") -> dict[str, Any]:
+def save_scene_image_upload(dependencies: SceneImageDependencies, file_data: str, file_name: str = "") -> dict[str, Any]:
     if not file_data:
         return {"ok": False, "error": "未提供冒险头图文件"}
     if len(file_data) > (MAX_SCENE_IMAGE_UPLOAD_BYTES * 4 // 3) + 32:
@@ -56,14 +62,14 @@ def save_scene_image_upload(api: "WebAPI", file_data: str, file_name: str = "") 
         payload = _normalized_scene_image(raw)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
-    reference = _store_payload(api, payload)
+    reference = _store_payload(dependencies, payload)
     return {"ok": True, "scene_image": reference, "file_name": Path(file_name).name}
 
 
-def scene_image_file(api: "WebAPI", asset_id: str) -> Path | None:
+def scene_image_file(dependencies: SceneImageDependencies, asset_id: str) -> Path | None:
     if not ASSET_ID_RE.fullmatch(str(asset_id or "")):
         return None
-    path = api._scene_images_dir / f"{asset_id}.webp"
+    path = dependencies.images_dir / f"{asset_id}.webp"
     return path if path.is_file() else None
 
 
@@ -78,7 +84,7 @@ def builtin_scene_image_file(image_id: str) -> Path | None:
     return None
 
 
-def validate_scene_image_ref(api: "WebAPI", reference: Any) -> dict[str, str]:
+def validate_scene_image_ref(dependencies: SceneImageDependencies, reference: Any) -> dict[str, str]:
     if not isinstance(reference, dict):
         raise ValueError("冒险头图引用必须是对象")
     kind = str(reference.get("kind") or "").strip()
@@ -89,12 +95,12 @@ def validate_scene_image_ref(api: "WebAPI", reference: Any) -> dict[str, str]:
         return {"kind": "builtin", "id": image_id}
     if kind == "upload":
         asset_id = str(reference.get("asset_id") or "").strip()
-        if not scene_image_file(api, asset_id):
+        if not scene_image_file(dependencies, asset_id):
             raise ValueError("上传的冒险头图不存在")
         return {"kind": "upload", "asset_id": asset_id}
     if kind == "generated":
         asset_id = str(reference.get("asset_id") or "").strip()
-        if not api.generated_image_file(asset_id):
+        if not dependencies.generated_image_file(asset_id):
             raise ValueError("生成的冒险头图不存在")
         return {"kind": "generated", "asset_id": asset_id}
     if kind == "plugin":
@@ -103,7 +109,7 @@ def validate_scene_image_ref(api: "WebAPI", reference: Any) -> dict[str, str]:
         if not plugin_id or not relative_path:
             raise ValueError("内容包冒险头图引用不完整")
         try:
-            path = api.plugin_asset_path(plugin_id, relative_path)
+            path = dependencies.plugin_asset_path(plugin_id, relative_path)
         except (KeyError, ValueError) as exc:
             raise ValueError("内容包冒险头图不存在或未声明") from exc
         if path.stat().st_size > MAX_SCENE_IMAGE_UPLOAD_BYTES:
@@ -112,24 +118,24 @@ def validate_scene_image_ref(api: "WebAPI", reference: Any) -> dict[str, str]:
     raise ValueError("不支持的冒险头图引用类型")
 
 
-def resolve_default_scene_image(api: "WebAPI", world_id: str = "", rule_id: str = "") -> dict[str, str]:
-    world = api._load_world_template(str(world_id or "")) if world_id else None
+def resolve_default_scene_image(dependencies: SceneImageDependencies, world_id: str = "", rule_id: str = "") -> dict[str, str]:
+    world = dependencies.load_world_template(str(world_id or "")) if world_id else None
     if isinstance(world, dict):
         reference = world.get("scene_image")
         if isinstance(reference, dict):
             try:
-                return validate_scene_image_ref(api, reference)
+                return validate_scene_image_ref(dependencies, reference)
             except ValueError:
                 pass
         rule_id = str(rule_id or world.get("default_rule") or "")
 
-    rule_result = api.get_rule_template(str(rule_id or "")) if rule_id else {}
+    rule_result = dependencies.get_rule_template(str(rule_id or "")) if rule_id else {}
     rule = rule_result.get("rule") if isinstance(rule_result, dict) else None
     if isinstance(rule, dict):
         reference = rule.get("scene_image")
         if isinstance(reference, dict):
             try:
-                return validate_scene_image_ref(api, reference)
+                return validate_scene_image_ref(dependencies, reference)
             except ValueError:
                 pass
         source_rule_id = str(rule.get("source_rule_id") or "")
@@ -138,41 +144,41 @@ def resolve_default_scene_image(api: "WebAPI", world_id: str = "", rule_id: str 
     return builtin_scene_image_ref(rule_id)
 
 
-def materialize_scene_image(api: "WebAPI", reference: Any) -> dict[str, str]:
-    normalized = validate_scene_image_ref(api, reference)
+def materialize_scene_image(dependencies: SceneImageDependencies, reference: Any) -> dict[str, str]:
+    normalized = validate_scene_image_ref(dependencies, reference)
     if normalized["kind"] != "plugin":
         return normalized
-    source = api.plugin_asset_path(normalized["plugin_id"], normalized["path"])
+    source = dependencies.plugin_asset_path(normalized["plugin_id"], normalized["path"])
     payload = _normalized_scene_image(source.read_bytes())
-    return _store_payload(api, payload)
+    return _store_payload(dependencies, payload)
 
 
-def resolve_scene_image_file(api: "WebAPI", reference: Any) -> Path | None:
+def resolve_scene_image_file(dependencies: SceneImageDependencies, reference: Any) -> Path | None:
     try:
-        normalized = validate_scene_image_ref(api, reference)
+        normalized = validate_scene_image_ref(dependencies, reference)
     except ValueError:
         return None
     if normalized["kind"] == "builtin":
         return builtin_scene_image_file(normalized["id"])
     if normalized["kind"] == "upload":
-        return scene_image_file(api, normalized["asset_id"])
+        return scene_image_file(dependencies, normalized["asset_id"])
     if normalized["kind"] == "generated":
-        return api.generated_image_file(normalized["asset_id"])
-    return api.plugin_asset_path(normalized["plugin_id"], normalized["path"])
+        return dependencies.generated_image_file(normalized["asset_id"])
+    return dependencies.plugin_asset_path(normalized["plugin_id"], normalized["path"])
 
 
 def package_scene_image(
-    api: "WebAPI",
+    dependencies: SceneImageDependencies,
     reference: Any,
     files: dict[str, str | bytes],
 ) -> dict[str, str] | None:
     try:
-        normalized = validate_scene_image_ref(api, reference)
+        normalized = validate_scene_image_ref(dependencies, reference)
     except ValueError:
         return None
     if normalized["kind"] == "builtin":
         return normalized
-    source = resolve_scene_image_file(api, normalized)
+    source = resolve_scene_image_file(dependencies, normalized)
     if source is None:
         return None
     try:
@@ -206,12 +212,44 @@ def _normalized_scene_image(raw: bytes) -> bytes:
         raise ValueError("无法读取该冒险头图") from exc
 
 
-def _store_payload(api: "WebAPI", payload: bytes) -> dict[str, str]:
+def _store_payload(dependencies: SceneImageDependencies, payload: bytes) -> dict[str, str]:
     asset_id = hashlib.sha256(payload).hexdigest()
-    path = api._scene_images_dir / f"{asset_id}.webp"
+    path = dependencies.images_dir / f"{asset_id}.webp"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         tmp_path = path.with_suffix(".webp.tmp")
         tmp_path.write_bytes(payload)
         tmp_path.replace(path)
     return {"kind": "upload", "asset_id": asset_id}
+
+
+class SceneImageService:
+    """Scene-image storage and reference resolution with explicit boundaries."""
+
+    def __init__(self, dependencies: SceneImageDependencies) -> None:
+        self._dependencies = dependencies
+
+    def save_upload(self, file_data: str, file_name: str = "") -> dict[str, Any]:
+        return save_scene_image_upload(self._dependencies, file_data, file_name)
+
+    def file(self, asset_id: str) -> Path | None:
+        return scene_image_file(self._dependencies, asset_id)
+
+    def validate(self, reference: Any) -> dict[str, str]:
+        return validate_scene_image_ref(self._dependencies, reference)
+
+    def resolve_default(
+        self, world_id: str = "", rule_id: str = "",
+    ) -> dict[str, str]:
+        return resolve_default_scene_image(self._dependencies, world_id, rule_id)
+
+    def materialize(self, reference: Any) -> dict[str, str]:
+        return materialize_scene_image(self._dependencies, reference)
+
+    def resolve_file(self, reference: Any) -> Path | None:
+        return resolve_scene_image_file(self._dependencies, reference)
+
+    def package(
+        self, reference: Any, files: dict[str, str | bytes],
+    ) -> dict[str, str] | None:
+        return package_scene_image(self._dependencies, reference, files)

@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+from typing import Any
 
 from src.bots.bridge_core.card_renderer import BRAND_FOOTER, render_card_png
 
@@ -21,8 +19,14 @@ MAX_BRIDGE_PAYLOAD_BYTES = 192 * 1024
 _BRIDGE_CARD_NAME_RE = re.compile(r"^card_[0-9a-f]{8,64}\.png$")
 
 
-def capabilities(api: "WebAPI") -> dict[str, Any]:
-    extensions = api._plugins.list_bridge_extensions() if api._plugins else []
+@dataclass(frozen=True)
+class BotExtensionDependencies:
+    plugin_host: Any | None
+
+
+def capabilities(dependencies: BotExtensionDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    extensions = host.list_bridge_extensions() if host else []
     return {
         "protocol_version": BRIDGE_EXTENSION_PROTOCOL_VERSION,
         "stages": list(BRIDGE_EXTENSION_STAGES),
@@ -31,7 +35,7 @@ def capabilities(api: "WebAPI") -> dict[str, Any]:
 
 
 async def apply(
-    api: "WebAPI",
+    dependencies: BotExtensionDependencies,
     stage: str,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
@@ -46,7 +50,8 @@ async def apply(
         return {"ok": False, "error": "payload 不是有效 JSON"}
     if len(encoded) > MAX_BRIDGE_PAYLOAD_BYTES:
         return {"ok": False, "error": "Bot Bridge 扩展 payload 不能超过 192 KB"}
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return {
             "ok": True,
             "handled": False,
@@ -54,20 +59,25 @@ async def apply(
             "outputs": [],
             "applied": [],
         }
-    result = await api._plugins.apply_bridge_extensions(stage, payload)
+    result = await host.apply_bridge_extensions(stage, payload)
     outputs = result.get("outputs") if isinstance(result.get("outputs"), list) else []
     if outputs:
-        result["outputs"] = _materialize_cards(api, outputs)
+        result["outputs"] = _materialize_cards(dependencies, outputs)
     return {"ok": True, **result}
 
 
-def bridge_card_dir(api: "WebAPI") -> Path:
+def bridge_card_dir(dependencies: BotExtensionDependencies) -> Path:
     """卡片渲染输出目录（data/bot/cards），与清缓存按钮一致。"""
-    data_dir = Path(api._plugins.data_dir).resolve()
+    if dependencies.plugin_host is None:
+        raise KeyError("插件宿主未启用")
+    data_dir = Path(dependencies.plugin_host.data_dir).resolve()
     return (data_dir / "bot" / "cards").resolve()
 
 
-def _materialize_cards(api: "WebAPI", outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _materialize_cards(
+    dependencies: BotExtensionDependencies,
+    outputs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """把服务端收到的 card 输出渲染成 PNG，转成可下载的 image 输出。
 
     渲染失败（如 PIL 缺失）时保留原 card 输出并记 warning，让渠道走自己的降级路径。
@@ -82,7 +92,7 @@ def _materialize_cards(api: "WebAPI", outputs: list[dict[str, Any]]) -> list[dic
         lines = output.get("lines") if isinstance(output.get("lines"), list) else []
         try:
             png = render_card_png(
-                bridge_card_dir(api),
+                bridge_card_dir(dependencies),
                 title=title,
                 subtitle=subtitle,
                 lines=lines,
@@ -104,11 +114,11 @@ def _materialize_cards(api: "WebAPI", outputs: list[dict[str, Any]]) -> list[dic
     return materialized
 
 
-def bridge_card_path(api: "WebAPI", name: str) -> Path:
+def bridge_card_path(dependencies: BotExtensionDependencies, name: str) -> Path:
     """解析卡片渲染输出文件路径；非法或不存在时抛异常。"""
     if not _BRIDGE_CARD_NAME_RE.match(str(name or "")):
         raise ValueError("卡片文件名非法")
-    root = bridge_card_dir(api)
+    root = bridge_card_dir(dependencies)
     target = (root / str(name)).resolve()
     if root not in target.parents:
         raise ValueError("卡片文件路径非法")
@@ -117,7 +127,37 @@ def bridge_card_path(api: "WebAPI", name: str) -> Path:
     return target
 
 
-def asset_path(api: "WebAPI", plugin_id: str, relative_path: str) -> Path:
-    if not api._plugins:
+def asset_path(
+    dependencies: BotExtensionDependencies,
+    plugin_id: str,
+    relative_path: str,
+) -> Path:
+    if not dependencies.plugin_host:
         raise KeyError("插件宿主未启用")
-    return api._plugins.bridge_asset_path(plugin_id, relative_path)
+    return dependencies.plugin_host.bridge_asset_path(plugin_id, relative_path)
+
+
+class BotExtensionService:
+    """Managed Bot Bridge extensions and their generated asset boundary."""
+
+    def __init__(self, dependencies: BotExtensionDependencies) -> None:
+        self._dependencies = dependencies
+
+    def capabilities(self) -> dict[str, Any]:
+        return capabilities(self._dependencies)
+
+    async def apply(
+        self, stage: str, payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await apply(self._dependencies, stage, payload)
+
+    def asset_path(self, plugin_id: str, relative_path: str) -> Path:
+        return asset_path(self._dependencies, plugin_id, relative_path)
+
+    def bridge_card_path(self, name: str) -> Path:
+        return bridge_card_path(self._dependencies, name)
+
+    def materialize_cards(
+        self, outputs: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        return _materialize_cards(self._dependencies, outputs)

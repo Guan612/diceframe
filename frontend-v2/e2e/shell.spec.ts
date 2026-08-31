@@ -96,7 +96,10 @@ test('hub controls whether the overview shows the direct-connect entry', async (
   await expect(page.getByText('实验性功能').first()).toBeVisible()
   await expect(page.getByRole('heading', { name: '和朋友一起进入冒险' })).toBeVisible()
   await page.getByRole('button', { name: '创建或加入' }).click()
-  await expect(page.getByRole('heading', { name: '创建或加入多人游戏' })).toBeVisible()
+  const peerSetupHeading = page.getByRole('heading', { name: '创建或加入多人游戏' })
+  const peerSetupBadge = page.locator('.peer-modal-toolbar .peer-experimental-badge')
+  await expect(peerSetupHeading).toBeVisible()
+  await expect(peerSetupBadge).toBeVisible()
   await expect(page.getByText('P2P 多人冒险')).toHaveCount(0)
   await expect(page.getByText('不会发送、接收或显示自定义测试文本。')).toHaveCount(0)
   const [setupBox, statusBox] = await Promise.all([
