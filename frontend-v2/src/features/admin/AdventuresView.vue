@@ -31,14 +31,16 @@ const editingCreation = ref(false)
 const advancedOpen = ref(false)
 const createForm = ref({ directory_id: '', adventure_id: '', name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
 const editorForm = ref({ name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
-type EditorStep = { id: string; chapter_id: string; scene_ref: string; requires: string; title: string; narration: string; objective: string; hint: string }
+type EditorStep = { id: string; chapter_id: string; scene_ref: string; requires: string; encounter_preset_id: string; title: string; narration: string; objective: string; hint: string }
 type EditorChoice = { id: string; step_id: string; next_step_id: string; label: string; description: string }
 type EditorChapter = { id: string; name: string }
 type EditorScene = { ref: string; name: string }
+type EditorEncounter = { id: string; name: string; difficulty: string; description: string }
 const editorSteps = ref<EditorStep[]>([])
 const editorChoices = ref<EditorChoice[]>([])
 const editorChapters = ref<EditorChapter[]>([])
 const editorScenes = ref<EditorScene[]>([])
+const editorEncounters = ref<EditorEncounter[]>([])
 
 const builtinCount = computed(() => items.value.filter(item => !item.custom).length)
 const customCount = computed(() => items.value.filter(item => item.custom).length)
@@ -116,7 +118,7 @@ function applyAiDraft(draft: AiDraft) {
   chapters.forEach((chapter, chapterIndex) => (chapter.steps || []).forEach((step, stepIndex) => {
     const id = `step_${chapterIndex + 1}_${stepIndex + 1}`
     stepIds.push(id)
-    editorSteps.value.push({ id, chapter_id: `chapter_${chapterIndex + 1}`, scene_ref: scenes[editorSteps.value.length]?.ref || scenes[0]?.ref || '', requires: 'none', title: String(step.title || '未命名步骤'), narration: String(step.narration || ''), objective: String(step.objective || ''), hint: String(step.hint || '') })
+    editorSteps.value.push({ id, chapter_id: `chapter_${chapterIndex + 1}`, scene_ref: scenes[editorSteps.value.length]?.ref || scenes[0]?.ref || '', requires: 'none', encounter_preset_id: '', title: String(step.title || '未命名步骤'), narration: String(step.narration || ''), objective: String(step.objective || ''), hint: String(step.hint || '') })
   }))
   let choiceIndex = 0
   let stepCursor = 0
@@ -277,7 +279,7 @@ function hydrateStructuredEditor() {
     })
   editorSteps.value = (Array.isArray(adventure.steps) ? adventure.steps : []).map((step: any) => ({
     id: String(step.id || ''), chapter_id: String(step.chapter_id || ''), scene_ref: String(step.scene_ref || ''),
-    requires: String(step.requires || 'none'),
+    requires: String(step.requires || 'none'), encounter_preset_id: String(step.encounter_preset_id || ''),
     title: String(stepTexts[step.id]?.title || '未命名步骤'), narration: String(stepTexts[step.id]?.narration || ''),
     objective: String(stepTexts[step.id]?.objective || ''), hint: String(stepTexts[step.id]?.hint || ''),
   }))
@@ -286,6 +288,24 @@ function hydrateStructuredEditor() {
     id: String(choice.id || ''), step_id: String(choice.step_id || ''), next_step_id: String(choice.next_step_id || ''),
     label: String(choiceTexts[choice.id]?.label || choice.id || ''), description: String(choiceTexts[choice.id]?.description || ''),
   }))
+  editorEncounters.value = Object.entries(files)
+    .filter(([path, value]) => path.startsWith('content/') && (value as any)?.kind === 'encounter_catalog')
+    .flatMap(([path, value]) => {
+      const catalog = value as Record<string, any>
+      const catalogId = String(catalog.id || path.split('/').pop()?.replace(/\.json$/, '') || '')
+      const localeFile = (files[`locales/${locale.value}/encounters/${catalogId}.json`] || files[`locales/zh-CN/encounters/${catalogId}.json`] || {}) as Record<string, any>
+      const labels = (localeFile.fields?.labels?.presets || {}) as Record<string, any>
+      return (Array.isArray(catalog.presets) ? catalog.presets : []).map((preset: any) => {
+        const id = String(preset.id || '')
+        const label = labels[id] as Record<string, any> | undefined
+        return {
+          id,
+          name: String(label?.name || id || '未命名遭遇'),
+          difficulty: String(preset.difficulty || 'standard'),
+          description: String(label?.description || ''),
+        }
+      })
+    })
 }
 
 function syncStructuredEditor() {
@@ -307,7 +327,7 @@ function syncStructuredEditor() {
   adventure.start_step_id = editorSteps.value[0]?.id || adventure.start_step_id
   adventure.steps = editorSteps.value.map(step => {
     const original = (Array.isArray(adventure.steps) ? adventure.steps : []).find((candidate: any) => candidate.id === step.id) || {}
-    return { ...original, id: step.id, chapter_id: step.chapter_id, scene_ref: step.scene_ref, requires: step.requires, choice_ids: editorChoices.value.filter(choice => choice.step_id === step.id).map(choice => choice.id) }
+    return { ...original, id: step.id, chapter_id: step.chapter_id, scene_ref: step.scene_ref, requires: step.requires, encounter_preset_id: step.encounter_preset_id || undefined, choice_ids: editorChoices.value.filter(choice => choice.step_id === step.id).map(choice => choice.id) }
   })
   adventure.choices = editorChoices.value.map(choice => {
     const original = (Array.isArray(adventure.choices) ? adventure.choices : []).find((candidate: any) => candidate.id === choice.id) || {}
@@ -326,14 +346,40 @@ function syncStructuredEditor() {
 }
 
 function addStep() {
-  const id = `step_${editorSteps.value.length + 1}`
+  const id = `step_${Date.now().toString(36)}`
   const chapterId = editorChapters.value[0]?.id || 'chapter_1'
   if (!editorChapters.value.length) editorChapters.value.push({ id: chapterId, name: '第一章' })
-  editorSteps.value.push({ id, chapter_id: chapterId, scene_ref: '', requires: 'none', title: '新步骤', narration: '', objective: '', hint: '' })
+  editorSteps.value.push({ id, chapter_id: chapterId, scene_ref: '', requires: 'none', encounter_preset_id: '', title: '新步骤', narration: '', objective: '', hint: '' })
+}
+
+function newStep(chapterId: string): EditorStep {
+  return { id: `step_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, chapter_id: chapterId, scene_ref: '', requires: 'none', encounter_preset_id: '', title: '新步骤', narration: '', objective: '', hint: '' }
+}
+
+function insertStep(stepId: string, offset: -1 | 1) {
+  const index = editorSteps.value.findIndex(step => step.id === stepId)
+  if (index < 0) return
+  const source = editorSteps.value[index]
+  const step = newStep(source.chapter_id)
+  editorSteps.value.splice(index + (offset > 0 ? 1 : 0), 0, step)
+}
+
+function moveStep(stepId: string, direction: -1 | 1) {
+  const index = editorSteps.value.findIndex(step => step.id === stepId)
+  if (index < 0) return
+  const chapterId = editorSteps.value[index].chapter_id
+  const siblings = editorSteps.value
+    .map((step, itemIndex) => ({ step, itemIndex }))
+    .filter(item => item.step.chapter_id === chapterId)
+  const siblingIndex = siblings.findIndex(item => item.step.id === stepId)
+  const target = siblings[siblingIndex + direction]
+  if (!target) return
+  const [moved] = editorSteps.value.splice(index, 1)
+  editorSteps.value.splice(target.itemIndex + (direction > 0 ? 0 : 0), 0, moved)
 }
 
 function addChoice(stepId: string) {
-  const id = `choice_${editorChoices.value.length + 1}`
+  const id = `choice_${Date.now().toString(36)}`
   editorChoices.value.push({ id, step_id: stepId, next_step_id: '', label: '新选项', description: '' })
 }
 
@@ -567,11 +613,28 @@ function policyLabel(policy: string) {
           <div class="adventure-editor-section-head"><input v-model="chapter.name" :aria-label="t('adventureChapter')"><button v-if="editorChapters.length > 1" type="button" class="link-button danger-text" @click="removeChapter(chapter.id)">{{ t('deleteChapter') }}</button></div>
           <div class="adventure-step-list">
           <article v-for="step in editorSteps.filter(item => item.chapter_id === chapter.id)" :key="step.id" class="adventure-step-editor">
-            <header><strong>{{ step.title || t('unnamedStep') }}</strong><span class="editor-step-index">{{ t('step') }}</span><button type="button" class="link-button" @click="addChoice(step.id)">{{ t('addChoice') }}</button><button v-if="editorSteps.length > 1" type="button" class="link-button danger-text" @click="removeStep(step.id)">{{ t('deleteStep') }}</button></header>
+            <header>
+              <strong>{{ step.title || t('unnamedStep') }}</strong>
+              <span class="editor-step-index">{{ t('step') }}</span>
+              <button type="button" class="link-button" @click="insertStep(step.id, -1)">{{ String(locale).startsWith('zh') ? '前面插入' : 'Insert before' }}</button>
+              <button type="button" class="link-button" @click="insertStep(step.id, 1)">{{ String(locale).startsWith('zh') ? '后面插入' : 'Insert after' }}</button>
+              <button type="button" class="link-button" @click="moveStep(step.id, -1)">{{ String(locale).startsWith('zh') ? '上移' : 'Move up' }}</button>
+              <button type="button" class="link-button" @click="moveStep(step.id, 1)">{{ String(locale).startsWith('zh') ? '下移' : 'Move down' }}</button>
+              <button type="button" class="link-button" @click="addChoice(step.id)">{{ t('addChoice') }}</button>
+              <button v-if="editorSteps.length > 1" type="button" class="link-button danger-text" @click="removeStep(step.id)">{{ t('deleteStep') }}</button>
+            </header>
             <div class="grid-2">
               <label>{{ t('stepTitle') }}<input v-model="step.title"></label>
               <label>{{ t('sceneReference') }}<select v-model="step.scene_ref"><option value="">{{ t('sceneNotLinked') }}</option><option v-for="scene in editorScenes" :key="scene.ref" :value="scene.ref">{{ scene.name }}</option></select></label>
             </div>
+            <label v-if="editorEncounters.length" class="adventure-step-encounter">
+              <span>{{ String(locale).startsWith('zh') ? '战斗遭遇（可选）' : 'Combat encounter (optional)' }}</span>
+              <select v-model="step.encounter_preset_id">
+                <option value="">{{ String(locale).startsWith('zh') ? '非战斗步骤' : 'No combat encounter' }}</option>
+                <option v-for="encounter in editorEncounters" :key="encounter.id" :value="encounter.id">{{ encounter.name }} · {{ encounter.difficulty }}</option>
+              </select>
+              <small v-if="step.encounter_preset_id">{{ editorEncounters.find(item => item.id === step.encounter_preset_id)?.description }}</small>
+            </label>
             <label>{{ t('narration') }}<textarea v-model="step.narration" rows="2"></textarea></label>
             <div class="grid-2">
               <label>{{ t('objective') }}<input v-model="step.objective"></label>

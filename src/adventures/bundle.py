@@ -290,6 +290,12 @@ class AdventureBundleLoader:
             str(item.get("id") or ""): item
             for item in adventure.get("choices") or [] if isinstance(item, dict)
         }
+        encounter_ids = {
+            str(preset.get("id") or "")
+            for catalog in entities.get("encounter_catalog", {}).values()
+            for preset in catalog.get("presets") or []
+            if isinstance(preset, dict) and str(preset.get("id") or "")
+        }
         if str(adventure.get("start_step_id") or "") not in steps:
             raise AdventureBundleError("adventure start_step_id is invalid")
         for step_id, step in steps.items():
@@ -300,6 +306,11 @@ class AdventureBundleLoader:
             scene_ref = str(step.get("scene_ref") or "")
             if scene_ref and not self._has_ref(entities, scene_ref):
                 raise AdventureBundleError(f"adventure scene ref is missing: {scene_ref}")
+            encounter_id = str(step.get("encounter_preset_id") or "")
+            if encounter_id and encounter_id not in encounter_ids:
+                raise AdventureBundleError(
+                    f"adventure encounter preset is missing: {encounter_id}"
+                )
             for choice_id in step.get("choice_ids") or []:
                 choice = choices.get(str(choice_id))
                 if choice is None or choice.get("step_id") != step_id:

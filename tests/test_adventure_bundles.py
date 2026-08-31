@@ -86,3 +86,14 @@ def test_adventure_package_rejects_executable_content(tmp_path: Path) -> None:
 
     with pytest.raises(AdventureBundleError, match="executable content"):
         loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+def test_adventure_step_must_reference_a_catalogued_encounter(tmp_path: Path) -> None:
+    loader, package = _copied_package(tmp_path)
+    adventure_path = package / "adventure.json"
+    adventure = json.loads(adventure_path.read_text(encoding="utf-8"))
+    adventure["steps"][0]["encounter_preset_id"] = "missing_werewolf"
+    adventure_path.write_text(json.dumps(adventure), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError, match="encounter preset is missing"):
+        loader.load("lanterns_of_greymoor", "zh-CN")
