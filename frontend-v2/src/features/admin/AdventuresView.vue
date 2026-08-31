@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api, apiBlob, errorMessage } from '@/api/client'
 import type {
-  AdventureDetailResponse, AdventureSummary, AdventuresResponse,
+  AdventureDetailResponse, AdventureSummary, AdventuresResponse, WorldListResponse, WorldSummary,
 } from '@/api/types'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocale } from '@/composables/useLocale'
@@ -13,6 +13,7 @@ const { locale, t } = useLocale()
 const { confirm } = useConfirm()
 const toast = useToast()
 const items = ref<AdventureSummary[]>([])
+const worlds = ref<WorldSummary[]>([])
 const error = ref('')
 const busy = ref(false)
 const importInput = ref<HTMLInputElement | null>(null)
@@ -86,10 +87,12 @@ const editingFileGroups = computed(() => {
 async function load() {
   error.value = ''
   try {
-    const result = await api<AdventuresResponse>(
-      `/adventures?rule_id=dnd2024_srd&language=${encodeURIComponent(locale.value)}`,
-    )
+    const [result, worldResult] = await Promise.all([
+      api<AdventuresResponse>(`/adventures?rule_id=dnd2024_srd&language=${encodeURIComponent(locale.value)}`),
+      api<WorldListResponse>('/worlds'),
+    ])
     items.value = result.adventures || []
+    worlds.value = worldResult.worlds || []
   } catch (cause: unknown) {
     error.value = errorMessage(cause)
   }
@@ -171,6 +174,14 @@ function applyAiDraft(draft: AiDraft) {
     }
   })
   editorStartStepId.value = editorSteps.value[0]?.id || ''
+}
+
+function worldLabel(world: WorldSummary) {
+  return String(world.name || world.world_name || world.id || world.world_id || '')
+}
+
+function worldId(world: WorldSummary) {
+  return String(world.id || world.world_id || '')
 }
 
 async function generateDraft() {
@@ -709,7 +720,7 @@ function policyLabel(policy: string) {
           <label>{{ t('version') }}<input v-model="createForm.version"></label>
           <label>{{ t('adventureWorldPolicy') }}<select v-model="createForm.world_policy"><option value="portable">{{ t('adventurePolicyPortable') }}</option><option value="agnostic">{{ t('adventurePolicyAgnostic') }}</option><option value="fixed">{{ t('adventurePolicyFixed') }}</option></select></label>
           <label>{{ t('estimatedMinutes') }}<input v-model.number="createForm.estimated_minutes" type="number" min="1" max="999"></label>
-          <label v-if="createForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<input v-model="createForm.recommended_world_id"></label>
+          <label v-if="createForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<select v-model="createForm.recommended_world_id"><option value="">{{ t('selectWorld') }}</option><option v-for="world in worlds" :key="worldId(world)" :value="worldId(world)">{{ worldLabel(world) }}</option></select></label>
         </div>
         <label>{{ t('summary') }}<textarea v-model="createForm.summary" rows="4"></textarea></label>
       </template>
@@ -782,7 +793,7 @@ function policyLabel(policy: string) {
           <label>{{ t('version') }}<input v-model="editorForm.version"></label>
           <label>{{ t('adventureWorldPolicy') }}<select v-model="editorForm.world_policy"><option value="portable">{{ t('adventurePolicyPortable') }}</option><option value="agnostic">{{ t('adventurePolicyAgnostic') }}</option><option value="fixed">{{ t('adventurePolicyFixed') }}</option></select></label>
           <label>{{ t('estimatedMinutes') }}<input v-model.number="editorForm.estimated_minutes" type="number" min="1" max="999"></label>
-          <label v-if="editorForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<input v-model="editorForm.recommended_world_id"></label>
+          <label v-if="editorForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<select v-model="editorForm.recommended_world_id"><option value="">{{ t('selectWorld') }}</option><option v-for="world in worlds" :key="worldId(world)" :value="worldId(world)">{{ worldLabel(world) }}</option></select></label>
         </div>
         <label>{{ t('summary') }}<textarea v-model="editorForm.summary" rows="3"></textarea></label>
         <label class="adventure-start-step">
