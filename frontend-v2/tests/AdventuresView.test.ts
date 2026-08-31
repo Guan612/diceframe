@@ -94,15 +94,17 @@ describe('AdventuresView', () => {
   })
 
   it('uses one staged modal for AI drafting instead of stacking create and AI dialogs', async () => {
-    mocks.api
-      .mockResolvedValueOnce(packages)
-      .mockResolvedValueOnce({
+    mocks.api.mockImplementation(async (path: string) => {
+      if (path === '/worlds') return { ok: true, worlds: [] }
+      if (path === '/generate-text') return {
         ok: true,
         text: JSON.stringify({
           name: '雾港失踪案', summary: '调查雾港的失踪者。',
           chapters: [{ name: '第一章', steps: [{ title: '抵达港口', choices: [] }] }],
         }),
-      })
+      }
+      return packages
+    })
     const wrapper = mount(AdventuresView, { global: { plugins: [i18n] } })
     await flushPromises()
 
