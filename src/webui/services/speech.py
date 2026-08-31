@@ -4,14 +4,11 @@ from __future__ import annotations
 
 import html
 import re
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from src.tts import SpeechRequest, VoiceProfile
 from src.llm.parser import sanitize_narration
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 
 _OPENAI_BUILTIN_VOICES = (
     "alloy", "ash", "ballad", "coral", "echo", "fable",
@@ -38,19 +35,36 @@ _EDGE_TTS_BUILTIN_VOICES = (
 )
 
 
-def _plugin_voice_profiles(api: "WebAPI") -> list[dict[str, Any]]:
-    if not api._plugins or not hasattr(api._plugins, "list_voice_profiles"):
+GameKey = tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SpeechDependencies:
+    backend: Any
+    plugin_host: Any | None
+    get_instance: Callable[[GameKey], Any | None]
+    parse_game_key: Callable[[str], GameKey]
+
+
+def _plugin_voice_profiles(
+    dependencies: SpeechDependencies,
+) -> list[dict[str, Any]]:
+    host = dependencies.plugin_host
+    if not host or not hasattr(host, "list_voice_profiles"):
         return []
-    return list(api._plugins.list_voice_profiles())
+    return list(host.list_voice_profiles())
 
 
-def _voice_profiles(api: "WebAPI") -> list[dict[str, Any]]:
-    return [*api._speech.personal_voice_profiles(), *_plugin_voice_profiles(api)]
+def _voice_profiles(dependencies: SpeechDependencies) -> list[dict[str, Any]]:
+    return [
+        *dependencies.backend.personal_voice_profiles(),
+        *_plugin_voice_profiles(dependencies),
+    ]
 
 
-def list_voices(api: "WebAPI") -> dict[str, Any]:
-    service = api._speech
-    profiles = _voice_profiles(api)
+def list_voices(dependencies: SpeechDependencies) -> dict[str, Any]:
+    service = dependencies.backend
+    profiles = _voice_profiles(dependencies)
     voices = [VoiceProfile.from_mapping(item).public_dict() for item in profiles]
     known = {voice["id"] for voice in voices}
     if service.provider_id == "openai-compatible":
@@ -86,20 +100,20 @@ def list_voices(api: "WebAPI") -> dict[str, Any]:
     return {"ok": True, **service.public_config(), "voices": voices}
 
 
-def list_personal_profiles(api: "WebAPI") -> dict[str, Any]:
-    profiles = api._speech.editable_voice_profiles()
+def list_personal_profiles(dependencies: SpeechDependencies) -> dict[str, Any]:
+    profiles = dependencies.backend.editable_voice_profiles()
     return {"ok": True, "profiles": profiles, "total": len(profiles)}
 
 
 def save_personal_profile(
-    api: "WebAPI",
+    dependencies: SpeechDependencies,
     profile_id: str,
     values: dict[str, Any],
     *,
     file_data: str = "",
     file_name: str = "",
 ) -> dict[str, Any]:
-    profile = api._speech.save_voice_profile(
+    profile = dependencies.backend.save_voice_profile(
         profile_id,
         values,
         file_data=file_data,
@@ -108,13 +122,15 @@ def save_personal_profile(
     return {"ok": True, "profile": profile}
 
 
-def delete_personal_profile(api: "WebAPI", profile_id: str) -> dict[str, Any]:
-    api._speech.delete_voice_profile(profile_id)
+def delete_personal_profile(
+    dependencies: SpeechDependencies, profile_id: str,
+) -> dict[str, Any]:
+    dependencies.backend.delete_voice_profile(profile_id)
     return {"ok": True}
 
 
 async def synthesize(
-    api: "WebAPI",
+    dependencies: SpeechDependencies,
     game_key: str,
     user_id: str,
     text: str,
@@ -123,16 +139,16 @@ async def synthesize(
     speed: float = 1.0,
     owner: bool = False,
 ):
-    inst = api._reg.get(api._parse_key(game_key))
+    inst = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if inst is None:
         raise KeyError("游戏不存在")
     if not user_id or not (owner or user_id == inst.gm_uid or user_id in inst.players):
         raise PermissionError("当前身份不属于本局游戏")
     if not _is_public_game_text(inst, text):
         raise PermissionError("只能朗读本局公开时间线中的内容")
-    return await api._speech.synthesize(
+    return await dependencies.backend.synthesize(
         SpeechRequest(text=text, voice=voice, language=language, speed=speed),
-        _voice_profiles(api),
+        _voice_profiles(dependencies),
     )
 
 
@@ -170,13 +186,77 @@ def _speech_signature(value: str) -> str:
 
 
 async def test_synthesis(
-    api: "WebAPI",
+    dependencies: SpeechDependencies,
     text: str,
     voice: str = "",
     language: str = "zh-CN",
     speed: float = 1.0,
 ):
-    return await api._speech.synthesize(
+    return await dependencies.backend.synthesize(
         SpeechRequest(text=text, voice=voice, language=language, speed=speed),
-        _voice_profiles(api),
+        _voice_profiles(dependencies),
     )
+
+
+class WebSpeechService:
+    """Voice catalogs and game-scoped synthesis over explicit dependencies."""
+
+    def __init__(self, dependencies: SpeechDependencies) -> None:
+        self._dependencies = dependencies
+
+    def list_voices(self) -> dict[str, Any]:
+        return list_voices(self._dependencies)
+
+    def list_personal_profiles(self) -> dict[str, Any]:
+        return list_personal_profiles(self._dependencies)
+
+    def save_personal_profile(
+        self,
+        profile_id: str,
+        values: dict[str, Any],
+        *,
+        file_data: str = "",
+        file_name: str = "",
+    ) -> dict[str, Any]:
+        return save_personal_profile(
+            self._dependencies,
+            profile_id,
+            values,
+            file_data=file_data,
+            file_name=file_name,
+        )
+
+    def delete_personal_profile(self, profile_id: str) -> dict[str, Any]:
+        return delete_personal_profile(self._dependencies, profile_id)
+
+    async def synthesize(
+        self,
+        game_key: str,
+        user_id: str,
+        text: str,
+        voice: str = "",
+        language: str = "zh-CN",
+        speed: float = 1.0,
+        owner: bool = False,
+    ):
+        return await synthesize(
+            self._dependencies,
+            game_key,
+            user_id,
+            text,
+            voice,
+            language,
+            speed,
+            owner,
+        )
+
+    async def test_synthesis(
+        self,
+        text: str,
+        voice: str = "",
+        language: str = "zh-CN",
+        speed: float = 1.0,
+    ):
+        return await test_synthesis(
+            self._dependencies, text, voice, language, speed,
+        )

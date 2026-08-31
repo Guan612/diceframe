@@ -11,8 +11,7 @@ from src.engine.character_utils import revive_character
 from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
 from src.engine.puzzle import PuzzleState
-from src.rulesets.contracts import NarrativeCombatSignalRuntime
-from src.rulesets.dnd2024.advancement_access import apply_ai_rewards
+from src.rulesets.contracts import NarrativeAdvancementRuntime, NarrativeCombatSignalRuntime
 
 logger = logging.getLogger("trpg")
 
@@ -85,10 +84,16 @@ def apply_revive_commands(instance: GameInstance, data: dict) -> None:
                     method, character_sheet["hp"])
 
 
-def apply_growth_rewards(instance: GameInstance, data: dict, response: Any, rule: Any, progression: Any) -> None:
-    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id == "core:dnd2024":
-        messages = apply_ai_rewards(instance, data)
+def apply_growth_rewards(
+    instance: GameInstance,
+    data: dict,
+    response: Any,
+    rule: Any,
+    progression: Any,
+    runtime: Any | None = None,
+) -> None:
+    if isinstance(runtime, NarrativeAdvancementRuntime):
+        messages = runtime.apply_narrative_advancement_rewards(instance, data)
         if messages:
             response.narration = f"{response.narration or ''}\n\n" + "\n".join(messages)
         return

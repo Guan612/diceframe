@@ -25,6 +25,31 @@ class FakeAPI:
     def _parse_key(self, key: str) -> tuple[str, ...]:
         return tuple(key.split("|"))
 
+    def get_game_instance(self, game_key: str):
+        return self.registry.get(self._parse_key(game_key))
+
+    async def save_game_instance(self, instance) -> None:
+        await self.registry.save(instance)
+
+    async def generate_game_swipe(self, instance, round_number: int) -> str:
+        return await self._handler.generate_swipe(instance, round_number)
+
+    def saved_game_access(self, game_key: str) -> dict:
+        key = self._parse_key(game_key)
+        instance = self.registry.get(key)
+        save_path = self.registry._save_path(key)
+        if instance is not None:
+            return {"exists": True, "gm_uid": str(instance.gm_uid or "")}
+        if not save_path.parent.exists():
+            return {"exists": False, "gm_uid": ""}
+        for path in (save_path, save_path.with_name("state.backup.json")):
+            if path.exists():
+                return {
+                    "exists": True,
+                    "gm_uid": str(json.loads(path.read_text(encoding="utf-8")).get("gm_uid") or ""),
+                }
+        return {"exists": True, "gm_uid": ""}
+
     async def reset_game(self, game_key: str) -> dict:
         self.calls.append(("reset", game_key))
         return {"ok": True}

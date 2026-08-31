@@ -2,29 +2,80 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol
 
 
-def list_memories(api: "WebAPI", game_key: str, keyword: str = "",
+GameKey = tuple[str, ...]
+
+
+class MemoryRepository(Protocol):
+    def recall(
+        self, game_key: str, keywords: list[str], limit: int, offset: int,
+    ) -> list[dict[str, Any]]: ...
+
+    def list_entries(
+        self, game_key: str, limit: int, offset: int,
+    ) -> list[dict[str, Any]]: ...
+
+    def count_entries(self, game_key: str, keyword: str = "") -> int: ...
+    async def edit_entry(
+        self, game_key: str, entry_id: int, updates: dict[str, Any],
+    ) -> bool: ...
+    async def forget_entry(self, game_key: str, entry_id: int) -> bool: ...
+
+
+@dataclass(frozen=True)
+class MemoryDependencies:
+    repository: MemoryRepository
+    parse_game_key: Callable[[str], GameKey]
+
+
+def list_memories(dependencies: MemoryDependencies, game_key: str, keyword: str = "",
                   limit: int = 20, offset: int = 0) -> dict[str, Any]:
     # game_key 来自 URL（# 分隔），需转为 str(tuple) 与存储路径一致
-    gk = str(api._parse_key(game_key))
+    gk = str(dependencies.parse_game_key(game_key))
     if keyword:
-        entries = api._mem.recall(gk, [keyword], limit, offset)
+        entries = dependencies.repository.recall(gk, [keyword], limit, offset)
     else:
-        entries = api._mem.list_entries(gk, limit, offset)
-    total = api._mem.count_entries(gk, keyword)
+        entries = dependencies.repository.list_entries(gk, limit, offset)
+    total = dependencies.repository.count_entries(gk, keyword)
     return {"memories": entries, "total": total}
 
 
-async def update_memory(api: "WebAPI", game_key: str, entry_id: int, updates: dict[str, Any]) -> dict[str, Any]:
-    ok = await api._mem.edit_entry(str(api._parse_key(game_key)), entry_id, updates)
+async def update_memory(dependencies: MemoryDependencies, game_key: str, entry_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+    ok = await dependencies.repository.edit_entry(
+        str(dependencies.parse_game_key(game_key)), entry_id, updates,
+    )
     return {"ok": ok, "error": "记忆不存在" if not ok else ""}
 
 
-async def delete_memory(api: "WebAPI", game_key: str, entry_id: int) -> dict[str, Any]:
-    ok = await api._mem.forget_entry(str(api._parse_key(game_key)), entry_id)
+async def delete_memory(dependencies: MemoryDependencies, game_key: str, entry_id: int) -> dict[str, Any]:
+    ok = await dependencies.repository.forget_entry(
+        str(dependencies.parse_game_key(game_key)), entry_id,
+    )
     return {"ok": ok, "error": "记忆不存在" if not ok else ""}
+
+
+class MemoryService:
+    """Memory management scoped to an explicit repository and key parser."""
+
+    def __init__(self, dependencies: MemoryDependencies) -> None:
+        self._dependencies = dependencies
+
+    def list(
+        self, game_key: str, keyword: str = "", limit: int = 20, offset: int = 0,
+    ) -> dict[str, Any]:
+        return list_memories(
+            self._dependencies, game_key, keyword, limit, offset,
+        )
+
+    async def update(
+        self, game_key: str, entry_id: int, updates: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await update_memory(
+            self._dependencies, game_key, entry_id, updates,
+        )
+
+    async def delete(self, game_key: str, entry_id: int) -> dict[str, Any]:
+        return await delete_memory(self._dependencies, game_key, entry_id)

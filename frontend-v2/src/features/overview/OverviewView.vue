@@ -272,7 +272,8 @@ onBeforeUnmount(() => {
       </header>
       <div class="game-grid">
         <article v-for="g in sortedGames" :key="g.game_key" class="game-card">
-          <div class="game-card-cover" :style="gameSceneStyle(g)">
+          <div class="game-card-art" :style="gameSceneStyle(g)" aria-hidden="true" />
+          <div class="game-card-cover">
             <span class="cover-sigil"><NIcon :component="CompassOutline" /></span>
             <label class="game-select compact">
               <input type="checkbox" :value="g.game_key" v-model="selected" :aria-label="t('chooseSave')">

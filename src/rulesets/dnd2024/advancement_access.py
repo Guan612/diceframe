@@ -150,6 +150,31 @@ def reconcile_after_level_up(instance: Any, user_id: str) -> bool:
 
 def view(instance: Any) -> dict[str, Any]:
     state = _state(instance)
+    return _project(instance, state)
+
+
+def project(instance: Any) -> dict[str, Any]:
+    """Return the public advancement view without normalizing stored state in place."""
+
+    ruleset_state = getattr(instance, "ruleset_state", None)
+    raw = ruleset_state.get("advancement") if isinstance(ruleset_state, dict) else None
+    saved = raw if isinstance(raw, dict) else {}
+    mode = str(saved.get("mode") or "milestone")
+    authority = str(saved.get("authority") or "ai_gm")
+    state = {
+        "mode": mode if mode in VALID_MODES else "milestone",
+        "authority": authority if authority in VALID_AUTHORITIES else "ai_gm",
+        "xp": saved.get("xp") if isinstance(saved.get("xp"), dict) else {},
+        "entitlements": (
+            saved.get("entitlements")
+            if isinstance(saved.get("entitlements"), dict)
+            else {}
+        ),
+    }
+    return _project(instance, state)
+
+
+def _project(instance: Any, state: dict[str, Any]) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     for user_id, player in instance.players.items():
         character = player.get("character_sheet") if isinstance(player, dict) else {}

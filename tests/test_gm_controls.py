@@ -4,7 +4,12 @@ import pytest
 
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.webui.routes.games import _should_rebind_player_session
-from src.webui.services import characters, games
+from src.webui.services import (
+    characters,
+    game_controls,
+    game_master,
+    game_queries,
+)
 from src.webui.services._common import _GAME_KEY_SEP
 
 
@@ -26,6 +31,24 @@ class DummyAPI:
         return save_character_card(self, character)
 
 
+def _game_controls(registry: GameRegistry) -> game_controls.GameControlService:
+    return game_controls.GameControlService(game_controls.GameControlDependencies(
+        parse_game_key=lambda game_key: tuple(game_key.split(_GAME_KEY_SEP)),
+        get_instance=registry.get,
+        save_instance=registry.save,
+        load_rule=lambda _instance: None,
+    ))
+
+
+def _game_master(registry: GameRegistry) -> game_master.GameMasterService:
+    return game_master.GameMasterService(game_master.GameMasterDependencies(
+        parse_game_key=lambda game_key: tuple(game_key.split(_GAME_KEY_SEP)),
+        get_instance=registry.get,
+        save_instance=registry.save,
+        load_rule=lambda _instance: None,
+    ))
+
+
 @pytest.mark.asyncio
 async def test_set_solo_mode_marks_pending_round_ready(tmp_path):
     registry = GameRegistry(tmp_path)
@@ -36,7 +59,9 @@ async def test_set_solo_mode_marks_pending_round_ready(tmp_path):
     inst.action_queue.append({"user_id": "gm", "text": "继续"})
     registry.register(inst)
 
-    result = await games.set_solo_mode(DummyAPI(registry), _GAME_KEY_SEP.join(key), True)
+    result = await _game_controls(registry).set_solo_mode(
+        _GAME_KEY_SEP.join(key), True,
+    )
 
     assert result["ok"]
     assert inst.solo_mode is True
@@ -54,8 +79,8 @@ async def test_narrative_perspective_is_ruleset_neutral_and_persisted(tmp_path):
     )
     registry.register(inst)
 
-    result = await games.set_narrative_perspective(
-        DummyAPI(registry), _GAME_KEY_SEP.join(key), "third_person",
+    result = await _game_controls(registry).set_narrative_perspective(
+        _GAME_KEY_SEP.join(key), "third_person",
     )
 
     assert result == {"ok": True, "narrative_perspective": "third_person"}
@@ -65,8 +90,8 @@ async def test_narrative_perspective_is_ruleset_neutral_and_persisted(tmp_path):
     generic_key = ("web", "generic-game", "bot")
     generic = GameInstance(game_key=generic_key, rule_id="freeform_fantasy")
     registry.register(generic)
-    generic_result = await games.set_narrative_perspective(
-        DummyAPI(registry), _GAME_KEY_SEP.join(generic_key), "immersive",
+    generic_result = await _game_controls(registry).set_narrative_perspective(
+        _GAME_KEY_SEP.join(generic_key), "immersive",
     )
     assert generic_result == {"ok": True, "narrative_perspective": "immersive"}
     assert generic.narrative_perspective == "immersive"
@@ -80,10 +105,10 @@ async def test_gm_private_message_appends_private_log(tmp_path):
     inst.players["p1"] = {"character_name": "艾伦", "character_sheet": {"deceased": False}}
     registry.register(inst)
 
-    result = await games.gm_private_message(
-        DummyAPI(registry), _GAME_KEY_SEP.join(key), "p1", "你注意到门后有冷风。"
+    result = await _game_master(registry).private_message(
+        _GAME_KEY_SEP.join(key), "p1", "你注意到门后有冷风。"
     )
-    log = games.private_log(DummyAPI(registry), _GAME_KEY_SEP.join(key))
+    log = game_queries.private_log(DummyAPI(registry), _GAME_KEY_SEP.join(key))
 
     assert result["ok"]
     assert inst.private_log["p1"][0]["source"] == "gm"
@@ -101,7 +126,9 @@ def test_private_log_for_user_only_returns_own_messages(tmp_path):
     inst.private_log["p2"] = [{"round": 1, "text": "你发现窗边有脚印。", "source": "gm"}]
     registry.register(inst)
 
-    log = games.private_log_for_user(DummyAPI(registry), _GAME_KEY_SEP.join(key), "p1")
+    log = game_queries.private_log_for_user(
+        DummyAPI(registry), _GAME_KEY_SEP.join(key), "p1",
+    )
 
     assert log["ok"] is True
     assert len(log["messages"]) == 1
@@ -158,12 +185,16 @@ def test_gm_target_prioritizes_exact_player_name_over_generic():
         "adv": {"character_name": "冒险者", "character_sheet": {"deceased": True, "hp": 0}},
         "wu": {"character_name": "吴川", "character_sheet": {"deceased": False, "hp": 12}},
     }
-    uid, err = games._resolve_gm_command_target(inst, "冒险者", prefer_deceased=True)
+    uid, err = game_master._resolve_gm_command_target(
+        inst, "冒险者", prefer_deceased=True,
+    )
     assert uid == "adv"
     assert err == ""
 
     # 多个死亡玩家时，泛称才歧义报错
     inst.players["adv2"] = {"character_name": "第二个冒险者", "character_sheet": {"deceased": True, "hp": 0}}
-    uid2, err2 = games._resolve_gm_command_target(inst, "玩家", prefer_deceased=True)
+    uid2, err2 = game_master._resolve_gm_command_target(
+        inst, "玩家", prefer_deceased=True,
+    )
     assert uid2 is None
     assert "写明角色名" in err2

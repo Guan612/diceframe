@@ -590,10 +590,10 @@ def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None 
         asr_service=asr_service,
         imagegen_service=imagegen_service,
         ruleset_registry=getattr(subsystems, "ruleset_registry", None),
+        content_cache_dir=DATA_DIR / "content-cache",
     )
     # 配置状态引用就地更新，始终指向最新值（更新频道等运行时配置）
     api._config_state = STATE
-    api._content_cache_dir = DATA_DIR / "content-cache"
     # 持久化回调：service 层更新 public_base_url 后走标准写盘路径（见 services/tunnel.py）
     api._save_config = save_config
     return api

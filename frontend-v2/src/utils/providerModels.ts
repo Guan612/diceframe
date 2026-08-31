@@ -2,6 +2,18 @@ export type ModelCapability = 'chat' | 'image' | 'embedding' | 'tts' | 'asr'
 export type ProviderTestMode = 'auto' | 'model' | 'embedding'
 export type ProviderTestKind = Exclude<ProviderTestMode, 'auto'>
 
+/** Settings provider-library editor draft. Kept beside the model role contract so
+ * extracted provider components do not depend on the SettingsView page shell. */
+export interface ProviderDraft {
+  id: string
+  name: string
+  base_url: string
+  api_format: string
+  models: string[]
+  model_capabilities: Record<string, ModelCapability>
+  configuredMasked: string
+}
+
 export function modelCapability(model: string, override?: string): ModelCapability {
   if (override && ['chat', 'image', 'embedding', 'tts', 'asr'].includes(override)) {
     return override as ModelCapability
@@ -32,39 +44,122 @@ export function providerTestKind(
 
 export interface CatalogSavedProvider {
   id: string
+  api_format?: string
   models?: string[]
   model_capabilities?: Record<string, ModelCapability>
 }
 
-/** 目录行“设为主模型”的资格判定：只认**已持久化**的 provider library——
- * provider 已保存、模型已在 saved models 里、保存后的能力是 chat。
+export type CatalogModelRoleId = 'main' | 'embedding' | 'imagegen' | 'asr'
+
+export interface CatalogModelRole {
+  id: CatalogModelRoleId
+  capability: ModelCapability
+  providerKey: string
+  modelKey: string
+  apiFormats?: readonly string[]
+  activation?: Readonly<Record<string, unknown>>
+}
+
+/** 模型目录与“模型配置”页共用的用途注册表。
+ * 新增模型用途时在这里声明能力、绑定字段和必要的启用字段，目录行无需再加
+ * 一套专用按钮或保存逻辑。 */
+export const CATALOG_MODEL_ROLES: readonly CatalogModelRole[] = [
+  { id: 'main', capability: 'chat', providerKey: 'llm_provider_ref', modelKey: 'model' },
+  {
+    id: 'embedding',
+    capability: 'embedding',
+    providerKey: 'embedding_provider_ref',
+    modelKey: 'embedding_model',
+    activation: { embedding_enabled: true },
+  },
+  {
+    id: 'imagegen',
+    capability: 'image',
+    providerKey: 'imagegen_provider_ref',
+    modelKey: 'imagegen_model',
+    apiFormats: ['openai'],
+    activation: { imagegen_enabled: true },
+  },
+  {
+    id: 'asr',
+    capability: 'asr',
+    providerKey: 'asr_provider_ref',
+    modelKey: 'asr_model',
+    activation: { asr_provider: 'openai-compatible' },
+  },
+]
+
+export function catalogModelRole(roleId: CatalogModelRoleId): CatalogModelRole | undefined {
+  return CATALOG_MODEL_ROLES.find(role => role.id === roleId)
+}
+
+/** 目录行的分配资格只认**已持久化**的 provider library。
  * UI 草稿（新建 provider / 未保存的新模型 / 刚改未保存的能力）不算数，
  * 否则 routing 会指向后端根本不存在的 provider/model 组合。 */
-export function catalogModelMainEligible(
+export function catalogModelRoleEligible(
   savedProviders: CatalogSavedProvider[],
   providerId: string,
   modelName: string,
+  roleId: CatalogModelRoleId,
 ): boolean {
   const saved = savedProviders.find(provider => provider.id === providerId)
+  const role = catalogModelRole(roleId)
+  if (!role) return false
   if (!saved) return false
   if (!(saved.models || []).includes(modelName)) return false
-  return modelCapability(modelName, saved.model_capabilities?.[modelName]) === 'chat'
+  if (role.apiFormats && !role.apiFormats.includes(String(saved.api_format || ''))) return false
+  return modelCapability(modelName, saved.model_capabilities?.[modelName]) === role.capability
 }
 
-/** 把主模型切到目标 provider/model 并持久化；保存失败时把这两个字段
- * 回滚为调用前的值（调用方负责提示，不做整页 config 重载）。 */
-export async function selectMainModelWithRollback(
+export function isCatalogModelAssigned(
   config: Record<string, unknown>,
+  roleId: CatalogModelRoleId,
+  providerId: string,
+  modelName: string,
+): boolean {
+  const role = catalogModelRole(roleId)
+  return Boolean(
+    role
+    && config[role.providerKey] === providerId
+    && config[role.modelKey] === modelName,
+  )
+}
+
+/** 把目录模型分配给目标用途并持久化；保存失败或抛错时完整恢复所有受影响字段。 */
+export async function assignCatalogModelRoleWithRollback(
+  config: Record<string, unknown>,
+  roleId: CatalogModelRoleId,
   providerId: string,
   modelName: string,
   save: () => Promise<boolean>,
 ): Promise<boolean> {
-  const previousProviderRef = String(config.llm_provider_ref || '')
-  const previousModel = String(config.model || '')
-  config.llm_provider_ref = providerId
-  config.model = modelName
-  if (await save()) return true
-  config.llm_provider_ref = previousProviderRef
-  config.model = previousModel
+  const role = catalogModelRole(roleId)
+  if (!role) return false
+
+  const patch: Record<string, unknown> = {
+    [role.providerKey]: providerId,
+    [role.modelKey]: modelName,
+    ...(role.activation || {}),
+  }
+  const previous = new Map<string, { existed: boolean; value: unknown }>()
+  for (const [key, value] of Object.entries(patch)) {
+    previous.set(key, { existed: Object.prototype.hasOwnProperty.call(config, key), value: config[key] })
+    config[key] = value
+  }
+
+  const rollback = () => {
+    for (const [key, state] of previous) {
+      if (state.existed) config[key] = state.value
+      else delete config[key]
+    }
+  }
+
+  try {
+    if (await save()) return true
+  } catch (error) {
+    rollback()
+    throw error
+  }
+  rollback()
   return false
 }

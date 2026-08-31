@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 from src.engine.character_utils import parse_tavern_card
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 logger = logging.getLogger("trpg")
+GameKey = tuple[str, ...]
 
 
-async def import_tavern_card(api: "WebAPI", file_path: str = "", file_data: str = "",
+@dataclass(frozen=True)
+class TavernImportDependencies:
+    lorebook: Any | None
+    get_instance: Callable[[GameKey], Any | None]
+    parse_game_key: Callable[[str], GameKey]
+    rebuild_lorebook_index: Callable[[str], None]
+
+
+async def import_tavern_card(dependencies: TavernImportDependencies, file_path: str = "", file_data: str = "",
                              file_name: str = "card.png", game_key: str = "") -> dict[str, Any]:
     """导入酒馆角色卡为 NPC 或玩家角色。
 
@@ -58,18 +65,19 @@ async def import_tavern_card(api: "WebAPI", file_path: str = "", file_data: str 
         "tier": "core",
     }
 
-    if game_key and api._lore:
-        inst = api._reg.get(api._parse_key(game_key))
+    lorebook = dependencies.lorebook
+    if game_key and lorebook:
+        inst = dependencies.get_instance(dependencies.parse_game_key(game_key))
         if inst and inst.world_id:
             entry_id = f"npc_tavern_{card['name'].replace(' ', '_')}"
-            existing = api._lore.get_entry(entry_id)
+            existing = lorebook.get_entry(entry_id)
             npc_info["id"] = entry_id
             npc_info["world_id"] = inst.world_id
             if existing:
-                api._lore.update_entry(entry_id, npc_info)
+                lorebook.update_entry(entry_id, npc_info)
             else:
-                api._lore.add_entry(npc_info)
-            api._rebuild_lorebook_index(inst.world_id)
+                lorebook.add_entry(npc_info)
+            dependencies.rebuild_lorebook_index(inst.world_id)
             logger.info("酒馆角色卡已导入: %s -> world=%s", card["name"], inst.world_id)
 
     if card.get("character_book"):
@@ -77,3 +85,21 @@ async def import_tavern_card(api: "WebAPI", file_path: str = "", file_data: str 
         npc_info["lorebook_entries"] = len(book_entries)
 
     return {"ok": True, "card": card, "npc": npc_info}
+
+
+class TavernImportService:
+    """Tavern-card import with explicit game and lorebook boundaries."""
+
+    def __init__(self, dependencies: TavernImportDependencies) -> None:
+        self._dependencies = dependencies
+
+    async def import_card(
+        self,
+        file_path: str = "",
+        file_data: str = "",
+        file_name: str = "card.png",
+        game_key: str = "",
+    ) -> dict[str, Any]:
+        return await import_tavern_card(
+            self._dependencies, file_path, file_data, file_name, game_key,
+        )

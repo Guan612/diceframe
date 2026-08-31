@@ -42,6 +42,9 @@ class _Api:
     def _parse_key(game_key: str):
         return _parse_game_key(game_key)
 
+    def get_game_instance(self, game_key: str):
+        return self._reg.get(self._parse_key(game_key))
+
     def _load_rule_for_game(self, instance):
         del instance
         return self._rule

@@ -5,13 +5,27 @@ from __future__ import annotations
 import copy
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal, TypedDict
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Literal, Protocol, TypedDict
 from uuid import uuid4
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 logger = logging.getLogger("trpg")
+GameKey = tuple[str, ...]
+
+
+class KPQuestionRegistry(Protocol):
+    def get(self, game_key: GameKey) -> Any | None: ...
+    async def save(self, instance: Any) -> None: ...
+
+
+KPAnswerer = Callable[..., Awaitable[dict[str, Any]]]
+
+
+@dataclass(frozen=True)
+class KPQuestionDependencies:
+    registry: KPQuestionRegistry
+    parse_game_key: Callable[[str], GameKey]
+    answer_question: KPAnswerer | None
 
 
 class KPQuestionResult(TypedDict):
@@ -24,14 +38,15 @@ def _result(payload: dict[str, Any], status: int = 200) -> KPQuestionResult:
 
 
 async def ask(
-    api: "WebAPI",
+    dependencies: KPQuestionDependencies,
     game_key: str,
     actor_uid: str,
     question: str,
     visibility: Literal["private", "party"] = "private",
 ) -> KPQuestionResult:
     """Answer table talk outside the turn pipeline; persist only party exchanges."""
-    instance = api._reg.get(api._parse_key(game_key))
+    parsed_key = dependencies.parse_game_key(game_key)
+    instance = dependencies.registry.get(parsed_key)
     if not instance:
         return _result({
             "ok": False,
@@ -57,9 +72,8 @@ async def ask(
             "code": "INVALID_VISIBILITY",
             "error": "询问可见范围无效",
         }, 400)
-    handler = getattr(api, "_handler", None)
-    answerer = getattr(handler, "answer_kp_question", None)
-    if not callable(answerer):
+    answerer = dependencies.answer_question
+    if answerer is None:
         return _result({
             "ok": False,
             "code": "LLM_NOT_CONFIGURED",
@@ -97,7 +111,7 @@ async def ask(
             "code": "EMPTY_ANSWER",
             "error": "KP 没有返回可显示的回答，请重试",
         }, 502)
-    if api._reg.get(api._parse_key(game_key)) is not instance:
+    if dependencies.registry.get(parsed_key) is not instance:
         return _result({
             "ok": False,
             "code": "GAME_CHANGED",
@@ -122,7 +136,7 @@ async def ask(
             async with instance._process_lock:
                 instance.append_table_talk(exchange)
                 try:
-                    await api._reg.save(instance)
+                    await dependencies.registry.save(instance)
                 except Exception:
                     instance.table_talk[:] = [
                         item for item in instance.table_talk
@@ -149,3 +163,21 @@ async def ask(
         "provider_used": str((generated or {}).get("provider_used") or ""),
         "total_tokens": int((generated or {}).get("total_tokens", 0) or 0),
     })
+
+
+class KPQuestionService:
+    """Read-only KP questions with optional, transactional party persistence."""
+
+    def __init__(self, dependencies: KPQuestionDependencies) -> None:
+        self._dependencies = dependencies
+
+    async def ask(
+        self,
+        game_key: str,
+        actor_uid: str,
+        question: str,
+        visibility: Literal["private", "party"] = "private",
+    ) -> KPQuestionResult:
+        return await ask(
+            self._dependencies, game_key, actor_uid, question, visibility,
+        )

@@ -139,12 +139,41 @@ class NarrativeCheckPolicyRuntime(Protocol):
 
 
 @runtime_checkable
+class NarrativeAdvancementRuntime(Protocol):
+    """Optional bridge for ruleset-owned narrative advancement policy."""
+
+    def narrative_advancement_prompt(self, instance: Any, locale: str) -> str: ...
+
+    def apply_narrative_advancement_rewards(
+        self, instance: Any, update: dict[str, Any],
+    ) -> list[str]: ...
+
+
+@runtime_checkable
 class NarrativeDirectorRuntime(Protocol):
     """Optional read-only director projection for a ruleset runtime."""
 
     def director_proposal(
         self, instance: Any, campaign: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class GameDetailProjectionRuntime(Protocol):
+    """Optional read-only fields contributed to the generic game detail view."""
+
+    def game_detail_projection(self, instance: Any) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class LiveAdvancementPolicyRuntime(Protocol):
+    """Optional lifecycle hooks for a ruleset-owned live advancement policy."""
+
+    def configure_live_advancement(
+        self, instance: Any, mode: str, authority: str,
+    ) -> dict[str, Any]: ...
+
+    def live_advancement_policy(self, instance: Any) -> dict[str, Any]: ...
 
 
 @runtime_checkable

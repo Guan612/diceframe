@@ -17,9 +17,13 @@ const MUTATING_OPERATIONS = new Set<PeerGameOperation>([
   'player.away',
   'action.submit',
   'ruleset.intent',
+  'ruleset.decision',
   'luck.resolve',
   'payment.resolve',
   'character.update',
+  'character.profile',
+  'character.rest',
+  'character.advancement.apply',
 ])
 const MAX_REQUESTS_PER_MINUTE = 120
 const MAX_IN_FLIGHT_PER_PEER = 8
@@ -39,7 +43,7 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'game.player_context': [],
   'player.create': [
     'character_name', 'race', 'class', 'background', 'hp',
-    'attributes', 'skills', 'identity', 'portrait',
+    'attributes', 'skills', 'identity', 'portrait', 'ruleset_character',
   ],
   'player.rebind': ['user_id'],
   'player.away': ['away'],
@@ -49,7 +53,14 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'ruleset.intent': [
     'intent_id', 'type', 'expected_version', 'actor_id', 'target_id', 'target_ids',
     'weapon_ref', 'attack_id', 'spell_ref', 'slot_level', 'damage_type', 'distance',
-    'decision_id', 'option', 'response', 'comment', 'choice_id', 'enabled',
+    'decision_id', 'option', 'response', 'comment', 'choice_id', 'enabled', 'text',
+    'agreement', 'kind', 'visibility', 'entity_id', 'title', 'summary',
+    'proposal_id', 'mode', 'adventure_id',
+    'encounter_preset_id', 'encounter_instance_id', 'enemies',
+  ],
+  'ruleset.decision': [
+    'intent_id', 'type', 'expected_version', 'decision_id', 'option',
+    'response', 'comment', 'choice_id', 'enabled',
   ],
   'luck.resolve': ['check_id', 'spend'],
   'payment.resolve': ['payment_id', 'accepted'],
@@ -57,6 +68,12 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
     'character_name', 'race', 'class', 'background', 'hp',
     'attributes', 'skills', 'identity', 'portrait',
   ],
+  'character.profile': ['character_name', 'portrait', 'profile'],
+  'character.rest': [
+    'rest', 'hit_dice', 'confirm_elapsed_time', 'expected_revision', 'operation_id',
+  ],
+  'character.advancement.preview': ['choices'],
+  'character.advancement.apply': ['choices', 'expected_revision', 'operation_id'],
 }
 
 function sanitizePayload(
@@ -68,6 +85,11 @@ function sanitizePayload(
   const cleaned: Record<string, unknown> = {}
   for (const field of allowed) {
     if (field in payload) cleaned[field] = payload[field]
+  }
+  // Session 0 的完整 agreement 只属于 propose；respond 即使夹带该字段也不能
+  // 借 P2P 通道改写约定。最终 GM/玩家权限仍由规则运行时验证。
+  if (operation === 'ruleset.intent' && cleaned.type !== 'session_zero.propose') {
+    delete cleaned.agreement
   }
   return cleaned
 }
@@ -235,6 +257,10 @@ export class PeerHostGameBridge {
     if (operation === 'kp.question') return write('/kp-question', payload)
     if (operation === 'ruleset.actions') return read('/available-actions')
     if (operation === 'ruleset.intent') return write('/intents', payload)
+    if (operation === 'ruleset.decision') {
+      const decisionId = requiredIdentifier(payload.decision_id, 'decision_id')
+      return write(`/decisions/${encodeURIComponent(decisionId)}`, payload)
+    }
     if (operation === 'luck.resolve') {
       const checkId = requiredIdentifier(payload.check_id, 'check_id')
       return write(`/checks/${encodeURIComponent(checkId)}/luck`, {
@@ -252,6 +278,21 @@ export class PeerHostGameBridge {
         `/games/${game}/character/${encodeURIComponent(actorId)}?${actorQuery}`,
         { method: 'PUT', body: JSON.stringify(payload) },
       )
+    }
+    if (operation === 'character.profile') {
+      return this.execute(
+        `/games/${game}/character/${encodeURIComponent(actorId)}/profile?${actorQuery}`,
+        { method: 'PATCH', body: JSON.stringify(payload) },
+      )
+    }
+    if (operation === 'character.rest') {
+      return write(`/character/${encodeURIComponent(actorId)}/rest`, payload)
+    }
+    if (operation === 'character.advancement.preview') {
+      return write(`/character/${encodeURIComponent(actorId)}/advancement/preview`, payload)
+    }
+    if (operation === 'character.advancement.apply') {
+      return write(`/character/${encodeURIComponent(actorId)}/advancement/apply`, payload)
     }
     throw new Error('peer_game_operation_not_supported')
   }
@@ -330,6 +371,10 @@ export class PeerRemoteGameClient {
       const payment = /^\/payments\/([^/]+)$/u.exec(parsed.tail)
       const away = /^\/players\/([^/]+)\/away$/u.exec(parsed.tail)
       const character = /^\/character\/([^/]+)$/u.exec(parsed.tail)
+      const decision = /^\/decisions\/([^/]+)$/u.exec(parsed.tail)
+      const profile = /^\/character\/([^/]+)\/profile$/u.exec(parsed.tail)
+      const rest = /^\/character\/([^/]+)\/rest$/u.exec(parsed.tail)
+      const advancement = /^\/character\/([^/]+)\/advancement\/(preview|apply)$/u.exec(parsed.tail)
       if (method === 'POST' && luck) {
         operation = 'luck.resolve'
         payload = { ...body, check_id: decodeURIComponent(luck[1]) }
@@ -340,6 +385,17 @@ export class PeerRemoteGameClient {
         operation = 'player.away'
       } else if (method === 'PUT' && character) {
         operation = 'character.update'
+      } else if (method === 'POST' && decision) {
+        operation = 'ruleset.decision'
+        payload = { ...body, decision_id: decodeURIComponent(decision[1]) }
+      } else if (method === 'PATCH' && profile) {
+        operation = 'character.profile'
+      } else if (method === 'POST' && rest) {
+        operation = 'character.rest'
+      } else if (method === 'POST' && advancement?.[2] === 'preview') {
+        operation = 'character.advancement.preview'
+      } else if (method === 'POST' && advancement?.[2] === 'apply') {
+        operation = 'character.advancement.apply'
       } else if (method === 'POST' && parsed.tail === '/sse-ticket') {
         return { handled: true, value: { ticket: 'peer-data-channel' } as T }
       } else {

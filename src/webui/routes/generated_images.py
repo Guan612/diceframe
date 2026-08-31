@@ -10,14 +10,7 @@ from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 
 
 async def api_image_generation_status(request: web.Request) -> web.Response:
-    service = getattr(_get_api(request), "_imagegen", None)
-    return web.json_response(service.public_config() if service is not None else {
-        "enabled": False,
-        "available": False,
-        "provider": "",
-        "model": "",
-        "auto_scene": False,
-    })
+    return web.json_response(_get_api(request).image_generation_status())
 
 
 async def api_generate_image(request: web.Request) -> web.Response:
@@ -35,7 +28,7 @@ async def api_generate_image(request: web.Request) -> web.Response:
     owner_type = "library"
     owner_id = str(request.get("user_id", "") or "local")
     if game_key:
-        inst = api._reg.get(api._parse_key(game_key))
+        inst = api.get_game_instance(game_key)
         if inst is None:
             return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
         user_id = str(request.get("user_id", "") or "")
@@ -49,10 +42,8 @@ async def api_generate_image(request: web.Request) -> web.Response:
         owner_id = game_image_owner_id(inst.game_key)
     elif request.get(ACCESS_PASSWORD_CONFIGURED_KEY, False) and not request.get("owner_authenticated", False):
         return web.json_response({"ok": False, "error": "仅管理员可以生成系统图片"}, status=403)
-    from src.webui.services import generated_images as service
     try:
-        result = await service.generate_image(
-            api,
+        result = await api.generate_generated_image(
             prompt=prompt,
             purpose=purpose,
             owner_type=owner_type,
@@ -70,7 +61,7 @@ async def api_generated_image_file(request: web.Request) -> web.StreamResponse:
     api = _get_api(request)
     game_key = str(request.match_info.get("game_key") or "").strip()
     if game_key:
-        inst = api._reg.get(api._parse_key(game_key))
+        inst = api.get_game_instance(game_key)
         if inst is None:
             return web.json_response({"error": "游戏不存在"}, status=404)
         user_id = str(request.get("user_id", "") or "")
@@ -83,10 +74,8 @@ async def api_generated_image_file(request: web.Request) -> web.StreamResponse:
 
 
 async def api_game_generated_images(request: web.Request) -> web.Response:
-    from src.webui.services import generated_images as service
     try:
-        images = service.list_game_images(
-            _get_api(request),
+        images = _get_api(request).list_game_generated_images(
             request.match_info["game_key"],
             str(request.get("user_id", "") or ""),
             purpose=str(request.query.get("purpose") or "").strip().lower(),
@@ -99,9 +88,7 @@ async def api_game_generated_images(request: web.Request) -> web.Response:
 
 
 async def api_generated_image_as_map_background(request: web.Request) -> web.Response:
-    from src.webui.services import generated_images as service
-    result = await service.use_as_map_background(
-        _get_api(request),
+    result = await _get_api(request).use_generated_image_as_map_background(
         request.match_info["game_key"],
         str(request.get("user_id", "") or ""),
         request.match_info["asset_id"],

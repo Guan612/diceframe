@@ -37,6 +37,21 @@ describe('API client connection recovery', () => {
     expect(connectionMocks.redirectToBackendLogin).toHaveBeenCalledOnce()
   })
 
+  it('coalesces simultaneous owner-access probes without changing their result', async () => {
+    let resolveFetch!: (response: Response) => void
+    const fetchMock = vi.fn().mockReturnValue(new Promise<Response>((resolve) => {
+      resolveFetch = resolve
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const first = checkOwnerAccess()
+    const second = checkOwnerAccess()
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    resolveFetch(new Response('{}', { status: 200 }))
+    await expect(Promise.all([first, second])).resolves.toEqual(['allowed', 'allowed'])
+  })
+
   it('does not redirect when a DOM AbortError cancels a request', async () => {
     const abortError = new DOMException('Request cancelled', 'AbortError')
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abortError))

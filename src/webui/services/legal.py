@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+from typing import Any, Awaitable, Callable
 
 
 LEGAL_VERSION = "1.1"
@@ -36,6 +34,12 @@ _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 class LegalContentUnavailable(RuntimeError):
     """The current online legal original could not be retrieved and verified."""
+
+
+@dataclass(frozen=True)
+class LegalDependencies:
+    fetch_public_json: Callable[..., Awaitable[dict[str, Any] | None]]
+    fetch_public_text: Callable[..., Awaitable[str]]
 
 
 def persisted_acceptance_state(saved: dict[str, Any]) -> dict[str, str]:
@@ -113,9 +117,11 @@ def _valid_remote_documents(manifest: dict[str, Any] | None) -> dict[str, Any] |
     return parsed
 
 
-async def _remote_documents(api: "WebAPI", *, allow_cached: bool) -> dict[str, Any] | None:
+async def _remote_documents(
+    dependencies: LegalDependencies, *, allow_cached: bool,
+) -> dict[str, Any] | None:
     return _valid_remote_documents(
-        await api.fetch_public_content_json(
+        await dependencies.fetch_public_json(
             "manifest.json",
             force_refresh=True,
             allow_cached=allow_cached,
@@ -143,23 +149,27 @@ def _select_documents(remote: dict[str, Any] | None) -> tuple[dict[str, Any], st
     return bundled, "bundled"
 
 
-async def current_documents(api: "WebAPI") -> dict[str, Any]:
+async def current_documents(dependencies: LegalDependencies) -> dict[str, Any]:
     """Use the newest reachable manifest; retain the release snapshot for offline startup."""
-    remote = await _remote_documents(api, allow_cached=True)
+    remote = await _remote_documents(dependencies, allow_cached=True)
     return _select_documents(remote)[0]
 
 
-async def document(api: "WebAPI", document_name: str, language: str) -> dict[str, Any]:
+async def document(
+    dependencies: LegalDependencies, document_name: str, language: str,
+) -> dict[str, Any]:
     if document_name not in _DOCUMENT_NAMES:
         raise KeyError(document_name)
     selected_language = _language(language)
-    documents, source = _select_documents(await _remote_documents(api, allow_cached=False))
+    documents, source = _select_documents(
+        await _remote_documents(dependencies, allow_cached=False)
+    )
     metadata = documents[document_name]
     localized = metadata["languages"][selected_language]
     if source == "bundled":
         text = _bundled_text(document_name, selected_language)
     else:
-        text = await api.fetch_public_content_text(
+        text = await dependencies.fetch_public_text(
             localized["path"],
             force_refresh=True,
             allow_cached=False,
@@ -241,3 +251,18 @@ def record_acceptance(
 
 def bundle_version(documents: dict[str, Any]) -> str:
     return "|".join(f"{name}:{documents[name]['updated_at']}" for name in _DOCUMENT_NAMES)
+
+
+class LegalService:
+    """Verified legal originals over an explicit public-content boundary."""
+
+    def __init__(self, dependencies: LegalDependencies) -> None:
+        self._dependencies = dependencies
+
+    async def current_documents(self) -> dict[str, Any]:
+        return await current_documents(self._dependencies)
+
+    async def document(
+        self, document_name: str, language: str,
+    ) -> dict[str, Any]:
+        return await document(self._dependencies, document_name, language)

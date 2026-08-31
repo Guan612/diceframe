@@ -39,26 +39,33 @@ body.light .login-page {
     var(--df-bg-atmosphere-image);
 }
 
-.game-card-cover::before {
-  background-image:
-    linear-gradient(90deg, color-mix(in srgb, var(--df-canvas) 58%, transparent), transparent 46%),
-    linear-gradient(180deg, transparent 30%, color-mix(in srgb, var(--df-canvas) 88%, transparent)),
-    var(--df-bg-scene-image);
+.game-card-art {
+  background-image: var(--df-bg-scene-image);
   background-position: center;
   background-size: cover;
   filter: saturate(.86) contrast(1.04);
-  transform: scale(1.015);
+  transform: scale(1.025);
+  transition: filter .22s ease, transform .28s ease;
 }
 
-.game-card-cover::after {
+.game-card-art::after {
+  position: absolute;
   inset: 0;
-  width: auto;
-  height: auto;
-  border: 0;
-  clip-path: none;
+  content: "";
   background:
-    linear-gradient(105deg, color-mix(in srgb, var(--df-canvas) 34%, transparent), transparent 55%);
-  opacity: .9;
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--df-canvas) 18%, transparent) 0%,
+      transparent 24%,
+      color-mix(in srgb, var(--df-surface-1) 48%, transparent) 44%,
+      color-mix(in srgb, var(--df-surface-1) 88%, transparent) 62%,
+      color-mix(in srgb, var(--df-surface-1) 97%, transparent) 82%,
+      var(--df-surface-1) 100%),
+    linear-gradient(100deg, color-mix(in srgb, var(--df-canvas) 40%, transparent), transparent 64%);
+}
+
+.game-card:hover .game-card-art {
+  filter: saturate(.94) contrast(1.06) brightness(1.04);
+  transform: scale(1.055);
 }
 
 .cover-sigil {
@@ -109,7 +116,7 @@ body.light .play-main {
     background-position: 70% center;
   }
 
-  .game-card-cover::before {
+  .game-card-art {
     background-position: 68% center;
   }
 

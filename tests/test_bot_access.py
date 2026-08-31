@@ -22,10 +22,12 @@ class FakeRegistry:
 class FakeAPI:
     def __init__(self, inst: GameInstance) -> None:
         self._reg = FakeRegistry(inst)
-
-    @staticmethod
-    def _parse_key(game_key: str):
-        return tuple(game_key.split("|"))
+        self.bot_access = bot_access.BotAccessService(
+            bot_access.BotAccessDependencies(
+                registry=self._reg,
+                parse_game_key=lambda game_key: tuple(game_key.split("|")),
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -33,7 +35,7 @@ async def test_bind_token_is_persisted_but_not_exposed_in_multiplayer_status():
     inst = GameInstance(game_key=("web", "room", "bot"), gm_uid="gm")
     api = FakeAPI(inst)
 
-    created = await bot_access.get_bind_token(api, "web|room|bot")
+    created = await api.bot_access.get_bind_token("web|room|bot")
 
     assert created["ok"] is True
     assert len(created["bind_token"]) >= 18
@@ -48,26 +50,26 @@ async def test_bind_verification_and_actor_authorization():
     inst.language = "en"
     inst.players = {"gm": {"character_name": "GM"}, "player-1": {"character_name": "玩家"}}
     api = FakeAPI(inst)
-    token = (await bot_access.get_bind_token(api, "web|room|bot"))["bind_token"]
+    token = (await api.bot_access.get_bind_token("web|room|bot"))["bind_token"]
 
-    assert (await bot_access.verify_bind_game(api, "web|room|bot", "wrong"))["ok"] is False
-    bound = await bot_access.verify_bind_game(api, "web|room|bot", token)
+    assert (await api.bot_access.verify_bind_game("web|room|bot", "wrong"))["ok"] is False
+    bound = await api.bot_access.verify_bind_game("web|room|bot", token)
     assert bound["gm_uid"] == "gm"
     assert bound["language"] == "en"
     assert inst.bot_bind_token == ""
     assert api._reg.saved == 2
-    assert (await bot_access.verify_bind_game(api, "web|room|bot", token))["ok"] is False
-    assert bot_access.actor_allowed(api, "web|room|bot", "player-1") is True
-    assert bot_access.actor_allowed(api, "web|room|bot", "stranger") is False
+    assert (await api.bot_access.verify_bind_game("web|room|bot", token))["ok"] is False
+    assert api.bot_access.actor_allowed("web|room|bot", "player-1") is True
+    assert api.bot_access.actor_allowed("web|room|bot", "stranger") is False
 
 
 @pytest.mark.asyncio
 async def test_rotating_bind_token_invalidates_previous_token():
     inst = GameInstance(game_key=("web", "room", "bot"), gm_uid="gm")
     api = FakeAPI(inst)
-    old = (await bot_access.get_bind_token(api, "web|room|bot"))["bind_token"]
-    new = (await bot_access.get_bind_token(api, "web|room|bot", rotate=True))["bind_token"]
+    old = (await api.bot_access.get_bind_token("web|room|bot"))["bind_token"]
+    new = (await api.bot_access.get_bind_token("web|room|bot", rotate=True))["bind_token"]
 
     assert old != new
-    assert (await bot_access.verify_bind_game(api, "web|room|bot", old))["ok"] is False
-    assert (await bot_access.verify_bind_game(api, "web|room|bot", new))["ok"] is True
+    assert (await api.bot_access.verify_bind_game("web|room|bot", old))["ok"] is False
+    assert (await api.bot_access.verify_bind_game("web|room|bot", new))["ok"] is True

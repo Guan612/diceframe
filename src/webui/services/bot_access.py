@@ -3,24 +3,36 @@
 from __future__ import annotations
 
 import secrets
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+from dataclasses import dataclass
+from typing import Any, Callable, Protocol
 
 
-async def get_bind_token(api: "WebAPI", game_key: str, rotate: bool = False) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+GameKey = tuple[str, ...]
+
+
+class BotAccessRegistry(Protocol):
+    def get(self, game_key: GameKey) -> Any | None: ...
+    async def save(self, instance: Any) -> None: ...
+
+
+@dataclass(frozen=True)
+class BotAccessDependencies:
+    registry: BotAccessRegistry
+    parse_game_key: Callable[[str], GameKey]
+
+
+async def get_bind_token(dependencies: BotAccessDependencies, game_key: str, rotate: bool = False) -> dict[str, Any]:
+    inst = dependencies.registry.get(dependencies.parse_game_key(game_key))
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
     if rotate or not getattr(inst, "bot_bind_token", ""):
         inst.set_bot_bind_token(secrets.token_urlsafe(18))
-        await api._reg.save(inst)
+        await dependencies.registry.save(inst)
     return {"ok": True, "bind_token": inst.bot_bind_token}
 
 
-async def verify_bind_game(api: "WebAPI", game_key: str, bind_token: str) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+async def verify_bind_game(dependencies: BotAccessDependencies, game_key: str, bind_token: str) -> dict[str, Any]:
+    inst = dependencies.registry.get(dependencies.parse_game_key(game_key))
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
     expected = str(getattr(inst, "bot_bind_token", "") or "")
@@ -42,10 +54,30 @@ async def verify_bind_game(api: "WebAPI", game_key: str, bind_token: str) -> dic
         ],
     }
     inst.set_bot_bind_token("")
-    await api._reg.save(inst)
+    await dependencies.registry.save(inst)
     return result
 
 
-def actor_allowed(api: "WebAPI", game_key: str, user_id: str) -> bool:
-    inst = api._reg.get(api._parse_key(game_key))
+def actor_allowed(dependencies: BotAccessDependencies, game_key: str, user_id: str) -> bool:
+    inst = dependencies.registry.get(dependencies.parse_game_key(game_key))
     return bool(inst and user_id and user_id in inst.players)
+
+
+class BotAccessService:
+    """Bot binding and actor checks against one explicit registry boundary."""
+
+    def __init__(self, dependencies: BotAccessDependencies) -> None:
+        self._dependencies = dependencies
+
+    async def get_bind_token(
+        self, game_key: str, rotate: bool = False,
+    ) -> dict[str, Any]:
+        return await get_bind_token(self._dependencies, game_key, rotate)
+
+    async def verify_bind_game(
+        self, game_key: str, bind_token: str,
+    ) -> dict[str, Any]:
+        return await verify_bind_game(self._dependencies, game_key, bind_token)
+
+    def actor_allowed(self, game_key: str, user_id: str) -> bool:
+        return actor_allowed(self._dependencies, game_key, user_id)

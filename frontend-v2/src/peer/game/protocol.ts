@@ -16,9 +16,14 @@ export type PeerGameOperation =
   | 'kp.question'
   | 'ruleset.actions'
   | 'ruleset.intent'
+  | 'ruleset.decision'
   | 'luck.resolve'
   | 'payment.resolve'
   | 'character.update'
+  | 'character.profile'
+  | 'character.rest'
+  | 'character.advancement.preview'
+  | 'character.advancement.apply'
 
 const GAME_OPERATIONS = new Set<PeerGameOperation>([
   'game.detail',
@@ -35,9 +40,14 @@ const GAME_OPERATIONS = new Set<PeerGameOperation>([
   'kp.question',
   'ruleset.actions',
   'ruleset.intent',
+  'ruleset.decision',
   'luck.resolve',
   'payment.resolve',
   'character.update',
+  'character.profile',
+  'character.rest',
+  'character.advancement.preview',
+  'character.advancement.apply',
 ])
 
 export type PeerApplicationMessage =

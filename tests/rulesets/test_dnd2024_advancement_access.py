@@ -32,6 +32,17 @@ def test_old_save_defaults_to_ai_milestone() -> None:
     assert all(not row["entitled"] for row in status["players"])
 
 
+def test_read_only_projection_does_not_normalize_old_save() -> None:
+    instance = _instance()
+    instance.ruleset_state = {"unrelated": {"kept": True}}
+
+    status = advancement_access.project(instance)
+
+    assert status["mode"] == "milestone"
+    assert status["authority"] == "ai_gm"
+    assert instance.ruleset_state == {"unrelated": {"kept": True}}
+
+
 def test_milestone_grants_only_one_next_level_entitlement() -> None:
     instance = _instance()
 

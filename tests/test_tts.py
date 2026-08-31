@@ -17,7 +17,11 @@ from src.tts.providers import (
     _openai_speech_url,
 )
 from src.webui.config_update import prepare_config_update
-from src.webui.services.speech import _is_public_game_text, list_voices
+from src.webui.services.speech import (
+    SpeechDependencies,
+    WebSpeechService,
+    _is_public_game_text,
+)
 
 
 def _config(**changes):
@@ -324,9 +328,14 @@ def test_edge_tts_provider_passes_runtime_config_update():
 
 def test_edge_tts_builtin_voice_catalog(tmp_path):
     service = SpeechService(_config(tts_provider="edge-tts", tts_base_url=""), tmp_path / "cache")
-    api = SimpleNamespace(_speech=service, _plugins=None)
+    web_speech = WebSpeechService(SpeechDependencies(
+        backend=service,
+        plugin_host=None,
+        get_instance=lambda _key: None,
+        parse_game_key=lambda raw: (raw,),
+    ))
 
-    catalog = list_voices(api)
+    catalog = web_speech.list_voices()
     voices = {voice["id"]: voice for voice in catalog["voices"]}
 
     assert catalog["provider"] == "edge-tts"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 from src.webui.services import system
 from src.webui.services.system import is_newer_version
@@ -45,24 +46,31 @@ def _release_payload(version: str) -> dict:
     }
 
 
-class _FakeApi:
+class _FakeState:
     def __init__(self, channel: str):
-        self._config_state = {"update_channel": channel}
-        self._llm_client = None
+        self.config = {"update_channel": channel}
+
+    def dependencies(self) -> system.SystemDependencies:
+        return system.SystemDependencies(
+            data_dir=Path("data"),
+            config_state=lambda: self.config,
+            proxy_url=lambda: "",
+            mirrors=lambda: None,
+        )
 
 
 @pytest.mark.asyncio
 async def test_check_updates_preview_channel_uses_releases_and_marks_channel(monkeypatch):
-    api = _FakeApi(channel="preview")
+    dependencies = _FakeState(channel="preview").dependencies()
     captured = {}
 
-    async def fake_fetch(api_, repo, include_prerelease, proxy_url):
+    async def fake_fetch(mirrors, repo, include_prerelease, proxy_url):
         captured["include_prerelease"] = include_prerelease
         return _release_payload("1.2.0-beta.1"), {"mode": "github-api"}
 
-    monkeypatch.setattr(system, "_fetch_release_for_api", fake_fetch)
+    monkeypatch.setattr(system, "_fetch_release_with_mirrors", fake_fetch)
 
-    result = await system.check_updates(api)
+    result = await system.check_updates(dependencies)
 
     assert captured["include_prerelease"] is True
     assert result["channel"] == "preview"
@@ -71,16 +79,16 @@ async def test_check_updates_preview_channel_uses_releases_and_marks_channel(mon
 
 @pytest.mark.asyncio
 async def test_check_updates_stable_channel_uses_latest_and_marks_channel(monkeypatch):
-    api = _FakeApi(channel="stable")
+    dependencies = _FakeState(channel="stable").dependencies()
     captured = {}
 
-    async def fake_fetch(api_, repo, include_prerelease, proxy_url):
+    async def fake_fetch(mirrors, repo, include_prerelease, proxy_url):
         captured["include_prerelease"] = include_prerelease
         return _release_payload("1.2.0"), {"mode": "github-api"}
 
-    monkeypatch.setattr(system, "_fetch_release_for_api", fake_fetch)
+    monkeypatch.setattr(system, "_fetch_release_with_mirrors", fake_fetch)
 
-    result = await system.check_updates(api)
+    result = await system.check_updates(dependencies)
 
     assert captured["include_prerelease"] is False
     assert result["channel"] == "stable"
@@ -89,16 +97,16 @@ async def test_check_updates_stable_channel_uses_latest_and_marks_channel(monkey
 @pytest.mark.asyncio
 async def test_check_updates_explicit_override_wins_over_channel(monkeypatch):
     # stable 频道但显式传 include_prerelease=True → 走 preview
-    api = _FakeApi(channel="stable")
+    dependencies = _FakeState(channel="stable").dependencies()
     captured = {}
 
-    async def fake_fetch(api_, repo, include_prerelease, proxy_url):
+    async def fake_fetch(mirrors, repo, include_prerelease, proxy_url):
         captured["include_prerelease"] = include_prerelease
         return _release_payload("1.3.0-beta.2"), {"mode": "github-api"}
 
-    monkeypatch.setattr(system, "_fetch_release_for_api", fake_fetch)
+    monkeypatch.setattr(system, "_fetch_release_with_mirrors", fake_fetch)
 
-    result = await system.check_updates(api, include_prerelease=True)
+    result = await system.check_updates(dependencies, include_prerelease=True)
 
     assert captured["include_prerelease"] is True
     assert result["channel"] == "preview"

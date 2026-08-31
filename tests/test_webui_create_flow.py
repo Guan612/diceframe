@@ -15,6 +15,7 @@ from src.llm.client import LLMResponse
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.webui.api import WebAPI, can_modify_character
+from src.webui.services.game_lifecycle_context import CreationTransaction
 from src.webui.session import SessionManager
 
 
@@ -188,7 +189,7 @@ def web_api(tmp_path):
         lorebook.close()
 
 
-def test_game_rule_loading_prefers_saved_rule_and_migrates_legacy_save(web_api):
+def test_game_rule_loading_prefers_saved_rule_and_projects_legacy_save(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     (api._rules_dir / "saved_custom.json").write_text(
         json.dumps({
@@ -213,12 +214,17 @@ def test_game_rule_loading_prefers_saved_rule_and_migrates_legacy_save(web_api):
     legacy.world_id = "template_world"
     legacy.rule_id = ""
 
-    api.list_games()
+    listed = api.list_games()
 
-    assert legacy.rule_id == "freeform_fantasy"
-    migrated = api._load_rule_for_game(legacy)
-    assert migrated is not None
-    assert migrated.rule_id == "freeform_fantasy"
+    legacy_view = next(
+        game for game in listed["games"]
+        if game["game_key"] == "web|legacy-rule|bot"
+    )
+    assert legacy_view["rule_id"] == "freeform_fantasy"
+    assert legacy.rule_id == ""
+    loaded_legacy = api._load_rule_for_game(legacy)
+    assert loaded_legacy is not None
+    assert loaded_legacy.rule_id == "freeform_fantasy"
 
 
 @pytest.mark.asyncio
@@ -1964,6 +1970,68 @@ async def test_create_game_rolls_back_first_saved_player_when_second_fails(web_a
 
     assert result["ok"] is False
     assert "simulated second player failure" in result["error"]
+    assert registry.list_all() == []
+    assert list(registry.save_dir.rglob("state.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_create_game_rolls_back_when_instance_creation_fails(web_api, monkeypatch):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+
+    async def fail_create(*_args, **_kwargs):
+        raise RuntimeError("simulated instance creation failure")
+
+    monkeypatch.setattr(api._handler, "create_game", fail_create)
+    result = await api.create_game(
+        "template_world", "实例创建补偿测试",
+        players=[{"character_name": "艾琳", "attributes": {"str": 10}}],
+    )
+
+    assert result["error_code"] == "GAME_CREATE_FAILED"
+    assert registry.list_all() == []
+    assert list(registry.save_dir.rglob("state.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_create_game_rolls_back_when_opening_fails(web_api, monkeypatch):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+
+    async def fail_start(*_args, **_kwargs):
+        raise RuntimeError("simulated opening failure")
+
+    monkeypatch.setattr(api._handler, "start_game", fail_start)
+    result = await api.create_game(
+        "template_world", "开场补偿测试",
+        players=[{"character_name": "艾琳", "attributes": {"str": 10}}],
+    )
+
+    assert result == {
+        "ok": False,
+        "error_code": "GAME_CREATE_FAILED",
+        "error": "生成开场失败，未留下半成品存档，请检查模型设置后重试。",
+    }
+    assert registry.list_all() == []
+    assert list(registry.save_dir.rglob("state.json")) == []
+
+
+@pytest.mark.asyncio
+async def test_create_game_rolls_back_when_final_commit_fails(web_api, monkeypatch):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+
+    async def fail_commit(_transaction, _instance):
+        raise OSError("simulated final save failure")
+
+    monkeypatch.setattr(CreationTransaction, "commit", fail_commit)
+    result = await api.create_game(
+        "template_world", "最终提交补偿测试",
+        players=[{"character_name": "艾琳", "attributes": {"str": 10}}],
+    )
+
+    assert result == {
+        "ok": False,
+        "error_code": "GAME_CREATE_FAILED",
+        "error": "保存新游戏失败，未留下半成品存档，请重试。",
+    }
     assert registry.list_all() == []
     assert list(registry.save_dir.rglob("state.json")) == []
 

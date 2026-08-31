@@ -13,8 +13,8 @@ from src.engine.checks import build_check_request
 from src.engine.game_instance import GameInstance, GameState
 from src.llm.parser import sanitize_narration
 from src.rules.rule_system import RuleSystem
-from src.webui.services.games import decline_pending_luck, gm_command, resolve_luck_decision
-from src.webui.services.logs import get_log
+from src.webui.services import game_controls, game_master
+from src.webui.services.logs import GameLogService, LogDependencies
 
 
 def _coc_instance() -> tuple[GameInstance, RuleSystem]:
@@ -390,6 +390,42 @@ class _Api:
         return self.rule
 
 
+def _controls(api: _Api) -> game_controls.GameControlService:
+    return game_controls.GameControlService(game_controls.GameControlDependencies(
+        parse_game_key=api._parse_key,
+        get_instance=api._reg.get,
+        save_instance=api._reg.save,
+        load_rule=api._load_rule_for_game,
+    ))
+
+
+def _game_master(api: _Api) -> game_master.GameMasterService:
+    return game_master.GameMasterService(game_master.GameMasterDependencies(
+        parse_game_key=api._parse_key,
+        get_instance=api._reg.get,
+        save_instance=api._reg.save,
+        load_rule=api._load_rule_for_game,
+    ))
+
+
+async def gm_command(
+    api: _Api, game_key: str, command: str, mode: str = "note",
+) -> dict:
+    return await _game_master(api).command(game_key, command, mode)
+
+
+async def resolve_luck_decision(
+    api: _Api, game_key: str, check_id: str, actor_uid: str, spend: bool,
+) -> dict:
+    return await _controls(api).resolve_luck_decision(
+        game_key, check_id, actor_uid, spend,
+    )
+
+
+async def decline_pending_luck(api: _Api, game_key: str) -> dict:
+    return await _controls(api).decline_pending_luck(game_key)
+
+
 @pytest.mark.asyncio
 async def test_gm_resource_command_updates_luck_directly_without_public_action():
     instance, rule = _coc_instance()
@@ -689,8 +725,12 @@ def test_public_log_filters_legacy_gm_instruction():
     }]
     api = _Api(instance, rule)
 
-    public = get_log(api, "web|room|bot", include_internal=False)
-    internal = get_log(api, "web|room|bot", include_internal=True)
+    logs = GameLogService(LogDependencies(
+        registry=api._reg,
+        parse_game_key=api._parse_key,
+    ))
+    public = logs.get_log("web|room|bot", include_internal=False)
+    internal = logs.get_log("web|room|bot", include_internal=True)
 
     assert [action["user_id"] for action in public["log"][0]["actions"]] == ["p1"]
     assert len(internal["log"][0]["actions"]) == 2

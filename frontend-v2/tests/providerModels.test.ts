@@ -1,77 +1,117 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  catalogModelMainEligible,
-  selectMainModelWithRollback,
+  assignCatalogModelRoleWithRollback,
+  CATALOG_MODEL_ROLES,
+  catalogModelRoleEligible,
+  isCatalogModelAssigned,
   type CatalogSavedProvider,
 } from '../src/utils/providerModels'
 
-// 模型目录“设为主模型”的两个状态一致性契约：
+// 模型目录快捷分配的状态一致性契约：
 // 1) 只认已持久化的 provider library（UI 草稿不算数）
-// 2) 保存失败时把主模型字段回滚为点击前的值
+// 2) 所有用途复用同一份可扩展注册表
+// 3) 保存失败时完整回滚该用途涉及的字段
 
-describe('catalogModelMainEligible', () => {
-  it('accepts persisted chat-capable models', () => {
-    const saved = [{ id: 'provider-a', models: ['model-a', 'model-new'], model_capabilities: {} }]
-    expect(catalogModelMainEligible(saved, 'provider-a', 'model-a')).toBe(true)
+describe('catalogModelRoleEligible', () => {
+  it('declares the four model-configuration roles in one extensible registry', () => {
+    expect(CATALOG_MODEL_ROLES.map(role => role.id)).toEqual(['main', 'embedding', 'imagegen', 'asr'])
+  })
+
+  it('accepts persisted models only for a matching role', () => {
+    const saved: CatalogSavedProvider[] = [{
+      id: 'provider-a',
+      api_format: 'openai',
+      models: ['chat-a', 'embed-a', 'image-a', 'asr-a'],
+      model_capabilities: { 'embed-a': 'embedding', 'image-a': 'image', 'asr-a': 'asr' },
+    }]
+    expect(catalogModelRoleEligible(saved, 'provider-a', 'chat-a', 'main')).toBe(true)
+    expect(catalogModelRoleEligible(saved, 'provider-a', 'embed-a', 'embedding')).toBe(true)
+    expect(catalogModelRoleEligible(saved, 'provider-a', 'image-a', 'imagegen')).toBe(true)
+    expect(catalogModelRoleEligible(saved, 'provider-a', 'asr-a', 'asr')).toBe(true)
+    expect(catalogModelRoleEligible(saved, 'provider-a', 'chat-a', 'imagegen')).toBe(false)
   })
 
   it('rejects models that only exist in the unsaved draft', () => {
-    // 持久化：provider A models = [model-a]；草稿新加 model-new(chat) → 不可设为主模型
+    // 持久化：provider A models = [model-a]；草稿新加 model-new(chat) → 不可分配
     const persisted = [{ id: 'provider-a', models: ['model-a'] }]
-    expect(catalogModelMainEligible(persisted, 'provider-a', 'model-new')).toBe(false)
+    expect(catalogModelRoleEligible(persisted, 'provider-a', 'model-new', 'main')).toBe(false)
   })
 
   it('uses the saved capability, not the draft override', () => {
-    // 持久化里 model-x 是 tts，草稿刚改成 chat 但未保存 → 不可设为主模型
+    // 持久化里 model-x 是 tts，草稿刚改成 chat 但未保存 → 不可分配给主模型
     const persisted: CatalogSavedProvider[] = [
       { id: 'provider-b', models: ['model-x'], model_capabilities: { 'model-x': 'tts' } },
     ]
-    expect(catalogModelMainEligible(persisted, 'provider-b', 'model-x')).toBe(false)
+    expect(catalogModelRoleEligible(persisted, 'provider-b', 'model-x', 'main')).toBe(false)
   })
 
   it('rejects providers that are not persisted yet', () => {
-    expect(catalogModelMainEligible([], 'provider-c', 'model-c')).toBe(false)
+    expect(catalogModelRoleEligible([], 'provider-c', 'model-c', 'main')).toBe(false)
+  })
+
+  it('keeps the existing OpenAI-only image-generation boundary', () => {
+    const anthropic: CatalogSavedProvider[] = [{
+      id: 'provider-a',
+      api_format: 'anthropic',
+      models: ['image-a'],
+      model_capabilities: { 'image-a': 'image' },
+    }]
+    expect(catalogModelRoleEligible(anthropic, 'provider-a', 'image-a', 'imagegen')).toBe(false)
   })
 })
 
-describe('selectMainModelWithRollback', () => {
-  it('restores previous provider and model when saving fails', async () => {
-    const config: Record<string, unknown> = { llm_provider_ref: 'provider-a', model: 'model-a' }
+describe('assignCatalogModelRoleWithRollback', () => {
+  it('restores provider, model, and activation fields when saving fails', async () => {
+    const config: Record<string, unknown> = {
+      imagegen_provider_ref: 'provider-a',
+      imagegen_model: 'image-a',
+      imagegen_enabled: false,
+    }
     const save = vi.fn(async () => false)
 
-    const ok = await selectMainModelWithRollback(config, 'provider-b', 'model-b', save)
+    const ok = await assignCatalogModelRoleWithRollback(config, 'imagegen', 'provider-b', 'image-b', save)
 
     expect(ok).toBe(false)
     expect(save).toHaveBeenCalledTimes(1)
-    expect(config.llm_provider_ref).toBe('provider-a')
-    expect(config.model).toBe('model-a')
+    expect(config.imagegen_provider_ref).toBe('provider-a')
+    expect(config.imagegen_model).toBe('image-a')
+    expect(config.imagegen_enabled).toBe(false)
   })
 
-  it('keeps the new binding when saving succeeds', async () => {
-    const config: Record<string, unknown> = { llm_provider_ref: 'provider-a', model: 'model-a' }
+  it('keeps the new binding and enables the assigned role when saving succeeds', async () => {
+    const config: Record<string, unknown> = { embedding_enabled: false }
 
-    const ok = await selectMainModelWithRollback(config, 'provider-b', 'model-b', async () => true)
+    const ok = await assignCatalogModelRoleWithRollback(config, 'embedding', 'provider-b', 'embed-b', async () => true)
 
     expect(ok).toBe(true)
-    expect(config.llm_provider_ref).toBe('provider-b')
-    expect(config.model).toBe('model-b')
+    expect(config.embedding_provider_ref).toBe('provider-b')
+    expect(config.embedding_model).toBe('embed-b')
+    expect(config.embedding_enabled).toBe(true)
+    expect(isCatalogModelAssigned(config, 'embedding', 'provider-b', 'embed-b')).toBe(true)
+  })
+
+  it('restores absent fields after a thrown save error', async () => {
+    const config: Record<string, unknown> = {}
+
+    await expect(assignCatalogModelRoleWithRollback(config, 'asr', 'provider-b', 'asr-b', async () => {
+      throw new Error('save failed')
+    })).rejects.toThrow('save failed')
+
+    expect(config).toEqual({})
   })
 })
 
-// 结构守卫：rollback 依赖“在任何 mutation 之前捕获旧值”。如果生产代码在
-// 调用 helper 之前就改了 config（先 mutate 再 capture），回滚会还原成中间
-// 态而不是真正的旧值——这里锁死快捷入口的所有 config 赋值必须发生在
-// selectMainModelWithRollback 内部。
-describe('setCatalogModelAsMain wiring structure guard', () => {
-  it('delegates every config mutation to selectMainModelWithRollback', async () => {
+// 结构守卫：所有目录快捷分配必须委托给统一 helper，不能先污染 config 再捕获旧值。
+describe('assignCatalogModelRole wiring structure guard', () => {
+  it('delegates every config mutation to assignCatalogModelRoleWithRollback', async () => {
     const { readFileSync } = await import('node:fs')
     const { resolve } = await import('node:path')
-    const source = readFileSync(resolve('src/features/admin/SettingsView.vue'), 'utf-8')
-    const start = source.indexOf('async function setCatalogModelAsMain')
+    const source = readFileSync(resolve('src/composables/useProviderModelSettings.ts'), 'utf-8')
+    const start = source.indexOf('async function assignCatalogModelRole')
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, source.indexOf('\n}', start))
 
-    expect(body).toContain('selectMainModelWithRollback(')
+    expect(body).toContain('assignCatalogModelRoleWithRollback(')
     expect(body).not.toMatch(/setModelRoleProvider\(/)
     expect(body).not.toMatch(/setStr\(/)
   })

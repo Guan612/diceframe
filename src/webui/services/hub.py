@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 
 from src.hub_client import HubUnavailable
 from src.plugin_host.mirrors import parse_github_repository
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
 
 # 作者 GitHub 仓库 Raw README 的大小上限（超出视为不可信，直接拒绝）。
 _README_RAW_MAX_BYTES = 256 * 1024
@@ -20,39 +18,57 @@ _README_RAW_MAX_BYTES = 256 * 1024
 _README_CANDIDATES = ("README_CN.md", "README.md", "README_EN.md")
 
 
-def _client(api: "WebAPI"):
-    client = getattr(api, "_hub", None)
+@dataclass(frozen=True)
+class HubDependencies:
+    client: Any | None
+    plugin_host: Any | None
+    config_state: Callable[[], dict[str, Any]]
+    save_config: Callable[[], None]
+    current_legal_documents: Callable[[], Awaitable[dict[str, Any]]]
+    legal_bundle_version: Callable[[dict[str, Any]], str]
+    legal_acceptance_payload: Callable[[dict[str, Any], str], dict[str, Any]]
+    legal_accepted: Callable[[dict[str, Any], dict[str, Any] | None], bool]
+    record_legal_acceptance: Callable[..., None]
+
+
+def _client(dependencies: HubDependencies):
+    client = dependencies.client
     if client is None:
         raise RuntimeError("DiceFrame Hub 当前未启用")
     return client
 
 
-async def preferences(api: "WebAPI", language: str = "zh-CN") -> dict[str, Any]:
-    state = getattr(api, "_config_state", {})
-    client = getattr(api, "_hub", None)
+async def preferences(
+    dependencies: HubDependencies, language: str = "zh-CN",
+) -> dict[str, Any]:
+    state = dependencies.config_state()
+    client = dependencies.client
     identity_exists = bool(client and client.identity_file.exists())
-    documents = await api.current_legal_documents()
+    documents = await dependencies.current_legal_documents()
     return {
         "ok": True,
         "available": client is not None,
         "telemetry_enabled": bool(state.get("hub_telemetry_enabled", False)),
         "choice_made": bool(state.get("hub_telemetry_choice_made", False)),
         "identity_created": identity_exists,
-        "legal_version": api.legal_bundle_version(documents),
-        "legal_documents": api.legal_acceptance_payload(documents, language),
-        "legal_accepted": api.legal_accepted(state, documents),
+        "legal_version": dependencies.legal_bundle_version(documents),
+        "legal_documents": dependencies.legal_acceptance_payload(documents, language),
+        "legal_accepted": dependencies.legal_accepted(state, documents),
     }
 
 
 async def update_preferences(
-    api: "WebAPI",
+    dependencies: HubDependencies,
     telemetry_enabled: bool,
     legal_acceptance: dict[str, Any] | None = None,
     language: str = "zh-CN",
 ) -> dict[str, Any]:
-    state = api._config_state
-    documents = await api.current_legal_documents()
-    if telemetry_enabled and not (api.legal_accepted(state, documents) or legal_acceptance is not None):
+    state = dependencies.config_state()
+    documents = await dependencies.current_legal_documents()
+    if telemetry_enabled and not (
+        dependencies.legal_accepted(state, documents)
+        or legal_acceptance is not None
+    ):
         raise ValueError("启用匿名使用统计前必须先确认当前隐私政策")
     previous = {
         "hub_telemetry_enabled": state.get("hub_telemetry_enabled", False),
@@ -69,7 +85,7 @@ async def update_preferences(
         "legal_accepted_at": state.get("legal_accepted_at"),
     }
     if legal_acceptance is not None:
-        api.record_legal_acceptance(
+        dependencies.record_legal_acceptance(
             state,
             acceptance=legal_acceptance,
             documents=documents,
@@ -78,7 +94,7 @@ async def update_preferences(
     state["hub_telemetry_enabled"] = bool(telemetry_enabled)
     state["hub_telemetry_choice_made"] = True
     try:
-        api._save_config()
+        dependencies.save_config()
     except Exception:
         for key, value in previous.items():
             if value is None:
@@ -86,49 +102,49 @@ async def update_preferences(
             else:
                 state[key] = value
         raise
-    client = getattr(api, "_hub", None)
+    client = dependencies.client
     if client is not None:
         await client.set_telemetry(bool(telemetry_enabled), choice_made=True)
-    return await preferences(api, language)
+    return await preferences(dependencies, language)
 
 
-async def delete_identity(api: "WebAPI") -> dict[str, Any]:
-    client = _client(api)
+async def delete_identity(dependencies: HubDependencies) -> dict[str, Any]:
+    client = _client(dependencies)
     await client.delete_identity()
-    return await preferences(api)
+    return await preferences(dependencies)
 
 
 async def create_rendezvous_room(
-    api: "WebAPI", peer_count: int
+    dependencies: HubDependencies, peer_count: int
 ) -> dict[str, Any]:
     return {
         "ok": True,
-        **await _client(api).create_rendezvous_room(peer_count),
+        **await _client(dependencies).create_rendezvous_room(peer_count),
     }
 
 
-async def rendezvous_config(api: "WebAPI") -> dict[str, Any]:
-    return {"ok": True, **await _client(api).rendezvous_config()}
+async def rendezvous_config(dependencies: HubDependencies) -> dict[str, Any]:
+    return {"ok": True, **await _client(dependencies).rendezvous_config()}
 
 
-async def plugin_detail(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    return {"ok": True, **await _client(api).plugin_detail(plugin_id)}
+async def plugin_detail(dependencies: HubDependencies, plugin_id: str) -> dict[str, Any]:
+    return {"ok": True, **await _client(dependencies).plugin_detail(plugin_id)}
 
 
-async def plugin_readme(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
+async def plugin_readme(dependencies: HubDependencies, plugin_id: str) -> dict[str, Any]:
     """插件详情 README 的三层兜底：Hub 已清洗 HTML → 本地磁盘缓存 → 作者 GitHub Raw。
 
     Hub 成功时把已清洗正文写入磁盘缓存；Hub 失败时先读缓存并标记 stale，
     无缓存时才按注册表中已经校验的 GitHub 仓库地址读取固定候选 README，
     禁止请求任意 URL。返回 `markdown`（Raw 原文）由前端用公共清洗器渲染。
     """
-    client = _client(api)
+    client = _client(dependencies)
     hub_error = ""
     try:
         payload = await client.plugin_readme(plugin_id)
         html = str(payload.get("html") or "")
         if html:
-            meta = await _repository_meta(api, plugin_id)
+            meta = await _repository_meta(dependencies, plugin_id)
             client.write_readme_cache(
                 plugin_id,
                 html=html,
@@ -158,7 +174,7 @@ async def plugin_readme(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
             },
         }
 
-    markdown = await _fetch_author_readme(api, plugin_id)
+    markdown = await _fetch_author_readme(dependencies, plugin_id)
     if markdown:
         return {
             "ok": True,
@@ -175,9 +191,11 @@ async def plugin_readme(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
     }
 
 
-async def _repository_meta(api: "WebAPI", plugin_id: str) -> dict[str, str]:
+async def _repository_meta(
+    dependencies: HubDependencies, plugin_id: str,
+) -> dict[str, str]:
     """从已校验的商店索引取插件仓库地址与最新提交版本。"""
-    plugins = getattr(api, "_plugins", None)
+    plugins = dependencies.plugin_host
     marketplace = getattr(plugins, "marketplace", None)
     if marketplace is None:
         return {"repository_url": "", "commit_sha": ""}
@@ -199,13 +217,15 @@ async def _repository_meta(api: "WebAPI", plugin_id: str) -> dict[str, str]:
     }
 
 
-async def _fetch_author_readme(api: "WebAPI", plugin_id: str) -> str:
+async def _fetch_author_readme(
+    dependencies: HubDependencies, plugin_id: str,
+) -> str:
     """只在注册表仓库地址基础上读取固定候选 README；非 GitHub 或私网地址直接跳过。"""
-    plugins = getattr(api, "_plugins", None)
+    plugins = dependencies.plugin_host
     mirrors = getattr(plugins, "mirrors", None)
     if mirrors is None:
         return ""
-    meta = await _repository_meta(api, plugin_id)
+    meta = await _repository_meta(dependencies, plugin_id)
     repository_url = meta["repository_url"]
     if not repository_url:
         return ""
@@ -226,15 +246,71 @@ async def _fetch_author_readme(api: "WebAPI", plugin_id: str) -> str:
     return ""
 
 
-async def plugin_ratings(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    return {"ok": True, **await _client(api).plugin_ratings(plugin_id)}
+async def plugin_ratings(dependencies: HubDependencies, plugin_id: str) -> dict[str, Any]:
+    return {"ok": True, **await _client(dependencies).plugin_ratings(plugin_id)}
 
 
-async def set_plugin_like(api: "WebAPI", plugin_id: str, liked: bool) -> dict[str, Any]:
-    return {"ok": True, **await _client(api).set_like(plugin_id, liked)}
+async def set_plugin_like(
+    dependencies: HubDependencies, plugin_id: str, liked: bool,
+) -> dict[str, Any]:
+    return {"ok": True, **await _client(dependencies).set_like(plugin_id, liked)}
 
 
 async def set_plugin_rating(
-    api: "WebAPI", plugin_id: str, stars: int | None, tags: list[str] | None = None
+    dependencies: HubDependencies,
+    plugin_id: str,
+    stars: int | None,
+    tags: list[str] | None = None,
 ) -> dict[str, Any]:
-    return {"ok": True, **await _client(api).set_rating(plugin_id, stars, tags)}
+    return {
+        "ok": True,
+        **await _client(dependencies).set_rating(plugin_id, stars, tags),
+    }
+
+
+class HubService:
+    """Hub preferences, discovery, and community actions with explicit boundaries."""
+
+    def __init__(self, dependencies: HubDependencies) -> None:
+        self._dependencies = dependencies
+
+    async def preferences(self, language: str = "zh-CN") -> dict[str, Any]:
+        return await preferences(self._dependencies, language)
+
+    async def update_preferences(
+        self,
+        telemetry_enabled: bool,
+        legal_acceptance: dict[str, Any] | None = None,
+        language: str = "zh-CN",
+    ) -> dict[str, Any]:
+        return await update_preferences(
+            self._dependencies, telemetry_enabled, legal_acceptance, language,
+        )
+
+    async def delete_identity(self) -> dict[str, Any]:
+        return await delete_identity(self._dependencies)
+
+    async def create_rendezvous_room(self, peer_count: int) -> dict[str, Any]:
+        return await create_rendezvous_room(self._dependencies, peer_count)
+
+    async def rendezvous_config(self) -> dict[str, Any]:
+        return await rendezvous_config(self._dependencies)
+
+    async def plugin_detail(self, plugin_id: str) -> dict[str, Any]:
+        return await plugin_detail(self._dependencies, plugin_id)
+
+    async def plugin_readme(self, plugin_id: str) -> dict[str, Any]:
+        return await plugin_readme(self._dependencies, plugin_id)
+
+    async def plugin_ratings(self, plugin_id: str) -> dict[str, Any]:
+        return await plugin_ratings(self._dependencies, plugin_id)
+
+    async def set_plugin_like(self, plugin_id: str, liked: bool) -> dict[str, Any]:
+        return await set_plugin_like(self._dependencies, plugin_id, liked)
+
+    async def set_plugin_rating(
+        self, plugin_id: str, stars: int | None, tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return await set_plugin_rating(
+            self._dependencies, plugin_id, stars, tags,
+        )

@@ -83,11 +83,11 @@ async def test_bridge_extension_route_rejects_non_object_payload():
 
 @pytest.mark.asyncio
 async def test_bridge_extension_service_is_noop_without_plugin_host():
-    class Api:
-        _plugins = None
-
+    service = bot_extensions.BotExtensionService(
+        bot_extensions.BotExtensionDependencies(plugin_host=None)
+    )
     payload = {"platform": "maibot", "kind": "text", "text": "hello"}
-    result = await bot_extensions.apply(Api(), "render", payload)
+    result = await service.apply("render", payload)
 
     assert result == {
         "ok": True,
@@ -125,9 +125,12 @@ class FakePluginHost:
 class MaterializeApi:
     def __init__(self, data_dir):
         self._plugins = FakePluginHost(data_dir)
+        self.extensions = bot_extensions.BotExtensionService(
+            bot_extensions.BotExtensionDependencies(plugin_host=self._plugins)
+        )
 
     def bot_bridge_card_path(self, name):
-        return bot_extensions.bridge_card_path(self, name)
+        return self.extensions.bridge_card_path(name)
 
 
 def test_materialize_cards_turns_card_output_into_image(tmp_path):
@@ -142,7 +145,7 @@ def test_materialize_cards_turns_card_output_into_image(tmp_path):
         },
     ]
 
-    result = bot_extensions._materialize_cards(api, outputs)
+    result = api.extensions.materialize_cards(outputs)
 
     assert len(result) == 1
     assert result[0]["type"] == "image"
@@ -158,7 +161,7 @@ def test_materialize_cards_keeps_non_card_outputs_untouched(tmp_path):
     api = MaterializeApi(str(tmp_path))
     outputs = [{"type": "text", "text": "hello"}]
 
-    result = bot_extensions._materialize_cards(api, outputs)
+    result = api.extensions.materialize_cards(outputs)
 
     assert result == outputs
 
@@ -168,7 +171,7 @@ def test_bridge_card_path_rejects_bad_names(tmp_path):
 
     for bad in ("../evil.png", "not-card.png", "card_abc.png", "card_zzzz.png", "card_123.png"):
         try:
-            bot_extensions.bridge_card_path(api, bad)
+            api.extensions.bridge_card_path(bad)
             raised = None
         except (KeyError, ValueError) as exc:
             raised = exc
@@ -178,7 +181,7 @@ def test_bridge_card_path_rejects_bad_names(tmp_path):
 def test_bridge_card_path_serves_rendered_file(tmp_path):
     api = MaterializeApi(str(tmp_path))
     # 先物化产生一张卡
-    bot_extensions._materialize_cards(api, [{
+    api.extensions.materialize_cards([{
         "type": "card",
         "title": "T",
         "subtitle": "S",
@@ -188,14 +191,14 @@ def test_bridge_card_path_serves_rendered_file(tmp_path):
     card_dir = tmp_path / "bot" / "cards"
     files = list(card_dir.glob("card_*.png"))
     assert files, "物化应生成卡片文件"
-    path = bot_extensions.bridge_card_path(api, files[0].name)
+    path = api.extensions.bridge_card_path(files[0].name)
     assert path == files[0].resolve()
 
 
 @pytest.mark.asyncio
 async def test_bridge_card_asset_route_returns_image(tmp_path):
     api = MaterializeApi(str(tmp_path))
-    bot_extensions._materialize_cards(api, [{
+    api.extensions.materialize_cards([{
         "type": "card",
         "title": "T",
         "subtitle": "S",

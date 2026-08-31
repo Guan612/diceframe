@@ -564,7 +564,7 @@ class RoundProcessor:
                 # The advisory encounter request remains visible for GM review.
                 logger.exception("D&D Director automation was rejected; waiting for GM")
         apply_revive_commands(instance, data)
-        apply_growth_rewards(instance, data, response, rule, self._progression)
+        apply_growth_rewards(instance, data, response, rule, self._progression, runtime)
         update_quick_actions(instance, data)
         await apply_memory_delta(instance, response, self.memory_store)
         # 消费待处理 embedding 队列，让新记忆在运行中也能获得向量（此前从未被调用）
