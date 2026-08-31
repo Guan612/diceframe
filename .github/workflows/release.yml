@@ -187,8 +187,8 @@ jobs:
           overwrite_files: false
           preserve_order: true
           files: |
-            dist/DiceFrame-${{ github.ref_name }}-windows.zip
             dist/DiceFrame-${{ github.ref_name }}-windows-portable.zip
+            dist/DiceFrame-${{ github.ref_name }}-windows.zip
             dist/DiceFrame-${{ github.ref_name }}-docker-update-linux-amd64.zip
             dist/SHA256SUMS
 
