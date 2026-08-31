@@ -38,6 +38,27 @@ def test_prompt_uses_save_rule_instead_of_world_default() -> None:
     assert context.rule.check_mechanic["critical"] == {"success": None, "failure": None}
 
 
+def test_legacy_empty_rule_uses_world_default_in_round_rule_context() -> None:
+    instance = GameInstance(
+        game_key=("web", "legacy-rule", "bot"),
+        world_id="default_fantasy",
+        rule_id="",
+    )
+    composer = PromptComposer(ROOT / "prompts", ROOT / "templates" / "rules")
+
+    context = composer.load_rule_context(
+        instance,
+        lambda _world_id: {
+            "world_id": "default_fantasy",
+            "default_rule": "freeform_fantasy",
+        },
+    )
+
+    assert context.rule is not None
+    assert context.rule.rule_id == "freeform_fantasy"
+    assert instance.rule_id == ""
+
+
 def _combat_instance() -> GameInstance:
     instance = GameInstance(game_key=("web", "combat-guard", "bot"))
     instance.players = {

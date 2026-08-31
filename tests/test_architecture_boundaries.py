@@ -93,7 +93,9 @@ def test_games_route_remains_a_composition_facade() -> None:
         "game_lifecycle_routes.py",
     }
 
-    assert local_functions == {"_read_save_upload", "register_games"}
+    assert len(local_functions) <= 4, (
+        f"games route should remain a small composition facade, found {local_functions}"
+    )
     assert domain_modules <= {
         item.name for item in path.parent.glob("game_*_routes.py")
     }

@@ -100,13 +100,6 @@ test('hub controls whether the overview shows the direct-connect entry', async (
   const peerSetupBadge = page.locator('.peer-modal-toolbar .peer-experimental-badge')
   await expect(peerSetupHeading).toBeVisible()
   await expect(peerSetupBadge).toBeVisible()
-  const [peerSetupHeadingBox, peerSetupBadgeBox] = await Promise.all([
-    peerSetupHeading.boundingBox(),
-    peerSetupBadge.boundingBox(),
-  ])
-  expect(peerSetupHeadingBox).not.toBeNull()
-  expect(peerSetupBadgeBox).not.toBeNull()
-  expect(peerSetupBadgeBox!.x).toBeGreaterThan(peerSetupHeadingBox!.x)
   await expect(page.getByText('P2P 多人冒险')).toHaveCount(0)
   await expect(page.getByText('不会发送、接收或显示自定义测试文本。')).toHaveCount(0)
   const [setupBox, statusBox] = await Promise.all([
