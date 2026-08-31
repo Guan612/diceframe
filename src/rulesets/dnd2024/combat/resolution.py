@@ -359,11 +359,20 @@ class CombatResolutionMixin:
             for enemy in combat.get("enemies", {}).values()
         ):
             return [{"type": "dnd2024.combat.ended", "reason": "victory"}]
-        if not any(
-            "dead" not in self._actor_view(instance, combat, actor_id)["conditions"]
+        player_conditions = [
+            self._actor_view(instance, combat, actor_id)["conditions"]
             for actor_id in order if actor_id.startswith("player:")
+        ]
+        if not any(
+            "dead" not in conditions and "stable" not in conditions
+            for conditions in player_conditions
         ):
-            return [{"type": "dnd2024.combat.ended", "reason": "party_defeated"}]
+            reason = (
+                "party_incapacitated"
+                if any("stable" in conditions for conditions in player_conditions)
+                else "party_defeated"
+            )
+            return [{"type": "dnd2024.combat.ended", "reason": reason}]
         previous_index = int(combat["turn_index"])
         next_index = previous_index
         wraps = 0

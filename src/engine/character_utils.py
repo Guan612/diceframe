@@ -424,9 +424,32 @@ def revive_character(character_sheet: dict, method: str = "法术") -> bool:
 
 def reset_character_for_restart(character_sheet: dict) -> dict:
     """重开世界时恢复角色的可复用运行状态。"""
-    raw_max_hp = character_sheet.get("max_hp", 100)
+    canonical = character_sheet.get("ruleset_character")
+    canonical_resources = canonical.get("resources") if isinstance(canonical, dict) else None
+    canonical_hp = canonical_resources.get("hp") if isinstance(canonical_resources, dict) else None
+    canonical_max_hp = (
+        canonical_resources.get("max_hp")
+        if isinstance(canonical_resources, dict) and canonical_resources.get("max_hp") is not None
+        else canonical_hp.get("max") if isinstance(canonical_hp, dict) else None
+    )
+    raw_max_hp = canonical_max_hp if canonical_max_hp is not None else character_sheet.get("max_hp", 100)
     max_hp = int(raw_max_hp if raw_max_hp is not None else 100)
     raw_gold = character_sheet.get("gold", 30)
+
+    if isinstance(canonical, dict):
+        resources = canonical.setdefault("resources", {})
+        if isinstance(resources, dict):
+            canonical_hp = resources.get("hp")
+            if isinstance(canonical_hp, dict):
+                canonical_hp["current"] = max_hp
+                canonical_hp.setdefault("max", max_hp)
+            else:
+                resources["hp"] = max_hp
+        # A restart begins a fresh run. Death/downed/stable and combat-only
+        # conditions must not leak from any canonical character state.
+        canonical["conditions"] = {}
+        canonical["deceased"] = False
+
     set_hp(character_sheet, max_hp, max_hp)
     character_sheet["gold"] = int(raw_gold if raw_gold is not None else 30)
     character_sheet["deceased"] = False

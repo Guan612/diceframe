@@ -582,7 +582,7 @@ class Dnd2024Runtime:
             "total", "target", "success", "critical", "delta", "amount", "damage_type",
             "healing",
             "distance", "round", "turn_index", "previous_actor_id", "condition", "reason",
-            "spell_ref", "resource", "roll", "successes", "failures", "stable", "dead",
+            "spell_ref", "resource", "roll", "successes", "failures", "stable", "dead", "hp",
         }
         combat = (
             instance.ruleset_state.get("combat")

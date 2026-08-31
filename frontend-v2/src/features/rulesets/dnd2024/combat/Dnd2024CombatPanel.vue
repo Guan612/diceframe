@@ -340,6 +340,7 @@ function friendlyCombatError(cause: unknown): string {
   if (/not your turn|requested actor is not the current actor/i.test(message)) return '现在还没轮到这个角色。请等待当前行动者结束回合。'
   if (/already been spent|action is not available/i.test(message)) return '这个动作资源本回合已经用掉了。请选择仍可用的动作，或结束回合。'
   if (/state version|stale|expected_version/i.test(message)) return '战斗状态刚刚发生变化，界面已为你刷新。请按最新状态再试一次。'
+  if (/automatic combat turn exceeded the safety limit/i.test(message)) return '敌方自动回合未能正常结束，本次操作已安全回滚。请刷新战斗状态后重试。'
   return message
 }
 
@@ -847,13 +848,13 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 
           <section class="action-card compact-actions">
             <h3><NIcon :component="ShieldOutline" />{{ copy.economy }}</h3>
-            <button v-if="action('dash')" @click="stageSimple('dash')"><NIcon :component="FootstepsOutline" />{{ copy.dash }}</button>
-            <button v-if="action('dodge')" @click="stageSimple('dodge')"><NIcon :component="ShieldOutline" />{{ copy.dodge }}</button>
-            <button v-if="action('disengage')" @click="stageSimple('disengage')"><NIcon :component="FootstepsOutline" />{{ copy.disengage }}</button>
-            <button v-if="action('death_save')" @click="stageSimple('death_save')"><NIcon :component="SparklesOutline" />{{ copy.deathSave }}</button>
+            <button v-if="action('dash')" :disabled="busy" @click="stageSimple('dash')"><NIcon :component="FootstepsOutline" />{{ copy.dash }}</button>
+            <button v-if="action('dodge')" :disabled="busy" @click="stageSimple('dodge')"><NIcon :component="ShieldOutline" />{{ copy.dodge }}</button>
+            <button v-if="action('disengage')" :disabled="busy" @click="stageSimple('disengage')"><NIcon :component="FootstepsOutline" />{{ copy.disengage }}</button>
+            <button v-if="action('death_save')" :disabled="busy" @click="stageSimple('death_save')"><NIcon :component="SparklesOutline" />{{ copy.deathSave }}</button>
             <p v-if="action('end_turn')" class="end-turn-ready" role="status"><NIcon :component="PlayForwardOutline" />{{ copy.canEndTurn }}</p>
-            <button v-if="action('end_turn')" @click="stageSimple('end_turn')"><NIcon :component="PlayForwardOutline" />{{ copy.endTurn }}</button>
-            <button v-if="action('combat.end')" class="danger" @click="stageSimple('combat.end')"><NIcon :component="ShieldOutline" />{{ copy.endCombat }}</button>
+            <button v-if="action('end_turn')" :disabled="busy" @click="stageSimple('end_turn')"><NIcon :component="PlayForwardOutline" />{{ copy.endTurn }}</button>
+            <button v-if="action('combat.end')" class="danger" :disabled="busy" @click="stageSimple('combat.end')"><NIcon :component="ShieldOutline" />{{ copy.endCombat }}</button>
           </section>
           </div>
         </section>
