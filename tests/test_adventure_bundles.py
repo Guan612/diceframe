@@ -135,3 +135,14 @@ def test_adventure_graph_rejects_disconnected_step(tmp_path: Path) -> None:
 
     with pytest.raises(AdventureBundleError):
         loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+def test_adventure_rejects_invalid_generated_monster_stats(tmp_path: Path) -> None:
+    loader, package = _copied_package(tmp_path)
+    encounter_path = package / "content" / "encounters" / "greymoor_encounters.json"
+    encounter = json.loads(encounter_path.read_text(encoding="utf-8"))
+    encounter["presets"][0]["enemies"][0]["hp"] = 0
+    encounter_path.write_text(json.dumps(encounter), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError):
+        loader.load("lanterns_of_greymoor", "zh-CN")

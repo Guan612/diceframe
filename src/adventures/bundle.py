@@ -16,6 +16,7 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 _REF_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*$")
 _PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]*$")
 _AUTOMATION_LEVELS = frozenset({"deterministic", "guided", "reference"})
+_ENCOUNTER_DIFFICULTIES = frozenset({"story", "standard", "challenging", "lethal"})
 _FORBIDDEN_KEYS = frozenset({
     "python", "javascript", "script", "code", "eval", "module", "callable",
 })
@@ -108,6 +109,18 @@ def _positive_int(value: Any, field: str) -> int:
         raise AdventureBundleError(f"{field} must be a positive integer") from exc
     if parsed < 1:
         raise AdventureBundleError(f"{field} must be a positive integer")
+    return parsed
+
+
+def _bounded_int(value: Any, field: str, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        raise AdventureBundleError(f"{field} must be an integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise AdventureBundleError(f"{field} must be an integer") from exc
+    if not minimum <= parsed <= maximum:
+        raise AdventureBundleError(f"{field} is out of range")
     return parsed
 
 
@@ -320,6 +333,40 @@ class AdventureBundleLoader:
             for preset in catalog.get("presets") or []
             if isinstance(preset, dict) and str(preset.get("id") or "")
         }
+        for catalog in entities.get("encounter_catalog", {}).values():
+            presets = catalog.get("presets")
+            if not isinstance(presets, list):
+                raise AdventureBundleError("encounter catalog presets must be an array")
+            seen_presets: set[str] = set()
+            for preset in presets:
+                if not isinstance(preset, dict):
+                    raise AdventureBundleError("encounter preset must be an object")
+                preset_id = _required_text(preset.get("id"), "encounter preset id", _ID_RE)
+                if preset_id in seen_presets:
+                    raise AdventureBundleError(f"duplicate encounter preset id: {preset_id}")
+                seen_presets.add(preset_id)
+                difficulty = _required_text(preset.get("difficulty"), "encounter difficulty")
+                if difficulty not in _ENCOUNTER_DIFFICULTIES:
+                    raise AdventureBundleError(f"invalid encounter difficulty: {difficulty}")
+                enemies = preset.get("enemies")
+                if not isinstance(enemies, list) or not enemies:
+                    raise AdventureBundleError(f"encounter preset must contain enemies: {preset_id}")
+                for enemy in enemies:
+                    if not isinstance(enemy, dict):
+                        raise AdventureBundleError(f"encounter enemy must be an object: {preset_id}")
+                    _required_text(enemy.get("id"), "encounter enemy id", _ID_RE)
+                    _required_text(enemy.get("profile_id"), "encounter enemy profile_id", _ID_RE)
+                    _bounded_int(enemy.get("hp", 0), "encounter enemy hp", 1, 100000)
+                    _bounded_int(enemy.get("armor_class", 0), "encounter enemy armor_class", 1, 40)
+                    attacks = enemy.get("attacks")
+                    if not isinstance(attacks, list) or not attacks:
+                        raise AdventureBundleError(f"encounter enemy must contain attacks: {preset_id}")
+                    for attack in attacks:
+                        if not isinstance(attack, dict):
+                            raise AdventureBundleError(f"encounter attack must be an object: {preset_id}")
+                        _required_text(attack.get("id"), "encounter attack id", _ID_RE)
+                        _required_text(attack.get("damage"), "encounter attack damage")
+                        _bounded_int(attack.get("attack_bonus", 0), "encounter attack bonus", -20, 20)
         if str(adventure.get("start_step_id") or "") not in steps:
             raise AdventureBundleError("adventure start_step_id is invalid")
 

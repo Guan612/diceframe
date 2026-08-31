@@ -138,12 +138,15 @@ function openAiDraft() {
   openCreate('ai')
 }
 
-type AiDraft = { name?: string; summary?: string; chapters?: Array<{ name?: string; steps?: Array<{ title?: string; narration?: string; objective?: string; hint?: string; choices?: Array<{ label?: string; description?: string; nextStepIndex?: number | null }> }> }> }
+type AiDraftEnemy = { profile_id?: string; hp?: number; armor_class?: number; attacks?: Array<{ id?: string; damage?: string; attack_bonus?: number }> }
+type AiDraftEncounter = { name?: string; difficulty?: string; description?: string; stepIndex?: number | null; enemies?: AiDraftEnemy[] }
+type AiDraft = { name?: string; summary?: string; encounters?: AiDraftEncounter[]; chapters?: Array<{ name?: string; steps?: Array<{ title?: string; narration?: string; objective?: string; hint?: string; choices?: Array<{ label?: string; description?: string; nextStepIndex?: number | null }> }> }> }
 const aiDraftCounts = computed(() => {
   const chapters = pendingAiDraft.value?.chapters || []
   return {
     chapters: chapters.length,
     steps: chapters.reduce((total: number, chapter: { steps?: unknown[] }) => total + (chapter.steps?.length || 0), 0),
+    encounters: Array.isArray(pendingAiDraft.value?.encounters) ? pendingAiDraft.value.encounters.length : 0,
   }
 })
 
@@ -151,10 +154,29 @@ function applyAiDraft(draft: AiDraft) {
   const chapters = Array.isArray(draft.chapters) ? draft.chapters : []
   editorForm.value.name = String(draft.name || editorForm.value.name)
   editorForm.value.summary = String(draft.summary || editorForm.value.summary)
+  const defaultCatalogPath = editorEncounters.value[0]?.catalog_path || 'content/encounters/adventure_encounters.json'
   const scenes = editorScenes.value
   editorChapters.value = chapters.map((chapter, chapterIndex) => ({ id: `chapter_${chapterIndex + 1}`, name: String(chapter.name || `第 ${chapterIndex + 1} 章`) }))
   editorSteps.value = []
   editorChoices.value = []
+  editorEncounters.value = (Array.isArray(draft.encounters) ? draft.encounters : []).map((encounter, encounterIndex) => ({
+    id: `encounter_${encounterIndex + 1}`,
+    name: String(encounter.name || `遭遇 ${encounterIndex + 1}`),
+    difficulty: ['story', 'standard', 'challenging', 'lethal'].includes(String(encounter.difficulty)) ? String(encounter.difficulty) : 'standard',
+    description: String(encounter.description || ''),
+    catalog_path: defaultCatalogPath,
+    enemies: (Array.isArray(encounter.enemies) ? encounter.enemies : []).map((enemy, enemyIndex) => ({
+      id: `enemy_${encounterIndex + 1}_${enemyIndex + 1}`,
+      profile_id: String(enemy.profile_id || 'custom_enemy'),
+      hp: Math.max(1, Math.min(10000, Number(enemy.hp || 10))),
+      armor_class: Math.max(1, Math.min(40, Number(enemy.armor_class || 12))),
+      attacks: (Array.isArray(enemy.attacks) && enemy.attacks.length ? enemy.attacks : [{ id: 'attack', damage: '1d6+2', attack_bonus: 4 }]).map((attack, attackIndex) => ({
+        id: String(attack.id || `attack_${attackIndex + 1}`),
+        damage: String(attack.damage || '1d6+2'),
+        attack_bonus: Math.max(-20, Math.min(20, Number(attack.attack_bonus || 0))),
+      })),
+    })),
+  }))
   const stepIds: string[] = []
   chapters.forEach((chapter, chapterIndex) => (chapter.steps || []).forEach((step, stepIndex) => {
     const id = `step_${chapterIndex + 1}_${stepIndex + 1}`
@@ -183,6 +205,11 @@ function applyAiDraft(draft: AiDraft) {
     }
   })
   editorStartStepId.value = editorSteps.value[0]?.id || ''
+  editorEncounters.value.forEach((encounter, encounterIndex) => {
+    const source = (Array.isArray(draft.encounters) ? draft.encounters : [])[encounterIndex]
+    const stepIndex = source && typeof source.stepIndex === 'number' ? source.stepIndex : -1
+    if (stepIndex >= 0 && stepIndex < editorSteps.value.length) editorSteps.value[stepIndex].encounter_preset_id = encounter.id
+  })
 }
 
 function worldLabel(world: WorldSummary) {
@@ -202,7 +229,7 @@ async function generateDraft() {
       method: 'POST',
       body: JSON.stringify({
         language: locale.value,
-        prompt: `为一个 TRPG 冒险包起草剧情结构。用户需求：${aiPrompt.value.trim()}\n只输出 JSON，不要 Markdown，格式必须是：{"name":"","summary":"","chapters":[{"name":"","steps":[{"title":"","narration":"","objective":"","hint":"","choices":[{"label":"","description":"","nextStepIndex":null}]}]}]}`,
+        prompt: `为一个 TRPG 冒险包起草剧情结构。用户需求：${aiPrompt.value.trim()}\n只输出 JSON，不要 Markdown，格式必须是：{"name":"","summary":"","chapters":[{"name":"","steps":[{"title":"","narration":"","objective":"","hint":"","choices":[{"label":"","description":"","nextStepIndex":null}]}]}],"encounters":[{"name":"","difficulty":"standard","description":"","stepIndex":null,"enemies":[{"profile_id":"goblin","hp":7,"armor_class":12,"attacks":[{"id":"scimitar","damage":"1d6+2","attack_bonus":4}]}]}]}。encounters 是可选的结构化战斗配置；stepIndex 指向 chapters 展平后的步骤序号，从 0 开始。不要生成超出普通 D&D 范围的数值。`,
         system_hint: '你是冒险设计助手。只输出符合用户要求的 JSON，不要解释，不要代码围栏。',
       }),
     })
@@ -721,7 +748,7 @@ function policyLabel(policy: string) {
         <div v-if="createSource === 'ai'" class="adventure-ai-summary">
           <strong>{{ createForm.name || t('newAdventureNamePlaceholder') }}</strong>
           <span>{{ createForm.summary || t('noDescription') }}</span>
-          <small>{{ aiDraftCounts.chapters }} {{ String(locale).startsWith('zh') ? '章' : 'chapters' }} · {{ aiDraftCounts.steps }} {{ String(locale).startsWith('zh') ? '个步骤' : 'steps' }}</small>
+          <small>{{ aiDraftCounts.chapters }} {{ String(locale).startsWith('zh') ? '章' : 'chapters' }} · {{ aiDraftCounts.steps }} {{ String(locale).startsWith('zh') ? '个步骤' : 'steps' }} · {{ aiDraftCounts.encounters }} {{ String(locale).startsWith('zh') ? '个遭遇' : 'encounters' }}</small>
         </div>
         <div class="grid-2">
           <label v-if="createSource === 'manual'">{{ t('directoryId') }}<input v-model="createForm.directory_id" placeholder="my_adventure"></label>
