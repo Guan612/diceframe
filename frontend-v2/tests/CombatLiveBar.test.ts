@@ -145,8 +145,8 @@ describe('combat live bar', () => {
 
     expect(wrapper.text()).toContain('死亡豁免')
     expect(wrapper.text()).toContain('本轮等待投掷')
-    expect(wrapper.findAll('.save-pips.success i.filled')).toHaveLength(2)
-    expect(wrapper.findAll('.save-pips.failure i.filled')).toHaveLength(1)
+    expect(wrapper.findAll('.save-pips.success-pips i.filled')).toHaveLength(2)
+    expect(wrapper.findAll('.save-pips.failure-pips i.filled')).toHaveLength(1)
   })
 
   it('replays newly received automatic batches in order', async () => {
@@ -197,5 +197,7 @@ describe('combat live bar', () => {
     const rows = wrapper.findAll('li')
     expect(rows[0].text()).toContain('最新事件')
     expect(rows[1].text()).toContain('最早事件')
+    expect(rows[0].find('.combat-history-new').text()).toBe('新')
+    expect(rows[1].find('.combat-history-new').exists()).toBe(false)
   })
 })

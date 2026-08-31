@@ -301,8 +301,8 @@ onBeforeUnmount(() => {
       <span>{{ eventText(lastResult) }}</span>
       <div v-if="showDeathSaves" class="combat-death-saves" role="status">
         <b>{{ zh ? '死亡豁免' : 'Death saves' }}</b>
-        <span class="save-pips success"><small>{{ zh ? '成功' : 'Success' }}</small><i v-for="slot in 3" :key="`success-${slot}`" :class="{ filled: slot <= deathSaveSuccesses }" /></span>
-        <span class="save-pips failure"><small>{{ zh ? '失败' : 'Failure' }}</small><i v-for="slot in 3" :key="`failure-${slot}`" :class="{ filled: slot <= deathSaveFailures }" /></span>
+        <span class="save-pips success-pips"><small>{{ zh ? '成功' : 'Success' }}</small><i v-for="slot in 3" :key="`success-${slot}`" :class="{ filled: slot <= deathSaveSuccesses }" /></span>
+        <span class="save-pips failure-pips"><small>{{ zh ? '失败' : 'Failure' }}</small><i v-for="slot in 3" :key="`failure-${slot}`" :class="{ filled: slot <= deathSaveFailures }" /></span>
         <em>{{ deathSaveStatus }}</em>
       </div>
     </div>
@@ -329,8 +329,11 @@ onBeforeUnmount(() => {
   >
     <p v-if="!events.length" class="combat-history-empty">{{ zh ? '尚无战斗记录。' : 'No combat events yet.' }}</p>
     <ol v-else class="combat-history-list">
-      <li v-for="event in [...orderedEvents].reverse()" :key="event.event_id">
-        <span v-if="event.round" class="combat-history-round">{{ zh ? `第 ${event.round} 轮` : `Round ${event.round}` }}</span>
+      <li v-for="(event, eventIndex) in [...orderedEvents].reverse()" :key="event.event_id">
+        <span class="combat-history-meta">
+          <span v-if="event.round" class="combat-history-round">{{ zh ? `第 ${event.round} 轮` : `Round ${event.round}` }}</span>
+          <span v-if="eventIndex === 0" class="combat-history-new">{{ zh ? '新' : 'NEW' }}</span>
+        </span>
         <strong><span
           v-for="(token, index) in eventTokens(event)"
           :key="`${event.event_id}-${index}`"
@@ -365,13 +368,15 @@ onBeforeUnmount(() => {
 .save-pips { display: inline-flex; align-items: center; gap: 4px; }
 .save-pips small { margin-right: 2px; color: #bfc8cd; font-size: 9px; }
 .save-pips i { width: 9px; height: 9px; border: 1px solid #75838a; border-radius: 50%; background: transparent; }
-.save-pips.success i.filled { border-color: #69c99c; background: #69c99c; box-shadow: 0 0 7px rgb(105 201 156 / 50%); }
-.save-pips.failure i.filled { border-color: #ef737c; background: #ef737c; box-shadow: 0 0 7px rgb(239 115 124 / 50%); }
+.save-pips.success-pips i.filled { border-color: #69c99c; background: #69c99c; box-shadow: 0 0 7px rgb(105 201 156 / 50%); }
+.save-pips.failure-pips i.filled { border-color: #ef737c; background: #ef737c; box-shadow: 0 0 7px rgb(239 115 124 / 50%); }
 .combat-live-actions { display: flex; gap: 7px; }
 .combat-live-actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 38px; }
 .combat-history-list { display: grid; gap: 7px; max-height: min(62vh, 560px); margin: 0; padding: 0; overflow: auto; list-style: none; }
 .combat-history-list li { display: grid; grid-template-columns: minmax(72px, auto) minmax(0, 1fr); gap: 9px; padding: 9px 11px; border: 1px solid var(--df-border-soft); border-radius: 9px; background: var(--df-surface-2); }
+.combat-history-meta { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 5px; }
 .combat-history-round { color: var(--df-text-muted); font-size: 11px; }
+.combat-history-new { display: inline-flex; align-items: center; min-height: 18px; padding: 1px 5px; border: 1px solid #e4b75e; border-radius: 999px; color: #ffe4a0; background: rgb(228 183 94 / 16%); font-size: 10px; font-style: normal; font-weight: 800; letter-spacing: .04em; line-height: 1; }
 .combat-history-list strong { font-size: 13px; font-weight: 600; }
 .combat-history-token.self { color: #f1c768; }.combat-history-token.ally { color: #76c8f2; }.combat-history-token.enemy { color: #f17f86; }.combat-history-token.roll { color: #7ddbd4; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-weight: 800; }
 .combat-history-empty { color: var(--df-text-muted); }
