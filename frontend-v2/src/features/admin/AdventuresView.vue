@@ -35,7 +35,9 @@ type EditorStep = { id: string; chapter_id: string; scene_ref: string; requires:
 type EditorChoice = { id: string; step_id: string; next_step_id: string; label: string; description: string }
 type EditorChapter = { id: string; name: string }
 type EditorScene = { ref: string; name: string }
-type EditorEncounter = { id: string; name: string; difficulty: string; description: string }
+type EditorAttack = { id: string; damage: string; attack_bonus: number }
+type EditorEnemy = { id: string; profile_id: string; hp: number; armor_class: number; attacks: EditorAttack[] }
+type EditorEncounter = { id: string; name: string; difficulty: string; description: string; catalog_path: string; enemies: EditorEnemy[] }
 const editorSteps = ref<EditorStep[]>([])
 const editorChoices = ref<EditorChoice[]>([])
 const editorChapters = ref<EditorChapter[]>([])
@@ -303,6 +305,18 @@ function hydrateStructuredEditor() {
           name: String(label?.name || id || '未命名遭遇'),
           difficulty: String(preset.difficulty || 'standard'),
           description: String(label?.description || ''),
+          catalog_path: path,
+          enemies: (Array.isArray(preset.enemies) ? preset.enemies : []).map((enemy: any, enemyIndex: number) => ({
+            id: String(enemy.id || `enemy_${enemyIndex + 1}`),
+            profile_id: String(enemy.profile_id || ''),
+            hp: Math.max(1, Number(enemy.hp || 1)),
+            armor_class: Math.max(1, Number(enemy.armor_class || 10)),
+            attacks: (Array.isArray(enemy.attacks) ? enemy.attacks : []).map((attack: any, attackIndex: number) => ({
+              id: String(attack.id || `attack_${attackIndex + 1}`),
+              damage: String(attack.damage || '1d4'),
+              attack_bonus: Number(attack.attack_bonus || 0),
+            })),
+          })),
         }
       })
     })
@@ -333,6 +347,59 @@ function syncStructuredEditor() {
     const original = (Array.isArray(adventure.choices) ? adventure.choices : []).find((candidate: any) => candidate.id === choice.id) || {}
     return { ...original, id: choice.id, step_id: choice.step_id, next_step_id: choice.next_step_id }
   })
+  const encountersByCatalog = new Map<string, EditorEncounter[]>()
+  editorEncounters.value.forEach(encounter => {
+    const entries = encountersByCatalog.get(encounter.catalog_path) || []
+    entries.push(encounter)
+    encountersByCatalog.set(encounter.catalog_path, entries)
+  })
+  for (const [catalogPath, encounters] of encountersByCatalog) {
+    const catalog = (files[catalogPath] ||= {
+      schema_version: 1,
+      kind: 'encounter_catalog',
+      id: catalogPath.split('/').pop()?.replace(/\.json$/, '') || 'adventure_encounters',
+      source_ref: `user:${editing.value?.adventure_id || 'adventure'}`,
+      automation_level: 'deterministic',
+      presets: [],
+    }) as Record<string, any>
+    const originalPresets = Array.isArray(catalog.presets) ? catalog.presets : []
+    catalog.presets = encounters.map(encounter => {
+      const original = originalPresets.find((preset: any) => String(preset.id || '') === encounter.id) || {}
+      return {
+        ...original,
+        id: encounter.id,
+        difficulty: encounter.difficulty || 'standard',
+        enemies: encounter.enemies.map(enemy => {
+          const originalEnemy = (Array.isArray(original.enemies) ? original.enemies : []).find((item: any) => String(item.id || '') === enemy.id) || {}
+          return {
+            ...originalEnemy,
+            id: enemy.id,
+            profile_id: enemy.profile_id || originalEnemy.profile_id || enemy.id,
+            hp: Math.max(1, Number(enemy.hp || 1)),
+            armor_class: Math.max(1, Number(enemy.armor_class || 10)),
+            attacks: enemy.attacks.map(attack => {
+              const originalAttack = (Array.isArray(originalEnemy.attacks) ? originalEnemy.attacks : []).find((item: any) => String(item.id || '') === attack.id) || {}
+              return { ...originalAttack, id: attack.id, damage: attack.damage || '1d4', attack_bonus: Number(attack.attack_bonus || 0) }
+            }),
+          }
+        }),
+      }
+    })
+    const catalogId = String(catalog.id || catalogPath.split('/').pop()?.replace(/\.json$/, '') || 'adventure_encounters')
+    const encounterLocalePath = `locales/${locale.value}/encounters/${catalogId}.json`
+    const encounterLocale = (files[encounterLocalePath] ||= {
+      locale_schema_version: 1,
+      locale: locale.value,
+      target: { kind: 'encounter_catalog', id: catalogId },
+      fields: { name: catalogId, labels: { presets: {} } },
+    }) as Record<string, any>
+    const fields = (encounterLocale.fields ||= {}) as Record<string, any>
+    const labels = (fields.labels ||= {}) as Record<string, any>
+    const presetLabels = (labels.presets ||= {}) as Record<string, any>
+    encounters.forEach(encounter => {
+      presetLabels[encounter.id] = { ...(presetLabels[encounter.id] || {}), name: encounter.name, description: encounter.description }
+    })
+  }
   tutorial.name = editorForm.value.name.trim()
   tutorial.summary = editorForm.value.summary.trim()
   tutorial.chapters ||= {}
@@ -403,6 +470,41 @@ function removeStep(stepId: string) {
 
 function removeChoice(choiceId: string) {
   editorChoices.value = editorChoices.value.filter(choice => choice.id !== choiceId)
+}
+
+function addEncounter() {
+  const catalogPath = editorEncounters.value[0]?.catalog_path || 'content/encounters/adventure_encounters.json'
+  editorEncounters.value.push({
+    id: `encounter_${Date.now().toString(36)}`,
+    name: '新遭遇', difficulty: 'standard', description: '', catalog_path: catalogPath,
+    enemies: [],
+  })
+}
+
+function removeEncounter(encounterId: string) {
+  editorEncounters.value = editorEncounters.value.filter(encounter => encounter.id !== encounterId)
+  editorSteps.value.forEach(step => { if (step.encounter_preset_id === encounterId) step.encounter_preset_id = '' })
+}
+
+function addEnemy(encounter: EditorEncounter) {
+  encounter.enemies.push({
+    id: `enemy_${Date.now().toString(36)}`,
+    profile_id: 'custom_enemy', hp: 10, armor_class: 12,
+    attacks: [{ id: 'attack', damage: '1d6+2', attack_bonus: 4 }],
+  })
+}
+
+function removeEnemy(encounter: EditorEncounter, enemyId: string) {
+  encounter.enemies = encounter.enemies.filter(enemy => enemy.id !== enemyId)
+}
+
+function addAttack(enemy: EditorEnemy) {
+  enemy.attacks.push({ id: `attack_${enemy.attacks.length + 1}`, damage: '1d6+2', attack_bonus: 4 })
+}
+
+function removeAttack(enemy: EditorEnemy, attackId: string) {
+  if (enemy.attacks.length <= 1) return
+  enemy.attacks = enemy.attacks.filter(attack => attack.id !== attackId)
 }
 
 async function savePackage() {
@@ -609,6 +711,45 @@ function policyLabel(policy: string) {
           <label v-if="editorForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<input v-model="editorForm.recommended_world_id"></label>
         </div>
         <label>{{ t('summary') }}<textarea v-model="editorForm.summary" rows="3"></textarea></label>
+        <section class="adventure-encounter-editor">
+          <header class="adventure-editor-section-head">
+            <div>
+              <strong>{{ String(locale).startsWith('zh') ? '战斗遭遇与怪物' : 'Combat encounters and monsters' }}</strong>
+              <small>{{ String(locale).startsWith('zh') ? '遭遇是冒险中的可复用战斗配置；规则结算仍由 D&D 运行时负责。' : 'Encounters are reusable combat configurations; the D&D runtime owns resolution.' }}</small>
+            </div>
+            <button type="button" class="secondary" @click="addEncounter">{{ String(locale).startsWith('zh') ? '新增遭遇' : 'Add encounter' }}</button>
+          </header>
+          <p v-if="!editorEncounters.length" class="muted">{{ String(locale).startsWith('zh') ? '还没有遭遇。新增后可在步骤中绑定它。' : 'No encounters yet. Add one, then bind it to a step.' }}</p>
+          <article v-for="encounter in editorEncounters" :key="encounter.id" class="adventure-encounter-card">
+            <header>
+              <input v-model="encounter.name" :placeholder="String(locale).startsWith('zh') ? '遭遇名称（显示用）' : 'Encounter name'">
+              <select v-model="encounter.difficulty">
+                <option value="story">{{ String(locale).startsWith('zh') ? '剧情' : 'Story' }}</option>
+                <option value="standard">{{ String(locale).startsWith('zh') ? '标准' : 'Standard' }}</option>
+                <option value="challenging">{{ String(locale).startsWith('zh') ? '挑战' : 'Challenging' }}</option>
+                <option value="lethal">{{ String(locale).startsWith('zh') ? '致命' : 'Lethal' }}</option>
+              </select>
+              <button type="button" class="link-button danger-text" @click="removeEncounter(encounter.id)">{{ String(locale).startsWith('zh') ? '删除遭遇' : 'Delete encounter' }}</button>
+            </header>
+            <textarea v-model="encounter.description" rows="2" :placeholder="String(locale).startsWith('zh') ? '遭遇说明（不会替代世界书）' : 'Encounter description (does not replace the worldbook)'"></textarea>
+            <div v-for="enemy in encounter.enemies" :key="enemy.id" class="adventure-enemy-editor">
+              <input v-model="enemy.profile_id" :placeholder="String(locale).startsWith('zh') ? '怪物类型 ID，例如 werewolf' : 'Monster profile id, e.g. werewolf'">
+              <label>{{ String(locale).startsWith('zh') ? 'HP' : 'HP' }}<input v-model.number="enemy.hp" type="number" min="1"></label>
+              <label>{{ String(locale).startsWith('zh') ? 'AC' : 'AC' }}<input v-model.number="enemy.armor_class" type="number" min="1"></label>
+              <button type="button" class="link-button danger-text" @click="removeEnemy(encounter, enemy.id)">{{ String(locale).startsWith('zh') ? '删除怪物' : 'Delete monster' }}</button>
+              <div class="adventure-attack-editor">
+                <div v-for="attack in enemy.attacks" :key="attack.id">
+                  <input v-model="attack.id" :placeholder="String(locale).startsWith('zh') ? '攻击 ID' : 'Attack id'">
+                  <input v-model="attack.damage" placeholder="1d6+2">
+                  <label>+<input v-model.number="attack.attack_bonus" type="number"></label>
+                  <button type="button" class="link-button danger-text" @click="removeAttack(enemy, attack.id)">{{ String(locale).startsWith('zh') ? '删攻击' : 'Remove attack' }}</button>
+                </div>
+                <button type="button" class="link-button" @click="addAttack(enemy)">{{ String(locale).startsWith('zh') ? '新增攻击' : 'Add attack' }}</button>
+              </div>
+            </div>
+            <button type="button" class="link-button" @click="addEnemy(encounter)">{{ String(locale).startsWith('zh') ? '新增怪物' : 'Add monster' }}</button>
+          </article>
+        </section>
         <div v-for="chapter in editorChapters" :key="chapter.id" class="adventure-chapter-editor">
           <div class="adventure-editor-section-head"><input v-model="chapter.name" :aria-label="t('adventureChapter')"><button v-if="editorChapters.length > 1" type="button" class="link-button danger-text" @click="removeChapter(chapter.id)">{{ t('deleteChapter') }}</button></div>
           <div class="adventure-step-list">
