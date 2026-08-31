@@ -30,6 +30,7 @@ const aiPrompt = ref('')
 const pendingAiDraft = ref<any | null>(null)
 const editingCreation = ref(false)
 const advancedOpen = ref(false)
+const editorPanel = ref<'overview' | 'flow' | 'encounters' | 'preview' | 'advanced'>('overview')
 const createForm = ref({ directory_id: '', adventure_id: '', name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
 const editorForm = ref({ name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
 type EditorStep = { id: string; chapter_id: string; scene_ref: string; requires: string; encounter_preset_id: string; title: string; narration: string; objective: string; hint: string }
@@ -278,6 +279,7 @@ async function openEditor(item: AdventureSummary, asCreationStep = false) {
     editingFiles.value = result.adventure.files
     filesJson.value = JSON.stringify(result.adventure.files, null, 2)
     advancedOpen.value = false
+    editorPanel.value = 'overview'
     hydrateStructuredEditor()
   } catch (cause: unknown) {
     error.value = errorMessage(cause)
@@ -788,6 +790,18 @@ function policyLabel(policy: string) {
     <Modal v-if="editing" :title="editingCreation ? `${t('editAdventurePackage')} · 3/3` : t('editAdventurePackage')" dialog-class="adventure-editor-dialog" @close="cancelEditor">
       <p class="muted">{{ t('adventureStructuredEditorHint') }}</p>
       <section class="adventure-editor-form">
+        <nav class="adventure-editor-nav" aria-label="Adventure editor sections">
+          <button type="button" :class="{ active: editorPanel === 'overview' }" @click="editorPanel = 'overview'">{{ String(locale).startsWith('zh') ? '概览' : 'Overview' }}</button>
+          <button type="button" :class="{ active: editorPanel === 'flow' }" @click="editorPanel = 'flow'">{{ String(locale).startsWith('zh') ? '流程' : 'Flow' }} <span>{{ editorSteps.length }}</span><em v-if="editorGraphIssues.length">!</em></button>
+          <button type="button" :class="{ active: editorPanel === 'encounters' }" @click="editorPanel = 'encounters'">{{ String(locale).startsWith('zh') ? '遭遇' : 'Encounters' }} <span>{{ editorEncounters.length }}</span></button>
+          <button type="button" :class="{ active: editorPanel === 'preview' }" @click="editorPanel = 'preview'">{{ String(locale).startsWith('zh') ? '预览' : 'Preview' }}</button>
+          <button type="button" :class="{ active: editorPanel === 'advanced' }" @click="editorPanel = 'advanced'">JSON</button>
+        </nav>
+        <div v-if="editorGraphIssues.length" class="adventure-editor-issue-strip">
+          <strong>{{ String(locale).startsWith('zh') ? `${editorGraphIssues.length} 个流程问题` : `${editorGraphIssues.length} flow issues` }}</strong>
+          <button type="button" @click="editorPanel = 'flow'">{{ String(locale).startsWith('zh') ? '去流程区处理' : 'Review flow' }}</button>
+        </div>
+        <div v-if="editorPanel === 'overview'" class="adventure-editor-panel-content">
         <div class="grid-2">
           <label>{{ t('adventurePackageName') }}<input v-model="editorForm.name"></label>
           <label>{{ t('version') }}<input v-model="editorForm.version"></label>
@@ -808,7 +822,8 @@ function policyLabel(policy: string) {
           <ul><li v-for="issue in editorGraphIssues" :key="issue">{{ issue }}</li></ul>
           <small>{{ String(locale).startsWith('zh') ? '保存时服务端还会执行完整校验。' : 'The server performs a final validation when you save.' }}</small>
         </section>
-        <section class="adventure-encounter-editor">
+        </div>
+        <section v-if="editorPanel === 'encounters'" class="adventure-encounter-editor adventure-editor-panel-content">
           <header class="adventure-editor-section-head">
             <div>
               <strong>{{ String(locale).startsWith('zh') ? '战斗遭遇与怪物' : 'Combat encounters and monsters' }}</strong>
@@ -847,6 +862,7 @@ function policyLabel(policy: string) {
             <button type="button" class="link-button" @click="addEnemy(encounter)">{{ String(locale).startsWith('zh') ? '新增怪物' : 'Add monster' }}</button>
           </article>
         </section>
+        <div v-if="editorPanel === 'flow'" class="adventure-editor-panel-content adventure-flow-panel">
         <div v-for="chapter in editorChapters" :key="chapter.id" class="adventure-chapter-editor">
           <div class="adventure-editor-section-head"><input v-model="chapter.name" :aria-label="t('adventureChapter')"><button v-if="editorChapters.length > 1" type="button" class="link-button danger-text" @click="removeChapter(chapter.id)">{{ t('deleteChapter') }}</button></div>
           <div class="adventure-step-list">
@@ -886,8 +902,9 @@ function policyLabel(policy: string) {
           </div>
         </div>
         <div class="adventure-editor-actions"><button type="button" class="secondary" @click="addChapter">{{ t('addChapter') }}</button><button type="button" class="secondary" @click="addStep">{{ t('addStep') }}</button></div>
+        </div>
       </section>
-      <section class="adventure-structure-summary">
+      <section v-if="editorPanel === 'preview'" class="adventure-structure-summary adventure-editor-panel-content">
         <header><strong>冒险包结构</strong><span>{{ Object.keys(editingFiles).length }} 个 JSON 文件</span></header>
         <div v-for="group in editingFileGroups" :key="group.label" class="adventure-file-group">
           <b>{{ group.label }}（{{ group.paths.length }}）</b>
@@ -895,7 +912,7 @@ function policyLabel(policy: string) {
         </div>
         <small>冒险包由清单、剧情图、场景/NPC/遭遇等内容和多语言文本组成；规则结算仍由规则系统负责。</small>
       </section>
-      <details :open="advancedOpen" class="adventure-advanced-editor">
+      <details v-if="editorPanel === 'advanced'" class="adventure-advanced-editor adventure-editor-panel-content" open>
         <summary @click.prevent="advancedOpen = !advancedOpen">{{ t('advancedJsonEditor') }}</summary>
         <p class="muted">{{ t('adventureEditorHint') }}</p>
         <textarea v-model="filesJson" class="adventure-package-json" rows="24" spellcheck="false" />
