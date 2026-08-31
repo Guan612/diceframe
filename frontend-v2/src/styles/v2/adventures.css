@@ -193,6 +193,43 @@
   font-weight: 800;
 }
 
+.adventure-editor-ai-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, .7fr) minmax(0, 1.3fr);
+  gap: 12px;
+  align-items: center;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 28%, var(--df-border-soft));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--df-accent) 6%, var(--df-surface-2));
+}
+
+.adventure-editor-ai-copy,
+.adventure-editor-ai-controls {
+  display: grid;
+  gap: 5px;
+}
+
+.adventure-editor-ai-copy small {
+  color: var(--df-text-muted);
+  line-height: 1.45;
+}
+
+.adventure-editor-ai-controls {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+
+.adventure-editor-ai-controls textarea {
+  min-height: 44px;
+  resize: vertical;
+}
+
+.adventure-editor-ai-controls button {
+  align-self: stretch;
+  white-space: nowrap;
+}
+
 .adventure-editor-issue-strip {
   display: flex;
   align-items: center;
@@ -568,6 +605,11 @@
 
   .adventure-editor-dialog {
     width: 96vw;
+  }
+
+  .adventure-editor-ai-bar,
+  .adventure-editor-ai-controls {
+    grid-template-columns: 1fr;
   }
 
   .adventure-create-progress {

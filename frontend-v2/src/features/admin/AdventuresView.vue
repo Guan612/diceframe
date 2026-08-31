@@ -31,6 +31,8 @@ const pendingAiDraft = ref<any | null>(null)
 const editingCreation = ref(false)
 const advancedOpen = ref(false)
 const editorPanel = ref<'overview' | 'flow' | 'encounters' | 'preview' | 'advanced'>('overview')
+const editorAiPrompt = ref('')
+const editorAiBusy = ref(false)
 const createForm = ref({ directory_id: '', adventure_id: '', name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
 const editorForm = ref({ name: '', summary: '', version: '1.0.0', world_policy: 'portable', recommended_world_id: '', estimated_minutes: 60 })
 type EditorStep = { id: string; chapter_id: string; scene_ref: string; requires: string; encounter_preset_id: string; title: string; narration: string; objective: string; hint: string }
@@ -141,6 +143,8 @@ function openAiDraft() {
 type AiDraftEnemy = { profile_id?: string; hp?: number; armor_class?: number; attacks?: Array<{ id?: string; damage?: string; attack_bonus?: number }> }
 type AiDraftEncounter = { name?: string; difficulty?: string; description?: string; stepIndex?: number | null; enemies?: AiDraftEnemy[] }
 type AiDraft = { name?: string; summary?: string; encounters?: AiDraftEncounter[]; chapters?: Array<{ name?: string; steps?: Array<{ title?: string; narration?: string; objective?: string; hint?: string; choices?: Array<{ label?: string; description?: string; nextStepIndex?: number | null }> }> }> }
+type AiOverviewDraft = { name?: string; summary?: string; world_policy?: string; recommended_world_id?: string; estimated_minutes?: number }
+type AiEditorDraft = AiDraft & AiOverviewDraft
 const aiDraftCounts = computed(() => {
   const chapters = pendingAiDraft.value?.chapters || []
   return {
@@ -150,16 +154,9 @@ const aiDraftCounts = computed(() => {
   }
 })
 
-function applyAiDraft(draft: AiDraft) {
-  const chapters = Array.isArray(draft.chapters) ? draft.chapters : []
-  editorForm.value.name = String(draft.name || editorForm.value.name)
-  editorForm.value.summary = String(draft.summary || editorForm.value.summary)
+function normalizeAiEncounters(encounters: AiDraftEncounter[]) {
   const defaultCatalogPath = editorEncounters.value[0]?.catalog_path || 'content/encounters/adventure_encounters.json'
-  const scenes = editorScenes.value
-  editorChapters.value = chapters.map((chapter, chapterIndex) => ({ id: `chapter_${chapterIndex + 1}`, name: String(chapter.name || `第 ${chapterIndex + 1} 章`) }))
-  editorSteps.value = []
-  editorChoices.value = []
-  editorEncounters.value = (Array.isArray(draft.encounters) ? draft.encounters : []).map((encounter, encounterIndex) => ({
+  return encounters.map((encounter, encounterIndex) => ({
     id: `encounter_${encounterIndex + 1}`,
     name: String(encounter.name || `遭遇 ${encounterIndex + 1}`),
     difficulty: ['story', 'standard', 'challenging', 'lethal'].includes(String(encounter.difficulty)) ? String(encounter.difficulty) : 'standard',
@@ -177,6 +174,23 @@ function applyAiDraft(draft: AiDraft) {
       })),
     })),
   }))
+}
+
+function applyAiEncountersDraft(encounters: AiDraftEncounter[]) {
+  editorEncounters.value = normalizeAiEncounters(encounters)
+  editorSteps.value.forEach(step => { step.encounter_preset_id = '' })
+  editorEncounters.value.forEach((encounter, encounterIndex) => {
+    const source = encounters[encounterIndex]
+    const stepIndex = source && typeof source.stepIndex === 'number' ? source.stepIndex : -1
+    if (stepIndex >= 0 && stepIndex < editorSteps.value.length) editorSteps.value[stepIndex].encounter_preset_id = encounter.id
+  })
+}
+
+function applyAiFlowDraft(chapters: NonNullable<AiDraft['chapters']>) {
+  const scenes = editorScenes.value
+  editorChapters.value = chapters.map((chapter, chapterIndex) => ({ id: `chapter_${chapterIndex + 1}`, name: String(chapter.name || `第 ${chapterIndex + 1} 章`) }))
+  editorSteps.value = []
+  editorChoices.value = []
   const stepIds: string[] = []
   chapters.forEach((chapter, chapterIndex) => (chapter.steps || []).forEach((step, stepIndex) => {
     const id = `step_${chapterIndex + 1}_${stepIndex + 1}`
@@ -193,10 +207,7 @@ function applyAiDraft(draft: AiDraft) {
       editorChoices.value.push({ id: `choice_${++choiceIndex}`, step_id: currentStep, next_step_id: target, label: String(choice.label || '新选项'), description: String(choice.description || '') })
     })
   }))
-  // AI drafts are allowed to omit links (or return null nextStepIndex), but
-  // the persisted graph still needs a playable path.  Add conservative
-  // linear fallback edges only for steps with no incoming edge; authored
-  // branches remain untouched and can be edited before publishing.
+  // Keep the graph playable even when the model omits links.
   const incoming = new Set(editorChoices.value.map(choice => choice.next_step_id).filter(Boolean))
   stepIds.forEach((stepId, index) => {
     if (index > 0 && !incoming.has(stepId)) {
@@ -205,11 +216,85 @@ function applyAiDraft(draft: AiDraft) {
     }
   })
   editorStartStepId.value = editorSteps.value[0]?.id || ''
-  editorEncounters.value.forEach((encounter, encounterIndex) => {
-    const source = (Array.isArray(draft.encounters) ? draft.encounters : [])[encounterIndex]
-    const stepIndex = source && typeof source.stepIndex === 'number' ? source.stepIndex : -1
-    if (stepIndex >= 0 && stepIndex < editorSteps.value.length) editorSteps.value[stepIndex].encounter_preset_id = encounter.id
-  })
+}
+
+function applyAiDraft(draft: AiDraft) {
+  const chapters = Array.isArray(draft.chapters) ? draft.chapters : []
+  editorForm.value.name = String(draft.name || editorForm.value.name)
+  editorForm.value.summary = String(draft.summary || editorForm.value.summary)
+  applyAiFlowDraft(chapters)
+  applyAiEncountersDraft(Array.isArray(draft.encounters) ? draft.encounters : [])
+}
+
+function applyAiOverviewDraft(draft: AiOverviewDraft) {
+  if (draft.name) editorForm.value.name = String(draft.name)
+  if (draft.summary) editorForm.value.summary = String(draft.summary)
+  if (['portable', 'agnostic', 'fixed'].includes(String(draft.world_policy))) editorForm.value.world_policy = String(draft.world_policy)
+  if (draft.recommended_world_id !== undefined) editorForm.value.recommended_world_id = String(draft.recommended_world_id || '')
+  if (draft.estimated_minutes !== undefined) editorForm.value.estimated_minutes = Math.max(1, Math.min(999, Number(draft.estimated_minutes) || 60))
+}
+
+function editorAiPanelTitle() {
+  const zh = String(locale.value).startsWith('zh')
+  if (editorPanel.value === 'overview') return zh ? '生成概览草稿' : 'Generate overview draft'
+  if (editorPanel.value === 'flow') return zh ? '生成流程草稿' : 'Generate flow draft'
+  return zh ? '生成遭遇草稿' : 'Generate encounter draft'
+}
+
+function editorAiPlaceholder() {
+  const zh = String(locale.value).startsWith('zh')
+  if (editorPanel.value === 'overview') return zh ? '例如：一场 60 分钟、适合新手的森林调查冒险。' : 'e.g. A 60-minute beginner adventure investigating a forest.'
+  if (editorPanel.value === 'flow') return zh ? '例如：三章结构，包含一个分支和一个有明确目标的结局。' : 'e.g. Three chapters, one meaningful branch, and a clear ending goal.'
+  return zh ? '例如：第二章的哥布林伏击，2 只普通哥布林，带弯刀攻击。' : 'e.g. A chapter-two goblin ambush with two standard goblins using scimitars.'
+}
+
+async function generateEditorPanelDraft() {
+  const promptText = editorAiPrompt.value.trim()
+  if (!promptText || editorAiBusy.value || !editing.value) return
+  const targetPanel = editorPanel.value
+  editorAiBusy.value = true
+  error.value = ''
+  const zh = String(locale.value).startsWith('zh')
+  try {
+    let shape = ''
+    if (targetPanel === 'overview') shape = '{"name":"","summary":"","world_policy":"portable","recommended_world_id":"","estimated_minutes":60}'
+    else if (targetPanel === 'flow') shape = '{"chapters":[{"name":"","steps":[{"title":"","narration":"","objective":"","hint":"","choices":[{"label":"","description":"","nextStepIndex":null}]}]}]}'
+    else shape = '{"encounters":[{"name":"","difficulty":"standard","description":"","stepIndex":null,"enemies":[{"profile_id":"goblin","hp":7,"armor_class":12,"attacks":[{"id":"scimitar","damage":"1d6+2","attack_bonus":4}]}]}]}'
+    const result = await api<{ ok: boolean; text?: string; error?: string }>('/generate-text', {
+      method: 'POST',
+      body: JSON.stringify({ language: locale.value, prompt: `${zh ? '只生成当前编辑器分区的 JSON 草稿。' : 'Generate JSON for the current editor section only.'}\n用户需求：${promptText}\n格式：${shape}\n不要 Markdown、解释或代码围栏。`, system_hint: zh ? '你是冒险包编辑助手，只输出合法 JSON。' : 'You are an adventure package editor. Output valid JSON only.' }),
+    })
+    if (!result.ok || !result.text) throw new Error(result.error || (zh ? 'AI 生成失败' : 'AI generation failed'))
+    const raw = result.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
+    const draft = JSON.parse(raw) as AiEditorDraft
+    const replacingExisting = (targetPanel === 'flow' && editorSteps.value.length > 0)
+      || (targetPanel === 'encounters' && editorEncounters.value.length > 0)
+    if (replacingExisting) {
+      const accepted = await confirm({
+        title: zh ? '替换当前分区草稿？' : 'Replace this section draft?',
+        content: zh ? 'AI 结果会替换当前分区尚未保存的内容；其它分区不会改变。是否继续？' : 'The AI result will replace unsaved content in this section only. Other sections are unchanged. Continue?',
+        positiveText: zh ? '继续生成' : 'Continue',
+        type: 'warning',
+      })
+      if (!accepted) return
+    }
+    if (targetPanel === 'overview') applyAiOverviewDraft(draft)
+    else if (targetPanel === 'flow') {
+      const chapters = Array.isArray(draft.chapters) ? draft.chapters : []
+      if (!chapters.length) throw new Error(zh ? 'AI 没有返回流程章节' : 'AI returned no flow chapters')
+      applyAiFlowDraft(chapters)
+    } else {
+      const encounters = Array.isArray(draft.encounters) ? draft.encounters : []
+      if (!encounters.length) throw new Error(zh ? 'AI 没有返回遭遇' : 'AI returned no encounters')
+      applyAiEncountersDraft(encounters)
+    }
+    editorAiPrompt.value = ''
+    toast.success(zh ? '草稿已填入当前分区，请检查后保存' : 'Draft inserted into this section. Review before saving.')
+  } catch (cause: unknown) {
+    error.value = cause instanceof SyntaxError ? (zh ? 'AI 返回的 JSON 无效' : 'AI returned invalid JSON') : errorMessage(cause)
+  } finally {
+    editorAiBusy.value = false
+  }
 }
 
 function worldLabel(world: WorldSummary) {
@@ -305,6 +390,8 @@ async function copyPackage() {
 
 async function openEditor(item: AdventureSummary, asCreationStep = false) {
   error.value = ''
+  editorAiPrompt.value = ''
+  editorAiBusy.value = false
   try {
     const result = await api<AdventureDetailResponse>(
       `/adventures/${encodeURIComponent(item.adventure_id)}?language=${encodeURIComponent(locale.value)}`,
@@ -832,6 +919,16 @@ function policyLabel(policy: string) {
           <button type="button" :class="{ active: editorPanel === 'preview' }" @click="editorPanel = 'preview'">{{ String(locale).startsWith('zh') ? '预览' : 'Preview' }}</button>
           <button type="button" :class="{ active: editorPanel === 'advanced' }" @click="editorPanel = 'advanced'">JSON</button>
         </nav>
+        <section v-if="['overview', 'flow', 'encounters'].includes(editorPanel)" class="adventure-editor-ai-bar">
+          <div class="adventure-editor-ai-copy">
+            <strong>{{ editorAiPanelTitle() }}</strong>
+            <small>{{ String(locale).startsWith('zh') ? '用自然语言描述即可。AI 只会修改当前分区，结果先填入草稿，检查无误后再保存。' : 'Describe what you want in plain language. Only this section is changed; review the draft before saving.' }}</small>
+          </div>
+          <div class="adventure-editor-ai-controls">
+            <textarea v-model="editorAiPrompt" rows="2" :placeholder="editorAiPlaceholder()" :disabled="editorAiBusy"></textarea>
+            <button type="button" class="secondary" :disabled="editorAiBusy || !editorAiPrompt.trim()" @click="generateEditorPanelDraft">{{ editorAiBusy ? (String(locale).startsWith('zh') ? '生成中…' : 'Generating…') : (String(locale).startsWith('zh') ? 'AI 生成并填入' : 'Generate with AI') }}</button>
+          </div>
+        </section>
         <div v-if="editorGraphIssues.length" class="adventure-editor-issue-strip">
           <strong>{{ String(locale).startsWith('zh') ? `${editorGraphIssues.length} 个流程问题` : `${editorGraphIssues.length} flow issues` }}</strong>
           <button type="button" @click="editorPanel = 'flow'">{{ String(locale).startsWith('zh') ? '去流程区处理' : 'Review flow' }}</button>
