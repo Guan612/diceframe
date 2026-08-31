@@ -43,6 +43,7 @@ const editorChoices = ref<EditorChoice[]>([])
 const editorChapters = ref<EditorChapter[]>([])
 const editorScenes = ref<EditorScene[]>([])
 const editorEncounters = ref<EditorEncounter[]>([])
+const editorStartStepId = ref('')
 
 const builtinCount = computed(() => items.value.filter(item => !item.custom).length)
 const customCount = computed(() => items.value.filter(item => item.custom).length)
@@ -132,6 +133,7 @@ function applyAiDraft(draft: AiDraft) {
       editorChoices.value.push({ id: `choice_${++choiceIndex}`, step_id: currentStep, next_step_id: target, label: String(choice.label || '新选项'), description: String(choice.description || '') })
     })
   }))
+  editorStartStepId.value = editorSteps.value[0]?.id || ''
 }
 
 async function generateDraft() {
@@ -285,6 +287,7 @@ function hydrateStructuredEditor() {
     title: String(stepTexts[step.id]?.title || '未命名步骤'), narration: String(stepTexts[step.id]?.narration || ''),
     objective: String(stepTexts[step.id]?.objective || ''), hint: String(stepTexts[step.id]?.hint || ''),
   }))
+  editorStartStepId.value = String(adventure.start_step_id || editorSteps.value[0]?.id || '')
   const choiceTexts = (tutorial.choices || {}) as Record<string, any>
   editorChoices.value = (Array.isArray(adventure.choices) ? adventure.choices : []).map((choice: any) => ({
     id: String(choice.id || ''), step_id: String(choice.step_id || ''), next_step_id: String(choice.next_step_id || ''),
@@ -338,7 +341,7 @@ function syncStructuredEditor() {
     const original = originalChapters.find((candidate: any) => candidate.id === chapter.id) || {}
     return { ...original, id: chapter.id, step_ids: editorSteps.value.filter(step => step.chapter_id === chapter.id).map(step => step.id) }
   })
-  adventure.start_step_id = editorSteps.value[0]?.id || adventure.start_step_id
+  adventure.start_step_id = editorStartStepId.value || editorSteps.value[0]?.id || adventure.start_step_id
   adventure.steps = editorSteps.value.map(step => {
     const original = (Array.isArray(adventure.steps) ? adventure.steps : []).find((candidate: any) => candidate.id === step.id) || {}
     return { ...original, id: step.id, chapter_id: step.chapter_id, scene_ref: step.scene_ref, requires: step.requires, encounter_preset_id: step.encounter_preset_id || undefined, choice_ids: editorChoices.value.filter(choice => choice.step_id === step.id).map(choice => choice.id) }
@@ -466,6 +469,7 @@ function removeStep(stepId: string) {
   if (editorSteps.value.length <= 1) return
   editorSteps.value = editorSteps.value.filter(step => step.id !== stepId)
   editorChoices.value = editorChoices.value.filter(choice => choice.step_id !== stepId && choice.next_step_id !== stepId)
+  if (editorStartStepId.value === stepId) editorStartStepId.value = editorSteps.value[0]?.id || ''
 }
 
 function removeChoice(choiceId: string) {
@@ -711,6 +715,13 @@ function policyLabel(policy: string) {
           <label v-if="editorForm.world_policy === 'fixed'">{{ t('recommendedWorldBook') }}<input v-model="editorForm.recommended_world_id"></label>
         </div>
         <label>{{ t('summary') }}<textarea v-model="editorForm.summary" rows="3"></textarea></label>
+        <label class="adventure-start-step">
+          <span>{{ String(locale).startsWith('zh') ? '冒险起点' : 'Adventure start' }}</span>
+          <select v-model="editorStartStepId">
+            <option v-for="step in editorSteps" :key="step.id" :value="step.id">{{ step.title || t('unnamedStep') }}</option>
+          </select>
+          <small>{{ String(locale).startsWith('zh') ? '新增或移动步骤不会自动改变入口；请在这里明确选择第一步。' : 'Adding or moving steps will not silently change the entry point.' }}</small>
+        </label>
         <section class="adventure-encounter-editor">
           <header class="adventure-editor-section-head">
             <div>
