@@ -19,6 +19,7 @@ from src.engine.game_instance import GameRegistry
 from src.llm.client import LLMResponse
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
+from src.memory.delta import MemoryStore
 from src.webui.api import WebAPI
 
 
@@ -130,6 +131,8 @@ def audit_api(tmp_path):
     registry = GameRegistry(data_dir / "saves")
     lorebook = LorebookStore(data_dir / "lorebook.db")
     lorebook.open()
+    memory = MemoryStore(data_dir / "memory.db")
+    memory.open()
     llm = ScriptedLLMClient([
         "开场：甲与乙来到遗迹大厅。\n---\nSCENE:大厅\nQUICK_ACTIONS:观察|前进",
         (
@@ -155,7 +158,7 @@ def audit_api(tmp_path):
         llm_client=llm,
         lorebook_matcher=KeywordMatcher(),
         lorebook_store=lorebook,
-        memory_store=None,
+        memory_store=memory,
         prompts_dir=prompts_dir,
         rules_dir=rules_dir,
         worlds_dir=worlds_dir,
@@ -163,7 +166,7 @@ def audit_api(tmp_path):
     api = WebAPI(
         registry=registry,
         lorebook=lorebook,
-        memory=None,
+        memory=memory,
         rules_dir=rules_dir,
         handler=handler,
         llm_client=llm,
@@ -173,6 +176,7 @@ def audit_api(tmp_path):
         yield api, registry, llm
     finally:
         lorebook.close()
+        memory.close()
 
 
 @pytest.mark.asyncio
@@ -277,6 +281,14 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     assert await reloaded.switch_swipe(1, 0) is True
     assert reloaded.log[-1]["current_swipe"] == 0
 
+    # The durable projection is session-scoped.  A restart reuses the public
+    # save key, but must not recall facts written by the previous run.
+    await api._mem.apply_delta(str(reloaded.game_key), {
+        "add": [{"entity": "前世线索", "relation": "记录", "value": "上一局发生过的事"}],
+        "update": [], "forget": [],
+    }, reloaded.round_number)
+    assert api._mem.list_entries(str(reloaded.game_key))
+
     # 重开保留角色卡并清掉运行态；重置清空角色，保持 seed，可再由 GM 加人。
     restarted = await api.restart_game(game_key)
     assert restarted["ok"] is True
@@ -286,6 +298,12 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     assert after_restart.get_character_sheet(uid_gm)["hp"] == after_restart.get_character_sheet(uid_gm)["max_hp"]
     assert after_restart.pending_payments == []
     assert after_restart.scene == "新大厅"
+    assert api._mem.list_entries(str(after_restart.game_key)) == []
+
+    await api._mem.apply_delta(str(after_restart.game_key), {
+        "add": [{"entity": "另一条前世线索", "relation": "记录", "value": "不应带入重置"}],
+        "update": [], "forget": [],
+    }, after_restart.round_number)
 
     old_seed = after_restart.seed_code
     reset = await api.reset_game(game_key)
@@ -296,6 +314,7 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     assert after_reset.players == {}
     assert after_reset.pending_payments == []
     assert after_reset.scene == "空大厅"
+    assert api._mem.list_entries(str(after_reset.game_key)) == []
 
 
 @pytest.mark.asyncio

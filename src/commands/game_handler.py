@@ -116,6 +116,7 @@ class GameHandler:
             self._load_world_template,
             narrative_max_tokens,
             brief_max_tokens,
+            self.memory_store,
         )
         self._story_recap = StoryRecapGenerator(self.llm_client, brief_max_tokens)
         self._kp_questions = KPQuestionResponder(

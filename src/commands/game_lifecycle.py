@@ -37,6 +37,7 @@ class GameLifecycle:
         load_world_template: Callable[[str, str], dict | None],
         narrative_max_tokens: int,
         brief_max_tokens: int,
+        memory_store: Any | None = None,
     ):
         self.registry = registry
         self.llm_client = llm_client
@@ -47,6 +48,28 @@ class GameLifecycle:
         self.load_world_template = load_world_template
         self.narrative_max_tokens = narrative_max_tokens
         self.brief_max_tokens = brief_max_tokens
+        self.memory_store = memory_store
+
+    async def _clear_session_memory(self, instance: GameInstance) -> None:
+        """Drop durable memories before starting a fresh run.
+
+        ``reset`` and ``restart`` preserve the save's public key.  Memory is
+        keyed by that value, therefore leaving the rows behind would make the
+        next run recall facts from a previous life.  Keep this integration
+        optional for lightweight/legacy handlers that do not configure a
+        MemoryStore.
+        """
+        clear = getattr(self.memory_store, "clear_game", None)
+        if not callable(clear):
+            return
+        try:
+            result = clear(str(instance.game_key))
+            if hasattr(result, "__await__"):
+                await result
+        except Exception:
+            logger.exception("清理重置前长期记忆失败: game=%s", instance.game_key)
+            # Do not start a new run when isolation cannot be guaranteed.
+            raise RuntimeError("无法清理本局长期记忆，已中止重置/重开") from None
 
     async def start_game(self, instance: GameInstance) -> str:
         """激活游戏，生成开场叙事，进入第一轮。"""
@@ -293,6 +316,7 @@ class GameLifecycle:
         seed = instance.seed_code
         rule_id = instance.rule_id
         language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
+        await self._clear_session_memory(instance)
         await instance.reset(keep_seed=True)
         instance = await self.create_game(
             instance.game_key, world_id=world_id, world_name=world_name,
@@ -320,6 +344,7 @@ class GameLifecycle:
         narrative_perspective = instance.narrative_perspective
         language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
 
+        await self._clear_session_memory(instance)
         await instance.reset(keep_seed=True)
         instance = await self.create_game(
             instance.game_key, world_id=world_id, world_name=world_name,
