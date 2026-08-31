@@ -841,31 +841,36 @@ function policyLabel(policy: string) {
           </header>
           <p v-if="!editorEncounters.length" class="muted">{{ String(locale).startsWith('zh') ? '还没有遭遇。新增后可在步骤中绑定它。' : 'No encounters yet. Add one, then bind it to a step.' }}</p>
           <article v-for="encounter in editorEncounters" :key="encounter.id" class="adventure-encounter-card">
-            <header>
-              <input v-model="encounter.name" :placeholder="String(locale).startsWith('zh') ? '遭遇名称（显示用）' : 'Encounter name'">
-              <select v-model="encounter.difficulty">
+            <header class="adventure-encounter-head">
+              <div class="adventure-encounter-title-fields">
+                <label>{{ String(locale).startsWith('zh') ? '遭遇名称' : 'Encounter name' }}<input v-model="encounter.name" :placeholder="String(locale).startsWith('zh') ? '例如：荆棘林伏击' : 'e.g. Thorn glade ambush'"></label>
+                <label>{{ String(locale).startsWith('zh') ? '难度' : 'Difficulty' }}<select v-model="encounter.difficulty">
                 <option value="story">{{ String(locale).startsWith('zh') ? '剧情' : 'Story' }}</option>
                 <option value="standard">{{ String(locale).startsWith('zh') ? '标准' : 'Standard' }}</option>
                 <option value="challenging">{{ String(locale).startsWith('zh') ? '挑战' : 'Challenging' }}</option>
                 <option value="lethal">{{ String(locale).startsWith('zh') ? '致命' : 'Lethal' }}</option>
-              </select>
+                </select></label>
+              </div>
               <button type="button" class="link-button danger-text" @click="removeEncounter(encounter.id)">{{ String(locale).startsWith('zh') ? '删除遭遇' : 'Delete encounter' }}</button>
             </header>
             <textarea v-model="encounter.description" rows="2" :placeholder="String(locale).startsWith('zh') ? '遭遇说明（不会替代世界书）' : 'Encounter description (does not replace the worldbook)'"></textarea>
-            <div v-for="enemy in encounter.enemies" :key="enemy.id" class="adventure-enemy-editor">
-              <input v-model="enemy.profile_id" :placeholder="String(locale).startsWith('zh') ? '怪物类型 ID，例如 werewolf' : 'Monster profile id, e.g. werewolf'">
-              <label>{{ String(locale).startsWith('zh') ? 'HP' : 'HP' }}<input v-model.number="enemy.hp" type="number" min="1"></label>
-              <label>{{ String(locale).startsWith('zh') ? 'AC' : 'AC' }}<input v-model.number="enemy.armor_class" type="number" min="1"></label>
-              <button type="button" class="link-button danger-text" @click="removeEnemy(encounter, enemy.id)">{{ String(locale).startsWith('zh') ? '删除怪物' : 'Delete monster' }}</button>
-              <div class="adventure-attack-editor">
-                <div v-for="attack in enemy.attacks" :key="attack.id">
-                  <input v-model="attack.id" :placeholder="String(locale).startsWith('zh') ? '攻击 ID' : 'Attack id'">
-                  <input v-model="attack.damage" placeholder="1d6+2">
-                  <label>+<input v-model.number="attack.attack_bonus" type="number"></label>
-                  <button type="button" class="link-button danger-text" @click="removeAttack(enemy, attack.id)">{{ String(locale).startsWith('zh') ? '删攻击' : 'Remove attack' }}</button>
-                </div>
-                <button type="button" class="link-button" @click="addAttack(enemy)">{{ String(locale).startsWith('zh') ? '新增攻击' : 'Add attack' }}</button>
+            <div class="adventure-enemy-list">
+            <article v-for="(enemy, enemyIndex) in encounter.enemies" :key="enemy.id" class="adventure-enemy-card">
+              <header class="adventure-enemy-head"><strong>{{ String(locale).startsWith('zh') ? `怪物 ${enemyIndex + 1}` : `Monster ${enemyIndex + 1}` }}</strong><button type="button" class="link-button danger-text" @click="removeEnemy(encounter, enemy.id)">{{ String(locale).startsWith('zh') ? '删除怪物' : 'Delete monster' }}</button></header>
+              <div class="adventure-enemy-stats">
+                <label>{{ String(locale).startsWith('zh') ? '怪物 ID' : 'Monster ID' }}<input v-model="enemy.profile_id" :placeholder="String(locale).startsWith('zh') ? '例如：goblin' : 'e.g. goblin'"></label>
+                <label>HP<input v-model.number="enemy.hp" type="number" min="1"></label>
+                <label>AC<input v-model.number="enemy.armor_class" type="number" min="1"></label>
               </div>
+              <section class="adventure-attack-editor"><header><strong>{{ String(locale).startsWith('zh') ? '攻击动作' : 'Attacks' }}</strong><button type="button" class="link-button" @click="addAttack(enemy)">{{ String(locale).startsWith('zh') ? '新增攻击' : 'Add attack' }}</button></header>
+                <div v-for="attack in enemy.attacks" :key="attack.id" class="adventure-attack-row">
+                  <label>{{ String(locale).startsWith('zh') ? '攻击 ID' : 'Attack ID' }}<input v-model="attack.id" placeholder="claw"></label>
+                  <label>{{ String(locale).startsWith('zh') ? '伤害骰' : 'Damage' }}<input v-model="attack.damage" placeholder="1d6+2"></label>
+                  <label>{{ String(locale).startsWith('zh') ? '命中加值' : 'Bonus' }}<input v-model.number="attack.attack_bonus" type="number"></label>
+                  <button type="button" class="link-button danger-text" @click="removeAttack(enemy, attack.id)">{{ String(locale).startsWith('zh') ? '删除' : 'Remove' }}</button>
+                </div>
+              </section>
+            </article>
             </div>
             <button type="button" class="link-button" @click="addEnemy(encounter)">{{ String(locale).startsWith('zh') ? '新增怪物' : 'Add monster' }}</button>
           </article>

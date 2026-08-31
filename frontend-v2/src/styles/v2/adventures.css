@@ -307,6 +307,90 @@
   font-size: 18px;
 }
 
+.adventure-encounter-card {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 26%, var(--df-border-soft));
+  border-radius: 10px;
+  background: var(--df-surface-1);
+}
+
+.adventure-encounter-head,
+.adventure-enemy-head,
+.adventure-attack-editor > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.adventure-encounter-title-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 10px;
+  flex: 1;
+}
+
+.adventure-encounter-title-fields label,
+.adventure-enemy-stats label,
+.adventure-attack-row label {
+  display: grid;
+  gap: 5px;
+  color: var(--df-text-muted);
+  font-size: 11px;
+}
+
+.adventure-encounter-head > .link-button,
+.adventure-enemy-head > .link-button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--df-danger, #d87567) 45%, transparent);
+  border-radius: 6px;
+}
+
+.adventure-enemy-list {
+  display: grid;
+  gap: 10px;
+}
+
+.adventure-enemy-card {
+  display: grid;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 8px;
+  background: var(--df-surface-2);
+}
+
+.adventure-enemy-head strong,
+.adventure-attack-editor > header strong {
+  color: var(--df-text);
+  font-size: 12px;
+}
+
+.adventure-enemy-stats {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 100px 100px;
+  gap: 8px;
+}
+
+.adventure-attack-editor {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--df-border-soft);
+}
+
+.adventure-attack-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 1fr) 100px auto;
+  gap: 8px;
+  align-items: end;
+}
+
 .adventure-editor-diagnostics {
   display: grid;
   gap: 6px;
@@ -463,6 +547,23 @@
 
   .adventure-choice-editor {
     grid-template-columns: 1fr;
+  }
+
+  .adventure-encounter-head,
+  .adventure-enemy-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .adventure-encounter-title-fields,
+  .adventure-enemy-stats,
+  .adventure-attack-row {
+    grid-template-columns: 1fr;
+  }
+
+  .adventure-encounter-head > .link-button,
+  .adventure-enemy-head > .link-button {
+    width: 100%;
   }
 
   .adventure-editor-dialog {
