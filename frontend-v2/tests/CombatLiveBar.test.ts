@@ -55,6 +55,24 @@ describe('combat live bar', () => {
     expect(wrapper.emitted('openCombat')).toHaveLength(1)
   })
 
+  it('labels critical hits in the shared history text', async () => {
+    const next = gameplay()
+    next.recent_combat_events = [{
+      ...next.recent_combat_events[0],
+      event_id: 'critical:0',
+      critical: true,
+      success: true,
+      natural: 20,
+      total: 24,
+      target: 14,
+    }]
+    const wrapper = mountBar({ gameplay: next, actorId: 'ally' })
+
+    expect(wrapper.text()).toContain('暴击命中')
+    await buttonByText(wrapper, '行动历史').trigger('click')
+    expect(wrapper.text()).toContain('暴击命中')
+  })
+
   it('opens a shared action history without opening the combat tool', async () => {
     const wrapper = mountBar({ gameplay: gameplay(), actorId: 'ally' })
 

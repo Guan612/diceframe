@@ -124,7 +124,9 @@ function eventText(event?: RulesetCombatEvent): string {
   if (event.type === 'check.resolved') {
     const roll = event.total ?? event.natural ?? ''
     const dc = event.target ?? ''
-    const verdict = event.success ? (zh.value ? '命中' : 'hit') : (zh.value ? '未命中' : 'miss')
+    const verdict = event.success
+      ? (event.critical ? (zh.value ? '暴击命中' : 'critical hit') : (zh.value ? '命中' : 'hit'))
+      : (zh.value ? '未命中' : 'miss')
     const kind = String(event.kind || '')
     if (kind === 'death_save') {
       return zh.value
@@ -145,9 +147,12 @@ function eventText(event?: RulesetCombatEvent): string {
   if (event.type === 'resource.changed') {
     const amount = Math.abs(Number(event.delta || event.amount || 0))
     const healing = Boolean((event as RulesetCombatEvent & { healing?: boolean }).healing) || Number(event.delta || 0) > 0
+    const critical = Boolean(event.critical)
     return healing
       ? (zh.value ? `${target}恢复 ${amount} 点生命` : `${target} recovers ${amount} HP`)
-      : (zh.value ? `${target}受到 ${amount} 点伤害` : `${target} takes ${amount} damage`)
+      : (zh.value
+        ? `${target}受到 ${amount} 点伤害${critical ? '（暴击）' : ''}`
+        : `${target} takes ${amount} damage${critical ? ' (critical)' : ''}`)
   }
   if (event.type === 'dnd2024.position.changed') {
     return zh.value ? `${actor}移动 ${Math.abs(Number(event.distance || 0))} 尺` : `${actor} moves ${Math.abs(Number(event.distance || 0))} ft`
