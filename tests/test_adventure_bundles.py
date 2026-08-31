@@ -86,3 +86,63 @@ def test_adventure_package_rejects_executable_content(tmp_path: Path) -> None:
 
     with pytest.raises(AdventureBundleError, match="executable content"):
         loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+def test_adventure_step_must_reference_a_catalogued_encounter(tmp_path: Path) -> None:
+    loader, package = _copied_package(tmp_path)
+    adventure_path = package / "adventure.json"
+    adventure = json.loads(adventure_path.read_text(encoding="utf-8"))
+    adventure["steps"][0]["encounter_preset_id"] = "missing_werewolf"
+    adventure_path.write_text(json.dumps(adventure), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError, match="encounter preset is missing"):
+        loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda adventure: adventure["steps"].append(dict(adventure["steps"][0])),
+        lambda adventure: adventure["chapters"][0]["step_ids"].remove("keepers_plea"),
+        lambda adventure: adventure["chapters"][0]["step_ids"].append("thorn_ambush"),
+        lambda adventure: adventure["choices"].append(dict(adventure["choices"][0])),
+        lambda adventure: adventure["choices"][0].update({"step_id": "missing_step"}),
+    ],
+)
+def test_adventure_graph_rejects_editor_integrity_errors(
+    tmp_path: Path, mutation,
+) -> None:
+    loader, package = _copied_package(tmp_path)
+    adventure_path = package / "adventure.json"
+    adventure = json.loads(adventure_path.read_text(encoding="utf-8"))
+    mutation(adventure)
+    adventure_path.write_text(json.dumps(adventure), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError):
+        loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+def test_adventure_graph_rejects_disconnected_step(tmp_path: Path) -> None:
+    loader, package = _copied_package(tmp_path)
+    adventure_path = package / "adventure.json"
+    adventure = json.loads(adventure_path.read_text(encoding="utf-8"))
+    adventure["steps"].append({
+        "id": "orphan_step", "chapter_id": "old_shrine", "scene_ref": "",
+        "requires": "none", "choice_ids": [],
+    })
+    adventure["chapters"][2]["step_ids"].append("orphan_step")
+    adventure_path.write_text(json.dumps(adventure), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError):
+        loader.load("lanterns_of_greymoor", "zh-CN")
+
+
+def test_adventure_rejects_invalid_generated_monster_stats(tmp_path: Path) -> None:
+    loader, package = _copied_package(tmp_path)
+    encounter_path = package / "content" / "encounters" / "greymoor_encounters.json"
+    encounter = json.loads(encounter_path.read_text(encoding="utf-8"))
+    encounter["presets"][0]["enemies"][0]["hp"] = 0
+    encounter_path.write_text(json.dumps(encounter), encoding="utf-8")
+
+    with pytest.raises(AdventureBundleError):
+        loader.load("lanterns_of_greymoor", "zh-CN")

@@ -93,3 +93,24 @@ class TestPagination:
         finally:
             store.close()
             path.unlink(missing_ok=True)
+
+
+class TestSessionIsolation:
+    async def test_clear_game_removes_only_selected_session(self):
+        store, path = _temp_store()
+        try:
+            await store.apply_delta("game1", {
+                "add": ["上一局的线索"], "update": [], "forget": [],
+            }, 1)
+            await store.apply_delta("game2", {
+                "add": ["另一局的线索"], "update": [], "forget": [],
+            }, 1)
+
+            removed = await store.clear_game("game1")
+
+            assert removed == 1
+            assert store.list_entries("game1") == []
+            assert len(store.list_entries("game2")) == 1
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)

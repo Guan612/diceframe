@@ -87,6 +87,25 @@ class MemoryStore:
             self._conn.commit()
         return cursor.rowcount == 1
 
+    async def clear_game(self, game_key: str) -> int:
+        """Remove every memory entry owned by one game session.
+
+        Reset/restart intentionally reuse the public ``game_key`` for the
+        save, so merely clearing the in-memory GameInstance is not enough:
+        the durable memory projection would otherwise be recalled by the new
+        run.  This operation is scoped to one exact key and is safe to call
+        when no entries exist.
+        """
+        if not self._conn:
+            return 0
+        async with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM memory_entries WHERE game_key=?",
+                (str(game_key),),
+            )
+            self._conn.commit()
+        return int(cursor.rowcount or 0)
+
     # ---- Delta 处理 ----
 
     async def apply_delta(self, game_key: str, delta: dict, round_number: int) -> None:
