@@ -133,6 +133,17 @@ function applyAiDraft(draft: AiDraft) {
       editorChoices.value.push({ id: `choice_${++choiceIndex}`, step_id: currentStep, next_step_id: target, label: String(choice.label || '新选项'), description: String(choice.description || '') })
     })
   }))
+  // AI drafts are allowed to omit links (or return null nextStepIndex), but
+  // the persisted graph still needs a playable path.  Add conservative
+  // linear fallback edges only for steps with no incoming edge; authored
+  // branches remain untouched and can be edited before publishing.
+  const incoming = new Set(editorChoices.value.map(choice => choice.next_step_id).filter(Boolean))
+  stepIds.forEach((stepId, index) => {
+    if (index > 0 && !incoming.has(stepId)) {
+      editorChoices.value.push(makeChoice(stepIds[index - 1], stepId))
+      incoming.add(stepId)
+    }
+  })
   editorStartStepId.value = editorSteps.value[0]?.id || ''
 }
 
