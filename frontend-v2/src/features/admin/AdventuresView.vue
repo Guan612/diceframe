@@ -45,6 +45,32 @@ const editorScenes = ref<EditorScene[]>([])
 const editorEncounters = ref<EditorEncounter[]>([])
 const editorStartStepId = ref('')
 
+const editorGraphIssues = computed(() => {
+  const stepIds = new Set(editorSteps.value.map(step => step.id))
+  const chapterIds = new Set(editorChapters.value.map(chapter => chapter.id))
+  const encounterIds = new Set(editorEncounters.value.map(encounter => encounter.id))
+  const issues: string[] = []
+  if (!editorStartStepId.value || !stepIds.has(editorStartStepId.value)) {
+    issues.push(String(locale.value).startsWith('zh') ? '未选择有效的冒险起点。' : 'Choose a valid adventure start step.')
+  }
+  editorSteps.value.forEach(step => {
+    if (!chapterIds.has(step.chapter_id)) issues.push(`步骤「${step.title || step.id}」没有有效章节。`)
+    if (step.encounter_preset_id && !encounterIds.has(step.encounter_preset_id)) issues.push(`步骤「${step.title || step.id}」引用了不存在的遭遇。`)
+  })
+  const incoming = new Set<string>()
+  editorChoices.value.forEach(choice => {
+    if (!stepIds.has(choice.step_id)) issues.push(`选项「${choice.label || choice.id}」没有有效来源步骤。`)
+    if (choice.next_step_id) {
+      if (!stepIds.has(choice.next_step_id)) issues.push(`选项「${choice.label || choice.id}」跳转目标不存在。`)
+      else incoming.add(choice.next_step_id)
+    }
+  })
+  editorSteps.value.forEach(step => {
+    if (step.id !== editorStartStepId.value && !incoming.has(step.id)) issues.push(`步骤「${step.title || step.id}」从起点不可达。`)
+  })
+  return [...new Set(issues)]
+})
+
 const builtinCount = computed(() => items.value.filter(item => !item.custom).length)
 const customCount = computed(() => items.value.filter(item => item.custom).length)
 const boundCount = computed(() => items.value.filter(item => Number(item.in_use || 0) > 0).length)
@@ -766,6 +792,11 @@ function policyLabel(policy: string) {
           </select>
           <small>{{ String(locale).startsWith('zh') ? '新增或移动步骤不会自动改变入口；请在这里明确选择第一步。' : 'Adding or moving steps will not silently change the entry point.' }}</small>
         </label>
+        <section v-if="editorGraphIssues.length" class="adventure-editor-diagnostics" role="status">
+          <strong>{{ String(locale).startsWith('zh') ? '流程检查' : 'Flow checks' }}</strong>
+          <ul><li v-for="issue in editorGraphIssues" :key="issue">{{ issue }}</li></ul>
+          <small>{{ String(locale).startsWith('zh') ? '保存时服务端还会执行完整校验。' : 'The server performs a final validation when you save.' }}</small>
+        </section>
         <section class="adventure-encounter-editor">
           <header class="adventure-editor-section-head">
             <div>
@@ -860,7 +891,7 @@ function policyLabel(policy: string) {
       </details>
       <template #actions>
         <button @click="cancelEditor">{{ editingCreation && String(locale).startsWith('zh') ? '取消并丢弃草稿' : t('cancel') }}</button>
-        <button class="primary" :disabled="busy" @click="savePackage">{{ t('validateAndSave') }}</button>
+        <button class="primary" :disabled="busy || editorGraphIssues.length > 0" @click="savePackage">{{ t('validateAndSave') }}</button>
       </template>
     </Modal>
   </section>

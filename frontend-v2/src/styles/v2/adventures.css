@@ -146,6 +146,25 @@
   margin: 14px 0;
 }
 
+.adventure-editor-diagnostics {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--df-warning) 48%, var(--df-border-soft));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--df-warning) 9%, var(--df-surface-2));
+  color: var(--df-text);
+}
+
+.adventure-editor-diagnostics ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.adventure-editor-diagnostics small {
+  color: var(--df-text-muted);
+}
+
 .adventure-editor-section-head,
 .adventure-step-editor > header {
   display: flex;
