@@ -56,12 +56,6 @@ BACKEND_CONCRETE_RULESET_ALLOWLIST = frozenset(
     {
         DependencyDebt("src/webui/services/adventures.py", "runtime_id", "core:dnd2024"),
         DependencyDebt(
-            "src/webui/services/characters.py",
-            "concrete_import",
-            "src.rulesets.dnd2024.advancement_access",
-        ),
-        DependencyDebt("src/webui/services/characters.py", "runtime_id", "core:dnd2024"),
-        DependencyDebt(
             "src/webui/services/ruleset_advancement.py",
             "concrete_import",
             "src.rulesets.dnd2024",

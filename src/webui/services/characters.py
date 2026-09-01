@@ -22,6 +22,7 @@ from src.content.worlds import localize_lorebook_entries
 from src.engine.language import localized_text
 from src.engine.health import record_health_event
 from src.commands.state_items import grant_classified_item
+from src.rulesets.contracts import GameDetailProjectionRuntime
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -320,10 +321,9 @@ def list_characters(
             rule.template,
         ).to_dict()
         result["ruleset_runtime"] = runtime_metadata
-        if str(runtime_metadata.get("id") or "") == "core:dnd2024":
-            from src.rulesets.dnd2024.advancement_access import view as advancement_view
-
-            result["advancement"] = advancement_view(inst)
+        runtime = dependencies.rules.ruleset_registry.resolve(rule.template)
+        if isinstance(runtime, GameDetailProjectionRuntime):
+            result.update(runtime.game_detail_projection(inst))
     return result
 
 
