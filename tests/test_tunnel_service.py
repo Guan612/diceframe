@@ -12,6 +12,26 @@ import pytest
 from src.webui.services import tunnel
 
 
+def _dependencies(api) -> tunnel.TunnelDependencies:
+    return tunnel.TunnelDependencies(
+        config_state=lambda: api._config_state,
+        save_config=api._save_config,
+        list_plugins=api.list_plugins,
+    )
+
+
+def _publish(api, plugin_id: str, url: str):
+    return tunnel.publish_tunnel_url(_dependencies(api), plugin_id, url)
+
+
+def _release(api, plugin_id: str):
+    return tunnel.release_tunnel_url(_dependencies(api), plugin_id)
+
+
+def _status(api):
+    return tunnel.tunnel_status(_dependencies(api))
+
+
 @pytest.fixture
 def tunnel_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """构造带 _config_state(内存 STATE) + _save_config(写盘) 的 api。"""
@@ -35,13 +55,13 @@ def tunnel_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def test_publish_validates_https(tunnel_env):
     with pytest.raises(ValueError, match="https"):
-        tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "http://not-secure.example")
+        _publish(tunnel_env, "cloudflare-tunnel", "http://not-secure.example")
     with pytest.raises(ValueError, match="https"):
-        tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "not-a-url")
+        _publish(tunnel_env, "cloudflare-tunnel", "not-a-url")
 
 
 def test_publish_writes_public_base_url_and_preserves_prev(tunnel_env):
-    result = tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    result = _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
     assert result["ok"] is True
     assert result["public_base_url"] == "https://abc.trycloudflare.com"
     # STATE 同步（问题 A 的核心）+ 持久化写盘
@@ -51,39 +71,39 @@ def test_publish_writes_public_base_url_and_preserves_prev(tunnel_env):
 
 
 def test_publish_second_plugin_rejected(tunnel_env):
-    tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
     with pytest.raises(ValueError, match="已由插件"):
-        tunnel.publish_tunnel_url(tunnel_env, "other", "https://other.trycloudflare.com")
+        _publish(tunnel_env, "other", "https://other.trycloudflare.com")
 
 
 def test_publish_same_plugin_republish_replaces(tunnel_env):
     """同插件二次发布替换 URL，prev_url 不被覆盖。"""
-    tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
-    result = tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://xyz.trycloudflare.com")
+    _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    result = _publish(tunnel_env, "cloudflare-tunnel", "https://xyz.trycloudflare.com")
     assert result["public_base_url"] == "https://xyz.trycloudflare.com"
     assert tunnel_env._config_state["public_base_url"] == "https://xyz.trycloudflare.com"
     # release 应回到原始地址，而非 abc
-    released = tunnel.release_tunnel_url(tunnel_env, "cloudflare-tunnel")
+    released = _release(tunnel_env, "cloudflare-tunnel")
     assert released["restored"] == "http://127.0.0.1:18000"
 
 
 def test_release_restores_prev_url(tunnel_env):
-    tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
-    result = tunnel.release_tunnel_url(tunnel_env, "cloudflare-tunnel")
+    _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    result = _release(tunnel_env, "cloudflare-tunnel")
     assert result["ok"] is True
     assert result["restored"] == "http://127.0.0.1:18000"
     assert tunnel_env._config_state["public_base_url"] == "http://127.0.0.1:18000"
 
 
 def test_release_non_publisher_noop(tunnel_env):
-    tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
-    result = tunnel.release_tunnel_url(tunnel_env, "other")
+    _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    result = _release(tunnel_env, "other")
     assert result["ok"] is True
     assert result["released"] is False
 
 
 def test_status_lists_providers(tunnel_env):
-    status = tunnel.tunnel_status(tunnel_env)
+    status = _status(tunnel_env)
     assert status["ok"] is True
     assert status["active"] is False
     ids = [p["plugin_id"] for p in status["providers"]]
@@ -107,13 +127,13 @@ def test_publish_takes_over_after_publisher_uninstalled(tmp_path, monkeypatch):
         _save_config=save_config,
         list_plugins=lambda: {"plugins": list(plugins)},
     )
-    tunnel.publish_tunnel_url(api, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    _publish(api, "cloudflare-tunnel", "https://abc.trycloudflare.com")
     # 模拟 cloudflare-tunnel 被卸载：从已安装列表消失，但 tunnel_state 仍指向它
     plugins.clear()
     # 新插件发布应接管（不再阻塞），且 prev_url 仍是最初地址
-    result = tunnel.publish_tunnel_url(api, "other", "https://xyz.trycloudflare.com")
+    result = _publish(api, "other", "https://xyz.trycloudflare.com")
     assert result["public_base_url"] == "https://xyz.trycloudflare.com"
-    released = tunnel.release_tunnel_url(api, "other")
+    released = _release(api, "other")
     assert released["restored"] == "http://127.0.0.1:18000"
 
 
@@ -122,7 +142,7 @@ def test_config_save_failure_restores_in_memory_state(tunnel_env):
     tunnel_env._save_config = lambda: (_ for _ in ()).throw(OSError("disk full"))
 
     with pytest.raises(OSError, match="disk full"):
-        tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+        _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
 
     assert tunnel_env._config_state == original
     assert not (Path(os.environ["TRPG_DATA_DIR"]) / "tunnel_state.json").exists()
@@ -133,7 +153,7 @@ def test_publish_state_failure_rolls_back_config(tunnel_env, monkeypatch):
     monkeypatch.setattr(tunnel, "_write_state", lambda _state: (_ for _ in ()).throw(OSError("state full")))
 
     with pytest.raises(OSError, match="state full"):
-        tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+        _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
 
     assert tunnel_env._config_state["public_base_url"] == original_url
     config = json.loads((Path(os.environ["TRPG_DATA_DIR"]) / "config.json").read_text(encoding="utf-8"))
@@ -141,11 +161,11 @@ def test_publish_state_failure_rolls_back_config(tunnel_env, monkeypatch):
 
 
 def test_release_state_failure_keeps_published_config(tunnel_env, monkeypatch):
-    tunnel.publish_tunnel_url(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
+    _publish(tunnel_env, "cloudflare-tunnel", "https://abc.trycloudflare.com")
     monkeypatch.setattr(tunnel, "_write_state", lambda _state: (_ for _ in ()).throw(OSError("state full")))
 
     with pytest.raises(OSError, match="state full"):
-        tunnel.release_tunnel_url(tunnel_env, "cloudflare-tunnel")
+        _release(tunnel_env, "cloudflare-tunnel")
 
     assert tunnel_env._config_state["public_base_url"] == "https://abc.trycloudflare.com"
     config = json.loads((Path(os.environ["TRPG_DATA_DIR"]) / "config.json").read_text(encoding="utf-8"))

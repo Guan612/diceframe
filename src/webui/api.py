@@ -246,6 +246,11 @@ class WebAPI:
             load_rule=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,
         )
+        self._tunnel_dependencies = tunnel.TunnelDependencies(
+            config_state=lambda: getattr(self, "_config_state", {}),
+            save_config=lambda: getattr(self, "_save_config")(),
+            list_plugins=self.list_plugins,
+        )
         self._bot_extensions = bot_extensions.BotExtensionService(
             bot_extensions.BotExtensionDependencies(plugin_host=plugin_host)
         )
@@ -530,13 +535,13 @@ class WebAPI:
         return await plugins.rescan_plugins(self)
 
     def publish_tunnel_url(self, plugin_id: str, url: str) -> dict[str, Any]:
-        return tunnel.publish_tunnel_url(self, plugin_id, url)
+        return tunnel.publish_tunnel_url(self._tunnel_dependencies, plugin_id, url)
 
     def release_tunnel_url(self, plugin_id: str) -> dict[str, Any]:
-        return tunnel.release_tunnel_url(self, plugin_id)
+        return tunnel.release_tunnel_url(self._tunnel_dependencies, plugin_id)
 
     def tunnel_status(self) -> dict[str, Any]:
-        return tunnel.tunnel_status(self)
+        return tunnel.tunnel_status(self._tunnel_dependencies)
 
     def authenticate_plugin_token(self, token: str) -> dict[str, Any] | None:
         """校验插件进程内部 Token，返回插件身份（复用 plugin_host）。"""
