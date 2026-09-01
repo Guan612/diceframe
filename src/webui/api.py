@@ -147,6 +147,30 @@ class WebAPI:
             adventures_dir or self._builtin_adventures_dir
         )
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
+        self._character_dependencies = characters.CharacterDependencies(
+            games=characters.CharacterGameDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+            ),
+            rules=characters.CharacterRuleDependencies(
+                rules_dir=self._rules_dir,
+                load_rule_by_id=self._load_rule_by_id,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+            ),
+            assets=characters.CharacterAssetDependencies(
+                lorebook=self._lore,
+                load_world_template=self._load_world_template,
+                avatar_file=lambda asset_id: self.avatar_file(asset_id),
+                generated_image_file=lambda asset_id: self.generated_image_file(
+                    asset_id,
+                ),
+            ),
+            save_character_card=lambda character: character_cards.save_character_card(
+                self._character_card_dependencies, character,
+            ),
+        )
         self._ruleset_character_dependencies = (
             ruleset_characters.RulesetCharacterDependencies(
                 get_instance=self._reg.get,
@@ -162,7 +186,7 @@ class WebAPI:
                     self._character_card_dependencies, cards,
                 ),
                 validate_portrait=lambda portrait: characters._validated_portrait(
-                    self, portrait,
+                    self._character_dependencies.assets, portrait,
                 ),
             )
         )
@@ -1278,16 +1302,22 @@ class WebAPI:
     # ---- 角色管理 ----
 
     def list_characters(self, game_key: str) -> dict[str, Any]:
-        return characters.list_characters(self, game_key)
+        return characters.list_characters(self._character_dependencies, game_key)
 
     def character_schema(self, rule_id: str, language: str = "") -> dict[str, Any]:
-        return characters.character_schema(self, rule_id, language)
+        return characters.character_schema(
+            self._character_dependencies, rule_id, language,
+        )
 
     def get_character(self, game_key: str, user_id: str) -> dict[str, Any] | None:
-        return characters.get_character(self, game_key, user_id)
+        return characters.get_character(
+            self._character_dependencies, game_key, user_id,
+        )
 
     async def update_character(self, game_key: str, user_id: str, updates: dict) -> dict[str, Any]:
-        return await characters.update_character(self, game_key, user_id, updates)
+        return await characters.update_character(
+            self._character_dependencies, game_key, user_id, updates,
+        )
 
     async def update_ruleset_character_profile(
         self, game_key: str, user_id: str, patch: dict[str, Any],
@@ -1330,17 +1360,33 @@ class WebAPI:
         )
 
     async def update_npc_portrait(self, game_key: str, npc_id: str, portrait: Any) -> dict[str, Any]:
-        return await characters.update_npc_portrait(self, game_key, npc_id, portrait)
+        return await characters.update_npc_portrait(
+            self._character_dependencies, game_key, npc_id, portrait,
+        )
 
     async def resolve_payment(self, game_key: str, payment_id: str, accepted: bool, session_uid: str = "") -> dict[str, Any]:
-        return await characters.resolve_payment(self, game_key, payment_id, accepted, session_uid)
+        return await characters.resolve_payment(
+            self._character_dependencies,
+            game_key,
+            payment_id,
+            accepted,
+            session_uid,
+        )
 
     async def delete_character(self, game_key: str, user_id: str) -> dict[str, Any]:
-        return await characters.delete_character(self, game_key, user_id)
+        return await characters.delete_character(
+            self._character_dependencies, game_key, user_id,
+        )
 
     async def create_player(self, game_key: str, character: dict,
                            force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
-        return await characters.create_player(self, game_key, character, force_uid, assign_new_id)
+        return await characters.create_player(
+            self._character_dependencies,
+            game_key,
+            character,
+            force_uid,
+            assign_new_id,
+        )
 
     def save_avatar_upload(self, file_data: str, file_name: str = "") -> dict[str, Any]:
         return self._avatars.save_upload(file_data, file_name)

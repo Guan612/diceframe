@@ -49,7 +49,6 @@ _STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT = (
 # Historical service-locator debt. Do not add entries. Remove a file or
 # category in the same PR that removes the corresponding dependency.
 SERVICE_LOCATOR_ALLOWLIST = frozenset().union(
-    _service_debt("characters.py", *_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT),
     _service_debt("plugins.py", *_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT),
 )
 

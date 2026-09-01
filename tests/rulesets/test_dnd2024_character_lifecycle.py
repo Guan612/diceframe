@@ -46,6 +46,28 @@ class _Api:
                 ruleset_registry=self._ruleset_registry,
             )
         )
+        self._character_dependencies = characters.CharacterDependencies(
+            games=characters.CharacterGameDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+            ),
+            rules=characters.CharacterRuleDependencies(
+                rules_dir=None,
+                load_rule_by_id=self._load_rule_by_id,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+            ),
+            assets=characters.CharacterAssetDependencies(
+                lorebook=None,
+                load_world_template=lambda _world_id, _language: None,
+                avatar_file=self.avatar_file,
+                generated_image_file=self.generated_image_file,
+            ),
+            save_character_card=lambda character: character_cards.save_character_card(
+                self._character_card_dependencies, character,
+            ),
+        )
         self._ruleset_character_dependencies = (
             ruleset_characters.RulesetCharacterDependencies(
                 get_instance=self._reg.get,
@@ -61,7 +83,7 @@ class _Api:
                     self._character_card_dependencies, cards,
                 ),
                 validate_portrait=lambda portrait: characters._validated_portrait(
-                    self, portrait,
+                    self._character_dependencies.assets, portrait,
                 ),
             )
         )
@@ -221,7 +243,7 @@ async def test_legacy_live_update_rejects_professional_mechanics_atomically(
     before = deepcopy(instance.players["gm"])
 
     result = await characters.update_character(
-        api,
+        api._character_dependencies,
         "web|character-lifecycle|web_bot",
         "gm",
         {

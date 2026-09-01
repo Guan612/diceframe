@@ -24,6 +24,26 @@ class DummyAPI:
         self._character_card_dependencies = CharacterCardDependencies(
             cards_path=cards_path or registry.save_dir.parent / "character_cards.json",
         )
+        self._character_dependencies = characters.CharacterDependencies(
+            games=characters.CharacterGameDependencies(
+                get_instance=registry.get,
+                parse_game_key=self._parse_key,
+                save_instance=registry.save,
+            ),
+            rules=characters.CharacterRuleDependencies(
+                rules_dir=None,
+                load_rule_by_id=lambda _rule_id, _language: None,
+                load_rule_for_game=lambda _instance: None,
+                ruleset_registry=RulesetRuntimeRegistry([]),
+            ),
+            assets=characters.CharacterAssetDependencies(
+                lorebook=None,
+                load_world_template=lambda _world_id, _language: None,
+                avatar_file=lambda _asset_id: None,
+                generated_image_file=lambda _asset_id: None,
+            ),
+            save_character_card=self.save_character_card,
+        )
 
     def _parse_key(self, game_key: str) -> tuple:
         return tuple(game_key.split(_GAME_KEY_SEP))
@@ -184,7 +204,10 @@ async def test_delete_character_cleans_player_runtime_state(tmp_path):
     inst.private_log["p1"] = [{"text": "secret"}]
     registry.register(inst)
 
-    result = await characters.delete_character(DummyAPI(registry), _GAME_KEY_SEP.join(key), "p1")
+    api = DummyAPI(registry)
+    result = await characters.delete_character(
+        api._character_dependencies, _GAME_KEY_SEP.join(key), "p1",
+    )
 
     assert result["ok"] is True
     assert "p1" not in inst.players

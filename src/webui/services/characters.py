@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.engine.character_utils import (
@@ -21,9 +24,40 @@ from src.engine.health import record_health_event
 from src.commands.state_items import grant_classified_item
 
 if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+    from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
+
+
+@dataclass(frozen=True)
+class CharacterGameDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    save_instance: Callable[[Any], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class CharacterRuleDependencies:
+    rules_dir: Path | None
+    load_rule_by_id: Callable[[str, str], Any | None]
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
+
+
+@dataclass(frozen=True)
+class CharacterAssetDependencies:
+    lorebook: Any | None
+    load_world_template: Callable[[str, str], dict[str, Any] | None]
+    avatar_file: Callable[[str], Path | None]
+    generated_image_file: Callable[[str], Path | None]
+
+
+@dataclass(frozen=True)
+class CharacterDependencies:
+    games: CharacterGameDependencies
+    rules: CharacterRuleDependencies
+    assets: CharacterAssetDependencies
+    save_character_card: Callable[[dict[str, Any]], dict[str, Any]]
 
 MAX_BIO_CHARS = 8000  # 兼容详细人物小传，同时保留上限避免无限污染上下文。
 
@@ -194,15 +228,21 @@ def _character_schema_for_rule(rule) -> dict[str, Any]:
     }
 
 
-def character_schema(api: "WebAPI", rule_id: str, language: str = "") -> dict[str, Any]:
+def character_schema(
+    dependencies: CharacterDependencies,
+    rule_id: str,
+    language: str = "",
+) -> dict[str, Any]:
     """Return rule-driven creation fields without requiring a GameInstance."""
-    rule = api._load_rule_by_id(rule_id, language)
+    rule = dependencies.rules.load_rule_by_id(rule_id, language)
     if not rule:
         return {"ok": False, "error": f"规则不存在: {rule_id}"}
     return {
         "ok": True,
         **_character_schema_for_rule(rule),
-        "ruleset_runtime": api._ruleset_registry.describe(rule.template).to_dict(),
+        "ruleset_runtime": dependencies.rules.ruleset_registry.describe(
+            rule.template,
+        ).to_dict(),
     }
 
 
@@ -220,13 +260,18 @@ def format_attribute_map(attributes: dict, rule_attrs: list[dict]) -> str:
     return " ".join(parts)
 
 
-def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+def list_characters(
+    dependencies: CharacterDependencies,
+    game_key: str,
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst:
         return {"players": [], "npcs": [], "rule_attrs": []}
     players = [{"user_id": uid, **p} for uid, p in inst.players.items()]
-    rule_attrs = _get_rule_attrs_for_game(api, inst)
-    rule = api._load_rule_for_game(inst)
+    rule_attrs = _get_rule_attrs_for_game(dependencies, inst)
+    rule = dependencies.rules.load_rule_for_game(inst)
     for player in players:
         cs = player.get("character_sheet", {})
         normalize_character_sheet(cs, rule)
@@ -235,9 +280,9 @@ def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
     for nid, npc in inst.npcs.items():
         name = npc.get("character_name") or npc.get("name") or nid
         npcs_by_name[name] = {"npc_id": nid, **npc, "name": name}
-    if api._lore and inst.world_id:
-        entries = api._lore.list_entries(inst.world_id, "npc")
-        world_data = api._load_world_template(
+    if dependencies.assets.lorebook and inst.world_id:
+        entries = dependencies.assets.lorebook.list_entries(inst.world_id, "npc")
+        world_data = dependencies.assets.load_world_template(
             inst.world_id,
             str(getattr(inst, "language", "") or ""),
         )
@@ -260,24 +305,34 @@ def list_characters(api: "WebAPI", game_key: str) -> dict[str, Any]:
                 "portrait": entry.get("portrait"),
             }
     npcs = list(npcs_by_name.values())
-    rule_attrs_total = _get_rule_attrs_total(api, inst)
-    result = {"players": players, "npcs": npcs, "rule_attrs": rule_attrs,
-              "rule_attrs_total": rule_attrs_total,
-              "rule_classes": _get_rule_classes_for_game(api, inst),
-              "rule_special_stats": _get_rule_special_stats(api, inst),
-              "rule_meta": _get_rule_meta_for_game(api, inst)}
+    rule_attrs_total = _get_rule_attrs_total(dependencies, inst)
+    result: dict[str, Any] = {
+        "players": players,
+        "npcs": npcs,
+        "rule_attrs": rule_attrs,
+        "rule_attrs_total": rule_attrs_total,
+        "rule_classes": _get_rule_classes_for_game(dependencies, inst),
+        "rule_special_stats": _get_rule_special_stats(dependencies, inst),
+        "rule_meta": _get_rule_meta_for_game(dependencies, inst),
+    }
     if rule is not None:
-        result["ruleset_runtime"] = api._ruleset_registry.describe(rule.template).to_dict()
-        if str(result["ruleset_runtime"].get("id") or "") == "core:dnd2024":
+        runtime_metadata = dependencies.rules.ruleset_registry.describe(
+            rule.template,
+        ).to_dict()
+        result["ruleset_runtime"] = runtime_metadata
+        if str(runtime_metadata.get("id") or "") == "core:dnd2024":
             from src.rulesets.dnd2024.advancement_access import view as advancement_view
 
             result["advancement"] = advancement_view(inst)
     return result
 
 
-def _get_rule_classes_for_game(api: "WebAPI", inst) -> list[str]:
+def _get_rule_classes_for_game(
+    dependencies: CharacterDependencies,
+    inst: Any,
+) -> list[str]:
     try:
-        rule = api._load_rule_for_game(inst)
+        rule = dependencies.rules.load_rule_for_game(inst)
         if rule:
             return _character_schema_for_rule(rule)["rule_classes"]
     except Exception:
@@ -285,9 +340,12 @@ def _get_rule_classes_for_game(api: "WebAPI", inst) -> list[str]:
     return ["战士", "法师", "游侠", "盗贼", "牧师", "冒险者"]
 
 
-def _get_rule_attrs_for_game(api: "WebAPI", inst) -> list[dict]:
+def _get_rule_attrs_for_game(
+    dependencies: CharacterDependencies,
+    inst: Any,
+) -> list[dict]:
     try:
-        rule = api._load_rule_for_game(inst)
+        rule = dependencies.rules.load_rule_for_game(inst)
         if rule:
             return _character_schema_for_rule(rule)["rule_attrs"]
     except Exception:
@@ -295,9 +353,9 @@ def _get_rule_attrs_for_game(api: "WebAPI", inst) -> list[dict]:
     return _fallback_rule_attrs()
 
 
-def _get_rule_attrs_total(api: "WebAPI", inst) -> int:
+def _get_rule_attrs_total(dependencies: CharacterDependencies, inst: Any) -> int:
     try:
-        rule = api._load_rule_for_game(inst)
+        rule = dependencies.rules.load_rule_for_game(inst)
         if rule:
             return _character_schema_for_rule(rule)["rule_attrs_total"]
     except Exception:
@@ -305,9 +363,12 @@ def _get_rule_attrs_total(api: "WebAPI", inst) -> int:
     return 60
 
 
-def _get_rule_special_stats(api: "WebAPI", inst) -> list[dict]:
+def _get_rule_special_stats(
+    dependencies: CharacterDependencies,
+    inst: Any,
+) -> list[dict]:
     try:
-        rule = api._load_rule_for_game(inst)
+        rule = dependencies.rules.load_rule_for_game(inst)
         if rule:
             return _character_schema_for_rule(rule)["rule_special_stats"]
     except Exception:
@@ -315,9 +376,12 @@ def _get_rule_special_stats(api: "WebAPI", inst) -> list[dict]:
     return []
 
 
-def _get_rule_meta_for_game(api: "WebAPI", inst) -> dict[str, Any]:
+def _get_rule_meta_for_game(
+    dependencies: CharacterDependencies,
+    inst: Any,
+) -> dict[str, Any]:
     try:
-        rule = api._load_rule_for_game(inst)
+        rule = dependencies.rules.load_rule_for_game(inst)
         if rule:
             return _character_schema_for_rule(rule)["rule_meta"]
     except Exception:
@@ -325,24 +389,39 @@ def _get_rule_meta_for_game(api: "WebAPI", inst) -> dict[str, Any]:
     return _fallback_rule_meta()
 
 
-def get_character(api: "WebAPI", game_key: str, user_id: str) -> dict[str, Any] | None:
-    inst = api._reg.get(api._parse_key(game_key))
+def get_character(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    user_id: str,
+) -> dict[str, Any] | None:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst or user_id not in inst.players:
         return None
     player = inst.get_player(user_id) or {}
     character_sheet = player.get("character_sheet", {})
-    normalize_character_sheet(character_sheet, api._load_rule_for_game(inst))
+    normalize_character_sheet(
+        character_sheet, dependencies.rules.load_rule_for_game(inst),
+    )
     inst.set_character_sheet(user_id, character_sheet)
     return {"user_id": user_id, **(inst.get_player(user_id) or {})}
 
 
-async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: dict) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+async def update_character(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    user_id: str,
+    updates: dict,
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
-    rule = api._load_rule_for_game(inst)
+    rule = dependencies.rules.load_rule_for_game(inst)
     if rule is not None:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.rules.ruleset_registry.resolve(rule.template)
         if getattr(runtime.capabilities, "character_lifecycle", "legacy") == "rules_aware":
             return {
                 "ok": False,
@@ -356,10 +435,12 @@ async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: 
     cs = inst.get_character_sheet(user_id)
     if "background" in updates and len(str(updates.get("background", ""))) > MAX_BIO_CHARS:
         return {"ok": False, "error": f"角色背景过长（上限 {MAX_BIO_CHARS} 字）"}
-    rule = api._load_rule_for_game(inst)
+    rule = dependencies.rules.load_rule_for_game(inst)
     if "portrait" in updates:
         try:
-            portrait = _validated_portrait(api, updates.pop("portrait"))
+            portrait = _validated_portrait(
+                dependencies.assets, updates.pop("portrait"),
+            )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         if portrait is None:
@@ -404,7 +485,11 @@ async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: 
             base_hp = (
                 rule.calculate_hp(new_attrs, cs.get("class", ""))
                 if rule
-                else calc_hp_from_rule(new_attrs, rules_dir=api._rules_dir, language=getattr(inst, "language", ""))
+                else calc_hp_from_rule(
+                    new_attrs,
+                    rules_dir=dependencies.rules.rules_dir,
+                    language=getattr(inst, "language", ""),
+                )
             )
             lv_bonus = max(0, (cs.get("level", 1) - 1) * 5)
             new_hp = base_hp + lv_bonus
@@ -417,9 +502,9 @@ async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: 
             logger.warning("属性变化后 HP 重算失败: %s", exc)
     normalize_character_sheet(cs, rule)
     inst.set_character_sheet(user_id, cs)
-    await api._reg.save(inst)
+    await dependencies.games.save_instance(inst)
     try:
-        api.save_character_card({
+        dependencies.save_character_card({
             "character_name": inst.players[user_id].get("character_name", ""),
             "character_sheet": cs,
         })
@@ -428,7 +513,10 @@ async def update_character(api: "WebAPI", game_key: str, user_id: str, updates: 
     return {"ok": True}
 
 
-def _validated_portrait(api: "WebAPI", portrait: Any) -> dict[str, str] | None:
+def _validated_portrait(
+    dependencies: CharacterAssetDependencies,
+    portrait: Any,
+) -> dict[str, str] | None:
     # Existing saves use an empty object as "no explicit portrait". Treat it
     # exactly like null so editing unrelated profile fields remains possible.
     if portrait is None or portrait == {}:
@@ -443,19 +531,26 @@ def _validated_portrait(api: "WebAPI", portrait: Any) -> dict[str, str] | None:
         return {"kind": "builtin", "id": portrait_id}
     if kind == "upload":
         asset_id = str(portrait.get("asset_id") or "")
-        if not asset_id or api.avatar_file(asset_id) is None:
+        if not asset_id or dependencies.avatar_file(asset_id) is None:
             raise ValueError("上传头像不存在")
         return {"kind": "upload", "asset_id": asset_id}
     if kind == "generated":
         asset_id = str(portrait.get("asset_id") or "")
-        if not asset_id or api.generated_image_file(asset_id) is None:
+        if not asset_id or dependencies.generated_image_file(asset_id) is None:
             raise ValueError("生成头像不存在")
         return {"kind": "generated", "asset_id": asset_id}
     raise ValueError("头像类型无效")
 
 
-async def update_npc_portrait(api: "WebAPI", game_key: str, npc_id: str, portrait: Any) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+async def update_npc_portrait(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    npc_id: str,
+    portrait: Any,
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
     npc_key = str(npc_id or "").strip()
@@ -467,10 +562,10 @@ async def update_npc_portrait(api: "WebAPI", game_key: str, npc_id: str, portrai
             if str(candidate.get("id") or candidate.get("npc_id") or "") == npc_key:
                 npc_key, npc = key, candidate
                 break
-    if npc is None and api._lore and inst.world_id:
-        entry = api._lore.get_entry(npc_key)
+    if npc is None and dependencies.assets.lorebook and inst.world_id:
+        entry = dependencies.assets.lorebook.get_entry(npc_key)
         if entry and entry.get("world_id") == inst.world_id and entry.get("type") == "npc":
-            world_data = api._load_world_template(
+            world_data = dependencies.assets.load_world_template(
                 inst.world_id,
                 str(getattr(inst, "language", "") or ""),
             )
@@ -485,19 +580,27 @@ async def update_npc_portrait(api: "WebAPI", game_key: str, npc_id: str, portrai
     if npc is None:
         return {"ok": False, "error": "NPC 不存在"}
     try:
-        normalized = _validated_portrait(api, portrait)
+        normalized = _validated_portrait(dependencies.assets, portrait)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     if normalized is None:
         npc.pop("portrait", None)
     else:
         npc["portrait"] = normalized
-    await api._reg.save(inst)
+    await dependencies.games.save_instance(inst)
     return {"ok": True, "portrait": npc.get("portrait")}
 
 
-async def resolve_payment(api: "WebAPI", game_key: str, payment_id: str, accepted: bool, session_uid: str = "") -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+async def resolve_payment(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    payment_id: str,
+    accepted: bool,
+    session_uid: str = "",
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
     payment = next(
@@ -527,7 +630,7 @@ async def resolve_payment(api: "WebAPI", game_key: str, payment_id: str, accepte
             # 弹窗因 status=pending 每轮重弹、玩家无法解除（修复反复跳支付窗口）。
             inst.mark_payment_resolved(payment_id, "rejected", resolved_at=time.time())
             inst.prune_resolved_payments()
-            await api._reg.save(inst)
+            await dependencies.games.save_instance(inst)
             return {
                 "ok": False,
                 "code": "INSUFFICIENT_FUNDS",
@@ -587,12 +690,18 @@ async def resolve_payment(api: "WebAPI", game_key: str, payment_id: str, accepte
             message=f"{name} 拒绝支付 {amount} 金币（第 {payment.get('round', inst.round_number)} 轮建议）",
         )
     inst.prune_resolved_payments()
-    await api._reg.save(inst)
+    await dependencies.games.save_instance(inst)
     return {"ok": True, "accepted": bool(accepted), "payment": payment}
 
 
-async def delete_character(api: "WebAPI", game_key: str, user_id: str) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+async def delete_character(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    user_id: str,
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
     if len(inst.players) <= 1:
@@ -603,14 +712,16 @@ async def delete_character(api: "WebAPI", game_key: str, user_id: str) -> dict[s
         return {"ok": False, "error": "角色不存在"}
     inst.remove_payments_for_player(user_id)
     inst.clear_private_messages(user_id)
-    await api._reg.save(inst)
+    await dependencies.games.save_instance(inst)
     logger.info("角色已删除: %s (%s)", name, game_key)
     return {"ok": True}
 
 
-async def create_player(api: "WebAPI", game_key: str, character: dict,
+async def create_player(dependencies: CharacterDependencies, game_key: str, character: dict,
                        force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
-    inst = api._reg.get(api._parse_key(game_key))
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
     requested_uid = str(character.get("user_id") or "").strip()
@@ -641,11 +752,11 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
             "error": f"房间已满（最多 {max_players} 人）",
             "error_code": "game_room_full",
         }
-    rule = api._load_rule_for_game(inst)
+    rule = dependencies.rules.load_rule_for_game(inst)
     rule_id = rule.rule_id if rule else "freeform_fantasy"
     professional_character = False
     if rule is not None:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.rules.ruleset_registry.resolve(rule.template)
         professional_character = runtime.capabilities.character_builder == "professional"
         if professional_character:
             try:
@@ -671,13 +782,17 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
     if not has_full_sheet:
         name = character.get("name") or character.get("character_name") or "冒险者"
         try:
-            templates_base = api._rules_dir.parent if api._rules_dir else None
+            templates_base = (
+                dependencies.rules.rules_dir.parent
+                if dependencies.rules.rules_dir
+                else None
+            )
             character = make_default_character(name, rule_id or "freeform_fantasy", templates_base, language=getattr(inst, "language", ""))
             character["character_name"] = name
         except Exception:
             logger.exception("生成默认角色卡失败: %s", name)
     attrs = character.get("attributes", {})
-    rule_attrs = _get_rule_attrs_for_game(api, inst)
+    rule_attrs = _get_rule_attrs_for_game(dependencies, inst)
     total_points = sum(int(attrs.get(r["key"], 10)) for r in rule_attrs) if rule_attrs else 60
     default_weapons = [{"name": "徒手", "type": "weapon", "damage": 2, "slot": "main_hand", "quality": "common"}]
     hp = character.get("hp")
@@ -686,7 +801,13 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
         hp = (
             rule.calculate_hp(attrs, character.get("class", ""))
             if rule
-            else calc_hp_from_rule(attrs, rule_id, api._rules_dir, character.get("class", ""), language=getattr(inst, "language", ""))
+            else calc_hp_from_rule(
+                attrs,
+                rule_id,
+                dependencies.rules.rules_dir,
+                character.get("class", ""),
+                language=getattr(inst, "language", ""),
+            )
         )
         max_hp = hp
     default_class = rule.classes[0]["name"] if (rule and rule.classes) else "冒险者"
@@ -731,7 +852,7 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
         "character_sheet": cs,
     }
     inst.put_player(uid, player)
-    api.save_character_card({
+    dependencies.save_character_card({
         **player,
         "rule_id": rule_id,
         "rule_name": rule.rule_name if rule else rule_id,
@@ -739,5 +860,5 @@ async def create_player(api: "WebAPI", game_key: str, character: dict,
         "mechanics": rule.mechanics if rule else "",
         "language": getattr(inst, "language", ""),
     })
-    await api._reg.save(inst)
+    await dependencies.games.save_instance(inst)
     return {"ok": True, "user_id": uid, "character_name": player["character_name"]}
