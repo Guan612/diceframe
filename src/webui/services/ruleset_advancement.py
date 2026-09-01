@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from src.webui.services.ruleset_builder import validate_draft_shape
@@ -10,18 +12,45 @@ from src.rulesets.dnd2024 import advancement_access
 from src.rulesets.dnd2024.progression.catalog import ProgressionCatalogError
 
 if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+    from src.rulesets.registry import RulesetRuntimeRegistry
+    from src.webui.services.ruleset_characters import RulesetCharacterDependencies
 
 
-def _context(api: "WebAPI", rule_id: str, language: str):
-    rule = api._load_rule_by_id(rule_id, language)
+@dataclass(frozen=True)
+class RulesetAdvancementDependencies:
+    load_rule_by_id: Callable[[str, str], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
+
+
+@dataclass(frozen=True)
+class CardAdvancementDependencies:
+    read_cards: Callable[[], list[dict[str, Any]]]
+    write_cards: Callable[[list[dict[str, Any]]], None]
+    ruleset_characters: "RulesetCharacterDependencies"
+
+
+@dataclass(frozen=True)
+class LiveAdvancementDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    save_instance: Callable[[Any], Awaitable[None]]
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
+
+
+def _context(
+    dependencies: RulesetAdvancementDependencies,
+    rule_id: str,
+    language: str,
+):
+    rule = dependencies.load_rule_by_id(rule_id, language)
     if rule is None:
         return None, None, {
             "ok": False,
             "code": "RULE_NOT_FOUND",
             "error": f"规则不存在: {rule_id}",
         }
-    runtime = api._ruleset_registry.resolve(rule.template)
+    runtime = dependencies.ruleset_registry.resolve(rule.template)
     if not all(
         callable(getattr(runtime, name, None))
         for name in ("progression_table", "preview_advancement", "apply_advancement")
@@ -35,14 +64,14 @@ def _context(api: "WebAPI", rule_id: str, language: str):
 
 
 def progression(
-    api: "WebAPI",
+    dependencies: RulesetAdvancementDependencies,
     rule_id: str,
     class_ref: str,
     start_level: int = 1,
     end_level: int = 20,
     language: str = "",
 ) -> dict[str, Any]:
-    rule, runtime, error = _context(api, rule_id, language)
+    rule, runtime, error = _context(dependencies, rule_id, language)
     if error:
         return error
     rows = runtime.progression_table(
@@ -63,9 +92,12 @@ def _payload(body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def preview(
-    api: "WebAPI", rule_id: str, body: Any, language: str = "",
+    dependencies: RulesetAdvancementDependencies,
+    rule_id: str,
+    body: Any,
+    language: str = "",
 ) -> dict[str, Any]:
-    rule, runtime, error = _context(api, rule_id, language)
+    rule, runtime, error = _context(dependencies, rule_id, language)
     if error:
         return error
     character, choices = _payload(body)
@@ -77,9 +109,12 @@ def preview(
 
 
 def apply(
-    api: "WebAPI", rule_id: str, body: Any, language: str = "",
+    dependencies: RulesetAdvancementDependencies,
+    rule_id: str,
+    body: Any,
+    language: str = "",
 ) -> dict[str, Any]:
-    rule, runtime, error = _context(api, rule_id, language)
+    rule, runtime, error = _context(dependencies, rule_id, language)
     if error:
         return error
     character, choices = _payload(body)
@@ -90,18 +125,18 @@ def apply(
     }
 
 
-def _card_context(api: "WebAPI", card_id: str):
-    from src.webui.services.character_cards import _dedupe_cards, _read_cards
+def _card_context(dependencies: CardAdvancementDependencies, card_id: str):
+    from src.webui.services.character_cards import _dedupe_cards
     from src.webui.services.ruleset_characters import runtime_for_card
 
-    cards = _dedupe_cards(_read_cards(api))
+    cards = _dedupe_cards(dependencies.read_cards())
     for index, card in enumerate(cards):
         if str(card.get("id") or "") != card_id:
             continue
         rule_id = str(card.get("rule_id") or "").strip()
         language = str(card.get("language") or "")
-        rule = api._load_rule_by_id(rule_id, language)
-        runtime = runtime_for_card(api._ruleset_character_dependencies, card)
+        rule = dependencies.ruleset_characters.load_rule_by_id(rule_id, language)
+        runtime = runtime_for_card(dependencies.ruleset_characters, card)
         if rule is None or runtime is None:
             return cards, index, card, None, None, {
                 "ok": False,
@@ -133,8 +168,14 @@ def _entity_choices(body: Any) -> dict[str, Any]:
     return choices
 
 
-def preview_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
-    _cards, _index, card, rule, runtime, error = _card_context(api, card_id)
+def preview_card(
+    dependencies: CardAdvancementDependencies,
+    card_id: str,
+    body: Any,
+) -> dict[str, Any]:
+    _cards, _index, card, rule, runtime, error = _card_context(
+        dependencies, card_id,
+    )
     if error:
         return error
     choices = _entity_choices(body)
@@ -147,10 +188,14 @@ def preview_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
     }
 
 
-def apply_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
-    from src.webui.services.character_cards import _write_cards
-
-    cards, index, card, rule, runtime, error = _card_context(api, card_id)
+def apply_card(
+    dependencies: CardAdvancementDependencies,
+    card_id: str,
+    body: Any,
+) -> dict[str, Any]:
+    cards, index, card, rule, runtime, error = _card_context(
+        dependencies, card_id,
+    )
     if error:
         return error
     parsed = validate_draft_shape(body)
@@ -232,7 +277,7 @@ def apply_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
     })
     updated["ruleset_operation_log"] = operation_log[-32:]
     cards[index] = updated
-    _write_cards(api, cards)
+    dependencies.write_cards(cards)
     return {
         "ok": True,
         "rule_id": rule.rule_id,
@@ -244,8 +289,12 @@ def apply_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
     }
 
 
-def _live_context(api: "WebAPI", game_key: str, user_id: str):
-    instance = api._reg.get(api._parse_key(game_key))
+def _live_context(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    user_id: str,
+):
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None:
         return None, None, None, None, {
             "ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在",
@@ -254,13 +303,13 @@ def _live_context(api: "WebAPI", game_key: str, user_id: str):
         return instance, None, None, None, {
             "ok": False, "code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
         }
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return instance, None, None, None, {
             "ok": False, "code": "RULE_NOT_FOUND", "error": "当前游戏规则不存在",
         }
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return instance, rule, None, None, {
             "ok": False, "code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
@@ -278,9 +327,14 @@ def _live_context(api: "WebAPI", game_key: str, user_id: str):
 
 
 def preview_live(
-    api: "WebAPI", game_key: str, user_id: str, body: Any,
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
 ) -> dict[str, Any]:
-    _instance, rule, runtime, character, error = _live_context(api, game_key, user_id)
+    _instance, rule, runtime, character, error = _live_context(
+        dependencies, game_key, user_id,
+    )
     if error:
         return error
     choices = _entity_choices(body)
@@ -308,9 +362,14 @@ def preview_live(
 
 
 async def apply_live(
-    api: "WebAPI", game_key: str, user_id: str, body: Any,
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
 ) -> dict[str, Any]:
-    instance, rule, runtime, character, error = _live_context(api, game_key, user_id)
+    instance, rule, runtime, character, error = _live_context(
+        dependencies, game_key, user_id,
+    )
     if error:
         return error
     parsed = validate_draft_shape(body)
@@ -397,7 +456,7 @@ async def apply_live(
         instance.set_character_sheet(user_id, updated)
         if runtime_id == "core:dnd2024":
             advancement_access.reconcile_after_level_up(instance, user_id)
-        await api._reg.save(instance)
+        await dependencies.save_instance(instance)
     except Exception:
         instance.players[user_id] = before_player
         if before_advancement is not None:
@@ -411,8 +470,11 @@ async def apply_live(
     }
 
 
-def live_status(api: "WebAPI", game_key: str) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+def live_status(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
     runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
@@ -421,8 +483,12 @@ def live_status(api: "WebAPI", game_key: str) -> dict[str, Any]:
     return {"ok": True, "advancement": advancement_access.view(instance)}
 
 
-async def control_live(api: "WebAPI", game_key: str, body: Any) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+async def control_live(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    body: Any,
+) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
     runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
@@ -457,5 +523,5 @@ async def control_live(api: "WebAPI", game_key: str, body: Any) -> dict[str, Any
             return {"ok": False, "code": "INVALID_ADVANCEMENT_ACTION", "error": "未知升级控制操作"}
     except ValueError as exc:
         return {"ok": False, "code": "INVALID_ADVANCEMENT_ACTION", "error": str(exc)}
-    await api._reg.save(instance)
+    await dependencies.save_instance(instance)
     return {"ok": True, "advancement": advancement_access.view(instance)}

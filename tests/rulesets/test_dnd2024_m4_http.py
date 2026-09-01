@@ -26,6 +26,12 @@ class _M4Api:
             load_rule_by_id=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,
         )
+        self._ruleset_advancement_dependencies = (
+            ruleset_advancement.RulesetAdvancementDependencies(
+                load_rule_by_id=self._load_rule_by_id,
+                ruleset_registry=self._ruleset_registry,
+            )
+        )
 
     def _load_rule_by_id(self, rule_id: str, language: str = ""):
         del language
@@ -39,14 +45,19 @@ class _M4Api:
         end_level: int = 20, language: str = "",
     ):
         return ruleset_advancement.progression(
-            self, rule_id, class_ref, start_level, end_level, language,
+            self._ruleset_advancement_dependencies,
+            rule_id, class_ref, start_level, end_level, language,
         )
 
     def ruleset_advancement_preview(self, rule_id: str, body, language: str = ""):
-        return ruleset_advancement.preview(self, rule_id, body, language)
+        return ruleset_advancement.preview(
+            self._ruleset_advancement_dependencies, rule_id, body, language,
+        )
 
     def ruleset_advancement_apply(self, rule_id: str, body, language: str = ""):
-        return ruleset_advancement.apply(self, rule_id, body, language)
+        return ruleset_advancement.apply(
+            self._ruleset_advancement_dependencies, rule_id, body, language,
+        )
 
     def ruleset_rest_resolve(self, rule_id: str, body, language: str = ""):
         return ruleset_rest.resolve(

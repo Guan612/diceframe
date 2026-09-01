@@ -162,6 +162,28 @@ class WebAPI:
                 ),
             )
         )
+        self._ruleset_advancement_dependencies = (
+            ruleset_advancement.RulesetAdvancementDependencies(
+                load_rule_by_id=self._load_rule_by_id,
+                ruleset_registry=self._ruleset_registry,
+            )
+        )
+        self._card_advancement_dependencies = (
+            ruleset_advancement.CardAdvancementDependencies(
+                read_cards=lambda: character_cards._read_cards(self),
+                write_cards=lambda cards: character_cards._write_cards(self, cards),
+                ruleset_characters=self._ruleset_character_dependencies,
+            )
+        )
+        self._live_advancement_dependencies = (
+            ruleset_advancement.LiveAdvancementDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+            )
+        )
         self._ruleset_rest_dependencies = ruleset_rest.RulesetRestDependencies(
             load_rule_by_id=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,
@@ -1124,6 +1146,20 @@ class WebAPI:
             self._ruleset_character_dependencies, card_id, patch,
         )
 
+    def preview_character_card_advancement(
+        self, card_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return ruleset_advancement.preview_card(
+            self._card_advancement_dependencies, card_id, body,
+        )
+
+    def apply_character_card_advancement(
+        self, card_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return ruleset_advancement.apply_card(
+            self._card_advancement_dependencies, card_id, body,
+        )
+
     # ---- 世界编辑器 ----
 
     def list_worlds(self) -> dict[str, Any]:
@@ -1212,6 +1248,32 @@ class WebAPI:
     ) -> dict[str, Any]:
         return await ruleset_characters.adopt_character_card(
             self._ruleset_character_dependencies, game_key, user_id, card_id,
+        )
+
+    def preview_live_character_advancement(
+        self, game_key: str, user_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return ruleset_advancement.preview_live(
+            self._live_advancement_dependencies, game_key, user_id, body,
+        )
+
+    async def apply_live_character_advancement(
+        self, game_key: str, user_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await ruleset_advancement.apply_live(
+            self._live_advancement_dependencies, game_key, user_id, body,
+        )
+
+    def live_advancement_status(self, game_key: str) -> dict[str, Any]:
+        return ruleset_advancement.live_status(
+            self._live_advancement_dependencies, game_key,
+        )
+
+    async def control_live_advancement(
+        self, game_key: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await ruleset_advancement.control_live(
+            self._live_advancement_dependencies, game_key, body,
         )
 
     async def update_npc_portrait(self, game_key: str, npc_id: str, portrait: Any) -> dict[str, Any]:
@@ -1374,18 +1436,23 @@ class WebAPI:
         end_level: int = 20, language: str = "",
     ) -> dict[str, Any]:
         return ruleset_advancement.progression(
-            self, rule_id, class_ref, start_level, end_level, language,
+            self._ruleset_advancement_dependencies,
+            rule_id, class_ref, start_level, end_level, language,
         )
 
     def ruleset_advancement_preview(
         self, rule_id: str, body: dict[str, Any], language: str = "",
     ) -> dict[str, Any]:
-        return ruleset_advancement.preview(self, rule_id, body, language)
+        return ruleset_advancement.preview(
+            self._ruleset_advancement_dependencies, rule_id, body, language,
+        )
 
     def ruleset_advancement_apply(
         self, rule_id: str, body: dict[str, Any], language: str = "",
     ) -> dict[str, Any]:
-        return ruleset_advancement.apply(self, rule_id, body, language)
+        return ruleset_advancement.apply(
+            self._ruleset_advancement_dependencies, rule_id, body, language,
+        )
 
     def ruleset_rest_resolve(
         self, rule_id: str, body: dict[str, Any], language: str = "",

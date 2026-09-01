@@ -98,8 +98,6 @@ async def _api_live_character_advancement(
     request: web.Request,
     action: str,
 ) -> web.Response:
-    from src.webui.services import ruleset_advancement
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -123,11 +121,12 @@ async def _api_live_character_advancement(
             {"ok": False, "error": "无权修改他人角色卡"}, status=403
         )
     body = await request.json()
-    method = getattr(ruleset_advancement, f"{action}_live")
     try:
-        result = method(api, gk, uid, body)
-        if action == "apply":
-            result = await result
+        result = (
+            await api.apply_live_character_advancement(gk, uid, body)
+            if action == "apply"
+            else api.preview_live_character_advancement(gk, uid, body)
+        )
     except ValueError as exc:
         result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error": str(exc)}
     code = str(result.get("code") or "")
@@ -152,16 +151,12 @@ async def api_live_character_advancement_apply(request: web.Request) -> web.Resp
 
 
 async def api_live_advancement_control(request: web.Request) -> web.Response:
-    from src.webui.services import ruleset_advancement
-
     game_key = request.match_info["game_key"]
     _, denied = _gm_only_inst(request, game_key)
     if denied is not None:
         return denied
-    result = await ruleset_advancement.control_live(
-        _get_api(request),
-        game_key,
-        await request.json(),
+    result = await _get_api(request).control_live_advancement(
+        game_key, await request.json(),
     )
     await _broadcast_ruleset_change(request, game_key, result)
     code = str(result.get("code") or "")
