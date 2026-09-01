@@ -20,14 +20,19 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from .capabilities import (
+    clear_runtime_capabilities,
+    find_provider_plugin,
+    initialize_runtime_capabilities,
+    list_runtime_bridge_extensions,
+    list_runtime_tools,
+    provider_capability,
+)
 from .content import PluginContentCatalog, safe_id_part
 from .contracts import AIProviderResolver, PluginPublicDetail, PluginStoppedCallback
 from .descriptors import (
     BRIDGE_EXTENSION_STAGES,
     normalize_bridge_outputs,
-    validate_bridge_extension_descriptors,
-    validate_provider_capabilities,
-    validate_tool_descriptors,
 )
 from .marketplace import PluginMarketplace
 from .mirrors import MirrorManager
@@ -214,18 +219,7 @@ class PluginHost:
         return [item.to_dict() for item in self.contributions.list(kind)]
 
     def list_tools(self) -> list[dict[str, Any]]:
-        tools: list[dict[str, Any]] = []
-        for plugin_id, runtime in self.plugins.items():
-            if self._plugin_type(runtime.manifest) != "tool" or runtime.status != "running":
-                continue
-            for descriptor in runtime.tools:
-                tools.append({
-                    **descriptor,
-                    "plugin_id": plugin_id,
-                    "plugin_name": str(runtime.manifest.get("name") or plugin_id),
-                    "tool_ui": str(runtime.manifest.get("tool_ui") or "").strip(),
-                })
-        return tools
+        return list_runtime_tools(self.plugins)
 
     async def call_tool(
         self,
@@ -263,15 +257,7 @@ class PluginHost:
 
     def find_provider(self, capability: str) -> str | None:
         """返回当前运行中、声明了指定 capability 的 provider 插件 id。"""
-        capability = str(capability or "").strip()
-        if not capability:
-            return None
-        for plugin_id, runtime in self.plugins.items():
-            if self._plugin_type(runtime.manifest) != "provider" or runtime.status != "running":
-                continue
-            if any(item.get("kind") == capability for item in runtime.provider_capabilities):
-                return plugin_id
-        return None
+        return find_provider_plugin(self.plugins, capability)
 
     async def call_provider(
         self,
@@ -288,10 +274,7 @@ class PluginHost:
             raise ValueError("该插件不是 provider 类型")
         if runtime.status != "running" or not runtime.rpc_client:
             raise ValueError("Provider 插件尚未运行或初始化失败")
-        descriptor = next(
-            (item for item in runtime.provider_capabilities if item.get("kind") == capability),
-            None,
-        )
+        descriptor = provider_capability(runtime, capability)
         if not descriptor:
             raise KeyError(f"插件 {plugin_id} 未声明 capability：{capability}")
         method_name = str(descriptor.get("methods", {}).get(method_alias) or "")
@@ -313,20 +296,7 @@ class PluginHost:
         return result
 
     def list_bridge_extensions(self) -> list[dict[str, Any]]:
-        extensions: list[dict[str, Any]] = []
-        for plugin_id, runtime in self.plugins.items():
-            if self._plugin_type(runtime.manifest) != "bot-extension" or runtime.status != "running":
-                continue
-            for descriptor in runtime.bridge_extensions:
-                extensions.append({
-                    **descriptor,
-                    "plugin_id": plugin_id,
-                    "plugin_name": str(runtime.manifest.get("name") or plugin_id),
-                })
-        return sorted(
-            extensions,
-            key=lambda item: (-int(item.get("priority", 0)), str(item.get("plugin_id")), str(item.get("name"))),
-        )
+        return list_runtime_bridge_extensions(self.plugins)
 
     async def apply_bridge_extensions(self, stage: str, payload: dict[str, Any]) -> dict[str, Any]:
         stage = str(stage or "").strip()
@@ -804,13 +774,11 @@ class PluginHost:
                     },
                     timeout=5,
                 )
-                plugin_type = self._plugin_type(runtime.manifest)
-                if plugin_type == "tool":
-                    runtime.tools = validate_tool_descriptors(initialized)
-                elif plugin_type == "provider":
-                    runtime.provider_capabilities = validate_provider_capabilities(initialized)
-                else:
-                    runtime.bridge_extensions = validate_bridge_extension_descriptors(initialized)
+                initialize_runtime_capabilities(
+                    self._plugin_type(runtime.manifest),
+                    runtime,
+                    initialized,
+                )
             runtime.started_at = time.monotonic()
             runtime.status = "running"
             self.logger.info("插件 %s 已启动，PID=%s", plugin_id, runtime.process.pid)
@@ -830,9 +798,7 @@ class PluginHost:
                     await process.wait()
             runtime.process = None
             runtime.rpc_client = None
-            runtime.tools = []
-            runtime.bridge_extensions = []
-            runtime.provider_capabilities = []
+            clear_runtime_capabilities(runtime)
             runtime.status, runtime.error = "failed", str(exc)
             self.logger.exception("插件 %s 启动失败", plugin_id)
 
@@ -977,9 +943,7 @@ class PluginHost:
                 await process.wait()
         runtime.process = None
         runtime.rpc_client = None
-        runtime.tools = []
-        runtime.bridge_extensions = []
-        runtime.provider_capabilities = []
+        clear_runtime_capabilities(runtime)
         runtime.status = self._status_for_enabled(runtime)
         if runtime.status != "active":
             self.contributions.clear_plugin(plugin_id)
@@ -1006,9 +970,7 @@ class PluginHost:
                 await process.wait()
         runtime.process = None
         runtime.rpc_client = None
-        runtime.tools = []
-        runtime.bridge_extensions = []
-        runtime.provider_capabilities = []
+        clear_runtime_capabilities(runtime)
         runtime.status = "failed"
         runtime.error = error
 
@@ -1052,9 +1014,7 @@ class PluginHost:
         runtime.error = f"插件进程已退出，code={code}"
         runtime.process = None
         runtime.rpc_client = None
-        runtime.tools = []
-        runtime.bridge_extensions = []
-        runtime.provider_capabilities = []
+        clear_runtime_capabilities(runtime)
         if alive_sec >= _RESTART_STABLE_SECONDS:
             runtime.restart_delay_sec = _RESTART_BASE_DELAY
         delay = runtime.restart_delay_sec

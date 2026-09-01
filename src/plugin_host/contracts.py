@@ -93,5 +93,16 @@ class PluginPublicDetail(TypedDict, total=False):
     docs: object
 
 
+class ListedToolDescriptor(ToolDescriptor):
+    plugin_id: str
+    plugin_name: str
+    tool_ui: str
+
+
+class ListedBridgeExtensionDescriptor(BridgeExtensionDescriptor):
+    plugin_id: str
+    plugin_name: str
+
+
 PluginStoppedCallback = Callable[[str], Awaitable[None]]
 AIProviderResolver = Callable[[str], object]
