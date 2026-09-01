@@ -35,6 +35,7 @@ class SwipeGenerator:
         ensure_matcher_for_world: Callable[[str, str], None],
         narrative_max_tokens: int,
         get_instance: Callable[[tuple], GameInstance | None] | None = None,
+        save_instance: Callable[[GameInstance], Any] | None = None,
     ):
         self.llm_client = llm_client
         self.matcher = matcher
@@ -44,6 +45,7 @@ class SwipeGenerator:
         self.ensure_matcher_for_world = ensure_matcher_for_world
         self.narrative_max_tokens = narrative_max_tokens
         self.get_instance = get_instance
+        self.save_instance = save_instance
         # 生图调度回调（GameHandler 注入）：swipe 叙事带新 SCENE_IMAGE 时重新生成该回合图片
         self._scene_image_hook = None
 
@@ -51,11 +53,25 @@ class SwipeGenerator:
         self._scene_image_hook = hook
 
     async def generate(self, instance: GameInstance, round_num: int) -> str | None:
+        """Run the complete historical rewrite under the shared process barrier."""
+
+        if instance._process_lock.locked():
+            logger.warning(
+                "process_round/swipe 进行中，跳过并发 generate_swipe: %s",
+                instance.game_key,
+            )
+            return None
+        async with instance._process_lock:
+            narration = await self._generate_locked(instance, round_num)
+            if narration is not None and self.save_instance is not None:
+                # Keep the rewrite barrier held through the authoritative save;
+                # normal actions cannot observe a half-persisted swipe.
+                await self.save_instance(instance)
+            return narration
+
+    async def _generate_locked(self, instance: GameInstance, round_num: int) -> str | None:
         """为指定轮生成一个新 swipe（最多 5 个）。"""
         expected_run_id = instance.run_id
-        if instance._process_lock.locked():
-            logger.warning("process_round 进行中，跳过 generate_swipe: %s", instance.game_key)
-            return None
         target_entry = None
         target_idx = -1
         for i, entry in enumerate(instance.log):

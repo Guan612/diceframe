@@ -77,7 +77,7 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 
 `GameInstance` 是单局对局的 Aggregate Root，继续拥有权威运行时状态、不变量、状态转换以及 `_lock` / `_process_lock` 协调权。玩家、战斗、回合和支付不会仅为缩短文件而拆成彼此独立的 aggregate。
 
-每个存档同时具有稳定 `game_key` 和可轮换 `run_id`。程序恢复保留 `run_id`；重置与重开在旧聚合写锁内构造候选聚合并完成原子替换，等待中的旧 run 写入在替换后按 stale run 拒绝，开场已经应用到候选角色的状态不会被旧角色整表覆盖。长期记忆通过持久化 `memory_namespace` 隔离，隔离不依赖先删除旧记录。重开保留角色、资产和成长但清除死亡、战斗、剧情与待处理提案；重置同时清除角色。存档 shape 的升级只经 `src/migrations/instance.py` 的顺序迁移入口。
+每个存档同时具有稳定 `game_key` 和可轮换 `run_id`。程序恢复保留 `run_id`；重置与重开在旧聚合写锁内构造候选聚合并完成原子替换，等待中的旧 run 写入在替换后按 stale run 拒绝，开场已经应用到候选角色的状态不会被旧角色整表覆盖。历史 swipe 重写与正常回合共用 `_process_lock`，并一直持锁到“恢复旧快照 → LLM → 应用新分支 → 权威存档”完成；玩家行动在重写期间于写入前拒绝。长期记忆通过持久化 `memory_namespace` 隔离，隔离不依赖先删除旧记录。重开保留角色、资产和成长但清除死亡、战斗、剧情与待处理提案；重置同时清除角色。存档 shape 的升级只经 `src/migrations/instance.py` 的顺序迁移入口。
 
 通用经济状态属于 `GameInstance`。叙事 `GOLD` / `PAY`、世界书文本与 AI 输出只能创建提案；余额变化必须经过服务端权限、余额、run identity 与幂等校验并写入事务流水。`currency.amount` 是余额 authority，`gold` 仅为兼容投影。个人支付由付款人确认，自由叙事奖励由 GM 确认，Web、Bot 与其它 transport 进入同一经济路径。
 

@@ -106,6 +106,7 @@ class GameHandler:
             self._ensure_matcher_for_world,
             narrative_max_tokens,
             self.registry.get,
+            self.registry.save,
         )
         self._lifecycle = GameLifecycle(
             self.registry,

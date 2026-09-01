@@ -27,6 +27,11 @@ and replacement. Old requests that were waiting to write resume only after the
 swap and fail their registry-identity fence; no post-opening whole-player copy
 may overwrite character effects produced by the new opening.
 
+Historical swipe rewrites share the process barrier with normal round
+processing. The barrier covers restoring the target snapshot, awaiting the LLM,
+applying the candidate branch, and saving the authoritative aggregate. Player
+actions are rejected before mutation while the rewrite is active.
+
 Long-term memory uses a persisted `memory_namespace`. Existing saves retain the
 legacy namespace on migration; a new run receives a new namespace, so old
 memory is unreachable without requiring destructive deletion first.

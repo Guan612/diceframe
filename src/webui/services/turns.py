@@ -302,7 +302,7 @@ async def submit_action(
 
     if not (confirm and existing_pending_roll):
         action_text = text
-        await instance.add_action(
+        action_added = await instance.add_action(
             actor_uid,
             action_text,
             selected_attribute,
@@ -310,6 +310,12 @@ async def submit_action(
             target_text,
             source=source,
         )
+        if not action_added and instance._process_lock.locked():
+            return _result({
+                "ok": False,
+                "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后再提交行动",
+            }, 409)
 
     if await instance.try_advance():
         await _prepare_checks(dependencies, instance)

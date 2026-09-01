@@ -870,6 +870,8 @@ class GameInstance:
         归因字段（P1），供检定与 prompt 直接使用，避免靠文本启发式猜。
         """
         async with self._lock:
+            if self._process_lock.locked():
+                return False
             if user_id in self.players:
                 cs = self.get_character_sheet(user_id)
                 if cs.get("deceased"):

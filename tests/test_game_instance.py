@@ -137,6 +137,20 @@ async def test_reset_preserves_exact_ruleset_and_adventure_bindings() -> None:
 
 @pytest.mark.asyncio
 class TestGameInstance:
+    async def test_action_is_rejected_while_historical_rewrite_holds_process_barrier(self):
+        instance = GameInstance(game_key=("web", "rewrite", "bot"), gm_uid="gm")
+        instance.players = {
+            "gm": {
+                "character_name": "GM",
+                "character_sheet": {"deceased": False},
+            },
+        }
+        async with instance._process_lock:
+            added = await instance.add_action("gm", "在重写期间偷偷行动")
+        assert added is False
+        assert instance.action_queue == []
+        assert instance.pending_actions == []
+
     async def test_initial_state(self):
         inst = GameInstance(game_key=("qq", "123", "bot1"))
         assert inst.state == GameState.CREATED
