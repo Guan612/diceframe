@@ -12,6 +12,26 @@ from src.plugin_host.mirrors import FetchResult
 from src.webui.services import updater
 
 
+async def _unavailable_update_check() -> dict:
+    return {"ok": False, "error": "update check not configured"}
+
+
+def _service(
+    data_dir: Path,
+    root: Path,
+    mirrors,
+    check_updates=_unavailable_update_check,
+) -> updater.UpdaterService:
+    return updater.UpdaterService(
+        updater.UpdaterDependencies(
+            data_dir=data_dir,
+            root=root,
+            mirrors=mirrors,
+            check_updates=check_updates,
+        )
+    )
+
+
 def _asset(name: str, size: int = 1024) -> dict:
     return {"name": name, "download_url": f"https://example.com/{name}", "size": size}
 
@@ -64,13 +84,13 @@ async def test_docker_download_requires_checksum_manifest(tmp_path, monkeypatch)
     monkeypatch.setenv("TRPG_INSTALL_MODE", "docker-managed")
     monkeypatch.setenv("TRPG_DOCKER_RUNTIME_ROOT", str(tmp_path / "_updater"))
     (tmp_path / "_updater").mkdir()
-    service = updater.UpdaterService(tmp_path, tmp_path, SimpleNamespace())
     name = "DiceFrame-v2.4.0-docker-update-linux-amd64.zip"
 
     async def check_updates():
         return {"ok": True, "latest": {"version": "2.4.0", "assets": [_asset(name)]}}
 
-    result = await service.download_update(SimpleNamespace(check_updates=check_updates), "docker")
+    service = _service(tmp_path, tmp_path, SimpleNamespace(), check_updates)
+    result = await service.download_update("docker")
     assert result["ok"] is False
     assert "SHA256SUMS" in result["error"]
 
@@ -99,14 +119,13 @@ async def test_docker_download_and_prepare_candidate(tmp_path, monkeypatch):
     monkeypatch.setenv("TRPG_INSTALL_MODE", "docker-managed")
     monkeypatch.setenv("TRPG_DOCKER_RUNTIME_ROOT", str(runtime))
     monkeypatch.setenv("TRPG_LEGACY_PLUGIN_DIR", str(tmp_path / "plugins"))
-    service = updater.UpdaterService(data, tmp_path, mirrors)
-
     async def check_updates():
         return {"ok": True, "latest": {
             "version": "2.4.0", "assets": [_asset(name, len(content)), _asset("SHA256SUMS")],
         }}
 
-    started = await service.download_update(SimpleNamespace(check_updates=check_updates), "docker")
+    service = _service(data, tmp_path, mirrors, check_updates)
+    started = await service.download_update("docker")
     assert started["ok"] is True
     await service._task
     assert service.get_status()["state"] == "staged"
@@ -127,7 +146,7 @@ def test_docker_prepare_reuses_matching_version_without_overwrite(tmp_path, monk
     _docker_archive(archive)
     monkeypatch.setenv("TRPG_DOCKER_RUNTIME_ROOT", str(runtime))
     monkeypatch.setenv("TRPG_LEGACY_PLUGIN_DIR", str(tmp_path / "plugins"))
-    service = updater.UpdaterService(data, tmp_path, SimpleNamespace())
+    service = _service(data, tmp_path, SimpleNamespace())
 
     first = service._prepare_docker_update(archive, "2.4.0")
     marker = Path(first["candidate_dir"]) / "keep.txt"

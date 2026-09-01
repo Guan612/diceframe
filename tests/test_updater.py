@@ -157,17 +157,41 @@ def test_safe_extract_rejects_path_traversal(tmp_path):
 
 # ---------- UpdaterService 状态机 ----------
 
-def _make_service(tmp_path, mirrors=None) -> updater.UpdaterService:
+async def _unavailable_update_check() -> dict:
+    return {"ok": False, "error": "update check not configured"}
+
+
+def _dependencies(
+    data_dir,
+    root,
+    mirrors,
+    check_updates=_unavailable_update_check,
+) -> updater.UpdaterDependencies:
+    return updater.UpdaterDependencies(
+        data_dir=data_dir,
+        root=root,
+        mirrors=mirrors,
+        check_updates=check_updates,
+    )
+
+
+def _make_service(
+    tmp_path,
+    mirrors=None,
+    check_updates=_unavailable_update_check,
+) -> updater.UpdaterService:
     if mirrors is None:
         mirrors = SimpleNamespace()
-    return updater.UpdaterService(tmp_path, tmp_path, mirrors)
+    return updater.UpdaterService(
+        _dependencies(tmp_path, tmp_path, mirrors, check_updates)
+    )
 
 
-def _api_with_update_result(result: dict) -> SimpleNamespace:
+def _check_updates_with_result(result: dict):
     async def check_updates():
         return result
 
-    return SimpleNamespace(check_updates=check_updates)
+    return check_updates
 
 
 @pytest.mark.asyncio
@@ -196,10 +220,8 @@ async def test_download_update_respects_channel_and_accepts_prerelease_latest(tm
         calls.append((args, kwargs))
         return {"ok": True, "latest": latest, "channel": "preview"}
 
-    api = SimpleNamespace(check_updates=check_updates)
-
-    svc = _make_service(tmp_path, mirrors)
-    result = await svc.download_update(api, "source")
+    svc = _make_service(tmp_path, mirrors, check_updates)
+    result = await svc.download_update("source")
     assert result["ok"] is True
     await svc._task
     status = svc.get_status()
@@ -229,11 +251,12 @@ async def test_download_update_success_flow(tmp_path):
 
     latest = {"version": "1.6.0", "assets": [_asset(ZIP_NAME), _asset(ZIP_NAME + ".sha256")]}
 
-    svc = _make_service(tmp_path, mirrors)
-    result = await svc.download_update(
-        _api_with_update_result({"ok": True, "latest": latest}),
-        "source",
+    svc = _make_service(
+        tmp_path,
+        mirrors,
+        _check_updates_with_result({"ok": True, "latest": latest}),
     )
+    result = await svc.download_update("source")
     assert result["ok"] is True
     assert result["state"] == "downloading"
     await svc._task
@@ -268,11 +291,12 @@ async def test_download_update_progress_updates_bytes(tmp_path):
     mirrors.download_to_file = fake_download
     latest = {"version": "1.6.0", "assets": [_asset(ZIP_NAME), _asset(ZIP_NAME + ".sha256")]}
 
-    svc = _make_service(tmp_path, mirrors)
-    await svc.download_update(
-        _api_with_update_result({"ok": True, "latest": latest}),
-        "source",
+    svc = _make_service(
+        tmp_path,
+        mirrors,
+        _check_updates_with_result({"ok": True, "latest": latest}),
     )
+    await svc.download_update("source")
     await svc._task
     # 最终进度应等于文件大小
     assert svc.get_status()["downloaded_bytes"] == 1024
@@ -282,18 +306,21 @@ async def test_download_update_progress_updates_bytes(tmp_path):
 async def test_download_update_busy_rejected(tmp_path):
     svc = _make_service(tmp_path, SimpleNamespace())
     svc._state["state"] = "downloading"
-    result = await svc.download_update(SimpleNamespace(), "source")
+    result = await svc.download_update("source")
     assert result["ok"] is False
     assert "进行中" in result["error"]
 
 
 @pytest.mark.asyncio
 async def test_download_update_no_release(tmp_path):
-    svc = _make_service(tmp_path, SimpleNamespace())
-    result = await svc.download_update(
-        _api_with_update_result({"ok": True, "no_release": True, "latest": None}),
-        "source",
+    svc = _make_service(
+        tmp_path,
+        SimpleNamespace(),
+        _check_updates_with_result(
+            {"ok": True, "no_release": True, "latest": None}
+        ),
     )
+    result = await svc.download_update("source")
     assert result["ok"] is False
     assert result.get("no_release") is True
 
@@ -301,11 +328,12 @@ async def test_download_update_no_release(tmp_path):
 @pytest.mark.asyncio
 async def test_download_update_no_matching_asset(tmp_path):
     latest = {"version": "1.6.0", "assets": [_asset("other.zip")]}
-    svc = _make_service(tmp_path, SimpleNamespace())
-    result = await svc.download_update(
-        _api_with_update_result({"ok": True, "latest": latest}),
-        "source",
+    svc = _make_service(
+        tmp_path,
+        SimpleNamespace(),
+        _check_updates_with_result({"ok": True, "latest": latest}),
     )
+    result = await svc.download_update("source")
     assert result["ok"] is False
     assert "未找到" in result["error"]
 
@@ -313,7 +341,7 @@ async def test_download_update_no_matching_asset(tmp_path):
 @pytest.mark.asyncio
 async def test_download_update_unknown_kind_rejected(tmp_path):
     svc = _make_service(tmp_path, SimpleNamespace())
-    result = await svc.download_update(SimpleNamespace(), "foo")
+    result = await svc.download_update("foo")
     assert result["ok"] is False
 
 
@@ -324,7 +352,7 @@ async def test_download_update_rejects_portable_package_for_source_install(
     monkeypatch.delenv("TRPG_INSTALL_ROOT", raising=False)
     monkeypatch.delenv("TRPG_DATA_DIR", raising=False)
     svc = _make_service(tmp_path, SimpleNamespace())
-    result = await svc.download_update(SimpleNamespace(), "portable")
+    result = await svc.download_update("portable")
     assert result["ok"] is False
     assert "完整源码" in result["error"]
     assert svc._task is None
@@ -337,7 +365,7 @@ async def test_download_update_rejects_source_package_for_portable_install(
     monkeypatch.delenv("TRPG_DATA_DIR", raising=False)
     monkeypatch.setenv("TRPG_INSTALL_ROOT", str(tmp_path))
     svc = _make_service(tmp_path, SimpleNamespace())
-    result = await svc.download_update(SimpleNamespace(), "source")
+    result = await svc.download_update("source")
     assert result["ok"] is False
     assert "便携版" in result["error"]
     assert svc._task is None
@@ -351,11 +379,12 @@ async def test_download_update_sha_mismatch_marks_failed(tmp_path):
     mirrors.download_to_file = lambda url, target, *, max_bytes=None, on_progress=None, resolve=True: _async_download(target, content)
     latest = {"version": "1.6.0", "assets": [_asset(ZIP_NAME), _asset(ZIP_NAME + ".sha256")]}
 
-    svc = _make_service(tmp_path, mirrors)
-    await svc.download_update(
-        _api_with_update_result({"ok": True, "latest": latest}),
-        "source",
+    svc = _make_service(
+        tmp_path,
+        mirrors,
+        _check_updates_with_result({"ok": True, "latest": latest}),
     )
+    await svc.download_update("source")
     await svc._task
     status = svc.get_status()
     assert status["state"] == "failed"
@@ -376,11 +405,12 @@ async def test_download_update_download_failure_marks_failed(tmp_path):
     mirrors.download_to_file = fake_download
     latest = {"version": "1.6.0", "assets": [_asset(ZIP_NAME), _asset(ZIP_NAME + ".sha256")]}
 
-    svc = _make_service(tmp_path, mirrors)
-    await svc.download_update(
-        _api_with_update_result({"ok": True, "latest": latest}),
-        "source",
+    svc = _make_service(
+        tmp_path,
+        mirrors,
+        _check_updates_with_result({"ok": True, "latest": latest}),
     )
+    await svc.download_update("source")
     await svc._task
     status = svc.get_status()
     assert status["state"] == "failed"
@@ -401,11 +431,12 @@ async def test_download_update_sha_sidecar_missing_skips_verify(tmp_path):
     # 无 .sha256 asset
     latest = {"version": "1.6.0", "assets": [_asset(ZIP_NAME)]}
 
-    svc = _make_service(tmp_path, mirrors)
-    await svc.download_update(
-        _api_with_update_result({"ok": True, "latest": latest}),
-        "source",
+    svc = _make_service(
+        tmp_path,
+        mirrors,
+        _check_updates_with_result({"ok": True, "latest": latest}),
     )
+    await svc.download_update("source")
     await svc._task
     status = svc.get_status()
     assert status["state"] == "staged"
@@ -444,7 +475,9 @@ async def test_portable_apply_stages_side_by_side_and_restart_signal(
     monkeypatch.setenv("TRPG_INSTALL_ROOT", str(install_root))
     monkeypatch.delenv("TRPG_DATA_DIR", raising=False)
 
-    svc = updater.UpdaterService(data_dir, app_dir, SimpleNamespace())
+    svc = updater.UpdaterService(
+        _dependencies(data_dir, app_dir, SimpleNamespace())
+    )
     svc._state = {
         "state": "staged",
         "version": "1.7.0",
@@ -499,7 +532,9 @@ async def test_source_apply_creates_backup_and_requires_restart(
     monkeypatch.delenv("TRPG_INSTALL_ROOT", raising=False)
     monkeypatch.delenv("TRPG_DATA_DIR", raising=False)
 
-    svc = updater.UpdaterService(data_dir, root, SimpleNamespace())
+    svc = updater.UpdaterService(
+        _dependencies(data_dir, root, SimpleNamespace())
+    )
     svc._state = {
         "state": "staged",
         "version": "1.7.0",
@@ -538,7 +573,9 @@ def test_source_apply_restores_backup_when_install_fails(
     _write_source_archive(archive)
     monkeypatch.delenv("TRPG_INSTALL_ROOT", raising=False)
 
-    svc = updater.UpdaterService(data_dir, root, SimpleNamespace())
+    svc = updater.UpdaterService(
+        _dependencies(data_dir, root, SimpleNamespace())
+    )
     original_move = updater.shutil.move
     failed_once = False
 

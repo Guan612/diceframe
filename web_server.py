@@ -727,7 +727,14 @@ async def on_startup(app: web.Application) -> None:
     app["plugin_host"] = plugin_host
     app["api"] = _make_api(subsystems, plugin_host, hub_client=hub_client)
     _activate_api_runtime(subsystems, app["api"])
-    app["updater"] = updater_svc.UpdaterService(DATA_DIR, ROOT, plugin_host.mirrors if plugin_host else None)
+    app["updater"] = updater_svc.UpdaterService(
+        updater_svc.UpdaterDependencies(
+            data_dir=DATA_DIR,
+            root=ROOT,
+            mirrors=plugin_host.mirrors if plugin_host else None,
+            check_updates=app["api"].check_updates,
+        )
+    )
     recovered = await subsystems.registry.recover_all()
     if recovered:
         logger.info("恢复了 %d 个存档", len(recovered))
