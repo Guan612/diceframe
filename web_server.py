@@ -8,7 +8,6 @@ import os
 import secrets as secrets_module
 import signal
 import sys
-from datetime import datetime, timezone
 
 from aiohttp import web
 
@@ -23,18 +22,13 @@ from src.common_factory import TRPGSubsystems, create_trpg_subsystems
 from src.adventures import sync_adventure_catalog
 from src.migrations.config import (
     DEFAULT_NARRATIVE_MAX_TOKENS,
-    GENERATION_DEFAULTS_VERSION,
     migrate_generation_defaults as _migrate_generation_defaults,
 )
 from src.ai_providers import (
-    is_provider_secret_key,
-    normalize_ai_providers,
-    provider_secret_key,
     resolve_provider,
 )
-from src.llm.client import ProviderConfig
 from src.hub_client import HubClient
-from src.network_proxy import effective_proxy_url, env_proxy_url, is_supported_proxy_url, mask_proxy_url
+from src.network_proxy import effective_proxy_url, is_supported_proxy_url, mask_proxy_url
 from src.plugin_host import PluginHost
 from src.plugin_host.package_limits import MAX_PLUGIN_PACKAGE_BYTES
 from src.template_catalog import sync_template_catalog
@@ -46,13 +40,12 @@ from src.webui.access_password import (
     hash_access_password,
     is_hashed_access_password,
     is_valid_access_password,
-    mask_access_password,
     normalize_access_password,
     verify_access_password,
 )
 from src.webui.abuse_guard import ABUSE_GUARD_KEY, AbuseGuard, abuse_guard_middleware
 from src.webui.api import WebAPI
-from src.webui.cors import cors_middleware, cors_response_prepare, normalize_cors_origins, parse_cors_origins
+from src.webui.cors import cors_middleware, cors_response_prepare, parse_cors_origins
 from src.webui.config_update import (
     API_RUNTIME_CONFIG_KEYS,
     MODEL_RUNTIME_CONFIG_KEYS,
@@ -66,6 +59,10 @@ from src.webui.config_update import (
 from src.webui.composition import (
     RuntimeComposition,
     RuntimeFactories,
+    RuntimePaths as CompositionPaths,
+)
+from src.webui.runtime_config import (
+    ConfigStore,
     RuntimePaths,
 )
 from src.webui.routes._common import _get_api, _require_confirmed_request
@@ -99,241 +96,55 @@ from src.webui.routes.generated_images import register_generated_images
 from src.webui.services import updater as updater_svc
 from src.webui.services import legal as legal_svc
 from src.webui.services.security import SecurityTransportService
-from src.web_transport import build_server_transport, parse_web_transport
 
 logger = logging.getLogger("trpg")
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
 
 
-DATA_DIR = Path(os.getenv("TRPG_DATA_DIR", str(Path(__file__).parent / "data")))
+ROOT = Path(__file__).parent
+RUNTIME_PATHS = RuntimePaths.from_root(ROOT, os.environ)
+CONFIG_STORE = ConfigStore(RUNTIME_PATHS, os.environ, logger=logger)
+DATA_DIR = RUNTIME_PATHS.data_dir
 DATA_DIR.mkdir(parents=True, exist_ok=True)
-CONFIG_FILE = DATA_DIR / "config.json"
-SECRETS_FILE = DATA_DIR / "secrets.json"
-ACCESS_TOKEN_FILE = DATA_DIR / "access_token.txt"
+CONFIG_FILE = RUNTIME_PATHS.config_file
+SECRETS_FILE = RUNTIME_PATHS.secrets_file
+ACCESS_TOKEN_FILE = RUNTIME_PATHS.access_token_file
 
 
 def _quarantine_invalid_json(path: Path) -> Path | None:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    candidate = path.with_name(f"{path.stem}.corrupt-{timestamp}{path.suffix}")
-    index = 1
-    while candidate.exists():
-        candidate = path.with_name(f"{path.stem}.corrupt-{timestamp}-{index}{path.suffix}")
-        index += 1
-    try:
-        path.replace(candidate)
-    except OSError:
-        logger.exception("无法隔离损坏的配置文件: %s", path)
-        return None
-    return candidate
+    return CONFIG_STORE.quarantine_invalid_json(path)
 
 
 def _load_json_object(path: Path, label: str) -> dict:
-    if not path.exists():
-        return {}
-    try:
-        with open(path, encoding="utf-8") as file:
-            data = json.load(file)
-        if not isinstance(data, dict):
-            raise ValueError("JSON 根节点不是对象")
-        return data
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        backup = _quarantine_invalid_json(path)
-        if backup:
-            logger.error("%s损坏，已保留为 %s：%s", label, backup, exc)
-        else:
-            logger.error("%s无法读取且未能隔离：%s", label, exc)
-        return {}
+    return CONFIG_STORE.load_json_object(path, label)
 
 
-# 各 token 字段的迁移规则：(字段名, 旧默认值集合, 新默认值)。
-# 仅在配置值等于某个已知旧默认时提升，保留用户自定义值。
-# 默认值历史上单调递增，缺失字段按最小旧默认补全后同样提升。
-# character_gen_max_tokens 一直是 2048，无旧默认需提升，不在表中。
-saved = _load_json_object(CONFIG_FILE, "主配置")
-secrets = _load_json_object(SECRETS_FILE, "敏感配置")
-_generation_defaults_migrated = _migrate_generation_defaults(saved)
-
-# env > secrets.json（敏感配置只存 secrets.json）
-API_KEY = (os.getenv("TRPG_LLM_API_KEY")
-           or secrets.get("api_key")
-           or "")
-BASE_URL = (os.getenv("TRPG_LLM_BASE_URL")
-            or saved.get("base_url", "https://api.deepseek.com/v1"))
-MODEL = (os.getenv("TRPG_LLM_MODEL")
-         or saved.get("model", "deepseek-v4-flash"))
-API_FORMAT = (os.getenv("TRPG_LLM_API_FORMAT")
-              or saved.get("api_format", "openai"))
-PORT = int(os.getenv("TRPG_WEB_PORT") or saved.get("web_port", 18000))
-HOST = os.getenv("TRPG_WEB_HOST") or saved.get("web_host", "0.0.0.0")
-# Web Transport（HTTP / HTTPS）由独立模块统一解析；旧配置缺少该字段等价于
-# {"tls_mode": "off"}，升级后行为不变。
-WEB_TRANSPORT_CONFIG = parse_web_transport(saved.get("web_transport"), os.environ)
-TRANSPORT = build_server_transport(WEB_TRANSPORT_CONFIG, DATA_DIR, PORT)
-WEB_CORS_ENV_VALUE = str(os.getenv("TRPG_WEB_CORS_ORIGINS") or "").strip()
-WEB_CORS_CONFIG_VALUE = WEB_CORS_ENV_VALUE or str(saved.get("web_cors_origins") or "")
-WEB_CORS_ORIGINS = parse_cors_origins(WEB_CORS_CONFIG_VALUE)
-EMB_ENABLED = saved.get("embedding_enabled", False)
-EMB_BASE_URL = saved.get("embedding_base_url", "")
-EMB_MODEL = (os.getenv("TRPG_EMBEDDING_MODEL")
-             or saved.get("embedding_model", "nomic-embed-text"))
-EMB_API_KEY = (os.getenv("TRPG_EMBEDDING_API_KEY")
-               or secrets.get("embedding_api_key")
-               or "")
-FALLBACK1_API_KEY = secrets.get("fallback1_api_key") or ""
-FALLBACK2_API_KEY = secrets.get("fallback2_api_key") or ""
-TTS_API_KEY = os.getenv("TRPG_TTS_API_KEY") or secrets.get("tts_api_key") or ""
-ASR_API_KEY = os.getenv("TRPG_ASR_API_KEY") or secrets.get("asr_api_key") or ""
-IMAGEGEN_API_KEY = os.getenv("TRPG_IMAGEGEN_API_KEY") or secrets.get("imagegen_api_key") or ""
-ACCESS_TOKEN = next((
-    password for password in (
-        normalize_access_password(os.getenv("TRPG_ACCESS_TOKEN")),
-        normalize_access_password(secrets.get("access_token")),
-        normalize_access_password(saved.get("access_token")),
-    ) if password
-), "")
-BOT_TOKEN = (os.getenv("TRPG_BOT_TOKEN")
-             or secrets.get("bot_token")
-             or saved.get("bot_token", ""))
-NAPCAT_TOKEN = (os.getenv("NAPCAT_TOKEN")
-                or secrets.get("napcat_token")
-                or saved.get("napcat_token", ""))
-NAPCAT_HOST = os.getenv("NAPCAT_HOST") or saved.get("napcat_host", "127.0.0.1")
-NAPCAT_PORT = int(os.getenv("NAPCAT_PORT") or saved.get("napcat_port", 3001))
-NAPCAT_HEARTBEAT_SEC = float(os.getenv("NAPCAT_HEARTBEAT_SEC") or saved.get("napcat_heartbeat_sec", 30))
-NAPCAT_RECONNECT_DELAY_SEC = float(os.getenv("NAPCAT_RECONNECT_DELAY_SEC") or saved.get("napcat_reconnect_delay_sec", 5))
-NAPCAT_ACTION_TIMEOUT_SEC = float(os.getenv("NAPCAT_ACTION_TIMEOUT_SEC") or saved.get("napcat_action_timeout_sec", 15))
-NAPCAT_REPLY_DELAY_MIN_SEC = float(os.getenv("NAPCAT_REPLY_DELAY_MIN_SEC") or saved.get("napcat_reply_delay_min_sec", 0.8))
-NAPCAT_REPLY_DELAY_MAX_SEC = float(os.getenv("NAPCAT_REPLY_DELAY_MAX_SEC") or saved.get("napcat_reply_delay_max_sec", 2.4))
-NAPCAT_COMMAND_DEDUP_WINDOW_SEC = float(os.getenv("NAPCAT_COMMAND_DEDUP_WINDOW_SEC") or saved.get("napcat_command_dedup_window_sec", 6))
-NAPCAT_CONNECTION_ID = os.getenv("NAPCAT_CONNECTION_ID") or str(saved.get("napcat_connection_id", ""))
-NARRATIVE_MAX_TOKENS = int(os.getenv("TRPG_NARRATIVE_MAX_TOKENS")
-                           or saved.get("narrative_max_tokens", DEFAULT_NARRATIVE_MAX_TOKENS))
-CHARACTER_GEN_MAX_TOKENS = int(os.getenv("TRPG_CHARACTER_GEN_MAX_TOKENS")
-                               or saved.get("character_gen_max_tokens", 2048))
-SUMMARY_MAX_TOKENS = int(os.getenv("TRPG_SUMMARY_MAX_TOKENS")
-                         or saved.get("summary_max_tokens", 1024))
-BRIEF_MAX_TOKENS = int(os.getenv("TRPG_BRIEF_MAX_TOKENS")
-                       or saved.get("brief_max_tokens", 1024))
-ANALYSIS_MAX_TOKENS = int(os.getenv("TRPG_ANALYSIS_MAX_TOKENS")
-                          or saved.get("analysis_max_tokens", 1024))
-TEXT_GEN_MAX_TOKENS = int(os.getenv("TRPG_TEXT_GEN_MAX_TOKENS")
-                          or saved.get("text_gen_max_tokens", 1024))
-MODEL_REQUEST_TIMEOUT_SECONDS = float(os.getenv("TRPG_MODEL_REQUEST_TIMEOUT_SECONDS")
-                                      or saved.get("model_request_timeout_seconds", 120))
-_ENV_PROXY_URL = env_proxy_url()
-_CONFIG_PROXY_URL = secrets.get("proxy_url") or saved.get("proxy_url", "")
-PROXY_ENABLED = bool(saved.get("proxy_enabled", bool(_ENV_PROXY_URL)))
-PROXY_URL = (os.getenv("TRPG_PROXY_URL")
-             or _CONFIG_PROXY_URL
-             or _ENV_PROXY_URL)
-
+RUNTIME_CONFIG = CONFIG_STORE.load()
+saved = RUNTIME_CONFIG.saved
+secrets = RUNTIME_CONFIG.secrets
+STATE = RUNTIME_CONFIG.state
+HOST = RUNTIME_CONFIG.host
+PORT = RUNTIME_CONFIG.port
+TRANSPORT = RUNTIME_CONFIG.transport
+WEB_CORS_ENV_VALUE = RUNTIME_CONFIG.cors_env_value
+WEB_CORS_CONFIG_VALUE = RUNTIME_CONFIG.cors_config_value
+WEB_CORS_ORIGINS = RUNTIME_CONFIG.cors_origins
+EMB_ENABLED = bool(STATE.get("embedding_enabled", False))
+EMB_BASE_URL = str(STATE.get("embedding_base_url", ""))
+API_KEY = str(STATE.get("api_key", ""))
+_generation_defaults_migrated = RUNTIME_CONFIG.generation_defaults_migrated
 _migrated = _generation_defaults_migrated
+_ENV_PROXY_URL = RUNTIME_CONFIG.env_proxy_url
+_CONFIG_PROXY_URL = RUNTIME_CONFIG.config_proxy_url
 
-_AI_PROVIDERS_DEFAULT = normalize_ai_providers(saved.get("ai_providers"))
-
-STATE = {
-    "generation_defaults_version": GENERATION_DEFAULTS_VERSION,
-    "api_key": API_KEY, "base_url": BASE_URL, "model": MODEL, "api_format": API_FORMAT, "web_port": PORT,
-    "web_cors_origins": normalize_cors_origins(WEB_CORS_CONFIG_VALUE),
-    "ai_providers": _AI_PROVIDERS_DEFAULT,
-    "llm_provider_ref": str(saved.get("llm_provider_ref", "")),
-    "fallback1_provider_ref": str(saved.get("fallback1_provider_ref", "")),
-    "fallback2_provider_ref": str(saved.get("fallback2_provider_ref", "")),
-    "embedding_provider_ref": str(saved.get("embedding_provider_ref", "")),
-    "tts_provider_ref": str(saved.get("tts_provider_ref", "")),
-    "asr_provider_ref": str(saved.get("asr_provider_ref", "")),
-    "imagegen_provider_ref": str(saved.get("imagegen_provider_ref", "")),
-    **{key: str(value or "") for key, value in secrets.items() if is_provider_secret_key(key)},
-    "embedding_enabled": EMB_ENABLED, "embedding_base_url": EMB_BASE_URL,
-    "embedding_model": EMB_MODEL, "embedding_api_key": EMB_API_KEY,
-    "fallback1_enabled": saved.get("fallback1_enabled", False),
-    "fallback1_base_url": saved.get("fallback1_base_url", ""),
-    "fallback1_model": saved.get("fallback1_model", ""),
-    "fallback1_api_format": saved.get("fallback1_api_format", "openai"),
-    "fallback1_api_key": FALLBACK1_API_KEY,
-    "fallback2_enabled": saved.get("fallback2_enabled", False),
-    "fallback2_base_url": saved.get("fallback2_base_url", ""),
-    "fallback2_model": saved.get("fallback2_model", ""),
-    "fallback2_api_format": saved.get("fallback2_api_format", "openai"),
-    "fallback2_api_key": FALLBACK2_API_KEY,
-    "tts_provider": str(os.getenv("TRPG_TTS_PROVIDER") or saved.get("tts_provider", "browser")),
-    "tts_base_url": str(os.getenv("TRPG_TTS_BASE_URL") or saved.get("tts_base_url", "")),
-    "tts_api_key": TTS_API_KEY,
-    "tts_model": str(os.getenv("TRPG_TTS_MODEL") or saved.get("tts_model", "tts-1")),
-    "tts_audio_format": str(os.getenv("TRPG_TTS_AUDIO_FORMAT") or saved.get("tts_audio_format", "mp3")),
-    "tts_default_voice": str(os.getenv("TRPG_TTS_VOICE") or saved.get("tts_default_voice", "alloy")),
-    "tts_gm_voice": str(saved.get("tts_gm_voice", "")),
-    "tts_player_voice": str(saved.get("tts_player_voice", "")),
-    "tts_timeout_seconds": float(saved.get("tts_timeout_seconds", 60)),
-    "tts_cache_mb": int(saved.get("tts_cache_mb", 256)),
-    "asr_provider": str(os.getenv("TRPG_ASR_PROVIDER") or saved.get("asr_provider", "disabled")),
-    "asr_base_url": str(os.getenv("TRPG_ASR_BASE_URL") or saved.get("asr_base_url", "")),
-    "asr_api_key": ASR_API_KEY,
-    "asr_model": str(os.getenv("TRPG_ASR_MODEL") or saved.get("asr_model", "whisper-1")),
-    "asr_timeout_seconds": float(saved.get("asr_timeout_seconds", 60)),
-    "imagegen_enabled": bool(saved.get("imagegen_enabled", False)),
-    "imagegen_auto_scene": bool(saved.get("imagegen_auto_scene", True)),
-    "imagegen_provider": "openai-compatible",
-    "imagegen_base_url": str(os.getenv("TRPG_IMAGEGEN_BASE_URL") or saved.get("imagegen_base_url", "")),
-    "imagegen_api_key": IMAGEGEN_API_KEY,
-    "imagegen_model": str(os.getenv("TRPG_IMAGEGEN_MODEL") or saved.get("imagegen_model", "")),
-    "imagegen_square_size": str(saved.get("imagegen_square_size", "1024x1024")),
-    "imagegen_landscape_size": str(saved.get("imagegen_landscape_size", "1792x1024")),
-    "imagegen_quality": str(saved.get("imagegen_quality", "")),
-    "imagegen_style_prefix": str(saved.get("imagegen_style_prefix", "")),
-    "imagegen_timeout_seconds": float(saved.get("imagegen_timeout_seconds", 120)),
-    "test_timeout_seconds": float(saved.get("test_timeout_seconds", 30)),
-    "model_request_timeout_seconds": MODEL_REQUEST_TIMEOUT_SECONDS,
-    "narrative_max_tokens": NARRATIVE_MAX_TOKENS,
-    "character_gen_max_tokens": CHARACTER_GEN_MAX_TOKENS,
-    "summary_max_tokens": SUMMARY_MAX_TOKENS,
-    "brief_max_tokens": BRIEF_MAX_TOKENS,
-    "analysis_max_tokens": ANALYSIS_MAX_TOKENS,
-    "text_gen_max_tokens": TEXT_GEN_MAX_TOKENS,
-    "access_token": ACCESS_TOKEN,
-    "bot_token": BOT_TOKEN,
-    "update_channel": saved.get("update_channel", "stable"),
-    "qq_bot_enabled": bool(saved.get("qq_bot_enabled", False)),
-    "qq_bot_running": False,
-    "napcat_host": NAPCAT_HOST,
-    "napcat_port": NAPCAT_PORT,
-    "napcat_token": NAPCAT_TOKEN,
-    "napcat_heartbeat_sec": NAPCAT_HEARTBEAT_SEC,
-    "napcat_reconnect_delay_sec": NAPCAT_RECONNECT_DELAY_SEC,
-    "napcat_action_timeout_sec": NAPCAT_ACTION_TIMEOUT_SEC,
-    "napcat_reply_delay_min_sec": NAPCAT_REPLY_DELAY_MIN_SEC,
-    "napcat_reply_delay_max_sec": NAPCAT_REPLY_DELAY_MAX_SEC,
-    "napcat_command_dedup_window_sec": NAPCAT_COMMAND_DEDUP_WINDOW_SEC,
-    "napcat_connection_id": NAPCAT_CONNECTION_ID,
-    "napcat_chat_filter_enabled": bool(saved.get("napcat_chat_filter_enabled", False)),
-    "napcat_show_dropped_logs": bool(saved.get("napcat_show_dropped_logs", False)),
-    "napcat_group_list_mode": saved.get("napcat_group_list_mode", "whitelist"),
-    "napcat_group_list": saved.get("napcat_group_list", []),
-    "napcat_private_list_mode": saved.get("napcat_private_list_mode", "whitelist"),
-    "napcat_private_list": saved.get("napcat_private_list", []),
-    "napcat_blocked_users": saved.get("napcat_blocked_users", []),
-    "napcat_block_official_bots": bool(saved.get("napcat_block_official_bots", True)),
-    "proxy_enabled": PROXY_ENABLED,
-    "proxy_url": PROXY_URL,
-    "public_base_url": str(saved.get("public_base_url", "")),
-    "hub_telemetry_enabled": bool(saved.get("hub_telemetry_enabled", False)),
-    "hub_telemetry_choice_made": bool(saved.get("hub_telemetry_choice_made", False)),
-    **legal_svc.persisted_acceptance_state(saved),
-    "legal_privacy_acknowledged_version": saved.get("legal_privacy_acknowledged_version", ""),
-    # 原样携带：save_config 白名单持久化该字段，防止其他设置保存时丢失；
-    # 对外视图走专用 /api/system/security/transport（脱敏）。
-    "web_transport": dict(saved.get("web_transport") or {}),
-}
-
-ROOT = Path(__file__).parent
-PROMPTS_DIR = ROOT / "prompts"
-BUILTIN_RULES_DIR = ROOT / "templates" / "rules"
-BUILTIN_WORLDS_DIR = ROOT / "templates" / "worlds"
-BUILTIN_ADVENTURES_DIR = ROOT / "templates" / "adventures"
-RULES_DIR = DATA_DIR / "templates" / "rules"
-WORLDS_DIR = DATA_DIR / "templates" / "worlds"
-ADVENTURES_DIR = DATA_DIR / "templates" / "adventures"
-STATIC_V2_DIR = ROOT / "static-v2"
+PROMPTS_DIR = RUNTIME_PATHS.prompts_dir
+BUILTIN_RULES_DIR = RUNTIME_PATHS.builtin_rules_dir
+BUILTIN_WORLDS_DIR = RUNTIME_PATHS.builtin_worlds_dir
+BUILTIN_ADVENTURES_DIR = RUNTIME_PATHS.builtin_adventures_dir
+RULES_DIR = RUNTIME_PATHS.rules_dir
+WORLDS_DIR = RUNTIME_PATHS.worlds_dir
+ADVENTURES_DIR = RUNTIME_PATHS.adventures_dir
+STATIC_V2_DIR = RUNTIME_PATHS.static_v2_dir
 
 _rule_sync = sync_template_catalog(BUILTIN_RULES_DIR, RULES_DIR, "rules")
 _world_sync = sync_template_catalog(BUILTIN_WORLDS_DIR, WORLDS_DIR, "worlds")
@@ -346,63 +157,19 @@ if any(_rule_sync.values()) or any(_world_sync.values()) or any(_adventure_sync.
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    CONFIG_STORE.atomic_write_json(path, data)
 
 
 def _mask_secret(value: str) -> dict:
-    if not value:
-        return {"configured": False, "masked": ""}
-    return {"configured": True, "masked": f"***{value[-4:]}"}
+    return CONFIG_STORE.mask_secret(value)
 
 
 def _public_config() -> dict:
-    public = {k: v for k, v in STATE.items()
-              if k not in ("api_key", "embedding_api_key", "fallback1_api_key", "fallback2_api_key", "tts_api_key", "asr_api_key", "imagegen_api_key", "access_token", "bot_token", "napcat_token", "proxy_url", "web_transport")
-              and not is_provider_secret_key(k)}
-    public["ai_providers"] = [
-        {**entry, "api_key": _mask_secret(STATE.get(provider_secret_key(entry["id"]), ""))}
-        for entry in STATE.get("ai_providers", [])
-    ]
-    public["api_key"] = _mask_secret(STATE.get("api_key", ""))
-    public["embedding_api_key"] = _mask_secret(STATE.get("embedding_api_key", ""))
-    public["fallback1_api_key"] = _mask_secret(STATE.get("fallback1_api_key", ""))
-    public["fallback2_api_key"] = _mask_secret(STATE.get("fallback2_api_key", ""))
-    public["tts_api_key"] = _mask_secret(STATE.get("tts_api_key", ""))
-    public["asr_api_key"] = _mask_secret(STATE.get("asr_api_key", ""))
-    public["imagegen_api_key"] = _mask_secret(STATE.get("imagegen_api_key", ""))
-    public["access_password"] = mask_access_password(STATE.get("access_token", ""))
-    public["bot_token"] = _mask_secret(STATE.get("bot_token", ""))
-    public["bot_token_source"] = "env" if os.getenv("TRPG_BOT_TOKEN") else "generated"
-    public["web_cors_origins_source"] = "env" if WEB_CORS_ENV_VALUE else "config"
-    public["napcat_token"] = _mask_secret(STATE.get("napcat_token", ""))
-    proxy_url = STATE.get("proxy_url", "")
-    public["proxy_url"] = mask_proxy_url(proxy_url)
-    if not STATE.get("proxy_enabled"):
-        public["proxy_source"] = "disabled"
-    elif _CONFIG_PROXY_URL or (STATE.get("proxy_url") and STATE.get("proxy_url") != _ENV_PROXY_URL):
-        public["proxy_source"] = "config"
-    elif _ENV_PROXY_URL:
-        public["proxy_source"] = "env"
-    else:
-        public["proxy_source"] = "empty"
-    public["proxy_supported"] = is_supported_proxy_url(effective_proxy_url(bool(STATE.get("proxy_enabled")), proxy_url))
-    return public
+    return CONFIG_STORE.public_view(RUNTIME_CONFIG)
 
 
 def save_config():
-    non_sensitive = {k: v for k, v in STATE.items()
-                     if k not in ("api_key", "embedding_api_key", "fallback1_api_key", "fallback2_api_key", "tts_api_key", "asr_api_key", "imagegen_api_key", "access_token", "bot_token", "napcat_token", "proxy_url", "qq_bot_running")
-                     and not is_provider_secret_key(k)}
-    _atomic_write_json(CONFIG_FILE, non_sensitive)
-    sensitive = {k: v for k, v in STATE.items()
-                 if k in ("api_key", "embedding_api_key", "fallback1_api_key", "fallback2_api_key", "tts_api_key", "asr_api_key", "imagegen_api_key", "access_token", "bot_token", "napcat_token", "proxy_url")
-                 or is_provider_secret_key(k)}
-    sensitive = {k: v for k, v in sensitive.items()
-                 if not (k == "access_token" and os.getenv("TRPG_ACCESS_TOKEN"))}
-    if any(v for v in sensitive.values()) or SECRETS_FILE.exists():
-        _atomic_write_json(SECRETS_FILE, sensitive)
+    CONFIG_STORE.save(STATE)
 
 
 def _legacy_plugin_bot_token() -> str:
@@ -494,7 +261,7 @@ def _activate_api_runtime(subsystems: TRPGSubsystems, api: WebAPI) -> None:
 def _runtime_composition() -> RuntimeComposition:
     """Build the composition boundary from current compatibility globals."""
     return RuntimeComposition(
-        paths=RuntimePaths(
+        paths=CompositionPaths(
             data_dir=DATA_DIR,
             prompts_dir=PROMPTS_DIR,
             rules_dir=RULES_DIR,

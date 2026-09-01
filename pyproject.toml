@@ -33,6 +33,8 @@ files = [
     "src/rulesets/registry.py",
     "src/rulesets/legacy_adapter.py",
     "src/webui/config_update.py",
+    "src/webui/composition.py",
+    "src/webui/runtime_config.py",
     "src/webui/services/adventures.py",
     "src/webui/services/assistant.py",
     "src/webui/services/character_cards.py",
