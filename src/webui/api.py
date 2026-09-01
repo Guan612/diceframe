@@ -146,6 +146,17 @@ class WebAPI:
             adventures_dir or self._builtin_adventures_dir
         )
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
+        self._ruleset_rest_dependencies = ruleset_rest.RulesetRestDependencies(
+            load_rule_by_id=self._load_rule_by_id,
+            ruleset_registry=self._ruleset_registry,
+        )
+        self._live_ruleset_rest_dependencies = ruleset_rest.LiveRulesetRestDependencies(
+            get_instance=self._reg.get,
+            parse_game_key=_parse_game_key,
+            save_instance=self._reg.save,
+            load_rule_for_game=self._load_rule_for_game,
+            ruleset_registry=self._ruleset_registry,
+        )
         self._content = content.PublicContentService(content_cache_dir)
         self._legal = legal.LegalService(
             legal.LegalDependencies(
@@ -1342,7 +1353,23 @@ class WebAPI:
     def ruleset_rest_resolve(
         self, rule_id: str, body: dict[str, Any], language: str = "",
     ) -> dict[str, Any]:
-        return ruleset_rest.resolve(self, rule_id, body, language)
+        return ruleset_rest.resolve(
+            self._ruleset_rest_dependencies, rule_id, body, language,
+        )
+
+    async def ruleset_rest_resolve_live(
+        self, game_key: str, user_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await ruleset_rest.resolve_live(
+            self._live_ruleset_rest_dependencies, game_key, user_id, body,
+        )
+
+    async def ruleset_rest_resolve_live_party(
+        self, game_key: str, user_id: str, body: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await ruleset_rest.resolve_live_party(
+            self._live_ruleset_rest_dependencies, game_key, user_id, body,
+        )
 
     async def ruleset_available_actions(
         self, game_key: str, requester_id: str, requester_is_gm: bool = False,

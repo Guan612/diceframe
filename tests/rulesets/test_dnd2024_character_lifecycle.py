@@ -37,6 +37,15 @@ class _Api:
             "rule_name": "5E 2024 SRD",
             "runtime": {"id": "core:dnd2024", "minimum_version": 1},
         })
+        self._live_ruleset_rest_dependencies = (
+            ruleset_rest.LiveRulesetRestDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+            )
+        )
 
     @staticmethod
     def _parse_key(game_key: str):
@@ -63,6 +72,18 @@ class _Api:
 
     def save_character_card(self, character: dict):
         return character_cards.save_character_card(self, character)
+
+    async def ruleset_rest_resolve_live(self, game_key: str, user_id: str, body):
+        return await ruleset_rest.resolve_live(
+            self._live_ruleset_rest_dependencies, game_key, user_id, body,
+        )
+
+    async def ruleset_rest_resolve_live_party(
+        self, game_key: str, user_id: str, body,
+    ):
+        return await ruleset_rest.resolve_live_party(
+            self._live_ruleset_rest_dependencies, game_key, user_id, body,
+        )
 
 
 def _professional_character(runtime: Dnd2024Runtime) -> dict:
@@ -343,7 +364,8 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
     sheet["hp"] = 1
 
     applied = await ruleset_rest.resolve_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short",
             "hit_dice": {"d10": 1},
@@ -353,7 +375,8 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
         },
     )
     duplicate = await ruleset_rest.resolve_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short",
             "hit_dice": {"d10": 1},
@@ -363,7 +386,8 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
         },
     )
     forged = await ruleset_rest.resolve_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short",
             "hit_die_rolls": {"d10": [10]},
@@ -401,7 +425,8 @@ async def test_multiplayer_rest_waits_for_every_present_character_and_resolves_o
         sheet["ruleset_character"]["resources"]["hp"] = 1
 
     waiting = await ruleset_rest.resolve_live_party(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short", "hit_dice": {"d10": 1},
             "confirm_elapsed_time": True, "expected_revision": 0,
@@ -417,7 +442,8 @@ async def test_multiplayer_rest_waits_for_every_present_character_and_resolves_o
     assert instance.get_character_sheet("ally")["hp"] == 1
 
     resolved = await ruleset_rest.resolve_live_party(
-        api, "web|character-lifecycle|web_bot", "ally",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "ally",
         {
             "rest": "short", "hit_dice": {"d10": 1},
             "confirm_elapsed_time": True, "expected_revision": 0,

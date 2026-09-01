@@ -182,8 +182,6 @@ async def api_live_advancement_control(request: web.Request) -> web.Response:
 
 
 async def api_live_character_rest(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_rest import resolve_live, resolve_live_party
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -201,9 +199,9 @@ async def api_live_character_rest(request: web.Request) -> web.Response:
         )
     payload = await request.json()
     result = await (
-        resolve_live_party(api, gk, uid, payload)
+        api.ruleset_rest_resolve_live_party(gk, uid, payload)
         if not inst.solo_mode
-        else resolve_live(api, gk, uid, payload)
+        else api.ruleset_rest_resolve_live(gk, uid, payload)
     )
     await _broadcast_ruleset_change(request, gk, result)
     code = str(result.get("code") or "")
