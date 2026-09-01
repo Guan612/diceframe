@@ -253,6 +253,26 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._map_dependencies = maps.MapDependencies(
+            get_instance=self._reg.get,
+            parse_game_key=_parse_game_key,
+            list_lore_entries=self._lore.list_entries,
+            list_map_assets=(
+                plugin_host.list_map_assets
+                if plugin_host is not None
+                else lambda _world_id: {
+                    "maps": [],
+                    "locations": [],
+                    "icons": [],
+                    "scenes": [],
+                }
+            ),
+            validate_background_selection=self.validate_map_background_selection,
+            save_instance=self._reg.save,
+            load_world_template=self._load_world_template,
+            map_background_file=self.map_background_file,
+            generated_image_file=self.generated_image_file,
+        )
         self._assistant_dependencies = assistant.AssistantDependencies(
             list_plugins=self.list_plugins,
             llm_configuration_error=self._llm_configuration_error,
@@ -1399,7 +1419,11 @@ class WebAPI:
         game_key: str,
         selection: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return await maps.update_map_background(self, game_key, selection)
+        return await maps.update_map_background(
+            self._map_dependencies,
+            game_key,
+            selection,
+        )
 
     # ---- AI 生成 ----
 
@@ -1479,10 +1503,14 @@ class WebAPI:
     # ----
 
     def get_map_locations(self, game_key: str) -> dict[str, Any]:
-        return maps.get_map_locations(self, game_key)
+        return maps.get_map_locations(self._map_dependencies, game_key)
 
     def map_background_asset(self, game_key: str, asset_id: str) -> Path | None:
-        return maps.map_background_asset(self, game_key, asset_id)
+        return maps.map_background_asset(
+            self._map_dependencies,
+            game_key,
+            asset_id,
+        )
 
     @staticmethod
     def _parse_key(game_key: str) -> tuple:

@@ -37,6 +37,7 @@ files = [
     "src/webui/services/content_pack_maps.py",
     "src/webui/services/game_queries.py",
     "src/webui/services/generation.py",
+    "src/webui/services/maps.py",
     "src/webui/services/rules.py",
     "src/webui/services/tunnel.py",
     "src/webui/services/turns.py",

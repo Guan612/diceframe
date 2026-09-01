@@ -44,6 +44,36 @@ class ContentMapApiFacade:
         )
 
 
+async def _unused_map_save(_instance):
+    return None
+
+
+def _map_dependencies(api) -> map_service.MapDependencies:
+    plugin_host = getattr(api, "_plugins", None)
+    load_world_template = getattr(api, "_load_world_template", None)
+    return map_service.MapDependencies(
+        get_instance=api._reg.get,
+        parse_game_key=api._parse_key,
+        list_lore_entries=api._lore.list_entries,
+        list_map_assets=(
+            plugin_host.list_map_assets
+            if plugin_host is not None
+            else lambda _world_id: {
+                "maps": [], "locations": [], "icons": [], "scenes": [],
+            }
+        ),
+        validate_background_selection=lambda _selection: {"kind": "auto"},
+        save_instance=_unused_map_save,
+        load_world_template=(
+            load_world_template
+            if callable(load_world_template)
+            else lambda _world_id: None
+        ),
+        map_background_file=lambda _asset_id: None,
+        generated_image_file=lambda _asset_id: None,
+    )
+
+
 def test_import_all_plugin_content_imports_characters_and_entries(tmp_path):
     from src.webui.services.plugins import import_all_plugin_content
 
@@ -1229,7 +1259,7 @@ async def test_content_pack_maps_are_consumed_by_map_service(tmp_path):
         def _parse_key(game_key):
             return ("web", game_key, "web_bot")
 
-    result = map_service.get_map_locations(Api, "demo")
+    result = map_service.get_map_locations(_map_dependencies(Api), "demo")
 
     assert result["locations"][0]["id"] == "town"
     assert result["assets"]["icons"][0]["url"] == "/api/plugins/assets/map-assets/maps/icons/town.png"
@@ -1258,7 +1288,7 @@ def test_fantasy_world_uses_builtin_map_background_without_plugin(tmp_path):
         def _parse_key(game_key):
             return ("web", game_key, "web_bot")
 
-    result = map_service.get_map_locations(Api, "demo")
+    result = map_service.get_map_locations(_map_dependencies(Api), "demo")
 
     assert result["active_map"]["id"] == "builtin:map:fantasy-region-v1"
     assert result["active_map"]["background"]["url"] == "/v2-assets/ui/maps/fantasy-region-v1.webp"
@@ -1290,7 +1320,7 @@ def test_copied_world_uses_builtin_background_recommended_by_rule(rule_id, asset
         def _parse_key(game_key):
             return ("web", game_key, "web_bot")
 
-    result = map_service.get_map_locations(Api, "demo")
+    result = map_service.get_map_locations(_map_dependencies(Api), "demo")
 
     assert result["active_map"]["id"] == f"builtin:map:{asset_id}"
     assert result["active_map"]["background"]["url"] == f"/v2-assets/ui/maps/{asset_id}.webp"
@@ -1320,7 +1350,7 @@ def test_old_save_without_rule_uses_world_template_rule_for_builtin_background()
         def _load_world_template(_world_id):
             return {"default_rule": "freeform_coc"}
 
-    result = map_service.get_map_locations(Api, "demo")
+    result = map_service.get_map_locations(_map_dependencies(Api), "demo")
 
     assert result["active_map"]["id"] == "builtin:map:occult-town-v1"
 
@@ -1388,7 +1418,7 @@ async def test_content_pack_map_definition_applies_background_icons_and_stable_c
         def _load_world_template(_world_id):
             return {"world_id": "coc_horror", "default_map": "plugin:map-assets:map:arkham"}
 
-    result = map_service.get_map_locations(Api, "demo")
+    result = map_service.get_map_locations(_map_dependencies(Api), "demo")
 
     assert result["current_location_id"] == "station"
     assert result["active_map"]["id"] == "plugin:map-assets:map:arkham"
