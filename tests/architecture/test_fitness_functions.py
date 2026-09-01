@@ -123,6 +123,22 @@ def test_new_generic_backend_concrete_ruleset_import_is_rejected(tmp_path: Path)
         )
 
 
+def test_package_init_relative_ruleset_import_is_rejected(tmp_path: Path) -> None:
+    module = tmp_path / "src/engine/__init__.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(
+        "from ..rulesets.dnd2024.runtime import Dnd2024Runtime\n",
+        encoding="utf-8",
+    )
+
+    debt = scan_backend_concrete_ruleset_debt(tmp_path)
+    assert DependencyDebt(
+        "src/engine/__init__.py",
+        "concrete_import",
+        "src.rulesets.dnd2024.runtime",
+    ) in debt
+
+
 def test_new_generic_frontend_concrete_ruleset_import_is_rejected(tmp_path: Path) -> None:
     component = tmp_path / "frontend-v2/src/features/rulesets/NewPanel.vue"
     component.parent.mkdir(parents=True)

@@ -80,11 +80,7 @@ def _function_arguments(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterabl
 
 
 def _python_package_parts(root: Path, path: Path) -> tuple[str, ...]:
-    relative = path.relative_to(root).with_suffix("")
-    parts = relative.parts
-    if path.stem == "__init__":
-        return parts
-    return parts[:-1]
+    return path.relative_to(root).with_suffix("").parts[:-1]
 
 
 def _resolve_import_from(root: Path, path: Path, node: ast.ImportFrom) -> str:
