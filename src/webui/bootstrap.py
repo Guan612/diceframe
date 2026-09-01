@@ -13,9 +13,11 @@ from typing import Any
 from aiohttp import web
 
 from src.ai_providers import resolve_provider
+from src.adventures import sync_adventure_catalog
 from src.common_factory import TRPGSubsystems
 from src.hub_client import HubClient
 from src.plugin_host import PluginHost
+from src.template_catalog import sync_template_catalog
 from src.web_transport import ServerTransport
 from src.webui.assistant_knowledge import prefetch_remote_indexes
 from src.webui.host_credentials import HostCredentials
@@ -27,6 +29,12 @@ from src.webui.services import updater as updater_svc
 class BootstrapPaths:
     root: Path
     data_dir: Path
+    builtin_rules_dir: Path
+    builtin_worlds_dir: Path
+    builtin_adventures_dir: Path
+    rules_dir: Path
+    worlds_dir: Path
+    adventures_dir: Path
 
 
 @dataclass(frozen=True)
@@ -35,6 +43,7 @@ class BootstrapDependencies:
     state: dict
     environ: Mapping[str, str]
     transport: ServerTransport
+    generation_defaults_migrated: bool
     credentials: Callable[[], HostCredentials]
     save_config: Callable[[], None]
     build_subsystems: Callable[..., TRPGSubsystems]
@@ -91,6 +100,10 @@ class WebUIBootstrap:
     async def on_startup(self, app: web.Application) -> None:
         dependencies = self.dependencies
         state = dependencies.state
+        self.sync_builtin_templates()
+        if dependencies.generation_defaults_migrated:
+            dependencies.save_config()
+            self.logger.warning("已迁移 generation 默认值到新版本配置")
         dependencies.credentials().initialize_access_password()
         dependencies.credentials().ensure_bot_token()
         subsystems = dependencies.build_subsystems()
@@ -200,6 +213,32 @@ class WebUIBootstrap:
             self.certificate_renewal_loop(app),
             name="certificate-renewal",
         )
+
+    def sync_builtin_templates(self) -> None:
+        paths = self.dependencies.paths
+        rule_sync = sync_template_catalog(
+            paths.builtin_rules_dir,
+            paths.rules_dir,
+            "rules",
+        )
+        world_sync = sync_template_catalog(
+            paths.builtin_worlds_dir,
+            paths.worlds_dir,
+            "worlds",
+        )
+        adventure_sync = sync_adventure_catalog(
+            paths.builtin_adventures_dir,
+            paths.adventures_dir,
+        )
+        if any(rule_sync.values()) or any(world_sync.values()) or any(
+            adventure_sync.values()
+        ):
+            self.logger.info(
+                "模板目录已同步到 data: rules=%s worlds=%s adventures=%s",
+                rule_sync,
+                world_sync,
+                adventure_sync,
+            )
 
     def _migrate_portable_plugin_packages(self, plugin_host: PluginHost) -> None:
         install_root = str(

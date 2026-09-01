@@ -2,6 +2,19 @@
 
 本文描述当前实现，不是路线图。代码依赖方向为 `routes -> WebAPI -> services -> 核心`；核心层不得导入 `src.webui`，WebAPI 是委托层，跨 service 调用经由 API 委托。
 
+## WebUI 启动与配置
+
+`web_server.py` 是源码版、Windows 便携版和 Docker 共用的稳定启动入口，主要负责加载项目环境、组合明确的 WebUI owner，并启动 aiohttp listener。具体职责位于：
+
+- `src/webui/runtime_config.py`：`RuntimeConfig` / `ConfigStore`，唯一应用 `env > secrets.json > config.json` 优先级并负责敏感配置分离、脱敏与原子写入；
+- `src/webui/composition.py`：从显式路径、配置状态和 factory 构造核心 subsystem 与 `WebAPI`；
+- `src/webui/application.py`：`create_app`、middleware 与 route composition，不启动监听器；
+- `src/webui/bootstrap.py`：模板同步、插件/Hub 启动、后台任务、存档恢复和清理；
+- `src/webui/access_control.py`：owner、Bot、SSE ticket、玩家分享与房间密码访问边界；
+- `src/webui/config_controller.py`：配置热重载事务和服务商连接测试。
+
+模板同步和配置默认值迁移写盘只在真实 application startup 发生，不在导入独立 owner 模块时发生。配置热重载必须先完整构造候选 runtime，写盘成功后才替换活动状态；构造或写盘失败均保留旧 runtime。
+
 ## Content V2
 
 所有输入先经过兼容边界，再进入当前 canonical model：

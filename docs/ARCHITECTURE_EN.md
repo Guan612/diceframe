@@ -2,6 +2,19 @@
 
 This document describes the current implementation, not a roadmap. The dependency direction is `routes -> WebAPI -> services -> core`; core code must not import `src.webui`, WebAPI methods are delegates, and cross-service calls go through API delegates.
 
+## WebUI Startup and Configuration
+
+`web_server.py` remains the stable source, Windows portable, and Docker entrypoint. It primarily loads the project environment, composes the explicit WebUI owners, and starts the aiohttp listener. Responsibilities are owned by:
+
+- `src/webui/runtime_config.py`: `RuntimeConfig` / `ConfigStore`, the single `env > secrets.json > config.json` precedence boundary plus secret splitting, redaction, and atomic persistence;
+- `src/webui/composition.py`: core subsystem and `WebAPI` construction from explicit paths, state, and factories;
+- `src/webui/application.py`: `create_app`, middleware, and route composition without starting a listener;
+- `src/webui/bootstrap.py`: template synchronization, plugin/Hub startup, background tasks, save recovery, and cleanup;
+- `src/webui/access_control.py`: owner, Bot, SSE ticket, player-share, and room-password access control;
+- `src/webui/config_controller.py`: transactional runtime reload and provider connection tests.
+
+Template synchronization and migrated-default persistence happen only during real application startup, not when importing the individual owner modules. A runtime configuration reload fully constructs the candidate runtime before persistence and swaps active state only after persistence succeeds; construction or persistence failure keeps the previous runtime active.
+
 ## Content V2
 
 Inputs cross a compatibility boundary before entering the current canonical model:
