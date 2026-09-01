@@ -8,8 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from src.webui.services.ruleset_builder import validate_draft_shape
-from src.rulesets.dnd2024 import advancement_access
-from src.rulesets.dnd2024.progression.catalog import ProgressionCatalogError
+from src.rulesets.contracts import LiveAdvancementTransactionRuntime
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -251,7 +250,7 @@ def apply_card(
     # normal client error instead of an unhandled exception.
     try:
         readiness = runtime.preview_advancement(rule, card, choices)
-    except (ProgressionCatalogError, ValueError) as exc:
+    except ValueError as exc:
         return {
             "ok": False, "code": "ADVANCEMENT_NOT_READY", "error": str(exc),
             "revision": revision,
@@ -339,17 +338,16 @@ def preview_live(
         return error
     choices = _entity_choices(body)
     advancement = runtime.preview_advancement(rule, character, choices)
-    runtime_id = str((getattr(_instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id == "core:dnd2024":
+    if isinstance(runtime, LiveAdvancementTransactionRuntime):
         try:
-            advancement_access.require_entitlement(
+            runtime.validate_live_advancement(
                 _instance, user_id, int(advancement.get("to_level", 0) or 0),
             )
         except ValueError as exc:
             return {
                 "ok": False, "code": "ADVANCEMENT_NOT_GRANTED", "error": str(exc),
                 "revision": int(character.get("ruleset_revision", 0) or 0),
-                "advancement_status": advancement_access.view(_instance),
+                "advancement_status": runtime.live_advancement_status(_instance),
             }
     return {
         "ok": True,
@@ -416,7 +414,7 @@ async def apply_live(
 
     try:
         readiness = runtime.preview_advancement(rule, character, choices)
-    except (ProgressionCatalogError, ValueError) as exc:
+    except ValueError as exc:
         return {
             "ok": False, "code": "ADVANCEMENT_NOT_READY", "error": str(exc),
             "revision": revision,
@@ -429,10 +427,12 @@ async def apply_live(
             or "character cannot advance at this time",
             "revision": revision,
         }
-    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id == "core:dnd2024":
+    live_policy = (
+        runtime if isinstance(runtime, LiveAdvancementTransactionRuntime) else None
+    )
+    if live_policy is not None:
         try:
-            advancement_access.require_entitlement(
+            live_policy.validate_live_advancement(
                 instance, user_id, int(readiness.get("to_level", 0) or 0),
             )
         except ValueError as exc:
@@ -449,24 +449,34 @@ async def apply_live(
     })
     updated["ruleset_operation_log"] = operation_log[-32:]
     before_player = deepcopy(instance.players[user_id])
-    before_advancement = advancement_access.snapshot(instance) if runtime_id == "core:dnd2024" else None
+    before_advancement = (
+        live_policy.snapshot_live_advancement(instance)
+        if live_policy is not None
+        else None
+    )
     try:
-        if runtime_id == "core:dnd2024":
-            advancement_access.consume(instance, user_id, int(readiness.get("to_level", 0) or 0))
+        if live_policy is not None:
+            live_policy.consume_live_advancement(
+                instance, user_id, int(readiness.get("to_level", 0) or 0),
+            )
         instance.set_character_sheet(user_id, updated)
-        if runtime_id == "core:dnd2024":
-            advancement_access.reconcile_after_level_up(instance, user_id)
+        if live_policy is not None:
+            live_policy.reconcile_live_advancement(instance, user_id)
         await dependencies.save_instance(instance)
     except Exception:
         instance.players[user_id] = before_player
-        if before_advancement is not None:
-            instance.ruleset_state["advancement"] = before_advancement
+        if live_policy is not None:
+            live_policy.restore_live_advancement(instance, before_advancement)
         raise
     return {
         "ok": True, "rule_id": rule.rule_id, "game_key": game_key,
         "user_id": user_id, "revision": revision + 1, "duplicate": False,
         "character": deepcopy(updated),
-        "advancement_status": advancement_access.view(instance) if runtime_id == "core:dnd2024" else None,
+        "advancement_status": (
+            live_policy.live_advancement_status(instance)
+            if live_policy is not None
+            else None
+        ),
     }
 
 
@@ -477,10 +487,14 @@ def live_status(
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
-    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id != "core:dnd2024":
+    rule = dependencies.load_rule_for_game(instance)
+    try:
+        runtime = dependencies.ruleset_registry.resolve(rule.template) if rule else None
+    except (AttributeError, TypeError, ValueError):
+        runtime = None
+    if not isinstance(runtime, LiveAdvancementTransactionRuntime):
         return {"ok": False, "code": "RULESET_ADVANCEMENT_UNAVAILABLE", "error": "当前规则不支持该升级控制"}
-    return {"ok": True, "advancement": advancement_access.view(instance)}
+    return {"ok": True, "advancement": runtime.live_advancement_status(instance)}
 
 
 async def control_live(
@@ -491,37 +505,16 @@ async def control_live(
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
-    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id != "core:dnd2024":
+    rule = dependencies.load_rule_for_game(instance)
+    try:
+        runtime = dependencies.ruleset_registry.resolve(rule.template) if rule else None
+    except (AttributeError, TypeError, ValueError):
+        runtime = None
+    if not isinstance(runtime, LiveAdvancementTransactionRuntime):
         return {"ok": False, "code": "RULESET_ADVANCEMENT_UNAVAILABLE", "error": "当前规则不支持该升级控制"}
     parsed = validate_draft_shape(body)
-    action = str(parsed.get("action") or "").strip().casefold()
-    try:
-        if action == "configure":
-            advancement_access.configure(
-                instance, str(parsed.get("mode") or ""), str(parsed.get("authority") or ""),
-            )
-        elif action == "grant":
-            user_id = str(parsed.get("user_id") or "").strip()
-            targets = list(instance.alive_players) if user_id == "all" else [user_id]
-            if not targets:
-                return {"ok": False, "code": "CHARACTER_NOT_FOUND", "error": "没有可发放升级资格的角色"}
-            for target in targets:
-                advancement_access.grant(instance, target, source="gm")
-        elif action == "award_xp":
-            if advancement_access.view(instance)["mode"] != "xp":
-                return {"ok": False, "code": "INVALID_ADVANCEMENT_MODE", "error": "当前不是 XP 升级模式"}
-            user_id = str(parsed.get("user_id") or "").strip()
-            targets = list(instance.alive_players) if user_id == "all" else [user_id]
-            try:
-                amount = int(parsed.get("amount"))
-            except (TypeError, ValueError):
-                return {"ok": False, "code": "INVALID_XP_REWARD", "error": "请填写有效的 XP 奖励"}
-            for target in targets:
-                advancement_access.award_xp(instance, target, amount, source="gm")
-        else:
-            return {"ok": False, "code": "INVALID_ADVANCEMENT_ACTION", "error": "未知升级控制操作"}
-    except ValueError as exc:
-        return {"ok": False, "code": "INVALID_ADVANCEMENT_ACTION", "error": str(exc)}
+    result = runtime.apply_live_advancement_control(instance, parsed)
+    if not result.get("ok"):
+        return result
     await dependencies.save_instance(instance)
-    return {"ok": True, "advancement": advancement_access.view(instance)}
+    return result

@@ -21,69 +21,13 @@ from scripts.architecture_fitness import (
 
 ROOT = Path(__file__).resolve().parents[2]
 
-_SERVICE_TARGETS = {
-    "facade_service_call": "api.<service>()",
-    "private_facade_access": "api._*",
-    "webapi_import": "src.webui.api.WebAPI",
-    "webapi_parameter": "WebAPI",
-}
-
-
-def _service_debt(path: str, *kinds: str) -> set[DependencyDebt]:
-    return {
-        DependencyDebt(f"src/webui/services/{path}", kind, _SERVICE_TARGETS[kind])
-        for kind in kinds
-    }
-
-
-_STANDARD_WEBAPI_DEBT = (
-    "private_facade_access",
-    "webapi_import",
-    "webapi_parameter",
-)
-_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT = (
-    "facade_service_call",
-    *_STANDARD_WEBAPI_DEBT,
-)
-
 # Historical service-locator debt. Do not add entries. Remove a file or
 # category in the same PR that removes the corresponding dependency.
 SERVICE_LOCATOR_ALLOWLIST: frozenset[DependencyDebt] = frozenset()
 
 # Historical concrete-ruleset knowledge in otherwise generic backend modules.
 # Each entry is a dependency semantic, not a line/function/source snapshot.
-BACKEND_CONCRETE_RULESET_ALLOWLIST = frozenset(
-    {
-        DependencyDebt("src/webui/services/adventures.py", "runtime_id", "core:dnd2024"),
-        DependencyDebt(
-            "src/webui/services/ruleset_advancement.py",
-            "concrete_import",
-            "src.rulesets.dnd2024",
-        ),
-        DependencyDebt(
-            "src/webui/services/ruleset_advancement.py",
-            "concrete_import",
-            "src.rulesets.dnd2024.progression.catalog",
-        ),
-        DependencyDebt(
-            "src/webui/services/ruleset_advancement.py", "runtime_id", "core:dnd2024"
-        ),
-        DependencyDebt(
-            "src/webui/services/ruleset_gameplay.py", "runtime_id", "core:dnd2024"
-        ),
-        *(
-            DependencyDebt("src/webui/services/ruleset_gameplay.py", "event_type", event)
-            for event in (
-                "dnd2024.combat.ended",
-                "dnd2024.combat.started",
-                "dnd2024.party_decision.resolved",
-                "dnd2024.tutorial.choice_applied",
-                "dnd2024.tutorial.completed",
-                "dnd2024.tutorial.started",
-            )
-        ),
-    }
-)
+BACKEND_CONCRETE_RULESET_ALLOWLIST: frozenset[DependencyDebt] = frozenset()
 
 # Historical direct imports outside the D&D-owned frontend feature directory.
 FRONTEND_CONCRETE_RULESET_ALLOWLIST = frozenset(
@@ -157,16 +101,16 @@ def test_new_service_locator_dependency_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_removing_backend_allowlist_entry_while_debt_remains_is_rejected() -> None:
-    actual = scan_backend_concrete_ruleset_debt(ROOT)
-    shortened = set(BACKEND_CONCRETE_RULESET_ALLOWLIST)
+def test_removing_frontend_allowlist_entry_while_debt_remains_is_rejected() -> None:
+    actual = scan_frontend_concrete_ruleset_debt(ROOT)
+    shortened = set(FRONTEND_CONCRETE_RULESET_ALLOWLIST)
     shortened.remove(next(iter(shortened)))
 
     with pytest.raises(AssertionError):
         assert_debt_matches_allowlist(
             actual,
             shortened,
-            boundary="generic backend -> dnd2024",
+            boundary="generic frontend -> dnd2024",
         )
 
 

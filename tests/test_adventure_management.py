@@ -9,6 +9,7 @@ import pytest
 from src.adventures import AdventureBundleLoader, sync_adventure_catalog
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.rulesets.registry import RulesetRuntimeRegistry
+from src.rulesets.builtin import default_adventure_runtime_requirement
 from src.webui.services import adventures
 
 
@@ -28,6 +29,7 @@ def _api(tmp_path: Path) -> SimpleNamespace:
         list_instances=api._reg.list_all,
         load_rule_by_id=lambda _rule_id, _language: None,
         ruleset_registry=RulesetRuntimeRegistry(),
+        default_runtime_requirement=default_adventure_runtime_requirement,
     )
     return api
 
@@ -103,10 +105,25 @@ def test_create_adventure_starts_with_a_valid_editable_package(tmp_path: Path) -
     bundle = api._adventure_loader.resolve("user:fog_harbor_case", "zh-CN")
     assert bundle.adventure["start_step_id"] == "opening"
     assert bundle.adventure["steps"][0]["scene_ref"] == "scene:fog_harbor_case_opening"
+    assert bundle.manifest.required_runtime_id == "core:dnd2024"
     detail = adventures.adventure_detail(
         api.dependencies, "user:fog_harbor_case", "zh-CN",
     )["adventure"]
     assert detail["custom"] is True and detail["editable"] is True
+
+
+def test_create_adventure_preserves_explicit_runtime_requirement(tmp_path: Path) -> None:
+    api = _api(tmp_path)
+
+    adventures.create_adventure(api.dependencies, {
+        "directory_id": "external_rules_story",
+        "name": "External rules story",
+        "required_runtime": {"id": "example:custom", "minimum_version": 3},
+    })
+
+    bundle = api._adventure_loader.resolve("user:external_rules_story")
+    assert bundle.manifest.required_runtime_id == "example:custom"
+    assert bundle.manifest.required_runtime_version == 3
 
 
 def test_builtin_and_bound_adventures_are_protected(tmp_path: Path) -> None:

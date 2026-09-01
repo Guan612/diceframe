@@ -7,6 +7,15 @@ from src.rulesets.legacy_adapter import LegacyRulesetAdapter
 from src.rulesets.registry import RulesetRuntimeRegistry
 
 
+def default_adventure_runtime_requirement() -> dict[str, int | str]:
+    """Return the first-party default for newly authored adventure packages."""
+
+    return {
+        "id": Dnd2024Runtime.runtime_id,
+        "minimum_version": Dnd2024Runtime.runtime_version,
+    }
+
+
 def build_default_ruleset_registry(
     adventures_dir: str | Path | None = None,
 ) -> RulesetRuntimeRegistry:

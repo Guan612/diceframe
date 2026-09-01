@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from src.adventures import ADVENTURE_GRAPH_FORMAT, AdventureBundleLoader, LoadedAdventureBundle
+from src.rulesets.dnd2024.adventure_migrations import (
+    apply_unreleased_adventure_binding_migration,
+)
 from src.rulesets.bundle import LoadedRulesetBundle, RulesetBundleLoader
 from src.rulesets.contracts import RulesetCapabilities
 from src.rulesets.dnd2024 import advancement_access
@@ -18,7 +21,12 @@ from src.rulesets.dnd2024.director.planner import (
     plan_adventure_choice,
     plan_encounter_preset,
 )
-from src.rulesets.dnd2024.play import EncounterAccess, resolve_story_encounter_access
+from src.rulesets.dnd2024.play import (
+    EncounterAccess,
+    is_public_story_milestone,
+    public_timeline_projection,
+    resolve_story_encounter_access,
+)
 from src.rulesets.dnd2024.progression import (
     Dnd2024AdvancementEngine,
     Dnd2024ProgressionCatalog,
@@ -119,6 +127,48 @@ class Dnd2024Runtime:
 
     def live_advancement_policy(self, instance: Any) -> dict[str, Any]:
         return advancement_access.project(instance)
+
+    def live_advancement_status(self, instance: Any) -> dict[str, Any]:
+        return advancement_access.view(instance)
+
+    def validate_live_advancement(
+        self, instance: Any, user_id: str, target_level: int,
+    ) -> None:
+        advancement_access.require_entitlement(instance, user_id, target_level)
+
+    def snapshot_live_advancement(self, instance: Any) -> Any:
+        return advancement_access.snapshot(instance)
+
+    def consume_live_advancement(
+        self, instance: Any, user_id: str, target_level: int,
+    ) -> None:
+        advancement_access.consume(instance, user_id, target_level)
+
+    def reconcile_live_advancement(self, instance: Any, user_id: str) -> None:
+        advancement_access.reconcile_after_level_up(instance, user_id)
+
+    def restore_live_advancement(self, instance: Any, snapshot: Any) -> None:
+        advancement_access.restore(instance, snapshot)
+
+    def apply_live_advancement_control(
+        self, instance: Any, command: dict[str, Any],
+    ) -> dict[str, Any]:
+        return advancement_access.control(instance, command)
+
+    def migrate_adventure_binding(
+        self, instance: Any, expected: dict[str, Any],
+    ) -> bool | None:
+        """Apply D&D-owned compatibility for known unreleased adventure digests."""
+
+        return apply_unreleased_adventure_binding_migration(instance, expected)
+
+    def is_public_story_milestone(self, batch: dict[str, Any]) -> bool:
+        return is_public_story_milestone(batch)
+
+    def public_timeline_projection(
+        self, batch: dict[str, Any], locale: str,
+    ) -> dict[str, str]:
+        return public_timeline_projection(batch, locale)
 
     def _campaign_engine(
         self, instance: Any, locale: str = "",

@@ -260,6 +260,17 @@ async def test_m5_http_forces_server_identity_persists_and_replays(tmp_path) -> 
     assert recovered is not None
     assert recovered.ruleset_state["version"] >= encounter["expected_version"] + 1
     assert len(recovered.event_ledger) >= 5
+    public_entries = [
+        entry
+        for entry in recovered.log
+        if any(
+            action.get("source") == "ruleset_authority"
+            for action in entry.get("actions", [])
+        )
+    ]
+    assert public_entries[-1]["gm_response"] == (
+        "Encounter started: the current story has entered combat."
+    )
 
 
 @pytest.mark.asyncio

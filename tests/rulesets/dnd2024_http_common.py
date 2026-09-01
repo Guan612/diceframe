@@ -10,6 +10,7 @@ from __future__ import annotations
 from src.engine.game_instance import GameRegistry
 from src.rules.rule_system import RuleSystem
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
+from src.rulesets.builtin import default_adventure_runtime_requirement
 from src.rulesets.legacy_adapter import LegacyRulesetAdapter
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.services import adventures, ruleset_gameplay
@@ -35,6 +36,7 @@ class GameplayApiShim:
                 self._rule if rule_id == self._rule.rule_id else None
             ),
             ruleset_registry=self._ruleset_registry,
+            default_runtime_requirement=default_adventure_runtime_requirement,
         )
         self._gameplay_dependencies = (
             ruleset_gameplay.RulesetGameplayDependencies(

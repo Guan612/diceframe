@@ -10,11 +10,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from src.migrations import migrate_instance
 from src.webui.services.ruleset_builder import validate_draft_shape
 from src.rulesets.contracts import (
+    AdventureBindingMigrationRuntime,
     AuthoritativeIntentHooks,
     AutomaticIntentRuntime,
+    PublicTimelineProjectionRuntime,
 )
 from src.rulesets.registry import RulesetRuntimeRegistry
 
@@ -37,58 +38,17 @@ def _error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message}
 
 
-def _ruleset_timeline_text(batch: dict[str, Any], instance: Any) -> str:
-    """Create one short public timeline entry for an authoritative ruleset batch."""
+def _append_ruleset_timeline_entry(
+    runtime: PublicTimelineProjectionRuntime,
+    instance: Any,
+    batch: dict[str, Any],
+) -> None:
     intent_type = str(batch.get("intent_type") or "")
-    event_types = {
-        str(event.get("type") or "")
-        for event in batch.get("events", [])
-        if isinstance(event, dict)
-    }
-    chinese = not str(getattr(instance, "language", "") or "").lower().startswith("en")
-    if "dnd2024.combat.started" in event_types:
-        return "遭遇战开始：当前剧情已进入战斗。" if chinese else "Encounter started: the current story has entered combat."
-    if "dnd2024.combat.ended" in event_types:
-        return "遭遇战结束：可以回到当前冒险继续剧情。" if chinese else "Encounter ended: return to the current adventure."
-    if intent_type == "tutorial.choose":
-        return "剧情选择已记录，当前冒险已推进。" if chinese else "Story choice recorded; the current adventure advanced."
-    if intent_type == "party_decision.submit":
-        return "已收到队伍成员的行动意图，等待队伍决策。" if chinese else "A party intent was received; waiting for the group decision."
-    if intent_type == "party_decision.resolve":
-        return "队伍决定已记录，当前冒险已推进。" if chinese else "The party decision was recorded; the current adventure advanced."
-    if intent_type.startswith("session_zero."):
-        return "开团约定已更新。" if chinese else "Session agreement updated."
-    if intent_type.startswith("campaign."):
-        return "战役记录状态已更新。" if chinese else "Campaign record state updated."
-    return "规则行动已由服务器结算。" if chinese else "Rules action resolved by the server."
-
-
-def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None:
-    intent_type = str(batch.get("intent_type") or "")
-    chinese = not str(getattr(instance, "language", "") or "").lower().startswith("en")
-    action_labels = {
-        "tutorial.choose": ("推进当前剧情", "Advance the current story"),
-        "party_decision.submit": ("提交队伍决策意图", "Submit a party decision intent"),
-        "party_decision.resolve": ("结算队伍决定", "Resolve the party decision"),
-        "tutorial.start": ("开始教学冒险", "Start the guided adventure"),
-        "combat.start": ("进入剧情遭遇战", "Enter the story encounter"),
-        "combat.end": ("结束遭遇战", "End the encounter"),
-        "attack": ("进行攻击", "Make an attack"),
-        "cast_spell": ("施放法术", "Cast a spell"),
-        "move": ("移动位置", "Move position"),
-        "end_turn": ("结束回合", "End the turn"),
-    }
-    event_types = {
-        str(event.get("type") or "")
-        for event in batch.get("events", [])
-        if isinstance(event, dict)
-    }
-    if "dnd2024.combat.started" in event_types:
-        action_text = ("进入剧情遭遇战", "Enter the story encounter")[0 if chinese else 1]
-    elif "dnd2024.combat.ended" in event_types:
-        action_text = ("结束剧情遭遇战", "Finish the story encounter")[0 if chinese else 1]
-    else:
-        action_text = action_labels.get(intent_type, ("推进高级规则剧情", "Advance the rules story"))[0 if chinese else 1]
+    projection = runtime.public_timeline_projection(
+        batch, str(getattr(instance, "language", "") or ""),
+    )
+    action_text = str(projection.get("action_text") or "")
+    gm_response = str(projection.get("gm_response") or "")
     submitted_by = next(
         (
             str(event.get("submitted_by") or "")
@@ -111,7 +71,7 @@ def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None
             "intent_type": intent_type,
             "operation_id": str(batch.get("intent_id") or ""),
         }],
-        "gm_response": _ruleset_timeline_text(batch, instance),
+        "gm_response": gm_response,
         "state_changes": [
             str(event.get("type") or "")
             for event in batch.get("events", [])
@@ -124,21 +84,11 @@ def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None
     })
 
 
-def _is_public_story_milestone(batch: dict[str, Any]) -> bool:
-    """Keep the shared story feed readable; turn-by-turn mechanics stay in combat."""
-    event_types = {
-        str(event.get("type") or "")
-        for event in batch.get("events", [])
-        if isinstance(event, dict)
-    }
-    return bool(event_types.intersection({
-        "dnd2024.tutorial.started",
-        "dnd2024.tutorial.choice_applied",
-        "dnd2024.tutorial.completed",
-        "dnd2024.party_decision.resolved",
-        "dnd2024.combat.started",
-        "dnd2024.combat.ended",
-    }))
+def _is_public_story_milestone(runtime: Any, batch: dict[str, Any]) -> bool:
+    return (
+        isinstance(runtime, PublicTimelineProjectionRuntime)
+        and runtime.is_public_story_milestone(batch)
+    )
 
 
 def _context(
@@ -226,12 +176,12 @@ async def _ensure_compatible_adventure_binding(
         return _error("INCOMPATIBLE_ADVENTURE", str(exc))
     if binding == expected:
         return None
-    if str(getattr(runtime, "runtime_id", "") or "") != "core:dnd2024":
+    if not isinstance(runtime, AdventureBindingMigrationRuntime):
         return _error(
             "INCOMPATIBLE_ADVENTURE",
             "bound adventure package is missing or has changed",
         )
-    migrated = migrate_instance(instance, adventure_expected=expected)
+    migrated = runtime.migrate_adventure_binding(instance, expected)
     if migrated is None:
         return _error(
             "INCOMPATIBLE_ADVENTURE",
@@ -318,8 +268,8 @@ async def submit_intent(
             if not isinstance(batch, dict):
                 return _error("INVALID_EVENT_BATCH", "规则运行时没有返回有效事件批次")
             applied = runtime.apply_event_batch(instance, batch)
-            if applied.get("applied") and _is_public_story_milestone(batch):
-                _append_ruleset_timeline_entry(instance, batch)
+            if applied.get("applied") and _is_public_story_milestone(runtime, batch):
+                _append_ruleset_timeline_entry(runtime, instance, batch)
             automatic_batches: list[dict[str, Any]] = []
             automatic_results: list[dict[str, Any]] = []
             if isinstance(runtime, AutomaticIntentRuntime):
@@ -340,8 +290,10 @@ async def submit_intent(
                         raise ValueError("automatic combat intent did not advance state")
                     automatic_batches.append(deepcopy(automatic_batch))
                     automatic_results.append(deepcopy(automatic_applied))
-                    if _is_public_story_milestone(automatic_batch):
-                        _append_ruleset_timeline_entry(instance, automatic_batch)
+                    if _is_public_story_milestone(runtime, automatic_batch):
+                        _append_ruleset_timeline_entry(
+                            runtime, instance, automatic_batch,
+                        )
                 else:
                     raise ValueError("automatic combat turn exceeded the safety limit")
             instance.last_activity = datetime.now(timezone.utc).isoformat()

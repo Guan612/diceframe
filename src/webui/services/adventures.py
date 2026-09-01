@@ -33,6 +33,7 @@ class AdventureDependencies:
     list_instances: Callable[[], list[Any]]
     load_rule_by_id: Callable[[str, str], Any | None]
     ruleset_registry: RulesetRuntimeRegistry
+    default_runtime_requirement: Callable[[], dict[str, Any]]
     builtin_adventures_dir: Path | None = None
 
 
@@ -333,6 +334,26 @@ def create_adventure(
     chapter_id = "chapter_1"
     step_id = "opening"
     source_ref = f"diceframe-user:{adventure_id}"
+    raw_runtime = body.get("required_runtime")
+    runtime_requirement = (
+        dict(raw_runtime)
+        if isinstance(raw_runtime, dict)
+        else dict(dependencies.default_runtime_requirement())
+    )
+    runtime_id = str(runtime_requirement.get("id") or "").strip()
+    raw_minimum_version = runtime_requirement.get("minimum_version", 1)
+    if not runtime_id:
+        raise ValueError("required_runtime.id must not be empty")
+    if isinstance(raw_minimum_version, bool):
+        raise ValueError("required_runtime.minimum_version must be a positive integer")
+    try:
+        minimum_runtime_version = int(raw_minimum_version)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "required_runtime.minimum_version must be a positive integer"
+        ) from exc
+    if minimum_runtime_version < 1:
+        raise ValueError("required_runtime.minimum_version must be a positive integer")
     files: dict[str, Any] = {
         "manifest.json": {
             "schema_version": 1,
@@ -341,7 +362,10 @@ def create_adventure(
             "format": "diceframe:adventure-graph-v1",
             "world_policy": world_policy,
             "recommended_world_id": world_id,
-            "required_runtime": {"id": "core:dnd2024", "minimum_version": 1},
+            "required_runtime": {
+                "id": runtime_id,
+                "minimum_version": minimum_runtime_version,
+            },
             "default_locale": "zh-CN",
             "supported_locales": ["zh-CN", "en"],
             "custom": True,

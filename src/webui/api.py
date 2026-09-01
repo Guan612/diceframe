@@ -16,7 +16,10 @@ from src.adventures import AdventureBundleLoader
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
 from src.rules.loader import RuleBundleLoader
-from src.rulesets.builtin import build_default_ruleset_registry
+from src.rulesets.builtin import (
+    build_default_ruleset_registry,
+    default_adventure_runtime_requirement,
+)
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
 from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
@@ -419,6 +422,7 @@ class WebAPI:
             list_instances=self._reg.list_all,
             load_rule_by_id=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,
+            default_runtime_requirement=default_adventure_runtime_requirement,
             builtin_adventures_dir=self._builtin_adventures_dir,
         )
         self._ruleset_gameplay_dependencies = (
