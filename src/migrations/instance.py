@@ -40,7 +40,10 @@ def _migrate_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
         sheet = player.get("character_sheet")
         if not isinstance(sheet, dict):
             continue
-        currency = sheet.get("currency") if isinstance(sheet.get("currency"), dict) else {}
+        currency_value = sheet.get("currency")
+        currency: dict[str, Any] = (
+            dict(currency_value) if isinstance(currency_value, dict) else {}
+        )
         raw_amount = currency.get("amount", sheet.get("gold", 0))
         try:
             amount = max(0, int(raw_amount or 0))
