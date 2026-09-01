@@ -20,7 +20,7 @@ from src.engine.character_utils import (
 from src.content.worlds import localize_lorebook_entries
 from src.engine.language import localized_text
 from src.engine.health import record_health_event
-from src.engine.economy import resolve_proposal
+from src.engine.economy import complete_effect_group, resolve_proposal
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
@@ -29,6 +29,66 @@ if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
+
+
+def _record_economy_outcome_in_round(
+    instance: Any,
+    outcome: dict[str, Any],
+) -> None:
+    """Attach the authoritative decision to its originating public round."""
+
+    status = str(outcome.get("status") or "")
+    effects_status = str(outcome.get("effects_status") or "none")
+    amount = int(outcome.get("amount", 0) or 0)
+    reason = str(outcome.get("reason") or "经济提案")
+    if status == "committed" and effects_status == "pending":
+        message = localized_text(instance.language, {
+            "en": f"Settlement confirmed ({amount}): {reason}. Linked results are waiting for the remaining decisions.",
+            "zh-CN": f"结算已确认（{amount}）：{reason}。关联结果仍在等待其余决定。",
+            "ja": f"決済確認済み（{amount}）：{reason}。関連結果は残りの判断を待っています。",
+        })
+    elif status == "committed":
+        message = localized_text(instance.language, {
+            "en": f"Settlement confirmed ({amount}): {reason}. Dependent results are now effective.",
+            "zh-CN": f"结算已确认（{amount}）：{reason}。关联结果现已生效。",
+            "ja": f"決済確認済み（{amount}）：{reason}。関連結果が発効しました。",
+        })
+    else:
+        message = localized_text(instance.language, {
+            "en": f"Settlement {status} ({amount}): {reason}. No payment or dependent result occurred.",
+            "zh-CN": f"结算未成立（{amount}）：{reason}。没有付款，关联结果也未生效。",
+            "ja": f"決済不成立（{amount}）：{reason}。支払いも関連結果も発生していません。",
+        })
+    round_number = int(outcome.get("round", 0) or 0)
+    if str(outcome.get("visibility") or "private") != "party":
+        recipients = {
+            str(outcome.get("payer_uid") or ""),
+            str(outcome.get("recipient_uid") or ""),
+        }
+        for uid in recipients:
+            if uid in instance.players:
+                instance.append_private_message(uid, {
+                    "round": round_number,
+                    "text": message,
+                    "kind": "economy_resolution",
+                })
+        return
+    entry = next(
+        (
+            item for item in reversed(instance.log)
+            if int(item.get("round", -1) or -1) == round_number
+        ),
+        None,
+    )
+    if entry is None:
+        return
+    resolutions = entry.setdefault("economy_resolutions", [])
+    outcome_id = str(outcome.get("id") or "")
+    if not any(str(item.get("id") or "") == outcome_id for item in resolutions):
+        resolutions.append(dict(outcome))
+    changes = entry.setdefault("state_changes", [])
+    if message not in changes:
+        changes.append(message)
 
 
 @dataclass(frozen=True)
@@ -60,6 +120,7 @@ class CharacterDependencies:
     rules: CharacterRuleDependencies
     assets: CharacterAssetDependencies
     save_character_card: Callable[[dict[str, Any]], dict[str, Any]]
+    apply_economy_effects: Callable[[Any, dict[str, Any]], Awaitable[None]] | None = None
 
 _ATTR_NAME_EN = {
     "str": "STR",
@@ -617,6 +678,24 @@ async def resolve_payment(
             accepted=bool(accepted),
             grant_reward=grant_reward,
         )
+        effect_group = result.get("effect_group")
+        if (
+            result.get("ok")
+            and isinstance(effect_group, dict)
+            and isinstance(effect_group.get("effects"), dict)
+            and dependencies.apply_economy_effects is not None
+        ):
+            await dependencies.apply_economy_effects(
+                inst, dict(effect_group.get("effects") or {}),
+            )
+            result["effects_committed"] = complete_effect_group(
+                inst, str(effect_group.get("id") or ""),
+            )
+            if result["effects_committed"] and isinstance(result.get("outcome"), dict):
+                result["outcome"]["effects_status"] = "committed"
+        outcome = result.get("outcome")
+        if isinstance(outcome, dict):
+            _record_economy_outcome_in_round(inst, outcome)
     # Insufficient funds changes the proposal to rejected, so persist both
     # successful resolutions and terminal business failures.
     if result.get("ok") or result.get("code") == "INSUFFICIENT_FUNDS":

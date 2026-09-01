@@ -6,12 +6,17 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from src.commands.economy_effects import (
+    defer_narrative_effects,
+    has_economy_proposal,
+    pending_decision_notice,
+)
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
-from src.engine.economy import reverse_round_economy
+from src.engine.economy import economy_revision, queue_effect_group, reverse_round_economy
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -75,6 +80,10 @@ class SwipeGenerator:
             restore_players(instance, snapshot)
             logger.info("Swipe: 已恢复 pre-state snapshot (round=%d)", round_num)
 
+        # Swipe 自己会回滚目标轮的经济状态；并发护栏必须从回滚后的
+        # authoritative revision 开始观察，否则这次合法回滚会被误判为并发修改。
+        expected_economy_revision = economy_revision(instance)
+
         actions_text = "; ".join(
             a.get("text", "") for a in target_entry.get("actions", [])
             if a.get("user_id") in instance.players
@@ -124,8 +133,12 @@ class SwipeGenerator:
         )
         if self.get_instance:
             current = self.get_instance(instance.game_key)
-            if current is not instance or instance.run_id != expected_run_id:
-                logger.warning("丢弃上一 run 的 swipe 响应: game=%s", instance.game_key)
+            if (
+                current is not instance
+                or instance.run_id != expected_run_id
+                or economy_revision(instance) != expected_economy_revision
+            ):
+                logger.warning("丢弃过期 swipe 响应: game=%s", instance.game_key)
                 return None
         response.content = normalize_tag_protocol(response.content)
 
@@ -134,10 +147,20 @@ class SwipeGenerator:
             narration = response.content.split("---", 1)[0].strip()
         narration = sanitize_narration(narration)
         data = parse_tag_state(response.content, combat_model_s)
+        economy_pending = has_economy_proposal(data)
+        deferred_effects = defer_narrative_effects(data, response)
+        if economy_pending:
+            narration = f"{narration}\n\n{pending_decision_notice(instance.language)}".strip()
 
+        queued_proposals: list[dict[str, Any]] = []
         if data.get("state_update"):
             discard_unresolved_player_damage(instance, data.get("state_update", {}))
-            self.state_applier.apply_state_update(instance, data.get("state_update", {}))
+            queued_proposals = self.state_applier.apply_state_update(
+                instance, data.get("state_update", {}),
+            )
+        if deferred_effects:
+            deferred_effects["allowed_player_uids"] = None
+            queue_effect_group(instance, queued_proposals, deferred_effects)
         if data.get("plot_update") and instance.plot_tracker:
             try:
                 instance.plot_tracker.apply_update(

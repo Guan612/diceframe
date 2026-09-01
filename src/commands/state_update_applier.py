@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.engine.game_instance import GameInstance
@@ -97,8 +97,9 @@ class StateUpdateApplier:
         instance: GameInstance,
         update: dict,
         allowed_player_uids: set | None = None,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         """将 LLM 输出的 state_update 应用到游戏状态。"""
+        queued_proposals: list[dict[str, Any]] = []
         # 玩家状态更新（带当前规则，供 STAT 资源结算与阈值触发器使用）
         self._players.apply_players(
             instance,
@@ -154,7 +155,7 @@ class StateUpdateApplier:
                         "name": item_name,
                         "category": classify_item(item_name, rule_cats),
                     })
-            queue_proposal(
+            queued_proposals.append(queue_proposal(
                 instance,
                 kind="purchase" if rewards else "payment",
                 payer_uid=uid,
@@ -168,7 +169,7 @@ class StateUpdateApplier:
                 source="pay_tag",
                 source_ref=f"round:{instance.run_id}:{instance.round_number}:pay:{proposal_index}:{uid}:{amount}:{recipient_uid}:{'|'.join(item['name'] for item in rewards)}",
                 approval_policy="payer",
-            )
+            ))
 
         for proposal_index, proposal in enumerate(update.get("economy_proposals", [])):
             uid = str(proposal.get("uid") or "")
@@ -176,7 +177,7 @@ class StateUpdateApplier:
             kind = str(proposal.get("kind") or "")
             if uid not in instance.players or kind not in {"payment", "reward"}:
                 continue
-            queue_proposal(
+            queued_proposals.append(queue_proposal(
                 instance,
                 kind=kind,
                 payer_uid=uid if kind == "payment" else "",
@@ -186,7 +187,8 @@ class StateUpdateApplier:
                 source=str(proposal.get("source") or "narrative"),
                 source_ref=f"round:{instance.run_id}:{instance.round_number}:legacy-gold:{proposal_index}:{kind}:{uid}:{amount}",
                 approval_policy="gm" if kind == "reward" else "payer",
-            )
+            ))
+        return queued_proposals
 
     def apply_madness(self, instance: GameInstance, uid: str, cs: dict, loss: int) -> None:
         """兼容旧内部调用；实际逻辑已拆到 MadnessTracker。"""

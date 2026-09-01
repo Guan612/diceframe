@@ -191,6 +191,51 @@ async def test_build_context_does_not_duplicate_system_prompt():
 
 
 @pytest.mark.asyncio
+async def test_build_context_exposes_authoritative_economy_decisions():
+    instance = DummyInstance()
+    instance.language = "zh-CN"
+    instance.economy = {
+        "outcomes": [{
+            "proposal_id": "pay_declined",
+            "kind": "payment",
+            "payer_uid": "hero",
+            "recipient_uid": "merchant",
+            "amount": 10,
+            "reason": "进城费用",
+            "status": "declined",
+            "effects_status": "discarded",
+            "round": 3,
+        }],
+        "proposals": [{
+            "id": "pay_pending",
+            "kind": "payment",
+            "payer_uid": "hero",
+            "recipient_uid": "innkeeper",
+            "amount": 5,
+            "reason": "住宿费用",
+            "status": "pending",
+            "round": 4,
+        }],
+    }
+
+    context = await build_context(
+        instance,
+        gm_prompt_filled="你是测试 GM。",
+        lorebook_entries=[],
+        player_message="我接下来做什么？",
+        provider_name="deepseek",
+    )
+
+    assert "pay_declined" in context
+    assert '"status": "declined"' in context
+    assert '"effects_status": "discarded"' in context
+    assert "pay_pending" in context
+    assert '"status": "pending"' in context
+    assert "以下服务端记录覆盖此前叙事" in context
+    assert "不得再次提出同一交易" in context
+
+
+@pytest.mark.asyncio
 async def test_build_context_enforces_window_with_extreme_inputs(caplog, monkeypatch):
     """极端配置（海量已确认事项/世界书 + 超长玩家消息）下，上下文仍不超窗。"""
     monkeypatch.setenv("TRPG_MAX_CONTEXT_CHARS", "3000")

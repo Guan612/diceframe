@@ -86,6 +86,9 @@ def _migrate_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
         "proposals": legacy_proposals,
         "transactions": [],
         "idempotency_records": {},
+        "effect_groups": [],
+        "outcomes": [],
+        "decision_revision": 0,
     })
     payload["instance_schema_version"] = 2
     return payload
@@ -125,7 +128,7 @@ def rebind_imported_game_state_payload(
     economy = payload.get("economy")
     if isinstance(economy, dict):
         economy["run_id"] = run_id
-        for collection_name in ("proposals", "transactions"):
+        for collection_name in ("proposals", "transactions", "effect_groups", "outcomes"):
             for item in economy.get(collection_name, []) or []:
                 if isinstance(item, dict):
                     item["run_id"] = run_id

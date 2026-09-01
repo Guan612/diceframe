@@ -9,8 +9,15 @@ import random
 import time
 import uuid
 from collections.abc import Callable
+from copy import deepcopy
+from types import SimpleNamespace
 from typing import Any
 
+from src.commands.economy_effects import (
+    defer_narrative_effects,
+    has_economy_proposal,
+    pending_decision_notice,
+)
 from src.commands.round_effects import (
     append_state_change_messages,
     apply_combat_command,
@@ -43,6 +50,7 @@ from src.commands.state_recap import snapshot_public_player_state
 from src.commands.state_update_applier import discard_unresolved_player_damage
 from src.commands.tag_summary import summarize_tags
 from src.engine.constants import COMBAT_INTENT_KEYWORDS
+from src.engine.economy import economy_revision, queue_effect_group
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
 from src.imagegen import (
@@ -441,6 +449,7 @@ class RoundProcessor:
     async def process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """实际的判定处理逻辑。"""
         expected_run_id = instance.run_id
+        expected_economy_revision = economy_revision(instance)
         if not instance.round_checks_prepared:
             await self.prepare_round_checks_ai(instance)
         # 只保留最近一轮的短期展示状态，避免旧提示或战斗结果常驻。
@@ -515,12 +524,18 @@ class RoundProcessor:
             dice_block, self.narrative_max_tokens, actions_text,
             on_delta=on_delta, on_reset=on_reset)
         current_instance = self.registry.get(instance.game_key)
-        if current_instance is not instance or instance.run_id != expected_run_id:
+        if (
+            current_instance is not instance
+            or instance.run_id != expected_run_id
+            or economy_revision(instance) != expected_economy_revision
+        ):
             logger.warning(
-                "丢弃上一 run 的叙事响应: game=%s expected=%s current=%s",
+                "丢弃过期叙事响应: game=%s expected_run=%s current_run=%s expected_economy=%d current_economy=%d",
                 instance.game_key,
                 expected_run_id,
                 getattr(current_instance, "run_id", "missing"),
+                expected_economy_revision,
+                economy_revision(instance),
             )
             return "", None
         runtime = self._ruleset_runtime(instance)
@@ -563,13 +578,19 @@ class RoundProcessor:
         used_budget = int(getattr(response, "token_budget_used", 0) or 0)
         instance.set_token_budget_bump(initial_budget, used_budget)
         apply_parsed_data_to_response(instance, response, data)
+        economy_pending = has_economy_proposal(data)
+        deferred_effects = defer_narrative_effects(data, response)
+        if economy_pending:
+            notice = pending_decision_notice(instance.language)
+            response.narration = f"{response.narration or ''}\n\n{notice}".strip()
 
         public_state_before = snapshot_public_player_state(instance)
         round_pre_snapshot = _snapshot_players(instance)
 
+        queued_proposals: list[dict[str, Any]] = []
+        allowed_uids: set | None = None
         if response.state_update:
             # 多人局权威白名单：状态标签只允许作用于本轮行动者/参战者。
-            allowed_uids: set | None = None
             if len(instance.players) > 1:
                 allowed_uids = {
                     str(action.get("user_id"))
@@ -578,9 +599,21 @@ class RoundProcessor:
                 }
                 if str(getattr(instance, "combat_state", "none") or "none") != "none":
                     allowed_uids |= set(instance.alive_players)
-            self._state_applier.apply_state_update(
+            queued_proposals = self._state_applier.apply_state_update(
                 instance, response.state_update, allowed_player_uids=allowed_uids,
             )
+        if deferred_effects:
+            deferred_effects["allowed_player_uids"] = (
+                sorted(allowed_uids) if allowed_uids is not None else None
+            )
+            group = queue_effect_group(instance, queued_proposals, deferred_effects)
+            if group is None:
+                logger.warning(
+                    "经济提案未能建立叙事效果决策屏障，已 fail closed: game=%s round=%d proposals=%d",
+                    instance.game_key,
+                    instance.round_number,
+                    len(queued_proposals),
+                )
         instance.set_state_update_recap(response.state_update)
 
         apply_confirmed_items(instance, data)
@@ -652,3 +685,56 @@ class RoundProcessor:
             logger.exception("存档失败(连续%d次) (round=%d)", count, instance.round_number)
 
         return response.narration, response.info_asymmetry
+
+    async def commit_deferred_economy_effects(
+        self,
+        instance: GameInstance,
+        effects: dict[str, Any],
+    ) -> None:
+        """Apply one persisted effect group after its economic commit."""
+
+        payload = deepcopy(dict(effects or {}))
+        state_update = dict(payload.get("state_update") or {})
+        allowed_raw = payload.get("allowed_player_uids")
+        allowed_uids = (
+            {str(uid) for uid in allowed_raw if str(uid)}
+            if isinstance(allowed_raw, list)
+            else None
+        )
+        if state_update:
+            self._state_applier.apply_state_update(
+                instance,
+                state_update,
+                allowed_player_uids=allowed_uids,
+            )
+            instance.set_state_update_recap(state_update)
+        response = SimpleNamespace(
+            narration="",
+            memory_delta=dict(payload.get("memory_delta") or {}),
+            info_asymmetry=dict(payload.get("info_asymmetry") or {}),
+            plot_update=dict(payload.get("plot_update") or {}),
+        )
+        apply_confirmed_items(instance, payload)
+        if any(
+            payload.get(key)
+            for key in ("xp_rewards", "growth_skills", "milestone_grants")
+        ):
+            rule_ctx = self._prompt.load_rule_context(
+                instance, self._load_world_template,
+            )
+            apply_growth_rewards(
+                instance,
+                payload,
+                response,
+                rule_ctx.rule,
+                self._progression,
+                self._ruleset_runtime(instance),
+                include_base=False,
+            )
+        if payload.get("quick_actions"):
+            update_quick_actions(instance, payload)
+        await apply_memory_delta(instance, response, self.memory_store)
+        apply_plot_update(instance, response)
+        store_private_messages(instance, response)
+        if payload.get("scene_image_prompt"):
+            self._maybe_schedule_scene_image(instance, payload)

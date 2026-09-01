@@ -30,6 +30,7 @@ PAY:player_id:amount           (positive payment amount; the system stores it as
 PAY:payer_id:amount:recipient_id:item1|item2
                                (for purchases; deduct and grant items only after the payer confirms and has enough currency)
                                (do not repeat purchased items as LOOT/KEY_ITEM/WEAPON/EQUIP; narrate an offer awaiting confirmation, not a completed purchase)
+                               (every PAY and confirmable GOLD is only a proposal: never narrate payment, reward, service, registration, or delivery as completed, and do not submit dependent SCENE/QUEST/LOOT/MEMORY/CONFIRMED tags in the same turn. Continue those results only after Authoritative Economy Decisions says committed. If it says declined/cancelled/rejected, the transaction did not happen; do not repeat it unless the current player message explicitly retries.)
 SCENE:new scene name           (when the scene changes)
 SCENE_IMAGE:visual description (output ONCE only on a major scene change or the first appearance of a new location/level: one short English sentence describing subject, environment, mood and art style, e.g. SCENE_IMAGE:misty harbor town at dusk, galleons in port, oil painting style. Never output it without a major scene change, or when the scene matches the previous image)
 NPC:name:relationship          (register named NPCs on first appearance)

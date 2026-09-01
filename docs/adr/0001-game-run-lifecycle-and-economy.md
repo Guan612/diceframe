@@ -33,12 +33,25 @@ authorities. A transaction is permission-checked, idempotent, atomic with its
 item effects, persisted, and auditable. `currency.amount` is the canonical
 balance; `gold` remains a compatibility projection during migration.
 
+An economic proposal is a commit barrier for narrative effects emitted by the
+same model response. Those effects remain persisted but unapplied until the
+proposal commits. If one response contains multiple proposals, they share an
+all-or-nothing effect group: all must commit, and any terminal rejection
+discards the group. Settlement outcomes enter trusted model context and an
+economy decision revision invalidates model responses that were already in
+flight when a player decided. A new run always starts with an empty proposal,
+transaction, outcome, effect-group, and revision state.
+
 ## Consequences
 
 - New persisted domains must declare lifecycle behavior once at their owner.
 - Reset/restart, migration, Bot, multiplayer, swipe, and recovery require
   behavior-level contract tests.
 - Old `GOLD` tags are compatibility input only and cannot directly deduct money.
+- A model cannot advance transaction-dependent narrative state before a player
+  decision, or continue from a rejected transaction on a later turn.
+- Multi-proposal model responses use a conservative all-or-nothing effect
+  barrier because the legacy tag protocol cannot prove per-effect attribution.
 - The stable table key can continue to back links and Bot bindings while stale
   actions from an earlier run are rejected.
 - Old memory rows may be cleaned later; isolation does not depend on cleanup.

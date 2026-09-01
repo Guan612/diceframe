@@ -10,6 +10,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.commands.protocol_repair import repair_malformed_protocol_response
+from src.commands.economy_effects import (
+    defer_narrative_effects,
+    has_economy_proposal,
+    pending_decision_notice,
+)
 from src.commands.state_update_applier import StateUpdateApplier
 from src.commands.tag_parser import (
     parse_tag_state,
@@ -17,6 +22,7 @@ from src.commands.tag_parser import (
 from src.commands.tag_json import extract_narration_from_response
 from src.commands.tag_summary import summarize_tags
 from src.engine.character_utils import reset_character_for_restart
+from src.engine.economy import queue_effect_group
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
 from src.engine.narrative_perspective import narrative_perspective_instruction
@@ -287,8 +293,21 @@ class GameLifecycle:
                 },
             )
             start_data = {}
+        economy_pending = bool(response is not None and has_economy_proposal(start_data))
+        deferred_effects = (
+            defer_narrative_effects(start_data, response)
+            if response is not None else {}
+        )
+        if economy_pending:
+            narration = f"{narration}\n\n{pending_decision_notice(instance.language)}".strip()
+        queued_proposals: list[dict[str, Any]] = []
         if start_data.get("state_update"):
-            self.state_applier.apply_state_update(instance, start_data["state_update"])
+            queued_proposals = self.state_applier.apply_state_update(
+                instance, start_data["state_update"],
+            )
+        if deferred_effects:
+            deferred_effects["allowed_player_uids"] = None
+            queue_effect_group(instance, queued_proposals, deferred_effects)
         if start_data.get("plot_update") and instance.plot_tracker:
             try:
                 instance.plot_tracker.apply_update(start_data["plot_update"], 0)

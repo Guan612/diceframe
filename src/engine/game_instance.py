@@ -264,6 +264,9 @@ class GameInstance:
             self.economy.setdefault("proposals", [])
             self.economy.setdefault("transactions", [])
             self.economy.setdefault("idempotency_records", {})
+            self.economy.setdefault("effect_groups", [])
+            self.economy.setdefault("outcomes", [])
+            self.economy.setdefault("decision_revision", 0)
 
     def _fresh_economy_state(self) -> dict[str, Any]:
         return {
@@ -273,6 +276,9 @@ class GameInstance:
             "proposals": [],
             "transactions": [],
             "idempotency_records": {},
+            "effect_groups": [],
+            "outcomes": [],
+            "decision_revision": 0,
         }
 
     def rotate_run_identity(self) -> tuple[str, str]:
@@ -549,24 +555,9 @@ class GameInstance:
         self.pending_payments.append(payment)
 
     def remove_payments_for_player(self, uid: str) -> None:
-        affected_ids: set[str] = set()
-        for proposal in self.economy.get("proposals", []):
-            if not isinstance(proposal, dict) or proposal.get("status") != "pending":
-                continue
-            participant_uids = {
-                str(proposal.get("payer_uid") or proposal.get("uid") or ""),
-                str(proposal.get("recipient_uid") or ""),
-                *(
-                    str(item.get("uid") or "")
-                    for item in (proposal.get("contributors") or [])
-                    if isinstance(item, dict)
-                ),
-            }
-            if uid in participant_uids:
-                proposal["status"] = "cancelled"
-                proposal["resolved_at"] = datetime.now(timezone.utc).isoformat()
-                proposal["resolution_code"] = "PLAYER_REMOVED"
-                affected_ids.add(str(proposal.get("id") or ""))
+        from src.engine.economy import cancel_proposals_for_player
+
+        affected_ids = cancel_proposals_for_player(self, uid)
         self.pending_payments = [
             payment
             for payment in self.pending_payments

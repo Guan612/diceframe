@@ -12,6 +12,220 @@ from src.engine.character_utils import apply_currency_delta
 MAX_ECONOMY_AMOUNT = 100_000
 ECONOMY_KINDS = {"payment", "purchase", "fee", "transfer", "reward"}
 APPROVAL_POLICIES = {"payer", "gm", "system", "all_contributors"}
+MAX_ECONOMY_OUTCOMES = 50
+MAX_EFFECT_GROUPS = 50
+
+
+def economy_revision(instance: Any) -> int:
+    economy = getattr(instance, "economy", {})
+    if not isinstance(economy, dict):
+        return 0
+    return int(economy.get("decision_revision", 0) or 0)
+
+
+def _advance_revision(instance: Any) -> int:
+    revision = economy_revision(instance) + 1
+    instance.economy["decision_revision"] = revision
+    return revision
+
+
+def _record_outcome(
+    instance: Any,
+    proposal: dict[str, Any],
+    *,
+    status: str,
+    actor_uid: str,
+) -> dict[str, Any]:
+    effect_group = _effect_group_for(instance, proposal)
+    outcome = {
+        "id": f"outcome_{uuid4().hex}",
+        "run_id": instance.run_id,
+        "proposal_id": str(proposal.get("id") or ""),
+        "effect_group_id": str(proposal.get("effect_group_id") or ""),
+        "kind": str(proposal.get("kind") or "payment"),
+        "payer_uid": str(proposal.get("payer_uid") or proposal.get("uid") or ""),
+        "recipient_uid": str(proposal.get("recipient_uid") or ""),
+        "amount": int(proposal.get("amount", 0) or 0),
+        "reason": str(proposal.get("reason") or "经济提案")[:240],
+        "status": str(status),
+        "effects_status": (
+            str(effect_group.get("status") or "pending")
+            if effect_group is not None else "none"
+        ),
+        "actor_uid": str(actor_uid),
+        "visibility": str(proposal.get("visibility") or "private"),
+        "round": int(proposal.get("round", getattr(instance, "round_number", 0)) or 0),
+        "resolved_at": str(proposal.get("resolved_at") or datetime.now(timezone.utc).isoformat()),
+    }
+    outcomes = instance.economy.setdefault("outcomes", [])
+    outcomes.append(outcome)
+    if len(outcomes) > MAX_ECONOMY_OUTCOMES:
+        del outcomes[:-MAX_ECONOMY_OUTCOMES]
+    return outcome
+
+
+def queue_effect_group(
+    instance: Any,
+    proposals: list[dict[str, Any]],
+    effects: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Attach one deferred narrative effect batch to its authoritative decisions.
+
+    The legacy tag protocol cannot assign individual effects to individual
+    charges. When one response creates several proposals, the conservative
+    contract is therefore one all-or-nothing decision barrier: all proposals
+    must commit before effects apply, and any terminal rejection discards them.
+    """
+
+    candidates = [
+        proposal for proposal in proposals
+        if isinstance(proposal, dict)
+        and proposal.get("status") == "pending"
+        and proposal.get("run_id") == instance.run_id
+    ]
+    if not candidates or not effects:
+        return None
+    group = {
+        "id": f"effect_{uuid4().hex}",
+        "run_id": instance.run_id,
+        "proposal_ids": [str(proposal.get("id") or "") for proposal in candidates],
+        "effects": deepcopy(effects),
+        "status": "pending",
+        "round": int(getattr(instance, "round_number", 0) or 0),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    groups = instance.economy.setdefault("effect_groups", [])
+    groups.append(group)
+    if len(groups) > MAX_EFFECT_GROUPS:
+        active = [
+            item for item in groups
+            if isinstance(item, dict)
+            and item.get("status") in {"pending", "ready"}
+        ]
+        resolved = [
+            item for item in groups
+            if isinstance(item, dict)
+            and item.get("status") not in {"pending", "ready"}
+        ]
+        resolved_budget = max(0, MAX_EFFECT_GROUPS - len(active))
+        instance.economy["effect_groups"] = (
+            active + resolved[-resolved_budget:]
+            if resolved_budget else active
+        )
+    for proposal in candidates:
+        proposal["effect_group_id"] = group["id"]
+    return group
+
+
+def _effect_group_for(
+    instance: Any,
+    proposal: dict[str, Any],
+) -> dict[str, Any] | None:
+    group_id = str(proposal.get("effect_group_id") or "")
+    if not group_id:
+        return None
+    return next(
+        (
+            group for group in instance.economy.get("effect_groups", [])
+            if isinstance(group, dict) and group.get("id") == group_id
+        ),
+        None,
+    )
+
+
+def _settle_effect_group(
+    instance: Any,
+    proposal: dict[str, Any],
+) -> dict[str, Any] | None:
+    group = _effect_group_for(instance, proposal)
+    if group is None or group.get("status") != "pending":
+        return None
+    if proposal.get("status") in {"declined", "cancelled", "rejected"}:
+        group["status"] = "discarded"
+        group["resolved_at"] = str(proposal.get("resolved_at") or "")
+        group.pop("effects", None)
+        group_id = str(group.get("id") or "")
+        for outcome in instance.economy.get("outcomes", []):
+            if str(outcome.get("effect_group_id") or "") == group_id:
+                outcome["effects_status"] = "discarded"
+        return None
+    proposal_ids = {str(item) for item in group.get("proposal_ids", []) if str(item)}
+    states = {
+        str(item.get("id") or ""): str(item.get("status") or "")
+        for item in instance.economy.get("proposals", [])
+        if isinstance(item, dict) and str(item.get("id") or "") in proposal_ids
+    }
+    if proposal_ids and all(states.get(proposal_id) == "committed" for proposal_id in proposal_ids):
+        group["status"] = "ready"
+        return deepcopy(group)
+    return None
+
+
+def complete_effect_group(instance: Any, group_id: str) -> bool:
+    group = next(
+        (
+            item for item in instance.economy.get("effect_groups", [])
+            if isinstance(item, dict) and item.get("id") == group_id
+        ),
+        None,
+    )
+    if group is None or group.get("run_id") != instance.run_id:
+        return False
+    if group.get("status") == "committed":
+        return True
+    if group.get("status") != "ready":
+        return False
+    group["status"] = "committed"
+    group["committed_at"] = datetime.now(timezone.utc).isoformat()
+    group.pop("effects", None)
+    for outcome in instance.economy.get("outcomes", []):
+        if str(outcome.get("effect_group_id") or "") == group_id:
+            outcome["effects_status"] = "committed"
+    return True
+
+
+def cancel_proposals_for_player(
+    instance: Any,
+    uid: str,
+    *,
+    resolution_code: str = "PLAYER_REMOVED",
+) -> set[str]:
+    """Cancel unresolved proposals involving a player and discard their effects."""
+
+    affected_ids: set[str] = set()
+    now = datetime.now(timezone.utc).isoformat()
+    for proposal in instance.economy.get("proposals", []):
+        if not isinstance(proposal, dict) or proposal.get("status") != "pending":
+            continue
+        participant_uids = {
+            str(proposal.get("payer_uid") or proposal.get("uid") or ""),
+            str(proposal.get("recipient_uid") or ""),
+            *(
+                str(item.get("uid") or "")
+                for item in (proposal.get("contributors") or [])
+                if isinstance(item, dict)
+            ),
+        }
+        if uid not in participant_uids:
+            continue
+        proposal["status"] = "cancelled"
+        proposal["resolved_at"] = now
+        proposal["resolution_code"] = resolution_code
+        proposal_id = str(proposal.get("id") or "")
+        affected_ids.add(proposal_id)
+        _advance_revision(instance)
+        _record_outcome(
+            instance,
+            proposal,
+            status="cancelled",
+            actor_uid="system",
+        )
+        _settle_effect_group(instance, proposal)
+    instance.pending_payments = [
+        item for item in instance.pending_payments
+        if str(item.get("id") or "") not in affected_ids
+    ]
+    return affected_ids
 
 
 def pending_proposals(instance: Any) -> list[dict[str, Any]]:
@@ -201,7 +415,17 @@ def resolve_proposal(
         instance.pending_payments = [
             item for item in instance.pending_payments if item.get("id") != proposal_id
         ]
-        return {"ok": True, "accepted": False, "proposal": deepcopy(proposal)}
+        _advance_revision(instance)
+        outcome = _record_outcome(
+            instance, proposal, status=str(proposal["status"]), actor_uid=actor_uid,
+        )
+        _settle_effect_group(instance, proposal)
+        return {
+            "ok": True,
+            "accepted": False,
+            "proposal": deepcopy(proposal),
+            "outcome": deepcopy(outcome),
+        }
 
     if policy == "all_contributors":
         approvals = proposal.setdefault("approvals", {})
@@ -210,6 +434,7 @@ def resolve_proposal(
             uid for uid, approved in approvals.items() if approved
         ))
         if missing:
+            _advance_revision(instance)
             return {
                 "ok": True,
                 "accepted": True,
@@ -239,7 +464,18 @@ def resolve_proposal(
                     item for item in instance.pending_payments
                     if item.get("id") != proposal_id
                 ]
-                return {"ok": False, "code": "INSUFFICIENT_FUNDS", "error": f"{uid} 余额不足"}
+                _advance_revision(instance)
+                outcome = _record_outcome(
+                    instance, proposal, status="rejected", actor_uid=actor_uid,
+                )
+                _settle_effect_group(instance, proposal)
+                return {
+                    "ok": False,
+                    "code": "INSUFFICIENT_FUNDS",
+                    "error": f"{uid} 余额不足",
+                    "proposal": deepcopy(proposal),
+                    "outcome": deepcopy(outcome),
+                }
         for contribution in contributors:
             uid = str(contribution.get("uid") or "")
             contribution_amount = int(contribution.get("amount", 0) or 0)
@@ -273,7 +509,18 @@ def resolve_proposal(
             instance.pending_payments = [
                 item for item in instance.pending_payments if item.get("id") != proposal_id
             ]
-            return {"ok": False, "code": "INSUFFICIENT_FUNDS", "error": f"余额不足：需要 {amount}，当前 {current}"}
+            _advance_revision(instance)
+            outcome = _record_outcome(
+                instance, proposal, status="rejected", actor_uid=actor_uid,
+            )
+            _settle_effect_group(instance, proposal)
+            return {
+                "ok": False,
+                "code": "INSUFFICIENT_FUNDS",
+                "error": f"余额不足：需要 {amount}，当前 {current}",
+                "proposal": deepcopy(proposal),
+                "outcome": deepcopy(outcome),
+            }
         before = current
         after = apply_currency_delta(payer, -amount)
         instance.set_character_sheet(payer_uid, payer)
@@ -346,11 +593,18 @@ def resolve_proposal(
     instance.pending_payments = [
         item for item in instance.pending_payments if item.get("id") != proposal_id
     ]
+    _advance_revision(instance)
+    outcome = _record_outcome(
+        instance, proposal, status="committed", actor_uid=actor_uid,
+    )
+    effect_group = _settle_effect_group(instance, proposal)
     return {
         "ok": True,
         "accepted": True,
         "proposal": deepcopy(proposal),
         "transaction": deepcopy(transaction),
+        "outcome": deepcopy(outcome),
+        "effect_group": effect_group,
     }
 
 
@@ -377,3 +631,12 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
         item for item in instance.pending_payments
         if int(item.get("round", -1) or -1) != int(round_number)
     ]
+    for group in instance.economy.get("effect_groups", []):
+        if int(group.get("round", -1) or -1) == int(round_number):
+            group["status"] = "superseded"
+            group.pop("effects", None)
+    instance.economy["outcomes"] = [
+        item for item in instance.economy.get("outcomes", [])
+        if int(item.get("round", -1) or -1) != int(round_number)
+    ]
+    _advance_revision(instance)

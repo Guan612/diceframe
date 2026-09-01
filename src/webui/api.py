@@ -178,6 +178,12 @@ class WebAPI:
             save_character_card=lambda character: character_cards.save_character_card(
                 self._character_card_dependencies, character,
             ),
+            apply_economy_effects=(
+                handler.commit_deferred_economy_effects
+                if handler is not None
+                and callable(getattr(handler, "commit_deferred_economy_effects", None))
+                else None
+            ),
         )
         self._ruleset_character_dependencies = (
             ruleset_characters.RulesetCharacterDependencies(

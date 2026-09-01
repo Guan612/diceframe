@@ -240,30 +240,33 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     narration, _private = await api._handler.process_round(inst)
 
     assert "暗门" in narration
-    assert inst.scene == "走廊"
+    # 同一 AI 回复里含两项待确认费用；场景、伤害、物品等关联结果在
+    # 所有费用结算前都不得成为权威状态。
+    assert inst.scene == "大厅"
     assert inst.round_number == 2
     assert inst.log[-1]["round"] == 1
     assert inst.log[-1]["pre_state_snapshot"][uid_gm]["hp"] == 32
     cs_gm = inst.get_character_sheet(uid_gm)
     cs_player = inst.get_character_sheet(uid_player)
-    assert cs_gm["hp"] == 29
+    assert cs_gm["hp"] == 32
     # Legacy GOLD no longer changes the wallet directly. It becomes a payer
     # proposal, while PAY remains a separate proposal for the other player.
     assert cs_gm["gold"] == 30
     assert cs_gm["currency"]["amount"] == 30
-    assert cs_gm["xp"] == 20
-    assert any(item.get("name") == "银钥匙" for item in cs_gm["key_items"])
-    assert any(item.get("name") == "狼王耳" for item in cs_player["key_items"])
-    assert inst.private_log[uid_player][-1]["text"] == "你发现暗门"
-    assert inst.quick_actions == ["搜索", "撤退"]
+    assert cs_gm["xp"] == 10
+    assert not any(item.get("name") == "银钥匙" for item in cs_gm["key_items"])
+    assert not any(item.get("name") == "狼王耳" for item in cs_player["key_items"])
+    assert not inst.private_log.get(uid_player)
     assert len(inst.pending_payments) == 2
     gm_payment = next(item for item in inst.pending_payments if item["uid"] == uid_gm)
     player_payment = next(item for item in inst.pending_payments if item["uid"] == uid_player)
     assert gm_payment["amount"] == 5
     payment_id = player_payment["id"]
     assert player_payment["amount"] == 7
-    declined = await api.resolve_payment(game_key, gm_payment["id"], False, uid_gm)
-    assert declined["ok"] is True
+    first_approval = await api.resolve_payment(game_key, gm_payment["id"], True, uid_gm)
+    assert first_approval["ok"] is True
+    assert first_approval.get("effects_committed") is not True
+    assert inst.scene == "大厅"
 
     # PAY 跨存档 reload 后仍在；确认后只扣当事人的金币，并清理 pending 列表。
     await registry.save(inst)
@@ -276,6 +279,23 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     assert reloaded.get_character_sheet(uid_player)["gold"] == 23
     assert reloaded.get_character_sheet(uid_player)["currency"]["amount"] == 23
     assert reloaded.pending_payments == []
+    assert reloaded.get_character_sheet(uid_gm)["gold"] == 25
+    assert reloaded.get_character_sheet(uid_gm)["hp"] == 29
+    assert reloaded.get_character_sheet(uid_gm)["xp"] == 20
+    assert reloaded.scene == "走廊"
+    assert any(
+        item.get("name") == "银钥匙"
+        for item in reloaded.get_character_sheet(uid_gm)["key_items"]
+    )
+    assert any(
+        item.get("name") == "狼王耳"
+        for item in reloaded.get_character_sheet(uid_player)["key_items"]
+    )
+    assert any(
+        item.get("text") == "你发现暗门"
+        for item in reloaded.private_log[uid_player]
+    )
+    assert reloaded.quick_actions == ["搜索", "撤退"]
 
     # swipe 必须回滚到本轮 pre-state，再应用新分支，不能叠加旧分支伤害。
     swipe_text = await api._handler.generate_swipe(reloaded, 1)

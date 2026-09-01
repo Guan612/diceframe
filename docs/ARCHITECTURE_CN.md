@@ -81,6 +81,8 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 
 通用经济状态属于 `GameInstance`。叙事 `GOLD` / `PAY`、世界书文本与 AI 输出只能创建提案；余额变化必须经过服务端权限、余额、run identity 与幂等校验并写入事务流水。`currency.amount` 是余额 authority，`gold` 仅为兼容投影。个人支付由付款人确认，自由叙事奖励由 GM 确认，Web、Bot 与其它 transport 进入同一经济路径。
 
+经济提案同时是叙事提交屏障：同一模型回复中的场景、角色状态、物品、任务、记忆、私密信息与快捷行动先持久化为挂起效果，不得在付款决定前成为权威状态。单项确认后提交一次；同轮多项提案必须全部提交后才应用整组效果，任一拒绝、取消或余额不足都会丢弃整组效果。最终结果写入有界经济 outcome，并作为可信服务端上下文覆盖此前模型叙事；经济修订号用于阻止决定期间仍在飞行的旧 AI 回复落地。重开与重置均清空提案、流水、outcome、挂起效果和修订号；重开只保留已经结算进角色卡的余额，重置同时清除角色。
+
 附属投影有独立 owner：`src/engine/game_state_codec.py` 负责稳定存档投影与重建，`src/engine/game_context_projector.py` 负责通用 LLM/展示视图；旧存档 payload 的 shape 归一化位于 `src/migrations/instance.py`，在构造聚合前对副本执行，不修改调用方输入。`GameInstance.to_dict()`、`from_dict()` 与 `to_llm_view()` 是兼容委托，不再实现这些投影。旧版属性修正、护甲求和和字符串技能默认值由独立的 `src/engine/legacy_game_projection.py` 提供，并由 `LegacyRulesetAdapter` 显式采用；Ruleset runtime 可以在通用投影之上追加自己的权威视图，但不能把具体 mechanics 写回通用 projector。
 
 这是第一轮 codec / projection / migration 边界抽取，不表示 generic state shape 已经终局化或完全去规则化。通用投影为兼容现有世界、存档与 prompt，仍保留 `hp`、`max_hp`、`class`、`race`、`level`、`attributes`、`equipment`、`skills`、`inventory` 等传统角色字段；这些 compatibility shape 后续仍可在不破坏存档和规则运行时契约的前提下继续收口。

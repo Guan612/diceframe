@@ -273,6 +273,17 @@ class GameHandler:
         """兼容旧内部调用；实际逻辑已拆到 StateUpdateApplier。"""
         self._state_applier.apply_state_update(instance, update)
 
+    async def commit_deferred_economy_effects(
+        self,
+        instance: GameInstance,
+        effects: dict,
+    ) -> None:
+        """Commit narrative effects after the authoritative payment succeeds."""
+
+        await self._round_processor.commit_deferred_economy_effects(
+            instance, effects,
+        )
+
     def _tick_madness(self, instance: GameInstance) -> None:
         """兼容旧内部调用；实际逻辑已拆到 StateUpdateApplier。"""
         self._state_applier.tick_madness(instance)

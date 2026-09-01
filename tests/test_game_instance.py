@@ -614,6 +614,14 @@ class TestGameRegistry:
                     "id": "tx_committed", "run_id": "run_exported",
                     "status": "committed",
                 }],
+                "effect_groups": [{
+                    "id": "effect_pending", "run_id": "run_exported",
+                    "status": "pending", "effects": {},
+                }],
+                "outcomes": [{
+                    "id": "outcome_declined", "run_id": "run_exported",
+                    "status": "declined",
+                }],
                 "idempotency_records": {},
             },
         }
@@ -635,7 +643,7 @@ class TestGameRegistry:
         assert imported.economy["run_id"] == imported.run_id
         assert all(
             item["run_id"] == imported.run_id
-            for key in ("proposals", "transactions")
+            for key in ("proposals", "transactions", "effect_groups", "outcomes")
             for item in imported.economy[key]
         )
         # state.json 内 game_key 已改写为新值，避免 register 串到原对局
