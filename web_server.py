@@ -1,11 +1,9 @@
 from pathlib import Path
 
 import asyncio
-import json
 import hmac
 import logging
 import os
-import signal
 import sys
 
 from aiohttp import web
@@ -26,17 +24,12 @@ from src.migrations.config import (
 from src.ai_providers import (
     resolve_provider,
 )
-from src.hub_client import HubClient
 from src.network_proxy import effective_proxy_url, is_supported_proxy_url, mask_proxy_url
-from src.plugin_host import PluginHost
 from src.template_catalog import sync_template_catalog
 from src.tts import SpeechService
 from src.asr import AsrService
 from src.imagegen import ImageGenerationService
 from src.webui.access_password import (
-    consume_reset_password,
-    hash_access_password,
-    is_hashed_access_password,
     is_valid_access_password,
     normalize_access_password,
     verify_access_password,
@@ -63,10 +56,14 @@ from src.webui.runtime_config import (
     ConfigStore,
     RuntimePaths,
 )
+from src.webui.host_credentials import HostCredentials
+from src.webui.bootstrap import (
+    BootstrapDependencies,
+    BootstrapPaths,
+    WebUIBootstrap,
+)
 from src.webui.routes._common import _get_api, _require_confirmed_request
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
-from src.webui.services import updater as updater_svc
-from src.webui.services import legal as legal_svc
 
 logger = logging.getLogger("trpg")
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
@@ -91,8 +88,6 @@ def _load_json_object(path: Path, label: str) -> dict:
 
 
 RUNTIME_CONFIG = CONFIG_STORE.load()
-saved = RUNTIME_CONFIG.saved
-secrets = RUNTIME_CONFIG.secrets
 STATE = RUNTIME_CONFIG.state
 HOST = RUNTIME_CONFIG.host
 PORT = RUNTIME_CONFIG.port
@@ -100,13 +95,8 @@ TRANSPORT = RUNTIME_CONFIG.transport
 WEB_CORS_ENV_VALUE = RUNTIME_CONFIG.cors_env_value
 WEB_CORS_CONFIG_VALUE = RUNTIME_CONFIG.cors_config_value
 WEB_CORS_ORIGINS = RUNTIME_CONFIG.cors_origins
-EMB_ENABLED = bool(STATE.get("embedding_enabled", False))
-EMB_BASE_URL = str(STATE.get("embedding_base_url", ""))
 API_KEY = str(STATE.get("api_key", ""))
-_generation_defaults_migrated = RUNTIME_CONFIG.generation_defaults_migrated
-_migrated = _generation_defaults_migrated
-_ENV_PROXY_URL = RUNTIME_CONFIG.env_proxy_url
-_CONFIG_PROXY_URL = RUNTIME_CONFIG.config_proxy_url
+_migrated = RUNTIME_CONFIG.generation_defaults_migrated
 
 PROMPTS_DIR = RUNTIME_PATHS.prompts_dir
 BUILTIN_RULES_DIR = RUNTIME_PATHS.builtin_rules_dir
@@ -144,60 +134,38 @@ def save_config():
 
 
 def _legacy_plugin_bot_token() -> str:
-    """Read the pre-v1.2 QQ plugin token once so upgrades keep working."""
-    legacy_file = DATA_DIR / "plugins" / "qq-napcat" / "secrets.json"
-    if not legacy_file.exists():
-        return ""
-    try:
-        data = json.loads(legacy_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        logger.warning("读取旧 QQ 插件 Bot Token 失败", exc_info=True)
-        return ""
-    return str(data.get("bot_token") or "").strip() if isinstance(data, dict) else ""
+    return _host_credentials().legacy_plugin_bot_token()
 
 
 def _ensure_bot_token() -> str:
-    """Keep one host-level Bot API token, independent from channel plugins."""
-    current = str(STATE.get("bot_token") or "").strip()
-    if current:
-        return current
-    import secrets as _secrets
-    current = _legacy_plugin_bot_token() or _secrets.token_urlsafe(32)
-    STATE["bot_token"] = current
-    save_config()
-    logger.info("已生成全局 Bot API Token；可在设置 → Bot API 中复制")
-    return current
+    return _host_credentials().ensure_bot_token()
 
 
 def _write_access_token_file(password: str) -> None:
-    token_tmp = ACCESS_TOKEN_FILE.with_suffix(ACCESS_TOKEN_FILE.suffix + ".tmp")
-    token_tmp.write_text(password + "\n", encoding="utf-8")
-    token_tmp.replace(ACCESS_TOKEN_FILE)
+    _host_credentials().write_access_token_file(password)
 
 
 def _delete_access_token_file() -> None:
-    ACCESS_TOKEN_FILE.unlink(missing_ok=True)
+    _host_credentials().delete_access_token_file()
 
 
 def _read_access_token_file() -> str:
-    try:
-        return normalize_access_password(ACCESS_TOKEN_FILE.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
-        return ""
+    return _host_credentials().read_access_token_file()
 
 
 def _generate_initial_access_password() -> None:
-    import secrets as _secrets
-    generated_password = _secrets.token_urlsafe(18)
-    STATE["access_token"] = hash_access_password(generated_password)
-    save_config()
-    _write_access_token_file(generated_password)
-    print("\n" + "=" * 60, flush=True)
-    print("  Initial access password: " + generated_password, flush=True)
-    print("  Frontend will prompt for this on open.", flush=True)
-    print("  It is also saved once to data/access_token.txt.", flush=True)
-    print("  If forgotten later: create data/reset_access_password.txt and restart.", flush=True)
-    print("=" * 60 + "\n", flush=True)
+    _host_credentials().generate_initial_access_password()
+
+
+def _host_credentials() -> HostCredentials:
+    return HostCredentials(
+        state=STATE,
+        data_dir=DATA_DIR,
+        access_token_file=ACCESS_TOKEN_FILE,
+        environ=os.environ,
+        save_config=save_config,
+        logger=logger,
+    )
 
 
 if _migrated:
@@ -251,220 +219,20 @@ def _runtime_composition() -> RuntimeComposition:
     )
 
 
-async def _periodic_save(app: web.Application):
-    """每 60 秒自动保存所有活跃对局，防崩溃丢档。"""
-    while True:
-        await asyncio.sleep(60)
-        subs: TRPGSubsystems | None = app.get("subsystems")
-        if subs:
-            try:
-                await subs.registry.save_all_active()
-            except Exception:
-                logger.exception("定时保存失败")
-
-async def _embed_pending_memories(app: web.Application):
-    """Backfill pending memory embeddings without blocking the WebUI listener."""
-    if not (EMB_ENABLED and EMB_BASE_URL):
-        return
-    subsystems: TRPGSubsystems | None = app.get("subsystems")
-    if not subsystems or not subsystems.memory_store:
-        return
-    try:
-        for inst in subsystems.registry.list_all():
-            count = await subsystems.memory_store.embed_all_pending(str(inst.game_key))
-            if count:
-                logger.info("[Embedding] %s: backfilled %d pending memories", inst.world_name, count)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception("Embedding backfill failed")
-
-async def on_startup(app: web.Application) -> None:
-    reset_password = consume_reset_password(DATA_DIR)
-    configured_env_password = normalize_access_password(os.getenv("TRPG_ACCESS_TOKEN"))
-    stored_password = normalize_access_password(STATE.get("access_token"))
-    STATE["access_token"] = stored_password
-    if reset_password:
-        STATE["access_token"] = hash_access_password(reset_password)
-        save_config()
-        _delete_access_token_file()
-        logger.warning("访问密码已通过 data/reset_access_password.txt 重置，重置文件已删除。")
-    elif not is_valid_access_password(stored_password):
-        if stored_password:
-            logger.warning("保存的访问密码凭证无效，将重新生成首次启动密码。")
-        _generate_initial_access_password()
-    elif not is_hashed_access_password(stored_password) and not configured_env_password:
-        STATE["access_token"] = hash_access_password(stored_password)
-        save_config()
-        password_file_value = _read_access_token_file()
-        if password_file_value and not hmac.compare_digest(password_file_value, stored_password):
-            _delete_access_token_file()
-            logger.warning("data/access_token.txt 与现有密码不一致，已删除过期文件。")
-        logger.info("已将旧版明文访问密码迁移为安全凭证。")
-    elif configured_env_password:
-        logger.info("使用环境变量 TRPG_ACCESS_TOKEN 配置的访问密码。")
-    else:
-        password_file_value = _read_access_token_file()
-        if password_file_value and not verify_access_password(password_file_value, stored_password):
-            _delete_access_token_file()
-            password_file_value = ""
-            logger.warning("data/access_token.txt 与现有密码不一致，已删除过期文件。")
-        if password_file_value:
-            logger.info("已加载访问密码；首次启动密码仍可在 data/access_token.txt 查看。")
-        else:
-            logger.info("已加载访问密码安全凭证；忘记密码请使用 data/reset_access_password.txt 重置。")
-    _ensure_bot_token()
-    subsystems = _build_subsystems()
-    app["subsystems"] = subsystems
-    hub_client = None
-    try:
-        legal_accepted = legal_svc.accepted(STATE)
-        hub_client = HubClient(
-            DATA_DIR,
-            telemetry_enabled=bool(STATE.get("hub_telemetry_enabled")) and legal_accepted,
-            telemetry_choice_made=bool(STATE.get("hub_telemetry_choice_made")) and legal_accepted,
-        )
-        await hub_client.start()
-    except ValueError as exc:
-        logger.warning("DiceFrame Hub 配置无效，已停用 Hub 接入：%s", exc)
-    app["hub_client"] = hub_client
-    async def _on_plugin_stopped(plugin_id: str) -> None:
-        # 插件被真正停止/卸载时，若它是当前隧道 publisher 则恢复 public_base_url（§3.5）。
-        api = app.get("api")
-        if api is not None:
-            api.release_tunnel_url(plugin_id)
-
-    plugin_host = PluginHost(
-        DATA_DIR / "plugin-packages",
-        DATA_DIR / "plugins",
-        builtin_dir=ROOT / "plugins",
-        base_env={"TRPG_API_BASE": TRANSPORT.endpoint.url("127.0.0.1")},
-        on_plugin_stopped=_on_plugin_stopped,
-        hub_client=hub_client,
-        ai_provider_resolver=lambda provider_id: resolve_provider(STATE, provider_id),
-    )
-    # 启动时补迁：旧布局便携版根 app/plugins/ 里可能还有用户插件（更新器迁移由旧版本
-    # 执行，覆盖不到本次升级），新版本首次启动时由自己补搬一次到 data/plugin-packages/。
-    install_root = os.getenv("TRPG_INSTALL_ROOT", "").strip()
-    if install_root:
-        from src.webui.services.updater import _migrate_user_plugin_packages
-        install_root_path = Path(install_root)
-        # 根目录旧布局 + versions 下各版本都可能残留用户插件（旧机制装进版本目录）
-        sources = [install_root_path / "app" / "plugins"]
-        sources.extend(install_root_path.glob("versions/*/app/plugins"))
-        for source in sources:
-            _migrate_user_plugin_packages(source, DATA_DIR / "plugin-packages")
-    plugin_host.discover()
-    if "qq-napcat" in plugin_host.plugins:
-        plugin_host.migrate_config("qq-napcat", {
-            "enabled": STATE.get("qq_bot_enabled", False), "host": STATE.get("napcat_host"),
-            "port": STATE.get("napcat_port"), "token": STATE.get("napcat_token"),
-            "heartbeat_sec": STATE.get("napcat_heartbeat_sec"), "reconnect_delay_sec": STATE.get("napcat_reconnect_delay_sec"),
-            "action_timeout_sec": STATE.get("napcat_action_timeout_sec"),
-            "reply_delay_min_sec": STATE.get("napcat_reply_delay_min_sec"),
-            "reply_delay_max_sec": STATE.get("napcat_reply_delay_max_sec"),
-            "command_dedup_window_sec": STATE.get("napcat_command_dedup_window_sec"),
-            "connection_id": STATE.get("napcat_connection_id"),
-            "chat_filter_enabled": STATE.get("napcat_chat_filter_enabled"), "show_dropped_logs": STATE.get("napcat_show_dropped_logs"),
-            "group_list_mode": STATE.get("napcat_group_list_mode"), "group_list": STATE.get("napcat_group_list"),
-            "private_list_mode": STATE.get("napcat_private_list_mode"), "private_list": STATE.get("napcat_private_list"),
-            "blocked_users": STATE.get("napcat_blocked_users"), "block_official_bots": STATE.get("napcat_block_official_bots"),
-        })
-    app["plugin_host"] = plugin_host
-    app["api"] = _make_api(subsystems, plugin_host, hub_client=hub_client)
-    _activate_api_runtime(subsystems, app["api"])
-    app["updater"] = updater_svc.UpdaterService(
-        updater_svc.UpdaterDependencies(
-            data_dir=DATA_DIR,
-            root=ROOT,
-            mirrors=plugin_host.mirrors if plugin_host else None,
-            check_updates=app["api"].check_updates,
-        )
-    )
-    recovered = await subsystems.registry.recover_all()
-    if recovered:
-        logger.info("恢复了 %d 个存档", len(recovered))
-    removed_templates = app["api"].cleanup_orphan_game_templates()
-    if removed_templates:
-        logger.info("已清理 %d 个孤立的对局临时世界模板", removed_templates)
-    await plugin_host.start_enabled()
-    app["_embedding_backfill_task"] = asyncio.create_task(_embed_pending_memories(app))
-    app["_save_task"] = asyncio.create_task(_periodic_save(app))
-    # 后台预热 DF 助手的远程文档索引（diceframe-content），失败静默回退内置索引
-    from src.webui.assistant_knowledge import prefetch_remote_indexes
-    app["_assistant_docs_task"] = asyncio.create_task(prefetch_remote_indexes())
-    app["_certificate_renewal_task"] = asyncio.create_task(
-        _certificate_renewal_loop(app), name="certificate-renewal"
-    )
-
-
-async def _certificate_renewal_loop(app: web.Application) -> None:
-    """检查并续期当前证书；只在启用 Let's Encrypt 时产生网络请求。"""
-    while True:
-        try:
-            service = app.get("security_transport")
-            result = await service.renew_if_due() if service else None
-            if result and result.get("status") == "failed":
-                logger.error("Let's Encrypt 证书续期失败：%s", result.get("error"))
-            elif result and result.get("status") == "missing":
-                logger.warning("Let's Encrypt 已配置但找不到当前证书，请在设置 → 安全重新申请")
-            elif result and result.get("status") == "renewed":
-                logger.info("Let's Encrypt 证书续期成功，准备重启加载新证书")
-                control = app["runtime_control"]
-                if not control["restart_requested"]:
-                    control["restart_requested"] = True
-                    control["restart_task"] = asyncio.create_task(
-                        _restart_after_certificate_renewal()
-                    )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Let's Encrypt 证书续期检查失败")
-        await asyncio.sleep(15 * 60)
-
-
-async def _restart_after_certificate_renewal() -> None:
-    await asyncio.sleep(0.5)
-    signal.raise_signal(signal.SIGINT)
-
-
-async def on_cleanup(app: web.Application) -> None:
-    plugin_host = app.get("plugin_host")
-    if plugin_host:
-        await plugin_host.cleanup()
-    hub_client = app.get("hub_client")
-    if hub_client:
-        await hub_client.close()
-    embed_task = app.get("_embedding_backfill_task")
-    if embed_task:
-        embed_task.cancel()
-        try:
-            await embed_task
-        except asyncio.CancelledError:
-            pass
-    save_task = app.get("_save_task")
-    if save_task:
-        save_task.cancel()
-    renewal_task = app.get("_certificate_renewal_task")
-    if renewal_task:
-        renewal_task.cancel()
-        try:
-            await renewal_task
-        except asyncio.CancelledError:
-            pass
-    subsystems: TRPGSubsystems | None = app.get("subsystems")
-    if subsystems:
-        try:
-            await subsystems.registry.save_all_active()
-        except Exception:
-            logger.exception("关闭前保存失败")
-        # 关闭复用的 HTTP session
-        if subsystems.llm_client:
-            await subsystems.llm_client.close()
-        if subsystems.memory_store and subsystems.memory_store.embedding_client:
-            await subsystems.memory_store.embedding_client.close()
-        subsystems.lorebook_store.close()
-        subsystems.memory_store.close()
+BOOTSTRAP = WebUIBootstrap(
+    BootstrapDependencies(
+        paths=BootstrapPaths(root=ROOT, data_dir=DATA_DIR),
+        state=STATE,
+        environ=os.environ,
+        transport=TRANSPORT,
+        credentials=_host_credentials,
+        save_config=save_config,
+        build_subsystems=_build_subsystems,
+        make_api=_make_api,
+        activate_api_runtime=_activate_api_runtime,
+    ),
+    logger=logger,
+)
 
 
 @web.middleware
@@ -1025,8 +793,8 @@ def _application_dependencies() -> ApplicationDependencies:
         transport=TRANSPORT,
         config_state=STATE,
         save_config=save_config,
-        on_startup=on_startup,
-        on_cleanup=on_cleanup,
+        on_startup=BOOTSTRAP.on_startup,
+        on_cleanup=BOOTSTRAP.on_cleanup,
         auth_middleware=auth_middleware,
         config_get=api_config_get,
         config_post=api_config_post,
