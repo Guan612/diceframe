@@ -253,6 +253,13 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._assistant_dependencies = assistant.AssistantDependencies(
+            list_plugins=self.list_plugins,
+            llm_configuration_error=self._llm_configuration_error,
+            llm_client=self._llm_client,
+            data_dir=self._reg.save_dir.parent,
+            text_gen_max_tokens=self.text_gen_max_tokens,
+        )
         self._connection_dependencies = generation.ConnectionDependencies(
             llm_client=self._llm_client,
             config_state=lambda: getattr(self, "_config_state", {}) or {},
@@ -496,7 +503,12 @@ class WebAPI:
         return await self._hub_service.set_plugin_rating(plugin_id, stars, tags)
 
     async def assistant_chat(self, response, messages: list[dict], language: str = "zh-CN") -> None:
-        return await assistant.chat_stream(self, response, messages, language)
+        return await assistant.chat_stream(
+            self._assistant_dependencies,
+            response,
+            messages,
+            language,
+        )
 
     def list_plugin_types(self) -> dict[str, Any]:
         return plugins.list_plugin_types(self)

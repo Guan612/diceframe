@@ -56,11 +56,21 @@ class FakeStreamResponse:
         self.written.append(data)
 
 
+def _dependencies(api: FakeAPI) -> assistant_service.AssistantDependencies:
+    return assistant_service.AssistantDependencies(
+        list_plugins=api.list_plugins,
+        llm_configuration_error=api._llm_configuration_error,
+        llm_client=api._llm_client,
+        data_dir=api._reg.save_dir.parent,
+        text_gen_max_tokens=api.text_gen_max_tokens,
+    )
+
+
 # ---- _system_prompt ----
 
 def test_system_prompt_includes_plugins():
     api = FakeAPI()
-    text = assistant_service._system_prompt(api, "zh-CN")
+    text = assistant_service._system_prompt(_dependencies(api), "zh-CN")
     # 契约：已安装插件进入助手上下文；具体角色/栏目措辞不锁。
     assert "隧道" in text
     assert "plugin_type" not in text
@@ -68,8 +78,8 @@ def test_system_prompt_includes_plugins():
 
 def test_system_prompt_language_en():
     api = FakeAPI()
-    text_en = assistant_service._system_prompt(api, "en")
-    text_zh = assistant_service._system_prompt(api, "zh-CN")
+    text_en = assistant_service._system_prompt(_dependencies(api), "en")
+    text_zh = assistant_service._system_prompt(_dependencies(api), "zh-CN")
     # 契约：提示词按语言本地化；具体文案不锁。
     assert text_en and text_zh
     assert text_en != text_zh
@@ -77,7 +87,9 @@ def test_system_prompt_language_en():
 
 def test_system_prompt_omits_plugins_for_unrelated_question():
     api = FakeAPI()
-    text = assistant_service._system_prompt(api, "zh-CN", query="怎么配置模型 API")
+    text = assistant_service._system_prompt(
+        _dependencies(api), "zh-CN", query="怎么配置模型 API",
+    )
     # 契约：无关问题不携带插件清单。
     assert "cloudflare-tunnel" not in text
     assert "隧道" not in text
@@ -85,7 +97,9 @@ def test_system_prompt_omits_plugins_for_unrelated_question():
 
 def test_system_prompt_includes_plugins_for_plugin_question():
     api = FakeAPI()
-    text = assistant_service._system_prompt(api, "zh-CN", query="cloudflare-tunnel 插件怎么用")
+    text = assistant_service._system_prompt(
+        _dependencies(api), "zh-CN", query="cloudflare-tunnel 插件怎么用",
+    )
     assert "cloudflare-tunnel" in text
 
 
@@ -122,7 +136,9 @@ def test_log_diagnosis_requires_explicit_runtime_log_intent():
 async def test_chat_stream_llm_not_configured():
     api = FakeAPI(config_error={"error": "尚未配置模型 API"})
     resp = FakeStreamResponse()
-    await assistant_service.chat_stream(api, resp, [{"role": "user", "content": "hi"}], "zh-CN")
+    await assistant_service.chat_stream(
+        _dependencies(api), resp, [{"role": "user", "content": "hi"}], "zh-CN",
+    )
     text = b"".join(resp.written).decode()
     assert "event: error" not in text
     assert "DiceFrame 自带的离线回复" in text
@@ -135,7 +151,7 @@ async def test_chat_stream_offline_model_setup_guide():
     api = FakeAPI(config_error={"error": "尚未配置模型 API"})
     resp = FakeStreamResponse()
     await assistant_service.chat_stream(
-        api,
+        _dependencies(api),
         resp,
         [{"role": "user", "content": "怎样配置模型 API？"}],
         "zh-CN",
@@ -152,7 +168,12 @@ async def test_chat_stream_offline_model_setup_guide():
 async def test_chat_stream_deltas_and_done():
     api = FakeAPI(llm_client=FakeLLMClient(deltas=["你", "好"]))
     resp = FakeStreamResponse()
-    await assistant_service.chat_stream(api, resp, [{"role": "user", "content": "怎么配置 API"}], "zh-CN")
+    await assistant_service.chat_stream(
+        _dependencies(api),
+        resp,
+        [{"role": "user", "content": "怎么配置 API"}],
+        "zh-CN",
+    )
     text = b"".join(resp.written).decode()
     assert "event: sources" in text
     assert '"delta": "你"' in text
@@ -174,7 +195,7 @@ async def test_chat_stream_sends_only_redacted_log_context_to_model(monkeypatch,
     resp = FakeStreamResponse()
 
     await assistant_service.chat_stream(
-        api,
+        _dependencies(api),
         resp,
         [{"role": "user", "content": "检查运行日志，帮我找出问题"}],
         "zh-CN",
@@ -193,7 +214,9 @@ async def test_chat_stream_sends_only_redacted_log_context_to_model(monkeypatch,
 async def test_chat_stream_error_event():
     api = FakeAPI(llm_client=FakeLLMClient(error=RuntimeError("boom")))
     resp = FakeStreamResponse()
-    await assistant_service.chat_stream(api, resp, [{"role": "user", "content": "x"}], "zh-CN")
+    await assistant_service.chat_stream(
+        _dependencies(api), resp, [{"role": "user", "content": "x"}], "zh-CN",
+    )
     text = b"".join(resp.written).decode()
     assert "event: error" in text
 
@@ -218,7 +241,12 @@ async def test_chat_stream_truncation_retries_with_reset():
 
     api = FakeAPI(llm_client=RetryClient())
     resp = FakeStreamResponse()
-    await assistant_service.chat_stream(api, resp, [{"role": "user", "content": "问题"}], "zh-CN")
+    await assistant_service.chat_stream(
+        _dependencies(api),
+        resp,
+        [{"role": "user", "content": "问题"}],
+        "zh-CN",
+    )
 
     text = b"".join(resp.written).decode()
     assert "event: reset" in text

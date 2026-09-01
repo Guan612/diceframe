@@ -33,6 +33,7 @@ files = [
     "src/rulesets/registry.py",
     "src/rulesets/legacy_adapter.py",
     "src/webui/config_update.py",
+    "src/webui/services/assistant.py",
     "src/webui/services/content_pack_maps.py",
     "src/webui/services/game_queries.py",
     "src/webui/services/generation.py",
