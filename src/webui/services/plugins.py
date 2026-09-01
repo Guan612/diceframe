@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -21,26 +22,44 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("trpg")
 
-def list_plugins(api: "WebAPI") -> dict[str, Any]:
-    return {"ok": True, "plugins": api._plugins.list_public() if api._plugins else []}
 
-def list_plugin_types(api: "WebAPI") -> dict[str, Any]:
+@dataclass(frozen=True)
+class PluginHostDependencies:
+    plugin_host: Any | None
+
+
+def list_plugins(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    return {"ok": True, "plugins": host.list_public() if host else []}
+
+def list_plugin_types() -> dict[str, Any]:
     """插件类型清单（数据驱动前端筛选/展示）。"""
     return {"ok": True, "types": _support_plugin_types()}
 
-async def rescan_plugins(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+async def rescan_plugins(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "plugins": []}
-    await api._plugins.rescan()
-    return {"ok": True, "plugins": api._plugins.list_public()}
+    await host.rescan()
+    return {"ok": True, "plugins": host.list_public()}
 
-def plugin_detail(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins: return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, **api._plugins.public_detail(plugin_id)}
+def plugin_detail(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
+        return {"ok": False, "error": "插件宿主未启用"}
+    return {"ok": True, **host.public_detail(plugin_id)}
 
-def read_plugin_docs(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins: return {"ok": False, "error": "插件宿主未启用"}
-    return api._plugins.read_docs(plugin_id)
+def read_plugin_docs(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
+        return {"ok": False, "error": "插件宿主未启用"}
+    return host.read_docs(plugin_id)
 
 
 def sync_plugin_lorebooks(api: "WebAPI") -> dict[str, Any]:
@@ -178,10 +197,13 @@ async def install_plugin(api: "WebAPI", payload: bytes, overwrite: bool = False)
     _maybe_autoimport_after_install(api, detail.get("id", ""))
     return {"ok": True, **detail}
 
-async def list_plugin_marketplace(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+async def list_plugin_marketplace(
+    dependencies: PluginHostDependencies,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "plugins": []}
-    return await api._plugins.marketplace_plugins()
+    return await host.marketplace_plugins()
 
 async def install_marketplace_plugin(api: "WebAPI", plugin_id: str, overwrite: bool = False) -> dict[str, Any]:
     if not api._plugins:
@@ -190,10 +212,14 @@ async def install_marketplace_plugin(api: "WebAPI", plugin_id: str, overwrite: b
     _maybe_autoimport_after_install(api, plugin_id)
     return {"ok": True, **result}
 
-async def update_marketplace_plugin(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins:
+async def update_marketplace_plugin(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, **await api._plugins.update_from_marketplace(plugin_id)}
+    return {"ok": True, **await host.update_from_marketplace(plugin_id)}
 
 # 卸载清理域注册表：新增清理域时实现 handler 并在此注册，再在类型 descriptor 的
 # cleanup 列表声明。content_data 是 lorebook+worlds+cards 的耦合清理（必须先抓
@@ -230,38 +256,60 @@ async def uninstall_plugin(api: "WebAPI", plugin_id: str, delete_data: bool = Fa
         "worlds_kept": cleanup.get("worlds_kept", []),
     }
 
-def list_plugin_mirrors(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_mirrors(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "mirrors": []}
-    return {"ok": True, **api._plugins.list_mirrors()}
+    return {"ok": True, **host.list_mirrors()}
 
-def add_plugin_mirror(api: "WebAPI", data: dict[str, Any]) -> dict[str, Any]:
-    if not api._plugins:
+def add_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, "mirror": api._plugins.add_mirror(data)}
+    return {"ok": True, "mirror": host.add_mirror(data)}
 
-def update_plugin_mirror(api: "WebAPI", mirror_id: str, data: dict[str, Any]) -> dict[str, Any]:
-    if not api._plugins:
+def update_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    mirror_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, "mirror": api._plugins.update_mirror(mirror_id, data)}
+    return {"ok": True, "mirror": host.update_mirror(mirror_id, data)}
 
-def delete_plugin_mirror(api: "WebAPI", mirror_id: str) -> dict[str, Any]:
-    if not api._plugins:
+def delete_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    mirror_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, **api._plugins.delete_mirror(mirror_id)}
+    return {"ok": True, **host.delete_mirror(mirror_id)}
 
-async def test_plugin_mirror(api: "WebAPI", mirror_id: str = "") -> dict[str, Any]:
-    if not api._plugins:
+async def test_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    mirror_id: str = "",
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return await api._plugins.test_mirror(mirror_id)
+    return await host.test_mirror(mirror_id)
 
-def clear_plugin_card_cache(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins:
+def clear_plugin_card_cache(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
     if plugin_id != "qq-napcat":
         return {"ok": False, "error": "该插件没有可清理的卡片缓存"}
-    api._plugins.public_detail(plugin_id)  # 触发 KeyError，保持和其他插件接口一致
-    data_dir = Path(api._plugins.data_dir).resolve()
+    host.public_detail(plugin_id)  # 触发 KeyError，保持和其他插件接口一致
+    data_dir = Path(host.data_dir).resolve()
     card_dir = (data_dir / "bot" / "cards").resolve()
     if data_dir not in card_dir.parents:
         return {"ok": False, "error": "卡片缓存路径非法"}
@@ -269,37 +317,44 @@ def clear_plugin_card_cache(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
     return {"ok": True, "path": str(card_dir), **result}
 
 
-def list_plugin_contributions(api: "WebAPI", kind: str = "") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_contributions(
+    dependencies: PluginHostDependencies,
+    kind: str = "",
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "contributions": []}
-    contributions = api._plugins.list_contributions((kind or "").strip())
+    contributions = host.list_contributions((kind or "").strip())
     return {"ok": True, "contributions": contributions, "total": len(contributions)}
 
 
-def list_plugin_themes(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_themes(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "themes": []}
-    themes = api._plugins.list_themes()
+    themes = host.list_themes()
     return {"ok": True, "themes": themes, "total": len(themes)}
 
 
-def list_plugin_tools(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_tools(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "tools": []}
-    tools = api._plugins.list_tools()
+    tools = host.list_tools()
     return {"ok": True, "tools": tools, "total": len(tools)}
 
 
 async def invoke_plugin_tool(
-    api: "WebAPI",
+    dependencies: PluginHostDependencies,
     plugin_id: str,
     tool_name: str,
     arguments: dict[str, Any],
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    result = await api._plugins.call_tool(
+    result = await host.call_tool(
         (plugin_id or "").strip(),
         (tool_name or "").strip(),
         arguments,
@@ -308,10 +363,17 @@ async def invoke_plugin_tool(
     return {"ok": True, "plugin_id": plugin_id, "tool_name": tool_name, "result": result}
 
 
-def list_plugin_content(api: "WebAPI", kind: str = "", world_id: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_content(
+    dependencies: PluginHostDependencies,
+    kind: str = "",
+    world_id: str = "",
+    rule_id: str = "",
+    language: str = "",
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "resources": {}}
-    resources = api._plugins.list_content_resources(
+    resources = host.list_content_resources(
         (kind or "").strip(),
         world_id=(world_id or "").strip(),
         rule_id=(rule_id or "").strip(),

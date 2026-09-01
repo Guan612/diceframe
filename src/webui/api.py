@@ -340,6 +340,9 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._plugin_host_dependencies = plugins.PluginHostDependencies(
+            plugin_host=self._plugins,
+        )
         self._world_dependencies = worlds.WorldDependencies(
             lorebook=self._lore,
             worlds_dir=self._worlds_dir,
@@ -626,7 +629,7 @@ class WebAPI:
     # ---- 规则辅助 ----
 
     def list_plugins(self) -> dict[str, Any]:
-        return plugins.list_plugins(self)
+        return plugins.list_plugins(self._plugin_host_dependencies)
 
     async def get_official_announcement(self, language: str = "zh-CN") -> dict[str, Any]:
         return await self._announcements.fetch(language)
@@ -679,7 +682,7 @@ class WebAPI:
         )
 
     def list_plugin_types(self) -> dict[str, Any]:
-        return plugins.list_plugin_types(self)
+        return plugins.list_plugin_types()
 
     def list_speech_voices(self) -> dict[str, Any]:
         return self._web_speech.list_voices()
@@ -749,7 +752,7 @@ class WebAPI:
         )
 
     async def rescan_plugins(self) -> dict[str, Any]:
-        return await plugins.rescan_plugins(self)
+        return await plugins.rescan_plugins(self._plugin_host_dependencies)
 
     def publish_tunnel_url(self, plugin_id: str, url: str) -> dict[str, Any]:
         return tunnel.publish_tunnel_url(self._tunnel_dependencies, plugin_id, url)
@@ -767,10 +770,10 @@ class WebAPI:
         return self._plugins.authenticate_api_token(token)
 
     def plugin_detail(self, plugin_id: str) -> dict[str, Any]:
-        return plugins.plugin_detail(self, plugin_id)
+        return plugins.plugin_detail(self._plugin_host_dependencies, plugin_id)
 
     def read_plugin_docs(self, plugin_id: str) -> dict[str, Any]:
-        return plugins.read_plugin_docs(self, plugin_id)
+        return plugins.read_plugin_docs(self._plugin_host_dependencies, plugin_id)
 
     async def update_plugin_config(self, plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
         return await plugins.update_plugin_config(self, plugin_id, changes)
@@ -782,43 +785,57 @@ class WebAPI:
         return await plugins.install_plugin(self, payload, overwrite)
 
     async def list_plugin_marketplace(self) -> dict[str, Any]:
-        return await plugins.list_plugin_marketplace(self)
+        return await plugins.list_plugin_marketplace(
+            self._plugin_host_dependencies,
+        )
 
     async def install_marketplace_plugin(self, plugin_id: str, overwrite: bool = False) -> dict[str, Any]:
         return await plugins.install_marketplace_plugin(self, plugin_id, overwrite)
 
     async def update_marketplace_plugin(self, plugin_id: str) -> dict[str, Any]:
-        return await plugins.update_marketplace_plugin(self, plugin_id)
+        return await plugins.update_marketplace_plugin(
+            self._plugin_host_dependencies, plugin_id,
+        )
 
     async def uninstall_plugin(self, plugin_id: str, delete_data: bool = False) -> dict[str, Any]:
         return await plugins.uninstall_plugin(self, plugin_id, delete_data)
 
     def list_plugin_mirrors(self) -> dict[str, Any]:
-        return plugins.list_plugin_mirrors(self)
+        return plugins.list_plugin_mirrors(self._plugin_host_dependencies)
 
     def add_plugin_mirror(self, data: dict[str, Any]) -> dict[str, Any]:
-        return plugins.add_plugin_mirror(self, data)
+        return plugins.add_plugin_mirror(self._plugin_host_dependencies, data)
 
     def update_plugin_mirror(self, mirror_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        return plugins.update_plugin_mirror(self, mirror_id, data)
+        return plugins.update_plugin_mirror(
+            self._plugin_host_dependencies, mirror_id, data,
+        )
 
     def delete_plugin_mirror(self, mirror_id: str) -> dict[str, Any]:
-        return plugins.delete_plugin_mirror(self, mirror_id)
+        return plugins.delete_plugin_mirror(
+            self._plugin_host_dependencies, mirror_id,
+        )
 
     async def test_plugin_mirror(self, mirror_id: str = "") -> dict[str, Any]:
-        return await plugins.test_plugin_mirror(self, mirror_id)
+        return await plugins.test_plugin_mirror(
+            self._plugin_host_dependencies, mirror_id,
+        )
 
     def clear_plugin_card_cache(self, plugin_id: str) -> dict[str, Any]:
-        return plugins.clear_plugin_card_cache(self, plugin_id)
+        return plugins.clear_plugin_card_cache(
+            self._plugin_host_dependencies, plugin_id,
+        )
 
     def list_plugin_contributions(self, kind: str = "") -> dict[str, Any]:
-        return plugins.list_plugin_contributions(self, kind)
+        return plugins.list_plugin_contributions(
+            self._plugin_host_dependencies, kind,
+        )
 
     def list_plugin_themes(self) -> dict[str, Any]:
-        return plugins.list_plugin_themes(self)
+        return plugins.list_plugin_themes(self._plugin_host_dependencies)
 
     def list_plugin_tools(self) -> dict[str, Any]:
-        return plugins.list_plugin_tools(self)
+        return plugins.list_plugin_tools(self._plugin_host_dependencies)
 
     async def invoke_plugin_tool(
         self,
@@ -827,10 +844,22 @@ class WebAPI:
         arguments: dict[str, Any],
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return await plugins.invoke_plugin_tool(self, plugin_id, tool_name, arguments, context)
+        return await plugins.invoke_plugin_tool(
+            self._plugin_host_dependencies,
+            plugin_id,
+            tool_name,
+            arguments,
+            context,
+        )
 
     def list_plugin_content(self, kind: str = "", world_id: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
-        return plugins.list_plugin_content(self, kind, world_id, rule_id, language)
+        return plugins.list_plugin_content(
+            self._plugin_host_dependencies,
+            kind,
+            world_id,
+            rule_id,
+            language,
+        )
 
     def sync_plugin_lorebooks(self) -> dict[str, Any]:
         """同步已启用插件的世界模板世界书到世界书库（幂等）。"""
