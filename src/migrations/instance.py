@@ -6,11 +6,13 @@ knowing which compatibility steps are needed for a loaded instance.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 import logging
-from typing import Any
+from typing import Any, cast
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
+from src.engine.game_state_contracts import GamePersistedState
 
 
 logger = logging.getLogger("trpg")
@@ -29,13 +31,13 @@ def _referenced_player_ids(log: list[Any]) -> set[str]:
     return referenced
 
 
-def normalize_game_state_payload(data: dict[str, Any]) -> dict[str, Any]:
+def normalize_game_state_payload(data: Mapping[str, Any]) -> GamePersistedState:
     """Return a normalized copy of a persisted game-state payload.
 
     Ghost-player cleanup intentionally requires historical evidence. Waiting
     rooms and unplayed multiplayer sessions therefore keep every participant.
     """
-    payload = deepcopy(data)
+    payload = cast(GamePersistedState, deepcopy(dict(data)))
     players = payload.get("players")
     log = payload.get("log")
     if not isinstance(players, dict) or len(players) <= 1 or not isinstance(log, list) or not log:

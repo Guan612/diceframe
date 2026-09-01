@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from src.engine.game_state_contracts import (
+    CharacterSheetView,
+    GameContextView,
+    PlayerContextView,
+)
 from src.engine.language import normalize_language
 
+if TYPE_CHECKING:
+    from src.engine.game_instance import GameInstance
 
-CharacterSheetProjector = Callable[[dict[str, Any]], dict[str, Any]]
+
+CharacterSheetProjector = Callable[[dict[str, Any]], CharacterSheetView]
 
 
-def _project_generic_character_sheet(character_sheet: dict[str, Any]) -> dict[str, Any]:
+def _project_generic_character_sheet(character_sheet: dict[str, Any]) -> CharacterSheetView:
     """Copy presentation fields without inventing ruleset mechanics."""
-    sheet: dict[str, Any] = {
+    sheet: CharacterSheetView = {
         "hp": character_sheet.get("hp", 0),
         "max_hp": character_sheet.get("max_hp", 0),
         "class": character_sheet.get("class", ""),
@@ -39,12 +47,12 @@ class GameContextProjector:
 
     @staticmethod
     def project(
-        instance: Any,
+        instance: GameInstance,
         *,
         character_sheet_projector: CharacterSheetProjector | None = None,
-    ) -> dict[str, Any]:
+    ) -> GameContextView:
         project_sheet = character_sheet_projector or _project_generic_character_sheet
-        players_view: dict[str, dict[str, Any]] = {}
+        players_view: dict[str, PlayerContextView] = {}
         for uid, player_data in instance.players.items():
             character_sheet = player_data.get("character_sheet", {})
             sheet = project_sheet(character_sheet)
@@ -59,7 +67,7 @@ class GameContextProjector:
             for uid in sorted(instance.away_players)
             if uid in instance.players and instance.is_alive(uid)
         ]
-        state: dict[str, Any] = {
+        state: GameContextView = {
             "world_name": instance.world_name,
             "round_number": instance.round_number,
             "scene": instance.scene,

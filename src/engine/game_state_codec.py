@@ -7,19 +7,23 @@ changes do not keep expanding the aggregate implementation.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any
 
+from src.engine.game_state_contracts import GamePersistedState
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.migrations.instance import normalize_game_state_payload
+
+if TYPE_CHECKING:
+    from src.engine.game_instance import GameInstance, GameState
 
 
 class GameStateCodec:
     """Encode and reconstruct the persisted ``GameInstance`` projection."""
 
     @staticmethod
-    def encode(instance: Any) -> dict[str, Any]:
-        data: dict[str, Any] = {
+    def encode(instance: GameInstance) -> GamePersistedState:
+        data: GamePersistedState = {
             "game_key": list(instance.game_key),
             "world_id": instance.world_id,
             "rule_id": instance.rule_id,
@@ -98,11 +102,11 @@ class GameStateCodec:
 
     @staticmethod
     def decode(
-        data: dict[str, Any],
+        data: Mapping[str, Any],
         *,
-        instance_type: Callable[..., Any],
-        state_type: type[Any],
-    ) -> Any:
+        instance_type: type[GameInstance],
+        state_type: type[GameState],
+    ) -> GameInstance:
         data = normalize_game_state_payload(data)
         raw_death_save_outcomes = data.get("death_save_outcomes")
         death_save_outcomes = (

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.engine.game_context_projector import GameContextProjector
+from src.engine.game_state_contracts import CharacterSheetView, GameContextView
+
+if TYPE_CHECKING:
+    from src.engine.game_instance import GameInstance
 
 
-def project_legacy_character_sheet(character_sheet: dict[str, Any]) -> dict[str, Any]:
+def project_legacy_character_sheet(character_sheet: dict[str, Any]) -> CharacterSheetView:
     """Preserve the pre-runtime character view used by legacy prompts."""
     attributes = character_sheet.get("attributes", {})
     equipment = character_sheet.get("equipment", [])
     skills = character_sheet.get("skills", [])
     if skills and isinstance(skills[0], str):
         skills = [{"name": skill, "value": 20} for skill in skills]
-    sheet: dict[str, Any] = {
+    sheet: CharacterSheetView = {
         "hp": character_sheet.get("hp", 0),
         "max_hp": character_sheet.get("max_hp", 0),
         "class": character_sheet.get("class", ""),
@@ -56,7 +60,7 @@ def project_legacy_character_sheet(character_sheet: dict[str, Any]) -> dict[str,
     return sheet
 
 
-def project_legacy_game_context(instance: Any) -> dict[str, Any]:
+def project_legacy_game_context(instance: GameInstance) -> GameContextView:
     """Build generic context with explicit legacy mechanic fallbacks."""
     return GameContextProjector.project(
         instance,
