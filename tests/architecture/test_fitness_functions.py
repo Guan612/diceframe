@@ -48,9 +48,7 @@ _STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT = (
 
 # Historical service-locator debt. Do not add entries. Remove a file or
 # category in the same PR that removes the corresponding dependency.
-SERVICE_LOCATOR_ALLOWLIST = frozenset().union(
-    _service_debt("plugins.py", *_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT),
-)
+SERVICE_LOCATOR_ALLOWLIST: frozenset[DependencyDebt] = frozenset()
 
 # Historical concrete-ruleset knowledge in otherwise generic backend modules.
 # Each entry is a dependency semantic, not a line/function/source snapshot.
@@ -165,13 +163,17 @@ def test_new_service_locator_dependency_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_removing_allowlist_entry_while_debt_remains_is_rejected() -> None:
-    actual = scan_service_locator_debt(ROOT)
-    shortened = set(SERVICE_LOCATOR_ALLOWLIST)
+def test_removing_backend_allowlist_entry_while_debt_remains_is_rejected() -> None:
+    actual = scan_backend_concrete_ruleset_debt(ROOT)
+    shortened = set(BACKEND_CONCRETE_RULESET_ALLOWLIST)
     shortened.remove(next(iter(shortened)))
 
     with pytest.raises(AssertionError):
-        assert_debt_matches_allowlist(actual, shortened, boundary="services -> WebAPI")
+        assert_debt_matches_allowlist(
+            actual,
+            shortened,
+            boundary="generic backend -> dnd2024",
+        )
 
 
 def test_new_generic_backend_concrete_ruleset_import_is_rejected(tmp_path: Path) -> None:

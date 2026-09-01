@@ -356,6 +356,64 @@ class WebAPI:
             ),
             list_instances=self._reg.list_all,
         )
+        self._plugin_content_dependencies = plugins.PluginContentDependencies(
+            plugin_host=self._plugins,
+            store=plugins.PluginContentStoreDependencies(
+                lorebook=self._lore,
+                list_games=self._reg.list_all,
+                list_character_cards=lambda: character_cards.list_character_cards(
+                    self._character_card_dependencies,
+                ),
+                save_character_card=lambda card: character_cards.save_character_card(
+                    self._character_card_dependencies, card,
+                ),
+                delete_character_card=lambda card_id: character_cards.delete_character_card(
+                    self._character_card_dependencies, card_id,
+                ),
+                save_entry=lambda entry: worlds.save_entry(
+                    self._world_dependencies, entry,
+                ),
+            ),
+            portraits=plugins.PluginPortraitDependencies(
+                plugin_asset_path=lambda plugin_id, relative_path: plugins.plugin_asset_path(
+                    self._plugin_host_dependencies, plugin_id, relative_path,
+                ),
+                avatar_file=lambda asset_id: self._avatars.file(asset_id),
+                generated_image_file=lambda asset_id: self._generated_images.image_file(
+                    asset_id,
+                ),
+                save_avatar_upload=lambda file_data, file_name: self._avatars.save_upload(
+                    file_data, file_name,
+                ),
+            ),
+        )
+        self._plugin_lifecycle_dependencies = plugins.PluginLifecycleDependencies(
+            plugin_host=self._plugins,
+            content=self._plugin_content_dependencies,
+        )
+        self._plugin_export_dependencies = plugins.PluginExportDependencies(
+            plugin_host=self._plugins,
+            lorebook=self._lore,
+            rules_dir=self._rules_dir,
+            list_character_cards=lambda: character_cards.list_character_cards(
+                self._character_card_dependencies,
+            ),
+            media=plugins.PluginExportMediaDependencies(
+                package_scene_image=lambda reference, files: self._scene_images.package(
+                    reference, files,
+                ),
+                package_content_map=lambda *args, **kwargs: content_pack_maps.package_content_map(
+                    self._content_map_dependencies, *args, **kwargs,
+                ),
+                avatar_file=lambda asset_id: self._avatars.file(asset_id),
+                generated_image_file=lambda asset_id: self._generated_images.image_file(
+                    asset_id,
+                ),
+                plugin_asset_path=lambda plugin_id, relative_path: plugins.plugin_asset_path(
+                    self._plugin_host_dependencies, plugin_id, relative_path,
+                ),
+            ),
+        )
         self._adventure_dependencies = adventures.AdventureDependencies(
             adventure_loader=self._adventure_loader,
             list_instances=self._reg.list_all,
@@ -776,13 +834,19 @@ class WebAPI:
         return plugins.read_plugin_docs(self._plugin_host_dependencies, plugin_id)
 
     async def update_plugin_config(self, plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
-        return await plugins.update_plugin_config(self, plugin_id, changes)
+        return await plugins.update_plugin_config(
+            self._plugin_lifecycle_dependencies, plugin_id, changes,
+        )
 
     async def control_plugin(self, plugin_id: str, action: str) -> dict[str, Any]:
-        return await plugins.control_plugin(self, plugin_id, action)
+        return await plugins.control_plugin(
+            self._plugin_lifecycle_dependencies, plugin_id, action,
+        )
 
     async def install_plugin(self, payload: bytes, overwrite: bool = False) -> dict[str, Any]:
-        return await plugins.install_plugin(self, payload, overwrite)
+        return await plugins.install_plugin(
+            self._plugin_lifecycle_dependencies, payload, overwrite,
+        )
 
     async def list_plugin_marketplace(self) -> dict[str, Any]:
         return await plugins.list_plugin_marketplace(
@@ -790,7 +854,9 @@ class WebAPI:
         )
 
     async def install_marketplace_plugin(self, plugin_id: str, overwrite: bool = False) -> dict[str, Any]:
-        return await plugins.install_marketplace_plugin(self, plugin_id, overwrite)
+        return await plugins.install_marketplace_plugin(
+            self._plugin_lifecycle_dependencies, plugin_id, overwrite,
+        )
 
     async def update_marketplace_plugin(self, plugin_id: str) -> dict[str, Any]:
         return await plugins.update_marketplace_plugin(
@@ -798,7 +864,9 @@ class WebAPI:
         )
 
     async def uninstall_plugin(self, plugin_id: str, delete_data: bool = False) -> dict[str, Any]:
-        return await plugins.uninstall_plugin(self, plugin_id, delete_data)
+        return await plugins.uninstall_plugin(
+            self._plugin_lifecycle_dependencies, plugin_id, delete_data,
+        )
 
     def list_plugin_mirrors(self) -> dict[str, Any]:
         return plugins.list_plugin_mirrors(self._plugin_host_dependencies)
@@ -863,11 +931,13 @@ class WebAPI:
 
     def sync_plugin_lorebooks(self) -> dict[str, Any]:
         """同步已启用插件的世界模板世界书到世界书库（幂等）。"""
-        return plugins.sync_plugin_lorebooks(self)
+        return plugins.sync_plugin_lorebooks(self._plugin_content_dependencies)
 
     def cleanup_plugin_lorebook(self, plugin_id: str) -> dict[str, Any]:
         """删除某插件灌入的、未被用户改动的世界书条目。"""
-        return plugins.cleanup_plugin_lorebook(self, plugin_id)
+        return plugins.cleanup_plugin_lorebook(
+            self._plugin_content_dependencies, plugin_id,
+        )
 
     def import_plugin_content(
         self,
@@ -877,10 +947,19 @@ class WebAPI:
         target_world_id: str = "",
         overwrite: bool = False,
     ) -> dict[str, Any]:
-        return plugins.import_plugin_content(self, kind, resource_id, plugin_id, target_world_id, overwrite)
+        return plugins.import_plugin_content(
+            self._plugin_content_dependencies,
+            kind,
+            resource_id,
+            plugin_id,
+            target_world_id,
+            overwrite,
+        )
 
     def import_all_plugin_content(self, plugin_id: str, target_world_id: str = "") -> dict[str, Any]:
-        return plugins.import_all_plugin_content(self, plugin_id, target_world_id)
+        return plugins.import_all_plugin_content(
+            self._plugin_content_dependencies, plugin_id, target_world_id,
+        )
 
     def export_content_pack(
         self,
@@ -902,7 +981,8 @@ class WebAPI:
         language: str = "",
     ) -> dict[str, Any]:
         return plugins.export_content_pack(
-            self, plugin_id, name, version, description, world_id, card_ids, rule_id, flat,
+            self._plugin_export_dependencies,
+            plugin_id, name, version, description, world_id, card_ids, rule_id, flat,
             include_portraits, include_scene_images, world_scene_image, rule_scene_image,
             include_map, map_background, map_icons, language,
         )
@@ -931,7 +1011,9 @@ class WebAPI:
         )
 
     def plugin_asset_path(self, plugin_id: str, relative_path: str) -> Path:
-        return plugins.plugin_asset_path(self, plugin_id, relative_path)
+        return plugins.plugin_asset_path(
+            self._plugin_host_dependencies, plugin_id, relative_path,
+        )
 
     async def check_updates(self, include_prerelease: bool | None = None) -> dict[str, Any]:
         return await self._system.check_updates(include_prerelease)
@@ -1260,7 +1342,7 @@ class WebAPI:
         # 确保已启用插件的世界模板世界书已同步（幂等）
         if self._plugins:
             try:
-                plugins.sync_plugin_lorebooks(self)
+                plugins.sync_plugin_lorebooks(self._plugin_content_dependencies)
             except Exception:
                 logger.warning("list_worlds 同步插件世界书失败，已跳过", exc_info=True)
         return worlds.list_worlds(self._world_dependencies)
@@ -1698,7 +1780,7 @@ class WebAPI:
         # 确保已启用插件的世界模板世界书已同步（幂等）
         if self._plugins:
             try:
-                plugins.sync_plugin_lorebooks(self)
+                plugins.sync_plugin_lorebooks(self._plugin_content_dependencies)
             except Exception:
                 logger.warning("list_world_templates 同步插件世界书失败，已跳过", exc_info=True)
         return worlds.list_world_templates(self._world_dependencies, language)

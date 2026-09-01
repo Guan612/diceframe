@@ -44,6 +44,82 @@ class ContentMapApiFacade:
         )
 
 
+def _plugin_content_dependencies(api) -> plugin_service.PluginContentDependencies:
+    host = getattr(api, "_plugins", None)
+    lorebook = getattr(api, "_lore", None)
+    registry = getattr(api, "_reg", None)
+    list_games = getattr(registry, "list_all", lambda: []) if registry else lambda: []
+    plugin_asset = getattr(
+        api,
+        "plugin_asset_path",
+        lambda plugin_id, relative_path: host.public_asset_path(
+            plugin_id, relative_path,
+        ),
+    )
+    return plugin_service.PluginContentDependencies(
+        plugin_host=host,
+        store=plugin_service.PluginContentStoreDependencies(
+            lorebook=lorebook,
+            list_games=list_games,
+            list_character_cards=getattr(api, "list_character_cards", lambda: {"cards": []}),
+            save_character_card=getattr(
+                api, "save_character_card", lambda _card: {"ok": False}
+            ),
+            delete_character_card=getattr(
+                api, "delete_character_card", lambda _card_id: {"ok": True}
+            ),
+            save_entry=getattr(api, "save_entry", lambda _entry: {"ok": False}),
+        ),
+        portraits=plugin_service.PluginPortraitDependencies(
+            plugin_asset_path=plugin_asset,
+            avatar_file=getattr(api, "avatar_file", lambda _asset_id: None),
+            generated_image_file=getattr(
+                api, "generated_image_file", lambda _asset_id: None
+            ),
+            save_avatar_upload=getattr(
+                api, "save_avatar_upload", lambda _data, _name: {"ok": False}
+            ),
+        ),
+    )
+
+
+def _plugin_lifecycle_dependencies(api) -> plugin_service.PluginLifecycleDependencies:
+    content = _plugin_content_dependencies(api)
+    return plugin_service.PluginLifecycleDependencies(
+        plugin_host=content.plugin_host,
+        content=content,
+    )
+
+
+def _plugin_export_dependencies(api) -> plugin_service.PluginExportDependencies:
+    host = getattr(api, "_plugins", None)
+    return plugin_service.PluginExportDependencies(
+        plugin_host=host,
+        lorebook=getattr(api, "_lore", None),
+        rules_dir=getattr(api, "_rules_dir"),
+        list_character_cards=getattr(api, "list_character_cards", lambda: {"cards": []}),
+        media=plugin_service.PluginExportMediaDependencies(
+            package_scene_image=getattr(
+                api, "package_scene_image", lambda _reference, _files: None
+            ),
+            package_content_map=getattr(
+                api, "package_content_map", lambda *_args, **_kwargs: None
+            ),
+            avatar_file=getattr(api, "avatar_file", lambda _asset_id: None),
+            generated_image_file=getattr(
+                api, "generated_image_file", lambda _asset_id: None
+            ),
+            plugin_asset_path=getattr(
+                api,
+                "plugin_asset_path",
+                lambda plugin_id, relative_path: host.public_asset_path(
+                    plugin_id, relative_path,
+                ),
+            ),
+        ),
+    )
+
+
 async def _unused_map_save(_instance):
     return None
 
@@ -110,7 +186,7 @@ def test_import_all_plugin_content_imports_characters_and_entries(tmp_path):
         def save_entry(self, e): self._lore.entries[e["id"]] = e; return {"ok": True}
 
     api = _Api()
-    result = import_all_plugin_content(api, "packs", "w1")
+    result = import_all_plugin_content(_plugin_content_dependencies(api), "packs", "w1")
 
     assert result["ok"] is True
     assert result["imported_count"] == 2
@@ -219,7 +295,9 @@ def test_content_pack_portraits_preview_and_import_as_local_uploads(tmp_path):
             return {"ok": True}
 
     api = _Api()
-    result = import_all_plugin_content(api, "portrait-pack", "w1")
+    result = import_all_plugin_content(
+        _plugin_content_dependencies(api), "portrait-pack", "w1"
+    )
 
     assert result["ok"] is True
     assert result["imported_count"] == 2
@@ -382,7 +460,7 @@ def test_sync_plugin_lorebook_and_cleanup(tmp_path):
         def delete_character_card(self, card_id): return {"ok": True}
 
     api = _Api()
-    synced = sync_plugin_lorebooks(api)
+    synced = sync_plugin_lorebooks(_plugin_content_dependencies(api))
     assert synced["ok"] is True
     assert synced["synced"] == 1
     assert len(api._lore.entries) == 1
@@ -390,7 +468,7 @@ def test_sync_plugin_lorebook_and_cleanup(tmp_path):
     assert "_plugin_worlds_" in entry_id
     assert next(iter(api._lore.entries.values())).get("source_plugin") == "worlds"
 
-    removed = cleanup_plugin_lorebook(api, "worlds")
+    removed = cleanup_plugin_lorebook(_plugin_content_dependencies(api), "worlds")
     assert removed["ok"] is True
     assert removed["removed"] == 1
     assert len(api._lore.entries) == 0
@@ -432,7 +510,9 @@ def test_cleanup_removes_imported_and_auto_synced_entries(tmp_path):
         def delete_character_card(self, card_id): return {"ok": True}
 
     api = _Api()
-    result = cleanup_plugin_lorebook(api, "frieren-journey")
+    result = cleanup_plugin_lorebook(
+        _plugin_content_dependencies(api), "frieren-journey"
+    )
 
     assert result["removed"] == 2
     # 插件创建的两个世界都含有用户自建内容或来源条目 -> 保留（无对局引用但世界仍有条目）
@@ -482,7 +562,9 @@ async def test_update_plugin_config_enables_and_syncs_lorebook(tmp_path):
         def delete_character_card(self, card_id): return {"ok": True}
 
     api = _Api()
-    result = await update_plugin_config(api, "worlds", {"enabled": True})
+    result = await update_plugin_config(
+        _plugin_lifecycle_dependencies(api), "worlds", {"enabled": True}
+    )
 
     assert result["ok"] is True
     assert result["enabled"] is True
@@ -533,7 +615,7 @@ async def test_export_content_pack_round_trips_through_install(tmp_path):
             return {"cards": [card], "total": 1}
 
     api = _Api()
-    result = export_content_pack(api, "my-pack", "我的包", "1.0.0", "导出测试",
+    result = export_content_pack(_plugin_export_dependencies(api), "my-pack", "我的包", "1.0.0", "导出测试",
                                  world_id="w1", card_ids=["card1"], rule_id="myrule")
 
     assert result["ok"] is True
@@ -633,8 +715,9 @@ async def test_export_content_pack_bundles_world_map_background_locations_and_ic
         def resolve_map_background_file(selection):
             return background if selection == {"kind": "upload", "asset_id": "test"} else None
 
+    api = _Api()
     result = export_content_pack(
-        _Api(),
+        _plugin_export_dependencies(api),
         "map-content",
         "地图内容包",
         "1.0.0",
@@ -699,7 +782,15 @@ def test_export_content_pack_flat_has_plugin_json_at_root(tmp_path):
         def list_character_cards(self): return {"cards": []}
 
     api = _Api()
-    result = export_content_pack(api, "my-pack", "我的包", "1.0.0", "desc", world_id="w1", flat=True)
+    result = export_content_pack(
+        _plugin_export_dependencies(api),
+        "my-pack",
+        "我的包",
+        "1.0.0",
+        "desc",
+        world_id="w1",
+        flat=True,
+    )
 
     assert result["ok"] is True
     assert result["filename"] == "my-pack-1.0.0-src.zip"
@@ -744,7 +835,7 @@ def test_cleanup_plugin_removes_imported_character_cards(tmp_path):
             return {"ok": True, "card_id": card_id}
 
     api = _Api()
-    result = cleanup_plugin_lorebook(api, "packs")
+    result = cleanup_plugin_lorebook(_plugin_content_dependencies(api), "packs")
 
     assert result["ok"] is True
     assert result["cards_removed"] == 2
@@ -805,7 +896,7 @@ def test_cleanup_removes_cards_saved_through_real_save_path(tmp_path):
     assert len(persisted) == 1
     assert persisted[0]["source_plugin"] == "packs"  # Bug 1：曾在此处被 _to_character_card 丢弃
 
-    result = cleanup_plugin_lorebook(api, "packs")
+    result = cleanup_plugin_lorebook(_plugin_content_dependencies(api), "packs")
     assert result["cards_removed"] == 1
     assert list_character_cards(api._character_card_dependencies)["cards"] == []
 
@@ -962,7 +1053,7 @@ def test_autoimport_plugin_content_idempotent():
             return {"ok": True}
 
     api = _Api(_Plugins([_Contrib("pack", "w1")]))
-    _autoimport_plugin_content(api, "pack")
+    _autoimport_plugin_content(_plugin_content_dependencies(api), "pack")
 
     assert len(saved_cards) == 1
     assert saved_cards[0]["character_name"] == "Hero"
@@ -973,7 +1064,7 @@ def test_autoimport_plugin_content_idempotent():
     assert any("spell" in e["id"] for e in saved_entries)
 
     # 幂等：再调一次，已存在的世界书条目跳过（不复制）
-    _autoimport_plugin_content(api, "pack")
+    _autoimport_plugin_content(_plugin_content_dependencies(api), "pack")
     assert len(saved_entries) == 2
 
 
@@ -1007,7 +1098,8 @@ def test_autoimport_plugin_content_without_world_only_imports_cards():
             saved_entries.append(entry)
             return {"ok": True}
 
-    _autoimport_plugin_content(_Api(), "pack")
+    api = _Api()
+    _autoimport_plugin_content(_plugin_content_dependencies(api), "pack")
     assert len(saved_cards) == 1
     assert len(saved_entries) == 0  # 无世界，npc 跳过
 
@@ -1075,7 +1167,9 @@ async def test_install_marketplace_plugin_triggers_autoimport_when_enabled():
             return {"ok": True}
 
     api = _Api()
-    result = await install_marketplace_plugin(api, "pack")
+    result = await install_marketplace_plugin(
+        _plugin_lifecycle_dependencies(api), "pack"
+    )
 
     assert result["ok"] is True
     assert api._plugins.synced is True
@@ -1107,7 +1201,10 @@ async def test_install_marketplace_plugin_skips_autoimport_when_disabled():
         _plugins = _Plugins()
         _lore = None
 
-    result = await install_marketplace_plugin(_Api(), "pack")
+    api = _Api()
+    result = await install_marketplace_plugin(
+        _plugin_lifecycle_dependencies(api), "pack"
+    )
     assert result["ok"] is True
 
 
@@ -1705,8 +1802,13 @@ async def test_plugin_content_can_import_character_template_and_lore_entries(tmp
 
     api = Api()
 
-    card_result = plugin_service.import_plugin_content(api, "character_template", "hero", "library-pack")
-    entry_result = plugin_service.import_plugin_content(api, "npc", "elder", "library-pack", "pack_world")
+    dependencies = _plugin_content_dependencies(api)
+    card_result = plugin_service.import_plugin_content(
+        dependencies, "character_template", "hero", "library-pack"
+    )
+    entry_result = plugin_service.import_plugin_content(
+        dependencies, "npc", "elder", "library-pack", "pack_world"
+    )
 
     assert card_result["ok"] is True
     assert api.cards[0]["character_name"] == "Hero"
