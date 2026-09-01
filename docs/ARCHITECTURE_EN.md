@@ -73,6 +73,8 @@ Migrations for loaded persisted `GameInstance` data are orchestrated through the
 
 Auxiliary projections have explicit owners: `src/engine/game_state_codec.py` owns the stable save projection and reconstruction, `src/engine/game_context_projector.py` owns the generic LLM/presentation view, and `src/migrations/instance.py` owns normalization of loaded legacy save payloads. Payload normalization runs on a copy before aggregate construction and never mutates caller input. `GameInstance.to_dict()`, `from_dict()`, and `to_llm_view()` remain compatibility delegates rather than implementing those projections. Legacy ability modifiers, armor summation, and string-skill defaults live in the isolated `src/engine/legacy_game_projection.py` and are selected explicitly by `LegacyRulesetAdapter`. A ruleset runtime may extend the generic projection with its authoritative view, but concrete mechanics must not move back into the generic projector.
 
+This is the first codec/projection/migration boundary extraction; it does not mean the generic state shape is final or completely rules-agnostic. To preserve existing worlds, saves, and prompts, the generic projection still carries traditional character fields such as `hp`, `max_hp`, `class`, `race`, `level`, `attributes`, `equipment`, `skills`, and `inventory`. Those compatibility shapes can be narrowed further only while preserving save and ruleset-runtime contracts.
+
 ## Application Update Boundary
 
 Windows source/portable and managed Docker share the download state machine in `src/webui/services/updater.py`, but installation authority is separated. Source updates use a backup transaction, portable candidates are committed by the Windows launcher, and Docker candidates are committed only by the stable image launcher under `src/docker_launcher/` after health and probation checks pass. A Docker application process may write only a restart signal containing a relative candidate path; it cannot control the Docker daemon, mount the Docker socket, or overwrite the current version directory.
@@ -86,6 +88,8 @@ Only when the owner explicitly asks DF Assistant to inspect runtime logs may `sr
 ## Frontend and Rule Boundaries
 
 The backend materializes V2 locales and the frontend renders the returned payload; the frontend does not reimplement Content V2 locale architecture. D&D using d20 is not the same as changing generic d20 behavior. D&D-specific behavior remains inside the D&D boundary.
+
+The current implementation completes the first ruleset capability-normalization pass: major D&D-specific semantics have moved out of generic layers, and optional runtime capability boundaries now exist for further contraction. The main `RulesetRuntime` protocol still carries a broad base contract spanning character construction and validation, intents, events, projections, and migration. This is not a claim that every ruleset feature is already an independent capability or that the runtime protocol is minimal.
 
 ## Adventure Bundle v1
 

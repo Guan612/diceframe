@@ -61,15 +61,26 @@ def test_new_service_locator_dependency_is_rejected(tmp_path: Path) -> None:
     service = tmp_path / "src/webui/services/new_service.py"
     service.parent.mkdir(parents=True)
     service.write_text(
-        "from src.webui.api import WebAPI\n"
-        "def run(api: WebAPI):\n"
-        "    return api._reg.list_all()\n",
+        "from ..api import WebAPI as Facade\n"
+        "def run(web_api: Facade):\n"
+        "    return web_api._reg.list_all()\n",
         encoding="utf-8",
     )
 
+    debt = scan_service_locator_debt(tmp_path)
+    assert DependencyDebt(
+        "src/webui/services/new_service.py",
+        "webapi_parameter",
+        "WebAPI",
+    ) in debt
+    assert DependencyDebt(
+        "src/webui/services/new_service.py",
+        "private_facade_access",
+        "WebAPI._*",
+    ) in debt
     with pytest.raises(AssertionError):
         assert_debt_matches_allowlist(
-            scan_service_locator_debt(tmp_path), set(), boundary="services -> WebAPI"
+            debt, set(), boundary="services -> WebAPI"
         )
 
 
@@ -94,31 +105,49 @@ def test_new_generic_backend_concrete_ruleset_import_is_rejected(tmp_path: Path)
     module = tmp_path / "src/engine/new_runtime_bridge.py"
     module.parent.mkdir(parents=True)
     module.write_text(
-        "from src.rulesets.dnd2024.runtime import Dnd2024Runtime\n",
+        "from ..rulesets.dnd2024.runtime import Dnd2024Runtime\n",
         encoding="utf-8",
     )
 
+    debt = scan_backend_concrete_ruleset_debt(tmp_path)
+    assert DependencyDebt(
+        "src/engine/new_runtime_bridge.py",
+        "concrete_import",
+        "src.rulesets.dnd2024.runtime",
+    ) in debt
     with pytest.raises(AssertionError):
         assert_debt_matches_allowlist(
-            scan_backend_concrete_ruleset_debt(tmp_path),
+            debt,
             set(),
             boundary="generic backend -> dnd2024",
         )
 
 
 def test_new_generic_frontend_concrete_ruleset_import_is_rejected(tmp_path: Path) -> None:
-    component = tmp_path / "frontend-v2/src/components/NewPanel.vue"
+    component = tmp_path / "frontend-v2/src/features/rulesets/NewPanel.vue"
     component.parent.mkdir(parents=True)
     component.write_text(
         '<script setup lang="ts">\n'
-        "import { submitRulesetIntent } from '@/features/rulesets/dnd2024/api'\n"
+        "import { submitRulesetIntent } from './dnd2024/api'\n"
+        "import CombatPanel from '@/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue'\n"
         "</script>\n",
         encoding="utf-8",
     )
 
+    debt = scan_frontend_concrete_ruleset_debt(tmp_path)
+    assert DependencyDebt(
+        "frontend-v2/src/features/rulesets/NewPanel.vue",
+        "concrete_import",
+        "frontend-v2/src/features/rulesets/dnd2024/api",
+    ) in debt
+    assert DependencyDebt(
+        "frontend-v2/src/features/rulesets/NewPanel.vue",
+        "concrete_import",
+        "frontend-v2/src/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue",
+    ) in debt
     with pytest.raises(AssertionError):
         assert_debt_matches_allowlist(
-            scan_frontend_concrete_ruleset_debt(tmp_path),
+            debt,
             set(),
             boundary="generic frontend -> dnd2024",
         )

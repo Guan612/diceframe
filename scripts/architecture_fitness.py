@@ -35,8 +35,14 @@ _FRONTEND_SUFFIXES = frozenset({".js", ".jsx", ".ts", ".tsx", ".vue"})
 _CONCRETE_RULESET_MODULE = "src.rulesets.dnd2024"
 _CONCRETE_RUNTIME_ID = "core:dnd2024"
 _CONCRETE_EVENT_PREFIX = "dnd2024."
-_CONCRETE_FRONTEND_SEGMENT = "rulesets/dnd2024/"
+_FRONTEND_SOURCE_ROOT = "frontend-v2/src"
 _CONCRETE_FRONTEND_OWNER = "frontend-v2/src/features/rulesets/dnd2024"
+# This registry is the composition root that maps runtime identities to their
+# concrete, lazily loaded frontend implementations.  No other generic source
+# file is exempt from the concrete-ruleset import boundary.
+_FRONTEND_CONCRETE_IMPORT_EXEMPTIONS = frozenset(
+    {"frontend-v2/src/features/rulesets/registry.ts"}
+)
 
 # These patterns only inspect module specifiers in static import/export
 # declarations and dynamic import() expressions.  They do not match arbitrary
@@ -73,16 +79,112 @@ def _function_arguments(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterabl
         yield node.args.kwarg
 
 
-def _mentions_webapi(annotation: ast.expr | None) -> bool:
+def _python_package_parts(root: Path, path: Path) -> tuple[str, ...]:
+    relative = path.relative_to(root).with_suffix("")
+    parts = relative.parts
+    if path.stem == "__init__":
+        return parts
+    return parts[:-1]
+
+
+def _resolve_import_from(root: Path, path: Path, node: ast.ImportFrom) -> str:
+    if not node.level:
+        return node.module or ""
+    package = _python_package_parts(root, path)
+    parents_to_drop = node.level - 1
+    if parents_to_drop > len(package):
+        return ""
+    base = package[: len(package) - parents_to_drop]
+    if node.module:
+        base = (*base, *node.module.split("."))
+    return ".".join(base)
+
+
+def _import_targets(
+    root: Path,
+    path: Path,
+    node: ast.Import | ast.ImportFrom,
+) -> Iterable[str]:
+    if isinstance(node, ast.Import):
+        yield from (alias.name for alias in node.names)
+        return
+    base = _resolve_import_from(root, path, node)
+    if base:
+        yield base
+    for alias in node.names:
+        if alias.name == "*":
+            continue
+        yield f"{base}.{alias.name}" if base else alias.name
+
+
+def _webapi_annotation_names(
+    root: Path,
+    path: Path,
+    tree: ast.Module,
+) -> tuple[set[str], set[str]]:
+    type_names = {"WebAPI"}
+    module_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "src.webui.api":
+                    module_names.add(alias.asname or alias.name)
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        base = _resolve_import_from(root, path, node)
+        for alias in node.names:
+            imported = f"{base}.{alias.name}" if base else alias.name
+            bound = alias.asname or alias.name
+            if imported == "src.webui.api.WebAPI":
+                type_names.add(bound)
+            elif imported == "src.webui.api":
+                module_names.add(bound)
+    return type_names, module_names
+
+
+def _attribute_name(node: ast.Attribute) -> str:
+    parts = [node.attr]
+    value: ast.expr = node.value
+    while isinstance(value, ast.Attribute):
+        parts.append(value.attr)
+        value = value.value
+    if isinstance(value, ast.Name):
+        parts.append(value.id)
+    return ".".join(reversed(parts))
+
+
+def _mentions_webapi(
+    annotation: ast.expr | None,
+    type_names: set[str],
+    module_names: set[str],
+) -> bool:
     if annotation is None:
         return False
     for node in ast.walk(annotation):
-        if isinstance(node, ast.Name) and node.id == "WebAPI":
+        if isinstance(node, ast.Name) and node.id in type_names:
             return True
         if isinstance(node, ast.Attribute) and node.attr == "WebAPI":
-            return True
+            qualified = _attribute_name(node)
+            if qualified == "src.webui.api.WebAPI" or any(
+                qualified == f"{module}.WebAPI" for module in module_names
+            ):
+                return True
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if node.value.rsplit(".", 1)[-1] == "WebAPI":
+            reference = node.value.strip()
+            if reference in type_names or reference == "src.webui.api.WebAPI" or any(
+                reference == f"{module}.WebAPI" for module in module_names
+            ):
+                return True
+            try:
+                parsed = ast.parse(reference, mode="eval").body
+            except SyntaxError:
+                continue
+            if not isinstance(parsed, ast.Constant) and _mentions_webapi(
+                parsed,
+                type_names,
+                module_names,
+            ):
                 return True
     return False
 
@@ -94,52 +196,65 @@ def scan_service_locator_debt(root: Path) -> set[DependencyDebt]:
     for path in _python_files(root, ("src/webui/services",)):
         relative = _relative(root, path)
         tree = _tree(path)
+        webapi_type_names, webapi_module_names = _webapi_annotation_names(
+            root, path, tree,
+        )
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "src.webui.api":
-                if any(alias.name == "WebAPI" for alias in node.names):
-                    found.add(DependencyDebt(relative, "webapi_import", "src.webui.api.WebAPI"))
-            elif isinstance(node, ast.Import):
-                if any(alias.name == "src.webui.api" for alias in node.names):
-                    found.add(DependencyDebt(relative, "webapi_import", "src.webui.api"))
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if any(
+                    target == "src.webui.api"
+                    or target.startswith("src.webui.api.")
+                    for target in _import_targets(root, path, node)
+                ):
+                    found.add(
+                        DependencyDebt(relative, "webapi_import", "src.webui.api")
+                    )
 
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            api_arguments = {
+            facade_arguments = {
                 argument.arg: argument
                 for argument in _function_arguments(node)
-                if argument.arg == "api"
+                if _mentions_webapi(
+                    argument.annotation,
+                    webapi_type_names,
+                    webapi_module_names,
+                )
             }
-            if not api_arguments:
+            if not facade_arguments:
                 continue
-            if any(_mentions_webapi(argument.annotation) for argument in api_arguments.values()):
-                found.add(DependencyDebt(relative, "webapi_parameter", "WebAPI"))
+            found.add(DependencyDebt(relative, "webapi_parameter", "WebAPI"))
 
             for child in ast.walk(node):
                 if (
                     isinstance(child, ast.Attribute)
                     and isinstance(child.value, ast.Name)
-                    and child.value.id == "api"
+                    and child.value.id in facade_arguments
                     and child.attr.startswith("_")
                     and not child.attr.startswith("__")
                 ):
-                    found.add(DependencyDebt(relative, "private_facade_access", "api._*"))
+                    found.add(
+                        DependencyDebt(
+                            relative,
+                            "private_facade_access",
+                            "WebAPI._*",
+                        )
+                    )
                 elif (
                     isinstance(child, ast.Call)
                     and isinstance(child.func, ast.Attribute)
                     and isinstance(child.func.value, ast.Name)
-                    and child.func.value.id == "api"
+                    and child.func.value.id in facade_arguments
                     and not child.func.attr.startswith("_")
                 ):
-                    found.add(DependencyDebt(relative, "facade_service_call", "api.<service>()"))
+                    found.add(
+                        DependencyDebt(
+                            relative,
+                            "facade_service_call",
+                            "WebAPI.<service>()",
+                        )
+                    )
     return found
-
-
-def _import_modules(node: ast.Import | ast.ImportFrom) -> Iterable[str]:
-    if isinstance(node, ast.Import):
-        yield from (alias.name for alias in node.names)
-        return
-    if node.module:
-        yield node.module
 
 
 def scan_backend_concrete_ruleset_debt(root: Path) -> set[DependencyDebt]:
@@ -150,7 +265,7 @@ def scan_backend_concrete_ruleset_debt(root: Path) -> set[DependencyDebt]:
         relative = _relative(root, path)
         for node in ast.walk(_tree(path)):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
-                for module in _import_modules(node):
+                for module in _import_targets(root, path, node):
                     if module == _CONCRETE_RULESET_MODULE or module.startswith(
                         f"{_CONCRETE_RULESET_MODULE}."
                     ):
@@ -168,10 +283,27 @@ def _frontend_module_specifiers(source: str) -> Iterable[str]:
         yield from (match.group(1) for match in pattern.finditer(source))
 
 
+def _resolve_frontend_import(root: Path, path: Path, module: str) -> str | None:
+    normalized = module.replace("\\", "/").split("?", 1)[0].split("#", 1)[0]
+    source_root = root / _FRONTEND_SOURCE_ROOT
+    if normalized == "@":
+        target = source_root
+    elif normalized.startswith("@/"):
+        target = source_root / normalized[2:]
+    elif normalized.startswith("."):
+        target = path.parent / normalized
+    else:
+        return None
+    try:
+        return target.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
 def scan_frontend_concrete_ruleset_debt(root: Path) -> set[DependencyDebt]:
     """Find concrete D&D imports outside the D&D-owned frontend feature."""
 
-    source_root = root / "frontend-v2" / "src"
+    source_root = root / _FRONTEND_SOURCE_ROOT
     found: set[DependencyDebt] = set()
     if not source_root.exists():
         return found
@@ -183,11 +315,16 @@ def scan_frontend_concrete_ruleset_debt(root: Path) -> set[DependencyDebt]:
             f"{_CONCRETE_FRONTEND_OWNER}/"
         ):
             continue
+        if relative in _FRONTEND_CONCRETE_IMPORT_EXEMPTIONS:
+            continue
         source = path.read_text(encoding="utf-8-sig")
         for module in _frontend_module_specifiers(source):
-            normalized = module.replace("\\", "/")
-            if _CONCRETE_FRONTEND_SEGMENT in normalized:
-                found.add(DependencyDebt(relative, "concrete_import", normalized))
+            resolved = _resolve_frontend_import(root, path, module)
+            if resolved == _CONCRETE_FRONTEND_OWNER or (
+                resolved is not None
+                and resolved.startswith(f"{_CONCRETE_FRONTEND_OWNER}/")
+            ):
+                found.add(DependencyDebt(relative, "concrete_import", resolved))
     return found
 
 
