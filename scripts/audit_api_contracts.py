@@ -14,8 +14,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_PATH = ROOT / "web_server.py"
+APPLICATION_PATH = ROOT / "src" / "webui" / "application.py"
 ROUTES_DIR = ROOT / "src" / "webui" / "routes"
-SOURCES = [SERVER_PATH] + sorted(ROUTES_DIR.glob("*.py"))
+SOURCES = [SERVER_PATH, APPLICATION_PATH] + sorted(ROUTES_DIR.glob("*.py"))
 
 DATA_ENDPOINTS = {
     "/api/games",
@@ -110,7 +111,11 @@ def main() -> int:
             marker = "stream"
         elif path in BINARY_ENDPOINTS:
             marker = "binary"
-        elif "_get_api(request)." in body or "api.resolve_payment(" in body:
+        elif (
+            handler.startswith("dependencies.")
+            or "_get_api(request)." in body
+            or "api.resolve_payment(" in body
+        ):
             marker = "delegated"
         elif path.startswith("/api/") and not (has_ok or has_error or has_status):
             marker = "review"

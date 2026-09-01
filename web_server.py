@@ -5,7 +5,6 @@ import json
 import hmac
 import logging
 import os
-import secrets as secrets_module
 import signal
 import sys
 
@@ -30,7 +29,6 @@ from src.ai_providers import (
 from src.hub_client import HubClient
 from src.network_proxy import effective_proxy_url, is_supported_proxy_url, mask_proxy_url
 from src.plugin_host import PluginHost
-from src.plugin_host.package_limits import MAX_PLUGIN_PACKAGE_BYTES
 from src.template_catalog import sync_template_catalog
 from src.tts import SpeechService
 from src.asr import AsrService
@@ -43,9 +41,8 @@ from src.webui.access_password import (
     normalize_access_password,
     verify_access_password,
 )
-from src.webui.abuse_guard import ABUSE_GUARD_KEY, AbuseGuard, abuse_guard_middleware
 from src.webui.api import WebAPI
-from src.webui.cors import cors_middleware, cors_response_prepare, parse_cors_origins
+from src.webui.cors import parse_cors_origins
 from src.webui.config_update import (
     API_RUNTIME_CONFIG_KEYS,
     MODEL_RUNTIME_CONFIG_KEYS,
@@ -61,41 +58,15 @@ from src.webui.composition import (
     RuntimeFactories,
     RuntimePaths as CompositionPaths,
 )
+from src.webui.application import ApplicationDependencies, create_app
 from src.webui.runtime_config import (
     ConfigStore,
     RuntimePaths,
 )
 from src.webui.routes._common import _get_api, _require_confirmed_request
-from src.webui.routes.character_cards import register_character_cards
-from src.webui.routes.avatars import register_avatars
-from src.webui.routes.scene_images import register_scene_images
-from src.webui.routes.maps import register_maps
-from src.webui.routes.rules import register_rules
-from src.webui.routes.adventures import register_adventures
-from src.webui.routes.worlds import register_worlds
-from src.webui.routes.generation import register_generation
-from src.webui.routes.games import register_games
-from src.webui.routes.sse import register_sse
-from src.webui.routes.memory import register_memory
-from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY, register_auth
-from src.webui.routes.pages import add_response_security_headers, register_pages
-from src.webui.login_audit import LOGIN_AUDIT_KEY, LoginAuditStore
-from src.webui.routes.bot import register_bot
-from src.webui.routes.plugins import register_plugins
-from src.webui.routes.security import register_security
-from src.webui.routes.announcements import register_announcements
-from src.webui.routes.hub import register_hub
-from src.webui.routes.legal import register_legal
-from src.webui.routes.assistant import register_assistant
-from src.webui.routes.tunnel import register_tunnel
-from src.webui.routes.system import register_system
-from src.webui.routes.updater import register_updater
-from src.webui.routes.speech import register_speech
-from src.webui.routes.asr import register_asr
-from src.webui.routes.generated_images import register_generated_images
+from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 from src.webui.services import updater as updater_svc
 from src.webui.services import legal as legal_svc
-from src.webui.services.security import SecurityTransportService
 
 logger = logging.getLogger("trpg")
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(message)s")
@@ -1046,88 +1017,28 @@ async def api_test_proxy(request: web.Request) -> web.Response:
         })
 
 
-app = web.Application(client_max_size=MAX_PLUGIN_PACKAGE_BYTES + 1024 * 1024)
-app.on_startup.append(on_startup)
-app.on_cleanup.append(on_cleanup)
-
-from src.webui.connection_pool import ConnectionPool
-from src.webui.session import SessionManager, session_middleware
-from src.webui.sse_ticket import SseTicketStore
-from src.webui.errors import error_code_middleware
-
-app.middlewares.append(cors_middleware)
-app.on_response_prepare.append(cors_response_prepare)
-app.middlewares.append(session_middleware)
-app.middlewares.append(abuse_guard_middleware)
-app.middlewares.append(auth_middleware)
-app.middlewares.append(error_code_middleware)
-app.on_response_prepare.append(add_response_security_headers)
-app["_config_reload_lock"] = asyncio.Lock()
-app["session_manager"] = SessionManager(DATA_DIR)
-app[ABUSE_GUARD_KEY] = AbuseGuard()
-app[LOGIN_AUDIT_KEY] = LoginAuditStore(DATA_DIR)
-app["connection_pool"] = ConnectionPool()
-app["sse_tickets"] = SseTicketStore()
-app["static_v2_dir"] = STATIC_V2_DIR
-app["cors_origins"] = WEB_CORS_ORIGINS
-app["runtime_control"] = {
-        "boot_id": secrets_module.token_hex(8),
-    "restart_requested": False,
-    "restart_task": None,
-}
-app["web_transport"] = TRANSPORT
-app["security_transport"] = SecurityTransportService(STATE, save_config, DATA_DIR, TRANSPORT)
-
-def register_routes(application: web.Application) -> None:
-    """集中注册所有路由，按域分组。"""
-    # 页面
-    register_pages(application)
-    # auth/session
-    register_auth(application)
-    # games
-    register_games(application)
-    register_bot(application)
-    register_plugins(application)
-    register_security(application)
-    register_announcements(application)
-    register_hub(application)
-    register_legal(application)
-    register_assistant(application)
-    register_tunnel(application)
-    register_system(application)
-    register_updater(application)
-    register_speech(application)
-    register_asr(application)
-    register_generated_images(application)
-    # worlds / lorebook
-    register_worlds(application)
-    # rules
-    register_rules(application)
-    register_adventures(application)
-    # character cards
-    register_character_cards(application)
-    # character portraits
-    register_avatars(application)
-    # adventure scene images
-    register_scene_images(application)
-    register_maps(application)
-    # config / test
-    application.router.add_get("/api/config", api_config_get)
-    application.router.add_post("/api/config", api_config_post)
-    application.router.add_post("/api/config/bot-token", api_bot_token_post)
-    application.router.add_post("/api/config/providers/models", api_config_provider_models_post)
-    application.router.add_post("/api/test-connection", api_test_connection)
-    application.router.add_post("/api/test-embedding", api_test_embedding)
-    application.router.add_post("/api/test-proxy", api_test_proxy)
-    # generation
-    register_generation(application)
-    # SSE / stream
-    register_sse(application)
-    # memory
-    register_memory(application)
+def _application_dependencies() -> ApplicationDependencies:
+    return ApplicationDependencies(
+        data_dir=DATA_DIR,
+        static_v2_dir=STATIC_V2_DIR,
+        cors_origins=WEB_CORS_ORIGINS,
+        transport=TRANSPORT,
+        config_state=STATE,
+        save_config=save_config,
+        on_startup=on_startup,
+        on_cleanup=on_cleanup,
+        auth_middleware=auth_middleware,
+        config_get=api_config_get,
+        config_post=api_config_post,
+        bot_token_post=api_bot_token_post,
+        provider_models_post=api_config_provider_models_post,
+        test_connection=api_test_connection,
+        test_embedding=api_test_embedding,
+        test_proxy=api_test_proxy,
+    )
 
 
-register_routes(app)
+app = create_app(_application_dependencies())
 
 if __name__ == "__main__":
     runtime_log_path = configure_runtime_logging(DATA_DIR)
