@@ -34,6 +34,7 @@ files = [
     "src/rulesets/legacy_adapter.py",
     "src/webui/config_update.py",
     "src/webui/application.py",
+    "src/webui/access_control.py",
     "src/webui/bootstrap.py",
     "src/webui/composition.py",
     "src/webui/host_credentials.py",
