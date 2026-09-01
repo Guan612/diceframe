@@ -23,7 +23,6 @@ from src.engine.contracts import (
 )
 from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
 from src.engine.character_utils import apply_resource_delta, get_resource
-from src.engine.game_context_projector import GameContextProjector
 from src.engine.game_state_codec import GameStateCodec
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
@@ -1104,7 +1103,9 @@ class GameInstance:
         （log、summary、key_facts、confirmed_items、plot_tracker 等），
         这些由 context_builder 单独注入。含属性修正和护甲计算。
         """
-        return GameContextProjector.project(self)
+        from src.engine.legacy_game_projection import project_legacy_game_context
+
+        return project_legacy_game_context(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "GameInstance":

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.adventures import ADVENTURE_GRAPH_FORMAT, AdventureBundleLoader, LoadedAdventureBundle
+from src.engine.legacy_game_projection import project_legacy_game_context
 from src.rulesets.dnd2024.adventure_migrations import (
     apply_unreleased_adventure_binding_migration,
 )
@@ -752,7 +753,7 @@ class Dnd2024Runtime:
         return [str(item) for item in proposal.get("action_ids") or [] if str(item)]
 
     def build_llm_view(self, instance: Any) -> dict[str, Any]:
-        state = dict(instance.to_llm_view())
+        state = project_legacy_game_context(instance)
         for uid, player in state.get("players", {}).items():
             source = instance.get_character_sheet(uid)
             canonical = source.get("ruleset_character")

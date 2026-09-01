@@ -2,65 +2,52 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from src.engine.language import normalize_language
+
+
+CharacterSheetProjector = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def _project_generic_character_sheet(character_sheet: dict[str, Any]) -> dict[str, Any]:
+    """Copy presentation fields without inventing ruleset mechanics."""
+    sheet: dict[str, Any] = {
+        "hp": character_sheet.get("hp", 0),
+        "max_hp": character_sheet.get("max_hp", 0),
+        "class": character_sheet.get("class", ""),
+        "race": character_sheet.get("race", ""),
+        "level": character_sheet.get("level", 1),
+        "xp": character_sheet.get("xp", 0),
+        "gold": character_sheet.get("gold", 0),
+        "attributes": character_sheet.get("attributes", {}),
+        "equipment": character_sheet.get("equipment", []),
+        "skills": character_sheet.get("skills", []),
+        "inventory": character_sheet.get("inventory", []),
+        "key_items": character_sheet.get("key_items", []),
+    }
+    if character_sheet.get("background"):
+        sheet["background"] = character_sheet["background"]
+    if character_sheet.get("deceased"):
+        sheet["deceased"] = True
+    return sheet
 
 
 class GameContextProjector:
     """Build the compact generic state view consumed by LLM context code."""
 
     @staticmethod
-    def project(instance: Any) -> dict[str, Any]:
+    def project(
+        instance: Any,
+        *,
+        character_sheet_projector: CharacterSheetProjector | None = None,
+    ) -> dict[str, Any]:
+        project_sheet = character_sheet_projector or _project_generic_character_sheet
         players_view: dict[str, dict[str, Any]] = {}
         for uid, player_data in instance.players.items():
             character_sheet = player_data.get("character_sheet", {})
-            attributes = character_sheet.get("attributes", {})
-            equipment = character_sheet.get("equipment", [])
-            skills = character_sheet.get("skills", [])
-            if skills and isinstance(skills[0], str):
-                skills = [{"name": skill, "value": 20} for skill in skills]
-            sheet: dict[str, Any] = {
-                "hp": character_sheet.get("hp", 0),
-                "max_hp": character_sheet.get("max_hp", 0),
-                "class": character_sheet.get("class", ""),
-                "race": character_sheet.get("race", ""),
-                "level": character_sheet.get("level", 1),
-                "xp": character_sheet.get("xp", 0),
-                "gold": character_sheet.get("gold", 0),
-                "attributes": attributes,
-                "_modifiers": {
-                    key: (value - 10) // 2 for key, value in attributes.items()
-                },
-                "equipment": equipment,
-                "_armor": sum(
-                    item.get("armor", 1)
-                    if item.get("type") in ("armor", "clothing")
-                    else item.get("armor", 0)
-                    for item in equipment
-                ),
-                "skills": skills,
-                "inventory": character_sheet.get("inventory", []),
-                "key_items": character_sheet.get("key_items", []),
-            }
-            if character_sheet.get("background"):
-                sheet["background"] = character_sheet["background"]
-            if character_sheet.get("deceased"):
-                sheet["deceased"] = True
-            special_stats: dict[str, int] = {}
-            for key in (
-                "sanity",
-                "qi",
-                "luck",
-                "cyberware",
-                "cyberware_load",
-                "humanity",
-                "heat",
-            ):
-                if key in character_sheet:
-                    special_stats[key] = character_sheet[key]
-            if special_stats:
-                sheet["_special_stats"] = special_stats
+            sheet = project_sheet(character_sheet)
             players_view[uid] = {
                 "character_name": player_data.get("character_name", ""),
                 "attendance": "away" if uid in instance.away_players else "active",

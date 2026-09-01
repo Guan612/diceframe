@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from src.engine.legacy_game_projection import project_legacy_game_context
 from src.rulesets.contracts import RulesetCapabilities
 
 
@@ -79,7 +80,7 @@ class LegacyRulesetAdapter:
         return {}
 
     def build_llm_view(self, instance: Any) -> dict[str, Any]:
-        return dict(instance.to_llm_view())
+        return project_legacy_game_context(instance)
 
     def project_legacy_character(self, character: dict[str, Any]) -> dict[str, Any]:
         return deepcopy(character)

@@ -65,6 +65,12 @@ V2 resource IDs must already be canonical. The registry never silently normalize
 
 Migrations for loaded persisted `GameInstance` data are orchestrated through the single `src.migrations.migrate_instance` entry point. Domain-specific migration implementations may live in `src/compat/` as pure adapters, but services, routes, and runtimes must not call those adapters directly. Every migration must be idempotent, tested, and bounded by an explicit version/identity/digest contract; uncertain migrations fail closed. New behavior adds a versioned migration step rather than changing the meaning of a released step.
 
+## GameInstance Aggregate Boundary
+
+`GameInstance` remains the aggregate root for one game. It owns authoritative runtime state, invariants, state transitions, and coordination through `_lock` / `_process_lock`. Players, combat, rounds, and payments are not split into independent aggregates merely to shorten the source file.
+
+Auxiliary projections have explicit owners: `src/engine/game_state_codec.py` owns the stable save projection and reconstruction, `src/engine/game_context_projector.py` owns the generic LLM/presentation view, and `src/migrations/instance.py` owns normalization of loaded legacy save shapes. `GameInstance.to_dict()`, `from_dict()`, and `to_llm_view()` remain compatibility delegates rather than implementing those projections. Legacy ability modifiers, armor summation, and string-skill defaults live in the isolated `src/engine/legacy_game_projection.py` and are selected explicitly by `LegacyRulesetAdapter`. A ruleset runtime may extend the generic projection with its authoritative view, but concrete mechanics must not move back into the generic projector.
+
 ## Application Update Boundary
 
 Windows source/portable and managed Docker share the download state machine in `src/webui/services/updater.py`, but installation authority is separated. Source updates use a backup transaction, portable candidates are committed by the Windows launcher, and Docker candidates are committed only by the stable image launcher under `src/docker_launcher/` after health and probation checks pass. A Docker application process may write only a restart signal containing a relative candidate path; it cannot control the Docker daemon, mount the Docker socket, or overwrite the current version directory.
