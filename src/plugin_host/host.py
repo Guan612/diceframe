@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,14 @@ from .capabilities import (
     provider_capability,
 )
 from .content import PluginContentCatalog, safe_id_part
-from .contracts import AIProviderResolver, PluginPublicDetail, PluginStoppedCallback
+from .contracts import (
+    AIProviderResolver,
+    ListedBridgeExtensionDescriptor,
+    ListedToolDescriptor,
+    PluginContributionView,
+    PluginPublicDetail,
+    PluginStoppedCallback,
+)
 from .descriptors import (
     BRIDGE_EXTENSION_STAGES,
     normalize_bridge_outputs,
@@ -141,7 +149,7 @@ class PluginHost:
         # 旧插件进程读到世代变化/缺失即退出，避免孤儿进程残留导致开关状态与真实进程不一致。
         self._host_generation = secrets.token_hex(8)
 
-    def discover(self) -> list[dict[str, Any]]:
+    def discover(self) -> list[PluginPublicDetail]:
         self.plugins.clear()
         # 先内置再用户目录，用户目录同名覆盖内置；runtime.source 记录来源。
         for source, base_dir in (("builtin", self.builtin_dir), ("user", self.plugins_dir)):
@@ -215,10 +223,10 @@ class PluginHost:
             "docs": runtime.manifest.get("docs", ""),
         }
 
-    def list_contributions(self, kind: str = "") -> list[dict[str, Any]]:
+    def list_contributions(self, kind: str = "") -> list[PluginContributionView]:
         return [item.to_dict() for item in self.contributions.list(kind)]
 
-    def list_tools(self) -> list[dict[str, Any]]:
+    def list_tools(self) -> list[ListedToolDescriptor]:
         return list_runtime_tools(self.plugins)
 
     async def call_tool(
@@ -295,7 +303,7 @@ class PluginHost:
             raise
         return result
 
-    def list_bridge_extensions(self) -> list[dict[str, Any]]:
+    def list_bridge_extensions(self) -> list[ListedBridgeExtensionDescriptor]:
         return list_runtime_bridge_extensions(self.plugins)
 
     async def apply_bridge_extensions(self, stage: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -495,7 +503,13 @@ class PluginHost:
                 total += 1
         return total
 
-    async def install_from_zip(self, payload: bytes, *, overwrite: bool = False, allow_any_root: bool = False) -> dict[str, Any]:
+    async def install_from_zip(
+        self,
+        payload: bytes,
+        *,
+        overwrite: bool = False,
+        allow_any_root: bool = False,
+    ) -> PluginPublicDetail:
         if not payload:
             raise ValueError("插件包为空")
         if len(payload) > MAX_PLUGIN_PACKAGE_BYTES:
@@ -692,7 +706,11 @@ class PluginHost:
         except Exception:
             self.logger.exception("插件商店自动更新失败")
 
-    async def update_config(self, plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    async def update_config(
+        self,
+        plugin_id: str,
+        changes: dict[str, Any],
+    ) -> PluginPublicDetail:
         runtime = self._require(plugin_id)
         properties = runtime.schema.get("properties", {})
         new_config = dict(runtime.config)
@@ -989,7 +1007,7 @@ class PluginHost:
             with contextlib.suppress(OSError):
                 self._host_generation_path(plugin_id).unlink()
 
-    async def rescan(self) -> list[dict[str, Any]]:
+    async def rescan(self) -> list[PluginPublicDetail]:
         await self.cleanup()
         discovered = self.discover()
         await self.start_enabled()
@@ -1022,7 +1040,12 @@ class PluginHost:
             runtime.restart_delay_sec = min(runtime.restart_delay_sec * 2, _RESTART_MAX_DELAY)
         self.logger.warning("插件 %s 意外退出，%.0f 秒后尝试自动重启，code=%s", plugin_id, delay, code)
         await asyncio.sleep(delay)
-        if self.plugins.get(plugin_id) is runtime and runtime.config.get("enabled") and runtime.status == "failed":
+        if (
+            runtime is not None
+            and self.plugins.get(plugin_id) is runtime
+            and runtime.config.get("enabled")
+            and runtime.status == "failed"
+        ):
             await self.start(plugin_id, reset_backoff=False)
 
     def migrate_config(self, plugin_id: str, legacy: dict[str, Any]) -> None:
@@ -1270,11 +1293,11 @@ class PluginHost:
         return "stopped" if self._has_entrypoint(runtime.manifest) else "active"
 
     @staticmethod
-    def _plugin_type(manifest: dict[str, Any]) -> str:
+    def _plugin_type(manifest: Mapping[str, object]) -> str:
         return str(manifest.get("plugin_type") or "").strip()
 
     @staticmethod
-    def _has_entrypoint(manifest: dict[str, Any]) -> bool:
+    def _has_entrypoint(manifest: Mapping[str, object]) -> bool:
         command = manifest.get("entrypoint")
         return isinstance(command, list) and bool(command)
 

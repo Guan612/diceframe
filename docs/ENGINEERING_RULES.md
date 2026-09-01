@@ -666,6 +666,12 @@ ADR 不是审批凭证；它是长期的“为什么”。
 
 运行缓存、本机产物、临时测试结果 **MUST NOT** 作为源码提交。
 
+### 20.1 Typed boundaries
+
+外部 JSON、Plugin RPC、上传存档和历史兼容 payload 在校验前可以保持宽类型；通过校验后，稳定的模块边界 **SHOULD** 暴露明确的 typed contract。
+
+Ruleset / Plugin 私有状态可以有意保持 opaque，但必须在 generic boundary 标明 ownership；不得为了 typing 让 generic engine 编码具体 ruleset mechanics。Mypy typed zone 应渐进扩展，不通过全仓 strict、大量 `cast(Any, ...)` 或 blanket `type: ignore` 制造虚假精确性。
+
 ---
 
 ## 21. AI-assisted development
