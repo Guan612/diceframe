@@ -253,6 +253,21 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._ruleset_gameplay_dependencies = (
+            ruleset_gameplay.RulesetGameplayDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
+                    self, adventure_id, runtime, world_id, language,
+                ),
+                save_instance=self._reg.save,
+                apply_memory_delta=(
+                    self._mem.apply_delta if self._mem is not None else None
+                ),
+            )
+        )
         self._map_dependencies = maps.MapDependencies(
             get_instance=self._reg.get,
             parse_game_key=_parse_game_key,
@@ -1284,7 +1299,10 @@ class WebAPI:
         self, game_key: str, requester_id: str, requester_is_gm: bool = False,
     ) -> dict[str, Any]:
         return await ruleset_gameplay.available_actions(
-            self, game_key, requester_id, requester_is_gm,
+            self._ruleset_gameplay_dependencies,
+            game_key,
+            requester_id,
+            requester_is_gm,
         )
 
     async def ruleset_submit_intent(
@@ -1292,7 +1310,11 @@ class WebAPI:
         body: dict[str, Any],
     ) -> dict[str, Any]:
         return await ruleset_gameplay.submit_intent(
-            self, game_key, requester_id, requester_is_gm, body,
+            self._ruleset_gameplay_dependencies,
+            game_key,
+            requester_id,
+            requester_is_gm,
+            body,
         )
 
     # ---- 世界模板 ----

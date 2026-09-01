@@ -12,7 +12,7 @@ from src.rules.rule_system import RuleSystem
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.rulesets.legacy_adapter import LegacyRulesetAdapter
 from src.rulesets.registry import RulesetRuntimeRegistry
-from src.webui.services import ruleset_gameplay
+from src.webui.services import adventures, ruleset_gameplay
 from src.webui.services._common import _parse_game_key
 
 
@@ -28,6 +28,25 @@ class GameplayApiShim:
             "rule_id": "dnd2024_srd",
             "runtime": {"id": "core:dnd2024", "minimum_version": 1},
         })
+        self._gameplay_dependencies = (
+            ruleset_gameplay.RulesetGameplayDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+                resolve_adventure_binding=lambda adventure_id, active_runtime, world_id, language: adventures.resolve_binding_for_runtime(
+                    self,
+                    adventure_id,
+                    active_runtime,
+                    world_id,
+                    language,
+                ),
+                save_instance=self._reg.save,
+                apply_memory_delta=(
+                    memory.apply_delta if memory is not None else None
+                ),
+            )
+        )
 
     @staticmethod
     def _parse_key(game_key: str):
@@ -44,14 +63,21 @@ class GameplayApiShim:
         self, game_key: str, requester_id: str, requester_is_gm: bool = False,
     ):
         return await ruleset_gameplay.available_actions(
-            self, game_key, requester_id, requester_is_gm,
+            self._gameplay_dependencies,
+            game_key,
+            requester_id,
+            requester_is_gm,
         )
 
     async def ruleset_submit_intent(
         self, game_key: str, requester_id: str, requester_is_gm: bool, body,
     ):
         return await ruleset_gameplay.submit_intent(
-            self, game_key, requester_id, requester_is_gm, body,
+            self._gameplay_dependencies,
+            game_key,
+            requester_id,
+            requester_is_gm,
+            body,
         )
 
 

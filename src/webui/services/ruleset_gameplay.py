@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.migrations import migrate_instance
 from src.webui.services.ruleset_builder import validate_draft_shape
@@ -14,13 +16,21 @@ from src.rulesets.contracts import (
     AuthoritativeIntentHooks,
     AutomaticIntentRuntime,
 )
-from src.webui.services import adventures
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+from src.rulesets.registry import RulesetRuntimeRegistry
 
 
 logger = logging.getLogger("trpg")
+
+
+@dataclass(frozen=True)
+class RulesetGameplayDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: RulesetRuntimeRegistry
+    resolve_adventure_binding: Callable[[str, Any, str, str], dict[str, Any]]
+    save_instance: Callable[[Any], Awaitable[None]]
+    apply_memory_delta: Callable[[str, dict[str, Any], int], Awaitable[Any]] | None
 
 
 def _error(code: str, message: str) -> dict[str, Any]:
@@ -132,9 +142,14 @@ def _is_public_story_milestone(batch: dict[str, Any]) -> bool:
 
 
 def _context(
-    api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool,
+    dependencies: RulesetGameplayDependencies,
+    game_key: str,
+    requester_id: str,
+    requester_is_gm: bool,
 ) -> tuple[Any, Any, Any, str, dict[str, Any] | None]:
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
     if instance is None:
         return None, None, None, "", _error("GAME_NOT_FOUND", "游戏不存在")
     if not requester_id:
@@ -144,13 +159,13 @@ def _context(
         return instance, None, None, "", _error("GM_IDENTITY_MISSING", "本局缺少 GM 身份")
     if not requester_is_gm and requester_id not in instance.players:
         return instance, None, None, "", _error("PLAYER_NOT_IN_GAME", "当前玩家不在本局中")
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return instance, None, None, effective_requester, _error(
             "RULE_NOT_FOUND", "本局规则不存在",
         )
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except ValueError as exc:
         return instance, rule, None, effective_requester, _error(
             "RULESET_RUNTIME_UNAVAILABLE", str(exc),
@@ -168,7 +183,11 @@ def _context(
 
 
 def _response(
-    api: "WebAPI", rule: Any, runtime: Any, instance: Any, requester_id: str,
+    dependencies: RulesetGameplayDependencies,
+    rule: Any,
+    runtime: Any,
+    instance: Any,
+    requester_id: str,
     *, requester_is_gm: bool = False, result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     view = runtime.gameplay_view(instance, requester_id, requester_is_gm)
@@ -177,7 +196,9 @@ def _response(
         "ok": True,
         "game_key": "|".join(instance.game_key),
         "rule_id": str(rule.rule_id),
-        "ruleset_runtime": api._ruleset_registry.describe(rule.template).to_dict(),
+        "ruleset_runtime": dependencies.ruleset_registry.describe(
+            rule.template
+        ).to_dict(),
         "gameplay": view,
         "available_actions": actions,
     }
@@ -187,14 +208,15 @@ def _response(
 
 
 async def _ensure_compatible_adventure_binding(
-    api: "WebAPI", runtime: Any, instance: Any,
+    dependencies: RulesetGameplayDependencies,
+    runtime: Any,
+    instance: Any,
 ) -> dict[str, Any] | None:
     binding = dict(getattr(instance, "adventure_binding", {}) or {})
     if not binding:
         return None
     try:
-        expected = adventures.resolve_binding_for_runtime(
-            api,
+        expected = dependencies.resolve_adventure_binding(
             str(binding.get("adventure_id") or ""),
             runtime,
             str(getattr(instance, "world_id", "") or ""),
@@ -216,36 +238,42 @@ async def _ensure_compatible_adventure_binding(
             "bound adventure package is missing or has changed",
         )
     if migrated:
-        await api._reg.save(instance)
+        await dependencies.save_instance(instance)
     return None
 
 
 
 async def available_actions(
-    api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool = False,
+    dependencies: RulesetGameplayDependencies,
+    game_key: str,
+    requester_id: str,
+    requester_is_gm: bool = False,
 ) -> dict[str, Any]:
     instance, rule, runtime, effective_requester, error = _context(
-        api, game_key, requester_id, requester_is_gm,
+        dependencies, game_key, requester_id, requester_is_gm,
     )
     if error:
         return error
     async with instance._lock:
         binding_error = await _ensure_compatible_adventure_binding(
-            api, runtime, instance,
+            dependencies, runtime, instance,
         )
         if binding_error:
             return binding_error
         return _response(
-            api, rule, runtime, instance, effective_requester,
+            dependencies, rule, runtime, instance, effective_requester,
             requester_is_gm=requester_is_gm,
         )
 
 async def submit_intent(
-    api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool,
+    dependencies: RulesetGameplayDependencies,
+    game_key: str,
+    requester_id: str,
+    requester_is_gm: bool,
     body: Any,
 ) -> dict[str, Any]:
     instance, rule, runtime, effective_requester, error = _context(
-        api, game_key, requester_id, requester_is_gm,
+        dependencies, game_key, requester_id, requester_is_gm,
     )
     if error:
         return error
@@ -265,7 +293,7 @@ async def submit_intent(
 
     async with instance._lock:
         binding_error = await _ensure_compatible_adventure_binding(
-            api, runtime, instance,
+            dependencies, runtime, instance,
         )
         if binding_error:
             return binding_error
@@ -317,7 +345,7 @@ async def submit_intent(
                 else:
                     raise ValueError("automatic combat turn exceeded the safety limit")
             instance.last_activity = datetime.now(timezone.utc).isoformat()
-            await api._reg.save(instance)
+            await dependencies.save_instance(instance)
         except (ValueError, KeyError, TypeError) as exc:
             instance.ruleset_state = before["ruleset_state"]
             instance.event_ledger = before["event_ledger"]
@@ -342,16 +370,15 @@ async def submit_intent(
             instance.log = before["log"]
             instance.round_number = before["round_number"]
             raise
-        memory_store = getattr(api, "_mem", None)
         resolved_batches = [batch, *automatic_batches]
-        if memory_store:
+        if dependencies.apply_memory_delta:
             for memory in [
                 memory
                 for resolved_batch in resolved_batches
                 for memory in runtime.memory_deltas_from_event_batch(resolved_batch, instance)
             ]:
                 try:
-                    await memory_store.apply_delta(
+                    await dependencies.apply_memory_delta(
                         str(instance.game_key), {"add": [memory]},
                         int(getattr(instance, "round_number", 0) or 0),
                     )
@@ -361,7 +388,7 @@ async def submit_intent(
                     # contradict the already-saved authoritative campaign state.
                     logger.exception("D&D chapter-summary memory projection failed")
         return _response(
-            api, rule, runtime, instance, effective_requester,
+            dependencies, rule, runtime, instance, effective_requester,
             requester_is_gm=requester_is_gm,
             result={
                 **applied,
