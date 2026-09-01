@@ -316,6 +316,19 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._world_dependencies = worlds.WorldDependencies(
+            lorebook=self._lore,
+            worlds_dir=self._worlds_dir,
+            plugin_host=self._plugins,
+            llm_client=self._llm_client,
+            character_gen_max_tokens=self.character_gen_max_tokens,
+            invalidate_lorebook_index=(
+                self._handler.invalidate_matcher_for_world
+                if self._handler is not None
+                else None
+            ),
+            list_instances=self._reg.list_all,
+        )
         self._adventure_dependencies = adventures.AdventureDependencies(
             adventure_loader=self._adventure_loader,
             list_instances=self._reg.list_all,
@@ -1197,43 +1210,55 @@ class WebAPI:
                 plugins.sync_plugin_lorebooks(self)
             except Exception:
                 logger.warning("list_worlds 同步插件世界书失败，已跳过", exc_info=True)
-        return worlds.list_worlds(self)
+        return worlds.list_worlds(self._world_dependencies)
 
     def create_world(self, name: str, description: str = "", language: str = "") -> dict[str, Any]:
-        return worlds.create_world(self, name, description, language)
+        return worlds.create_world(
+            self._world_dependencies, name, description, language,
+        )
 
     def clone_world_from_template(self, template_id: str, name: str = "") -> dict[str, Any]:
-        return worlds.clone_world_from_template(self, template_id, name)
+        return worlds.clone_world_from_template(
+            self._world_dependencies, template_id, name,
+        )
 
     def update_world_gm_style(self, world_id: str, raw: dict | None = None) -> dict[str, Any]:
-        return worlds.update_world_gm_style(self, world_id, raw)
+        return worlds.update_world_gm_style(
+            self._world_dependencies, world_id, raw,
+        )
 
     def set_user_world_scene_image(self, world_id: str, scene_image: dict | None = None) -> dict[str, Any]:
-        return worlds.set_user_world_scene_image(self, world_id, scene_image)
+        return worlds.set_user_world_scene_image(
+            self._world_dependencies, world_id, scene_image,
+        )
 
     def list_entries(self, world_id: str, entry_type: str | None = None) -> dict[str, Any]:
-        return worlds.list_entries(self, world_id, entry_type)
+        return worlds.list_entries(
+            self._world_dependencies, world_id, entry_type,
+        )
 
     def search_entries(self, world_id: str, keyword: str) -> dict[str, Any]:
-        return worlds.search_entries(self, world_id, keyword)
+        return worlds.search_entries(self._world_dependencies, world_id, keyword)
 
     def get_entry(self, entry_id: str) -> dict[str, Any] | None:
-        return worlds.get_entry(self, entry_id)
+        return worlds.get_entry(self._world_dependencies, entry_id)
 
     def save_entry(self, entry: dict) -> dict[str, Any]:
-        return worlds.save_entry(self, entry)
+        return worlds.save_entry(self._world_dependencies, entry)
 
     async def generate_lorebook_entries(self, world_id: str, prompt: str, language: str = "") -> dict[str, Any]:
-        return await worlds.generate_lorebook_entries(self, world_id, prompt, language)
+        return await worlds.generate_lorebook_entries(
+            self._world_dependencies, world_id, prompt, language,
+        )
 
     def update_entry(self, entry_id: str, updates: dict) -> dict[str, Any]:
-        return worlds.update_entry(self, entry_id, updates)
+        return worlds.update_entry(self._world_dependencies, entry_id, updates)
 
     def delete_entry(self, entry_id: str) -> dict[str, Any]:
-        return worlds.delete_entry(self, entry_id)
+        return worlds.delete_entry(self._world_dependencies, entry_id)
 
     def delete_world(self, world_id: str) -> dict[str, Any]:
-        return worlds.delete_world(self, world_id)
+        return worlds.delete_world(self._world_dependencies, world_id)
 
     def preview_lore_visibility(
         self,
@@ -1244,7 +1269,7 @@ class WebAPI:
         return self._lore_preview.preview(world_id, viewer, game_key)
 
     def _rebuild_lorebook_index(self, world_id: str) -> None:
-        worlds.rebuild_lorebook_index(self, world_id)
+        worlds.rebuild_lorebook_index(self._world_dependencies, world_id)
 
     def _refresh_game_lorebook_index(self, world_id: str) -> None:
         self._handler._last_matcher_world_id = None
@@ -1601,10 +1626,12 @@ class WebAPI:
                 plugins.sync_plugin_lorebooks(self)
             except Exception:
                 logger.warning("list_world_templates 同步插件世界书失败，已跳过", exc_info=True)
-        return worlds.list_world_templates(self, language)
+        return worlds.list_world_templates(self._world_dependencies, language)
 
     def cleanup_orphan_game_templates(self, world_id: str = "") -> int:
-        return worlds.cleanup_orphan_game_templates(self, world_id)
+        return worlds.cleanup_orphan_game_templates(
+            self._world_dependencies, world_id,
+        )
 
     # ---- 创建游戏 ----
 

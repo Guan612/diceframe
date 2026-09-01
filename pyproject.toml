@@ -47,6 +47,7 @@ files = [
     "src/webui/services/ruleset_rest.py",
     "src/webui/services/tunnel.py",
     "src/webui/services/turns.py",
+    "src/webui/services/worlds.py",
     "src/webui/services/ruleset_builder.py",
 ]
 

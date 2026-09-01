@@ -1564,8 +1564,17 @@ async def test_content_pack_rules_and_worlds_are_visible_to_services(tmp_path):
         rules_dir=Api._rules_dir,
         plugin_host=host,
     )
+    world_dependencies = world_service.WorldDependencies(
+        lorebook=None,
+        worlds_dir=Api._worlds_dir,
+        plugin_host=host,
+        llm_client=None,
+        character_gen_max_tokens=2048,
+        invalidate_lorebook_index=None,
+        list_instances=lambda: [],
+    )
     rule_items = rule_service.list_rules(rule_dependencies)["rules"]
-    world_items = world_service.list_world_templates(Api)["templates"]
+    world_items = world_service.list_world_templates(world_dependencies)["templates"]
     detail = rule_service.get_rule_template(rule_dependencies, "pack_rule")
 
     assert next(item for item in rule_items if item["rule_id"] == "pack_rule")["plugin_id"] == "starter-pack"

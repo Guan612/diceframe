@@ -51,7 +51,6 @@ _STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT = (
 SERVICE_LOCATOR_ALLOWLIST = frozenset().union(
     _service_debt("characters.py", *_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT),
     _service_debt("plugins.py", *_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT),
-    _service_debt("worlds.py", *_STANDARD_WEBAPI_DEBT),
 )
 
 # Historical concrete-ruleset knowledge in otherwise generic backend modules.
