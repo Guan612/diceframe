@@ -5,7 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 from src.engine.game_instance import GameState
-from src.webui.services.turns import advance_round, resolve_luck_and_continue, submit_action
+from src.rulesets.registry import RulesetRuntimeRegistry
+from src.webui.services.turns import (
+    TurnDependencies,
+    advance_round,
+    resolve_luck_and_continue,
+    submit_action,
+)
 
 
 class FakeInstance:
@@ -106,6 +112,20 @@ class FakeApi:
         self.roll_result: dict = {"ok": True, "value": 13}
         self.luck_result: dict = {"ok": True, "ready_to_resolve": False}
         self.declined_result: dict = {"declined_luck_decisions": []}
+        self.dependencies = TurnDependencies(
+            get_instance=self._reg.get,
+            parse_game_key=self._parse_key,
+            ruleset_registry=RulesetRuntimeRegistry(),
+            load_rule_for_game=lambda _instance: None,
+            prepare_round_checks_ai=None,
+            prepare_round_checks=self._handler.prepare_round_checks,
+            resolve_pending_dice=self.resolve_pending_dice_for_game,
+            roll_for_game=self.roll_for_game,
+            save_instance=self._reg.save,
+            process_round=self._handler.process_round,
+            resolve_luck_decision=self.resolve_luck_decision,
+            decline_pending_luck=self.decline_pending_luck,
+        )
 
     @staticmethod
     def _parse_key(_key: str):
@@ -129,21 +149,24 @@ class FakeApi:
 
 @pytest.mark.asyncio
 async def test_submit_action_rejects_invalid_actor_and_busy_round() -> None:
-    missing = await submit_action(FakeApi(None), "game", "gm", "行动")
+    missing_api = FakeApi(None)
+    missing = await submit_action(
+        missing_api.dependencies, "game", "gm", "行动",
+    )
     assert missing == {"payload": {"error": "游戏不存在，请刷新页面重新开始"}, "status": 404}
 
     instance = FakeInstance()
     api = FakeApi(instance)
-    stranger = await submit_action(api, "game", "other", "行动")
+    stranger = await submit_action(api.dependencies, "game", "other", "行动")
     assert stranger["status"] == 403
 
     instance.dead.add("gm")
-    dead = await submit_action(api, "game", "gm", "行动")
+    dead = await submit_action(api.dependencies, "game", "gm", "行动")
     assert dead["status"] == 403
 
     instance.dead.clear()
     instance.state = GameState.ACTIVE_JUDGMENT
-    busy = await submit_action(api, "game", "gm", "行动")
+    busy = await submit_action(api.dependencies, "game", "gm", "行动")
     assert busy["status"] == 409
     assert busy["payload"]["phase"] == "processing"
 
@@ -154,7 +177,9 @@ async def test_submit_action_records_natural_language_without_player_dice_gate()
     api = FakeApi(instance)
     api.check_request = {"label": "潜行检定", "dice_system": "d100"}  # 旧启发式不再参与提交主链
 
-    pending = await submit_action(api, "game", "gm", "悄悄前进")
+    pending = await submit_action(
+        api.dependencies, "game", "gm", "悄悄前进",
+    )
     assert pending["payload"]["phase"] == "done"
     assert pending["payload"]["advanced"] is False
     assert "dice_pending" not in instance.action_queue[0]
@@ -168,13 +193,13 @@ async def test_submit_action_pauses_for_luck_or_processes_round() -> None:
     api = FakeApi(instance)
     api._handler.luck_after_prepare = [{"check_id": "luck-1"}]
 
-    pending = await submit_action(api, "game", "gm", "调查石门")
+    pending = await submit_action(api.dependencies, "game", "gm", "调查石门")
     assert pending["payload"]["phase"] == "luck"
     assert api._reg.saved == 1
     assert api._handler.processed == 0
 
     api._handler.luck_after_prepare = []
-    completed = await submit_action(api, "game", "p2", "观察门缝")
+    completed = await submit_action(api.dependencies, "game", "p2", "观察门缝")
     assert completed["payload"]["advanced"] is True
     assert completed["payload"]["narration"] == "叙事完成"
     assert completed["payload"]["recap"] == {"scene": "门厅"}
@@ -185,15 +210,21 @@ async def test_luck_decision_maps_errors_and_continues_when_ready() -> None:
     instance = FakeInstance()
     api = FakeApi(instance)
     api.luck_result = {"ok": False, "code": "LUCK_ALREADY_RESOLVED", "error": "done"}
-    conflict = await resolve_luck_and_continue(api, "game", "check", "gm", True)
+    conflict = await resolve_luck_and_continue(
+        api.dependencies, "game", "check", "gm", True,
+    )
     assert conflict["status"] == 409
 
     api.luck_result = {"ok": True, "round_already_resolved": True}
-    already = await resolve_luck_and_continue(api, "game", "check", "gm", True)
+    already = await resolve_luck_and_continue(
+        api.dependencies, "game", "check", "gm", True,
+    )
     assert already["payload"]["advanced"] is True
 
     api.luck_result = {"ok": True, "ready_to_resolve": True, "check_result": {"verdict": "成功"}}
-    completed = await resolve_luck_and_continue(api, "game", "check", "gm", True)
+    completed = await resolve_luck_and_continue(
+        api.dependencies, "game", "check", "gm", True,
+    )
     assert completed["payload"]["phase"] == "done"
     assert completed["payload"]["narration"] == "叙事完成"
     assert api._handler.processed == 1
@@ -203,17 +234,17 @@ async def test_luck_decision_maps_errors_and_continues_when_ready() -> None:
 async def test_advance_round_enforces_gm_and_pending_dice() -> None:
     instance = FakeInstance()
     api = FakeApi(instance)
-    denied = await advance_round(api, "game", "p2")
+    denied = await advance_round(api.dependencies, "game", "p2")
     assert denied["status"] == 403
 
     instance.pending_dice = True
-    blocked = await advance_round(api, "game", "gm")
+    blocked = await advance_round(api.dependencies, "game", "gm")
     assert blocked["payload"]["ok"] is False
     assert "等待掷骰" in blocked["payload"]["narration"]
 
     api.pending_dice_result = {"ok": True, "resolved": [{"user_id": "gm", "value": 17}]}
     instance.advance_result = True
-    forced = await advance_round(api, "game", "gm", force=True)
+    forced = await advance_round(api.dependencies, "game", "gm", force=True)
     assert forced["payload"]["ok"] is True
     assert forced["payload"]["auto_rolls"] == [{"user_id": "gm", "value": 17}]
 
@@ -227,8 +258,8 @@ async def test_force_advance_recovers_judgment_and_declines_luck() -> None:
     api._handler.luck_after_prepare = [{"check_id": "luck-1"}]
     api.declined_result = {"declined_luck_decisions": [{"check_id": "luck-1"}]}
 
-    blocked = await advance_round(api, "game", "gm")
+    blocked = await advance_round(api.dependencies, "game", "gm")
     assert blocked["status"] == 409
-    recovered = await advance_round(api, "game", "gm", force=True)
+    recovered = await advance_round(api.dependencies, "game", "gm", force=True)
     assert recovered["payload"]["narration"] == "叙事完成"
     assert recovered["payload"]["declined_luck_decisions"] == [{"check_id": "luck-1"}]

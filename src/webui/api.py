@@ -279,6 +279,24 @@ class WebAPI:
                 ),
             )
         )
+        self._turn_dependencies = turns.TurnDependencies(
+            get_instance=self._reg.get,
+            parse_game_key=_parse_game_key,
+            ruleset_registry=self._ruleset_registry,
+            load_rule_for_game=self._load_rule_for_game,
+            prepare_round_checks_ai=getattr(
+                self._handler, "prepare_round_checks_ai", None,
+            ),
+            prepare_round_checks=getattr(
+                self._handler, "prepare_round_checks", None,
+            ),
+            resolve_pending_dice=self.resolve_pending_dice_for_game,
+            roll_for_game=self.roll_for_game,
+            save_instance=self._reg.save,
+            process_round=getattr(self._handler, "process_round", None),
+            resolve_luck_decision=self.resolve_luck_decision,
+            decline_pending_luck=self.decline_pending_luck,
+        )
         self._map_dependencies = maps.MapDependencies(
             get_instance=self._reg.get,
             parse_game_key=_parse_game_key,
@@ -953,7 +971,13 @@ class WebAPI:
         return await self._game_controls.decline_pending_luck(game_key)
 
     async def submit_action(self, game_key: str, actor_uid: str, text: str, **kwargs) -> turns.TurnResult:
-        return await turns.submit_action(self, game_key, actor_uid, text, **kwargs)
+        return await turns.submit_action(
+            self._turn_dependencies,
+            game_key,
+            actor_uid,
+            text,
+            **kwargs,
+        )
 
     async def ask_kp_question(
         self,
@@ -975,11 +999,21 @@ class WebAPI:
         **kwargs,
     ) -> turns.TurnResult:
         return await turns.resolve_luck_and_continue(
-            self, game_key, check_id, actor_uid, spend, **kwargs
+            self._turn_dependencies,
+            game_key,
+            check_id,
+            actor_uid,
+            spend,
+            **kwargs,
         )
 
     async def advance_turn(self, game_key: str, actor_uid: str, **kwargs) -> turns.TurnResult:
-        return await turns.advance_round(self, game_key, actor_uid, **kwargs)
+        return await turns.advance_round(
+            self._turn_dependencies,
+            game_key,
+            actor_uid,
+            **kwargs,
+        )
 
     def private_log(self, game_key: str) -> dict[str, Any]:
         return game_queries.private_log(self._game_query_dependencies, game_key)
