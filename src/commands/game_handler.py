@@ -284,6 +284,15 @@ class GameHandler:
             instance, effects,
         )
 
+    def schedule_deferred_economy_scene_image(
+        self,
+        instance: GameInstance,
+        payload: dict,
+    ):
+        """Schedule a settled scene image after the authoritative save."""
+
+        return self._round_processor.schedule_deferred_scene_image(instance, payload)
+
     def _tick_madness(self, instance: GameInstance) -> None:
         """兼容旧内部调用；实际逻辑已拆到 StateUpdateApplier。"""
         self._state_applier.tick_madness(instance)

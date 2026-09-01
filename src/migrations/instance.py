@@ -148,6 +148,15 @@ def rebind_imported_game_state_payload(
     economy = payload.get("economy")
     if isinstance(economy, dict):
         economy["run_id"] = run_id
+        # External stores are not bundled with a save export. Pending
+        # deliveries still carry their payload and may safely target the new
+        # namespace; delivered/reversal receipts refer to source-side memory
+        # rows that do not exist in the imported game and must not be rebound.
+        economy["external_effects_outbox"] = [
+            item
+            for item in economy.get("external_effects_outbox", []) or []
+            if isinstance(item, dict) and item.get("status") == "pending"
+        ]
         for collection_name in (
             "proposals",
             "transactions",

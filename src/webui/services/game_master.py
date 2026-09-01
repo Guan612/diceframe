@@ -22,6 +22,7 @@ from src.rules.rule_system import RuleSystem
 
 GameKey = tuple[str, ...]
 RecapGenerator = Callable[[Any], Awaitable[dict[str, Any]]]
+EconomyOutboxDrainer = Callable[[Any], Awaitable[bool]]
 
 _GM_RESOURCE_ALIASES = {
     "生命值": "hp",
@@ -57,6 +58,7 @@ class GameMasterDependencies:
     save_instance: Callable[[Any], Awaitable[None]]
     load_rule: Callable[[Any], RuleSystem | None]
     generate_recap: RecapGenerator | None = None
+    drain_economy_outbox: EconomyOutboxDrainer | None = None
 
 
 def _resource_aliases_for_rule(rule: RuleSystem | None) -> dict[str, str]:
@@ -301,9 +303,15 @@ class GameMasterService:
             repair_hint="如果仍不满意，可继续用 GM 指令修正下一次判定。",
         )
         await self._dependencies.save_instance(instance)
+        external_effects_committed = True
+        if self._dependencies.drain_economy_outbox is not None:
+            external_effects_committed = await self._dependencies.drain_economy_outbox(
+                instance,
+            )
         return {
             "ok": True,
             "message": f"已撤回到第 {round_number} 轮开始前的玩家状态",
+            "external_effects_committed": external_effects_committed,
         }
 
     async def generate_story_recap(self, game_key: str) -> dict[str, Any]:

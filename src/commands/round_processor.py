@@ -388,6 +388,15 @@ class RoundProcessor:
         # 否则与上一张相同的描述视为模型复读，跳过。
         return self.schedule_scene_image(instance, prompt, completed_round, force=bool(scene_change))
 
+    def schedule_deferred_scene_image(
+        self,
+        instance: GameInstance,
+        payload: dict[str, Any],
+    ) -> asyncio.Task | None:
+        """Public boundary for a deferred prompt whose settlement is persisted."""
+
+        return self._maybe_schedule_scene_image(instance, payload)
+
     def schedule_scene_image(
         self,
         instance: GameInstance,
@@ -773,11 +782,3 @@ class RoundProcessor:
                 response.memory_delta,
                 instance.round_number,
             )
-        if payload.get("scene_image_prompt"):
-            try:
-                self._maybe_schedule_scene_image(instance, payload)
-            except Exception:
-                logger.exception(
-                    "经济结算后的场景图任务创建失败，已保留权威结算: %s",
-                    instance.game_key,
-                )

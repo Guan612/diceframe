@@ -221,11 +221,17 @@ def queue_memory_delivery(
     if len(deliveries) > MAX_EXTERNAL_EFFECT_DELIVERIES:
         active = [
             item for item in deliveries
-            if isinstance(item, dict) and item.get("status") == "pending"
+            if (
+                isinstance(item, dict)
+                and item.get("status") in {"pending", "reversal_pending"}
+            )
         ]
         resolved = [
             item for item in deliveries
-            if isinstance(item, dict) and item.get("status") != "pending"
+            if (
+                isinstance(item, dict)
+                and item.get("status") not in {"pending", "reversal_pending"}
+            )
         ]
         budget = max(0, MAX_EXTERNAL_EFFECT_DELIVERIES - len(active))
         instance.economy["external_effects_outbox"] = (
@@ -251,6 +257,25 @@ def pending_memory_deliveries(instance: Any) -> list[dict[str, Any]]:
     ]
 
 
+def pending_memory_reversals(instance: Any) -> list[dict[str, Any]]:
+    """Return delivered economy memories that must be undone after rollback."""
+
+    economy = getattr(instance, "economy", {})
+    deliveries = (
+        economy.get("external_effects_outbox", [])
+        if isinstance(economy, dict) else []
+    )
+    return [
+        item for item in deliveries
+        if (
+            isinstance(item, dict)
+            and item.get("status") == "reversal_pending"
+            and item.get("kind") == "memory_delta"
+            and item.get("run_id") == getattr(instance, "run_id", "")
+        )
+    ]
+
+
 def complete_memory_delivery(instance: Any, delivery_id: str) -> bool:
     delivery = next(
         (
@@ -268,6 +293,25 @@ def complete_memory_delivery(instance: Any, delivery_id: str) -> bool:
     delivery["status"] = "delivered"
     delivery["delivered_at"] = datetime.now(timezone.utc).isoformat()
     delivery.pop("payload", None)
+    return True
+
+
+def complete_memory_reversal(instance: Any, delivery_id: str) -> bool:
+    delivery = next(
+        (
+            item for item in instance.economy.get("external_effects_outbox", [])
+            if isinstance(item, dict) and item.get("id") == delivery_id
+        ),
+        None,
+    )
+    if delivery is None or delivery.get("run_id") != instance.run_id:
+        return False
+    if delivery.get("status") == "reversed":
+        return True
+    if delivery.get("status") != "reversal_pending":
+        return False
+    delivery["status"] = "reversed"
+    delivery["reversed_at"] = datetime.now(timezone.utc).isoformat()
     return True
 
 
@@ -354,6 +398,7 @@ def has_pending_economy_decision(instance: Any) -> bool:
         pending_proposals(instance)
         or pending_effect_groups(instance)
         or pending_memory_deliveries(instance)
+        or pending_memory_reversals(instance)
         or legacy_pending
     )
 
@@ -757,12 +802,14 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
             group["status"] = "superseded"
             group.pop("effects", None)
     for delivery in instance.economy.get("external_effects_outbox", []):
-        if (
-            int(delivery.get("round", -1) or -1) == int(round_number)
-            and delivery.get("status") == "pending"
-        ):
+        if int(delivery.get("round", -1) or -1) != int(round_number):
+            continue
+        if delivery.get("status") == "pending":
             delivery["status"] = "superseded"
             delivery.pop("payload", None)
+        elif delivery.get("status") == "delivered":
+            delivery["status"] = "reversal_pending"
+            delivery["reversal_requested_at"] = datetime.now(timezone.utc).isoformat()
     instance.economy["outcomes"] = [
         item for item in instance.economy.get("outcomes", [])
         if int(item.get("round", -1) or -1) != int(round_number)

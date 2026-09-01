@@ -15,6 +15,7 @@ from src.engine.economy import (
     has_pending_economy_decision,
     pending_effect_groups,
     pending_memory_deliveries,
+    pending_memory_reversals,
     pending_proposals,
 )
 from src.engine.game_instance import GameState
@@ -112,6 +113,7 @@ def economy_decision_pending_payload(
             or len(_pending_payments(instance))
             or len(pending_effect_groups(instance))
             or len(pending_memory_deliveries(instance))
+            or len(pending_memory_reversals(instance))
         ),
         "pending_payments": visible,
     }

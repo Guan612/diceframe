@@ -366,7 +366,12 @@ async def api_swipe(request: web.Request) -> web.Response:
         nar = await api.generate_game_swipe(inst, round_num)
         # swipe 改写了内存 log（gm_response/swipes），落盘否则重启即丢
         await api.save_game_instance(inst)
-        return web.json_response({"ok": True, "narration": nar})
+        external_effects_committed = await api.drain_economy_outbox(game_key)
+        return web.json_response({
+            "ok": True,
+            "narration": nar,
+            "external_effects_committed": external_effects_committed,
+        })
     else:
         idx = body.get("swipe_index", 0)
         ok = await inst.switch_swipe(round_num, idx)

@@ -49,8 +49,16 @@ transaction, outcome, effect-group, and revision state.
 Any unresolved current-run proposal, effect group, or external-effect delivery
 blocks every narrative progression entry point before it records an action.
 Cross-store memory effects use a durable outbox: game state and the outbox are
-saved first, memory delivery is idempotent, and an unrecorded delivery receipt
-is retried during recovery or before the next progression attempt.
+saved first, memory delivery is idempotent under a stable delivery identity,
+and an unrecorded delivery receipt is retried during recovery or before the
+next progression attempt. The memory store journals the verifiable before and
+after state of a transaction-associated delivery. Swipe or rollback changes a
+delivered record to a durable reversal request; reversal restores only rows
+that still match that delivery's result, does not overwrite newer facts, and
+is itself idempotent and crash-recoverable. Pending reversals remain part of
+the narrative barrier. A transaction-associated scene-image prompt is removed
+from staged application and can schedule asynchronous generation only after
+the first authoritative game-state save succeeds.
 
 ## Consequences
 

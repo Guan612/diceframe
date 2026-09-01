@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.game_instance import GameRegistry
-from src.engine.economy import pending_memory_deliveries
+from src.engine.economy import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader
 from src.memory.delta import MemoryStore
@@ -185,8 +185,19 @@ class WebAPI:
                 and callable(getattr(handler, "commit_deferred_economy_effects", None))
                 else None
             ),
+            schedule_economy_scene_image=(
+                handler.schedule_deferred_economy_scene_image
+                if handler is not None
+                and callable(
+                    getattr(handler, "schedule_deferred_economy_scene_image", None)
+                )
+                else None
+            ),
             apply_economy_memory=(
-                self._mem.apply_delta if self._mem is not None else None
+                self._mem.apply_economy_delta if self._mem is not None else None
+            ),
+            reverse_economy_memory=(
+                self._mem.reverse_economy_delta if self._mem is not None else None
             ),
         )
         self._ruleset_character_dependencies = (
@@ -344,6 +355,7 @@ class WebAPI:
                     if self._handler is not None
                     else None
                 ),
+                drain_economy_outbox=self._drain_economy_outbox,
             )
         )
         self._game_media = game_media.GameMediaService(
@@ -1530,7 +1542,10 @@ class WebAPI:
     async def recover_economy_outboxes(self, instances: list[Any]) -> int:
         recovered = 0
         for instance in instances:
-            had_pending = bool(pending_memory_deliveries(instance))
+            had_pending = bool(
+                pending_memory_deliveries(instance)
+                or pending_memory_reversals(instance)
+            )
             if had_pending and await self._drain_economy_outbox(instance):
                 recovered += 1
         return recovered

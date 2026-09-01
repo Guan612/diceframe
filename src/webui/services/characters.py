@@ -23,7 +23,9 @@ from src.engine.health import record_health_event
 from src.engine.economy import (
     complete_effect_group,
     complete_memory_delivery,
+    complete_memory_reversal,
     pending_memory_deliveries,
+    pending_memory_reversals,
     queue_memory_delivery,
     resolve_proposal,
 )
@@ -128,7 +130,9 @@ class CharacterDependencies:
     assets: CharacterAssetDependencies
     save_character_card: Callable[[dict[str, Any]], dict[str, Any]]
     apply_economy_effects: Callable[[Any, dict[str, Any]], Awaitable[None]] | None = None
-    apply_economy_memory: Callable[[str, dict[str, Any], int], Awaitable[None]] | None = None
+    schedule_economy_scene_image: Callable[[Any, dict[str, Any]], Any] | None = None
+    apply_economy_memory: Callable[[str, str, dict[str, Any], int], Awaitable[None]] | None = None
+    reverse_economy_memory: Callable[[str, str], Awaitable[bool]] | None = None
 
 _ATTR_NAME_EN = {
     "str": "STR",
@@ -678,6 +682,7 @@ async def resolve_payment(
         if item_name:
             grant_classified_item(sheet, item_name, str(reward.get("category") or ""))
 
+    scene_image_payload: dict[str, Any] | None = None
     async with inst._lock:
         current = dependencies.games.get_instance(
             dependencies.games.parse_game_key(game_key),
@@ -709,6 +714,14 @@ async def resolve_payment(
         ):
             effect_payload = dict(effect_group.get("effects") or {})
             memory_delta = dict(effect_payload.pop("memory_delta", {}) or {})
+            scene_image_prompt = str(
+                effect_payload.pop("scene_image_prompt", "") or ""
+            ).strip()
+            if scene_image_prompt:
+                scene_image_payload = {
+                    "scene_image_prompt": scene_image_prompt,
+                    "state_update": deepcopy(effect_payload.get("state_update") or {}),
+                }
             try:
                 await dependencies.apply_economy_effects(
                     staged, effect_payload,
@@ -778,6 +791,22 @@ async def resolve_payment(
             except Exception:
                 inst.replace_persisted_state_from(before_commit)
                 raise
+            if (
+                scene_image_payload is not None
+                and dependencies.schedule_economy_scene_image is not None
+            ):
+                try:
+                    result["scene_image_scheduled"] = bool(
+                        dependencies.schedule_economy_scene_image(
+                            inst, scene_image_payload,
+                        )
+                    )
+                except Exception:
+                    logger.exception(
+                        "经济结算后的场景图任务创建失败，权威结算已保留: game=%s",
+                        game_key,
+                    )
+                    result["scene_image_scheduled"] = False
             result["external_effects_committed"] = await _deliver_memory_outbox_locked(
                 dependencies, inst,
             )
@@ -792,32 +821,64 @@ async def _deliver_memory_outbox_locked(
 ) -> bool:
     """Deliver persisted memory effects; caller must hold the aggregate lock."""
 
+    reversals = pending_memory_reversals(instance)
     pending = pending_memory_deliveries(instance)
-    if not pending:
+    if not reversals and not pending:
         return True
-    apply_memory = dependencies.apply_economy_memory
-    if apply_memory is None:
-        return False
-    delivered = False
-    for delivery in pending:
-        try:
-            await apply_memory(
-                instance.memory_namespace,
-                dict(delivery.get("payload") or {}),
-                int(delivery.get("round", instance.round_number) or 0),
-            )
-        except Exception:
-            logger.exception(
-                "经济结算记忆 outbox 投递失败，已保留待重试记录: game=%s delivery=%s",
-                instance.game_key,
-                delivery.get("id"),
-            )
+    reverse_memory = dependencies.reverse_economy_memory
+    changed = False
+    if reversals:
+        if reverse_memory is None:
             return False
-        complete_memory_delivery(instance, str(delivery.get("id") or ""))
-        delivered = True
-    if delivered:
+        for delivery in reversals:
+            try:
+                reversed_ok = await reverse_memory(
+                    instance.memory_namespace,
+                    str(delivery.get("id") or ""),
+                )
+            except Exception:
+                logger.exception(
+                    "经济结算记忆撤销失败，已保留待重试记录: game=%s delivery=%s",
+                    instance.game_key,
+                    delivery.get("id"),
+                )
+                return False
+            if not reversed_ok:
+                logger.error(
+                    "经济结算记忆缺少可验证的撤销记录: game=%s delivery=%s",
+                    instance.game_key,
+                    delivery.get("id"),
+                )
+                return False
+            complete_memory_reversal(instance, str(delivery.get("id") or ""))
+            changed = True
+    apply_memory = dependencies.apply_economy_memory
+    if pending:
+        if apply_memory is None:
+            return False
+        for delivery in pending:
+            try:
+                await apply_memory(
+                    instance.memory_namespace,
+                    str(delivery.get("id") or ""),
+                    dict(delivery.get("payload") or {}),
+                    int(delivery.get("round", instance.round_number) or 0),
+                )
+            except Exception:
+                logger.exception(
+                    "经济结算记忆 outbox 投递失败，已保留待重试记录: game=%s delivery=%s",
+                    instance.game_key,
+                    delivery.get("id"),
+                )
+                return False
+            complete_memory_delivery(instance, str(delivery.get("id") or ""))
+            changed = True
+    if changed:
         await dependencies.games.save_instance(instance)
-    return not pending_memory_deliveries(instance)
+    return not (
+        pending_memory_deliveries(instance)
+        or pending_memory_reversals(instance)
+    )
 
 
 async def drain_economy_outbox(

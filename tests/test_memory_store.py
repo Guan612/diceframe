@@ -21,6 +21,19 @@ def _temp_store():
 
 
 class TestDeltaApplication:
+    async def test_open_migrates_economy_delivery_journal(self, tmp_path):
+        store = MemoryStore(tmp_path / "memory.db")
+        store.open()
+        try:
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+            table = store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                ("memory_economy_deliveries",),
+            ).fetchone()
+            assert table is not None
+        finally:
+            store.close()
+
     async def test_add_memory(self):
         store, path = _temp_store()
         try:

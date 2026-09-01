@@ -618,6 +618,21 @@ class TestGameRegistry:
                     "id": "effect_pending", "run_id": "run_exported",
                     "status": "pending", "effects": {},
                 }],
+                "external_effects_outbox": [
+                    {
+                        "id": "memory:pending",
+                        "run_id": "run_exported",
+                        "kind": "memory_delta",
+                        "status": "pending",
+                        "payload": {"add": ["待投递记忆"]},
+                    },
+                    {
+                        "id": "memory:delivered",
+                        "run_id": "run_exported",
+                        "kind": "memory_delta",
+                        "status": "delivered",
+                    },
+                ],
                 "outcomes": [{
                     "id": "outcome_declined", "run_id": "run_exported",
                     "status": "declined",
@@ -643,9 +658,15 @@ class TestGameRegistry:
         assert imported.economy["run_id"] == imported.run_id
         assert all(
             item["run_id"] == imported.run_id
-            for key in ("proposals", "transactions", "effect_groups", "outcomes")
+            for key in (
+                "proposals", "transactions", "effect_groups",
+                "external_effects_outbox", "outcomes",
+            )
             for item in imported.economy[key]
         )
+        assert [
+            item["id"] for item in imported.economy["external_effects_outbox"]
+        ] == ["memory:pending"]
         # state.json 内 game_key 已改写为新值，避免 register 串到原对局
         saved = _json.loads(reg._save_path(new_key).read_text(encoding="utf-8"))
         assert saved["game_key"] == list(new_key)

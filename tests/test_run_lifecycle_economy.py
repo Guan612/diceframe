@@ -7,6 +7,7 @@ import pytest
 
 from src.engine.economy import (
     pending_memory_deliveries,
+    pending_memory_reversals,
     queue_effect_group,
     queue_proposal,
     resolve_proposal,
@@ -517,6 +518,75 @@ async def test_effect_failure_rolls_back_the_whole_economy_decision(
 
 
 @pytest.mark.asyncio
+async def test_economy_scene_image_starts_only_after_authoritative_save(
+    web_api,
+) -> None:
+    api, _lorebook, registry, _llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Atomic Economy Scene Image",
+        players=[{"character_name": "Hero", "attributes": {"str": 10}, "gold": 20}],
+    )
+    instance = registry.get(api._parse_key(created["game_key"]))
+    uid = next(iter(instance.players))
+    instance.gm_uid = uid
+    instance.scene_image = {"kind": "upload", "asset_id": "old-scene"}
+    proposal = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=4,
+        reason="进入雾港",
+    )
+    queue_effect_group(instance, [proposal], {
+        "state_update": {"scene_change": "雾港码头"},
+        "scene_image_prompt": "misty harbor at dusk",
+    })
+    schedule_calls: list[dict] = []
+
+    def schedule_scene(_instance, payload):
+        schedule_calls.append(dict(payload))
+        return object()
+
+    original = api._character_dependencies
+
+    async def fail_authoritative_save(_instance):
+        raise OSError("fault before scene image scheduling")
+
+    api._character_dependencies = replace(
+        original,
+        schedule_economy_scene_image=schedule_scene,
+        games=replace(original.games, save_instance=fail_authoritative_save),
+    )
+    with pytest.raises(OSError, match="before scene image"):
+        await api.resolve_payment(created["game_key"], proposal["id"], True, uid)
+
+    assert schedule_calls == []
+    assert instance.scene_image == {"kind": "upload", "asset_id": "old-scene"}
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == 20
+
+    api._character_dependencies = replace(
+        original,
+        schedule_economy_scene_image=schedule_scene,
+    )
+    committed = await api.resolve_payment(
+        created["game_key"], proposal["id"], True, uid,
+    )
+    duplicate = await api.resolve_payment(
+        created["game_key"], proposal["id"], True, uid,
+    )
+
+    assert committed["ok"] is True
+    assert committed["scene_image_scheduled"] is True
+    assert duplicate["code"] == "ALREADY_RESOLVED"
+    assert schedule_calls == [{
+        "scene_image_prompt": "misty harbor at dusk",
+        "state_update": {"scene_change": "雾港码头"},
+    }]
+
+
+@pytest.mark.asyncio
 async def test_economy_memory_outbox_closes_save_crash_window(
     web_api,
     tmp_path,
@@ -540,7 +610,8 @@ async def test_economy_memory_outbox_closes_save_crash_window(
         original_dependencies = api._character_dependencies
         memory_dependencies = replace(
             original_dependencies,
-            apply_economy_memory=memory.apply_delta,
+            apply_economy_memory=memory.apply_economy_delta,
+            reverse_economy_memory=memory.reverse_economy_delta,
         )
         api._character_dependencies = memory_dependencies
 
@@ -658,6 +729,117 @@ async def test_economy_memory_outbox_closes_save_crash_window(
         ) is True
         assert pending_memory_deliveries(recovered) == []
         assert len(memory.list_entries(recovered.memory_namespace)) == 2
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
+async def test_delivered_economy_memory_is_reversed_with_round(
+    web_api,
+    tmp_path,
+) -> None:
+    api, _lorebook, registry, _llm, _worlds = web_api
+    memory = MemoryStore(tmp_path / "economy-memory-reversal.db")
+    memory.open()
+    try:
+        created = await api.create_game(
+            "template_world",
+            "Economy Memory Reversal",
+            players=[{
+                "character_name": "Hero",
+                "attributes": {"str": 10},
+                "gold": 20,
+            }],
+        )
+        instance = registry.get(api._parse_key(created["game_key"]))
+        uid = next(iter(instance.players))
+        instance.gm_uid = uid
+        await memory.apply_delta(instance.memory_namespace, {
+            "add": [{
+                "entity": "通行证",
+                "relation": "持有状态",
+                "value": "尚未取得",
+                "confidence": 1.0,
+            }],
+            "update": [],
+            "forget": [],
+        }, 0)
+        dependencies = replace(
+            api._character_dependencies,
+            apply_economy_memory=memory.apply_economy_delta,
+            reverse_economy_memory=memory.reverse_economy_delta,
+        )
+        api._character_dependencies = dependencies
+        proposal = queue_proposal(
+            instance,
+            kind="purchase",
+            payer_uid=uid,
+            recipient_uid=uid,
+            amount=3,
+            reason="购买通行证",
+        )
+        queue_effect_group(instance, [proposal], {
+            "memory_delta": {
+                "add": [],
+                "update": [{
+                    "entity": "通行证",
+                    "relation": "持有状态",
+                    "value": "已经取得",
+                    "confidence": 1.0,
+                }],
+                "forget": [],
+            },
+        })
+        committed = await api.resolve_payment(
+            created["game_key"], proposal["id"], True, uid,
+        )
+
+        assert committed["external_effects_committed"] is True
+        assert memory.list_entries(instance.memory_namespace)[0]["value"] == "已经取得"
+        delivery = instance.economy["external_effects_outbox"][0]
+        assert delivery["status"] == "delivered"
+
+        async def fail_reversal_receipt_save(_instance):
+            raise OSError("fault after external memory reversal")
+
+        failing_dependencies = replace(
+            dependencies,
+            games=replace(
+                dependencies.games,
+                save_instance=fail_reversal_receipt_save,
+            ),
+        )
+        api._character_dependencies = failing_dependencies
+        instance.log.append({"round": instance.round_number})
+        with pytest.raises(OSError, match="after external memory reversal"):
+            await api.rollback_round(created["game_key"])
+
+        restored = memory.list_entries(instance.memory_namespace)
+        assert len(restored) == 1
+        assert restored[0]["value"] == "尚未取得"
+
+        recovered_registry = GameRegistry(registry.save_dir)
+        recovered = await recovered_registry.load(instance.game_key)
+        assert recovered is not None
+        assert len(pending_memory_reversals(recovered)) == 1
+        recovery_dependencies = replace(
+            dependencies,
+            games=replace(
+                dependencies.games,
+                get_instance=recovered_registry.get,
+                save_instance=recovered_registry.save,
+            ),
+        )
+        assert await characters.drain_economy_outbox(
+            recovery_dependencies, recovered,
+        ) is True
+        recovered_delivery = recovered.economy["external_effects_outbox"][0]
+        assert recovered_delivery["status"] == "reversed"
+        assert pending_memory_deliveries(recovered) == []
+        assert pending_memory_reversals(recovered) == []
+        assert await characters.drain_economy_outbox(
+            recovery_dependencies, recovered,
+        ) is True
     finally:
         memory.close()
 
