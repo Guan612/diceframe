@@ -253,6 +253,24 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._connection_dependencies = generation.ConnectionDependencies(
+            llm_client=self._llm_client,
+            config_state=lambda: getattr(self, "_config_state", {}) or {},
+        )
+        self._generation_dependencies = generation.GenerationDependencies(
+            llm_client=self._llm_client,
+            llm_configuration_error=self._llm_configuration_error,
+            worlds_dir=self._worlds_dir,
+            lorebook_store=self._lore,
+            rules_dir=self._rules_dir,
+            registry=self._reg,
+            parse_game_key=_parse_game_key,
+            get_instance=self._reg.get,
+            load_rule_by_id=self._load_rule_by_id,
+            load_rule_for_game=self._load_rule_for_game,
+            character_gen_max_tokens=self.character_gen_max_tokens,
+            text_gen_max_tokens=self.text_gen_max_tokens,
+        )
         self._rule_dependencies = rules.RuleDependencies(
             rules_dir=self._rules_dir,
             ruleset_registry=self._ruleset_registry,
@@ -1376,23 +1394,57 @@ class WebAPI:
     async def test_connection(self, base_url: str, api_key: str,
                               model: str, proxy_url: str = "",
                               api_format: str = "openai") -> dict[str, Any]:
-        return await generation.test_connection(self, base_url, api_key, model, proxy_url, api_format)
+        return await generation.test_connection(
+            self._connection_dependencies,
+            base_url,
+            api_key,
+            model,
+            proxy_url,
+            api_format,
+        )
 
     async def list_models(self, base_url: str, api_key: str,
                           proxy_url: str = "", api_format: str = "openai") -> dict[str, Any]:
-        return await generation.list_models(self, base_url, api_key, proxy_url, api_format)
+        return await generation.list_models(
+            self._connection_dependencies,
+            base_url,
+            api_key,
+            proxy_url,
+            api_format,
+        )
 
     async def generate_world(self, prompt: str, rule_id: str = "", language: str = "") -> dict[str, Any]:
-        return await generation.generate_world(self, prompt, rule_id, language)
+        return await generation.generate_world(
+            self._generation_dependencies,
+            prompt,
+            rule_id,
+            language,
+        )
 
     async def generate_rule(self, prompt: str, source_rule_id: str = "", language: str = "") -> dict[str, Any]:
-        return await generation.generate_rule(self, prompt, source_rule_id, language)
+        return await generation.generate_rule(
+            self._generation_dependencies,
+            prompt,
+            source_rule_id,
+            language,
+        )
 
     async def generate_character(self, prompt: str, game_key: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
-        return await generation.generate_character(self, prompt, game_key, rule_id, language)
+        return await generation.generate_character(
+            self._generation_dependencies,
+            prompt,
+            game_key,
+            rule_id,
+            language,
+        )
 
     async def generate_text(self, prompt: str, system_hint: str = "", language: str = "") -> dict[str, Any]:
-        return await generation.generate_text(self, prompt, system_hint, language)
+        return await generation.generate_text(
+            self._generation_dependencies,
+            prompt,
+            system_hint,
+            language,
+        )
 
     # ---- 内存 ----
 

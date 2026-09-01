@@ -6,17 +6,38 @@ import logging
 import json
 import re
 import time
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.generation import creator
 from src.rules.rule_system import RuleSystem
 from src.webui.config_update import connection_test_timeout
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 logger = logging.getLogger("trpg")
+
+
+@dataclass(frozen=True)
+class ConnectionDependencies:
+    llm_client: Any | None
+    config_state: Callable[[], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class GenerationDependencies:
+    llm_client: Any | None
+    llm_configuration_error: Callable[[str], dict[str, Any] | None]
+    worlds_dir: Path
+    lorebook_store: Any
+    rules_dir: Path
+    registry: Any
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    load_rule_by_id: Callable[[str, str], RuleSystem | None]
+    load_rule_for_game: Callable[[Any], RuleSystem | None]
+    character_gen_max_tokens: int
+    text_gen_max_tokens: int
 
 
 def _model_list_url(base_url: str, api_format: str = "openai") -> str:
@@ -58,8 +79,13 @@ def _extract_model_ids(payload: Any) -> list[str]:
     return sorted(models, key=str.casefold)
 
 
-async def list_models(api: "WebAPI", base_url: str, api_key: str,
-                      proxy_url: str = "", api_format: str = "openai") -> dict[str, Any]:
+async def list_models(
+    dependencies: ConnectionDependencies,
+    base_url: str,
+    api_key: str,
+    proxy_url: str = "",
+    api_format: str = "openai",
+) -> dict[str, Any]:
     """读取 OpenAI / Anthropic 兼容接口的模型目录。"""
     import aiohttp
 
@@ -70,15 +96,17 @@ async def list_models(api: "WebAPI", base_url: str, api_key: str,
         if anthropic else {"Authorization": f"Bearer {api_key}"}
     )
     try:
-        if not api._llm_client:
+        if not dependencies.llm_client:
             return {"ok": False, "error": "LLM 客户端未初始化", "models": []}
-        session = await api._llm_client._get_session()
-        active_proxy = proxy_url or api._llm_client.proxy_url
+        session = await dependencies.llm_client._get_session()
+        active_proxy = proxy_url or dependencies.llm_client.proxy_url
         request_kwargs = {"proxy": active_proxy} if active_proxy else {}
         async with session.get(
             url,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=connection_test_timeout(api._config_state)),
+            timeout=aiohttp.ClientTimeout(
+                total=connection_test_timeout(dependencies.config_state())
+            ),
             **request_kwargs,
         ) as response:
             if response.status != 200:
@@ -96,18 +124,32 @@ async def list_models(api: "WebAPI", base_url: str, api_key: str,
         return {"ok": False, "error": str(exc), "models": []}
 
 
-async def test_connection(api: "WebAPI", base_url: str, api_key: str,
-                          model: str, proxy_url: str = "",
-                          api_format: str = "openai") -> dict[str, Any]:
+async def test_connection(
+    dependencies: ConnectionDependencies,
+    base_url: str,
+    api_key: str,
+    model: str,
+    proxy_url: str = "",
+    api_format: str = "openai",
+) -> dict[str, Any]:
     """测试 LLM API 连接是否正常。"""
     import aiohttp
     if (api_format or "openai").strip().lower() == "anthropic":
-        return await _test_anthropic_connection(api, base_url, api_key, model, proxy_url)
-    return await _test_openai_connection(api, base_url, api_key, model, proxy_url)
+        return await _test_anthropic_connection(
+            dependencies, base_url, api_key, model, proxy_url,
+        )
+    return await _test_openai_connection(
+        dependencies, base_url, api_key, model, proxy_url,
+    )
 
 
-async def _test_openai_connection(api: "WebAPI", base_url: str, api_key: str,
-                                  model: str, proxy_url: str = "") -> dict[str, Any]:
+async def _test_openai_connection(
+    dependencies: ConnectionDependencies,
+    base_url: str,
+    api_key: str,
+    model: str,
+    proxy_url: str = "",
+) -> dict[str, Any]:
     import aiohttp
     url = base_url.rstrip("/")
     if not url.endswith("/chat/completions"):
@@ -125,14 +167,16 @@ async def _test_openai_connection(api: "WebAPI", base_url: str, api_key: str,
 
     start = time.time()
     try:
-        if not api._llm_client:
+        if not dependencies.llm_client:
             return {"ok": False, "error": "LLM 客户端未初始化", "elapsed": 0}
-        session = await api._llm_client._get_session()
-        active_proxy = proxy_url or api._llm_client.proxy_url
+        session = await dependencies.llm_client._get_session()
+        active_proxy = proxy_url or dependencies.llm_client.proxy_url
         request_kwargs = {"proxy": active_proxy} if active_proxy else {}
         async with session.post(
             url, json=body, headers=headers,
-            timeout=aiohttp.ClientTimeout(total=connection_test_timeout(api._config_state)),
+            timeout=aiohttp.ClientTimeout(
+                total=connection_test_timeout(dependencies.config_state())
+            ),
             **request_kwargs,
         ) as resp:
             return await _parse_connection_test_response(resp, start)
@@ -140,8 +184,13 @@ async def _test_openai_connection(api: "WebAPI", base_url: str, api_key: str,
         return {"ok": False, "error": str(e), "elapsed": round(time.time() - start, 2)}
 
 
-async def _test_anthropic_connection(api: "WebAPI", base_url: str, api_key: str,
-                                     model: str, proxy_url: str = "") -> dict[str, Any]:
+async def _test_anthropic_connection(
+    dependencies: ConnectionDependencies,
+    base_url: str,
+    api_key: str,
+    model: str,
+    proxy_url: str = "",
+) -> dict[str, Any]:
     import aiohttp
     from src.llm.client import _anthropic_messages_url, _anthropic_text_content
 
@@ -159,14 +208,16 @@ async def _test_anthropic_connection(api: "WebAPI", base_url: str, api_key: str,
 
     start = time.time()
     try:
-        if not api._llm_client:
+        if not dependencies.llm_client:
             return {"ok": False, "error": "LLM 客户端未初始化", "elapsed": 0}
-        session = await api._llm_client._get_session()
-        active_proxy = proxy_url or api._llm_client.proxy_url
+        session = await dependencies.llm_client._get_session()
+        active_proxy = proxy_url or dependencies.llm_client.proxy_url
         request_kwargs = {"proxy": active_proxy} if active_proxy else {}
         async with session.post(
             url, json=body, headers=headers,
-            timeout=aiohttp.ClientTimeout(total=connection_test_timeout(api._config_state)),
+            timeout=aiohttp.ClientTimeout(
+                total=connection_test_timeout(dependencies.config_state())
+            ),
             **request_kwargs,
         ) as resp:
             elapsed = round(time.time() - start, 2)
@@ -209,23 +260,35 @@ async def _parse_connection_test_response(resp, start: float) -> dict[str, Any]:
     }
 
 
-async def generate_world(api: "WebAPI", prompt: str, rule_id: str = "",
-                         language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+async def generate_world(
+    dependencies: GenerationDependencies,
+    prompt: str,
+    rule_id: str = "",
+    language: str = DEFAULT_LANGUAGE,
+) -> dict[str, Any]:
     """使用 AI 根据用户描述生成完整世界模板。"""
-    if config_error := api._llm_configuration_error(language):
+    if config_error := dependencies.llm_configuration_error(language):
         return config_error
     try:
-        return await _gen_world(api, prompt, rule_id, normalize_language(language))
+        return await _gen_world(
+            dependencies, prompt, rule_id, normalize_language(language),
+        )
     except Exception as e:
         logger.exception("AI 生成世界失败")
         return {"ok": False, "error": str(e)}
 
 
-async def _gen_world(api: "WebAPI", prompt: str, rule_id: str, language: str) -> dict[str, Any]:
+async def _gen_world(
+    dependencies: GenerationDependencies,
+    prompt: str,
+    rule_id: str,
+    language: str,
+) -> dict[str, Any]:
     return await creator.generate_world(
-        api._llm_client, prompt, rule_id or "freeform_fantasy",
-        worlds_dir=api._worlds_dir, lorebook_store=api._lore,
-        max_tokens=api.character_gen_max_tokens,
+        dependencies.llm_client, prompt, rule_id or "freeform_fantasy",
+        worlds_dir=dependencies.worlds_dir,
+        lorebook_store=dependencies.lorebook_store,
+        max_tokens=dependencies.character_gen_max_tokens,
         language=language,
     )
 
@@ -235,16 +298,22 @@ def _slug(value: str) -> str:
     return raw or "custom"
 
 
-async def generate_rule(api: "WebAPI", prompt: str, source_rule_id: str = "",
-                        language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+async def generate_rule(
+    dependencies: GenerationDependencies,
+    prompt: str,
+    source_rule_id: str = "",
+    language: str = DEFAULT_LANGUAGE,
+) -> dict[str, Any]:
     """按母版规则生成并保存一套 AI 自定义规则。"""
-    if config_error := api._llm_configuration_error(language):
+    if config_error := dependencies.llm_configuration_error(language):
         return config_error
     prompt = (prompt or "").strip()
     if not prompt:
         return {"ok": False, "error": "请输入规则题材描述"}
     source_rule_id = (source_rule_id or "freeform_fantasy").strip()
-    source_path = RuleSystem.path_for(api._rules_dir, source_rule_id, language)
+    source_path = RuleSystem.path_for(
+        dependencies.rules_dir, source_rule_id, language,
+    )
     if not source_path.exists():
         return {"ok": False, "error": f"母版规则不存在: {source_rule_id}"}
     try:
@@ -252,12 +321,12 @@ async def generate_rule(api: "WebAPI", prompt: str, source_rule_id: str = "",
         source_rule = json.loads(source_path.read_text(encoding="utf-8"))
         rule_id = f"ai_rule_{_slug(prompt)}_{int(time.time())}"
         data = await creator.generate_rule(
-            api._llm_client,
+            dependencies.llm_client,
             prompt,
             source_rule=source_rule,
             source_rule_id=source_rule_id,
             rule_id=rule_id,
-            max_tokens=max(api.character_gen_max_tokens, 4096),
+            max_tokens=max(dependencies.character_gen_max_tokens, 4096),
             language=language,
         )
         if not data:
@@ -265,8 +334,8 @@ async def generate_rule(api: "WebAPI", prompt: str, source_rule_id: str = "",
         data["rule_id"] = rule_id
         data["custom"] = True
         data["source_rule_id"] = source_rule_id
-        api._rules_dir.mkdir(parents=True, exist_ok=True)
-        target = RuleSystem.path_for(api._rules_dir, rule_id)
+        dependencies.rules_dir.mkdir(parents=True, exist_ok=True)
+        target = RuleSystem.path_for(dependencies.rules_dir, rule_id)
         tmp = target.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         # 读取一次确保 JSON 与规则系统兼容；不兼容则不落正式文件。
@@ -285,22 +354,33 @@ async def generate_rule(api: "WebAPI", prompt: str, source_rule_id: str = "",
         return {"ok": False, "error": str(e)}
 
 
-async def generate_character(api: "WebAPI", prompt: str, game_key: str = "", rule_id: str = "",
-                             language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+async def generate_character(
+    dependencies: GenerationDependencies,
+    prompt: str,
+    game_key: str = "",
+    rule_id: str = "",
+    language: str = DEFAULT_LANGUAGE,
+) -> dict[str, Any]:
     """使用 AI 根据用户描述生成角色卡。"""
-    if config_error := api._llm_configuration_error(language):
+    if config_error := dependencies.llm_configuration_error(language):
         return config_error
     try:
         resolved_language = normalize_language(language)
-        rule = api._load_rule_by_id(rule_id, resolved_language)
+        rule = dependencies.load_rule_by_id(rule_id, resolved_language)
         if game_key:
-            inst = api._reg.get(api._parse_key(game_key))
+            inst = dependencies.get_instance(
+                dependencies.parse_game_key(game_key)
+            )
             if inst:
                 resolved_language = normalize_language(language or getattr(inst, "language", DEFAULT_LANGUAGE))
-                rule = rule or api._load_rule_for_game(inst)
+                rule = rule or dependencies.load_rule_for_game(inst)
         data = await creator.generate_character(
-            api._llm_client, prompt, game_key, api._reg, rule=rule,
-            max_tokens=api.character_gen_max_tokens,
+            dependencies.llm_client,
+            prompt,
+            game_key,
+            dependencies.registry,
+            rule=rule,
+            max_tokens=dependencies.character_gen_max_tokens,
             language=resolved_language,
         )
         if not data:
@@ -311,11 +391,18 @@ async def generate_character(api: "WebAPI", prompt: str, game_key: str = "", rul
         return {"ok": False, "error": str(e)}
 
 
-async def generate_text(api: "WebAPI", prompt: str, system_hint: str = "",
-                        language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+async def generate_text(
+    dependencies: GenerationDependencies,
+    prompt: str,
+    system_hint: str = "",
+    language: str = DEFAULT_LANGUAGE,
+) -> dict[str, Any]:
     """轻量文字生成：直接发 prompt 给 LLM，返回原始文本，不解析 JSON。"""
-    if config_error := api._llm_configuration_error(language):
+    if config_error := dependencies.llm_configuration_error(language):
         return config_error
+    llm_client = dependencies.llm_client
+    if llm_client is None:
+        return {"ok": False, "error": "LLM 客户端未初始化"}
     language = normalize_language(language)
     system = system_hint or (
         "You are a TRPG character and setting assistant. Answer briefly and practically in natural English. Do not output JSON."
@@ -323,10 +410,11 @@ async def generate_text(api: "WebAPI", prompt: str, system_hint: str = "",
         else "你是一个TRPG角色设定助手。根据用户描述，生成简短实用的回答。不要输出JSON，直接输出文字。"
     )
     try:
-        response = await api._llm_client.call(
+        response = await llm_client.call(
             system_prompt=system,
             user_message=prompt,
-            temperature=0.7, max_tokens=api.text_gen_max_tokens,
+            temperature=0.7,
+            max_tokens=dependencies.text_gen_max_tokens,
         )
         text = response.narration or response.content
         return {"ok": True, "text": text.strip()}
