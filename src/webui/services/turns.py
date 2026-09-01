@@ -310,7 +310,12 @@ async def submit_action(
             target_text,
             source=source,
         )
-        if not action_added and instance._process_lock.locked():
+        process_lock = getattr(instance, "_process_lock", None)
+        if (
+            not action_added
+            and process_lock is not None
+            and process_lock.locked()
+        ):
             return _result({
                 "ok": False,
                 "error_code": "REWRITE_IN_PROGRESS",
