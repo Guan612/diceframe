@@ -394,6 +394,10 @@ class _BuilderApi:
             "runtime": {"id": "core:dnd2024", "minimum_version": 1},
         })
         self._legacy_rule = RuleSystem({"rule_id": "legacy"})
+        self.builder_dependencies = ruleset_builder.RulesetBuilderDependencies(
+            load_rule=self._load_rule_by_id,
+            ruleset_registry=self._ruleset_registry,
+        )
 
     def _load_rule_by_id(self, rule_id: str, language: str = ""):
         del language
@@ -403,29 +407,43 @@ class _BuilderApi:
         }.get(rule_id)
 
     def ruleset_experience(self, rule_id: str, language: str = ""):
-        return ruleset_builder.experience(self, rule_id, language)
+        return ruleset_builder.experience(self.builder_dependencies, rule_id, language)
 
     def ruleset_builder_choices(self, rule_id: str, draft, language: str = ""):
-        return ruleset_builder.choices(self, rule_id, draft, language)
+        return ruleset_builder.choices(
+            self.builder_dependencies, rule_id, draft, language
+        )
 
     def ruleset_builder_validate(self, rule_id: str, draft, language: str = ""):
-        return ruleset_builder.validate(self, rule_id, draft, language)
+        return ruleset_builder.validate(
+            self.builder_dependencies, rule_id, draft, language
+        )
 
     def ruleset_builder_derive(self, rule_id: str, draft, language: str = ""):
-        return ruleset_builder.derive(self, rule_id, draft, language)
+        return ruleset_builder.derive(
+            self.builder_dependencies, rule_id, draft, language
+        )
 
     def ruleset_builder_finalize(self, rule_id: str, draft, language: str = ""):
-        return ruleset_builder.finalize(self, rule_id, draft, language)
+        return ruleset_builder.finalize(
+            self.builder_dependencies, rule_id, draft, language
+        )
 
 
 def test_stateless_builder_service_validates_before_deriving(runtime, valid_draft) -> None:
     api = _BuilderApi(runtime)
 
-    valid = ruleset_builder.validate(api, "test_dnd2024", valid_draft, "en")
-    finalized = ruleset_builder.finalize(api, "test_dnd2024", valid_draft, "en")
+    valid = ruleset_builder.validate(
+        api.builder_dependencies, "test_dnd2024", valid_draft, "en"
+    )
+    finalized = ruleset_builder.finalize(
+        api.builder_dependencies, "test_dnd2024", valid_draft, "en"
+    )
     invalid_draft = deepcopy(valid_draft)
     invalid_draft["name"] = ""
-    rejected = ruleset_builder.derive(api, "test_dnd2024", invalid_draft, "en")
+    rejected = ruleset_builder.derive(
+        api.builder_dependencies, "test_dnd2024", invalid_draft, "en"
+    )
 
     assert valid == {"ok": True, "rule_id": "test_dnd2024", "valid": True, "errors": []}
     assert finalized["ok"] is True
@@ -442,7 +460,9 @@ def test_builder_service_rejects_legacy_rule_and_hostile_shape(runtime) -> None:
         cursor["next"] = {}
         cursor = cursor["next"]
 
-    unavailable = ruleset_builder.validate(api, "legacy", {}, "en")
+    unavailable = ruleset_builder.validate(
+        api.builder_dependencies, "legacy", {}, "en"
+    )
 
     assert unavailable["ok"] is False
     assert unavailable["code"] == "RULESET_BUILDER_UNAVAILABLE"

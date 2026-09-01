@@ -30,8 +30,18 @@ from plugin_host_common import write_plugin, write_png, make_plugin_zip
 class ContentMapApiFacade:
     """Minimal WebAPI map-packaging facade used by service unit tests."""
 
+    @staticmethod
+    def resolve_map_background_file(selection):
+        del selection
+        return None
+
     def package_content_map(self, *args, **kwargs):
-        return content_pack_map_service.package_content_map(self, *args, **kwargs)
+        dependencies = content_pack_map_service.ContentMapDependencies(
+            resolve_background_file=self.resolve_map_background_file,
+        )
+        return content_pack_map_service.package_content_map(
+            dependencies, *args, **kwargs
+        )
 
 
 def test_import_all_plugin_content_imports_characters_and_entries(tmp_path):

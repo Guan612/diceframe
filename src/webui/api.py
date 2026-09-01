@@ -156,6 +156,9 @@ class WebAPI:
             self._reg.save_dir.parent / "map-backgrounds",
             lambda asset_id: self.generated_image_file(asset_id),
         )
+        self._content_map_dependencies = content_pack_maps.ContentMapDependencies(
+            resolve_background_file=self.resolve_map_background_file,
+        )
         self._memory_service = memory_service.MemoryService(
             memory_service.MemoryDependencies(
                 repository=self._mem,
@@ -239,6 +242,10 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._ruleset_builder_dependencies = ruleset_builder.RulesetBuilderDependencies(
+            load_rule=self._load_rule_by_id,
+            ruleset_registry=self._ruleset_registry,
+        )
         self._bot_extensions = bot_extensions.BotExtensionService(
             bot_extensions.BotExtensionDependencies(plugin_host=plugin_host)
         )
@@ -662,7 +669,7 @@ class WebAPI:
     ):
         """Package map contributions through the WebAPI cross-domain facade."""
         return content_pack_maps.package_content_map(
-            self,
+            self._content_map_dependencies,
             plugin_id,
             pack_name,
             world,
@@ -1126,27 +1133,37 @@ class WebAPI:
         return rules.delete_custom_rule(self, rule_id)
 
     def ruleset_experience(self, rule_id: str, language: str = "") -> dict[str, Any]:
-        return ruleset_builder.experience(self, rule_id, language)
+        return ruleset_builder.experience(
+            self._ruleset_builder_dependencies, rule_id, language
+        )
 
     def ruleset_builder_choices(
         self, rule_id: str, draft: Any, language: str = "",
     ) -> dict[str, Any]:
-        return ruleset_builder.choices(self, rule_id, draft, language)
+        return ruleset_builder.choices(
+            self._ruleset_builder_dependencies, rule_id, draft, language
+        )
 
     def ruleset_builder_validate(
         self, rule_id: str, draft: Any, language: str = "",
     ) -> dict[str, Any]:
-        return ruleset_builder.validate(self, rule_id, draft, language)
+        return ruleset_builder.validate(
+            self._ruleset_builder_dependencies, rule_id, draft, language
+        )
 
     def ruleset_builder_derive(
         self, rule_id: str, draft: Any, language: str = "",
     ) -> dict[str, Any]:
-        return ruleset_builder.derive(self, rule_id, draft, language)
+        return ruleset_builder.derive(
+            self._ruleset_builder_dependencies, rule_id, draft, language
+        )
 
     def ruleset_builder_finalize(
         self, rule_id: str, draft: Any, language: str = "",
     ) -> dict[str, Any]:
-        return ruleset_builder.finalize(self, rule_id, draft, language)
+        return ruleset_builder.finalize(
+            self._ruleset_builder_dependencies, rule_id, draft, language
+        )
 
     def ruleset_progression(
         self, rule_id: str, class_ref: str, start_level: int = 1,
