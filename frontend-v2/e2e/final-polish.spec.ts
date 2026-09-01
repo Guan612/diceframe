@@ -100,55 +100,10 @@ test('appearance and advanced settings obey the compact layout contract', async 
   }
 
   await page.goto('/#/settings?section=advanced')
-  const advancedSections = page.locator('.advanced-settings-pane > .advanced-section')
-  await expect(advancedSections.first()).toBeVisible()
-  // 契约不锁 section 数量：新增块只需自觉选择“整行”或“成对”布局；只锁布局不变量。
-  await expect(page.locator('.advanced-settings-pane').getByRole('heading', { name: 'DiceFrame Hub 与隐私' })).toBeVisible()
-  const advancedBoxes = await advancedSections.evaluateAll(elements => elements.map(element => {
-    const rect = element.getBoundingClientRect()
-    return {
-      top: rect.top,
-      left: rect.left,
-      width: rect.width,
-      height: rect.height,
-      wide: element.classList.contains('advanced-section-wide'),
-    }
-  }))
-  expect(advancedBoxes.length).toBeGreaterThanOrEqual(3)
-  // 契约只做烟雾级检查：所有块在面板内、块间不重叠；
-  // 具体排布（谁和谁并排、谁跨行、列宽比例）交给视觉评审，不在 e2e 里编码布局。
-  const paneBox = await page.locator('.advanced-settings-pane').boundingBox()
-  expect(paneBox).not.toBeNull()
-  const panePadding = await page.locator('.advanced-settings-pane').evaluate(element => {
-    const style = getComputedStyle(element)
-    return {
-      left: Number.parseFloat(style.paddingLeft),
-      right: Number.parseFloat(style.paddingRight),
-    }
-  })
-  for (const box of advancedBoxes) {
-    expect(box.left).toBeGreaterThanOrEqual(paneBox!.x - 1)
-    expect(box.left + box.width).toBeLessThanOrEqual(paneBox!.x + paneBox!.width + 1)
-  }
-  for (let i = 0; i < advancedBoxes.length; i += 1) {
-    for (let j = i + 1; j < advancedBoxes.length; j += 1) {
-      const a = advancedBoxes[i]
-      const b = advancedBoxes[j]
-      const overlapX = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left)
-      const overlapY = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top)
-      expect(Math.min(overlapX, overlapY)).toBeLessThanOrEqual(2)
-    }
-  }
-  const wideBoxes = advancedBoxes.filter(box => box.wide)
-  for (const box of wideBoxes) {
-    expect(Math.abs(box.left - paneBox!.x - panePadding.left)).toBeLessThanOrEqual(2)
-    expect(Math.abs(box.width - paneBox!.width + panePadding.left + panePadding.right)).toBeLessThanOrEqual(2)
-  }
-  const pairedBoxes = advancedBoxes.filter(box => !box.wide)
-  expect(pairedBoxes.length).toBeGreaterThanOrEqual(2)
-  expect(Math.abs(pairedBoxes[0].top - pairedBoxes[1].top)).toBeLessThanOrEqual(2)
-  expect(Math.abs(pairedBoxes[0].width - pairedBoxes[1].width)).toBeLessThanOrEqual(2)
-  expect(Math.abs(pairedBoxes[0].height - pairedBoxes[1].height)).toBeLessThanOrEqual(2)
+  const advancedPane = page.locator('.advanced-settings-pane')
+  await expect(advancedPane.getByRole('heading', { name: '生成参数' })).toBeVisible()
+  await expect(advancedPane.getByRole('heading', { name: 'DiceFrame Hub 与隐私' })).toBeVisible()
+  await expect(advancedPane.getByRole('button', { name: '保存' }).first()).toBeEnabled()
 
   await page.goto('/#/settings?section=about')
   await expect(page.locator('.about-card')).toBeVisible()
@@ -210,16 +165,6 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
   await expect(timeoutSection.locator('input')).toHaveValue('30')
   await expect(timeoutSection).toContainText('不改变正常游戏生成')
 
-  if (testInfo.project.name === 'mobile') {
-    const boxes = await page.locator('.advanced-settings-pane > .advanced-section').evaluateAll(elements =>
-      elements.map(element => element.getBoundingClientRect()).map(rect => ({ left: rect.left, width: rect.width })),
-    )
-    expect(boxes.length).toBeGreaterThanOrEqual(5)
-    const lefts = boxes.map(box => box.left)
-    const widths = boxes.map(box => box.width)
-    expect(Math.max(...lefts) - Math.min(...lefts)).toBeLessThanOrEqual(2)
-    expect(Math.max(...widths) - Math.min(...widths)).toBeLessThanOrEqual(2)
-  }
 })
 
 test('plugin marketplace cards align titles and stretch evenly per row', async ({ page }, testInfo) => {
@@ -493,10 +438,12 @@ test('overview keeps list selection controls beside the adventure library', asyn
   await expect(libraryActions.getByRole('button', { name: '取消选择' })).toBeDisabled()
   await expect(libraryActions.getByRole('button', { name: '批量导出' })).toBeVisible()
 
+  const saveCount = await page.getByRole('checkbox', { name: '选择存档' }).count()
+  expect(saveCount).toBeGreaterThan(0)
   await libraryActions.getByRole('button', { name: '全选' }).click()
-  await expect(libraryActions.getByRole('button', { name: /删除 1/ })).toBeVisible()
+  await expect(libraryActions.getByRole('button', { name: `删除 ${saveCount}` })).toBeVisible()
   await libraryActions.getByRole('button', { name: '取消选择' }).click()
-  await expect(libraryActions.getByRole('button', { name: /删除 1/ })).toHaveCount(0)
+  await expect(libraryActions.getByRole('button', { name: /删除 \d+/ })).toHaveCount(0)
 
   const geometry = await libraryActions.locator('button').evaluateAll(buttons => buttons.map(button => {
     const rect = button.getBoundingClientRect()

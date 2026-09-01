@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { NIcon } from 'naive-ui'
 import { ChatbubbleEllipsesOutline, ShieldOutline } from '@vicons/ionicons5'
 import type { RulesetGameplayView } from '@/api/types'
-import { submitRulesetIntent } from '@/features/rulesets/dnd2024/api'
+import { submitRulesetIntent } from '@/api/rulesets'
 import { useLocale } from '@/composables/useLocale'
 
 const props = defineProps<{

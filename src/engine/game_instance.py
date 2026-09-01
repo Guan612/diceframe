@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -24,6 +23,7 @@ from src.engine.contracts import (
 )
 from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
 from src.engine.character_utils import apply_resource_delta, get_resource
+from src.engine.game_state_codec import GameStateCodec
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
@@ -84,42 +84,6 @@ def restore_players(instance, snapshot: dict) -> None:
         for key, value in snap.items():
             cs[key] = value
         instance.players[uid]["character_sheet"] = cs
-
-
-def _referenced_player_ids(log: list) -> set[str]:
-    """从历史日志里提取真正参与过本局的玩家 ID。"""
-    referenced: set[str] = set()
-    for entry in log or []:
-        for action in entry.get("actions", []) or []:
-            uid = action.get("user_id")
-            if uid and uid != "system":
-                referenced.add(uid)
-        snapshot = entry.get("pre_state_snapshot", {})
-        if isinstance(snapshot, dict):
-            referenced.update(uid for uid in snapshot if uid and uid != "system")
-    return referenced
-
-
-def _prune_ghost_players(instance) -> None:
-    """加载旧存档时清理明显不属于本局的幽灵玩家。
-
-    只在有历史日志依据时执行；等待房间、无日志新局、从未推进的多人局不会被误删。
-    """
-    if len(instance.players) <= 1 or not instance.log:
-        return
-    referenced = _referenced_player_ids(instance.log)
-    if not referenced:
-        return
-    ghost_ids = sorted(uid for uid in instance.players if uid not in referenced)
-    if not ghost_ids:
-        return
-    for uid in ghost_ids:
-        instance.players.pop(uid, None)
-        instance.ready_players.discard(uid)
-        instance.away_players.discard(uid)
-    instance.action_queue = [a for a in instance.action_queue if a.get("user_id") not in ghost_ids]
-    instance.pending_actions = [a for a in instance.pending_actions if a.get("user_id") not in ghost_ids]
-    logger.warning("加载存档时移除幽灵玩家: game_key=%s, players=%s", instance.game_key, ghost_ids)
 
 
 # ---------- GameInstance ------------------------------------
@@ -411,6 +375,29 @@ class GameInstance:
 
     def replace_players(self, players: dict[str, PlayerData]) -> None:
         self.players = players
+
+    def restore_ruleset_transaction(self, snapshot: dict[str, Any]) -> None:
+        """Restore the bounded state touched by an authoritative ruleset transaction.
+
+        Callers capture the snapshot before invoking a runtime reducer. Keeping
+        the rollback assignment here preserves the aggregate write boundary
+        while allowing ruleset orchestration to remain transaction-aware.
+        """
+        self.ruleset_state = copy.deepcopy(snapshot["ruleset_state"])
+        self.event_ledger = copy.deepcopy(snapshot["event_ledger"])
+        self.players = copy.deepcopy(snapshot["players"])
+        self.combat_state = str(snapshot["combat_state"])
+        self.combat_active = bool(snapshot["combat_active"])
+        self.initiative_order = copy.deepcopy(snapshot["initiative_order"])
+        self.initiative_current = int(snapshot["initiative_current"])
+        if "scene" in snapshot and snapshot["scene"] is not None:
+            self.scene = str(snapshot["scene"])
+        if "last_activity" in snapshot:
+            self.last_activity = str(snapshot["last_activity"])
+        if "log" in snapshot:
+            self.log = copy.deepcopy(snapshot["log"])
+        if "round_number" in snapshot:
+            self.round_number = int(snapshot["round_number"])
 
     def set_player_access(self, open_access: bool) -> None:
         self.player_access_open = bool(open_access)
@@ -1129,81 +1116,8 @@ class GameInstance:
     # ---------- 序列化 --------------------------------------
 
     def to_dict(self) -> dict:
-        data = {
-            "game_key": list(self.game_key),
-            "world_id": self.world_id,
-            "rule_id": self.rule_id,
-            "adventure_binding": self.adventure_binding,
-            "scene_image": self.scene_image,
-            "map_background": self.map_background,
-            "world_name": self.world_name,
-            "group_name": self.group_name,
-            "state": self.state.value,
-            "players": self.players,
-            "npcs": self.npcs,
-            "round_number": self.round_number,
-            "action_queue": self.action_queue,
-            "pending_actions": self.pending_actions,
-            "ready_players": sorted(self.ready_players),
-            "away_players": sorted(self.away_players),
-            "combat_active": self.combat_active,
-            "combat_enemies": self.combat_enemies,
-            "combat_state": self.combat_state,
-            "initiative_order": self.initiative_order,
-            "initiative_current": self.initiative_current,
-            "scene": self.scene,
-            "game_time": self.game_time,
-            "log": self.log[-100:],
-            "summary": self.summary,
-            "key_facts": self.key_facts,
-            "total_llm_calls": self.total_llm_calls,
-            "total_tokens": self.total_tokens,
-            "started_at": self.started_at,
-            "last_activity": self.last_activity,
-            "solo_mode": self.solo_mode,
-            "seed_code": self.seed_code,
-            "difficulty": self.difficulty,
-            "narrative_perspective": self.narrative_perspective,
-            "language": normalize_language(self.language),
-            "luck_timeout_seconds": self.luck_timeout_seconds,
-            "entry_point": self.entry_point,
-            "max_players": self.max_players,
-            "gm_uid": self.gm_uid,
-            "player_access_open": self.player_access_open,
-            "bot_bind_token": self.bot_bind_token,
-            "room_password": self.room_password,
-            "room_token": self.room_token,
-            "pending_combat_results": self.pending_combat_results,
-            "lorebook_timed_state": self.lorebook_timed_state,
-            "quick_actions": self.quick_actions,
-            "pending_payments": [
-                p for p in self.pending_payments
-                if isinstance(p, dict) and p.get("status") == "pending"
-            ],
-            "health_events": self.health_events[-100:],
-            "health_status": self.health_status,
-            "last_check": self.last_check,
-            "last_checks": self.last_checks,
-            "last_overreach": self.last_overreach,
-            "round_checks_prepared": self.round_checks_prepared,
-            "round_start_snapshot": self.round_start_snapshot,
-            "death_save_outcomes": self.death_save_outcomes,
-            "last_state_update": self.last_state_update,
-            "last_token_budget_bump": self.last_token_budget_bump,
-            "gm_directives": self.gm_directives,
-            "confirmed_items": self.confirmed_items,
-            "private_log": self.private_log,
-            "table_talk": self.table_talk,
-        }
-        if self.ruleset_runtime:
-            data["ruleset_runtime"] = self.ruleset_runtime
-            data["ruleset_state"] = self.ruleset_state
-            data["event_ledger"] = self.event_ledger
-        if self.puzzle_manager and hasattr(self.puzzle_manager, "to_active_dict"):
-            data["puzzles"] = self.puzzle_manager.to_active_dict()
-        if self.plot_tracker and hasattr(self.plot_tracker, "to_dict"):
-            data["plot_tracker"] = self.plot_tracker.to_dict()
-        return data
+        """Return the stable persisted projection for this aggregate."""
+        return GameStateCodec.encode(self)
 
     def to_llm_view(self) -> dict:
         """LLM 决策所需的精简状态视图。
@@ -1212,170 +1126,18 @@ class GameInstance:
         （log、summary、key_facts、confirmed_items、plot_tracker 等），
         这些由 context_builder 单独注入。含属性修正和护甲计算。
         """
-        players_view: dict[str, dict] = {}
-        for uid, pdata in self.players.items():
-            cs = pdata.get("character_sheet", {})
-            attrs = cs.get("attributes", {})
-            equipment = cs.get("equipment", [])
-            skills = cs.get("skills", [])
-            if skills and isinstance(skills[0], str):
-                skills = [{"name": s, "value": 20} for s in skills]
-            sheet: dict = {
-                "hp": cs.get("hp", 0),
-                "max_hp": cs.get("max_hp", 0),
-                "class": cs.get("class", ""),
-                "race": cs.get("race", ""),
-                "level": cs.get("level", 1),
-                "xp": cs.get("xp", 0),
-                "gold": cs.get("gold", 0),
-                "attributes": attrs,
-                "_modifiers": {k: (v - 10) // 2 for k, v in attrs.items()},
-                "equipment": equipment,
-                "_armor": sum(
-                    eq.get("armor", 1) if eq.get("type") in ("armor", "clothing")
-                    else eq.get("armor", 0)
-                    for eq in equipment
-                ),
-                "skills": skills,
-                "inventory": cs.get("inventory", []),
-                "key_items": cs.get("key_items", []),
-            }
-            if cs.get("background"):
-                sheet["background"] = cs["background"]
-            if cs.get("deceased"):
-                sheet["deceased"] = True
-            ss: dict[str, int] = {}
-            for key in ("sanity", "qi", "luck", "cyberware", "cyberware_load", "humanity", "heat"):
-                if key in cs:
-                    ss[key] = cs[key]
-            if ss:
-                sheet["_special_stats"] = ss
-            players_view[uid] = {
-                "character_name": pdata.get("character_name", ""),
-                "attendance": "away" if uid in self.away_players else "active",
-                "character_sheet": sheet,
-            }
-        away_names = [
-            self.players.get(uid, {}).get("character_name") or uid
-            for uid in sorted(self.away_players)
-            if uid in self.players and self.is_alive(uid)
-        ]
-        state: dict = {
-            "world_name": self.world_name,
-            "round_number": self.round_number,
-            "scene": self.scene,
-            "game_time": self.game_time,
-            "difficulty": self.difficulty,
-            "language": normalize_language(self.language),
-            "players": players_view,
-            "away_players": away_names,
-            "npcs": self.npcs,
-            "combat_state": self.combat_state,
-            "combat_enemies": self.combat_enemies,
-            "initiative_order": self.initiative_order,
-            "initiative_current": self.initiative_current,
-            "quick_actions": self.quick_actions,
-        }
-        if away_names:
-            state["attendance_note"] = "暂离角色默认跟随队伍，不主动做重大决定，不承担关键风险；除非玩家回来或 GM 明确点名。"
-        if self.combat_state == "active":
-            state["combat_active"] = True
-        if self.solo_mode:
-            state["solo_mode"] = True
-        if self.puzzle_manager and hasattr(self.puzzle_manager, "to_active_dict"):
-            puzzles = self.puzzle_manager.to_active_dict()
-            if puzzles:
-                state["puzzles"] = puzzles
-        return state
+        from src.engine.legacy_game_projection import project_legacy_game_context
+
+        return project_legacy_game_context(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "GameInstance":
-        raw_death_save_outcomes = data.get("death_save_outcomes")
-        death_save_outcomes = raw_death_save_outcomes if isinstance(raw_death_save_outcomes, dict) else {}
-        inst = cls(
-            game_key=tuple(data["game_key"]),
-            world_id=data.get("world_id"),
-            # Empty marks a pre-rule_id save. The WebUI service resolves it from
-            # the world template on first read and persists the migrated value.
-            rule_id=data.get("rule_id", ""),
-            ruleset_runtime=data.get("ruleset_runtime") or {},
-            ruleset_state=data.get("ruleset_state") or {},
-            adventure_binding=data.get("adventure_binding") or {},
-            event_ledger=data.get("event_ledger") or [],
-            scene_image=data.get("scene_image", {}),
-            map_background=data.get("map_background", {}),
-            world_name=data.get("world_name", ""),
-            group_name=data.get("group_name", ""),
-            state=GameState(data["state"]),
-            players=data.get("players", {}),
-            npcs=data.get("npcs", {}),
-            round_number=data.get("round_number", 0),
-            action_queue=data.get("action_queue", []),
-            pending_actions=data.get("pending_actions", []),
-            combat_active=data.get("combat_active", False),
-            combat_enemies=data.get("combat_enemies", []),
-            combat_state=data.get("combat_state", "none"),
-            initiative_order=data.get("initiative_order", []),
-            initiative_current=data.get("initiative_current", 0),
-            scene=data.get("scene", ""),
-            game_time=data.get("game_time", ""),
-            log=data.get("log", []),
-            summary=data.get("summary", {}),
-            key_facts=data.get("key_facts", []),
-            total_llm_calls=data.get("total_llm_calls", 0),
-            total_tokens=data.get("total_tokens", 0),
-            started_at=data.get("started_at", ""),
-            last_activity=data.get("last_activity", ""),
-            solo_mode=data.get("solo_mode", False),
-            seed_code=data.get("seed_code", ""),
-            difficulty=data.get("difficulty", "标准"),
-            narrative_perspective=data.get("narrative_perspective", "auto"),
-            language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
-            luck_timeout_seconds=int(data.get("luck_timeout_seconds", 60) or 0),
-            entry_point=data.get("entry_point", "web"),
-            max_players=data.get("max_players", 6),
-            gm_uid=data.get("gm_uid", ""),
-            player_access_open=data.get("player_access_open", True),
-            bot_bind_token=data.get("bot_bind_token", ""),
-            room_password=data.get("room_password", ""),
-            room_token=data.get("room_token", ""),
-            pending_combat_results=data.get("pending_combat_results", []),
-            lorebook_timed_state=data.get("lorebook_timed_state", {}),
-            quick_actions=data.get("quick_actions", []),
-            pending_payments=[p for p in data.get("pending_payments", []) if isinstance(p, dict) and p.get("status") == "pending"],
-            health_events=data.get("health_events", []),
-            health_status=data.get("health_status", {}),
-            last_check=data.get("last_check"),
-            last_checks=data.get("last_checks") or [],
-            last_overreach=data.get("last_overreach") or [],
-            round_checks_prepared=bool(data.get("round_checks_prepared", False)),
-            round_start_snapshot=data.get("round_start_snapshot") or {},
-            death_save_outcomes=death_save_outcomes,
-            last_state_update=data.get("last_state_update"),
-            last_token_budget_bump=data.get("last_token_budget_bump"),
-            gm_directives=data.get("gm_directives", []),
+        """Reconstruct the aggregate from its persisted projection."""
+        return GameStateCodec.decode(
+            data,
+            instance_type=cls,
+            state_type=GameState,
         )
-        inst.ready_players = set(data.get("ready_players", []))
-        inst.away_players = set(data.get("away_players", []))
-        inst.confirmed_items = data.get("confirmed_items", [])
-        inst.private_log = data.get("private_log", {})
-        inst.table_talk = [
-            item for item in (data.get("table_talk") or [])
-            if isinstance(item, dict) and item.get("visibility") == "party"
-        ][-50:]
-        puzzles_data = data.get("puzzles")
-        if puzzles_data:
-            from src.engine.puzzle import PuzzleManager
-            inst.puzzle_manager = PuzzleManager.from_dict(puzzles_data)
-        plot_data = data.get("plot_tracker")
-        if plot_data:
-            from src.engine.plot_tracker import PlotTracker
-            inst.plot_tracker = PlotTracker.from_dict(plot_data)
-        else:
-            from src.engine.plot_tracker import PlotTracker
-            inst.plot_tracker = PlotTracker()
-        _prune_ghost_players(inst)
-        return inst
 
 
 # ---------- GameRegistry -----------------------------------

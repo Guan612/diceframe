@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.webui.map_domain.backgrounds import apply_background_selection, background_options
 from src.webui.map_domain.locations import (
@@ -16,27 +18,41 @@ from src.webui.map_domain.presentation import apply_map_presentation, public_map
 from src.webui.map_domain.selection import select_map_definition, select_plugin_map
 from src.webui.map_presets import builtin_map_preset
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+@dataclass(frozen=True)
+class MapDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    list_lore_entries: Callable[[str, str], list[dict[str, Any]]]
+    list_map_assets: Callable[[str], dict[str, list[dict[str, Any]]]]
+    validate_background_selection: Callable[[Any], dict[str, str]]
+    save_instance: Callable[[Any], Awaitable[None]]
+    load_world_template: Callable[[str], dict[str, Any] | None]
+    map_background_file: Callable[[str], Path | None]
+    generated_image_file: Callable[[str], Path | None]
 
 
-def get_map_locations(api: "WebAPI", game_key: str) -> dict[str, Any]:
+def get_map_locations(
+    dependencies: MapDependencies,
+    game_key: str,
+) -> dict[str, Any]:
     """Return the compatible location list plus read-only map presentation data."""
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
     if not instance or not instance.world_id:
         return {"locations": [], "current_scene": "", "current_location_id": ""}
 
-    entries = api._lore.list_entries(instance.world_id, "location")
+    entries = dependencies.list_lore_entries(instance.world_id, "location")
     locations = lore_locations(entries)
-    assets = _content_map_assets(api, instance.world_id)
+    assets = _content_map_assets(dependencies, instance.world_id)
     merge_contributed_locations(locations, assets.get("locations", []))
 
-    selection = _saved_background_selection(api, instance)
+    selection = _saved_background_selection(dependencies, instance)
     definitions = assets.get("maps", [])
     if selection["kind"] == "plugin":
         active_definition = select_plugin_map(definitions, selection.get("map_id", ""))
     else:
-        world = _world_template(api, str(instance.world_id or ""))
+        world = _world_template(dependencies, str(instance.world_id or ""))
         active_definition = select_map_definition(
             str(instance.world_id or ""),
             definitions,
@@ -48,15 +64,15 @@ def get_map_locations(api: "WebAPI", game_key: str) -> dict[str, Any]:
     current_location_id = _append_current_scene(locations, current_scene)
     automatic_map = public_map_definition(active_definition, assets) or builtin_map_preset(
         str(instance.world_id or ""),
-        _map_rule_id(api, instance),
+        _map_rule_id(dependencies, instance),
     )
     public_map = apply_background_selection(
         game_key,
         automatic_map,
         selection,
         lambda asset_id: (
-            api.map_background_file(asset_id) is not None
-            or api.generated_image_file(asset_id) is not None
+            dependencies.map_background_file(asset_id) is not None
+            or dependencies.generated_image_file(asset_id) is not None
         ),
     )
     return {
@@ -84,38 +100,49 @@ def get_map_locations(api: "WebAPI", game_key: str) -> dict[str, Any]:
 
 
 async def update_map_background(
-    api: "WebAPI",
+    dependencies: MapDependencies,
     game_key: str,
     selection: Any,
 ) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
     if not instance:
         return {"ok": False, "error": "游戏不存在"}
     try:
-        normalized = api.validate_map_background_selection(selection)
+        normalized = dependencies.validate_background_selection(selection)
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     if normalized["kind"] == "plugin":
-        assets = _content_map_assets(api, str(instance.world_id or ""))
+        assets = _content_map_assets(
+            dependencies,
+            str(instance.world_id or ""),
+        )
         definition = select_plugin_map(assets.get("maps", []), normalized.get("map_id", ""))
         if not definition or not public_map_definition(definition, assets).get("background"):
             return {"ok": False, "error": "内容包地图背景不存在或不适用于当前世界"}
     instance.set_map_background(normalized)
-    await api._reg.save(instance)
+    await dependencies.save_instance(instance)
     return {
         "ok": True,
         "map_background": normalized,
-        "map": get_map_locations(api, game_key),
+        "map": get_map_locations(dependencies, game_key),
     }
 
 
-def map_background_asset(api: "WebAPI", game_key: str, asset_id: str) -> Path | None:
+def map_background_asset(
+    dependencies: MapDependencies,
+    game_key: str,
+    asset_id: str,
+) -> Path | None:
     """Resolve only the upload currently selected by this game."""
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
     if not instance:
         return None
     try:
-        selection = api.validate_map_background_selection(
+        selection = dependencies.validate_background_selection(
             getattr(instance, "map_background", None),
         )
     except ValueError:
@@ -123,8 +150,8 @@ def map_background_asset(api: "WebAPI", game_key: str, asset_id: str) -> Path | 
     if selection.get("kind") not in {"upload", "generated"} or selection.get("asset_id") != asset_id:
         return None
     if selection.get("kind") == "generated":
-        return api.generated_image_file(asset_id)
-    return api.map_background_file(asset_id)
+        return dependencies.generated_image_file(asset_id)
+    return dependencies.map_background_file(asset_id)
 
 
 def _append_current_scene(locations: list[dict[str, Any]], current_scene: str) -> str:
@@ -145,29 +172,44 @@ def _append_current_scene(locations: list[dict[str, Any]], current_scene: str) -
     return "__current_scene__"
 
 
-def _map_rule_id(api: "WebAPI", instance: Any) -> str:
+def _map_rule_id(
+    dependencies: MapDependencies,
+    instance: Any,
+) -> str:
     rule_id = str(getattr(instance, "rule_id", "") or "").strip()
     if rule_id:
         return rule_id
-    return str(_world_template(api, str(instance.world_id or "")).get("default_rule") or "").strip()
+    return str(
+        _world_template(dependencies, str(instance.world_id or "")).get(
+            "default_rule"
+        ) or ""
+    ).strip()
 
 
-def _world_template(api: "WebAPI", world_id: str) -> dict[str, Any]:
+def _world_template(
+    dependencies: MapDependencies,
+    world_id: str,
+) -> dict[str, Any]:
     try:
-        return api._load_world_template(world_id) or {}
-    except (AttributeError, OSError, ValueError):
+        return dependencies.load_world_template(world_id) or {}
+    except (OSError, ValueError):
         return {}
 
 
-def _saved_background_selection(api: "WebAPI", instance: Any) -> dict[str, str]:
+def _saved_background_selection(
+    dependencies: MapDependencies,
+    instance: Any,
+) -> dict[str, str]:
     try:
-        return api.validate_map_background_selection(getattr(instance, "map_background", None))
-    except (AttributeError, ValueError):
+        return dependencies.validate_background_selection(
+            getattr(instance, "map_background", None)
+        )
+    except ValueError:
         return {"kind": "auto"}
 
 
-def _content_map_assets(api: "WebAPI", world_id: str) -> dict[str, list[dict[str, Any]]]:
-    plugin_host = getattr(api, "_plugins", None)
-    if not plugin_host:
-        return {"maps": [], "locations": [], "icons": [], "scenes": []}
-    return plugin_host.list_map_assets(world_id)
+def _content_map_assets(
+    dependencies: MapDependencies,
+    world_id: str,
+) -> dict[str, list[dict[str, Any]]]:
+    return dependencies.list_map_assets(world_id)

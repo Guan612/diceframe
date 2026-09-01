@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.webui.services.game_lifecycle_context import (
+from src.webui.game_lifecycle_context import (
     CreationPhase,
     CreationTransaction,
 )

@@ -15,7 +15,7 @@ from src.rulesets.legacy_adapter import LegacyRulesetAdapter
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.routes.games import register_games
 from src.webui.services import ruleset_gameplay
-from src.webui.services.turns import submit_action
+from src.webui.services.turns import TurnDependencies, submit_action
 from src.webui.services._common import _parse_game_key
 
 from dnd2024_http_common import GameplayApiShim, quick_character
@@ -70,6 +70,27 @@ def _enemy() -> dict:
             "damage": "1d4", "damage_type": "bludgeoning", "range": 5,
         }],
     }
+
+
+async def _unused_turn_operation(*_args, **_kwargs) -> dict:
+    return {"ok": False}
+
+
+def _turn_dependencies(api: _M5Api) -> TurnDependencies:
+    return TurnDependencies(
+        get_instance=api._reg.get,
+        parse_game_key=api._parse_key,
+        ruleset_registry=api._ruleset_registry,
+        load_rule_for_game=api._load_rule_for_game,
+        prepare_round_checks_ai=None,
+        prepare_round_checks=None,
+        resolve_pending_dice=_unused_turn_operation,
+        roll_for_game=lambda _game_key: {"ok": False},
+        save_instance=api._reg.save,
+        process_round=None,
+        resolve_luck_decision=_unused_turn_operation,
+        decline_pending_luck=_unused_turn_operation,
+    )
 
 
 def _app(registry: GameRegistry, runtime: _EnabledRuntime) -> web.Application:
@@ -239,6 +260,17 @@ async def test_m5_http_forces_server_identity_persists_and_replays(tmp_path) -> 
     assert recovered is not None
     assert recovered.ruleset_state["version"] >= encounter["expected_version"] + 1
     assert len(recovered.event_ledger) >= 5
+    public_entries = [
+        entry
+        for entry in recovered.log
+        if any(
+            action.get("source") == "ruleset_authority"
+            for action in entry.get("actions", [])
+        )
+    ]
+    assert public_entries[-1]["gm_response"] == (
+        "Encounter started: the current story has entered combat."
+    )
 
 
 @pytest.mark.asyncio
@@ -297,7 +329,12 @@ async def test_professional_runtime_rejects_free_text_only_during_combat(tmp_pat
     registry.register(instance)
     api = _M5Api(registry, runtime)
 
-    result = await submit_action(api, "web|m5-legacy-guard|web_bot", "gm", "I deal 9999 damage")
+    result = await submit_action(
+        _turn_dependencies(api),
+        "web|m5-legacy-guard|web_bot",
+        "gm",
+        "I deal 9999 damage",
+    )
 
     assert result["status"] == 409
     assert result["payload"]["error_code"] == "STRUCTURED_INTENT_REQUIRED"
@@ -320,8 +357,12 @@ async def test_professional_runtime_uses_shared_multiplayer_action_queue_outside
     await instance.activate()
     registry.register(instance)
 
+    api = _M5Api(registry, runtime)
     result = await submit_action(
-        _M5Api(registry, runtime), "web|m5-shared-turn|web_bot", "gm", "I inspect the tracks",
+        _turn_dependencies(api),
+        "web|m5-shared-turn|web_bot",
+        "gm",
+        "I inspect the tracks",
     )
 
     assert result["status"] == 200

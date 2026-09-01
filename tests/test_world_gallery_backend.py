@@ -42,8 +42,16 @@ class FakeLoreStore:
         self.worlds.pop(world_id, None)
 
 
-def make_api(tmp_path):
-    return SimpleNamespace(_worlds_dir=tmp_path, _lore=FakeLoreStore(), _plugins=None)
+def make_api(tmp_path, plugin_host=None):
+    return worlds_service.WorldDependencies(
+        lorebook=FakeLoreStore(),
+        worlds_dir=tmp_path,
+        plugin_host=plugin_host,
+        llm_client=None,
+        character_gen_max_tokens=2048,
+        invalidate_lorebook_index=None,
+        list_instances=lambda: [],
+    )
 
 
 def write_template(tmp_path, template_id: str, data: dict) -> None:
@@ -97,8 +105,8 @@ def test_clone_creates_user_world_and_seeds_entries(tmp_path) -> None:
     assert data["custom"] is True
     assert "_internal_marker" not in data
 
-    assert api._lore.get_world(world_id)["language"] == "zh-CN"
-    seeded = api._lore.list_entries(world_id)
+    assert api.lorebook.get_world(world_id)["language"] == "zh-CN"
+    seeded = api.lorebook.list_entries(world_id)
     assert len(seeded) == 1
     assert seeded[0]["name"] == "Border Town"
 
@@ -137,9 +145,10 @@ class _FakePluginHost:
 
 def test_clone_world_from_plugin_template(tmp_path) -> None:
     """插件世界在画廊里可以克隆为用户可编辑世界（与内置世界同一条路径）。"""
-    api = make_api(tmp_path)
     plugin_world = dict(BUILTIN_TEMPLATE, world_id="hyouka_world", world_name="Hyouka")
-    api._plugins = _FakePluginHost({"hyouka_world": plugin_world})
+    api = make_api(
+        tmp_path, _FakePluginHost({"hyouka_world": plugin_world}),
+    )
 
     result = worlds_service.clone_world_from_template(api, "hyouka_world")
 
@@ -150,8 +159,8 @@ def test_clone_world_from_plugin_template(tmp_path) -> None:
     assert data["world_name"] == "Hyouka（克隆）"
     assert data["custom"] is True
     assert "_internal_marker" not in data
-    assert api._lore.get_world(world_id)["language"] == "zh-CN"
-    assert len(api._lore.list_entries(world_id)) == 1
+    assert api.lorebook.get_world(world_id)["language"] == "zh-CN"
+    assert len(api.lorebook.list_entries(world_id)) == 1
 
 
 def test_set_user_world_scene_image_writes_template(tmp_path) -> None:
@@ -195,7 +204,7 @@ def test_clone_rejects_noncanonical_traversal_id(tmp_path) -> None:
 
     assert result["ok"] is False
     assert "id 不合法" in result["error"]
-    assert api._lore.list_worlds() == []
+    assert api.lorebook.list_worlds() == []
 
 
 def test_same_name_clones_get_distinct_ids_even_in_one_second(monkeypatch, tmp_path) -> None:
@@ -273,7 +282,7 @@ def test_update_gm_style_saves_normalized_for_user_world(tmp_path) -> None:
 def test_update_gm_style_rejects_builtin_world(tmp_path) -> None:
     api = make_api(tmp_path)
     write_template(tmp_path, "default_fantasy", BUILTIN_TEMPLATE)
-    api._lore.create_world("default_fantasy", "Classic Fantasy", language="zh-CN")
+    api.lorebook.create_world("default_fantasy", "Classic Fantasy", language="zh-CN")
 
     result = worlds_service.update_world_gm_style(api, "default_fantasy", {"tone": "x"})
 
@@ -290,8 +299,10 @@ def test_update_gm_style_unknown_world_fails(tmp_path) -> None:
 def test_update_gm_style_materializes_legacy_lore_only_world(tmp_path) -> None:
     api = make_api(tmp_path)
     world_id = "custom_book_legacy_1700000000"
-    api._lore.create_world(world_id, "Legacy Manual World", description="Old lore", language="en")
-    api._lore.add_entry({
+    api.lorebook.create_world(
+        world_id, "Legacy Manual World", description="Old lore", language="en",
+    )
+    api.lorebook.add_entry({
         "id": "legacy_entry",
         "world_id": world_id,
         "name": "Old Harbor",
@@ -319,8 +330,8 @@ def test_update_gm_style_materializes_legacy_lore_only_world(tmp_path) -> None:
 def test_list_worlds_exposes_gm_style_only_for_user_worlds(tmp_path) -> None:
     api = make_api(tmp_path)
     write_template(tmp_path, "default_fantasy", BUILTIN_TEMPLATE)
-    api._lore.create_world("default_fantasy", "Classic Fantasy", language="zh-CN")
-    api._lore.create_world("custom_book_demo_1", "Demo", language="zh-CN")
+    api.lorebook.create_world("default_fantasy", "Classic Fantasy", language="zh-CN")
+    api.lorebook.create_world("custom_book_demo_1", "Demo", language="zh-CN")
     write_template(tmp_path, "custom_book_demo_1", {
         "world_id": "custom_book_demo_1", "world_name": "Demo", "custom": True,
         "gm_style": {"tone": "noir", "verbosity": "LOUD"},

@@ -4,81 +4,51 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from src.migrations import migrate_instance
-from src.webui.services.ruleset_builder import validate_draft_shape
+from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.rulesets.contracts import (
+    AdventureBindingMigrationRuntime,
     AuthoritativeIntentHooks,
     AutomaticIntentRuntime,
+    PublicTimelineProjectionRuntime,
 )
-from src.webui.services import adventures
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+from src.rulesets.registry import RulesetRuntimeRegistry
 
 
 logger = logging.getLogger("trpg")
+
+
+@dataclass(frozen=True)
+class RulesetGameplayDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: RulesetRuntimeRegistry
+    resolve_adventure_binding: Callable[[str, Any, str, str], dict[str, Any]]
+    save_instance: Callable[[Any], Awaitable[None]]
+    apply_memory_delta: Callable[[str, dict[str, Any], int], Awaitable[Any]] | None
 
 
 def _error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message}
 
 
-def _ruleset_timeline_text(batch: dict[str, Any], instance: Any) -> str:
-    """Create one short public timeline entry for an authoritative ruleset batch."""
+def _append_ruleset_timeline_entry(
+    runtime: PublicTimelineProjectionRuntime,
+    instance: Any,
+    batch: dict[str, Any],
+) -> None:
     intent_type = str(batch.get("intent_type") or "")
-    event_types = {
-        str(event.get("type") or "")
-        for event in batch.get("events", [])
-        if isinstance(event, dict)
-    }
-    chinese = not str(getattr(instance, "language", "") or "").lower().startswith("en")
-    if "dnd2024.combat.started" in event_types:
-        return "遭遇战开始：当前剧情已进入战斗。" if chinese else "Encounter started: the current story has entered combat."
-    if "dnd2024.combat.ended" in event_types:
-        return "遭遇战结束：可以回到当前冒险继续剧情。" if chinese else "Encounter ended: return to the current adventure."
-    if intent_type == "tutorial.choose":
-        return "剧情选择已记录，当前冒险已推进。" if chinese else "Story choice recorded; the current adventure advanced."
-    if intent_type == "party_decision.submit":
-        return "已收到队伍成员的行动意图，等待队伍决策。" if chinese else "A party intent was received; waiting for the group decision."
-    if intent_type == "party_decision.resolve":
-        return "队伍决定已记录，当前冒险已推进。" if chinese else "The party decision was recorded; the current adventure advanced."
-    if intent_type.startswith("session_zero."):
-        return "开团约定已更新。" if chinese else "Session agreement updated."
-    if intent_type.startswith("campaign."):
-        return "战役记录状态已更新。" if chinese else "Campaign record state updated."
-    return "规则行动已由服务器结算。" if chinese else "Rules action resolved by the server."
-
-
-def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None:
-    intent_type = str(batch.get("intent_type") or "")
-    chinese = not str(getattr(instance, "language", "") or "").lower().startswith("en")
-    action_labels = {
-        "tutorial.choose": ("推进当前剧情", "Advance the current story"),
-        "party_decision.submit": ("提交队伍决策意图", "Submit a party decision intent"),
-        "party_decision.resolve": ("结算队伍决定", "Resolve the party decision"),
-        "tutorial.start": ("开始教学冒险", "Start the guided adventure"),
-        "combat.start": ("进入剧情遭遇战", "Enter the story encounter"),
-        "combat.end": ("结束遭遇战", "End the encounter"),
-        "attack": ("进行攻击", "Make an attack"),
-        "cast_spell": ("施放法术", "Cast a spell"),
-        "move": ("移动位置", "Move position"),
-        "end_turn": ("结束回合", "End the turn"),
-    }
-    event_types = {
-        str(event.get("type") or "")
-        for event in batch.get("events", [])
-        if isinstance(event, dict)
-    }
-    if "dnd2024.combat.started" in event_types:
-        action_text = ("进入剧情遭遇战", "Enter the story encounter")[0 if chinese else 1]
-    elif "dnd2024.combat.ended" in event_types:
-        action_text = ("结束剧情遭遇战", "Finish the story encounter")[0 if chinese else 1]
-    else:
-        action_text = action_labels.get(intent_type, ("推进高级规则剧情", "Advance the rules story"))[0 if chinese else 1]
+    projection = runtime.public_timeline_projection(
+        batch, str(getattr(instance, "language", "") or ""),
+    )
+    action_text = str(projection.get("action_text") or "")
+    gm_response = str(projection.get("gm_response") or "")
     submitted_by = next(
         (
             str(event.get("submitted_by") or "")
@@ -101,7 +71,7 @@ def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None
             "intent_type": intent_type,
             "operation_id": str(batch.get("intent_id") or ""),
         }],
-        "gm_response": _ruleset_timeline_text(batch, instance),
+        "gm_response": gm_response,
         "state_changes": [
             str(event.get("type") or "")
             for event in batch.get("events", [])
@@ -114,27 +84,22 @@ def _append_ruleset_timeline_entry(instance: Any, batch: dict[str, Any]) -> None
     })
 
 
-def _is_public_story_milestone(batch: dict[str, Any]) -> bool:
-    """Keep the shared story feed readable; turn-by-turn mechanics stay in combat."""
-    event_types = {
-        str(event.get("type") or "")
-        for event in batch.get("events", [])
-        if isinstance(event, dict)
-    }
-    return bool(event_types.intersection({
-        "dnd2024.tutorial.started",
-        "dnd2024.tutorial.choice_applied",
-        "dnd2024.tutorial.completed",
-        "dnd2024.party_decision.resolved",
-        "dnd2024.combat.started",
-        "dnd2024.combat.ended",
-    }))
+def _is_public_story_milestone(runtime: Any, batch: dict[str, Any]) -> bool:
+    return (
+        isinstance(runtime, PublicTimelineProjectionRuntime)
+        and runtime.is_public_story_milestone(batch)
+    )
 
 
 def _context(
-    api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool,
+    dependencies: RulesetGameplayDependencies,
+    game_key: str,
+    requester_id: str,
+    requester_is_gm: bool,
 ) -> tuple[Any, Any, Any, str, dict[str, Any] | None]:
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
     if instance is None:
         return None, None, None, "", _error("GAME_NOT_FOUND", "游戏不存在")
     if not requester_id:
@@ -144,13 +109,13 @@ def _context(
         return instance, None, None, "", _error("GM_IDENTITY_MISSING", "本局缺少 GM 身份")
     if not requester_is_gm and requester_id not in instance.players:
         return instance, None, None, "", _error("PLAYER_NOT_IN_GAME", "当前玩家不在本局中")
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return instance, None, None, effective_requester, _error(
             "RULE_NOT_FOUND", "本局规则不存在",
         )
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except ValueError as exc:
         return instance, rule, None, effective_requester, _error(
             "RULESET_RUNTIME_UNAVAILABLE", str(exc),
@@ -168,7 +133,11 @@ def _context(
 
 
 def _response(
-    api: "WebAPI", rule: Any, runtime: Any, instance: Any, requester_id: str,
+    dependencies: RulesetGameplayDependencies,
+    rule: Any,
+    runtime: Any,
+    instance: Any,
+    requester_id: str,
     *, requester_is_gm: bool = False, result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     view = runtime.gameplay_view(instance, requester_id, requester_is_gm)
@@ -177,7 +146,9 @@ def _response(
         "ok": True,
         "game_key": "|".join(instance.game_key),
         "rule_id": str(rule.rule_id),
-        "ruleset_runtime": api._ruleset_registry.describe(rule.template).to_dict(),
+        "ruleset_runtime": dependencies.ruleset_registry.describe(
+            rule.template
+        ).to_dict(),
         "gameplay": view,
         "available_actions": actions,
     }
@@ -187,14 +158,15 @@ def _response(
 
 
 async def _ensure_compatible_adventure_binding(
-    api: "WebAPI", runtime: Any, instance: Any,
+    dependencies: RulesetGameplayDependencies,
+    runtime: Any,
+    instance: Any,
 ) -> dict[str, Any] | None:
     binding = dict(getattr(instance, "adventure_binding", {}) or {})
     if not binding:
         return None
     try:
-        expected = adventures.resolve_binding_for_runtime(
-            api,
+        expected = dependencies.resolve_adventure_binding(
             str(binding.get("adventure_id") or ""),
             runtime,
             str(getattr(instance, "world_id", "") or ""),
@@ -204,48 +176,54 @@ async def _ensure_compatible_adventure_binding(
         return _error("INCOMPATIBLE_ADVENTURE", str(exc))
     if binding == expected:
         return None
-    if str(getattr(runtime, "runtime_id", "") or "") != "core:dnd2024":
+    if not isinstance(runtime, AdventureBindingMigrationRuntime):
         return _error(
             "INCOMPATIBLE_ADVENTURE",
             "bound adventure package is missing or has changed",
         )
-    migrated = migrate_instance(instance, adventure_expected=expected)
+    migrated = runtime.migrate_adventure_binding(instance, expected)
     if migrated is None:
         return _error(
             "INCOMPATIBLE_ADVENTURE",
             "bound adventure package is missing or has changed",
         )
     if migrated:
-        await api._reg.save(instance)
+        await dependencies.save_instance(instance)
     return None
 
 
 
 async def available_actions(
-    api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool = False,
+    dependencies: RulesetGameplayDependencies,
+    game_key: str,
+    requester_id: str,
+    requester_is_gm: bool = False,
 ) -> dict[str, Any]:
     instance, rule, runtime, effective_requester, error = _context(
-        api, game_key, requester_id, requester_is_gm,
+        dependencies, game_key, requester_id, requester_is_gm,
     )
     if error:
         return error
     async with instance._lock:
         binding_error = await _ensure_compatible_adventure_binding(
-            api, runtime, instance,
+            dependencies, runtime, instance,
         )
         if binding_error:
             return binding_error
         return _response(
-            api, rule, runtime, instance, effective_requester,
+            dependencies, rule, runtime, instance, effective_requester,
             requester_is_gm=requester_is_gm,
         )
 
 async def submit_intent(
-    api: "WebAPI", game_key: str, requester_id: str, requester_is_gm: bool,
+    dependencies: RulesetGameplayDependencies,
+    game_key: str,
+    requester_id: str,
+    requester_is_gm: bool,
     body: Any,
 ) -> dict[str, Any]:
     instance, rule, runtime, effective_requester, error = _context(
-        api, game_key, requester_id, requester_is_gm,
+        dependencies, game_key, requester_id, requester_is_gm,
     )
     if error:
         return error
@@ -265,7 +243,7 @@ async def submit_intent(
 
     async with instance._lock:
         binding_error = await _ensure_compatible_adventure_binding(
-            api, runtime, instance,
+            dependencies, runtime, instance,
         )
         if binding_error:
             return binding_error
@@ -290,8 +268,8 @@ async def submit_intent(
             if not isinstance(batch, dict):
                 return _error("INVALID_EVENT_BATCH", "规则运行时没有返回有效事件批次")
             applied = runtime.apply_event_batch(instance, batch)
-            if applied.get("applied") and _is_public_story_milestone(batch):
-                _append_ruleset_timeline_entry(instance, batch)
+            if applied.get("applied") and _is_public_story_milestone(runtime, batch):
+                _append_ruleset_timeline_entry(runtime, instance, batch)
             automatic_batches: list[dict[str, Any]] = []
             automatic_results: list[dict[str, Any]] = []
             if isinstance(runtime, AutomaticIntentRuntime):
@@ -312,46 +290,29 @@ async def submit_intent(
                         raise ValueError("automatic combat intent did not advance state")
                     automatic_batches.append(deepcopy(automatic_batch))
                     automatic_results.append(deepcopy(automatic_applied))
-                    if _is_public_story_milestone(automatic_batch):
-                        _append_ruleset_timeline_entry(instance, automatic_batch)
+                    if _is_public_story_milestone(runtime, automatic_batch):
+                        _append_ruleset_timeline_entry(
+                            runtime, instance, automatic_batch,
+                        )
                 else:
                     raise ValueError("automatic combat turn exceeded the safety limit")
             instance.last_activity = datetime.now(timezone.utc).isoformat()
-            await api._reg.save(instance)
+            await dependencies.save_instance(instance)
         except (ValueError, KeyError, TypeError) as exc:
-            instance.ruleset_state = before["ruleset_state"]
-            instance.event_ledger = before["event_ledger"]
-            instance.players = before["players"]
-            instance.combat_state = before["combat_state"]
-            instance.combat_active = before["combat_active"]
-            instance.initiative_order = before["initiative_order"]
-            instance.initiative_current = before["initiative_current"]
-            instance.last_activity = before["last_activity"]
-            instance.log = before["log"]
-            instance.round_number = before["round_number"]
+            instance.restore_ruleset_transaction(before)
             return _error("INTENT_REJECTED", str(exc))
         except Exception:
-            instance.ruleset_state = before["ruleset_state"]
-            instance.event_ledger = before["event_ledger"]
-            instance.players = before["players"]
-            instance.combat_state = before["combat_state"]
-            instance.combat_active = before["combat_active"]
-            instance.initiative_order = before["initiative_order"]
-            instance.initiative_current = before["initiative_current"]
-            instance.last_activity = before["last_activity"]
-            instance.log = before["log"]
-            instance.round_number = before["round_number"]
+            instance.restore_ruleset_transaction(before)
             raise
-        memory_store = getattr(api, "_mem", None)
         resolved_batches = [batch, *automatic_batches]
-        if memory_store:
+        if dependencies.apply_memory_delta:
             for memory in [
                 memory
                 for resolved_batch in resolved_batches
                 for memory in runtime.memory_deltas_from_event_batch(resolved_batch, instance)
             ]:
                 try:
-                    await memory_store.apply_delta(
+                    await dependencies.apply_memory_delta(
                         str(instance.game_key), {"add": [memory]},
                         int(getattr(instance, "round_number", 0) or 0),
                     )
@@ -361,7 +322,7 @@ async def submit_intent(
                     # contradict the already-saved authoritative campaign state.
                     logger.exception("D&D chapter-summary memory projection failed")
         return _response(
-            api, rule, runtime, instance, effective_requester,
+            dependencies, rule, runtime, instance, effective_requester,
             requester_is_gm=requester_is_gm,
             result={
                 **applied,

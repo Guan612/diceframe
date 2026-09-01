@@ -16,7 +16,7 @@ from src.rulesets.contracts import LiveAdvancementPolicyRuntime
 
 from src.webui.services._common import _GAME_KEY_SEP, _is_safe_world_id
 from src.webui.services import game_creation_phases, game_seed_lifecycle
-from src.webui.services.game_lifecycle_context import (
+from src.webui.game_lifecycle_context import (
     CreationPhase,
     CreationTransaction,
     GameLifecycleDependencies,

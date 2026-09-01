@@ -266,3 +266,69 @@ def snapshot(instance: Any) -> dict[str, Any]:
     """Copy the private state for transactional rollback."""
 
     return deepcopy(_state(instance))
+
+
+def restore(instance: Any, saved: Any) -> None:
+    """Restore a transaction snapshot without retaining mutable aliases."""
+
+    ruleset_state = instance.ruleset_state
+    if not isinstance(ruleset_state, dict):
+        ruleset_state = {}
+        instance.ruleset_state = ruleset_state
+    ruleset_state["advancement"] = deepcopy(saved) if isinstance(saved, dict) else {}
+
+
+def control(instance: Any, command: dict[str, Any]) -> dict[str, Any]:
+    """Apply one GM advancement command and return a transport-neutral result."""
+
+    action = str(command.get("action") or "").strip().casefold()
+    try:
+        if action == "configure":
+            configure(
+                instance,
+                str(command.get("mode") or ""),
+                str(command.get("authority") or ""),
+            )
+        elif action == "grant":
+            user_id = str(command.get("user_id") or "").strip()
+            targets = list(instance.alive_players) if user_id == "all" else [user_id]
+            if not targets:
+                return {
+                    "ok": False,
+                    "code": "CHARACTER_NOT_FOUND",
+                    "error": "没有可发放升级资格的角色",
+                }
+            for target in targets:
+                grant(instance, target, source="gm")
+        elif action == "award_xp":
+            if view(instance)["mode"] != "xp":
+                return {
+                    "ok": False,
+                    "code": "INVALID_ADVANCEMENT_MODE",
+                    "error": "当前不是 XP 升级模式",
+                }
+            user_id = str(command.get("user_id") or "").strip()
+            targets = list(instance.alive_players) if user_id == "all" else [user_id]
+            try:
+                amount = int(command.get("amount"))
+            except (TypeError, ValueError):
+                return {
+                    "ok": False,
+                    "code": "INVALID_XP_REWARD",
+                    "error": "请填写有效的 XP 奖励",
+                }
+            for target in targets:
+                award_xp(instance, target, amount, source="gm")
+        else:
+            return {
+                "ok": False,
+                "code": "INVALID_ADVANCEMENT_ACTION",
+                "error": "未知升级控制操作",
+            }
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "code": "INVALID_ADVANCEMENT_ACTION",
+            "error": str(exc),
+        }
+    return {"ok": True, "advancement": view(instance)}

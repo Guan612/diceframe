@@ -1,6 +1,7 @@
 ﻿"""GameInstance 状态机测试。"""
 
 import asyncio
+from copy import deepcopy
 
 import pytest
 
@@ -248,8 +249,10 @@ class TestGameInstance:
             }],
         }
 
+        original = deepcopy(data)
         restored = GameInstance.from_dict(data)
 
+        assert data == original
         assert set(restored.players) == {"web_user"}
         assert restored.ready_players == {"web_user"}
         assert restored.action_queue == []

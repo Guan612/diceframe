@@ -421,7 +421,7 @@ def test_save_config_splits_provider_secrets(monkeypatch):
     def fake_write(path, data):
         written[path.name] = data
 
-    monkeypatch.setattr(web_server, "_atomic_write_json", fake_write)
+    monkeypatch.setattr(web_server.CONFIG_STORE, "atomic_write_json", fake_write)
     monkeypatch.setitem(web_server.STATE, "ai_providers", [_provider()])
     monkeypatch.setitem(web_server.STATE, provider_secret_key("sf"), "sk-x")
 

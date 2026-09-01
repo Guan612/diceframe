@@ -9,7 +9,7 @@ import signal
 from aiohttp import web
 
 from src.version import __version__
-from src.webui.routes._common import _get_api, _require_confirmed_request
+from src.webui.routes._common import _require_confirmed_request
 
 
 async def _restart_after_response() -> None:
@@ -32,9 +32,7 @@ async def api_update_download(request: web.Request) -> web.Response:
             {"ok": False, "error": "kind 必须为 source、portable 或 docker"},
             status=400,
         )
-    result = await request.app["updater"].download_update(
-        _get_api(request), kind
-    )
+    result = await request.app["updater"].download_update(kind)
     return web.json_response(result)
 
 

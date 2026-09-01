@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
@@ -34,17 +34,12 @@ import SceneGalleryModal from '@/components/play/SceneGalleryModal.vue'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePicker.vue'
 import MapBackgroundSettingsModal from '@/components/play/MapBackgroundSettingsModal.vue'
-import ProfessionalCharacterCenter from '@/features/rulesets/ProfessionalCharacterCenter.vue'
+import RulesetCharacterCenterHost from '@/features/rulesets/RulesetCharacterCenterHost.vue'
+import RulesetPlayHost from '@/features/rulesets/RulesetPlayHost.vue'
+import { resolveRulesetPlayExtension } from '@/features/rulesets/registry'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
-import { fetchRulesetAvailableActions } from '@/features/rulesets/dnd2024/api'
-
-const Dnd2024CombatPanel = defineAsyncComponent(
-  () => import('@/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue'),
-)
-const Dnd2024CampaignPanel = defineAsyncComponent(
-  () => import('@/features/rulesets/dnd2024/campaign/Dnd2024CampaignPanel.vue'),
-)
+import { fetchRulesetAvailableActions } from '@/api/rulesets'
 
 defineOptions({ name: 'PlayView' })
 
@@ -121,26 +116,16 @@ async function refreshRulesetPanels(): Promise<void> {
   rulesetRefreshKey.value += 1
   await game.refresh(true)
 }
-const isAdvancedDnd = computed(() => (
-  game.detail.value?.rule_id === 'dnd2024_srd'
-  && game.detail.value?.ruleset_runtime?.id === 'core:dnd2024'
-))
 const hasAuthoritativeCombat = computed(() => Boolean(
-  (
-    game.detail.value?.ruleset_runtime?.capabilities?.authoritative_intents
-    && game.detail.value?.ruleset_runtime?.capabilities?.deterministic_combat
-  )
-  || isAdvancedDnd.value,
+  game.detail.value?.ruleset_runtime?.capabilities?.authoritative_intents
+  && game.detail.value?.ruleset_runtime?.capabilities?.deterministic_combat,
 ))
 const hasRulesAwareCharacters = computed(() => (
   game.detail.value?.ruleset_runtime?.capabilities?.character_lifecycle === 'rules_aware'
 ))
 const hasCampaignGuidance = computed(() => Boolean(
-  (
-    game.detail.value?.ruleset_runtime?.capabilities?.session_zero
-    || game.detail.value?.ruleset_runtime?.capabilities?.tutorial_coach
-  )
-  || isAdvancedDnd.value,
+  game.detail.value?.ruleset_runtime?.capabilities?.session_zero
+  || game.detail.value?.ruleset_runtime?.capabilities?.tutorial_coach,
 ))
 type RulesetTool = 'campaign' | 'combat'
 const activeRulesetTool = ref<RulesetTool | ''>('')
@@ -148,13 +133,12 @@ const directorProposal = ref<RulesetDirectorProposal | null>(null)
 const rulesetGameplay = ref<RulesetGameplayView | null>(null)
 const rulesetCombatStatus = ref('none')
 const rulesetCampaignStatus = ref('')
-const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value || isAdvancedDnd.value)
-const rulesetToolCopy = computed(() => locale.value.startsWith('zh') ? {
-  menu: 'DND5E工具', campaign: '冒险与战役', combat: '战斗工具', title: 'DND5E工具',
-} : {
-  menu: 'DND5E Tools', campaign: 'Adventure & campaign', combat: 'Combat tools', title: 'DND5E Tools',
-})
-
+const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value)
+const rulesetToolCopy = computed(() => (
+  resolveRulesetPlayExtension(String(game.detail.value?.ruleset_runtime?.id || ''))
+    ?.copy(String(locale.value))
+  || { menu: 'Ruleset tools', campaign: 'Campaign', combat: 'Combat', title: 'Ruleset tools' }
+))
 function openRulesetTool(tool: RulesetTool): void {
   activeRulesetTool.value = tool
 }
@@ -864,7 +848,8 @@ onBeforeUnmount(() => {
         dialog-class="professional-character-dialog"
         @close="showCharacterCenter = false"
       >
-        <ProfessionalCharacterCenter
+        <RulesetCharacterCenterHost
+          :runtime-id="String(game.detail.value.ruleset_runtime?.id || '')"
           :character="game.player.value.character_sheet || {}"
           target="game"
           :rule-id="String(ruleMeta.rule_id || game.detail.value.rule_id || '')"
@@ -908,48 +893,25 @@ onBeforeUnmount(() => {
         @saved="onMapBackgroundSaved"
       />
 
-      <Modal
+      <RulesetPlayHost
         v-if="activeRulesetTool"
-        :title="rulesetToolCopy.title"
-        dialog-class="dnd-toolbox-dialog"
+        :runtime-id="String(game.detail.value.ruleset_runtime?.id || '')"
+        :active-tool="activeRulesetTool"
+        :has-campaign="hasCampaignGuidance"
+        :has-combat="hasAuthoritativeCombat"
+        :game-key="game.currentGame.value"
+        :actor-id="actorId"
+        :character-name="game.player.value?.character_name || ''"
+        :scene-name="sceneTitle"
+        :world-name="game.detail.value.world_name || game.detail.value.world_id || ''"
+        :map="game.map.value"
+        :is-gm="game.isGm.value"
+        :refresh-key="rulesetRefreshKey"
         @close="activeRulesetTool = ''"
-      >
-        <nav class="dnd-toolbox-tabs" :aria-label="rulesetToolCopy.menu">
-          <button
-            v-if="hasCampaignGuidance"
-            :class="{ active: activeRulesetTool === 'campaign' }"
-            @click="openRulesetTool('campaign')"
-          >{{ rulesetToolCopy.campaign }}</button>
-          <button
-            v-if="hasAuthoritativeCombat"
-            :class="{ active: activeRulesetTool === 'combat' }"
-            @click="openRulesetTool('combat')"
-          >{{ rulesetToolCopy.combat }}</button>
-        </nav>
-        <Dnd2024CampaignPanel
-          v-if="activeRulesetTool === 'campaign' && hasCampaignGuidance"
-          :game-key="game.currentGame.value"
-          :actor-id="actorId"
-          :character-name="game.player.value?.character_name || ''"
-          :scene-name="sceneTitle"
-          :world-name="game.detail.value.world_name || game.detail.value.world_id || ''"
-          :map="game.map.value"
-          :is-gm="game.isGm.value"
-          :refresh-key="rulesetRefreshKey"
-          @refresh="refreshRulesetPanels"
-          @navigate="navigateRulesetTool"
-          @open-map="openMap"
-        />
-        <Dnd2024CombatPanel
-          v-else-if="activeRulesetTool === 'combat' && hasAuthoritativeCombat"
-          :game-key="game.currentGame.value"
-          :actor-id="actorId"
-          :is-gm="game.isGm.value"
-          :refresh-key="rulesetRefreshKey"
-          @refresh="refreshRulesetPanels"
-          @navigate="navigateRulesetTool"
-        />
-      </Modal>
+        @refresh="refreshRulesetPanels"
+        @navigate="navigateRulesetTool"
+        @open-map="openMap"
+      />
 
       <section class="play-main">
         <section class="scene-strip">

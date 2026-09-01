@@ -41,8 +41,6 @@ async def api_char_update(request: web.Request) -> web.Response:
 
 async def api_ruleset_character_profile_update(request: web.Request) -> web.Response:
     """Patch non-mechanical profile data for a ruleset-authoritative character."""
-    from src.webui.services.ruleset_characters import update_live_character_profile
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -60,7 +58,7 @@ async def api_ruleset_character_profile_update(request: web.Request) -> web.Resp
             {"ok": False, "error": "无权修改他人角色卡"}, status=403
         )
     body = await request.json()
-    result = await update_live_character_profile(api, gk, uid, body)
+    result = await api.update_ruleset_character_profile(gk, uid, body)
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")
@@ -69,8 +67,6 @@ async def api_ruleset_character_profile_update(request: web.Request) -> web.Resp
 
 
 async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_characters import adopt_character_card
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -88,7 +84,9 @@ async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response
             {"ok": False, "error": "无权修改他人角色卡"}, status=403
         )
     body = await request.json()
-    result = await adopt_character_card(api, gk, uid, str(body.get("card_id") or ""))
+    result = await api.adopt_ruleset_character_card(
+        gk, uid, str(body.get("card_id") or ""),
+    )
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")
@@ -100,8 +98,6 @@ async def _api_live_character_advancement(
     request: web.Request,
     action: str,
 ) -> web.Response:
-    from src.webui.services import ruleset_advancement
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -125,11 +121,12 @@ async def _api_live_character_advancement(
             {"ok": False, "error": "无权修改他人角色卡"}, status=403
         )
     body = await request.json()
-    method = getattr(ruleset_advancement, f"{action}_live")
     try:
-        result = method(api, gk, uid, body)
-        if action == "apply":
-            result = await result
+        result = (
+            await api.apply_live_character_advancement(gk, uid, body)
+            if action == "apply"
+            else api.preview_live_character_advancement(gk, uid, body)
+        )
     except ValueError as exc:
         result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error": str(exc)}
     code = str(result.get("code") or "")
@@ -154,16 +151,12 @@ async def api_live_character_advancement_apply(request: web.Request) -> web.Resp
 
 
 async def api_live_advancement_control(request: web.Request) -> web.Response:
-    from src.webui.services import ruleset_advancement
-
     game_key = request.match_info["game_key"]
     _, denied = _gm_only_inst(request, game_key)
     if denied is not None:
         return denied
-    result = await ruleset_advancement.control_live(
-        _get_api(request),
-        game_key,
-        await request.json(),
+    result = await _get_api(request).control_live_advancement(
+        game_key, await request.json(),
     )
     await _broadcast_ruleset_change(request, game_key, result)
     code = str(result.get("code") or "")
@@ -182,8 +175,6 @@ async def api_live_advancement_control(request: web.Request) -> web.Response:
 
 
 async def api_live_character_rest(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_rest import resolve_live, resolve_live_party
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -201,9 +192,9 @@ async def api_live_character_rest(request: web.Request) -> web.Response:
         )
     payload = await request.json()
     result = await (
-        resolve_live_party(api, gk, uid, payload)
+        api.ruleset_rest_resolve_live_party(gk, uid, payload)
         if not inst.solo_mode
-        else resolve_live(api, gk, uid, payload)
+        else api.ruleset_rest_resolve_live(gk, uid, payload)
     )
     await _broadcast_ruleset_change(request, gk, result)
     code = str(result.get("code") or "")

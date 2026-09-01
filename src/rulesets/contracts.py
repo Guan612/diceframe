@@ -177,6 +177,31 @@ class LiveAdvancementPolicyRuntime(Protocol):
 
 
 @runtime_checkable
+class LiveAdvancementTransactionRuntime(Protocol):
+    """Optional ruleset-owned entitlement and control policy for live advancement."""
+
+    def live_advancement_status(self, instance: Any) -> dict[str, Any]: ...
+
+    def validate_live_advancement(
+        self, instance: Any, user_id: str, target_level: int,
+    ) -> None: ...
+
+    def snapshot_live_advancement(self, instance: Any) -> Any: ...
+
+    def consume_live_advancement(
+        self, instance: Any, user_id: str, target_level: int,
+    ) -> None: ...
+
+    def reconcile_live_advancement(self, instance: Any, user_id: str) -> None: ...
+
+    def restore_live_advancement(self, instance: Any, snapshot: Any) -> None: ...
+
+    def apply_live_advancement_control(
+        self, instance: Any, command: dict[str, Any],
+    ) -> dict[str, Any]: ...
+
+
+@runtime_checkable
 class NarrativeDirectorAutomationRuntime(Protocol):
     """Optional conversion from a Director proposal to an authoritative intent."""
 
@@ -199,3 +224,23 @@ class AutomaticIntentRuntime(Protocol):
     """Optional server-owned turn automation for non-player actors."""
 
     def next_automatic_intent(self, instance: Any) -> dict[str, Any] | None: ...
+
+
+@runtime_checkable
+class AdventureBindingMigrationRuntime(Protocol):
+    """Optional compatibility boundary for persisted adventure bindings."""
+
+    def migrate_adventure_binding(
+        self, instance: Any, expected: dict[str, Any],
+    ) -> bool | None: ...
+
+
+@runtime_checkable
+class PublicTimelineProjectionRuntime(Protocol):
+    """Optional ruleset-owned projection into the shared public story feed."""
+
+    def is_public_story_milestone(self, batch: dict[str, Any]) -> bool: ...
+
+    def public_timeline_projection(
+        self, batch: dict[str, Any], locale: str,
+    ) -> dict[str, str]: ...

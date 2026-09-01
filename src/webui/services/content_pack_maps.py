@@ -8,14 +8,11 @@ import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from src.plugin_host.content import safe_id_part
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
 
 
 MAX_MAP_ICON_BYTES = 3 * 1024 * 1024
@@ -23,6 +20,11 @@ MAX_MAP_ICON_PIXELS = 16_000_000
 MAX_MAP_ICON_EDGE = 512
 MAX_MAP_ICON_UPLOADS = 128
 MAX_TOTAL_MAP_ICON_BYTES = 24 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class ContentMapDependencies:
+    resolve_background_file: Callable[[dict[str, Any]], Path | None]
 
 
 @dataclass(frozen=True)
@@ -44,7 +46,7 @@ class ContentMapPackage:
 
 
 def package_content_map(
-    api: "WebAPI",
+    dependencies: ContentMapDependencies,
     plugin_id: str,
     pack_name: str,
     world: dict[str, Any],
@@ -88,7 +90,9 @@ def package_content_map(
         )
 
     map_id = safe_id_part(f"{world_id}-map")
-    background_id = _package_background(api, background_selection, map_id, files)
+    background_id = _package_background(
+        dependencies, background_selection, map_id, files
+    )
     default_map = ""
     if background_id:
         definition: dict[str, Any] = {
@@ -143,14 +147,14 @@ def _location_record(entry: dict[str, Any], world_id: str, index: int) -> dict[s
 
 
 def _package_background(
-    api: "WebAPI",
+    dependencies: ContentMapDependencies,
     selection: dict[str, Any] | None,
     map_id: str,
     files: dict[str, str | bytes],
 ) -> str:
     if not selection:
         return ""
-    source = api.resolve_map_background_file(selection)
+    source = dependencies.resolve_background_file(selection)
     if source is None or not source.is_file():
         raise ValueError("无法读取为内容包选择的地图底图")
     payload = source.read_bytes()

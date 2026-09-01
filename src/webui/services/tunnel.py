@@ -16,15 +16,20 @@ import logging
 import os
 import time
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 from src.webui.config_update import prepare_config_update
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 logger = logging.getLogger("trpg")
+
+
+@dataclass(frozen=True)
+class TunnelDependencies:
+    config_state: Callable[[], dict[str, Any]]
+    save_config: Callable[[], None]
+    list_plugins: Callable[[], dict[str, Any]]
 
 
 def _data_dir() -> Path:
@@ -82,27 +87,30 @@ def _valid_public_url(url: str) -> str:
     return text
 
 
-def _commit_public_base_url(api: "WebAPI", url: str) -> None:
+def _commit_public_base_url(dependencies: TunnelDependencies, url: str) -> None:
     """走标准配置更新路径，写盘失败时恢复内存与原配置。"""
-    prepared = prepare_config_update(api._config_state, {"public_base_url": url})
+    config_state = dependencies.config_state()
+    prepared = prepare_config_update(config_state, {"public_base_url": url})
     if prepared.error:
         raise ValueError(prepared.error)
-    previous = dict(api._config_state)
-    api._config_state.clear()
-    api._config_state.update(prepared.state)
+    previous = dict(config_state)
+    config_state.clear()
+    config_state.update(prepared.state)
     try:
-        api._save_config()
+        dependencies.save_config()
     except Exception:
-        api._config_state.clear()
-        api._config_state.update(previous)
+        config_state.clear()
+        config_state.update(previous)
         try:
-            api._save_config()
+            dependencies.save_config()
         except Exception:
             logger.exception("公网 URL 配置回滚写盘失败")
         raise
 
 
-def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any]:
+def publish_tunnel_url(
+    dependencies: TunnelDependencies, plugin_id: str, url: str
+) -> dict[str, Any]:
     """插件上报公网 URL，写入 public_base_url（首次保存 prev 供 release 恢复）。
 
     同一时刻只允许一个插件发布；需先 release 旧 publisher 再发布新插件。
@@ -111,7 +119,10 @@ def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any
     state = _read_state()
     current_publisher = state.get("publisher_plugin_id")
     if current_publisher and current_publisher != plugin_id:
-        installed = {p.get("id") for p in api.list_plugins().get("plugins", [])}
+        installed = {
+            p.get("id")
+            for p in dependencies.list_plugins().get("plugins", [])
+        }
         if current_publisher not in installed:
             # 旧 publisher 已卸载（幽灵状态，如手动删目录/异常退出未 release）：接管并继承其 prev_url。
             logger.warning("隧道 publisher %s 已卸载，自动接管", current_publisher)
@@ -120,9 +131,13 @@ def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any
         else:
             raise ValueError(f"隧道已由插件 {current_publisher} 发布，需先停止后再发布")
     if "prev_url" not in state:
-        state["prev_url"] = str(api._config_state.get("public_base_url") or "")
-    previous_public_url = str(api._config_state.get("public_base_url") or "")
-    _commit_public_base_url(api, normalized)
+        state["prev_url"] = str(
+            dependencies.config_state().get("public_base_url") or ""
+        )
+    previous_public_url = str(
+        dependencies.config_state().get("public_base_url") or ""
+    )
+    _commit_public_base_url(dependencies, normalized)
     state.update({
         "publisher_plugin_id": plugin_id,
         "url": normalized,
@@ -133,7 +148,7 @@ def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any
         _write_state(state)
     except Exception:
         try:
-            _commit_public_base_url(api, previous_public_url)
+            _commit_public_base_url(dependencies, previous_public_url)
         except Exception as rollback_error:
             raise RuntimeError("隧道状态写入失败，且公网 URL 回滚失败") from rollback_error
         raise
@@ -141,21 +156,25 @@ def publish_tunnel_url(api: "WebAPI", plugin_id: str, url: str) -> dict[str, Any
     return {"ok": True, "public_base_url": normalized}
 
 
-def release_tunnel_url(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
+def release_tunnel_url(
+    dependencies: TunnelDependencies, plugin_id: str
+) -> dict[str, Any]:
     """停止/卸载时恢复发布前的 public_base_url（仅当该插件是当前 publisher）。"""
     state = _read_state()
     if state.get("publisher_plugin_id") != plugin_id:
         return {"ok": True, "released": False}
     prev = str(state.get("prev_url") or "")
-    previous_public_url = str(api._config_state.get("public_base_url") or "")
-    _commit_public_base_url(api, prev)
+    previous_public_url = str(
+        dependencies.config_state().get("public_base_url") or ""
+    )
+    _commit_public_base_url(dependencies, prev)
     _record_event(state, "release", plugin_id)
     state = {"publisher_plugin_id": "", "url": "", "prev_url": "", "events": state.get("events", [])}
     try:
         _write_state(state)
     except Exception:
         try:
-            _commit_public_base_url(api, previous_public_url)
+            _commit_public_base_url(dependencies, previous_public_url)
         except Exception as rollback_error:
             raise RuntimeError("隧道状态清理失败，且公网 URL 回滚失败") from rollback_error
         raise
@@ -163,12 +182,12 @@ def release_tunnel_url(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
     return {"ok": True, "released": True, "restored": prev}
 
 
-def tunnel_status(api: "WebAPI") -> dict[str, Any]:
+def tunnel_status(dependencies: TunnelDependencies) -> dict[str, Any]:
     """当前隧道状态 + 可用提供者（声明 tunnel.publish 权限的已安装插件）。"""
     state = _read_state()
     providers: list[dict[str, Any]] = []
     try:
-        for plugin in api.list_plugins().get("plugins", []):
+        for plugin in dependencies.list_plugins().get("plugins", []):
             if "tunnel.publish" in (plugin.get("permissions") or []):
                 providers.append({
                     "plugin_id": plugin.get("id", ""),
@@ -184,6 +203,6 @@ def tunnel_status(api: "WebAPI") -> dict[str, Any]:
         "active": bool(state.get("url")),
         "url": state.get("url", ""),
         "published_at": state.get("published_at", 0),
-        "public_base_url": api._config_state.get("public_base_url", ""),
+        "public_base_url": dependencies.config_state().get("public_base_url", ""),
         "providers": providers,
     }

@@ -8,8 +8,10 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
 from src.content.gm_style import normalize_gm_style
@@ -17,9 +19,6 @@ from src.content.worlds import load_world_template as load_content_world
 from src.generation import creator
 from src.lorebook.bootstrap import ensure_world_from_template
 from src.template_catalog import is_user_template_file
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
 
 logger = logging.getLogger("trpg")
 
@@ -36,6 +35,17 @@ _LEGACY_GAME_TEMPLATE_SUFFIXES = (
 )
 
 
+@dataclass(frozen=True)
+class WorldDependencies:
+    lorebook: Any
+    worlds_dir: Path | None
+    plugin_host: Any | None
+    llm_client: Any | None
+    character_gen_max_tokens: int
+    invalidate_lorebook_index: Callable[[str], None] | None
+    list_instances: Callable[[], list[Any]]
+
+
 def _user_world_base(name: str) -> str:
     """Build an ASCII display-derived prefix; the UUID remains the identity."""
     return "".join(
@@ -44,13 +54,13 @@ def _user_world_base(name: str) -> str:
     ).strip("_")[:48] or "world"
 
 
-def _new_user_world_id(api: "WebAPI", name: str) -> str:
+def _new_user_world_id(dependencies: WorldDependencies, name: str) -> str:
     """Generate a canonical user-world identity that cannot collide by second."""
     base = _user_world_base(name)
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     while True:
         world_id = f"custom_book_{base}_{uuid.uuid4().hex}"
-        if api._lore.get_world(world_id) is not None:
+        if dependencies.lorebook.get_world(world_id) is not None:
             continue
         if worlds_dir and (worlds_dir / f"{world_id}.json").exists():
             continue
@@ -86,12 +96,15 @@ def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _user_template_from_lore(api: "WebAPI", world_id: str) -> dict[str, Any] | None:
-    world = api._lore.get_world(world_id)
+def _user_template_from_lore(
+    dependencies: WorldDependencies,
+    world_id: str,
+) -> dict[str, Any] | None:
+    world = dependencies.lorebook.get_world(world_id)
     if not world:
         return None
     description = str(world.get("description") or "")
-    entries = api._lore.list_entries(world_id)
+    entries = dependencies.lorebook.list_entries(world_id)
     return {
         "world_id": world_id,
         "world_name": str(world.get("name") or world_id),
@@ -110,9 +123,12 @@ def _user_template_from_lore(api: "WebAPI", world_id: str) -> dict[str, Any] | N
     }
 
 
-def _ensure_user_world_template(api: "WebAPI", world_id: str) -> Path | None:
+def _ensure_user_world_template(
+    dependencies: WorldDependencies,
+    world_id: str,
+) -> Path | None:
     """Materialize legacy lore-only custom worlds at the editable template boundary."""
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir or not world_id.startswith(("custom_", "ai_")):
         return None
     path = _template_path(worlds_dir, world_id)
@@ -120,42 +136,50 @@ def _ensure_user_world_template(api: "WebAPI", world_id: str) -> Path | None:
         return None
     if path.is_file():
         return path if is_user_template_file(path, "worlds") else None
-    template = _user_template_from_lore(api, world_id)
+    template = _user_template_from_lore(dependencies, world_id)
     if template is None:
         return None
     _write_json_atomic(path, template)
     return path
 
 
-def list_worlds(api: "WebAPI") -> dict[str, Any]:
-    worlds = api._lore.list_worlds()
+def list_worlds(dependencies: WorldDependencies) -> dict[str, Any]:
+    worlds = dependencies.lorebook.list_worlds()
     for w in worlds:
-        entries = api._lore.list_entries(w["id"])
+        entries = dependencies.lorebook.list_entries(w["id"])
         w["entry_count"] = len(entries)
-        w["gm_style"] = _read_user_template_gm_style(api, str(w.get("id") or ""))
+        w["gm_style"] = _read_user_template_gm_style(
+            dependencies, str(w.get("id") or ""),
+        )
     return {"worlds": worlds, "total": len(worlds)}
 
 
-def create_world(api: "WebAPI", name: str, description: str = "",
+def create_world(dependencies: WorldDependencies, name: str, description: str = "",
                  language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
     name = (name or "").strip()
     if not name:
         return {"ok": False, "error": "世界书名称不能为空"}
-    world_id = _new_user_world_id(api, name)
+    world_id = _new_user_world_id(dependencies, name)
     language = normalize_language(language)
-    api._lore.create_world(world_id, name, description=description or "", language=language)
+    dependencies.lorebook.create_world(
+        world_id, name, description=description or "", language=language,
+    )
     try:
-        if _ensure_user_world_template(api, world_id) is None:
-            api._lore.delete_world(world_id)
+        if _ensure_user_world_template(dependencies, world_id) is None:
+            dependencies.lorebook.delete_world(world_id)
             return {"ok": False, "error": "自建世界模板创建失败"}
     except OSError:
-        api._lore.delete_world(world_id)
+        dependencies.lorebook.delete_world(world_id)
         logger.exception("创建自建世界模板失败: %s", world_id)
         return {"ok": False, "error": "自建世界模板创建失败"}
     return {"ok": True, "world_id": world_id, "name": name, "language": language}
 
 
-def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -> dict[str, Any]:
+def clone_world_from_template(
+    dependencies: WorldDependencies,
+    template_id: str,
+    name: str = "",
+) -> dict[str, Any]:
     """把内置/插件/用户世界模板克隆为用户可编辑世界。
 
     新世界沿用 custom_book_* id 约定与用户模板文件写入，条目 CRUD 随后
@@ -167,10 +191,10 @@ def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -
         return {"ok": False, "error": "缺少要克隆的世界模板"}
     if not _WORLD_TEMPLATE_ID_RE.fullmatch(template_id):
         return {"ok": False, "error": "世界模板 id 不合法"}
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir:
         return {"ok": False, "error": "世界模板目录未配置"}
-    source = _load_clone_source(api, template_id)
+    source = _load_clone_source(dependencies, template_id)
     if source is None:
         return {"ok": False, "error": "世界模板不存在"}
     language = normalize_language(str(source.get("language") or ""))
@@ -180,7 +204,7 @@ def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -
         new_name = str(source.get("world_name") or template_id).strip() + localized_text(
             language, {"en": " (Clone)", "zh-CN": "（克隆）", "ja": "（クローン）"},
         )
-    world_id = _new_user_world_id(api, new_name)
+    world_id = _new_user_world_id(dependencies, new_name)
     template = {
         key: copy.deepcopy(value)
         for key, value in source.items()
@@ -195,23 +219,27 @@ def clone_world_from_template(api: "WebAPI", template_id: str, name: str = "") -
     if path is None:
         return {"ok": False, "error": "生成的世界模板 id 不合法"}
     _write_json_atomic(path, template)
-    ensure_world_from_template(api._lore, world_id, template)
+    ensure_world_from_template(dependencies.lorebook, world_id, template)
     logger.info("已克隆世界模板: %s -> %s", template_id, world_id)
     return {"ok": True, "world_id": world_id, "name": new_name, "language": language}
 
 
-def update_world_gm_style(api: "WebAPI", world_id: str, raw: Any) -> dict[str, Any]:
+def update_world_gm_style(
+    dependencies: WorldDependencies,
+    world_id: str,
+    raw: Any,
+) -> dict[str, Any]:
     """保存世界级 GM 风格。仅用户模板可改；内置/插件世界提示先克隆。"""
     world_id = str(world_id or "").strip()
     if not world_id:
         return {"ok": False, "error": "缺少世界 id"}
-    if api._lore.get_world(world_id) is None:
+    if dependencies.lorebook.get_world(world_id) is None:
         return {"ok": False, "error": "世界不存在"}
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir:
         return {"ok": False, "error": "世界模板目录未配置"}
     try:
-        path = _ensure_user_world_template(api, world_id)
+        path = _ensure_user_world_template(dependencies, world_id)
     except OSError:
         logger.exception("物化自建世界模板失败: %s", world_id)
         return {"ok": False, "error": "世界模板创建失败"}
@@ -232,7 +260,11 @@ def update_world_gm_style(api: "WebAPI", world_id: str, raw: Any) -> dict[str, A
 _USER_SCENE_IMAGE_KINDS = {"builtin", "upload", "generated"}
 
 
-def set_user_world_scene_image(api: "WebAPI", world_id: str, scene_image: Any) -> dict[str, Any]:
+def set_user_world_scene_image(
+    dependencies: WorldDependencies,
+    world_id: str,
+    scene_image: Any,
+) -> dict[str, Any]:
     """设置用户世界的头图引用。仅用户模板可改；插件世界的头图随插件内容提供，
     请先克隆为我的世界（克隆副本即用户世界，可正常设置）。
 
@@ -243,13 +275,13 @@ def set_user_world_scene_image(api: "WebAPI", world_id: str, scene_image: Any) -
     world_id = str(world_id or "").strip()
     if not world_id:
         return {"ok": False, "error": "缺少世界 id"}
-    if api._lore.get_world(world_id) is None:
+    if dependencies.lorebook.get_world(world_id) is None:
         return {"ok": False, "error": "世界不存在"}
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir:
         return {"ok": False, "error": "世界模板目录未配置"}
     try:
-        path = _ensure_user_world_template(api, world_id)
+        path = _ensure_user_world_template(dependencies, world_id)
     except OSError:
         logger.exception("物化自建世界模板失败: %s", world_id)
         return {"ok": False, "error": "世界模板创建失败"}
@@ -275,9 +307,12 @@ def set_user_world_scene_image(api: "WebAPI", world_id: str, scene_image: Any) -
     return {"ok": True, "scene_image": scene_image}
 
 
-def _read_user_template_gm_style(api: "WebAPI", world_id: str) -> dict[str, str] | None:
+def _read_user_template_gm_style(
+    dependencies: WorldDependencies,
+    world_id: str,
+) -> dict[str, str] | None:
     """用户模板的 gm_style（normalized）；无模板文件时 None。"""
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir or not world_id:
         return None
     path = _template_path(worlds_dir, world_id)
@@ -292,9 +327,12 @@ def _read_user_template_gm_style(api: "WebAPI", world_id: str) -> dict[str, str]
     return normalize_gm_style(data.get("gm_style"))
 
 
-def _load_clone_source(api: "WebAPI", template_id: str) -> dict[str, Any] | None:
+def _load_clone_source(
+    dependencies: WorldDependencies,
+    template_id: str,
+) -> dict[str, Any] | None:
     """按 id 查找克隆源：优先运行时模板目录的 raw core，其次插件贡献。"""
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if worlds_dir:
         path = _template_path(worlds_dir, template_id, require_canonical=True)
         if path is None:
@@ -307,7 +345,7 @@ def _load_clone_source(api: "WebAPI", template_id: str) -> dict[str, Any] | None
             if isinstance(data, dict) and not data.get("deprecated"):
                 return data
             return None
-    plugin_host = getattr(api, "_plugins", None)
+    plugin_host = dependencies.plugin_host
     if not plugin_host:
         return None
     for item in plugin_host.contributions.list("world_template"):
@@ -323,21 +361,35 @@ def _load_clone_source(api: "WebAPI", template_id: str) -> dict[str, Any] | None
     return None
 
 
-def list_entries(api: "WebAPI", world_id: str, entry_type: str | None = None) -> dict[str, Any]:
-    entries = api._lore.list_entries(world_id, entry_type)
+def list_entries(
+    dependencies: WorldDependencies,
+    world_id: str,
+    entry_type: str | None = None,
+) -> dict[str, Any]:
+    entries = dependencies.lorebook.list_entries(world_id, entry_type)
     return {"entries": entries, "total": len(entries)}
 
 
-def search_entries(api: "WebAPI", world_id: str, keyword: str) -> dict[str, Any]:
-    entries = api._lore.search_entries(world_id, keyword)
+def search_entries(
+    dependencies: WorldDependencies,
+    world_id: str,
+    keyword: str,
+) -> dict[str, Any]:
+    entries = dependencies.lorebook.search_entries(world_id, keyword)
     return {"entries": entries, "total": len(entries)}
 
 
-def get_entry(api: "WebAPI", entry_id: str) -> dict[str, Any] | None:
-    return api._lore.get_entry(entry_id)
+def get_entry(
+    dependencies: WorldDependencies,
+    entry_id: str,
+) -> dict[str, Any] | None:
+    return dependencies.lorebook.get_entry(entry_id)
 
 
-def save_entry(api: "WebAPI", entry: dict) -> dict[str, Any]:
+def save_entry(
+    dependencies: WorldDependencies,
+    entry: dict,
+) -> dict[str, Any]:
     # 导入/新增入口的防御性校验：缺键时生成 id 或返回 400 级错误，
     # 不让 KeyError 漏成 500（UI 导入的 body 可能完全不带 id 键）。
     if not isinstance(entry, dict):
@@ -346,7 +398,7 @@ def save_entry(api: "WebAPI", entry: dict) -> dict[str, Any]:
     name = str(entry.get("name") or "").strip()
     if not world_id:
         return {"ok": False, "error": "缺少 world_id"}
-    if api._lore.get_world(world_id) is None:
+    if dependencies.lorebook.get_world(world_id) is None:
         return {"ok": False, "error": "世界不存在"}
     if not name:
         return {"ok": False, "error": "世界书条目名称不能为空"}
@@ -359,12 +411,12 @@ def save_entry(api: "WebAPI", entry: dict) -> dict[str, Any]:
     entry["tier"] = tier if tier in _LOREBOOK_TIERS else "background"
     if not str(entry.get("id") or "").strip():
         existing = {
-            str(e.get("id")) for e in api._lore.list_entries(world_id)
+            str(e.get("id")) for e in dependencies.lorebook.list_entries(world_id)
         }
         entry["id"] = _entry_id_from_name(world_id, name, existing, 0)
-    api._lore.add_entry(entry)
-    rebuild_lorebook_index(api, world_id)
-    _sync_user_template_lorebook(api, world_id)
+    dependencies.lorebook.add_entry(entry)
+    rebuild_lorebook_index(dependencies, world_id)
+    _sync_user_template_lorebook(dependencies, world_id)
     return {"ok": True, "entry_id": entry["id"]}
 
 
@@ -419,25 +471,25 @@ def _normalize_generated_entry(raw: dict, world_id: str, existing_ids: set[str],
     return entry
 
 
-async def generate_lorebook_entries(api: "WebAPI", world_id: str, prompt: str,
+async def generate_lorebook_entries(dependencies: WorldDependencies, world_id: str, prompt: str,
                                     language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
     prompt = (prompt or "").strip()
     if not prompt:
         return {"ok": False, "error": "请输入要生成的世界书设定"}
-    if not api._llm_client:
+    if not dependencies.llm_client:
         return {"ok": False, "error": "当前未配置 AI，无法自动生成世界书条目"}
-    world = api._lore.get_world(world_id)
+    world = dependencies.lorebook.get_world(world_id)
     if not world:
         return {"ok": False, "error": "世界书不存在"}
     language = normalize_language(language or world.get("language", DEFAULT_LANGUAGE))
 
-    existing_entries = api._lore.list_entries(world_id)
+    existing_entries = dependencies.lorebook.list_entries(world_id)
     raw_entries = await creator.generate_lorebook_entries(
-        api._llm_client,
+        dependencies.llm_client,
         prompt,
         world_name=world.get("name", ""),
         existing_names=[e.get("name", "") for e in existing_entries],
-        max_tokens=api.character_gen_max_tokens,
+        max_tokens=dependencies.character_gen_max_tokens,
         language=language,
     )
     if not raw_entries:
@@ -449,45 +501,58 @@ async def generate_lorebook_entries(api: "WebAPI", world_id: str, prompt: str,
         entry = _normalize_generated_entry(raw, world_id, existing_ids, index)
         if not entry:
             continue
-        api._lore.add_entry(entry)
+        dependencies.lorebook.add_entry(entry)
         saved.append(entry)
     if not saved:
         return {"ok": False, "error": "AI 没有生成可保存的条目，请补充更具体的设定"}
-    rebuild_lorebook_index(api, world_id)
+    rebuild_lorebook_index(dependencies, world_id)
     return {"ok": True, "entries": saved, "count": len(saved)}
 
 
-def update_entry(api: "WebAPI", entry_id: str, updates: dict) -> dict[str, Any]:
-    api._lore.update_entry(entry_id, updates)
+def update_entry(
+    dependencies: WorldDependencies,
+    entry_id: str,
+    updates: dict,
+) -> dict[str, Any]:
+    dependencies.lorebook.update_entry(entry_id, updates)
     # 获取条目所属世界以重建索引
-    entry = api._lore.get_entry(entry_id)
+    entry = dependencies.lorebook.get_entry(entry_id)
     if entry:
         world_id = entry.get("world_id", "")
-        rebuild_lorebook_index(api, world_id)
-        _sync_user_template_lorebook(api, world_id)
+        rebuild_lorebook_index(dependencies, world_id)
+        _sync_user_template_lorebook(dependencies, world_id)
     return {"ok": True}
 
 
-def delete_entry(api: "WebAPI", entry_id: str) -> dict[str, Any]:
-    entry = api._lore.get_entry(entry_id)
+def delete_entry(
+    dependencies: WorldDependencies,
+    entry_id: str,
+) -> dict[str, Any]:
+    entry = dependencies.lorebook.get_entry(entry_id)
     world_id = entry.get("world_id", "") if entry else ""
-    api._lore.delete_entry(entry_id)
+    dependencies.lorebook.delete_entry(entry_id)
     if world_id:
-        rebuild_lorebook_index(api, world_id)
-        _sync_user_template_lorebook(api, world_id)
+        rebuild_lorebook_index(dependencies, world_id)
+        _sync_user_template_lorebook(dependencies, world_id)
     return {"ok": True}
 
 
-def delete_world(api: "WebAPI", world_id: str) -> dict[str, Any]:
+def delete_world(
+    dependencies: WorldDependencies,
+    world_id: str,
+) -> dict[str, Any]:
     """删除世界及其所有条目。"""
-    api._lore.delete_world_cascade(world_id)
-    _delete_user_template_file(api, world_id)
+    dependencies.lorebook.delete_world_cascade(world_id)
+    _delete_user_template_file(dependencies, world_id)
     return {"ok": True}
 
 
-def _delete_user_template_file(api: "WebAPI", world_id: str) -> None:
+def _delete_user_template_file(
+    dependencies: WorldDependencies,
+    world_id: str,
+) -> None:
     """删除世界书时联动删除对应的用户模板文件（ai_/custom_），内置/插件模板不动。"""
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir:
         return
     path = _template_path(worlds_dir, world_id)
@@ -513,7 +578,10 @@ def _entry_to_template_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
+def _sync_user_template_lorebook(
+    dependencies: WorldDependencies,
+    world_id: str,
+) -> None:
     """条目 CRUD 后把世界书当前条目回写到用户模板的 starter_lorebook。
 
     仅对用户模板（ai_/custom_）生效；内置模板只读（启动覆盖）不回写。
@@ -522,7 +590,7 @@ def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
     """
     if not world_id:
         return
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir:
         return
     path = _template_path(worlds_dir, world_id)
@@ -530,7 +598,7 @@ def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
         return
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        entries = api._lore.list_entries(world_id)
+        entries = dependencies.lorebook.list_entries(world_id)
         data["starter_lorebook"] = [
             _entry_to_template_entry(e) for e in entries if isinstance(e, dict)
         ]
@@ -541,21 +609,28 @@ def _sync_user_template_lorebook(api: "WebAPI", world_id: str) -> None:
         logger.warning("回写用户模板 starter_lorebook 失败: %s", path, exc_info=True)
 
 
-def rebuild_lorebook_index(api: "WebAPI", world_id: str) -> None:
+def rebuild_lorebook_index(
+    dependencies: WorldDependencies,
+    world_id: str,
+) -> None:
     """Invalidate the shared index so the next game rebuilds its own locale view."""
-    if not api._handler or not world_id:
+    invalidate = dependencies.invalidate_lorebook_index
+    if invalidate is None or not world_id:
         return
     try:
-        api._handler.invalidate_matcher_for_world(world_id)
+        invalidate(world_id)
     except Exception:
         logger.exception("世界书索引失效标记失败: world_id=%s", world_id)
 
 
-def list_world_templates(api: "WebAPI", language: str = "") -> dict[str, Any]:
+def list_world_templates(
+    dependencies: WorldDependencies,
+    language: str = "",
+) -> dict[str, Any]:
     """列出所有可用的世界模板。"""
     templates = []
     seen: set[str] = set()
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if worlds_dir and worlds_dir.is_dir():
         for f in sorted(worlds_dir.glob("*.json")):
             try:
@@ -578,7 +653,7 @@ def list_world_templates(api: "WebAPI", language: str = "") -> dict[str, Any]:
                 seen.add(str(world_id))
             except Exception as exc:
                 raise ValueError(f"世界模板读取失败：{f}: {exc}") from exc
-    for item in _plugin_world_templates(api, language):
+    for item in _plugin_world_templates(dependencies, language):
         if str(item.get("world_id") or "") not in seen:
             templates.append(item)
             seen.add(str(item.get("world_id") or ""))
@@ -596,14 +671,17 @@ def _is_game_scoped_template(data: dict[str, Any], world_id: str) -> bool:
     )
 
 
-def cleanup_orphan_game_templates(api: "WebAPI", world_id: str = "") -> int:
+def cleanup_orphan_game_templates(
+    dependencies: WorldDependencies,
+    world_id: str = "",
+) -> int:
     """Remove generated copy/blank templates after their last game is gone."""
-    worlds_dir = api._worlds_dir
+    worlds_dir = dependencies.worlds_dir
     if not worlds_dir or not worlds_dir.is_dir():
         return 0
     referenced = {
         str(getattr(instance, "world_id", "") or "")
-        for instance in api._reg.list_all()
+        for instance in dependencies.list_instances()
     }
     removed = 0
     candidates = sorted(worlds_dir.glob("*.json"))
@@ -668,8 +746,11 @@ def _recommended_rules(data: dict[str, Any]) -> list[str]:
     return result
 
 
-def _plugin_world_templates(api: "WebAPI", language: str = "") -> list[dict[str, Any]]:
-    plugin_host = getattr(api, "_plugins", None)
+def _plugin_world_templates(
+    dependencies: WorldDependencies,
+    language: str = "",
+) -> list[dict[str, Any]]:
+    plugin_host = dependencies.plugin_host
     if not plugin_host:
         return []
     result = []

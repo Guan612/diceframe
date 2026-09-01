@@ -2,6 +2,21 @@
 
 This document describes the current implementation, not a roadmap. The dependency direction is `routes -> WebAPI -> services -> core`; core code must not import `src.webui`, WebAPI methods are delegates, and cross-service calls go through API delegates.
 
+## WebUI Startup and Configuration
+
+`web_server.py` remains the stable source, Windows portable, and Docker entrypoint. It primarily loads the project environment, composes the explicit WebUI owners, and starts the aiohttp listener. Responsibilities are owned by:
+
+- `src/webui/runtime_config.py`: `RuntimeConfig` / `ConfigStore`, the single `env > secrets.json > config.json` precedence boundary plus secret splitting, redaction, and atomic persistence;
+- `src/webui/composition.py`: core subsystem and `WebAPI` construction from explicit paths, state, and factories;
+- `src/webui/application.py`: `create_app`, middleware, and route composition without starting a listener;
+- `src/webui/bootstrap.py`: template synchronization, plugin/Hub startup, background tasks, save recovery, and cleanup;
+- `src/webui/access_control.py`: owner, Bot, SSE ticket, player-share, and room-password access control;
+- `src/webui/config_controller.py`: transactional runtime reload and provider connection tests.
+
+Template synchronization and migrated-default persistence happen only during real application startup, not when importing the individual owner modules. A runtime configuration reload fully constructs the candidate runtime before persistence and swaps active state only after persistence succeeds; construction or persistence failure keeps the previous runtime active.
+
+A WebUI service does not import another service directly. Cross-domain business calls use callables or protocols injected by the composition root. Pure contracts and projections shared by multiple domains but performing no business orchestration live at the `src/webui/` root boundary, including lifecycle transaction context, ruleset draft-shape validation, read-only rest projection, and character-card identity/deduplication. Type-checking-only imports are not runtime dependencies.
+
 ## Content V2
 
 Inputs cross a compatibility boundary before entering the current canonical model:
@@ -52,6 +67,14 @@ V2 resource IDs must already be canonical. The registry never silently normalize
 
 Migrations for loaded persisted `GameInstance` data are orchestrated through the single `src.migrations.migrate_instance` entry point. Domain-specific migration implementations may live in `src/compat/` as pure adapters, but services, routes, and runtimes must not call those adapters directly. Every migration must be idempotent, tested, and bounded by an explicit version/identity/digest contract; uncertain migrations fail closed. New behavior adds a versioned migration step rather than changing the meaning of a released step.
 
+## GameInstance Aggregate Boundary
+
+`GameInstance` remains the aggregate root for one game. It owns authoritative runtime state, invariants, state transitions, and coordination through `_lock` / `_process_lock`. Players, combat, rounds, and payments are not split into independent aggregates merely to shorten the source file.
+
+Auxiliary projections have explicit owners: `src/engine/game_state_codec.py` owns the stable save projection and reconstruction, `src/engine/game_context_projector.py` owns the generic LLM/presentation view, and `src/migrations/instance.py` owns normalization of loaded legacy save payloads. Payload normalization runs on a copy before aggregate construction and never mutates caller input. `GameInstance.to_dict()`, `from_dict()`, and `to_llm_view()` remain compatibility delegates rather than implementing those projections. Legacy ability modifiers, armor summation, and string-skill defaults live in the isolated `src/engine/legacy_game_projection.py` and are selected explicitly by `LegacyRulesetAdapter`. A ruleset runtime may extend the generic projection with its authoritative view, but concrete mechanics must not move back into the generic projector.
+
+This is the first codec/projection/migration boundary extraction; it does not mean the generic state shape is final or completely rules-agnostic. To preserve existing worlds, saves, and prompts, the generic projection still carries traditional character fields such as `hp`, `max_hp`, `class`, `race`, `level`, `attributes`, `equipment`, `skills`, and `inventory`. Those compatibility shapes can be narrowed further only while preserving save and ruleset-runtime contracts.
+
 ## Application Update Boundary
 
 Windows source/portable and managed Docker share the download state machine in `src/webui/services/updater.py`, but installation authority is separated. Source updates use a backup transaction, portable candidates are committed by the Windows launcher, and Docker candidates are committed only by the stable image launcher under `src/docker_launcher/` after health and probation checks pass. A Docker application process may write only a restart signal containing a relative candidate path; it cannot control the Docker daemon, mount the Docker socket, or overwrite the current version directory.
@@ -65,6 +88,8 @@ Only when the owner explicitly asks DF Assistant to inspect runtime logs may `sr
 ## Frontend and Rule Boundaries
 
 The backend materializes V2 locales and the frontend renders the returned payload; the frontend does not reimplement Content V2 locale architecture. D&D using d20 is not the same as changing generic d20 behavior. D&D-specific behavior remains inside the D&D boundary.
+
+The current implementation completes the first ruleset capability-normalization pass: major D&D-specific semantics have moved out of generic layers, and optional runtime capability boundaries now exist for further contraction. The main `RulesetRuntime` protocol still carries a broad base contract spanning character construction and validation, intents, events, projections, and migration. This is not a claim that every ruleset feature is already an independent capability or that the runtime protocol is minimal.
 
 ## Adventure Bundle v1
 

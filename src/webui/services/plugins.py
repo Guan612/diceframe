@@ -5,8 +5,9 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 from src.content.contracts import canonical_id
 from src.content.rule_locale import materialize_rule
@@ -16,51 +17,118 @@ from src.rules.loader import RuleBundleLoader
 from src.plugin_host.support import list_plugin_types as _support_plugin_types, plugin_type_descriptor
 from src.bots.bridge_core.card_renderer import cleanup_card_cache
 
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
 logger = logging.getLogger("trpg")
 
-def list_plugins(api: "WebAPI") -> dict[str, Any]:
-    return {"ok": True, "plugins": api._plugins.list_public() if api._plugins else []}
 
-def list_plugin_types(api: "WebAPI") -> dict[str, Any]:
+@dataclass(frozen=True)
+class PluginHostDependencies:
+    plugin_host: Any | None
+
+
+@dataclass(frozen=True)
+class PluginContentStoreDependencies:
+    lorebook: Any | None
+    list_games: Callable[[], list[Any]]
+    list_character_cards: Callable[[], dict[str, Any]]
+    save_character_card: Callable[[dict[str, Any]], dict[str, Any]]
+    delete_character_card: Callable[[str], dict[str, Any]]
+    save_entry: Callable[[dict[str, Any]], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class PluginPortraitDependencies:
+    plugin_asset_path: Callable[[str, str], Path]
+    avatar_file: Callable[[str], Path | None]
+    generated_image_file: Callable[[str], Path | None]
+    save_avatar_upload: Callable[[str, str], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class PluginContentDependencies:
+    plugin_host: Any | None
+    store: PluginContentStoreDependencies
+    portraits: PluginPortraitDependencies
+
+
+@dataclass(frozen=True)
+class PluginLifecycleDependencies:
+    plugin_host: Any | None
+    content: PluginContentDependencies
+
+
+@dataclass(frozen=True)
+class PluginExportMediaDependencies:
+    package_scene_image: Callable[
+        [Any, dict[str, str | bytes]], dict[str, str] | None
+    ]
+    package_content_map: Callable[..., Any]
+    avatar_file: Callable[[str], Path | None]
+    generated_image_file: Callable[[str], Path | None]
+    plugin_asset_path: Callable[[str, str], Path]
+
+
+@dataclass(frozen=True)
+class PluginExportDependencies:
+    plugin_host: Any | None
+    lorebook: Any | None
+    rules_dir: Path
+    list_character_cards: Callable[[], dict[str, Any]]
+    media: PluginExportMediaDependencies
+
+
+def list_plugins(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    return {"ok": True, "plugins": host.list_public() if host else []}
+
+def list_plugin_types() -> dict[str, Any]:
     """插件类型清单（数据驱动前端筛选/展示）。"""
     return {"ok": True, "types": _support_plugin_types()}
 
-async def rescan_plugins(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+async def rescan_plugins(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "plugins": []}
-    await api._plugins.rescan()
-    return {"ok": True, "plugins": api._plugins.list_public()}
+    await host.rescan()
+    return {"ok": True, "plugins": host.list_public()}
 
-def plugin_detail(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins: return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, **api._plugins.public_detail(plugin_id)}
+def plugin_detail(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
+        return {"ok": False, "error": "插件宿主未启用"}
+    return {"ok": True, **host.public_detail(plugin_id)}
 
-def read_plugin_docs(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins: return {"ok": False, "error": "插件宿主未启用"}
-    return api._plugins.read_docs(plugin_id)
+def read_plugin_docs(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
+        return {"ok": False, "error": "插件宿主未启用"}
+    return host.read_docs(plugin_id)
 
 
-def sync_plugin_lorebooks(api: "WebAPI") -> dict[str, Any]:
+def sync_plugin_lorebooks(
+    dependencies: PluginContentDependencies,
+) -> dict[str, Any]:
     """同步已启用插件的世界模板世界书到世界书库（幂等）。
 
     委托 PluginHost.sync_lorebooks：条目 id 加 `_plugin_{plugin_id}_` 标记，
     便于卸载时精确清理。list_worlds / list_world_templates 调用前同步，使
     世界书页面无需先开一把游戏即可看到插件贡献的条目。
     """
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, "synced": api._plugins.sync_lorebooks(api._lore)}
+    return {"ok": True, "synced": host.sync_lorebooks(dependencies.store.lorebook)}
 
 
-def _world_in_use(world_id: str, registry) -> bool:
+def _world_in_use(world_id: str, list_games: Callable[[], list[Any]]) -> bool:
     """世界是否被正在进行的对局引用（有对局在用则不删）。"""
-    if not registry:
-        return False
     try:
-        for game in registry.list_all():
+        for game in list_games():
             if str(getattr(game, "world_id", "") or "") == world_id:
                 return True
     except Exception:
@@ -69,7 +137,10 @@ def _world_in_use(world_id: str, registry) -> bool:
     return False
 
 
-def cleanup_plugin_lorebook(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
+def cleanup_plugin_lorebook(
+    dependencies: PluginContentDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
     """卸载插件时清理其贡献的持久化内容。
 
     世界书条目与卡库角色卡都带 `source_plugin` 来源标记，按数据查询精确删除，
@@ -77,123 +148,159 @@ def cleanup_plugin_lorebook(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
     否则（仍有用户内容）保留。
     """
     result: dict[str, Any] = {"ok": True, "removed": 0, "cards_removed": 0, "worlds_removed": 0, "worlds_kept": []}
-    if api._plugins and api._lore:
+    lorebook = dependencies.store.lorebook
+    if dependencies.plugin_host and lorebook:
         # 1. 先记下插件创建的世界（删条目前），再删该插件来源的全部条目
-        plugin_worlds = [str(w.get("id") or w.get("world_id") or "") for w in api._lore.list_plugin_worlds(plugin_id)]
-        result["removed"] = api._lore.delete_entries_by_plugin(plugin_id)
+        plugin_worlds = [str(w.get("id") or w.get("world_id") or "") for w in lorebook.list_plugin_worlds(plugin_id)]
+        result["removed"] = lorebook.delete_entries_by_plugin(plugin_id)
         # 2. 插件创建的世界：无对局引用且删完条目后已空才删
         for wid in plugin_worlds:
             if not wid:
                 continue
-            if _world_in_use(wid, api._reg) or api._lore.list_entries(wid):
+            if _world_in_use(wid, dependencies.store.list_games) or lorebook.list_entries(wid):
                 result["worlds_kept"].append(wid)
                 continue
-            api._lore.delete_world_cascade(wid)
+            lorebook.delete_world_cascade(wid)
             result["worlds_removed"] += 1
-    # 3. 卡库角色卡（source_plugin 标记），通过 WebAPI 委托，避免跨 service 导入。
+    # 3. 卡库角色卡（source_plugin 标记），通过显式存储依赖清理。
     # 卡库清理是卸载的附带动作，失败不应阻断卸载，记录告警后继续。
     try:
-        listed = api.list_character_cards()
+        listed = dependencies.store.list_character_cards()
         cards = list(listed.get("cards", [])) if isinstance(listed, dict) else []
         for card in cards:
             if str(card.get("source_plugin") or "") == plugin_id:
-                api.delete_character_card(str(card["id"]))
+                dependencies.store.delete_character_card(str(card["id"]))
                 result["cards_removed"] += 1
     except Exception:
         logger.warning("插件卡库清理失败，已跳过: %s", plugin_id, exc_info=True)
     return result
 
-def _autoimport_plugin_content(api: "WebAPI", plugin_id: str) -> None:
+def _autoimport_plugin_content(
+    dependencies: PluginContentDependencies,
+    plugin_id: str,
+) -> None:
     """启用内容包时自动灌注全部内容资源，幂等：已存在则跳过，不重复创建。
 
     角色模板 -> 卡库（全局）；NPC/道具/法术/职业 -> 插件自己的世界（world_template
     的世界，sync 时已建好）。无 world_template 时只导角色模板。失败记日志不阻断启用。
     """
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return
     target_world = ""
-    for item in api._plugins.contributions.list("world_template"):
+    for item in host.contributions.list("world_template"):
         if item.plugin_id == plugin_id and item.key:
             target_world = str(item.key)
             break
-    resources = api._plugins.list_content_resources()
+    resources = host.list_content_resources()
     for kind in ("character_template", "npc", "item", "spell", "class"):
         for resource in resources.get(kind, []):
             if str(resource.get("plugin_id") or "") != plugin_id:
                 continue
             try:
-                resource = _materialize_content_portrait(api, resource)
+                resource = _materialize_content_portrait(dependencies.portraits, resource)
                 if kind == "character_template":
-                    api.save_character_card(_content_to_character_card(resource))
-                elif target_world and api._lore and api._lore.get_world(target_world):
+                    dependencies.store.save_character_card(_content_to_character_card(resource))
+                elif target_world and dependencies.store.lorebook and dependencies.store.lorebook.get_world(target_world):
                     entry = _content_to_lore_entry(resource, kind, target_world)
-                    if not api._lore.get_entry(entry["id"]):
-                        api.save_entry(entry)
+                    if not dependencies.store.lorebook.get_entry(entry["id"]):
+                        dependencies.store.save_entry(entry)
             except Exception:
                 logger.warning("自动灌注插件 %s 内容失败（%s）", plugin_id, kind, exc_info=True)
 
 
-def _maybe_autoimport_after_install(api: "WebAPI", plugin_id: str) -> None:
+def _maybe_autoimport_after_install(
+    dependencies: PluginLifecycleDependencies,
+    plugin_id: str,
+) -> None:
     """安装/更新内容包后自动同步世界书并灌入内容，避免已启用插件更新后内容缺失。"""
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return
     try:
-        detail = api._plugins.public_detail(plugin_id)
+        detail = host.public_detail(plugin_id)
     except Exception:
         return
     if not detail.get("enabled") or detail.get("status") != "active":
         return
     try:
-        sync_plugin_lorebooks(api)
-        _autoimport_plugin_content(api, plugin_id)
+        sync_plugin_lorebooks(dependencies.content)
+        _autoimport_plugin_content(dependencies.content, plugin_id)
     except Exception:
         logger.warning("安装后自动灌入插件内容失败，已跳过: %s", plugin_id, exc_info=True)
 
 
-async def update_plugin_config(api: "WebAPI", plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
-    if not api._plugins: return {"ok": False, "error": "插件宿主未启用"}
-    result = await api._plugins.update_config(plugin_id, changes)
+async def update_plugin_config(
+    dependencies: PluginLifecycleDependencies,
+    plugin_id: str,
+    changes: dict[str, Any],
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host: return {"ok": False, "error": "插件宿主未启用"}
+    result = await host.update_config(plugin_id, changes)
     # update_config 失败会抛异常，能走到这行即成功；public_detail 不含 ok，故不再判断 result.get("ok")。
     # 启用内容包/主题时立即同步世界书 + 自动灌注全部内容资源，避免用户还得手动一键导入。
     if changes.get("enabled") is True:
-        sync_plugin_lorebooks(api)
-        _autoimport_plugin_content(api, plugin_id)
+        sync_plugin_lorebooks(dependencies.content)
+        _autoimport_plugin_content(dependencies.content, plugin_id)
     return {"ok": True, **result}
 
-async def control_plugin(api: "WebAPI", plugin_id: str, action: str) -> dict[str, Any]:
-    if not api._plugins: return {"ok": False, "error": "插件宿主未启用"}
+async def control_plugin(
+    dependencies: PluginLifecycleDependencies,
+    plugin_id: str,
+    action: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host: return {"ok": False, "error": "插件宿主未启用"}
     # 前端进程开关要求强制启动/停止，不受 config.enabled 拦截（enabled 是"开机自启"概念）。
     start_kwargs = {"require_enabled": False} if action in ("start", "restart") else {}
-    method = {"start": api._plugins.start, "stop": api._plugins.stop, "restart": api._plugins.restart}.get(action)
+    method = {"start": host.start, "stop": host.stop, "restart": host.restart}.get(action)
     if not method: return {"ok": False, "error": "插件操作无效"}
     await method(plugin_id, **start_kwargs)
     if action in ("start", "restart"):
-        sync_plugin_lorebooks(api)
-    return {"ok": True, **api._plugins.public_detail(plugin_id)}
+        sync_plugin_lorebooks(dependencies.content)
+    return {"ok": True, **host.public_detail(plugin_id)}
 
-async def install_plugin(api: "WebAPI", payload: bytes, overwrite: bool = False) -> dict[str, Any]:
-    if not api._plugins:
+async def install_plugin(
+    dependencies: PluginLifecycleDependencies,
+    payload: bytes,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    detail = await api._plugins.install_from_zip(payload, overwrite=overwrite)
-    _maybe_autoimport_after_install(api, detail.get("id", ""))
+    detail = await host.install_from_zip(payload, overwrite=overwrite)
+    _maybe_autoimport_after_install(dependencies, detail.get("id", ""))
     return {"ok": True, **detail}
 
-async def list_plugin_marketplace(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+async def list_plugin_marketplace(
+    dependencies: PluginHostDependencies,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "plugins": []}
-    return await api._plugins.marketplace_plugins()
+    return await host.marketplace_plugins()
 
-async def install_marketplace_plugin(api: "WebAPI", plugin_id: str, overwrite: bool = False) -> dict[str, Any]:
-    if not api._plugins:
+async def install_marketplace_plugin(
+    dependencies: PluginLifecycleDependencies,
+    plugin_id: str,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    result = await api._plugins.install_from_marketplace(plugin_id, overwrite=overwrite)
-    _maybe_autoimport_after_install(api, plugin_id)
+    result = await host.install_from_marketplace(plugin_id, overwrite=overwrite)
+    _maybe_autoimport_after_install(dependencies, plugin_id)
     return {"ok": True, **result}
 
-async def update_marketplace_plugin(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins:
+async def update_marketplace_plugin(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, **await api._plugins.update_from_marketplace(plugin_id)}
+    return {"ok": True, **await host.update_from_marketplace(plugin_id)}
 
 # 卸载清理域注册表：新增清理域时实现 handler 并在此注册，再在类型 descriptor 的
 # cleanup 列表声明。content_data 是 lorebook+worlds+cards 的耦合清理（必须先抓
@@ -203,24 +310,33 @@ _CLEANUP_DOMAINS = {
 }
 
 
-def _run_cleanup_domains(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
+def _run_cleanup_domains(
+    dependencies: PluginLifecycleDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
     """按插件类型 descriptor 声明的清理域执行，聚合各域返回的计数/保留信息。"""
-    plugin_type = api._plugins.plugin_type_of(plugin_id) if api._plugins else ""
+    host = dependencies.plugin_host
+    plugin_type = host.plugin_type_of(plugin_id) if host else ""
     descriptor = plugin_type_descriptor(plugin_type)
     result: dict[str, Any] = {}
     for domain_name in descriptor.get("cleanup", []):
         handler = _CLEANUP_DOMAINS.get(domain_name)
         if handler:
-            result.update(handler(api, plugin_id))
+            result.update(handler(dependencies.content, plugin_id))
     return result
 
 
-async def uninstall_plugin(api: "WebAPI", plugin_id: str, delete_data: bool = False) -> dict[str, Any]:
-    if not api._plugins:
+async def uninstall_plugin(
+    dependencies: PluginLifecycleDependencies,
+    plugin_id: str,
+    delete_data: bool = False,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
     # 卸载前按类型 descriptor 声明的清理域清理插件灌入的数据，避免残留
-    cleanup = _run_cleanup_domains(api, plugin_id)
-    result = await api._plugins.uninstall(plugin_id, delete_data=delete_data)
+    cleanup = _run_cleanup_domains(dependencies, plugin_id)
+    result = await host.uninstall(plugin_id, delete_data=delete_data)
     return {
         "ok": True,
         **result,
@@ -230,38 +346,60 @@ async def uninstall_plugin(api: "WebAPI", plugin_id: str, delete_data: bool = Fa
         "worlds_kept": cleanup.get("worlds_kept", []),
     }
 
-def list_plugin_mirrors(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_mirrors(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "mirrors": []}
-    return {"ok": True, **api._plugins.list_mirrors()}
+    return {"ok": True, **host.list_mirrors()}
 
-def add_plugin_mirror(api: "WebAPI", data: dict[str, Any]) -> dict[str, Any]:
-    if not api._plugins:
+def add_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, "mirror": api._plugins.add_mirror(data)}
+    return {"ok": True, "mirror": host.add_mirror(data)}
 
-def update_plugin_mirror(api: "WebAPI", mirror_id: str, data: dict[str, Any]) -> dict[str, Any]:
-    if not api._plugins:
+def update_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    mirror_id: str,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, "mirror": api._plugins.update_mirror(mirror_id, data)}
+    return {"ok": True, "mirror": host.update_mirror(mirror_id, data)}
 
-def delete_plugin_mirror(api: "WebAPI", mirror_id: str) -> dict[str, Any]:
-    if not api._plugins:
+def delete_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    mirror_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return {"ok": True, **api._plugins.delete_mirror(mirror_id)}
+    return {"ok": True, **host.delete_mirror(mirror_id)}
 
-async def test_plugin_mirror(api: "WebAPI", mirror_id: str = "") -> dict[str, Any]:
-    if not api._plugins:
+async def test_plugin_mirror(
+    dependencies: PluginHostDependencies,
+    mirror_id: str = "",
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    return await api._plugins.test_mirror(mirror_id)
+    return await host.test_mirror(mirror_id)
 
-def clear_plugin_card_cache(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
-    if not api._plugins:
+def clear_plugin_card_cache(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
     if plugin_id != "qq-napcat":
         return {"ok": False, "error": "该插件没有可清理的卡片缓存"}
-    api._plugins.public_detail(plugin_id)  # 触发 KeyError，保持和其他插件接口一致
-    data_dir = Path(api._plugins.data_dir).resolve()
+    host.public_detail(plugin_id)  # 触发 KeyError，保持和其他插件接口一致
+    data_dir = Path(host.data_dir).resolve()
     card_dir = (data_dir / "bot" / "cards").resolve()
     if data_dir not in card_dir.parents:
         return {"ok": False, "error": "卡片缓存路径非法"}
@@ -269,37 +407,44 @@ def clear_plugin_card_cache(api: "WebAPI", plugin_id: str) -> dict[str, Any]:
     return {"ok": True, "path": str(card_dir), **result}
 
 
-def list_plugin_contributions(api: "WebAPI", kind: str = "") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_contributions(
+    dependencies: PluginHostDependencies,
+    kind: str = "",
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "contributions": []}
-    contributions = api._plugins.list_contributions((kind or "").strip())
+    contributions = host.list_contributions((kind or "").strip())
     return {"ok": True, "contributions": contributions, "total": len(contributions)}
 
 
-def list_plugin_themes(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_themes(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "themes": []}
-    themes = api._plugins.list_themes()
+    themes = host.list_themes()
     return {"ok": True, "themes": themes, "total": len(themes)}
 
 
-def list_plugin_tools(api: "WebAPI") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_tools(dependencies: PluginHostDependencies) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "tools": []}
-    tools = api._plugins.list_tools()
+    tools = host.list_tools()
     return {"ok": True, "tools": tools, "total": len(tools)}
 
 
 async def invoke_plugin_tool(
-    api: "WebAPI",
+    dependencies: PluginHostDependencies,
     plugin_id: str,
     tool_name: str,
     arguments: dict[str, Any],
     context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
-    result = await api._plugins.call_tool(
+    result = await host.call_tool(
         (plugin_id or "").strip(),
         (tool_name or "").strip(),
         arguments,
@@ -308,10 +453,17 @@ async def invoke_plugin_tool(
     return {"ok": True, "plugin_id": plugin_id, "tool_name": tool_name, "result": result}
 
 
-def list_plugin_content(api: "WebAPI", kind: str = "", world_id: str = "", rule_id: str = "", language: str = "") -> dict[str, Any]:
-    if not api._plugins:
+def list_plugin_content(
+    dependencies: PluginHostDependencies,
+    kind: str = "",
+    world_id: str = "",
+    rule_id: str = "",
+    language: str = "",
+) -> dict[str, Any]:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用", "resources": {}}
-    resources = api._plugins.list_content_resources(
+    resources = host.list_content_resources(
         (kind or "").strip(),
         world_id=(world_id or "").strip(),
         rule_id=(rule_id or "").strip(),
@@ -322,26 +474,27 @@ def list_plugin_content(api: "WebAPI", kind: str = "", world_id: str = "", rule_
 
 
 def import_plugin_content(
-    api: "WebAPI",
+    dependencies: PluginContentDependencies,
     kind: str,
     resource_id: str,
     plugin_id: str = "",
     target_world_id: str = "",
     overwrite: bool = False,
 ) -> dict[str, Any]:
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
     kind = (kind or "").strip()
     resource_id = (resource_id or "").strip()
     plugin_id = (plugin_id or "").strip()
     target_world_id = (target_world_id or "").strip()
-    resource = api._plugins.get_content_resource(kind, resource_id, plugin_id=plugin_id)
+    resource = host.get_content_resource(kind, resource_id, plugin_id=plugin_id)
     if not resource:
         return {"ok": False, "error": "插件内容不存在或未启用"}
-    resource = _materialize_content_portrait(api, resource)
+    resource = _materialize_content_portrait(dependencies.portraits, resource)
     if kind == "character_template":
         card = _content_to_character_card(resource)
-        result = api.save_character_card(card)
+        result = dependencies.store.save_character_card(card)
         if result.get("ok"):
             result["imported_as"] = "character_card"
             result["source_plugin_id"] = resource.get("plugin_id", "")
@@ -349,12 +502,13 @@ def import_plugin_content(
 
     if not target_world_id:
         return {"ok": False, "error": "请选择要导入到的世界书"}
-    if not api._lore.get_world(target_world_id):
+    lorebook = dependencies.store.lorebook
+    if not lorebook or not lorebook.get_world(target_world_id):
         return {"ok": False, "error": "目标世界书不存在"}
     entry = _content_to_lore_entry(resource, kind, target_world_id)
-    if api._lore.get_entry(entry["id"]) and not overwrite:
+    if lorebook.get_entry(entry["id"]) and not overwrite:
         entry["id"] = f"{entry['id']}_{int(time.time() * 1000)}"
-    result = api.save_entry(entry)
+    result = dependencies.store.save_entry(entry)
     if result.get("ok"):
         result["imported_as"] = "lorebook_entry"
         result["entry"] = entry
@@ -363,16 +517,17 @@ def import_plugin_content(
 
 
 def import_all_plugin_content(
-    api: "WebAPI",
+    dependencies: PluginContentDependencies,
     plugin_id: str,
     target_world_id: str = "",
 ) -> dict[str, Any]:
     """一键导入插件全部内容：角色卡→卡库，NPC/道具/魔法/职业→指定世界书。"""
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
     plugin_id = (plugin_id or "").strip()
     target_world_id = (target_world_id or "").strip()
-    resources = api._plugins.list_content_resources()
+    resources = host.list_content_resources()
     kinds = ("character_template", "npc", "item", "spell", "class")
     imported: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -382,10 +537,10 @@ def import_all_plugin_content(
             if str(resource.get("plugin_id") or "") != plugin_id:
                 continue
             try:
-                resource = _materialize_content_portrait(api, resource)
+                resource = _materialize_content_portrait(dependencies.portraits, resource)
                 if kind == "character_template":
                     card = _content_to_character_card(resource)
-                    result = api.save_character_card(card)
+                    result = dependencies.store.save_character_card(card)
                     if result.get("ok"):
                         imported.append({"kind": kind, "name": _content_name(resource), "as": "character_card"})
                     else:
@@ -394,15 +549,16 @@ def import_all_plugin_content(
                     if not target_world_id:
                         skipped.append({"kind": kind, "name": _content_name(resource), "reason": "未选择世界书"})
                         continue
-                    if not api._lore.get_world(target_world_id):
+                    lorebook = dependencies.store.lorebook
+                    if not lorebook or not lorebook.get_world(target_world_id):
                         return {"ok": False, "error": "目标世界书不存在"}
                     entry = _content_to_lore_entry(resource, kind, target_world_id)
-                    if api._lore.get_entry(entry["id"]):
+                    if lorebook.get_entry(entry["id"]):
                         # 幂等：已存在则更新，不创建时间戳副本（避免重复导入产生重复条目）
-                        api._lore.update_entry(entry["id"], entry)
+                        lorebook.update_entry(entry["id"], entry)
                         result = {"ok": True}
                     else:
-                        result = api.save_entry(entry)
+                        result = dependencies.store.save_entry(entry)
                     if result.get("ok"):
                         imported.append({"kind": kind, "name": _content_name(resource), "as": "lorebook_entry"})
                     else:
@@ -421,14 +577,19 @@ def import_all_plugin_content(
     }
 
 
-def plugin_asset_path(api: "WebAPI", plugin_id: str, relative_path: str) -> Path:
-    if not api._plugins:
+def plugin_asset_path(
+    dependencies: PluginHostDependencies,
+    plugin_id: str,
+    relative_path: str,
+) -> Path:
+    host = dependencies.plugin_host
+    if not host:
         raise KeyError("插件宿主未启用")
-    return api._plugins.public_asset_path(plugin_id, relative_path)
+    return host.public_asset_path(plugin_id, relative_path)
 
 
 def export_content_pack(
-    api: "WebAPI",
+    dependencies: PluginExportDependencies,
     plugin_id: str,
     name: str,
     version: str,
@@ -452,7 +613,8 @@ def export_content_pack(
     自定义规则 -> content/rules/；勾选的角色卡 -> content/characters/。
     返回 {"ok": True, "payload": bytes, "filename": ...}，payload 是 .dfplugin 字节。
     """
-    if not api._plugins:
+    host = dependencies.plugin_host
+    if not host:
         return {"ok": False, "error": "插件宿主未启用"}
     plugin_id = (plugin_id or "").strip()
     name = (name or "").strip()
@@ -478,7 +640,8 @@ def export_content_pack(
     pack_locale = normalize_language(language or "zh-CN")
     world: dict[str, Any] | None = None
     if world_id:
-        world = api._lore.get_world(world_id)
+        lorebook = dependencies.lorebook
+        world = lorebook.get_world(world_id) if lorebook else None
         if not world:
             return {"ok": False, "error": "世界不存在"}
         if not language:
@@ -487,7 +650,7 @@ def export_content_pack(
     if rule_id:
         rule_files = _rule_files(
             rule_id,
-            api._rules_dir,
+            dependencies.rules_dir,
             exported_rule_id=exported_rule_id,
             default_locale=pack_locale,
         )
@@ -500,7 +663,7 @@ def export_content_pack(
                 continue
             reference = rule_scene_image if isinstance(rule_scene_image, dict) else rule_data.get("scene_image")
             if include_scene_images and reference:
-                packaged = api.package_scene_image(reference, files)
+                packaged = dependencies.media.package_scene_image(reference, files)
                 if packaged:
                     rule_data["scene_image"] = packaged
                 elif isinstance(rule_scene_image, dict):
@@ -515,7 +678,8 @@ def export_content_pack(
 
     if world_id:
         assert world is not None
-        entries = api._lore.list_entries(world_id)
+        assert dependencies.lorebook is not None
+        entries = dependencies.lorebook.list_entries(world_id)
         export_world = dict(world)
         export_world["id"] = exported_world_id
         export_world["world_id"] = exported_world_id
@@ -527,7 +691,7 @@ def export_content_pack(
         )
         if include_map:
             try:
-                map_package = api.package_content_map(
+                map_package = dependencies.media.package_content_map(
                     plugin_id,
                     name,
                     export_world,
@@ -542,22 +706,28 @@ def export_content_pack(
                 template["default_map"] = map_package.default_map
         reference = world_scene_image if isinstance(world_scene_image, dict) else world.get("scene_image")
         if include_scene_images and reference:
-            packaged = api.package_scene_image(reference, files)
+            packaged = dependencies.media.package_scene_image(reference, files)
             if packaged:
                 template["scene_image"] = packaged
             elif isinstance(world_scene_image, dict):
                 return {"ok": False, "error": "无法读取所选世界头图"}
         for entry in template.get("starter_lorebook", []):
-            _package_record_portrait(api, entry, files, include=include_portraits)
+            _package_record_portrait(
+                dependencies.media, entry, files, include=include_portraits,
+            )
         files[f"content/worlds/{exported_world_id}.json"] = json.dumps(template, ensure_ascii=False, indent=2)
         has_world = True
 
     if card_ids:
         selected = set(card_ids)
-        for card in api.list_character_cards().get("cards", []):
+        for card in dependencies.list_character_cards().get("cards", []):
             if str(card.get("id") or "") not in selected:
                 continue
-            packaged_portrait = _package_portrait(api, card.get("portrait"), files) if include_portraits else {}
+            packaged_portrait = (
+                _package_portrait(dependencies.media, card.get("portrait"), files)
+                if include_portraits
+                else {}
+            )
             tmpl = _card_to_character_template(
                 card,
                 world_id=exported_world_id,
@@ -593,7 +763,7 @@ def export_content_pack(
         language=pack_locale,
     )
 
-    payload = api._plugins.package_files(plugin_id, files, flat=flat)
+    payload = host.package_files(plugin_id, files, flat=flat)
     filename = f"{plugin_id}-{version}-src.zip" if flat else f"{plugin_id}-{version}.dfplugin"
     return {"ok": True, "payload": payload, "filename": filename}
 
@@ -887,18 +1057,18 @@ def _legacy_rule_locale_overlay(
                 values[identity_value] = display
         if values:
             overlay[collection] = values
-    core_items = core.get("items")
-    localized_items = localized.get("items")
-    if isinstance(core_items, dict) and isinstance(localized_items, dict):
+    core_item_map = core.get("items")
+    localized_item_map = localized.get("items")
+    if isinstance(core_item_map, dict) and isinstance(localized_item_map, dict):
         values = {
             str(identity_value): {
-                field: localized_items[identity_value][field]
+                field: localized_item_map[identity_value][field]
                 for field in ("name", "description")
-                if isinstance(localized_items.get(identity_value), dict)
-                and field in localized_items[identity_value]
+                if isinstance(localized_item_map.get(identity_value), dict)
+                and field in localized_item_map[identity_value]
             }
-            for identity_value in core_items
-            if identity_value in localized_items
+            for identity_value in core_item_map
+            if identity_value in localized_item_map
         }
         overlay["items"] = {key: value for key, value in values.items() if value}
     return overlay
@@ -941,7 +1111,10 @@ def _content_to_character_card(resource: dict[str, Any]) -> dict[str, Any]:
     return card
 
 
-def _materialize_content_portrait(api: "WebAPI", resource: dict[str, Any]) -> dict[str, Any]:
+def _materialize_content_portrait(
+    dependencies: PluginPortraitDependencies,
+    resource: dict[str, Any],
+) -> dict[str, Any]:
     """Copy a declared plugin portrait into DiceFrame's persistent avatar store."""
     result = dict(resource)
     portrait = resource.get("portrait")
@@ -952,13 +1125,13 @@ def _materialize_content_portrait(api: "WebAPI", resource: dict[str, Any]) -> di
         return result
     if kind == "upload":
         asset_id = str(portrait.get("asset_id") or "")
-        if asset_id and api.avatar_file(asset_id):
+        if asset_id and dependencies.avatar_file(asset_id):
             return result
         result.pop("portrait", None)
         return result
     if kind == "generated":
         asset_id = str(portrait.get("asset_id") or "")
-        if asset_id and api.generated_image_file(asset_id):
+        if asset_id and dependencies.generated_image_file(asset_id):
             return result
         result.pop("portrait", None)
         return result
@@ -969,10 +1142,12 @@ def _materialize_content_portrait(api: "WebAPI", resource: dict[str, Any]) -> di
     if not plugin_id or plugin_id != str(portrait.get("plugin_id") or ""):
         result.pop("portrait", None)
         return result
-    path = api.plugin_asset_path(plugin_id, str(portrait.get("path") or ""))
+    path = dependencies.plugin_asset_path(plugin_id, str(portrait.get("path") or ""))
     if path.stat().st_size > 3 * 1024 * 1024:
         raise ValueError("内容包头像不能超过 3 MB")
-    saved = api.save_avatar_upload(base64.b64encode(path.read_bytes()).decode("ascii"), path.name)
+    saved = dependencies.save_avatar_upload(
+        base64.b64encode(path.read_bytes()).decode("ascii"), path.name,
+    )
     if not saved.get("ok") or not isinstance(saved.get("portrait"), dict):
         raise ValueError(str(saved.get("error") or "内容包头像导入失败"))
     result["portrait"] = saved["portrait"]
@@ -980,13 +1155,13 @@ def _materialize_content_portrait(api: "WebAPI", resource: dict[str, Any]) -> di
 
 
 def _package_record_portrait(
-    api: "WebAPI",
+    dependencies: "PluginExportMediaDependencies",
     record: dict[str, Any],
     files: dict[str, str | bytes],
     *,
     include: bool,
 ) -> None:
-    portrait = _package_portrait(api, record.get("portrait"), files) if include else None
+    portrait = _package_portrait(dependencies, record.get("portrait"), files) if include else None
     if portrait:
         record["portrait"] = portrait
     else:
@@ -994,7 +1169,7 @@ def _package_record_portrait(
 
 
 def _package_portrait(
-    api: "WebAPI",
+    dependencies: "PluginExportMediaDependencies",
     portrait: Any,
     files: dict[str, str | bytes],
 ) -> dict[str, str] | None:
@@ -1006,13 +1181,13 @@ def _package_portrait(
         return {"kind": "builtin", "id": portrait_id} if portrait_id else None
     source: Path | None = None
     if kind == "upload":
-        source = api.avatar_file(str(portrait.get("asset_id") or ""))
+        source = dependencies.avatar_file(str(portrait.get("asset_id") or ""))
     elif kind == "generated":
-        source = api.generated_image_file(str(portrait.get("asset_id") or ""))
+        source = dependencies.generated_image_file(str(portrait.get("asset_id") or ""))
     elif kind == "plugin":
         plugin_id = str(portrait.get("plugin_id") or "")
         if plugin_id:
-            source = api.plugin_asset_path(plugin_id, str(portrait.get("path") or ""))
+            source = dependencies.plugin_asset_path(plugin_id, str(portrait.get("path") or ""))
     if source is None or not source.is_file() or source.stat().st_size > 3 * 1024 * 1024:
         return None
     payload = source.read_bytes()

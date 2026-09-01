@@ -1,7 +1,17 @@
-from types import SimpleNamespace
-
 from src.engine.game_instance import GameInstance, GameRegistry
-from src.webui.services.game_queries import list_games
+from src.rulesets.registry import RulesetRuntimeRegistry
+from src.webui.services.game_queries import GameQueryDependencies, list_games
+
+
+def _query_dependencies(registry: GameRegistry) -> GameQueryDependencies:
+    return GameQueryDependencies(
+        list_instances=registry.list_all,
+        get_instance=registry.get,
+        parse_game_key=lambda game_key: tuple(game_key.split("|")),
+        load_world_template=None,
+        load_rule_for_game=lambda _instance: None,
+        ruleset_registry=RulesetRuntimeRegistry(),
+    )
 
 
 def test_list_games_returns_most_recent_activity_first(tmp_path):
@@ -26,7 +36,7 @@ def test_list_games_returns_most_recent_activity_first(tmp_path):
         world_name="Undated",
     ))
 
-    result = list_games(SimpleNamespace(_reg=registry))
+    result = list_games(_query_dependencies(registry))
 
     assert [game["game_key"] for game in result["games"]] == [
         "web|new|bot",
@@ -46,6 +56,6 @@ def test_list_games_reports_each_saves_real_player_limit(tmp_path):
     instance.max_players = 3
     registry.register(instance)
 
-    result = list_games(SimpleNamespace(_reg=registry))
+    result = list_games(_query_dependencies(registry))
 
     assert result["games"][0]["max_players"] == 3

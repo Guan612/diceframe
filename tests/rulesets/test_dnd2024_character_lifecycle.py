@@ -37,6 +37,93 @@ class _Api:
             "rule_name": "5E 2024 SRD",
             "runtime": {"id": "core:dnd2024", "minimum_version": 1},
         })
+        self._live_ruleset_rest_dependencies = (
+            ruleset_rest.LiveRulesetRestDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+            )
+        )
+        self._character_dependencies = characters.CharacterDependencies(
+            games=characters.CharacterGameDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+            ),
+            rules=characters.CharacterRuleDependencies(
+                rules_dir=None,
+                load_rule_by_id=self._load_rule_by_id,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+            ),
+            assets=characters.CharacterAssetDependencies(
+                lorebook=None,
+                load_world_template=lambda _world_id, _language: None,
+                avatar_file=self.avatar_file,
+                generated_image_file=self.generated_image_file,
+            ),
+            save_character_card=lambda character: character_cards.save_character_card(
+                self._character_card_dependencies, character,
+            ),
+        )
+        self._ruleset_character_dependencies = (
+            ruleset_characters.RulesetCharacterDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+                load_rule_by_id=self._load_rule_by_id,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+                read_cards=lambda: character_cards._read_cards(
+                    self._character_card_dependencies,
+                ),
+                write_cards=lambda cards: character_cards._write_cards(
+                    self._character_card_dependencies, cards,
+                ),
+                validate_portrait=lambda portrait: characters._validated_portrait(
+                    self._character_dependencies.assets, portrait,
+                ),
+            )
+        )
+        self._character_card_dependencies = (
+            character_cards.CharacterCardDependencies(
+                cards_path=self._character_cards_path,
+                ruleset_card_metadata=lambda card: ruleset_characters.runtime_metadata_for_card(
+                    self._ruleset_character_dependencies, card,
+                ),
+                normalize_ruleset_card=lambda card: ruleset_characters.normalize_character_card_blueprint(
+                    self._ruleset_character_dependencies, card,
+                ),
+                is_ruleset_card=lambda card: ruleset_characters.card_has_rules_aware_lifecycle(
+                    self._ruleset_character_dependencies, card,
+                ),
+            )
+        )
+        self._card_advancement_dependencies = (
+            ruleset_advancement.CardAdvancementDependencies(
+                read_cards=lambda: character_cards._read_cards(
+                    self._character_card_dependencies,
+                ),
+                write_cards=lambda cards: character_cards._write_cards(
+                    self._character_card_dependencies, cards,
+                ),
+                load_rule_by_id=self._load_rule_by_id,
+                runtime_for_card=lambda card: ruleset_characters.runtime_for_card(
+                    self._ruleset_character_dependencies, card,
+                ),
+            )
+        )
+        self._live_advancement_dependencies = (
+            ruleset_advancement.LiveAdvancementDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+            )
+        )
 
     @staticmethod
     def _parse_key(game_key: str):
@@ -62,7 +149,69 @@ class _Api:
         return None
 
     def save_character_card(self, character: dict):
-        return character_cards.save_character_card(self, character)
+        return character_cards.save_character_card(
+            self._character_card_dependencies, character,
+        )
+
+    async def ruleset_rest_resolve_live(self, game_key: str, user_id: str, body):
+        return await ruleset_rest.resolve_live(
+            self._live_ruleset_rest_dependencies, game_key, user_id, body,
+        )
+
+    async def ruleset_rest_resolve_live_party(
+        self, game_key: str, user_id: str, body,
+    ):
+        return await ruleset_rest.resolve_live_party(
+            self._live_ruleset_rest_dependencies, game_key, user_id, body,
+        )
+
+    def update_ruleset_character_card_profile(self, card_id: str, patch):
+        return ruleset_characters.update_character_card_profile(
+            self._ruleset_character_dependencies, card_id, patch,
+        )
+
+    async def update_ruleset_character_profile(
+        self, game_key: str, user_id: str, patch,
+    ):
+        return await ruleset_characters.update_live_character_profile(
+            self._ruleset_character_dependencies, game_key, user_id, patch,
+        )
+
+    async def adopt_ruleset_character_card(
+        self, game_key: str, user_id: str, card_id: str,
+    ):
+        return await ruleset_characters.adopt_character_card(
+            self._ruleset_character_dependencies, game_key, user_id, card_id,
+        )
+
+    def preview_character_card_advancement(self, card_id: str, body):
+        return ruleset_advancement.preview_card(
+            self._card_advancement_dependencies, card_id, body,
+        )
+
+    def apply_character_card_advancement(self, card_id: str, body):
+        return ruleset_advancement.apply_card(
+            self._card_advancement_dependencies, card_id, body,
+        )
+
+    def preview_live_character_advancement(
+        self, game_key: str, user_id: str, body,
+    ):
+        return ruleset_advancement.preview_live(
+            self._live_advancement_dependencies, game_key, user_id, body,
+        )
+
+    async def apply_live_character_advancement(
+        self, game_key: str, user_id: str, body,
+    ):
+        return await ruleset_advancement.apply_live(
+            self._live_advancement_dependencies, game_key, user_id, body,
+        )
+
+    async def control_live_advancement(self, game_key: str, body):
+        return await ruleset_advancement.control_live(
+            self._live_advancement_dependencies, game_key, body,
+        )
 
 
 def _professional_character(runtime: Dnd2024Runtime) -> dict:
@@ -105,7 +254,7 @@ async def test_legacy_live_update_rejects_professional_mechanics_atomically(
     before = deepcopy(instance.players["gm"])
 
     result = await characters.update_character(
-        api,
+        api._character_dependencies,
         "web|character-lifecycle|web_bot",
         "gm",
         {
@@ -132,7 +281,7 @@ async def test_live_profile_update_preserves_canonical_mechanics(
     before = deepcopy(instance.get_character_sheet("gm")["ruleset_character"])
 
     result = await ruleset_characters.update_live_character_profile(
-        api,
+        api._ruleset_character_dependencies,
         "web|character-lifecycle|web_bot",
         "gm",
         {
@@ -168,11 +317,15 @@ def test_raw_card_update_rejects_professional_canonical_overwrite(
     professional_context,
 ) -> None:
     api, _instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
-    before = deepcopy(character_cards.list_character_cards(api)["cards"])
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
+    before = deepcopy(
+        character_cards.list_character_cards(api._character_card_dependencies)["cards"]
+    )
 
     result = character_cards.update_character_card(
-        api,
+        api._character_card_dependencies,
         saved["id"],
         {
             "character_name": "Partially Mutated",
@@ -182,7 +335,9 @@ def test_raw_card_update_rejects_professional_canonical_overwrite(
 
     assert result["ok"] is False
     assert result["error_code"] == "RULESET_CHARACTER_OPERATION_REQUIRED"
-    assert character_cards.list_character_cards(api)["cards"] == before
+    assert character_cards.list_character_cards(
+        api._character_card_dependencies,
+    )["cards"] == before
 
 
 def test_professional_card_is_rebuilt_before_storage(professional_context) -> None:
@@ -192,7 +347,9 @@ def test_professional_card_is_rebuilt_before_storage(professional_context) -> No
     forged["ruleset_character"]["derived"]["armor_class"] = 99
     forged["ruleset_character"]["profile"] = {"notes": "Keep this safe note."}
 
-    result = character_cards.save_character_card(api, forged)
+    result = character_cards.save_character_card(
+        api._character_card_dependencies, forged,
+    )
 
     assert result["ok"] is True
     card = result["card"]
@@ -215,23 +372,29 @@ async def test_invalid_professional_import_is_rejected_before_storage(
     ).decode("ascii")
 
     imported = await character_cards.import_character_card(
-        api, file_data=payload, file_name="forged.json",
+        api._character_card_dependencies,
+        file_data=payload,
+        file_name="forged.json",
     )
 
     assert imported["ok"] is False
     assert imported["error_code"] == "INVALID_RULESET_CHARACTER"
-    assert character_cards.list_character_cards(api)["cards"] == []
+    assert character_cards.list_character_cards(
+        api._character_card_dependencies,
+    )["cards"] == []
 
 
 def test_card_profile_update_preserves_professional_blueprint(
     professional_context,
 ) -> None:
     api, _instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
     before = deepcopy(saved["ruleset_character"])
 
     result = ruleset_characters.update_character_card_profile(
-        api,
+        api._ruleset_character_dependencies,
         saved["id"],
         {
             "character_name": "Library Hero",
@@ -259,23 +422,27 @@ def test_card_advancement_is_entity_backed_versioned_and_idempotent(
     professional_context,
 ) -> None:
     api, _instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
     card_id = saved["id"]
     choices = {"hp_method": "fixed"}
 
-    preview = ruleset_advancement.preview_card(api, card_id, {"choices": choices})
+    preview = ruleset_advancement.preview_card(
+        api._card_advancement_dependencies, card_id, {"choices": choices},
+    )
     applied = ruleset_advancement.apply_card(
-        api,
+        api._card_advancement_dependencies,
         card_id,
         {"choices": choices, "expected_revision": 0, "operation_id": "level-2"},
     )
     duplicate = ruleset_advancement.apply_card(
-        api,
+        api._card_advancement_dependencies,
         card_id,
         {"choices": choices, "expected_revision": 0, "operation_id": "level-2"},
     )
     stale = ruleset_advancement.apply_card(
-        api,
+        api._card_advancement_dependencies,
         card_id,
         {"choices": choices, "expected_revision": 0, "operation_id": "level-3"},
     )
@@ -300,10 +467,12 @@ async def test_live_advancement_is_entity_backed_versioned_and_idempotent(
     advancement_access.grant(instance, "gm", source="gm")
 
     preview = ruleset_advancement.preview_live(
-        api, "web|character-lifecycle|web_bot", "gm", {"choices": {"hp_method": "fixed"}},
+        api._live_advancement_dependencies,
+        "web|character-lifecycle|web_bot", "gm", {"choices": {"hp_method": "fixed"}},
     )
     applied = await ruleset_advancement.apply_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_advancement_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "choices": {"hp_method": "fixed"},
             "expected_revision": 0,
@@ -311,7 +480,8 @@ async def test_live_advancement_is_entity_backed_versioned_and_idempotent(
         },
     )
     duplicate = await ruleset_advancement.apply_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_advancement_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "choices": {"hp_method": "fixed"},
             "expected_revision": 0,
@@ -319,7 +489,8 @@ async def test_live_advancement_is_entity_backed_versioned_and_idempotent(
         },
     )
     stale = await ruleset_advancement.apply_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_advancement_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "choices": {"hp_method": "fixed"},
             "expected_revision": 0,
@@ -343,7 +514,8 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
     sheet["hp"] = 1
 
     applied = await ruleset_rest.resolve_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short",
             "hit_dice": {"d10": 1},
@@ -353,7 +525,8 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
         },
     )
     duplicate = await ruleset_rest.resolve_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short",
             "hit_dice": {"d10": 1},
@@ -363,7 +536,8 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
         },
     )
     forged = await ruleset_rest.resolve_live(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short",
             "hit_die_rolls": {"d10": [10]},
@@ -401,7 +575,8 @@ async def test_multiplayer_rest_waits_for_every_present_character_and_resolves_o
         sheet["ruleset_character"]["resources"]["hp"] = 1
 
     waiting = await ruleset_rest.resolve_live_party(
-        api, "web|character-lifecycle|web_bot", "gm",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "gm",
         {
             "rest": "short", "hit_dice": {"d10": 1},
             "confirm_elapsed_time": True, "expected_revision": 0,
@@ -417,7 +592,8 @@ async def test_multiplayer_rest_waits_for_every_present_character_and_resolves_o
     assert instance.get_character_sheet("ally")["hp"] == 1
 
     resolved = await ruleset_rest.resolve_live_party(
-        api, "web|character-lifecycle|web_bot", "ally",
+        api._live_ruleset_rest_dependencies,
+        "web|character-lifecycle|web_bot", "ally",
         {
             "rest": "short", "hit_dice": {"d10": 1},
             "confirm_elapsed_time": True, "expected_revision": 0,
@@ -476,10 +652,13 @@ async def test_live_character_adopts_server_owned_professional_blueprint(
     replacement = _professional_character(api._runtime)
     replacement["ruleset_character"]["identity"]["name"] = "Replacement Hero"
     replacement["character_name"] = "Replacement Hero"
-    saved = character_cards.save_character_card(api, replacement)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, replacement,
+    )["card"]
 
     result = await ruleset_characters.adopt_character_card(
-        api, "web|character-lifecycle|web_bot", "gm", saved["id"],
+        api._ruleset_character_dependencies,
+        "web|character-lifecycle|web_bot", "gm", saved["id"],
     )
 
     assert result["ok"] is True
@@ -509,7 +688,9 @@ async def test_profile_http_routes_enforce_live_identity_and_patch_cards(
     professional_context,
 ) -> None:
     api, instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
     game_path = "/api/games/web%7Ccharacter-lifecycle%7Cweb_bot/character/gm/profile"
     card_path = f"/api/character-cards/{saved['id']}/profile"
 

@@ -3,7 +3,7 @@ import { computed, reactive, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/client'
 import type { CharacterPortrait, CharacterSheet, JsonObject, RestSessionStatus } from '@/api/types'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
-import { resolveLiveCharacterRest } from '@/features/rulesets/dnd2024/api'
+import { resolveLiveCharacterRest } from '@/api/rulesets'
 
 const props = withDefaults(defineProps<{
   character: CharacterSheet

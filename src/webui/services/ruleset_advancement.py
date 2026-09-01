@@ -2,26 +2,55 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.webui.services.ruleset_builder import validate_draft_shape
-from src.rulesets.dnd2024 import advancement_access
-from src.rulesets.dnd2024.progression.catalog import ProgressionCatalogError
+from src.webui.character_card_projection import dedupe_cards
+from src.webui.ruleset_draft_validation import validate_draft_shape
+from src.rulesets.contracts import LiveAdvancementTransactionRuntime
 
 if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+    from src.rulesets.registry import RulesetRuntimeRegistry
 
 
-def _context(api: "WebAPI", rule_id: str, language: str):
-    rule = api._load_rule_by_id(rule_id, language)
+@dataclass(frozen=True)
+class RulesetAdvancementDependencies:
+    load_rule_by_id: Callable[[str, str], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
+
+
+@dataclass(frozen=True)
+class CardAdvancementDependencies:
+    read_cards: Callable[[], list[dict[str, Any]]]
+    write_cards: Callable[[list[dict[str, Any]]], None]
+    load_rule_by_id: Callable[[str, str], Any | None]
+    runtime_for_card: Callable[[dict[str, Any]], Any | None]
+
+
+@dataclass(frozen=True)
+class LiveAdvancementDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    save_instance: Callable[[Any], Awaitable[None]]
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
+
+
+def _context(
+    dependencies: RulesetAdvancementDependencies,
+    rule_id: str,
+    language: str,
+):
+    rule = dependencies.load_rule_by_id(rule_id, language)
     if rule is None:
         return None, None, {
             "ok": False,
             "code": "RULE_NOT_FOUND",
             "error": f"规则不存在: {rule_id}",
         }
-    runtime = api._ruleset_registry.resolve(rule.template)
+    runtime = dependencies.ruleset_registry.resolve(rule.template)
     if not all(
         callable(getattr(runtime, name, None))
         for name in ("progression_table", "preview_advancement", "apply_advancement")
@@ -35,14 +64,14 @@ def _context(api: "WebAPI", rule_id: str, language: str):
 
 
 def progression(
-    api: "WebAPI",
+    dependencies: RulesetAdvancementDependencies,
     rule_id: str,
     class_ref: str,
     start_level: int = 1,
     end_level: int = 20,
     language: str = "",
 ) -> dict[str, Any]:
-    rule, runtime, error = _context(api, rule_id, language)
+    rule, runtime, error = _context(dependencies, rule_id, language)
     if error:
         return error
     rows = runtime.progression_table(
@@ -63,9 +92,12 @@ def _payload(body: Any) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 def preview(
-    api: "WebAPI", rule_id: str, body: Any, language: str = "",
+    dependencies: RulesetAdvancementDependencies,
+    rule_id: str,
+    body: Any,
+    language: str = "",
 ) -> dict[str, Any]:
-    rule, runtime, error = _context(api, rule_id, language)
+    rule, runtime, error = _context(dependencies, rule_id, language)
     if error:
         return error
     character, choices = _payload(body)
@@ -77,9 +109,12 @@ def preview(
 
 
 def apply(
-    api: "WebAPI", rule_id: str, body: Any, language: str = "",
+    dependencies: RulesetAdvancementDependencies,
+    rule_id: str,
+    body: Any,
+    language: str = "",
 ) -> dict[str, Any]:
-    rule, runtime, error = _context(api, rule_id, language)
+    rule, runtime, error = _context(dependencies, rule_id, language)
     if error:
         return error
     character, choices = _payload(body)
@@ -90,18 +125,15 @@ def apply(
     }
 
 
-def _card_context(api: "WebAPI", card_id: str):
-    from src.webui.services.character_cards import _dedupe_cards, _read_cards
-    from src.webui.services.ruleset_characters import runtime_for_card
-
-    cards = _dedupe_cards(_read_cards(api))
+def _card_context(dependencies: CardAdvancementDependencies, card_id: str):
+    cards = dedupe_cards(dependencies.read_cards())
     for index, card in enumerate(cards):
         if str(card.get("id") or "") != card_id:
             continue
         rule_id = str(card.get("rule_id") or "").strip()
         language = str(card.get("language") or "")
-        rule = api._load_rule_by_id(rule_id, language)
-        runtime = runtime_for_card(api, card)
+        rule = dependencies.load_rule_by_id(rule_id, language)
+        runtime = dependencies.runtime_for_card(card)
         if rule is None or runtime is None:
             return cards, index, card, None, None, {
                 "ok": False,
@@ -133,8 +165,14 @@ def _entity_choices(body: Any) -> dict[str, Any]:
     return choices
 
 
-def preview_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
-    _cards, _index, card, rule, runtime, error = _card_context(api, card_id)
+def preview_card(
+    dependencies: CardAdvancementDependencies,
+    card_id: str,
+    body: Any,
+) -> dict[str, Any]:
+    _cards, _index, card, rule, runtime, error = _card_context(
+        dependencies, card_id,
+    )
     if error:
         return error
     choices = _entity_choices(body)
@@ -147,10 +185,14 @@ def preview_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
     }
 
 
-def apply_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
-    from src.webui.services.character_cards import _write_cards
-
-    cards, index, card, rule, runtime, error = _card_context(api, card_id)
+def apply_card(
+    dependencies: CardAdvancementDependencies,
+    card_id: str,
+    body: Any,
+) -> dict[str, Any]:
+    cards, index, card, rule, runtime, error = _card_context(
+        dependencies, card_id,
+    )
     if error:
         return error
     parsed = validate_draft_shape(body)
@@ -206,7 +248,7 @@ def apply_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
     # normal client error instead of an unhandled exception.
     try:
         readiness = runtime.preview_advancement(rule, card, choices)
-    except (ProgressionCatalogError, ValueError) as exc:
+    except ValueError as exc:
         return {
             "ok": False, "code": "ADVANCEMENT_NOT_READY", "error": str(exc),
             "revision": revision,
@@ -232,7 +274,7 @@ def apply_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
     })
     updated["ruleset_operation_log"] = operation_log[-32:]
     cards[index] = updated
-    _write_cards(api, cards)
+    dependencies.write_cards(cards)
     return {
         "ok": True,
         "rule_id": rule.rule_id,
@@ -244,8 +286,12 @@ def apply_card(api: "WebAPI", card_id: str, body: Any) -> dict[str, Any]:
     }
 
 
-def _live_context(api: "WebAPI", game_key: str, user_id: str):
-    instance = api._reg.get(api._parse_key(game_key))
+def _live_context(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    user_id: str,
+):
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None:
         return None, None, None, None, {
             "ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在",
@@ -254,13 +300,13 @@ def _live_context(api: "WebAPI", game_key: str, user_id: str):
         return instance, None, None, None, {
             "ok": False, "code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
         }
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return instance, None, None, None, {
             "ok": False, "code": "RULE_NOT_FOUND", "error": "当前游戏规则不存在",
         }
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return instance, rule, None, None, {
             "ok": False, "code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
@@ -278,24 +324,28 @@ def _live_context(api: "WebAPI", game_key: str, user_id: str):
 
 
 def preview_live(
-    api: "WebAPI", game_key: str, user_id: str, body: Any,
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
 ) -> dict[str, Any]:
-    _instance, rule, runtime, character, error = _live_context(api, game_key, user_id)
+    _instance, rule, runtime, character, error = _live_context(
+        dependencies, game_key, user_id,
+    )
     if error:
         return error
     choices = _entity_choices(body)
     advancement = runtime.preview_advancement(rule, character, choices)
-    runtime_id = str((getattr(_instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id == "core:dnd2024":
+    if isinstance(runtime, LiveAdvancementTransactionRuntime):
         try:
-            advancement_access.require_entitlement(
+            runtime.validate_live_advancement(
                 _instance, user_id, int(advancement.get("to_level", 0) or 0),
             )
         except ValueError as exc:
             return {
                 "ok": False, "code": "ADVANCEMENT_NOT_GRANTED", "error": str(exc),
                 "revision": int(character.get("ruleset_revision", 0) or 0),
-                "advancement_status": advancement_access.view(_instance),
+                "advancement_status": runtime.live_advancement_status(_instance),
             }
     return {
         "ok": True,
@@ -308,9 +358,14 @@ def preview_live(
 
 
 async def apply_live(
-    api: "WebAPI", game_key: str, user_id: str, body: Any,
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
 ) -> dict[str, Any]:
-    instance, rule, runtime, character, error = _live_context(api, game_key, user_id)
+    instance, rule, runtime, character, error = _live_context(
+        dependencies, game_key, user_id,
+    )
     if error:
         return error
     parsed = validate_draft_shape(body)
@@ -357,7 +412,7 @@ async def apply_live(
 
     try:
         readiness = runtime.preview_advancement(rule, character, choices)
-    except (ProgressionCatalogError, ValueError) as exc:
+    except ValueError as exc:
         return {
             "ok": False, "code": "ADVANCEMENT_NOT_READY", "error": str(exc),
             "revision": revision,
@@ -370,10 +425,12 @@ async def apply_live(
             or "character cannot advance at this time",
             "revision": revision,
         }
-    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id == "core:dnd2024":
+    live_policy = (
+        runtime if isinstance(runtime, LiveAdvancementTransactionRuntime) else None
+    )
+    if live_policy is not None:
         try:
-            advancement_access.require_entitlement(
+            live_policy.validate_live_advancement(
                 instance, user_id, int(readiness.get("to_level", 0) or 0),
             )
         except ValueError as exc:
@@ -390,72 +447,72 @@ async def apply_live(
     })
     updated["ruleset_operation_log"] = operation_log[-32:]
     before_player = deepcopy(instance.players[user_id])
-    before_advancement = advancement_access.snapshot(instance) if runtime_id == "core:dnd2024" else None
+    before_advancement = (
+        live_policy.snapshot_live_advancement(instance)
+        if live_policy is not None
+        else None
+    )
     try:
-        if runtime_id == "core:dnd2024":
-            advancement_access.consume(instance, user_id, int(readiness.get("to_level", 0) or 0))
+        if live_policy is not None:
+            live_policy.consume_live_advancement(
+                instance, user_id, int(readiness.get("to_level", 0) or 0),
+            )
         instance.set_character_sheet(user_id, updated)
-        if runtime_id == "core:dnd2024":
-            advancement_access.reconcile_after_level_up(instance, user_id)
-        await api._reg.save(instance)
+        if live_policy is not None:
+            live_policy.reconcile_live_advancement(instance, user_id)
+        await dependencies.save_instance(instance)
     except Exception:
-        instance.players[user_id] = before_player
-        if before_advancement is not None:
-            instance.ruleset_state["advancement"] = before_advancement
+        instance.put_player(user_id, before_player)
+        if live_policy is not None:
+            live_policy.restore_live_advancement(instance, before_advancement)
         raise
     return {
         "ok": True, "rule_id": rule.rule_id, "game_key": game_key,
         "user_id": user_id, "revision": revision + 1, "duplicate": False,
         "character": deepcopy(updated),
-        "advancement_status": advancement_access.view(instance) if runtime_id == "core:dnd2024" else None,
+        "advancement_status": (
+            live_policy.live_advancement_status(instance)
+            if live_policy is not None
+            else None
+        ),
     }
 
 
-def live_status(api: "WebAPI", game_key: str) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+def live_status(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
-    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id != "core:dnd2024":
+    rule = dependencies.load_rule_for_game(instance)
+    try:
+        runtime = dependencies.ruleset_registry.resolve(rule.template) if rule else None
+    except (AttributeError, TypeError, ValueError):
+        runtime = None
+    if not isinstance(runtime, LiveAdvancementTransactionRuntime):
         return {"ok": False, "code": "RULESET_ADVANCEMENT_UNAVAILABLE", "error": "当前规则不支持该升级控制"}
-    return {"ok": True, "advancement": advancement_access.view(instance)}
+    return {"ok": True, "advancement": runtime.live_advancement_status(instance)}
 
 
-async def control_live(api: "WebAPI", game_key: str, body: Any) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+async def control_live(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    body: Any,
+) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
-    runtime_id = str((getattr(instance, "ruleset_runtime", {}) or {}).get("id") or "")
-    if runtime_id != "core:dnd2024":
+    rule = dependencies.load_rule_for_game(instance)
+    try:
+        runtime = dependencies.ruleset_registry.resolve(rule.template) if rule else None
+    except (AttributeError, TypeError, ValueError):
+        runtime = None
+    if not isinstance(runtime, LiveAdvancementTransactionRuntime):
         return {"ok": False, "code": "RULESET_ADVANCEMENT_UNAVAILABLE", "error": "当前规则不支持该升级控制"}
     parsed = validate_draft_shape(body)
-    action = str(parsed.get("action") or "").strip().casefold()
-    try:
-        if action == "configure":
-            advancement_access.configure(
-                instance, str(parsed.get("mode") or ""), str(parsed.get("authority") or ""),
-            )
-        elif action == "grant":
-            user_id = str(parsed.get("user_id") or "").strip()
-            targets = list(instance.alive_players) if user_id == "all" else [user_id]
-            if not targets:
-                return {"ok": False, "code": "CHARACTER_NOT_FOUND", "error": "没有可发放升级资格的角色"}
-            for target in targets:
-                advancement_access.grant(instance, target, source="gm")
-        elif action == "award_xp":
-            if advancement_access.view(instance)["mode"] != "xp":
-                return {"ok": False, "code": "INVALID_ADVANCEMENT_MODE", "error": "当前不是 XP 升级模式"}
-            user_id = str(parsed.get("user_id") or "").strip()
-            targets = list(instance.alive_players) if user_id == "all" else [user_id]
-            try:
-                amount = int(parsed.get("amount"))
-            except (TypeError, ValueError):
-                return {"ok": False, "code": "INVALID_XP_REWARD", "error": "请填写有效的 XP 奖励"}
-            for target in targets:
-                advancement_access.award_xp(instance, target, amount, source="gm")
-        else:
-            return {"ok": False, "code": "INVALID_ADVANCEMENT_ACTION", "error": "未知升级控制操作"}
-    except ValueError as exc:
-        return {"ok": False, "code": "INVALID_ADVANCEMENT_ACTION", "error": str(exc)}
-    await api._reg.save(instance)
-    return {"ok": True, "advancement": advancement_access.view(instance)}
+    result = runtime.apply_live_advancement_control(instance, parsed)
+    if not result.get("ok"):
+        return result
+    await dependencies.save_instance(instance)
+    return result

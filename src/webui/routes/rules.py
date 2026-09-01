@@ -7,7 +7,7 @@ import json
 from aiohttp import web
 
 from src.webui.routes._common import _get_api, _require_confirmed_request
-from src.webui.services.ruleset_builder import MAX_BUILDER_DRAFT_BYTES
+from src.webui.ruleset_draft_validation import MAX_BUILDER_DRAFT_BYTES
 
 
 async def _builder_body(request: web.Request) -> dict | web.Response:

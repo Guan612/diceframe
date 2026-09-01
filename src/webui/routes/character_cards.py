@@ -30,11 +30,9 @@ async def api_character_card_update(request: web.Request) -> web.Response:
 
 
 async def api_character_card_profile_update(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_characters import update_character_card_profile
-
     body = await request.json()
-    result = update_character_card_profile(
-        _get_api(request), request.match_info["card_id"], body,
+    result = _get_api(request).update_ruleset_character_card_profile(
+        request.match_info["card_id"], body,
     )
     if result.get("ok"):
         return web.json_response(result)
@@ -44,12 +42,18 @@ async def api_character_card_profile_update(request: web.Request) -> web.Respons
 
 
 async def _api_character_card_advancement(request: web.Request, action: str) -> web.Response:
-    from src.webui.services import ruleset_advancement
-
     body = await request.json()
-    method = getattr(ruleset_advancement, f"{action}_card")
     try:
-        result = method(_get_api(request), request.match_info["card_id"], body)
+        api = _get_api(request)
+        result = (
+            api.apply_character_card_advancement(
+                request.match_info["card_id"], body,
+            )
+            if action == "apply"
+            else api.preview_character_card_advancement(
+                request.match_info["card_id"], body,
+            )
+        )
     except ValueError as exc:
         result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error": str(exc)}
     if result.get("ok"):

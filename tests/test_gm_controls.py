@@ -3,6 +3,7 @@ import json
 import pytest
 
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
+from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.routes.games import _should_rebind_player_session
 from src.webui.services import (
     characters,
@@ -18,6 +19,31 @@ class DummyAPI:
         self._reg = registry
         self._character_cards_path = cards_path
         self._rules_dir = None
+        from src.webui.services.character_cards import CharacterCardDependencies
+
+        self._character_card_dependencies = CharacterCardDependencies(
+            cards_path=cards_path or registry.save_dir.parent / "character_cards.json",
+        )
+        self._character_dependencies = characters.CharacterDependencies(
+            games=characters.CharacterGameDependencies(
+                get_instance=registry.get,
+                parse_game_key=self._parse_key,
+                save_instance=registry.save,
+            ),
+            rules=characters.CharacterRuleDependencies(
+                rules_dir=None,
+                load_rule_by_id=lambda _rule_id, _language: None,
+                load_rule_for_game=lambda _instance: None,
+                ruleset_registry=RulesetRuntimeRegistry([]),
+            ),
+            assets=characters.CharacterAssetDependencies(
+                lorebook=None,
+                load_world_template=lambda _world_id, _language: None,
+                avatar_file=lambda _asset_id: None,
+                generated_image_file=lambda _asset_id: None,
+            ),
+            save_character_card=self.save_character_card,
+        )
 
     def _parse_key(self, game_key: str) -> tuple:
         return tuple(game_key.split(_GAME_KEY_SEP))
@@ -28,7 +54,7 @@ class DummyAPI:
     def save_character_card(self, character):
         from src.webui.services.character_cards import save_character_card
 
-        return save_character_card(self, character)
+        return save_character_card(self._character_card_dependencies, character)
 
 
 def _game_controls(registry: GameRegistry) -> game_controls.GameControlService:
@@ -47,6 +73,17 @@ def _game_master(registry: GameRegistry) -> game_master.GameMasterService:
         save_instance=registry.save,
         load_rule=lambda _instance: None,
     ))
+
+
+def _game_queries(registry: GameRegistry) -> game_queries.GameQueryDependencies:
+    return game_queries.GameQueryDependencies(
+        list_instances=registry.list_all,
+        get_instance=registry.get,
+        parse_game_key=lambda game_key: tuple(game_key.split(_GAME_KEY_SEP)),
+        load_world_template=None,
+        load_rule_for_game=lambda _instance: None,
+        ruleset_registry=RulesetRuntimeRegistry(),
+    )
 
 
 @pytest.mark.asyncio
@@ -108,7 +145,7 @@ async def test_gm_private_message_appends_private_log(tmp_path):
     result = await _game_master(registry).private_message(
         _GAME_KEY_SEP.join(key), "p1", "你注意到门后有冷风。"
     )
-    log = game_queries.private_log(DummyAPI(registry), _GAME_KEY_SEP.join(key))
+    log = game_queries.private_log(_game_queries(registry), _GAME_KEY_SEP.join(key))
 
     assert result["ok"]
     assert inst.private_log["p1"][0]["source"] == "gm"
@@ -127,7 +164,7 @@ def test_private_log_for_user_only_returns_own_messages(tmp_path):
     registry.register(inst)
 
     log = game_queries.private_log_for_user(
-        DummyAPI(registry), _GAME_KEY_SEP.join(key), "p1",
+        _game_queries(registry), _GAME_KEY_SEP.join(key), "p1",
     )
 
     assert log["ok"] is True
@@ -167,7 +204,10 @@ async def test_delete_character_cleans_player_runtime_state(tmp_path):
     inst.private_log["p1"] = [{"text": "secret"}]
     registry.register(inst)
 
-    result = await characters.delete_character(DummyAPI(registry), _GAME_KEY_SEP.join(key), "p1")
+    api = DummyAPI(registry)
+    result = await characters.delete_character(
+        api._character_dependencies, _GAME_KEY_SEP.join(key), "p1",
+    )
 
     assert result["ok"] is True
     assert "p1" not in inst.players

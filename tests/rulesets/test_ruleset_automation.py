@@ -1,8 +1,8 @@
 from copy import deepcopy
-from types import SimpleNamespace
 
 import pytest
 
+from src.engine.game_instance import GameInstance
 from src.rulesets.automation import apply_director_automation, summarize_automation_batches
 
 
@@ -21,9 +21,10 @@ class _FailingRuntime:
 
 
 def test_director_automation_rolls_back_partial_runtime_mutation():
-    instance = SimpleNamespace(
-        ruleset_state={"version": 1}, event_ledger=[], players={"p": {"hp": 10}},
-        combat_state="none", combat_active=False, initiative_order=[], initiative_current=0,
+    instance = GameInstance(
+        game_key=("test", "automation-rollback", "bot"),
+        ruleset_state={"version": 1},
+        players={"p": {"hp": 10}},
         scene="original scene",
     )
     before = deepcopy((instance.ruleset_state, instance.players, instance.scene))

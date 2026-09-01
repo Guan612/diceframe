@@ -18,8 +18,9 @@ import shutil
 import stat
 import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from src.docker_launcher.contracts import (
     PLATFORM as DOCKER_PLATFORM,
@@ -48,6 +49,14 @@ _ASSET_PATTERNS = {
         r"docker-update-linux-amd64\.zip$"
     ),
 }
+
+
+@dataclass(frozen=True)
+class UpdaterDependencies:
+    data_dir: Path
+    root: Path
+    mirrors: Any
+    check_updates: Callable[[], Awaitable[dict[str, Any]]]
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _ACTIVE_STATES = {"downloading", "verifying", "applying", "restarting"}
 _INTERRUPTIBLE_STATES = {"downloading", "verifying", "applying"}
@@ -308,14 +317,15 @@ def is_self_update_supported(root: Path) -> dict[str, Any]:
 class UpdaterService:
     """Persistent updater state machine."""
 
-    def __init__(self, data_dir: Path, root: Path, mirrors: Any) -> None:
-        self._data_dir = data_dir.resolve()
+    def __init__(self, dependencies: UpdaterDependencies) -> None:
+        self._data_dir = dependencies.data_dir.resolve()
         self._dir = self._data_dir / _UPDATER_DIR_NAME
         self._dir.mkdir(parents=True, exist_ok=True)
         self._state_file = self._dir / _STATE_FILE_NAME
         self._restart_signal = self._dir / _RESTART_SIGNAL_NAME
-        self._root = root.resolve()
-        self._mirrors = mirrors
+        self._root = dependencies.root.resolve()
+        self._mirrors = dependencies.mirrors
+        self._check_updates = dependencies.check_updates
         self._state = self._load_state()
         self._task: asyncio.Task | None = None
 
@@ -357,7 +367,7 @@ class UpdaterService:
     def is_busy(self) -> bool:
         return self._state.get("state") in _ACTIVE_STATES
 
-    async def download_update(self, api: Any, kind: str) -> dict[str, Any]:
+    async def download_update(self, kind: str) -> dict[str, Any]:
         if self._mirrors is None:
             return {"ok": False, "error": "镜像服务不可用（插件宿主未初始化）"}
         if kind not in _ASSET_PATTERNS:
@@ -376,7 +386,7 @@ class UpdaterService:
             expected = "便携版" if mode == "portable" else "完整源码"
             return {"ok": False, "error": f"当前安装方式需要下载{expected}更新包"}
 
-        check = await api.check_updates()
+        check = await self._check_updates()
         if not check.get("ok"):
             return {"ok": False, "error": check.get("error", "版本检查失败")}
         latest = check.get("latest") or {}

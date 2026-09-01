@@ -3,18 +3,39 @@
 from __future__ import annotations
 
 import secrets
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from datetime import datetime, timezone
 
-from src.webui.services.ruleset_builder import validate_draft_shape
+from src.webui.ruleset_draft_validation import validate_draft_shape
+from src.webui.ruleset_rest_projection import public_rest_session, saved_rest_session
 
 if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+    from src.rulesets.registry import RulesetRuntimeRegistry
+
+
+@dataclass(frozen=True)
+class RulesetRestDependencies:
+    load_rule_by_id: Callable[[str, str], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
+
+
+@dataclass(frozen=True)
+class LiveRulesetRestDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    save_instance: Callable[[Any], Awaitable[None]]
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
 
 
 def resolve(
-    api: "WebAPI", rule_id: str, body: Any, language: str = "",
+    dependencies: RulesetRestDependencies,
+    rule_id: str,
+    body: Any,
+    language: str = "",
 ) -> dict[str, Any]:
     parsed = validate_draft_shape(body)
     character = parsed.get("character")
@@ -26,10 +47,10 @@ def resolve(
         raise ValueError("rest must be short or long")
     if hit_die_rolls is not None and not isinstance(hit_die_rolls, dict):
         raise ValueError("hit_die_rolls must be a JSON object")
-    rule = api._load_rule_by_id(rule_id, language)
+    rule = dependencies.load_rule_by_id(rule_id, language)
     if rule is None:
         return {"ok": False, "code": "RULE_NOT_FOUND", "error": f"规则不存在: {rule_id}"}
-    runtime = api._ruleset_registry.resolve(rule.template)
+    runtime = dependencies.ruleset_registry.resolve(rule.template)
     method = getattr(runtime, "complete_rest", None)
     if not callable(method):
         return {
@@ -45,59 +66,12 @@ def _failure(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message, **extra}
 
 
-def _saved_rest_session(instance: Any) -> dict[str, Any]:
-    state = getattr(instance, "ruleset_state", None)
-    if not isinstance(state, dict):
-        return {}
-    session = state.get("rest_session")
-    return session if isinstance(session, dict) else {}
-
-
 def _set_rest_session(instance: Any, session: dict[str, Any]) -> None:
     state = getattr(instance, "ruleset_state", None)
     if not isinstance(state, dict):
         state = {}
         instance.ruleset_state = state
     state["rest_session"] = session
-
-
-def public_rest_session(instance: Any) -> dict[str, Any]:
-    """Return the shared rest proposal without exposing character sheets or rolls."""
-
-    session = _saved_rest_session(instance)
-    status = str(session.get("status") or "idle")
-    if status == "idle" and not session.get("participants"):
-        return {
-            "active": False,
-            "status": "idle",
-            "rest": None,
-            "ready_count": 0,
-            "active_count": 0,
-            "participants": [],
-        }
-    required = [str(uid) for uid in session.get("required_uids", []) if str(uid) in instance.players]
-    submitted = session.get("participants")
-    submitted = submitted if isinstance(submitted, dict) else {}
-    rows: list[dict[str, Any]] = []
-    for uid in required:
-        player = instance.players.get(uid) or {}
-        entry = submitted.get(uid)
-        rows.append({
-            "user_id": uid,
-            "character_name": str(player.get("character_name") or uid),
-            "status": "submitted" if isinstance(entry, dict) else "waiting",
-        })
-    ready_count = sum(row["status"] == "submitted" for row in rows)
-    return {
-        "active": status in {"collecting", "resolving"},
-        "status": status,
-        "rest": session.get("rest"),
-        "ready_count": ready_count,
-        "active_count": len(rows),
-        "participants": rows,
-        "resolved_at": session.get("resolved_at"),
-        "error": session.get("error", ""),
-    }
 
 
 def _rest_eligible_uids(instance: Any) -> list[str]:
@@ -173,7 +147,10 @@ def _server_hit_die_rolls(character: dict[str, Any], requested: Any) -> dict[str
 
 
 async def resolve_live(
-    api: "WebAPI", game_key: str, user_id: str, body: Any,
+    dependencies: LiveRulesetRestDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
 ) -> dict[str, Any]:
     parsed = validate_draft_shape(body)
     rest = parsed.get("rest")
@@ -191,16 +168,16 @@ async def resolve_live(
     if not operation_id or len(operation_id) > 160:
         return _failure("INVALID_OPERATION_ID", "休息操作必须提供有效的 operation_id")
 
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None:
         return _failure("GAME_NOT_FOUND", "游戏不存在")
     if user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return _failure("RULE_NOT_FOUND", "当前游戏规则不存在")
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return _failure("RULESET_RUNTIME_UNAVAILABLE", str(exc))
     method = getattr(runtime, "complete_rest", None)
@@ -268,9 +245,9 @@ async def resolve_live(
     before_player = deepcopy(instance.players[user_id])
     instance.set_character_sheet(user_id, updated)
     try:
-        await api._reg.save(instance)
+        await dependencies.save_instance(instance)
     except Exception:
-        instance.players[user_id] = before_player
+        instance.put_player(user_id, before_player)
         raise
     return {
         "ok": True, "rule_id": rule.rule_id, "game_key": game_key,
@@ -281,7 +258,10 @@ async def resolve_live(
 
 
 async def resolve_live_party(
-    api: "WebAPI", game_key: str, user_id: str, body: Any,
+    dependencies: LiveRulesetRestDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
 ) -> dict[str, Any]:
     """Collect one player's rest choice and resolve the whole present party together."""
 
@@ -299,14 +279,14 @@ async def resolve_live_party(
     if not operation_id or len(operation_id) > 160:
         return _failure("INVALID_OPERATION_ID", "休息操作必须提供有效的 operation_id")
 
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None:
         return _failure("GAME_NOT_FOUND", "游戏不存在")
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return _failure("RULE_NOT_FOUND", "当前游戏规则不存在")
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return _failure("RULESET_RUNTIME_UNAVAILABLE", str(exc))
     method = getattr(runtime, "complete_rest", None)
@@ -328,16 +308,16 @@ async def resolve_live_party(
         except ValueError as exc:
             return _failure("INVALID_REST", str(exc))
 
-        session = _saved_rest_session(instance)
+        session = saved_rest_session(instance)
         status = str(session.get("status") or "idle")
         if status in {"idle", "completed", "error"}:
-            required = _rest_eligible_uids(instance)
-            if not required:
+            eligible_uids = _rest_eligible_uids(instance)
+            if not eligible_uids:
                 return _failure("REST_NOT_AVAILABLE", "当前没有可参加休息的存活角色")
             session = {
                 "status": "collecting",
                 "rest": rest,
-                "required_uids": required,
+                "required_uids": eligible_uids,
                 "participants": {},
                 "started_at": datetime.now(timezone.utc).isoformat(),
             }
@@ -380,7 +360,7 @@ async def resolve_live_party(
         if not required.issubset(participants):
             session["status"] = "collecting"
             _set_rest_session(instance, session)
-            await api._reg.save(instance)
+            await dependencies.save_instance(instance)
             return {
                 "ok": True, "pending": True, "resolved": False, "rest": rest,
                 "rest_session": public_rest_session(instance),
@@ -392,7 +372,7 @@ async def resolve_live_party(
         results: dict[str, dict[str, Any]] = {}
         for uid in sorted(required):
             item = participants[uid]
-            result = await resolve_live(api, game_key, uid, {
+            result = await resolve_live(dependencies, game_key, uid, {
                 "rest": rest,
                 "hit_dice": item.get("hit_dice", {}),
                 "confirm_elapsed_time": True,
@@ -401,18 +381,18 @@ async def resolve_live_party(
             })
             if not result.get("ok"):
                 for restore_uid, player in before_players.items():
-                    instance.players[restore_uid] = player
+                    instance.put_player(restore_uid, player)
                 session["status"] = "error"
                 session["error"] = str(result.get("error") or "队伍休息结算失败")
                 _set_rest_session(instance, session)
-                await api._reg.save(instance)
+                await dependencies.save_instance(instance)
                 return _failure("PARTY_REST_FAILED", session["error"], rest_session=public_rest_session(instance))
             results[uid] = result
         session["status"] = "completed"
         session["resolved_at"] = datetime.now(timezone.utc).isoformat()
         session["error"] = ""
         _set_rest_session(instance, session)
-        await api._reg.save(instance)
+        await dependencies.save_instance(instance)
         own = results.get(user_id) or {}
         return {
             **own,

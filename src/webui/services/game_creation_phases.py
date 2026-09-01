@@ -8,7 +8,7 @@ from typing import Any
 
 from src.rules.rule_system import RuleSystem
 from src.webui.services._common import _GAME_KEY_SEP
-from src.webui.services.game_lifecycle_context import (
+from src.webui.game_lifecycle_context import (
     CreationTransaction,
     GameLifecycleDependencies,
 )

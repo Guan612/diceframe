@@ -1,23 +1,13 @@
 from src.lorebook.store import LorebookStore
-from src.webui.services.character_cards import _import_tavern_as_npc
-
-
-class _Api:
-    """最小 api：只暴露 _lore 和 _rebuild_lorebook_index 给 NPC 导入用。"""
-    def __init__(self, store):
-        self._lore = store
-
-    def _rebuild_lorebook_index(self, world_id):
-        pass
+from src.webui.services.character_cards import (
+    CharacterCardDependencies,
+    _import_tavern_as_npc,
+)
 
 
 def test_update_card_can_explicitly_clear_uploaded_portrait(tmp_path):
     import json
     from src.webui.services.character_cards import update_character_card
-
-    class _CardApi:
-        def __init__(self, path):
-            self._character_cards_path = path
 
     cards_path = tmp_path / "cards.json"
     cards_path.write_text(json.dumps([{
@@ -26,7 +16,8 @@ def test_update_card_can_explicitly_clear_uploaded_portrait(tmp_path):
         "portrait": {"kind": "upload", "asset_id": "avatar.webp"},
     }]), encoding="utf-8")
 
-    result = update_character_card(_CardApi(cards_path), "card-1", {"portrait": None})
+    dependencies = CharacterCardDependencies(cards_path=cards_path)
+    result = update_character_card(dependencies, "card-1", {"portrait": None})
 
     assert result["ok"] is True
     assert "portrait" not in result["card"]
@@ -38,12 +29,8 @@ def test_export_preserves_business_fields_strips_runtime_markers(tmp_path):
     import json
     from src.webui.services.character_cards import export_character_cards
 
-    class _Api:
-        def __init__(self, path):
-            self._character_cards_path = path
-
     cards_path = tmp_path / "cards.json"
-    api = _Api(cards_path)
+    dependencies = CharacterCardDependencies(cards_path=cards_path)
     card = {
         "id": "st_123", "schema_version": 2, "character_name": "Himmel",
         "attributes": {}, "skills": [],
@@ -52,7 +39,7 @@ def test_export_preserves_business_fields_strips_runtime_markers(tmp_path):
         "source_plugin": "napcat", "plugin_content_id": "p1",
     }
     cards_path.write_text(json.dumps([card], ensure_ascii=False), encoding="utf-8")
-    result = export_character_cards(api, ["st_123"])
+    result = export_character_cards(dependencies, ["st_123"])
     assert result["ok"] is True
     payload = json.loads(result["payload"].decode("utf-8"))
     # 业务字段保留
@@ -70,18 +57,14 @@ def test_export_batch_disambiguates_same_name(tmp_path):
     import zipfile
     from src.webui.services.character_cards import export_character_cards
 
-    class _Api:
-        def __init__(self, path):
-            self._character_cards_path = path
-
     cards_path = tmp_path / "cards.json"
-    api = _Api(cards_path)
+    dependencies = CharacterCardDependencies(cards_path=cards_path)
     cards = [
         {"id": "c1", "schema_version": 2, "character_name": "艾琳", "attributes": {}},
         {"id": "c2", "schema_version": 2, "character_name": "艾琳", "attributes": {}},
     ]
     cards_path.write_text(json.dumps(cards, ensure_ascii=False), encoding="utf-8")
-    result = export_character_cards(api, ["c1", "c2"])
+    result = export_character_cards(dependencies, ["c1", "c2"])
     assert result["ok"] is True
     assert result["content_type"] == "application/zip"
     with zipfile.ZipFile(io.BytesIO(result["payload"])) as zf:
@@ -97,21 +80,21 @@ def test_export_import_roundtrip_preserves_raw_sillytavern(tmp_path):
     import json
     from src.webui.services.character_cards import export_character_cards, import_character_card
 
-    class _Api:
-        def __init__(self, path):
-            self._character_cards_path = path
-
     cards_path = tmp_path / "cards.json"
-    api = _Api(cards_path)
+    dependencies = CharacterCardDependencies(cards_path=cards_path)
     card = {
         "id": "st_123", "schema_version": 2, "character_name": "Himmel",
         "attributes": {}, "skills": [], "source": "SillyTavern: himmel.png",
         "raw_sillytavern": {"name": "Himmel", "description": "冒险者"},
     }
     cards_path.write_text(json.dumps([card], ensure_ascii=False), encoding="utf-8")
-    exported = export_character_cards(api, ["st_123"])
+    exported = export_character_cards(dependencies, ["st_123"])
     file_data = base64.b64encode(exported["payload"]).decode()
-    imported = asyncio.run(import_character_card(api, file_data=file_data, file_name="Himmel.json"))
+    imported = asyncio.run(
+        import_character_card(
+            dependencies, file_data=file_data, file_name="Himmel.json",
+        )
+    )
     assert imported["ok"] is True
     assert imported["format"] == "diceframe"
     assert imported["card"]["raw_sillytavern"] == card["raw_sillytavern"]
@@ -134,7 +117,12 @@ def test_import_tavern_as_npc_creates_npc_and_book_entries(tmp_path):
                 {"keys": ["过去"], "content": "Himmel 的往事", "comment": "往事"},
             ],
         }
-        result = _import_tavern_as_npc(_Api(store), tavern, "w1")
+        dependencies = CharacterCardDependencies(
+            cards_path=tmp_path / "cards.json",
+            lorebook=store,
+            rebuild_lorebook_index=lambda _world_id: None,
+        )
+        result = _import_tavern_as_npc(dependencies, tavern, "w1")
 
         assert result["ok"] is True
         assert result["imported_as"] == "npc"
@@ -158,7 +146,7 @@ def test_import_tavern_as_npc_creates_npc_and_book_entries(tmp_path):
 
         # 幂等：再导一次是更新而非新增，条目数不变（1 npc + 2 book = 3）
         tavern["description"] = "更新后的描述"
-        _import_tavern_as_npc(_Api(store), tavern, "w1")
+        _import_tavern_as_npc(dependencies, tavern, "w1")
         npc2 = store.get_entry("w1_tavern_Himmel")
         assert "更新后的描述" in npc2["content"]
         assert len(store.list_entries("w1")) == 3
@@ -170,11 +158,19 @@ def test_import_tavern_as_npc_requires_world(tmp_path):
     store = LorebookStore(tmp_path / "lore.db")
     store.open()
     try:
-        api = _Api(store)
+        dependencies = CharacterCardDependencies(
+            cards_path=tmp_path / "cards.json",
+            lorebook=store,
+            rebuild_lorebook_index=lambda _world_id: None,
+        )
         # 无 world_id
-        assert _import_tavern_as_npc(api, {"name": "X"}, "")["ok"] is False
+        assert _import_tavern_as_npc(
+            dependencies, {"name": "X"}, "",
+        )["ok"] is False
         # 世界不存在
-        assert _import_tavern_as_npc(api, {"name": "X"}, "no-such-world")["ok"] is False
+        assert _import_tavern_as_npc(
+            dependencies, {"name": "X"}, "no-such-world",
+        )["ok"] is False
     finally:
         store.close()
 
@@ -197,7 +193,12 @@ def test_import_tavern_carries_play_directives_and_nsfw_warning(tmp_path):
             "tags": ["Game Characters", "Female", "Cute"],
             "character_book": None,
         }
-        result = _import_tavern_as_npc(_Api(store), tavern, "w1")
+        dependencies = CharacterCardDependencies(
+            cards_path=tmp_path / "cards.json",
+            lorebook=store,
+            rebuild_lorebook_index=lambda _world_id: None,
+        )
+        result = _import_tavern_as_npc(dependencies, tavern, "w1")
         assert result["ok"] is True
         assert "nsfw_warning" not in result  # 无 NSFW 标记，不给警告
 

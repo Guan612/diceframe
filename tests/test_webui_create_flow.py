@@ -15,7 +15,7 @@ from src.llm.client import LLMResponse
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.webui.api import WebAPI, can_modify_character
-from src.webui.services.game_lifecycle_context import CreationTransaction
+from src.webui.game_lifecycle_context import CreationTransaction
 from src.webui.session import SessionManager
 
 
