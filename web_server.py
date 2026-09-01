@@ -63,6 +63,11 @@ from src.webui.config_update import (
     prepare_config_update,
     provider_runtime_changed,
 )
+from src.webui.composition import (
+    RuntimeComposition,
+    RuntimeFactories,
+    RuntimePaths,
+)
 from src.webui.routes._common import _get_api, _require_confirmed_request
 from src.webui.routes.character_cards import register_character_cards
 from src.webui.routes.avatars import register_avatars
@@ -466,143 +471,46 @@ def _build_subsystems(
     reuse: TRPGSubsystems | None = None,
     config: dict | None = None,
 ) -> TRPGSubsystems:
-    runtime_config = STATE if config is None else config
-    # 引用服务商时凭据以服务商为准（即使 key 为空也不回退内联，避免把 key 发给别家服务）；
-    # 未引用则维持原内联配置与回退语义。
-    main_provider = resolve_provider(runtime_config, runtime_config.get("llm_provider_ref", ""))
-    if main_provider:
-        main_base_url, main_api_key, main_api_format = (
-            main_provider["base_url"], main_provider["api_key"], main_provider["api_format"])
-    else:
-        main_base_url = runtime_config["base_url"]
-        main_api_key = runtime_config["api_key"]
-        main_api_format = normalize_api_format(runtime_config.get("api_format"))
-    providers = [ProviderConfig(provider_name="default", base_url=main_base_url,
-                                api_key=main_api_key, model_name=runtime_config["model"],
-                                api_format=main_api_format)]
-    for idx in (1, 2):
-        if not runtime_config.get(f"fallback{idx}_enabled"):
-            continue
-        fallback_provider = resolve_provider(runtime_config, runtime_config.get(f"fallback{idx}_provider_ref", ""))
-        fallback_base_url = (fallback_provider["base_url"] if fallback_provider
-                             else runtime_config.get(f"fallback{idx}_base_url", ""))
-        fallback_model = runtime_config.get(f"fallback{idx}_model", "")
-        if not (fallback_base_url and fallback_model):
-            continue
-        if fallback_provider:
-            fallback_api_key = fallback_provider["api_key"]
-            fallback_api_format = fallback_provider["api_format"]
-        else:
-            fallback_api_key = runtime_config.get(f"fallback{idx}_api_key") or main_api_key
-            fallback_api_format = normalize_api_format(runtime_config.get(f"fallback{idx}_api_format"))
-        providers.append(ProviderConfig(
-            provider_name=f"fallback{idx}",
-            base_url=fallback_base_url,
-            api_key=fallback_api_key,
-            model_name=fallback_model,
-            api_format=fallback_api_format,
-            fallback=True,
-        ))
-    embedding_provider = resolve_provider(runtime_config, runtime_config.get("embedding_provider_ref", ""))
-    if embedding_provider:
-        emb_base = embedding_provider["base_url"]
-        emb_api_key = embedding_provider["api_key"]
-    else:
-        emb_base = runtime_config.get("embedding_base_url", "")
-        emb_api_key = runtime_config.get("embedding_api_key") or main_api_key
-    emb_enabled = runtime_config.get("embedding_enabled", False) and bool(emb_base)
-    return create_trpg_subsystems(
-        data_dir=DATA_DIR, prompts_dir=PROMPTS_DIR,
-        rules_dir=RULES_DIR, worlds_dir=WORLDS_DIR,
-        adventures_dir=ADVENTURES_DIR,
-        providers=providers, default_provider="default",
-        embedding_enabled=emb_enabled,
-        embedding_base_url=emb_base,
-        embedding_api_key=emb_api_key,
-        embedding_model=runtime_config.get("embedding_model", "nomic-embed-text"),
-        embedding_max_input=int(runtime_config.get("embedding_max_input", 0)),
-        proxy_url=effective_proxy_url(bool(runtime_config.get("proxy_enabled")), runtime_config.get("proxy_url", "")),
-        narrative_max_tokens=int(runtime_config.get("narrative_max_tokens", DEFAULT_NARRATIVE_MAX_TOKENS)),
-        character_gen_max_tokens=int(runtime_config.get("character_gen_max_tokens", 4096)),
-        summary_max_tokens=int(runtime_config.get("summary_max_tokens", 1024)),
-        brief_max_tokens=int(runtime_config.get("brief_max_tokens", 1024)),
-        analysis_max_tokens=int(runtime_config.get("analysis_max_tokens", 1024)),
-        model_request_timeout_seconds=float(runtime_config.get("model_request_timeout_seconds", 120)),
-        reuse=reuse,
-    )
+    return _runtime_composition().build_subsystems(reuse=reuse, config=config)
 
 
 def _config_with_resolved_api_refs(config: dict) -> dict:
-    """Resolve shared provider references into capability-specific runtime keys."""
-    resolved = dict(config)
-    tts_provider = resolve_provider(config, config.get("tts_provider_ref", ""))
-    if tts_provider:
-        resolved["tts_base_url"] = tts_provider["base_url"]
-        resolved["tts_api_key"] = tts_provider["api_key"]
-    asr_provider = resolve_provider(config, config.get("asr_provider_ref", ""))
-    if asr_provider:
-        resolved["asr_base_url"] = asr_provider["base_url"]
-        resolved["asr_api_key"] = asr_provider["api_key"]
-    imagegen_provider = resolve_provider(config, config.get("imagegen_provider_ref", ""))
-    if imagegen_provider and imagegen_provider.get("api_format") == "openai":
-        resolved["imagegen_base_url"] = imagegen_provider["base_url"]
-        resolved["imagegen_api_key"] = imagegen_provider["api_key"]
-    return resolved
+    return RuntimeComposition.config_with_resolved_api_refs(config)
 
 
 def _make_api(subsystems: TRPGSubsystems, plugin_host=None, config: dict | None = None, hub_client=None) -> WebAPI:
-    runtime_config = STATE if config is None else config
-    api_config = _config_with_resolved_api_refs(runtime_config)
-    speech_service = SpeechService(
-        api_config,
-        DATA_DIR / "tts-cache",
-        proxy_url=effective_proxy_url(
-            bool(runtime_config.get("proxy_enabled")),
-            runtime_config.get("proxy_url", ""),
-        ),
-    )
-    asr_service = AsrService(
-        api_config,
-        proxy_url=effective_proxy_url(
-            bool(runtime_config.get("proxy_enabled")),
-            runtime_config.get("proxy_url", ""),
-        ),
-    )
-    imagegen_service = ImageGenerationService(
-        api_config,
-        DATA_DIR / "generated-images",
-        proxy_url=effective_proxy_url(
-            bool(runtime_config.get("proxy_enabled")),
-            runtime_config.get("proxy_url", ""),
-        ),
-    )
-    api = WebAPI(
-        registry=subsystems.registry, lorebook=subsystems.lorebook_store,
-        memory=subsystems.memory_store, rules_dir=RULES_DIR,
-        handler=subsystems.handler, llm_client=subsystems.llm_client,
-        worlds_dir=WORLDS_DIR,
-        adventures_dir=ADVENTURES_DIR,
-        character_gen_max_tokens=int(runtime_config.get("character_gen_max_tokens", 4096)),
-        text_gen_max_tokens=int(runtime_config.get("text_gen_max_tokens", 1024)),
+    return _runtime_composition().make_api(
+        subsystems,
         plugin_host=plugin_host,
+        config=config,
         hub_client=hub_client,
-        speech_service=speech_service,
-        asr_service=asr_service,
-        imagegen_service=imagegen_service,
-        ruleset_registry=getattr(subsystems, "ruleset_registry", None),
-        content_cache_dir=DATA_DIR / "content-cache",
     )
-    # 配置状态引用就地更新，始终指向最新值（更新频道等运行时配置）
-    api._config_state = STATE
-    # 持久化回调：service 层更新 public_base_url 后走标准写盘路径（见 services/tunnel.py）
-    api._save_config = save_config
-    return api
 
 
 def _activate_api_runtime(subsystems: TRPGSubsystems, api: WebAPI) -> None:
-    handler = getattr(subsystems, "handler", None)
-    if handler is not None and hasattr(handler, "set_image_generation_service"):
-        handler.set_image_generation_service(getattr(api, "_imagegen", None))
+    RuntimeComposition.activate_api_runtime(subsystems, api)
+
+
+def _runtime_composition() -> RuntimeComposition:
+    """Build the composition boundary from current compatibility globals."""
+    return RuntimeComposition(
+        paths=RuntimePaths(
+            data_dir=DATA_DIR,
+            prompts_dir=PROMPTS_DIR,
+            rules_dir=RULES_DIR,
+            worlds_dir=WORLDS_DIR,
+            adventures_dir=ADVENTURES_DIR,
+        ),
+        state=STATE,
+        save_config=save_config,
+        factories=RuntimeFactories(
+            create_subsystems=create_trpg_subsystems,
+            create_web_api=WebAPI,
+            create_speech=SpeechService,
+            create_asr=AsrService,
+            create_imagegen=ImageGenerationService,
+        ),
+    )
 
 
 async def _periodic_save(app: web.Application):

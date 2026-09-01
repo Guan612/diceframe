@@ -7,6 +7,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
@@ -120,12 +121,16 @@ class WebAPI:
                  text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
                  speech_service=None, asr_service=None, imagegen_service=None,
                  ruleset_registry: RulesetRuntimeRegistry | None = None,
-                 content_cache_dir: Path | None = None):
+                 content_cache_dir: Path | None = None,
+                 config_state: dict | None = None,
+                 save_config: Callable[[], None] | None = None):
         self._reg = registry
         self._lore = lorebook
         self._mem = memory
         self._rules_dir = rules_dir
         self._handler = handler
+        self._config_state = config_state if config_state is not None else {}
+        self._save_config = save_config or (lambda: None)
         handler_rulesets = getattr(handler, "ruleset_registry", None)
         self._ruleset_registry: RulesetRuntimeRegistry = (
             ruleset_registry or handler_rulesets or build_default_ruleset_registry()
