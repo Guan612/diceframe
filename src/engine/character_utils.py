@@ -246,11 +246,12 @@ def apply_hp_delta(character_sheet: dict, hp_change: int | float, *, bounded: bo
 
 
 def apply_currency_delta(character_sheet: dict, delta: int | float) -> int:
-    """应用金币/通用货币变化并保持 legacy gold 与 currency.amount 同步。"""
-    current = max(0, int(character_sheet.get("gold", 0) or 0) + int(delta))
-    character_sheet["gold"] = current
+    """Apply canonical currency and mirror the legacy ``gold`` projection."""
     currency = character_sheet.setdefault("currency", {})
+    raw_current = currency.get("amount", character_sheet.get("gold", 0))
+    current = max(0, int(raw_current or 0) + int(delta))
     currency["amount"] = current
+    character_sheet["gold"] = current
     return current
 
 
@@ -455,6 +456,7 @@ def reset_character_for_restart(character_sheet: dict) -> dict:
     character_sheet["deceased"] = False
     character_sheet.pop("status", None)
     character_sheet.pop("death_round", None)
+    character_sheet.pop("death_saves", None)
     normalize_character_sheet(character_sheet)
     return character_sheet
 

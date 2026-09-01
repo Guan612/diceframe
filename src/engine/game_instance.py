@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
+from uuid import uuid4
 
 from src.engine.contracts import (
     ActionRecord,
@@ -108,6 +109,10 @@ class GameInstance:
     """
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
+    instance_schema_version: int = 2
+    run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
+    memory_namespace: str = ""
+    economy: dict[str, Any] = field(default_factory=dict)
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
     ruleset_runtime: dict[str, Any] = field(default_factory=dict)
@@ -244,6 +249,40 @@ class GameInstance:
     _tag_fail_streak: int = field(default=0, repr=False)
     # D1: 已确认事项（CONFIRMED 标签累积），注入 LLM 上下文防重复讨论
     confirmed_items: list = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.run_id:
+            self.run_id = f"run_{uuid4().hex}"
+        if not self.memory_namespace:
+            self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
+        if not isinstance(self.economy, dict) or not self.economy:
+            self.economy = self._fresh_economy_state()
+        else:
+            self.economy.setdefault("schema_version", 1)
+            self.economy.setdefault("run_id", self.run_id)
+            self.economy.setdefault("next_sequence", 1)
+            self.economy.setdefault("proposals", [])
+            self.economy.setdefault("transactions", [])
+            self.economy.setdefault("idempotency_records", {})
+
+    def _fresh_economy_state(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "run_id": self.run_id,
+            "next_sequence": 1,
+            "proposals": [],
+            "transactions": [],
+            "idempotency_records": {},
+        }
+
+    def rotate_run_identity(self) -> tuple[str, str]:
+        """Start an isolated run namespace and return ``(old, new)``."""
+
+        old = self.run_id
+        self.run_id = f"run_{uuid4().hex}"
+        self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
+        self.economy = self._fresh_economy_state()
+        return old, self.run_id
 
     # ---------- 状态查询 ------------------------------------
 
@@ -510,10 +549,37 @@ class GameInstance:
         self.pending_payments.append(payment)
 
     def remove_payments_for_player(self, uid: str) -> None:
+        affected_ids: set[str] = set()
+        for proposal in self.economy.get("proposals", []):
+            if not isinstance(proposal, dict) or proposal.get("status") != "pending":
+                continue
+            participant_uids = {
+                str(proposal.get("payer_uid") or proposal.get("uid") or ""),
+                str(proposal.get("recipient_uid") or ""),
+                *(
+                    str(item.get("uid") or "")
+                    for item in (proposal.get("contributors") or [])
+                    if isinstance(item, dict)
+                ),
+            }
+            if uid in participant_uids:
+                proposal["status"] = "cancelled"
+                proposal["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                proposal["resolution_code"] = "PLAYER_REMOVED"
+                affected_ids.add(str(proposal.get("id") or ""))
         self.pending_payments = [
             payment
             for payment in self.pending_payments
-            if payment.get("uid") != uid and payment.get("recipient_uid") != uid
+            if (
+                payment.get("uid") != uid
+                and payment.get("recipient_uid") != uid
+                and str(payment.get("id") or "") not in affected_ids
+                and uid not in {
+                    str(item.get("uid") or "")
+                    for item in (payment.get("contributors") or [])
+                    if isinstance(item, dict)
+                }
+            )
         ]
 
     def prune_resolved_payments(self) -> None:
@@ -637,6 +703,9 @@ class GameInstance:
             if not self.log:
                 return None
             last = self.log.pop()
+            from src.engine.economy import reverse_round_economy
+
+            reverse_round_economy(self, int(last.get("round", self.round_number) or self.round_number))
             snapshot = last.get("round_start_snapshot") or last.get("pre_state_snapshot", {})
             if isinstance(snapshot, dict) and snapshot:
                 restore_players(self, snapshot)
@@ -1057,6 +1126,7 @@ class GameInstance:
             saved_language = normalize_language(self.language)
             saved_ruleset_runtime = copy.deepcopy(self.ruleset_runtime)
             saved_adventure_binding = copy.deepcopy(self.adventure_binding)
+            self.rotate_run_identity()
             self.players.clear()
             self.npcs.clear()
             self.round_number = 0

@@ -101,7 +101,7 @@ async def test_schedule_scene_image_updates_log_and_generated_reference():
     assert request.owner_type == "game"
     assert request.owner_id == "web:room:test"
     assert request.aspect_ratio == "16:9"
-    assert request.context == {"round": 3}
+    assert request.context == {"round": 3, "run_id": registry.instance.run_id}
     assert registry.saved == [registry.instance.game_key]
 
 
@@ -192,3 +192,30 @@ async def test_in_flight_image_blocks_new_request_for_same_game():
     assert second is None
     slow_release.set()
     await first
+
+
+@pytest.mark.asyncio
+async def test_in_flight_image_from_previous_run_cannot_mutate_restarted_game():
+    slow_release = asyncio.Event()
+    registry = _FakeRegistry()
+    previous = _instance_with_log()
+    registry.instance = previous
+
+    class _SlowService(_FakeImageGenerationService):
+        async def generate(self, request):
+            await slow_release.wait()
+            return await super().generate(request)
+
+    processor = _processor(registry, _SlowService())
+    stale_task = processor.schedule_scene_image(previous, "old run", 3)
+    assert stale_task is not None
+    await asyncio.sleep(0)
+
+    restarted = _instance_with_log()
+    registry.instance = restarted
+    slow_release.set()
+    await stale_task
+
+    assert restarted.scene_image == {}
+    assert restarted.log[-1]["scene_image"] == {}
+    assert registry.saved == []

@@ -596,9 +596,26 @@ class TestGameRegistry:
         # 导出一个 zip（含 state.json + chatlog.jsonl）
         state = {
             "game_key": ["web", "orig", "bot"],
+            "instance_schema_version": 2,
+            "run_id": "run_exported",
+            "memory_namespace": "source-memory",
             "world_id": "w1", "world_name": "Orig", "state": "paused",
             "players": {}, "npcs": {}, "round_number": 5, "log": [],
             "summary": {}, "key_facts": [],
+            "economy": {
+                "schema_version": 1,
+                "run_id": "run_exported",
+                "next_sequence": 2,
+                "proposals": [{
+                    "id": "eco_pending", "run_id": "run_exported",
+                    "status": "pending",
+                }],
+                "transactions": [{
+                    "id": "tx_committed", "run_id": "run_exported",
+                    "status": "committed",
+                }],
+                "idempotency_records": {},
+            },
         }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
@@ -611,6 +628,16 @@ class TestGameRegistry:
         # 内存立即可见（不必等重启 recover_all）
         assert reg.get(new_key) is not None
         assert reg.get(new_key).round_number == 5
+        imported = reg.get(new_key)
+        assert imported.run_id != "run_exported"
+        assert imported.memory_namespace != "source-memory"
+        assert imported.memory_namespace.endswith(imported.run_id)
+        assert imported.economy["run_id"] == imported.run_id
+        assert all(
+            item["run_id"] == imported.run_id
+            for key in ("proposals", "transactions")
+            for item in imported.economy[key]
+        )
         # state.json 内 game_key 已改写为新值，避免 register 串到原对局
         saved = _json.loads(reg._save_path(new_key).read_text(encoding="utf-8"))
         assert saved["game_key"] == list(new_key)

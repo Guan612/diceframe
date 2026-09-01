@@ -11,6 +11,7 @@ from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
+from src.engine.economy import reverse_round_economy
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -28,6 +29,7 @@ class SwipeGenerator:
         load_world_template: Callable[[str, str], dict | None],
         ensure_matcher_for_world: Callable[[str, str], None],
         narrative_max_tokens: int,
+        get_instance: Callable[[tuple], GameInstance | None] | None = None,
     ):
         self.llm_client = llm_client
         self.matcher = matcher
@@ -36,6 +38,7 @@ class SwipeGenerator:
         self.load_world_template = load_world_template
         self.ensure_matcher_for_world = ensure_matcher_for_world
         self.narrative_max_tokens = narrative_max_tokens
+        self.get_instance = get_instance
         # 生图调度回调（GameHandler 注入）：swipe 叙事带新 SCENE_IMAGE 时重新生成该回合图片
         self._scene_image_hook = None
 
@@ -44,6 +47,7 @@ class SwipeGenerator:
 
     async def generate(self, instance: GameInstance, round_num: int) -> str | None:
         """为指定轮生成一个新 swipe（最多 5 个）。"""
+        expected_run_id = instance.run_id
         if instance._process_lock.locked():
             logger.warning("process_round 进行中，跳过 generate_swipe: %s", instance.game_key)
             return None
@@ -67,6 +71,7 @@ class SwipeGenerator:
 
         snapshot = target_entry.get("pre_state_snapshot", {})
         if snapshot:
+            reverse_round_economy(instance, round_num)
             restore_players(instance, snapshot)
             logger.info("Swipe: 已恢复 pre-state snapshot (round=%d)", round_num)
 
@@ -117,6 +122,11 @@ class SwipeGenerator:
             temperature=0.9,
             max_tokens=self.narrative_max_tokens,
         )
+        if self.get_instance:
+            current = self.get_instance(instance.game_key)
+            if current is not instance or instance.run_id != expected_run_id:
+                logger.warning("丢弃上一 run 的 swipe 响应: game=%s", instance.game_key)
+                return None
         response.content = normalize_tag_protocol(response.content)
 
         narration = response.content

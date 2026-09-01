@@ -21,6 +21,10 @@ def summarize_tags(data: dict) -> dict:
             tags.append(f"USE:{uid}:{player_update['use_item']}")
     for pay in state_update.get("pending_payments", []):
         tags.append(f"PAY:{pay.get('uid', '')}:{pay.get('amount', 0)}")
+    for proposal in state_update.get("economy_proposals", []):
+        tags.append(
+            f"ECONOMY:{proposal.get('kind', '')}:{proposal.get('uid', '')}:{proposal.get('amount', 0)}"
+        )
     if state_update.get("scene_change"):
         tags.append(f"SCENE:{state_update['scene_change']}")
     for name in state_update.get("npcs", {}):

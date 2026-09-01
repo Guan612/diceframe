@@ -53,8 +53,9 @@ class GameFactory:
         group_name: str, rule_id: str = "",
         seed_code: str = "", difficulty: str = "标准",
         language: str = DEFAULT_LANGUAGE,
+        fresh_instance: bool = False,
     ) -> GameInstance:
-        instance = self.registry.get_or_create(game_key)
+        instance = GameInstance(game_key=game_key) if fresh_instance else self.registry.get_or_create(game_key)
         world_data = self.load_world_template(world_id, language)
         if world_data:
             rule_id = rule_id or world_data.get("default_rule", "")

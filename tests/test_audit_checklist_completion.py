@@ -247,17 +247,23 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     cs_gm = inst.get_character_sheet(uid_gm)
     cs_player = inst.get_character_sheet(uid_player)
     assert cs_gm["hp"] == 29
-    assert cs_gm["gold"] == 25
-    assert cs_gm["currency"]["amount"] == 25
+    # Legacy GOLD no longer changes the wallet directly. It becomes a payer
+    # proposal, while PAY remains a separate proposal for the other player.
+    assert cs_gm["gold"] == 30
+    assert cs_gm["currency"]["amount"] == 30
     assert cs_gm["xp"] == 20
     assert any(item.get("name") == "银钥匙" for item in cs_gm["key_items"])
     assert any(item.get("name") == "狼王耳" for item in cs_player["key_items"])
     assert inst.private_log[uid_player][-1]["text"] == "你发现暗门"
     assert inst.quick_actions == ["搜索", "撤退"]
-    assert len(inst.pending_payments) == 1
-    payment_id = inst.pending_payments[0]["id"]
-    assert inst.pending_payments[0]["uid"] == uid_player
-    assert inst.pending_payments[0]["amount"] == 7
+    assert len(inst.pending_payments) == 2
+    gm_payment = next(item for item in inst.pending_payments if item["uid"] == uid_gm)
+    player_payment = next(item for item in inst.pending_payments if item["uid"] == uid_player)
+    assert gm_payment["amount"] == 5
+    payment_id = player_payment["id"]
+    assert player_payment["amount"] == 7
+    declined = await api.resolve_payment(game_key, gm_payment["id"], False, uid_gm)
+    assert declined["ok"] is True
 
     # PAY 跨存档 reload 后仍在；确认后只扣当事人的金币，并清理 pending 列表。
     await registry.save(inst)
@@ -348,7 +354,7 @@ async def test_payment_double_resolve_is_idempotent_and_cleans_history(audit_api
     )
 
     assert sum(1 for r in results if r["ok"]) == 1
-    assert sum(1 for r in results if not r["ok"] and "不存在" in r["error"]) == 1
+    assert sum(1 for r in results if not r["ok"] and r["code"] == "ALREADY_RESOLVED") == 1
     assert inst.get_character_sheet(uid)["gold"] == 18
     assert inst.get_character_sheet(uid)["currency"]["amount"] == 18
     assert inst.pending_payments == []

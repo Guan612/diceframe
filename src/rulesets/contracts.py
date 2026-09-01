@@ -236,6 +236,15 @@ class AdventureBindingMigrationRuntime(Protocol):
 
 
 @runtime_checkable
+class RunLifecycleRuntime(Protocol):
+    """Optional ruleset-owned initialization for a fresh playable run."""
+
+    def initialize_new_run(
+        self, instance: Any, *, preserve_characters: bool,
+    ) -> None: ...
+
+
+@runtime_checkable
 class PublicTimelineProjectionRuntime(Protocol):
     """Optional ruleset-owned projection into the shared public story feed."""
 

@@ -518,26 +518,37 @@ class DiceFrameBridgeService:
         payments = await self._pending_payments(game_key, actor)
         if accepted is None:
             if not payments:
-                return bridge_text(language, "当前没有待处理的支付请求。", "There are no pending payment requests.")
-            lines = [localized_text(language, {"en": "Pending payments:", "zh-CN": "待处理支付：", "ja": "支払い待ち："})]
+                return bridge_text(language, "当前没有待处理的经济提案。", "There are no pending economy proposals.")
+            lines = [localized_text(language, {"en": "Pending economy proposals:", "zh-CN": "待处理经济提案：", "ja": "保留中の経済提案："})]
             for index, payment in enumerate(payments, 1):
                 lines.append(payment_line(payment, index, language))
+            first_reference = int(payments[0].get("sequence", 1) or 1)
             lines.append(localized_text(language, {
-                "en": f"Confirm: {self._cmd('confirm pay 1')}; reject: {self._cmd('reject pay 1')}",
-                "zh-CN": f"确认：{self._cmd('确认支付 1')}；拒绝：{self._cmd('拒绝支付 1')}",
-                "ja": f"承認：{self._cmd('confirm pay 1')}；却下：{self._cmd('reject pay 1')}",
+                "en": f"Confirm: {self._cmd(f'confirm pay {first_reference}')}; reject: {self._cmd(f'reject pay {first_reference}')}",
+                "zh-CN": f"确认：{self._cmd(f'确认支付 {first_reference}')}；拒绝：{self._cmd(f'拒绝支付 {first_reference}')}",
+                "ja": f"承認：{self._cmd(f'confirm pay {first_reference}')}；却下：{self._cmd(f'reject pay {first_reference}')}",
             }))
             return "\n".join(lines)
         if not payments:
-            return bridge_text(language, "当前没有待处理的支付请求。", "There are no pending payment requests.")
-        index = payment_index(text)
-        if index < 1 or index > len(payments):
+            return bridge_text(language, "当前没有待处理的经济提案。", "There are no pending economy proposals.")
+        reference = payment_index(text)
+        payment = next(
+            (
+                item for item in payments
+                if int(item.get("sequence", 0) or 0) == reference
+            ),
+            None,
+        )
+        # Compatibility for old servers/proposals that did not expose a stable
+        # sequence: retain the historical one-based list position.
+        if payment is None and 1 <= reference <= len(payments):
+            payment = payments[reference - 1]
+        if payment is None:
             return localized_text(language, {
-                "en": f"There is no pending payment #{index}; use “{self._cmd('pay')}” to view the list.",
-                "zh-CN": f"没有第 {index} 笔待支付；发送“{self._cmd('支付')}”查看列表。",
-                "ja": f"第 {index} 番の支払い待ちはありません；“{self._cmd('pay')}”で一覧を確認してください。",
+                "en": f"There is no pending proposal #{reference}; use “{self._cmd('pay')}” to view the list.",
+                "zh-CN": f"没有编号 #{reference} 的待处理提案；发送“{self._cmd('支付')}”查看列表。",
+                "ja": f"保留中の提案 #{reference} はありません；“{self._cmd('pay')}”で一覧を確認してください。",
             })
-        payment = payments[index - 1]
         result = await self.client.resolve_payment(game_key, actor, str(payment.get("id") or ""), accepted)
         if result.get("ok") is False:
             return str(result.get("error") or localized_text(language, {
@@ -546,10 +557,17 @@ class DiceFrameBridgeService:
                 "ja": "支払い処理に失敗しました",
             }))
         amount = int(payment.get("amount", 0) or 0)
+        is_reward = str(payment.get("kind") or "") == "reward"
+        if accepted and result.get("committed") is False:
+            return localized_text(language, {
+                "en": "Your approval was recorded; waiting for the other contributors.",
+                "zh-CN": "已记录你的确认，等待其他参与者。",
+                "ja": "承認を記録しました。ほかの参加者を待っています。",
+            })
         return localized_text(language, {
-            "en": f"Payment of {amount} gold {'confirmed' if accepted else 'rejected'}.",
-            "zh-CN": f"已{'确认' if accepted else '拒绝'}支付 {amount} 金币。",
-            "ja": f"{amount} ゴールドの支払いを{'承認' if accepted else '却下'}しました。",
+            "en": f"{'Reward' if is_reward else 'Payment'} of {amount} gold {'confirmed' if accepted else 'rejected'}.",
+            "zh-CN": f"已{'确认' if accepted else '拒绝'}{'奖励' if is_reward else '支付'} {amount} 金币。",
+            "ja": f"{amount} ゴールドの{'報酬' if is_reward else '支払い'}を{'承認' if accepted else '却下'}しました。",
         })
 
     def _require_group(self, stream_id: str, language: str = "") -> tuple[dict[str, Any], str, str]:
@@ -596,13 +614,28 @@ class DiceFrameBridgeService:
 
     async def _pending_payments(self, game_key: str, actor: str) -> list[dict[str, Any]]:
         detail = await self.client.detail(game_key, actor)
-        payments = detail.get("pending_payments") if isinstance(detail.get("pending_payments"), list) else []
+        payments = (
+            detail.get("economy_proposals")
+            if isinstance(detail.get("economy_proposals"), list)
+            else detail.get("pending_payments")
+            if isinstance(detail.get("pending_payments"), list)
+            else []
+        )
         gm_uid = str(detail.get("gm_uid") or "")
         return [
             item for item in payments
             if isinstance(item, dict)
             and item.get("status", "pending") == "pending"
-            and (actor == gm_uid or str(item.get("uid") or "") == actor)
+            and (
+                actor == gm_uid
+                or str(item.get("payer_uid") or item.get("uid") or "") == actor
+                or str(item.get("recipient_uid") or "") == actor
+                or actor in {
+                    str(contributor.get("uid") or "")
+                    for contributor in (item.get("contributors") or [])
+                    if isinstance(contributor, dict)
+                }
+            )
         ]
 
     async def _format_status(self, player: dict[str, Any], group: dict[str, Any], language: str) -> str:

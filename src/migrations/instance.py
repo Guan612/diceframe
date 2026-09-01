@@ -10,11 +10,129 @@ from collections.abc import Mapping
 from copy import deepcopy
 import logging
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
 
 
 logger = logging.getLogger("trpg")
+
+CURRENT_INSTANCE_SCHEMA_VERSION = 2
+
+
+def _legacy_run_id(payload: Mapping[str, Any]) -> str:
+    """Return a deterministic run identity for a pre-versioned save."""
+
+    game_key = "|".join(str(part) for part in (payload.get("game_key") or []))
+    started_at = str(payload.get("started_at") or "legacy")
+    return f"run_{uuid5(NAMESPACE_URL, f'diceframe:{game_key}:{started_at}').hex}"
+
+
+def _migrate_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(payload.get("run_id") or _legacy_run_id(payload))
+    payload["run_id"] = run_id
+    # Existing memory rows are keyed by the tuple string. Preserve access to
+    # those rows for the current run; reset/restart rotates to a namespaced key.
+    payload.setdefault("memory_namespace", str(tuple(payload.get("game_key") or ())))
+    for uid, player in (payload.get("players") or {}).items():
+        if not isinstance(player, dict):
+            continue
+        sheet = player.get("character_sheet")
+        if not isinstance(sheet, dict):
+            continue
+        currency = sheet.get("currency") if isinstance(sheet.get("currency"), dict) else {}
+        raw_amount = currency.get("amount", sheet.get("gold", 0))
+        try:
+            amount = max(0, int(raw_amount or 0))
+        except (TypeError, ValueError):
+            amount = max(0, int(sheet.get("gold", 0) or 0))
+        if currency.get("amount") is not None and sheet.get("gold") is not None:
+            try:
+                mismatch = int(currency["amount"]) != int(sheet["gold"])
+            except (TypeError, ValueError):
+                mismatch = True
+            if mismatch:
+                logger.warning(
+                    "迁移存档货币字段不一致，采用 currency.amount: uid=%s",
+                    uid,
+                )
+        sheet["currency"] = {**currency, "amount": amount}
+        sheet["gold"] = amount
+    legacy_proposals: list[dict[str, Any]] = []
+    for sequence, payment in enumerate(payload.get("pending_payments") or [], 1):
+        if not isinstance(payment, dict) or payment.get("status", "pending") != "pending":
+            continue
+        legacy_id = str(payment.get("id") or uuid5(
+            NAMESPACE_URL,
+            f"diceframe:{run_id}:legacy-payment:{sequence}",
+        ).hex)
+        legacy_proposals.append({
+            **deepcopy(payment),
+            "id": legacy_id,
+            "run_id": run_id,
+            "sequence": sequence,
+            "kind": "payment",
+            "payer_uid": str(payment.get("uid") or ""),
+            "approval_policy": "payer_or_gm_legacy",
+            "source": "legacy",
+            "source_ref": "",
+            "visibility": "private",
+            "status": "pending",
+        })
+    payload.setdefault("economy", {
+        "schema_version": 1,
+        "run_id": run_id,
+        "next_sequence": len(legacy_proposals) + 1,
+        "proposals": legacy_proposals,
+        "transactions": [],
+        "idempotency_records": {},
+    })
+    payload["instance_schema_version"] = 2
+    return payload
+
+
+def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply sequential, idempotent migrations to one persisted save payload."""
+
+    payload = deepcopy(dict(data))
+    version = int(payload.get("instance_schema_version", 1) or 1)
+    if version < 1 or version > CURRENT_INSTANCE_SCHEMA_VERSION:
+        raise ValueError(f"unsupported game instance schema version: {version}")
+    if version == 1:
+        payload = _migrate_v1_to_v2(payload)
+        version = 2
+    payload["instance_schema_version"] = version
+    return payload
+
+
+def rebind_imported_game_state_payload(
+    data: Mapping[str, Any],
+    *,
+    game_key: tuple[str, ...],
+    run_id: str,
+) -> dict[str, Any]:
+    """Clone an imported save into an isolated local aggregate identity.
+
+    Import keeps the saved play state and ledger, but it must not share the
+    source game's live-run or memory namespace. Embedded economy projections
+    are rebound together so pending decisions remain internally consistent.
+    """
+
+    payload = migrate_game_state_payload(data)
+    payload["game_key"] = list(game_key)
+    payload["run_id"] = run_id
+    payload["memory_namespace"] = f"{game_key!s}::run:{run_id}"
+    economy = payload.get("economy")
+    if isinstance(economy, dict):
+        economy["run_id"] = run_id
+        for collection_name in ("proposals", "transactions"):
+            for item in economy.get(collection_name, []) or []:
+                if isinstance(item, dict):
+                    item["run_id"] = run_id
+    for payment in payload.get("pending_payments", []) or []:
+        if isinstance(payment, dict):
+            payment["run_id"] = run_id
+    return payload
 
 
 def _referenced_player_ids(log: list[Any]) -> set[str]:
@@ -36,7 +154,7 @@ def normalize_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     Ghost-player cleanup intentionally requires historical evidence. Waiting
     rooms and unplayed multiplayer sessions therefore keep every participant.
     """
-    payload = deepcopy(dict(data))
+    payload = migrate_game_state_payload(data)
     players = payload.get("players")
     log = payload.get("log")
     if not isinstance(players, dict) or len(players) <= 1 or not isinstance(log, list) or not log:

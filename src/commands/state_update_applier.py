@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Callable
-from uuid import uuid4
 
 from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.engine.game_instance import GameInstance
@@ -23,6 +22,7 @@ from src.commands.state_items import (
     grant_classified_item,
 )
 from src.rules.rule_system import RuleSystem
+from src.engine.economy import queue_proposal
 
 logger = logging.getLogger("trpg")
 
@@ -138,7 +138,7 @@ class StateUpdateApplier:
             grant_classified_item(cs, item_name, category)
 
         # 待确认支付（PAY tag 不直接扣金币，转入 pending 等玩家确认）
-        for pay in update.get("pending_payments", []):
+        for proposal_index, pay in enumerate(update.get("pending_payments", [])):
             uid = pay.get("uid", "")
             amount = int(pay.get("amount", 0) or 0)
             if not uid or amount <= 0 or uid not in instance.players:
@@ -154,19 +154,39 @@ class StateUpdateApplier:
                         "name": item_name,
                         "category": classify_item(item_name, rule_cats),
                     })
-            instance.queue_payment({
-                "id": f"pay_{instance.round_number}_{uid}_{uuid4().hex[:8]}",
-                "uid": uid,
-                "amount": amount,
-                "recipient_uid": recipient_uid,
-                "rewards": rewards,
-                "reason": pay.get("reason") or (
+            queue_proposal(
+                instance,
+                kind="purchase" if rewards else "payment",
+                payer_uid=uid,
+                recipient_uid=recipient_uid,
+                amount=amount,
+                rewards=rewards,
+                reason=pay.get("reason") or (
                     f"购买 {'、'.join(item['name'] for item in rewards)}"
                     if rewards else "GM 建议支付"
                 ),
-                "status": "pending",
-                "round": instance.round_number,
-            })
+                source="pay_tag",
+                source_ref=f"round:{instance.run_id}:{instance.round_number}:pay:{proposal_index}:{uid}:{amount}:{recipient_uid}:{'|'.join(item['name'] for item in rewards)}",
+                approval_policy="payer",
+            )
+
+        for proposal_index, proposal in enumerate(update.get("economy_proposals", [])):
+            uid = str(proposal.get("uid") or "")
+            amount = int(proposal.get("amount", 0) or 0)
+            kind = str(proposal.get("kind") or "")
+            if uid not in instance.players or kind not in {"payment", "reward"}:
+                continue
+            queue_proposal(
+                instance,
+                kind=kind,
+                payer_uid=uid if kind == "payment" else "",
+                recipient_uid=uid if kind == "reward" else uid,
+                amount=amount,
+                reason=str(proposal.get("reason") or "经济提案"),
+                source=str(proposal.get("source") or "narrative"),
+                source_ref=f"round:{instance.run_id}:{instance.round_number}:legacy-gold:{proposal_index}:{kind}:{uid}:{amount}",
+                approval_policy="gm" if kind == "reward" else "payer",
+            )
 
     def apply_madness(self, instance: GameInstance, uid: str, cs: dict, loss: int) -> None:
         """兼容旧内部调用；实际逻辑已拆到 MadnessTracker。"""

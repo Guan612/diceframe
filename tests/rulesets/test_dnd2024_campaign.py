@@ -69,6 +69,23 @@ def _agreement(runtime: Dnd2024Runtime, instance: GameInstance) -> None:
     _submit(runtime, instance, "session_zero.lock")
 
 
+def test_new_run_initialization_clears_runtime_state_and_rebinds_campaign() -> None:
+    runtime, instance = _instance(adventure=True)
+    instance.ruleset_state = {
+        "state_schema_version": 1,
+        "combat": {"status": "active"},
+        "campaign": {"schema_version": 1, "tutorial": {"status": "completed"}},
+    }
+
+    runtime.initialize_new_run(instance, preserve_characters=True)
+
+    assert "combat" not in instance.ruleset_state
+    campaign = instance.ruleset_state["campaign"]
+    assert campaign["session_zero"]["status"] == "not_started"
+    assert campaign["tutorial"]["status"] == "not_started"
+    assert campaign["adventure_binding"]["adventure_id"] == "core:lanterns_of_greymoor"
+
+
 def test_session_zero_requires_every_player_and_revisions_reset_consent() -> None:
     runtime, instance = _instance(multiplayer=True)
     defaults = runtime.gameplay_view(instance, "gm", True)["campaign"][

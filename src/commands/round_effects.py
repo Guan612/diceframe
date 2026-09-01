@@ -131,7 +131,7 @@ async def apply_memory_delta(instance: GameInstance, response: Any, memory_store
     if response.memory_delta and memory_store:
         try:
             await memory_store.apply_delta(
-                str(instance.game_key), response.memory_delta, instance.round_number,
+                instance.memory_namespace, response.memory_delta, instance.round_number,
             )
         except Exception:
             logger.exception("记忆写入失败 (round=%d)", instance.round_number)

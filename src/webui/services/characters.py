@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.engine.character_utils import (
-    apply_currency_delta,
     build_starter_items,
     calc_hp_from_rule,
     initial_special_stat_value,
@@ -21,6 +20,7 @@ from src.engine.character_utils import (
 from src.content.worlds import localize_lorebook_entries
 from src.engine.language import localized_text
 from src.engine.health import record_health_event
+from src.engine.economy import resolve_proposal
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
@@ -602,95 +602,52 @@ async def resolve_payment(
     )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
-    payment = next(
-        (p for p in getattr(inst, "pending_payments", []) if p.get("id") == payment_id),
-        None,
-    )
-    if not payment:
-        return {"ok": False, "error": "支付请求不存在"}
-    if payment.get("status") != "pending":
-        return {"ok": False, "error": "支付请求已处理"}
+    actor_uid = str(session_uid or "")
 
-    uid = payment.get("uid", "")
-    # 权限：GM 或支付当事玩家可处理（玩家自己确认/拒绝购买）
-    if session_uid and session_uid != inst.gm_uid and session_uid != uid:
-        return {"ok": False, "error": "仅 GM 或当事玩家可处理支付"}
-    amount = int(payment.get("amount", 0) or 0)
-    if accepted:
-        if uid not in inst.players:
-            return {"ok": False, "error": "支付角色不存在"}
-        recipient_uid = str(payment.get("recipient_uid") or uid)
-        if recipient_uid not in inst.players:
-            return {"ok": False, "error": "物品接收角色不存在"}
-        cs = inst.get_character_sheet(uid)
-        current_gold = int(cs.get("gold", 0) or 0)
-        if current_gold < amount:
-            # 确认支付但余额不足：交易不成立。自动取消该 pending，避免
-            # 弹窗因 status=pending 每轮重弹、玩家无法解除（修复反复跳支付窗口）。
-            inst.mark_payment_resolved(payment_id, "rejected", resolved_at=time.time())
-            inst.prune_resolved_payments()
-            await dependencies.games.save_instance(inst)
-            return {
-                "ok": False,
-                "code": "INSUFFICIENT_FUNDS",
-                "error": f"金币不足：需要 {amount}，当前 {current_gold}，支付已自动取消",
-            }
-        apply_currency_delta(cs, -amount)
-        inst.set_character_sheet(uid, cs)
-        rewards = list(payment.get("rewards") or [])
-        if rewards:
-            recipient_cs = (
-                cs
-                if recipient_uid == uid
-                else inst.get_character_sheet(recipient_uid)
-            )
-            for reward in rewards:
-                item_name = str(reward.get("name") or "").strip()
-                if item_name:
-                    grant_classified_item(
-                        recipient_cs,
-                        item_name,
-                        str(reward.get("category") or ""),
-                    )
-            inst.set_character_sheet(recipient_uid, recipient_cs)
-        payment = inst.mark_payment_resolved(payment_id, "accepted", resolved_at=time.time()) or payment
-        payer_name = inst.players.get(uid, {}).get("character_name", uid)
-        recipient_name = inst.players.get(recipient_uid, {}).get(
-            "character_name", recipient_uid
-        )
-        reward_names = "、".join(
-            str(reward.get("name") or "")
-            for reward in rewards
-            if reward.get("name")
-        )
-        record_health_event(
+    def grant_reward(sheet: dict[str, Any], reward: dict[str, Any]) -> None:
+        item_name = str(reward.get("name") or "").strip()
+        if item_name:
+            grant_classified_item(sheet, item_name, str(reward.get("category") or ""))
+
+    async with inst._lock:
+        result = resolve_proposal(
             inst,
-            component="economy",
-            code="payment_accepted",
-            severity="info",
-            title="玩家确认支付",
-            message=(
-                f"{payer_name} 支付 {amount} 金币"
-                + (
-                    f"，{recipient_name} 获得 {reward_names}"
-                    if reward_names else ""
-                )
-            ),
+            payment_id,
+            actor_uid=actor_uid,
+            accepted=bool(accepted),
+            grant_reward=grant_reward,
         )
-    else:
-        payment = inst.mark_payment_resolved(payment_id, "rejected", resolved_at=time.time()) or payment
-        name = inst.players.get(uid, {}).get("character_name", uid)
-        record_health_event(
-            inst,
-            component="economy",
-            code="payment_rejected",
-            severity="info",
-            title="玩家拒绝支付",
-            message=f"{name} 拒绝支付 {amount} 金币（第 {payment.get('round', inst.round_number)} 轮建议）",
-        )
-    inst.prune_resolved_payments()
+    # Insufficient funds changes the proposal to rejected, so persist both
+    # successful resolutions and terminal business failures.
+    if result.get("ok") or result.get("code") == "INSUFFICIENT_FUNDS":
+        await dependencies.games.save_instance(inst)
+    if not result.get("ok"):
+        return result
+    proposal = result.get("proposal") or {}
+    uid = str(proposal.get("payer_uid") or proposal.get("recipient_uid") or "")
+    amount = int(proposal.get("amount", 0) or 0)
+    name = inst.players.get(uid, {}).get("character_name", uid)
+    awaiting_party = bool(accepted and result.get("committed") is False)
+    record_health_event(
+        inst,
+        component="economy",
+        code=(
+            "economy_approved"
+            if awaiting_party
+            else "economy_committed"
+            if accepted
+            else "economy_declined"
+        ),
+        severity="info",
+        title="经济提案已处理",
+        message=(
+            f"{name} 已确认，等待其他队员：{proposal.get('reason') or amount}"
+            if awaiting_party
+            else f"{name} {'确认' if accepted else '拒绝'}：{proposal.get('reason') or amount}"
+        ),
+    )
     await dependencies.games.save_instance(inst)
-    return {"ok": True, "accepted": bool(accepted), "payment": payment}
+    return {**result, "payment": proposal}
 
 
 async def delete_character(

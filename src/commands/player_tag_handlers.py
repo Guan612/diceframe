@@ -74,8 +74,18 @@ def _gold(value: str, result: dict, limits: dict) -> None:
         parsed = _parse_int(change, tag="GOLD", uid=uid)
         if parsed is None:
             return
-        if -limits["gold_loss"] <= parsed <= limits["gold_max"]:
-            _set_int_change(result, uid, "gold_change", parsed)
+        if parsed and -limits["gold_loss"] <= parsed <= limits["gold_max"]:
+            # Legacy GOLD is untrusted model output. Convert it to a proposal;
+            # deductions require the payer and narrative rewards require GM.
+            kind = "reward" if parsed > 0 else "payment"
+            result.setdefault("state_update", {}).setdefault("economy_proposals", []).append({
+                "kind": kind,
+                "uid": uid,
+                "amount": abs(parsed),
+                "reason": "GM 建议奖励" if parsed > 0 else "GM 建议支付",
+                "approval_policy": "gm" if parsed > 0 else "payer",
+                "source": "legacy_gold_tag",
+            })
         else:
             logger.warning("GOLD 变更异常，已忽略: %s = %d", uid, parsed)
 

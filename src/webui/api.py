@@ -280,6 +280,7 @@ class WebAPI:
             memory_service.MemoryDependencies(
                 repository=self._mem,
                 parse_game_key=_parse_game_key,
+                get_instance=self._reg.get,
             )
         )
         self._bot_access = bot_access.BotAccessService(
@@ -1104,8 +1105,8 @@ class WebAPI:
     def list_games(self) -> dict[str, Any]:
         return game_queries.list_games(self._game_query_dependencies)
 
-    def game_detail(self, game_key: str) -> dict[str, Any] | None:
-        return game_queries.game_detail(self._game_query_dependencies, game_key)
+    def game_detail(self, game_key: str, viewer_uid: str = "") -> dict[str, Any] | None:
+        return game_queries.game_detail(self._game_query_dependencies, game_key, viewer_uid)
 
     def get_game_instance(self, game_key: str):
         """Resolve a public game key without exposing registry/parser internals."""

@@ -52,11 +52,23 @@ def _result(payload: dict[str, Any], status: int = 200) -> TurnResult:
     return {"payload": payload, "status": status}
 
 
-def _pending_payments(instance: "GameInstance") -> list[dict[str, Any]]:
+def _pending_payments(instance: "GameInstance", viewer_uid: str = "") -> list[dict[str, Any]]:
     return [
         payment
         for payment in instance.pending_payments
-        if isinstance(payment, dict) and payment.get("status") == "pending"
+        if isinstance(payment, dict)
+        and payment.get("status") == "pending"
+        and (
+            not viewer_uid
+            or viewer_uid == instance.gm_uid
+            or payment.get("visibility") == "party"
+            or viewer_uid == str(payment.get("payer_uid") or payment.get("uid") or "")
+            or viewer_uid in {
+                str(item.get("uid") or "")
+                for item in (payment.get("contributors") or [])
+                if isinstance(item, dict)
+            }
+        )
     ]
 
 
@@ -87,11 +99,12 @@ def _round_payload(
     phase: str | None = None,
     ok: bool | None = None,
     include_recap: bool = False,
+    viewer_uid: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "narration": narration,
         "quick_actions": list(instance.quick_actions),
-        "pending_payments": _pending_payments(instance),
+        "pending_payments": _pending_payments(instance, viewer_uid),
         "check_result": instance.last_check,
         "check_results": list(instance.last_checks),
     }
@@ -252,6 +265,7 @@ async def submit_action(
             narration,
             phase="done",
             include_recap=True,
+            viewer_uid=actor_uid,
         )
         payload["advanced"] = True
         if roll_payload:
@@ -307,7 +321,7 @@ async def resolve_luck_and_continue(
     )
     payload = {
         **decision,
-        **_round_payload(instance, narration, phase="done"),
+        **_round_payload(instance, narration, phase="done", viewer_uid=actor_uid),
         "advanced": True,
     }
     return _result(payload)
@@ -344,7 +358,7 @@ async def advance_round(
         narration, _ = await _process_round(
             dependencies, instance, on_delta=on_delta, on_reset=on_reset,
         )
-        payload = _round_payload(instance, narration)
+        payload = _round_payload(instance, narration, viewer_uid=actor_uid)
         if advanced_declined_luck:
             payload["declined_luck_decisions"] = advanced_declined_luck
         return _result(payload)
@@ -394,7 +408,7 @@ async def advance_round(
         narration, _ = await _process_round(
             dependencies, instance, on_delta=on_delta, on_reset=on_reset,
         )
-        payload = _round_payload(instance, narration, ok=True)
+        payload = _round_payload(instance, narration, ok=True, viewer_uid=actor_uid)
         if forced_waiting:
             payload["forced_waiting"] = forced_waiting
         if auto_rolls:

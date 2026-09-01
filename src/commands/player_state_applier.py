@@ -11,7 +11,6 @@ import re
 from src.engine.dice import check_d100, roll as dice_roll
 from src.engine.character_utils import (
     apply_bounded_stat_delta,
-    apply_currency_delta,
     apply_hp_delta,
     apply_resource_delta,
     bounded_hp_delta,
@@ -63,7 +62,14 @@ class PlayerStateApplier:
                 apply_hp_delta(cs, bounded_change, bounded=False)
             gold_change = pud.get("gold_change")
             if isinstance(gold_change, (int, float)):
-                apply_currency_delta(cs, gold_change)
+                # Narrative output is not an economic authority. Legacy GOLD
+                # tags are converted to economy proposals by the parser; an
+                # injected raw field is ignored rather than bypassing approval.
+                logger.warning(
+                    "忽略未经经济事务授权的 gold_change: uid=%s round=%d",
+                    uid,
+                    instance.round_number,
+                )
             if "status" in pud:
                 cs["status"] = pud["status"]
             # 使用道具

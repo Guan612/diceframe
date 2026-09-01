@@ -148,7 +148,7 @@ class RoundProcessor:
         self._pending_summary_tasks: set = set()
         self._image_generation = None
         # 每局同一时间只允许一个生图任务：连续快速推进时跳过新请求
-        self._scene_image_tasks: dict[str, asyncio.Task] = {}
+        self._scene_image_tasks: dict[tuple[tuple[str, ...], str], asyncio.Task] = {}
 
     def set_image_generation_service(self, service) -> None:
         self._image_generation = service
@@ -367,26 +367,40 @@ class RoundProcessor:
         if not force and prompt == _last_scene_image_prompt(instance):
             return None
         game_key = instance.game_key
-        existing = self._scene_image_tasks.get(game_key)
+        expected_run_id = instance.run_id
+        task_key = (game_key, expected_run_id)
+        existing = self._scene_image_tasks.get(task_key)
         if existing is not None and not existing.done():
             return None
         task = asyncio.create_task(
-            self._generate_scene_image_background(game_key, completed_round, prompt)
+            self._generate_scene_image_background(
+                game_key, expected_run_id, completed_round, prompt,
+            )
         )
-        self._scene_image_tasks[game_key] = task
-        task.add_done_callback(lambda _task: self._scene_image_tasks.pop(game_key, None))
+        self._scene_image_tasks[task_key] = task
+        task.add_done_callback(
+            lambda completed, key=task_key: (
+                self._scene_image_tasks.pop(key, None)
+                if self._scene_image_tasks.get(key) is completed
+                else None
+            )
+        )
         return task
 
-    async def _generate_scene_image_background(self, game_key: str, round_number: int, prompt: str) -> None:
+    async def _generate_scene_image_background(
+        self,
+        game_key: tuple[str, ...],
+        expected_run_id: str,
+        round_number: int,
+        prompt: str,
+    ) -> None:
         try:
             current = self.registry.get(game_key)
-            if current is None:
+            if current is None or current.run_id != expected_run_id:
                 return
-            entry = next(
-                (item for item in current.log if item.get("round") == round_number),
-                None,
-            )
-            if entry is None:
+            if not any(
+                item.get("round") == round_number for item in current.log
+            ):
                 return  # 该回合已被回滚删除，放弃本次生图
             result = await self._image_generation.generate(ImageGenerationRequest(
                 prompt=prompt,
@@ -394,8 +408,19 @@ class RoundProcessor:
                 owner_type="game",
                 owner_id=game_image_owner_id(game_key),
                 aspect_ratio="16:9",
-                context={"round": round_number},
+                context={"round": round_number, "run_id": expected_run_id},
             ))
+            # 重开/重置可能发生在生图 await 期间。旧任务不得写入新一局，
+            # 同一局的 swipe 也可能已经删除或替换目标回合。
+            current = self.registry.get(game_key)
+            if current is None or current.run_id != expected_run_id:
+                return
+            entry = next(
+                (item for item in current.log if item.get("round") == round_number),
+                None,
+            )
+            if entry is None:
+                return  # 该回合已被回滚删除，放弃本次生图
             reference = {"kind": "generated", "asset_id": result.asset_id}
             current.set_scene_image(reference)
             entry["scene_image"] = {
@@ -415,6 +440,7 @@ class RoundProcessor:
 
     async def process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """实际的判定处理逻辑。"""
+        expected_run_id = instance.run_id
         if not instance.round_checks_prepared:
             await self.prepare_round_checks_ai(instance)
         # 只保留最近一轮的短期展示状态，避免旧提示或战斗结果常驻。
@@ -488,6 +514,15 @@ class RoundProcessor:
             self.llm_client, instance, gm_prompt, context, combat_model,
             dice_block, self.narrative_max_tokens, actions_text,
             on_delta=on_delta, on_reset=on_reset)
+        current_instance = self.registry.get(instance.game_key)
+        if current_instance is not instance or instance.run_id != expected_run_id:
+            logger.warning(
+                "丢弃上一 run 的叙事响应: game=%s expected=%s current=%s",
+                instance.game_key,
+                expected_run_id,
+                getattr(current_instance, "run_id", "missing"),
+            )
+            return "", None
         runtime = self._ruleset_runtime(instance)
         if isinstance(runtime, NarrativeStatePolicyRuntime):
             data["state_update"] = runtime.filter_narrative_state_update(

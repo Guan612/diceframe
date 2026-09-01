@@ -20,7 +20,9 @@ async def api_games(request: web.Request) -> web.Response:
 
 
 async def api_detail(request: web.Request) -> web.Response:
-    d = _get_api(request).game_detail(request.match_info["game_key"])
+    d = _get_api(request).game_detail(
+        request.match_info["game_key"], request.get("user_id", "")
+    )
     return (
         web.json_response(d)
         if d

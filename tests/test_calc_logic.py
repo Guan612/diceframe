@@ -30,14 +30,23 @@ def _pending(result):
     return result["state_update"].get("pending_payments", [])
 
 
-# ===== 金币：GOLD 负值直接扣（#10 bug 修复）=====
-def test_gold_negative_deducts():
-    """GM 写 GOLD:尤洛:-3 表示扣 3 金币，应被接受（旧逻辑 0<=v 忽略负值）。"""
-    assert _pu(_parse([("GOLD", f"{UID}:-3")]))["gold_change"] == -3
+def _economy(result):
+    return result["state_update"].get("economy_proposals", [])
+
+
+# ===== 金币：legacy GOLD 只产生提案，不直接改余额 =====
+def test_gold_negative_creates_payment_proposal():
+    proposal = _economy(_parse([("GOLD", f"{UID}:-3")]))[0]
+    assert proposal["kind"] == "payment"
+    assert proposal["amount"] == 3
+    assert proposal["approval_policy"] == "payer"
 
 
 def test_gold_positive_gains():
-    assert _pu(_parse([("GOLD", f"{UID}:50")]))["gold_change"] == 50
+    proposal = _economy(_parse([("GOLD", f"{UID}:50")]))[0]
+    assert proposal["kind"] == "reward"
+    assert proposal["amount"] == 50
+    assert proposal["approval_policy"] == "gm"
 
 
 def test_pay_creates_pending():
@@ -71,13 +80,14 @@ def test_pay_negative_amount_uses_abs():
 
 # ===== 累加：同轮多标签不再覆盖（#19 修复）=====
 def test_multiple_gold_accumulate():
-    assert _pu(_parse([("GOLD", f"{UID}:10"), ("GOLD", f"{UID}:5")]))["gold_change"] == 15
+    proposals = _economy(_parse([("GOLD", f"{UID}:10"), ("GOLD", f"{UID}:5")]))
+    assert [proposal["amount"] for proposal in proposals] == [10, 5]
 
 
 def test_gold_direct_pay_pending():
-    """GOLD 直接改金币，PAY 转挂起；互不影响。"""
+    """GOLD 与 PAY 都只能产生待确认提案。"""
     result = _parse([("GOLD", f"{UID}:50"), ("PAY", f"{UID}:3")])
-    assert _pu(result)["gold_change"] == 50
+    assert _economy(result)[0]["kind"] == "reward"
     pending = _pending(result)
     assert len(pending) == 1
     assert pending[0]["amount"] == 3
@@ -139,10 +149,10 @@ def test_xp_accumulate():
 
 # ===== 集成：parse_tag_state 全文解析（用户实际路径）=====
 def test_parse_tag_state_gold_negative():
-    """GM 回复含 GOLD:尤洛:-3，解析后 gold_change=-3、无 _pay_tagged。"""
+    """GM 回复含负 GOLD 时生成支付提案，不直接扣钱。"""
     text = "尤洛买下驱兽粉。\n---\nGOLD:尤洛:-3"
     result = parse_tag_state(text, "hp_based")
-    assert _pu(result)["gold_change"] == -3
+    assert _economy(result)[0]["kind"] == "payment"
     assert "_pay_tagged" not in _pu(result)
 
 
@@ -158,10 +168,10 @@ def test_parse_tag_state_pay_pending():
 
 
 def test_parse_tag_state_purchase_accumulates():
-    """GOLD 直接结算，PAY 转挂起。"""
+    """GOLD 奖励与 PAY 支付都等待相应 authority。"""
     text = "尤洛卖出旧剑又买了药水。\n---\nGOLD:尤洛:20\nPAY:尤洛:3"
     result = parse_tag_state(text, "hp_based")
-    assert _pu(result)["gold_change"] == 20
+    assert _economy(result)[0]["kind"] == "reward"
     assert len(_pending(result)) == 1
 
 

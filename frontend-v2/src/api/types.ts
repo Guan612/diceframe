@@ -239,6 +239,13 @@ export interface PendingPayment {
   description?: string
   reason?: string
   status?: string
+  kind?: 'payment' | 'purchase' | 'fee' | 'reward' | 'transfer' | string
+  payer_uid?: string
+  approval_policy?: string
+  contributors?: Array<{ uid: string; amount: number }>
+  approvals?: Record<string, boolean>
+  sequence?: number
+  run_id?: string
   [key: string]: unknown
 }
 
@@ -263,6 +270,8 @@ export interface GameDetail {
   multiplayer?: Multiplayer
   quick_actions?: string[]
   pending_payments?: PendingPayment[]
+  economy_proposals?: PendingPayment[]
+  run_id?: string
   pending_luck_decisions?: CheckResult[]
   round_check_results?: CheckResult[]
   total_tokens?: number

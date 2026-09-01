@@ -618,18 +618,29 @@ async function resolveHealth(id: string, action: string) {
 }
 
 const pendingPay = ref<PendingPayment | null>(null)
-watch(() => game.detail.value?.pending_payments, (list) => {
-  const mine = (list || []).find(p => p.status === 'pending' && p.uid === actorId.value)
+watch(() => (game.detail.value?.economy_proposals?.length
+  ? game.detail.value.economy_proposals
+  : game.detail.value?.pending_payments), (list) => {
+  const mine = (list || []).find(p => p.status === 'pending' && (
+    p.payer_uid === actorId.value
+    || p.uid === actorId.value
+    || (p.approval_policy === 'gm' && game.detail.value?.gm_uid === actorId.value)
+    || p.contributors?.some(item => item.uid === actorId.value)
+  ))
   if (mine && (!pendingPay.value || pendingPay.value.id !== mine.id)) pendingPay.value = mine
 }, { immediate: true, deep: true })
 async function resolvePay(accepted: boolean) {
   const p = pendingPay.value
   if (!p || !p.id) return
   try {
-    await api(`/games/${encodeURIComponent(game.currentGame.value)}/payments/${encodeURIComponent(p.id)}`, { method: 'POST', body: JSON.stringify({ accepted }) })
+    const result = await api<{ committed?: boolean; awaiting_uids?: string[] }>(`/games/${encodeURIComponent(game.currentGame.value)}/payments/${encodeURIComponent(p.id)}`, { method: 'POST', body: JSON.stringify({ accepted }) })
     pendingPay.value = null
     await game.refresh()
-    toast.success(accepted ? t('paid') : t('paymentRejected'))
+    toast.success(accepted && result.committed === false
+      ? t('economyApprovalRecorded')
+      : accepted
+      ? (p.kind === 'reward' ? t('economyRewardApproved') : t('paid'))
+      : (p.kind === 'reward' ? t('economyRewardRejected') : t('paymentRejected')))
   } catch (e: unknown) {
     toast.error(errorMessage(e))
     // 刷新 detail：若后端已自动取消该支付（如金币不足），pending 消失后 watch 不再重弹
@@ -1189,8 +1200,10 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <Modal v-if="pendingPay" :title="t('gmPaymentTitle')" @close="pendingPay = null">
-      <p>{{ t('gmPaymentContent', { amount: pendingPay.amount ?? 0, reason: pendingPay.reason ? t('gmPaymentReason', { reason: pendingPay.reason }) : '' }) }}</p>
+    <Modal v-if="pendingPay" :title="pendingPay.kind === 'reward' ? t('economyRewardTitle') : t('gmPaymentTitle')" @close="pendingPay = null">
+      <p>{{ pendingPay.kind === 'reward'
+        ? t('economyRewardContent', { amount: pendingPay.amount ?? 0, reason: pendingPay.reason || '' })
+        : t('gmPaymentContent', { amount: pendingPay.amount ?? 0, reason: pendingPay.reason ? t('gmPaymentReason', { reason: pendingPay.reason }) : '' }) }}</p>
       <p v-if="pendingPay.rewards?.length">
         {{ t('gmPaymentRewards', { items: pendingPay.rewards.map(item => item.name).join('、') }) }}
       </p>
@@ -1198,7 +1211,7 @@ onBeforeUnmount(() => {
       <template #actions>
         <button @click="pendingPay = null">{{ t('later') }}</button>
         <button class="danger" @click="resolvePay(false)">{{ t('reject') }}</button>
-        <button class="primary" @click="resolvePay(true)">{{ t('confirmPurchase') }}</button>
+        <button class="primary" @click="resolvePay(true)">{{ pendingPay.kind === 'reward' ? t('economyApproveReward') : t('confirmPurchase') }}</button>
       </template>
     </Modal>
   </main>

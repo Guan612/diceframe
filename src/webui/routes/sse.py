@@ -272,6 +272,16 @@ def _play_public_signature(inst, user_id: str) -> str:
         "pending_payments": [
             payment for payment in getattr(inst, "pending_payments", [])
             if payment.get("status") == "pending"
+            and (
+                user_id == inst.gm_uid
+                or payment.get("visibility") == "party"
+                or user_id == str(payment.get("payer_uid") or payment.get("uid") or "")
+                or user_id in {
+                    str(item.get("uid") or "")
+                    for item in (payment.get("contributors") or [])
+                    if isinstance(item, dict)
+                }
+            )
         ],
         "multiplayer": inst.multiplayer_status(),
         "round_checks_prepared": bool(getattr(inst, "round_checks_prepared", False)),

@@ -313,10 +313,17 @@ def payment_line(payment: dict[str, Any], index: int, language: str = "zh-CN") -
         "ja": "GM からの支払い要請",
     })).strip()
     round_no = payment.get("round", "?")
+    kind = str(payment.get("kind") or "payment")
+    marker = localized_text(language, {
+        "en": "reward" if kind == "reward" else "payment",
+        "zh-CN": "奖励" if kind == "reward" else "支付",
+        "ja": "報酬" if kind == "reward" else "支払い",
+    })
+    reference = int(payment.get("sequence", index) or index)
     return localized_text(language, {
-        "en": f"{index}. R{round_no} {amount} gold: {reason}",
-        "zh-CN": f"{index}. R{round_no} {amount} 金币：{reason}",
-        "ja": f"{index}. R{round_no} {amount} ゴールド：{reason}",
+        "en": f"#{reference} · R{round_no} {marker} {amount} gold: {reason}",
+        "zh-CN": f"#{reference} · R{round_no} {marker} {amount} 金币：{reason}",
+        "ja": f"#{reference} · R{round_no} {marker} {amount} ゴールド：{reason}",
     })
 
 

@@ -354,7 +354,7 @@ async def build_context(
                 if gm_resp:
                     recall_source += "\n" + gm_resp
             memory_text = await recall_and_format(
-                memory_store, str(instance.game_key), recall_source, limit=8,
+                memory_store, instance.memory_namespace, recall_source, limit=8,
             )
             if memory_text:
                 memory_text = _truncate(memory_text, budget_memory)

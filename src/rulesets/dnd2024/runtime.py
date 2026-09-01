@@ -53,6 +53,16 @@ class Dnd2024Runtime:
         adventure_formats=(ADVENTURE_GRAPH_FORMAT,),
     )
 
+    def initialize_new_run(
+        self, instance: Any, *, preserve_characters: bool,
+    ) -> None:
+        """Materialize a clean campaign projection for reset/restart."""
+
+        instance.ruleset_state = {"state_schema_version": 1}
+        self._campaign_engine(
+            instance, str(getattr(instance, "language", "") or ""),
+        ).initialize_state(instance)
+
     def __init__(
         self, bundles_dir: str | Path | None = None, *,
         adventures_dir: str | Path | None = None,

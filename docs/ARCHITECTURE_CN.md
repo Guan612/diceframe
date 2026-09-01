@@ -77,6 +77,10 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 
 `GameInstance` 是单局对局的 Aggregate Root，继续拥有权威运行时状态、不变量、状态转换以及 `_lock` / `_process_lock` 协调权。玩家、战斗、回合和支付不会仅为缩短文件而拆成彼此独立的 aggregate。
 
+每个存档同时具有稳定 `game_key` 和可轮换 `run_id`。程序恢复保留 `run_id`；重置与重开构造候选聚合并轮换 `run_id`，旧 run 的异步响应不得写入新 run。长期记忆通过持久化 `memory_namespace` 隔离，隔离不依赖先删除旧记录。重开保留角色、资产和成长但清除死亡、战斗、剧情与待处理提案；重置同时清除角色。存档 shape 的升级只经 `src/migrations/instance.py` 的顺序迁移入口。
+
+通用经济状态属于 `GameInstance`。叙事 `GOLD` / `PAY`、世界书文本与 AI 输出只能创建提案；余额变化必须经过服务端权限、余额、run identity 与幂等校验并写入事务流水。`currency.amount` 是余额 authority，`gold` 仅为兼容投影。个人支付由付款人确认，自由叙事奖励由 GM 确认，Web、Bot 与其它 transport 进入同一经济路径。
+
 附属投影有独立 owner：`src/engine/game_state_codec.py` 负责稳定存档投影与重建，`src/engine/game_context_projector.py` 负责通用 LLM/展示视图；旧存档 payload 的 shape 归一化位于 `src/migrations/instance.py`，在构造聚合前对副本执行，不修改调用方输入。`GameInstance.to_dict()`、`from_dict()` 与 `to_llm_view()` 是兼容委托，不再实现这些投影。旧版属性修正、护甲求和和字符串技能默认值由独立的 `src/engine/legacy_game_projection.py` 提供，并由 `LegacyRulesetAdapter` 显式采用；Ruleset runtime 可以在通用投影之上追加自己的权威视图，但不能把具体 mechanics 写回通用 projector。
 
 这是第一轮 codec / projection / migration 边界抽取，不表示 generic state shape 已经终局化或完全去规则化。通用投影为兼容现有世界、存档与 prompt，仍保留 `hp`、`max_hp`、`class`、`race`、`level`、`attributes`、`equipment`、`skills`、`inventory` 等传统角色字段；这些 compatibility shape 后续仍可在不破坏存档和规则运行时契约的前提下继续收口。
