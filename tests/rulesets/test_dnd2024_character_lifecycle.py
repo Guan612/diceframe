@@ -54,17 +54,31 @@ class _Api:
                 load_rule_by_id=self._load_rule_by_id,
                 load_rule_for_game=self._load_rule_for_game,
                 ruleset_registry=self._ruleset_registry,
-                read_cards=lambda: character_cards._read_cards(self),
-                write_cards=lambda cards: character_cards._write_cards(self, cards),
+                read_cards=lambda: character_cards._read_cards(
+                    self._character_card_dependencies,
+                ),
+                write_cards=lambda cards: character_cards._write_cards(
+                    self._character_card_dependencies, cards,
+                ),
                 validate_portrait=lambda portrait: characters._validated_portrait(
                     self, portrait,
                 ),
             )
         )
+        self._character_card_dependencies = (
+            character_cards.CharacterCardDependencies(
+                cards_path=self._character_cards_path,
+                ruleset_characters=self._ruleset_character_dependencies,
+            )
+        )
         self._card_advancement_dependencies = (
             ruleset_advancement.CardAdvancementDependencies(
-                read_cards=lambda: character_cards._read_cards(self),
-                write_cards=lambda cards: character_cards._write_cards(self, cards),
+                read_cards=lambda: character_cards._read_cards(
+                    self._character_card_dependencies,
+                ),
+                write_cards=lambda cards: character_cards._write_cards(
+                    self._character_card_dependencies, cards,
+                ),
                 ruleset_characters=self._ruleset_character_dependencies,
             )
         )
@@ -102,7 +116,9 @@ class _Api:
         return None
 
     def save_character_card(self, character: dict):
-        return character_cards.save_character_card(self, character)
+        return character_cards.save_character_card(
+            self._character_card_dependencies, character,
+        )
 
     async def ruleset_rest_resolve_live(self, game_key: str, user_id: str, body):
         return await ruleset_rest.resolve_live(
@@ -268,11 +284,15 @@ def test_raw_card_update_rejects_professional_canonical_overwrite(
     professional_context,
 ) -> None:
     api, _instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
-    before = deepcopy(character_cards.list_character_cards(api)["cards"])
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
+    before = deepcopy(
+        character_cards.list_character_cards(api._character_card_dependencies)["cards"]
+    )
 
     result = character_cards.update_character_card(
-        api,
+        api._character_card_dependencies,
         saved["id"],
         {
             "character_name": "Partially Mutated",
@@ -282,7 +302,9 @@ def test_raw_card_update_rejects_professional_canonical_overwrite(
 
     assert result["ok"] is False
     assert result["error_code"] == "RULESET_CHARACTER_OPERATION_REQUIRED"
-    assert character_cards.list_character_cards(api)["cards"] == before
+    assert character_cards.list_character_cards(
+        api._character_card_dependencies,
+    )["cards"] == before
 
 
 def test_professional_card_is_rebuilt_before_storage(professional_context) -> None:
@@ -292,7 +314,9 @@ def test_professional_card_is_rebuilt_before_storage(professional_context) -> No
     forged["ruleset_character"]["derived"]["armor_class"] = 99
     forged["ruleset_character"]["profile"] = {"notes": "Keep this safe note."}
 
-    result = character_cards.save_character_card(api, forged)
+    result = character_cards.save_character_card(
+        api._character_card_dependencies, forged,
+    )
 
     assert result["ok"] is True
     card = result["card"]
@@ -315,19 +339,25 @@ async def test_invalid_professional_import_is_rejected_before_storage(
     ).decode("ascii")
 
     imported = await character_cards.import_character_card(
-        api, file_data=payload, file_name="forged.json",
+        api._character_card_dependencies,
+        file_data=payload,
+        file_name="forged.json",
     )
 
     assert imported["ok"] is False
     assert imported["error_code"] == "INVALID_RULESET_CHARACTER"
-    assert character_cards.list_character_cards(api)["cards"] == []
+    assert character_cards.list_character_cards(
+        api._character_card_dependencies,
+    )["cards"] == []
 
 
 def test_card_profile_update_preserves_professional_blueprint(
     professional_context,
 ) -> None:
     api, _instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
     before = deepcopy(saved["ruleset_character"])
 
     result = ruleset_characters.update_character_card_profile(
@@ -359,7 +389,9 @@ def test_card_advancement_is_entity_backed_versioned_and_idempotent(
     professional_context,
 ) -> None:
     api, _instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
     card_id = saved["id"]
     choices = {"hp_method": "fixed"}
 
@@ -587,7 +619,9 @@ async def test_live_character_adopts_server_owned_professional_blueprint(
     replacement = _professional_character(api._runtime)
     replacement["ruleset_character"]["identity"]["name"] = "Replacement Hero"
     replacement["character_name"] = "Replacement Hero"
-    saved = character_cards.save_character_card(api, replacement)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, replacement,
+    )["card"]
 
     result = await ruleset_characters.adopt_character_card(
         api._ruleset_character_dependencies,
@@ -621,7 +655,9 @@ async def test_profile_http_routes_enforce_live_identity_and_patch_cards(
     professional_context,
 ) -> None:
     api, instance, character = professional_context
-    saved = character_cards.save_character_card(api, character)["card"]
+    saved = character_cards.save_character_card(
+        api._character_card_dependencies, character,
+    )["card"]
     game_path = "/api/games/web%7Ccharacter-lifecycle%7Cweb_bot/character/gm/profile"
     card_path = f"/api/character-cards/{saved['id']}/profile"
 

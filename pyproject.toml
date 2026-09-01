@@ -35,6 +35,7 @@ files = [
     "src/webui/config_update.py",
     "src/webui/services/adventures.py",
     "src/webui/services/assistant.py",
+    "src/webui/services/character_cards.py",
     "src/webui/services/content_pack_maps.py",
     "src/webui/services/game_queries.py",
     "src/webui/services/generation.py",

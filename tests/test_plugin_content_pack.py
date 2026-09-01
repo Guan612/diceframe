@@ -758,7 +758,10 @@ def test_cleanup_removes_cards_saved_through_real_save_path(tmp_path):
     _to_character_card 重建卡时丢弃该字段，导致卸载清理在生产中空转。"""
     from src.webui.services.plugins import cleanup_plugin_lorebook, _content_to_character_card
     from src.webui.services.character_cards import (
-        save_character_card, list_character_cards, delete_character_card,
+        CharacterCardDependencies,
+        delete_character_card,
+        list_character_cards,
+        save_character_card,
     )
 
     plugins = tmp_path / "plugins"
@@ -776,10 +779,15 @@ def test_cleanup_removes_cards_saved_through_real_save_path(tmp_path):
         _lore = None
         _reg = None
         _character_cards_path = cards_path
+        _character_card_dependencies = CharacterCardDependencies(
+            cards_path=cards_path,
+        )
         def list_character_cards(self):
-            return list_character_cards(self)
+            return list_character_cards(self._character_card_dependencies)
         def delete_character_card(self, card_id):
-            return delete_character_card(self, card_id)
+            return delete_character_card(
+                self._character_card_dependencies, card_id,
+            )
 
     api = _Api()
     # 走真实导入链路：_content_to_character_card 打 source_plugin 标 -> save_character_card 落盘
@@ -791,15 +799,15 @@ def test_cleanup_removes_cards_saved_through_real_save_path(tmp_path):
         "race": "人类",
         "class": "冒险者",
     })
-    save_character_card(api, card)
+    save_character_card(api._character_card_dependencies, card)
 
-    persisted = list_character_cards(api)["cards"]
+    persisted = list_character_cards(api._character_card_dependencies)["cards"]
     assert len(persisted) == 1
     assert persisted[0]["source_plugin"] == "packs"  # Bug 1：曾在此处被 _to_character_card 丢弃
 
     result = cleanup_plugin_lorebook(api, "packs")
     assert result["cards_removed"] == 1
-    assert list_character_cards(api)["cards"] == []
+    assert list_character_cards(api._character_card_dependencies)["cards"] == []
 
 
 @pytest.mark.asyncio

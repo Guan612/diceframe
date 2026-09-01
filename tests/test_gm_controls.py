@@ -19,6 +19,11 @@ class DummyAPI:
         self._reg = registry
         self._character_cards_path = cards_path
         self._rules_dir = None
+        from src.webui.services.character_cards import CharacterCardDependencies
+
+        self._character_card_dependencies = CharacterCardDependencies(
+            cards_path=cards_path or registry.save_dir.parent / "character_cards.json",
+        )
 
     def _parse_key(self, game_key: str) -> tuple:
         return tuple(game_key.split(_GAME_KEY_SEP))
@@ -29,7 +34,7 @@ class DummyAPI:
     def save_character_card(self, character):
         from src.webui.services.character_cards import save_character_card
 
-        return save_character_card(self, character)
+        return save_character_card(self._character_card_dependencies, character)
 
 
 def _game_controls(registry: GameRegistry) -> game_controls.GameControlService:

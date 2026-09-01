@@ -10,19 +10,29 @@ import logging
 import tempfile
 import time
 import zipfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.engine.character_utils import parse_tavern_card
 
 if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+    from src.webui.services.ruleset_characters import RulesetCharacterDependencies
 
 logger = logging.getLogger("trpg")
 
 
-def _read_cards(api: "WebAPI") -> list[dict[str, Any]]:
-    path = api._character_cards_path
+@dataclass(frozen=True)
+class CharacterCardDependencies:
+    cards_path: Path
+    ruleset_characters: "RulesetCharacterDependencies | None" = None
+    lorebook: Any | None = None
+    rebuild_lorebook_index: Callable[[str], None] | None = None
+
+
+def _read_cards(dependencies: CharacterCardDependencies) -> list[dict[str, Any]]:
+    path = dependencies.cards_path
     if not path.exists():
         return []
     try:
@@ -33,8 +43,11 @@ def _read_cards(api: "WebAPI") -> list[dict[str, Any]]:
         return []
 
 
-def _write_cards(api: "WebAPI", cards: list[dict[str, Any]]) -> None:
-    path = api._character_cards_path
+def _write_cards(
+    dependencies: CharacterCardDependencies,
+    cards: list[dict[str, Any]],
+) -> None:
+    path = dependencies.cards_path
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -115,16 +128,18 @@ def _to_character_card(character: dict, source: str = "") -> dict[str, Any]:
     return card
 
 
-def list_character_cards(api: "WebAPI") -> dict[str, Any]:
-    cards = _read_cards(api)
+def list_character_cards(
+    dependencies: CharacterCardDependencies,
+) -> dict[str, Any]:
+    cards = _read_cards(dependencies)
     deduped = _dedupe_cards(cards)
     if len(deduped) != len(cards):
-        _write_cards(api, deduped)
+        _write_cards(dependencies, deduped)
         cards = deduped
     from src.webui.services.ruleset_characters import runtime_metadata_for_card
 
     visible_cards = []
-    ruleset_dependencies = getattr(api, "_ruleset_character_dependencies", None)
+    ruleset_dependencies = dependencies.ruleset_characters
     for card in cards:
         visible = copy.deepcopy(card)
         metadata = (
@@ -138,7 +153,10 @@ def list_character_cards(api: "WebAPI") -> dict[str, Any]:
     return {"cards": visible_cards, "total": len(visible_cards)}
 
 
-def save_character_card(api: "WebAPI", character: dict) -> dict[str, Any]:
+def save_character_card(
+    dependencies: CharacterCardDependencies,
+    character: dict,
+) -> dict[str, Any]:
     from src.webui.services.ruleset_characters import (
         RulesetCharacterOperationError,
         normalize_character_card_blueprint,
@@ -150,9 +168,7 @@ def save_character_card(api: "WebAPI", character: dict) -> dict[str, Any]:
     # before professional validation so the canonical blueprint is not missed.
     candidate = _to_character_card(character, source=source)
     try:
-        ruleset_dependencies = getattr(
-            api, "_ruleset_character_dependencies", None,
-        )
+        ruleset_dependencies = dependencies.ruleset_characters
         if ruleset_dependencies is not None:
             candidate = normalize_character_card_blueprint(
                 ruleset_dependencies, candidate,
@@ -160,7 +176,7 @@ def save_character_card(api: "WebAPI", character: dict) -> dict[str, Any]:
     except RulesetCharacterOperationError as exc:
         return {"ok": False, "error_code": exc.code, "error": str(exc)}
     card = _to_character_card(candidate, source=source)
-    cards = _read_cards(api)
+    cards = _read_cards(dependencies)
     sig = _card_signature(card)
     for existing in cards:
         if existing.get("id") == card["id"] or _card_signature(existing) == sig:
@@ -172,20 +188,22 @@ def save_character_card(api: "WebAPI", character: dict) -> dict[str, Any]:
     ]
     cards.append(card)
     cards = _dedupe_cards(cards)
-    _write_cards(api, cards)
+    _write_cards(dependencies, cards)
     return {"ok": True, "card": card}
 
 
-def update_character_card(api: "WebAPI", card_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-    cards = _dedupe_cards(_read_cards(api))
+def update_character_card(
+    dependencies: CharacterCardDependencies,
+    card_id: str,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
+    cards = _dedupe_cards(_read_cards(dependencies))
     for idx, old in enumerate(cards):
         if old.get("id") != card_id:
             continue
         from src.webui.services.ruleset_characters import card_has_rules_aware_lifecycle
 
-        ruleset_dependencies = getattr(
-            api, "_ruleset_character_dependencies", None,
-        )
+        ruleset_dependencies = dependencies.ruleset_characters
         if (
             ruleset_dependencies is not None
             and card_has_rules_aware_lifecycle(ruleset_dependencies, old)
@@ -216,17 +234,20 @@ def update_character_card(api: "WebAPI", card_id: str, patch: dict[str, Any]) ->
         updated["schema_version"] = 2
         updated["id"] = card_id
         cards[idx] = updated
-        _write_cards(api, cards)
+        _write_cards(dependencies, cards)
         return {"ok": True, "card": updated}
     return {"ok": False, "error": f"角色卡不存在: {card_id}"}
 
 
-def delete_character_card(api: "WebAPI", card_id: str) -> dict[str, Any]:
-    cards = _dedupe_cards(_read_cards(api))
+def delete_character_card(
+    dependencies: CharacterCardDependencies,
+    card_id: str,
+) -> dict[str, Any]:
+    cards = _dedupe_cards(_read_cards(dependencies))
     kept = [c for c in cards if c.get("id") != card_id]
     if len(kept) == len(cards):
         return {"ok": False, "error": f"角色卡不存在: {card_id}"}
-    _write_cards(api, kept)
+    _write_cards(dependencies, kept)
     return {"ok": True, "card_id": card_id}
 
 
@@ -280,7 +301,11 @@ def _tavern_has_nsfw(tavern: dict) -> bool:
     return any(marker in haystack for marker in _NSFW_MARKERS)
 
 
-def _import_tavern_as_npc(api: "WebAPI", tavern: dict, world_id: str) -> dict[str, Any]:
+def _import_tavern_as_npc(
+    dependencies: CharacterCardDependencies,
+    tavern: dict,
+    world_id: str,
+) -> dict[str, Any]:
     """把酒馆卡导入为指定世界的 NPC 世界书条目，并拆入内嵌角色世界书。
 
     酒馆卡本质是「AI 扮演的角色」，落成 NPC 比塞进 TRPG 角色卡（强填 race/class/
@@ -289,9 +314,10 @@ def _import_tavern_as_npc(api: "WebAPI", tavern: dict, world_id: str) -> dict[st
     """
     if not world_id:
         return {"ok": False, "error": "导入为 NPC 需要选择目标世界"}
-    if not api._lore:
+    lorebook = dependencies.lorebook
+    if not lorebook:
         return {"ok": False, "error": "世界书库未启用"}
-    if not api._lore.get_world(world_id):
+    if not lorebook.get_world(world_id):
         return {"ok": False, "error": "目标世界不存在"}
     name = str(tavern.get("name") or "未命名").strip()
     safe_name = name.replace(" ", "_") or "npc"
@@ -318,10 +344,10 @@ def _import_tavern_as_npc(api: "WebAPI", tavern: dict, world_id: str) -> dict[st
         "content": "\n".join(content_parts),
         "tier": "core",
     }
-    if api._lore.get_entry(entry_id):
-        api._lore.update_entry(entry_id, npc_entry)
+    if lorebook.get_entry(entry_id):
+        lorebook.update_entry(entry_id, npc_entry)
     else:
-        api._lore.add_entry(npc_entry)
+        lorebook.add_entry(npc_entry)
     # 内嵌角色世界书 -> 同世界的 other 条目
     book = tavern.get("character_book") or []
     book_imported = 0
@@ -339,12 +365,13 @@ def _import_tavern_as_npc(api: "WebAPI", tavern: dict, world_id: str) -> dict[st
                 "content": str(item.get("content") or ""),
                 "tier": "background",
             }
-            if api._lore.get_entry(book_id):
-                api._lore.update_entry(book_id, book_entry)
+            if lorebook.get_entry(book_id):
+                lorebook.update_entry(book_id, book_entry)
             else:
-                api._lore.add_entry(book_entry)
+                lorebook.add_entry(book_entry)
             book_imported += 1
-    api._rebuild_lorebook_index(world_id)
+    if dependencies.rebuild_lorebook_index is not None:
+        dependencies.rebuild_lorebook_index(world_id)
     logger.info("酒馆卡已导入为 NPC: %s -> world=%s（含 %d 条世界书）", name, world_id, book_imported)
     result: dict[str, Any] = {"ok": True, "imported_as": "npc", "npc_name": name, "world_id": world_id, "lorebook_entries": book_imported}
     if _tavern_has_nsfw(tavern):
@@ -368,8 +395,13 @@ def _is_diceframe_card(data: dict) -> bool:
     return any(key in data for key in ("attributes", "skills", "rule_id", "mechanics", "equipment", "inventory"))
 
 
-async def import_character_card(api: "WebAPI", file_data: str = "", file_name: str = "card.json",
-                                target: str = "character_card", world_id: str = "") -> dict[str, Any]:
+async def import_character_card(
+    dependencies: CharacterCardDependencies,
+    file_data: str = "",
+    file_name: str = "card.json",
+    target: str = "character_card",
+    world_id: str = "",
+) -> dict[str, Any]:
     if not file_data:
         return {"ok": False, "error": "未提供文件数据"}
     raw_bytes = base64.b64decode(file_data)
@@ -385,7 +417,7 @@ async def import_character_card(api: "WebAPI", file_data: str = "", file_name: s
             return {"ok": False, "error": "DiceFrame 角色卡不支持导入为 NPC，请选择「导入为角色卡」"}
         card = dict(as_json)
         card.setdefault("character_name", card.get("character_name") or card.get("name") or "未命名")
-        saved = save_character_card(api, card)
+        saved = save_character_card(dependencies, card)
         if not saved.get("ok"):
             return saved
         return {
@@ -407,18 +439,21 @@ async def import_character_card(api: "WebAPI", file_data: str = "", file_name: s
     if "error" in tavern:
         return {"ok": False, "error": tavern["error"]}
     if target == "npc":
-        return _import_tavern_as_npc(api, tavern, world_id)
+        return _import_tavern_as_npc(dependencies, tavern, world_id)
     card = _tavern_to_character_card(tavern, safe_name)
-    cards = _read_cards(api)
+    cards = _read_cards(dependencies)
     cards.append(card)
-    _write_cards(api, cards)
+    _write_cards(dependencies, cards)
     result: dict[str, Any] = {"ok": True, "card": card, "imported_as": "character_card", "format": "tavern"}
     if _tavern_has_nsfw(tavern):
         result["nsfw_warning"] = True
     return result
 
 
-def export_character_cards(api: "WebAPI", card_ids: list[str]) -> dict[str, Any]:
+def export_character_cards(
+    dependencies: CharacterCardDependencies,
+    card_ids: list[str],
+) -> dict[str, Any]:
     """批量导出 DiceFrame 角色卡：单张返回 JSON 文本，多张打包 zip。
 
     导出的是 DiceFrame 自家格式（含 attributes/skills/rule_id 等），
@@ -427,7 +462,7 @@ def export_character_cards(api: "WebAPI", card_ids: list[str]) -> dict[str, Any]
     card_ids = [str(c).strip() for c in card_ids if str(c).strip()] if isinstance(card_ids, list) else []
     if not card_ids:
         return {"ok": False, "error": "请选择要导出的角色卡"}
-    cards = _read_cards(api)
+    cards = _read_cards(dependencies)
     selected = [c for c in cards if str(c.get("id") or "") in set(card_ids)]
     if not selected:
         return {"ok": False, "error": "未找到所选角色卡"}

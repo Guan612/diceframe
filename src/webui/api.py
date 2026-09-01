@@ -155,12 +155,22 @@ class WebAPI:
                 load_rule_by_id=self._load_rule_by_id,
                 load_rule_for_game=self._load_rule_for_game,
                 ruleset_registry=self._ruleset_registry,
-                read_cards=lambda: character_cards._read_cards(self),
-                write_cards=lambda cards: character_cards._write_cards(self, cards),
+                read_cards=lambda: character_cards._read_cards(
+                    self._character_card_dependencies,
+                ),
+                write_cards=lambda cards: character_cards._write_cards(
+                    self._character_card_dependencies, cards,
+                ),
                 validate_portrait=lambda portrait: characters._validated_portrait(
                     self, portrait,
                 ),
             )
+        )
+        self._character_card_dependencies = character_cards.CharacterCardDependencies(
+            cards_path=self._character_cards_path,
+            ruleset_characters=self._ruleset_character_dependencies,
+            lorebook=self._lore,
+            rebuild_lorebook_index=self._rebuild_lorebook_index,
         )
         self._ruleset_advancement_dependencies = (
             ruleset_advancement.RulesetAdvancementDependencies(
@@ -170,8 +180,12 @@ class WebAPI:
         )
         self._card_advancement_dependencies = (
             ruleset_advancement.CardAdvancementDependencies(
-                read_cards=lambda: character_cards._read_cards(self),
-                write_cards=lambda cards: character_cards._write_cards(self, cards),
+                read_cards=lambda: character_cards._read_cards(
+                    self._character_card_dependencies,
+                ),
+                write_cards=lambda cards: character_cards._write_cards(
+                    self._character_card_dependencies, cards,
+                ),
                 ruleset_characters=self._ruleset_character_dependencies,
             )
         )
@@ -1121,23 +1135,37 @@ class WebAPI:
     # ---- 角色卡库 ----
 
     def list_character_cards(self) -> dict[str, Any]:
-        return character_cards.list_character_cards(self)
+        return character_cards.list_character_cards(self._character_card_dependencies)
 
     def save_character_card(self, character: dict) -> dict[str, Any]:
-        return character_cards.save_character_card(self, character)
+        return character_cards.save_character_card(
+            self._character_card_dependencies, character,
+        )
 
     def update_character_card(self, card_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        return character_cards.update_character_card(self, card_id, patch)
+        return character_cards.update_character_card(
+            self._character_card_dependencies, card_id, patch,
+        )
 
     def delete_character_card(self, card_id: str) -> dict[str, Any]:
-        return character_cards.delete_character_card(self, card_id)
+        return character_cards.delete_character_card(
+            self._character_card_dependencies, card_id,
+        )
 
     async def import_character_card(self, file_data: str = "", file_name: str = "card.json",
                                     target: str = "character_card", world_id: str = "") -> dict[str, Any]:
-        return await character_cards.import_character_card(self, file_data, file_name, target, world_id)
+        return await character_cards.import_character_card(
+            self._character_card_dependencies,
+            file_data,
+            file_name,
+            target,
+            world_id,
+        )
 
     def export_character_cards(self, card_ids: list[str]) -> dict[str, Any]:
-        return character_cards.export_character_cards(self, card_ids)
+        return character_cards.export_character_cards(
+            self._character_card_dependencies, card_ids,
+        )
 
     def update_ruleset_character_card_profile(
         self, card_id: str, patch: dict[str, Any],
