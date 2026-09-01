@@ -21,6 +21,7 @@ from src.content.worlds import localize_lorebook_entries
 from src.engine.language import localized_text
 from src.engine.health import record_health_event
 from src.engine.economy import complete_effect_group, resolve_proposal
+from src.engine.game_instance import GameInstance
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
@@ -93,9 +94,9 @@ def _record_economy_outcome_in_round(
 
 @dataclass(frozen=True)
 class CharacterGameDependencies:
-    get_instance: Callable[[tuple[str, ...]], Any | None]
+    get_instance: Callable[[tuple[str, ...]], GameInstance | None]
     parse_game_key: Callable[[str], tuple[str, ...]]
-    save_instance: Callable[[Any], Awaitable[None]]
+    save_instance: Callable[[GameInstance], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -661,7 +662,7 @@ async def resolve_payment(
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
-    if not inst:
+    if inst is None:
         return {"ok": False, "error": "游戏不存在"}
     actor_uid = str(session_uid or "")
 
@@ -674,7 +675,7 @@ async def resolve_payment(
         current = dependencies.games.get_instance(
             dependencies.games.parse_game_key(game_key),
         )
-        if current is not inst:
+        if current is None or id(current) != id(inst):
             return {
                 "ok": False,
                 "code": "STALE_RUN",
