@@ -28,6 +28,14 @@ class GameplayApiShim:
             "rule_id": "dnd2024_srd",
             "runtime": {"id": "core:dnd2024", "minimum_version": 1},
         })
+        self._adventure_dependencies = adventures.AdventureDependencies(
+            adventure_loader=self._adventure_loader,
+            list_instances=self._reg.list_all,
+            load_rule_by_id=lambda rule_id, _language: (
+                self._rule if rule_id == self._rule.rule_id else None
+            ),
+            ruleset_registry=self._ruleset_registry,
+        )
         self._gameplay_dependencies = (
             ruleset_gameplay.RulesetGameplayDependencies(
                 get_instance=self._reg.get,
@@ -35,7 +43,7 @@ class GameplayApiShim:
                 load_rule_for_game=self._load_rule_for_game,
                 ruleset_registry=self._ruleset_registry,
                 resolve_adventure_binding=lambda adventure_id, active_runtime, world_id, language: adventures.resolve_binding_for_runtime(
-                    self,
+                    self._adventure_dependencies,
                     adventure_id,
                     active_runtime,
                     world_id,

@@ -8,8 +8,9 @@ import re
 import shutil
 import tempfile
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import Any, Callable
 
 from src.adventures import (
     AdventureBundleError,
@@ -17,10 +18,7 @@ from src.adventures import (
     LoadedAdventureBundle,
     is_builtin_adventure_directory,
 )
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
-
+from src.rulesets.registry import RulesetRuntimeRegistry
 
 _DIRECTORY_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 _PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]*$")
@@ -29,12 +27,27 @@ MAX_ADVENTURE_FILE_BYTES = 1024 * 1024
 MAX_ADVENTURE_FILES = 256
 
 
-def _runtime_for_rule(api: "WebAPI", rule_id: str, language: str) -> Any | None:
-    rule = api._load_rule_by_id(str(rule_id or "").strip(), language)
+@dataclass(frozen=True)
+class AdventureDependencies:
+    adventure_loader: AdventureBundleLoader
+    list_instances: Callable[[], list[Any]]
+    load_rule_by_id: Callable[[str, str], Any | None]
+    ruleset_registry: RulesetRuntimeRegistry
+    builtin_adventures_dir: Path | None = None
+
+
+def _runtime_for_rule(
+    dependencies: AdventureDependencies,
+    rule_id: str,
+    language: str,
+) -> Any | None:
+    rule = dependencies.load_rule_by_id(
+        str(rule_id or "").strip(), language,
+    )
     if rule is None:
         return None
     try:
-        return api._ruleset_registry.resolve(rule.template)
+        return dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError):
         return None
 
@@ -63,19 +76,22 @@ def _compatibility(
 
 
 def list_adventures(
-    api: "WebAPI", rule_id: str = "", world_id: str = "", language: str = "",
+    dependencies: AdventureDependencies,
+    rule_id: str = "",
+    world_id: str = "",
+    language: str = "",
 ) -> dict[str, Any]:
-    runtime = _runtime_for_rule(api, rule_id, language)
+    runtime = _runtime_for_rule(dependencies, rule_id, language)
     try:
-        bundles = api._adventure_loader.list(language)
+        bundles = dependencies.adventure_loader.list(language)
     except AdventureBundleError as exc:
         return {"ok": False, "error_code": "ADVENTURE_CATALOG_INVALID", "error": str(exc)}
     items: list[dict[str, Any]] = []
     for bundle in bundles:
         status, reasons = _compatibility(bundle, runtime, world_id)
         adventure = bundle.adventure
-        usages = _bound_games(api, bundle.manifest.adventure_id)
-        builtin = _is_builtin_bundle(api, bundle)
+        usages = _bound_games(dependencies, bundle.manifest.adventure_id)
+        builtin = _is_builtin_bundle(dependencies, bundle)
         items.append({
             "adventure_id": bundle.manifest.adventure_id,
             "version": bundle.manifest.version,
@@ -100,27 +116,39 @@ def list_adventures(
     return {"ok": True, "adventures": items}
 
 
-def _bound_games(api: "WebAPI", adventure_id: str) -> list[str]:
+def _bound_games(
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+) -> list[str]:
     return [
         "|".join(instance.game_key)
-        for instance in api._reg.list_all()
+        for instance in dependencies.list_instances()
         if str(
             (getattr(instance, "adventure_binding", {}) or {}).get("adventure_id") or ""
         ) == adventure_id
     ]
 
 
-def _is_builtin_bundle(api: "WebAPI", bundle: LoadedAdventureBundle) -> bool:
-    builtin_root = getattr(api, "_builtin_adventures_dir", None)
+def _is_builtin_bundle(
+    dependencies: AdventureDependencies,
+    bundle: LoadedAdventureBundle,
+) -> bool:
+    builtin_root = dependencies.builtin_adventures_dir
     return is_builtin_adventure_directory(bundle.root) or (
         isinstance(builtin_root, Path)
         and bundle.root.parent.resolve() == builtin_root.resolve()
     )
 
 
-def _resolve_bundle(api: "WebAPI", adventure_id: str, language: str = "") -> LoadedAdventureBundle:
+def _resolve_bundle(
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+    language: str = "",
+) -> LoadedAdventureBundle:
     try:
-        return api._adventure_loader.resolve(str(adventure_id or ""), language)
+        return dependencies.adventure_loader.resolve(
+            str(adventure_id or ""), language,
+        )
     except AdventureBundleError as exc:
         raise ValueError(str(exc)) from exc
 
@@ -134,11 +162,13 @@ def _json_files(root: Path) -> dict[str, Any]:
 
 
 def adventure_detail(
-    api: "WebAPI", adventure_id: str, language: str = "",
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+    language: str = "",
 ) -> dict[str, Any]:
-    bundle = _resolve_bundle(api, adventure_id, language)
-    usages = _bound_games(api, bundle.manifest.adventure_id)
-    builtin = _is_builtin_bundle(api, bundle)
+    bundle = _resolve_bundle(dependencies, adventure_id, language)
+    usages = _bound_games(dependencies, bundle.manifest.adventure_id)
+    builtin = _is_builtin_bundle(dependencies, bundle)
     return {
         "ok": True,
         "adventure": {
@@ -169,8 +199,11 @@ def _validate_package_id(value: Any) -> str:
     return adventure_id
 
 
-def _ensure_identity_available(api: "WebAPI", adventure_id: str) -> None:
-    for bundle in api._adventure_loader.list(""):
+def _ensure_identity_available(
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+) -> None:
+    for bundle in dependencies.adventure_loader.list(""):
         if bundle.manifest.adventure_id == adventure_id:
             raise ValueError(f"adventure identity already exists: {adventure_id}")
 
@@ -200,8 +233,12 @@ def _write_json_files(root: Path, files: Any) -> None:
         target.write_bytes(payload)
 
 
-def _validated_stage(api: "WebAPI", directory_id: str, files: dict[str, Any]) -> tuple[Path, Any]:
-    parent = api._adventure_loader.adventures_dir.parent
+def _validated_stage(
+    dependencies: AdventureDependencies,
+    directory_id: str,
+    files: dict[str, Any],
+) -> tuple[Path, Any]:
+    parent = dependencies.adventure_loader.adventures_dir.parent
     temporary = tempfile.TemporaryDirectory(prefix="diceframe-adventure-", dir=parent)
     root = Path(temporary.name) / directory_id
     root.mkdir()
@@ -215,15 +252,18 @@ def _validated_stage(api: "WebAPI", directory_id: str, files: dict[str, Any]) ->
 
 
 def copy_adventure(
-    api: "WebAPI", adventure_id: str, body: dict[str, Any], language: str = "",
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+    body: dict[str, Any],
+    language: str = "",
 ) -> dict[str, Any]:
-    source = _resolve_bundle(api, adventure_id, language)
+    source = _resolve_bundle(dependencies, adventure_id, language)
     directory_id = _validate_directory_id(body.get("directory_id"))
-    target = api._adventure_loader.adventures_dir / directory_id
+    target = dependencies.adventure_loader.adventures_dir / directory_id
     if target.exists():
         raise ValueError(f"adventure directory already exists: {directory_id}")
     new_id = _validate_package_id(body.get("adventure_id") or f"user:{directory_id}")
-    _ensure_identity_available(api, new_id)
+    _ensure_identity_available(dependencies, new_id)
     files = _json_files(source.root)
     manifest = dict(files.get("manifest.json") or {})
     manifest.update({
@@ -249,12 +289,12 @@ def copy_adventure(
                 tutorial["name"] = str(body["name"]).strip()
             if str(body.get("summary") or "").strip():
                 tutorial["summary"] = str(body["summary"]).strip()
-    staged, temporary = _validated_stage(api, directory_id, files)
+    staged, temporary = _validated_stage(dependencies, directory_id, files)
     try:
         shutil.move(str(staged), str(target))
     finally:
         temporary.cleanup()
-    bundle = api._adventure_loader.resolve(new_id, language)
+    bundle = dependencies.adventure_loader.resolve(new_id, language)
     return {
         "ok": True,
         "adventure_id": bundle.manifest.adventure_id,
@@ -264,7 +304,9 @@ def copy_adventure(
 
 
 def create_adventure(
-    api: "WebAPI", body: dict[str, Any], language: str = "",
+    dependencies: AdventureDependencies,
+    body: dict[str, Any],
+    language: str = "",
 ) -> dict[str, Any]:
     """Create a small, valid user package that can be expanded in the editor.
 
@@ -273,11 +315,11 @@ def create_adventure(
     optional and can be added later through the structured editor.
     """
     directory_id = _validate_directory_id(body.get("directory_id"))
-    target = api._adventure_loader.adventures_dir / directory_id
+    target = dependencies.adventure_loader.adventures_dir / directory_id
     if target.exists():
         raise ValueError(f"adventure directory already exists: {directory_id}")
     adventure_id = _validate_package_id(body.get("adventure_id") or f"user:{directory_id}")
-    _ensure_identity_available(api, adventure_id)
+    _ensure_identity_available(dependencies, adventure_id)
     name = str(body.get("name") or "未命名冒险").strip()
     summary = str(body.get("summary") or "").strip()
     world_policy = str(body.get("world_policy") or "portable").strip()
@@ -358,22 +400,25 @@ def create_adventure(
             "target": {"kind": "scene", "id": scene_id},
             "fields": {"name": "开场场景" if locale == "zh-CN" else "Opening Scene", "description": ""},
         }
-    staged, temporary = _validated_stage(api, directory_id, files)
+    staged, temporary = _validated_stage(dependencies, directory_id, files)
     try:
         shutil.move(str(staged), str(target))
     finally:
         temporary.cleanup()
-    bundle = api._adventure_loader.resolve(adventure_id, language)
+    bundle = dependencies.adventure_loader.resolve(adventure_id, language)
     return {"ok": True, "adventure_id": adventure_id, "directory_id": directory_id, "content_digest": bundle.content_digest}
 
 
 def update_adventure(
-    api: "WebAPI", adventure_id: str, body: dict[str, Any], language: str = "",
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+    body: dict[str, Any],
+    language: str = "",
 ) -> dict[str, Any]:
-    current = _resolve_bundle(api, adventure_id, language)
-    if _is_builtin_bundle(api, current):
+    current = _resolve_bundle(dependencies, adventure_id, language)
+    if _is_builtin_bundle(dependencies, current):
         raise PermissionError("built-in adventures must be copied before editing")
-    usages = _bound_games(api, current.manifest.adventure_id)
+    usages = _bound_games(dependencies, current.manifest.adventure_id)
     if usages:
         raise PermissionError("adventure is bound to a save and cannot be edited")
     files = body.get("files")
@@ -382,7 +427,9 @@ def update_adventure(
     manifest = files.get("manifest.json")
     if not isinstance(manifest, dict) or str(manifest.get("adventure_id") or "") != adventure_id:
         raise ValueError("editing cannot change canonical adventure identity")
-    staged, temporary = _validated_stage(api, current.root.name, files)
+    staged, temporary = _validated_stage(
+        dependencies, current.root.name, files,
+    )
     backup = current.root.with_name(f".{current.root.name}.backup")
     try:
         if backup.exists():
@@ -396,23 +443,29 @@ def update_adventure(
         shutil.rmtree(backup)
     finally:
         temporary.cleanup()
-    updated = api._adventure_loader.resolve(adventure_id, language)
+    updated = dependencies.adventure_loader.resolve(adventure_id, language)
     return {"ok": True, "content_digest": updated.content_digest}
 
 
-def delete_adventure(api: "WebAPI", adventure_id: str) -> dict[str, Any]:
-    bundle = _resolve_bundle(api, adventure_id)
-    if _is_builtin_bundle(api, bundle):
+def delete_adventure(
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+) -> dict[str, Any]:
+    bundle = _resolve_bundle(dependencies, adventure_id)
+    if _is_builtin_bundle(dependencies, bundle):
         raise PermissionError("built-in adventures cannot be deleted")
-    usages = _bound_games(api, bundle.manifest.adventure_id)
+    usages = _bound_games(dependencies, bundle.manifest.adventure_id)
     if usages:
         raise PermissionError("adventure is bound to a save and cannot be deleted")
     shutil.rmtree(bundle.root)
     return {"ok": True, "deleted": bundle.manifest.adventure_id}
 
 
-def export_adventure(api: "WebAPI", adventure_id: str) -> tuple[str, bytes]:
-    bundle = _resolve_bundle(api, adventure_id)
+def export_adventure(
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+) -> tuple[str, bytes]:
+    bundle = _resolve_bundle(dependencies, adventure_id)
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(bundle.root.rglob("*.json")):
@@ -421,7 +474,9 @@ def export_adventure(api: "WebAPI", adventure_id: str) -> tuple[str, bytes]:
 
 
 def import_adventure(
-    api: "WebAPI", payload: bytes, directory_id: str = "",
+    dependencies: AdventureDependencies,
+    payload: bytes,
+    directory_id: str = "",
 ) -> dict[str, Any]:
     if not payload or len(payload) > MAX_ADVENTURE_PACKAGE_BYTES:
         raise ValueError("adventure package is empty or too large")
@@ -463,19 +518,21 @@ def import_adventure(
     if not isinstance(manifest, dict):
         raise ValueError("adventure package is missing manifest.json")
     adventure_id = _validate_package_id(manifest.get("adventure_id"))
-    _ensure_identity_available(api, adventure_id)
+    _ensure_identity_available(dependencies, adventure_id)
     wanted_directory = _validate_directory_id(directory_id or root)
-    target = api._adventure_loader.adventures_dir / wanted_directory
+    target = dependencies.adventure_loader.adventures_dir / wanted_directory
     if target.exists():
         raise ValueError(f"adventure directory already exists: {wanted_directory}")
     manifest["custom"] = True
     files["manifest.json"] = manifest
-    staged, temporary = _validated_stage(api, wanted_directory, files)
+    staged, temporary = _validated_stage(
+        dependencies, wanted_directory, files,
+    )
     try:
         shutil.move(str(staged), str(target))
     finally:
         temporary.cleanup()
-    imported = api._adventure_loader.resolve(adventure_id, "")
+    imported = dependencies.adventure_loader.resolve(adventure_id, "")
     return {
         "ok": True,
         "adventure_id": adventure_id,
@@ -485,23 +542,29 @@ def import_adventure(
 
 
 def resolve_binding(
-    api: "WebAPI", adventure_id: str, rule_id: str, world_id: str, language: str,
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+    rule_id: str,
+    world_id: str,
+    language: str,
 ) -> dict[str, Any]:
-    runtime = _runtime_for_rule(api, rule_id, language)
+    runtime = _runtime_for_rule(dependencies, rule_id, language)
     return resolve_binding_for_runtime(
-        api, adventure_id, runtime, world_id, language,
+        dependencies, adventure_id, runtime, world_id, language,
     )
 
 
 def resolve_binding_for_runtime(
-    api: "WebAPI", adventure_id: str, runtime: Any | None,
+    dependencies: AdventureDependencies,
+    adventure_id: str,
+    runtime: Any | None,
     world_id: str, language: str,
 ) -> dict[str, Any]:
     wanted = str(adventure_id or "").strip()
     if not wanted:
         return {}
     try:
-        bundle = api._adventure_loader.resolve(wanted, language)
+        bundle = dependencies.adventure_loader.resolve(wanted, language)
     except AdventureBundleError as exc:
         raise ValueError(str(exc)) from exc
     status, reasons = _compatibility(bundle, runtime, world_id)

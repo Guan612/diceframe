@@ -253,6 +253,13 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._adventure_dependencies = adventures.AdventureDependencies(
+            adventure_loader=self._adventure_loader,
+            list_instances=self._reg.list_all,
+            load_rule_by_id=self._load_rule_by_id,
+            ruleset_registry=self._ruleset_registry,
+            builtin_adventures_dir=self._builtin_adventures_dir,
+        )
         self._ruleset_gameplay_dependencies = (
             ruleset_gameplay.RulesetGameplayDependencies(
                 get_instance=self._reg.get,
@@ -260,7 +267,11 @@ class WebAPI:
                 load_rule_for_game=self._load_rule_for_game,
                 ruleset_registry=self._ruleset_registry,
                 resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
-                    self, adventure_id, runtime, world_id, language,
+                    self._adventure_dependencies,
+                    adventure_id,
+                    runtime,
+                    world_id,
+                    language,
                 ),
                 save_instance=self._reg.save,
                 apply_memory_delta=(
@@ -416,7 +427,11 @@ class WebAPI:
                 llm_configuration_error=self._llm_configuration_error,
                 load_rule_by_id=self._load_rule_by_id,
                 resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
-                    self, adventure_id, runtime, world_id, language,
+                    self._adventure_dependencies,
+                    adventure_id,
+                    runtime,
+                    world_id,
+                    language,
                 ),
                 resolve_default_scene_image=self.resolve_default_scene_image,
                 materialize_scene_image=self.materialize_scene_image,
@@ -1322,36 +1337,69 @@ class WebAPI:
     def list_adventures(
         self, rule_id: str = "", world_id: str = "", language: str = "",
     ) -> dict[str, Any]:
-        return adventures.list_adventures(self, rule_id, world_id, language)
+        return adventures.list_adventures(
+            self._adventure_dependencies,
+            rule_id,
+            world_id,
+            language,
+        )
 
     def adventure_detail(self, adventure_id: str, language: str = "") -> dict[str, Any]:
-        return adventures.adventure_detail(self, adventure_id, language)
+        return adventures.adventure_detail(
+            self._adventure_dependencies,
+            adventure_id,
+            language,
+        )
 
     def copy_adventure(
         self, adventure_id: str, body: dict[str, Any], language: str = "",
     ) -> dict[str, Any]:
-        return adventures.copy_adventure(self, adventure_id, body, language)
+        return adventures.copy_adventure(
+            self._adventure_dependencies,
+            adventure_id,
+            body,
+            language,
+        )
 
     def create_adventure(
         self, body: dict[str, Any], language: str = "",
     ) -> dict[str, Any]:
-        return adventures.create_adventure(self, body, language)
+        return adventures.create_adventure(
+            self._adventure_dependencies,
+            body,
+            language,
+        )
 
     def update_adventure(
         self, adventure_id: str, body: dict[str, Any], language: str = "",
     ) -> dict[str, Any]:
-        return adventures.update_adventure(self, adventure_id, body, language)
+        return adventures.update_adventure(
+            self._adventure_dependencies,
+            adventure_id,
+            body,
+            language,
+        )
 
     def delete_adventure(self, adventure_id: str) -> dict[str, Any]:
-        return adventures.delete_adventure(self, adventure_id)
+        return adventures.delete_adventure(
+            self._adventure_dependencies,
+            adventure_id,
+        )
 
     def export_adventure(self, adventure_id: str) -> tuple[str, bytes]:
-        return adventures.export_adventure(self, adventure_id)
+        return adventures.export_adventure(
+            self._adventure_dependencies,
+            adventure_id,
+        )
 
     def import_adventure(
         self, payload: bytes, directory_id: str = "",
     ) -> dict[str, Any]:
-        return adventures.import_adventure(self, payload, directory_id)
+        return adventures.import_adventure(
+            self._adventure_dependencies,
+            payload,
+            directory_id,
+        )
 
     def list_world_templates(self, language: str = "") -> dict[str, Any]:
         # 确保已启用插件的世界模板世界书已同步（幂等）
