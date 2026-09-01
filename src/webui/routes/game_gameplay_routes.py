@@ -348,6 +348,7 @@ async def api_payment_resolve(request: web.Request) -> web.Response:
             "STALE_RUN",
             "EFFECT_COMMIT_FAILED",
             "INSUFFICIENT_FUNDS",
+            "REWRITE_IN_PROGRESS",
         }
         else 400
     )
@@ -364,8 +365,6 @@ async def api_swipe(request: web.Request) -> web.Response:
         return denied
     if request.method == "PUT":
         nar = await api.generate_game_swipe(inst, round_num)
-        # swipe 改写了内存 log（gm_response/swipes），落盘否则重启即丢
-        await api.save_game_instance(inst)
         external_effects_committed = await api.drain_economy_outbox(game_key)
         return web.json_response({
             "ok": True,

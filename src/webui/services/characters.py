@@ -677,6 +677,16 @@ async def resolve_payment(
         return {"ok": False, "error": "游戏不存在"}
     actor_uid = str(session_uid or "")
 
+    # Historical swipe rewrites hold the aggregate process barrier for their
+    # entire staged transaction (including the LLM await). Do not let a
+    # payment writer commit against temporary historical state.
+    if getattr(inst, "_rewrite_in_progress", False):
+        return {
+            "ok": False,
+            "code": "REWRITE_IN_PROGRESS",
+            "error": "GM 正在重写历史回合，请等待完成后再处理支付",
+        }
+
     def grant_reward(sheet: dict[str, Any], reward: dict[str, Any]) -> None:
         item_name = str(reward.get("name") or "").strip()
         if item_name:
