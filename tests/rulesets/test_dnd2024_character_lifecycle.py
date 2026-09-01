@@ -46,6 +46,21 @@ class _Api:
                 ruleset_registry=self._ruleset_registry,
             )
         )
+        self._ruleset_character_dependencies = (
+            ruleset_characters.RulesetCharacterDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+                load_rule_by_id=self._load_rule_by_id,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+                read_cards=lambda: character_cards._read_cards(self),
+                write_cards=lambda cards: character_cards._write_cards(self, cards),
+                validate_portrait=lambda portrait: characters._validated_portrait(
+                    self, portrait,
+                ),
+            )
+        )
 
     @staticmethod
     def _parse_key(game_key: str):
@@ -83,6 +98,25 @@ class _Api:
     ):
         return await ruleset_rest.resolve_live_party(
             self._live_ruleset_rest_dependencies, game_key, user_id, body,
+        )
+
+    def update_ruleset_character_card_profile(self, card_id: str, patch):
+        return ruleset_characters.update_character_card_profile(
+            self._ruleset_character_dependencies, card_id, patch,
+        )
+
+    async def update_ruleset_character_profile(
+        self, game_key: str, user_id: str, patch,
+    ):
+        return await ruleset_characters.update_live_character_profile(
+            self._ruleset_character_dependencies, game_key, user_id, patch,
+        )
+
+    async def adopt_ruleset_character_card(
+        self, game_key: str, user_id: str, card_id: str,
+    ):
+        return await ruleset_characters.adopt_character_card(
+            self._ruleset_character_dependencies, game_key, user_id, card_id,
         )
 
 
@@ -153,7 +187,7 @@ async def test_live_profile_update_preserves_canonical_mechanics(
     before = deepcopy(instance.get_character_sheet("gm")["ruleset_character"])
 
     result = await ruleset_characters.update_live_character_profile(
-        api,
+        api._ruleset_character_dependencies,
         "web|character-lifecycle|web_bot",
         "gm",
         {
@@ -252,7 +286,7 @@ def test_card_profile_update_preserves_professional_blueprint(
     before = deepcopy(saved["ruleset_character"])
 
     result = ruleset_characters.update_character_card_profile(
-        api,
+        api._ruleset_character_dependencies,
         saved["id"],
         {
             "character_name": "Library Hero",
@@ -505,7 +539,8 @@ async def test_live_character_adopts_server_owned_professional_blueprint(
     saved = character_cards.save_character_card(api, replacement)["card"]
 
     result = await ruleset_characters.adopt_character_card(
-        api, "web|character-lifecycle|web_bot", "gm", saved["id"],
+        api._ruleset_character_dependencies,
+        "web|character-lifecycle|web_bot", "gm", saved["id"],
     )
 
     assert result["ok"] is True

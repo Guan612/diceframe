@@ -41,8 +41,6 @@ async def api_char_update(request: web.Request) -> web.Response:
 
 async def api_ruleset_character_profile_update(request: web.Request) -> web.Response:
     """Patch non-mechanical profile data for a ruleset-authoritative character."""
-    from src.webui.services.ruleset_characters import update_live_character_profile
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -60,7 +58,7 @@ async def api_ruleset_character_profile_update(request: web.Request) -> web.Resp
             {"ok": False, "error": "无权修改他人角色卡"}, status=403
         )
     body = await request.json()
-    result = await update_live_character_profile(api, gk, uid, body)
+    result = await api.update_ruleset_character_profile(gk, uid, body)
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")
@@ -69,8 +67,6 @@ async def api_ruleset_character_profile_update(request: web.Request) -> web.Resp
 
 
 async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_characters import adopt_character_card
-
     gk = request.match_info["game_key"]
     uid = request.match_info["user_id"]
     api = _get_api(request)
@@ -88,7 +84,9 @@ async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response
             {"ok": False, "error": "无权修改他人角色卡"}, status=403
         )
     body = await request.json()
-    result = await adopt_character_card(api, gk, uid, str(body.get("card_id") or ""))
+    result = await api.adopt_ruleset_character_card(
+        gk, uid, str(body.get("card_id") or ""),
+    )
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")

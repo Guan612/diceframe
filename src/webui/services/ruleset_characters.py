@@ -7,13 +7,28 @@ the legacy projection through the selected runtime before persisting once.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.webui.services.characters import MAX_BIO_CHARS, _validated_portrait
+from src.webui.services.characters import MAX_BIO_CHARS
 
 if TYPE_CHECKING:
-    from src.webui.api import WebAPI
+    from src.rulesets.registry import RulesetRuntimeRegistry
+
+
+@dataclass(frozen=True)
+class RulesetCharacterDependencies:
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    save_instance: Callable[[Any], Awaitable[None]]
+    load_rule_by_id: Callable[[str, str], Any | None]
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: "RulesetRuntimeRegistry"
+    read_cards: Callable[[], list[dict[str, Any]]]
+    write_cards: Callable[[list[dict[str, Any]]], None]
+    validate_portrait: Callable[[Any], dict[str, str] | None]
 
 
 PROFILE_FIELDS = frozenset({
@@ -46,7 +61,10 @@ def _is_rules_aware(runtime: Any) -> bool:
     return getattr(runtime.capabilities, "character_lifecycle", "legacy") == "rules_aware"
 
 
-def runtime_for_card(api: "WebAPI", card: dict[str, Any]) -> Any | None:
+def runtime_for_card(
+    dependencies: RulesetCharacterDependencies,
+    card: dict[str, Any],
+) -> Any | None:
     """Resolve a card's runtime without matching translated names or rule IDs."""
 
     canonical = card.get("ruleset_character")
@@ -59,33 +77,39 @@ def runtime_for_card(api: "WebAPI", card: dict[str, Any]) -> Any | None:
         if runtime_id:
             try:
                 minimum_version = int(raw_version)
-                return api._ruleset_registry.get(
+                return dependencies.ruleset_registry.get(
                     runtime_id, minimum_version=max(1, minimum_version),
                 )
             except (AttributeError, TypeError, ValueError):
                 return None
 
     rule_id = str(card.get("rule_id") or "").strip()
-    loader = getattr(api, "_load_rule_by_id", None)
-    registry = getattr(api, "_ruleset_registry", None)
-    if not rule_id or not callable(loader) or registry is None:
+    if not rule_id:
         return None
-    rule = loader(rule_id, str(card.get("language") or ""))
+    rule = dependencies.load_rule_by_id(
+        rule_id, str(card.get("language") or ""),
+    )
     if rule is None:
         return None
     try:
-        return registry.resolve(rule.template)
+        return dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError):
         return None
 
 
-def card_has_rules_aware_lifecycle(api: "WebAPI", card: dict[str, Any]) -> bool:
-    runtime = runtime_for_card(api, card)
+def card_has_rules_aware_lifecycle(
+    dependencies: RulesetCharacterDependencies,
+    card: dict[str, Any],
+) -> bool:
+    runtime = runtime_for_card(dependencies, card)
     return runtime is not None and _is_rules_aware(runtime)
 
 
-def runtime_metadata_for_card(api: "WebAPI", card: dict[str, Any]) -> dict[str, Any] | None:
-    runtime = runtime_for_card(api, card)
+def runtime_metadata_for_card(
+    dependencies: RulesetCharacterDependencies,
+    card: dict[str, Any],
+) -> dict[str, Any] | None:
+    runtime = runtime_for_card(dependencies, card)
     if runtime is None:
         return None
     canonical = card.get("ruleset_character")
@@ -105,7 +129,8 @@ def runtime_metadata_for_card(api: "WebAPI", card: dict[str, Any]) -> dict[str, 
 
 
 def normalize_character_card_blueprint(
-    api: "WebAPI", character: dict[str, Any],
+    dependencies: RulesetCharacterDependencies,
+    character: dict[str, Any],
 ) -> dict[str, Any]:
     """Validate and rebuild a professional card before it enters local storage.
 
@@ -119,7 +144,7 @@ def normalize_character_card_blueprint(
         raise RulesetCharacterOperationError(
             "INVALID_RULESET_CHARACTER", "角色卡必须是对象",
         )
-    runtime = runtime_for_card(api, character)
+    runtime = runtime_for_card(dependencies, character)
     if runtime is None or not _is_rules_aware(runtime):
         return deepcopy(character)
 
@@ -130,19 +155,18 @@ def normalize_character_card_blueprint(
             "INVALID_RULESET_CHARACTER", "专业角色卡缺少可重建的权威规则数据",
         )
     rule_id = str(binding.get("rule_id") or character.get("rule_id") or "").strip()
-    loader = getattr(api, "_load_rule_by_id", None)
-    if not rule_id or not callable(loader):
+    if not rule_id:
         raise RulesetCharacterOperationError(
             "RULESET_NOT_FOUND", "专业角色卡没有可用的规则标识",
         )
     locale = str(canonical.get("locale") or character.get("language") or "")
-    rule = loader(rule_id, locale)
+    rule = dependencies.load_rule_by_id(rule_id, locale)
     if rule is None:
         raise RulesetCharacterOperationError(
             "RULESET_NOT_FOUND", f"找不到专业角色卡使用的规则: {rule_id}",
         )
     try:
-        selected_runtime = api._ruleset_registry.resolve(rule.template)
+        selected_runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         raise RulesetCharacterOperationError(
             "RULESET_RUNTIME_UNAVAILABLE", str(exc),
@@ -169,7 +193,9 @@ def normalize_character_card_blueprint(
     if character.get("portrait") not in (None, {}):
         profile_patch["portrait"] = deepcopy(character.get("portrait"))
     if profile_patch:
-        normalized, _name = _apply_profile(api, runtime, normalized, profile_patch)
+        normalized, _name = _apply_profile(
+            dependencies, runtime, normalized, profile_patch,
+        )
 
     # Retain human-facing library metadata, never imported operation/revision
     # journals. A newly stored blueprint starts with a fresh entity revision.
@@ -182,7 +208,10 @@ def normalize_character_card_blueprint(
     return normalized
 
 
-def _validate_profile_patch(api: "WebAPI", patch: dict[str, Any]) -> dict[str, Any]:
+def _validate_profile_patch(
+    dependencies: RulesetCharacterDependencies,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
     if not isinstance(patch, dict):
         raise RulesetCharacterOperationError("INVALID_CHARACTER_PROFILE", "角色资料必须是对象")
     unknown = sorted(set(patch) - PROFILE_PATCH_FIELDS)
@@ -206,7 +235,9 @@ def _validate_profile_patch(api: "WebAPI", patch: dict[str, Any]) -> dict[str, A
 
     if "portrait" in patch:
         try:
-            result["portrait"] = _validated_portrait(api, patch.get("portrait"))
+            result["portrait"] = dependencies.validate_portrait(
+                patch.get("portrait"),
+            )
         except ValueError as exc:
             raise RulesetCharacterOperationError("INVALID_CHARACTER_PROFILE", str(exc)) from exc
 
@@ -240,12 +271,12 @@ def _validate_profile_patch(api: "WebAPI", patch: dict[str, Any]) -> dict[str, A
 
 
 def _apply_profile(
-    api: "WebAPI",
+    dependencies: RulesetCharacterDependencies,
     runtime: Any,
     current: dict[str, Any],
     patch: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
-    validated = _validate_profile_patch(api, patch)
+    validated = _validate_profile_patch(dependencies, patch)
     canonical = current.get("ruleset_character")
     if not isinstance(canonical, dict):
         raise RulesetCharacterOperationError(
@@ -305,16 +336,19 @@ def _apply_profile(
 
 
 async def update_live_character_profile(
-    api: "WebAPI", game_key: str, user_id: str, patch: dict[str, Any],
+    dependencies: RulesetCharacterDependencies,
+    game_key: str,
+    user_id: str,
+    patch: dict[str, Any],
 ) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None or user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return _failure("RULESET_NOT_FOUND", "当前游戏规则不存在")
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return _failure("RULESET_RUNTIME_UNAVAILABLE", str(exc))
     if not _is_rules_aware(runtime):
@@ -323,7 +357,7 @@ async def update_live_character_profile(
     before_player = deepcopy(instance.players[user_id])
     try:
         updated, name = _apply_profile(
-            api, runtime, instance.get_character_sheet(user_id), patch,
+            dependencies, runtime, instance.get_character_sheet(user_id), patch,
         )
     except RulesetCharacterOperationError as exc:
         return _failure(exc.code, str(exc))
@@ -331,7 +365,7 @@ async def update_live_character_profile(
     instance.set_player_name(user_id, name)
     instance.set_character_sheet(user_id, updated)
     try:
-        await api._reg.save(instance)
+        await dependencies.save_instance(instance)
     except Exception:
         instance.players[user_id] = before_player
         raise
@@ -339,31 +373,34 @@ async def update_live_character_profile(
 
 
 async def adopt_character_card(
-    api: "WebAPI", game_key: str, user_id: str, card_id: str,
+    dependencies: RulesetCharacterDependencies,
+    game_key: str,
+    user_id: str,
+    card_id: str,
 ) -> dict[str, Any]:
     """Replace one live professional character from a server-owned blueprint."""
-    from src.webui.services.character_cards import _dedupe_cards, _read_cards
+    from src.webui.services.character_cards import _dedupe_cards
 
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None or user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
     card = next(
         (
-            item for item in _dedupe_cards(_read_cards(api))
+            item for item in _dedupe_cards(dependencies.read_cards())
             if str(item.get("id") or "") == str(card_id or "")
         ),
         None,
     )
     if card is None:
         return _failure("CHARACTER_NOT_FOUND", f"角色卡不存在: {card_id}")
-    rule = api._load_rule_for_game(instance)
+    rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return _failure("RULESET_NOT_FOUND", "当前游戏规则不存在")
     try:
-        runtime = api._ruleset_registry.resolve(rule.template)
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return _failure("RULESET_RUNTIME_UNAVAILABLE", str(exc))
-    card_runtime = runtime_for_card(api, card)
+    card_runtime = runtime_for_card(dependencies, card)
     if (
         not _is_rules_aware(runtime)
         or card_runtime is None
@@ -389,7 +426,7 @@ async def adopt_character_card(
     instance.set_player_name(user_id, name)
     instance.set_character_sheet(user_id, normalized)
     try:
-        await api._reg.save(instance)
+        await dependencies.save_instance(instance)
     except Exception:
         instance.players[user_id] = before_player
         raise
@@ -397,27 +434,31 @@ async def adopt_character_card(
 
 
 def update_character_card_profile(
-    api: "WebAPI", card_id: str, patch: dict[str, Any],
+    dependencies: RulesetCharacterDependencies,
+    card_id: str,
+    patch: dict[str, Any],
 ) -> dict[str, Any]:
     # Local import keeps the storage module independent from ruleset runtime code.
-    from src.webui.services.character_cards import _dedupe_cards, _read_cards, _write_cards
+    from src.webui.services.character_cards import _dedupe_cards
 
-    cards = _dedupe_cards(_read_cards(api))
+    cards = _dedupe_cards(dependencies.read_cards())
     for index, card in enumerate(cards):
         if str(card.get("id") or "") != card_id:
             continue
-        runtime = runtime_for_card(api, card)
+        runtime = runtime_for_card(dependencies, card)
         if runtime is None or not _is_rules_aware(runtime):
             return _failure(
                 "RULESET_CHARACTER_NOT_SUPPORTED", "当前角色卡不使用专业角色资料接口",
             )
         try:
-            updated, _name = _apply_profile(api, runtime, card, patch)
+            updated, _name = _apply_profile(
+                dependencies, runtime, card, patch,
+            )
         except RulesetCharacterOperationError as exc:
             return _failure(exc.code, str(exc))
         updated["id"] = card_id
         updated["schema_version"] = max(2, int(card.get("schema_version", 2) or 2))
         cards[index] = updated
-        _write_cards(api, cards)
+        dependencies.write_cards(cards)
         return {"ok": True, "card": deepcopy(updated)}
     return _failure("CHARACTER_NOT_FOUND", f"角色卡不存在: {card_id}")

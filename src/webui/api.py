@@ -20,6 +20,7 @@ from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
 from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import ruleset_characters
 from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
@@ -146,6 +147,21 @@ class WebAPI:
             adventures_dir or self._builtin_adventures_dir
         )
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
+        self._ruleset_character_dependencies = (
+            ruleset_characters.RulesetCharacterDependencies(
+                get_instance=self._reg.get,
+                parse_game_key=_parse_game_key,
+                save_instance=self._reg.save,
+                load_rule_by_id=self._load_rule_by_id,
+                load_rule_for_game=self._load_rule_for_game,
+                ruleset_registry=self._ruleset_registry,
+                read_cards=lambda: character_cards._read_cards(self),
+                write_cards=lambda cards: character_cards._write_cards(self, cards),
+                validate_portrait=lambda portrait: characters._validated_portrait(
+                    self, portrait,
+                ),
+            )
+        )
         self._ruleset_rest_dependencies = ruleset_rest.RulesetRestDependencies(
             load_rule_by_id=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,
@@ -1101,6 +1117,13 @@ class WebAPI:
     def export_character_cards(self, card_ids: list[str]) -> dict[str, Any]:
         return character_cards.export_character_cards(self, card_ids)
 
+    def update_ruleset_character_card_profile(
+        self, card_id: str, patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        return ruleset_characters.update_character_card_profile(
+            self._ruleset_character_dependencies, card_id, patch,
+        )
+
     # ---- 世界编辑器 ----
 
     def list_worlds(self) -> dict[str, Any]:
@@ -1176,6 +1199,20 @@ class WebAPI:
 
     async def update_character(self, game_key: str, user_id: str, updates: dict) -> dict[str, Any]:
         return await characters.update_character(self, game_key, user_id, updates)
+
+    async def update_ruleset_character_profile(
+        self, game_key: str, user_id: str, patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        return await ruleset_characters.update_live_character_profile(
+            self._ruleset_character_dependencies, game_key, user_id, patch,
+        )
+
+    async def adopt_ruleset_character_card(
+        self, game_key: str, user_id: str, card_id: str,
+    ) -> dict[str, Any]:
+        return await ruleset_characters.adopt_character_card(
+            self._ruleset_character_dependencies, game_key, user_id, card_id,
+        )
 
     async def update_npc_portrait(self, game_key: str, npc_id: str, portrait: Any) -> dict[str, Any]:
         return await characters.update_npc_portrait(self, game_key, npc_id, portrait)

@@ -30,11 +30,9 @@ async def api_character_card_update(request: web.Request) -> web.Response:
 
 
 async def api_character_card_profile_update(request: web.Request) -> web.Response:
-    from src.webui.services.ruleset_characters import update_character_card_profile
-
     body = await request.json()
-    result = update_character_card_profile(
-        _get_api(request), request.match_info["card_id"], body,
+    result = _get_api(request).update_ruleset_character_card_profile(
+        request.match_info["card_id"], body,
     )
     if result.get("ok"):
         return web.json_response(result)

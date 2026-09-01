@@ -124,9 +124,14 @@ def list_character_cards(api: "WebAPI") -> dict[str, Any]:
     from src.webui.services.ruleset_characters import runtime_metadata_for_card
 
     visible_cards = []
+    ruleset_dependencies = getattr(api, "_ruleset_character_dependencies", None)
     for card in cards:
         visible = copy.deepcopy(card)
-        metadata = runtime_metadata_for_card(api, card)
+        metadata = (
+            runtime_metadata_for_card(ruleset_dependencies, card)
+            if ruleset_dependencies is not None
+            else None
+        )
         if metadata is not None:
             visible["ruleset_runtime"] = metadata
         visible_cards.append(visible)
@@ -145,7 +150,13 @@ def save_character_card(api: "WebAPI", character: dict) -> dict[str, Any]:
     # before professional validation so the canonical blueprint is not missed.
     candidate = _to_character_card(character, source=source)
     try:
-        candidate = normalize_character_card_blueprint(api, candidate)
+        ruleset_dependencies = getattr(
+            api, "_ruleset_character_dependencies", None,
+        )
+        if ruleset_dependencies is not None:
+            candidate = normalize_character_card_blueprint(
+                ruleset_dependencies, candidate,
+            )
     except RulesetCharacterOperationError as exc:
         return {"ok": False, "error_code": exc.code, "error": str(exc)}
     card = _to_character_card(candidate, source=source)
@@ -172,7 +183,13 @@ def update_character_card(api: "WebAPI", card_id: str, patch: dict[str, Any]) ->
             continue
         from src.webui.services.ruleset_characters import card_has_rules_aware_lifecycle
 
-        if card_has_rules_aware_lifecycle(api, old):
+        ruleset_dependencies = getattr(
+            api, "_ruleset_character_dependencies", None,
+        )
+        if (
+            ruleset_dependencies is not None
+            and card_has_rules_aware_lifecycle(ruleset_dependencies, old)
+        ):
             return {
                 "ok": False,
                 "error_code": "RULESET_CHARACTER_OPERATION_REQUIRED",

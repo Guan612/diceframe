@@ -101,7 +101,7 @@ def _card_context(api: "WebAPI", card_id: str):
         rule_id = str(card.get("rule_id") or "").strip()
         language = str(card.get("language") or "")
         rule = api._load_rule_by_id(rule_id, language)
-        runtime = runtime_for_card(api, card)
+        runtime = runtime_for_card(api._ruleset_character_dependencies, card)
         if rule is None or runtime is None:
             return cards, index, card, None, None, {
                 "ok": False,
