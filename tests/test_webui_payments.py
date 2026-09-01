@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands.game_handler import GameHandler
+from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameRegistry
 from src.engine.health import record_health_event
 from src.llm.client import LLMResponse
@@ -241,6 +242,67 @@ async def test_apply_state_update_creates_pending_payment(web_api):
         item.get("name") == "药水"
         for item in inst.players[uid]["character_sheet"].get("inventory", [])
     )
+
+
+@pytest.mark.asyncio
+async def test_repeated_narrative_reward_cause_is_idempotent_across_rounds(web_api):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    result = await api.create_game(
+        "template_world", "模板世界",
+        players=[{"character_name": "艾琳", "attributes": {"str": 12}, "gold": 30}],
+    )
+    inst = registry.get(api._parse_key(result["game_key"]))
+    uid = next(iter(inst.players))
+    update = parse_tag_state(
+        f"艾琳完成悬赏。\n---\nGOLD:{uid}:15:完成黑石镇悬赏",
+        "hp_based",
+    )["state_update"]
+
+    api._handler._apply_state_update(inst, deepcopy(update))
+    inst.round_number += 1
+    api._handler._apply_state_update(inst, deepcopy(update))
+
+    rewards = [item for item in inst.economy["proposals"] if item["kind"] == "reward"]
+    assert len(rewards) == 1
+    assert rewards[0]["reason"] == "完成黑石镇悬赏"
+
+
+@pytest.mark.asyncio
+async def test_team_pay_tag_reaches_atomic_multiplayer_settlement(web_api):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    result = await api.create_game(
+        "template_world", "多人分摊",
+        players=[
+            {"character_name": "甲", "attributes": {"str": 12}, "gold": 20},
+            {"character_name": "乙", "attributes": {"str": 12}, "gold": 20},
+        ],
+    )
+    inst = registry.get(api._parse_key(result["game_key"]))
+    first_uid, second_uid = list(inst.players)
+    inst.gm_uid = first_uid
+    update = parse_tag_state(
+        "队伍共同租用马车。\n---\n"
+        f"TEAM_PAY:{first_uid}=2|{second_uid}=3:共同租用马车",
+        "hp_based",
+    )["state_update"]
+
+    api._handler._apply_state_update(inst, update)
+
+    proposal = inst.economy["proposals"][0]
+    assert proposal["approval_policy"] == "all_contributors"
+    assert proposal["visibility"] == "party"
+    first = await api.resolve_payment(
+        result["game_key"], proposal["id"], True, first_uid,
+    )
+    assert first["committed"] is False
+    assert inst.get_character_sheet(first_uid)["currency"]["amount"] == 20
+
+    second = await api.resolve_payment(
+        result["game_key"], proposal["id"], True, second_uid,
+    )
+    assert second["ok"] is True
+    assert inst.get_character_sheet(first_uid)["currency"]["amount"] == 18
+    assert inst.get_character_sheet(second_uid)["currency"]["amount"] == 17
 
 
 @pytest.mark.asyncio

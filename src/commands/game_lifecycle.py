@@ -132,6 +132,18 @@ class GameLifecycle:
                     pdata.get("character_sheet", {})
                 )
             candidate.replace_players(players)
+        self._initialize_ruleset_run(
+            candidate,
+            preserve_characters=preserve_players,
+        )
+        return candidate
+
+    def _initialize_ruleset_run(
+        self,
+        candidate: GameInstance,
+        *,
+        preserve_characters: bool,
+    ) -> None:
         binding = dict(candidate.ruleset_runtime or {})
         runtime_id = str(binding.get("id") or "")
         ruleset_registry = getattr(self.prompt, "ruleset_registry", None)
@@ -143,9 +155,8 @@ class GameLifecycle:
             if isinstance(runtime, RunLifecycleRuntime):
                 runtime.initialize_new_run(
                     candidate,
-                    preserve_characters=preserve_players,
+                    preserve_characters=preserve_characters,
                 )
-        return candidate
 
     async def start_game(
         self,
@@ -424,14 +435,25 @@ class GameLifecycle:
         candidate = await self._new_run_candidate(
             previous, preserve_players=preserve_players,
         )
-        try:
-            await self._start_reset_instance(candidate)
-            candidate.record_llm_usage(calls=1)
-            await self.registry.save(candidate)
-        except Exception:
-            self.registry.register(previous)
-            raise
-        self.registry.register(candidate)
+        await self._start_reset_instance(candidate)
+        candidate.record_llm_usage(calls=1)
+        async with previous._lock:
+            if self.registry.get(previous.game_key) is not previous:
+                raise RuntimeError("对局已在重开过程中发生变化，请刷新后重试")
+            if preserve_players:
+                players = copy.deepcopy(previous.players)
+                for pdata in players.values():
+                    pdata["character_sheet"] = reset_character_for_restart(
+                        pdata.get("character_sheet", {})
+                    )
+                candidate.replace_players(players)
+                # Ruleset projections may depend on the refreshed character
+                # set. Rebuild them immediately before the atomic swap.
+                self._initialize_ruleset_run(
+                    candidate,
+                    preserve_characters=True,
+                )
+            await self.registry.replace_current(previous, candidate)
         await self._clear_session_memory(previous)
         return candidate
 

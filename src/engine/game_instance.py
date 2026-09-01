@@ -1190,6 +1190,27 @@ class GameInstance:
         """Return the stable persisted projection for this aggregate."""
         return GameStateCodec.encode(self)
 
+    def replace_persisted_state_from(self, source: "GameInstance") -> None:
+        """Commit a staged aggregate without replacing its runtime identity.
+
+        Economy decisions are prepared against an isolated ``GameInstance`` so
+        a failing dependent effect cannot leave half of a transaction applied.
+        Only persisted domain fields cross this boundary; locks, timers, save
+        counters and other process-local coordination remain attached to the
+        live instance.
+        """
+
+        if source.game_key != self.game_key or source.run_id != self.run_id:
+            raise ValueError("staged game state belongs to a different run")
+        runtime_only = {
+            "last_saved_log_count",
+            "pending_luck_after_recovery",
+        }
+        for name, value in source.__dict__.items():
+            if name.startswith("_") or name in runtime_only:
+                continue
+            setattr(self, name, copy.deepcopy(value))
+
     def to_llm_view(self) -> GameContextView:
         """LLM 决策所需的精简状态视图。
 
@@ -1222,6 +1243,7 @@ class GameRegistry:
 
     def __init__(self, save_dir: Path):
         self._instances: dict[tuple, GameInstance] = {}
+        self._save_locks: dict[tuple, asyncio.Lock] = {}
         self.save_dir = Path(save_dir)
 
     # ---------- CRUD ---------------------------------------
@@ -1265,8 +1287,35 @@ class GameRegistry:
         return persistence._save_path(self, game_key)
 
     async def save(self, instance: GameInstance) -> None:
-        """写入存档（逻辑见 persistence）。"""
-        await persistence.save(self, instance)
+        """Persist only the live aggregate for this game key.
+
+        A reset/restart keeps the public game key while rotating ``run_id``.
+        Rejecting stale object identities prevents an old request that resumes
+        late from overwriting the newly installed run on disk.
+        """
+
+        lock = self._save_locks.setdefault(instance.game_key, asyncio.Lock())
+        async with lock:
+            current = self.get(instance.game_key)
+            if current is not None and current is not instance:
+                raise RuntimeError("stale game instance cannot overwrite the current run")
+            await persistence.save(self, instance)
+
+    async def replace_current(
+        self,
+        expected: GameInstance,
+        candidate: GameInstance,
+    ) -> None:
+        """Atomically persist and install a replacement run."""
+
+        if candidate.game_key != expected.game_key:
+            raise ValueError("replacement game key mismatch")
+        lock = self._save_locks.setdefault(expected.game_key, asyncio.Lock())
+        async with lock:
+            if self.get(expected.game_key) is not expected:
+                raise RuntimeError("game run changed while replacement was being prepared")
+            await persistence.save(self, candidate)
+            self.register(candidate)
 
     # P2-G Step 2：_chatlog_path / _append_chatlog / _truncate_chatlog 已迁到
     # src/engine/persistence.py（仅 persistence 内部使用，无外部调用，不设委托）。

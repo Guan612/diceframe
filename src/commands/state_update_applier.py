@@ -175,18 +175,54 @@ class StateUpdateApplier:
             uid = str(proposal.get("uid") or "")
             amount = int(proposal.get("amount", 0) or 0)
             kind = str(proposal.get("kind") or "")
-            if uid not in instance.players or kind not in {"payment", "reward"}:
+            contributors = [
+                {"uid": str(item.get("uid") or ""), "amount": int(item.get("amount", 0) or 0)}
+                for item in (proposal.get("contributors") or [])
+                if isinstance(item, dict)
+            ]
+            is_team_fee = (
+                kind == "fee"
+                and str(proposal.get("approval_policy") or "") == "all_contributors"
+                and len(contributors) >= 2
+                and all(
+                    item["uid"] in instance.players and item["amount"] > 0
+                    for item in contributors
+                )
+                and sum(item["amount"] for item in contributors) == amount
+            )
+            if not is_team_fee and (uid not in instance.players or kind not in {"payment", "reward"}):
                 continue
+            reason = str(proposal.get("reason") or "经济提案")[:240]
+            source = str(proposal.get("source") or "narrative")
+            if kind == "reward":
+                # Reward identity intentionally omits the round: repeating the same
+                # target, amount and explicit cause in a later response is still the
+                # same narrative reward, not a fresh grant.
+                source_ref = f"narrative-reward:{instance.run_id}:{uid}:{amount}:{reason.casefold()}"
+            else:
+                contributor_ref = "|".join(
+                    f"{item['uid']}={item['amount']}" for item in contributors
+                )
+                source_ref = (
+                    f"round:{instance.run_id}:{instance.round_number}:economy:"
+                    f"{proposal_index}:{kind}:{uid}:{amount}:{contributor_ref}:{reason.casefold()}"
+                )
             queued_proposals.append(queue_proposal(
                 instance,
                 kind=kind,
                 payer_uid=uid if kind == "payment" else "",
                 recipient_uid=uid if kind == "reward" else uid,
                 amount=amount,
-                reason=str(proposal.get("reason") or "经济提案"),
-                source=str(proposal.get("source") or "narrative"),
-                source_ref=f"round:{instance.run_id}:{instance.round_number}:legacy-gold:{proposal_index}:{kind}:{uid}:{amount}",
-                approval_policy="gm" if kind == "reward" else "payer",
+                reason=reason,
+                source=source,
+                source_ref=source_ref,
+                approval_policy=(
+                    "all_contributors" if is_team_fee
+                    else "gm" if kind == "reward"
+                    else "payer"
+                ),
+                contributors=contributors if is_team_fee else None,
+                visibility="party" if is_team_fee else "private",
             ))
         return queued_proposals
 

@@ -671,8 +671,22 @@ async def resolve_payment(
             grant_classified_item(sheet, item_name, str(reward.get("category") or ""))
 
     async with inst._lock:
+        current = dependencies.games.get_instance(
+            dependencies.games.parse_game_key(game_key),
+        )
+        if current is not inst:
+            return {
+                "ok": False,
+                "code": "STALE_RUN",
+                "error": "对局已重开，请刷新后处理新的请求",
+            }
+        staged = type(inst).from_dict(deepcopy(inst.to_dict()))
+        # The persistence projection intentionally keeps only the recent log
+        # window. A transaction stage must retain the live aggregate's full
+        # in-memory history when it is committed back.
+        staged.log = deepcopy(inst.log)
         result = resolve_proposal(
-            inst,
+            staged,
             payment_id,
             actor_uid=actor_uid,
             accepted=bool(accepted),
@@ -685,47 +699,64 @@ async def resolve_payment(
             and isinstance(effect_group.get("effects"), dict)
             and dependencies.apply_economy_effects is not None
         ):
-            await dependencies.apply_economy_effects(
-                inst, dict(effect_group.get("effects") or {}),
-            )
+            try:
+                await dependencies.apply_economy_effects(
+                    staged, dict(effect_group.get("effects") or {}),
+                )
+            except Exception:
+                logger.exception(
+                    "经济提案关联效果提交失败，已回滚: game=%s proposal=%s",
+                    game_key,
+                    payment_id,
+                )
+                return {
+                    "ok": False,
+                    "code": "EFFECT_COMMIT_FAILED",
+                    "error": "关联结果应用失败，本次结算未生效，请重试",
+                }
             result["effects_committed"] = complete_effect_group(
-                inst, str(effect_group.get("id") or ""),
+                staged, str(effect_group.get("id") or ""),
             )
             if result["effects_committed"] and isinstance(result.get("outcome"), dict):
                 result["outcome"]["effects_status"] = "committed"
         outcome = result.get("outcome")
         if isinstance(outcome, dict):
-            _record_economy_outcome_in_round(inst, outcome)
-    # Insufficient funds changes the proposal to rejected, so persist both
-    # successful resolutions and terminal business failures.
-    if result.get("ok") or result.get("code") == "INSUFFICIENT_FUNDS":
-        await dependencies.games.save_instance(inst)
-    if not result.get("ok"):
-        return result
-    proposal = result.get("proposal") or {}
-    uid = str(proposal.get("payer_uid") or proposal.get("recipient_uid") or "")
-    amount = int(proposal.get("amount", 0) or 0)
-    name = inst.players.get(uid, {}).get("character_name", uid)
-    awaiting_party = bool(accepted and result.get("committed") is False)
-    record_health_event(
-        inst,
-        component="economy",
-        code=(
-            "economy_approved"
-            if awaiting_party
-            else "economy_committed"
-            if accepted
-            else "economy_declined"
-        ),
-        severity="info",
-        title="经济提案已处理",
-        message=(
-            f"{name} 已确认，等待其他队员：{proposal.get('reason') or amount}"
-            if awaiting_party
-            else f"{name} {'确认' if accepted else '拒绝'}：{proposal.get('reason') or amount}"
-        ),
-    )
-    await dependencies.games.save_instance(inst)
+            _record_economy_outcome_in_round(staged, outcome)
+        proposal = result.get("proposal") or {}
+        if result.get("ok"):
+            uid = str(
+                proposal.get("payer_uid")
+                or proposal.get("recipient_uid")
+                or ""
+            )
+            amount = int(proposal.get("amount", 0) or 0)
+            name = staged.players.get(uid, {}).get("character_name", uid)
+            awaiting_party = bool(accepted and result.get("committed") is False)
+            record_health_event(
+                staged,
+                component="economy",
+                code=(
+                    "economy_approved"
+                    if awaiting_party
+                    else "economy_committed"
+                    if accepted
+                    else "economy_declined"
+                ),
+                severity="info",
+                title="经济提案已处理",
+                message=(
+                    f"{name} 已确认，等待其他队员：{proposal.get('reason') or amount}"
+                    if awaiting_party
+                    else f"{name} {'确认' if accepted else '拒绝'}：{proposal.get('reason') or amount}"
+                ),
+            )
+        if result.get("ok") or result.get("code") == "INSUFFICIENT_FUNDS":
+            inst.replace_persisted_state_from(staged)
+            # Persist while still holding the aggregate lock. This closes the
+            # gap where restart could replace the run between mutation and save.
+            await dependencies.games.save_instance(inst)
+        if not result.get("ok"):
+            return result
     return {**result, "payment": proposal}
 
 

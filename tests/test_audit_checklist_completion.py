@@ -139,7 +139,7 @@ def audit_api(tmp_path):
             "甲挡住落石，乙发现暗门。\n"
             "---\n"
             "HP:gm_user:-3\n"
-            "GOLD:gm_user:-5\n"
+            "PAY:gm_user:5\n"
             "PAY:player_乙:7\n"
             "LOOT:gm_user:银钥匙\n"
             "KEY_ITEM:player_乙:狼王耳\n"
@@ -218,7 +218,7 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
         "甲挡住落石，乙发现暗门。\n"
         "---\n"
         f"HP:{uid_gm}:-3\n"
-        f"GOLD:{uid_gm}:-5\n"
+        f"PAY:{uid_gm}:5\n"
         f"PAY:{uid_player}:7\n"
         f"LOOT:{uid_gm}:银钥匙\n"
         f"KEY_ITEM:{uid_player}:狼王耳\n"
@@ -249,8 +249,7 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     cs_gm = inst.get_character_sheet(uid_gm)
     cs_player = inst.get_character_sheet(uid_player)
     assert cs_gm["hp"] == 32
-    # Legacy GOLD no longer changes the wallet directly. It becomes a payer
-    # proposal, while PAY remains a separate proposal for the other player.
+    # Both explicit PAY tags become separate payer-authorized proposals.
     assert cs_gm["gold"] == 30
     assert cs_gm["currency"]["amount"] == 30
     assert cs_gm["xp"] == 10

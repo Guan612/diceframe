@@ -351,7 +351,10 @@ async def build_context(
     proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
     recent_economy = []
     for item in list(outcomes or [])[-8:]:
-        if not isinstance(item, dict):
+        if (
+            not isinstance(item, dict)
+            or str(item.get("visibility") or "private") != "party"
+        ):
             continue
         recent_economy.append({
             "proposal_id": str(item.get("proposal_id") or ""),
@@ -365,7 +368,11 @@ async def build_context(
             "round": int(item.get("round", 0) or 0),
         })
     for item in list(proposals or []):
-        if not isinstance(item, dict) or item.get("status") != "pending":
+        if (
+            not isinstance(item, dict)
+            or item.get("status") != "pending"
+            or str(item.get("visibility") or "private") != "party"
+        ):
             continue
         recent_economy.append({
             "proposal_id": str(item.get("id") or ""),

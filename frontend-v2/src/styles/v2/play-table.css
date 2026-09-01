@@ -31,6 +31,35 @@
   background: var(--df-control-bg);
 }
 
+.play-toolbar .play-economy-pending {
+  border-color: color-mix(in srgb, var(--df-warning) 60%, var(--df-border-soft));
+  background: color-mix(in srgb, var(--df-warning) 16%, var(--df-surface-2));
+  color: var(--df-warning);
+}
+
+.economy-contributor-list {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.economy-contributor-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-sm);
+  background: var(--df-surface-2);
+}
+
+.economy-contributor-list small {
+  color: var(--df-text-muted);
+}
+
 .play-layout {
   background: linear-gradient(90deg, var(--df-surface-1), transparent 19%, transparent 81%, var(--df-surface-1));
 }

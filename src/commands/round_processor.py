@@ -221,9 +221,28 @@ class RoundProcessor:
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
         instance.reset_round_checks()
         deferred_indexes = self._deferred_check_indexes(instance)
+        expected_run_id = instance.run_id
+        expected_economy_revision = economy_revision(instance)
+
+        def planning_target_is_current() -> bool:
+            return (
+                self.registry.get(instance.game_key) is instance
+                and instance.run_id == expected_run_id
+                and economy_revision(instance) == expected_economy_revision
+            )
+
         try:
             plan_started = time.perf_counter()
             planned, metadata = await plan_round_checks(instance, rule_ctx.rule, self.llm_client)
+            if not planning_target_is_current():
+                logger.info(
+                    "丢弃过期检定规划: game=%s run=%s economy=%d",
+                    instance.game_key,
+                    expected_run_id,
+                    expected_economy_revision,
+                )
+                instance.reset_round_checks()
+                return []
             logger.info(
                 "检定规划: 完成 (round=%d, 耗时=%dms)",
                 instance.round_number,
@@ -258,6 +277,9 @@ class RoundProcessor:
             )
         except Exception:
             logger.exception("AI 检定规划失败，进入离线检定兼容路径: %s", instance.game_key)
+            if not planning_target_is_current():
+                instance.reset_round_checks()
+                return []
             return self.prepare_round_checks(instance)
         for check in instance.last_checks:
             if not check.get("check_id"):
@@ -733,8 +755,22 @@ class RoundProcessor:
             )
         if payload.get("quick_actions"):
             update_quick_actions(instance, payload)
-        await apply_memory_delta(instance, response, self.memory_store)
         apply_plot_update(instance, response)
         store_private_messages(instance, response)
+        # Deferred economy effects participate in the settlement transaction.
+        # Unlike normal round memory (which is best-effort), a failure here must
+        # abort the staged aggregate so the proposal remains retryable.
+        if response.memory_delta and self.memory_store:
+            await self.memory_store.apply_delta(
+                instance.memory_namespace,
+                response.memory_delta,
+                instance.round_number,
+            )
         if payload.get("scene_image_prompt"):
-            self._maybe_schedule_scene_image(instance, payload)
+            try:
+                self._maybe_schedule_scene_image(instance, payload)
+            except Exception:
+                logger.exception(
+                    "经济结算后的场景图任务创建失败，已保留权威结算: %s",
+                    instance.game_key,
+                )

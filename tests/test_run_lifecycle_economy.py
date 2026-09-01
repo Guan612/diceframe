@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
 from src.engine.economy import queue_effect_group, queue_proposal, resolve_proposal
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.llm.client import LLMResponse
+from src.llm.context_builder import build_context
 from src.migrations.instance import migrate_game_state_payload
 
 from webapi_harness import web_api  # noqa: F401
@@ -294,8 +296,12 @@ async def test_team_split_is_visible_to_each_contributor_and_waits_for_all(web_a
     assert instance.get_character_sheet(first_uid)["currency"]["amount"] == 16
     assert instance.get_character_sheet(second_uid)["currency"]["amount"] == 14
     assert instance.scene == "队伍包下的房间"
-    assert effect_group["status"] == "committed"
-    assert "effects" not in effect_group
+    committed_group = next(
+        item for item in instance.economy["effect_groups"]
+        if item["id"] == effect_group["id"]
+    )
+    assert committed_group["status"] == "committed"
+    assert "effects" not in committed_group
     assert instance.economy["outcomes"][-1]["effects_status"] == "committed"
 
 
@@ -396,7 +402,11 @@ async def test_payment_decision_commits_or_discards_linked_effects(web_api) -> N
     assert any(item.get("name") == "城门通行证" for item in owned_items)
     assert "已经取得城门通行证" in instance.confirmed_items
     assert instance.get_character_sheet(uid)["xp"] == 7
-    assert accepted_group is not None and accepted_group["status"] == "committed"
+    assert accepted_group is not None
+    assert next(
+        item for item in instance.economy["effect_groups"]
+        if item["id"] == accepted_group["id"]
+    )["status"] == "committed"
     assert instance.log[-1]["economy_resolutions"][-1]["status"] == "committed"
 
     declined = queue_proposal(
@@ -421,9 +431,136 @@ async def test_payment_decision_commits_or_discards_linked_effects(web_api) -> N
     assert rejected["accepted"] is False
     assert instance.get_character_sheet(uid)["currency"]["amount"] == 15
     assert instance.scene == "城门内"
-    assert declined_group is not None and declined_group["status"] == "discarded"
-    assert "effects" not in declined_group
+    assert declined_group is not None
+    discarded_group = next(
+        item for item in instance.economy["effect_groups"]
+        if item["id"] == declined_group["id"]
+    )
+    assert discarded_group["status"] == "discarded"
+    assert "effects" not in discarded_group
     assert instance.log[-1]["economy_resolutions"][-1]["status"] == "declined"
+
+
+@pytest.mark.asyncio
+async def test_effect_failure_rolls_back_the_whole_economy_decision(
+    web_api,
+) -> None:
+    api, _lorebook, registry, _llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Atomic Economy",
+        players=[{"character_name": "Hero", "attributes": {"str": 10}, "gold": 20}],
+    )
+    instance = registry.get(api._parse_key(created["game_key"]))
+    uid = next(iter(instance.players))
+    instance.gm_uid = uid
+    proposal = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=5,
+        reason="购买通行证",
+        visibility="party",
+    )
+    group = queue_effect_group(
+        instance,
+        [proposal],
+        {"state_update": {"scene_change": "收费区内"}},
+    )
+    original_apply = api._character_dependencies.apply_economy_effects
+
+    async def fail_after_partial_mutation(staged, effects):
+        staged.set_scene("不应提交的半成品场景")
+        raise RuntimeError("fault injection after partial effect")
+
+    api._character_dependencies = replace(
+        api._character_dependencies,
+        apply_economy_effects=fail_after_partial_mutation,
+    )
+    failed = await api.resolve_payment(
+        created["game_key"], proposal["id"], True, uid,
+    )
+
+    assert failed["code"] == "EFFECT_COMMIT_FAILED"
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == 20
+    assert instance.scene != "不应提交的半成品场景"
+    assert proposal["status"] == "pending"
+    assert instance.economy["transactions"] == []
+    assert instance.economy["outcomes"] == []
+    assert group is not None and group["status"] == "pending"
+
+    api._character_dependencies = replace(
+        api._character_dependencies,
+        apply_economy_effects=original_apply,
+    )
+    retried = await api.resolve_payment(
+        created["game_key"], proposal["id"], True, uid,
+    )
+
+    assert retried["ok"] is True
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == 15
+    assert instance.scene == "收费区内"
+    assert len(instance.economy["transactions"]) == 1
+    assert next(
+        item for item in instance.economy["effect_groups"]
+        if item["id"] == group["id"]
+    )["status"] == "committed"
+
+
+@pytest.mark.asyncio
+async def test_private_reward_and_transfer_stay_out_of_public_gm_context(
+    web_api,
+) -> None:
+    api, _lorebook, registry, _llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Private Economy Projection",
+        players=[
+            {"character_name": "GM", "attributes": {"str": 10}, "gold": 20},
+            {"character_name": "Agent", "attributes": {"str": 10}, "gold": 20},
+        ],
+    )
+    instance = registry.get(api._parse_key(created["game_key"]))
+    gm_uid, agent_uid = list(instance.players)
+    instance.gm_uid = gm_uid
+    reward = queue_proposal(
+        instance,
+        kind="reward",
+        recipient_uid=agent_uid,
+        amount=3,
+        approval_policy="gm",
+        reason="秘密线人奖励-不可公开",
+        visibility="private",
+    )
+    transfer = queue_proposal(
+        instance,
+        kind="transfer",
+        payer_uid=gm_uid,
+        recipient_uid=agent_uid,
+        amount=2,
+        reason="秘密转账-不可公开",
+        visibility="private",
+    )
+
+    assert (await api.resolve_payment(
+        created["game_key"], reward["id"], True, gm_uid,
+    ))["ok"] is True
+    assert (await api.resolve_payment(
+        created["game_key"], transfer["id"], True, gm_uid,
+    ))["ok"] is True
+    context = await build_context(instance, "SYSTEM", [], "继续")
+
+    assert "秘密线人奖励-不可公开" not in context
+    assert "秘密转账-不可公开" not in context
+    assert any(
+        "秘密线人奖励" in item.get("text", "")
+        for item in instance.private_log[agent_uid]
+    )
+    assert any(
+        "秘密转账" in item.get("text", "")
+        for item in instance.private_log[agent_uid]
+    )
 
 
 @pytest.mark.asyncio
@@ -486,6 +623,129 @@ async def test_in_flight_narration_is_discarded_after_economy_decision(
     assert private is None
     assert instance.scene != "错误场景"
     assert not any(entry.get("gm_response") == "这条叙事已经过期。" for entry in instance.log)
+
+
+@pytest.mark.asyncio
+async def test_in_flight_check_plan_is_discarded_after_economy_decision(
+    web_api,
+    monkeypatch,
+) -> None:
+    api, _lorebook, registry, _llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Planner Decision Race",
+        players=[{"character_name": "Hero", "attributes": {"str": 10}, "gold": 20}],
+    )
+    instance = registry.get(api._parse_key(created["game_key"]))
+    uid = next(iter(instance.players))
+    instance.gm_uid = uid
+    await instance.activate()
+    await instance.start_round()
+    await instance.add_action(uid, "我用力量推开石门", selected_attribute="str")
+    assert await instance.try_advance() is True
+    proposal = queue_proposal(
+        instance,
+        kind="payment",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=1,
+        reason="旧报价",
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls_before = instance.total_llm_calls
+
+    async def delayed_plan(target, rule, client):
+        entered.set()
+        await release.wait()
+        return [(
+            target.action_queue[0],
+            {
+                "check_id": "stale-check",
+                "required": True,
+                "actor_uid": uid,
+                "dice_system": "d20",
+                "attribute": "str",
+                "target": 10,
+            },
+        )], {"available": True, "skipped": False, "total_tokens": 7}
+
+    monkeypatch.setattr("src.commands.round_processor.plan_round_checks", delayed_plan)
+    planning = asyncio.create_task(api._handler.prepare_round_checks_ai(instance))
+    await entered.wait()
+    declined = await api.resolve_payment(
+        created["game_key"], proposal["id"], False, uid,
+    )
+    assert declined["ok"] is True
+    release.set()
+
+    checks = await planning
+
+    assert checks == []
+    assert instance.round_checks_prepared is False
+    assert "check_request" not in instance.action_queue[0]
+    assert instance.total_llm_calls == calls_before
+
+
+@pytest.mark.asyncio
+async def test_restart_keeps_payment_committed_during_candidate_generation(
+    web_api,
+    monkeypatch,
+) -> None:
+    api, _lorebook, registry, llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Restart Payment Race",
+        players=[{"character_name": "Hero", "attributes": {"str": 10}, "gold": 20}],
+    )
+    old_instance = registry.get(api._parse_key(created["game_key"]))
+    uid = next(iter(old_instance.players))
+    old_instance.gm_uid = uid
+    proposal = queue_proposal(
+        old_instance,
+        kind="payment",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=5,
+        reason="重开期间支付",
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def delayed_opening(*, system_prompt, user_message, **kwargs):
+        entered.set()
+        await release.wait()
+        return LLMResponse(
+            content="新开场。",
+            narration="新开场。",
+            state_update=None,
+            memory_delta=None,
+            info_asymmetry=None,
+            plot_update=None,
+            total_tokens=5,
+            is_narration_only=True,
+            provider_used="fake",
+        )
+
+    monkeypatch.setattr(llm, "call", delayed_opening)
+    restarting = asyncio.create_task(api.restart_game(created["game_key"]))
+    await entered.wait()
+    paid = await api.resolve_payment(
+        created["game_key"], proposal["id"], True, uid,
+    )
+    assert paid["ok"] is True
+    release.set()
+    assert (await restarting)["ok"] is True
+
+    restarted = registry.get(api._parse_key(created["game_key"]))
+    assert restarted is not old_instance
+    assert restarted.get_character_sheet(uid)["currency"]["amount"] == 15
+    with pytest.raises(RuntimeError, match="stale game instance"):
+        await registry.save(old_instance)
+    recovered = await GameRegistry(registry.save_dir).load(restarted.game_key)
+    assert recovered is not None
+    assert recovered.run_id == restarted.run_id
+    assert recovered.get_character_sheet(uid)["currency"]["amount"] == 15
 
 
 @pytest.mark.asyncio

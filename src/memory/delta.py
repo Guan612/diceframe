@@ -110,31 +110,38 @@ class MemoryStore:
 
     async def apply_delta(self, game_key: str, delta: dict, round_number: int) -> None:
         """应用 memory_delta，根据冲突消解规则处理 add/update/forget。"""
+        if self._conn is None:
+            raise RuntimeError("memory store is not open")
+        connection = self._conn
         gk = str(game_key)
         now = datetime.now(timezone.utc).isoformat()
         new_ids: list[int] = []
 
         async with self._lock:
-            for item in delta.get("add", []):
-                eid = self._insert_or_update(gk, item, round_number, now, force_add=True)
-                if eid:
-                    new_ids.append(eid)
+            try:
+                for item in delta.get("add", []):
+                    eid = self._insert_or_update(gk, item, round_number, now, force_add=True)
+                    if eid:
+                        new_ids.append(eid)
 
-            for item in delta.get("update", []):
-                self._insert_or_update(gk, item, round_number, now, force_add=False)
+                for item in delta.get("update", []):
+                    self._insert_or_update(gk, item, round_number, now, force_add=False)
 
-            for item in delta.get("forget", []):
-                confidence = float(item.get("confidence", 1.0))
-                entity = item.get("entity", "")
-                relation = item.get("relation", "")
-                if confidence >= 0.5:
-                    self._conn.execute(
-                        "UPDATE memory_entries SET status='forgotten', "
-                        "updated_at=? WHERE game_key=? AND entity=? AND relation=? AND status='active'",
-                        (now, gk, entity, relation),
-                    )
+                for item in delta.get("forget", []):
+                    confidence = float(item.get("confidence", 1.0))
+                    entity = item.get("entity", "")
+                    relation = item.get("relation", "")
+                    if confidence >= 0.5:
+                            connection.execute(
+                            "UPDATE memory_entries SET status='forgotten', "
+                            "updated_at=? WHERE game_key=? AND entity=? AND relation=? AND status='active'",
+                            (now, gk, entity, relation),
+                        )
 
-            self._conn.commit()
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
         # 标记待处理 embedding（由外部在 async 上下文中调用 flush_pending_embeddings）
         if new_ids and self.embedding_client:

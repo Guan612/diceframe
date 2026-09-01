@@ -40,6 +40,8 @@ import { resolveRulesetPlayExtension } from '@/features/rulesets/registry'
 import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
 import { fetchRulesetAvailableActions } from '@/api/rulesets'
+import { currencyLabel } from '@/utils/ruleSchema'
+import { isEconomyProposalActionable, nextEconomyProposal } from '@/features/play/economyPrompts'
 
 defineOptions({ name: 'PlayView' })
 
@@ -618,22 +620,80 @@ async function resolveHealth(id: string, action: string) {
 }
 
 const pendingPay = ref<PendingPayment | null>(null)
-watch(() => (game.detail.value?.economy_proposals?.length
+const dismissedPaymentIds = ref<Set<string>>(new Set())
+const economyCurrencyName = computed(() => currencyLabel(ruleMeta.value))
+const economyProposalList = computed(() => (game.detail.value?.economy_proposals?.length
   ? game.detail.value.economy_proposals
-  : game.detail.value?.pending_payments), (list) => {
-  const mine = (list || []).find(p => p.status === 'pending' && (
-    p.payer_uid === actorId.value
-    || p.uid === actorId.value
-    || (p.approval_policy === 'gm' && game.detail.value?.gm_uid === actorId.value)
-    || p.contributors?.some(item => item.uid === actorId.value)
-  ))
-  if (mine && (!pendingPay.value || pendingPay.value.id !== mine.id)) pendingPay.value = mine
+  : game.detail.value?.pending_payments) || [])
+const actionableEconomyProposals = computed(() => economyProposalList.value.filter(proposal => (
+  isEconomyProposalActionable(
+    proposal,
+    actorId.value,
+    String(game.detail.value?.gm_uid || ''),
+  )
+)))
+const pendingEconomyCount = computed(() => actionableEconomyProposals.value.length)
+
+watch(actionableEconomyProposals, (list) => {
+  const activeIds = new Set(list.map(item => String(item.id || item.payment_id || '')).filter(Boolean))
+  const currentId = String(pendingPay.value?.id || pendingPay.value?.payment_id || '')
+  if (currentId && !activeIds.has(currentId)) pendingPay.value = null
+  dismissedPaymentIds.value = new Set(
+    [...dismissedPaymentIds.value].filter(id => activeIds.has(id)),
+  )
+  const mine = nextEconomyProposal(
+    list,
+    actorId.value,
+    String(game.detail.value?.gm_uid || ''),
+    dismissedPaymentIds.value,
+  )
+  const mineId = String(mine?.id || mine?.payment_id || '')
+  if (mine && (!pendingPay.value || currentId !== mineId)) pendingPay.value = mine
 }, { immediate: true, deep: true })
+
+function economyPlayerName(uid?: string): string {
+  if (!uid) return '—'
+  return game.players.value.find(player => player.user_id === uid)?.character_name || uid
+}
+
+function isTeamPayment(proposal: PendingPayment | null): boolean {
+  return proposal?.approval_policy === 'all_contributors'
+}
+
+function economyDialogTitle(proposal: PendingPayment): string {
+  if (proposal.kind === 'reward') return t('economyRewardTitle')
+  return isTeamPayment(proposal) ? t('economyTeamPaymentTitle') : t('gmPaymentTitle')
+}
+
+function postponePendingPay() {
+  const id = String(pendingPay.value?.id || pendingPay.value?.payment_id || '')
+  if (id) dismissedPaymentIds.value = new Set([...dismissedPaymentIds.value, id])
+  pendingPay.value = null
+}
+
+function reopenPendingEconomy() {
+  const proposal = actionableEconomyProposals.value[0]
+  if (!proposal) return
+  const id = String(proposal.id || proposal.payment_id || '')
+  if (id) {
+    const next = new Set(dismissedPaymentIds.value)
+    next.delete(id)
+    dismissedPaymentIds.value = next
+  }
+  pendingPay.value = proposal
+}
+
 async function resolvePay(accepted: boolean) {
   const p = pendingPay.value
   if (!p || !p.id) return
   try {
     const result = await api<{ committed?: boolean; awaiting_uids?: string[] }>(`/games/${encodeURIComponent(game.currentGame.value)}/payments/${encodeURIComponent(p.id)}`, { method: 'POST', body: JSON.stringify({ accepted }) })
+    const resolvedId = String(p.id || p.payment_id || '')
+    if (resolvedId) {
+      const next = new Set(dismissedPaymentIds.value)
+      next.delete(resolvedId)
+      dismissedPaymentIds.value = next
+    }
     pendingPay.value = null
     await game.refresh()
     toast.success(accepted && result.committed === false
@@ -801,6 +861,11 @@ onBeforeUnmount(() => {
         <span v-if="preview" class="busy">{{ t('hostPreview') }}</span>
         <button v-if="preview" @click="toggleDelegate">{{ delegate ? t('disableDelegate') : t('enableDelegate') }}</button>
         <span v-if="game.loading.value" class="busy">{{ t('updating') }}</span>
+        <button
+          v-if="pendingEconomyCount && !pendingPay"
+          class="play-economy-pending"
+          @click="reopenPendingEconomy"
+        >{{ t('economyPendingAction', { count: pendingEconomyCount }) }}</button>
         <label v-if="isPlayer" class="locale-select play-locale-select">
           <span>{{ t('language') }}</span>
           <select :value="locale" @change="onLocaleChange">
@@ -1200,16 +1265,43 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <Modal v-if="pendingPay" :title="pendingPay.kind === 'reward' ? t('economyRewardTitle') : t('gmPaymentTitle')" @close="pendingPay = null">
-      <p>{{ pendingPay.kind === 'reward'
-        ? t('economyRewardContent', { amount: pendingPay.amount ?? 0, reason: pendingPay.reason || '' })
-        : t('gmPaymentContent', { amount: pendingPay.amount ?? 0, reason: pendingPay.reason ? t('gmPaymentReason', { reason: pendingPay.reason }) : '' }) }}</p>
+    <Modal v-if="pendingPay" :title="economyDialogTitle(pendingPay)" @close="postponePendingPay">
+      <p v-if="pendingPay.kind === 'reward'">
+        {{ t('economyRewardContent', {
+          target: economyPlayerName(pendingPay.recipient_uid || pendingPay.uid),
+          amount: pendingPay.amount ?? 0,
+          currency: economyCurrencyName,
+          reason: pendingPay.reason || '',
+        }) }}
+      </p>
+      <template v-else-if="isTeamPayment(pendingPay)">
+        <p>{{ t('economyTeamPaymentContent', { amount: pendingPay.amount ?? 0, currency: economyCurrencyName, reason: pendingPay.reason || '' }) }}</p>
+        <ul class="economy-contributor-list">
+          <li v-for="contributor in pendingPay.contributors" :key="contributor.uid">
+            <span>{{ economyPlayerName(contributor.uid) }}</span>
+            <strong>{{ contributor.amount }} {{ economyCurrencyName }}</strong>
+            <small>{{ pendingPay.approvals?.[contributor.uid] ? t('economyApproved') : t('economyAwaitingApproval') }}</small>
+          </li>
+        </ul>
+      </template>
+      <p v-else>
+        {{ t('gmPaymentContent', {
+          target: economyPlayerName(pendingPay.payer_uid || pendingPay.uid),
+          amount: pendingPay.amount ?? 0,
+          currency: economyCurrencyName,
+          reason: pendingPay.reason ? t('gmPaymentReason', { reason: pendingPay.reason }) : '',
+        }) }}
+      </p>
       <p v-if="pendingPay.rewards?.length">
         {{ t('gmPaymentRewards', { items: pendingPay.rewards.map(item => item.name).join('、') }) }}
       </p>
-      <p class="muted">{{ t('gmPaymentHelp') }}</p>
+      <p class="muted">{{ pendingPay.kind === 'reward'
+        ? t('economyRewardHelp')
+        : isTeamPayment(pendingPay)
+          ? t('economyTeamPaymentHelp')
+          : t('gmPaymentHelp') }}</p>
       <template #actions>
-        <button @click="pendingPay = null">{{ t('later') }}</button>
+        <button @click="postponePendingPay">{{ t('later') }}</button>
         <button class="danger" @click="resolvePay(false)">{{ t('reject') }}</button>
         <button class="primary" @click="resolvePay(true)">{{ pendingPay.kind === 'reward' ? t('economyApproveReward') : t('confirmPurchase') }}</button>
       </template>

@@ -204,6 +204,7 @@ async def test_build_context_exposes_authoritative_economy_decisions():
             "reason": "进城费用",
             "status": "declined",
             "effects_status": "discarded",
+            "visibility": "party",
             "round": 3,
         }],
         "proposals": [{
@@ -214,6 +215,7 @@ async def test_build_context_exposes_authoritative_economy_decisions():
             "amount": 5,
             "reason": "住宿费用",
             "status": "pending",
+            "visibility": "party",
             "round": 4,
         }],
     }
