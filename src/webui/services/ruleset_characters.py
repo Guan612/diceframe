@@ -12,7 +12,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.webui.services.characters import MAX_BIO_CHARS
+from src.webui.character_card_projection import dedupe_cards
+from src.webui.character_contracts import MAX_BIO_CHARS
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -367,7 +368,7 @@ async def update_live_character_profile(
     try:
         await dependencies.save_instance(instance)
     except Exception:
-        instance.players[user_id] = before_player
+        instance.put_player(user_id, before_player)
         raise
     return {"ok": True, "character": deepcopy(updated)}
 
@@ -379,14 +380,12 @@ async def adopt_character_card(
     card_id: str,
 ) -> dict[str, Any]:
     """Replace one live professional character from a server-owned blueprint."""
-    from src.webui.services.character_cards import _dedupe_cards
-
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None or user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
     card = next(
         (
-            item for item in _dedupe_cards(dependencies.read_cards())
+            item for item in dedupe_cards(dependencies.read_cards())
             if str(item.get("id") or "") == str(card_id or "")
         ),
         None,
@@ -428,7 +427,7 @@ async def adopt_character_card(
     try:
         await dependencies.save_instance(instance)
     except Exception:
-        instance.players[user_id] = before_player
+        instance.put_player(user_id, before_player)
         raise
     return {"ok": True, "character": deepcopy(normalized)}
 
@@ -439,9 +438,7 @@ def update_character_card_profile(
     patch: dict[str, Any],
 ) -> dict[str, Any]:
     # Local import keeps the storage module independent from ruleset runtime code.
-    from src.webui.services.character_cards import _dedupe_cards
-
-    cards = _dedupe_cards(dependencies.read_cards())
+    cards = dedupe_cards(dependencies.read_cards())
     for index, card in enumerate(cards):
         if str(card.get("id") or "") != card_id:
             continue

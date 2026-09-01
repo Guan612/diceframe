@@ -88,6 +88,7 @@ def parse_routes(source: str) -> list[tuple[str, str, str]]:
 
 def main() -> int:
     handler_bodies: dict[str, str] = {}
+    handler_calls: dict[str, set[str]] = {}
     routes: list[tuple[str, str, str]] = []
     review_routes: list[tuple[str, str, str]] = []
     for path in SOURCES:
@@ -97,10 +98,41 @@ def main() -> int:
         for node in tree.body:
             if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
                 handler_bodies.setdefault(node.name, "\n".join(lines[node.lineno - 1: node.end_lineno]))
+                handler_calls.setdefault(
+                    node.name,
+                    {
+                        child.func.id
+                        for child in ast.walk(node)
+                        if isinstance(child, ast.Call)
+                        and isinstance(child.func, ast.Name)
+                    },
+                )
         routes.extend(parse_routes(source))
+
+    def expanded_body(handler: str) -> str:
+        """Include local helper bodies reached by a route handler.
+
+        Route modules deliberately keep parsing/status logic in bounded helper
+        functions. Looking only at the one-line wrapper produces false review
+        failures even though the request is delegated through the same contract.
+        """
+        pending = [handler]
+        seen: set[str] = set()
+        bodies: list[str] = []
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            body = handler_bodies.get(name)
+            if body:
+                bodies.append(body)
+            pending.extend(handler_calls.get(name, set()) - seen)
+        return "\n".join(bodies)
+
     print("API route contract audit:")
     for method, path, handler in routes:
-        body = handler_bodies.get(handler, "")
+        body = expanded_body(handler)
         has_ok = '"ok"' in body or "'ok'" in body
         has_error = '"error"' in body or "'error'" in body
         has_status = "status=" in body
@@ -115,6 +147,7 @@ def main() -> int:
             handler.startswith("dependencies.")
             or "_get_api(request)." in body
             or "api.resolve_payment(" in body
+            or "request.app[" in body
         ):
             marker = "delegated"
         elif path.startswith("/api/") and not (has_ok or has_error or has_status):

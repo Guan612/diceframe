@@ -7,12 +7,12 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.webui.services.ruleset_builder import validate_draft_shape
+from src.webui.character_card_projection import dedupe_cards
+from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.rulesets.contracts import LiveAdvancementTransactionRuntime
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
-    from src.webui.services.ruleset_characters import RulesetCharacterDependencies
 
 
 @dataclass(frozen=True)
@@ -25,7 +25,8 @@ class RulesetAdvancementDependencies:
 class CardAdvancementDependencies:
     read_cards: Callable[[], list[dict[str, Any]]]
     write_cards: Callable[[list[dict[str, Any]]], None]
-    ruleset_characters: "RulesetCharacterDependencies"
+    load_rule_by_id: Callable[[str, str], Any | None]
+    runtime_for_card: Callable[[dict[str, Any]], Any | None]
 
 
 @dataclass(frozen=True)
@@ -125,17 +126,14 @@ def apply(
 
 
 def _card_context(dependencies: CardAdvancementDependencies, card_id: str):
-    from src.webui.services.character_cards import _dedupe_cards
-    from src.webui.services.ruleset_characters import runtime_for_card
-
-    cards = _dedupe_cards(dependencies.read_cards())
+    cards = dedupe_cards(dependencies.read_cards())
     for index, card in enumerate(cards):
         if str(card.get("id") or "") != card_id:
             continue
         rule_id = str(card.get("rule_id") or "").strip()
         language = str(card.get("language") or "")
-        rule = dependencies.ruleset_characters.load_rule_by_id(rule_id, language)
-        runtime = runtime_for_card(dependencies.ruleset_characters, card)
+        rule = dependencies.load_rule_by_id(rule_id, language)
+        runtime = dependencies.runtime_for_card(card)
         if rule is None or runtime is None:
             return cards, index, card, None, None, {
                 "ok": False,
@@ -464,7 +462,7 @@ async def apply_live(
             live_policy.reconcile_live_advancement(instance, user_id)
         await dependencies.save_instance(instance)
     except Exception:
-        instance.players[user_id] = before_player
+        instance.put_player(user_id, before_player)
         if live_policy is not None:
             live_policy.restore_live_advancement(instance, before_advancement)
         raise

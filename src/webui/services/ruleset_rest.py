@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from datetime import datetime, timezone
 
-from src.webui.services.ruleset_builder import validate_draft_shape
+from src.webui.ruleset_draft_validation import validate_draft_shape
+from src.webui.ruleset_rest_projection import public_rest_session, saved_rest_session
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -65,59 +66,12 @@ def _failure(code: str, message: str, **extra: Any) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message, **extra}
 
 
-def _saved_rest_session(instance: Any) -> dict[str, Any]:
-    state = getattr(instance, "ruleset_state", None)
-    if not isinstance(state, dict):
-        return {}
-    session = state.get("rest_session")
-    return session if isinstance(session, dict) else {}
-
-
 def _set_rest_session(instance: Any, session: dict[str, Any]) -> None:
     state = getattr(instance, "ruleset_state", None)
     if not isinstance(state, dict):
         state = {}
         instance.ruleset_state = state
     state["rest_session"] = session
-
-
-def public_rest_session(instance: Any) -> dict[str, Any]:
-    """Return the shared rest proposal without exposing character sheets or rolls."""
-
-    session = _saved_rest_session(instance)
-    status = str(session.get("status") or "idle")
-    if status == "idle" and not session.get("participants"):
-        return {
-            "active": False,
-            "status": "idle",
-            "rest": None,
-            "ready_count": 0,
-            "active_count": 0,
-            "participants": [],
-        }
-    required = [str(uid) for uid in session.get("required_uids", []) if str(uid) in instance.players]
-    submitted = session.get("participants")
-    submitted = submitted if isinstance(submitted, dict) else {}
-    rows: list[dict[str, Any]] = []
-    for uid in required:
-        player = instance.players.get(uid) or {}
-        entry = submitted.get(uid)
-        rows.append({
-            "user_id": uid,
-            "character_name": str(player.get("character_name") or uid),
-            "status": "submitted" if isinstance(entry, dict) else "waiting",
-        })
-    ready_count = sum(row["status"] == "submitted" for row in rows)
-    return {
-        "active": status in {"collecting", "resolving"},
-        "status": status,
-        "rest": session.get("rest"),
-        "ready_count": ready_count,
-        "active_count": len(rows),
-        "participants": rows,
-        "resolved_at": session.get("resolved_at"),
-        "error": session.get("error", ""),
-    }
 
 
 def _rest_eligible_uids(instance: Any) -> list[str]:
@@ -293,7 +247,7 @@ async def resolve_live(
     try:
         await dependencies.save_instance(instance)
     except Exception:
-        instance.players[user_id] = before_player
+        instance.put_player(user_id, before_player)
         raise
     return {
         "ok": True, "rule_id": rule.rule_id, "game_key": game_key,
@@ -354,7 +308,7 @@ async def resolve_live_party(
         except ValueError as exc:
             return _failure("INVALID_REST", str(exc))
 
-        session = _saved_rest_session(instance)
+        session = saved_rest_session(instance)
         status = str(session.get("status") or "idle")
         if status in {"idle", "completed", "error"}:
             eligible_uids = _rest_eligible_uids(instance)
@@ -427,7 +381,7 @@ async def resolve_live_party(
             })
             if not result.get("ok"):
                 for restore_uid, player in before_players.items():
-                    instance.players[restore_uid] = player
+                    instance.put_player(restore_uid, player)
                 session["status"] = "error"
                 session["error"] = str(result.get("error") or "队伍休息结算失败")
                 _set_rest_session(instance, session)

@@ -6,6 +6,7 @@ knowing which compatibility steps are needed for a loaded instance.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 from typing import Any
 
@@ -28,39 +29,48 @@ def _referenced_player_ids(log: list[Any]) -> set[str]:
     return referenced
 
 
-def normalize_loaded_instance(instance: Any) -> None:
-    """Normalize known legacy persisted shapes after reconstruction.
+def normalize_game_state_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Return a normalized copy of a persisted game-state payload.
 
     Ghost-player cleanup intentionally requires historical evidence. Waiting
     rooms and unplayed multiplayer sessions therefore keep every participant.
     """
-    if len(instance.players) <= 1 or not instance.log:
-        return
-    referenced = _referenced_player_ids(instance.log)
+    payload = deepcopy(data)
+    players = payload.get("players")
+    log = payload.get("log")
+    if not isinstance(players, dict) or len(players) <= 1 or not isinstance(log, list) or not log:
+        return payload
+    referenced = _referenced_player_ids(log)
     if not referenced:
-        return
-    ghost_ids = sorted(uid for uid in instance.players if uid not in referenced)
+        return payload
+    ghost_ids = sorted(uid for uid in players if uid not in referenced)
     if not ghost_ids:
-        return
-    for uid in ghost_ids:
-        instance.players.pop(uid, None)
-        instance.ready_players.discard(uid)
-        instance.away_players.discard(uid)
-    instance.action_queue = [
+        return payload
+    payload["players"] = {
+        uid: player for uid, player in players.items() if uid not in ghost_ids
+    }
+    payload["ready_players"] = [
+        uid for uid in payload.get("ready_players", []) if uid not in ghost_ids
+    ]
+    payload["away_players"] = [
+        uid for uid in payload.get("away_players", []) if uid not in ghost_ids
+    ]
+    payload["action_queue"] = [
         action
-        for action in instance.action_queue
+        for action in payload.get("action_queue", [])
         if action.get("user_id") not in ghost_ids
     ]
-    instance.pending_actions = [
+    payload["pending_actions"] = [
         action
-        for action in instance.pending_actions
+        for action in payload.get("pending_actions", [])
         if action.get("user_id") not in ghost_ids
     ]
     logger.warning(
         "加载存档时移除幽灵玩家: game_key=%s, players=%s",
-        instance.game_key,
+        tuple(payload.get("game_key") or ()),
         ghost_ids,
     )
+    return payload
 
 
 def migrate_instance(instance: Any, *, adventure_expected: dict[str, Any] | None = None) -> bool | None:

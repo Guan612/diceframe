@@ -13,7 +13,7 @@ from src.rulesets.dnd2024.adventure_migrations import (
 )
 from src.rulesets.bundle import LoadedRulesetBundle, RulesetBundleLoader
 from src.rulesets.contracts import RulesetCapabilities
-from src.rulesets.dnd2024 import advancement_access
+import src.rulesets.dnd2024.advancement_access as advancement_access
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine

@@ -59,15 +59,7 @@ def apply_director_automation(
                 )
         raise ValueError("Director automation exceeded the safety limit")
     except Exception:
-        instance.ruleset_state = before["ruleset_state"]
-        instance.event_ledger = before["event_ledger"]
-        instance.players = before["players"]
-        instance.combat_state = before["combat_state"]
-        instance.combat_active = before["combat_active"]
-        instance.initiative_order = before["initiative_order"]
-        instance.initiative_current = before["initiative_current"]
-        if before["scene"] is not None:
-            instance.scene = before["scene"]
+        instance.restore_ruleset_transaction(before)
         raise
 
 

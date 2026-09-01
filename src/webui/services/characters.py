@@ -23,6 +23,7 @@ from src.engine.language import localized_text
 from src.engine.health import record_health_event
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime
+from src.webui.character_contracts import MAX_BIO_CHARS
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -59,8 +60,6 @@ class CharacterDependencies:
     rules: CharacterRuleDependencies
     assets: CharacterAssetDependencies
     save_character_card: Callable[[dict[str, Any]], dict[str, Any]]
-
-MAX_BIO_CHARS = 8000  # 兼容详细人物小传，同时保留上限避免无限污染上下文。
 
 _ATTR_NAME_EN = {
     "str": "STR",

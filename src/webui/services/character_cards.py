@@ -13,12 +13,10 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.engine.character_utils import parse_tavern_card
-
-if TYPE_CHECKING:
-    from src.webui.services.ruleset_characters import RulesetCharacterDependencies
+from src.webui.character_card_projection import card_signature, dedupe_cards
 
 logger = logging.getLogger("trpg")
 
@@ -26,7 +24,9 @@ logger = logging.getLogger("trpg")
 @dataclass(frozen=True)
 class CharacterCardDependencies:
     cards_path: Path
-    ruleset_characters: "RulesetCharacterDependencies | None" = None
+    ruleset_card_metadata: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
+    normalize_ruleset_card: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    is_ruleset_card: Callable[[dict[str, Any]], bool] | None = None
     lorebook: Any | None = None
     rebuild_lorebook_index: Callable[[str], None] | None = None
 
@@ -52,32 +52,6 @@ def _write_cards(
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp_path.replace(path)
-
-
-def _card_signature(card: dict[str, Any]) -> tuple[str, str, str, str, str]:
-    """同一张仓库卡的稳定指纹，用于避免 AI 生成后微调产生重复卡。"""
-    return (
-        str(card.get("character_name") or "").strip().lower(),
-        str(card.get("race") or "").strip().lower(),
-        str(card.get("class") or "").strip().lower(),
-        str(card.get("background") or "").strip().lower(),
-        str(card.get("rule_id") or "").strip().lower(),
-    )
-
-
-def _dedupe_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
-    order: list[tuple[str, str, str, str, str]] = []
-    for card in cards:
-        if not isinstance(card, dict):
-            continue
-        sig = _card_signature(card)
-        if not sig[0]:
-            sig = (str(card.get("id") or f"anon_{len(order)}"), "", "", "", "")
-        if sig not in seen:
-            order.append(sig)
-        seen[sig] = card
-    return [seen[sig] for sig in order]
 
 
 def _to_character_card(character: dict, source: str = "") -> dict[str, Any]:
@@ -132,19 +106,16 @@ def list_character_cards(
     dependencies: CharacterCardDependencies,
 ) -> dict[str, Any]:
     cards = _read_cards(dependencies)
-    deduped = _dedupe_cards(cards)
+    deduped = dedupe_cards(cards)
     if len(deduped) != len(cards):
         _write_cards(dependencies, deduped)
         cards = deduped
-    from src.webui.services.ruleset_characters import runtime_metadata_for_card
-
     visible_cards = []
-    ruleset_dependencies = dependencies.ruleset_characters
     for card in cards:
         visible = copy.deepcopy(card)
         metadata = (
-            runtime_metadata_for_card(ruleset_dependencies, card)
-            if ruleset_dependencies is not None
+            dependencies.ruleset_card_metadata(card)
+            if dependencies.ruleset_card_metadata is not None
             else None
         )
         if metadata is not None:
@@ -157,37 +128,33 @@ def save_character_card(
     dependencies: CharacterCardDependencies,
     character: dict,
 ) -> dict[str, Any]:
-    from src.webui.services.ruleset_characters import (
-        RulesetCharacterOperationError,
-        normalize_character_card_blueprint,
-    )
-
     source = str(character.get("source") or "角色卡库")
     # Game creation passes a player wrapper with mechanics nested under
     # ``character_sheet``. Convert that wrapper to the reusable card shape
     # before professional validation so the canonical blueprint is not missed.
     candidate = _to_character_card(character, source=source)
     try:
-        ruleset_dependencies = dependencies.ruleset_characters
-        if ruleset_dependencies is not None:
-            candidate = normalize_character_card_blueprint(
-                ruleset_dependencies, candidate,
-            )
-    except RulesetCharacterOperationError as exc:
-        return {"ok": False, "error_code": exc.code, "error": str(exc)}
+        if dependencies.normalize_ruleset_card is not None:
+            candidate = dependencies.normalize_ruleset_card(candidate)
+    except ValueError as exc:
+        return {
+            "ok": False,
+            "error_code": str(getattr(exc, "code", "INVALID_RULESET_CHARACTER")),
+            "error": str(exc),
+        }
     card = _to_character_card(candidate, source=source)
     cards = _read_cards(dependencies)
-    sig = _card_signature(card)
+    sig = card_signature(card)
     for existing in cards:
-        if existing.get("id") == card["id"] or _card_signature(existing) == sig:
+        if existing.get("id") == card["id"] or card_signature(existing) == sig:
             card["id"] = existing.get("id") or card["id"]
             break
     cards = [
         c for c in cards
-        if c.get("id") != card["id"] and _card_signature(c) != sig
+        if c.get("id") != card["id"] and card_signature(c) != sig
     ]
     cards.append(card)
-    cards = _dedupe_cards(cards)
+    cards = dedupe_cards(cards)
     _write_cards(dependencies, cards)
     return {"ok": True, "card": card}
 
@@ -197,16 +164,13 @@ def update_character_card(
     card_id: str,
     patch: dict[str, Any],
 ) -> dict[str, Any]:
-    cards = _dedupe_cards(_read_cards(dependencies))
+    cards = dedupe_cards(_read_cards(dependencies))
     for idx, old in enumerate(cards):
         if old.get("id") != card_id:
             continue
-        from src.webui.services.ruleset_characters import card_has_rules_aware_lifecycle
-
-        ruleset_dependencies = dependencies.ruleset_characters
         if (
-            ruleset_dependencies is not None
-            and card_has_rules_aware_lifecycle(ruleset_dependencies, old)
+            dependencies.is_ruleset_card is not None
+            and dependencies.is_ruleset_card(old)
         ):
             return {
                 "ok": False,
@@ -243,7 +207,7 @@ def delete_character_card(
     dependencies: CharacterCardDependencies,
     card_id: str,
 ) -> dict[str, Any]:
-    cards = _dedupe_cards(_read_cards(dependencies))
+    cards = dedupe_cards(_read_cards(dependencies))
     kept = [c for c in cards if c.get("id") != card_id]
     if len(kept) == len(cards):
         return {"ok": False, "error": f"角色卡不存在: {card_id}"}

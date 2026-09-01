@@ -376,6 +376,29 @@ class GameInstance:
     def replace_players(self, players: dict[str, PlayerData]) -> None:
         self.players = players
 
+    def restore_ruleset_transaction(self, snapshot: dict[str, Any]) -> None:
+        """Restore the bounded state touched by an authoritative ruleset transaction.
+
+        Callers capture the snapshot before invoking a runtime reducer. Keeping
+        the rollback assignment here preserves the aggregate write boundary
+        while allowing ruleset orchestration to remain transaction-aware.
+        """
+        self.ruleset_state = copy.deepcopy(snapshot["ruleset_state"])
+        self.event_ledger = copy.deepcopy(snapshot["event_ledger"])
+        self.players = copy.deepcopy(snapshot["players"])
+        self.combat_state = str(snapshot["combat_state"])
+        self.combat_active = bool(snapshot["combat_active"])
+        self.initiative_order = copy.deepcopy(snapshot["initiative_order"])
+        self.initiative_current = int(snapshot["initiative_current"])
+        if "scene" in snapshot and snapshot["scene"] is not None:
+            self.scene = str(snapshot["scene"])
+        if "last_activity" in snapshot:
+            self.last_activity = str(snapshot["last_activity"])
+        if "log" in snapshot:
+            self.log = copy.deepcopy(snapshot["log"])
+        if "round_number" in snapshot:
+            self.round_number = int(snapshot["round_number"])
+
     def set_player_access(self, open_access: bool) -> None:
         self.player_access_open = bool(open_access)
 

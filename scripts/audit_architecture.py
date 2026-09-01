@@ -73,11 +73,33 @@ def _known_target(name: str, modules: set[str]) -> str | None:
     return None
 
 
+def _is_type_checking_guard(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Name)
+        and node.id == "TYPE_CHECKING"
+    ) or (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "typing"
+        and node.attr == "TYPE_CHECKING"
+    )
+
+
 def _imports(path: Path, module: str, modules: set[str]) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
     is_package = path.name == "__init__.py"
+    typing_only_imports = {
+        id(child)
+        for guard in ast.walk(tree)
+        if isinstance(guard, ast.If) and _is_type_checking_guard(guard.test)
+        for statement in guard.body
+        for child in ast.walk(statement)
+        if isinstance(child, (ast.Import, ast.ImportFrom))
+    }
     found: set[str] = set()
     for node in ast.walk(tree):
+        if id(node) in typing_only_imports:
+            continue
         names: list[str] = []
         if isinstance(node, ast.Import):
             names.extend(alias.name for alias in node.names)

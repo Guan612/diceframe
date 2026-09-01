@@ -90,7 +90,15 @@ class _Api:
         self._character_card_dependencies = (
             character_cards.CharacterCardDependencies(
                 cards_path=self._character_cards_path,
-                ruleset_characters=self._ruleset_character_dependencies,
+                ruleset_card_metadata=lambda card: ruleset_characters.runtime_metadata_for_card(
+                    self._ruleset_character_dependencies, card,
+                ),
+                normalize_ruleset_card=lambda card: ruleset_characters.normalize_character_card_blueprint(
+                    self._ruleset_character_dependencies, card,
+                ),
+                is_ruleset_card=lambda card: ruleset_characters.card_has_rules_aware_lifecycle(
+                    self._ruleset_character_dependencies, card,
+                ),
             )
         )
         self._card_advancement_dependencies = (
@@ -101,7 +109,10 @@ class _Api:
                 write_cards=lambda cards: character_cards._write_cards(
                     self._character_card_dependencies, cards,
                 ),
-                ruleset_characters=self._ruleset_character_dependencies,
+                load_rule_by_id=self._load_rule_by_id,
+                runtime_for_card=lambda card: ruleset_characters.runtime_for_card(
+                    self._ruleset_character_dependencies, card,
+                ),
             )
         )
         self._live_advancement_dependencies = (

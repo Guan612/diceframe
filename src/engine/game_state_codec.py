@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
-from src.migrations.instance import normalize_loaded_instance
+from src.migrations.instance import normalize_game_state_payload
 
 
 class GameStateCodec:
@@ -103,6 +103,7 @@ class GameStateCodec:
         instance_type: Callable[..., Any],
         state_type: type[Any],
     ) -> Any:
+        data = normalize_game_state_payload(data)
         raw_death_save_outcomes = data.get("death_save_outcomes")
         death_save_outcomes = (
             raw_death_save_outcomes
@@ -175,16 +176,16 @@ class GameStateCodec:
             last_state_update=data.get("last_state_update"),
             last_token_budget_bump=data.get("last_token_budget_bump"),
             gm_directives=data.get("gm_directives", []),
+            ready_players=set(data.get("ready_players", [])),
+            away_players=set(data.get("away_players", [])),
+            confirmed_items=data.get("confirmed_items", []),
+            private_log=data.get("private_log", {}),
+            table_talk=[
+                item
+                for item in (data.get("table_talk") or [])
+                if isinstance(item, dict) and item.get("visibility") == "party"
+            ][-50:],
         )
-        instance.ready_players = set(data.get("ready_players", []))
-        instance.away_players = set(data.get("away_players", []))
-        instance.confirmed_items = data.get("confirmed_items", [])
-        instance.private_log = data.get("private_log", {})
-        instance.table_talk = [
-            item
-            for item in (data.get("table_talk") or [])
-            if isinstance(item, dict) and item.get("visibility") == "party"
-        ][-50:]
 
         puzzles_data = data.get("puzzles")
         if puzzles_data:
@@ -198,5 +199,4 @@ class GameStateCodec:
         instance.plot_tracker = (
             PlotTracker.from_dict(plot_data) if plot_data else PlotTracker()
         )
-        normalize_loaded_instance(instance)
         return instance

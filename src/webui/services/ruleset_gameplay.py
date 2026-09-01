@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from src.webui.services.ruleset_builder import validate_draft_shape
+from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.rulesets.contracts import (
     AdventureBindingMigrationRuntime,
     AuthoritativeIntentHooks,
@@ -299,28 +299,10 @@ async def submit_intent(
             instance.last_activity = datetime.now(timezone.utc).isoformat()
             await dependencies.save_instance(instance)
         except (ValueError, KeyError, TypeError) as exc:
-            instance.ruleset_state = before["ruleset_state"]
-            instance.event_ledger = before["event_ledger"]
-            instance.players = before["players"]
-            instance.combat_state = before["combat_state"]
-            instance.combat_active = before["combat_active"]
-            instance.initiative_order = before["initiative_order"]
-            instance.initiative_current = before["initiative_current"]
-            instance.last_activity = before["last_activity"]
-            instance.log = before["log"]
-            instance.round_number = before["round_number"]
+            instance.restore_ruleset_transaction(before)
             return _error("INTENT_REJECTED", str(exc))
         except Exception:
-            instance.ruleset_state = before["ruleset_state"]
-            instance.event_ledger = before["event_ledger"]
-            instance.players = before["players"]
-            instance.combat_state = before["combat_state"]
-            instance.combat_active = before["combat_active"]
-            instance.initiative_order = before["initiative_order"]
-            instance.initiative_current = before["initiative_current"]
-            instance.last_activity = before["last_activity"]
-            instance.log = before["log"]
-            instance.round_number = before["round_number"]
+            instance.restore_ruleset_transaction(before)
             raise
         resolved_batches = [batch, *automatic_batches]
         if dependencies.apply_memory_delta:

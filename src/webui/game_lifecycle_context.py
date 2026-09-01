@@ -1,4 +1,4 @@
-"""Typed dependencies and compensation state for game lifecycle transactions."""
+"""Shared contracts and compensation state for game lifecycle transactions."""
 
 from __future__ import annotations
 

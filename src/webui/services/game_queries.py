@@ -13,7 +13,7 @@ from src.llm.parser import sanitize_narration
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.services._common import _GAME_KEY_SEP
-from src.webui.services.ruleset_rest import public_rest_session
+from src.webui.ruleset_rest_projection import public_rest_session
 
 logger = logging.getLogger("trpg")
 
