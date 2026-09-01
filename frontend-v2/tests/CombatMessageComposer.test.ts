@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const submit = vi.hoisted(() => vi.fn())
-vi.mock('../src/features/rulesets/dnd2024/api', () => ({ submitRulesetIntent: submit }))
+vi.mock('../src/api/rulesets', () => ({ submitRulesetIntent: submit }))
 vi.mock('../src/composables/useLocale', () => ({
   useLocale: () => ({ locale: ref('zh-CN') }),
 }))

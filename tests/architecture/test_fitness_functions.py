@@ -30,35 +30,7 @@ SERVICE_LOCATOR_ALLOWLIST: frozenset[DependencyDebt] = frozenset()
 BACKEND_CONCRETE_RULESET_ALLOWLIST: frozenset[DependencyDebt] = frozenset()
 
 # Historical direct imports outside the D&D-owned frontend feature directory.
-FRONTEND_CONCRETE_RULESET_ALLOWLIST = frozenset(
-    {
-        DependencyDebt(
-            "frontend-v2/src/components/play/CombatMessageComposer.vue",
-            "concrete_import",
-            "@/features/rulesets/dnd2024/api",
-        ),
-        DependencyDebt(
-            "frontend-v2/src/features/admin/CharactersView.vue",
-            "concrete_import",
-            "@/features/rulesets/dnd2024/progression/Dnd2024AdvancementPanel.vue",
-        ),
-        DependencyDebt(
-            "frontend-v2/src/features/rulesets/ProfessionalCharacterCenter.vue",
-            "concrete_import",
-            "@/features/rulesets/dnd2024/api",
-        ),
-        *(
-            DependencyDebt(
-                "frontend-v2/src/features/play/PlayView.vue", "concrete_import", target
-            )
-            for target in (
-                "@/features/rulesets/dnd2024/api",
-                "@/features/rulesets/dnd2024/campaign/Dnd2024CampaignPanel.vue",
-                "@/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue",
-            )
-        ),
-    }
-)
+FRONTEND_CONCRETE_RULESET_ALLOWLIST: frozenset[DependencyDebt] = frozenset()
 
 
 def test_service_locator_debt_matches_shrink_only_baseline() -> None:
@@ -101,16 +73,20 @@ def test_new_service_locator_dependency_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_removing_frontend_allowlist_entry_while_debt_remains_is_rejected() -> None:
-    actual = scan_frontend_concrete_ruleset_debt(ROOT)
-    shortened = set(FRONTEND_CONCRETE_RULESET_ALLOWLIST)
-    shortened.remove(next(iter(shortened)))
+def test_stale_allowlist_entry_is_rejected() -> None:
+    stale = {
+        DependencyDebt(
+            "src/webui/services/removed.py",
+            "webapi_parameter",
+            "WebAPI",
+        )
+    }
 
     with pytest.raises(AssertionError):
         assert_debt_matches_allowlist(
-            actual,
-            shortened,
-            boundary="generic frontend -> dnd2024",
+            set(),
+            stale,
+            boundary="synthetic stale baseline",
         )
 
 

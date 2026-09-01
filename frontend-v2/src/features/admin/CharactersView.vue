@@ -15,9 +15,9 @@ import LevelUpDialog from '@/components/admin/LevelUpDialog.vue'
 import ItemEditor from '@/components/admin/ItemEditor.vue'
 import PortraitImage from '@/components/PortraitImage.vue'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
-import Dnd2024AdvancementPanel from '@/features/rulesets/dnd2024/progression/Dnd2024AdvancementPanel.vue'
+import RulesetAdvancementHost from '@/features/rulesets/RulesetAdvancementHost.vue'
 import RulesetExperienceHost from '@/features/rulesets/RulesetExperienceHost.vue'
-import ProfessionalCharacterCenter from '@/features/rulesets/ProfessionalCharacterCenter.vue'
+import RulesetCharacterCenterHost from '@/features/rulesets/RulesetCharacterCenterHost.vue'
 import {
   identitySchema, identityLabel, getIdentityValue, setIdentityUpdate,
   currencyLabel, getCurrencyAmount, getResourceValue,
@@ -67,6 +67,7 @@ interface CharacterCardPatch extends JsonObject {
   portrait?: CharacterPortrait | null
 }
 interface ProfessionalEditTarget {
+  runtimeId: string
   target: 'game' | 'card'
   character: CharacterSheet
   ruleId: string
@@ -427,6 +428,7 @@ function openEdit(p: import('@/api/types').Player) {
 function openPlayerEditor(p: import('@/api/types').Player) {
   if (isProfessionalGame()) {
     professionalEdit.value = {
+      runtimeId: String(data.value?.ruleset_runtime?.id || ''),
       target: 'game',
       character: { ...(p.character_sheet || {}), character_name: p.character_name },
       ruleId: ruleId.value,
@@ -533,6 +535,7 @@ function openCardEdit(c: CharacterCard) {
 function openCardEditor(c: CharacterCard) {
   if (isProfessionalCard(c)) {
     professionalEdit.value = {
+      runtimeId: String(c.ruleset_runtime?.id || ''),
       target: 'card',
       character: c,
       ruleId: String(c.rule_id || ''),
@@ -844,33 +847,34 @@ async function onWizardSubmit(c: CharacterSheet) {
       </template>
     </Modal>
 
-    <Modal v-if="advancementCard" :title="String(locale).startsWith('en') ? 'D&D 2024 advancement' : 'D&D 2024 职业升级'" @close="advancementCard = null">
-      <Dnd2024AdvancementPanel
-        :rule-id="String(advancementCard.rule_id || ruleId)"
-        :character="advancementCard"
-        :card-id="cardId(advancementCard)"
-        :revision="Number(advancementCard.ruleset_revision || 0)"
-        :language="String(advancementCard.language || locale)"
-        @applied="onCardAdvanced"
-        @cancel="advancementCard = null"
-      />
-    </Modal>
+    <RulesetAdvancementHost
+      v-if="advancementCard"
+      :runtime-id="String(advancementCard.ruleset_runtime?.id || '')"
+      :rule-id="String(advancementCard.rule_id || ruleId)"
+      :character="advancementCard"
+      :card-id="cardId(advancementCard)"
+      :revision="Number(advancementCard.ruleset_revision || 0)"
+      :language="String(advancementCard.language || locale)"
+      @applied="onCardAdvanced"
+      @cancel="advancementCard = null"
+    />
 
-    <Modal v-if="advancementPlayer?.character_sheet" :title="String(locale).startsWith('en') ? 'D&D 2024 advancement' : 'D&D 2024 职业升级'" @close="advancementPlayer = null">
-      <Dnd2024AdvancementPanel
-        :rule-id="ruleId"
-        :character="advancementPlayer.character_sheet"
-        :game-key="game"
-        :user-id="advancementPlayer.user_id"
-        :revision="Number(advancementPlayer.character_sheet.ruleset_revision || 0)"
-        :language="String(locale)"
-        @applied="onLiveCharacterAdvanced"
-        @cancel="advancementPlayer = null"
-      />
-    </Modal>
+    <RulesetAdvancementHost
+      v-if="advancementPlayer?.character_sheet"
+      :runtime-id="String(data?.ruleset_runtime?.id || '')"
+      :rule-id="ruleId"
+      :character="advancementPlayer.character_sheet"
+      :game-key="game"
+      :user-id="advancementPlayer.user_id"
+      :revision="Number(advancementPlayer.character_sheet.ruleset_revision || 0)"
+      :language="String(locale)"
+      @applied="onLiveCharacterAdvanced"
+      @cancel="advancementPlayer = null"
+    />
 
     <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('en') ? 'Advanced character center' : '高级角色中心'" @close="professionalEdit = null">
-      <ProfessionalCharacterCenter
+      <RulesetCharacterCenterHost
+        :runtime-id="professionalEdit.runtimeId"
         :character="professionalEdit.character"
         :target="professionalEdit.target"
         :rule-id="professionalEdit.ruleId"
