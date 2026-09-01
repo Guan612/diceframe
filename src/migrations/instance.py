@@ -9,10 +9,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 import logging
-from typing import Any, cast
+from typing import Any
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
-from src.engine.game_state_contracts import GamePersistedState
 
 
 logger = logging.getLogger("trpg")
@@ -31,13 +30,13 @@ def _referenced_player_ids(log: list[Any]) -> set[str]:
     return referenced
 
 
-def normalize_game_state_payload(data: Mapping[str, Any]) -> GamePersistedState:
+def normalize_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Return a normalized copy of a persisted game-state payload.
 
     Ghost-player cleanup intentionally requires historical evidence. Waiting
     rooms and unplayed multiplayer sessions therefore keep every participant.
     """
-    payload = cast(GamePersistedState, deepcopy(dict(data)))
+    payload = deepcopy(dict(data))
     players = payload.get("players")
     log = payload.get("log")
     if not isinstance(players, dict) or len(players) <= 1 or not isinstance(log, list) or not log:

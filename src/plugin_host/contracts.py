@@ -13,23 +13,31 @@ from src.plugin_sdk.contracts import (
 
 
 class PluginManifest(TypedDict, total=False):
-    schema_version: int
-    id: str
-    name: str
-    version: str
-    description: str
-    plugin_type: str
+    """Known manifest keys with only the guarantees made by host validation.
+
+    Values that the host merely converts while reading remain ``object``;
+    declaring a narrower type here would incorrectly imply normalization of
+    the stored manifest. Fields with structural validation retain useful
+    precise types.
+    """
+
+    schema_version: str | int | float | bool
+    id: object
+    name: object
+    version: object
+    description: object
+    plugin_type: object
     entrypoint: list[str]
-    min_app_version: str
-    permissions: list[str]
-    capabilities: list[str]
+    min_app_version: object
+    permissions: list[str] | None
+    capabilities: object
     contributes: dict[str, object]
-    content_schema_version: int
-    locale_schema_version: int
-    default_locale: str
-    config_schema: str
-    tool_ui: str
-    docs: str
+    content_schema_version: str | int | float | bool
+    locale_schema_version: str | int | float | bool
+    default_locale: object
+    config_schema: object
+    tool_ui: object
+    docs: object
 
 
 class PluginTypeDescriptor(TypedDict):
