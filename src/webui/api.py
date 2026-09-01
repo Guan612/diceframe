@@ -253,6 +253,11 @@ class WebAPI:
         self.character_gen_max_tokens = character_gen_max_tokens
         self.text_gen_max_tokens = text_gen_max_tokens
         self._plugins = plugin_host
+        self._rule_dependencies = rules.RuleDependencies(
+            rules_dir=self._rules_dir,
+            ruleset_registry=self._ruleset_registry,
+            plugin_host=plugin_host,
+        )
         self._ruleset_builder_dependencies = ruleset_builder.RulesetBuilderDependencies(
             load_rule=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,
@@ -1151,19 +1156,23 @@ class WebAPI:
     # ---- 规则配置 ----
 
     def list_rules(self, language: str = "") -> dict[str, Any]:
-        return rules.list_rules(self, language)
+        return rules.list_rules(self._rule_dependencies, language)
 
     def save_custom_rule(self, data: dict[str, Any]) -> dict[str, Any]:
-        return rules.save_custom_rule(self, data)
+        return rules.save_custom_rule(self._rule_dependencies, data)
 
     def get_rule_template(self, rule_id: str, language: str = "") -> dict[str, Any]:
-        return rules.get_rule_template(self, rule_id, language)
+        return rules.get_rule_template(self._rule_dependencies, rule_id, language)
 
     def update_custom_rule(self, rule_id: str, template: dict[str, Any]) -> dict[str, Any]:
-        return rules.update_custom_rule(self, rule_id, template)
+        return rules.update_custom_rule(
+            self._rule_dependencies,
+            rule_id,
+            template,
+        )
 
     def delete_custom_rule(self, rule_id: str) -> dict[str, Any]:
-        return rules.delete_custom_rule(self, rule_id)
+        return rules.delete_custom_rule(self._rule_dependencies, rule_id)
 
     def ruleset_experience(self, rule_id: str, language: str = "") -> dict[str, Any]:
         return ruleset_builder.experience(

@@ -56,7 +56,6 @@ SERVICE_LOCATOR_ALLOWLIST = frozenset().union(
     _service_debt("generation.py", *_STANDARD_WEBAPI_DEBT),
     _service_debt("maps.py", *_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT),
     _service_debt("plugins.py", *_STANDARD_WEBAPI_AND_SERVICE_CALL_DEBT),
-    _service_debt("rules.py", *_STANDARD_WEBAPI_DEBT),
     _service_debt("ruleset_advancement.py", *_STANDARD_WEBAPI_DEBT),
     _service_debt("ruleset_characters.py", *_STANDARD_WEBAPI_DEBT),
     _service_debt("ruleset_gameplay.py", *_STANDARD_WEBAPI_DEBT),

@@ -1522,9 +1522,13 @@ async def test_content_pack_rules_and_worlds_are_visible_to_services(tmp_path):
     Api._rules_dir.mkdir()
     Api._worlds_dir.mkdir()
 
-    rule_items = rule_service.list_rules(Api)["rules"]
+    rule_dependencies = rule_service.RuleDependencies(
+        rules_dir=Api._rules_dir,
+        plugin_host=host,
+    )
+    rule_items = rule_service.list_rules(rule_dependencies)["rules"]
     world_items = world_service.list_world_templates(Api)["templates"]
-    detail = rule_service.get_rule_template(Api, "pack_rule")
+    detail = rule_service.get_rule_template(rule_dependencies, "pack_rule")
 
     assert next(item for item in rule_items if item["rule_id"] == "pack_rule")["plugin_id"] == "starter-pack"
     assert next(item for item in world_items if item["world_id"] == "pack_world")["plugin_id"] == "starter-pack"
