@@ -19,6 +19,7 @@ ignore_missing_imports = true
 follow_imports = "skip"
 check_untyped_defs = true
 files = [
+    "scripts/architecture_fitness.py",
     "src/engine/contracts.py",
     "src/engine/luck_resolver.py",
     "src/engine/persistence.py",
