@@ -17,11 +17,11 @@ import sys
 import tempfile
 import time
 import zipfile
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .content import PluginContentCatalog, safe_id_part
+from .contracts import AIProviderResolver, PluginPublicDetail, PluginStoppedCallback
 from .descriptors import (
     BRIDGE_EXTENSION_STAGES,
     normalize_bridge_outputs,
@@ -31,6 +31,7 @@ from .descriptors import (
 )
 from .marketplace import PluginMarketplace
 from .mirrors import MirrorManager
+from .models import PluginRuntime
 from src.version import needs_core_update
 from .package_limits import (
     MAX_PLUGIN_ARCHIVE_FILES,
@@ -89,26 +90,6 @@ _SAFE_PARENT_ENV = {
 }
 
 
-@dataclass
-class PluginRuntime:
-    manifest: dict[str, Any]
-    schema: dict[str, Any]
-    directory: Path
-    config: dict[str, Any] = field(default_factory=dict)
-    secrets: dict[str, str] = field(default_factory=dict)
-    process: asyncio.subprocess.Process | None = None
-    monitor_task: asyncio.Task | None = None
-    rpc_client: JsonRpcStdioClient | None = None
-    tools: list[dict[str, Any]] = field(default_factory=list)
-    bridge_extensions: list[dict[str, Any]] = field(default_factory=list)
-    provider_capabilities: list[dict[str, Any]] = field(default_factory=list)
-    status: str = "disabled"
-    error: str = ""
-    started_at: float = 0.0
-    restart_delay_sec: float = 3.0
-    source: str = "user"
-
-
 async def _rename_dir_with_retry(src: Path, dst: Path, *, attempts: int = 3, delay: float = 0.3) -> None:
     """重命名目录；Windows 下杀毒软件实时扫描可能短暂锁定目录，失败时小间隔重试。"""
     for attempt in range(1, attempts + 1):
@@ -129,9 +110,9 @@ class PluginHost:
         *,
         builtin_dir: Path | None = None,
         base_env: dict[str, str] | None = None,
-        on_plugin_stopped=None,
-        hub_client=None,
-        ai_provider_resolver=None,
+        on_plugin_stopped: PluginStoppedCallback | None = None,
+        hub_client: Any | None = None,
+        ai_provider_resolver: AIProviderResolver | None = None,
     ) -> None:
         self.builtin_dir = builtin_dir
         self.plugins_dir = plugins_dir
@@ -184,7 +165,7 @@ class PluginHost:
                 self._register_contributions(plugin_id, runtime)
         return self.list_public()
 
-    def list_public(self) -> list[dict[str, Any]]:
+    def list_public(self) -> list[PluginPublicDetail]:
         return [self.public_detail(plugin_id) for plugin_id in self.plugins]
 
     def plugin_type_of(self, plugin_id: str) -> str:
@@ -192,7 +173,7 @@ class PluginHost:
         runtime = self.plugins.get(plugin_id)
         return self._plugin_type(runtime.manifest) if runtime else ""
 
-    def public_detail(self, plugin_id: str) -> dict[str, Any]:
+    def public_detail(self, plugin_id: str) -> PluginPublicDetail:
         runtime = self._require(plugin_id)
         if runtime.process and runtime.process.returncode is not None and runtime.status == "running":
             runtime.status = "failed"

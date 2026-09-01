@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, TextIO
 
-BridgeHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
+from .contracts import BridgeHandler, JsonObject
 
 
 @dataclass(frozen=True)
@@ -83,7 +83,7 @@ class BridgeExtensionRuntime:
             self.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
             self.stdout.flush()
 
-    def _dispatch(self, method: str, raw_params: Any) -> dict[str, Any]:
+    def _dispatch(self, method: str, raw_params: Any) -> JsonObject:
         params = raw_params if isinstance(raw_params, dict) else {}
         if method == "initialize":
             requested = int(params.get("protocol_version") or 0)

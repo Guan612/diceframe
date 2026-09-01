@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from src.plugin_sdk.contracts import (
+    BridgeExtensionDescriptor,
+    ProviderCapabilityDescriptor,
+    ToolDescriptor,
+)
+
 from .runtime_protocol import PLUGIN_PROTOCOL_VERSION, PluginProtocolError
 
 BRIDGE_EXTENSION_STAGES = frozenset({"before_message", "after_result", "render"})
@@ -19,7 +25,7 @@ _PROVIDER_METHOD_NAME_RE = re.compile(r"^provider\.[a-z][a-z0-9_.-]{0,63}$")
 PROVIDER_METHOD_ALIASES = frozenset({"generate"})
 
 
-def validate_tool_descriptors(initialized: Any) -> list[dict[str, Any]]:
+def validate_tool_descriptors(initialized: object) -> list[ToolDescriptor]:
     if not isinstance(initialized, dict) or int(initialized.get("protocol_version") or 0) != PLUGIN_PROTOCOL_VERSION:
         raise PluginProtocolError("工具插件协议版本不匹配")
     raw_tools = initialized.get("tools")
@@ -27,7 +33,7 @@ def validate_tool_descriptors(initialized: Any) -> list[dict[str, Any]]:
         raise PluginProtocolError("工具插件必须注册至少一个工具")
     if len(raw_tools) > 64:
         raise PluginProtocolError("单个插件最多注册 64 个工具")
-    tools: list[dict[str, Any]] = []
+    tools: list[ToolDescriptor] = []
     names: set[str] = set()
     for raw in raw_tools:
         if not isinstance(raw, dict):
@@ -54,7 +60,7 @@ def validate_tool_descriptors(initialized: Any) -> list[dict[str, Any]]:
     return tools
 
 
-def validate_bridge_extension_descriptors(initialized: Any) -> list[dict[str, Any]]:
+def validate_bridge_extension_descriptors(initialized: object) -> list[BridgeExtensionDescriptor]:
     if not isinstance(initialized, dict) or int(initialized.get("protocol_version") or 0) != PLUGIN_PROTOCOL_VERSION:
         raise PluginProtocolError("Bot Bridge 插件协议版本不匹配")
     raw_extensions = initialized.get("bridge_extensions")
@@ -62,7 +68,7 @@ def validate_bridge_extension_descriptors(initialized: Any) -> list[dict[str, An
         raise PluginProtocolError("bot-extension 插件必须注册至少一个扩展")
     if len(raw_extensions) > 32:
         raise PluginProtocolError("单个插件最多注册 32 个 Bot Bridge 扩展")
-    descriptors: list[dict[str, Any]] = []
+    descriptors: list[BridgeExtensionDescriptor] = []
     names: set[str] = set()
     for raw in raw_extensions:
         if not isinstance(raw, dict):
@@ -102,7 +108,7 @@ def validate_bridge_extension_descriptors(initialized: Any) -> list[dict[str, An
     return descriptors
 
 
-def validate_provider_capabilities(initialized: Any) -> list[dict[str, Any]]:
+def validate_provider_capabilities(initialized: object) -> list[ProviderCapabilityDescriptor]:
     """校验 provider 插件 initialize 返回的 capabilities 声明。
 
     每个 capability 形如 {"kind": "text-transform", "version": 1,
@@ -116,7 +122,7 @@ def validate_provider_capabilities(initialized: Any) -> list[dict[str, Any]]:
         raise PluginProtocolError("provider 插件必须声明至少一个 capability")
     if len(raw_capabilities) > 8:
         raise PluginProtocolError("单个 provider 插件最多声明 8 个 capability")
-    capabilities: list[dict[str, Any]] = []
+    capabilities: list[ProviderCapabilityDescriptor] = []
     kinds: set[str] = set()
     for raw in raw_capabilities:
         if not isinstance(raw, dict):

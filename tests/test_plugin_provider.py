@@ -26,8 +26,13 @@ def _caps(**overrides):
 
 def test_validate_provider_capabilities_accepts_declaration():
     capabilities = validate_provider_capabilities(_caps())
-    assert capabilities[0]["kind"] == "text-transform"
-    assert capabilities[0]["methods"]["generate"] == "provider.text-transform.generate"
+    assert capabilities == [{
+        "kind": "text-transform",
+        "version": 1,
+        "methods": {"generate": "provider.text-transform.generate"},
+        "title": "text-transform",
+        "description": "",
+    }]
 
 
 @pytest.mark.parametrize(
