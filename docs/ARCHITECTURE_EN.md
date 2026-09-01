@@ -61,6 +61,12 @@ The manifest currently supports `schema_version = 1`, `content_schema_version = 
 
 V2 resource IDs must already be canonical. The registry never silently normalizes case, spaces, or non-ASCII IDs on a plugin's behalf. When V2 locale or content validation fails, catalog APIs return `CONTENT_VALIDATION_FAILED`; they do not omit the broken resource or fall back to unlocalized content. The in-app content-pack exporter always emits a Content V2 core plus typed-locale layout. V1 full copies remain supported only through import adapters.
 
+## Plugin Runtime Extension Boundary
+
+`src/plugin_host/support.py` is the single metadata source for plugin types, process modes, inferred permissions, and contribution mappings. `src/plugin_host/descriptors.py` validates untrusted initialize payloads into typed descriptors; `src/plugin_host/capabilities.py` owns RPC capability initialization, lookup, and projection; `PluginHost` retains package, process, lifecycle, security, and compatibility-facade responsibilities.
+
+Adding a valid provider capability kind requires plugin implementation, SDK contracts, and tests, but no `PluginHost` edit. Only a genuinely new plugin type should prompt changes to the support descriptor, runtime initializer, permissions, cleanup, and public metadata. See `docs/plugins/EXTENDING_EN.md` for contributor paths.
+
 ## Migration and Compatibility
 
 `src/migrations/` performs persisted schema upgrades. `src/compat/` adapts old external/runtime shapes to the current canonical model. V1 packages are read through adapters; compatibility branches do not move into normal business logic.
@@ -74,6 +80,8 @@ Migrations for loaded persisted `GameInstance` data are orchestrated through the
 Auxiliary projections have explicit owners: `src/engine/game_state_codec.py` owns the stable save projection and reconstruction, `src/engine/game_context_projector.py` owns the generic LLM/presentation view, and `src/migrations/instance.py` owns normalization of loaded legacy save payloads. Payload normalization runs on a copy before aggregate construction and never mutates caller input. `GameInstance.to_dict()`, `from_dict()`, and `to_llm_view()` remain compatibility delegates rather than implementing those projections. Legacy ability modifiers, armor summation, and string-skill defaults live in the isolated `src/engine/legacy_game_projection.py` and are selected explicitly by `LegacyRulesetAdapter`. A ruleset runtime may extend the generic projection with its authoritative view, but concrete mechanics must not move back into the generic projector.
 
 This is the first codec/projection/migration boundary extraction; it does not mean the generic state shape is final or completely rules-agnostic. To preserve existing worlds, saves, and prompts, the generic projection still carries traditional character fields such as `hp`, `max_hp`, `class`, `race`, `level`, `attributes`, `equipment`, `skills`, and `inventory`. Those compatibility shapes can be narrowed further only while preserving save and ruleset-runtime contracts.
+
+`src/engine/game_state_contracts.py` declares typed contracts for the save top level, generic context, and player rollback snapshots. `ruleset_runtime`, `ruleset_state`, adventure-binding extensions, event payloads, and character extension fields remain intentionally opaque in the generic engine. When adding a persisted field, check each owner in order: authoritative `GameInstance` field → `GamePersistedState` → codec encode/decode → migration/default compatibility → projection only when LLM/UI consumers need it → behavior regression.
 
 ## Application Update Boundary
 

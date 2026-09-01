@@ -8,9 +8,16 @@ import textwrap
 
 import pytest
 
+from src.plugin_host.capabilities import (
+    find_provider_plugin,
+    initialize_runtime_capabilities,
+    runtime_capability_initializer_types,
+)
 from src.plugin_host.descriptors import validate_provider_capabilities
 from src.plugin_host.host import PluginHost
+from src.plugin_host.models import PluginRuntime
 from src.plugin_host.runtime_protocol import PluginProtocolError
+from src.plugin_host.support import RPC_PLUGIN_TYPES
 from src.plugin_sdk.provider_runtime import ProviderRuntime
 
 
@@ -26,8 +33,13 @@ def _caps(**overrides):
 
 def test_validate_provider_capabilities_accepts_declaration():
     capabilities = validate_provider_capabilities(_caps())
-    assert capabilities[0]["kind"] == "text-transform"
-    assert capabilities[0]["methods"]["generate"] == "provider.text-transform.generate"
+    assert capabilities == [{
+        "kind": "text-transform",
+        "version": 1,
+        "methods": {"generate": "provider.text-transform.generate"},
+        "title": "text-transform",
+        "description": "",
+    }]
 
 
 @pytest.mark.parametrize(
@@ -72,6 +84,45 @@ def test_provider_runtime_serves_initialize_and_request_over_stdio():
     assert responses[0]["result"]["capabilities"][0]["kind"] == "text-transform"
     assert responses[1]["result"] == {"ok": True, "text": "HARBOR"}
     assert responses[2]["result"] == {"ok": False, "error": "boom"}
+
+
+def test_rpc_plugin_types_have_exactly_one_runtime_capability_initializer():
+    assert runtime_capability_initializer_types() == RPC_PLUGIN_TYPES
+
+
+def test_new_provider_capability_kind_uses_generic_registration_and_invocation(tmp_path):
+    sdk_runtime = ProviderRuntime()
+
+    @sdk_runtime.capability(kind="sample-capability", version=1)
+    def generate(arguments, context):
+        return {"value": arguments.get("value"), "context": context}
+
+    initialized = sdk_runtime._dispatch(
+        "initialize",
+        {"protocol_version": sdk_runtime.protocol_version},
+    )
+    host_runtime = PluginRuntime(
+        manifest={"id": "sample-provider", "plugin_type": "provider"},
+        schema={"type": "object", "properties": {}},
+        directory=tmp_path,
+        status="running",
+    )
+
+    initialize_runtime_capabilities("provider", host_runtime, initialized)
+
+    assert find_provider_plugin(
+        {"sample-provider": host_runtime},
+        "sample-capability",
+    ) == "sample-provider"
+    assert sdk_runtime._dispatch(
+        "provider.request",
+        {
+            "capability": "sample-capability",
+            "method": "generate",
+            "arguments": {"value": 7},
+            "context": {"source": "test"},
+        },
+    ) == {"value": 7, "context": {"source": "test"}}
 
 
 @pytest.mark.asyncio

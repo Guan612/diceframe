@@ -42,6 +42,46 @@ def test_versioned_ruleset_state_is_optional_and_round_trips() -> None:
     })
 
 
+def test_persisted_boundary_preserves_opaque_state_and_filters_transient_entries() -> None:
+    payload = {
+        "game_key": ["web", "typed-boundary", "bot"],
+        "state": "active_action",
+        "rule_id": "",
+        "players": {
+            "active": {"character_name": "Active"},
+            "away": {"character_name": "Away"},
+        },
+        "ready_players": ["active"],
+        "away_players": ["away"],
+        "ruleset_runtime": {"id": "sample:runtime", "extension": {"kept": True}},
+        "ruleset_state": {"private_shape": [1, {"kept": True}]},
+        "adventure_binding": {"extension": {"kept": True}},
+        "event_ledger": [{"payload": {"kept": True}}],
+        "pending_payments": [
+            {"id": "pending", "status": "pending"},
+            {"id": "settled", "status": "accepted"},
+        ],
+        "table_talk": [
+            {"id": "party", "visibility": "party"},
+            {"id": "private", "visibility": "private"},
+        ],
+    }
+    original = deepcopy(payload)
+
+    restored = GameInstance.from_dict(payload)
+
+    assert payload == original
+    assert restored.rule_id == ""
+    assert restored.ready_players == {"active"}
+    assert restored.away_players == {"away"}
+    assert restored.ruleset_runtime == payload["ruleset_runtime"]
+    assert restored.ruleset_state == payload["ruleset_state"]
+    assert restored.adventure_binding == payload["adventure_binding"]
+    assert restored.event_ledger == payload["event_ledger"]
+    assert [item["id"] for item in restored.pending_payments] == ["pending"]
+    assert [item["id"] for item in restored.table_talk] == ["party"]
+
+
 def test_narrative_perspective_round_trips_and_old_saves_default_to_auto() -> None:
     instance = GameInstance(game_key=("web", "perspective", "bot"))
     instance.set_narrative_perspective("third_person")

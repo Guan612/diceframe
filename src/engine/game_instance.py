@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from src.engine.contracts import (
     ActionRecord,
@@ -24,9 +25,18 @@ from src.engine.contracts import (
 from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
 from src.engine.character_utils import apply_resource_delta, get_resource
 from src.engine.game_state_codec import GameStateCodec
+from src.engine.game_state_contracts import (
+    GameContextView,
+    GamePersistedState,
+    PlayerRollbackSnapshot,
+)
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
+
+if TYPE_CHECKING:
+    from src.engine.plot_tracker import PlotTracker
+    from src.engine.puzzle import PuzzleManager
 
 logger = logging.getLogger("trpg")
 
@@ -49,14 +59,14 @@ class GameState(Enum):
     ENDED = "ended"                      # 已结束
 
 
-def _snapshot_players(instance) -> dict:
+def _snapshot_players(instance: GameInstance) -> PlayerRollbackSnapshot:
     """快照所有玩家可回滚状态（含死亡玩家，便于 swipe 复活）。
 
     覆盖运行时可变字段（HP/金币/SAN/LUCK/MANA/状态/背包/装备/法术）；
     不含 identity/progression（race/class/level/xp/skills 不随 swipe 回滚）。
     """
     import copy
-    snap = {}
+    snap: PlayerRollbackSnapshot = {}
     for uid in instance.players:
         cs = instance.get_character_sheet(uid)
         snap[uid] = {
@@ -75,7 +85,7 @@ def _snapshot_players(instance) -> dict:
     return snap
 
 
-def restore_players(instance, snapshot: dict) -> None:
+def restore_players(instance: GameInstance, snapshot: PlayerRollbackSnapshot) -> None:
     """从快照恢复玩家可回滚状态（含 deceased/death_round，便于 swipe 复活）。"""
     for uid, snap in snapshot.items():
         if uid not in instance.players:
@@ -112,18 +122,18 @@ class GameInstance:
 
     # 玩家与 NPC
     players: dict[str, PlayerData] = field(default_factory=dict)       # user_id -> {...}
-    npcs: dict[str, dict] = field(default_factory=dict)
+    npcs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # 回合
     round_number: int = 0
     action_queue: list[ActionRecord] = field(default_factory=list)
     pending_actions: list[ActionRecord] = field(default_factory=list)
-    ready_players: set = field(default_factory=set)
-    away_players: set = field(default_factory=set)
+    ready_players: set[str] = field(default_factory=set)
+    away_players: set[str] = field(default_factory=set)
 
     # 战斗
     combat_active: bool = False
-    combat_enemies: list = field(default_factory=list)
+    combat_enemies: list[dict[str, Any]] = field(default_factory=list)
     combat_state: str = "none"  # "none" / "active"
     initiative_order: list[str] = field(default_factory=list)
     initiative_current: int = 0
@@ -135,7 +145,7 @@ class GameInstance:
     bot_bind_token: str = ""  # 渠道 Bot 绑定本局的一次性管理凭证
     room_password: str = ""  # 房间密码（空=开放）；玩家凭此进入游戏，替代后台 access_token
     room_token: str = ""  # 玩家凭房间密码换取的会话凭证（random secrets，校验通过后颁发）
-    private_log: dict[str, list[dict]] = field(default_factory=dict)  # user_id → 私聊历史
+    private_log: dict[str, list[dict[str, Any]]] = field(default_factory=dict)  # user_id → 私聊历史
     # 公开桌边问答与回合日志分离；正常 GM 上下文不会读取此字段。
     table_talk: list[TableTalkExchange] = field(default_factory=list)
 
@@ -158,10 +168,10 @@ class GameInstance:
     last_activity: str = ""
 
     # 谜题
-    puzzle_manager: object | None = None   # PuzzleManager 实例
+    puzzle_manager: PuzzleManager | None = None
 
     # 剧情追踪
-    plot_tracker: object | None = None     # PlotTracker 实例
+    plot_tracker: PlotTracker | None = None
 
     # 判定卡片：最近一次检定的结构化结果（前端渲染用）
     last_check: CheckResult | None = None
@@ -169,7 +179,7 @@ class GameInstance:
     # 当前判定阶段是否已生成结构化检定；幸运选择必须发生在 LLM 叙事之前。
     round_checks_prepared: bool = False
     # 进入判定阶段前的玩家状态；整轮撤回时用于退还本轮消耗的幸运。
-    round_start_snapshot: dict = field(default_factory=dict)
+    round_start_snapshot: PlayerRollbackSnapshot = field(default_factory=dict)
     # Death-save outcomes are keyed by round and player UID so narrative/API
     # retries reuse the same roll without leaking it into future rounds.
     death_save_outcomes: dict[str, dict[str, dict]] = field(default_factory=dict)
@@ -803,7 +813,7 @@ class GameInstance:
                 if cs.get("deceased"):
                     return False  # 死亡玩家不能行动
                 self.away_players.discard(user_id)
-            action_entry = {
+            action_entry: ActionRecord = {
                 "user_id": user_id, "text": action_text,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "selected_attribute": selected_attribute,
@@ -1115,11 +1125,11 @@ class GameInstance:
 
     # ---------- 序列化 --------------------------------------
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> GamePersistedState:
         """Return the stable persisted projection for this aggregate."""
         return GameStateCodec.encode(self)
 
-    def to_llm_view(self) -> dict:
+    def to_llm_view(self) -> GameContextView:
         """LLM 决策所需的精简状态视图。
 
         排除运行时元数据（health_events、total_tokens 等）和重复数据
@@ -1131,7 +1141,7 @@ class GameInstance:
         return project_legacy_game_context(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "GameInstance":
+    def from_dict(cls, data: Mapping[str, Any]) -> "GameInstance":
         """Reconstruct the aggregate from its persisted projection."""
         return GameStateCodec.decode(
             data,

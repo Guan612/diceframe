@@ -10,6 +10,7 @@ from typing import Any
 
 from src.content.contracts import ResourceRef, asset_local_id, canonical_id
 
+from .contracts import PluginContributionView, PluginManifest
 from .map_validation import (
     MAP_IMAGE_KINDS,
     MAP_KINDS,
@@ -57,7 +58,7 @@ class PluginContribution:
             local_id = re.sub(r"[^a-zA-Z0-9_-]", "_", self.key).lower().strip("_") or "asset"
         return ResourceRef(f"plugin:{self.plugin_id}", self.kind, local_id)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> PluginContributionView:
         return {
             "plugin_id": self.plugin_id,
             "plugin_name": self.plugin_name,
@@ -92,7 +93,7 @@ class ContributionRegistry:
         for item in kept:
             self._add(item)
 
-    def register_static_plugin(self, manifest: dict[str, Any], plugin_dir: Path) -> list[PluginContribution]:
+    def register_static_plugin(self, manifest: PluginManifest, plugin_dir: Path) -> list[PluginContribution]:
         plugin_type = str(manifest.get("plugin_type") or "")
         mapping = plugin_type_descriptor(plugin_type).get("contributes")
         if not mapping:
@@ -161,7 +162,7 @@ class ContributionRegistry:
         self._by_kind_key[(item.kind, lookup_key)] = item
 
 
-def validate_contributes(manifest: dict[str, Any], plugin_dir: Path) -> None:
+def validate_contributes(manifest: PluginManifest, plugin_dir: Path) -> None:
     registry = ContributionRegistry()
     registry.register_static_plugin(manifest, plugin_dir)
 
@@ -190,7 +191,7 @@ def _validate_pattern(pattern: str) -> None:
 
 
 def _contribution_from_path(
-    manifest: dict[str, Any],
+    manifest: PluginManifest,
     plugin_dir: Path,
     kind: str,
     path: Path,

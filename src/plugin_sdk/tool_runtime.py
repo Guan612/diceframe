@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, TextIO
 
-ToolHandler = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+from .contracts import JsonObject, ToolHandler
 
 
 @dataclass(frozen=True)
@@ -15,7 +15,7 @@ class _Tool:
     name: str
     title: str
     description: str
-    input_schema: dict[str, Any]
+    input_schema: JsonObject
     handler: ToolHandler
 
 
@@ -35,7 +35,7 @@ class ToolRuntime:
         name: str,
         title: str,
         description: str,
-        input_schema: dict[str, Any] | None = None,
+        input_schema: JsonObject | None = None,
     ) -> Callable[[ToolHandler], ToolHandler]:
         def register(handler: ToolHandler) -> ToolHandler:
             if name in self._tools:
@@ -71,7 +71,7 @@ class ToolRuntime:
             self.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
             self.stdout.flush()
 
-    def _dispatch(self, method: str, raw_params: Any) -> dict[str, Any]:
+    def _dispatch(self, method: str, raw_params: Any) -> JsonObject:
         params = raw_params if isinstance(raw_params, dict) else {}
         if method == "initialize":
             requested = int(params.get("protocol_version") or 0)

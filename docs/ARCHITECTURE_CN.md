@@ -61,6 +61,12 @@ Manifest 当前支持：`schema_version = 1`、`content_schema_version = 1 or 2`
 
 V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大小写、空格或非 ASCII ID 悄悄归一化。V2 locale 或内容校验失败时，目录 API 返回 `CONTENT_VALIDATION_FAILED`，不得省略损坏资源或回退到未本地化内容。应用内内容包导出器始终生成 Content V2 core + typed locale 布局；V1 全文副本只在导入适配器中支持。
 
+## Plugin 运行时扩展边界
+
+`src/plugin_host/support.py` 是插件类型、process mode、推导权限和 contribution mapping 的单一元数据来源。`src/plugin_host/descriptors.py` 负责将不可信 initialize payload 校验为 typed descriptor；`src/plugin_host/capabilities.py` 负责 RPC capability 初始化、查询和投影；`PluginHost` 保留 package、process、lifecycle、security 与兼容 facade 职责。
+
+新增合法 provider capability kind 只需插件实现、SDK 契约和测试，不修改 `PluginHost`。只有真正新增 plugin type 时，才评估 support descriptor、runtime initializer、permissions、cleanup 和对外 metadata。贡献路径见 `docs/plugins/EXTENDING_CN.md`。
+
 ## Migration 与 Compatibility
 
 `src/migrations/` 负责 persisted schema upgrade；`src/compat/` 负责 old external/runtime shape 到当前 canonical model 的兼容。V1 包通过适配器读取，不能把兼容分支散回正常业务逻辑。
@@ -74,6 +80,8 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 附属投影有独立 owner：`src/engine/game_state_codec.py` 负责稳定存档投影与重建，`src/engine/game_context_projector.py` 负责通用 LLM/展示视图；旧存档 payload 的 shape 归一化位于 `src/migrations/instance.py`，在构造聚合前对副本执行，不修改调用方输入。`GameInstance.to_dict()`、`from_dict()` 与 `to_llm_view()` 是兼容委托，不再实现这些投影。旧版属性修正、护甲求和和字符串技能默认值由独立的 `src/engine/legacy_game_projection.py` 提供，并由 `LegacyRulesetAdapter` 显式采用；Ruleset runtime 可以在通用投影之上追加自己的权威视图，但不能把具体 mechanics 写回通用 projector。
 
 这是第一轮 codec / projection / migration 边界抽取，不表示 generic state shape 已经终局化或完全去规则化。通用投影为兼容现有世界、存档与 prompt，仍保留 `hp`、`max_hp`、`class`、`race`、`level`、`attributes`、`equipment`、`skills`、`inventory` 等传统角色字段；这些 compatibility shape 后续仍可在不破坏存档和规则运行时契约的前提下继续收口。
+
+`src/engine/game_state_contracts.py` 声明存档顶层、通用上下文和玩家回滚快照的 typed contract。`ruleset_runtime`、`ruleset_state`、`adventure_binding` 扩展 payload、event payload 和 character extension fields 在 generic engine 内有意保持 opaque。新增持久化字段时，必须依次检查：`GameInstance` 权威字段 → `GamePersistedState` → codec encode/decode → migration/default 兼容 → 只在 LLM/UI 需要时才增加 projection → behavior regression。
 
 ## 应用更新边界
 

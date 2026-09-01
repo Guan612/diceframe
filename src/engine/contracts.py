@@ -18,15 +18,17 @@ class PlayerData(TypedDict, total=False):
 class ActionRecord(TypedDict, total=False):
     user_id: str
     text: str
+    timestamp: str
     selected_attribute: str
     selected_skill: str
     target_text: str
     source: str
     dice_pending: bool
     dice_system: str
-    dice_value: int
+    dice_roll_source: str
+    dice_value: int | None
     dice_rolls: list[int]
-    check_request: dict[str, Any]
+    check_request: dict[str, Any] | None
     combat_outcome: dict[str, Any]
     revision_count: int
 

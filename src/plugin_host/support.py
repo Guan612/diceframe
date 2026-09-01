@@ -6,7 +6,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from .contracts import (
+    PluginSupportView,
+    PluginTypeDescriptor,
+    PluginTypeListView,
+)
 
 # 运行方式
 PROCESS_MODE_STATIC = "static"                # 无进程：内容包/主题
@@ -55,7 +59,7 @@ MAP_CONTRIBUTION_FIELDS = frozenset({
     "map_backgrounds",
 })
 
-PLUGIN_TYPE_SUPPORT: dict[str, dict[str, Any]] = {
+PLUGIN_TYPE_SUPPORT: dict[str, PluginTypeDescriptor] = {
     "channel-adapter": {
         "level": "supported",
         "summary": "可作为独立进程连接聊天平台并调用 DiceFrame HTTP API",
@@ -139,7 +143,7 @@ PLUGIN_TYPE_SUPPORT: dict[str, dict[str, Any]] = {
     },
 }
 
-_DEFAULT_DESCRIPTOR: dict[str, Any] = {
+_DEFAULT_DESCRIPTOR: PluginTypeDescriptor = {
     "level": "unsupported",
     "summary": "DiceFrame 不识别此插件类型",
     "process_mode": PROCESS_MODE_NONE,
@@ -160,7 +164,7 @@ RPC_PLUGIN_TYPES = frozenset(
 )
 
 
-def plugin_type_support(plugin_type: str) -> dict[str, Any]:
+def plugin_type_support(plugin_type: str) -> PluginSupportView:
     """返回面向商店/前端的 support level + summary（兼容旧调用方）。"""
     descriptor = PLUGIN_TYPE_SUPPORT.get(plugin_type)
     if descriptor:
@@ -168,17 +172,17 @@ def plugin_type_support(plugin_type: str) -> dict[str, Any]:
     return {"level": "unsupported", "summary": "DiceFrame 不识别此插件类型"}
 
 
-def plugin_type_descriptor(plugin_type: str) -> dict[str, Any]:
+def plugin_type_descriptor(plugin_type: str) -> PluginTypeDescriptor:
     """返回完整 descriptor 副本；未知类型返回默认 descriptor。"""
     descriptor = PLUGIN_TYPE_SUPPORT.get(plugin_type)
     if descriptor:
-        return dict(descriptor)
-    return dict(_DEFAULT_DESCRIPTOR)
+        return descriptor.copy()
+    return _DEFAULT_DESCRIPTOR.copy()
 
 
-def list_plugin_types() -> list[dict[str, Any]]:
+def list_plugin_types() -> list[PluginTypeListView]:
     """返回全部插件类型（按 filter_order 升序），供前端筛选/展示数据驱动。"""
-    items = []
+    items: list[PluginTypeListView] = []
     for type_id, descriptor in PLUGIN_TYPE_SUPPORT.items():
         items.append({
             "id": type_id,

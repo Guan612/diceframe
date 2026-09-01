@@ -6,6 +6,7 @@ knowing which compatibility steps are needed for a loaded instance.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 import logging
 from typing import Any
@@ -29,13 +30,13 @@ def _referenced_player_ids(log: list[Any]) -> set[str]:
     return referenced
 
 
-def normalize_game_state_payload(data: dict[str, Any]) -> dict[str, Any]:
+def normalize_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Return a normalized copy of a persisted game-state payload.
 
     Ghost-player cleanup intentionally requires historical evidence. Waiting
     rooms and unplayed multiplayer sessions therefore keep every participant.
     """
-    payload = deepcopy(data)
+    payload = deepcopy(dict(data))
     players = payload.get("players")
     log = payload.get("log")
     if not isinstance(players, dict) or len(players) <= 1 or not isinstance(log, list) or not log:

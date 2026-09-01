@@ -17,20 +17,34 @@ import sys
 import tempfile
 import time
 import zipfile
-from dataclasses import dataclass, field
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from .capabilities import (
+    clear_runtime_capabilities,
+    find_provider_plugin,
+    initialize_runtime_capabilities,
+    list_runtime_bridge_extensions,
+    list_runtime_tools,
+    provider_capability,
+)
 from .content import PluginContentCatalog, safe_id_part
+from .contracts import (
+    AIProviderResolver,
+    ListedBridgeExtensionDescriptor,
+    ListedToolDescriptor,
+    PluginContributionView,
+    PluginPublicDetail,
+    PluginStoppedCallback,
+)
 from .descriptors import (
     BRIDGE_EXTENSION_STAGES,
     normalize_bridge_outputs,
-    validate_bridge_extension_descriptors,
-    validate_provider_capabilities,
-    validate_tool_descriptors,
 )
 from .marketplace import PluginMarketplace
 from .mirrors import MirrorManager
+from .models import PluginRuntime
 from src.version import needs_core_update
 from .package_limits import (
     MAX_PLUGIN_ARCHIVE_FILES,
@@ -89,26 +103,6 @@ _SAFE_PARENT_ENV = {
 }
 
 
-@dataclass
-class PluginRuntime:
-    manifest: dict[str, Any]
-    schema: dict[str, Any]
-    directory: Path
-    config: dict[str, Any] = field(default_factory=dict)
-    secrets: dict[str, str] = field(default_factory=dict)
-    process: asyncio.subprocess.Process | None = None
-    monitor_task: asyncio.Task | None = None
-    rpc_client: JsonRpcStdioClient | None = None
-    tools: list[dict[str, Any]] = field(default_factory=list)
-    bridge_extensions: list[dict[str, Any]] = field(default_factory=list)
-    provider_capabilities: list[dict[str, Any]] = field(default_factory=list)
-    status: str = "disabled"
-    error: str = ""
-    started_at: float = 0.0
-    restart_delay_sec: float = 3.0
-    source: str = "user"
-
-
 async def _rename_dir_with_retry(src: Path, dst: Path, *, attempts: int = 3, delay: float = 0.3) -> None:
     """重命名目录；Windows 下杀毒软件实时扫描可能短暂锁定目录，失败时小间隔重试。"""
     for attempt in range(1, attempts + 1):
@@ -129,9 +123,9 @@ class PluginHost:
         *,
         builtin_dir: Path | None = None,
         base_env: dict[str, str] | None = None,
-        on_plugin_stopped=None,
-        hub_client=None,
-        ai_provider_resolver=None,
+        on_plugin_stopped: PluginStoppedCallback | None = None,
+        hub_client: Any | None = None,
+        ai_provider_resolver: AIProviderResolver | None = None,
     ) -> None:
         self.builtin_dir = builtin_dir
         self.plugins_dir = plugins_dir
@@ -155,7 +149,7 @@ class PluginHost:
         # 旧插件进程读到世代变化/缺失即退出，避免孤儿进程残留导致开关状态与真实进程不一致。
         self._host_generation = secrets.token_hex(8)
 
-    def discover(self) -> list[dict[str, Any]]:
+    def discover(self) -> list[PluginPublicDetail]:
         self.plugins.clear()
         # 先内置再用户目录，用户目录同名覆盖内置；runtime.source 记录来源。
         for source, base_dir in (("builtin", self.builtin_dir), ("user", self.plugins_dir)):
@@ -184,7 +178,7 @@ class PluginHost:
                 self._register_contributions(plugin_id, runtime)
         return self.list_public()
 
-    def list_public(self) -> list[dict[str, Any]]:
+    def list_public(self) -> list[PluginPublicDetail]:
         return [self.public_detail(plugin_id) for plugin_id in self.plugins]
 
     def plugin_type_of(self, plugin_id: str) -> str:
@@ -192,7 +186,7 @@ class PluginHost:
         runtime = self.plugins.get(plugin_id)
         return self._plugin_type(runtime.manifest) if runtime else ""
 
-    def public_detail(self, plugin_id: str) -> dict[str, Any]:
+    def public_detail(self, plugin_id: str) -> PluginPublicDetail:
         runtime = self._require(plugin_id)
         if runtime.process and runtime.process.returncode is not None and runtime.status == "running":
             runtime.status = "failed"
@@ -229,22 +223,11 @@ class PluginHost:
             "docs": runtime.manifest.get("docs", ""),
         }
 
-    def list_contributions(self, kind: str = "") -> list[dict[str, Any]]:
+    def list_contributions(self, kind: str = "") -> list[PluginContributionView]:
         return [item.to_dict() for item in self.contributions.list(kind)]
 
-    def list_tools(self) -> list[dict[str, Any]]:
-        tools: list[dict[str, Any]] = []
-        for plugin_id, runtime in self.plugins.items():
-            if self._plugin_type(runtime.manifest) != "tool" or runtime.status != "running":
-                continue
-            for descriptor in runtime.tools:
-                tools.append({
-                    **descriptor,
-                    "plugin_id": plugin_id,
-                    "plugin_name": str(runtime.manifest.get("name") or plugin_id),
-                    "tool_ui": str(runtime.manifest.get("tool_ui") or "").strip(),
-                })
-        return tools
+    def list_tools(self) -> list[ListedToolDescriptor]:
+        return list_runtime_tools(self.plugins)
 
     async def call_tool(
         self,
@@ -282,15 +265,7 @@ class PluginHost:
 
     def find_provider(self, capability: str) -> str | None:
         """返回当前运行中、声明了指定 capability 的 provider 插件 id。"""
-        capability = str(capability or "").strip()
-        if not capability:
-            return None
-        for plugin_id, runtime in self.plugins.items():
-            if self._plugin_type(runtime.manifest) != "provider" or runtime.status != "running":
-                continue
-            if any(item.get("kind") == capability for item in runtime.provider_capabilities):
-                return plugin_id
-        return None
+        return find_provider_plugin(self.plugins, capability)
 
     async def call_provider(
         self,
@@ -307,10 +282,7 @@ class PluginHost:
             raise ValueError("该插件不是 provider 类型")
         if runtime.status != "running" or not runtime.rpc_client:
             raise ValueError("Provider 插件尚未运行或初始化失败")
-        descriptor = next(
-            (item for item in runtime.provider_capabilities if item.get("kind") == capability),
-            None,
-        )
+        descriptor = provider_capability(runtime, capability)
         if not descriptor:
             raise KeyError(f"插件 {plugin_id} 未声明 capability：{capability}")
         method_name = str(descriptor.get("methods", {}).get(method_alias) or "")
@@ -331,21 +303,8 @@ class PluginHost:
             raise
         return result
 
-    def list_bridge_extensions(self) -> list[dict[str, Any]]:
-        extensions: list[dict[str, Any]] = []
-        for plugin_id, runtime in self.plugins.items():
-            if self._plugin_type(runtime.manifest) != "bot-extension" or runtime.status != "running":
-                continue
-            for descriptor in runtime.bridge_extensions:
-                extensions.append({
-                    **descriptor,
-                    "plugin_id": plugin_id,
-                    "plugin_name": str(runtime.manifest.get("name") or plugin_id),
-                })
-        return sorted(
-            extensions,
-            key=lambda item: (-int(item.get("priority", 0)), str(item.get("plugin_id")), str(item.get("name"))),
-        )
+    def list_bridge_extensions(self) -> list[ListedBridgeExtensionDescriptor]:
+        return list_runtime_bridge_extensions(self.plugins)
 
     async def apply_bridge_extensions(self, stage: str, payload: dict[str, Any]) -> dict[str, Any]:
         stage = str(stage or "").strip()
@@ -544,7 +503,13 @@ class PluginHost:
                 total += 1
         return total
 
-    async def install_from_zip(self, payload: bytes, *, overwrite: bool = False, allow_any_root: bool = False) -> dict[str, Any]:
+    async def install_from_zip(
+        self,
+        payload: bytes,
+        *,
+        overwrite: bool = False,
+        allow_any_root: bool = False,
+    ) -> PluginPublicDetail:
         if not payload:
             raise ValueError("插件包为空")
         if len(payload) > MAX_PLUGIN_PACKAGE_BYTES:
@@ -741,7 +706,11 @@ class PluginHost:
         except Exception:
             self.logger.exception("插件商店自动更新失败")
 
-    async def update_config(self, plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+    async def update_config(
+        self,
+        plugin_id: str,
+        changes: dict[str, Any],
+    ) -> PluginPublicDetail:
         runtime = self._require(plugin_id)
         properties = runtime.schema.get("properties", {})
         new_config = dict(runtime.config)
@@ -802,7 +771,7 @@ class PluginHost:
         args = expanded[1:]
         kwargs: dict[str, Any] = {}
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
         uses_rpc = self._plugin_type(runtime.manifest) in _RPC_PLUGIN_TYPES
         if uses_rpc:
             kwargs.update({
@@ -823,13 +792,11 @@ class PluginHost:
                     },
                     timeout=5,
                 )
-                plugin_type = self._plugin_type(runtime.manifest)
-                if plugin_type == "tool":
-                    runtime.tools = validate_tool_descriptors(initialized)
-                elif plugin_type == "provider":
-                    runtime.provider_capabilities = validate_provider_capabilities(initialized)
-                else:
-                    runtime.bridge_extensions = validate_bridge_extension_descriptors(initialized)
+                initialize_runtime_capabilities(
+                    self._plugin_type(runtime.manifest),
+                    runtime,
+                    initialized,
+                )
             runtime.started_at = time.monotonic()
             runtime.status = "running"
             self.logger.info("插件 %s 已启动，PID=%s", plugin_id, runtime.process.pid)
@@ -849,9 +816,7 @@ class PluginHost:
                     await process.wait()
             runtime.process = None
             runtime.rpc_client = None
-            runtime.tools = []
-            runtime.bridge_extensions = []
-            runtime.provider_capabilities = []
+            clear_runtime_capabilities(runtime)
             runtime.status, runtime.error = "failed", str(exc)
             self.logger.exception("插件 %s 启动失败", plugin_id)
 
@@ -996,9 +961,7 @@ class PluginHost:
                 await process.wait()
         runtime.process = None
         runtime.rpc_client = None
-        runtime.tools = []
-        runtime.bridge_extensions = []
-        runtime.provider_capabilities = []
+        clear_runtime_capabilities(runtime)
         runtime.status = self._status_for_enabled(runtime)
         if runtime.status != "active":
             self.contributions.clear_plugin(plugin_id)
@@ -1025,9 +988,7 @@ class PluginHost:
                 await process.wait()
         runtime.process = None
         runtime.rpc_client = None
-        runtime.tools = []
-        runtime.bridge_extensions = []
-        runtime.provider_capabilities = []
+        clear_runtime_capabilities(runtime)
         runtime.status = "failed"
         runtime.error = error
 
@@ -1046,7 +1007,7 @@ class PluginHost:
             with contextlib.suppress(OSError):
                 self._host_generation_path(plugin_id).unlink()
 
-    async def rescan(self) -> list[dict[str, Any]]:
+    async def rescan(self) -> list[PluginPublicDetail]:
         await self.cleanup()
         discovered = self.discover()
         await self.start_enabled()
@@ -1071,9 +1032,7 @@ class PluginHost:
         runtime.error = f"插件进程已退出，code={code}"
         runtime.process = None
         runtime.rpc_client = None
-        runtime.tools = []
-        runtime.bridge_extensions = []
-        runtime.provider_capabilities = []
+        clear_runtime_capabilities(runtime)
         if alive_sec >= _RESTART_STABLE_SECONDS:
             runtime.restart_delay_sec = _RESTART_BASE_DELAY
         delay = runtime.restart_delay_sec
@@ -1081,7 +1040,12 @@ class PluginHost:
             runtime.restart_delay_sec = min(runtime.restart_delay_sec * 2, _RESTART_MAX_DELAY)
         self.logger.warning("插件 %s 意外退出，%.0f 秒后尝试自动重启，code=%s", plugin_id, delay, code)
         await asyncio.sleep(delay)
-        if self.plugins.get(plugin_id) is runtime and runtime.config.get("enabled") and runtime.status == "failed":
+        if (
+            runtime is not None
+            and self.plugins.get(plugin_id) is runtime
+            and runtime.config.get("enabled")
+            and runtime.status == "failed"
+        ):
             await self.start(plugin_id, reset_backoff=False)
 
     def migrate_config(self, plugin_id: str, legacy: dict[str, Any]) -> None:
@@ -1329,11 +1293,11 @@ class PluginHost:
         return "stopped" if self._has_entrypoint(runtime.manifest) else "active"
 
     @staticmethod
-    def _plugin_type(manifest: dict[str, Any]) -> str:
+    def _plugin_type(manifest: Mapping[str, object]) -> str:
         return str(manifest.get("plugin_type") or "").strip()
 
     @staticmethod
-    def _has_entrypoint(manifest: dict[str, Any]) -> bool:
+    def _has_entrypoint(manifest: Mapping[str, object]) -> bool:
         command = manifest.get("entrypoint")
         return isinstance(command, list) and bool(command)
 

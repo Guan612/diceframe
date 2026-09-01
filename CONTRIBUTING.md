@@ -7,7 +7,7 @@
 - 使用前先查阅 [README](README.md) 和 [用户手册](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/guide.md)。
 - Bug、需求和架构讨论优先提交到 [GitHub Issues](https://github.com/diceframe/diceframe/issues)。
 - 代码或文档改动请发 Pull Request，并在描述中说明动机、行为变化和验证方式。
-- 插件和内容包请遵循 [插件开发指南](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md) 及 [插件审核规则](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md)。
+- 插件和内容包请先看本仓库的 [Plugin 扩展路径](docs/plugins/EXTENDING_CN.md)，并遵循 [插件开发指南](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md) 及 [插件审核规则](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md)。
 - Android 客户端在独立仓库 [diceframe-mobile](https://github.com/diceframe/diceframe-mobile)，其 Bug、需求与代码贡献请提交到该仓库；APK 等发布物见 [Releases](https://github.com/diceframe/diceframe-mobile/releases)。
 
 ## 架构与工程规范
