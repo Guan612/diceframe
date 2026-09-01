@@ -3,23 +3,35 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.llm.parser import sanitize_narration
 from src.rulesets.contracts import GameDetailProjectionRuntime
+from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.services._common import _GAME_KEY_SEP
 from src.webui.services.ruleset_rest import public_rest_session
-
-if TYPE_CHECKING:
-    from src.webui.api import WebAPI
 
 logger = logging.getLogger("trpg")
 
 
-def projected_rule_id(api: "WebAPI", instance: Any) -> str:
+@dataclass(frozen=True)
+class GameQueryDependencies:
+    list_instances: Callable[[], list[Any]]
+    get_instance: Callable[[tuple[str, ...]], Any | None]
+    parse_game_key: Callable[[str], tuple[str, ...]]
+    load_world_template: Callable[[str], dict[str, Any] | None] | None
+    load_rule_for_game: Callable[[Any], Any | None]
+    ruleset_registry: RulesetRuntimeRegistry
+
+
+def projected_rule_id(
+    dependencies: GameQueryDependencies,
+    instance: Any,
+) -> str:
     """Resolve a legacy save's effective rule ID without modifying the save."""
 
     rule_id = str(getattr(instance, "rule_id", "") or "").strip()
@@ -27,8 +39,8 @@ def projected_rule_id(api: "WebAPI", instance: Any) -> str:
         return rule_id
     try:
         template = (
-            api._handler._load_world_template(str(instance.world_id or ""))
-            if api._handler
+            dependencies.load_world_template(str(instance.world_id or ""))
+            if dependencies.load_world_template
             else None
         )
         rule_id = str((template or {}).get("default_rule") or "").strip()
@@ -41,15 +53,15 @@ def projected_rule_id(api: "WebAPI", instance: Any) -> str:
     return rule_id or "freeform_fantasy"
 
 
-def list_games(api: "WebAPI") -> dict[str, Any]:
+def list_games(dependencies: GameQueryDependencies) -> dict[str, Any]:
     active = []
-    for instance in api._reg.list_all():
+    for instance in dependencies.list_instances():
         multiplayer = instance.multiplayer_status()
         active.append({
             "game_key": _GAME_KEY_SEP.join(instance.game_key),
             "world_id": instance.world_id,
             "world_name": instance.world_name,
-            "rule_id": projected_rule_id(api, instance),
+            "rule_id": projected_rule_id(dependencies, instance),
             "scene_image": dict(getattr(instance, "scene_image", {}) or {}),
             "map_background": dict(getattr(instance, "map_background", {}) or {}),
             "group_name": instance.group_name,
@@ -84,14 +96,17 @@ def list_games(api: "WebAPI") -> dict[str, Any]:
     return {"games": active, "total": len(active)}
 
 
-def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
-    instance = api._reg.get(api._parse_key(game_key))
+def game_detail(
+    dependencies: GameQueryDependencies,
+    game_key: str,
+) -> dict[str, Any] | None:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return None
     detail = {
         "game_key": _GAME_KEY_SEP.join(instance.game_key),
         "world_id": instance.world_id or "",
-        "rule_id": projected_rule_id(api, instance),
+        "rule_id": projected_rule_id(dependencies, instance),
         "scene_image": dict(getattr(instance, "scene_image", {}) or {}),
         "map_background": dict(getattr(instance, "map_background", {}) or {}),
         "world_name": instance.world_name,
@@ -147,15 +162,15 @@ def game_detail(api: "WebAPI", game_key: str) -> dict[str, Any] | None:
     }
     if getattr(instance, "ruleset_runtime", None):
         binding = dict(instance.ruleset_runtime)
-        rule = api._load_rule_for_game(instance)
+        rule = dependencies.load_rule_for_game(instance)
         runtime = None
         if rule is not None:
             try:
                 binding = {
                     **binding,
-                    **api._ruleset_registry.describe(rule.template).to_dict(),
+                    **dependencies.ruleset_registry.describe(rule.template).to_dict(),
                 }
-                runtime = api._ruleset_registry.resolve(rule.template)
+                runtime = dependencies.ruleset_registry.resolve(rule.template)
             except ValueError:
                 logger.warning(
                     "对局规则运行时元数据不可用: %s",
@@ -231,8 +246,11 @@ def _public_recap(instance: Any) -> dict[str, Any]:
     }
 
 
-def multiplayer_status(api: "WebAPI", game_key: str) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+def multiplayer_status(
+    dependencies: GameQueryDependencies,
+    game_key: str,
+) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "error": "游戏不存在"}
     return {"ok": True, **instance.multiplayer_status()}
@@ -251,17 +269,22 @@ def player_context(
     }
 
 
-def private_log(api: "WebAPI", game_key: str) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+def private_log(
+    dependencies: GameQueryDependencies,
+    game_key: str,
+) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "error": "游戏不存在"}
     return {"ok": True, "messages": _private_log_messages(instance)[-50:]}
 
 
 def private_log_for_user(
-    api: "WebAPI", game_key: str, user_id: str,
+    dependencies: GameQueryDependencies,
+    game_key: str,
+    user_id: str,
 ) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "error": "游戏不存在"}
     if user_id not in instance.players:
@@ -272,10 +295,13 @@ def private_log_for_user(
     }
 
 
-def table_talk(api: "WebAPI", game_key: str) -> dict[str, Any]:
+def table_talk(
+    dependencies: GameQueryDependencies,
+    game_key: str,
+) -> dict[str, Any]:
     """Return the bounded public table-talk channel, separate from round logs."""
 
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "error": "游戏不存在"}
     exchanges = [
@@ -317,9 +343,11 @@ def _private_log_messages(
 
 
 def game_health(
-    api: "WebAPI", game_key: str, include_resolved: bool = False,
+    dependencies: GameQueryDependencies,
+    game_key: str,
+    include_resolved: bool = False,
 ) -> dict[str, Any]:
-    instance = api._reg.get(api._parse_key(game_key))
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return {"ok": False, "error": "game not found"}
     return health_payload(instance, include_resolved)

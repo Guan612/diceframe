@@ -3,6 +3,7 @@ import json
 import pytest
 
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
+from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.routes.games import _should_rebind_player_session
 from src.webui.services import (
     characters,
@@ -47,6 +48,17 @@ def _game_master(registry: GameRegistry) -> game_master.GameMasterService:
         save_instance=registry.save,
         load_rule=lambda _instance: None,
     ))
+
+
+def _game_queries(registry: GameRegistry) -> game_queries.GameQueryDependencies:
+    return game_queries.GameQueryDependencies(
+        list_instances=registry.list_all,
+        get_instance=registry.get,
+        parse_game_key=lambda game_key: tuple(game_key.split(_GAME_KEY_SEP)),
+        load_world_template=None,
+        load_rule_for_game=lambda _instance: None,
+        ruleset_registry=RulesetRuntimeRegistry(),
+    )
 
 
 @pytest.mark.asyncio
@@ -108,7 +120,7 @@ async def test_gm_private_message_appends_private_log(tmp_path):
     result = await _game_master(registry).private_message(
         _GAME_KEY_SEP.join(key), "p1", "你注意到门后有冷风。"
     )
-    log = game_queries.private_log(DummyAPI(registry), _GAME_KEY_SEP.join(key))
+    log = game_queries.private_log(_game_queries(registry), _GAME_KEY_SEP.join(key))
 
     assert result["ok"]
     assert inst.private_log["p1"][0]["source"] == "gm"
@@ -127,7 +139,7 @@ def test_private_log_for_user_only_returns_own_messages(tmp_path):
     registry.register(inst)
 
     log = game_queries.private_log_for_user(
-        DummyAPI(registry), _GAME_KEY_SEP.join(key), "p1",
+        _game_queries(registry), _GAME_KEY_SEP.join(key), "p1",
     )
 
     assert log["ok"] is True

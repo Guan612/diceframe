@@ -126,6 +126,17 @@ class WebAPI:
         self._ruleset_registry: RulesetRuntimeRegistry = (
             ruleset_registry or handler_rulesets or build_default_ruleset_registry()
         )
+        legacy_world_loader = getattr(handler, "_load_world_template", None)
+        self._game_query_dependencies = game_queries.GameQueryDependencies(
+            list_instances=self._reg.list_all,
+            get_instance=self._reg.get,
+            parse_game_key=_parse_game_key,
+            load_world_template=(
+                legacy_world_loader if callable(legacy_world_loader) else None
+            ),
+            load_rule_for_game=self._load_rule_for_game,
+            ruleset_registry=self._ruleset_registry,
+        )
         self._llm_client = llm_client
         self._worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
         self._builtin_adventures_dir = (
@@ -348,7 +359,10 @@ class WebAPI:
                 create_player=lambda *args, **kwargs: self.create_player(*args, **kwargs),
                 cleanup_orphan_game_templates=self.cleanup_orphan_game_templates,
                 refresh_lorebook_index=self._refresh_game_lorebook_index,
-                project_rule_id=lambda instance: game_queries.projected_rule_id(self, instance),
+                project_rule_id=lambda instance: game_queries.projected_rule_id(
+                    self._game_query_dependencies,
+                    instance,
+                ),
                 clean_public_narration=game_queries.clean_public_narration,
             )
         )
@@ -727,7 +741,10 @@ class WebAPI:
         return self._load_rule_by_id(rule_id, language)
 
     def _project_game_rule_id(self, instance) -> str:
-        return game_queries.projected_rule_id(self, instance)
+        return game_queries.projected_rule_id(
+            self._game_query_dependencies,
+            instance,
+        )
 
     def _load_rule_by_id(self, rule_id: str, language: str = "") -> RuleSystem | None:
         rule_id = (rule_id or "").strip()
@@ -751,10 +768,10 @@ class WebAPI:
     # ---- 游戏总览 ----
 
     def list_games(self) -> dict[str, Any]:
-        return game_queries.list_games(self)
+        return game_queries.list_games(self._game_query_dependencies)
 
     def game_detail(self, game_key: str) -> dict[str, Any] | None:
-        return game_queries.game_detail(self, game_key)
+        return game_queries.game_detail(self._game_query_dependencies, game_key)
 
     def get_game_instance(self, game_key: str):
         """Resolve a public game key without exposing registry/parser internals."""
@@ -805,7 +822,10 @@ class WebAPI:
         return self._bot_extensions.bridge_card_path(name)
 
     def multiplayer_status(self, game_key: str) -> dict[str, Any]:
-        return game_queries.multiplayer_status(self, game_key)
+        return game_queries.multiplayer_status(
+            self._game_query_dependencies,
+            game_key,
+        )
 
     def player_context(
         self, *, preview: bool = False, delegate: bool = False, user_id: str = "",
@@ -877,16 +897,24 @@ class WebAPI:
         return await turns.advance_round(self, game_key, actor_uid, **kwargs)
 
     def private_log(self, game_key: str) -> dict[str, Any]:
-        return game_queries.private_log(self, game_key)
+        return game_queries.private_log(self._game_query_dependencies, game_key)
 
     def private_log_for_user(self, game_key: str, user_id: str) -> dict[str, Any]:
-        return game_queries.private_log_for_user(self, game_key, user_id)
+        return game_queries.private_log_for_user(
+            self._game_query_dependencies,
+            game_key,
+            user_id,
+        )
 
     def table_talk(self, game_key: str) -> dict[str, Any]:
-        return game_queries.table_talk(self, game_key)
+        return game_queries.table_talk(self._game_query_dependencies, game_key)
 
     def game_health(self, game_key: str, include_resolved: bool = False) -> dict[str, Any]:
-        return game_queries.game_health(self, game_key, include_resolved)
+        return game_queries.game_health(
+            self._game_query_dependencies,
+            game_key,
+            include_resolved,
+        )
 
     async def set_solo_mode(self, game_key: str, solo: bool) -> dict[str, Any]:
         return await self._game_controls.set_solo_mode(game_key, solo)
