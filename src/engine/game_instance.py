@@ -109,7 +109,7 @@ class GameInstance:
     """
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
-    instance_schema_version: int = 2
+    instance_schema_version: int = 3
     run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
     memory_namespace: str = ""
     economy: dict[str, Any] = field(default_factory=dict)
@@ -258,25 +258,27 @@ class GameInstance:
         if not isinstance(self.economy, dict) or not self.economy:
             self.economy = self._fresh_economy_state()
         else:
-            self.economy.setdefault("schema_version", 1)
+            self.economy.setdefault("schema_version", 2)
             self.economy.setdefault("run_id", self.run_id)
             self.economy.setdefault("next_sequence", 1)
             self.economy.setdefault("proposals", [])
             self.economy.setdefault("transactions", [])
             self.economy.setdefault("idempotency_records", {})
             self.economy.setdefault("effect_groups", [])
+            self.economy.setdefault("external_effects_outbox", [])
             self.economy.setdefault("outcomes", [])
             self.economy.setdefault("decision_revision", 0)
 
     def _fresh_economy_state(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "run_id": self.run_id,
             "next_sequence": 1,
             "proposals": [],
             "transactions": [],
             "idempotency_records": {},
             "effect_groups": [],
+            "external_effects_outbox": [],
             "outcomes": [],
             "decision_revision": 0,
         }
@@ -1004,11 +1006,19 @@ class GameInstance:
     async def advance_round(self) -> bool:
         """显式推进回合。未行动的存活玩家标记为已就绪。"""
         async with self._lock:
+            from src.engine.economy import has_pending_economy_decision
+
+            if has_pending_economy_decision(self):
+                return False
             return self._do_advance_locked()
 
     async def try_advance(self) -> bool:
         """原子推进：检查条件 + 推进在同一个锁内完成，消除 TOCTOU 竞态。"""
         async with self._lock:
+            from src.engine.economy import has_pending_economy_decision
+
+            if has_pending_economy_decision(self):
+                return False
             if self.state != GameState.ACTIVE_ACTION:
                 return False
             if not self.should_advance():

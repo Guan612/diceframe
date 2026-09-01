@@ -424,7 +424,8 @@ class GameLifecycle:
         async with transition_lock:
             current = self.registry.get(instance.game_key) or instance
             async with current._process_lock:
-                return await self._replace_run(current, preserve_players=False)
+                async with current._lock:
+                    return await self._replace_run(current, preserve_players=False)
 
     async def _replace_run(
         self,
@@ -437,23 +438,9 @@ class GameLifecycle:
         )
         await self._start_reset_instance(candidate)
         candidate.record_llm_usage(calls=1)
-        async with previous._lock:
-            if self.registry.get(previous.game_key) is not previous:
-                raise RuntimeError("对局已在重开过程中发生变化，请刷新后重试")
-            if preserve_players:
-                players = copy.deepcopy(previous.players)
-                for pdata in players.values():
-                    pdata["character_sheet"] = reset_character_for_restart(
-                        pdata.get("character_sheet", {})
-                    )
-                candidate.replace_players(players)
-                # Ruleset projections may depend on the refreshed character
-                # set. Rebuild them immediately before the atomic swap.
-                self._initialize_ruleset_run(
-                    candidate,
-                    preserve_characters=True,
-                )
-            await self.registry.replace_current(previous, candidate)
+        if self.registry.get(previous.game_key) is not previous:
+            raise RuntimeError("对局已在重开过程中发生变化，请刷新后重试")
+        await self.registry.replace_current(previous, candidate)
         await self._clear_session_memory(previous)
         return candidate
 
@@ -467,7 +454,11 @@ class GameLifecycle:
             if not current.players:
                 raise ValueError("重开世界需要至少 1 名角色")
             async with current._process_lock:
-                return await self._replace_run(current, preserve_players=True)
+                # Freeze every old-run aggregate write through the atomic swap.
+                # A waiter holding a stale reference resumes afterwards and is
+                # rejected by its registry-identity fence.
+                async with current._lock:
+                    return await self._replace_run(current, preserve_players=True)
 
     async def _start_reset_instance(self, instance: GameInstance) -> str:
         """Resume the gameplay stack already bound to this save."""

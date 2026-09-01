@@ -2148,5 +2148,6 @@ export const ja = {
     no_previous_round: '巻き戻せる前のラウンドがありません',
     invalid_viewer: '視点が無効です',
     world_not_found: 'ワールドが存在しません',
+    economy_decision_pending: '保留中の経済提案を処理してから物語を続けてください。',
   },
 } as const

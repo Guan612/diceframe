@@ -196,6 +196,9 @@ class WebUIBootstrap:
         recovered = await subsystems.registry.recover_all()
         if recovered:
             self.logger.info("恢复了 %d 个存档", len(recovered))
+            delivered = await app["api"].recover_economy_outboxes(recovered)
+            if delivered:
+                self.logger.info("恢复了 %d 个对局的经济外部效果", delivered)
         removed_templates = app["api"].cleanup_orphan_game_templates()
         if removed_templates:
             self.logger.info(

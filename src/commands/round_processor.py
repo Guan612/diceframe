@@ -50,7 +50,11 @@ from src.commands.state_recap import snapshot_public_player_state
 from src.commands.state_update_applier import discard_unresolved_player_damage
 from src.commands.tag_summary import summarize_tags
 from src.engine.constants import COMBAT_INTENT_KEYWORDS
-from src.engine.economy import economy_revision, queue_effect_group
+from src.engine.economy import (
+    economy_revision,
+    has_pending_economy_decision,
+    queue_effect_group,
+)
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
 from src.imagegen import (
@@ -292,6 +296,9 @@ class RoundProcessor:
     async def process_round(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         instance = self.registry.get(instance.game_key)
         if not instance or instance.state != GameState.ACTIVE_JUDGMENT:
+            return "", None
+        if has_pending_economy_decision(instance):
+            logger.info("等待经济提案结算，暂不生成叙事: %s", instance.game_key)
             return "", None
         await self.prepare_round_checks_ai(instance)
         if instance.pending_luck_checks():

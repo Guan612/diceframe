@@ -338,7 +338,20 @@ async def api_payment_resolve(request: web.Request) -> web.Response:
     result = await api.resolve_payment(
         gk, payment_id, bool(body.get("accepted")), session_uid
     )
-    return web.json_response(result)
+    code = str(result.get("code") or "")
+    status = (
+        200 if result.get("ok")
+        else 404 if code in {"NOT_FOUND", "GAME_NOT_FOUND", "PROPOSAL_NOT_FOUND"}
+        else 403 if code in {"FORBIDDEN", "PAYMENT_FORBIDDEN"}
+        else 409 if code in {
+            "ALREADY_RESOLVED",
+            "STALE_RUN",
+            "EFFECT_COMMIT_FAILED",
+            "INSUFFICIENT_FUNDS",
+        }
+        else 400
+    )
+    return web.json_response(result, status=status)
 
 
 async def api_swipe(request: web.Request) -> web.Response:

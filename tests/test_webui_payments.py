@@ -10,6 +10,7 @@ import pytest
 
 from src.commands.game_handler import GameHandler
 from src.commands.tag_parser import parse_tag_state
+from src.engine.economy import queue_effect_group
 from src.engine.game_instance import GameRegistry
 from src.engine.health import record_health_event
 from src.llm.client import LLMResponse
@@ -245,7 +246,29 @@ async def test_apply_state_update_creates_pending_payment(web_api):
 
 
 @pytest.mark.asyncio
-async def test_repeated_narrative_reward_cause_is_idempotent_across_rounds(web_api):
+async def test_same_reward_emission_retry_is_idempotent(web_api):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    result = await api.create_game(
+        "template_world", "模板世界",
+        players=[{"character_name": "艾琳", "attributes": {"str": 12}, "gold": 30}],
+    )
+    inst = registry.get(api._parse_key(result["game_key"]))
+    uid = next(iter(inst.players))
+    update = parse_tag_state(
+        f"艾琳完成悬赏。\n---\nGOLD:{uid}:15:完成黑石镇悬赏",
+        "hp_based",
+    )["state_update"]
+
+    api._handler._apply_state_update(inst, deepcopy(update))
+    api._handler._apply_state_update(inst, deepcopy(update))
+
+    rewards = [item for item in inst.economy["proposals"] if item["kind"] == "reward"]
+    assert len(rewards) == 1
+    assert rewards[0]["reason"] == "完成黑石镇悬赏"
+
+
+@pytest.mark.asyncio
+async def test_same_reward_reason_in_later_round_creates_new_proposal(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     result = await api.create_game(
         "template_world", "模板世界",
@@ -263,8 +286,46 @@ async def test_repeated_narrative_reward_cause_is_idempotent_across_rounds(web_a
     api._handler._apply_state_update(inst, deepcopy(update))
 
     rewards = [item for item in inst.economy["proposals"] if item["kind"] == "reward"]
-    assert len(rewards) == 1
-    assert rewards[0]["reason"] == "完成黑石镇悬赏"
+    assert len(rewards) == 2
+    assert rewards[0]["source_ref"] != rewards[1]["source_ref"]
+
+
+@pytest.mark.asyncio
+async def test_later_identical_reward_does_not_drop_deferred_effects(web_api):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    result = await api.create_game(
+        "template_world", "重复任务奖励",
+        players=[{"character_name": "艾琳", "attributes": {"str": 12}, "gold": 30}],
+    )
+    inst = registry.get(api._parse_key(result["game_key"]))
+    uid = next(iter(inst.players))
+    inst.gm_uid = uid
+    update = parse_tag_state(
+        f"艾琳完成每日委托。\n---\nGOLD:{uid}:5:完成每日委托",
+        "hp_based",
+    )["state_update"]
+
+    first = api._handler._state_applier.apply_state_update(inst, deepcopy(update))
+    first_group = queue_effect_group(
+        inst, first, {"state_update": {"scene_change": "第一天营地"}},
+    )
+    assert first_group is not None
+    assert (await api.resolve_payment(
+        result["game_key"], first[0]["id"], True, uid,
+    ))["effects_committed"] is True
+    assert inst.scene == "第一天营地"
+
+    inst.round_number += 1
+    second = api._handler._state_applier.apply_state_update(inst, deepcopy(update))
+    second_group = queue_effect_group(
+        inst, second, {"state_update": {"scene_change": "第二天营地"}},
+    )
+    assert second_group is not None
+    assert second[0]["id"] != first[0]["id"]
+    assert (await api.resolve_payment(
+        result["game_key"], second[0]["id"], True, uid,
+    ))["effects_committed"] is True
+    assert inst.scene == "第二天营地"
 
 
 @pytest.mark.asyncio
@@ -296,6 +357,11 @@ async def test_team_pay_tag_reaches_atomic_multiplayer_settlement(web_api):
     )
     assert first["committed"] is False
     assert inst.get_character_sheet(first_uid)["currency"]["amount"] == 20
+    blocked = await api.submit_action(
+        result["game_key"], first_uid, "确认后继续上车",
+    )
+    assert blocked["status"] == 409
+    assert blocked["payload"]["error_code"] == "ECONOMY_DECISION_PENDING"
 
     second = await api.resolve_payment(
         result["game_key"], proposal["id"], True, second_uid,
@@ -303,6 +369,10 @@ async def test_team_pay_tag_reaches_atomic_multiplayer_settlement(web_api):
     assert second["ok"] is True
     assert inst.get_character_sheet(first_uid)["currency"]["amount"] == 18
     assert inst.get_character_sheet(second_uid)["currency"]["amount"] == 17
+    continued = await api.submit_action(
+        result["game_key"], first_uid, "全队确认后继续上车",
+    )
+    assert continued["payload"].get("error_code") != "ECONOMY_DECISION_PENDING"
 
 
 @pytest.mark.asyncio

@@ -195,10 +195,13 @@ class StateUpdateApplier:
             reason = str(proposal.get("reason") or "经济提案")[:240]
             source = str(proposal.get("source") or "narrative")
             if kind == "reward":
-                # Reward identity intentionally omits the round: repeating the same
-                # target, amount and explicit cause in a later response is still the
-                # same narrative reward, not a fresh grant.
-                source_ref = f"narrative-reward:{instance.run_id}:{uid}:{amount}:{reason.casefold()}"
+                # One parsed emission remains idempotent when the same response is
+                # retried, while a later round may legitimately grant the same
+                # amount for the same recurring cause.
+                source_ref = (
+                    f"round:{instance.run_id}:{instance.round_number}:reward:"
+                    f"{proposal_index}:{uid}:{amount}:{reason.casefold()}"
+                )
             else:
                 contributor_ref = "|".join(
                     f"{item['uid']}={item['amount']}" for item in contributors

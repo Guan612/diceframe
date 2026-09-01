@@ -2147,5 +2147,6 @@ export const zhCN = {
     no_previous_round: '没有可回滚的上一轮',
     invalid_viewer: '视角无效',
     world_not_found: '世界不存在',
+    economy_decision_pending: '请先处理待确认的经济提案，再继续本局叙事',
   },
 } as const

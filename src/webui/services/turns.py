@@ -11,6 +11,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from src.engine.economy import (
+    has_pending_economy_decision,
+    pending_effect_groups,
+    pending_memory_deliveries,
+    pending_proposals,
+)
 from src.engine.game_instance import GameState
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
 
@@ -39,6 +45,7 @@ class TurnDependencies:
     process_round: Callable[..., Awaitable[tuple[str, Any]]] | None
     resolve_luck_decision: Callable[..., Awaitable[dict[str, Any]]]
     decline_pending_luck: Callable[..., Awaitable[dict[str, Any]]]
+    drain_economy_outbox: Callable[[Any], Awaitable[bool]] | None = None
 
 
 class TurnResult(TypedDict):
@@ -70,6 +77,44 @@ def _pending_payments(instance: "GameInstance", viewer_uid: str = "") -> list[di
             }
         )
     ]
+
+
+def economy_decision_pending_payload(
+    instance: "GameInstance",
+    viewer_uid: str = "",
+) -> dict[str, Any]:
+    """Build a non-leaking progression barrier response for one viewer."""
+
+    unresolved = pending_proposals(instance)
+    visible = [
+        proposal
+        for proposal in unresolved
+        if (
+            not viewer_uid
+            or viewer_uid == instance.gm_uid
+            or proposal.get("visibility") == "party"
+            or viewer_uid
+            == str(proposal.get("payer_uid") or proposal.get("uid") or "")
+            or viewer_uid
+            in {
+                str(item.get("uid") or "")
+                for item in (proposal.get("contributors") or [])
+                if isinstance(item, dict)
+            }
+        )
+    ]
+    return {
+        "ok": False,
+        "error_code": "ECONOMY_DECISION_PENDING",
+        "error": "请先处理待确认的经济提案，再继续本局叙事",
+        "pending_count": (
+            len(unresolved)
+            or len(_pending_payments(instance))
+            or len(pending_effect_groups(instance))
+            or len(pending_memory_deliveries(instance))
+        ),
+        "pending_payments": visible,
+    }
 
 
 def _pending_luck_payload(
@@ -125,6 +170,15 @@ def _luck_error_status(code: str) -> int:
     if code in {"LUCK_ALREADY_RESOLVED", "LUCK_NOT_PENDING"}:
         return 409
     return 400
+
+
+async def _retry_external_economy_effects(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+) -> None:
+    drain = dependencies.drain_economy_outbox
+    if drain is not None:
+        await drain(instance)
 
 
 async def _prepare_checks(
@@ -202,6 +256,9 @@ async def submit_action(
             }, 409)
     if instance.is_dead(actor_uid):
         return _result({"error": "角色已死亡，无法提交行动"}, 403)
+    await _retry_external_economy_effects(dependencies, instance)
+    if has_pending_economy_decision(instance):
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     if instance.state == GameState.ACTIVE_JUDGMENT:
         return _result({"error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing"}, 409)
 
@@ -316,6 +373,9 @@ async def resolve_luck_and_continue(
     )
     if not instance:
         return _result({"ok": False, "error": "游戏不存在"}, 404)
+    await _retry_external_economy_effects(dependencies, instance)
+    if has_pending_economy_decision(instance):
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     narration, _ = await _process_round(
         dependencies, instance, on_delta=on_delta, on_reset=on_reset,
     )
@@ -344,6 +404,9 @@ async def advance_round(
         return _result({"error": "not found"}, 404)
     if actor_uid != instance.gm_uid:
         return _result({"ok": False, "error": "仅 GM 可推进"}, 403)
+    await _retry_external_economy_effects(dependencies, instance)
+    if has_pending_economy_decision(instance):
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
 
     if instance.state == GameState.ACTIVE_JUDGMENT and instance.action_queue:
         await _prepare_checks(dependencies, instance)

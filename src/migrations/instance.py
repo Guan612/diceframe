@@ -17,7 +17,7 @@ from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_bin
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 2
+CURRENT_INSTANCE_SCHEMA_VERSION = 3
 
 
 def _legacy_run_id(payload: Mapping[str, Any]) -> str:
@@ -97,6 +97,20 @@ def _migrate_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add the durable external-effect outbox to the economy aggregate."""
+
+    economy = payload.get("economy")
+    if not isinstance(economy, dict):
+        economy = {}
+        payload["economy"] = economy
+    economy.setdefault("schema_version", 2)
+    economy["schema_version"] = max(2, int(economy.get("schema_version", 1) or 1))
+    economy.setdefault("external_effects_outbox", [])
+    payload["instance_schema_version"] = 3
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -107,6 +121,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 1:
         payload = _migrate_v1_to_v2(payload)
         version = 2
+    if version == 2:
+        payload = _migrate_v2_to_v3(payload)
+        version = 3
     payload["instance_schema_version"] = version
     return payload
 
@@ -131,7 +148,13 @@ def rebind_imported_game_state_payload(
     economy = payload.get("economy")
     if isinstance(economy, dict):
         economy["run_id"] = run_id
-        for collection_name in ("proposals", "transactions", "effect_groups", "outcomes"):
+        for collection_name in (
+            "proposals",
+            "transactions",
+            "effect_groups",
+            "external_effects_outbox",
+            "outcomes",
+        ):
             for item in economy.get(collection_name, []) or []:
                 if isinstance(item, dict):
                     item["run_id"] = run_id

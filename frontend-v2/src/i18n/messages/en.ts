@@ -2147,5 +2147,6 @@ export const en = {
     no_previous_round: 'No previous round to roll back',
     invalid_viewer: 'Invalid viewer',
     world_not_found: 'World not found',
+    economy_decision_pending: 'Resolve the pending economy decision before continuing the story.',
   },
 } as const

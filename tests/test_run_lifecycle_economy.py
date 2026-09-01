@@ -5,11 +5,18 @@ from dataclasses import replace
 
 import pytest
 
-from src.engine.economy import queue_effect_group, queue_proposal, resolve_proposal
+from src.engine.economy import (
+    pending_memory_deliveries,
+    queue_effect_group,
+    queue_proposal,
+    resolve_proposal,
+)
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.llm.client import LLMResponse
 from src.llm.context_builder import build_context
+from src.memory.delta import MemoryStore
 from src.migrations.instance import migrate_game_state_payload
+from src.webui.services import characters
 
 from webapi_harness import web_api  # noqa: F401
 
@@ -34,7 +41,8 @@ def test_save_migration_assigns_stable_run_and_imports_pending_payment() -> None
     second = migrate_game_state_payload(first)
 
     assert first == second
-    assert first["instance_schema_version"] == 2
+    assert first["instance_schema_version"] == 3
+    assert first["economy"]["external_effects_outbox"] == []
     assert first["run_id"].startswith("run_")
     assert first["memory_namespace"] == "('web', 'legacy', 'bot')"
     assert first["economy"]["proposals"][0]["id"] == "pay_old"
@@ -509,6 +517,152 @@ async def test_effect_failure_rolls_back_the_whole_economy_decision(
 
 
 @pytest.mark.asyncio
+async def test_economy_memory_outbox_closes_save_crash_window(
+    web_api,
+    tmp_path,
+) -> None:
+    api, _lorebook, registry, _llm, _worlds = web_api
+    memory = MemoryStore(tmp_path / "economy-memory.db")
+    memory.open()
+    try:
+        created = await api.create_game(
+            "template_world",
+            "Economy Memory Outbox",
+            players=[{
+                "character_name": "Hero",
+                "attributes": {"str": 10},
+                "gold": 20,
+            }],
+        )
+        instance = registry.get(api._parse_key(created["game_key"]))
+        uid = next(iter(instance.players))
+        instance.gm_uid = uid
+        original_dependencies = api._character_dependencies
+        memory_dependencies = replace(
+            original_dependencies,
+            apply_economy_memory=memory.apply_delta,
+        )
+        api._character_dependencies = memory_dependencies
+
+        proposal = queue_proposal(
+            instance,
+            kind="payment",
+            payer_uid=uid,
+            recipient_uid=uid,
+            amount=3,
+            reason="读取密函",
+        )
+        group = queue_effect_group(instance, [proposal], {
+            "memory_delta": {
+                "add": [{
+                    "entity": "密函",
+                    "relation": "内容",
+                    "value": "北门午夜开启",
+                    "confidence": 1.0,
+                }],
+                "update": [],
+                "forget": [],
+            },
+        })
+        assert group is not None
+
+        async def fail_authoritative_save(_instance):
+            raise OSError("fault before authoritative game save")
+
+        api._character_dependencies = replace(
+            memory_dependencies,
+            games=replace(
+                memory_dependencies.games,
+                save_instance=fail_authoritative_save,
+            ),
+        )
+        with pytest.raises(OSError, match="authoritative game save"):
+            await api.resolve_payment(
+                created["game_key"], proposal["id"], True, uid,
+            )
+
+        live_proposal = next(
+            item for item in instance.economy["proposals"]
+            if item["id"] == proposal["id"]
+        )
+        assert live_proposal["status"] == "pending"
+        assert instance.get_character_sheet(uid)["currency"]["amount"] == 20
+        assert memory.list_entries(instance.memory_namespace) == []
+
+        api._character_dependencies = memory_dependencies
+        committed = await api.resolve_payment(
+            created["game_key"], proposal["id"], True, uid,
+        )
+        assert committed["external_effects_committed"] is True
+        assert len(memory.list_entries(instance.memory_namespace)) == 1
+        assert pending_memory_deliveries(instance) == []
+
+        second = queue_proposal(
+            instance,
+            kind="payment",
+            payer_uid=uid,
+            recipient_uid=uid,
+            amount=2,
+            reason="读取第二封密函",
+        )
+        second_group = queue_effect_group(instance, [second], {
+            "memory_delta": {
+                "add": [{
+                    "entity": "第二封密函",
+                    "relation": "内容",
+                    "value": "钟响后撤离",
+                    "confidence": 1.0,
+                }],
+                "update": [],
+                "forget": [],
+            },
+        })
+        assert second_group is not None
+        save_calls = 0
+
+        async def fail_delivery_receipt_save(target):
+            nonlocal save_calls
+            save_calls += 1
+            if save_calls == 1:
+                await registry.save(target)
+                return
+            raise OSError("fault after external memory delivery")
+
+        api._character_dependencies = replace(
+            memory_dependencies,
+            games=replace(
+                memory_dependencies.games,
+                save_instance=fail_delivery_receipt_save,
+            ),
+        )
+        with pytest.raises(OSError, match="after external memory delivery"):
+            await api.resolve_payment(
+                created["game_key"], second["id"], True, uid,
+            )
+        assert len(memory.list_entries(instance.memory_namespace)) == 2
+
+        recovered_registry = GameRegistry(registry.save_dir)
+        recovered = await recovered_registry.load(instance.game_key)
+        assert recovered is not None
+        assert len(pending_memory_deliveries(recovered)) == 1
+        recovery_dependencies = replace(
+            memory_dependencies,
+            games=replace(
+                memory_dependencies.games,
+                get_instance=recovered_registry.get,
+                save_instance=recovered_registry.save,
+            ),
+        )
+        assert await characters.drain_economy_outbox(
+            recovery_dependencies, recovered,
+        ) is True
+        assert pending_memory_deliveries(recovered) == []
+        assert len(memory.list_entries(recovered.memory_namespace)) == 2
+    finally:
+        memory.close()
+
+
+@pytest.mark.asyncio
 async def test_private_reward_and_transfer_stay_out_of_public_gm_context(
     web_api,
 ) -> None:
@@ -582,14 +736,6 @@ async def test_in_flight_narration_is_discarded_after_economy_decision(
     await instance.add_action(uid, "我等待商人的答复")
     assert await instance.try_advance() is True
     instance.complete_round_check_preparation()
-    proposal = queue_proposal(
-        instance,
-        kind="payment",
-        payer_uid=uid,
-        recipient_uid=uid,
-        amount=3,
-        reason="商人的旧报价",
-    )
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -611,6 +757,14 @@ async def test_in_flight_narration_is_discarded_after_economy_decision(
     monkeypatch.setattr(llm, "call", delayed_call)
     processing = asyncio.create_task(api._handler.process_round(instance))
     await entered.wait()
+    proposal = queue_proposal(
+        instance,
+        kind="payment",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=3,
+        reason="商人的旧报价",
+    )
     declined = await api.resolve_payment(
         created["game_key"], proposal["id"], False, uid,
     )
@@ -643,14 +797,6 @@ async def test_in_flight_check_plan_is_discarded_after_economy_decision(
     await instance.start_round()
     await instance.add_action(uid, "我用力量推开石门", selected_attribute="str")
     assert await instance.try_advance() is True
-    proposal = queue_proposal(
-        instance,
-        kind="payment",
-        payer_uid=uid,
-        recipient_uid=uid,
-        amount=1,
-        reason="旧报价",
-    )
     entered = asyncio.Event()
     release = asyncio.Event()
     calls_before = instance.total_llm_calls
@@ -673,6 +819,14 @@ async def test_in_flight_check_plan_is_discarded_after_economy_decision(
     monkeypatch.setattr("src.commands.round_processor.plan_round_checks", delayed_plan)
     planning = asyncio.create_task(api._handler.prepare_round_checks_ai(instance))
     await entered.wait()
+    proposal = queue_proposal(
+        instance,
+        kind="payment",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=1,
+        reason="旧报价",
+    )
     declined = await api.resolve_payment(
         created["game_key"], proposal["id"], False, uid,
     )
@@ -688,7 +842,7 @@ async def test_in_flight_check_plan_is_discarded_after_economy_decision(
 
 
 @pytest.mark.asyncio
-async def test_restart_keeps_payment_committed_during_candidate_generation(
+async def test_restart_rejects_old_payment_waiting_during_candidate_generation(
     web_api,
     monkeypatch,
 ) -> None:
@@ -730,22 +884,73 @@ async def test_restart_keeps_payment_committed_during_candidate_generation(
     monkeypatch.setattr(llm, "call", delayed_opening)
     restarting = asyncio.create_task(api.restart_game(created["game_key"]))
     await entered.wait()
-    paid = await api.resolve_payment(
-        created["game_key"], proposal["id"], True, uid,
+    payment = asyncio.create_task(
+        api.resolve_payment(created["game_key"], proposal["id"], True, uid)
     )
-    assert paid["ok"] is True
+    await asyncio.sleep(0)
+    assert payment.done() is False
     release.set()
     assert (await restarting)["ok"] is True
+    paid = await payment
+    assert paid["ok"] is False
+    assert paid["code"] == "STALE_RUN"
 
     restarted = registry.get(api._parse_key(created["game_key"]))
     assert restarted is not old_instance
-    assert restarted.get_character_sheet(uid)["currency"]["amount"] == 15
+    assert restarted.get_character_sheet(uid)["currency"]["amount"] == 20
     with pytest.raises(RuntimeError, match="stale game instance"):
         await registry.save(old_instance)
     recovered = await GameRegistry(registry.save_dir).load(restarted.game_key)
     assert recovered is not None
     assert recovered.run_id == restarted.run_id
-    assert recovered.get_character_sheet(uid)["currency"]["amount"] == 15
+    assert recovered.get_character_sheet(uid)["currency"]["amount"] == 20
+
+
+@pytest.mark.asyncio
+async def test_restart_opening_character_effect_survives(web_api, monkeypatch) -> None:
+    api, _lorebook, registry, llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Restart Opening Effect",
+        players=[{
+            "character_name": "Hero",
+            "attributes": {"str": 10},
+            "gold": 20,
+            "mana": 12,
+            "max_mana": 12,
+        }],
+    )
+    old_instance = registry.get(api._parse_key(created["game_key"]))
+    uid = next(iter(old_instance.players))
+    old_instance.get_character_sheet(uid).update({"mana": 12, "max_mana": 12})
+
+    async def opening_with_character_effects(*, system_prompt, user_message, **kwargs):
+        return LLMResponse(
+            content=(
+                "Hero 在风暴中醒来。\n---\n"
+                f"HP:{uid}:-3\n"
+                f"MANA:{uid}:-2\n"
+                "SCENE:风暴海岸"
+            ),
+            narration="Hero 在风暴中醒来。",
+            state_update=None,
+            memory_delta=None,
+            info_asymmetry=None,
+            plot_update=None,
+            total_tokens=8,
+            is_narration_only=False,
+            provider_used="fake",
+        )
+
+    monkeypatch.setattr(llm, "call", opening_with_character_effects)
+    result = await api.restart_game(created["game_key"])
+    restarted = registry.get(api._parse_key(created["game_key"]))
+    sheet = restarted.get_character_sheet(uid)
+
+    assert result["ok"] is True
+    assert sheet["hp"] == sheet["max_hp"] - 3
+    assert sheet["mana"] == 10
+    assert restarted.scene == "风暴海岸"
 
 
 @pytest.mark.asyncio

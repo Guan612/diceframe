@@ -20,7 +20,13 @@ from src.engine.character_utils import (
 from src.content.worlds import localize_lorebook_entries
 from src.engine.language import localized_text
 from src.engine.health import record_health_event
-from src.engine.economy import complete_effect_group, resolve_proposal
+from src.engine.economy import (
+    complete_effect_group,
+    complete_memory_delivery,
+    pending_memory_deliveries,
+    queue_memory_delivery,
+    resolve_proposal,
+)
 from src.engine.game_instance import GameInstance
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime
@@ -122,6 +128,7 @@ class CharacterDependencies:
     assets: CharacterAssetDependencies
     save_character_card: Callable[[dict[str, Any]], dict[str, Any]]
     apply_economy_effects: Callable[[Any, dict[str, Any]], Awaitable[None]] | None = None
+    apply_economy_memory: Callable[[str, dict[str, Any], int], Awaitable[None]] | None = None
 
 _ATTR_NAME_EN = {
     "str": "STR",
@@ -700,9 +707,11 @@ async def resolve_payment(
             and isinstance(effect_group.get("effects"), dict)
             and dependencies.apply_economy_effects is not None
         ):
+            effect_payload = dict(effect_group.get("effects") or {})
+            memory_delta = dict(effect_payload.pop("memory_delta", {}) or {})
             try:
                 await dependencies.apply_economy_effects(
-                    staged, dict(effect_group.get("effects") or {}),
+                    staged, effect_payload,
                 )
             except Exception:
                 logger.exception(
@@ -715,6 +724,13 @@ async def resolve_payment(
                     "code": "EFFECT_COMMIT_FAILED",
                     "error": "关联结果应用失败，本次结算未生效，请重试",
                 }
+            if memory_delta and dependencies.apply_economy_memory is not None:
+                queue_memory_delivery(
+                    staged,
+                    effect_group_id=str(effect_group.get("id") or ""),
+                    memory_delta=memory_delta,
+                    round_number=int(effect_group.get("round", staged.round_number) or 0),
+                )
             result["effects_committed"] = complete_effect_group(
                 staged, str(effect_group.get("id") or ""),
             )
@@ -752,13 +768,69 @@ async def resolve_payment(
                 ),
             )
         if result.get("ok") or result.get("code") == "INSUFFICIENT_FUNDS":
+            before_commit = type(inst).from_dict(deepcopy(inst.to_dict()))
+            before_commit.log = deepcopy(inst.log)
             inst.replace_persisted_state_from(staged)
             # Persist while still holding the aggregate lock. This closes the
             # gap where restart could replace the run between mutation and save.
-            await dependencies.games.save_instance(inst)
+            try:
+                await dependencies.games.save_instance(inst)
+            except Exception:
+                inst.replace_persisted_state_from(before_commit)
+                raise
+            result["external_effects_committed"] = await _deliver_memory_outbox_locked(
+                dependencies, inst,
+            )
         if not result.get("ok"):
             return result
     return {**result, "payment": proposal}
+
+
+async def _deliver_memory_outbox_locked(
+    dependencies: CharacterDependencies,
+    instance: GameInstance,
+) -> bool:
+    """Deliver persisted memory effects; caller must hold the aggregate lock."""
+
+    pending = pending_memory_deliveries(instance)
+    if not pending:
+        return True
+    apply_memory = dependencies.apply_economy_memory
+    if apply_memory is None:
+        return False
+    delivered = False
+    for delivery in pending:
+        try:
+            await apply_memory(
+                instance.memory_namespace,
+                dict(delivery.get("payload") or {}),
+                int(delivery.get("round", instance.round_number) or 0),
+            )
+        except Exception:
+            logger.exception(
+                "经济结算记忆 outbox 投递失败，已保留待重试记录: game=%s delivery=%s",
+                instance.game_key,
+                delivery.get("id"),
+            )
+            return False
+        complete_memory_delivery(instance, str(delivery.get("id") or ""))
+        delivered = True
+    if delivered:
+        await dependencies.games.save_instance(instance)
+    return not pending_memory_deliveries(instance)
+
+
+async def drain_economy_outbox(
+    dependencies: CharacterDependencies,
+    instance: GameInstance,
+) -> bool:
+    """Retry durable external effects before allowing narrative progression."""
+
+    async with instance._lock:
+        current = dependencies.games.get_instance(instance.game_key)
+        if current is not instance:
+            return False
+        return await _deliver_memory_outbox_locked(dependencies, instance)
 
 
 async def delete_character(

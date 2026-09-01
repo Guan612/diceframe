@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.game_instance import GameRegistry
+from src.engine.economy import pending_memory_deliveries
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader
 from src.memory.delta import MemoryStore
@@ -183,6 +184,9 @@ class WebAPI:
                 if handler is not None
                 and callable(getattr(handler, "commit_deferred_economy_effects", None))
                 else None
+            ),
+            apply_economy_memory=(
+                self._mem.apply_delta if self._mem is not None else None
             ),
         )
         self._ruleset_character_dependencies = (
@@ -484,6 +488,7 @@ class WebAPI:
             process_round=getattr(self._handler, "process_round", None),
             resolve_luck_decision=self.resolve_luck_decision,
             decline_pending_luck=self.decline_pending_luck,
+            drain_economy_outbox=self._drain_economy_outbox,
         )
         self._map_dependencies = maps.MapDependencies(
             get_instance=self._reg.get,
@@ -1510,6 +1515,25 @@ class WebAPI:
             accepted,
             session_uid,
         )
+
+    async def _drain_economy_outbox(self, instance: Any) -> bool:
+        return await characters.drain_economy_outbox(
+            self._character_dependencies, instance,
+        )
+
+    async def drain_economy_outbox(self, game_key: str) -> bool:
+        instance = self.get_game_instance(game_key)
+        if instance is None:
+            return False
+        return await self._drain_economy_outbox(instance)
+
+    async def recover_economy_outboxes(self, instances: list[Any]) -> int:
+        recovered = 0
+        for instance in instances:
+            had_pending = bool(pending_memory_deliveries(instance))
+            if had_pending and await self._drain_economy_outbox(instance):
+                recovered += 1
+        return recovered
 
     async def delete_character(self, game_key: str, user_id: str) -> dict[str, Any]:
         return await characters.delete_character(

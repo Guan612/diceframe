@@ -22,6 +22,10 @@ Persisted state is classified as game identity, character state, run state, or
 ephemeral process state. Reset and restart construct and validate a candidate
 aggregate before replacing the active instance. Ruleset-owned opaque state is
 reset through runtime capabilities rather than generic imports.
+The transition holds the old aggregate write lock through candidate opening
+and replacement. Old requests that were waiting to write resume only after the
+swap and fail their registry-identity fence; no post-opening whole-player copy
+may overwrite character effects produced by the new opening.
 
 Long-term memory uses a persisted `memory_namespace`. Existing saves retain the
 legacy namespace on migration; a new run receives a new namespace, so old
@@ -41,6 +45,12 @@ discards the group. Settlement outcomes enter trusted model context and an
 economy decision revision invalidates model responses that were already in
 flight when a player decided. A new run always starts with an empty proposal,
 transaction, outcome, effect-group, and revision state.
+
+Any unresolved current-run proposal, effect group, or external-effect delivery
+blocks every narrative progression entry point before it records an action.
+Cross-store memory effects use a durable outbox: game state and the outbox are
+saved first, memory delivery is idempotent, and an unrecorded delivery receipt
+is retried during recovery or before the next progression attempt.
 
 ## Consequences
 

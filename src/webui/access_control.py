@@ -301,6 +301,13 @@ class WebAccessControl:
                 return uid or request.get("user_id", "")
             if (
                 request.method == "POST"
+                and tail == "payments"
+                and len(parts) == 5
+                and bool(parts[4])
+            ):
+                return uid or request.get("user_id", "")
+            if (
+                request.method == "POST"
                 and tail == "checks"
                 and len(parts) >= 6
                 and parts[5] == "luck"
