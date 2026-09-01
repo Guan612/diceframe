@@ -771,7 +771,7 @@ class PluginHost:
         args = expanded[1:]
         kwargs: dict[str, Any] = {}
         if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            kwargs["creationflags"] = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
         uses_rpc = self._plugin_type(runtime.manifest) in _RPC_PLUGIN_TYPES
         if uses_rpc:
             kwargs.update({
