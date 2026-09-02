@@ -77,6 +77,13 @@ const sceneImageDraft = ref<File | null>(null)
 const sceneImageDefaultUrl = ref(ruleSceneUrl())
 const sceneImageBusy = ref(false)
 const showMapBackgroundEditor = ref(false)
+const showPaymentComposer = ref(false)
+const paymentPayerUid = ref('')
+const paymentRecipientUid = ref('')
+const paymentAmount = ref(1)
+const paymentReason = ref('')
+const paymentItems = ref('')
+const paymentBusy = ref(false)
 function toggleSidebar() { sidebarCollapsed.value = !sidebarCollapsed.value; localStorage.setItem('play_sidebar_collapsed', sidebarCollapsed.value ? '1' : '0') }
 const railCollapsed = ref(false)
 function toggleRail() { railCollapsed.value = !railCollapsed.value; localStorage.setItem('play_rail_collapsed', railCollapsed.value ? '1' : '0') }
@@ -105,6 +112,38 @@ function refreshMapAfterBackground() {
   void game.refresh(true)
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error || t('operationFailed')) }
+function openPaymentComposer() {
+  const first = game.players.value[0]?.user_id || ''
+  paymentPayerUid.value = first
+  paymentRecipientUid.value = first
+  paymentAmount.value = 1
+  paymentReason.value = ''
+  paymentItems.value = ''
+  showPaymentComposer.value = true
+}
+async function createPaymentProposal() {
+  if (!game.currentGame.value || !paymentPayerUid.value || paymentAmount.value < 1) return
+  paymentBusy.value = true
+  try {
+    await api(`/games/${encodeURIComponent(game.currentGame.value)}/payments`, {
+      method: 'POST',
+      body: JSON.stringify({
+        payer_uid: paymentPayerUid.value,
+        recipient_uid: paymentRecipientUid.value || paymentPayerUid.value,
+        amount: Math.trunc(paymentAmount.value),
+        reason: paymentReason.value.trim(),
+        items: paymentItems.value.split(/[,，、\n]/).map(item => item.trim()).filter(Boolean),
+      }),
+    })
+    showPaymentComposer.value = false
+    await game.refresh(true)
+    toast.success(t('paymentProposalCreated'))
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+  } finally {
+    paymentBusy.value = false
+  }
+}
 function joinNames(names: string[]) { return names.filter(Boolean).join(t('listSeparator')) }
 function onLocaleChange(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
 
@@ -1169,6 +1208,7 @@ onBeforeUnmount(() => {
           @room-password="onRoomPassword"
           @scene-image="openSceneImageEditor"
           @map-background="openMapBackgroundEditor"
+          @payment="openPaymentComposer"
         />
 
         <MultiplayerPanel
@@ -1184,7 +1224,7 @@ onBeforeUnmount(() => {
           @open-character-center="showCharacterCenter = true"
         />
 
-        <HealthPanel v-if="game.isGm.value" :health="health" :detail="game.detail.value" :is-gm="game.isGm.value" @resolve="resolveHealth" />
+      <HealthPanel v-if="game.isGm.value" :health="health" :detail="game.detail.value" :is-gm="game.isGm.value" @resolve="resolveHealth" />
       </aside>
       <button
         v-if="mobilePanel"
@@ -1193,6 +1233,39 @@ onBeforeUnmount(() => {
         @click="mobilePanel = ''"
       />
     </div>
+    <Modal v-if="showPaymentComposer" :title="t('createPaymentProposal')" @close="showPaymentComposer = false">
+      <div class="gm-payment-form">
+        <label>
+          <span>{{ t('paymentPayer') }}</span>
+          <select v-model="paymentPayerUid">
+            <option v-for="player in game.players.value" :key="player.user_id" :value="player.user_id">{{ player.character_name || player.user_id }}</option>
+          </select>
+        </label>
+        <label>
+          <span>{{ t('paymentRecipient') }}</span>
+          <select v-model="paymentRecipientUid">
+            <option v-for="player in game.players.value" :key="player.user_id" :value="player.user_id">{{ player.character_name || player.user_id }}</option>
+          </select>
+        </label>
+        <label>
+          <span>{{ t('paymentAmount') }}</span>
+          <input v-model.number="paymentAmount" type="number" min="1" max="100000">
+        </label>
+        <label>
+          <span>{{ t('paymentReason') }}</span>
+          <input v-model="paymentReason" :placeholder="t('paymentReasonPlaceholder')" maxlength="240">
+        </label>
+        <label>
+          <span>{{ t('paymentItems') }}</span>
+          <input v-model="paymentItems" :placeholder="t('paymentItemsPlaceholder')">
+        </label>
+        <p class="muted">{{ t('paymentProposalHelp') }}</p>
+      </div>
+      <template #actions>
+        <button type="button" @click="showPaymentComposer = false">{{ t('cancel') }}</button>
+        <button type="button" class="primary" :disabled="paymentBusy || !paymentPayerUid || paymentAmount < 1" @click="createPaymentProposal">{{ paymentBusy ? t('saving') : t('createProposal') }}</button>
+      </template>
+    </Modal>
     <MapWorkspace
       v-if="showMap"
       :map="game.map.value"

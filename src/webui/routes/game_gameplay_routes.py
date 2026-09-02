@@ -357,6 +357,31 @@ async def api_payment_resolve(request: web.Request) -> web.Response:
     return web.json_response(result, status=status)
 
 
+async def api_payment_create(request: web.Request) -> web.Response:
+    """Create a payment proposal from the GM console."""
+
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    _inst, denied = _gm_only_inst(request, gk)
+    if denied is not None:
+        return denied
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    result = await api.create_payment_proposal(
+        gk,
+        payer_uid=str(body.get("payer_uid") or ""),
+        amount=body.get("amount", 0),
+        reason=str(body.get("reason") or ""),
+        recipient_uid=str(body.get("recipient_uid") or ""),
+        items=body.get("items") if isinstance(body.get("items"), list) else [],
+    )
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 async def api_swipe(request: web.Request) -> web.Response:
     game_key = request.match_info["game_key"]
     round_num = int(request.match_info["round"])

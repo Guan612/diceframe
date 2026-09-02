@@ -53,6 +53,7 @@ from src.webui.routes.game_gameplay_routes import (
     api_ruleset_resolve_decision,
     api_luck_decision,
     api_advance,
+    api_payment_create,
     api_payment_resolve,
     api_swipe,
 )
@@ -149,6 +150,7 @@ def register_games(app: web.Application) -> None:
     app.router.add_post(
         "/api/games/{game_key}/payments/{payment_id}", api_payment_resolve
     )
+    app.router.add_post("/api/games/{game_key}/payments", api_payment_create)
     app.router.add_get("/api/games/{game_key}/characters", api_chars)
     app.router.add_get("/api/games/{game_key}/log", api_log)
     app.router.add_route("DELETE", "/api/games/{game_key}", api_delete_game)

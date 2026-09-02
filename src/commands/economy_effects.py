@@ -43,6 +43,16 @@ _COMPLETION_EVIDENCE_RE = re.compile(
     r"(?:完成|成功|击败|打倒|交付|归还|回收|达成|兑现|领取|earned|completed|complete|defeated|delivered|recovered|claimed|critical success|大成功)",
     re.IGNORECASE,
 )
+_UNBACKED_CHARGE_RE = re.compile(
+    r"(?:需要|需|必须|须|售价|价格|费用|收费|支付|付费|购买|买下|花费|缴纳|"
+    r"cost|price|charge|pay|purchase|spend)"
+    r"[^。！？\n]{0,24}?"
+    r"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:金币|金子|金|gold|credits?|dollars?)"
+    r"|(?:[一二三四五六七八九十百千万两\d]+)\s*(?:金币|金子|金|gold|credits?|dollars?)"
+    r"[^。！？\n]{0,16}?"
+    r"(?:需要|需|支付|付费|购买|买下|花费|缴纳|cost|price|charge|pay|purchase|spend)",
+    re.IGNORECASE,
+)
 
 
 def _meaningful(value: Any) -> bool:
@@ -159,6 +169,39 @@ def guard_unbacked_payment_narration(
         "ja": "権威台帳の通知：支払い提案が作成されなかったため、ゴールドは差し引かれていません。請求が必要なら GM に支払い提案を出してもらってください。",
     }.get(str(language or "").lower(), "权威账本提示：本次没有生成支付提案，因此未扣除金币。若确实需要收费，请由 GM 重新发起支付提案。")
     return f"{text}\n\n{notice}"
+
+
+def discard_unbacked_purchase_items(
+    data: dict[str, Any],
+    narration: str,
+) -> int:
+    """Fail closed when prose describes a priced purchase without a proposal.
+
+    A model can emit ``LOOT`` while narrating a shop price but omit ``PAY`` /
+    ``ECONOMY``.  Granting that loot would make the item authoritative even
+    though no payment decision exists.  Drop the transaction-dependent loot;
+    the GM can issue a proposal explicitly on a later turn.
+    """
+
+    if has_economy_proposal(data) or not _UNBACKED_CHARGE_RE.search(str(narration or "")):
+        return 0
+    state_update = data.get("state_update")
+    if not isinstance(state_update, dict):
+        return 0
+    loot = state_update.get("loot")
+    if not isinstance(loot, list) or not loot:
+        return 0
+    dropped = len(loot)
+    state_update["loot"] = []
+    return dropped
+
+
+def unbacked_purchase_notice(language: str) -> str:
+    return localized_text(language, {
+        "en": "Purchase items were not granted because no payment proposal was created.",
+        "zh-CN": "由于没有生成支付提案，本次购买物品未发放。",
+        "ja": "支払い提案が作成されなかったため、購入品は付与されませんでした。",
+    })
 
 
 def defer_narrative_effects(

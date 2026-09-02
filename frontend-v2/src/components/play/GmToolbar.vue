@@ -7,6 +7,7 @@ import {
   KeyOutline, PlaySkipForwardOutline, DownloadOutline, RefreshOutline,
   TrashOutline, SendOutline, ImageOutline, MapOutline,
   ReaderOutline,
+  CashOutline,
 } from '@vicons/ionicons5'
 import type { GameDetail, Player } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
@@ -32,6 +33,7 @@ const emit = defineEmits<{
   'room-password': []
   'scene-image': []
   'map-background': []
+  payment: []
 }>()
 
 const cmdText = ref('')
@@ -76,6 +78,7 @@ function awardXp(userId: string) {
       <h4>{{ t('flow') }}</h4>
       <button @click="emit('advance')"><NIcon :component="PlayForwardOutline" size="14" /> {{ t('advance') }}</button>
       <button @click="emit('rollback')"><NIcon :component="ArrowUndoOutline" size="14" /> {{ t('rollback') }}</button>
+      <button @click="emit('payment')"><NIcon :component="CashOutline" size="14" /> {{ t('createPaymentProposal') }}</button>
       <button :disabled="recapBusy" @click="emit('recap')"><NIcon :component="ReaderOutline" size="14" /> {{ recapBusy ? t('storyRecapGenerating') : t('storyRecapGenerate') }}</button>
     </div>
     <div class="gm-group gm-grow gm-command-group">

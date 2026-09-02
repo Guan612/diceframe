@@ -21,6 +21,7 @@ from src.engine.economy import (
 )
 from src.commands.economy_effects import (
     discard_unearned_reward_proposals,
+    discard_unbacked_purchase_items,
     guard_unbacked_payment_narration,
 )
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
@@ -127,6 +128,26 @@ def test_narrated_payment_with_proposal_keeps_pending_notice_path() -> None:
     narration = "你支付了五枚金币。"
     data = {"state_update": {"pending_payments": [{"uid": "gm", "amount": 5}]}}
     assert guard_unbacked_payment_narration(narration, data, "zh-CN") == narration
+
+
+def test_unbacked_shop_price_does_not_grant_loot() -> None:
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    dropped = discard_unbacked_purchase_items(
+        data, "城门卫兵说通行证需要支付5金币。"
+    )
+    assert dropped == 1
+    assert data["state_update"]["loot"] == []
+
+
+def test_purchase_loot_is_kept_when_proposal_exists() -> None:
+    data = {
+        "state_update": {
+            "loot": [{"player": "gm", "item": "通行证"}],
+            "economy_proposals": [{"kind": "purchase", "uid": "gm", "amount": 5}],
+        },
+    }
+    assert discard_unbacked_purchase_items(data, "通行证需要支付5金币。") == 0
+    assert data["state_update"]["loot"]
 
 
 def test_personal_purchase_with_effect_group_remains_blocking() -> None:

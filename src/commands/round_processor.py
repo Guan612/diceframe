@@ -15,10 +15,12 @@ from typing import Any
 
 from src.commands.economy_effects import (
     discard_unearned_reward_proposals,
+    discard_unbacked_purchase_items,
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    unbacked_purchase_notice,
     unearned_reward_notice,
 )
 from src.commands.round_effects import (
@@ -630,6 +632,14 @@ class RoundProcessor:
         response.narration = guard_unbacked_payment_narration(
             response.narration, data, instance.language,
         )
+        dropped_purchase_items = discard_unbacked_purchase_items(
+            data, response.narration,
+        )
+        if dropped_purchase_items:
+            response.narration = (
+                f"{response.narration or ''}\n\n"
+                f"{unbacked_purchase_notice(instance.language)}"
+            ).strip()
         deferred_effects = defer_narrative_effects(data, response)
         if economy_pending:
             notice = pending_decision_notice(instance.language)

@@ -9,6 +9,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from src.engine.character_utils import (
     build_starter_items,
@@ -27,6 +28,7 @@ from src.engine.economy import (
     pending_memory_deliveries,
     pending_memory_reversals,
     queue_memory_delivery,
+    queue_proposal,
     resolve_proposal,
 )
 from src.engine.game_instance import GameInstance
@@ -133,6 +135,70 @@ class CharacterDependencies:
     schedule_economy_scene_image: Callable[[Any, dict[str, Any]], Any] | None = None
     apply_economy_memory: Callable[[str, str, dict[str, Any], int], Awaitable[None]] | None = None
     reverse_economy_memory: Callable[[str, str], Awaitable[bool]] | None = None
+
+
+async def create_payment_proposal(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    *,
+    payer_uid: str,
+    amount: int,
+    reason: str = "",
+    recipient_uid: str = "",
+    items: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a GM-authored payment proposal without changing balances."""
+
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
+    if inst is None:
+        return {"ok": False, "error": "游戏不存在"}
+    payer_uid = str(payer_uid or "").strip()
+    recipient_uid = str(recipient_uid or payer_uid).strip()
+    try:
+        amount = int(amount)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "金额必须是整数"}
+    if not 0 < amount <= 100_000:
+        return {"ok": False, "error": "金额必须在 1 到 100000 之间"}
+    if payer_uid not in inst.players:
+        return {"ok": False, "error": "付款角色不存在"}
+    if recipient_uid not in inst.players:
+        return {"ok": False, "error": "接收角色不存在"}
+    normalized_items = [
+        str(item).strip()[:120]
+        for item in list(items or [])[:8]
+        if str(item).strip()
+    ]
+    reason = str(reason or "").strip()[:240]
+    if not reason:
+        reason = f"购买 {'、'.join(normalized_items)}" if normalized_items else "GM 发起的支付"
+    rewards = [
+        {"name": item, "category": ""}
+        for item in normalized_items
+    ]
+    async with inst.authoritative_write() as write_entered, inst._lock:
+        if not write_entered:
+            return {
+                "ok": False,
+                "code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请稍后再发起支付",
+            }
+        proposal = queue_proposal(
+            inst,
+            kind="purchase" if rewards else "payment",
+            payer_uid=payer_uid,
+            recipient_uid=recipient_uid,
+            amount=amount,
+            rewards=rewards,
+            reason=reason,
+            source="gm_manual",
+            source_ref=f"gm_manual:{inst.run_id}:{uuid4().hex}",
+            approval_policy="payer",
+        )
+        await dependencies.games.save_instance(inst)
+    return {"ok": True, "proposal": proposal}
 
 _ATTR_NAME_EN = {
     "str": "STR",
