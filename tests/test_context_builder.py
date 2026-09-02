@@ -217,6 +217,16 @@ async def test_build_context_exposes_authoritative_economy_decisions():
             "status": "pending",
             "visibility": "party",
             "round": 4,
+        }, {
+            "id": "purchase_pending",
+            "kind": "purchase",
+            "payer_uid": "hero",
+            "recipient_uid": "hero",
+            "approval_policy": "payer",
+            "rewards": [{"name": "药水"}],
+            "status": "pending",
+            "visibility": "private",
+            "round": 4,
         }],
     }
 
@@ -235,6 +245,7 @@ async def test_build_context_exposes_authoritative_economy_decisions():
     assert '"status": "pending"' in context
     assert "以下服务端记录覆盖此前叙事" in context
     assert "不得再次提出同一交易" in context
+    assert "商品尚未拥有且不可使用" in context
 
 
 @pytest.mark.asyncio
