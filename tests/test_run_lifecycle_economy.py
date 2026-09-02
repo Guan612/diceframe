@@ -418,6 +418,90 @@ async def test_real_swipe_reconciles_purchase_settled_after_target_round(
     assert recovered.pending_payments[0]["status"] == "pending"
 
 
+@pytest.mark.asyncio
+async def test_origin_round_swipe_does_not_project_later_settlement_before_state(
+    web_api, monkeypatch,
+) -> None:
+    """Origin-round Swipe restores its own snapshot, not a later tx.before."""
+    api, _lorebook, registry, llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Origin round snapshot",
+        gm_uid="gm",
+        players=[{"character_name": "Hero", "attributes": {"str": 10}, "gold": 30}],
+    )
+    instance = registry.get(api._parse_key(created["game_key"]))
+    assert instance is not None
+    uid = next(iter(instance.players))
+    instance.gm_uid = uid
+
+    # R5 snapshot starts at 30 and contains the offer.
+    instance.round_number = 5
+    proposal = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+        reason="购买通行证",
+    )
+    target_snapshot = _snapshot_players(instance)
+
+    # An unrelated later-round change raises the balance to 40 before the old
+    # R5 offer is settled in R7.  Its transaction.before is therefore 40.
+    instance.round_number = 6
+    sheet = instance.get_character_sheet(uid)
+    sheet["gold"] = 40
+    sheet["currency"]["amount"] = 40
+    instance.set_character_sheet(uid, sheet)
+    instance.round_number = 7
+    settled = await api.resolve_payment(created["game_key"], proposal["id"], True, uid)
+    assert settled["transaction"]["round"] == 7
+    assert settled["transaction"]["entries"][0]["before"] == 40
+
+    instance.log.append({
+        "round": 5,
+        "actions": [],
+        "gm_response": "旧 R5 分支",
+        "pre_state_snapshot": target_snapshot,
+        "swipes": ["旧 R5 分支"],
+        "current_swipe": 0,
+    })
+
+    async def replacement_swipe(*, system_prompt, user_message, **kwargs):
+        del system_prompt, user_message, kwargs
+        return LLMResponse(
+            content="新的 R5 分支。\n---\nNONE",
+            narration="新的 R5 分支。",
+            state_update=None,
+            memory_delta=None,
+            info_asymmetry=None,
+            plot_update=None,
+            total_tokens=6,
+            is_narration_only=True,
+            provider_used="fake",
+        )
+
+    monkeypatch.setattr(llm, "call", replacement_swipe)
+    assert await api._handler.generate_swipe(instance, 5) == "新的 R5 分支。"
+
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == 30
+    assert instance.get_character_sheet(uid)["gold"] == 30
+    assert instance.get_character_sheet(uid)["key_items"] == []
+    current_proposal = next(
+        item for item in instance.economy["proposals"] if item["id"] == proposal["id"]
+    )
+    assert current_proposal["status"] == "reversed"
+    assert all(item["id"] != proposal["id"] for item in instance.pending_payments)
+    assert instance.economy["transactions"][0]["status"] == "reversed"
+    assert not any(
+        outcome.get("proposal_id") == proposal["id"]
+        and outcome.get("status") == "committed"
+        for outcome in instance.economy["outcomes"]
+    )
+
+
 def test_transfer_moves_currency_between_players_with_balanced_ledger() -> None:
     instance = _instance()
     proposal = queue_proposal(

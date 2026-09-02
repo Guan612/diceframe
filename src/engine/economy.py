@@ -1016,25 +1016,16 @@ def reconcile_rollback_snapshot(
     if not isinstance(snapshot, dict):
         return snapshot
     rollback_round = int(round_number)
-    # A proposal can be created in the rolled-back round but settled later
-    # while its decision barrier was still open.  ``reverse_round_economy``
-    # reverses that late transaction via its proposal origin, so snapshot
-    # reconciliation must use the same relation instead of looking only at
-    # the transaction's settlement round.
-    origin_proposal_ids = {
-        str(item.get("id") or "")
-        for item in instance.economy.get("proposals", [])
-        if isinstance(item, dict)
-        and int(item.get("round", -1) or -1) == rollback_round
-    }
+    # Snapshot reconciliation has a narrower responsibility than economy
+    # invalidation: only settlements embedded in this snapshot's own round
+    # may rewrite its character state.  A later settlement tied to an erased
+    # origin is already reversed by ``reverse_round_economy``; projecting its
+    # ``before`` value here would leak later-round state into the old snapshot.
     transactions = [
         item for item in instance.economy.get("transactions", [])
         if isinstance(item, dict)
         and item.get("status") == "reversed"
-        and (
-            int(item.get("round", -1) or -1) == rollback_round
-            or str(item.get("proposal_id") or "") in origin_proposal_ids
-        )
+        and int(item.get("round", -1) or -1) == rollback_round
     ]
     if not transactions:
         return snapshot
