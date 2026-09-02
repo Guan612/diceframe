@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal
 from uuid import uuid4
 
 from src.engine.contracts import (
@@ -239,6 +240,11 @@ class GameInstance:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     # 内部：process_round/generate_swipe 互斥锁，防并发处理同一实例
     _process_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    # Runtime-only authority gate. Lock order is authority -> process -> state.
+    _authority_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _authority_owner: asyncio.Task[Any] | None = field(default=None, repr=False)
+    _authority_depth: int = field(default=0, repr=False)
+    _rewrite_in_progress: bool = field(default=False, repr=False)
     _save_fail_count: int = field(default=0, repr=False)
     # 幸运超时（秒）：每条 pending 幸运检定独立倒计时，到点按失败继续；0=禁用（异步局可设 0）
     luck_timeout_seconds: int = 60
@@ -282,6 +288,57 @@ class GameInstance:
             "outcomes": [],
             "decision_revision": 0,
         }
+
+    @asynccontextmanager
+    async def authoritative_write(self) -> AsyncIterator[bool]:
+        """Enter the atomic live-aggregate writer gate.
+
+        Writers arriving during a historical rewrite are rejected before any
+        mutation. The gate is task-reentrant so a service transaction may call
+        guarded aggregate methods without deadlocking itself.
+        """
+
+        task = asyncio.current_task()
+        if task is not None and self._authority_owner is task:
+            self._authority_depth += 1
+            try:
+                yield True
+            finally:
+                self._authority_depth -= 1
+            return
+        if self._rewrite_in_progress:
+            yield False
+            return
+        await self._authority_lock.acquire()
+        self._authority_owner = task
+        self._authority_depth = 1
+        try:
+            # A queued writer may resume after a rewrite. At that point the
+            # rewrite is committed and the caller must revalidate identity.
+            yield True
+        finally:
+            self._authority_depth = 0
+            self._authority_owner = None
+            self._authority_lock.release()
+
+    @asynccontextmanager
+    async def historical_rewrite(self) -> AsyncIterator[bool]:
+        """Own the authority gate for a complete staged historical rewrite."""
+
+        if self._authority_lock.locked() and self._rewrite_in_progress:
+            yield False
+            return
+        await self._authority_lock.acquire()
+        self._authority_owner = asyncio.current_task()
+        self._authority_depth = 1
+        self._rewrite_in_progress = True
+        try:
+            yield True
+        finally:
+            self._rewrite_in_progress = False
+            self._authority_depth = 0
+            self._authority_owner = None
+            self._authority_lock.release()
 
     def rotate_run_identity(self) -> tuple[str, str]:
         """Start an isolated run namespace and return ``(old, new)``."""
@@ -869,8 +926,8 @@ class GameInstance:
         selected_attribute/selected_skill/target_text 为前端可选提交的结构化
         归因字段（P1），供检定与 prompt 直接使用，避免靠文本启发式猜。
         """
-        async with self._lock:
-            if self._process_lock.locked():
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered or self._process_lock.locked():
                 return False
             if user_id in self.players:
                 cs = self.get_character_sheet(user_id)
@@ -954,7 +1011,9 @@ class GameInstance:
         source: str = "player",
     ) -> bool:
         """Attach a resolved roll to a pending action without counting as an edit."""
-        async with self._lock:
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered:
+                return False
             action = next(
                 (
                     item for item in self.action_queue

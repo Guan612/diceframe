@@ -292,7 +292,8 @@ async def submit_action(
             game_key, actor_uid, "player",
         )
         if not resolved.get("ok"):
-            return _result(resolved, 400)
+            status = 409 if resolved.get("code") == "REWRITE_IN_PROGRESS" else 400
+            return _result(resolved, status)
         roll_payload = resolved.get("roll")
     elif confirm and d20 is None and server_roll:
         roll_payload = dependencies.roll_for_game(game_key)

@@ -37,7 +37,8 @@ async def api_gm_command(request: web.Request) -> web.Response:
             status=400,
         )
     result = await api.gm_command(gk, command, str(body.get("mode", "note") or "note"))
-    return web.json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else 409 if result.get("code") == "REWRITE_IN_PROGRESS" else 400
+    return web.json_response(result, status=status)
 
 
 async def api_rollback(request: web.Request) -> web.Response:
@@ -47,7 +48,8 @@ async def api_rollback(request: web.Request) -> web.Response:
     if err:
         return err
     result = await api.rollback_round(gk)
-    return web.json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else 409 if result.get("code") == "REWRITE_IN_PROGRESS" else 400
+    return web.json_response(result, status=status)
 
 
 async def api_story_recap(request: web.Request) -> web.Response:

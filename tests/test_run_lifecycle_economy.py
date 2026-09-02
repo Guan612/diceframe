@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -1218,3 +1219,83 @@ async def test_restart_rotates_run_and_memory_but_preserves_character_assets(web
     assert reset_instance.economy["effect_groups"] == []
     assert reset_instance.economy["outcomes"] == []
     assert reset_instance.economy["decision_revision"] == 0
+
+
+async def _hold_historical_rewrite(instance, entered, release) -> None:
+    async with instance.historical_rewrite() as acquired:
+        assert acquired is True
+        async with instance._process_lock:
+            entered.set()
+            await release.wait()
+
+
+async def _gated_game(web_api, name: str, *, gold: int = 20):
+    api, _lorebook, registry, _llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world", name,
+        players=[{"character_name": "Hero", "attributes": {"str": 10}, "gold": gold}],
+    )
+    instance = registry.get(api._parse_key(created["game_key"]))
+    return api, registry, created, instance, next(iter(instance.players))
+
+
+@pytest.mark.asyncio
+async def test_payment_cannot_interleave_with_swipe_rewrite(web_api) -> None:
+    api, _registry, created, instance, uid = await _gated_game(web_api, "Payment Gate")
+    proposal = queue_proposal(instance, kind="payment", payer_uid=uid, recipient_uid=uid, amount=5)
+    before = deepcopy(instance.economy)
+    entered, release = asyncio.Event(), asyncio.Event()
+    rewrite = asyncio.create_task(_hold_historical_rewrite(instance, entered, release))
+    await entered.wait()
+    result = await asyncio.wait_for(api.resolve_payment(created["game_key"], proposal["id"], True, uid), 1)
+    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert instance.economy == before
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == 20
+    release.set()
+    await asyncio.wait_for(rewrite, 1)
+
+
+@pytest.mark.asyncio
+async def test_pending_dice_confirmation_is_rejected_during_swipe(web_api) -> None:
+    api, _registry, created, instance, uid = await _gated_game(web_api, "Dice Gate")
+    await instance.activate()
+    await instance.start_round()
+    await instance.add_action(uid, "尝试开锁", dice_pending=True, dice_system="d20", check_request={"dice_system": "d20", "dc": 10})
+    before_action, before_ready = deepcopy(instance.action_queue[0]), set(instance.ready_players)
+    entered, release = asyncio.Event(), asyncio.Event()
+    rewrite = asyncio.create_task(_hold_historical_rewrite(instance, entered, release))
+    await entered.wait()
+    result = await asyncio.wait_for(api.resolve_pending_dice_for_game(created["game_key"], uid, "player"), 1)
+    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert instance.action_queue[0] == before_action
+    assert instance.ready_players == before_ready
+    release.set()
+    await asyncio.wait_for(rewrite, 1)
+
+
+@pytest.mark.asyncio
+async def test_gm_resource_change_is_rejected_during_swipe(web_api) -> None:
+    api, _registry, created, instance, _uid = await _gated_game(web_api, "GM Gate")
+    before = deepcopy(instance.players)
+    entered, release = asyncio.Event(), asyncio.Event()
+    rewrite = asyncio.create_task(_hold_historical_rewrite(instance, entered, release))
+    await entered.wait()
+    result = await asyncio.wait_for(api.gm_command(created["game_key"], "给Hero加金币5"), 1)
+    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert instance.players == before
+    release.set()
+    await asyncio.wait_for(rewrite, 1)
+
+
+@pytest.mark.asyncio
+async def test_character_update_is_rejected_during_swipe(web_api) -> None:
+    api, _registry, created, instance, uid = await _gated_game(web_api, "Character Gate")
+    before = deepcopy(instance.players[uid])
+    entered, release = asyncio.Event(), asyncio.Event()
+    rewrite = asyncio.create_task(_hold_historical_rewrite(instance, entered, release))
+    await entered.wait()
+    result = await asyncio.wait_for(api.update_character(created["game_key"], uid, {"background": "changed"}), 1)
+    assert result["error_code"] == "REWRITE_IN_PROGRESS"
+    assert instance.players[uid] == before
+    release.set()
+    await asyncio.wait_for(rewrite, 1)

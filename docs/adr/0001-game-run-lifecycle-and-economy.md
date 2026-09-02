@@ -30,7 +30,11 @@ may overwrite character effects produced by the new opening.
 Historical swipe rewrites share the process barrier with normal round
 processing. The barrier covers restoring the target snapshot, awaiting the LLM,
 applying the candidate branch, and saving the authoritative aggregate. Player
-actions are rejected before mutation while the rewrite is active.
+actions are rejected before mutation while the rewrite is active. A runtime-only
+authority gate serializes the rewrite with payment, pending-dice, GM, live
+character, NPC, advancement, reset, and restart writers. The fixed acquisition
+order is authority gate, then process lock, then aggregate state lock. This makes
+the rewrite check and acquisition of mutation authority one atomic boundary.
 
 Long-term memory uses a persisted `memory_namespace`. Existing saves retain the
 legacy namespace on migration; a new run receives a new namespace, so old

@@ -36,7 +36,9 @@ async def api_char_update(request: web.Request) -> web.Response:
         owner=bool(request.get("owner_authenticated", False)),
     ):
         return web.json_response({"error": "无权修改他人角色卡"}, status=403)
-    return web.json_response(await api.update_character(gk, uid, body))
+    result = await api.update_character(gk, uid, body)
+    status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
+    return web.json_response(result, status=status)
 
 
 async def api_ruleset_character_profile_update(request: web.Request) -> web.Response:
@@ -62,7 +64,7 @@ async def api_ruleset_character_profile_update(request: web.Request) -> web.Resp
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")
-    status = 404 if code == "CHARACTER_NOT_FOUND" else 422
+    status = 409 if code == "REWRITE_IN_PROGRESS" else 404 if code == "CHARACTER_NOT_FOUND" else 422
     return web.json_response(result, status=status)
 
 
@@ -90,7 +92,7 @@ async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")
-    status = 404 if code == "CHARACTER_NOT_FOUND" else 422
+    status = 409 if code == "REWRITE_IN_PROGRESS" else 404 if code == "CHARACTER_NOT_FOUND" else 422
     return web.json_response(result, status=status)
 
 
@@ -136,7 +138,7 @@ async def _api_live_character_advancement(
         else 404
         if code in {"GAME_NOT_FOUND", "CHARACTER_NOT_FOUND"}
         else 409
-        if code == "STALE_CHARACTER_REVISION"
+        if code in {"STALE_CHARACTER_REVISION", "REWRITE_IN_PROGRESS"}
         else 422
     )
     return web.json_response(result, status=status)
@@ -169,6 +171,8 @@ async def api_live_advancement_control(request: web.Request) -> web.Response:
             "GAME_NOT_FOUND",
             "CHARACTER_NOT_FOUND",
         }
+        else 409
+        if code == "REWRITE_IN_PROGRESS"
         else 422
     )
     return web.json_response(result, status=status)
@@ -228,7 +232,9 @@ async def api_char_delete(request: web.Request) -> web.Response:
         owner=bool(request.get("owner_authenticated", False)),
     ):
         return web.json_response({"error": "无权删除他人角色"}, status=403)
-    return web.json_response(await api.delete_character(gk, uid))
+    result = await api.delete_character(gk, uid)
+    status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
+    return web.json_response(result, status=status)
 
 
 async def api_npc_portrait_update(request: web.Request) -> web.Response:
@@ -241,9 +247,9 @@ async def api_npc_portrait_update(request: web.Request) -> web.Response:
     if request.get("user_id", "") != inst.gm_uid:
         return web.json_response({"error": "仅 GM 可修改 NPC 头像"}, status=403)
     body = await request.json()
-    return web.json_response(
-        await api.update_npc_portrait(gk, npc_id, body.get("portrait"))
-    )
+    result = await api.update_npc_portrait(gk, npc_id, body.get("portrait"))
+    status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
+    return web.json_response(result, status=status)
 
 
 async def api_player_create(request: web.Request) -> web.Response:
@@ -268,4 +274,5 @@ async def api_player_create(request: web.Request) -> web.Response:
         token = request.get("session_token")
         if mgr and token:
             mgr.rebind(token, result.get("user_id", ""))
-    return web.json_response(result)
+    status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
+    return web.json_response(result, status=status)

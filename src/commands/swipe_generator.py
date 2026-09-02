@@ -62,14 +62,15 @@ class SwipeGenerator:
                 instance.game_key,
             )
             return None
-        async with instance._process_lock:
-            expected_run_id = instance.run_id
-            instance._rewrite_in_progress = True
-            before = type(instance).from_dict(deepcopy(instance.to_dict()))
-            before.log = deepcopy(instance.log)
-            staged = type(instance).from_dict(deepcopy(instance.to_dict()))
-            staged.log = deepcopy(instance.log)
-            try:
+        async with instance.historical_rewrite() as rewrite_entered:
+            if not rewrite_entered:
+                return None
+            async with instance._process_lock:
+                expected_run_id = instance.run_id
+                before = type(instance).from_dict(deepcopy(instance.to_dict()))
+                before.log = deepcopy(instance.log)
+                staged = type(instance).from_dict(deepcopy(instance.to_dict()))
+                staged.log = deepcopy(instance.log)
                 narration, scene_payload = await self._generate_locked(staged, round_num)
                 if narration is None:
                     return None
@@ -90,8 +91,6 @@ class SwipeGenerator:
                     except Exception:
                         logger.exception("Swipe 场景图调度失败 (round=%d)", round_num)
                 return narration
-            finally:
-                instance._rewrite_in_progress = False
 
     async def _generate_locked(
         self, instance: GameInstance, round_num: int,

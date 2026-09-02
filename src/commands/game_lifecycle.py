@@ -423,9 +423,10 @@ class GameLifecycle:
         )
         async with transition_lock:
             current = self.registry.get(instance.game_key) or instance
-            async with current._process_lock:
-                async with current._lock:
-                    return await self._replace_run(current, preserve_players=False)
+            async with current.authoritative_write():
+                async with current._process_lock:
+                    async with current._lock:
+                        return await self._replace_run(current, preserve_players=False)
 
     async def _replace_run(
         self,
@@ -453,12 +454,13 @@ class GameLifecycle:
             current = self.registry.get(instance.game_key) or instance
             if not current.players:
                 raise ValueError("重开世界需要至少 1 名角色")
-            async with current._process_lock:
-                # Freeze every old-run aggregate write through the atomic swap.
-                # A waiter holding a stale reference resumes afterwards and is
-                # rejected by its registry-identity fence.
-                async with current._lock:
-                    return await self._replace_run(current, preserve_players=True)
+            async with current.authoritative_write():
+                async with current._process_lock:
+                    # Freeze every old-run aggregate write through the atomic swap.
+                    # A waiter holding a stale reference resumes afterwards and is
+                    # rejected by its registry-identity fence.
+                    async with current._lock:
+                        return await self._replace_run(current, preserve_players=True)
 
     async def _start_reset_instance(self, instance: GameInstance) -> str:
         """Resume the gameplay stack already bound to this save."""

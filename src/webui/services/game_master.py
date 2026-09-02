@@ -288,6 +288,12 @@ class GameMasterService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return self._rewrite_conflict()
+            return await self._rollback_round_authority(instance)
+
+    async def _rollback_round_authority(self, instance: Any) -> dict[str, Any]:
         round_number = await instance.rollback_last_round()
         if round_number is None:
             return {"ok": False, "error": "没有可撤回的上一轮"}
@@ -333,9 +339,17 @@ class GameMasterService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return self._rewrite_conflict()
+            return await self._command_authority(instance, game_key, command, mode)
+
+    async def _command_authority(
+        self, instance: Any, game_key: str, command: str, mode: str,
+    ) -> dict[str, Any]:
         command = (command or "").strip()
         if mode == "rollback":
-            return await self.rollback_round(game_key)
+            return await self._rollback_round_authority(instance)
         if not command:
             return {"ok": False, "error": "请输入 GM 指令"}
 
@@ -439,6 +453,14 @@ class GameMasterService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return self._rewrite_conflict()
+            return await self._private_message_authority(instance, user_id, text)
+
+    async def _private_message_authority(
+        self, instance: Any, user_id: str, text: str,
+    ) -> dict[str, Any]:
         user_id = (user_id or "").strip()
         text = (text or "").strip()
         if user_id not in instance.players:
@@ -453,3 +475,11 @@ class GameMasterService:
         })
         await self._dependencies.save_instance(instance)
         return {"ok": True, "message": "悄悄话已发送"}
+
+    @staticmethod
+    def _rewrite_conflict() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "code": "REWRITE_IN_PROGRESS",
+            "error": "GM 正在重写历史回合，请等待完成后重试",
+        }

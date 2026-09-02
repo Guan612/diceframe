@@ -489,6 +489,28 @@ async def update_character(
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
+    if not inst:
+        return {"ok": False, "error": "角色不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        return await _update_character_authority(
+            dependencies, game_key, user_id, updates,
+        )
+
+
+async def _update_character_authority(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    user_id: str,
+    updates: dict,
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
     rule = dependencies.rules.load_rule_for_game(inst)
@@ -625,6 +647,23 @@ async def update_npc_portrait(
     )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        return await _update_npc_portrait_authority(
+            dependencies, inst, npc_id, portrait,
+        )
+
+
+async def _update_npc_portrait_authority(
+    dependencies: CharacterDependencies,
+    inst: GameInstance,
+    npc_id: str,
+    portrait: Any,
+) -> dict[str, Any]:
     npc_key = str(npc_id or "").strip()
     if not npc_key:
         return {"ok": False, "error": "NPC 不存在"}
@@ -677,23 +716,19 @@ async def resolve_payment(
         return {"ok": False, "error": "游戏不存在"}
     actor_uid = str(session_uid or "")
 
-    # Historical swipe rewrites hold the aggregate process barrier for their
-    # entire staged transaction (including the LLM await). Do not let a
-    # payment writer commit against temporary historical state.
-    if getattr(inst, "_rewrite_in_progress", False):
-        return {
-            "ok": False,
-            "code": "REWRITE_IN_PROGRESS",
-            "error": "GM 正在重写历史回合，请等待完成后再处理支付",
-        }
-
     def grant_reward(sheet: dict[str, Any], reward: dict[str, Any]) -> None:
         item_name = str(reward.get("name") or "").strip()
         if item_name:
             grant_classified_item(sheet, item_name, str(reward.get("category") or ""))
 
     scene_image_payload: dict[str, Any] | None = None
-    async with inst._lock:
+    async with inst.authoritative_write() as write_entered, inst._lock:
+        if not write_entered:
+            return {
+                "ok": False,
+                "code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后再处理支付",
+            }
         current = dependencies.games.get_instance(
             dependencies.games.parse_game_key(game_key),
         )
@@ -912,6 +947,25 @@ async def delete_character(
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
+    if not inst:
+        return {"ok": False, "error": "角色不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        return await _delete_character_authority(dependencies, game_key, user_id)
+
+
+async def _delete_character_authority(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    user_id: str,
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
     if len(inst.players) <= 1:
@@ -927,7 +981,27 @@ async def delete_character(
     return {"ok": True}
 
 
-async def create_player(dependencies: CharacterDependencies, game_key: str, character: dict,
+async def create_player(
+    dependencies: CharacterDependencies, game_key: str, character: dict,
+    force_uid: str = "", assign_new_id: bool = False,
+) -> dict[str, Any]:
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
+    )
+    if not inst:
+        return {"ok": False, "error": "游戏不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        return await _create_player_authority(
+            dependencies, game_key, character, force_uid, assign_new_id,
+        )
+
+
+async def _create_player_authority(dependencies: CharacterDependencies, game_key: str, character: dict,
                        force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),

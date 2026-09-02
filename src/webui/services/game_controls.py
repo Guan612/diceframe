@@ -126,36 +126,43 @@ class GameControlService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
-        pending = instance.pending_dice_actions(user_id or None)
-        if not pending:
-            return {"ok": True, "resolved": []}
-        rule = self._dependencies.load_rule(instance)
-        resolved: list[dict[str, Any]] = []
-        for action in pending:
-            actor_id = str(action.get("user_id") or "")
-            request = action.get("check_request")
-            if not isinstance(request, dict):
-                request = build_check_request(instance, action, rule)
-            if not request:
-                continue
-            action["check_request"] = request
-            payload = roll_check_request(request, rule)
-            applied = await instance.apply_action_roll(
-                actor_id,
-                payload["dice_system"],
-                payload["value"],
-                rolls=payload["rolls"],
-                source=source,
-            )
-            if not applied:
-                continue
-            payload.update({"user_id": actor_id, "source": source})
-            resolved.append(payload)
-        return {
-            "ok": True,
-            "resolved": resolved,
-            "roll": resolved[0] if resolved else None,
-        }
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return {
+                    "ok": False,
+                    "code": "REWRITE_IN_PROGRESS",
+                    "error": "GM 正在重写历史回合，请等待完成后重试",
+                }
+            pending = instance.pending_dice_actions(user_id or None)
+            if not pending:
+                return {"ok": True, "resolved": []}
+            rule = self._dependencies.load_rule(instance)
+            resolved: list[dict[str, Any]] = []
+            for action in pending:
+                actor_id = str(action.get("user_id") or "")
+                request = action.get("check_request")
+                if not isinstance(request, dict):
+                    request = build_check_request(instance, action, rule)
+                if not request:
+                    continue
+                action["check_request"] = request
+                payload = roll_check_request(request, rule)
+                applied = await instance.apply_action_roll(
+                    actor_id,
+                    payload["dice_system"],
+                    payload["value"],
+                    rolls=payload["rolls"],
+                    source=source,
+                )
+                if not applied:
+                    continue
+                payload.update({"user_id": actor_id, "source": source})
+                resolved.append(payload)
+            return {
+                "ok": True,
+                "resolved": resolved,
+                "roll": resolved[0] if resolved else None,
+            }
 
     async def resolve_luck_decision(
         self,
