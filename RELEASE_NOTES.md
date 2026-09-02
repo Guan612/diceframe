@@ -1,6 +1,6 @@
-# DiceFrame v2.5.0
+# DiceFrame v2.5.1-beta.1
 
-> 正式发布版本。v2.5.0 汇总了自 v2.3.2 以来的功能与修复，其中包括此前 2.4 系列预览版中的改进。重要战役升级前，请先备份完整的 `data/` 文件夹。
+> 预览版本。v2.5.1-beta.1 延续 v2.5.0 的功能，并补充 PR202 经济结算回滚、Swipe 历史重写与 origin-round 快照隔离修复。重要战役升级前，请先备份完整的 `data/` 文件夹。
 
 ## 中文
 
@@ -29,6 +29,11 @@
 - **运行日志与诊断**：运行日志可持久化与导出；需要排查时，内置助手可以在明确授权后阅读受限、脱敏的 DiceFrame 运行诊断上下文。
 - **Docker 托管更新首次发布**：容器可下载并校验应用更新包，经过健康检查与观察期后切换版本；失败时可回到上一应用版本，业务数据仍独立保留。
 
+### 本预览版补充
+
+- **经济结算回滚**：多笔晚结算按逆提交顺序恢复余额、金币、物品和堆叠数量；origin-round Swipe 不再把后续轮次的状态写回旧快照。
+- **奖励资格**：开场、普通回合和 Swipe 都会拦截尚未有完成证据的条件性奖励，避免任务未完成就生成奖励提案。
+
 ### 修复、兼容与更新可靠性
 
 - **重开、重置和战斗状态**：修复了新开/重开对局可能带入旧会话记忆、死亡或战斗状态的问题；战斗历史、死亡豁免与敌方回合的公共反馈也经过补强。
@@ -49,9 +54,9 @@
 
 ### 下载与校验
 
-- **普通 Windows 用户**：`DiceFrame-v2.5.0-windows-portable.zip`
-- **源码运行用户**：`DiceFrame-v2.5.0-windows.zip`
-- **托管 Docker 更新**：`DiceFrame-v2.5.0-docker-update-linux-amd64.zip`
+- **普通 Windows 用户**：`DiceFrame-v2.5.1-beta.1-windows-portable.zip`
+- **源码运行用户**：`DiceFrame-v2.5.1-beta.1-windows.zip`
+- **托管 Docker 更新**：`DiceFrame-v2.5.1-beta.1-docker-update-linux-amd64.zip`
 - 下载后请使用 Release 中的 `SHA256SUMS` 统一校验；重要战役建议保留旧版程序与数据备份，便于回退。
 
 ## English
@@ -81,6 +86,11 @@
 - **Runtime logs and diagnostics**: Runtime logs can be retained and exported. With explicit permission, the built-in assistant can inspect a bounded, redacted DiceFrame diagnostic context for troubleshooting.
 - **First managed-Docker update release**: Containers can download and verify an application update package, switch versions after health checks and a probation period, and return to the prior application version on failure while business data remains separate.
 
+### Included in this preview
+
+- **Economy rollback**: multiple late settlements now restore balances, gold, items, and stacked quantities in reverse commit order; origin-round Swipe no longer projects later-round state into an earlier snapshot.
+- **Reward eligibility**: opening, normal-round, and Swipe pipelines reject conditional rewards without completion evidence, so unfinished tasks do not create reward proposals.
+
 ### Fixes, compatibility, and update reliability
 
 - **Restart, reset, and combat state**: Fixed cases where a new or restarted game could inherit prior session memory, death state, or combat state. Public feedback for combat history, death saves, and enemy turns was also strengthened.
@@ -101,7 +111,7 @@
 
 ### Downloads and verification
 
-- **Regular Windows users**: `DiceFrame-v2.5.0-windows-portable.zip`
-- **Source-run users**: `DiceFrame-v2.5.0-windows.zip`
-- **Managed Docker update**: `DiceFrame-v2.5.0-docker-update-linux-amd64.zip`
+- **Regular Windows users**: `DiceFrame-v2.5.1-beta.1-windows-portable.zip`
+- **Source-run users**: `DiceFrame-v2.5.1-beta.1-windows.zip`
+- **Managed Docker update**: `DiceFrame-v2.5.1-beta.1-docker-update-linux-amd64.zip`
 - Verify downloads with the Release `SHA256SUMS`. For important campaigns, keep the prior program version and a data backup so rollback remains possible.
