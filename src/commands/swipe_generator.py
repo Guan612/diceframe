@@ -9,6 +9,7 @@ from typing import Any
 
 from src.commands.economy_effects import (
     defer_narrative_effects,
+    guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
 )
@@ -174,6 +175,9 @@ class SwipeGenerator:
             narration = response.content.split("---", 1)[0].strip()
         narration = sanitize_narration(narration)
         data = parse_tag_state(response.content, combat_model_s)
+        narration = guard_unbacked_payment_narration(
+            narration, data, instance.language,
+        )
         economy_pending = has_economy_proposal(data)
         deferred_effects = defer_narrative_effects(data, response)
         if economy_pending:

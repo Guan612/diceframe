@@ -10,6 +10,7 @@ decision group.
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 from src.engine.language import localized_text
@@ -26,6 +27,14 @@ _DEFERRED_DATA_KEYS = {
     "scene_image_prompt",
     "xp_rewards",
 }
+
+_COMPLETED_PAYMENT_RE = re.compile(
+    r"(?:掏出|拿出|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
+    r"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:金币|金子|金)"
+    r"|(?:paid|spent|handed over|paid out)\s+"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+gold",
+    re.IGNORECASE,
+)
 
 
 def _meaningful(value: Any) -> bool:
@@ -44,6 +53,30 @@ def has_economy_proposal(data: dict[str, Any]) -> bool:
         state_update.get("pending_payments")
         or state_update.get("economy_proposals")
     )
+
+
+def guard_unbacked_payment_narration(
+    narration: str,
+    data: dict[str, Any],
+    language: str,
+) -> str:
+    """Prevent prose from claiming a completed payment without authority.
+
+    Currency changes are authoritative only through PAY/TEAM_PAY/economy
+    proposals.  Models occasionally narrate handing over coins while omitting
+    the protocol tag; leave the balance untouched and make that fact explicit
+    instead of presenting a false completed transaction to the player.
+    """
+
+    text = str(narration or "").strip()
+    if not text or has_economy_proposal(data) or not _COMPLETED_PAYMENT_RE.search(text):
+        return text
+    notice = {
+        "en": "Authority notice: no payment proposal was created, so no gold was deducted. Ask the GM to issue a payment proposal if this fee should be charged.",
+        "zh-CN": "权威账本提示：本次没有生成支付提案，因此未扣除金币。若确实需要收费，请由 GM 重新发起支付提案。",
+        "ja": "権威台帳の通知：支払い提案が作成されなかったため、ゴールドは差し引かれていません。請求が必要なら GM に支払い提案を出してもらってください。",
+    }.get(str(language or "").lower(), "权威账本提示：本次没有生成支付提案，因此未扣除金币。若确实需要收费，请由 GM 重新发起支付提案。")
+    return f"{text}\n\n{notice}"
 
 
 def defer_narrative_effects(

@@ -14,8 +14,10 @@ from src.engine.economy import (
     pending_memory_reversals,
     queue_effect_group,
     queue_proposal,
+    reverse_round_economy,
     resolve_proposal,
 )
+from src.commands.economy_effects import guard_unbacked_payment_narration
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.llm.client import LLMResponse
 from src.llm.context_builder import build_context
@@ -59,6 +61,19 @@ def test_only_plain_personal_purchase_is_nonblocking() -> None:
     assert not is_nonblocking_personal_purchase(instance, team)
     assert team in blocking_economy_proposals(instance)
     assert has_blocking_economy_decision(instance)
+
+
+def test_narrated_payment_without_protocol_is_explicitly_not_charged() -> None:
+    narration = "你从怀里掏出五枚金币，放在柜台上。"
+    guarded = guard_unbacked_payment_narration(narration, {}, "zh-CN")
+    assert narration in guarded
+    assert "未扣除金币" in guarded
+
+
+def test_narrated_payment_with_proposal_keeps_pending_notice_path() -> None:
+    narration = "你支付了五枚金币。"
+    data = {"state_update": {"pending_payments": [{"uid": "gm", "amount": 5}]}}
+    assert guard_unbacked_payment_narration(narration, data, "zh-CN") == narration
 
 
 def test_personal_purchase_with_effect_group_remains_blocking() -> None:
@@ -118,6 +133,96 @@ def test_narrative_reward_requires_gm_and_commits_once() -> None:
         entry["delta"] for entry in accepted["transaction"]["entries"]
     ) == 0
     assert duplicate["code"] == "ALREADY_RESOLVED"
+
+
+def _grant_inventory_reward(sheet: dict, reward: dict) -> None:
+    inventory = sheet.setdefault("inventory", [])
+    inventory.append({"name": str(reward.get("name") or ""), "qty": 1})
+
+
+def test_late_personal_purchase_reopens_when_settlement_round_is_rolled_back() -> None:
+    instance = _instance()
+    instance.round_number = 5
+    purchase = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid="gm",
+        recipient_uid="gm",
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+    )
+    assert purchase["round"] == 5
+    instance.round_number = 7
+    before = deepcopy(instance.get_character_sheet("gm"))
+    committed = resolve_proposal(
+        instance,
+        purchase["id"],
+        actor_uid="gm",
+        accepted=True,
+        grant_reward=_grant_inventory_reward,
+    )
+    assert committed["transaction"]["round"] == 7
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 25
+    assert instance.get_character_sheet("gm")["inventory"]
+    assert purchase["status"] == "committed"
+
+    reverse_round_economy(instance, 7)
+    # The offer originated in R5, so a R7 settlement rollback reopens it.
+    assert purchase["status"] == "pending"
+    assert purchase in instance.pending_payments
+    assert not has_blocking_economy_decision(instance)
+    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert not any(
+        outcome.get("status") == "committed"
+        and outcome.get("proposal_id") == purchase["id"]
+        for outcome in instance.economy["outcomes"]
+    )
+
+    # Character snapshot restoration is performed by the rollback orchestrator;
+    # verify the reopened proposal can settle exactly once after restoration.
+    instance.players["gm"]["character_sheet"] = before
+    retry = resolve_proposal(
+        instance,
+        purchase["id"],
+        actor_uid="gm",
+        accepted=True,
+        grant_reward=_grant_inventory_reward,
+    )
+    assert retry["ok"] is True
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 25
+    assert len(instance.economy["transactions"]) == 2
+    assert sum(tx["status"] == "committed" for tx in instance.economy["transactions"]) == 1
+
+
+def test_origin_round_rollback_invalidates_purchase_paid_in_later_round() -> None:
+    instance = _instance()
+    instance.round_number = 5
+    purchase = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid="gm",
+        recipient_uid="gm",
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+    )
+    instance.round_number = 7
+    resolve_proposal(
+        instance,
+        purchase["id"],
+        actor_uid="gm",
+        accepted=True,
+        grant_reward=_grant_inventory_reward,
+    )
+
+    reverse_round_economy(instance, 5)
+    assert purchase["status"] == "reversed"
+    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert purchase not in instance.pending_payments
+    assert not any(
+        outcome.get("proposal_id") == purchase["id"]
+        and outcome.get("status") == "committed"
+        for outcome in instance.economy["outcomes"]
+    )
 
 
 def test_transfer_moves_currency_between_players_with_balanced_ledger() -> None:

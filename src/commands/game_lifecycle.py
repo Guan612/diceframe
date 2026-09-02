@@ -12,6 +12,7 @@ from typing import Any
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.economy_effects import (
     defer_narrative_effects,
+    guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
 )
@@ -305,6 +306,9 @@ class GameLifecycle:
             )
             start_data = {}
         economy_pending = bool(response is not None and has_economy_proposal(start_data))
+        narration = guard_unbacked_payment_narration(
+            narration, start_data, instance.language,
+        )
         deferred_effects = (
             defer_narrative_effects(start_data, response)
             if response is not None else {}

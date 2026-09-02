@@ -763,7 +763,9 @@ class GameInstance:
             self.action_queue.clear()
             self.pending_actions.clear()
             self.ready_players.clear()
-            self.pending_payments.clear()
+            # ``reverse_round_economy`` restores still-valid proposals whose
+            # settlement happened in the rolled-back round.  Do not clear the
+            # compatibility projection after that restoration.
             self.reset_round_checks()
             # Explicit rollback starts a fresh attempt for that round; do not
             # let a discarded outcome affect the replay or a later round.

@@ -56,6 +56,10 @@ def _record_outcome(
         "actor_uid": str(actor_uid),
         "visibility": str(proposal.get("visibility") or "private"),
         "round": int(proposal.get("round", getattr(instance, "round_number", 0)) or 0),
+        # Keep proposal origin round separate from the round in which this
+        # decision was actually settled.  Rollback uses this field to remove
+        # late-payment outcomes without invalidating the original offer.
+        "resolved_round": int(getattr(instance, "round_number", 0) or 0),
         "resolved_at": str(proposal.get("resolved_at") or datetime.now(timezone.utc).isoformat()),
     }
     outcomes = instance.economy.setdefault("outcomes", [])
@@ -852,28 +856,98 @@ def resolve_proposal(
 
 
 def reverse_round_economy(instance: Any, round_number: int) -> None:
-    """Invalidate proposal effects restored by a round snapshot rollback."""
+    """Reverse economy effects associated with either round axis.
 
-    proposal_ids: set[str] = set()
-    for proposal in instance.economy.get("proposals", []):
-        if int(proposal.get("round", -1) or -1) != int(round_number):
+    ``proposal.round`` is the narrative/origin round, while
+    ``transaction.round`` is the actual settlement round.  A late personal
+    purchase can therefore need settlement-only rollback (reopen the offer)
+    without erasing its origin, while origin rollback must invalidate all
+    later settlements of that offer.
+    """
+
+    rollback_round = int(round_number)
+    proposals = [
+        item for item in instance.economy.get("proposals", [])
+        if isinstance(item, dict)
+    ]
+    origin_ids = {
+        str(proposal.get("id") or "")
+        for proposal in proposals
+        if int(proposal.get("round", -1) or -1) == rollback_round
+    }
+    transactions = [
+        item for item in instance.economy.get("transactions", [])
+        if isinstance(item, dict)
+    ]
+    settlement_transactions = [
+        transaction for transaction in transactions
+        if transaction.get("status") == "committed"
+        and int(transaction.get("round", -1) or -1) == rollback_round
+    ]
+    settlement_ids = {
+        str(transaction.get("proposal_id") or "")
+        for transaction in settlement_transactions
+    }
+    affected_ids = origin_ids | settlement_ids
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Invalidate proposals whose narrative origin was erased, then reverse
+    # every committed settlement linked to those proposals (even if it was
+    # paid in a later round).
+    for proposal in proposals:
+        proposal_id = str(proposal.get("id") or "")
+        if proposal_id not in origin_ids:
             continue
-        proposal_ids.add(str(proposal.get("id") or ""))
         if proposal.get("status") == "committed":
             proposal["status"] = "reversed"
         elif proposal.get("status") == "pending":
             proposal["status"] = "superseded"
+        proposal.pop("resolved_at", None)
         source_ref = str(proposal.get("source_ref") or "")
         if source_ref:
             instance.economy.get("idempotency_records", {}).pop(source_ref, None)
-    for transaction in instance.economy.get("transactions", []):
-        if str(transaction.get("proposal_id") or "") in proposal_ids and transaction.get("status") == "committed":
+
+    for transaction in transactions:
+        if (
+            transaction.get("status") == "committed"
+            and str(transaction.get("proposal_id") or "") in affected_ids
+        ):
             transaction["status"] = "reversed"
-            transaction["reversed_at"] = datetime.now(timezone.utc).isoformat()
-    instance.pending_payments = [
-        item for item in instance.pending_payments
-        if int(item.get("round", -1) or -1) != int(round_number)
-    ]
+            transaction["reversed_at"] = now
+
+    # A settlement-only rollback keeps an earlier valid offer actionable. Do
+    # not resurrect proposals whose origin round is itself being erased.
+    for proposal in proposals:
+        proposal_id = str(proposal.get("id") or "")
+        if proposal_id not in settlement_ids or proposal_id in origin_ids:
+            continue
+        if proposal.get("status") == "committed" and proposal.get("run_id") == instance.run_id:
+            proposal["status"] = "pending"
+            proposal.pop("resolved_at", None)
+            proposal.pop("resolution_code", None)
+            if str(proposal.get("kind") or "payment") in {"payment", "purchase", "fee"}:
+                if not any(
+                    isinstance(item, dict) and str(item.get("id") or "") == proposal_id
+                    for item in instance.pending_payments
+                ):
+                    instance.pending_payments.append(proposal)
+
+    # Remove compatibility projections for erased origins, but retain reopened
+    # settlement-only proposals.  This also avoids duplicate pending entries.
+    pending: list[dict[str, Any]] = []
+    seen_pending: set[str] = set()
+    for item in instance.pending_payments:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "")
+        if item_id in origin_ids or item.get("status") != "pending":
+            continue
+        if item_id and item_id in seen_pending:
+            continue
+        if item_id:
+            seen_pending.add(item_id)
+        pending.append(item)
+    instance.pending_payments = pending
     for group in instance.economy.get("effect_groups", []):
         if int(group.get("round", -1) or -1) == int(round_number):
             group["status"] = "superseded"
@@ -889,6 +963,18 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
             delivery["reversal_requested_at"] = datetime.now(timezone.utc).isoformat()
     instance.economy["outcomes"] = [
         item for item in instance.economy.get("outcomes", [])
-        if int(item.get("round", -1) or -1) != int(round_number)
+        if not (
+            isinstance(item, dict)
+            and (
+                str(item.get("proposal_id") or "") in origin_ids
+                or (
+                    str(item.get("proposal_id") or "") in settlement_ids
+                    and (
+                        int(item.get("resolved_round", item.get("round", -1)) or -1) == rollback_round
+                        or str(item.get("status") or "") == "committed"
+                    )
+                )
+            )
+        )
     ]
     _advance_revision(instance)

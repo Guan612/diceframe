@@ -15,6 +15,7 @@ from typing import Any
 
 from src.commands.economy_effects import (
     defer_narrative_effects,
+    guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
 )
@@ -617,6 +618,9 @@ class RoundProcessor:
         instance.set_token_budget_bump(initial_budget, used_budget)
         apply_parsed_data_to_response(instance, response, data)
         economy_pending = has_economy_proposal(data)
+        response.narration = guard_unbacked_payment_narration(
+            response.narration, data, instance.language,
+        )
         deferred_effects = defer_narrative_effects(data, response)
         if economy_pending:
             notice = pending_decision_notice(instance.language)
