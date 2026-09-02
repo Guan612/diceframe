@@ -152,6 +152,24 @@ async def resolve_live(
     user_id: str,
     body: Any,
 ) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
+    if instance is None:
+        return _failure("GAME_NOT_FOUND", "游戏不存在")
+    async with instance.authoritative_write() as entered:
+        if not entered:
+            return _failure("REWRITE_IN_PROGRESS", "GM 正在重写历史回合，请等待完成后重试")
+        if dependencies.get_instance(instance.game_key) is not instance:
+            return _failure("STALE_RUN", "对局已重开，请刷新后重试")
+        return await _resolve_live_authority(dependencies, game_key, user_id, body, instance)
+
+
+async def _resolve_live_authority(
+    dependencies: LiveRulesetRestDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
+    instance: Any,
+) -> dict[str, Any]:
     parsed = validate_draft_shape(body)
     rest = parsed.get("rest")
     if rest not in {"short", "long"}:
@@ -168,9 +186,6 @@ async def resolve_live(
     if not operation_id or len(operation_id) > 160:
         return _failure("INVALID_OPERATION_ID", "休息操作必须提供有效的 operation_id")
 
-    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
-    if instance is None:
-        return _failure("GAME_NOT_FOUND", "游戏不存在")
     if user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
     rule = dependencies.load_rule_for_game(instance)
@@ -263,8 +278,24 @@ async def resolve_live_party(
     user_id: str,
     body: Any,
 ) -> dict[str, Any]:
-    """Collect one player's rest choice and resolve the whole present party together."""
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
+    if instance is None:
+        return _failure("GAME_NOT_FOUND", "游戏不存在")
+    async with instance.authoritative_write() as entered:
+        if not entered:
+            return _failure("REWRITE_IN_PROGRESS", "GM 正在重写历史回合，请等待完成后重试")
+        if dependencies.get_instance(instance.game_key) is not instance:
+            return _failure("STALE_RUN", "对局已重开，请刷新后重试")
+        return await _resolve_live_party_authority(dependencies, game_key, user_id, body, instance)
 
+
+async def _resolve_live_party_authority(
+    dependencies: LiveRulesetRestDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
+    instance: Any,
+) -> dict[str, Any]:
     parsed = validate_draft_shape(body)
     rest = parsed.get("rest")
     if rest not in {"short", "long"}:
@@ -279,9 +310,6 @@ async def resolve_live_party(
     if not operation_id or len(operation_id) > 160:
         return _failure("INVALID_OPERATION_ID", "休息操作必须提供有效的 operation_id")
 
-    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
-    if instance is None:
-        return _failure("GAME_NOT_FOUND", "游戏不存在")
     rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return _failure("RULE_NOT_FOUND", "当前游戏规则不存在")

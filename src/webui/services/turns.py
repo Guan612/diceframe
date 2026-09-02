@@ -169,7 +169,7 @@ def _luck_error_status(code: str) -> int:
         return 404
     if code == "LUCK_FORBIDDEN":
         return 403
-    if code in {"LUCK_ALREADY_RESOLVED", "LUCK_NOT_PENDING"}:
+    if code in {"LUCK_ALREADY_RESOLVED", "LUCK_NOT_PENDING", "REWRITE_IN_PROGRESS", "STALE_RUN"}:
         return 409
     return 400
 

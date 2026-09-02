@@ -497,20 +497,20 @@ async def update_character(
                 "ok": False, "error_code": "REWRITE_IN_PROGRESS",
                 "error": "GM 正在重写历史回合，请等待完成后重试",
             }
+        if dependencies.games.get_instance(inst.game_key) is not inst:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
         return await _update_character_authority(
-            dependencies, game_key, user_id, updates,
+            dependencies, inst, user_id, updates,
         )
 
 
 async def _update_character_authority(
     dependencies: CharacterDependencies,
-    game_key: str,
+    instance: GameInstance,
     user_id: str,
     updates: dict,
 ) -> dict[str, Any]:
-    inst = dependencies.games.get_instance(
-        dependencies.games.parse_game_key(game_key),
-    )
+    inst = instance
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
     rule = dependencies.rules.load_rule_for_game(inst)
@@ -955,17 +955,18 @@ async def delete_character(
                 "ok": False, "error_code": "REWRITE_IN_PROGRESS",
                 "error": "GM 正在重写历史回合，请等待完成后重试",
             }
-        return await _delete_character_authority(dependencies, game_key, user_id)
+        current = dependencies.games.get_instance(inst.game_key)
+        if current is not inst:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+        return await _delete_character_authority(dependencies, inst, user_id)
 
 
 async def _delete_character_authority(
     dependencies: CharacterDependencies,
-    game_key: str,
+    instance: GameInstance,
     user_id: str,
 ) -> dict[str, Any]:
-    inst = dependencies.games.get_instance(
-        dependencies.games.parse_game_key(game_key),
-    )
+    inst = instance
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
     if len(inst.players) <= 1:
@@ -977,7 +978,7 @@ async def _delete_character_authority(
     inst.remove_payments_for_player(user_id)
     inst.clear_private_messages(user_id)
     await dependencies.games.save_instance(inst)
-    logger.info("角色已删除: %s (%s)", name, game_key)
+    logger.info("角色已删除: %s (%s)", name, inst.game_key)
     return {"ok": True}
 
 
@@ -996,18 +997,15 @@ async def create_player(
                 "ok": False, "error_code": "REWRITE_IN_PROGRESS",
                 "error": "GM 正在重写历史回合，请等待完成后重试",
             }
+        if dependencies.games.get_instance(inst.game_key) is not inst:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
         return await _create_player_authority(
-            dependencies, game_key, character, force_uid, assign_new_id,
+            dependencies, inst, character, force_uid, assign_new_id,
         )
 
 
-async def _create_player_authority(dependencies: CharacterDependencies, game_key: str, character: dict,
+async def _create_player_authority(dependencies: CharacterDependencies, inst: GameInstance, character: dict,
                        force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
-    inst = dependencies.games.get_instance(
-        dependencies.games.parse_game_key(game_key),
-    )
-    if not inst:
-        return {"ok": False, "error": "游戏不存在"}
     requested_uid = str(character.get("user_id") or "").strip()
     if requested_uid and requested_uid in inst.players:
         return {

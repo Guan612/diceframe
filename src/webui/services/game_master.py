@@ -291,6 +291,8 @@ class GameMasterService:
         async with instance.authoritative_write() as write_entered:
             if not write_entered:
                 return self._rewrite_conflict()
+            if self._instance(game_key) is not instance:
+                return self._stale_run()
             return await self._rollback_round_authority(instance)
 
     async def _rollback_round_authority(self, instance: Any) -> dict[str, Any]:
@@ -342,6 +344,8 @@ class GameMasterService:
         async with instance.authoritative_write() as write_entered:
             if not write_entered:
                 return self._rewrite_conflict()
+            if self._instance(game_key) is not instance:
+                return self._stale_run()
             return await self._command_authority(instance, game_key, command, mode)
 
     async def _command_authority(
@@ -456,6 +460,8 @@ class GameMasterService:
         async with instance.authoritative_write() as write_entered:
             if not write_entered:
                 return self._rewrite_conflict()
+            if self._instance(game_key) is not instance:
+                return self._stale_run()
             return await self._private_message_authority(instance, user_id, text)
 
     async def _private_message_authority(
@@ -483,3 +489,7 @@ class GameMasterService:
             "code": "REWRITE_IN_PROGRESS",
             "error": "GM 正在重写历史回合，请等待完成后重试",
         }
+
+    @staticmethod
+    def _stale_run() -> dict[str, Any]:
+        return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}

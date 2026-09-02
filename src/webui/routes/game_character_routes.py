@@ -138,7 +138,7 @@ async def _api_live_character_advancement(
         else 404
         if code in {"GAME_NOT_FOUND", "CHARACTER_NOT_FOUND"}
         else 409
-        if code in {"STALE_CHARACTER_REVISION", "REWRITE_IN_PROGRESS"}
+        if code in {"STALE_CHARACTER_REVISION", "REWRITE_IN_PROGRESS", "STALE_RUN"}
         else 422
     )
     return web.json_response(result, status=status)
@@ -172,7 +172,7 @@ async def api_live_advancement_control(request: web.Request) -> web.Response:
             "CHARACTER_NOT_FOUND",
         }
         else 409
-        if code == "REWRITE_IN_PROGRESS"
+        if code in {"REWRITE_IN_PROGRESS", "STALE_RUN"}
         else 422
     )
     return web.json_response(result, status=status)
