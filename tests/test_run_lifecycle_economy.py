@@ -233,6 +233,56 @@ def test_origin_round_rollback_invalidates_purchase_paid_in_later_round() -> Non
     )
 
 
+@pytest.mark.asyncio
+async def test_gm_rollback_restores_late_purchase_character_and_ledger_consistently(tmp_path) -> None:
+    """Exercise the real GameInstance rollback path after a late settlement."""
+    instance = _instance()
+    instance.round_number = 5
+    purchase = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid="gm",
+        recipient_uid="gm",
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+    )
+    instance.round_number = 7
+    pre_payment = deepcopy(instance.get_character_sheet("gm"))
+    settled = resolve_proposal(
+        instance,
+        purchase["id"],
+        actor_uid="gm",
+        accepted=True,
+        grant_reward=_grant_inventory_reward,
+    )
+    assert settled["transaction"]["round"] == 7
+    # This deliberately captures the edge-case snapshot after payment.
+    instance.log.append({
+        "round": 7,
+        "actions": [],
+        "gm_response": "late purchase",
+        "round_start_snapshot": _snapshot_players(instance),
+    })
+    instance.round_number = 8
+
+    assert await instance.rollback_last_round() == 7
+    assert purchase["status"] == "pending"
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == pre_payment["currency"]["amount"]
+    assert instance.get_character_sheet("gm")["inventory"] == pre_payment.get("inventory", [])
+    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert purchase in instance.pending_payments
+
+    registry = GameRegistry(tmp_path / "saves")
+    registry.register(instance)
+    await registry.save(instance)
+    registry._instances.clear()
+    recovered = await registry.load(instance.game_key)
+    assert recovered is not None
+    assert recovered.get_character_sheet("gm")["currency"]["amount"] == pre_payment["currency"]["amount"]
+    assert recovered.get_character_sheet("gm")["inventory"] == pre_payment.get("inventory", [])
+    assert recovered.pending_payments[0]["status"] == "pending"
+
+
 def test_transfer_moves_currency_between_players_with_balanced_ledger() -> None:
     instance = _instance()
     proposal = queue_proposal(

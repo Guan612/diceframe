@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
@@ -810,6 +812,10 @@ def resolve_proposal(
             for reward in rewards:
                 grant_reward(recipient, reward)
             instance.set_character_sheet(recipient_uid, recipient)
+            reward_snapshots[-1]["after"] = {
+                key: deepcopy(recipient.get(key, []))
+                for key in ("inventory", "equipment", "key_items")
+            }
     elif kind == "reward":
         if recipient_uid not in instance.players:
             return {"ok": False, "code": "RECIPIENT_NOT_FOUND", "error": "奖励角色不存在"}
@@ -1037,9 +1043,62 @@ def reconcile_rollback_snapshot(
             uid = str(reward_snapshot.get("recipient_uid") or "")
             target = reconciled.get(uid)
             before = reward_snapshot.get("before")
-            if not isinstance(target, dict) or not isinstance(before, dict):
+            after = reward_snapshot.get("after")
+            if not isinstance(target, dict) or not isinstance(before, dict) or not isinstance(after, dict):
                 continue
             for key in ("inventory", "equipment", "key_items"):
-                if key in before:
-                    target[key] = deepcopy(before[key])
+                if key not in before or key not in after:
+                    continue
+                current = target.get(key)
+                if not isinstance(current, list):
+                    continue
+                target[key] = _remove_reward_delta(current, before[key], after[key])
     return reconciled
+
+
+def _item_key(item: Any, *, include_qty: bool = True) -> str:
+    value = dict(item) if isinstance(item, dict) else item
+    if isinstance(value, dict) and not include_qty:
+        value = {key: val for key, val in value.items() if key != "qty"}
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _remove_reward_delta(current: list[Any], before: Any, after: Any) -> list[Any]:
+    """Remove only entries added by a purchase reward, preserving later changes."""
+    if not isinstance(before, list) or not isinstance(after, list):
+        return deepcopy(current)
+    result = deepcopy(current)
+    before_counts = Counter(_item_key(item, include_qty=False) for item in before)
+    after_counts = Counter(_item_key(item, include_qty=False) for item in after)
+    additions = {
+        key: max(0, after_counts[key] - before_counts[key])
+        for key in after_counts
+        if after_counts[key] > before_counts[key]
+    }
+    if not additions:
+        # Inventory grants can merge into an existing stack instead of adding a row.
+        before_qty = Counter()
+        after_qty = Counter()
+        for item in before:
+            before_qty[_item_key(item, include_qty=False)] += int(item.get("qty", 1) or 0) if isinstance(item, dict) else 1
+        for item in after:
+            after_qty[_item_key(item, include_qty=False)] += int(item.get("qty", 1) or 0) if isinstance(item, dict) else 1
+        additions = {
+            key: max(0, after_qty[key] - before_qty[key])
+            for key in after_qty
+            if after_qty[key] > before_qty[key]
+        }
+    for index in range(len(result) - 1, -1, -1):
+        key = _item_key(result[index], include_qty=False)
+        remaining = additions.get(key, 0)
+        if remaining <= 0:
+            continue
+        item = result[index]
+        qty = int(item.get("qty", 1) or 0) if isinstance(item, dict) else 1
+        if qty <= remaining:
+            result.pop(index)
+            additions[key] = remaining - qty
+        elif isinstance(item, dict):
+            item["qty"] = qty - remaining
+            additions[key] = 0
+    return result
