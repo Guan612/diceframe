@@ -1602,6 +1602,7 @@ export const en = {
   worldDeleted: 'World deleted',
   jsonArrayRequired: 'Invalid JSON: expected an array',
   importedEntries: 'Imported {count} entries',
+  importedWithFailures: 'Imported {imported} entries; {failed} failed (empty name or oversized content)',
   standaloneLorebookHint: 'Manage lorebook entries independently.',
   chooseWorldEllipsis: 'Choose world...',
   newWorld: 'New World',

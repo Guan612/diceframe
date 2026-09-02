@@ -428,3 +428,60 @@ def test_save_entry_rejects_bad_target(web_api):
     assert api.save_entry({"world_id": "missing_world", "name": "x"}).get("ok") is False
     assert api.save_entry({"world_id": "import_world2", "name": "   "}).get("ok") is False
     assert api.save_entry({"world_id": "", "name": "x"}).get("ok") is False
+
+
+def test_import_entries_batches_large_lorebook_in_one_request(web_api):
+    """issue #213：50+ 条的批量导入必须一次请求完成，不再逐条撞写频控。"""
+
+    api, lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    lorebook.create_world("import_batch_world", "批量导入世界")
+
+    entries = [
+        {"name": f"条目{i}", "type": "location", "keywords": [f"关键词{i}"], "content": f"内容{i}"}
+        for i in range(60)
+    ]
+    result = api.import_entries("import_batch_world", entries)
+
+    assert result.get("ok") is True
+    assert result.get("imported") == 60
+    assert result.get("failed") == []
+    assert lorebook.list_entries("import_batch_world").__len__() >= 60
+    names = {e["name"] for e in lorebook.list_entries("import_batch_world")}
+    assert {"条目0", "条目59"} <= names
+    # 批量内同名条目生成不冲突的 id。
+    assert len({e["id"] for e in lorebook.list_entries("import_batch_world")}) == len(
+        lorebook.list_entries("import_batch_world")
+    )
+
+
+def test_import_entries_reports_per_entry_failures(web_api):
+    api, lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    lorebook.create_world("import_partial_world", "部分失败世界")
+
+    result = api.import_entries("import_partial_world", [
+        {"name": "好条目", "content": "c", "keywords": ["k"]},
+        {"name": "   ", "content": "c"},  # 名称为空
+        {"name": "超长条目", "content": "x" * 5001},  # 内容超长
+        {"name": "另一条", "content": "c"},
+    ])
+
+    assert result.get("ok") is True
+    assert result.get("imported") == 2
+    assert [f["index"] for f in result.get("failed", [])] == [1, 2]
+    names = {e["name"] for e in lorebook.list_entries("import_partial_world")}
+    assert {"好条目", "另一条"} <= names
+    assert "超长条目" not in names
+
+
+def test_import_entries_rejects_missing_world_and_oversize_batch(web_api):
+    api, lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    lorebook.create_world("import_guard_world", "限额世界")
+
+    assert api.import_entries("missing_world", [{"name": "x"}]).get("ok") is False
+    assert api.import_entries("import_guard_world", []).get("ok") is False
+    oversize = [
+        {"name": f"条目{i}", "content": "c"} for i in range(501)
+    ]
+    result = api.import_entries("import_guard_world", oversize)
+    assert result.get("ok") is False
+    assert "上限" in str(result.get("error"))

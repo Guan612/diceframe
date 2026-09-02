@@ -1431,6 +1431,9 @@ class WebAPI:
     def save_entry(self, entry: dict) -> dict[str, Any]:
         return worlds.save_entry(self._world_dependencies, entry)
 
+    def import_entries(self, world_id: str, entries: list) -> dict[str, Any]:
+        return worlds.import_entries(self._world_dependencies, world_id, entries)
+
     async def generate_lorebook_entries(self, world_id: str, prompt: str, language: str = "") -> dict[str, Any]:
         return await worlds.generate_lorebook_entries(
             self._world_dependencies, world_id, prompt, language,

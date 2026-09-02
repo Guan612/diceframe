@@ -84,6 +84,21 @@ async def api_lorebook_create(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def api_lorebook_import(request: web.Request) -> web.Response:
+    """Batch-import lorebook entries; one request instead of one per entry."""
+
+    world_id = request.match_info["world_id"]
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "条目列表不能为空"}, status=400)
+    entries = body.get("entries") if isinstance(body, dict) else None
+    result = _get_api(request).import_entries(
+        world_id, entries if isinstance(entries, list) else [],
+    )
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 async def api_lorebook_generate(request: web.Request) -> web.Response:
     body = await request.json()
     prompt = str(body.get("prompt", "")).strip()
@@ -126,6 +141,7 @@ def register_worlds(app: web.Application) -> None:
     app.router.add_get("/api/lorebook/{world_id}", api_lorebook)
     app.router.add_get("/api/lorebook/{world_id}/preview", api_lorebook_preview)
     app.router.add_post("/api/lorebook", api_lorebook_create)
+    app.router.add_post("/api/lorebook/{world_id}/import", api_lorebook_import)
     app.router.add_post("/api/lorebook/{world_id}/generate", api_lorebook_generate)
     app.router.add_route("PUT", "/api/lorebook/{entry_id}", api_lorebook_update)
     app.router.add_route("DELETE", "/api/lorebook/{entry_id}", api_lorebook_delete)
