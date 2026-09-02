@@ -28,6 +28,7 @@ from src.commands.economy_effects import (
     discard_unbacked_purchase_items,
     guard_unbacked_payment_narration,
     link_purchase_quote_proposal,
+    match_open_merchant_offers,
     record_merchant_offer,
     record_purchase_clarification,
     repair_unbacked_purchase,
@@ -578,6 +579,39 @@ def test_clarification_dedupes_identical_open_entries() -> None:
     )
     assert first["id"] == second["id"]
     assert len(instance.economy["clarifications"]) == 1
+
+
+def test_merchant_offer_matching_requires_exact_or_suffix() -> None:
+    """绑定只认精确匹配或后缀变体；包含关系不得误继承商家价格。"""
+
+    instance = _instance()
+    variant = record_merchant_offer(instance, item_display="精钢剑", amount=30)
+    sword_sheath = record_merchant_offer(instance, item_display="长剑鞘", amount=5)
+    assert record_merchant_offer(instance, item_display="铁剑", amount=25) is not None
+
+    # 精确匹配与后缀变体（修饰语在前、中心语在后）可绑定。
+    assert [offer["id"] for offer in match_open_merchant_offers(instance, ["精钢剑"])] == [variant["id"]]
+    assert [offer["id"] for offer in match_open_merchant_offers(instance, ["矮人精钢剑"])] == [variant["id"]]
+    # "长剑鞘" 精确命中自己的报价，且不得因包含关系再命中 "长剑"。
+    assert [offer["id"] for offer in match_open_merchant_offers(instance, ["长剑鞘"])] == [sword_sheath["id"]]
+    # 典型误绑定陷阱：碎片/鞘类 purchase 不得继承武器报价。
+    assert match_open_merchant_offers(instance, ["铁剑碎片"]) == []
+    assert match_open_merchant_offers(instance, ["长剑"]) == []
+    assert match_open_merchant_offers(instance, ["圣剑"]) == []
+
+
+def test_queue_proposal_rejects_unknown_amount_source() -> None:
+    instance = _instance()
+    with pytest.raises(ValueError):
+        queue_proposal(
+            instance, kind="payment", payer_uid="gm", amount=1,
+            amount_source="fabricated",
+        )
+    proposal = queue_proposal(
+        instance, kind="payment", payer_uid="gm", amount=1,
+        amount_source="merchant_offer",
+    )
+    assert proposal["amount_source"] == "merchant_offer"
 
 
 def test_rollback_supersedes_open_offers_and_clarifications() -> None:

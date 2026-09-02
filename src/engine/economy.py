@@ -23,6 +23,7 @@ MAX_EXTERNAL_EFFECT_DELIVERIES = 50
 # (or reopened by a settlement-only rollback).  Everything else is terminal and
 # must never be re-resolved.
 PAYER_ECONOMY_KINDS = {"payment", "purchase", "fee", "transfer"}
+VALID_AMOUNT_SOURCES = {"", "narration", "player_action", "merchant_offer"}
 PROPOSAL_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"committed", "declined", "cancelled", "rejected", "superseded"}),
     "committed": frozenset({"reversed", "pending"}),
@@ -554,6 +555,10 @@ def queue_proposal(
         # Fail closed at the proposal layer: a payer outside the current game
         # can never be settled, so the offer must not become pending.
         raise ValueError("economy payer is not part of the current game")
+    if str(amount_source) not in VALID_AMOUNT_SOURCES:
+        # The audit field records which evidence produced the amount; an
+        # unknown value would make that provenance untrustworthy.
+        raise ValueError("unsupported economy amount source")
     normalized_contributors = deepcopy(list(contributors or []))
     if approval_policy == "all_contributors":
         contributor_uids = [

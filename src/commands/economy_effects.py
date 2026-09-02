@@ -472,15 +472,25 @@ def record_merchant_offer(
     return offer
 
 
-def match_open_merchant_offers(instance: Any, item_names: Iterable[str]) -> list[dict[str, Any]]:
-    """Open offers whose item reference matches any purchase item name.
+def _normalized_item_name(name: str) -> str:
+    """Casefolded name without whitespace so decoration variants compare stably."""
 
-    Matching is deliberately conservative substring containment in either
-    direction with a minimum length, so "精钢剑" binds to "矮人精钢剑" while
-    single-character generic mentions never do.
+    return "".join(str(name or "").split()).casefold()
+
+
+def match_open_merchant_offers(instance: Any, item_names: Iterable[str]) -> list[dict[str, Any]]:
+    """Open offers whose item reference matches a purchase item name.
+
+    Binding requires the purchase name to equal the offer's item reference or
+    extend it as a suffix (Chinese variants put modifiers before the head
+    noun: "矮人精钢剑" extends "精钢剑").  Bidirectional substring matching is
+    deliberately not used — "长剑鞘" must not inherit a "长剑" quote and
+    "铁剑碎片" must not inherit "铁剑"; uncertain matches fall through to
+    clarification instead of silently inheriting a price.
     """
 
-    names = [str(name or "").strip() for name in item_names if str(name or "").strip()]
+    names = [_normalized_item_name(name) for name in item_names]
+    names = [name for name in names if name]
     if not names:
         return []
     matches: list[dict[str, Any]] = []
@@ -492,10 +502,10 @@ def match_open_merchant_offers(instance: Any, item_names: Iterable[str]) -> list
             and str(offer.get("run_id")) != str(getattr(instance, "run_id", ""))
         ):
             continue
-        display = str(offer.get("item_display") or "").strip()
+        display = _normalized_item_name(str(offer.get("item_display") or ""))
         if len(display) < 2:
             continue
-        if any(display in name or name in display for name in names):
+        if any(name == display or name.endswith(display) for name in names):
             matches.append(offer)
     return matches
 
