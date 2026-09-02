@@ -394,8 +394,8 @@ def save_entry(
     # 导入/新增入口的防御性校验：缺键时生成 id 或返回 400 级错误，
     # 不让 KeyError 漏成 500（UI 导入的 body 可能完全不带 id 键）。
     prepared, error = _prepare_entry(dependencies, entry, existing_ids=None)
-    if error:
-        return {"ok": False, "error": error}
+    if error or prepared is None:
+        return {"ok": False, "error": error or "世界书条目无效"}
     dependencies.lorebook.add_entry(prepared)
     rebuild_lorebook_index(dependencies, prepared["world_id"])
     _sync_user_template_lorebook(dependencies, prepared["world_id"])
