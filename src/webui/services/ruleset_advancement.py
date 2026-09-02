@@ -323,6 +323,33 @@ def _live_context(
     return instance, rule, runtime, instance.get_character_sheet(user_id), None
 
 
+def _live_context_for_instance(
+    dependencies: LiveAdvancementDependencies,
+    instance: Any,
+    user_id: str,
+):
+    if user_id not in instance.players:
+        return instance, None, None, None, {
+            "ok": False, "code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
+        }
+    rule = dependencies.load_rule_for_game(instance)
+    if rule is None:
+        return instance, None, None, None, {
+            "ok": False, "code": "RULE_NOT_FOUND", "error": "当前游戏规则不存在",
+        }
+    try:
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
+    except (AttributeError, TypeError, ValueError) as exc:
+        return instance, rule, None, None, {
+            "ok": False, "code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
+        }
+    if not all(callable(getattr(runtime, name, None)) for name in ("preview_advancement", "apply_advancement")):
+        return instance, rule, runtime, None, {
+            "ok": False, "code": "RULESET_ADVANCEMENT_UNAVAILABLE", "error": "该规则尚未提供专业升级流程",
+        }
+    return instance, rule, runtime, instance.get_character_sheet(user_id), None
+
+
 def preview_live(
     dependencies: LiveAdvancementDependencies,
     game_key: str,
@@ -363,8 +390,31 @@ async def apply_live(
     user_id: str,
     body: Any,
 ) -> dict[str, Any]:
-    instance, rule, runtime, character, error = _live_context(
-        dependencies, game_key, user_id,
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
+    if not instance:
+        return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
+    async with instance.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        if dependencies.get_instance(instance.game_key) is not instance:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+        return await _apply_live_authority(dependencies, game_key, user_id, body, instance)
+
+
+async def _apply_live_authority(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    user_id: str,
+    body: Any,
+    locked_instance: Any | None = None,
+) -> dict[str, Any]:
+    instance, rule, runtime, character, error = (
+        _live_context(dependencies, game_key, user_id)
+        if locked_instance is None
+        else _live_context_for_instance(dependencies, locked_instance, user_id)
     )
     if error:
         return error
@@ -496,6 +546,23 @@ def live_status(
 
 
 async def control_live(
+    dependencies: LiveAdvancementDependencies,
+    game_key: str,
+    body: Any,
+) -> dict[str, Any]:
+    instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
+    if not instance:
+        return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
+    async with instance.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        return await _control_live_authority(dependencies, game_key, body)
+
+
+async def _control_live_authority(
     dependencies: LiveAdvancementDependencies,
     game_key: str,
     body: Any,

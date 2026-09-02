@@ -25,6 +25,11 @@ class FakeInstance:
         self.round_number = 1
         self.action_queue: list[dict] = []
         self.pending_payments: list[dict] = []
+        self.run_id = "run-test"
+        self.economy = {
+            "proposals": [],
+            "effect_groups": [],
+        }
         self.last_check = None
         self.last_checks: list[dict] = []
         self.quick_actions = ["观察"]
@@ -169,6 +174,61 @@ async def test_submit_action_rejects_invalid_actor_and_busy_round() -> None:
     busy = await submit_action(api.dependencies, "game", "gm", "行动")
     assert busy["status"] == 409
     assert busy["payload"]["phase"] == "processing"
+
+
+@pytest.mark.asyncio
+async def test_pending_economy_blocks_next_round_before_recording_action() -> None:
+    instance = FakeInstance()
+    api = FakeApi(instance)
+    proposal = {
+        "id": "eco-pending",
+        "run_id": instance.run_id,
+        "status": "pending",
+        "kind": "payment",
+        "payer_uid": "gm",
+        "visibility": "private",
+    }
+    instance.economy["proposals"].append(proposal)
+    instance.pending_payments.append(proposal)
+
+    blocked = await submit_action(api.dependencies, "game", "gm", "继续赶路")
+
+    assert blocked["status"] == 409
+    assert blocked["payload"]["error_code"] == "ECONOMY_DECISION_PENDING"
+    assert blocked["payload"]["pending_count"] == 1
+    assert instance.added == []
+
+    proposal["status"] = "declined"
+    instance.pending_payments.clear()
+    continued = await submit_action(api.dependencies, "game", "gm", "继续赶路")
+    assert continued["status"] == 200
+    assert instance.added
+
+
+@pytest.mark.asyncio
+async def test_personal_purchase_can_remain_pending_without_blocking_other_player() -> None:
+    instance = FakeInstance()
+    api = FakeApi(instance)
+    purchase = {
+        "id": "purchase-pending",
+        "run_id": instance.run_id,
+        "status": "pending",
+        "kind": "purchase",
+        "approval_policy": "payer",
+        "payer_uid": "gm",
+        "recipient_uid": "gm",
+        "rewards": [{"name": "药水", "category": "consumable"}],
+        "contributors": [],
+        "visibility": "private",
+    }
+    instance.economy["proposals"].append(purchase)
+    instance.pending_payments.append(purchase)
+
+    result = await submit_action(api.dependencies, "game", "p2", "调查房门")
+
+    assert result["status"] == 200
+    assert instance.added and instance.added[0][0] == "p2"
+    assert purchase["status"] == "pending"
 
 
 @pytest.mark.asyncio

@@ -13,6 +13,7 @@ from src.bots.bridge_core.store import JsonBridgeStore
 class EnglishBridgeClient:
     def __init__(self) -> None:
         self.questions: list[tuple[str, str, str]] = []
+        self.resolved_proposals: list[tuple[str, str, str, bool]] = []
 
     async def bind_game(self, game_key: str, bind_token: str) -> dict:
         assert bind_token == "bind-ok"
@@ -55,6 +56,27 @@ class EnglishBridgeClient:
             "action_consumed": False,
         }
 
+    async def detail(self, game_key: str, actor: str) -> dict:
+        return {
+            "gm_uid": "gm-1",
+            "economy_proposals": [{
+                "id": "eco-party",
+                "sequence": 7,
+                "kind": "fee",
+                "amount": 3,
+                "reason": "Bridge toll",
+                "status": "pending",
+                "approval_policy": "all_contributors",
+                "contributors": [{"uid": "player-1", "amount": 3}],
+            }],
+        }
+
+    async def resolve_payment(
+        self, game_key: str, actor: str, proposal_id: str, accepted: bool,
+    ) -> dict:
+        self.resolved_proposals.append((game_key, actor, proposal_id, accepted))
+        return {"ok": True, "accepted": True, "committed": False}
+
 
 @pytest.mark.asyncio
 async def test_english_binding_persists_language_and_drives_shared_replies(tmp_path: Path):
@@ -85,6 +107,14 @@ async def test_english_binding_persists_language_and_drives_shared_replies(tmp_p
     status = await service.handle(BridgeInput("discord-channel", "player-platform", "/df status"))
     assert "Erin status" in status.replies[0]
     assert "Gold: 4" in status.replies[0]
+
+    proposals = await service.handle(BridgeInput("discord-channel", "player-platform", "/df pay"))
+    assert "#7" in proposals.replies[0]
+    confirmed = await service.handle(BridgeInput(
+        "discord-channel", "player-platform", "/df confirm pay 7",
+    ))
+    assert "waiting for the other contributors" in confirmed.replies[0]
+    assert client.resolved_proposals == [("game-1", "player-1", "eco-party", True)]
 
     reloaded = JsonBridgeStore(tmp_path / "bridge.json")
     await reloaded.load()

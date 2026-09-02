@@ -11,6 +11,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from src.engine.economy import (
+    has_blocking_economy_decision,
+    blocking_economy_proposals,
+    pending_effect_groups,
+    pending_memory_deliveries,
+    pending_memory_reversals,
+)
 from src.engine.game_instance import GameState
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
 
@@ -39,6 +46,7 @@ class TurnDependencies:
     process_round: Callable[..., Awaitable[tuple[str, Any]]] | None
     resolve_luck_decision: Callable[..., Awaitable[dict[str, Any]]]
     decline_pending_luck: Callable[..., Awaitable[dict[str, Any]]]
+    drain_economy_outbox: Callable[[Any], Awaitable[bool]] | None = None
 
 
 class TurnResult(TypedDict):
@@ -52,12 +60,63 @@ def _result(payload: dict[str, Any], status: int = 200) -> TurnResult:
     return {"payload": payload, "status": status}
 
 
-def _pending_payments(instance: "GameInstance") -> list[dict[str, Any]]:
+def _pending_payments(instance: "GameInstance", viewer_uid: str = "") -> list[dict[str, Any]]:
     return [
         payment
         for payment in instance.pending_payments
-        if isinstance(payment, dict) and payment.get("status") == "pending"
+        if isinstance(payment, dict)
+        and payment.get("status") == "pending"
+        and (
+            not viewer_uid
+            or viewer_uid == instance.gm_uid
+            or payment.get("visibility") == "party"
+            or viewer_uid == str(payment.get("payer_uid") or payment.get("uid") or "")
+            or viewer_uid in {
+                str(item.get("uid") or "")
+                for item in (payment.get("contributors") or [])
+                if isinstance(item, dict)
+            }
+        )
     ]
+
+
+def economy_decision_pending_payload(
+    instance: "GameInstance",
+    viewer_uid: str = "",
+) -> dict[str, Any]:
+    """Build a non-leaking progression barrier response for one viewer."""
+
+    unresolved = blocking_economy_proposals(instance)
+    visible = [
+        proposal
+        for proposal in unresolved
+        if (
+            not viewer_uid
+            or viewer_uid == instance.gm_uid
+            or proposal.get("visibility") == "party"
+            or viewer_uid
+            == str(proposal.get("payer_uid") or proposal.get("uid") or "")
+            or viewer_uid
+            in {
+                str(item.get("uid") or "")
+                for item in (proposal.get("contributors") or [])
+                if isinstance(item, dict)
+            }
+        )
+    ]
+    return {
+        "ok": False,
+        "error_code": "ECONOMY_DECISION_PENDING",
+        "error": "请先处理待确认的经济提案，再继续本局叙事",
+        "pending_count": (
+            len(unresolved)
+            or len(_pending_payments(instance))
+            or len(pending_effect_groups(instance))
+            or len(pending_memory_deliveries(instance))
+            or len(pending_memory_reversals(instance))
+        ),
+        "pending_payments": visible,
+    }
 
 
 def _pending_luck_payload(
@@ -87,11 +146,12 @@ def _round_payload(
     phase: str | None = None,
     ok: bool | None = None,
     include_recap: bool = False,
+    viewer_uid: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "narration": narration,
         "quick_actions": list(instance.quick_actions),
-        "pending_payments": _pending_payments(instance),
+        "pending_payments": _pending_payments(instance, viewer_uid),
         "check_result": instance.last_check,
         "check_results": list(instance.last_checks),
     }
@@ -109,9 +169,18 @@ def _luck_error_status(code: str) -> int:
         return 404
     if code == "LUCK_FORBIDDEN":
         return 403
-    if code in {"LUCK_ALREADY_RESOLVED", "LUCK_NOT_PENDING"}:
+    if code in {"LUCK_ALREADY_RESOLVED", "LUCK_NOT_PENDING", "REWRITE_IN_PROGRESS", "STALE_RUN"}:
         return 409
     return 400
+
+
+async def _retry_external_economy_effects(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+) -> None:
+    drain = dependencies.drain_economy_outbox
+    if drain is not None:
+        await drain(instance)
 
 
 async def _prepare_checks(
@@ -189,6 +258,9 @@ async def submit_action(
             }, 409)
     if instance.is_dead(actor_uid):
         return _result({"error": "角色已死亡，无法提交行动"}, 403)
+    await _retry_external_economy_effects(dependencies, instance)
+    if has_blocking_economy_decision(instance):
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     if instance.state == GameState.ACTIVE_JUDGMENT:
         return _result({"error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing"}, 409)
 
@@ -220,7 +292,8 @@ async def submit_action(
             game_key, actor_uid, "player",
         )
         if not resolved.get("ok"):
-            return _result(resolved, 400)
+            status = 409 if resolved.get("code") == "REWRITE_IN_PROGRESS" else 400
+            return _result(resolved, status)
         roll_payload = resolved.get("roll")
     elif confirm and d20 is None and server_roll:
         roll_payload = dependencies.roll_for_game(game_key)
@@ -230,7 +303,7 @@ async def submit_action(
 
     if not (confirm and existing_pending_roll):
         action_text = text
-        await instance.add_action(
+        action_added = await instance.add_action(
             actor_uid,
             action_text,
             selected_attribute,
@@ -238,6 +311,17 @@ async def submit_action(
             target_text,
             source=source,
         )
+        process_lock = getattr(instance, "_process_lock", None)
+        if (
+            not action_added
+            and process_lock is not None
+            and process_lock.locked()
+        ):
+            return _result({
+                "ok": False,
+                "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后再提交行动",
+            }, 409)
 
     if await instance.try_advance():
         await _prepare_checks(dependencies, instance)
@@ -252,6 +336,7 @@ async def submit_action(
             narration,
             phase="done",
             include_recap=True,
+            viewer_uid=actor_uid,
         )
         payload["advanced"] = True
         if roll_payload:
@@ -302,12 +387,15 @@ async def resolve_luck_and_continue(
     )
     if not instance:
         return _result({"ok": False, "error": "游戏不存在"}, 404)
+    await _retry_external_economy_effects(dependencies, instance)
+    if has_blocking_economy_decision(instance):
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     narration, _ = await _process_round(
         dependencies, instance, on_delta=on_delta, on_reset=on_reset,
     )
     payload = {
         **decision,
-        **_round_payload(instance, narration, phase="done"),
+        **_round_payload(instance, narration, phase="done", viewer_uid=actor_uid),
         "advanced": True,
     }
     return _result(payload)
@@ -330,6 +418,9 @@ async def advance_round(
         return _result({"error": "not found"}, 404)
     if actor_uid != instance.gm_uid:
         return _result({"ok": False, "error": "仅 GM 可推进"}, 403)
+    await _retry_external_economy_effects(dependencies, instance)
+    if has_blocking_economy_decision(instance):
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
 
     if instance.state == GameState.ACTIVE_JUDGMENT and instance.action_queue:
         await _prepare_checks(dependencies, instance)
@@ -344,7 +435,7 @@ async def advance_round(
         narration, _ = await _process_round(
             dependencies, instance, on_delta=on_delta, on_reset=on_reset,
         )
-        payload = _round_payload(instance, narration)
+        payload = _round_payload(instance, narration, viewer_uid=actor_uid)
         if advanced_declined_luck:
             payload["declined_luck_decisions"] = advanced_declined_luck
         return _result(payload)
@@ -394,7 +485,7 @@ async def advance_round(
         narration, _ = await _process_round(
             dependencies, instance, on_delta=on_delta, on_reset=on_reset,
         )
-        payload = _round_payload(instance, narration, ok=True)
+        payload = _round_payload(instance, narration, ok=True, viewer_uid=actor_uid)
         if forced_waiting:
             payload["forced_waiting"] = forced_waiting
         if auto_rolls:

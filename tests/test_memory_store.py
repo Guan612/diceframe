@@ -21,6 +21,19 @@ def _temp_store():
 
 
 class TestDeltaApplication:
+    async def test_open_migrates_economy_delivery_journal(self, tmp_path):
+        store = MemoryStore(tmp_path / "memory.db")
+        store.open()
+        try:
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+            table = store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                ("memory_economy_deliveries",),
+            ).fetchone()
+            assert table is not None
+        finally:
+            store.close()
+
     async def test_add_memory(self):
         store, path = _temp_store()
         try:
@@ -67,6 +80,29 @@ class TestDeltaApplication:
         finally:
             store.close()
             path.unlink(missing_ok=True)
+
+    async def test_failed_delta_rolls_back_earlier_items(self, tmp_path):
+        store = MemoryStore(tmp_path / "memory.db")
+        store.open()
+        try:
+            with pytest.raises(ValueError):
+                await store.apply_delta("atomic-game", {
+                    "add": [
+                        "不应留下的第一条",
+                        {
+                            "entity": "坏数据",
+                            "relation": "测试",
+                            "value": "触发中途失败",
+                            "confidence": "not-a-number",
+                        },
+                    ],
+                    "update": [],
+                    "forget": [],
+                }, 1)
+
+            assert store.list_entries("atomic-game") == []
+        finally:
+            store.close()
 
 
 class TestPagination:

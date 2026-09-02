@@ -15,6 +15,7 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from src.engine import game_instance
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
@@ -41,7 +42,26 @@ async def save(registry: GameRegistry, instance: GameInstance) -> None:
     sp.parent.mkdir(parents=True, exist_ok=True)
     backup = sp.with_name("state.backup.json")
 
-    _append_chatlog(registry, instance)
+    replace_history = False
+    if sp.exists():
+        try:
+            persisted = json.loads(sp.read_text(encoding="utf-8"))
+            replace_history = str(persisted.get("run_id") or "") != instance.run_id
+        except (OSError, ValueError, json.JSONDecodeError):
+            # Preserve the normal backup/recovery path for a damaged state;
+            # do not destroy the only full chat history based on uncertainty.
+            replace_history = False
+    chatlog_tmp: Path | None = None
+    if replace_history:
+        chatlog = _chatlog_path(sp)
+        chatlog_tmp = chatlog.with_name("chatlog.tmp.jsonl")
+        lines = "\n".join(
+            json.dumps(entry, ensure_ascii=False) for entry in instance.log
+        )
+        chatlog_tmp.write_text(lines + ("\n" if lines else ""), encoding="utf-8")
+        instance.mark_log_persisted()
+    else:
+        _append_chatlog(registry, instance)
     data = instance.to_dict()
     tmp = sp.with_name("state.tmp.json")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2),
@@ -49,6 +69,8 @@ async def save(registry: GameRegistry, instance: GameInstance) -> None:
     if sp.exists():
         sp.replace(backup)
     tmp.replace(sp)
+    if chatlog_tmp is not None:
+        chatlog_tmp.replace(_chatlog_path(sp))
 
 
 def _chatlog_path(sp: Path) -> Path:
@@ -333,8 +355,15 @@ async def import_save_zip(
     new_key = (platform, f"import_{int(time.time() * 1000)}", account_id)
     sp = _save_path(registry, new_key)
     sp.parent.mkdir(parents=True, exist_ok=True)
-    # 改写 game_key 为新值再落盘，使存档目录、instance.game_key、公开 game_key 三者一致
-    state_json["game_key"] = list(new_key)
+    # 导入是一个新的本地聚合体：保留进度与账本，但隔离 run/memory
+    # 身份，避免同机导入后与原局共享长期记忆或接受原局异步结果。
+    from src.migrations.instance import rebind_imported_game_state_payload
+
+    state_json = rebind_imported_game_state_payload(
+        state_json,
+        game_key=new_key,
+        run_id=f"run_{uuid4().hex}",
+    )
     sp.write_text(json.dumps(state_json, ensure_ascii=False, indent=2), encoding="utf-8")
     if chatlog_data:
         sp.with_name("chatlog.jsonl").write_bytes(chatlog_data)

@@ -136,7 +136,7 @@ async def test_m6_http_runs_confirmed_session_and_tutorial_into_memory(tmp_path)
 
     assert completed["gameplay"]["campaign"]["tutorial"]["status"] == "completed"
     assert len(memory.calls) == 3
-    assert all(call[0] == str(instance.game_key) for call in memory.calls)
+    assert all(call[0] == instance.memory_namespace for call in memory.calls)
     assert all(call[1]["add"][0]["confidence"] == 1.0 for call in memory.calls)
     recovered_registry = GameRegistry(tmp_path / "saves")
     recovered = await recovered_registry.load(instance.game_key)

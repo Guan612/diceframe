@@ -29,12 +29,19 @@ class MemoryRepository(Protocol):
 class MemoryDependencies:
     repository: MemoryRepository
     parse_game_key: Callable[[str], GameKey]
+    get_instance: Callable[[GameKey], Any | None] | None = None
+
+
+def _memory_namespace(dependencies: MemoryDependencies, game_key: str) -> str:
+    parsed = dependencies.parse_game_key(game_key)
+    instance = dependencies.get_instance(parsed) if dependencies.get_instance else None
+    return str(getattr(instance, "memory_namespace", "") or str(parsed))
 
 
 def list_memories(dependencies: MemoryDependencies, game_key: str, keyword: str = "",
                   limit: int = 20, offset: int = 0) -> dict[str, Any]:
     # game_key 来自 URL（# 分隔），需转为 str(tuple) 与存储路径一致
-    gk = str(dependencies.parse_game_key(game_key))
+    gk = _memory_namespace(dependencies, game_key)
     if keyword:
         entries = dependencies.repository.recall(gk, [keyword], limit, offset)
     else:
@@ -45,14 +52,14 @@ def list_memories(dependencies: MemoryDependencies, game_key: str, keyword: str 
 
 async def update_memory(dependencies: MemoryDependencies, game_key: str, entry_id: int, updates: dict[str, Any]) -> dict[str, Any]:
     ok = await dependencies.repository.edit_entry(
-        str(dependencies.parse_game_key(game_key)), entry_id, updates,
+        _memory_namespace(dependencies, game_key), entry_id, updates,
     )
     return {"ok": ok, "error": "记忆不存在" if not ok else ""}
 
 
 async def delete_memory(dependencies: MemoryDependencies, game_key: str, entry_id: int) -> dict[str, Any]:
     ok = await dependencies.repository.forget_entry(
-        str(dependencies.parse_game_key(game_key)), entry_id,
+        _memory_namespace(dependencies, game_key), entry_id,
     )
     return {"ok": ok, "error": "记忆不存在" if not ok else ""}
 

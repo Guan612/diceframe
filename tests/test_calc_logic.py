@@ -1,9 +1,9 @@
 """计算逻辑测试：金币/HP/SAN/MANA/LUCK/XP 标签解析与应用。
 
-回归覆盖用户报告的购买物品金币未扣 bug：
-- GOLD 负值被忽略（#10 轮驱兽粉，GM 写 GOLD:尤洛:-3）
+回归覆盖用户报告的购买物品金币未扣与重复奖励 bug：
+- GOLD 仅接受带明确原因的正数奖励，旧格式和负值均 fail closed
 - PAY 转为待确认支付条目，由玩家弹窗确认/拒绝（不直接扣金币）
-- 同轮多标签覆盖而非累加（gold/mana/luck/xp 用 add=False）
+- TEAM_PAY 生成全队一致确认的原子分摊提案
 """
 
 from __future__ import annotations
@@ -30,14 +30,23 @@ def _pending(result):
     return result["state_update"].get("pending_payments", [])
 
 
-# ===== 金币：GOLD 负值直接扣（#10 bug 修复）=====
-def test_gold_negative_deducts():
-    """GM 写 GOLD:尤洛:-3 表示扣 3 金币，应被接受（旧逻辑 0<=v 忽略负值）。"""
-    assert _pu(_parse([("GOLD", f"{UID}:-3")]))["gold_change"] == -3
+def _economy(result):
+    return result["state_update"].get("economy_proposals", [])
 
 
-def test_gold_positive_gains():
-    assert _pu(_parse([("GOLD", f"{UID}:50")]))["gold_change"] == 50
+# ===== 金币：legacy GOLD 只产生提案，不直接改余额 =====
+def test_gold_negative_is_ignored_in_favor_of_payment_protocol():
+    assert _economy(_parse([("GOLD", f"{UID}:-3:购买驱兽粉")])) == []
+
+
+def test_gold_positive_reward_requires_explicit_reason():
+    assert _economy(_parse([("GOLD", f"{UID}:50")])) == []
+
+    proposal = _economy(_parse([("GOLD", f"{UID}:50:完成黑石镇悬赏")]))[0]
+    assert proposal["kind"] == "reward"
+    assert proposal["amount"] == 50
+    assert proposal["reason"] == "完成黑石镇悬赏"
+    assert proposal["approval_policy"] == "gm"
 
 
 def test_pay_creates_pending():
@@ -62,6 +71,25 @@ def test_pay_purchase_carries_recipient_and_items():
     assert "解毒草" in payment["reason"]
 
 
+def test_team_pay_creates_atomic_party_proposal():
+    proposal = _economy(_parse([(
+        "TEAM_PAY", "player_a=2|player_b=3:共同租用马车",
+    )]))[0]
+
+    assert proposal == {
+        "kind": "fee",
+        "amount": 5,
+        "reason": "共同租用马车",
+        "approval_policy": "all_contributors",
+        "contributors": [
+            {"uid": "player_a", "amount": 2},
+            {"uid": "player_b", "amount": 3},
+        ],
+        "visibility": "party",
+        "source": "team_pay_tag",
+    }
+
+
 def test_pay_negative_amount_uses_abs():
     """PAY:-5 也按 5 金币挂起（amount 取绝对值）。"""
     pending = _pending(_parse([("PAY", f"{UID}:-5")]))
@@ -71,13 +99,17 @@ def test_pay_negative_amount_uses_abs():
 
 # ===== 累加：同轮多标签不再覆盖（#19 修复）=====
 def test_multiple_gold_accumulate():
-    assert _pu(_parse([("GOLD", f"{UID}:10"), ("GOLD", f"{UID}:5")]))["gold_change"] == 15
+    proposals = _economy(_parse([
+        ("GOLD", f"{UID}:10:完成护送"),
+        ("GOLD", f"{UID}:5:归还遗失物"),
+    ]))
+    assert [proposal["amount"] for proposal in proposals] == [10, 5]
 
 
 def test_gold_direct_pay_pending():
-    """GOLD 直接改金币，PAY 转挂起；互不影响。"""
-    result = _parse([("GOLD", f"{UID}:50"), ("PAY", f"{UID}:3")])
-    assert _pu(result)["gold_change"] == 50
+    """GOLD 与 PAY 都只能产生待确认提案。"""
+    result = _parse([("GOLD", f"{UID}:50:完成委托"), ("PAY", f"{UID}:3")])
+    assert _economy(result)[0]["kind"] == "reward"
     pending = _pending(result)
     assert len(pending) == 1
     assert pending[0]["amount"] == 3
@@ -138,11 +170,11 @@ def test_xp_accumulate():
 
 
 # ===== 集成：parse_tag_state 全文解析（用户实际路径）=====
-def test_parse_tag_state_gold_negative():
-    """GM 回复含 GOLD:尤洛:-3，解析后 gold_change=-3、无 _pay_tagged。"""
-    text = "尤洛买下驱兽粉。\n---\nGOLD:尤洛:-3"
+def test_parse_tag_state_gold_negative_fails_closed():
+    """GM 回复含负 GOLD 时不生成提案；支付必须走 PAY。"""
+    text = "尤洛买下驱兽粉。\n---\nGOLD:尤洛:-3:购买驱兽粉"
     result = parse_tag_state(text, "hp_based")
-    assert _pu(result)["gold_change"] == -3
+    assert _economy(result) == []
     assert "_pay_tagged" not in _pu(result)
 
 
@@ -158,10 +190,10 @@ def test_parse_tag_state_pay_pending():
 
 
 def test_parse_tag_state_purchase_accumulates():
-    """GOLD 直接结算，PAY 转挂起。"""
-    text = "尤洛卖出旧剑又买了药水。\n---\nGOLD:尤洛:20\nPAY:尤洛:3"
+    """GOLD 奖励与 PAY 支付都等待相应 authority。"""
+    text = "尤洛卖出旧剑又买了药水。\n---\nGOLD:尤洛:20:卖出旧剑\nPAY:尤洛:3"
     result = parse_tag_state(text, "hp_based")
-    assert _pu(result)["gold_change"] == 20
+    assert _economy(result)[0]["kind"] == "reward"
     assert len(_pending(result)) == 1
 
 

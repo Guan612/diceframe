@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import copy
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
 from src.commands.protocol_repair import repair_malformed_protocol_response
+from src.commands.economy_effects import (
+    discard_unearned_reward_proposals,
+    defer_narrative_effects,
+    guard_unbacked_payment_narration,
+    has_economy_proposal,
+    pending_decision_notice,
+    unearned_reward_notice,
+)
 from src.commands.state_update_applier import StateUpdateApplier
 from src.commands.tag_parser import (
     parse_tag_state,
@@ -15,10 +25,12 @@ from src.commands.tag_parser import (
 from src.commands.tag_json import extract_narration_from_response
 from src.commands.tag_summary import summarize_tags
 from src.engine.character_utils import reset_character_for_restart
+from src.engine.economy import queue_effect_group
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
 from src.engine.narrative_perspective import narrative_perspective_instruction
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
+from src.rulesets.contracts import RunLifecycleRuntime
 
 logger = logging.getLogger("trpg")
 
@@ -49,33 +61,118 @@ class GameLifecycle:
         self.narrative_max_tokens = narrative_max_tokens
         self.brief_max_tokens = brief_max_tokens
         self.memory_store = memory_store
+        self._run_transition_locks: dict[tuple[str, ...], asyncio.Lock] = {}
 
     async def _clear_session_memory(self, instance: GameInstance) -> None:
-        """Drop durable memories before starting a fresh run.
+        """Compatibility hook; run namespaces now provide memory isolation.
 
-        ``reset`` and ``restart`` preserve the save's public key.  Memory is
-        keyed by that value, therefore leaving the rows behind would make the
-        next run recall facts from a previous life.  Keep this integration
-        optional for lightweight/legacy handlers that do not configure a
-        MemoryStore.
+        Physical deletion is intentionally not part of the transition commit:
+        a cleanup failure must not expose an earlier run or leave a half-reset
+        aggregate. Old namespaces can be collected independently.
         """
         clear = getattr(self.memory_store, "clear_game", None)
         if not callable(clear):
             return
         try:
-            result = clear(str(instance.game_key))
-            if hasattr(result, "__await__"):
-                await result
+            namespaces = {instance.memory_namespace, str(instance.game_key)}
+            for namespace in namespaces:
+                result = clear(namespace)
+                if hasattr(result, "__await__"):
+                    await result
         except Exception:
-            logger.exception("清理重置前长期记忆失败: game=%s", instance.game_key)
-            # Do not start a new run when isolation cannot be guaranteed.
-            raise RuntimeError("无法清理本局长期记忆，已中止重置/重开") from None
+            # Isolation is already guaranteed by the new namespace. Cleanup is
+            # storage hygiene and may be retried without rolling back the run.
+            logger.warning(
+                "旧 run 记忆清理失败，已保持命名空间隔离: game=%s run=%s",
+                instance.game_key,
+                instance.run_id,
+                exc_info=True,
+            )
 
-    async def start_game(self, instance: GameInstance) -> str:
+    async def _new_run_candidate(
+        self,
+        source: GameInstance,
+        *,
+        preserve_players: bool,
+    ) -> GameInstance:
+        candidate = await self.create_game(
+            source.game_key,
+            world_id=source.world_id,
+            world_name=source.world_name,
+            group_name=source.group_name,
+            seed_code=source.seed_code,
+            rule_id=source.rule_id,
+            difficulty=source.difficulty,
+            language=normalize_language(source.language),
+            fresh_instance=True,
+        )
+        candidate.configure_session(
+            solo_mode=source.solo_mode,
+            entry_point=source.entry_point,
+            room_password=source.room_password,
+            gm_uid=source.gm_uid,
+            luck_timeout_seconds=source.luck_timeout_seconds,
+            narrative_perspective=source.narrative_perspective,
+        )
+        candidate.max_players = source.max_players
+        candidate.player_access_open = source.player_access_open
+        candidate.bot_bind_token = source.bot_bind_token
+        candidate.room_token = source.room_token
+        candidate.ruleset_runtime = copy.deepcopy(source.ruleset_runtime)
+        candidate.ruleset_state = (
+            {
+                "state_schema_version": int(
+                    source.ruleset_runtime.get("state_schema_version", 1) or 1
+                )
+            }
+            if source.ruleset_runtime else {}
+        )
+        candidate.adventure_binding = copy.deepcopy(source.adventure_binding)
+        if preserve_players:
+            players = copy.deepcopy(source.players)
+            for pdata in players.values():
+                pdata["character_sheet"] = reset_character_for_restart(
+                    pdata.get("character_sheet", {})
+                )
+            candidate.replace_players(players)
+        self._initialize_ruleset_run(
+            candidate,
+            preserve_characters=preserve_players,
+        )
+        return candidate
+
+    def _initialize_ruleset_run(
+        self,
+        candidate: GameInstance,
+        *,
+        preserve_characters: bool,
+    ) -> None:
+        binding = dict(candidate.ruleset_runtime or {})
+        runtime_id = str(binding.get("id") or "")
+        ruleset_registry = getattr(self.prompt, "ruleset_registry", None)
+        if runtime_id and runtime_id != "core:legacy" and ruleset_registry is not None:
+            runtime = ruleset_registry.get(
+                runtime_id,
+                minimum_version=int(binding.get("version", 1) or 1),
+            )
+            if isinstance(runtime, RunLifecycleRuntime):
+                runtime.initialize_new_run(
+                    candidate,
+                    preserve_characters=preserve_characters,
+                )
+
+    async def start_game(
+        self,
+        instance: GameInstance,
+        *,
+        publish: bool = True,
+        persist: bool = True,
+    ) -> str:
         """激活游戏，生成开场叙事，进入第一轮。"""
         await instance.activate()
         await instance.start_round()
-        self.registry.register(instance)
+        if publish:
+            self.registry.register(instance)
 
         if instance.world_id:
             self.ensure_matcher_for_world(instance.world_id, instance.language)
@@ -210,8 +307,34 @@ class GameLifecycle:
                 },
             )
             start_data = {}
+        # Opening narration goes through the same reward qualification gate as
+        # normal rounds.  The model may describe an NPC promising payment for
+        # a task that has not happened yet; such a GOLD tag must not become a
+        # pending GM approval (or an eventual balance change) merely because
+        # it appeared in the first response.
+        dropped_rewards = discard_unearned_reward_proposals(
+            instance, start_data, narration,
+        )
+        if dropped_rewards:
+            narration = f"{narration}\n\n{unearned_reward_notice(instance.language)}".strip()
+        economy_pending = bool(response is not None and has_economy_proposal(start_data))
+        narration = guard_unbacked_payment_narration(
+            narration, start_data, instance.language,
+        )
+        deferred_effects = (
+            defer_narrative_effects(start_data, response)
+            if response is not None else {}
+        )
+        if economy_pending:
+            narration = f"{narration}\n\n{pending_decision_notice(instance.language)}".strip()
+        queued_proposals: list[dict[str, Any]] = []
         if start_data.get("state_update"):
-            self.state_applier.apply_state_update(instance, start_data["state_update"])
+            queued_proposals = self.state_applier.apply_state_update(
+                instance, start_data["state_update"],
+            )
+        if deferred_effects:
+            deferred_effects["allowed_player_uids"] = None
+            queue_effect_group(instance, queued_proposals, deferred_effects)
         if start_data.get("plot_update") and instance.plot_tracker:
             try:
                 instance.plot_tracker.apply_update(start_data["plot_update"], 0)
@@ -234,7 +357,8 @@ class GameLifecycle:
             "tags_summary": summarize_tags(start_data),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        await self.registry.save(instance)
+        if persist:
+            await self.registry.save(instance)
         return narration
 
     async def resume_game(self, instance: GameInstance) -> str:
@@ -310,71 +434,59 @@ class GameLifecycle:
         return resume_narration
 
     async def reset_game(self, instance: GameInstance) -> GameInstance:
-        world_id = instance.world_id
-        world_name = instance.world_name
-        group_name = instance.group_name
-        seed = instance.seed_code
-        rule_id = instance.rule_id
-        language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
-        await self._clear_session_memory(instance)
-        await instance.reset(keep_seed=True)
-        instance = await self.create_game(
-            instance.game_key, world_id=world_id, world_name=world_name,
-            group_name=group_name, seed_code=seed, rule_id=rule_id, language=language,
+        transition_lock = self._run_transition_locks.setdefault(
+            instance.game_key, asyncio.Lock(),
         )
-        await self._start_reset_instance(instance)
-        instance.record_llm_usage(calls=1)
-        await self.registry.save(instance)
-        return instance
+        async with transition_lock:
+            current = self.registry.get(instance.game_key) or instance
+            async with current.authoritative_write():
+                async with current._process_lock:
+                    async with current._lock:
+                        return await self._replace_run(current, preserve_players=False)
+
+    async def _replace_run(
+        self,
+        previous: GameInstance,
+        *,
+        preserve_players: bool,
+    ) -> GameInstance:
+        candidate = await self._new_run_candidate(
+            previous, preserve_players=preserve_players,
+        )
+        await self._start_reset_instance(candidate)
+        candidate.record_llm_usage(calls=1)
+        if self.registry.get(previous.game_key) is not previous:
+            raise RuntimeError("对局已在重开过程中发生变化，请刷新后重试")
+        await self.registry.replace_current(previous, candidate)
+        await self._clear_session_memory(previous)
+        return candidate
 
     async def restart_game(self, instance: GameInstance) -> GameInstance:
         """重开世界：重置剧情/场景/日志，保留所有角色卡（回满 HP 和状态）。"""
-        saved_players = dict(instance.players)
-        for uid, pdata in saved_players.items():
-            cs = pdata.get("character_sheet", {})
-            pdata["character_sheet"] = reset_character_for_restart(cs)
-            saved_players[uid] = pdata
-
-        world_id = instance.world_id
-        world_name = instance.world_name
-        group_name = instance.group_name
-        seed = instance.seed_code
-        rule_id = instance.rule_id
-        solo = instance.solo_mode
-        narrative_perspective = instance.narrative_perspective
-        language = normalize_language(getattr(instance, "language", DEFAULT_LANGUAGE))
-
-        await self._clear_session_memory(instance)
-        await instance.reset(keep_seed=True)
-        instance = await self.create_game(
-            instance.game_key, world_id=world_id, world_name=world_name,
-            group_name=group_name, seed_code=seed, rule_id=rule_id, language=language,
+        transition_lock = self._run_transition_locks.setdefault(
+            instance.game_key, asyncio.Lock(),
         )
-        instance.configure_session(
-            solo_mode=solo,
-            narrative_perspective=narrative_perspective,
-        )
-        instance.replace_players(saved_players)
-
-        if not instance.players:
-            raise ValueError("重开世界需要至少 1 名角色")
-
-        await self._start_reset_instance(instance)
-        instance.record_llm_usage(calls=1)
-        await self.registry.save(instance)
-        return instance
+        async with transition_lock:
+            current = self.registry.get(instance.game_key) or instance
+            if not current.players:
+                raise ValueError("重开世界需要至少 1 名角色")
+            async with current.authoritative_write():
+                async with current._process_lock:
+                    # Freeze every old-run aggregate write through the atomic swap.
+                    # A waiter holding a stale reference resumes afterwards and is
+                    # rejected by its registry-identity fence.
+                    async with current._lock:
+                        return await self._replace_run(current, preserve_players=True)
 
     async def _start_reset_instance(self, instance: GameInstance) -> str:
         """Resume the gameplay stack already bound to this save."""
 
         runtime_id = str((instance.ruleset_runtime or {}).get("id") or "")
         if not runtime_id or runtime_id == "core:legacy":
-            return await self.start_game(instance)
+            return await self.start_game(instance, publish=False, persist=False)
         await instance.activate()
-        self.registry.register(instance)
         world = self.load_world_template(instance.world_id, instance.language) or {}
         initial_scene = str(world.get("starter_scene") or instance.world_name or "").strip()
         if initial_scene:
             instance.set_scene(initial_scene)
-        await self.registry.save(instance)
         return ""

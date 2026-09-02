@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from copy import deepcopy
 from typing import Any
 
+from src.commands.economy_effects import (
+    discard_unearned_reward_proposals,
+    defer_narrative_effects,
+    guard_unbacked_payment_narration,
+    has_economy_proposal,
+    pending_decision_notice,
+    unearned_reward_notice,
+)
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
+from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -28,6 +38,8 @@ class SwipeGenerator:
         load_world_template: Callable[[str, str], dict | None],
         ensure_matcher_for_world: Callable[[str, str], None],
         narrative_max_tokens: int,
+        get_instance: Callable[[tuple], GameInstance | None] | None = None,
+        save_instance: Callable[[GameInstance], Any] | None = None,
     ):
         self.llm_client = llm_client
         self.matcher = matcher
@@ -36,6 +48,8 @@ class SwipeGenerator:
         self.load_world_template = load_world_template
         self.ensure_matcher_for_world = ensure_matcher_for_world
         self.narrative_max_tokens = narrative_max_tokens
+        self.get_instance = get_instance
+        self.save_instance = save_instance
         # 生图调度回调（GameHandler 注入）：swipe 叙事带新 SCENE_IMAGE 时重新生成该回合图片
         self._scene_image_hook = None
 
@@ -43,10 +57,48 @@ class SwipeGenerator:
         self._scene_image_hook = hook
 
     async def generate(self, instance: GameInstance, round_num: int) -> str | None:
-        """为指定轮生成一个新 swipe（最多 5 个）。"""
+        """Run the complete historical rewrite under the shared process barrier."""
+
         if instance._process_lock.locked():
-            logger.warning("process_round 进行中，跳过 generate_swipe: %s", instance.game_key)
+            logger.warning(
+                "process_round/swipe 进行中，跳过并发 generate_swipe: %s",
+                instance.game_key,
+            )
             return None
+        async with instance.historical_rewrite() as rewrite_entered:
+            if not rewrite_entered:
+                return None
+            async with instance._process_lock:
+                expected_run_id = instance.run_id
+                before = type(instance).from_dict(deepcopy(instance.to_dict()))
+                before.log = deepcopy(instance.log)
+                staged = type(instance).from_dict(deepcopy(instance.to_dict()))
+                staged.log = deepcopy(instance.log)
+                narration, scene_payload = await self._generate_locked(staged, round_num)
+                if narration is None:
+                    return None
+                if self.get_instance:
+                    current = self.get_instance(instance.game_key)
+                    if current is not instance or getattr(current, "run_id", None) != expected_run_id:
+                        return None
+                instance.replace_persisted_state_from(staged)
+                try:
+                    if self.save_instance is not None:
+                        await self.save_instance(instance)
+                except Exception:
+                    instance.replace_persisted_state_from(before)
+                    raise
+                if scene_payload and self._scene_image_hook:
+                    try:
+                        self._scene_image_hook(instance, str(scene_payload.get("prompt") or ""), int(scene_payload.get("round", round_num) or round_num), force=True)
+                    except Exception:
+                        logger.exception("Swipe 场景图调度失败 (round=%d)", round_num)
+                return narration
+
+    async def _generate_locked(
+        self, instance: GameInstance, round_num: int,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """为指定轮生成一个新 swipe（最多 5 个）。"""
         target_entry = None
         target_idx = -1
         for i, entry in enumerate(instance.log):
@@ -55,7 +107,7 @@ class SwipeGenerator:
                 target_idx = i
                 break
         if not target_entry:
-            return None
+            return None, None
 
         swipes = target_entry.get("swipes", [])
         if not swipes:
@@ -63,11 +115,12 @@ class SwipeGenerator:
             target_entry["swipes"] = swipes
         if len(swipes) >= 5:
             logger.warning("Swipe 已达上限 (5), round=%d", round_num)
-            return None
+            return None, None
 
         snapshot = target_entry.get("pre_state_snapshot", {})
         if snapshot:
-            restore_players(instance, snapshot)
+            reverse_round_economy(instance, round_num)
+            restore_players(instance, reconcile_rollback_snapshot(instance, snapshot, round_num))
             logger.info("Swipe: 已恢复 pre-state snapshot (round=%d)", round_num)
 
         actions_text = "; ".join(
@@ -124,10 +177,28 @@ class SwipeGenerator:
             narration = response.content.split("---", 1)[0].strip()
         narration = sanitize_narration(narration)
         data = parse_tag_state(response.content, combat_model_s)
+        narration = guard_unbacked_payment_narration(
+            narration, data, instance.language,
+        )
+        dropped_rewards = discard_unearned_reward_proposals(
+            instance, data, narration,
+        )
+        if dropped_rewards:
+            narration = f"{narration}\n\n{unearned_reward_notice(instance.language)}".strip()
+        economy_pending = has_economy_proposal(data)
+        deferred_effects = defer_narrative_effects(data, response)
+        if economy_pending:
+            narration = f"{narration}\n\n{pending_decision_notice(instance.language)}".strip()
 
+        queued_proposals: list[dict[str, Any]] = []
         if data.get("state_update"):
             discard_unresolved_player_damage(instance, data.get("state_update", {}))
-            self.state_applier.apply_state_update(instance, data.get("state_update", {}))
+            queued_proposals = self.state_applier.apply_state_update(
+                instance, data.get("state_update", {}),
+            )
+        if deferred_effects:
+            deferred_effects["allowed_player_uids"] = None
+            queue_effect_group(instance, queued_proposals, deferred_effects)
         if data.get("plot_update") and instance.plot_tracker:
             try:
                 instance.plot_tracker.apply_update(
@@ -136,14 +207,10 @@ class SwipeGenerator:
                 logger.exception("Swipe 剧情更新异常，已跳过 (round=%d)", round_num)
 
         await instance.finish_judgment_with_swipe(narration, round_num)
-        if self._scene_image_hook:
-            swipe_prompt = str(data.get("scene_image_prompt") or "").strip()
-            if swipe_prompt:
-                try:
-                    # swipe 是用户主动重掷叙事，新画面描述直接强制重新生成
-                    self._scene_image_hook(instance, swipe_prompt, round_num, force=True)
-                except Exception:
-                    logger.exception("Swipe 场景图调度失败 (round=%d)", round_num)
+        scene_payload = None
+        swipe_prompt = str(data.get("scene_image_prompt") or "").strip()
+        if swipe_prompt:
+            scene_payload = {"prompt": swipe_prompt, "round": round_num}
         logger.info("Swipe 生成: round=%d swipe=%d/%d", round_num,
                     len(swipes) + 1, len(swipes) + 1)
-        return narration
+        return narration, scene_payload

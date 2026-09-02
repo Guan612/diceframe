@@ -91,6 +91,8 @@ def apply_growth_rewards(
     rule: Any,
     progression: Any,
     runtime: Any | None = None,
+    *,
+    include_base: bool = True,
 ) -> None:
     if isinstance(runtime, NarrativeAdvancementRuntime):
         messages = runtime.apply_narrative_advancement_rewards(instance, data)
@@ -106,7 +108,9 @@ def apply_growth_rewards(
     level_up_msgs: list[str] = []
     for uid in instance.alive_players:
         bonus_xp = xp_rewards.get(uid, 0)
-        total_xp = 10 + bonus_xp
+        total_xp = (10 if include_base else 0) + bonus_xp
+        if total_xp <= 0:
+            continue
         character_sheet = instance.get_character_sheet(uid)
         character_sheet["xp"] = character_sheet.get("xp", 0) + total_xp
         instance.set_character_sheet(uid, character_sheet)
@@ -131,7 +135,7 @@ async def apply_memory_delta(instance: GameInstance, response: Any, memory_store
     if response.memory_delta and memory_store:
         try:
             await memory_store.apply_delta(
-                str(instance.game_key), response.memory_delta, instance.round_number,
+                instance.memory_namespace, response.memory_delta, instance.round_number,
             )
         except Exception:
             logger.exception("记忆写入失败 (round=%d)", instance.round_number)

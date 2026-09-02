@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.game_instance import GameRegistry
+from src.engine.economy import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader
 from src.memory.delta import MemoryStore
@@ -178,6 +179,26 @@ class WebAPI:
             save_character_card=lambda character: character_cards.save_character_card(
                 self._character_card_dependencies, character,
             ),
+            apply_economy_effects=(
+                handler.commit_deferred_economy_effects
+                if handler is not None
+                and callable(getattr(handler, "commit_deferred_economy_effects", None))
+                else None
+            ),
+            schedule_economy_scene_image=(
+                handler.schedule_deferred_economy_scene_image
+                if handler is not None
+                and callable(
+                    getattr(handler, "schedule_deferred_economy_scene_image", None)
+                )
+                else None
+            ),
+            apply_economy_memory=(
+                self._mem.apply_economy_delta if self._mem is not None else None
+            ),
+            reverse_economy_memory=(
+                self._mem.reverse_economy_delta if self._mem is not None else None
+            ),
         )
         self._ruleset_character_dependencies = (
             ruleset_characters.RulesetCharacterDependencies(
@@ -280,6 +301,7 @@ class WebAPI:
             memory_service.MemoryDependencies(
                 repository=self._mem,
                 parse_game_key=_parse_game_key,
+                get_instance=self._reg.get,
             )
         )
         self._bot_access = bot_access.BotAccessService(
@@ -333,6 +355,7 @@ class WebAPI:
                     if self._handler is not None
                     else None
                 ),
+                drain_economy_outbox=self._drain_economy_outbox,
             )
         )
         self._game_media = game_media.GameMediaService(
@@ -477,6 +500,7 @@ class WebAPI:
             process_round=getattr(self._handler, "process_round", None),
             resolve_luck_decision=self.resolve_luck_decision,
             decline_pending_luck=self.decline_pending_luck,
+            drain_economy_outbox=self._drain_economy_outbox,
         )
         self._map_dependencies = maps.MapDependencies(
             get_instance=self._reg.get,
@@ -1104,8 +1128,8 @@ class WebAPI:
     def list_games(self) -> dict[str, Any]:
         return game_queries.list_games(self._game_query_dependencies)
 
-    def game_detail(self, game_key: str) -> dict[str, Any] | None:
-        return game_queries.game_detail(self._game_query_dependencies, game_key)
+    def game_detail(self, game_key: str, viewer_uid: str = "") -> dict[str, Any] | None:
+        return game_queries.game_detail(self._game_query_dependencies, game_key, viewer_uid)
 
     def get_game_instance(self, game_key: str):
         """Resolve a public game key without exposing registry/parser internals."""
@@ -1503,6 +1527,28 @@ class WebAPI:
             accepted,
             session_uid,
         )
+
+    async def _drain_economy_outbox(self, instance: Any) -> bool:
+        return await characters.drain_economy_outbox(
+            self._character_dependencies, instance,
+        )
+
+    async def drain_economy_outbox(self, game_key: str) -> bool:
+        instance = self.get_game_instance(game_key)
+        if instance is None:
+            return False
+        return await self._drain_economy_outbox(instance)
+
+    async def recover_economy_outboxes(self, instances: list[Any]) -> int:
+        recovered = 0
+        for instance in instances:
+            had_pending = bool(
+                pending_memory_deliveries(instance)
+                or pending_memory_reversals(instance)
+            )
+            if had_pending and await self._drain_economy_outbox(instance):
+                recovered += 1
+        return recovered
 
     async def delete_character(self, game_key: str, user_id: str) -> dict[str, Any]:
         return await characters.delete_character(

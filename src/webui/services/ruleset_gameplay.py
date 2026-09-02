@@ -313,7 +313,7 @@ async def submit_intent(
             ]:
                 try:
                     await dependencies.apply_memory_delta(
-                        str(instance.game_key), {"add": [memory]},
+                        instance.memory_namespace, {"add": [memory]},
                         int(getattr(instance, "round_number", 0) or 0),
                     )
                 except Exception:

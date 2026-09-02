@@ -37,7 +37,8 @@ async def api_gm_command(request: web.Request) -> web.Response:
             status=400,
         )
     result = await api.gm_command(gk, command, str(body.get("mode", "note") or "note"))
-    return web.json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else 409 if result.get("code") == "REWRITE_IN_PROGRESS" else 400
+    return web.json_response(result, status=status)
 
 
 async def api_rollback(request: web.Request) -> web.Response:
@@ -47,7 +48,8 @@ async def api_rollback(request: web.Request) -> web.Response:
     if err:
         return err
     result = await api.rollback_round(gk)
-    return web.json_response(result, status=200 if result.get("ok") else 400)
+    status = 200 if result.get("ok") else 409 if result.get("code") == "REWRITE_IN_PROGRESS" else 400
+    return web.json_response(result, status=status)
 
 
 async def api_story_recap(request: web.Request) -> web.Response:
@@ -338,7 +340,21 @@ async def api_payment_resolve(request: web.Request) -> web.Response:
     result = await api.resolve_payment(
         gk, payment_id, bool(body.get("accepted")), session_uid
     )
-    return web.json_response(result)
+    code = str(result.get("code") or "")
+    status = (
+        200 if result.get("ok")
+        else 404 if code in {"NOT_FOUND", "GAME_NOT_FOUND", "PROPOSAL_NOT_FOUND"}
+        else 403 if code in {"FORBIDDEN", "PAYMENT_FORBIDDEN"}
+        else 409 if code in {
+            "ALREADY_RESOLVED",
+            "STALE_RUN",
+            "EFFECT_COMMIT_FAILED",
+            "INSUFFICIENT_FUNDS",
+            "REWRITE_IN_PROGRESS",
+        }
+        else 400
+    )
+    return web.json_response(result, status=status)
 
 
 async def api_swipe(request: web.Request) -> web.Response:
@@ -351,9 +367,12 @@ async def api_swipe(request: web.Request) -> web.Response:
         return denied
     if request.method == "PUT":
         nar = await api.generate_game_swipe(inst, round_num)
-        # swipe 改写了内存 log（gm_response/swipes），落盘否则重启即丢
-        await api.save_game_instance(inst)
-        return web.json_response({"ok": True, "narration": nar})
+        external_effects_committed = await api.drain_economy_outbox(game_key)
+        return web.json_response({
+            "ok": True,
+            "narration": nar,
+            "external_effects_committed": external_effects_committed,
+        })
     else:
         idx = body.get("swipe_index", 0)
         ok = await inst.switch_swipe(round_num, idx)

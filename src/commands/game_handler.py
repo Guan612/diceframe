@@ -105,6 +105,8 @@ class GameHandler:
             self._load_world_template,
             self._ensure_matcher_for_world,
             narrative_max_tokens,
+            self.registry.get,
+            self.registry.save,
         )
         self._lifecycle = GameLifecycle(
             self.registry,
@@ -153,6 +155,7 @@ class GameHandler:
         group_name: str, rule_id: str = "",
         seed_code: str = "", difficulty: str = "标准",
         language: str = DEFAULT_LANGUAGE,
+        fresh_instance: bool = False,
     ) -> GameInstance:
         """兼容旧入口；实际逻辑已拆到 GameFactory。"""
         plugin_template = None
@@ -162,6 +165,7 @@ class GameHandler:
             game_key, world_id, world_name, group_name,
             rule_id=rule_id, seed_code=seed_code, difficulty=difficulty,
             language=language,
+            fresh_instance=fresh_instance,
         )
         if plugin_template:
             instance.rule_id = str(rule_id or plugin_template.get("default_rule") or "freeform_fantasy")
@@ -269,6 +273,26 @@ class GameHandler:
     def _apply_state_update(self, instance: GameInstance, update: dict) -> None:
         """兼容旧内部调用；实际逻辑已拆到 StateUpdateApplier。"""
         self._state_applier.apply_state_update(instance, update)
+
+    async def commit_deferred_economy_effects(
+        self,
+        instance: GameInstance,
+        effects: dict,
+    ) -> None:
+        """Commit narrative effects after the authoritative payment succeeds."""
+
+        await self._round_processor.commit_deferred_economy_effects(
+            instance, effects,
+        )
+
+    def schedule_deferred_economy_scene_image(
+        self,
+        instance: GameInstance,
+        payload: dict,
+    ):
+        """Schedule a settled scene image after the authoritative save."""
+
+        return self._round_processor.schedule_deferred_scene_image(instance, payload)
 
     def _tick_madness(self, instance: GameInstance) -> None:
         """兼容旧内部调用；实际逻辑已拆到 StateUpdateApplier。"""

@@ -27,13 +27,16 @@ function splitParagraphs(text:string):string[]{
   return out
 }
 
-export interface StateCard{title:string;body:string;cls:'good'|'warn'}
-function stateClass(title:string,body:string):'good'|'warn'{
-  return /失败|警惕|受伤|扣除|失去|消耗|危险|倒地|中毒|拒绝|伤害|惩罚|代价|fail|failure|alert|injured|damage|lose|lost|spend|spent|consume|danger|poison|reject|penalty|cost|[－-]\s*\d+/i.test(title+body)?'warn':'good'
+export interface StateCard{title:string;body:string;cls:'good'|'warn'|'pending'}
+function stateClass(title:string,body:string):'good'|'warn'|'pending'{
+  const value = title + body
+  if (/待确认|待生效|未生效|等待|pending|awaiting|not yet|not taken effect/i.test(value)) return 'pending'
+  if (/权威账本提示|authority notice|ledger notice/i.test(title)) return 'good'
+  return /失败|警惕|受伤|扣除|失去|消耗|危险|倒地|中毒|拒绝|伤害|惩罚|代价|fail|failure|alert|injured|damage|lose|lost|spend|spent|consume|danger|poison|reject|penalty|cost|[－-]\s*\d+/i.test(value) ? 'warn' : 'good'
 }
-const STATE_KEYWORDS='系统检定|任务更新|状态变化|状态变动|状态更新|玩家状态|资源变化|资源变动|资源更新|关系变化|关系变动|属性变化|属性变动|属性更新|线索更新|记忆更新|检定结果|战斗结算|奖励|代价|system check|quest update|status change|status update|player status|resource change|resource update|relationship change|attribute change|attribute update|clue update|memory update|check result|combat resolution|reward|cost|buff|debuff'
+const STATE_KEYWORDS='系统检定|任务更新|状态变化|状态变动|状态更新|玩家状态|资源变化|资源变动|资源更新|关系变化|关系变动|属性变化|属性变动|属性更新|线索更新|记忆更新|检定结果|战斗结算|奖励|代价|结算待确认|权威账本提示|system check|quest update|status change|status update|player status|resource change|resource update|relationship change|attribute change|clue update|memory update|check result|combat resolution|reward|cost|buff|debuff|settlement pending|authority notice|ledger notice'
 const STATE_TITLE_RE=new RegExp('^(?:'+STATE_KEYWORDS+')$','i')
-const STATE_CUE_RE=/变化|变动|更新|结算|检定|奖励|代价|change|update|resolution|check|reward|cost/i
+const STATE_CUE_RE=/变化|变动|更新|结算|提示|检定|奖励|代价|change|update|resolution|check|reward|cost|notice/i
 function isStateTitle(title:string):boolean{return STATE_TITLE_RE.test(title)||STATE_CUE_RE.test(title)}
 export function extractStateLines(text:string):{narration:string;states:StateCard[]}{
   const states:StateCard[]=[];const narration:string[]=[]

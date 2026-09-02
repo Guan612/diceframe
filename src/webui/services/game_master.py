@@ -22,6 +22,7 @@ from src.rules.rule_system import RuleSystem
 
 GameKey = tuple[str, ...]
 RecapGenerator = Callable[[Any], Awaitable[dict[str, Any]]]
+EconomyOutboxDrainer = Callable[[Any], Awaitable[bool]]
 
 _GM_RESOURCE_ALIASES = {
     "生命值": "hp",
@@ -57,6 +58,7 @@ class GameMasterDependencies:
     save_instance: Callable[[Any], Awaitable[None]]
     load_rule: Callable[[Any], RuleSystem | None]
     generate_recap: RecapGenerator | None = None
+    drain_economy_outbox: EconomyOutboxDrainer | None = None
 
 
 def _resource_aliases_for_rule(rule: RuleSystem | None) -> dict[str, str]:
@@ -286,6 +288,14 @@ class GameMasterService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return self._rewrite_conflict()
+            if self._instance(game_key) is not instance:
+                return self._stale_run()
+            return await self._rollback_round_authority(instance)
+
+    async def _rollback_round_authority(self, instance: Any) -> dict[str, Any]:
         round_number = await instance.rollback_last_round()
         if round_number is None:
             return {"ok": False, "error": "没有可撤回的上一轮"}
@@ -301,9 +311,15 @@ class GameMasterService:
             repair_hint="如果仍不满意，可继续用 GM 指令修正下一次判定。",
         )
         await self._dependencies.save_instance(instance)
+        external_effects_committed = True
+        if self._dependencies.drain_economy_outbox is not None:
+            external_effects_committed = await self._dependencies.drain_economy_outbox(
+                instance,
+            )
         return {
             "ok": True,
             "message": f"已撤回到第 {round_number} 轮开始前的玩家状态",
+            "external_effects_committed": external_effects_committed,
         }
 
     async def generate_story_recap(self, game_key: str) -> dict[str, Any]:
@@ -325,9 +341,19 @@ class GameMasterService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return self._rewrite_conflict()
+            if self._instance(game_key) is not instance:
+                return self._stale_run()
+            return await self._command_authority(instance, game_key, command, mode)
+
+    async def _command_authority(
+        self, instance: Any, game_key: str, command: str, mode: str,
+    ) -> dict[str, Any]:
         command = (command or "").strip()
         if mode == "rollback":
-            return await self.rollback_round(game_key)
+            return await self._rollback_round_authority(instance)
         if not command:
             return {"ok": False, "error": "请输入 GM 指令"}
 
@@ -431,6 +457,16 @@ class GameMasterService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return self._rewrite_conflict()
+            if self._instance(game_key) is not instance:
+                return self._stale_run()
+            return await self._private_message_authority(instance, user_id, text)
+
+    async def _private_message_authority(
+        self, instance: Any, user_id: str, text: str,
+    ) -> dict[str, Any]:
         user_id = (user_id or "").strip()
         text = (text or "").strip()
         if user_id not in instance.players:
@@ -445,3 +481,15 @@ class GameMasterService:
         })
         await self._dependencies.save_instance(instance)
         return {"ok": True, "message": "悄悄话已发送"}
+
+    @staticmethod
+    def _rewrite_conflict() -> dict[str, Any]:
+        return {
+            "ok": False,
+            "code": "REWRITE_IN_PROGRESS",
+            "error": "GM 正在重写历史回合，请等待完成后重试",
+        }
+
+    @staticmethod
+    def _stale_run() -> dict[str, Any]:
+        return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}

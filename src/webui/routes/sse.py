@@ -10,10 +10,12 @@ import re
 
 from aiohttp import web
 
+from src.engine.economy import has_blocking_economy_decision
 from src.engine.game_instance import GameState
 from src.llm.parser import sanitize_narration
 from src.webui.connection_pool import ConnectionPool
 from src.webui.routes._common import MAX_ACTION_CHARS, _get_api
+from src.webui.services.turns import economy_decision_pending_payload
 
 logger = logging.getLogger("trpg")
 
@@ -90,6 +92,12 @@ async def sse_stream_action(request: web.Request) -> web.StreamResponse:
         return web.json_response({"error": "未加入本局，无法提交行动"}, status=403)
     if inst.is_dead(user_id):
         return web.json_response({"error": "角色已死亡，无法提交行动"}, status=403)
+    await api.drain_economy_outbox(gk)
+    if has_blocking_economy_decision(inst):
+        return web.json_response(
+            economy_decision_pending_payload(inst, user_id),
+            status=409,
+        )
     if inst.state == GameState.ACTIVE_JUDGMENT:
         return web.json_response({"error": "本轮正在推进剧情，请等待下一轮开始"}, status=409)
 
@@ -272,6 +280,16 @@ def _play_public_signature(inst, user_id: str) -> str:
         "pending_payments": [
             payment for payment in getattr(inst, "pending_payments", [])
             if payment.get("status") == "pending"
+            and (
+                user_id == inst.gm_uid
+                or payment.get("visibility") == "party"
+                or user_id == str(payment.get("payer_uid") or payment.get("uid") or "")
+                or user_id in {
+                    str(item.get("uid") or "")
+                    for item in (payment.get("contributors") or [])
+                    if isinstance(item, dict)
+                }
+            )
         ],
         "multiplayer": inst.multiplayer_status(),
         "round_checks_prepared": bool(getattr(inst, "round_checks_prepared", False)),

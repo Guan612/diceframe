@@ -103,6 +103,10 @@ class MemoryStore:
                 "DELETE FROM memory_entries WHERE game_key=?",
                 (str(game_key),),
             )
+            self._conn.execute(
+                "DELETE FROM memory_economy_deliveries WHERE game_key=?",
+                (str(game_key),),
+            )
             self._conn.commit()
         return int(cursor.rowcount or 0)
 
@@ -110,35 +114,242 @@ class MemoryStore:
 
     async def apply_delta(self, game_key: str, delta: dict, round_number: int) -> None:
         """应用 memory_delta，根据冲突消解规则处理 add/update/forget。"""
+        if self._conn is None:
+            raise RuntimeError("memory store is not open")
+        connection = self._conn
         gk = str(game_key)
         now = datetime.now(timezone.utc).isoformat()
         new_ids: list[int] = []
 
         async with self._lock:
-            for item in delta.get("add", []):
-                eid = self._insert_or_update(gk, item, round_number, now, force_add=True)
-                if eid:
-                    new_ids.append(eid)
-
-            for item in delta.get("update", []):
-                self._insert_or_update(gk, item, round_number, now, force_add=False)
-
-            for item in delta.get("forget", []):
-                confidence = float(item.get("confidence", 1.0))
-                entity = item.get("entity", "")
-                relation = item.get("relation", "")
-                if confidence >= 0.5:
-                    self._conn.execute(
-                        "UPDATE memory_entries SET status='forgotten', "
-                        "updated_at=? WHERE game_key=? AND entity=? AND relation=? AND status='active'",
-                        (now, gk, entity, relation),
-                    )
-
-            self._conn.commit()
+            try:
+                new_ids = self._apply_delta_locked(gk, delta, round_number, now)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
 
         # 标记待处理 embedding（由外部在 async 上下文中调用 flush_pending_embeddings）
         if new_ids and self.embedding_client:
             self._pending_embed_ids.extend(new_ids)
+
+    async def apply_economy_delta(
+        self,
+        game_key: str,
+        delivery_id: str,
+        delta: dict,
+        round_number: int,
+    ) -> None:
+        """Apply one transaction-associated delta with a durable inverse journal."""
+
+        if self._conn is None:
+            raise RuntimeError("memory store is not open")
+        gk = str(game_key)
+        effect_id = str(delivery_id)
+        if not effect_id:
+            raise ValueError("economy memory delivery id is required")
+        now = datetime.now(timezone.utc).isoformat()
+        keys = self._delta_keys(delta)
+        new_ids: list[int] = []
+        async with self._lock:
+            existing = self._conn.execute(
+                "SELECT status FROM memory_economy_deliveries "
+                "WHERE game_key=? AND delivery_id=?",
+                (gk, effect_id),
+            ).fetchone()
+            if existing is not None:
+                return
+            try:
+                before = self._snapshot_keys(gk, keys)
+                new_ids = self._apply_delta_locked(
+                    gk, delta, int(round_number), now,
+                )
+                after = self._snapshot_keys(gk, keys)
+                self._conn.execute(
+                    "INSERT INTO memory_economy_deliveries "
+                    "(game_key, delivery_id, before_state, after_state, status, created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (
+                        gk,
+                        effect_id,
+                        json.dumps(before, ensure_ascii=False, sort_keys=True),
+                        json.dumps(after, ensure_ascii=False, sort_keys=True),
+                        "applied",
+                        now,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        if new_ids and self.embedding_client:
+            self._pending_embed_ids.extend(new_ids)
+
+    async def reverse_economy_delta(
+        self,
+        game_key: str,
+        delivery_id: str,
+    ) -> bool:
+        """Reverse one delivered economy delta without clobbering newer facts."""
+
+        if self._conn is None:
+            raise RuntimeError("memory store is not open")
+        gk = str(game_key)
+        effect_id = str(delivery_id)
+        async with self._lock:
+            record = self._conn.execute(
+                "SELECT before_state, after_state, status "
+                "FROM memory_economy_deliveries WHERE game_key=? AND delivery_id=?",
+                (gk, effect_id),
+            ).fetchone()
+            if record is None:
+                return False
+            if record["status"] == "reversed":
+                return True
+            before_rows = {
+                int(item["id"]): item
+                for item in json.loads(record["before_state"] or "[]")
+            }
+            after_rows = {
+                int(item["id"]): item
+                for item in json.loads(record["after_state"] or "[]")
+            }
+            try:
+                for entry_id, after in after_rows.items():
+                    current = self._conn.execute(
+                        "SELECT * FROM memory_entries WHERE id=? AND game_key=?",
+                        (entry_id, gk),
+                    ).fetchone()
+                    if current is None or not self._same_memory_state(dict(current), after):
+                        continue
+                    before = before_rows.get(entry_id)
+                    if before is None:
+                        self._conn.execute(
+                            "DELETE FROM memory_entries WHERE id=? AND game_key=?",
+                            (entry_id, gk),
+                        )
+                    else:
+                        self._restore_memory_row(before)
+                for entry_id, before in before_rows.items():
+                    if entry_id in after_rows:
+                        continue
+                    current = self._conn.execute(
+                        "SELECT 1 FROM memory_entries WHERE id=?",
+                        (entry_id,),
+                    ).fetchone()
+                    if current is None:
+                        self._insert_memory_row(before)
+                self._conn.execute(
+                    "UPDATE memory_economy_deliveries SET status='reversed', reversed_at=? "
+                    "WHERE game_key=? AND delivery_id=? AND status='applied'",
+                    (datetime.now(timezone.utc).isoformat(), gk, effect_id),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return True
+
+    def _apply_delta_locked(
+        self,
+        gk: str,
+        delta: dict,
+        round_number: int,
+        now: str,
+    ) -> list[int]:
+        new_ids: list[int] = []
+        for item in delta.get("add", []):
+            entry_id = self._insert_or_update(
+                gk, item, round_number, now, force_add=True,
+            )
+            if entry_id:
+                new_ids.append(entry_id)
+        for item in delta.get("update", []):
+            entry_id = self._insert_or_update(
+                gk, item, round_number, now, force_add=False,
+            )
+            if entry_id:
+                new_ids.append(entry_id)
+        for item in delta.get("forget", []):
+            if not isinstance(item, dict):
+                continue
+            confidence = float(item.get("confidence", 1.0))
+            entity = item.get("entity", "")
+            relation = item.get("relation", "")
+            if confidence >= 0.5:
+                self._conn.execute(
+                    "UPDATE memory_entries SET status='forgotten', updated_at=? "
+                    "WHERE game_key=? AND entity=? AND relation=? AND status='active'",
+                    (now, gk, entity, relation),
+                )
+        return new_ids
+
+    @staticmethod
+    def _delta_keys(delta: dict) -> list[tuple[str, str]]:
+        keys: set[tuple[str, str]] = set()
+        for operation in ("add", "update", "forget"):
+            for raw in delta.get(operation, []):
+                item = raw
+                if isinstance(raw, str):
+                    text = raw.strip()
+                    item = {"entity": text, "relation": "记录"}
+                if not isinstance(item, dict):
+                    continue
+                entity = str(item.get("entity") or "")
+                relation = str(item.get("relation") or "")
+                if entity.strip():
+                    keys.add((entity, relation))
+        return sorted(keys)
+
+    def _snapshot_keys(
+        self,
+        game_key: str,
+        keys: list[tuple[str, str]],
+    ) -> list[dict]:
+        rows: list[dict] = []
+        for entity, relation in keys:
+            rows.extend(
+                dict(row)
+                for row in self._conn.execute(
+                    "SELECT * FROM memory_entries "
+                    "WHERE game_key=? AND entity=? AND relation=? ORDER BY id",
+                    (game_key, entity, relation),
+                ).fetchall()
+            )
+        return rows
+
+    @staticmethod
+    def _same_memory_state(current: dict, expected: dict) -> bool:
+        fields = (
+            "game_key", "entity", "relation", "value", "confidence",
+            "status", "source_round",
+        )
+        return all(current.get(field) == expected.get(field) for field in fields)
+
+    def _restore_memory_row(self, row: dict) -> None:
+        self._conn.execute(
+            "UPDATE memory_entries SET game_key=?, entity=?, relation=?, value=?, "
+            "confidence=?, status=?, source_round=?, embedding=?, created_at=?, updated_at=? "
+            "WHERE id=?",
+            (
+                row["game_key"], row["entity"], row["relation"], row["value"],
+                row["confidence"], row["status"], row.get("source_round"),
+                row.get("embedding"), row["created_at"], row["updated_at"], row["id"],
+            ),
+        )
+
+    def _insert_memory_row(self, row: dict) -> None:
+        self._conn.execute(
+            "INSERT INTO memory_entries "
+            "(id, game_key, entity, relation, value, confidence, status, source_round, "
+            "embedding, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                row["id"], row["game_key"], row["entity"], row["relation"],
+                row["value"], row["confidence"], row["status"],
+                row.get("source_round"), row.get("embedding"), row["created_at"],
+                row["updated_at"],
+            ),
+        )
 
     def _insert_or_update(self, gk: str, item: dict, round_num: int,
                           now: str, force_add: bool) -> int | None:

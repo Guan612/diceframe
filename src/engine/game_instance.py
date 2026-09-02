@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal
+from uuid import uuid4
 
 from src.engine.contracts import (
     ActionRecord,
@@ -108,6 +110,10 @@ class GameInstance:
     """
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
+    instance_schema_version: int = 3
+    run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
+    memory_namespace: str = ""
+    economy: dict[str, Any] = field(default_factory=dict)
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
     ruleset_runtime: dict[str, Any] = field(default_factory=dict)
@@ -234,6 +240,11 @@ class GameInstance:
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     # 内部：process_round/generate_swipe 互斥锁，防并发处理同一实例
     _process_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    # Runtime-only authority gate. Lock order is authority -> process -> state.
+    _authority_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _authority_owner: asyncio.Task[Any] | None = field(default=None, repr=False)
+    _authority_depth: int = field(default=0, repr=False)
+    _rewrite_in_progress: bool = field(default=False, repr=False)
     _save_fail_count: int = field(default=0, repr=False)
     # 幸运超时（秒）：每条 pending 幸运检定独立倒计时，到点按失败继续；0=禁用（异步局可设 0）
     luck_timeout_seconds: int = 60
@@ -244,6 +255,99 @@ class GameInstance:
     _tag_fail_streak: int = field(default=0, repr=False)
     # D1: 已确认事项（CONFIRMED 标签累积），注入 LLM 上下文防重复讨论
     confirmed_items: list = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.run_id:
+            self.run_id = f"run_{uuid4().hex}"
+        if not self.memory_namespace:
+            self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
+        if not isinstance(self.economy, dict) or not self.economy:
+            self.economy = self._fresh_economy_state()
+        else:
+            self.economy.setdefault("schema_version", 2)
+            self.economy.setdefault("run_id", self.run_id)
+            self.economy.setdefault("next_sequence", 1)
+            self.economy.setdefault("proposals", [])
+            self.economy.setdefault("transactions", [])
+            self.economy.setdefault("idempotency_records", {})
+            self.economy.setdefault("effect_groups", [])
+            self.economy.setdefault("external_effects_outbox", [])
+            self.economy.setdefault("outcomes", [])
+            self.economy.setdefault("decision_revision", 0)
+
+    def _fresh_economy_state(self) -> dict[str, Any]:
+        return {
+            "schema_version": 2,
+            "run_id": self.run_id,
+            "next_sequence": 1,
+            "proposals": [],
+            "transactions": [],
+            "idempotency_records": {},
+            "effect_groups": [],
+            "external_effects_outbox": [],
+            "outcomes": [],
+            "decision_revision": 0,
+        }
+
+    @asynccontextmanager
+    async def authoritative_write(self) -> AsyncIterator[bool]:
+        """Enter the atomic live-aggregate writer gate.
+
+        Writers arriving during a historical rewrite are rejected before any
+        mutation. The gate is task-reentrant so a service transaction may call
+        guarded aggregate methods without deadlocking itself.
+        """
+
+        task = asyncio.current_task()
+        if task is not None and self._authority_owner is task:
+            self._authority_depth += 1
+            try:
+                yield True
+            finally:
+                self._authority_depth -= 1
+            return
+        if self._rewrite_in_progress:
+            yield False
+            return
+        await self._authority_lock.acquire()
+        self._authority_owner = task
+        self._authority_depth = 1
+        try:
+            # A queued writer may resume after a rewrite. At that point the
+            # rewrite is committed and the caller must revalidate identity.
+            yield True
+        finally:
+            self._authority_depth = 0
+            self._authority_owner = None
+            self._authority_lock.release()
+
+    @asynccontextmanager
+    async def historical_rewrite(self) -> AsyncIterator[bool]:
+        """Own the authority gate for a complete staged historical rewrite."""
+
+        if self._authority_lock.locked() and self._rewrite_in_progress:
+            yield False
+            return
+        await self._authority_lock.acquire()
+        self._authority_owner = asyncio.current_task()
+        self._authority_depth = 1
+        self._rewrite_in_progress = True
+        try:
+            yield True
+        finally:
+            self._rewrite_in_progress = False
+            self._authority_depth = 0
+            self._authority_owner = None
+            self._authority_lock.release()
+
+    def rotate_run_identity(self) -> tuple[str, str]:
+        """Start an isolated run namespace and return ``(old, new)``."""
+
+        old = self.run_id
+        self.run_id = f"run_{uuid4().hex}"
+        self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
+        self.economy = self._fresh_economy_state()
+        return old, self.run_id
 
     # ---------- 状态查询 ------------------------------------
 
@@ -510,10 +614,22 @@ class GameInstance:
         self.pending_payments.append(payment)
 
     def remove_payments_for_player(self, uid: str) -> None:
+        from src.engine.economy import cancel_proposals_for_player
+
+        affected_ids = cancel_proposals_for_player(self, uid)
         self.pending_payments = [
             payment
             for payment in self.pending_payments
-            if payment.get("uid") != uid and payment.get("recipient_uid") != uid
+            if (
+                payment.get("uid") != uid
+                and payment.get("recipient_uid") != uid
+                and str(payment.get("id") or "") not in affected_ids
+                and uid not in {
+                    str(item.get("uid") or "")
+                    for item in (payment.get("contributors") or [])
+                    if isinstance(item, dict)
+                }
+            )
         ]
 
     def prune_resolved_payments(self) -> None:
@@ -637,14 +753,19 @@ class GameInstance:
             if not self.log:
                 return None
             last = self.log.pop()
+            from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
+
+            reverse_round_economy(self, int(last.get("round", self.round_number) or self.round_number))
             snapshot = last.get("round_start_snapshot") or last.get("pre_state_snapshot", {})
             if isinstance(snapshot, dict) and snapshot:
-                restore_players(self, snapshot)
+                restore_players(self, reconcile_rollback_snapshot(self, snapshot, int(last.get("round", self.round_number) or self.round_number)))
             self.round_number = max(1, int(last.get("round", self.round_number) or 1))
             self.action_queue.clear()
             self.pending_actions.clear()
             self.ready_players.clear()
-            self.pending_payments.clear()
+            # ``reverse_round_economy`` restores still-valid proposals whose
+            # settlement happened in the rolled-back round.  Do not clear the
+            # compatibility projection after that restoration.
             self.reset_round_checks()
             # Explicit rollback starts a fresh attempt for that round; do not
             # let a discarded outcome affect the replay or a later round.
@@ -807,7 +928,9 @@ class GameInstance:
         selected_attribute/selected_skill/target_text 为前端可选提交的结构化
         归因字段（P1），供检定与 prompt 直接使用，避免靠文本启发式猜。
         """
-        async with self._lock:
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered or self._process_lock.locked():
+                return False
             if user_id in self.players:
                 cs = self.get_character_sheet(user_id)
                 if cs.get("deceased"):
@@ -890,7 +1013,9 @@ class GameInstance:
         source: str = "player",
     ) -> bool:
         """Attach a resolved roll to a pending action without counting as an edit."""
-        async with self._lock:
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered:
+                return False
             action = next(
                 (
                     item for item in self.action_queue
@@ -944,11 +1069,19 @@ class GameInstance:
     async def advance_round(self) -> bool:
         """显式推进回合。未行动的存活玩家标记为已就绪。"""
         async with self._lock:
+            from src.engine.economy import has_blocking_economy_decision
+
+            if has_blocking_economy_decision(self):
+                return False
             return self._do_advance_locked()
 
     async def try_advance(self) -> bool:
         """原子推进：检查条件 + 推进在同一个锁内完成，消除 TOCTOU 竞态。"""
         async with self._lock:
+            from src.engine.economy import has_blocking_economy_decision
+
+            if has_blocking_economy_decision(self):
+                return False
             if self.state != GameState.ACTIVE_ACTION:
                 return False
             if not self.should_advance():
@@ -1057,6 +1190,7 @@ class GameInstance:
             saved_language = normalize_language(self.language)
             saved_ruleset_runtime = copy.deepcopy(self.ruleset_runtime)
             saved_adventure_binding = copy.deepcopy(self.adventure_binding)
+            self.rotate_run_identity()
             self.players.clear()
             self.npcs.clear()
             self.round_number = 0
@@ -1129,6 +1263,27 @@ class GameInstance:
         """Return the stable persisted projection for this aggregate."""
         return GameStateCodec.encode(self)
 
+    def replace_persisted_state_from(self, source: "GameInstance") -> None:
+        """Commit a staged aggregate without replacing its runtime identity.
+
+        Economy decisions are prepared against an isolated ``GameInstance`` so
+        a failing dependent effect cannot leave half of a transaction applied.
+        Only persisted domain fields cross this boundary; locks, timers, save
+        counters and other process-local coordination remain attached to the
+        live instance.
+        """
+
+        if source.game_key != self.game_key or source.run_id != self.run_id:
+            raise ValueError("staged game state belongs to a different run")
+        runtime_only = {
+            "last_saved_log_count",
+            "pending_luck_after_recovery",
+        }
+        for name, value in source.__dict__.items():
+            if name.startswith("_") or name in runtime_only:
+                continue
+            setattr(self, name, copy.deepcopy(value))
+
     def to_llm_view(self) -> GameContextView:
         """LLM 决策所需的精简状态视图。
 
@@ -1161,6 +1316,7 @@ class GameRegistry:
 
     def __init__(self, save_dir: Path):
         self._instances: dict[tuple, GameInstance] = {}
+        self._save_locks: dict[tuple, asyncio.Lock] = {}
         self.save_dir = Path(save_dir)
 
     # ---------- CRUD ---------------------------------------
@@ -1204,8 +1360,35 @@ class GameRegistry:
         return persistence._save_path(self, game_key)
 
     async def save(self, instance: GameInstance) -> None:
-        """写入存档（逻辑见 persistence）。"""
-        await persistence.save(self, instance)
+        """Persist only the live aggregate for this game key.
+
+        A reset/restart keeps the public game key while rotating ``run_id``.
+        Rejecting stale object identities prevents an old request that resumes
+        late from overwriting the newly installed run on disk.
+        """
+
+        lock = self._save_locks.setdefault(instance.game_key, asyncio.Lock())
+        async with lock:
+            current = self.get(instance.game_key)
+            if current is not None and current is not instance:
+                raise RuntimeError("stale game instance cannot overwrite the current run")
+            await persistence.save(self, instance)
+
+    async def replace_current(
+        self,
+        expected: GameInstance,
+        candidate: GameInstance,
+    ) -> None:
+        """Atomically persist and install a replacement run."""
+
+        if candidate.game_key != expected.game_key:
+            raise ValueError("replacement game key mismatch")
+        lock = self._save_locks.setdefault(expected.game_key, asyncio.Lock())
+        async with lock:
+            if self.get(expected.game_key) is not expected:
+                raise RuntimeError("game run changed while replacement was being prepared")
+            await persistence.save(self, candidate)
+            self.register(candidate)
 
     # P2-G Step 2：_chatlog_path / _append_chatlog / _truncate_chatlog 已迁到
     # src/engine/persistence.py（仅 persistence 内部使用，无外部调用，不设委托）。

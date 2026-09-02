@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -660,6 +661,42 @@ async def test_spending_luck_is_atomic_persistent_and_idempotent():
     assert instance.get_character_sheet("p1")["luck"] == 28
     assert instance.last_checks[0]["luck_decision"] == "spent"
     assert api._reg.saved == 2
+
+
+@pytest.mark.asyncio
+async def test_luck_decision_is_rejected_while_historical_rewrite_is_active():
+    instance, rule = _coc_instance()
+    instance.state = GameState.ACTIVE_JUDGMENT
+    instance.round_checks_prepared = True
+    instance.last_checks = [{
+        "check_id": "rewrite-luck",
+        "actor_uid": "p1",
+        "dice": "d100",
+        "roll": 22,
+        "threshold": 20,
+        "verdict": "失败",
+        "luck_decision": "pending",
+        "luck_spend_available": True,
+    }]
+    api = _Api(instance, rule)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def hold_rewrite() -> None:
+        async with instance.historical_rewrite() as acquired:
+            assert acquired is True
+            entered.set()
+            await release.wait()
+
+    rewrite = asyncio.create_task(hold_rewrite())
+    await entered.wait()
+    result = await asyncio.wait_for(
+        resolve_luck_decision(api, "web|room|bot", "rewrite-luck", "p1", True),
+        1,
+    )
+    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert instance.last_checks[0]["luck_decision"] == "pending"
+    release.set()
+    await asyncio.wait_for(rewrite, 1)
 
 
 @pytest.mark.asyncio

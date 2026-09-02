@@ -573,6 +573,44 @@ async def test_create_game_uses_created_character_before_opening(web_api):
 
 
 @pytest.mark.asyncio
+async def test_opening_conditional_reward_is_not_queued(web_api, monkeypatch):
+    """Opening narration must not turn a future promise into a reward proposal."""
+    api, _lorebook, registry, fake_llm, _worlds_dir = web_api
+
+    async def opening_with_conditional_reward(*, system_prompt, user_message, **kwargs):
+        del system_prompt, user_message, kwargs
+        return LLMResponse(
+            content=(
+                "药剂师说，完成委托后会支付你十五枚金币。\n---\n"
+                "GOLD:gm:15:完成药剂师委托的报酬"
+            ),
+            narration="药剂师说，完成委托后会支付你十五枚金币。",
+            state_update=None,
+            memory_delta=None,
+            info_asymmetry=None,
+            plot_update=None,
+            total_tokens=12,
+            is_narration_only=False,
+            provider_used="fake",
+        )
+
+    monkeypatch.setattr(fake_llm, "call", opening_with_conditional_reward)
+    result = await api.create_game(
+        "template_world",
+        "条件奖励开场",
+        gm_uid="gm",
+        players=[{"character_name": "冒险者", "attributes": {"str": 12}}],
+    )
+
+    assert result["ok"] is True
+    instance = registry.get(api._parse_key(result["game_key"]))
+    assert instance is not None
+    assert instance.pending_payments == []
+    assert instance.economy["proposals"] == []
+    assert "奖励待确认" in instance.log[-1]["gm_response"]
+
+
+@pytest.mark.asyncio
 async def test_create_game_persists_and_returns_success_when_opening_generation_fails(
     web_api, monkeypatch,
 ):
@@ -659,7 +697,7 @@ async def test_ai_generation_reports_unconfigured_model_without_calling_it(web_a
 
 
 @pytest.mark.asyncio
-async def test_pay_tag_deducts_gold_immediately(web_api):
+async def test_raw_gold_change_cannot_bypass_economy_authority(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     result = await api.create_game(
         "template_world",
@@ -678,17 +716,17 @@ async def test_pay_tag_deducts_gold_immediately(web_api):
     cs = inst.players[uid]["character_sheet"]
     cs["gold"] = 30
 
-    # PAY/负 gold_change 直接扣金币，不再挂起待确认
+    # 未经经济模块验证的模型输出不能直接改余额。
     api._handler._apply_state_update(inst, {
         "players": {uid: {"gold_change": -12}},
     })
 
-    assert inst.players[uid]["character_sheet"]["gold"] == 18
+    assert inst.players[uid]["character_sheet"]["gold"] == 30
     assert inst.pending_payments == []
 
 
 @pytest.mark.asyncio
-async def test_negative_gold_change_clamps_at_zero(web_api):
+async def test_oversized_raw_gold_change_cannot_zero_balance(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     result = await api.create_game(
         "template_world",
@@ -704,12 +742,12 @@ async def test_negative_gold_change_clamps_at_zero(web_api):
     uid = next(iter(inst.players))
     inst.players[uid]["character_sheet"]["gold"] = 20
 
-    # 金币不足时扣到 0，不为负
+    # 即使数额超过余额，未授权字段也不得绕开审批与余额校验。
     api._handler._apply_state_update(inst, {
         "players": {uid: {"gold_change": -50}},
     })
 
-    assert inst.players[uid]["character_sheet"]["gold"] == 0
+    assert inst.players[uid]["character_sheet"]["gold"] == 20
     assert inst.pending_payments == []
 
 
@@ -754,7 +792,7 @@ async def test_resolve_payment_accepted_deducts_gold(web_api):
     assert res["ok"] is True
     assert res["accepted"] is True
     assert inst.players[uid]["character_sheet"]["gold"] == 18
-    assert res["payment"]["status"] == "accepted"
+    assert res["payment"]["status"] == "committed"
     assert inst.pending_payments == []
 
 
@@ -767,8 +805,8 @@ async def test_resolve_payment_rejected_adds_health_event(web_api):
     # 拒绝不扣金币
     assert inst.players[uid]["character_sheet"]["gold"] == 30
     # 通知 GM：健康事件
-    assert any(e.get("code") == "payment_rejected" for e in inst.health_events)
-    assert res["payment"]["status"] == "rejected"
+    assert any(e.get("code") == "economy_declined" for e in inst.health_events)
+    assert res["payment"]["status"] == "declined"
     assert inst.pending_payments == []
 
 
@@ -778,7 +816,7 @@ async def test_resolve_payment_permission_non_owner_blocked(web_api):
     # 非当事玩家、非 GM 不能处理
     res = await api.resolve_payment(gk, "pay_test1", True, "other_user")
     assert res["ok"] is False
-    assert "仅 GM 或当事玩家" in res["error"]
+    assert res["code"] == "FORBIDDEN"
     # 状态未变
     assert next(p for p in inst.pending_payments if p["id"] == "pay_test1")["status"] == "pending"
     assert inst.players[uid]["character_sheet"]["gold"] == 30
@@ -794,7 +832,7 @@ async def test_resolve_payment_insufficient_gold(web_api):
     )
     res = await api.resolve_payment(gk, "pay_test1", True, uid)
     assert res["ok"] is False
-    assert "金币不足" in res["error"]
+    assert res["code"] == "INSUFFICIENT_FUNDS"
     assert inst.players[uid]["character_sheet"]["gold"] == 5
     assert not any(
         item.get("name") == "解毒草"
@@ -873,7 +911,7 @@ async def test_apply_state_update_creates_pending_payment(web_api):
     assert pay["recipient_uid"] == uid
     assert pay["rewards"][0]["name"] == "药水"
     assert pay["status"] == "pending"
-    assert pay["id"].startswith("pay_")
+    assert pay["id"]
     # PAY 不直接扣金币
     assert inst.players[uid]["character_sheet"]["gold"] == 30
     assert not any(

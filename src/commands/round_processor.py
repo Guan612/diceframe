@@ -9,8 +9,18 @@ import random
 import time
 import uuid
 from collections.abc import Callable
+from copy import deepcopy
+from types import SimpleNamespace
 from typing import Any
 
+from src.commands.economy_effects import (
+    discard_unearned_reward_proposals,
+    defer_narrative_effects,
+    guard_unbacked_payment_narration,
+    has_economy_proposal,
+    pending_decision_notice,
+    unearned_reward_notice,
+)
 from src.commands.round_effects import (
     append_state_change_messages,
     apply_combat_command,
@@ -43,6 +53,11 @@ from src.commands.state_recap import snapshot_public_player_state
 from src.commands.state_update_applier import discard_unresolved_player_damage
 from src.commands.tag_summary import summarize_tags
 from src.engine.constants import COMBAT_INTENT_KEYWORDS
+from src.engine.economy import (
+    economy_revision,
+    has_blocking_economy_decision,
+    queue_effect_group,
+)
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
 from src.imagegen import (
@@ -148,7 +163,7 @@ class RoundProcessor:
         self._pending_summary_tasks: set = set()
         self._image_generation = None
         # 每局同一时间只允许一个生图任务：连续快速推进时跳过新请求
-        self._scene_image_tasks: dict[str, asyncio.Task] = {}
+        self._scene_image_tasks: dict[tuple[tuple[str, ...], str], asyncio.Task] = {}
 
     def set_image_generation_service(self, service) -> None:
         self._image_generation = service
@@ -213,9 +228,28 @@ class RoundProcessor:
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
         instance.reset_round_checks()
         deferred_indexes = self._deferred_check_indexes(instance)
+        expected_run_id = instance.run_id
+        expected_economy_revision = economy_revision(instance)
+
+        def planning_target_is_current() -> bool:
+            return (
+                self.registry.get(instance.game_key) is instance
+                and instance.run_id == expected_run_id
+                and economy_revision(instance) == expected_economy_revision
+            )
+
         try:
             plan_started = time.perf_counter()
             planned, metadata = await plan_round_checks(instance, rule_ctx.rule, self.llm_client)
+            if not planning_target_is_current():
+                logger.info(
+                    "丢弃过期检定规划: game=%s run=%s economy=%d",
+                    instance.game_key,
+                    expected_run_id,
+                    expected_economy_revision,
+                )
+                instance.reset_round_checks()
+                return []
             logger.info(
                 "检定规划: 完成 (round=%d, 耗时=%dms)",
                 instance.round_number,
@@ -250,6 +284,9 @@ class RoundProcessor:
             )
         except Exception:
             logger.exception("AI 检定规划失败，进入离线检定兼容路径: %s", instance.game_key)
+            if not planning_target_is_current():
+                instance.reset_round_checks()
+                return []
             return self.prepare_round_checks(instance)
         for check in instance.last_checks:
             if not check.get("check_id"):
@@ -262,6 +299,9 @@ class RoundProcessor:
     async def process_round(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         instance = self.registry.get(instance.game_key)
         if not instance or instance.state != GameState.ACTIVE_JUDGMENT:
+            return "", None
+        if has_blocking_economy_decision(instance):
+            logger.info("等待经济提案结算，暂不生成叙事: %s", instance.game_key)
             return "", None
         await self.prepare_round_checks_ai(instance)
         if instance.pending_luck_checks():
@@ -351,6 +391,15 @@ class RoundProcessor:
         # 否则与上一张相同的描述视为模型复读，跳过。
         return self.schedule_scene_image(instance, prompt, completed_round, force=bool(scene_change))
 
+    def schedule_deferred_scene_image(
+        self,
+        instance: GameInstance,
+        payload: dict[str, Any],
+    ) -> asyncio.Task | None:
+        """Public boundary for a deferred prompt whose settlement is persisted."""
+
+        return self._maybe_schedule_scene_image(instance, payload)
+
     def schedule_scene_image(
         self,
         instance: GameInstance,
@@ -367,26 +416,40 @@ class RoundProcessor:
         if not force and prompt == _last_scene_image_prompt(instance):
             return None
         game_key = instance.game_key
-        existing = self._scene_image_tasks.get(game_key)
+        expected_run_id = instance.run_id
+        task_key = (game_key, expected_run_id)
+        existing = self._scene_image_tasks.get(task_key)
         if existing is not None and not existing.done():
             return None
         task = asyncio.create_task(
-            self._generate_scene_image_background(game_key, completed_round, prompt)
+            self._generate_scene_image_background(
+                game_key, expected_run_id, completed_round, prompt,
+            )
         )
-        self._scene_image_tasks[game_key] = task
-        task.add_done_callback(lambda _task: self._scene_image_tasks.pop(game_key, None))
+        self._scene_image_tasks[task_key] = task
+        task.add_done_callback(
+            lambda completed, key=task_key: (
+                self._scene_image_tasks.pop(key, None)
+                if self._scene_image_tasks.get(key) is completed
+                else None
+            )
+        )
         return task
 
-    async def _generate_scene_image_background(self, game_key: str, round_number: int, prompt: str) -> None:
+    async def _generate_scene_image_background(
+        self,
+        game_key: tuple[str, ...],
+        expected_run_id: str,
+        round_number: int,
+        prompt: str,
+    ) -> None:
         try:
             current = self.registry.get(game_key)
-            if current is None:
+            if current is None or current.run_id != expected_run_id:
                 return
-            entry = next(
-                (item for item in current.log if item.get("round") == round_number),
-                None,
-            )
-            if entry is None:
+            if not any(
+                item.get("round") == round_number for item in current.log
+            ):
                 return  # 该回合已被回滚删除，放弃本次生图
             result = await self._image_generation.generate(ImageGenerationRequest(
                 prompt=prompt,
@@ -394,8 +457,19 @@ class RoundProcessor:
                 owner_type="game",
                 owner_id=game_image_owner_id(game_key),
                 aspect_ratio="16:9",
-                context={"round": round_number},
+                context={"round": round_number, "run_id": expected_run_id},
             ))
+            # 重开/重置可能发生在生图 await 期间。旧任务不得写入新一局，
+            # 同一局的 swipe 也可能已经删除或替换目标回合。
+            current = self.registry.get(game_key)
+            if current is None or current.run_id != expected_run_id:
+                return
+            entry = next(
+                (item for item in current.log if item.get("round") == round_number),
+                None,
+            )
+            if entry is None:
+                return  # 该回合已被回滚删除，放弃本次生图
             reference = {"kind": "generated", "asset_id": result.asset_id}
             current.set_scene_image(reference)
             entry["scene_image"] = {
@@ -415,6 +489,8 @@ class RoundProcessor:
 
     async def process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """实际的判定处理逻辑。"""
+        expected_run_id = instance.run_id
+        expected_economy_revision = economy_revision(instance)
         if not instance.round_checks_prepared:
             await self.prepare_round_checks_ai(instance)
         # 只保留最近一轮的短期展示状态，避免旧提示或战斗结果常驻。
@@ -488,6 +564,21 @@ class RoundProcessor:
             self.llm_client, instance, gm_prompt, context, combat_model,
             dice_block, self.narrative_max_tokens, actions_text,
             on_delta=on_delta, on_reset=on_reset)
+        current_instance = self.registry.get(instance.game_key)
+        if (
+            current_instance is not instance
+            or instance.run_id != expected_run_id
+            or economy_revision(instance) != expected_economy_revision
+        ):
+            logger.warning(
+                "丢弃过期叙事响应: game=%s expected_run=%s current_run=%s expected_economy=%d current_economy=%d",
+                instance.game_key,
+                expected_run_id,
+                getattr(current_instance, "run_id", "missing"),
+                expected_economy_revision,
+                economy_revision(instance),
+            )
+            return "", None
         runtime = self._ruleset_runtime(instance)
         if isinstance(runtime, NarrativeStatePolicyRuntime):
             data["state_update"] = runtime.filter_narrative_state_update(
@@ -528,13 +619,29 @@ class RoundProcessor:
         used_budget = int(getattr(response, "token_budget_used", 0) or 0)
         instance.set_token_budget_bump(initial_budget, used_budget)
         apply_parsed_data_to_response(instance, response, data)
+        dropped_rewards = discard_unearned_reward_proposals(instance, data, response.narration)
+        if dropped_rewards:
+            # The response object was populated before the economy gate; keep
+            # the authoritative state-update view in sync with the filtered
+            # proposal list so it cannot be queued through the old reference.
+            response.state_update = data.get("state_update") or {}
+            response.narration = f"{response.narration or ''}\n\n{unearned_reward_notice(instance.language)}".strip()
+        economy_pending = has_economy_proposal(data)
+        response.narration = guard_unbacked_payment_narration(
+            response.narration, data, instance.language,
+        )
+        deferred_effects = defer_narrative_effects(data, response)
+        if economy_pending:
+            notice = pending_decision_notice(instance.language)
+            response.narration = f"{response.narration or ''}\n\n{notice}".strip()
 
         public_state_before = snapshot_public_player_state(instance)
         round_pre_snapshot = _snapshot_players(instance)
 
+        queued_proposals: list[dict[str, Any]] = []
+        allowed_uids: set | None = None
         if response.state_update:
             # 多人局权威白名单：状态标签只允许作用于本轮行动者/参战者。
-            allowed_uids: set | None = None
             if len(instance.players) > 1:
                 allowed_uids = {
                     str(action.get("user_id"))
@@ -543,9 +650,21 @@ class RoundProcessor:
                 }
                 if str(getattr(instance, "combat_state", "none") or "none") != "none":
                     allowed_uids |= set(instance.alive_players)
-            self._state_applier.apply_state_update(
+            queued_proposals = self._state_applier.apply_state_update(
                 instance, response.state_update, allowed_player_uids=allowed_uids,
             )
+        if deferred_effects:
+            deferred_effects["allowed_player_uids"] = (
+                sorted(allowed_uids) if allowed_uids is not None else None
+            )
+            group = queue_effect_group(instance, queued_proposals, deferred_effects)
+            if group is None:
+                logger.warning(
+                    "经济提案未能建立叙事效果决策屏障，已 fail closed: game=%s round=%d proposals=%d",
+                    instance.game_key,
+                    instance.round_number,
+                    len(queued_proposals),
+                )
         instance.set_state_update_recap(response.state_update)
 
         apply_confirmed_items(instance, data)
@@ -617,3 +736,62 @@ class RoundProcessor:
             logger.exception("存档失败(连续%d次) (round=%d)", count, instance.round_number)
 
         return response.narration, response.info_asymmetry
+
+    async def commit_deferred_economy_effects(
+        self,
+        instance: GameInstance,
+        effects: dict[str, Any],
+    ) -> None:
+        """Apply one persisted effect group after its economic commit."""
+
+        payload = deepcopy(dict(effects or {}))
+        state_update = dict(payload.get("state_update") or {})
+        allowed_raw = payload.get("allowed_player_uids")
+        allowed_uids = (
+            {str(uid) for uid in allowed_raw if str(uid)}
+            if isinstance(allowed_raw, list)
+            else None
+        )
+        if state_update:
+            self._state_applier.apply_state_update(
+                instance,
+                state_update,
+                allowed_player_uids=allowed_uids,
+            )
+            instance.set_state_update_recap(state_update)
+        response = SimpleNamespace(
+            narration="",
+            memory_delta=dict(payload.get("memory_delta") or {}),
+            info_asymmetry=dict(payload.get("info_asymmetry") or {}),
+            plot_update=dict(payload.get("plot_update") or {}),
+        )
+        apply_confirmed_items(instance, payload)
+        if any(
+            payload.get(key)
+            for key in ("xp_rewards", "growth_skills", "milestone_grants")
+        ):
+            rule_ctx = self._prompt.load_rule_context(
+                instance, self._load_world_template,
+            )
+            apply_growth_rewards(
+                instance,
+                payload,
+                response,
+                rule_ctx.rule,
+                self._progression,
+                self._ruleset_runtime(instance),
+                include_base=False,
+            )
+        if payload.get("quick_actions"):
+            update_quick_actions(instance, payload)
+        apply_plot_update(instance, response)
+        store_private_messages(instance, response)
+        # Deferred economy effects participate in the settlement transaction.
+        # Unlike normal round memory (which is best-effort), a failure here must
+        # abort the staged aggregate so the proposal remains retryable.
+        if response.memory_delta and self.memory_store:
+            await self.memory_store.apply_delta(
+                instance.memory_namespace,
+                response.memory_delta,
+                instance.round_number,
+            )

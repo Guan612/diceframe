@@ -34,6 +34,10 @@ class FakeAPI:
     async def generate_game_swipe(self, instance, round_number: int) -> str:
         return await self._handler.generate_swipe(instance, round_number)
 
+    async def drain_economy_outbox(self, game_key: str) -> bool:
+        self.calls.append(("drain-economy", game_key))
+        return True
+
     def saved_game_access(self, game_key: str) -> dict:
         key = self._parse_key(game_key)
         instance = self.registry.get(key)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 from copy import deepcopy
 from types import SimpleNamespace
@@ -507,6 +508,42 @@ async def test_live_advancement_is_entity_backed_versioned_and_idempotent(
 
 
 @pytest.mark.asyncio
+async def test_live_advancement_is_rejected_during_swipe(professional_context) -> None:
+    api, instance, _character = professional_context
+    advancement_access.grant(instance, "gm", source="gm")
+    before_sheet = deepcopy(instance.get_character_sheet("gm"))
+    before_state = deepcopy(instance.ruleset_state)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def hold_rewrite() -> None:
+        async with instance.historical_rewrite() as acquired:
+            assert acquired is True
+            async with instance._process_lock:
+                entered.set()
+                await release.wait()
+
+    rewrite = asyncio.create_task(hold_rewrite())
+    await entered.wait()
+    result = await asyncio.wait_for(
+        ruleset_advancement.apply_live(
+            api._live_advancement_dependencies,
+            "web|character-lifecycle|web_bot", "gm",
+            {
+                "choices": {"hp_method": "fixed"},
+                "expected_revision": 0,
+                "operation_id": "blocked-level-2",
+            },
+        ),
+        1,
+    )
+    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert instance.get_character_sheet("gm") == before_sheet
+    assert instance.ruleset_state == before_state
+    release.set()
+    await asyncio.wait_for(rewrite, 1)
+
+
+@pytest.mark.asyncio
 async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context) -> None:
     api, instance, _character = professional_context
     sheet = instance.get_character_sheet("gm")
@@ -555,6 +592,38 @@ async def test_live_rest_rolls_on_server_and_is_idempotent(professional_context)
     assert duplicate["duplicate"] is True
     assert duplicate["character"] == rested
     assert forged["code"] == "CLIENT_ROLLS_FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_live_rest_is_rejected_during_historical_rewrite(professional_context) -> None:
+    api, instance, _character = professional_context
+    before = deepcopy(instance.get_character_sheet("gm"))
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def hold_rewrite() -> None:
+        async with instance.historical_rewrite() as acquired:
+            assert acquired is True
+            entered.set()
+            await release.wait()
+
+    rewrite = asyncio.create_task(hold_rewrite())
+    await entered.wait()
+    result = await asyncio.wait_for(
+        ruleset_rest.resolve_live(
+            api._live_ruleset_rest_dependencies,
+            "web|character-lifecycle|web_bot", "gm",
+            {
+                "rest": "short", "hit_dice": {"d10": 1},
+                "confirm_elapsed_time": True, "expected_revision": 0,
+                "operation_id": "rewrite-rest",
+            },
+        ),
+        1,
+    )
+    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert instance.get_character_sheet("gm") == before
+    release.set()
+    await asyncio.wait_for(rewrite, 1)
 
 
 @pytest.mark.asyncio

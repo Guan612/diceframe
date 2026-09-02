@@ -99,12 +99,34 @@ def list_games(dependencies: GameQueryDependencies) -> dict[str, Any]:
 def game_detail(
     dependencies: GameQueryDependencies,
     game_key: str,
+    viewer_uid: str = "",
 ) -> dict[str, Any] | None:
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if not instance:
         return None
+    economy_proposals = [
+        dict(proposal)
+        for proposal in (getattr(instance, "economy", {}).get("proposals", []) or [])
+        if isinstance(proposal, dict)
+        and proposal.get("status") == "pending"
+        and (
+            not viewer_uid
+            or viewer_uid == instance.gm_uid
+            or proposal.get("visibility") == "party"
+            or viewer_uid in {
+                str(proposal.get("payer_uid") or ""),
+                str(proposal.get("recipient_uid") or ""),
+            }
+            or viewer_uid in {
+                str(item.get("uid") or "")
+                for item in (proposal.get("contributors") or [])
+                if isinstance(item, dict)
+            }
+        )
+    ]
     detail = {
         "game_key": _GAME_KEY_SEP.join(instance.game_key),
+        "run_id": instance.run_id,
         "world_id": instance.world_id or "",
         "rule_id": projected_rule_id(dependencies, instance),
         "scene_image": dict(getattr(instance, "scene_image", {}) or {}),
@@ -133,7 +155,19 @@ def game_detail(
             payment
             for payment in getattr(instance, "pending_payments", [])
             if payment.get("status") == "pending"
+            and (
+                not viewer_uid
+                or viewer_uid == instance.gm_uid
+                or payment.get("visibility") == "party"
+                or viewer_uid == str(payment.get("payer_uid") or payment.get("uid") or "")
+                or viewer_uid in {
+                    str(item.get("uid") or "")
+                    for item in (payment.get("contributors") or [])
+                    if isinstance(item, dict)
+                }
+            )
         ],
+        "economy_proposals": economy_proposals,
         "pending_luck_decisions": instance.pending_luck_checks(),
         "round_check_results": (
             [dict(item) for item in instance.last_checks]

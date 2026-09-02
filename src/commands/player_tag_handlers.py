@@ -68,16 +68,57 @@ def _pay(value: str, result: dict, _limits: dict) -> None:
     result.setdefault("state_update", {}).setdefault("pending_payments", []).append(payment)
 
 
+def _team_pay(value: str, result: dict, _limits: dict) -> None:
+    contributor_text, separator, reason = value.partition(":")
+    if not separator or not reason.strip():
+        logger.warning("TEAM_PAY 缺少明确用途，已忽略: %s", value)
+        return
+    contributors = []
+    total = 0
+    seen: set[str] = set()
+    for raw_contributor in contributor_text.split("|"):
+        uid, equals, raw_amount = raw_contributor.strip().partition("=")
+        parsed = _parse_int(raw_amount.strip(), tag="TEAM_PAY", uid=uid) if equals else None
+        if not uid or uid in seen or parsed is None or not 0 < parsed <= MAX_PAYMENT_AMOUNT:
+            logger.warning("TEAM_PAY 分摊格式异常，已忽略: %s", value)
+            return
+        seen.add(uid)
+        total += parsed
+        contributors.append({"uid": uid, "amount": parsed})
+    if len(contributors) < 2 or total > MAX_PAYMENT_AMOUNT:
+        logger.warning("TEAM_PAY 参与者或总额异常，已忽略: %s", value)
+        return
+    result.setdefault("state_update", {}).setdefault("economy_proposals", []).append({
+        "kind": "fee",
+        "amount": total,
+        "reason": reason.strip()[:240],
+        "approval_policy": "all_contributors",
+        "contributors": contributors,
+        "visibility": "party",
+        "source": "team_pay_tag",
+    })
+
+
 def _gold(value: str, result: dict, limits: dict) -> None:
     if split := _split(value):
         uid, change = split
-        parsed = _parse_int(change, tag="GOLD", uid=uid)
+        raw_amount, separator, reason = change.partition(":")
+        parsed = _parse_int(raw_amount.strip(), tag="GOLD", uid=uid)
         if parsed is None:
             return
-        if -limits["gold_loss"] <= parsed <= limits["gold_max"]:
-            _set_int_change(result, uid, "gold_change", parsed)
+        if parsed > 0 and parsed <= limits["gold_max"] and separator and reason.strip():
+            # Narrative rewards are untrusted model output. They need an explicit
+            # human-readable cause and GM approval before changing the balance.
+            result.setdefault("state_update", {}).setdefault("economy_proposals", []).append({
+                "kind": "reward",
+                "uid": uid,
+                "amount": parsed,
+                "reason": reason.strip()[:240],
+                "approval_policy": "gm",
+                "source": "legacy_gold_tag",
+            })
         else:
-            logger.warning("GOLD 变更异常，已忽略: %s = %d", uid, parsed)
+            logger.warning("GOLD 奖励缺少正数金额或明确原因，已忽略: %s = %s", uid, change)
 
 
 def _string_update(value: str, result: dict, field: str, message: str) -> None:
@@ -214,6 +255,7 @@ def _stat(value: str, result: dict, _limits: dict) -> None:
 PLAYER_TAG_HANDLERS: dict[str, PlayerTagHandler] = {
     "HP": _hp,
     "PAY": _pay,
+    "TEAM_PAY": _team_pay,
     "GOLD": _gold,
     "USE": _use,
     "EQUIP": _equip,

@@ -139,7 +139,7 @@ def audit_api(tmp_path):
             "甲挡住落石，乙发现暗门。\n"
             "---\n"
             "HP:gm_user:-3\n"
-            "GOLD:gm_user:-5\n"
+            "PAY:gm_user:5\n"
             "PAY:player_乙:7\n"
             "LOOT:gm_user:银钥匙\n"
             "KEY_ITEM:player_乙:狼王耳\n"
@@ -218,7 +218,7 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
         "甲挡住落石，乙发现暗门。\n"
         "---\n"
         f"HP:{uid_gm}:-3\n"
-        f"GOLD:{uid_gm}:-5\n"
+        f"PAY:{uid_gm}:5\n"
         f"PAY:{uid_player}:7\n"
         f"LOOT:{uid_gm}:银钥匙\n"
         f"KEY_ITEM:{uid_player}:狼王耳\n"
@@ -240,24 +240,32 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     narration, _private = await api._handler.process_round(inst)
 
     assert "暗门" in narration
-    assert inst.scene == "走廊"
+    # 同一 AI 回复里含两项待确认费用；场景、伤害、物品等关联结果在
+    # 所有费用结算前都不得成为权威状态。
+    assert inst.scene == "大厅"
     assert inst.round_number == 2
     assert inst.log[-1]["round"] == 1
     assert inst.log[-1]["pre_state_snapshot"][uid_gm]["hp"] == 32
     cs_gm = inst.get_character_sheet(uid_gm)
     cs_player = inst.get_character_sheet(uid_player)
-    assert cs_gm["hp"] == 29
-    assert cs_gm["gold"] == 25
-    assert cs_gm["currency"]["amount"] == 25
-    assert cs_gm["xp"] == 20
-    assert any(item.get("name") == "银钥匙" for item in cs_gm["key_items"])
-    assert any(item.get("name") == "狼王耳" for item in cs_player["key_items"])
-    assert inst.private_log[uid_player][-1]["text"] == "你发现暗门"
-    assert inst.quick_actions == ["搜索", "撤退"]
-    assert len(inst.pending_payments) == 1
-    payment_id = inst.pending_payments[0]["id"]
-    assert inst.pending_payments[0]["uid"] == uid_player
-    assert inst.pending_payments[0]["amount"] == 7
+    assert cs_gm["hp"] == 32
+    # Both explicit PAY tags become separate payer-authorized proposals.
+    assert cs_gm["gold"] == 30
+    assert cs_gm["currency"]["amount"] == 30
+    assert cs_gm["xp"] == 10
+    assert not any(item.get("name") == "银钥匙" for item in cs_gm["key_items"])
+    assert not any(item.get("name") == "狼王耳" for item in cs_player["key_items"])
+    assert not inst.private_log.get(uid_player)
+    assert len(inst.pending_payments) == 2
+    gm_payment = next(item for item in inst.pending_payments if item["uid"] == uid_gm)
+    player_payment = next(item for item in inst.pending_payments if item["uid"] == uid_player)
+    assert gm_payment["amount"] == 5
+    payment_id = player_payment["id"]
+    assert player_payment["amount"] == 7
+    first_approval = await api.resolve_payment(game_key, gm_payment["id"], True, uid_gm)
+    assert first_approval["ok"] is True
+    assert first_approval.get("effects_committed") is not True
+    assert inst.scene == "大厅"
 
     # PAY 跨存档 reload 后仍在；确认后只扣当事人的金币，并清理 pending 列表。
     await registry.save(inst)
@@ -270,6 +278,23 @@ async def test_full_create_round_payment_swipe_restart_reset_contract(audit_api,
     assert reloaded.get_character_sheet(uid_player)["gold"] == 23
     assert reloaded.get_character_sheet(uid_player)["currency"]["amount"] == 23
     assert reloaded.pending_payments == []
+    assert reloaded.get_character_sheet(uid_gm)["gold"] == 25
+    assert reloaded.get_character_sheet(uid_gm)["hp"] == 29
+    assert reloaded.get_character_sheet(uid_gm)["xp"] == 20
+    assert reloaded.scene == "走廊"
+    assert any(
+        item.get("name") == "银钥匙"
+        for item in reloaded.get_character_sheet(uid_gm)["key_items"]
+    )
+    assert any(
+        item.get("name") == "狼王耳"
+        for item in reloaded.get_character_sheet(uid_player)["key_items"]
+    )
+    assert any(
+        item.get("text") == "你发现暗门"
+        for item in reloaded.private_log[uid_player]
+    )
+    assert reloaded.quick_actions == ["搜索", "撤退"]
 
     # swipe 必须回滚到本轮 pre-state，再应用新分支，不能叠加旧分支伤害。
     swipe_text = await api._handler.generate_swipe(reloaded, 1)
@@ -348,7 +373,7 @@ async def test_payment_double_resolve_is_idempotent_and_cleans_history(audit_api
     )
 
     assert sum(1 for r in results if r["ok"]) == 1
-    assert sum(1 for r in results if not r["ok"] and "不存在" in r["error"]) == 1
+    assert sum(1 for r in results if not r["ok"] and r["code"] == "ALREADY_RESOLVED") == 1
     assert inst.get_character_sheet(uid)["gold"] == 18
     assert inst.get_character_sheet(uid)["currency"]["amount"] == 18
     assert inst.pending_payments == []

@@ -137,6 +137,20 @@ async def test_reset_preserves_exact_ruleset_and_adventure_bindings() -> None:
 
 @pytest.mark.asyncio
 class TestGameInstance:
+    async def test_action_is_rejected_while_historical_rewrite_holds_process_barrier(self):
+        instance = GameInstance(game_key=("web", "rewrite", "bot"), gm_uid="gm")
+        instance.players = {
+            "gm": {
+                "character_name": "GM",
+                "character_sheet": {"deceased": False},
+            },
+        }
+        async with instance._process_lock:
+            added = await instance.add_action("gm", "在重写期间偷偷行动")
+        assert added is False
+        assert instance.action_queue == []
+        assert instance.pending_actions == []
+
     async def test_initial_state(self):
         inst = GameInstance(game_key=("qq", "123", "bot1"))
         assert inst.state == GameState.CREATED
@@ -596,9 +610,49 @@ class TestGameRegistry:
         # 导出一个 zip（含 state.json + chatlog.jsonl）
         state = {
             "game_key": ["web", "orig", "bot"],
+            "instance_schema_version": 2,
+            "run_id": "run_exported",
+            "memory_namespace": "source-memory",
             "world_id": "w1", "world_name": "Orig", "state": "paused",
             "players": {}, "npcs": {}, "round_number": 5, "log": [],
             "summary": {}, "key_facts": [],
+            "economy": {
+                "schema_version": 1,
+                "run_id": "run_exported",
+                "next_sequence": 2,
+                "proposals": [{
+                    "id": "eco_pending", "run_id": "run_exported",
+                    "status": "pending",
+                }],
+                "transactions": [{
+                    "id": "tx_committed", "run_id": "run_exported",
+                    "status": "committed",
+                }],
+                "effect_groups": [{
+                    "id": "effect_pending", "run_id": "run_exported",
+                    "status": "pending", "effects": {},
+                }],
+                "external_effects_outbox": [
+                    {
+                        "id": "memory:pending",
+                        "run_id": "run_exported",
+                        "kind": "memory_delta",
+                        "status": "pending",
+                        "payload": {"add": ["待投递记忆"]},
+                    },
+                    {
+                        "id": "memory:delivered",
+                        "run_id": "run_exported",
+                        "kind": "memory_delta",
+                        "status": "delivered",
+                    },
+                ],
+                "outcomes": [{
+                    "id": "outcome_declined", "run_id": "run_exported",
+                    "status": "declined",
+                }],
+                "idempotency_records": {},
+            },
         }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as zf:
@@ -611,6 +665,22 @@ class TestGameRegistry:
         # 内存立即可见（不必等重启 recover_all）
         assert reg.get(new_key) is not None
         assert reg.get(new_key).round_number == 5
+        imported = reg.get(new_key)
+        assert imported.run_id != "run_exported"
+        assert imported.memory_namespace != "source-memory"
+        assert imported.memory_namespace.endswith(imported.run_id)
+        assert imported.economy["run_id"] == imported.run_id
+        assert all(
+            item["run_id"] == imported.run_id
+            for key in (
+                "proposals", "transactions", "effect_groups",
+                "external_effects_outbox", "outcomes",
+            )
+            for item in imported.economy[key]
+        )
+        assert [
+            item["id"] for item in imported.economy["external_effects_outbox"]
+        ] == ["memory:pending"]
         # state.json 内 game_key 已改写为新值，避免 register 串到原对局
         saved = _json.loads(reg._save_path(new_key).read_text(encoding="utf-8"))
         assert saved["game_key"] == list(new_key)

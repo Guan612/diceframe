@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.engine.character_utils import (
-    apply_currency_delta,
     build_starter_items,
     calc_hp_from_rule,
     initial_special_stat_value,
@@ -21,6 +20,16 @@ from src.engine.character_utils import (
 from src.content.worlds import localize_lorebook_entries
 from src.engine.language import localized_text
 from src.engine.health import record_health_event
+from src.engine.economy import (
+    complete_effect_group,
+    complete_memory_delivery,
+    complete_memory_reversal,
+    pending_memory_deliveries,
+    pending_memory_reversals,
+    queue_memory_delivery,
+    resolve_proposal,
+)
+from src.engine.game_instance import GameInstance
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
@@ -31,11 +40,71 @@ if TYPE_CHECKING:
 logger = logging.getLogger("trpg")
 
 
+def _record_economy_outcome_in_round(
+    instance: Any,
+    outcome: dict[str, Any],
+) -> None:
+    """Attach the authoritative decision to its originating public round."""
+
+    status = str(outcome.get("status") or "")
+    effects_status = str(outcome.get("effects_status") or "none")
+    amount = int(outcome.get("amount", 0) or 0)
+    reason = str(outcome.get("reason") or "经济提案")
+    if status == "committed" and effects_status == "pending":
+        message = localized_text(instance.language, {
+            "en": f"Settlement confirmed ({amount}): {reason}. Linked results are waiting for the remaining decisions.",
+            "zh-CN": f"结算已确认（{amount}）：{reason}。关联结果仍在等待其余决定。",
+            "ja": f"決済確認済み（{amount}）：{reason}。関連結果は残りの判断を待っています。",
+        })
+    elif status == "committed":
+        message = localized_text(instance.language, {
+            "en": f"Settlement confirmed ({amount}): {reason}. Dependent results are now effective.",
+            "zh-CN": f"结算已确认（{amount}）：{reason}。关联结果现已生效。",
+            "ja": f"決済確認済み（{amount}）：{reason}。関連結果が発効しました。",
+        })
+    else:
+        message = localized_text(instance.language, {
+            "en": f"Settlement {status} ({amount}): {reason}. No payment or dependent result occurred.",
+            "zh-CN": f"结算未成立（{amount}）：{reason}。没有付款，关联结果也未生效。",
+            "ja": f"決済不成立（{amount}）：{reason}。支払いも関連結果も発生していません。",
+        })
+    round_number = int(outcome.get("round", 0) or 0)
+    if str(outcome.get("visibility") or "private") != "party":
+        recipients = {
+            str(outcome.get("payer_uid") or ""),
+            str(outcome.get("recipient_uid") or ""),
+        }
+        for uid in recipients:
+            if uid in instance.players:
+                instance.append_private_message(uid, {
+                    "round": round_number,
+                    "text": message,
+                    "kind": "economy_resolution",
+                })
+        return
+    entry = next(
+        (
+            item for item in reversed(instance.log)
+            if int(item.get("round", -1) or -1) == round_number
+        ),
+        None,
+    )
+    if entry is None:
+        return
+    resolutions = entry.setdefault("economy_resolutions", [])
+    outcome_id = str(outcome.get("id") or "")
+    if not any(str(item.get("id") or "") == outcome_id for item in resolutions):
+        resolutions.append(dict(outcome))
+    changes = entry.setdefault("state_changes", [])
+    if message not in changes:
+        changes.append(message)
+
+
 @dataclass(frozen=True)
 class CharacterGameDependencies:
-    get_instance: Callable[[tuple[str, ...]], Any | None]
+    get_instance: Callable[[tuple[str, ...]], GameInstance | None]
     parse_game_key: Callable[[str], tuple[str, ...]]
-    save_instance: Callable[[Any], Awaitable[None]]
+    save_instance: Callable[[GameInstance], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -60,6 +129,10 @@ class CharacterDependencies:
     rules: CharacterRuleDependencies
     assets: CharacterAssetDependencies
     save_character_card: Callable[[dict[str, Any]], dict[str, Any]]
+    apply_economy_effects: Callable[[Any, dict[str, Any]], Awaitable[None]] | None = None
+    schedule_economy_scene_image: Callable[[Any, dict[str, Any]], Any] | None = None
+    apply_economy_memory: Callable[[str, str, dict[str, Any], int], Awaitable[None]] | None = None
+    reverse_economy_memory: Callable[[str, str], Awaitable[bool]] | None = None
 
 _ATTR_NAME_EN = {
     "str": "STR",
@@ -416,6 +489,28 @@ async def update_character(
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
+    if not inst:
+        return {"ok": False, "error": "角色不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        if dependencies.games.get_instance(inst.game_key) is not inst:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+        return await _update_character_authority(
+            dependencies, inst, user_id, updates,
+        )
+
+
+async def _update_character_authority(
+    dependencies: CharacterDependencies,
+    instance: GameInstance,
+    user_id: str,
+    updates: dict,
+) -> dict[str, Any]:
+    inst = instance
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
     rule = dependencies.rules.load_rule_for_game(inst)
@@ -552,6 +647,23 @@ async def update_npc_portrait(
     )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        return await _update_npc_portrait_authority(
+            dependencies, inst, npc_id, portrait,
+        )
+
+
+async def _update_npc_portrait_authority(
+    dependencies: CharacterDependencies,
+    inst: GameInstance,
+    npc_id: str,
+    portrait: Any,
+) -> dict[str, Any]:
     npc_key = str(npc_id or "").strip()
     if not npc_key:
         return {"ok": False, "error": "NPC 不存在"}
@@ -600,97 +712,231 @@ async def resolve_payment(
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
-    if not inst:
+    if inst is None:
         return {"ok": False, "error": "游戏不存在"}
-    payment = next(
-        (p for p in getattr(inst, "pending_payments", []) if p.get("id") == payment_id),
-        None,
-    )
-    if not payment:
-        return {"ok": False, "error": "支付请求不存在"}
-    if payment.get("status") != "pending":
-        return {"ok": False, "error": "支付请求已处理"}
+    actor_uid = str(session_uid or "")
 
-    uid = payment.get("uid", "")
-    # 权限：GM 或支付当事玩家可处理（玩家自己确认/拒绝购买）
-    if session_uid and session_uid != inst.gm_uid and session_uid != uid:
-        return {"ok": False, "error": "仅 GM 或当事玩家可处理支付"}
-    amount = int(payment.get("amount", 0) or 0)
-    if accepted:
-        if uid not in inst.players:
-            return {"ok": False, "error": "支付角色不存在"}
-        recipient_uid = str(payment.get("recipient_uid") or uid)
-        if recipient_uid not in inst.players:
-            return {"ok": False, "error": "物品接收角色不存在"}
-        cs = inst.get_character_sheet(uid)
-        current_gold = int(cs.get("gold", 0) or 0)
-        if current_gold < amount:
-            # 确认支付但余额不足：交易不成立。自动取消该 pending，避免
-            # 弹窗因 status=pending 每轮重弹、玩家无法解除（修复反复跳支付窗口）。
-            inst.mark_payment_resolved(payment_id, "rejected", resolved_at=time.time())
-            inst.prune_resolved_payments()
-            await dependencies.games.save_instance(inst)
+    def grant_reward(sheet: dict[str, Any], reward: dict[str, Any]) -> None:
+        item_name = str(reward.get("name") or "").strip()
+        if item_name:
+            grant_classified_item(sheet, item_name, str(reward.get("category") or ""))
+
+    scene_image_payload: dict[str, Any] | None = None
+    async with inst.authoritative_write() as write_entered, inst._lock:
+        if not write_entered:
             return {
                 "ok": False,
-                "code": "INSUFFICIENT_FUNDS",
-                "error": f"金币不足：需要 {amount}，当前 {current_gold}，支付已自动取消",
+                "code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后再处理支付",
             }
-        apply_currency_delta(cs, -amount)
-        inst.set_character_sheet(uid, cs)
-        rewards = list(payment.get("rewards") or [])
-        if rewards:
-            recipient_cs = (
-                cs
-                if recipient_uid == uid
-                else inst.get_character_sheet(recipient_uid)
-            )
-            for reward in rewards:
-                item_name = str(reward.get("name") or "").strip()
-                if item_name:
-                    grant_classified_item(
-                        recipient_cs,
-                        item_name,
-                        str(reward.get("category") or ""),
-                    )
-            inst.set_character_sheet(recipient_uid, recipient_cs)
-        payment = inst.mark_payment_resolved(payment_id, "accepted", resolved_at=time.time()) or payment
-        payer_name = inst.players.get(uid, {}).get("character_name", uid)
-        recipient_name = inst.players.get(recipient_uid, {}).get(
-            "character_name", recipient_uid
+        current = dependencies.games.get_instance(
+            dependencies.games.parse_game_key(game_key),
         )
-        reward_names = "、".join(
-            str(reward.get("name") or "")
-            for reward in rewards
-            if reward.get("name")
+        if current is None or id(current) != id(inst):
+            return {
+                "ok": False,
+                "code": "STALE_RUN",
+                "error": "对局已重开，请刷新后处理新的请求",
+            }
+        staged = type(inst).from_dict(deepcopy(inst.to_dict()))
+        # The persistence projection intentionally keeps only the recent log
+        # window. A transaction stage must retain the live aggregate's full
+        # in-memory history when it is committed back.
+        staged.log = deepcopy(inst.log)
+        result = resolve_proposal(
+            staged,
+            payment_id,
+            actor_uid=actor_uid,
+            accepted=bool(accepted),
+            grant_reward=grant_reward,
         )
-        record_health_event(
-            inst,
-            component="economy",
-            code="payment_accepted",
-            severity="info",
-            title="玩家确认支付",
-            message=(
-                f"{payer_name} 支付 {amount} 金币"
-                + (
-                    f"，{recipient_name} 获得 {reward_names}"
-                    if reward_names else ""
+        effect_group = result.get("effect_group")
+        if (
+            result.get("ok")
+            and isinstance(effect_group, dict)
+            and isinstance(effect_group.get("effects"), dict)
+            and dependencies.apply_economy_effects is not None
+        ):
+            effect_payload = dict(effect_group.get("effects") or {})
+            memory_delta = dict(effect_payload.pop("memory_delta", {}) or {})
+            scene_image_prompt = str(
+                effect_payload.pop("scene_image_prompt", "") or ""
+            ).strip()
+            if scene_image_prompt:
+                scene_image_payload = {
+                    "scene_image_prompt": scene_image_prompt,
+                    "state_update": deepcopy(effect_payload.get("state_update") or {}),
+                }
+            try:
+                await dependencies.apply_economy_effects(
+                    staged, effect_payload,
                 )
-            ),
-        )
-    else:
-        payment = inst.mark_payment_resolved(payment_id, "rejected", resolved_at=time.time()) or payment
-        name = inst.players.get(uid, {}).get("character_name", uid)
-        record_health_event(
-            inst,
-            component="economy",
-            code="payment_rejected",
-            severity="info",
-            title="玩家拒绝支付",
-            message=f"{name} 拒绝支付 {amount} 金币（第 {payment.get('round', inst.round_number)} 轮建议）",
-        )
-    inst.prune_resolved_payments()
-    await dependencies.games.save_instance(inst)
-    return {"ok": True, "accepted": bool(accepted), "payment": payment}
+            except Exception:
+                logger.exception(
+                    "经济提案关联效果提交失败，已回滚: game=%s proposal=%s",
+                    game_key,
+                    payment_id,
+                )
+                return {
+                    "ok": False,
+                    "code": "EFFECT_COMMIT_FAILED",
+                    "error": "关联结果应用失败，本次结算未生效，请重试",
+                }
+            if memory_delta and dependencies.apply_economy_memory is not None:
+                queue_memory_delivery(
+                    staged,
+                    effect_group_id=str(effect_group.get("id") or ""),
+                    memory_delta=memory_delta,
+                    round_number=int(effect_group.get("round", staged.round_number) or 0),
+                )
+            result["effects_committed"] = complete_effect_group(
+                staged, str(effect_group.get("id") or ""),
+            )
+            if result["effects_committed"] and isinstance(result.get("outcome"), dict):
+                result["outcome"]["effects_status"] = "committed"
+        outcome = result.get("outcome")
+        if isinstance(outcome, dict):
+            _record_economy_outcome_in_round(staged, outcome)
+        proposal = result.get("proposal") or {}
+        if result.get("ok"):
+            uid = str(
+                proposal.get("payer_uid")
+                or proposal.get("recipient_uid")
+                or ""
+            )
+            amount = int(proposal.get("amount", 0) or 0)
+            name = staged.players.get(uid, {}).get("character_name", uid)
+            awaiting_party = bool(accepted and result.get("committed") is False)
+            record_health_event(
+                staged,
+                component="economy",
+                code=(
+                    "economy_approved"
+                    if awaiting_party
+                    else "economy_committed"
+                    if accepted
+                    else "economy_declined"
+                ),
+                severity="info",
+                title="经济提案已处理",
+                message=(
+                    f"{name} 已确认，等待其他队员：{proposal.get('reason') or amount}"
+                    if awaiting_party
+                    else f"{name} {'确认' if accepted else '拒绝'}：{proposal.get('reason') or amount}"
+                ),
+            )
+        if result.get("ok") or result.get("code") == "INSUFFICIENT_FUNDS":
+            before_commit = type(inst).from_dict(deepcopy(inst.to_dict()))
+            before_commit.log = deepcopy(inst.log)
+            inst.replace_persisted_state_from(staged)
+            # Persist while still holding the aggregate lock. This closes the
+            # gap where restart could replace the run between mutation and save.
+            try:
+                await dependencies.games.save_instance(inst)
+            except Exception:
+                inst.replace_persisted_state_from(before_commit)
+                raise
+            if (
+                scene_image_payload is not None
+                and dependencies.schedule_economy_scene_image is not None
+            ):
+                try:
+                    result["scene_image_scheduled"] = bool(
+                        dependencies.schedule_economy_scene_image(
+                            inst, scene_image_payload,
+                        )
+                    )
+                except Exception:
+                    logger.exception(
+                        "经济结算后的场景图任务创建失败，权威结算已保留: game=%s",
+                        game_key,
+                    )
+                    result["scene_image_scheduled"] = False
+            result["external_effects_committed"] = await _deliver_memory_outbox_locked(
+                dependencies, inst,
+            )
+        if not result.get("ok"):
+            return result
+    return {**result, "payment": proposal}
+
+
+async def _deliver_memory_outbox_locked(
+    dependencies: CharacterDependencies,
+    instance: GameInstance,
+) -> bool:
+    """Deliver persisted memory effects; caller must hold the aggregate lock."""
+
+    reversals = pending_memory_reversals(instance)
+    pending = pending_memory_deliveries(instance)
+    if not reversals and not pending:
+        return True
+    reverse_memory = dependencies.reverse_economy_memory
+    changed = False
+    if reversals:
+        if reverse_memory is None:
+            return False
+        for delivery in reversals:
+            try:
+                reversed_ok = await reverse_memory(
+                    instance.memory_namespace,
+                    str(delivery.get("id") or ""),
+                )
+            except Exception:
+                logger.exception(
+                    "经济结算记忆撤销失败，已保留待重试记录: game=%s delivery=%s",
+                    instance.game_key,
+                    delivery.get("id"),
+                )
+                return False
+            if not reversed_ok:
+                logger.error(
+                    "经济结算记忆缺少可验证的撤销记录: game=%s delivery=%s",
+                    instance.game_key,
+                    delivery.get("id"),
+                )
+                return False
+            complete_memory_reversal(instance, str(delivery.get("id") or ""))
+            changed = True
+    apply_memory = dependencies.apply_economy_memory
+    if pending:
+        if apply_memory is None:
+            return False
+        for delivery in pending:
+            try:
+                await apply_memory(
+                    instance.memory_namespace,
+                    str(delivery.get("id") or ""),
+                    dict(delivery.get("payload") or {}),
+                    int(delivery.get("round", instance.round_number) or 0),
+                )
+            except Exception:
+                logger.exception(
+                    "经济结算记忆 outbox 投递失败，已保留待重试记录: game=%s delivery=%s",
+                    instance.game_key,
+                    delivery.get("id"),
+                )
+                return False
+            complete_memory_delivery(instance, str(delivery.get("id") or ""))
+            changed = True
+    if changed:
+        await dependencies.games.save_instance(instance)
+    return not (
+        pending_memory_deliveries(instance)
+        or pending_memory_reversals(instance)
+    )
+
+
+async def drain_economy_outbox(
+    dependencies: CharacterDependencies,
+    instance: GameInstance,
+) -> bool:
+    """Retry durable external effects before allowing narrative progression."""
+
+    async with instance._lock:
+        current = dependencies.games.get_instance(instance.game_key)
+        if current is not instance:
+            return False
+        return await _deliver_memory_outbox_locked(dependencies, instance)
 
 
 async def delete_character(
@@ -701,6 +947,26 @@ async def delete_character(
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
+    if not inst:
+        return {"ok": False, "error": "角色不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        current = dependencies.games.get_instance(inst.game_key)
+        if current is not inst:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+        return await _delete_character_authority(dependencies, inst, user_id)
+
+
+async def _delete_character_authority(
+    dependencies: CharacterDependencies,
+    instance: GameInstance,
+    user_id: str,
+) -> dict[str, Any]:
+    inst = instance
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
     if len(inst.players) <= 1:
@@ -712,17 +978,34 @@ async def delete_character(
     inst.remove_payments_for_player(user_id)
     inst.clear_private_messages(user_id)
     await dependencies.games.save_instance(inst)
-    logger.info("角色已删除: %s (%s)", name, game_key)
+    logger.info("角色已删除: %s (%s)", name, inst.game_key)
     return {"ok": True}
 
 
-async def create_player(dependencies: CharacterDependencies, game_key: str, character: dict,
-                       force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
+async def create_player(
+    dependencies: CharacterDependencies, game_key: str, character: dict,
+    force_uid: str = "", assign_new_id: bool = False,
+) -> dict[str, Any]:
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
+    async with inst.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        if dependencies.games.get_instance(inst.game_key) is not inst:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+        return await _create_player_authority(
+            dependencies, inst, character, force_uid, assign_new_id,
+        )
+
+
+async def _create_player_authority(dependencies: CharacterDependencies, inst: GameInstance, character: dict,
+                       force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
     requested_uid = str(character.get("user_id") or "").strip()
     if requested_uid and requested_uid in inst.players:
         return {

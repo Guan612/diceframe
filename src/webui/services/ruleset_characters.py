@@ -345,6 +345,21 @@ async def update_live_character_profile(
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None or user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
+    async with instance.authoritative_write() as write_entered:
+        if not write_entered:
+            return _failure("REWRITE_IN_PROGRESS", "GM 正在重写历史回合，请等待完成后重试")
+        return await _update_live_character_profile_authority(
+            dependencies, instance, game_key, user_id, patch,
+        )
+
+
+async def _update_live_character_profile_authority(
+    dependencies: RulesetCharacterDependencies,
+    instance: Any,
+    game_key: str,
+    user_id: str,
+    patch: dict[str, Any],
+) -> dict[str, Any]:
     rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return _failure("RULESET_NOT_FOUND", "当前游戏规则不存在")
@@ -383,6 +398,22 @@ async def adopt_character_card(
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None or user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
+    async with instance.authoritative_write() as write_entered:
+        if not write_entered:
+            return _failure("REWRITE_IN_PROGRESS", "GM 正在重写历史回合，请等待完成后重试")
+        return await _adopt_character_card_authority(
+            dependencies, instance, game_key, user_id, card_id,
+        )
+
+
+async def _adopt_character_card_authority(
+    dependencies: RulesetCharacterDependencies,
+    instance: Any,
+    game_key: str,
+    user_id: str,
+    card_id: str,
+) -> dict[str, Any]:
+    """Replace one live professional character from a server-owned blueprint."""
     card = next(
         (
             item for item in dedupe_cards(dependencies.read_cards())

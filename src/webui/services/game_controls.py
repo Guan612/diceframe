@@ -126,36 +126,43 @@ class GameControlService:
         instance = self._instance(game_key)
         if not instance:
             return {"ok": False, "error": "游戏不存在"}
-        pending = instance.pending_dice_actions(user_id or None)
-        if not pending:
-            return {"ok": True, "resolved": []}
-        rule = self._dependencies.load_rule(instance)
-        resolved: list[dict[str, Any]] = []
-        for action in pending:
-            actor_id = str(action.get("user_id") or "")
-            request = action.get("check_request")
-            if not isinstance(request, dict):
-                request = build_check_request(instance, action, rule)
-            if not request:
-                continue
-            action["check_request"] = request
-            payload = roll_check_request(request, rule)
-            applied = await instance.apply_action_roll(
-                actor_id,
-                payload["dice_system"],
-                payload["value"],
-                rolls=payload["rolls"],
-                source=source,
-            )
-            if not applied:
-                continue
-            payload.update({"user_id": actor_id, "source": source})
-            resolved.append(payload)
-        return {
-            "ok": True,
-            "resolved": resolved,
-            "roll": resolved[0] if resolved else None,
-        }
+        async with instance.authoritative_write() as write_entered:
+            if not write_entered:
+                return {
+                    "ok": False,
+                    "code": "REWRITE_IN_PROGRESS",
+                    "error": "GM 正在重写历史回合，请等待完成后重试",
+                }
+            pending = instance.pending_dice_actions(user_id or None)
+            if not pending:
+                return {"ok": True, "resolved": []}
+            rule = self._dependencies.load_rule(instance)
+            resolved: list[dict[str, Any]] = []
+            for action in pending:
+                actor_id = str(action.get("user_id") or "")
+                request = action.get("check_request")
+                if not isinstance(request, dict):
+                    request = build_check_request(instance, action, rule)
+                if not request:
+                    continue
+                action["check_request"] = request
+                payload = roll_check_request(request, rule)
+                applied = await instance.apply_action_roll(
+                    actor_id,
+                    payload["dice_system"],
+                    payload["value"],
+                    rolls=payload["rolls"],
+                    source=source,
+                )
+                if not applied:
+                    continue
+                payload.update({"user_id": actor_id, "source": source})
+                resolved.append(payload)
+            return {
+                "ok": True,
+                "resolved": resolved,
+                "roll": resolved[0] if resolved else None,
+            }
 
     async def resolve_luck_decision(
         self,
@@ -171,29 +178,19 @@ class GameControlService:
                 "code": "GAME_NOT_FOUND",
                 "error": "游戏不存在",
             }
-        result = await instance.resolve_luck_decision(
-            check_id,
-            actor_uid,
-            spend,
-            rule=self._dependencies.load_rule(instance),
-            allow_gm=True,
-        )
-        if not result.get("ok"):
-            return result
-        await self._dependencies.save_instance(instance)
-        pending = instance.pending_luck_checks()
-        round_already_resolved = instance.state != GameState.ACTIVE_JUDGMENT
-        return {
-            **result,
-            "phase": (
-                "done"
-                if round_already_resolved
-                else ("luck" if pending else "ready")
-            ),
-            "pending_luck_decisions": pending,
-            "ready_to_resolve": not pending and not round_already_resolved,
-            "round_already_resolved": round_already_resolved,
-        }
+        async with instance.authoritative_write() as entered:
+            if not entered:
+                return {"ok": False, "code": "REWRITE_IN_PROGRESS", "error": "GM 正在重写历史回合，请等待完成后重试"}
+            if self._instance(game_key) is not instance:
+                return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+            assert instance is not None
+            result = await instance.resolve_luck_decision(check_id, actor_uid, spend, rule=self._dependencies.load_rule(instance), allow_gm=True)
+            if not result.get("ok"):
+                return result
+            await self._dependencies.save_instance(instance)
+            pending = instance.pending_luck_checks()
+            round_already_resolved = instance.state != GameState.ACTIVE_JUDGMENT
+            return {**result, "phase": "done" if round_already_resolved else ("luck" if pending else "ready"), "pending_luck_decisions": pending, "ready_to_resolve": not pending and not round_already_resolved, "round_already_resolved": round_already_resolved}
 
     async def decline_pending_luck(self, game_key: str) -> dict[str, Any]:
         instance = self._instance(game_key)
@@ -203,10 +200,15 @@ class GameControlService:
                 "code": "GAME_NOT_FOUND",
                 "error": "游戏不存在",
             }
-        declined = await instance.decline_pending_luck()
-        if declined:
-            await self._dependencies.save_instance(instance)
-        return {"ok": True, "declined_luck_decisions": declined}
+        async with instance.authoritative_write() as entered:
+            if not entered:
+                return {"ok": False, "code": "REWRITE_IN_PROGRESS", "error": "GM 正在重写历史回合，请等待完成后重试"}
+            if self._instance(game_key) is not instance:
+                return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+            declined = await instance.decline_pending_luck()
+            if declined:
+                await self._dependencies.save_instance(instance)
+            return {"ok": True, "declined_luck_decisions": declined}
 
     async def set_solo_mode(
         self, game_key: str, solo: bool,
