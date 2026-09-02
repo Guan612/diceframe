@@ -803,14 +803,17 @@ async function loadPlayContext() {
   // through the connection flow.  Restore the local player identity before
   // loading actions; otherwise requests have no user query and the backend
   // correctly rejects them as "not joined".
+  let memberValidated = false
   if (!route.query.user && !hasAccessToken()) {
     const storedUid = localStorage.getItem('trpg_play_user_' + game.currentGame.value) || ''
     if (storedUid) {
       try {
         const d = await api<GameDetail>(`/games/${encodeURIComponent(game.currentGame.value)}`)
         if (isStoredPlayerMember(d, storedUid)) {
-          router.replace({ name: 'play', query: { ...route.query, game: game.currentGame.value, user: storedUid, share: '1' } })
-          return
+          memberValidated = true
+          // Fall through to the normal load below instead of returning, so
+          // ruleMeta / player-context / health load with the restored identity.
+          await router.replace({ name: 'play', query: { ...route.query, game: game.currentGame.value, user: storedUid, share: '1' } })
         }
       } catch {
         // Keep the existing page if the identity check is temporarily unavailable.
@@ -821,7 +824,7 @@ async function loadPlayContext() {
   // 先独立校验一次成员资格（不依赖 refresh，因其 private-log 403 会中断整组请求），
   // 失效则清掉本地身份缓存，送回加入页走重新加入（GM 有 access_token，不受影响）。
   const linkUid = queryString(route.query.user)
-  if (linkUid && !hasAccessToken()) {
+  if (linkUid && !hasAccessToken() && !memberValidated) {
     try {
       const d = await api<GameDetail>(`/games/${encodeURIComponent(game.currentGame.value)}`)
       if (!isStoredPlayerMember(d, linkUid)) {
