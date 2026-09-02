@@ -199,6 +199,12 @@ class WebAPI:
             reverse_economy_memory=(
                 self._mem.reverse_economy_delta if self._mem is not None else None
             ),
+            load_item_categories=(
+                handler.load_item_categories
+                if handler is not None
+                and callable(getattr(handler, "load_item_categories", None))
+                else None
+            ),
         )
         self._ruleset_character_dependencies = (
             ruleset_characters.RulesetCharacterDependencies(

@@ -274,6 +274,11 @@ class GameHandler:
         """兼容旧内部调用；实际逻辑已拆到 StateUpdateApplier。"""
         self._state_applier.apply_state_update(instance, update)
 
+    def load_item_categories(self, instance: GameInstance) -> dict[str, list[str]]:
+        """Expose the narrative pipeline's item category table to injected services."""
+
+        return self._state_applier.load_item_categories(instance)
+
     async def commit_deferred_economy_effects(
         self,
         instance: GameInstance,

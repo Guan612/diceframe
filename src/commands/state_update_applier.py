@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.engine.game_instance import GameInstance
+from src.commands.economy_effects import link_purchase_quote_proposal
 from src.commands.item_category_resolver import ItemCategoryResolver
 from src.commands.madness_tracker import MadnessTracker
 from src.commands.npc_state_applier import NpcStateApplier
@@ -91,6 +92,11 @@ class StateUpdateApplier:
         except Exception:
             logger.warning("STAT 规则加载失败: world_id=%s", instance.world_id, exc_info=True)
             return None
+
+    def load_item_categories(self, instance: GameInstance) -> dict[str, list[str]]:
+        """Expose the same category table the narrative pipeline classifies with."""
+
+        return self._item_cats.load_categories(instance)
 
     def apply_state_update(
         self,
@@ -248,7 +254,13 @@ class StateUpdateApplier:
                 ),
                 contributors=contributors if is_team_fee else None,
                 visibility="party" if is_team_fee else "private",
+                quote_id=str(proposal.get("quote_id") or ""),
             ))
+            quote_id = str(proposal.get("quote_id") or "")
+            if quote_id:
+                link_purchase_quote_proposal(
+                    instance, quote_id, str(queued_proposals[-1].get("id") or ""),
+                )
         return queued_proposals
 
     def apply_madness(self, instance: GameInstance, uid: str, cs: dict, loss: int) -> None:

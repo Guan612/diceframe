@@ -381,6 +381,17 @@ def close_purchase_quote(
     return quote
 
 
+def link_purchase_quote_proposal(instance: Any, quote_id: str, proposal_id: str) -> None:
+    """Record the derived proposal id on the audit copy of a converted offer."""
+
+    if not quote_id or not proposal_id:
+        return
+    for quote in _purchase_quotes(instance):
+        if isinstance(quote, dict) and str(quote.get("id") or "") == str(quote_id):
+            quote["proposal_id"] = str(proposal_id)
+            return
+
+
 def settle_purchase_quote(
     instance: Any,
     data: dict[str, Any],
@@ -460,6 +471,9 @@ def settle_purchase_quote(
         "recipient_uid": str(quote.get("recipient_uid") or payer_uid),
         "items": items, "reason": str(quote.get("reason") or "购买商品"),
         "approval_policy": "payer", "source": "server_purchase_quote",
+        # Keep the offer's origin round authoritative after conversion so a
+        # rollback of that round can reverse the later settlement.
+        "quote_id": str(quote.get("id") or ""),
     })
     # Retire the offer, keeping the audit entry; the queued proposal above is
     # now the only path to settlement.

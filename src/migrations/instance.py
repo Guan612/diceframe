@@ -17,7 +17,7 @@ from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_bin
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 3
+CURRENT_INSTANCE_SCHEMA_VERSION = 4
 
 
 def _legacy_run_id(payload: Mapping[str, Any]) -> str:
@@ -111,6 +111,42 @@ def _migrate_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
+    """Give legacy id-less purchase quotes a stable server identity.
+
+    Pre-offer-contract saves persisted open purchase quotes without an ``id``,
+    which left them unaddressable by the explicit confirm/cancel endpoints.
+    The identity is a deterministic uuid5 over the quote's own coordinates, so
+    the same save always loads with the same id and the migration is
+    idempotent; quotes that already carry an id are left untouched.
+    """
+
+    economy = payload.get("economy")
+    if isinstance(economy, dict):
+        run_id = str(payload.get("run_id") or "")
+        quotes = economy.get("purchase_quotes")
+        if isinstance(quotes, list):
+            for index, quote in enumerate(quotes):
+                if not isinstance(quote, dict) or str(quote.get("id") or ""):
+                    continue
+                items = "|".join(str(item) for item in (quote.get("items") or []))
+                digest = uuid5(
+                    NAMESPACE_URL,
+                    "diceframe:{run_id}:purchase-quote:{index}:{round}:{payer}:{recipient}:{amount}:{items}".format(
+                        run_id=run_id,
+                        index=index,
+                        round=str(quote.get("round") or ""),
+                        payer=str(quote.get("payer_uid") or ""),
+                        recipient=str(quote.get("recipient_uid") or ""),
+                        amount=str(quote.get("amount") or ""),
+                        items=items,
+                    ),
+                ).hex
+                quote["id"] = f"quote_{digest}"
+    payload["instance_schema_version"] = 4
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -124,6 +160,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 2:
         payload = _migrate_v2_to_v3(payload)
         version = 3
+    if version == 3:
+        payload = _migrate_v3_to_v4(payload)
+        version = 4
     payload["instance_schema_version"] = version
     return payload
 

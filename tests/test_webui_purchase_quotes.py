@@ -13,7 +13,10 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 import web_server
-from src.commands.economy_effects import record_purchase_quote
+from src.commands.economy_effects import (
+    record_purchase_quote,
+    settle_purchase_quote,
+)
 from src.webui.routes.game_gameplay_routes import (
     api_payment_resolve,
     api_purchase_quote_cancel,
@@ -117,12 +120,74 @@ async def test_quote_confirm_creates_single_pending_proposal_for_payer(web_api):
         assert settled.status == 200
         sheet = instance.get_character_sheet(payer_uid)
         assert sheet["currency"]["amount"] == 25
+        # 分类与叙事路径一致：通行证是关键物品，不落普通背包。
         granted = [
-            item for item in sheet.get("inventory", [])
+            item for item in sheet.get("key_items", [])
             if item.get("name") == "通行证"
         ]
         assert len(granted) == 1
+        assert not [
+            item for item in sheet.get("inventory", [])
+            if item.get("name") == "通行证"
+        ]
         assert len(instance.economy["transactions"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_explicit_confirm_matches_narration_confirm_delivery(web_api):
+    """同一报价，显式确认与叙事确认的权威角色状态必须一致。"""
+
+    api, _lorebook, registry, _llm, _worlds = web_api
+
+    async def _make_game(name: str):
+        created = await api.create_game(
+            "template_world",
+            name,
+            players=[
+                {"character_name": "付款人", "attributes": {"str": 10}, "gold": 30},
+            ],
+        )
+        instance = registry.get(api._parse_key(created["game_key"]))
+        uid = next(iter(instance.players))
+        return created["game_key"], instance, uid
+
+    def _record(instance, uid: str):
+        instance.action_queue = [{"user_id": uid, "text": "我想买通行证"}]
+        data = {"state_update": {"loot": [{"player": uid, "item": "通行证"}]}}
+        assert record_purchase_quote(instance, data, "通行证售价5金币。")
+        return instance.economy["purchase_quotes"][-1]
+
+    # 叙事路径：下一轮文本确认 → state_update 提案 → 支付结算。
+    narration_key, narration_inst, narration_uid = await _make_game("叙事确认")
+    _record(narration_inst, narration_uid)
+    narration_inst.action_queue = [{"user_id": narration_uid, "text": "行，成交"}]
+    confirm_payload = {"state_update": {}}
+    assert settle_purchase_quote(narration_inst, confirm_payload)
+    api._handler._apply_state_update(narration_inst, confirm_payload["state_update"])
+    narration_proposal = narration_inst.economy["proposals"][-1]
+    assert narration_proposal["quote_id"]
+    settled = await api.resolve_payment(
+        narration_key, narration_proposal["id"], True, narration_uid,
+    )
+    assert settled["ok"] is True
+
+    # 显式路径：HTTP 确认 → 支付结算。
+    explicit_key, explicit_inst, explicit_uid = await _make_game("显式确认")
+    quote = _record(explicit_inst, explicit_uid)
+    confirmed = await api.confirm_purchase_quote(explicit_key, quote["id"], explicit_uid)
+    assert confirmed["ok"] is True
+    explicit_proposal = confirmed["proposal"]
+    settled = await api.resolve_payment(
+        explicit_key, explicit_proposal["id"], True, explicit_uid,
+    )
+    assert settled["ok"] is True
+
+    narration_sheet = narration_inst.get_character_sheet(narration_uid)
+    explicit_sheet = explicit_inst.get_character_sheet(explicit_uid)
+    assert narration_sheet["currency"]["amount"] == 25
+    assert explicit_sheet["currency"]["amount"] == narration_sheet["currency"]["amount"]
+    assert narration_sheet.get("key_items") == explicit_sheet.get("key_items")
+    assert narration_sheet.get("inventory") == explicit_sheet.get("inventory")
 
 
 @pytest.mark.asyncio
@@ -196,3 +261,73 @@ async def test_quote_confirm_rejects_stale_run(web_api):
         assert stale.status == 409
         assert (await stale.json())["code"] == "STALE_RUN"
         assert not instance.economy.get("proposals")
+
+
+@pytest.mark.asyncio
+async def test_imported_legacy_open_quote_keeps_usable_id(web_api, tmp_path):
+    """导入的无 id 旧报价经迁移获得稳定 id，且在导入后仍可显式确认。"""
+
+    import io
+    import json as _json
+    import zipfile
+
+    api, _lorebook, registry, _llm, _worlds = web_api
+    state = {
+        "game_key": ["web", "legacy", "quote"],
+        "instance_schema_version": 3,
+        "run_id": "run_exported",
+        "memory_namespace": "source-memory",
+        "world_id": "template_world",
+        "state": "paused",
+        "started_at": "2025-01-01T00:00:00+00:00",
+        "round_number": 5,
+        "log": [],
+        "players": {
+            "p1": {
+                "character_name": "付款人",
+                "character_sheet": {"gold": 30, "currency": {"amount": 30}},
+            },
+        },
+        "economy": {
+            "schema_version": 2,
+            "run_id": "run_exported",
+            "purchase_quotes": [{
+                "run_id": "run_exported",
+                "round": 5,
+                "payer_uid": "p1",
+                "recipient_uid": "p1",
+                "amount": 5,
+                "items": ["通行证"],
+                "reason": "购买商品",
+                "status": "open",
+            }],
+        },
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("state.json", _json.dumps(state))
+        zf.writestr("chatlog.jsonl", _json.dumps({"round": 1, "content": "a"}) + "\n")
+    result = await registry.import_save_zip(buffer.getvalue())
+    assert result["ok"] is True
+    game_key = result["game_key"]
+    game_key = game_key if isinstance(game_key, str) else "|".join(game_key)
+    instance = registry.get(api._parse_key(game_key))
+    quote = instance.economy["purchase_quotes"][0]
+    assert quote["id"].startswith("quote_")
+    assert quote["run_id"] == instance.run_id != "run_exported"
+
+    confirmed = await api.confirm_purchase_quote(game_key, quote["id"], "p1")
+    assert confirmed["ok"] is True
+    proposal = confirmed["proposal"]
+    assert proposal["status"] == "pending"
+    assert proposal["amount"] == 5
+    assert quote["status"] == "confirmed"
+    assert not instance.economy["transactions"]
+
+    settled = await api.resolve_payment(game_key, proposal["id"], True, "p1")
+    assert settled["ok"] is True
+    sheet = instance.get_character_sheet("p1")
+    assert sheet["currency"]["amount"] == 25
+    assert any(
+        item.get("name") == "通行证" for item in sheet.get("key_items", [])
+    )

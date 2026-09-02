@@ -32,8 +32,14 @@ from src.engine.economy import (
     resolve_proposal,
 )
 from src.engine.game_instance import GameInstance
-from src.commands.state_items import grant_classified_item
-from src.commands.economy_effects import close_purchase_quote
+from src.commands.state_items import (
+    grant_classified_item,
+    normalized_reward_entries,
+)
+from src.commands.economy_effects import (
+    close_purchase_quote,
+    link_purchase_quote_proposal,
+)
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
 
@@ -136,6 +142,7 @@ class CharacterDependencies:
     schedule_economy_scene_image: Callable[[Any, dict[str, Any]], Any] | None = None
     apply_economy_memory: Callable[[str, str, dict[str, Any], int], Awaitable[None]] | None = None
     reverse_economy_memory: Callable[[str, str], Awaitable[bool]] | None = None
+    load_item_categories: Callable[[Any], dict[str, list[str]]] | None = None
 
 
 async def create_payment_proposal(
@@ -274,6 +281,13 @@ async def confirm_purchase_quote(
         amount = int(quote.get("amount", 0) or 0)
         if amount <= 0 or not items:
             return {"ok": False, "code": "QUOTE_INVALID", "error": "报价缺少有效商品或金额"}
+        # Explicit confirmation must classify exactly like the narration path:
+        # the transport never decides where a purchased item lands.
+        categories = (
+            dependencies.load_item_categories(inst)
+            if dependencies.load_item_categories is not None
+            else {}
+        )
         try:
             proposal = queue_proposal(
                 inst,
@@ -281,11 +295,12 @@ async def confirm_purchase_quote(
                 payer_uid=str(quote.get("payer_uid") or ""),
                 recipient_uid=str(quote.get("recipient_uid") or quote.get("payer_uid") or ""),
                 amount=amount,
-                rewards=[{"name": item, "category": ""} for item in items],
+                rewards=normalized_reward_entries(items, categories),
                 reason=str(quote.get("reason") or "购买商品"),
                 source="server_purchase_quote",
                 source_ref=f"purchase_quote:{quote.get('id')}",
                 approval_policy="payer",
+                quote_id=str(quote.get("id") or ""),
             )
         except ValueError as exc:
             return {"ok": False, "code": "QUOTE_INVALID", "error": str(exc)}
@@ -293,7 +308,7 @@ async def confirm_purchase_quote(
             inst, quote_id, status="confirmed", resolution_code="CONFIRMED_BY_PAYER",
         ) is None:
             return {"ok": False, "code": "ALREADY_RESOLVED", "error": "购买报价已处理"}
-        quote["proposal_id"] = str(proposal.get("id") or "")
+        link_purchase_quote_proposal(inst, quote_id, str(proposal.get("id") or ""))
         await dependencies.games.save_instance(inst)
     return {"ok": True, "proposal": proposal}
 

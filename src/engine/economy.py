@@ -537,6 +537,7 @@ def queue_proposal(
     rewards: list[dict[str, Any]] | None = None,
     contributors: list[dict[str, Any]] | None = None,
     visibility: str = "private",
+    quote_id: str = "",
 ) -> dict[str, Any]:
     """Queue one idempotent proposal; no balance is changed here."""
 
@@ -589,6 +590,9 @@ def queue_proposal(
         "reason": str(reason or "经济提案")[:240],
         "source": str(source),
         "source_ref": str(source_ref),
+        # Origin linkage for offers converted from a persisted purchase quote;
+        # empty for proposals that did not come from a quote.
+        "quote_id": str(quote_id),
         "approval_policy": str(approval_policy),
         "rewards": deepcopy(list(rewards or [])),
         "contributors": normalized_contributors,
@@ -914,23 +918,40 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
 
     rollback_round = int(round_number)
     purchase_quotes = instance.economy.get("purchase_quotes", [])
+    quote_origin_proposal_ids: set[str] = set()
+    erased_quote_ids: set[str] = set()
     if isinstance(purchase_quotes, list):
+        quote_resolved_at = datetime.now(timezone.utc).isoformat()
         for quote in purchase_quotes:
+            if not isinstance(quote, dict):
+                continue
+            try:
+                quote_round = int(quote.get("round", -1))
+            except (TypeError, ValueError):
+                quote_round = -1
             if not (
-                isinstance(quote, dict)
-                and quote.get("status", "open") == "open"
-                and int(quote.get("round", -1)) == rollback_round
+                quote_round == rollback_round
                 and (
                     not quote.get("run_id")
                     or str(quote.get("run_id")) == str(instance.run_id)
                 )
             ):
                 continue
-            # Retire the offer for audit instead of deleting it; only open
-            # quotes are actionable, so the cancelled mark is sufficient.
-            quote["status"] = "cancelled"
-            quote["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            status = str(quote.get("status") or "open")
+            if status not in {"open", "confirmed"}:
+                continue
+            # Retire the offer for audit instead of deleting it.  Only open
+            # quotes are actionable, and a confirmed offer's purchase chain
+            # dies with its erased origin round.
+            quote["status"] = "cancelled" if status == "open" else "superseded"
+            quote["resolved_at"] = quote_resolved_at
             quote["resolution_code"] = "ORIGIN_ROLLED_BACK"
+            quote_id = str(quote.get("id") or "")
+            if quote_id:
+                erased_quote_ids.add(quote_id)
+            proposal_id = str(quote.get("proposal_id") or "")
+            if proposal_id:
+                quote_origin_proposal_ids.add(proposal_id)
     proposals = [
         item for item in instance.economy.get("proposals", [])
         if isinstance(item, dict)
@@ -940,6 +961,15 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
         for proposal in proposals
         if int(proposal.get("round", -1) or -1) == rollback_round
     }
+    # A proposal converted from a purchase quote inherits the quote's origin
+    # round as its authoritative narrative origin, even when the conversion
+    # and settlement happened in a later round.
+    quote_origin_proposal_ids |= {
+        str(proposal.get("id") or "")
+        for proposal in proposals
+        if str(proposal.get("quote_id") or "") in erased_quote_ids
+    }
+    origin_ids |= quote_origin_proposal_ids
     transactions = [
         item for item in instance.economy.get("transactions", [])
         if isinstance(item, dict)
@@ -982,6 +1012,25 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
         ):
             transaction["status"] = "reversed"
             transaction["reversed_at"] = now
+
+    # A quote's origin round stays authoritative after confirmation: rolling
+    # back that round must also undo a later-round settlement's balance and
+    # delivered goods, not only flip the ledger status.  Same-round
+    # settlements are restored by the caller's snapshot reconciliation.
+    quote_origin_transactions = [
+        transaction for transaction in transactions
+        if (
+            transaction.get("status") == "reversed"
+            and str(transaction.get("proposal_id") or "") in quote_origin_proposal_ids
+            and int(transaction.get("round", -1) or -1) != rollback_round
+        )
+    ]
+    for transaction in reversed(quote_origin_transactions):
+        _undo_transaction_state(
+            transaction,
+            get_sheet=instance.get_character_sheet,
+            set_sheet=instance.set_character_sheet,
+        )
 
     # A settlement-only rollback keeps an earlier valid offer actionable. Do
     # not resurrect proposals whose origin round is itself being erased.
@@ -1048,6 +1097,52 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
     _advance_revision(instance)
 
 
+def _undo_transaction_state(
+    transaction: dict[str, Any],
+    *,
+    get_sheet: Callable[[str], Any],
+    set_sheet: Callable[[str, dict[str, Any]], None],
+) -> None:
+    """Restore one committed settlement's before-images onto character sheets.
+
+    Shared by snapshot reconciliation and quote-origin rollback so both paths
+    undo balance entries and reward deltas identically.
+    """
+
+    for entry in transaction.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        account = str(entry.get("account") or "")
+        if not account.startswith("character:") or entry.get("before") is None:
+            continue
+        uid = account.removeprefix("character:")
+        target = get_sheet(uid)
+        if not isinstance(target, dict):
+            continue
+        before = int(entry.get("before", 0) or 0)
+        if isinstance(target.get("currency"), dict):
+            target["currency"] = {**target["currency"], "amount": before}
+        target["gold"] = before
+        set_sheet(uid, target)
+    for reward_snapshot in transaction.get("reward_snapshots", []):
+        if not isinstance(reward_snapshot, dict):
+            continue
+        uid = str(reward_snapshot.get("recipient_uid") or "")
+        target = get_sheet(uid)
+        before = reward_snapshot.get("before")
+        after = reward_snapshot.get("after")
+        if not isinstance(target, dict) or not isinstance(before, dict) or not isinstance(after, dict):
+            continue
+        for key in ("inventory", "equipment", "key_items"):
+            if key not in before or key not in after:
+                continue
+            current = target.get(key)
+            if not isinstance(current, list):
+                continue
+            target[key] = _remove_reward_delta(current, before[key], after[key])
+            set_sheet(uid, target)
+
+
 def reconcile_rollback_snapshot(
     instance: Any,
     snapshot: dict[str, Any],
@@ -1084,36 +1179,13 @@ def reconcile_rollback_snapshot(
     # earlier transaction after a later one reconstructs the round's original
     # balance and correctly removes stacked rewards.
     for transaction in reversed(transactions):
-        for entry in transaction.get("entries", []):
-            if not isinstance(entry, dict):
-                continue
-            account = str(entry.get("account") or "")
-            if not account.startswith("character:") or entry.get("before") is None:
-                continue
-            uid = account.removeprefix("character:")
-            target = reconciled.get(uid)
-            if isinstance(target, dict):
-                before = int(entry.get("before", 0) or 0)
-                if isinstance(target.get("currency"), dict):
-                    target["currency"] = deepcopy(target["currency"])
-                    target["currency"]["amount"] = before
-                target["gold"] = before
-        for reward_snapshot in transaction.get("reward_snapshots", []):
-            if not isinstance(reward_snapshot, dict):
-                continue
-            uid = str(reward_snapshot.get("recipient_uid") or "")
-            target = reconciled.get(uid)
-            before = reward_snapshot.get("before")
-            after = reward_snapshot.get("after")
-            if not isinstance(target, dict) or not isinstance(before, dict) or not isinstance(after, dict):
-                continue
-            for key in ("inventory", "equipment", "key_items"):
-                if key not in before or key not in after:
-                    continue
-                current = target.get(key)
-                if not isinstance(current, list):
-                    continue
-                target[key] = _remove_reward_delta(current, before[key], after[key])
+        _undo_transaction_state(
+            transaction,
+            get_sheet=lambda uid: (
+                reconciled.get(uid) if isinstance(reconciled.get(uid), dict) else None
+            ),
+            set_sheet=lambda uid, sheet: reconciled.__setitem__(uid, sheet),
+        )
     return reconciled
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -22,14 +23,18 @@ from src.engine.economy import (
     _remove_reward_delta,
 )
 from src.commands.economy_effects import (
+    close_purchase_quote,
     discard_unearned_reward_proposals,
     discard_unbacked_purchase_items,
     guard_unbacked_payment_narration,
+    link_purchase_quote_proposal,
     repair_unbacked_purchase,
     defer_narrative_effects,
     record_purchase_quote,
     settle_purchase_quote,
 )
+from src.commands.state_items import append_key_item
+from src.commands.state_update_applier import StateUpdateApplier
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
 from src.llm.context_builder import build_context
@@ -488,7 +493,7 @@ def test_save_migration_assigns_stable_run_and_imports_pending_payment() -> None
     second = migrate_game_state_payload(first)
 
     assert first == second
-    assert first["instance_schema_version"] == 3
+    assert first["instance_schema_version"] == 4
     assert first["economy"]["external_effects_outbox"] == []
     assert first["run_id"].startswith("run_")
     assert first["memory_namespace"] == "('web', 'legacy', 'bot')"
@@ -524,6 +529,159 @@ def test_narrative_reward_requires_gm_and_commits_once() -> None:
 def _grant_inventory_reward(sheet: dict, reward: dict) -> None:
     inventory = sheet.setdefault("inventory", [])
     inventory.append({"name": str(reward.get("name") or ""), "qty": 1})
+
+
+def _grant_key_item_reward(sheet: dict, reward: dict) -> None:
+    append_key_item(sheet, str(reward.get("name") or ""))
+
+
+def test_quote_origin_rollback_reverses_late_confirmed_purchase() -> None:
+    """R5 报价 → R6 显式确认并支付；回滚 R5 必须级联撤销 R6 结算。"""
+
+    instance = _instance()
+    instance.round_number = 5
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    assert record_purchase_quote(instance, data, "通行证售价5金币。")
+    quote = instance.economy["purchase_quotes"][0]
+    instance.round_number = 6
+    proposal = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid="gm",
+        recipient_uid="gm",
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+        source="server_purchase_quote",
+        source_ref=f"purchase_quote:{quote['id']}",
+        approval_policy="payer",
+        quote_id=quote["id"],
+    )
+    link_purchase_quote_proposal(instance, quote["id"], proposal["id"])
+    assert close_purchase_quote(
+        instance, quote["id"], status="confirmed", resolution_code="CONFIRMED_BY_PAYER",
+    ) is not None
+    settled = resolve_proposal(
+        instance,
+        proposal["id"],
+        actor_uid="gm",
+        accepted=True,
+        grant_reward=_grant_key_item_reward,
+    )
+    assert settled["ok"] is True
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 25
+    assert any(
+        item.get("name") == "通行证"
+        for item in instance.get_character_sheet("gm").get("key_items", [])
+    )
+
+    reverse_round_economy(instance, 5)
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 30
+    assert not any(
+        item.get("name") == "通行证"
+        for item in instance.get_character_sheet("gm").get("key_items", [])
+    )
+    assert all(
+        transaction["status"] == "reversed"
+        for transaction in instance.economy["transactions"]
+    )
+    assert proposal["status"] == "reversed"
+    assert quote["status"] == "superseded"
+    assert quote["resolution_code"] == "ORIGIN_ROLLED_BACK"
+    assert quote["id"]
+
+
+def test_quote_origin_rollback_reverses_narration_confirmed_purchase() -> None:
+    """叙事确认路径必须与显式路径共享同一 origin 回滚语义。"""
+
+    instance = _instance()
+    instance.round_number = 5
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    assert record_purchase_quote(instance, data, "通行证售价5金币。")
+    quote = instance.economy["purchase_quotes"][0]
+    instance.round_number = 6
+    instance.action_queue = [{"user_id": "gm", "text": "行，成交"}]
+    confirm_payload = {"state_update": {}}
+    assert settle_purchase_quote(instance, confirm_payload)
+    applier = StateUpdateApplier(Path("nonexistent-rules"), None, lambda world_id, language: {})
+    queued = applier.apply_state_update(instance, confirm_payload["state_update"])
+    assert len(queued) == 1
+    assert queued[0]["quote_id"] == quote["id"]
+    assert quote["proposal_id"] == queued[0]["id"]
+    settled = resolve_proposal(
+        instance,
+        queued[0]["id"],
+        actor_uid="gm",
+        accepted=True,
+        grant_reward=_grant_key_item_reward,
+    )
+    assert settled["ok"] is True
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 25
+
+    reverse_round_economy(instance, 5)
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 30
+    assert not any(
+        item.get("name") == "通行证"
+        for item in instance.get_character_sheet("gm").get("key_items", [])
+    )
+    assert queued[0]["status"] == "reversed"
+    assert quote["status"] == "superseded"
+    assert quote["resolution_code"] == "ORIGIN_ROLLED_BACK"
+
+
+def test_legacy_open_purchase_quote_gets_stable_id_on_load() -> None:
+    legacy = {
+        "game_key": ["web", "legacy", "quote"],
+        "instance_schema_version": 3,
+        "run_id": "run_legacy",
+        "state": "paused",
+        "started_at": "2025-01-01T00:00:00+00:00",
+        "players": {
+            "p1": {
+                "character_name": "付款人",
+                "character_sheet": {"gold": 30, "currency": {"amount": 30}},
+            },
+        },
+        "economy": {
+            "schema_version": 2,
+            "run_id": "run_legacy",
+            "purchase_quotes": [{
+                "run_id": "run_legacy",
+                "round": 5,
+                "payer_uid": "p1",
+                "recipient_uid": "p1",
+                "amount": 5,
+                "items": ["通行证"],
+                "reason": "购买商品",
+                "status": "open",
+            }],
+        },
+    }
+    migrated = migrate_game_state_payload(legacy)
+    quote = migrated["economy"]["purchase_quotes"][0]
+    assert quote["id"].startswith("quote_")
+    # 同一存档重复迁移得到同一身份，save/reload 后不变。
+    assert migrate_game_state_payload(migrated)["economy"]["purchase_quotes"][0]["id"] == quote["id"]
+    instance = GameInstance.from_dict(migrated)
+    assert instance.economy["purchase_quotes"][0]["id"] == quote["id"]
+    reloaded = GameInstance.from_dict(instance.to_dict())
+    assert reloaded.economy["purchase_quotes"][0]["id"] == quote["id"]
+    # 迁移后的报价可被显式确认契约寻址并转换。
+    proposal = queue_proposal(
+        reloaded,
+        kind="purchase",
+        payer_uid="p1",
+        recipient_uid="p1",
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+        source="server_purchase_quote",
+        source_ref=f"purchase_quote:{quote['id']}",
+        approval_policy="payer",
+        quote_id=quote["id"],
+    )
+    assert close_purchase_quote(
+        reloaded, quote["id"], status="confirmed", resolution_code="CONFIRMED_BY_PAYER",
+    ) is not None
+    assert proposal["status"] == "pending"
 
 
 def test_late_personal_purchase_reopens_when_settlement_round_is_rolled_back() -> None:
