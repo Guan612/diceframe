@@ -590,6 +590,12 @@ async function openCards() {
   } catch (e: unknown) { toast.error(errorMessage(e)) }
 }
 
+// Reset clears the player roster.  Give the GM a direct way back to the
+// normal join flow instead of requiring them to copy an invite link first.
+function createCharacterForCurrentGame() {
+  router.push({ name: 'join', query: { game: game.currentGame.value, share: '1' } })
+}
+
 async function selectCard(card: CharacterCard) {
   if (characterCardNeedsConversion(card, ruleMeta.value.rule_id)) {
     toast.error(t('cardRuleMismatchManage'))
@@ -793,6 +799,24 @@ async function loadPlayContext() {
     router.replace({ name: 'join', query: { game: game.currentGame.value, share: '1' } })
     return
   }
+  // A player may return to a previously bookmarked /play URL after joining
+  // through the connection flow.  Restore the local player identity before
+  // loading actions; otherwise requests have no user query and the backend
+  // correctly rejects them as "not joined".
+  if (!route.query.user && !hasAccessToken()) {
+    const storedUid = localStorage.getItem('trpg_play_user_' + game.currentGame.value) || ''
+    if (storedUid) {
+      try {
+        const d = await api<GameDetail>(`/games/${encodeURIComponent(game.currentGame.value)}`)
+        if (isStoredPlayerMember(d, storedUid)) {
+          router.replace({ name: 'play', query: { ...route.query, game: game.currentGame.value, user: storedUid, share: '1' } })
+          return
+        }
+      } catch {
+        // Keep the existing page if the identity check is temporarily unavailable.
+      }
+    }
+  }
   // 被踢/身份过期的玩家直连 play 链接时，SSE 与私聊接口会持续 403「未加入本局」。
   // 先独立校验一次成员资格（不依赖 refresh，因其 private-log 403 会中断整组请求），
   // 失效则清掉本地身份缓存，送回加入页走重新加入（GM 有 access_token，不受影响）。
@@ -912,6 +936,11 @@ onBeforeUnmount(() => {
           class="play-economy-pending"
           @click="reopenPendingEconomy"
         >{{ t('economyPendingAction', { count: pendingEconomyCount }) }}</button>
+        <button
+          v-if="game.isGm.value && !game.players.value.length"
+          class="play-economy-pending"
+          @click="createCharacterForCurrentGame"
+        >{{ t('createCharacterAndEnter') }}</button>
         <label v-if="isPlayer" class="locale-select play-locale-select">
           <span>{{ t('language') }}</span>
           <select :value="locale" @change="onLocaleChange">
