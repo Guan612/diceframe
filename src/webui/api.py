@@ -199,6 +199,12 @@ class WebAPI:
             reverse_economy_memory=(
                 self._mem.reverse_economy_delta if self._mem is not None else None
             ),
+            load_item_categories=(
+                handler.load_item_categories
+                if handler is not None
+                and callable(getattr(handler, "load_item_categories", None))
+                else None
+            ),
         )
         self._ruleset_character_dependencies = (
             ruleset_characters.RulesetCharacterDependencies(
@@ -1546,6 +1552,22 @@ class WebAPI:
             reason=reason,
             recipient_uid=recipient_uid,
             items=items,
+        )
+
+    async def confirm_purchase_quote(self, game_key: str, quote_id: str, session_uid: str = "") -> dict[str, Any]:
+        return await characters.confirm_purchase_quote(
+            self._character_dependencies,
+            game_key,
+            quote_id,
+            session_uid,
+        )
+
+    async def cancel_purchase_quote(self, game_key: str, quote_id: str, session_uid: str = "") -> dict[str, Any]:
+        return await characters.cancel_purchase_quote(
+            self._character_dependencies,
+            game_key,
+            quote_id,
+            session_uid,
         )
 
     async def _drain_economy_outbox(self, instance: Any) -> bool:

@@ -651,6 +651,11 @@ class TestGameRegistry:
                     "id": "outcome_declined", "run_id": "run_exported",
                     "status": "declined",
                 }],
+                "purchase_quotes": [{
+                    "id": "quote_open", "run_id": "run_exported",
+                    "status": "open", "round": 5,
+                    "payer_uid": "p1", "amount": 5, "items": ["通行证"],
+                }],
                 "idempotency_records": {},
             },
         }
@@ -674,10 +679,12 @@ class TestGameRegistry:
             item["run_id"] == imported.run_id
             for key in (
                 "proposals", "transactions", "effect_groups",
-                "external_effects_outbox", "outcomes",
+                "external_effects_outbox", "outcomes", "purchase_quotes",
             )
             for item in imported.economy[key]
         )
+        # open 报价随新 run 收养，导入后仍可确认，不会卡死新报价。
+        assert imported.economy["purchase_quotes"][0]["status"] == "open"
         assert [
             item["id"] for item in imported.economy["external_effects_outbox"]
         ] == ["memory:pending"]

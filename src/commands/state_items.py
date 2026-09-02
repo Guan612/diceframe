@@ -2,6 +2,28 @@
 
 from __future__ import annotations
 
+from typing import Iterable
+
+
+def normalized_reward_entries(
+    item_names: Iterable[str],
+    categories: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    """Normalize offer item names into classified proposal rewards.
+
+    Every transport that converts a persisted offer into a proposal must go
+    through this helper so the delivery destination never depends on how the
+    offer was confirmed.
+    """
+
+    rewards: list[dict[str, str]] = []
+    for item_name in item_names:
+        name = str(item_name or "").strip()[:120]
+        if not name:
+            continue
+        rewards.append({"name": name, "category": classify_item(name, categories)})
+    return rewards[:8]
+
 
 def classify_item(item_name: str, categories: dict[str, list[str]]) -> str:
     if not item_name:

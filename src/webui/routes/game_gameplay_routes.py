@@ -382,6 +382,48 @@ async def api_payment_create(request: web.Request) -> web.Response:
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
+async def api_purchase_quote_confirm(request: web.Request) -> web.Response:
+    """Payer explicitly accepts one persisted purchase offer."""
+
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    quote_id = request.match_info["quote_id"]
+    inst = api.get_game_instance(gk)
+    if not inst:
+        return web.json_response({"error": "游戏不存在"}, status=404)
+    result = await api.confirm_purchase_quote(gk, quote_id, request.get("user_id", ""))
+    code = str(result.get("code") or "")
+    status = (
+        200 if result.get("ok")
+        else 404 if code in {"GAME_NOT_FOUND", "QUOTE_NOT_FOUND"}
+        else 403 if code in {"FORBIDDEN", "PAYMENT_FORBIDDEN"}
+        else 409 if code in {"ALREADY_RESOLVED", "STALE_RUN", "REWRITE_IN_PROGRESS"}
+        else 400
+    )
+    return web.json_response(result, status=status)
+
+
+async def api_purchase_quote_cancel(request: web.Request) -> web.Response:
+    """Close one persisted purchase offer without settling it."""
+
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    quote_id = request.match_info["quote_id"]
+    inst = api.get_game_instance(gk)
+    if not inst:
+        return web.json_response({"error": "游戏不存在"}, status=404)
+    result = await api.cancel_purchase_quote(gk, quote_id, request.get("user_id", ""))
+    code = str(result.get("code") or "")
+    status = (
+        200 if result.get("ok")
+        else 404 if code in {"GAME_NOT_FOUND", "QUOTE_NOT_FOUND"}
+        else 403 if code in {"FORBIDDEN", "PAYMENT_FORBIDDEN"}
+        else 409 if code in {"ALREADY_RESOLVED", "STALE_RUN", "REWRITE_IN_PROGRESS"}
+        else 400
+    )
+    return web.json_response(result, status=status)
+
+
 async def api_swipe(request: web.Request) -> web.Response:
     game_key = request.match_info["game_key"]
     round_num = int(request.match_info["round"])
