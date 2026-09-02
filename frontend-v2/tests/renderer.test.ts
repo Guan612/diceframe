@@ -29,4 +29,12 @@ describe('renderer', () => {
     expect(block.states).toHaveLength(1)
     expect(block.states[0].cls).toBe('warn')
   })
+
+  it('renders economy authority notices as colored task-style state cards', () => {
+    const block = parseGMText('车票尚未扣款。\n结算待确认：本次交易关联的物品、服务或任务推进尚未生效。\n权威账本提示：本次没有生成支付提案，因此未扣除金币。')
+    expect(block.states).toHaveLength(2)
+    expect(block.states[0].cls).toBe('pending')
+    expect(block.states[1].cls).toBe('good')
+    expect(block.paragraphs.join('')).not.toContain('权威账本提示')
+  })
 })

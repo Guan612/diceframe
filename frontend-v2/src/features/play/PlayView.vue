@@ -23,6 +23,7 @@ import DirectorProposalCard from '@/components/play/DirectorProposalCard.vue'
 import CombatMessageComposer from '@/components/play/CombatMessageComposer.vue'
 import KpQuestionDialog from '@/components/play/KpQuestionDialog.vue'
 import TableTalkFeed from '@/components/play/TableTalkFeed.vue'
+import EconomyProposalCard from '@/components/play/EconomyProposalCard.vue'
 import GameSidebar from '@/components/GameSidebar.vue'
 import PlayHelpCenter from '@/components/PlayHelpCenter.vue'
 import HealthPanel from '@/components/HealthPanel.vue'
@@ -660,11 +661,6 @@ function isTeamPayment(proposal: PendingPayment | null): boolean {
   return proposal?.approval_policy === 'all_contributors'
 }
 
-function economyDialogTitle(proposal: PendingPayment): string {
-  if (proposal.kind === 'reward') return t('economyRewardTitle')
-  return isTeamPayment(proposal) ? t('economyTeamPaymentTitle') : t('gmPaymentTitle')
-}
-
 function postponePendingPay() {
   const id = String(pendingPay.value?.id || pendingPay.value?.payment_id || '')
   if (id) dismissedPaymentIds.value = new Set([...dismissedPaymentIds.value, id])
@@ -1041,6 +1037,18 @@ onBeforeUnmount(() => {
           @luck="onLuckDecision"
         />
 
+        <EconomyProposalCard
+          v-if="pendingPay"
+          :proposal="pendingPay"
+          :currency="economyCurrencyName"
+          :player-name="economyPlayerName"
+          :dismiss-label="pendingEconomyDismissLabel(pendingPay)"
+          :help="pendingEconomyHelp(pendingPay)"
+          @dismiss="postponePendingPay"
+          @reject="resolvePay(false)"
+          @confirm="resolvePay(true)"
+        />
+
         <div v-if="tableNotice" class="table-notice notice">{{ tableNotice }}</div>
         <p v-if="tokenBudgetHint" class="token-budget-hint" aria-live="polite">{{ tokenBudgetHint }}</p>
 
@@ -1276,43 +1284,6 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
-    <Modal v-if="pendingPay" :title="economyDialogTitle(pendingPay)" @close="postponePendingPay">
-      <p v-if="pendingPay.kind === 'reward'">
-        {{ t('economyRewardContent', {
-          target: economyPlayerName(pendingPay.recipient_uid || pendingPay.uid),
-          amount: pendingPay.amount ?? 0,
-          currency: economyCurrencyName,
-          reason: pendingPay.reason || '',
-        }) }}
-      </p>
-      <template v-else-if="isTeamPayment(pendingPay)">
-        <p>{{ t('economyTeamPaymentContent', { amount: pendingPay.amount ?? 0, currency: economyCurrencyName, reason: pendingPay.reason || '' }) }}</p>
-        <ul class="economy-contributor-list">
-          <li v-for="contributor in pendingPay.contributors" :key="contributor.uid">
-            <span>{{ economyPlayerName(contributor.uid) }}</span>
-            <strong>{{ contributor.amount }} {{ economyCurrencyName }}</strong>
-            <small>{{ pendingPay.approvals?.[contributor.uid] ? t('economyApproved') : t('economyAwaitingApproval') }}</small>
-          </li>
-        </ul>
-      </template>
-      <p v-else>
-        {{ t('gmPaymentContent', {
-          target: economyPlayerName(pendingPay.payer_uid || pendingPay.uid),
-          amount: pendingPay.amount ?? 0,
-          currency: economyCurrencyName,
-          reason: pendingPay.reason ? t('gmPaymentReason', { reason: pendingPay.reason }) : '',
-        }) }}
-      </p>
-      <p v-if="pendingPay.rewards?.length">
-        {{ t('gmPaymentRewards', { items: pendingPay.rewards.map(item => item.name).join('、') }) }}
-      </p>
-      <p class="muted">{{ pendingEconomyHelp(pendingPay) }}</p>
-      <template #actions>
-        <button @click="postponePendingPay">{{ pendingEconomyDismissLabel(pendingPay) }}</button>
-        <button class="danger" @click="resolvePay(false)">{{ t('reject') }}</button>
-        <button class="primary" @click="resolvePay(true)">{{ pendingPay.kind === 'reward' ? t('economyApproveReward') : t('confirmPurchase') }}</button>
-      </template>
-    </Modal>
   </main>
 
   <main v-else class="empty empty-game">

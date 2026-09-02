@@ -273,6 +273,7 @@ details:not([open])>:not(summary){display:none}
 .state-card{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;padding:7px 10px;margin:6px 0;border-left:3px solid var(--df-accent);background:rgba(216,173,82,.08);border-radius:5px;font-size:13px;line-height:1.55}
 .state-card.good{border-left-color:var(--df-success);background:rgba(79,143,88,.12)}
 .state-card.warn{border-left-color:var(--df-danger);background:rgba(233,69,96,.10)}
+.state-card.pending{border-left-color:var(--df-warning);background:rgba(216,173,82,.12)}
 .state-card-list{margin:8px 0;display:grid;gap:5px}
 .state-card-title{display:inline-flex;align-items:center;gap:4px;font-weight:700;color:var(--df-accent-strong);font-size:12px;white-space:nowrap}
 .state-card-title .n-icon{vertical-align:0}

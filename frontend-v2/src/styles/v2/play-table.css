@@ -37,6 +37,74 @@
   color: var(--df-warning);
 }
 
+/* Economy decisions use the same visual language as task/state updates. */
+.economy-proposal-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--df-warning) 52%, var(--df-border-soft));
+  border-left: 4px solid var(--df-warning);
+  border-radius: var(--df-radius-md);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--df-warning) 11%, var(--df-surface-2)), var(--df-surface-1));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .045), var(--df-shadow);
+}
+
+.economy-proposal-card.economy-proposal-reward {
+  border-color: color-mix(in srgb, var(--df-success) 58%, var(--df-border-soft));
+  border-left-color: var(--df-success);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--df-success) 12%, var(--df-surface-2)), var(--df-surface-1));
+}
+
+.economy-proposal-card.economy-proposal-team {
+  border-color: color-mix(in srgb, #a78bfa 60%, var(--df-border-soft));
+  border-left-color: #a78bfa;
+  background: linear-gradient(145deg, color-mix(in srgb, #8b5cf6 12%, var(--df-surface-2)), var(--df-surface-1));
+}
+
+.economy-proposal-header,
+.economy-proposal-heading,
+.economy-proposal-status,
+.economy-proposal-actions,
+.economy-proposal-help {
+  display: flex;
+  align-items: center;
+}
+
+.economy-proposal-header { justify-content: space-between; gap: 12px; }
+.economy-proposal-heading { gap: 10px; min-width: 0; }
+.economy-proposal-heading > div { display: grid; gap: 3px; min-width: 0; }
+.economy-proposal-heading strong { color: var(--df-accent-strong); font-size: 14px; }
+.economy-proposal-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  color: var(--df-warning);
+  background: color-mix(in srgb, var(--df-warning) 16%, var(--df-surface-2));
+}
+.economy-proposal-reward .economy-proposal-icon { color: var(--df-success); background: color-mix(in srgb, var(--df-success) 16%, var(--df-surface-2)); }
+.economy-proposal-team .economy-proposal-icon { color: #c4b5fd; background: color-mix(in srgb, #8b5cf6 18%, var(--df-surface-2)); }
+.economy-proposal-status { gap: 4px; color: var(--df-text-muted); font-size: 11px; }
+.economy-proposal-close { border: 0; padding: 4px 6px; color: var(--df-text-muted); background: transparent; cursor: pointer; }
+.economy-proposal-close:hover { color: var(--df-text); }
+.economy-proposal-description { margin: 0; line-height: 1.65; color: var(--df-text); }
+.economy-proposal-help { gap: 6px; margin: 0; color: var(--df-text-muted); font-size: 12px; line-height: 1.5; }
+.economy-proposal-actions { justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.economy-proposal-actions button { min-height: 32px; }
+.economy-proposal-safe-hint { display: none; }
+.economy-proposal-rewards { margin: 0; color: var(--df-success); font-size: 13px; }
+.economy-contributor-list small.approved { color: var(--df-success); }
+
+@media (max-width: 640px) {
+  .economy-proposal-card { padding: 12px; }
+  .economy-proposal-actions { justify-content: stretch; }
+  .economy-proposal-actions button { flex: 1 1 auto; }
+}
+
 .economy-contributor-list {
   display: grid;
   gap: 7px;
