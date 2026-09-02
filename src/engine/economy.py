@@ -1026,11 +1026,7 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
         )
     ]
     for transaction in reversed(quote_origin_transactions):
-        _undo_transaction_state(
-            transaction,
-            get_sheet=instance.get_character_sheet,
-            set_sheet=instance.set_character_sheet,
-        )
+        _undo_live_transaction_delta(instance, transaction)
 
     # A settlement-only rollback keeps an earlier valid offer actionable. Do
     # not resurrect proposals whose origin round is itself being erased.
@@ -1097,33 +1093,14 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
     _advance_revision(instance)
 
 
-def _undo_transaction_state(
+def _undo_transaction_rewards(
     transaction: dict[str, Any],
     *,
     get_sheet: Callable[[str], Any],
     set_sheet: Callable[[str, dict[str, Any]], None],
 ) -> None:
-    """Restore one committed settlement's before-images onto character sheets.
+    """Remove only the reward entries one committed settlement introduced."""
 
-    Shared by snapshot reconciliation and quote-origin rollback so both paths
-    undo balance entries and reward deltas identically.
-    """
-
-    for entry in transaction.get("entries", []):
-        if not isinstance(entry, dict):
-            continue
-        account = str(entry.get("account") or "")
-        if not account.startswith("character:") or entry.get("before") is None:
-            continue
-        uid = account.removeprefix("character:")
-        target = get_sheet(uid)
-        if not isinstance(target, dict):
-            continue
-        before = int(entry.get("before", 0) or 0)
-        if isinstance(target.get("currency"), dict):
-            target["currency"] = {**target["currency"], "amount": before}
-        target["gold"] = before
-        set_sheet(uid, target)
     for reward_snapshot in transaction.get("reward_snapshots", []):
         if not isinstance(reward_snapshot, dict):
             continue
@@ -1141,6 +1118,73 @@ def _undo_transaction_state(
                 continue
             target[key] = _remove_reward_delta(current, before[key], after[key])
             set_sheet(uid, target)
+
+
+def _undo_transaction_before_images(
+    transaction: dict[str, Any],
+    *,
+    get_sheet: Callable[[str], Any],
+    set_sheet: Callable[[str, dict[str, Any]], None],
+) -> None:
+    """Restore one settlement's absolute before-images.
+
+    Valid for snapshot reconciliation, which rebuilds historical state by
+    undoing settlements in strict reverse commit order.  Not valid for
+    selective single-transaction reversal, where writing the before-image
+    would erase later unrelated activity.
+    """
+
+    for entry in transaction.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        account = str(entry.get("account") or "")
+        if not account.startswith("character:") or entry.get("before") is None:
+            continue
+        uid = account.removeprefix("character:")
+        target = get_sheet(uid)
+        if not isinstance(target, dict):
+            continue
+        before = int(entry.get("before", 0) or 0)
+        if isinstance(target.get("currency"), dict):
+            target["currency"] = {**target["currency"], "amount": before}
+        target["gold"] = before
+        set_sheet(uid, target)
+    _undo_transaction_rewards(transaction, get_sheet=get_sheet, set_sheet=set_sheet)
+
+
+def _undo_live_transaction_delta(instance: Any, transaction: dict[str, Any]) -> None:
+    """Selectively reverse one committed settlement against the live state.
+
+    Quote-origin rollback removes one earlier transaction while preserving
+    later unrelated ones, so every character currency entry applies its
+    inverse delta (``-delta``) to the current balance instead of writing the
+    absolute before-image.  System/world balancing entries have no character
+    sheet and remain audit-only.
+    """
+
+    for entry in transaction.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        account = str(entry.get("account") or "")
+        if not account.startswith("character:"):
+            continue
+        try:
+            delta = int(entry.get("delta", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if delta == 0:
+            continue
+        uid = account.removeprefix("character:")
+        sheet = instance.get_character_sheet(uid)
+        if not isinstance(sheet, dict) or not sheet:
+            continue
+        apply_currency_delta(sheet, -delta)
+        instance.set_character_sheet(uid, sheet)
+    _undo_transaction_rewards(
+        transaction,
+        get_sheet=instance.get_character_sheet,
+        set_sheet=instance.set_character_sheet,
+    )
 
 
 def reconcile_rollback_snapshot(
@@ -1179,7 +1223,7 @@ def reconcile_rollback_snapshot(
     # earlier transaction after a later one reconstructs the round's original
     # balance and correctly removes stacked rewards.
     for transaction in reversed(transactions):
-        _undo_transaction_state(
+        _undo_transaction_before_images(
             transaction,
             get_sheet=lambda uid: (
                 reconciled.get(uid) if isinstance(reconciled.get(uid), dict) else None

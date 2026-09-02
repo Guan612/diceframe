@@ -590,6 +590,81 @@ def test_quote_origin_rollback_reverses_late_confirmed_purchase() -> None:
     assert quote["id"]
 
 
+def test_quote_origin_rollback_preserves_later_unrelated_currency_change() -> None:
+    """选择性回滚只撤销目标交易：30 → 买-5 → 无关-2 → 回滚 R5 应为 28。
+
+    反向 delta 叠加到当前余额，而不是写绝对 before 快照——否则后发生的
+    合法交易效果会被一并抹掉。
+    """
+
+    instance = _instance()
+    instance.round_number = 5
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    assert record_purchase_quote(instance, data, "通行证售价5金币。")
+    quote = instance.economy["purchase_quotes"][0]
+    instance.round_number = 6
+    proposal = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid="gm",
+        recipient_uid="gm",
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+        source="server_purchase_quote",
+        source_ref=f"purchase_quote:{quote['id']}",
+        approval_policy="payer",
+        quote_id=quote["id"],
+    )
+    link_purchase_quote_proposal(instance, quote["id"], proposal["id"])
+    assert close_purchase_quote(
+        instance, quote["id"], status="confirmed", resolution_code="CONFIRMED_BY_PAYER",
+    ) is not None
+    settled = resolve_proposal(
+        instance,
+        proposal["id"],
+        actor_uid="gm",
+        accepted=True,
+        grant_reward=_grant_key_item_reward,
+    )
+    assert settled["ok"] is True
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 25
+
+    # R7：与报价无关的合法支出。
+    instance.round_number = 7
+    unrelated = queue_proposal(
+        instance,
+        kind="fee",
+        payer_uid="gm",
+        amount=2,
+        reason="客栈住宿",
+    )
+    unrelated_settled = resolve_proposal(
+        instance, unrelated["id"], actor_uid="gm", accepted=True,
+    )
+    assert unrelated_settled["ok"] is True
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 23
+
+    reverse_round_economy(instance, 5)
+
+    # 只撤销目标购买：23 + 5 = 28，不是绝对 before 的 30。
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 28
+    assert proposal["status"] == "reversed"
+    assert quote["status"] == "superseded"
+    assert quote["resolution_code"] == "ORIGIN_ROLLED_BACK"
+    assert not any(
+        item.get("name") == "通行证"
+        for item in instance.get_character_sheet("gm").get("key_items", [])
+    )
+    # R7 无关交易保持已结算，未受波及。
+    assert unrelated["status"] == "committed"
+    statuses = {
+        transaction["id"]: transaction["status"]
+        for transaction in instance.economy["transactions"]
+    }
+    assert statuses[settled["transaction"]["id"]] == "reversed"
+    assert statuses[unrelated_settled["transaction"]["id"]] == "committed"
+
+
 def test_quote_origin_rollback_reverses_narration_confirmed_purchase() -> None:
     """叙事确认路径必须与显式路径共享同一 origin 回滚语义。"""
 
