@@ -14,6 +14,8 @@ from aiohttp.test_utils import TestClient, TestServer
 
 import web_server
 from src.commands.economy_effects import (
+    record_merchant_offer,
+    record_purchase_clarification,
     record_purchase_quote,
     settle_purchase_quote,
 )
@@ -261,6 +263,48 @@ async def test_quote_confirm_rejects_stale_run(web_api):
         assert stale.status == 409
         assert (await stale.json())["code"] == "STALE_RUN"
         assert not instance.economy.get("proposals")
+
+
+@pytest.mark.asyncio
+async def test_game_detail_projects_offers_and_clarifications(web_api):
+    """商家报价全桌可见；澄清只对 GM 和对应付款人可见。"""
+
+    api, _lorebook, registry, _llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "报价与澄清投影",
+        players=[
+            {"character_name": "付款人", "attributes": {"str": 10}, "gold": 30},
+            {"character_name": "旁观者", "attributes": {"str": 10}, "gold": 30},
+        ],
+    )
+    game_key = created["game_key"]
+    instance = registry.get(api._parse_key(game_key))
+    payer_uid, other_uid = list(instance.players)
+    record_merchant_offer(instance, item_display="矮人精钢剑", amount=30)
+    record_purchase_clarification(
+        instance, reason="OFFER_PRICE_CONFLICT", payer_uid=payer_uid,
+        item_candidates=["矮人精钢剑"], amount_candidates=[20, 30],
+    )
+
+    app = _quote_app(api, registry)
+    async with TestClient(TestServer(app)) as client:
+        payer_view = await client.get(
+            f"/api/games/{game_key}", params={"user": payer_uid, "share": "1"},
+        )
+        body = await payer_view.json()
+        assert [offer["item_display"] for offer in body["merchant_offers"]] == ["矮人精钢剑"]
+        assert body["merchant_offers"][0]["amount"] == 30
+        assert len(body["clarifications"]) == 1
+        assert body["clarifications"][0]["reason"] == "OFFER_PRICE_CONFLICT"
+
+        other_view = await client.get(
+            f"/api/games/{game_key}", params={"user": other_uid, "share": "1"},
+        )
+        other_body = await other_view.json()
+        # 报价是世界事实，全桌可见；他人澄清不可见。
+        assert len(other_body["merchant_offers"]) == 1
+        assert other_body["clarifications"] == []
 
 
 @pytest.mark.asyncio

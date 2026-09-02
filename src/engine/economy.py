@@ -23,6 +23,7 @@ MAX_EXTERNAL_EFFECT_DELIVERIES = 50
 # (or reopened by a settlement-only rollback).  Everything else is terminal and
 # must never be re-resolved.
 PAYER_ECONOMY_KINDS = {"payment", "purchase", "fee", "transfer"}
+VALID_AMOUNT_SOURCES = {"", "narration", "player_action", "merchant_offer"}
 PROPOSAL_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"committed", "declined", "cancelled", "rejected", "superseded"}),
     "committed": frozenset({"reversed", "pending"}),
@@ -538,6 +539,7 @@ def queue_proposal(
     contributors: list[dict[str, Any]] | None = None,
     visibility: str = "private",
     quote_id: str = "",
+    amount_source: str = "",
 ) -> dict[str, Any]:
     """Queue one idempotent proposal; no balance is changed here."""
 
@@ -553,6 +555,10 @@ def queue_proposal(
         # Fail closed at the proposal layer: a payer outside the current game
         # can never be settled, so the offer must not become pending.
         raise ValueError("economy payer is not part of the current game")
+    if str(amount_source) not in VALID_AMOUNT_SOURCES:
+        # The audit field records which evidence produced the amount; an
+        # unknown value would make that provenance untrustworthy.
+        raise ValueError("unsupported economy amount source")
     normalized_contributors = deepcopy(list(contributors or []))
     if approval_policy == "all_contributors":
         contributor_uids = [
@@ -593,6 +599,9 @@ def queue_proposal(
         # Origin linkage for offers converted from a persisted purchase quote;
         # empty for proposals that did not come from a quote.
         "quote_id": str(quote_id),
+        # Audit of which evidence produced the amount (server guard paths
+        # only): narration / player_action / merchant_offer.
+        "amount_source": str(amount_source)[:40],
         "approval_policy": str(approval_policy),
         "rewards": deepcopy(list(rewards or [])),
         "contributors": normalized_contributors,
@@ -952,6 +961,31 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
             proposal_id = str(quote.get("proposal_id") or "")
             if proposal_id:
                 quote_origin_proposal_ids.add(proposal_id)
+
+    # Merchant offers and clarifications are world-side purchase context, not
+    # decisions.  Erasing their origin round retires them the same way so a
+    # rollback never leaves ghost quotes or ghost intents actionable.
+    for collection_name in ("merchant_offers", "clarifications"):
+        entries = instance.economy.get(collection_name, [])
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("status") != "open":
+                continue
+            try:
+                origin_round = int(entry.get("origin_round", -1))
+            except (TypeError, ValueError):
+                origin_round = -1
+            if origin_round != rollback_round:
+                continue
+            if (
+                entry.get("run_id")
+                and str(entry.get("run_id")) != str(instance.run_id)
+            ):
+                continue
+            entry["status"] = "superseded"
+            entry["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            entry["resolution_code"] = "ORIGIN_ROLLED_BACK"
     proposals = [
         item for item in instance.economy.get("proposals", [])
         if isinstance(item, dict)

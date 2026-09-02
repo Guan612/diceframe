@@ -327,7 +327,7 @@ class GameLifecycle:
             currency_labels=currency_labels,
         )
         dropped_purchase_items = discard_unbacked_purchase_items(
-            start_data, narration, currency_labels=currency_labels,
+            instance, start_data, narration, currency_labels=currency_labels,
         )
         if dropped_purchase_items:
             narration = f"{narration}\n\n{unbacked_purchase_notice(instance.language)}".strip()

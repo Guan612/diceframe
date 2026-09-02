@@ -654,7 +654,7 @@ class RoundProcessor:
             dropped_purchase_items, purchase_was_ambiguous = 0, False
         if not settled_quote and not purchase_was_ambiguous:
             dropped_purchase_items += discard_unbacked_purchase_items(
-                data, response.narration, currency_labels=currency_labels,
+                instance, data, response.narration, currency_labels=currency_labels,
             )
         if dropped_purchase_items:
             response.narration = (

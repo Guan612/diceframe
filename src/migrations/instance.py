@@ -203,6 +203,8 @@ def rebind_imported_game_state_payload(
             "external_effects_outbox",
             "outcomes",
             "purchase_quotes",
+            "merchant_offers",
+            "clarifications",
         ):
             for item in economy.get(collection_name, []) or []:
                 if isinstance(item, dict):
