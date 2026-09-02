@@ -72,6 +72,20 @@ def test_conditional_narrative_reward_is_not_queued_before_task_completion() -> 
     assert data["state_update"]["economy_proposals"] == []
 
 
+def test_reward_without_completion_evidence_is_not_queued() -> None:
+    instance = _instance()
+    data = {
+        "state_update": {
+            "economy_proposals": [{
+                "kind": "reward", "uid": "gm", "amount": 15,
+                "reason": "任务报酬",
+            }],
+        },
+    }
+    assert discard_unearned_reward_proposals(instance, data, "药剂师向你说明报酬安排。") == 1
+    assert data["state_update"]["economy_proposals"] == []
+
+
 def test_reward_is_eligible_when_same_turn_marks_quest_completed() -> None:
     instance = _instance()
     data = {

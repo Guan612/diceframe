@@ -39,6 +39,10 @@ _CONDITIONAL_REWARD_RE = re.compile(
     r"(?:要是|如果|若是|完成后|之后再|等你|待你|才能|才会|以后|将会|\bif\b|\bonce\b|\bafter\b|\bwhen\b|\u3067\u304d\u305f\u3089|\u7d42\u308f\u3063\u305f\u3089)",
     re.IGNORECASE,
 )
+_COMPLETION_EVIDENCE_RE = re.compile(
+    r"(?:完成|成功|击败|打倒|交付|归还|回收|达成|兑现|领取|earned|completed|complete|defeated|delivered|recovered|claimed|critical success|大成功)",
+    re.IGNORECASE,
+)
 
 
 def _meaningful(value: Any) -> bool:
@@ -81,7 +85,8 @@ def discard_unearned_reward_proposals(
     if not isinstance(proposals, list) or not proposals:
         return 0
     rewards = [item for item in proposals if isinstance(item, dict) and item.get("kind") == "reward"]
-    if not rewards or not _CONDITIONAL_REWARD_RE.search(str(narration or "")):
+    narration_text = str(narration or "")
+    if not rewards:
         return 0
 
     completed_titles: set[str] = set()
@@ -110,10 +115,13 @@ def discard_unearned_reward_proposals(
         if any(title in reason or reason in title for title in completed_titles):
             kept.append(proposal)
             continue
-        # Critical-success and similar immediate mechanical rewards are not
-        # future task promises, even if the surrounding narration has a
-        # conditional phrase elsewhere.
-        if re.search(r"大成功|暴击|关键成功|critical|exceptional|milestone", reason, re.IGNORECASE):
+        # A reward needs affirmative completion evidence in the same turn. A
+        # conditional/promise phrase takes precedence, even if the model also
+        # mentions a future payment elsewhere in the paragraph.
+        if (
+            _COMPLETION_EVIDENCE_RE.search(narration_text)
+            and not _CONDITIONAL_REWARD_RE.search(narration_text)
+        ):
             kept.append(proposal)
             continue
         dropped += 1
