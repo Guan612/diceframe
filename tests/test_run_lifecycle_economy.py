@@ -18,7 +18,10 @@ from src.engine.economy import (
     reverse_round_economy,
     resolve_proposal,
 )
-from src.commands.economy_effects import guard_unbacked_payment_narration
+from src.commands.economy_effects import (
+    discard_unearned_reward_proposals,
+    guard_unbacked_payment_narration,
+)
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
 from src.llm.context_builder import build_context
@@ -50,6 +53,40 @@ def test_only_plain_personal_purchase_is_nonblocking() -> None:
     )
     assert is_nonblocking_personal_purchase(instance, purchase)
     assert blocking_economy_proposals(instance) == []
+
+
+def test_conditional_narrative_reward_is_not_queued_before_task_completion() -> None:
+    instance = _instance()
+    data = {
+        "state_update": {
+            "economy_proposals": [{
+                "kind": "reward", "uid": "gm", "amount": 15,
+                "reason": "完成药剂师委托的报酬",
+            }],
+        },
+    }
+    dropped = discard_unearned_reward_proposals(
+        instance, data, "你要是能帮我清干净，15 金币一个子儿不少。",
+    )
+    assert dropped == 1
+    assert data["state_update"]["economy_proposals"] == []
+
+
+def test_reward_is_eligible_when_same_turn_marks_quest_completed() -> None:
+    instance = _instance()
+    data = {
+        "state_update": {
+            "economy_proposals": [{
+                "kind": "reward", "uid": "gm", "amount": 15,
+                "reason": "完成药剂师委托的报酬",
+            }],
+        },
+        "plot_update": {"quests": [{"title": "药剂师委托", "status": "completed"}]},
+    }
+    assert discard_unearned_reward_proposals(
+        instance, data, "如果你完成了委托，药剂师会支付报酬；但本轮已确认任务完成。",
+    ) == 0
+    assert len(data["state_update"]["economy_proposals"]) == 1
     assert not has_blocking_economy_decision(instance)
 
     team = queue_proposal(

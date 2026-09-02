@@ -35,6 +35,10 @@ _COMPLETED_PAYMENT_RE = re.compile(
     r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+gold",
     re.IGNORECASE,
 )
+_CONDITIONAL_REWARD_RE = re.compile(
+    r"(?:要是|如果|若是|完成后|之后再|等你|待你|才能|才会|以后|将会|\bif\b|\bonce\b|\bafter\b|\bwhen\b|\u3067\u304d\u305f\u3089|\u7d42\u308f\u3063\u305f\u3089)",
+    re.IGNORECASE,
+)
 
 
 def _meaningful(value: Any) -> bool:
@@ -53,6 +57,76 @@ def has_economy_proposal(data: dict[str, Any]) -> bool:
         state_update.get("pending_payments")
         or state_update.get("economy_proposals")
     )
+
+
+def discard_unearned_reward_proposals(
+    instance: Any,
+    data: dict[str, Any],
+    narration: str,
+) -> int:
+    """Drop rewards that are still conditional promises, before queueing them.
+
+    ``GOLD`` is intentionally still a proposal, but a proposal must represent
+    an earned event. A common model failure is to emit GOLD while an NPC is
+    merely promising payment after a task is completed. Such a reward is kept
+    in the prose but cannot enter the authoritative economy until a later turn
+    records completion. Explicit same-turn or previously completed quest state
+    is accepted as the completion evidence.
+    """
+
+    state_update = data.get("state_update")
+    if not isinstance(state_update, dict):
+        return 0
+    proposals = state_update.get("economy_proposals")
+    if not isinstance(proposals, list) or not proposals:
+        return 0
+    rewards = [item for item in proposals if isinstance(item, dict) and item.get("kind") == "reward"]
+    if not rewards or not _CONDITIONAL_REWARD_RE.search(str(narration or "")):
+        return 0
+
+    completed_titles: set[str] = set()
+    plot_update = data.get("plot_update")
+    if isinstance(plot_update, dict):
+        for quest in plot_update.get("quests", []):
+            if isinstance(quest, dict) and str(quest.get("status") or "").casefold() in {"completed", "complete", "已完成", "完成", "成功"}:
+                title = str(quest.get("title") or "").strip().casefold()
+                if title:
+                    completed_titles.add(title)
+    tracker = getattr(instance, "plot_tracker", None)
+    for quest in getattr(tracker, "quests", {}).values() if tracker is not None else []:
+        status = getattr(getattr(quest, "status", None), "value", getattr(quest, "status", ""))
+        if str(status).casefold() in {"completed", "complete", "已完成", "完成", "成功"}:
+            title = str(getattr(quest, "title", "") or "").strip().casefold()
+            if title:
+                completed_titles.add(title)
+
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for proposal in proposals:
+        if proposal not in rewards:
+            kept.append(proposal)
+            continue
+        reason = str(proposal.get("reason") or "").casefold()
+        if any(title in reason or reason in title for title in completed_titles):
+            kept.append(proposal)
+            continue
+        # Critical-success and similar immediate mechanical rewards are not
+        # future task promises, even if the surrounding narration has a
+        # conditional phrase elsewhere.
+        if re.search(r"大成功|暴击|关键成功|critical|exceptional|milestone", reason, re.IGNORECASE):
+            kept.append(proposal)
+            continue
+        dropped += 1
+    state_update["economy_proposals"] = kept
+    return dropped
+
+
+def unearned_reward_notice(language: str) -> str:
+    return localized_text(language, {
+        "en": "Reward pending: the story described a conditional promise, so no reward proposal was created until the task is confirmed complete.",
+        "zh-CN": "奖励待确认：当前剧情只是条件性承诺，任务确认完成前不会生成奖励提案。",
+        "ja": "報酬保留中：物語が条件付きの約束を示しているため、任務の完了が確認されるまで報酬提案は作成されません。",
+    })
 
 
 def guard_unbacked_payment_narration(
