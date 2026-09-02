@@ -372,6 +372,77 @@ def pending_proposals(instance: Any) -> list[dict[str, Any]]:
     ]
 
 
+def pending_economy_proposals(instance: Any) -> list[dict[str, Any]]:
+    """Return every pending proposal, including legacy payment projections.
+
+    Legacy saves may still carry entries only in ``pending_payments``.  They
+    intentionally remain visible to the policy layer and are treated as
+    blocking when their semantics cannot be proven safe.
+    """
+
+    proposals = pending_proposals(instance)
+    known_ids = {str(item.get("id") or "") for item in proposals}
+    for item in (getattr(instance, "pending_payments", []) or []):
+        if not isinstance(item, dict) or item.get("status") != "pending":
+            continue
+        proposal_id = str(item.get("id") or "")
+        if proposal_id and proposal_id not in known_ids:
+            proposals.append(item)
+            known_ids.add(proposal_id)
+    return proposals
+
+
+def is_nonblocking_personal_purchase(
+    instance: Any,
+    proposal: dict[str, Any],
+) -> bool:
+    """Whether a purchase is safe to leave pending while the table continues.
+
+    This is deliberately a narrow, fail-closed classification.  Only a
+    payer-approved purchase that grants an item to that same payer and has no
+    deferred narrative/external effect may cross a round boundary.
+    """
+
+    if not isinstance(proposal, dict):
+        return False
+    if proposal.get("status") != "pending" or proposal.get("run_id") != instance.run_id:
+        return False
+    if str(proposal.get("kind") or "") != "purchase":
+        return False
+    if str(proposal.get("approval_policy") or "") != "payer":
+        return False
+    payer_uid = str(proposal.get("payer_uid") or proposal.get("uid") or "")
+    recipient_uid = str(proposal.get("recipient_uid") or payer_uid)
+    if not payer_uid or recipient_uid != payer_uid:
+        return False
+    contributors = proposal.get("contributors")
+    if contributors:
+        return False
+    rewards = proposal.get("rewards")
+    if not isinstance(rewards, list) or not rewards:
+        return False
+    if str(proposal.get("effect_group_id") or ""):
+        return False
+    # These fields indicate a transaction-dependent result.  Unknown fields
+    # are not rejected, but any known external/deferred payload fails closed.
+    for key in (
+        "deferred_effects", "memory_delta", "scene_image_prompt",
+        "quest", "plot", "private_info", "quick_actions", "narrative_effects",
+    ):
+        if proposal.get(key):
+            return False
+    return True
+
+
+def blocking_economy_proposals(instance: Any) -> list[dict[str, Any]]:
+    """Return pending proposals that must hold the narrative barrier."""
+
+    return [
+        proposal for proposal in pending_economy_proposals(instance)
+        if not is_nonblocking_personal_purchase(instance, proposal)
+    ]
+
+
 def pending_effect_groups(instance: Any) -> list[dict[str, Any]]:
     """Return unresolved effect groups owned by the current run."""
 
@@ -388,18 +459,24 @@ def pending_effect_groups(instance: Any) -> list[dict[str, Any]]:
 
 
 def has_pending_economy_decision(instance: Any) -> bool:
-    """Whether narrative progression must wait for economy settlement."""
+    """Whether any economy decision remains unresolved (compatibility API)."""
 
-    legacy_pending = any(
-        isinstance(item, dict) and item.get("status") == "pending"
-        for item in (getattr(instance, "pending_payments", []) or [])
-    )
     return bool(
-        pending_proposals(instance)
+        pending_economy_proposals(instance)
         or pending_effect_groups(instance)
         or pending_memory_deliveries(instance)
         or pending_memory_reversals(instance)
-        or legacy_pending
+    )
+
+
+def has_blocking_economy_decision(instance: Any) -> bool:
+    """Whether unresolved economy state must stop narrative progression."""
+
+    return bool(
+        blocking_economy_proposals(instance)
+        or pending_effect_groups(instance)
+        or pending_memory_deliveries(instance)
+        or pending_memory_reversals(instance)
     )
 
 

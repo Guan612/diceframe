@@ -206,6 +206,32 @@ async def test_pending_economy_blocks_next_round_before_recording_action() -> No
 
 
 @pytest.mark.asyncio
+async def test_personal_purchase_can_remain_pending_without_blocking_other_player() -> None:
+    instance = FakeInstance()
+    api = FakeApi(instance)
+    purchase = {
+        "id": "purchase-pending",
+        "run_id": instance.run_id,
+        "status": "pending",
+        "kind": "purchase",
+        "approval_policy": "payer",
+        "payer_uid": "gm",
+        "recipient_uid": "gm",
+        "rewards": [{"name": "药水", "category": "consumable"}],
+        "contributors": [],
+        "visibility": "private",
+    }
+    instance.economy["proposals"].append(purchase)
+    instance.pending_payments.append(purchase)
+
+    result = await submit_action(api.dependencies, "game", "p2", "调查房门")
+
+    assert result["status"] == 200
+    assert instance.added and instance.added[0][0] == "p2"
+    assert purchase["status"] == "pending"
+
+
+@pytest.mark.asyncio
 async def test_submit_action_records_natural_language_without_player_dice_gate() -> None:
     instance = FakeInstance()
     api = FakeApi(instance)

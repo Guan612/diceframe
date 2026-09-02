@@ -15,6 +15,18 @@ def command_example(command: str = "", *, command_prefix: str = "@我") -> str:
 
 
 def format_action_result(result: dict[str, Any], language: str = "zh-CN") -> str:
+    if str(result.get("error_code") or "") == "ECONOMY_DECISION_PENDING":
+        if result.get("pending_payments"):
+            return localized_text(language, {
+                "en": "An economy proposal is waiting for your decision. Send “pay” to review it.",
+                "zh-CN": "当前有经济提案待确认，请发送“支付”查看。",
+                "ja": "経済提案の確認待ちです。「支払い」で確認してください。",
+            })
+        return localized_text(language, {
+            "en": "The game is waiting for the GM or another contributor to resolve an economy proposal.",
+            "zh-CN": "当前正在等待 GM 或其他参与者处理经济提案。",
+            "ja": "GM またはほかの参加者による経済提案の処理を待っています。",
+        })
     lines = []
     roll = result.get("roll") or {}
     if roll:

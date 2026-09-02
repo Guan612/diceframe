@@ -10,7 +10,7 @@ import re
 
 from aiohttp import web
 
-from src.engine.economy import has_pending_economy_decision
+from src.engine.economy import has_blocking_economy_decision
 from src.engine.game_instance import GameState
 from src.llm.parser import sanitize_narration
 from src.webui.connection_pool import ConnectionPool
@@ -93,7 +93,7 @@ async def sse_stream_action(request: web.Request) -> web.StreamResponse:
     if inst.is_dead(user_id):
         return web.json_response({"error": "角色已死亡，无法提交行动"}, status=403)
     await api.drain_economy_outbox(gk)
-    if has_pending_economy_decision(inst):
+    if has_blocking_economy_decision(inst):
         return web.json_response(
             economy_decision_pending_payload(inst, user_id),
             status=409,

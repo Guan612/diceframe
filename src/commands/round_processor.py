@@ -52,7 +52,7 @@ from src.commands.tag_summary import summarize_tags
 from src.engine.constants import COMBAT_INTENT_KEYWORDS
 from src.engine.economy import (
     economy_revision,
-    has_pending_economy_decision,
+    has_blocking_economy_decision,
     queue_effect_group,
 )
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
@@ -297,7 +297,7 @@ class RoundProcessor:
         instance = self.registry.get(instance.game_key)
         if not instance or instance.state != GameState.ACTIVE_JUDGMENT:
             return "", None
-        if has_pending_economy_decision(instance):
+        if has_blocking_economy_decision(instance):
             logger.info("等待经济提案结算，暂不生成叙事: %s", instance.game_key)
             return "", None
         await self.prepare_round_checks_ai(instance)

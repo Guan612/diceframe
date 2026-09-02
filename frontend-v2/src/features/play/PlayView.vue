@@ -41,7 +41,7 @@ import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
 import { fetchRulesetAvailableActions } from '@/api/rulesets'
 import { currencyLabel } from '@/utils/ruleSchema'
-import { isEconomyProposalActionable, nextEconomyProposal } from '@/features/play/economyPrompts'
+import { isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
 
 defineOptions({ name: 'PlayView' })
 
@@ -671,6 +671,17 @@ function postponePendingPay() {
   pendingPay.value = null
 }
 
+function pendingEconomyDismissLabel(proposal: PendingPayment): string {
+  return isNonBlockingPersonalPurchase(proposal) ? t('economyPostpone') : t('economyViewLater')
+}
+
+function pendingEconomyHelp(proposal: PendingPayment): string {
+  if (isNonBlockingPersonalPurchase(proposal)) return t('economyPersonalPurchaseHelp')
+  return proposal.kind === 'reward'
+    ? t('economyRewardHelp')
+    : isTeamPayment(proposal) ? t('economyTeamPaymentHelp') : t('gmPaymentHelp')
+}
+
 function reopenPendingEconomy() {
   const proposal = actionableEconomyProposals.value[0]
   if (!proposal) return
@@ -1295,13 +1306,9 @@ onBeforeUnmount(() => {
       <p v-if="pendingPay.rewards?.length">
         {{ t('gmPaymentRewards', { items: pendingPay.rewards.map(item => item.name).join('、') }) }}
       </p>
-      <p class="muted">{{ pendingPay.kind === 'reward'
-        ? t('economyRewardHelp')
-        : isTeamPayment(pendingPay)
-          ? t('economyTeamPaymentHelp')
-          : t('gmPaymentHelp') }}</p>
+      <p class="muted">{{ pendingEconomyHelp(pendingPay) }}</p>
       <template #actions>
-        <button @click="postponePendingPay">{{ t('later') }}</button>
+        <button @click="postponePendingPay">{{ pendingEconomyDismissLabel(pendingPay) }}</button>
         <button class="danger" @click="resolvePay(false)">{{ t('reject') }}</button>
         <button class="primary" @click="resolvePay(true)">{{ pendingPay.kind === 'reward' ? t('economyApproveReward') : t('confirmPurchase') }}</button>
       </template>

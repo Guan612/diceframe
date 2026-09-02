@@ -1067,18 +1067,18 @@ class GameInstance:
     async def advance_round(self) -> bool:
         """显式推进回合。未行动的存活玩家标记为已就绪。"""
         async with self._lock:
-            from src.engine.economy import has_pending_economy_decision
+            from src.engine.economy import has_blocking_economy_decision
 
-            if has_pending_economy_decision(self):
+            if has_blocking_economy_decision(self):
                 return False
             return self._do_advance_locked()
 
     async def try_advance(self) -> bool:
         """原子推进：检查条件 + 推进在同一个锁内完成，消除 TOCTOU 竞态。"""
         async with self._lock:
-            from src.engine.economy import has_pending_economy_decision
+            from src.engine.economy import has_blocking_economy_decision
 
-            if has_pending_economy_decision(self):
+            if has_blocking_economy_decision(self):
                 return False
             if self.state != GameState.ACTIVE_ACTION:
                 return False

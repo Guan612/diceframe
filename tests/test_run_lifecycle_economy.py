@@ -7,6 +7,9 @@ from dataclasses import replace
 import pytest
 
 from src.engine.economy import (
+    blocking_economy_proposals,
+    has_blocking_economy_decision,
+    is_nonblocking_personal_purchase,
     pending_memory_deliveries,
     pending_memory_reversals,
     queue_effect_group,
@@ -30,6 +33,47 @@ def _instance() -> GameInstance:
         "p2": {"character_name": "P2", "character_sheet": {"gold": 20, "currency": {"amount": 20}}},
     }
     return instance
+
+
+def test_only_plain_personal_purchase_is_nonblocking() -> None:
+    instance = _instance()
+    purchase = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid="gm",
+        recipient_uid="gm",
+        amount=5,
+        rewards=[{"name": "药水", "category": "consumable"}],
+    )
+    assert is_nonblocking_personal_purchase(instance, purchase)
+    assert blocking_economy_proposals(instance) == []
+    assert not has_blocking_economy_decision(instance)
+
+    team = queue_proposal(
+        instance,
+        kind="fee",
+        amount=10,
+        approval_policy="all_contributors",
+        contributors=[{"uid": "gm", "amount": 5}, {"uid": "p2", "amount": 5}],
+    )
+    assert not is_nonblocking_personal_purchase(instance, team)
+    assert team in blocking_economy_proposals(instance)
+    assert has_blocking_economy_decision(instance)
+
+
+def test_personal_purchase_with_effect_group_remains_blocking() -> None:
+    instance = _instance()
+    purchase = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid="gm",
+        recipient_uid="gm",
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+    )
+    queue_effect_group(instance, [purchase], {"state_update": {"scene_change": "城门内"}})
+    assert not is_nonblocking_personal_purchase(instance, purchase)
+    assert has_blocking_economy_decision(instance)
 
 
 def test_save_migration_assigns_stable_run_and_imports_pending_payment() -> None:

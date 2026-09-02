@@ -349,6 +349,18 @@ async def build_context(
     economy = getattr(instance, "economy", {})
     outcomes = economy.get("outcomes", []) if isinstance(economy, dict) else []
     proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
+    pending_personal_purchase = any(
+        isinstance(item, dict)
+        and item.get("status") == "pending"
+        and str(item.get("kind") or "") == "purchase"
+        and str(item.get("approval_policy") or "") == "payer"
+        and str(item.get("payer_uid") or item.get("uid") or "")
+        == str(item.get("recipient_uid") or item.get("payer_uid") or item.get("uid") or "")
+        and isinstance(item.get("rewards"), list)
+        and bool(item.get("rewards"))
+        and not item.get("effect_group_id")
+        for item in (proposals or [])
+    )
     recent_economy = []
     for item in list(outcomes or [])[-8:]:
         if (
@@ -416,6 +428,14 @@ async def build_context(
         )
         parts.append(f"{heading}\n{economy_text}")
         sec_idx["economy"] = len(parts) - 1
+    if pending_personal_purchase:
+        pending_purchase_note = localized_text(language, {
+            "en": "Pending personal purchase: not confirmed, not charged, and not owned or usable yet.",
+            "zh-CN": "待确认的个人购买：尚未确认、尚未扣款，商品尚未拥有且不可使用。",
+            "ja": "保留中の個人購入：未確認・未決済で、アイテムはまだ所有・使用できません。",
+        })
+        parts.append(pending_purchase_note)
+        sec_idx["economy_pending"] = len(parts) - 1
 
     # 4. 长期记忆召回（召回源：玩家消息 + 最近 3 轮 GM 回复，提高命中率）
     if memory_store:

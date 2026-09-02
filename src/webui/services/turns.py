@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from src.engine.economy import (
-    has_pending_economy_decision,
+    has_blocking_economy_decision,
+    blocking_economy_proposals,
     pending_effect_groups,
     pending_memory_deliveries,
     pending_memory_reversals,
-    pending_proposals,
 )
 from src.engine.game_instance import GameState
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
@@ -86,7 +86,7 @@ def economy_decision_pending_payload(
 ) -> dict[str, Any]:
     """Build a non-leaking progression barrier response for one viewer."""
 
-    unresolved = pending_proposals(instance)
+    unresolved = blocking_economy_proposals(instance)
     visible = [
         proposal
         for proposal in unresolved
@@ -259,7 +259,7 @@ async def submit_action(
     if instance.is_dead(actor_uid):
         return _result({"error": "角色已死亡，无法提交行动"}, 403)
     await _retry_external_economy_effects(dependencies, instance)
-    if has_pending_economy_decision(instance):
+    if has_blocking_economy_decision(instance):
         return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     if instance.state == GameState.ACTIVE_JUDGMENT:
         return _result({"error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing"}, 409)
@@ -388,7 +388,7 @@ async def resolve_luck_and_continue(
     if not instance:
         return _result({"ok": False, "error": "游戏不存在"}, 404)
     await _retry_external_economy_effects(dependencies, instance)
-    if has_pending_economy_decision(instance):
+    if has_blocking_economy_decision(instance):
         return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     narration, _ = await _process_round(
         dependencies, instance, on_delta=on_delta, on_reset=on_reset,
@@ -419,7 +419,7 @@ async def advance_round(
     if actor_uid != instance.gm_uid:
         return _result({"ok": False, "error": "仅 GM 可推进"}, 403)
     await _retry_external_economy_effects(dependencies, instance)
-    if has_pending_economy_decision(instance):
+    if has_blocking_economy_decision(instance):
         return _result(economy_decision_pending_payload(instance, actor_uid), 409)
 
     if instance.state == GameState.ACTIVE_JUDGMENT and instance.action_queue:
