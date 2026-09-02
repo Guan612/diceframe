@@ -753,12 +753,12 @@ class GameInstance:
             if not self.log:
                 return None
             last = self.log.pop()
-            from src.engine.economy import reverse_round_economy
+            from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
 
             reverse_round_economy(self, int(last.get("round", self.round_number) or self.round_number))
             snapshot = last.get("round_start_snapshot") or last.get("pre_state_snapshot", {})
             if isinstance(snapshot, dict) and snapshot:
-                restore_players(self, snapshot)
+                restore_players(self, reconcile_rollback_snapshot(self, snapshot, int(last.get("round", self.round_number) or self.round_number)))
             self.round_number = max(1, int(last.get("round", self.round_number) or 1))
             self.action_queue.clear()
             self.pending_actions.clear()

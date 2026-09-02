@@ -694,6 +694,7 @@ def resolve_proposal(
     if not 0 < amount <= MAX_ECONOMY_AMOUNT:
         return {"ok": False, "code": "INVALID_AMOUNT", "error": "经济金额无效"}
     entries: list[dict[str, Any]] = []
+    reward_snapshots: list[dict[str, Any]] = []
     if policy == "all_contributors":
         balances: dict[str, int] = {}
         for contribution in contributors:
@@ -799,6 +800,13 @@ def resolve_proposal(
             })
         if rewards and grant_reward:
             recipient = instance.get_character_sheet(recipient_uid)
+            reward_snapshots.append({
+                "recipient_uid": recipient_uid,
+                "before": {
+                    key: deepcopy(recipient.get(key, []))
+                    for key in ("inventory", "equipment", "key_items")
+                },
+            })
             for reward in rewards:
                 grant_reward(recipient, reward)
             instance.set_character_sheet(recipient_uid, recipient)
@@ -836,6 +844,8 @@ def resolve_proposal(
         "round": int(getattr(instance, "round_number", 0) or 0),
         "committed_at": now,
     }
+    if reward_snapshots:
+        transaction["reward_snapshots"] = reward_snapshots
     instance.economy.setdefault("transactions", []).append(transaction)
     instance.pending_payments = [
         item for item in instance.pending_payments if item.get("id") != proposal_id
@@ -978,3 +988,58 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
         )
     ]
     _advance_revision(instance)
+
+
+def reconcile_rollback_snapshot(
+    instance: Any,
+    snapshot: dict[str, Any],
+    round_number: int,
+) -> dict[str, Any]:
+    """Make a round snapshot agree with settlements being reversed.
+
+    Late purchases can settle after the round-start snapshot was captured. In
+    that case the snapshot contains the already-paid state, while rollback has
+    reopened the proposal and reversed its ledger transaction. Use the
+    transaction's authoritative ``before`` values (and the captured reward
+    snapshot) to project the pre-settlement character state before restoring it.
+    """
+
+    if not isinstance(snapshot, dict):
+        return snapshot
+    rollback_round = int(round_number)
+    transactions = [
+        item for item in instance.economy.get("transactions", [])
+        if isinstance(item, dict)
+        and item.get("status") == "reversed"
+        and int(item.get("round", -1) or -1) == rollback_round
+    ]
+    if not transactions:
+        return snapshot
+    reconciled = deepcopy(snapshot)
+    for transaction in transactions:
+        for entry in transaction.get("entries", []):
+            if not isinstance(entry, dict):
+                continue
+            account = str(entry.get("account") or "")
+            if not account.startswith("character:") or entry.get("before") is None:
+                continue
+            uid = account.removeprefix("character:")
+            target = reconciled.get(uid)
+            if isinstance(target, dict):
+                before = int(entry.get("before", 0) or 0)
+                if isinstance(target.get("currency"), dict):
+                    target["currency"] = deepcopy(target["currency"])
+                    target["currency"]["amount"] = before
+                target["gold"] = before
+        for reward_snapshot in transaction.get("reward_snapshots", []):
+            if not isinstance(reward_snapshot, dict):
+                continue
+            uid = str(reward_snapshot.get("recipient_uid") or "")
+            target = reconciled.get(uid)
+            before = reward_snapshot.get("before")
+            if not isinstance(target, dict) or not isinstance(before, dict):
+                continue
+            for key in ("inventory", "equipment", "key_items"):
+                if key in before:
+                    target[key] = deepcopy(before[key])
+    return reconciled

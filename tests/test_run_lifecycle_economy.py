@@ -14,11 +14,12 @@ from src.engine.economy import (
     pending_memory_reversals,
     queue_effect_group,
     queue_proposal,
+    reconcile_rollback_snapshot,
     reverse_round_economy,
     resolve_proposal,
 )
 from src.commands.economy_effects import guard_unbacked_payment_narration
-from src.engine.game_instance import GameInstance, GameRegistry
+from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
 from src.llm.context_builder import build_context
 from src.memory.delta import MemoryStore
@@ -166,6 +167,9 @@ def test_late_personal_purchase_reopens_when_settlement_round_is_rolled_back() -
     assert instance.get_character_sheet("gm")["inventory"]
     assert purchase["status"] == "committed"
 
+    # The real round-start snapshot may be captured after a late settlement.
+    post_settlement_snapshot = _snapshot_players(instance)
+
     reverse_round_economy(instance, 7)
     # The offer originated in R5, so a R7 settlement rollback reopens it.
     assert purchase["status"] == "pending"
@@ -178,9 +182,13 @@ def test_late_personal_purchase_reopens_when_settlement_round_is_rolled_back() -
         for outcome in instance.economy["outcomes"]
     )
 
-    # Character snapshot restoration is performed by the rollback orchestrator;
-    # verify the reopened proposal can settle exactly once after restoration.
-    instance.players["gm"]["character_sheet"] = before
+    # Reconcile the post-settlement snapshot before restoring it, as the real
+    # GM rollback and swipe paths do.
+    restore_players(instance, reconcile_rollback_snapshot(instance, post_settlement_snapshot, 7))
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == before["currency"]["amount"]
+    assert instance.get_character_sheet("gm")["inventory"] == before.get("inventory", [])
+
+    # Verify the reopened proposal can settle exactly once after restoration.
     retry = resolve_proposal(
         instance,
         purchase["id"],
