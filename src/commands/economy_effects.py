@@ -335,19 +335,28 @@ def settle_purchase_quote(
 
     if has_economy_proposal(data):
         return False
-    action_text = "\n".join(
-        str(action.get("text") or "")
+    confirming_uids = {
+        str(action.get("user_id") or "")
         for action in getattr(instance, "action_queue", [])
         if isinstance(action, dict)
-    )
-    if not _PURCHASE_CONFIRM_RE.search(action_text):
+        and _PURCHASE_CONFIRM_RE.search(str(action.get("text") or ""))
+        and str(action.get("user_id") or "")
+    }
+    if len(confirming_uids) != 1:
         return False
     quotes = _purchase_quotes(instance)
     if len(quotes) != 1:
         return False
     quote = quotes[0]
+    if quote.get("status", "open") != "open":
+        return False
     payer_uid = str(quote.get("payer_uid") or "")
-    if not payer_uid or payer_uid not in getattr(instance, "players", {}):
+    if (
+        not payer_uid
+        or payer_uid not in getattr(instance, "players", {})
+        or confirming_uids != {payer_uid}
+        or str(quote.get("run_id") or "") != str(getattr(instance, "run_id", ""))
+    ):
         return False
     items = [str(item).strip() for item in quote.get("items", []) if str(item).strip()]
     amount = int(quote.get("amount", 0) or 0)
@@ -394,7 +403,8 @@ def record_purchase_quote(
                     if str(update.get(key) or "").strip():
                         grants.append((str(uid), str(update[key]).strip()))
     amounts = _currency_amounts(narration, currency_labels)
-    if len(grants) == 0 or len(amounts) != 1:
+    grant_uids = {uid for uid, _item in grants}
+    if len(grants) == 0 or len(grant_uids) != 1 or len(amounts) != 1:
         return False
     quotes = _purchase_quotes(instance)
     quotes[:] = [{

@@ -278,6 +278,28 @@ def test_purchase_quote_can_be_confirmed_on_next_turn() -> None:
     assert instance.economy["purchase_quotes"] == []
 
 
+def test_purchase_quote_confirmation_requires_payer_and_current_run() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "硬皮甲"}]}}
+    assert record_purchase_quote(instance, data, "硬皮甲，260金币。")
+    instance.action_queue = [{"user_id": "p2", "text": "行成交"}]
+    assert not settle_purchase_quote(instance, {"state_update": {}})
+    assert instance.economy["purchase_quotes"]
+    instance.action_queue = [{"user_id": "gm", "text": "行成交"}]
+    instance.run_id = "new-run"
+    assert not settle_purchase_quote(instance, {"state_update": {}})
+
+
+def test_purchase_quote_does_not_bundle_multiple_players() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [
+        {"player": "gm", "item": "药水"},
+        {"player": "p2", "item": "卷轴"},
+    ]}}
+    assert not record_purchase_quote(instance, data, "商品共需10金币。")
+    assert instance.economy.get("purchase_quotes", []) == []
+
+
 def test_personal_purchase_with_effect_group_remains_blocking() -> None:
     instance = _instance()
     purchase = queue_proposal(
