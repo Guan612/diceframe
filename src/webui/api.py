@@ -1528,6 +1528,26 @@ class WebAPI:
             session_uid,
         )
 
+    async def create_payment_proposal(
+        self,
+        game_key: str,
+        *,
+        payer_uid: str,
+        amount: int,
+        reason: str = "",
+        recipient_uid: str = "",
+        items: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return await characters.create_payment_proposal(
+            self._character_dependencies,
+            game_key,
+            payer_uid=payer_uid,
+            amount=amount,
+            reason=reason,
+            recipient_uid=recipient_uid,
+            items=items,
+        )
+
     async def _drain_economy_outbox(self, instance: Any) -> bool:
         return await characters.drain_economy_outbox(
             self._character_dependencies, instance,

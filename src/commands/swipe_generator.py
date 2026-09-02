@@ -8,12 +8,16 @@ from copy import deepcopy
 from typing import Any
 
 from src.commands.economy_effects import (
+    currency_labels_for_rule,
     discard_unearned_reward_proposals,
+    discard_unbacked_purchase_items,
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    repair_unbacked_purchase,
     unearned_reward_notice,
+    unbacked_purchase_notice,
 )
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.round_actions import format_check_results_constraint
@@ -138,6 +142,7 @@ class SwipeGenerator:
         rule_ctx = self.prompt.load_swipe_rule_context(instance, self.load_world_template)
         combat_model_s = rule_ctx.combat_model
         world_data = rule_ctx.world_data
+        currency_labels = currency_labels_for_rule(rule_ctx.rule)
 
         gm_prompt = self.prompt.compose_gm_prompt(
             instance, rule_ctx.rule_appendix, world_data=rule_ctx.world_data,
@@ -179,14 +184,24 @@ class SwipeGenerator:
         data = parse_tag_state(response.content, combat_model_s)
         narration = guard_unbacked_payment_narration(
             narration, data, instance.language,
+            currency_labels=currency_labels,
         )
         dropped_rewards = discard_unearned_reward_proposals(
             instance, data, narration,
         )
         if dropped_rewards:
             narration = f"{narration}\n\n{unearned_reward_notice(instance.language)}".strip()
-        economy_pending = has_economy_proposal(data)
+        dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
+            instance, data, narration, currency_labels=currency_labels,
+        )
+        if not purchase_was_ambiguous:
+            dropped_purchase_items += discard_unbacked_purchase_items(
+                data, narration, currency_labels=currency_labels,
+            )
+        if dropped_purchase_items:
+            narration = f"{narration}\n\n{unbacked_purchase_notice(instance.language)}".strip()
         deferred_effects = defer_narrative_effects(data, response)
+        economy_pending = has_economy_proposal(data)
         if economy_pending:
             narration = f"{narration}\n\n{pending_decision_notice(instance.language)}".strip()
 

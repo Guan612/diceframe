@@ -15,10 +15,14 @@ from typing import Any
 
 from src.commands.economy_effects import (
     discard_unearned_reward_proposals,
+    discard_unbacked_purchase_items,
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    repair_unbacked_purchase,
+    currency_labels_for_rule,
+    unbacked_purchase_notice,
     unearned_reward_notice,
 )
 from src.commands.round_effects import (
@@ -510,6 +514,7 @@ class RoundProcessor:
         dice_system = rule_ctx.dice_system
         world_data = rule_ctx.world_data
         rule = rule_ctx.rule
+        currency_labels = currency_labels_for_rule(rule)
 
         initialize_puzzles_from_lorebook(
             instance,
@@ -626,10 +631,27 @@ class RoundProcessor:
             # proposal list so it cannot be queued through the old reference.
             response.state_update = data.get("state_update") or {}
             response.narration = f"{response.narration or ''}\n\n{unearned_reward_notice(instance.language)}".strip()
-        economy_pending = has_economy_proposal(data)
         response.narration = guard_unbacked_payment_narration(
             response.narration, data, instance.language,
+            currency_labels=currency_labels,
         )
+        dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
+            instance, data, response.narration, currency_labels=currency_labels,
+        )
+        if not purchase_was_ambiguous:
+            dropped_purchase_items += discard_unbacked_purchase_items(
+                data, response.narration, currency_labels=currency_labels,
+            )
+        if dropped_purchase_items:
+            response.narration = (
+                f"{response.narration or ''}\n\n"
+                f"{unbacked_purchase_notice(instance.language)}"
+            ).strip()
+        # A server-side purchase repair may have synthesized a typed proposal
+        # from an explicit action plus an unambiguous rule currency amount.
+        # Recompute after the repair so it receives the same pending-settlement
+        # barrier and deferred-effect handling as model-emitted proposals.
+        economy_pending = has_economy_proposal(data)
         deferred_effects = defer_narrative_effects(data, response)
         if economy_pending:
             notice = pending_decision_notice(instance.language)

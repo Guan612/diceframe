@@ -190,10 +190,31 @@ class StateUpdateApplier:
                 )
                 and sum(item["amount"] for item in contributors) == amount
             )
-            if not is_team_fee and (uid not in instance.players or kind not in {"payment", "reward"}):
+            if not is_team_fee and (
+                uid not in instance.players
+                or kind not in {"payment", "purchase", "reward"}
+            ):
                 continue
             reason = str(proposal.get("reason") or "经济提案")[:240]
             source = str(proposal.get("source") or "narrative")
+            rewards = [
+                {
+                    "name": str(item.get("name") or item.get("item") or "").strip()[:120],
+                    "category": str(item.get("category") or classify_item(
+                        str(item.get("name") or item.get("item") or ""), rule_cats,
+                    )),
+                }
+                for item in (
+                    proposal.get("rewards")
+                    if isinstance(proposal.get("rewards"), list)
+                    else [
+                        {"name": item}
+                        for item in (proposal.get("items") or [])
+                    ]
+                )
+                if isinstance(item, dict)
+                and str(item.get("name") or item.get("item") or "").strip()
+            ][:8]
             if kind == "reward":
                 # One parsed emission remains idempotent when the same response is
                 # retried, while a later round may legitimately grant the same
@@ -213,9 +234,10 @@ class StateUpdateApplier:
             queued_proposals.append(queue_proposal(
                 instance,
                 kind=kind,
-                payer_uid=uid if kind == "payment" else "",
-                recipient_uid=uid if kind == "reward" else uid,
+                payer_uid=uid if kind in {"payment", "purchase"} else "",
+                recipient_uid=str(proposal.get("recipient_uid") or uid),
                 amount=amount,
+                rewards=rewards,
                 reason=reason,
                 source=source,
                 source_ref=source_ref,

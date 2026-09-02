@@ -246,6 +246,35 @@ async def test_apply_state_update_creates_pending_payment(web_api):
 
 
 @pytest.mark.asyncio
+async def test_gm_can_create_payment_proposal_without_deduction(web_api):
+    api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
+    result = await api.create_game(
+        "template_world", "GM 创建提案",
+        players=[{"character_name": "艾琳", "attributes": {"str": 12}, "gold": 30}],
+    )
+    gk = result["game_key"]
+    inst = registry.get(api._parse_key(gk))
+    uid = next(iter(inst.players))
+    inst.gm_uid = uid
+
+    created = await api.create_payment_proposal(
+        gk,
+        payer_uid=uid,
+        amount=5,
+        recipient_uid=uid,
+        items=["通行证"],
+        reason="购买通行证",
+    )
+    assert created["ok"] is True
+    proposal = created["proposal"]
+    assert proposal["approval_policy"] == "payer"
+    assert proposal["kind"] == "purchase"
+    assert proposal["rewards"][0]["name"] == "通行证"
+    assert inst.get_character_sheet(uid).get("gold") == 30
+    assert proposal in inst.pending_payments
+
+
+@pytest.mark.asyncio
 async def test_same_reward_emission_retry_is_idempotent(web_api):
     api, _lorebook, registry, _fake_llm, _worlds_dir = web_api
     result = await api.create_game(

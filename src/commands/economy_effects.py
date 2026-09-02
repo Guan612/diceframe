@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from src.engine.language import localized_text
 
@@ -28,13 +28,6 @@ _DEFERRED_DATA_KEYS = {
     "xp_rewards",
 }
 
-_COMPLETED_PAYMENT_RE = re.compile(
-    r"(?:掏出|拿出|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
-    r"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:金币|金子|金)"
-    r"|(?:paid|spent|handed over|paid out)\s+"
-    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+gold",
-    re.IGNORECASE,
-)
 _CONDITIONAL_REWARD_RE = re.compile(
     r"(?:要是|如果|若是|完成[^。！？\n]{0,20}后|之后再|等你|待你|才能|才会|以后|将会|承诺|答应|promise|promises|will pay|\bif\b|\bonce\b|\bafter\b|\bwhen\b|\u3067\u304d\u305f\u3089|\u7d42\u308f\u3063\u305f\u3089)",
     re.IGNORECASE,
@@ -43,6 +36,219 @@ _COMPLETION_EVIDENCE_RE = re.compile(
     r"(?:完成|成功|击败|打倒|交付|归还|回收|达成|兑现|领取|earned|completed|complete|defeated|delivered|recovered|claimed|critical success|大成功)",
     re.IGNORECASE,
 )
+_PURCHASE_INTENT_RE = re.compile(
+    r"(?:买下|买了|购买|购入|买入|付费|支付|缴纳|花费|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
+    re.IGNORECASE,
+)
+_FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
+def _currency_labels(currency_labels: Iterable[str] | None = None) -> tuple[str, ...]:
+    """Return canonical rule labels plus legacy aliases for text recognition.
+
+    Narrative parsing is only a repair/fail-closed guard; the persisted
+    currency schema remains authoritative.  Rule-provided labels let the same
+    guard work for custom economies (USD, credits, gems, etc.) without adding
+    ruleset branches to the generic engine.
+    """
+
+    labels = {
+        "金币", "金子", "金", "gold", "credits", "credit", "dollars", "dollar",
+    }
+    for label in currency_labels or ():
+        value = str(label or "").strip()
+        if value:
+            labels.add(value)
+    return tuple(sorted(labels, key=len, reverse=True))
+
+
+def currency_labels_for_rule(rule: Any) -> tuple[str, ...]:
+    """Project declared rule currency IDs/names into the generic text guard."""
+
+    system = getattr(rule, "currency_system", None)
+    if not isinstance(system, dict) and isinstance(rule, dict):
+        system = rule.get("currency_system")
+    units = system.get("units", []) if isinstance(system, dict) else []
+    labels: list[str] = []
+    if isinstance(units, list):
+        for unit in units:
+            if isinstance(unit, dict):
+                labels.extend(
+                    str(unit.get(key) or "").strip()
+                    for key in ("id", "name", "label")
+                    if str(unit.get(key) or "").strip()
+                )
+    return _currency_labels(labels)
+
+
+def _currency_amount_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
+    return re.compile(
+        rf"(?P<amount>[0-9]+|[零〇一二三四五六七八九十百千万两]+)"
+        rf"\s*(?:枚|个)?\s*(?:{labels})",
+        re.IGNORECASE,
+    )
+
+
+def _charge_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
+    return re.compile(
+        rf"(?:需要|需|必须|须|售价|价格|费用|收费|支付|付费|购买|买下|花费|缴纳|"
+        rf"cost|price|charge|pay|purchase|spend)[^。！？\n]{{0,24}}?"
+        rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
+        rf"|(?:[一二三四五六七八九十百千万两\d]+)\s*(?:{labels})"
+        rf"[^。！？\n]{{0,16}}?"
+        rf"(?:需要|需|支付|付费|购买|买下|花费|缴纳|cost|price|charge|pay|purchase|spend)",
+        re.IGNORECASE,
+    )
+
+
+def _completed_payment_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
+    return re.compile(
+        rf"(?:掏出|拿出|数出|数了|递出|放下|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
+        rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
+        rf"|(?:paid|spent|handed over|paid out)\s+"
+        rf"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:{labels})",
+        re.IGNORECASE,
+    )
+
+
+def _chinese_amount(value: str) -> int | None:
+    """Parse the small Chinese numerals commonly used in narrative prices."""
+
+    if value.isdigit():
+        return int(value)
+    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    units = {"十": 10, "百": 100, "千": 1000, "万": 10000}
+    total = 0
+    section = 0
+    number = 0
+    for char in value:
+        if char in digits:
+            number = digits[char]
+        elif char in units:
+            unit = units[char]
+            if unit == 10000:
+                section = (section + number) * unit
+                total += section
+                section = 0
+            else:
+                section += (number or 1) * unit
+            number = 0
+        else:
+            return None
+    return total + section + number
+
+
+def _currency_amounts(
+    narration: str,
+    currency_labels: Iterable[str] | None = None,
+) -> list[int]:
+    amounts: list[int] = []
+    for match in _currency_amount_pattern(currency_labels).finditer(str(narration or "")):
+        amount = _chinese_amount(match.group("amount"))
+        if amount is not None and amount > 0:
+            amounts.append(amount)
+    return amounts
+
+
+def repair_unbacked_purchase(
+    instance: Any,
+    data: dict[str, Any],
+    narration: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
+) -> tuple[int, bool]:
+    """Bind an explicit purchase to an economy proposal before state apply.
+
+    Item tags are intentionally independent from payment tags for ordinary
+    loot, but that old shape allowed a model to emit ``EQUIP`` for a purchase
+    while omitting ``PAY``.  The server now uses the player's explicit purchase
+    intent plus one unambiguous currency amount to synthesize the same typed
+    purchase proposal.  Ambiguous prices fail closed and suppress the grant.
+    """
+
+    state_update = data.get("state_update")
+    if not isinstance(state_update, dict) or has_economy_proposal(data):
+        return 0, False
+    action_text = "\n".join(
+        str(action.get("text") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+    )
+    narrative_text = str(narration or "")
+    explicit_purchase = bool(_PURCHASE_INTENT_RE.search(action_text))
+    charge_re = _charge_pattern(currency_labels)
+    completed_payment_re = _completed_payment_pattern(currency_labels)
+    priced_narrative = bool(charge_re.search(narrative_text) or completed_payment_re.search(narrative_text))
+    if not explicit_purchase and not priced_narrative:
+        return 0, False
+
+    grants: list[tuple[str, str]] = []
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        for uid, update in players_update.items():
+            if not isinstance(update, dict):
+                continue
+            for key in ("equip_gain", "weapon_change"):
+                item = str(update.get(key) or "").strip()
+                if item:
+                    grants.append((str(uid), item))
+    loot = state_update.get("loot")
+    if isinstance(loot, list):
+        for item in loot:
+            if isinstance(item, dict):
+                uid = str(item.get("player") or "")
+                name = str(item.get("item") or "").strip()
+                if uid and name:
+                    grants.append((uid, name))
+    if not grants:
+        return 0, False
+    if _FREE_PURCHASE_RE.search(narrative_text) and not priced_narrative:
+        return 0, False
+
+    amounts = _currency_amounts(narrative_text, currency_labels)
+    actor_uids = {
+        str(action.get("user_id") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+        and str(action.get("user_id") or "") in getattr(instance, "players", {})
+        and _PURCHASE_INTENT_RE.search(str(action.get("text") or ""))
+    }
+    grant_uids = {uid for uid, _item in grants}
+    payer_candidates = actor_uids & grant_uids
+    if len(amounts) != 1 or len(payer_candidates) != 1:
+        if isinstance(players_update, dict):
+            for update in players_update.values():
+                if isinstance(update, dict):
+                    update.pop("equip_gain", None)
+                    update.pop("weapon_change", None)
+        if isinstance(loot, list):
+            state_update["loot"] = []
+        return len(grants), True
+    payer_uid = next(iter(payer_candidates))
+    amount = amounts[0]
+    if amount > 100_000:
+        if isinstance(players_update, dict):
+            for update in players_update.values():
+                if isinstance(update, dict):
+                    update.pop("equip_gain", None)
+                    update.pop("weapon_change", None)
+        if isinstance(loot, list):
+            state_update["loot"] = []
+        return len(grants), True
+    items = [item for uid, item in grants if uid == payer_uid]
+    data.setdefault("state_update", {}).setdefault("economy_proposals", []).append({
+        "kind": "purchase",
+        "uid": payer_uid,
+        "amount": amount,
+        "recipient_uid": payer_uid,
+        "items": items,
+        "reason": f"购买 {'、'.join(items)}",
+        "approval_policy": "payer",
+        "source": "server_purchase_guard",
+    })
+    return 0, False
 
 
 def _meaningful(value: Any) -> bool:
@@ -141,6 +347,8 @@ def guard_unbacked_payment_narration(
     narration: str,
     data: dict[str, Any],
     language: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
 ) -> str:
     """Prevent prose from claiming a completed payment without authority.
 
@@ -151,7 +359,8 @@ def guard_unbacked_payment_narration(
     """
 
     text = str(narration or "").strip()
-    if not text or has_economy_proposal(data) or not _COMPLETED_PAYMENT_RE.search(text):
+    completed_payment_re = _completed_payment_pattern(currency_labels)
+    if not text or has_economy_proposal(data) or not completed_payment_re.search(text):
         return text
     notice = {
         "en": "Authority notice: no payment proposal was created, so no gold was deducted. Ask the GM to issue a payment proposal if this fee should be charged.",
@@ -159,6 +368,53 @@ def guard_unbacked_payment_narration(
         "ja": "権威台帳の通知：支払い提案が作成されなかったため、ゴールドは差し引かれていません。請求が必要なら GM に支払い提案を出してもらってください。",
     }.get(str(language or "").lower(), "权威账本提示：本次没有生成支付提案，因此未扣除金币。若确实需要收费，请由 GM 重新发起支付提案。")
     return f"{text}\n\n{notice}"
+
+
+def discard_unbacked_purchase_items(
+    data: dict[str, Any],
+    narration: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
+) -> int:
+    """Fail closed when prose describes a priced purchase without a proposal.
+
+    A model can emit ``LOOT`` while narrating a shop price but omit ``PAY`` /
+    ``ECONOMY``.  Granting that loot would make the item authoritative even
+    though no payment decision exists.  Drop the transaction-dependent loot;
+    the GM can issue a proposal explicitly on a later turn.
+    """
+
+    narration_text = str(narration or "")
+    charge_re = _charge_pattern(currency_labels)
+    completed_payment_re = _completed_payment_pattern(currency_labels)
+    if has_economy_proposal(data) or not (charge_re.search(narration_text) or completed_payment_re.search(narration_text)):
+        return 0
+    state_update = data.get("state_update")
+    if not isinstance(state_update, dict):
+        return 0
+    dropped = 0
+    loot = state_update.get("loot")
+    if isinstance(loot, list) and loot:
+        dropped += len(loot)
+        state_update["loot"] = []
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        for player_update in players_update.values():
+            if not isinstance(player_update, dict):
+                continue
+            for key in ("equip_gain", "weapon_change"):
+                if key in player_update:
+                    dropped += 1
+                    player_update.pop(key, None)
+    return dropped
+
+
+def unbacked_purchase_notice(language: str) -> str:
+    return localized_text(language, {
+        "en": "Purchase items were not granted because no payment proposal was created.",
+        "zh-CN": "由于没有生成支付提案，本次购买物品未发放。",
+        "ja": "支払い提案が作成されなかったため、購入品は付与されませんでした。",
+    })
 
 
 def defer_narrative_effects(

@@ -11,11 +11,14 @@ from typing import Any
 
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.economy_effects import (
+    currency_labels_for_rule,
     discard_unearned_reward_proposals,
+    discard_unbacked_purchase_items,
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    unbacked_purchase_notice,
     unearned_reward_notice,
 )
 from src.commands.state_update_applier import StateUpdateApplier
@@ -182,6 +185,7 @@ class GameLifecycle:
             instance, rule_ctx.rule_appendix, world_data=rule_ctx.world_data,
         )
         world_data = rule_ctx.world_data or {}
+        currency_labels = currency_labels_for_rule(rule_ctx.rule)
         world_description = world_data.get("description", "")
         world_setting = world_data.get("world_setting", "")
         starter_scene = world_data.get("starter_scene", "")
@@ -320,7 +324,13 @@ class GameLifecycle:
         economy_pending = bool(response is not None and has_economy_proposal(start_data))
         narration = guard_unbacked_payment_narration(
             narration, start_data, instance.language,
+            currency_labels=currency_labels,
         )
+        dropped_purchase_items = discard_unbacked_purchase_items(
+            start_data, narration, currency_labels=currency_labels,
+        )
+        if dropped_purchase_items:
+            narration = f"{narration}\n\n{unbacked_purchase_notice(instance.language)}".strip()
         deferred_effects = (
             defer_narrative_effects(start_data, response)
             if response is not None else {}
