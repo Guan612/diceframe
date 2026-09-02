@@ -46,6 +46,9 @@ _PURCHASE_CONFIRM_RE = re.compile(
     r"deal|accept|accepted|confirm|confirmed|buy it|take it|pay|yes|"
     r"成約|購入|承知|支払う|了解です|はい|了承)", re.IGNORECASE,
 )
+_PURCHASE_OFFER_RE = re.compile(
+    r"(?:需要|需|售价|价格|费用|收费|cost|price|charge)", re.IGNORECASE,
+)
 def _currency_labels(currency_labels: Iterable[str] | None = None) -> tuple[str, ...]:
     """Return canonical rule labels plus legacy aliases for text recognition.
 
@@ -363,10 +366,26 @@ def settle_purchase_quote(
     if amount <= 0 or not items:
         return False
     state_update = data.setdefault("state_update", {})
-    state_update.setdefault("loot", []).extend(
-        {"player": str(quote.get("recipient_uid") or payer_uid), "item": item}
-        for item in items
-    )
+    # The persisted quote is the only source of truth for purchased goods.
+    # Remove any model-repeated copy from ordinary LOOT/EQUIP before the
+    # proposal is queued, so confirmation cannot reintroduce double delivery.
+    loot = state_update.get("loot")
+    if isinstance(loot, list):
+        state_update["loot"] = [
+            entry for entry in loot
+            if not (
+                isinstance(entry, dict)
+                and str(entry.get("player") or "") == payer_uid
+                and str(entry.get("item") or "").strip() in items
+            )
+        ]
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        player_update = players_update.get(payer_uid)
+        if isinstance(player_update, dict):
+            for key in ("equip_gain", "weapon_change"):
+                if str(player_update.get(key) or "").strip() in items:
+                    player_update.pop(key, None)
     state_update.setdefault("economy_proposals", []).append({
         "kind": "purchase", "uid": payer_uid, "amount": amount,
         "recipient_uid": str(quote.get("recipient_uid") or payer_uid),
@@ -402,11 +421,35 @@ def record_purchase_quote(
                 for key in ("equip_gain", "weapon_change"):
                     if str(update.get(key) or "").strip():
                         grants.append((str(uid), str(update[key]).strip()))
+    action_text = "\n".join(
+        str(action.get("text") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+    )
     amounts = _currency_amounts(narration, currency_labels)
     grant_uids = {uid for uid, _item in grants}
-    if len(grants) == 0 or len(grant_uids) != 1 or len(amounts) != 1:
+    if (
+        len(grants) == 0
+        or len(grant_uids) != 1
+        or len(amounts) != 1
+        or not (
+            (
+                _PURCHASE_OFFER_RE.search(narration)
+                and _currency_amount_pattern(currency_labels).search(narration)
+            )
+            or _PURCHASE_INTENT_RE.search(action_text)
+        )
+    ):
         return False
     quotes = _purchase_quotes(instance)
+    if any(
+        isinstance(quote, dict) and quote.get("status", "open") == "open"
+        for quote in quotes
+    ):
+        # A persisted offer is authoritative until it is confirmed or
+        # invalidated by rollback; never replace its amount/items with a
+        # later model narration.
+        return False
     quotes[:] = [{
         "run_id": str(getattr(instance, "run_id", "")),
         "round": int(getattr(instance, "round_number", 0) or 0),

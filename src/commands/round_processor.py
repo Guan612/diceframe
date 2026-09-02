@@ -640,15 +640,19 @@ class RoundProcessor:
             response.narration, data, instance.language,
             currency_labels=currency_labels,
         )
-        record_purchase_quote(
-            instance, data, response.narration, currency_labels=currency_labels,
-        )
-        dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
-            instance, data, response.narration,
-            actions=instance.action_queue,
-            currency_labels=currency_labels,
-        )
-        if not purchase_was_ambiguous:
+        settled_quote = settle_purchase_quote(instance, data, currency_labels=currency_labels)
+        if not settled_quote:
+            record_purchase_quote(
+                instance, data, response.narration, currency_labels=currency_labels,
+            )
+            dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
+                instance, data, response.narration,
+                actions=instance.action_queue,
+                currency_labels=currency_labels,
+            )
+        else:
+            dropped_purchase_items, purchase_was_ambiguous = 0, False
+        if not settled_quote and not purchase_was_ambiguous:
             dropped_purchase_items += discard_unbacked_purchase_items(
                 data, response.narration, currency_labels=currency_labels,
             )
@@ -661,8 +665,6 @@ class RoundProcessor:
         # from an explicit action plus an unambiguous rule currency amount.
         # Recompute after the repair so it receives the same pending-settlement
         # barrier and deferred-effect handling as model-emitted proposals.
-        economy_pending = has_economy_proposal(data)
-        settle_purchase_quote(instance, data, currency_labels=currency_labels)
         economy_pending = has_economy_proposal(data)
         deferred_effects = defer_narrative_effects(
             data, response,

@@ -882,6 +882,20 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
     """
 
     rollback_round = int(round_number)
+    purchase_quotes = instance.economy.get("purchase_quotes", [])
+    if isinstance(purchase_quotes, list):
+        instance.economy["purchase_quotes"] = [
+            quote for quote in purchase_quotes
+            if not (
+                isinstance(quote, dict)
+                and quote.get("status", "open") == "open"
+                and int(quote.get("round", -1)) == rollback_round
+                and (
+                    not quote.get("run_id")
+                    or str(quote.get("run_id")) == str(instance.run_id)
+                )
+            )
+        ]
     proposals = [
         item for item in instance.economy.get("proposals", [])
         if isinstance(item, dict)
