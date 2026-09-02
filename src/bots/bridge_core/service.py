@@ -614,13 +614,18 @@ class DiceFrameBridgeService:
 
     async def _pending_payments(self, game_key: str, actor: str) -> list[dict[str, Any]]:
         detail = await self.client.detail(game_key, actor)
-        payments = (
-            detail.get("economy_proposals")
-            if isinstance(detail.get("economy_proposals"), list)
-            else detail.get("pending_payments")
-            if isinstance(detail.get("pending_payments"), list)
-            else []
-        )
+        canonical = detail.get("economy_proposals")
+        legacy = detail.get("pending_payments")
+        # Prefer the canonical projection when available, while retaining the
+        # legacy list for old backends (and partially upgraded responses).
+        if isinstance(canonical, list) and canonical:
+            payments = canonical
+        elif isinstance(legacy, list):
+            payments = legacy
+        elif isinstance(canonical, list):
+            payments = canonical
+        else:
+            payments = []
         gm_uid = str(detail.get("gm_uid") or "")
         return [
             item for item in payments
