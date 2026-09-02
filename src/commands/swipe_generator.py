@@ -199,7 +199,7 @@ class SwipeGenerator:
         )
         if not purchase_was_ambiguous:
             dropped_purchase_items += discard_unbacked_purchase_items(
-                data, narration, currency_labels=currency_labels,
+                instance, data, narration, currency_labels=currency_labels,
             )
         if dropped_purchase_items:
             narration = f"{narration}\n\n{unbacked_purchase_notice(instance.language)}".strip()

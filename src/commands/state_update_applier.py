@@ -13,7 +13,10 @@ from typing import Any, Callable
 
 from src.compat.callbacks import load_world_template as load_world_template_compat
 from src.engine.game_instance import GameInstance
-from src.commands.economy_effects import link_purchase_quote_proposal
+from src.commands.economy_effects import (
+    link_purchase_quote_proposal,
+    record_merchant_offer,
+)
 from src.commands.item_category_resolver import ItemCategoryResolver
 from src.commands.madness_tracker import MadnessTracker
 from src.commands.npc_state_applier import NpcStateApplier
@@ -255,13 +258,39 @@ class StateUpdateApplier:
                 contributors=contributors if is_team_fee else None,
                 visibility="party" if is_team_fee else "private",
                 quote_id=str(proposal.get("quote_id") or ""),
+                # AI payloads never set the price source; only the server
+                # guard records which evidence produced the amount.
+                amount_source=(
+                    str(proposal.get("amount_source") or "")
+                    if source == "server_purchase_guard"
+                    else ""
+                ),
             ))
             quote_id = str(proposal.get("quote_id") or "")
             if quote_id:
                 link_purchase_quote_proposal(
                     instance, quote_id, str(queued_proposals[-1].get("id") or ""),
                 )
+        self._apply_merchant_offers(instance, update)
         return queued_proposals
+
+    def _apply_merchant_offers(self, instance: GameInstance, update: dict) -> None:
+        """Persist typed world-side merchant offers; they never bind a payer."""
+
+        for offer_payload in update.get("merchant_offers", []) or []:
+            if not isinstance(offer_payload, dict):
+                continue
+            record_merchant_offer(
+                instance,
+                item_display=str(
+                    offer_payload.get("item_display")
+                    or offer_payload.get("item")
+                    or ""
+                ),
+                amount=offer_payload.get("amount", 0),
+                seller_id=str(offer_payload.get("seller_id") or ""),
+                currency_id=str(offer_payload.get("currency_id") or ""),
+            )
 
     def apply_madness(self, instance: GameInstance, uid: str, cs: dict, loss: int) -> None:
         """兼容旧内部调用；实际逻辑已拆到 MadnessTracker。"""

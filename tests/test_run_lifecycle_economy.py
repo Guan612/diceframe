@@ -28,6 +28,8 @@ from src.commands.economy_effects import (
     discard_unbacked_purchase_items,
     guard_unbacked_payment_narration,
     link_purchase_quote_proposal,
+    record_merchant_offer,
+    record_purchase_clarification,
     repair_unbacked_purchase,
     defer_narrative_effects,
     record_purchase_quote,
@@ -142,23 +144,32 @@ def test_narrated_payment_with_proposal_keeps_pending_notice_path() -> None:
 
 
 def test_unbacked_shop_price_does_not_grant_loot() -> None:
+    instance = _instance()
     data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
     dropped = discard_unbacked_purchase_items(
-        data, "城门卫兵说通行证需要支付5金币。"
+        instance, data, "城门卫兵说通行证需要支付5金币。"
     )
     assert dropped == 1
     assert data["state_update"]["loot"] == []
+    # fail-closed 的结构保留：澄清记录包含候选商品与叙事价格。
+    clarification = instance.economy["clarifications"][0]
+    assert clarification["status"] == "open"
+    assert clarification["item_candidates"] == ["通行证"]
+    assert clarification["amount_candidates"] == [5]
+    assert clarification["reason"] == "MISSING_SELLER_PRICE_CONFIRMATION"
 
 
 def test_purchase_loot_is_kept_when_proposal_exists() -> None:
+    instance = _instance()
     data = {
         "state_update": {
             "loot": [{"player": "gm", "item": "通行证"}],
             "economy_proposals": [{"kind": "purchase", "uid": "gm", "amount": 5}],
         },
     }
-    assert discard_unbacked_purchase_items(data, "通行证需要支付5金币。") == 0
+    assert discard_unbacked_purchase_items(instance, data, "通行证需要支付5金币。") == 0
     assert data["state_update"]["loot"]
+    assert not instance.economy.get("clarifications")
 
 
 def test_explicit_purchase_with_omitted_pay_tag_becomes_pending_proposal() -> None:
@@ -443,6 +454,151 @@ def test_queue_proposal_rejects_payer_outside_game() -> None:
         instance, kind="reward", recipient_uid="p2", amount=5, approval_policy="gm",
     )
     assert reward["status"] == "pending"
+
+
+def test_typed_merchant_offer_persists_without_grant() -> None:
+    instance = _instance()
+    applier = StateUpdateApplier(Path("nonexistent-rules"), None, lambda world_id, language: {})
+    applier.apply_state_update(instance, {
+        "merchant_offers": [
+            {
+                "item_display": "矮人精钢剑", "amount": 30,
+                "seller_id": "npc_hogen", "currency_id": "gold",
+            },
+            {"item_display": "", "amount": 5},
+            {"item_display": "药膏", "amount": -1},
+        ],
+    })
+    offers = instance.economy["merchant_offers"]
+    assert len(offers) == 1
+    offer = offers[0]
+    assert offer["id"].startswith("offer_")
+    assert offer["item_display"] == "矮人精钢剑"
+    assert offer["amount"] == 30
+    assert offer["run_id"] == instance.run_id
+    assert offer["status"] == "open"
+    # 已持久化的卖家报价不会被重新叙述覆盖价格。
+    applier.apply_state_update(instance, {
+        "merchant_offers": [{"item_display": "矮人精钢剑", "amount": 99}],
+    })
+    assert len(instance.economy["merchant_offers"]) == 1
+    assert instance.economy["merchant_offers"][0]["amount"] == 30
+
+
+def test_player_action_price_synthesizes_pending_proposal() -> None:
+    """叙事没复述价格、玩家行动自带唯一金额：出待确认提案，确认前不动钱。"""
+
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "掏30金币买下精钢剑"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根接过金币，转身取下那柄矮人精钢剑，递到你面前。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 30
+    assert proposal["amount_source"] == "player_action"
+    assert proposal["items"] == ["矮人精钢剑"]
+    assert data["state_update"]["loot"] == []
+    assert instance.get_character_sheet("gm")["currency"]["amount"] == 30
+
+
+def test_narration_price_outranks_action_price() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "掏20金币买下精钢剑"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根咧嘴：“这剑三十金币。”你把钱放下了。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 30
+    assert proposal["amount_source"] == "narration"
+
+
+def test_merchant_offer_price_is_authoritative_when_it_matches() -> None:
+    instance = _instance()
+    record_merchant_offer(instance, item_display="矮人精钢剑", amount=30)
+    instance.action_queue = [{"user_id": "gm", "text": "掏30金币买下精钢剑"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根收了钱，把剑递到你面前。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 30
+    assert proposal["amount_source"] == "merchant_offer"
+
+
+def test_player_amount_conflicting_with_offer_clarifies() -> None:
+    """stored offer=30，玩家喊 20：不出 20 的提案，进澄清（还价语义）。"""
+
+    instance = _instance()
+    record_merchant_offer(instance, item_display="矮人精钢剑", amount=30)
+    instance.action_queue = [{"user_id": "gm", "text": "掏20金币买下精钢剑"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根皱起了眉头。",
+    )
+    assert (dropped, ambiguous) == (1, True)
+    assert not data["state_update"].get("economy_proposals")
+    assert data["state_update"]["loot"] == []
+    clarification = instance.economy["clarifications"][0]
+    assert clarification["reason"] == "OFFER_PRICE_CONFLICT"
+    assert clarification["payer_uid"] == "gm"
+    assert clarification["item_candidates"] == ["矮人精钢剑"]
+    assert clarification["amount_candidates"] == [20, 30]
+
+
+def test_prose_sale_without_grants_persists_clarification() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "我买下这把剑"}]
+    data = {"state_update": {}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "你掏出三十金币递了过去，商家点头把剑包好。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    assert not data["state_update"].get("economy_proposals")
+    clarification = instance.economy["clarifications"][0]
+    assert clarification["reason"] == "MISSING_SELLER_PRICE_CONFIRMATION"
+    assert clarification["payer_uid"] == "gm"
+    assert clarification["amount_candidates"] == [30]
+    assert clarification["status"] == "open"
+
+
+def test_clarification_dedupes_identical_open_entries() -> None:
+    instance = _instance()
+    first = record_purchase_clarification(
+        instance, reason="AMBIGUOUS_PRICE", payer_uid="gm",
+        item_candidates=["矮人精钢剑"], amount_candidates=[20],
+    )
+    second = record_purchase_clarification(
+        instance, reason="AMBIGUOUS_PRICE", payer_uid="gm",
+        item_candidates=["矮人精钢剑"], amount_candidates=[20],
+    )
+    assert first["id"] == second["id"]
+    assert len(instance.economy["clarifications"]) == 1
+
+
+def test_rollback_supersedes_open_offers_and_clarifications() -> None:
+    instance = _instance()
+    instance.round_number = 5
+    record_merchant_offer(instance, item_display="矮人精钢剑", amount=30)
+    record_purchase_clarification(
+        instance, reason="AMBIGUOUS_PRICE", payer_uid="gm",
+        item_candidates=["矮人精钢剑"], amount_candidates=[20],
+    )
+    reverse_round_economy(instance, 5)
+    assert instance.economy["merchant_offers"][0]["status"] == "superseded"
+    assert instance.economy["merchant_offers"][0]["resolution_code"] == "ORIGIN_ROLLED_BACK"
+    assert instance.economy["clarifications"][0]["status"] == "superseded"
+    # 其他轮次的 open 条目不受影响。
+    instance.round_number = 6
+    later_offer = record_merchant_offer(instance, item_display="硬皮甲", amount=260)
+    assert later_offer["status"] == "open"
+    reverse_round_economy(instance, 6)
+    assert later_offer["status"] == "superseded"
+    assert instance.economy["merchant_offers"][0]["status"] == "superseded"
 
 
 def test_purchase_quote_confirmation_requires_payer_and_current_run() -> None:

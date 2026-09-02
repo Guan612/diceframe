@@ -147,6 +147,47 @@ def game_detail(
             or viewer_uid == str(quote.get("payer_uid") or "")
         )
     ]
+    open_merchant_offers = [
+        {
+            "id": str(offer.get("id") or ""),
+            "item_display": str(offer.get("item_display") or ""),
+            "amount": int(offer.get("amount", 0) or 0),
+            "currency_id": str(offer.get("currency_id") or ""),
+            "origin_round": int(offer.get("origin_round", 0) or 0),
+            "status": "open",
+        }
+        for offer in (getattr(instance, "economy", {}).get("merchant_offers", []) or [])
+        if isinstance(offer, dict)
+        and offer.get("status") == "open"
+        and str(offer.get("run_id") or "") == str(instance.run_id)
+    ]
+    open_clarifications = [
+        {
+            "id": str(entry.get("id") or ""),
+            "payer_uid": str(entry.get("payer_uid") or ""),
+            "item_candidates": [
+                str(item) for item in (entry.get("item_candidates") or []) if str(item)
+            ],
+            "amount_candidates": [
+                int(value) for value in (entry.get("amount_candidates") or [])
+            ],
+            "reason": str(entry.get("reason") or ""),
+            "origin_round": int(entry.get("origin_round", 0) or 0),
+            "status": "open",
+        }
+        for entry in (getattr(instance, "economy", {}).get("clarifications", []) or [])
+        if isinstance(entry, dict)
+        and entry.get("status") == "open"
+        and str(entry.get("run_id") or "") == str(instance.run_id)
+        and (
+            not viewer_uid
+            or viewer_uid == instance.gm_uid
+            or (
+                entry.get("payer_uid")
+                and viewer_uid == str(entry.get("payer_uid") or "")
+            )
+        )
+    ]
     detail = {
         "game_key": _GAME_KEY_SEP.join(instance.game_key),
         "run_id": instance.run_id,
@@ -192,6 +233,8 @@ def game_detail(
         ],
         "economy_proposals": economy_proposals,
         "purchase_quotes": open_purchase_quotes,
+        "merchant_offers": open_merchant_offers,
+        "clarifications": open_clarifications,
         "pending_luck_decisions": instance.pending_luck_checks(),
         "round_check_results": (
             [dict(item) for item in instance.last_checks]
