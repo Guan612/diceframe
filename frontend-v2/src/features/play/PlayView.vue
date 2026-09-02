@@ -1044,6 +1044,7 @@ onBeforeUnmount(() => {
           :player-name="economyPlayerName"
           :dismiss-label="pendingEconomyDismissLabel(pendingPay)"
           :help="pendingEconomyHelp(pendingPay)"
+          :solo="Boolean(game.detail.value?.solo_mode)"
           @dismiss="postponePendingPay"
           @reject="resolvePay(false)"
           @confirm="resolvePay(true)"
