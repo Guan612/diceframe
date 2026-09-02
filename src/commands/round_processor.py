@@ -23,6 +23,8 @@ from src.commands.economy_effects import (
     pending_decision_notice,
     repair_unbacked_purchase,
     currency_labels_for_rule,
+    record_purchase_quote,
+    settle_purchase_quote,
     unbacked_purchase_notice,
     unearned_reward_notice,
 )
@@ -638,6 +640,9 @@ class RoundProcessor:
             response.narration, data, instance.language,
             currency_labels=currency_labels,
         )
+        record_purchase_quote(
+            instance, data, response.narration, currency_labels=currency_labels,
+        )
         dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
             instance, data, response.narration,
             actions=instance.action_queue,
@@ -656,6 +661,8 @@ class RoundProcessor:
         # from an explicit action plus an unambiguous rule currency amount.
         # Recompute after the repair so it receives the same pending-settlement
         # barrier and deferred-effect handling as model-emitted proposals.
+        economy_pending = has_economy_proposal(data)
+        settle_purchase_quote(instance, data, currency_labels=currency_labels)
         economy_pending = has_economy_proposal(data)
         deferred_effects = defer_narrative_effects(
             data, response,

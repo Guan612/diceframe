@@ -41,6 +41,11 @@ _PURCHASE_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
+_PURCHASE_CONFIRM_RE = re.compile(
+    r"(?:成交|买了|买下|购买|确认购买|接受报价|就要这个|行|可以|同意|付钱|结账|"
+    r"deal|accept|accepted|confirm|confirmed|buy it|take it|pay|yes|"
+    r"成約|購入|承知|支払う|了解です|はい|了承)", re.IGNORECASE,
+)
 def _currency_labels(currency_labels: Iterable[str] | None = None) -> tuple[str, ...]:
     """Return canonical rule labels plus legacy aliases for text recognition.
 
@@ -309,6 +314,106 @@ def has_server_purchase_guard(data: dict[str, Any]) -> bool:
         isinstance(proposal, dict) and proposal.get("source") == "server_purchase_guard"
         for proposal in proposals
     )
+
+def _purchase_quotes(instance: Any) -> list[dict[str, Any]]:
+    economy = getattr(instance, "economy", None)
+    if not isinstance(economy, dict):
+        return []
+    quotes = economy.setdefault("purchase_quotes", [])
+    if not isinstance(quotes, list):
+        economy["purchase_quotes"] = []
+    return economy["purchase_quotes"]
+
+
+def settle_purchase_quote(
+    instance: Any,
+    data: dict[str, Any],
+    *,
+    currency_labels: Iterable[str] | None = None,
+) -> bool:
+    """Turn an open quote into a typed proposal when a player confirms it."""
+
+    if has_economy_proposal(data):
+        return False
+    action_text = "\n".join(
+        str(action.get("text") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+    )
+    if not _PURCHASE_CONFIRM_RE.search(action_text):
+        return False
+    quotes = _purchase_quotes(instance)
+    if len(quotes) != 1:
+        return False
+    quote = quotes[0]
+    payer_uid = str(quote.get("payer_uid") or "")
+    if not payer_uid or payer_uid not in getattr(instance, "players", {}):
+        return False
+    items = [str(item).strip() for item in quote.get("items", []) if str(item).strip()]
+    amount = int(quote.get("amount", 0) or 0)
+    if amount <= 0 or not items:
+        return False
+    state_update = data.setdefault("state_update", {})
+    state_update.setdefault("loot", []).extend(
+        {"player": str(quote.get("recipient_uid") or payer_uid), "item": item}
+        for item in items
+    )
+    state_update.setdefault("economy_proposals", []).append({
+        "kind": "purchase", "uid": payer_uid, "amount": amount,
+        "recipient_uid": str(quote.get("recipient_uid") or payer_uid),
+        "items": items, "reason": str(quote.get("reason") or "购买商品"),
+        "approval_policy": "payer", "source": "server_purchase_quote",
+    })
+    quotes.clear()
+    return True
+
+
+def record_purchase_quote(
+    instance: Any,
+    data: dict[str, Any],
+    narration: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
+) -> bool:
+    """Persist one uncommitted shop quote for a later confirmation turn."""
+
+    if has_economy_proposal(data):
+        return False
+    state_update = data.get("state_update")
+    if not isinstance(state_update, dict):
+        return False
+    grants: list[tuple[str, str]] = []
+    for item in state_update.get("loot", []) if isinstance(state_update.get("loot"), list) else []:
+        if isinstance(item, dict) and str(item.get("player") or "").strip() and str(item.get("item") or "").strip():
+            grants.append((str(item["player"]), str(item["item"]).strip()))
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        for uid, update in players_update.items():
+            if isinstance(update, dict):
+                for key in ("equip_gain", "weapon_change"):
+                    if str(update.get(key) or "").strip():
+                        grants.append((str(uid), str(update[key]).strip()))
+    amounts = _currency_amounts(narration, currency_labels)
+    if len(grants) == 0 or len(amounts) != 1:
+        return False
+    quotes = _purchase_quotes(instance)
+    quotes[:] = [{
+        "run_id": str(getattr(instance, "run_id", "")),
+        "round": int(getattr(instance, "round_number", 0) or 0),
+        "payer_uid": grants[0][0], "recipient_uid": grants[0][0],
+        "amount": amounts[0], "items": [item for _uid, item in grants],
+        "reason": "购买商品", "status": "open",
+    }]
+    # A quote is only an offer.  Keep its items out of the immediate state
+    # update; confirmation will re-create the typed proposal and its deferred
+    # effect group.
+    state_update["loot"] = []
+    if isinstance(players_update, dict):
+        for update in players_update.values():
+            if isinstance(update, dict):
+                update.pop("equip_gain", None)
+                update.pop("weapon_change", None)
+    return True
 
 
 def discard_unearned_reward_proposals(

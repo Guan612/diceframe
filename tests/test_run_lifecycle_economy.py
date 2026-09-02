@@ -25,6 +25,8 @@ from src.commands.economy_effects import (
     guard_unbacked_payment_narration,
     repair_unbacked_purchase,
     defer_narrative_effects,
+    record_purchase_quote,
+    settle_purchase_quote,
 )
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
@@ -261,6 +263,19 @@ def test_purchase_guard_uses_ruleset_currency_labels() -> None:
     proposal = data["state_update"]["economy_proposals"][0]
     assert proposal["amount"] == 3
     assert proposal["items"] == ["通行证"]
+
+
+def test_purchase_quote_can_be_confirmed_on_next_turn() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "硬皮甲"}]}}
+    assert record_purchase_quote(instance, data, "硬皮甲，260金币。")
+    instance.action_queue = [{"user_id": "gm", "text": "行成交"}]
+    confirm_data = {"state_update": {}}
+    assert settle_purchase_quote(instance, confirm_data)
+    proposal = confirm_data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 260
+    assert proposal["items"] == ["硬皮甲"]
+    assert instance.economy["purchase_quotes"] == []
 
 
 def test_personal_purchase_with_effect_group_remains_blocking() -> None:
