@@ -185,6 +185,13 @@ async def create_payment_proposal(
                 "code": "REWRITE_IN_PROGRESS",
                 "error": "GM 正在重写历史回合，请稍后再发起支付",
             }
+        current = dependencies.games.get_instance(inst.game_key)
+        if current is None or current is not inst:
+            return {
+                "ok": False,
+                "code": "STALE_RUN",
+                "error": "游戏已重开或重置，请刷新后再发起支付",
+            }
         proposal = queue_proposal(
             inst,
             kind="purchase" if rewards else "payment",

@@ -14,6 +14,7 @@ from src.commands.economy_effects import (
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
+    has_server_purchase_guard,
     pending_decision_notice,
     repair_unbacked_purchase,
     unearned_reward_notice,
@@ -192,7 +193,9 @@ class SwipeGenerator:
         if dropped_rewards:
             narration = f"{narration}\n\n{unearned_reward_notice(instance.language)}".strip()
         dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
-            instance, data, narration, currency_labels=currency_labels,
+            instance, data, narration,
+            actions=target_entry.get("actions", []),
+            currency_labels=currency_labels,
         )
         if not purchase_was_ambiguous:
             dropped_purchase_items += discard_unbacked_purchase_items(
@@ -200,7 +203,10 @@ class SwipeGenerator:
             )
         if dropped_purchase_items:
             narration = f"{narration}\n\n{unbacked_purchase_notice(instance.language)}".strip()
-        deferred_effects = defer_narrative_effects(data, response)
+        deferred_effects = defer_narrative_effects(
+            data, response,
+            defer_state_update=not has_server_purchase_guard(data),
+        )
         economy_pending = has_economy_proposal(data)
         if economy_pending:
             narration = f"{narration}\n\n{pending_decision_notice(instance.language)}".strip()
