@@ -18,6 +18,29 @@ MAX_ECONOMY_OUTCOMES = 50
 MAX_EFFECT_GROUPS = 50
 MAX_EXTERNAL_EFFECT_DELIVERIES = 50
 
+# Explicit transition whitelist for the persisted offer state machine.  A
+# proposal starts at "pending"; "committed" may only be reversed by a rollback
+# (or reopened by a settlement-only rollback).  Everything else is terminal and
+# must never be re-resolved.
+PAYER_ECONOMY_KINDS = {"payment", "purchase", "fee", "transfer"}
+PROPOSAL_TRANSITIONS: dict[str, frozenset[str]] = {
+    "pending": frozenset({"committed", "declined", "cancelled", "rejected", "superseded"}),
+    "committed": frozenset({"reversed", "pending"}),
+}
+
+
+def proposal_transition_allowed(current_status: Any, next_status: str) -> bool:
+    return next_status in PROPOSAL_TRANSITIONS.get(str(current_status or "pending"), frozenset())
+
+
+def set_proposal_status(proposal: dict[str, Any], next_status: str) -> None:
+    """Move a persisted proposal along the whitelisted state machine."""
+
+    current = str(proposal.get("status") or "pending")
+    if not proposal_transition_allowed(current, next_status):
+        raise ValueError(f"illegal economy proposal transition: {current} -> {next_status}")
+    proposal["status"] = next_status
+
 
 def economy_revision(instance: Any) -> int:
     economy = getattr(instance, "economy", {})
@@ -345,7 +368,7 @@ def cancel_proposals_for_player(
         }
         if uid not in participant_uids:
             continue
-        proposal["status"] = "cancelled"
+        set_proposal_status(proposal, "cancelled")
         proposal["resolved_at"] = now
         proposal["resolution_code"] = resolution_code
         proposal_id = str(proposal.get("id") or "")
@@ -524,6 +547,11 @@ def queue_proposal(
         raise ValueError("unsupported economy proposal kind")
     if approval_policy not in APPROVAL_POLICIES:
         raise ValueError("unsupported economy approval policy")
+    payer_uid = str(payer_uid)
+    if payer_uid and kind in PAYER_ECONOMY_KINDS and payer_uid not in instance.players:
+        # Fail closed at the proposal layer: a payer outside the current game
+        # can never be settled, so the offer must not become pending.
+        raise ValueError("economy payer is not part of the current game")
     normalized_contributors = deepcopy(list(contributors or []))
     if approval_policy == "all_contributors":
         contributor_uids = [
@@ -659,7 +687,10 @@ def resolve_proposal(
 
     now = datetime.now(timezone.utc).isoformat()
     if not accepted:
-        proposal["status"] = "cancelled" if is_gm and actor_uid != payer_uid else "declined"
+        set_proposal_status(
+            proposal,
+            "cancelled" if is_gm and actor_uid != payer_uid else "declined",
+        )
         proposal["resolved_at"] = now
         instance.pending_payments = [
             item for item in instance.pending_payments if item.get("id") != proposal_id
@@ -708,7 +739,7 @@ def resolve_proposal(
             currency = sheet.get("currency") if isinstance(sheet.get("currency"), dict) else {}
             balances[uid] = int(currency.get("amount", sheet.get("gold", 0)) or 0)
             if balances[uid] < contribution_amount:
-                proposal["status"] = "rejected"
+                set_proposal_status(proposal, "rejected")
                 proposal["resolved_at"] = now
                 instance.pending_payments = [
                     item for item in instance.pending_payments
@@ -754,7 +785,7 @@ def resolve_proposal(
         currency = payer.get("currency") if isinstance(payer.get("currency"), dict) else {}
         current = int(currency.get("amount", payer.get("gold", 0)) or 0)
         if current < amount:
-            proposal["status"] = "rejected"
+            set_proposal_status(proposal, "rejected")
             proposal["resolved_at"] = now
             instance.pending_payments = [
                 item for item in instance.pending_payments if item.get("id") != proposal_id
@@ -834,7 +865,7 @@ def resolve_proposal(
     else:
         return {"ok": False, "code": "UNSUPPORTED_KIND", "error": "不支持的经济提案类型"}
 
-    proposal["status"] = "committed"
+    set_proposal_status(proposal, "committed")
     proposal["resolved_at"] = now
     transaction = {
         "id": f"tx_{uuid4().hex}",
@@ -884,8 +915,7 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
     rollback_round = int(round_number)
     purchase_quotes = instance.economy.get("purchase_quotes", [])
     if isinstance(purchase_quotes, list):
-        instance.economy["purchase_quotes"] = [
-            quote for quote in purchase_quotes
+        for quote in purchase_quotes:
             if not (
                 isinstance(quote, dict)
                 and quote.get("status", "open") == "open"
@@ -894,8 +924,13 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
                     not quote.get("run_id")
                     or str(quote.get("run_id")) == str(instance.run_id)
                 )
-            )
-        ]
+            ):
+                continue
+            # Retire the offer for audit instead of deleting it; only open
+            # quotes are actionable, so the cancelled mark is sufficient.
+            quote["status"] = "cancelled"
+            quote["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            quote["resolution_code"] = "ORIGIN_ROLLED_BACK"
     proposals = [
         item for item in instance.economy.get("proposals", [])
         if isinstance(item, dict)
@@ -932,9 +967,9 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
         if proposal_id not in origin_ids:
             continue
         if proposal.get("status") == "committed":
-            proposal["status"] = "reversed"
+            set_proposal_status(proposal, "reversed")
         elif proposal.get("status") == "pending":
-            proposal["status"] = "superseded"
+            set_proposal_status(proposal, "superseded")
         proposal.pop("resolved_at", None)
         source_ref = str(proposal.get("source_ref") or "")
         if source_ref:
@@ -955,7 +990,7 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
         if proposal_id not in settlement_ids or proposal_id in origin_ids:
             continue
         if proposal.get("status") == "committed" and proposal.get("run_id") == instance.run_id:
-            proposal["status"] = "pending"
+            set_proposal_status(proposal, "pending")
             proposal.pop("resolved_at", None)
             proposal.pop("resolution_code", None)
             if str(proposal.get("kind") or "payment") in {"payment", "purchase", "fee"}:

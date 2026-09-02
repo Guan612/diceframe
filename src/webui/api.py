@@ -1548,6 +1548,22 @@ class WebAPI:
             items=items,
         )
 
+    async def confirm_purchase_quote(self, game_key: str, quote_id: str, session_uid: str = "") -> dict[str, Any]:
+        return await characters.confirm_purchase_quote(
+            self._character_dependencies,
+            game_key,
+            quote_id,
+            session_uid,
+        )
+
+    async def cancel_purchase_quote(self, game_key: str, quote_id: str, session_uid: str = "") -> dict[str, Any]:
+        return await characters.cancel_purchase_quote(
+            self._character_dependencies,
+            game_key,
+            quote_id,
+            session_uid,
+        )
+
     async def _drain_economy_outbox(self, instance: Any) -> bool:
         return await characters.drain_economy_outbox(
             self._character_dependencies, instance,

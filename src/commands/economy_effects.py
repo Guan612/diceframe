@@ -10,10 +10,14 @@ decision group.
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import re
 from typing import Any, Iterable
+from uuid import uuid4
 
 from src.engine.language import localized_text
+
+_MAX_PURCHASE_QUOTE_HISTORY = 24
 
 _ECONOMY_STATE_KEYS = {"pending_payments", "economy_proposals"}
 _DEFERRED_DATA_KEYS = {
@@ -328,6 +332,55 @@ def _purchase_quotes(instance: Any) -> list[dict[str, Any]]:
     return economy["purchase_quotes"]
 
 
+def _open_purchase_quote(quotes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the single actionable offer; history entries are not open."""
+
+    open_quotes = [
+        quote for quote in quotes
+        if isinstance(quote, dict) and quote.get("status", "open") == "open"
+    ]
+    return open_quotes[0] if len(open_quotes) == 1 else None
+
+
+def _trim_purchase_quote_history(quotes: list[dict[str, Any]]) -> None:
+    open_entries = [
+        quote for quote in quotes
+        if isinstance(quote, dict) and quote.get("status", "open") == "open"
+    ]
+    resolved = [
+        quote for quote in quotes
+        if not (isinstance(quote, dict) and quote.get("status", "open") == "open")
+    ]
+    budget = max(0, _MAX_PURCHASE_QUOTE_HISTORY - len(open_entries))
+    quotes[:] = (resolved[-budget:] if budget else []) + open_entries
+
+
+def close_purchase_quote(
+    instance: Any,
+    quote_id: str,
+    *,
+    status: str,
+    resolution_code: str,
+) -> dict[str, Any] | None:
+    """Retire one persisted offer by id, keeping the audit entry in place."""
+
+    quote = next(
+        (
+            quote for quote in _purchase_quotes(instance)
+            if isinstance(quote, dict) and str(quote.get("id") or "") == str(quote_id)
+        ),
+        None,
+    )
+    if quote is None:
+        return None
+    if quote.get("status", "open") != "open":
+        return None
+    quote["status"] = status
+    quote["resolution_code"] = resolution_code
+    quote["resolved_at"] = datetime.now(timezone.utc).isoformat()
+    return quote
+
+
 def settle_purchase_quote(
     instance: Any,
     data: dict[str, Any],
@@ -346,10 +399,8 @@ def settle_purchase_quote(
     if len(confirming_uids) != 1:
         return False
     quotes = _purchase_quotes(instance)
-    if len(quotes) != 1:
-        return False
-    quote = quotes[0]
-    if quote.get("status", "open") != "open":
+    quote = _open_purchase_quote(quotes)
+    if quote is None:
         return False
     payer_uid = str(quote.get("payer_uid") or "")
     if (
@@ -410,7 +461,11 @@ def settle_purchase_quote(
         "items": items, "reason": str(quote.get("reason") or "购买商品"),
         "approval_policy": "payer", "source": "server_purchase_quote",
     })
-    quotes.clear()
+    # Retire the offer, keeping the audit entry; the queued proposal above is
+    # now the only path to settlement.
+    quote["status"] = "confirmed"
+    quote["resolved_at"] = datetime.now(timezone.utc).isoformat()
+    _trim_purchase_quote_history(quotes)
     return True
 
 
@@ -484,13 +539,19 @@ def record_purchase_quote(
         # invalidated by rollback; never replace its amount/items with a
         # later model narration.
         return False
-    quotes[:] = [{
+    payer_uid = bound_grants[0][0]
+    if payer_uid not in getattr(instance, "players", {}):
+        # An offer for a payer outside the current game can never settle.
+        return False
+    quotes.append({
+        "id": f"quote_{uuid4().hex}",
         "run_id": str(getattr(instance, "run_id", "")),
         "round": int(getattr(instance, "round_number", 0) or 0),
-        "payer_uid": bound_grants[0][0], "recipient_uid": bound_grants[0][0],
+        "payer_uid": payer_uid, "recipient_uid": payer_uid,
         "amount": amounts[0], "items": [item for _uid, item in bound_grants],
         "reason": "购买商品", "status": "open",
-    }]
+    })
+    _trim_purchase_quote_history(quotes)
     # A quote is only an offer.  Keep its items out of the immediate state
     # update; confirmation will re-create the typed proposal and its deferred
     # effect group.

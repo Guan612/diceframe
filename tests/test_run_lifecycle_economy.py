@@ -12,11 +12,13 @@ from src.engine.economy import (
     is_nonblocking_personal_purchase,
     pending_memory_deliveries,
     pending_memory_reversals,
+    proposal_transition_allowed,
     queue_effect_group,
     queue_proposal,
     reconcile_rollback_snapshot,
     reverse_round_economy,
     resolve_proposal,
+    set_proposal_status,
     _remove_reward_delta,
 )
 from src.commands.economy_effects import (
@@ -276,7 +278,8 @@ def test_purchase_quote_can_be_confirmed_on_next_turn() -> None:
     assert proposal["amount"] == 260
     assert proposal["items"] == ["硬皮甲"]
     assert confirm_data["state_update"].get("loot", []) == []
-    assert instance.economy["purchase_quotes"] == []
+    # 确认后报价保留为审计条目，只有 open 报价可再次结算。
+    assert instance.economy["purchase_quotes"][0]["status"] == "confirmed"
 
 
 def test_purchase_quote_requires_purchase_semantics_not_bare_currency() -> None:
@@ -369,7 +372,9 @@ def test_origin_round_rollback_discards_open_purchase_quote() -> None:
     assert record_purchase_quote(instance, data, "通行证售价5金币。")
     assert instance.economy["purchase_quotes"]
     reverse_round_economy(instance, 5)
-    assert instance.economy["purchase_quotes"] == []
+    quote = instance.economy["purchase_quotes"][0]
+    assert quote["status"] == "cancelled"
+    assert quote["resolution_code"] == "ORIGIN_ROLLED_BACK"
 
 
 def test_round_zero_rollback_discards_open_purchase_quote() -> None:
@@ -378,7 +383,61 @@ def test_round_zero_rollback_discards_open_purchase_quote() -> None:
     data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
     assert record_purchase_quote(instance, data, "通行证售价5金币。")
     reverse_round_economy(instance, 0)
-    assert instance.economy["purchase_quotes"] == []
+    assert instance.economy["purchase_quotes"][0]["status"] == "cancelled"
+
+
+def test_purchase_quote_keeps_single_open_offer_over_history() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    assert record_purchase_quote(instance, data, "通行证售价5金币。")
+    quote = instance.economy["purchase_quotes"][0]
+    assert quote["id"].startswith("quote_")
+    # 历史条目（已确认/已取消）不会阻止新报价，但同一时刻仍最多一个 open。
+    instance.action_queue = [{"user_id": "gm", "text": "行，成交"}]
+    assert settle_purchase_quote(instance, {"state_update": {}})
+    assert quote["status"] == "confirmed"
+    assert not settle_purchase_quote(instance, {"state_update": {}})
+    assert record_purchase_quote(instance, {"state_update": {"loot": [{"player": "gm", "item": "硬皮甲"}]}}, "硬皮甲售价260金币。")
+    open_quotes = [
+        item for item in instance.economy["purchase_quotes"]
+        if item.get("status", "open") == "open"
+    ]
+    assert len(open_quotes) == 1
+
+
+def test_proposal_status_transitions_are_whitelisted() -> None:
+    instance = _instance()
+    assert proposal_transition_allowed("pending", "committed")
+    assert proposal_transition_allowed("committed", "reversed")
+    assert proposal_transition_allowed("committed", "pending")
+    for terminal in ("declined", "cancelled", "rejected", "reversed", "superseded"):
+        assert not proposal_transition_allowed(terminal, "committed")
+        assert not proposal_transition_allowed(terminal, "pending")
+        assert not proposal_transition_allowed(terminal, "cancelled")
+    with pytest.raises(ValueError):
+        set_proposal_status({"status": "declined"}, "committed")
+
+    proposal = queue_proposal(
+        instance, kind="payment", payer_uid="gm", recipient_uid="gm", amount=1,
+    )
+    declined = resolve_proposal(instance, proposal["id"], actor_uid="gm", accepted=False)
+    assert declined["ok"] is True
+    for accepted in (True, False):
+        repeat = resolve_proposal(instance, proposal["id"], actor_uid="gm", accepted=accepted)
+        assert repeat["code"] == "ALREADY_RESOLVED"
+
+
+def test_queue_proposal_rejects_payer_outside_game() -> None:
+    instance = _instance()
+    with pytest.raises(ValueError):
+        queue_proposal(instance, kind="purchase", payer_uid="ghost", amount=5)
+    with pytest.raises(ValueError):
+        queue_proposal(instance, kind="transfer", payer_uid="ghost", amount=5)
+    # 奖励类提案没有付款人；收款人资格在结算时校验。
+    reward = queue_proposal(
+        instance, kind="reward", recipient_uid="p2", amount=5, approval_policy="gm",
+    )
+    assert reward["status"] == "pending"
 
 
 def test_purchase_quote_confirmation_requires_payer_and_current_run() -> None:

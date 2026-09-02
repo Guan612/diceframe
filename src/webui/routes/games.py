@@ -55,6 +55,8 @@ from src.webui.routes.game_gameplay_routes import (
     api_advance,
     api_payment_create,
     api_payment_resolve,
+    api_purchase_quote_confirm,
+    api_purchase_quote_cancel,
     api_swipe,
 )
 from src.webui.routes.game_character_routes import (
@@ -151,6 +153,14 @@ def register_games(app: web.Application) -> None:
         "/api/games/{game_key}/payments/{payment_id}", api_payment_resolve
     )
     app.router.add_post("/api/games/{game_key}/payments", api_payment_create)
+    app.router.add_post(
+        "/api/games/{game_key}/purchase-quotes/{quote_id}/confirm",
+        api_purchase_quote_confirm,
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/purchase-quotes/{quote_id}/cancel",
+        api_purchase_quote_cancel,
+    )
     app.router.add_get("/api/games/{game_key}/characters", api_chars)
     app.router.add_get("/api/games/{game_key}/log", api_log)
     app.router.add_route("DELETE", "/api/games/{game_key}", api_delete_game)

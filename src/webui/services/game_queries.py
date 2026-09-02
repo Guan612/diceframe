@@ -124,6 +124,29 @@ def game_detail(
             }
         )
     ]
+    open_purchase_quotes = [
+        {
+            "id": str(quote.get("id") or ""),
+            "payer_uid": str(quote.get("payer_uid") or ""),
+            "recipient_uid": str(
+                quote.get("recipient_uid") or quote.get("payer_uid") or ""
+            ),
+            "amount": int(quote.get("amount", 0) or 0),
+            "items": [str(item) for item in (quote.get("items") or []) if str(item)],
+            "reason": str(quote.get("reason") or ""),
+            "round": int(quote.get("round", 0) or 0),
+            "status": "open",
+        }
+        for quote in (getattr(instance, "economy", {}).get("purchase_quotes", []) or [])
+        if isinstance(quote, dict)
+        and quote.get("status", "open") == "open"
+        and str(quote.get("run_id") or "") == str(instance.run_id)
+        and (
+            not viewer_uid
+            or viewer_uid == instance.gm_uid
+            or viewer_uid == str(quote.get("payer_uid") or "")
+        )
+    ]
     detail = {
         "game_key": _GAME_KEY_SEP.join(instance.game_key),
         "run_id": instance.run_id,
@@ -168,6 +191,7 @@ def game_detail(
             )
         ],
         "economy_proposals": economy_proposals,
+        "purchase_quotes": open_purchase_quotes,
         "pending_luck_decisions": instance.pending_luck_checks(),
         "round_check_results": (
             [dict(item) for item in instance.last_checks]
