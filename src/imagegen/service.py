@@ -118,11 +118,10 @@ class ImageGenerationService:
             raise ValueError(f"不支持的图像生成 provider：{self.provider_id}")
         if not self.enabled:
             return
-        parsed = urlparse(self.base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
-            raise ValueError("图像生成 Base URL 必须是无内嵌凭据的 http(s) 地址")
-        if not self.model:
-            raise ValueError("启用图像生成时必须选择模型")
+        if self.base_url:
+            parsed = urlparse(self.base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+                raise ValueError("图像生成 Base URL 必须是无内嵌凭据的 http(s) 地址")
 
 
 def _is_local_endpoint(value: str) -> bool:

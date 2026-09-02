@@ -4,6 +4,7 @@ import pytest
 
 import web_server
 from src.common_factory import create_trpg_subsystems
+from src.imagegen import ImageGenerationService
 from src.llm.client import ProviderConfig
 
 
@@ -205,6 +206,52 @@ async def test_tts_config_reload_rebuilds_only_api_facade(monkeypatch):
     }, app))
 
     assert response.status == 200
+    assert app["subsystems"] is runtime
+    assert app["api"] is new_api
+    assert runtime.llm_client.closed == 0
+
+
+@pytest.mark.asyncio
+async def test_imagegen_can_be_enabled_before_provider_and_model_are_selected(
+    monkeypatch,
+    tmp_path,
+):
+    runtime = _runtime()
+    old_api = object()
+    new_api = object()
+    app = {"subsystems": runtime, "api": old_api, "plugin_host": None}
+    saved_states = []
+    monkeypatch.setattr(
+        web_server,
+        "save_config",
+        lambda: saved_states.append(dict(web_server.STATE)),
+    )
+    monkeypatch.setattr(
+        web_server,
+        "_build_subsystems",
+        lambda **kwargs: pytest.fail("图像生成配置不应重建游戏子系统"),
+    )
+    monkeypatch.setitem(web_server.STATE, "imagegen_enabled", False)
+    monkeypatch.setitem(web_server.STATE, "imagegen_provider_ref", "")
+    monkeypatch.setitem(web_server.STATE, "imagegen_base_url", "")
+    monkeypatch.setitem(web_server.STATE, "imagegen_model", "")
+
+    def make_api(subsystems, plugin_host=None, config=None):
+        assert subsystems is runtime
+        service = ImageGenerationService(config, tmp_path / "generated-images")
+        assert service.enabled is True
+        assert service.available is False
+        return new_api
+
+    monkeypatch.setattr(web_server, "_make_api", make_api)
+
+    response = await web_server.api_config_post(
+        _ConfigRequest({"imagegen_enabled": True}, app)
+    )
+
+    assert response.status == 200
+    assert web_server.STATE["imagegen_enabled"] is True
+    assert saved_states[-1]["imagegen_enabled"] is True
     assert app["subsystems"] is runtime
     assert app["api"] is new_api
     assert runtime.llm_client.closed == 0
