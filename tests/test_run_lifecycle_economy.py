@@ -299,6 +299,53 @@ def test_persisted_purchase_quote_wins_over_later_narration() -> None:
     assert confirmation["state_update"].get("loot", []) == []
 
 
+def test_confirmed_quote_overrides_conflicting_llm_purchase() -> None:
+    instance = _instance()
+    first = {"state_update": {"loot": [{"player": "gm", "item": "护甲"}]}}
+    assert record_purchase_quote(instance, first, "护甲售价260金币。")
+    instance.action_queue = [{"user_id": "gm", "text": "成交"}]
+    confirmation = {"state_update": {
+        "economy_proposals": [
+            {"kind": "purchase", "uid": "gm", "amount": 300, "items": ["护甲"]},
+            {"kind": "purchase", "uid": "gm", "amount": 2, "items": ["药水"]},
+        ],
+        "loot": [{"player": "gm", "item": "护甲"}],
+    }}
+    assert settle_purchase_quote(instance, confirmation)
+    purchases = confirmation["state_update"]["economy_proposals"]
+    assert len(purchases) == 2
+    quoted = next(item for item in purchases if item["items"] == ["护甲"])
+    assert quoted["amount"] == 260
+    assert any(item["items"] == ["药水"] for item in purchases)
+    assert confirmation["state_update"]["loot"] == []
+
+
+def test_unrelated_shop_price_does_not_quote_other_loot() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}
+    assert not record_purchase_quote(instance, data, "你找到短剑。药水售价5金币。")
+    assert data["state_update"]["loot"] == [{"player": "gm", "item": "短剑"}]
+
+
+def test_purchase_intent_for_other_item_does_not_quote_unrelated_loot() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "我想买药水"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}
+    assert not record_purchase_quote(instance, data, "你找到一把短剑。你还有50金币。")
+    assert data["state_update"]["loot"] == [{"player": "gm", "item": "短剑"}]
+
+
+def test_item_and_price_in_same_offer_records_quote() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "硬皮甲"}]}}
+    assert record_purchase_quote(instance, data, "商人把硬皮甲推到你面前：硬皮甲售价260金币。")
+    quote = instance.economy["purchase_quotes"][0]
+    assert quote["amount"] == 260
+    assert quote["items"] == ["硬皮甲"]
+    assert quote["payer_uid"] == "gm"
+    assert quote["run_id"] == instance.run_id
+
+
 def test_quote_confirmation_removes_model_repeated_purchase_item() -> None:
     instance = _instance()
     first = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}

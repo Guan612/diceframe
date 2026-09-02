@@ -336,8 +336,6 @@ def settle_purchase_quote(
 ) -> bool:
     """Turn an open quote into a typed proposal when a player confirms it."""
 
-    if has_economy_proposal(data):
-        return False
     confirming_uids = {
         str(action.get("user_id") or "")
         for action in getattr(instance, "action_queue", [])
@@ -386,7 +384,27 @@ def settle_purchase_quote(
             for key in ("equip_gain", "weapon_change"):
                 if str(player_update.get(key) or "").strip() in items:
                     player_update.pop(key, None)
-    state_update.setdefault("economy_proposals", []).append({
+    proposals = state_update.setdefault("economy_proposals", [])
+    def conflicts_with_quote(proposal: Any) -> bool:
+        if not isinstance(proposal, dict) or proposal.get("kind") != "purchase":
+            return False
+        rewards = proposal.get("rewards")
+        if isinstance(rewards, list) and any(
+            isinstance(item, dict)
+            and str(item.get("name") or item.get("item") or "").strip() in items
+            for item in rewards
+        ):
+            return True
+        proposal_items = proposal.get("items")
+        return isinstance(proposal_items, list) and any(
+            str(item).strip() in items for item in proposal_items
+        )
+
+    state_update["economy_proposals"] = [
+        proposal for proposal in proposals
+        if not conflicts_with_quote(proposal)
+    ]
+    state_update["economy_proposals"].append({
         "kind": "purchase", "uid": payer_uid, "amount": amount,
         "recipient_uid": str(quote.get("recipient_uid") or payer_uid),
         "items": items, "reason": str(quote.get("reason") or "购买商品"),
@@ -427,9 +445,25 @@ def record_purchase_quote(
         if isinstance(action, dict)
     )
     amounts = _currency_amounts(narration, currency_labels)
-    grant_uids = {uid for uid, _item in grants}
+    offer_pattern = _PURCHASE_OFFER_RE
+    sentences = re.split(r"[。！？.!?\n]+", str(narration or ""))
+    bound_grants = [
+        grant for grant in grants
+        if any(
+            grant[1].casefold() in sentence.casefold()
+            and offer_pattern.search(sentence)
+            and _currency_amount_pattern(currency_labels).search(sentence)
+            for sentence in sentences
+        )
+        or (
+            grant[1].casefold() in action_text.casefold()
+            and len(amounts) == 1
+            and bool(offer_pattern.search(narration))
+        )
+    ]
+    grant_uids = {uid for uid, _item in bound_grants}
     if (
-        len(grants) == 0
+        len(bound_grants) == 0
         or len(grant_uids) != 1
         or len(amounts) != 1
         or not (
@@ -453,19 +487,29 @@ def record_purchase_quote(
     quotes[:] = [{
         "run_id": str(getattr(instance, "run_id", "")),
         "round": int(getattr(instance, "round_number", 0) or 0),
-        "payer_uid": grants[0][0], "recipient_uid": grants[0][0],
-        "amount": amounts[0], "items": [item for _uid, item in grants],
+        "payer_uid": bound_grants[0][0], "recipient_uid": bound_grants[0][0],
+        "amount": amounts[0], "items": [item for _uid, item in bound_grants],
         "reason": "购买商品", "status": "open",
     }]
     # A quote is only an offer.  Keep its items out of the immediate state
     # update; confirmation will re-create the typed proposal and its deferred
     # effect group.
-    state_update["loot"] = []
+    bound_pairs = set(bound_grants)
+    if isinstance(state_update.get("loot"), list):
+        state_update["loot"] = [
+            entry for entry in state_update["loot"]
+            if not (
+                isinstance(entry, dict)
+                and (str(entry.get("player") or ""), str(entry.get("item") or "").strip()) in bound_pairs
+            )
+        ]
     if isinstance(players_update, dict):
-        for update in players_update.values():
-            if isinstance(update, dict):
-                update.pop("equip_gain", None)
-                update.pop("weapon_change", None)
+        for uid, update in players_update.items():
+            if not isinstance(update, dict):
+                continue
+            for key in ("equip_gain", "weapon_change"):
+                if (str(uid), str(update.get(key) or "").strip()) in bound_pairs:
+                    update.pop(key, None)
     return True
 
 
