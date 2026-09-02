@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from src.engine.language import localized_text
 
@@ -28,13 +28,6 @@ _DEFERRED_DATA_KEYS = {
     "xp_rewards",
 }
 
-_COMPLETED_PAYMENT_RE = re.compile(
-    r"(?:掏出|拿出|数出|数了|递出|放下|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
-    r"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:金币|金子|金)"
-    r"|(?:paid|spent|handed over|paid out)\s+"
-    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+gold",
-    re.IGNORECASE,
-)
 _CONDITIONAL_REWARD_RE = re.compile(
     r"(?:要是|如果|若是|完成[^。！？\n]{0,20}后|之后再|等你|待你|才能|才会|以后|将会|承诺|答应|promise|promises|will pay|\bif\b|\bonce\b|\bafter\b|\bwhen\b|\u3067\u304d\u305f\u3089|\u7d42\u308f\u3063\u305f\u3089)",
     re.IGNORECASE,
@@ -43,25 +36,80 @@ _COMPLETION_EVIDENCE_RE = re.compile(
     r"(?:完成|成功|击败|打倒|交付|归还|回收|达成|兑现|领取|earned|completed|complete|defeated|delivered|recovered|claimed|critical success|大成功)",
     re.IGNORECASE,
 )
-_UNBACKED_CHARGE_RE = re.compile(
-    r"(?:需要|需|必须|须|售价|价格|费用|收费|支付|付费|购买|买下|花费|缴纳|"
-    r"cost|price|charge|pay|purchase|spend)"
-    r"[^。！？\n]{0,24}?"
-    r"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:金币|金子|金|gold|credits?|dollars?)"
-    r"|(?:[一二三四五六七八九十百千万两\d]+)\s*(?:金币|金子|金|gold|credits?|dollars?)"
-    r"[^。！？\n]{0,16}?"
-    r"(?:需要|需|支付|付费|购买|买下|花费|缴纳|cost|price|charge|pay|purchase|spend)",
-    re.IGNORECASE,
-)
 _PURCHASE_INTENT_RE = re.compile(
     r"(?:买下|买了|购买|购入|买入|付费|支付|缴纳|花费|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
     re.IGNORECASE,
 )
 _FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
-_CURRENCY_AMOUNT_RE = re.compile(
-    r"(?P<amount>[0-9]+|[零〇一二三四五六七八九十百千万两]+)\s*(?:枚|个)?\s*(?:金币|金子|金|gold|credits?|dollars?)",
-    re.IGNORECASE,
-)
+def _currency_labels(currency_labels: Iterable[str] | None = None) -> tuple[str, ...]:
+    """Return canonical rule labels plus legacy aliases for text recognition.
+
+    Narrative parsing is only a repair/fail-closed guard; the persisted
+    currency schema remains authoritative.  Rule-provided labels let the same
+    guard work for custom economies (USD, credits, gems, etc.) without adding
+    ruleset branches to the generic engine.
+    """
+
+    labels = {
+        "金币", "金子", "金", "gold", "credits", "credit", "dollars", "dollar",
+    }
+    for label in currency_labels or ():
+        value = str(label or "").strip()
+        if value:
+            labels.add(value)
+    return tuple(sorted(labels, key=len, reverse=True))
+
+
+def currency_labels_for_rule(rule: Any) -> tuple[str, ...]:
+    """Project declared rule currency IDs/names into the generic text guard."""
+
+    system = getattr(rule, "currency_system", None)
+    if not isinstance(system, dict) and isinstance(rule, dict):
+        system = rule.get("currency_system")
+    units = system.get("units", []) if isinstance(system, dict) else []
+    labels: list[str] = []
+    if isinstance(units, list):
+        for unit in units:
+            if isinstance(unit, dict):
+                labels.extend(
+                    str(unit.get(key) or "").strip()
+                    for key in ("id", "name", "label")
+                    if str(unit.get(key) or "").strip()
+                )
+    return _currency_labels(labels)
+
+
+def _currency_amount_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
+    return re.compile(
+        rf"(?P<amount>[0-9]+|[零〇一二三四五六七八九十百千万两]+)"
+        rf"\s*(?:枚|个)?\s*(?:{labels})",
+        re.IGNORECASE,
+    )
+
+
+def _charge_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
+    return re.compile(
+        rf"(?:需要|需|必须|须|售价|价格|费用|收费|支付|付费|购买|买下|花费|缴纳|"
+        rf"cost|price|charge|pay|purchase|spend)[^。！？\n]{{0,24}}?"
+        rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
+        rf"|(?:[一二三四五六七八九十百千万两\d]+)\s*(?:{labels})"
+        rf"[^。！？\n]{{0,16}}?"
+        rf"(?:需要|需|支付|付费|购买|买下|花费|缴纳|cost|price|charge|pay|purchase|spend)",
+        re.IGNORECASE,
+    )
+
+
+def _completed_payment_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
+    return re.compile(
+        rf"(?:掏出|拿出|数出|数了|递出|放下|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
+        rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
+        rf"|(?:paid|spent|handed over|paid out)\s+"
+        rf"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:{labels})",
+        re.IGNORECASE,
+    )
 
 
 def _chinese_amount(value: str) -> int | None:
@@ -92,9 +140,12 @@ def _chinese_amount(value: str) -> int | None:
     return total + section + number
 
 
-def _currency_amounts(narration: str) -> list[int]:
+def _currency_amounts(
+    narration: str,
+    currency_labels: Iterable[str] | None = None,
+) -> list[int]:
     amounts: list[int] = []
-    for match in _CURRENCY_AMOUNT_RE.finditer(str(narration or "")):
+    for match in _currency_amount_pattern(currency_labels).finditer(str(narration or "")):
         amount = _chinese_amount(match.group("amount"))
         if amount is not None and amount > 0:
             amounts.append(amount)
@@ -105,6 +156,8 @@ def repair_unbacked_purchase(
     instance: Any,
     data: dict[str, Any],
     narration: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
 ) -> tuple[int, bool]:
     """Bind an explicit purchase to an economy proposal before state apply.
 
@@ -125,10 +178,9 @@ def repair_unbacked_purchase(
     )
     narrative_text = str(narration or "")
     explicit_purchase = bool(_PURCHASE_INTENT_RE.search(action_text))
-    priced_narrative = bool(
-        _UNBACKED_CHARGE_RE.search(narrative_text)
-        or _COMPLETED_PAYMENT_RE.search(narrative_text)
-    )
+    charge_re = _charge_pattern(currency_labels)
+    completed_payment_re = _completed_payment_pattern(currency_labels)
+    priced_narrative = bool(charge_re.search(narrative_text) or completed_payment_re.search(narrative_text))
     if not explicit_purchase and not priced_narrative:
         return 0, False
 
@@ -155,7 +207,7 @@ def repair_unbacked_purchase(
     if _FREE_PURCHASE_RE.search(narrative_text) and not priced_narrative:
         return 0, False
 
-    amounts = _currency_amounts(narrative_text)
+    amounts = _currency_amounts(narrative_text, currency_labels)
     actor_uids = {
         str(action.get("user_id") or "")
         for action in getattr(instance, "action_queue", [])
@@ -295,6 +347,8 @@ def guard_unbacked_payment_narration(
     narration: str,
     data: dict[str, Any],
     language: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
 ) -> str:
     """Prevent prose from claiming a completed payment without authority.
 
@@ -305,7 +359,8 @@ def guard_unbacked_payment_narration(
     """
 
     text = str(narration or "").strip()
-    if not text or has_economy_proposal(data) or not _COMPLETED_PAYMENT_RE.search(text):
+    completed_payment_re = _completed_payment_pattern(currency_labels)
+    if not text or has_economy_proposal(data) or not completed_payment_re.search(text):
         return text
     notice = {
         "en": "Authority notice: no payment proposal was created, so no gold was deducted. Ask the GM to issue a payment proposal if this fee should be charged.",
@@ -318,6 +373,8 @@ def guard_unbacked_payment_narration(
 def discard_unbacked_purchase_items(
     data: dict[str, Any],
     narration: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
 ) -> int:
     """Fail closed when prose describes a priced purchase without a proposal.
 
@@ -328,10 +385,9 @@ def discard_unbacked_purchase_items(
     """
 
     narration_text = str(narration or "")
-    if has_economy_proposal(data) or not (
-        _UNBACKED_CHARGE_RE.search(narration_text)
-        or _COMPLETED_PAYMENT_RE.search(narration_text)
-    ):
+    charge_re = _charge_pattern(currency_labels)
+    completed_payment_re = _completed_payment_pattern(currency_labels)
+    if has_economy_proposal(data) or not (charge_re.search(narration_text) or completed_payment_re.search(narration_text)):
         return 0
     state_update = data.get("state_update")
     if not isinstance(state_update, dict):

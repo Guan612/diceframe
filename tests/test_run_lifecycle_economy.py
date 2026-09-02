@@ -182,6 +182,23 @@ def test_ambiguous_purchase_without_pay_tag_drops_item_fail_closed() -> None:
     assert "equip_gain" not in data["state_update"]["players"]["gm"]
 
 
+def test_purchase_guard_uses_ruleset_currency_labels() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "购买通行证"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance,
+        data,
+        "柜台收取三枚灵石。",
+        currency_labels=("spirit_shard", "灵石"),
+    )
+    assert dropped == 0
+    assert ambiguous is False
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 3
+    assert proposal["items"] == ["通行证"]
+
+
 def test_personal_purchase_with_effect_group_remains_blocking() -> None:
     instance = _instance()
     purchase = queue_proposal(
