@@ -29,7 +29,7 @@ _DEFERRED_DATA_KEYS = {
 }
 
 _COMPLETED_PAYMENT_RE = re.compile(
-    r"(?:掏出|拿出|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
+    r"(?:掏出|拿出|数出|数了|递出|放下|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
     r"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:金币|金子|金)"
     r"|(?:paid|spent|handed over|paid out)\s+"
     r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+gold",
@@ -53,6 +53,150 @@ _UNBACKED_CHARGE_RE = re.compile(
     r"(?:需要|需|支付|付费|购买|买下|花费|缴纳|cost|price|charge|pay|purchase|spend)",
     re.IGNORECASE,
 )
+_PURCHASE_INTENT_RE = re.compile(
+    r"(?:买下|买了|购买|购入|买入|付费|支付|缴纳|花费|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
+    re.IGNORECASE,
+)
+_FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
+_CURRENCY_AMOUNT_RE = re.compile(
+    r"(?P<amount>[0-9]+|[零〇一二三四五六七八九十百千万两]+)\s*(?:枚|个)?\s*(?:金币|金子|金|gold|credits?|dollars?)",
+    re.IGNORECASE,
+)
+
+
+def _chinese_amount(value: str) -> int | None:
+    """Parse the small Chinese numerals commonly used in narrative prices."""
+
+    if value.isdigit():
+        return int(value)
+    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    units = {"十": 10, "百": 100, "千": 1000, "万": 10000}
+    total = 0
+    section = 0
+    number = 0
+    for char in value:
+        if char in digits:
+            number = digits[char]
+        elif char in units:
+            unit = units[char]
+            if unit == 10000:
+                section = (section + number) * unit
+                total += section
+                section = 0
+            else:
+                section += (number or 1) * unit
+            number = 0
+        else:
+            return None
+    return total + section + number
+
+
+def _currency_amounts(narration: str) -> list[int]:
+    amounts: list[int] = []
+    for match in _CURRENCY_AMOUNT_RE.finditer(str(narration or "")):
+        amount = _chinese_amount(match.group("amount"))
+        if amount is not None and amount > 0:
+            amounts.append(amount)
+    return amounts
+
+
+def repair_unbacked_purchase(
+    instance: Any,
+    data: dict[str, Any],
+    narration: str,
+) -> tuple[int, bool]:
+    """Bind an explicit purchase to an economy proposal before state apply.
+
+    Item tags are intentionally independent from payment tags for ordinary
+    loot, but that old shape allowed a model to emit ``EQUIP`` for a purchase
+    while omitting ``PAY``.  The server now uses the player's explicit purchase
+    intent plus one unambiguous currency amount to synthesize the same typed
+    purchase proposal.  Ambiguous prices fail closed and suppress the grant.
+    """
+
+    state_update = data.get("state_update")
+    if not isinstance(state_update, dict) or has_economy_proposal(data):
+        return 0, False
+    action_text = "\n".join(
+        str(action.get("text") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+    )
+    narrative_text = str(narration or "")
+    explicit_purchase = bool(_PURCHASE_INTENT_RE.search(action_text))
+    priced_narrative = bool(
+        _UNBACKED_CHARGE_RE.search(narrative_text)
+        or _COMPLETED_PAYMENT_RE.search(narrative_text)
+    )
+    if not explicit_purchase and not priced_narrative:
+        return 0, False
+
+    grants: list[tuple[str, str]] = []
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        for uid, update in players_update.items():
+            if not isinstance(update, dict):
+                continue
+            for key in ("equip_gain", "weapon_change"):
+                item = str(update.get(key) or "").strip()
+                if item:
+                    grants.append((str(uid), item))
+    loot = state_update.get("loot")
+    if isinstance(loot, list):
+        for item in loot:
+            if isinstance(item, dict):
+                uid = str(item.get("player") or "")
+                name = str(item.get("item") or "").strip()
+                if uid and name:
+                    grants.append((uid, name))
+    if not grants:
+        return 0, False
+    if _FREE_PURCHASE_RE.search(narrative_text) and not priced_narrative:
+        return 0, False
+
+    amounts = _currency_amounts(narrative_text)
+    actor_uids = {
+        str(action.get("user_id") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+        and str(action.get("user_id") or "") in getattr(instance, "players", {})
+        and _PURCHASE_INTENT_RE.search(str(action.get("text") or ""))
+    }
+    grant_uids = {uid for uid, _item in grants}
+    payer_candidates = actor_uids & grant_uids
+    if len(amounts) != 1 or len(payer_candidates) != 1:
+        if isinstance(players_update, dict):
+            for update in players_update.values():
+                if isinstance(update, dict):
+                    update.pop("equip_gain", None)
+                    update.pop("weapon_change", None)
+        if isinstance(loot, list):
+            state_update["loot"] = []
+        return len(grants), True
+    payer_uid = next(iter(payer_candidates))
+    amount = amounts[0]
+    if amount > 100_000:
+        if isinstance(players_update, dict):
+            for update in players_update.values():
+                if isinstance(update, dict):
+                    update.pop("equip_gain", None)
+                    update.pop("weapon_change", None)
+        if isinstance(loot, list):
+            state_update["loot"] = []
+        return len(grants), True
+    items = [item for uid, item in grants if uid == payer_uid]
+    data.setdefault("state_update", {}).setdefault("economy_proposals", []).append({
+        "kind": "purchase",
+        "uid": payer_uid,
+        "amount": amount,
+        "recipient_uid": payer_uid,
+        "items": items,
+        "reason": f"购买 {'、'.join(items)}",
+        "approval_policy": "payer",
+        "source": "server_purchase_guard",
+    })
+    return 0, False
 
 
 def _meaningful(value: Any) -> bool:
@@ -183,16 +327,29 @@ def discard_unbacked_purchase_items(
     the GM can issue a proposal explicitly on a later turn.
     """
 
-    if has_economy_proposal(data) or not _UNBACKED_CHARGE_RE.search(str(narration or "")):
+    narration_text = str(narration or "")
+    if has_economy_proposal(data) or not (
+        _UNBACKED_CHARGE_RE.search(narration_text)
+        or _COMPLETED_PAYMENT_RE.search(narration_text)
+    ):
         return 0
     state_update = data.get("state_update")
     if not isinstance(state_update, dict):
         return 0
+    dropped = 0
     loot = state_update.get("loot")
-    if not isinstance(loot, list) or not loot:
-        return 0
-    dropped = len(loot)
-    state_update["loot"] = []
+    if isinstance(loot, list) and loot:
+        dropped += len(loot)
+        state_update["loot"] = []
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        for player_update in players_update.values():
+            if not isinstance(player_update, dict):
+                continue
+            for key in ("equip_gain", "weapon_change"):
+                if key in player_update:
+                    dropped += 1
+                    player_update.pop(key, None)
     return dropped
 
 

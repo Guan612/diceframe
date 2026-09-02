@@ -20,6 +20,7 @@ from src.commands.economy_effects import (
     guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    repair_unbacked_purchase,
     unbacked_purchase_notice,
     unearned_reward_notice,
 )
@@ -632,9 +633,13 @@ class RoundProcessor:
         response.narration = guard_unbacked_payment_narration(
             response.narration, data, instance.language,
         )
-        dropped_purchase_items = discard_unbacked_purchase_items(
-            data, response.narration,
+        dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
+            instance, data, response.narration,
         )
+        if not purchase_was_ambiguous:
+            dropped_purchase_items += discard_unbacked_purchase_items(
+                data, response.narration,
+            )
         if dropped_purchase_items:
             response.narration = (
                 f"{response.narration or ''}\n\n"

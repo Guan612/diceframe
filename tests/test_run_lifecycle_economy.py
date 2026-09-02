@@ -23,6 +23,7 @@ from src.commands.economy_effects import (
     discard_unearned_reward_proposals,
     discard_unbacked_purchase_items,
     guard_unbacked_payment_narration,
+    repair_unbacked_purchase,
 )
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
@@ -148,6 +149,37 @@ def test_purchase_loot_is_kept_when_proposal_exists() -> None:
     }
     assert discard_unbacked_purchase_items(data, "通行证需要支付5金币。") == 0
     assert data["state_update"]["loot"]
+
+
+def test_explicit_purchase_with_omitted_pay_tag_becomes_pending_proposal() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下硬皮甲"}]
+    data = {
+        "state_update": {
+            "players": {"gm": {"equip_gain": "硬皮甲"}},
+        },
+    }
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "你从钱袋里数出二十五枚金币，放在柜台上。"
+    )
+    assert dropped == 0
+    assert ambiguous is False
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["kind"] == "purchase"
+    assert proposal["amount"] == 25
+    assert proposal["items"] == ["硬皮甲"]
+
+
+def test_ambiguous_purchase_without_pay_tag_drops_item_fail_closed() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下硬皮甲"}]
+    data = {"state_update": {"players": {"gm": {"equip_gain": "硬皮甲"}}}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "店里有五金币的药水和二十五金币的硬皮甲。"
+    )
+    assert dropped == 1
+    assert ambiguous is True
+    assert "equip_gain" not in data["state_update"]["players"]["gm"]
 
 
 def test_personal_purchase_with_effect_group_remains_blocking() -> None:
