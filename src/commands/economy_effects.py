@@ -157,6 +157,7 @@ def repair_unbacked_purchase(
     data: dict[str, Any],
     narration: str,
     *,
+    actions: Iterable[dict[str, Any]] | None = None,
     currency_labels: Iterable[str] | None = None,
 ) -> tuple[int, bool]:
     """Bind an explicit purchase to an economy proposal before state apply.
@@ -171,9 +172,10 @@ def repair_unbacked_purchase(
     state_update = data.get("state_update")
     if not isinstance(state_update, dict) or has_economy_proposal(data):
         return 0, False
+    action_records = list(actions) if actions is not None else list(getattr(instance, "action_queue", []))
     action_text = "\n".join(
         str(action.get("text") or "")
-        for action in getattr(instance, "action_queue", [])
+        for action in action_records
         if isinstance(action, dict)
     )
     narrative_text = str(narration or "")
@@ -207,15 +209,25 @@ def repair_unbacked_purchase(
     if _FREE_PURCHASE_RE.search(narrative_text) and not priced_narrative:
         return 0, False
 
+    # Bind only grants named by the purchase context.  If the narration does
+    # not name an item (legacy responses), retain the conservative behavior of
+    # treating all grants for the sole payer as transaction-bound.
+    context_text = f"{action_text}\n{narrative_text}"
+    named_grants = [
+        grant for grant in grants
+        if grant[1].casefold() in context_text.casefold()
+    ]
+    bound_grants = named_grants or grants
+
     amounts = _currency_amounts(narrative_text, currency_labels)
     actor_uids = {
         str(action.get("user_id") or "")
-        for action in getattr(instance, "action_queue", [])
+        for action in action_records
         if isinstance(action, dict)
         and str(action.get("user_id") or "") in getattr(instance, "players", {})
         and _PURCHASE_INTENT_RE.search(str(action.get("text") or ""))
     }
-    grant_uids = {uid for uid, _item in grants}
+    grant_uids = {uid for uid, _item in bound_grants}
     payer_candidates = actor_uids & grant_uids
     if len(amounts) != 1 or len(payer_candidates) != 1:
         if isinstance(players_update, dict):
@@ -237,8 +249,8 @@ def repair_unbacked_purchase(
         if isinstance(loot, list):
             state_update["loot"] = []
         return len(grants), True
-    items = [item for uid, item in grants if uid == payer_uid]
-    data.setdefault("state_update", {}).setdefault("economy_proposals", []).append({
+    items = [item for uid, item in bound_grants if uid == payer_uid]
+    proposal = {
         "kind": "purchase",
         "uid": payer_uid,
         "amount": amount,
@@ -247,7 +259,26 @@ def repair_unbacked_purchase(
         "reason": f"购买 {'、'.join(items)}",
         "approval_policy": "payer",
         "source": "server_purchase_guard",
-    })
+    }
+    data.setdefault("state_update", {}).setdefault("economy_proposals", []).append(proposal)
+    # The proposal's rewards are the sole authoritative delivery path. Consume
+    # only grants bound to this payer/items; unrelated loot remains intact.
+    if isinstance(loot, list):
+        state_update["loot"] = [
+            entry for entry in loot
+            if not (
+                isinstance(entry, dict)
+                and str(entry.get("player") or "") == payer_uid
+                and str(entry.get("item") or "").strip() in items
+            )
+        ]
+    if isinstance(players_update, dict):
+        for uid, update in players_update.items():
+            if str(uid) != payer_uid or not isinstance(update, dict):
+                continue
+            for key in ("equip_gain", "weapon_change"):
+                if str(update.get(key) or "").strip() in items:
+                    update.pop(key, None)
     return 0, False
 
 
@@ -266,6 +297,17 @@ def has_economy_proposal(data: dict[str, Any]) -> bool:
     return bool(
         state_update.get("pending_payments")
         or state_update.get("economy_proposals")
+    )
+
+
+def has_server_purchase_guard(data: dict[str, Any]) -> bool:
+    """Whether this response contains a server-repaired purchase proposal."""
+
+    state_update = data.get("state_update")
+    proposals = state_update.get("economy_proposals") if isinstance(state_update, dict) else None
+    return isinstance(proposals, list) and any(
+        isinstance(proposal, dict) and proposal.get("source") == "server_purchase_guard"
+        for proposal in proposals
     )
 
 
@@ -420,22 +462,70 @@ def unbacked_purchase_notice(language: str) -> str:
 def defer_narrative_effects(
     data: dict[str, Any],
     response: Any,
+    *,
+    defer_state_update: bool = True,
 ) -> dict[str, Any]:
     """Remove decision-dependent effects from the immediate round response."""
 
     if not has_economy_proposal(data):
         return {}
     state_update = dict(data.get("state_update") or {})
-    immediate_state = {
-        key: deepcopy(value)
-        for key, value in state_update.items()
-        if key in _ECONOMY_STATE_KEYS
-    }
-    deferred_state = {
-        key: deepcopy(value)
-        for key, value in state_update.items()
-        if key not in _ECONOMY_STATE_KEYS and _meaningful(value)
-    }
+    if not defer_state_update and has_server_purchase_guard(data):
+        # A repaired purchase only proves that the purchased item is
+        # settlement-dependent.  Keep the explicitly remaining item grants on
+        # the normal pipeline, but fail closed for every other state field.
+        immediate_state = {
+            key: deepcopy(value)
+            for key, value in state_update.items()
+            if key in _ECONOMY_STATE_KEYS or key == "loot"
+        }
+        deferred_state = {
+            key: deepcopy(value)
+            for key, value in state_update.items()
+            if key not in _ECONOMY_STATE_KEYS and key != "loot" and _meaningful(value)
+        }
+        players = state_update.get("players")
+        if isinstance(players, dict):
+            immediate_players: dict[str, dict[str, Any]] = {}
+            deferred_players: dict[str, dict[str, Any]] = {}
+            for uid, raw_update in players.items():
+                if not isinstance(raw_update, dict):
+                    if _meaningful(raw_update):
+                        deferred_players[str(uid)] = deepcopy(raw_update)
+                    continue
+                immediate_update = {
+                    key: deepcopy(value)
+                    for key, value in raw_update.items()
+                    if key in {"equip_gain", "weapon_change"} and _meaningful(value)
+                }
+                deferred_update = {
+                    key: deepcopy(value)
+                    for key, value in raw_update.items()
+                    if key not in {"equip_gain", "weapon_change"} and _meaningful(value)
+                }
+                if immediate_update:
+                    immediate_players[str(uid)] = immediate_update
+                if deferred_update:
+                    deferred_players[str(uid)] = deferred_update
+            if immediate_players:
+                immediate_state["players"] = immediate_players
+            else:
+                immediate_state.pop("players", None)
+            if deferred_players:
+                deferred_state["players"] = deferred_players
+            else:
+                deferred_state.pop("players", None)
+    else:
+        immediate_state = {
+            key: deepcopy(value)
+            for key, value in state_update.items()
+            if not defer_state_update or key in _ECONOMY_STATE_KEYS
+        }
+        deferred_state = {
+            key: deepcopy(value)
+            for key, value in state_update.items()
+            if defer_state_update and key not in _ECONOMY_STATE_KEYS and _meaningful(value)
+        }
     deferred: dict[str, Any] = {}
     if deferred_state:
         deferred["state_update"] = deferred_state

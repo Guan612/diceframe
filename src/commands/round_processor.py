@@ -19,6 +19,7 @@ from src.commands.economy_effects import (
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
+    has_server_purchase_guard,
     pending_decision_notice,
     repair_unbacked_purchase,
     currency_labels_for_rule,
@@ -455,6 +456,8 @@ class RoundProcessor:
                 item.get("round") == round_number for item in current.log
             ):
                 return  # 该回合已被回滚删除，放弃本次生图
+            if self._image_generation is None:
+                return
             result = await self._image_generation.generate(ImageGenerationRequest(
                 prompt=prompt,
                 purpose="scene",
@@ -636,7 +639,9 @@ class RoundProcessor:
             currency_labels=currency_labels,
         )
         dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
-            instance, data, response.narration, currency_labels=currency_labels,
+            instance, data, response.narration,
+            actions=instance.action_queue,
+            currency_labels=currency_labels,
         )
         if not purchase_was_ambiguous:
             dropped_purchase_items += discard_unbacked_purchase_items(
@@ -652,7 +657,10 @@ class RoundProcessor:
         # Recompute after the repair so it receives the same pending-settlement
         # barrier and deferred-effect handling as model-emitted proposals.
         economy_pending = has_economy_proposal(data)
-        deferred_effects = defer_narrative_effects(data, response)
+        deferred_effects = defer_narrative_effects(
+            data, response,
+            defer_state_update=not has_server_purchase_guard(data),
+        )
         if economy_pending:
             notice = pending_decision_notice(instance.language)
             response.narration = f"{response.narration or ''}\n\n{notice}".strip()

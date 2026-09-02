@@ -24,6 +24,7 @@ from src.commands.economy_effects import (
     discard_unbacked_purchase_items,
     guard_unbacked_payment_narration,
     repair_unbacked_purchase,
+    defer_narrative_effects,
 )
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
@@ -168,6 +169,69 @@ def test_explicit_purchase_with_omitted_pay_tag_becomes_pending_proposal() -> No
     assert proposal["kind"] == "purchase"
     assert proposal["amount"] == 25
     assert proposal["items"] == ["硬皮甲"]
+
+
+def test_repaired_purchase_consumes_bound_grant_for_single_delivery() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下治疗药水"}]
+    data = {
+        "state_update": {
+            "loot": [
+                {"player": "gm", "item": "治疗药水"},
+                {"player": "gm", "item": "任务赠品"},
+            ],
+        },
+    }
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "治疗药水需要5金币。", actions=instance.action_queue,
+    )
+    assert dropped == 0 and ambiguous is False
+    assert data["state_update"]["economy_proposals"][0]["items"] == ["治疗药水"]
+    assert data["state_update"]["loot"] == [{"player": "gm", "item": "任务赠品"}]
+
+
+def test_repaired_purchase_defers_dependent_player_state_but_keeps_item_grants() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下治疗药水并喝掉"}]
+    data = {
+        "state_update": {
+            "economy_proposals": [{
+                "kind": "purchase", "uid": "gm", "amount": 5,
+                "source": "server_purchase_guard",
+            }],
+            "loot": [{"player": "gm", "item": "任务赠品"}],
+            "players": {"gm": {"hp_change": 10, "equip_gain": "无关护符"}},
+            "scene_change": "不应立即进入",
+        },
+    }
+
+    class Response:
+        state_update = data["state_update"]
+        memory_delta = {}
+        info_asymmetry = {}
+        plot_update = {}
+
+    deferred = defer_narrative_effects(data, Response(), defer_state_update=False)
+
+    assert data["state_update"]["loot"] == [{"player": "gm", "item": "任务赠品"}]
+    assert data["state_update"]["players"] == {"gm": {"equip_gain": "无关护符"}}
+    assert "scene_change" not in data["state_update"]
+    assert deferred["state_update"]["players"] == {"gm": {"hp_change": 10}}
+    assert deferred["state_update"]["scene_change"] == "不应立即进入"
+
+
+def test_purchase_repair_uses_explicit_historical_actions() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "p2", "text": "买下另一件物品"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "治疗药水"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance,
+        data,
+        "治疗药水需要5金币。",
+        actions=[{"user_id": "gm", "text": "买下治疗药水"}],
+    )
+    assert dropped == 0 and ambiguous is False
+    assert data["state_update"]["economy_proposals"][0]["uid"] == "gm"
 
 
 def test_ambiguous_purchase_without_pay_tag_drops_item_fail_closed() -> None:
