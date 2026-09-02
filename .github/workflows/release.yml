@@ -178,19 +178,32 @@ jobs:
           python ../scripts/validate_docker_update.py "$docker_zip" --version "${GITHUB_REF_NAME#v}"
           sha256sum "$source_zip" "$portable_zip" "$docker_zip" > SHA256SUMS
 
-      - name: Attach to GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           body_path: RELEASE_NOTES.md
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true
-          overwrite_files: false
-          preserve_order: true
-          files: |
-            dist/DiceFrame-${{ github.ref_name }}-windows.zip
-            dist/DiceFrame-${{ github.ref_name }}-windows-portable.zip
-            dist/DiceFrame-${{ github.ref_name }}-docker-update-linux-amd64.zip
-            dist/SHA256SUMS
+
+      - name: Upload release assets in user-facing order
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          gh release upload "$tag" \
+            "dist/DiceFrame-${tag}-windows.zip" \
+            --clobber
+          gh release upload "$tag" \
+            "dist/DiceFrame-${tag}-windows-portable.zip" \
+            --clobber
+          gh release upload "$tag" \
+            "dist/DiceFrame-${tag}-docker-update-linux-amd64.zip" \
+            --clobber
+          gh release upload "$tag" \
+            "dist/SHA256SUMS" \
+            --clobber
 
   publish-docker:
     if: startsWith(github.ref, 'refs/tags/')
