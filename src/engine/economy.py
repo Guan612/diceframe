@@ -898,7 +898,10 @@ def reverse_round_economy(instance: Any, round_number: int) -> None:
     settlement_transactions = [
         transaction for transaction in transactions
         if transaction.get("status") == "committed"
-        and int(transaction.get("round", -1) or -1) == rollback_round
+        and (
+            int(transaction.get("round", -1) or -1) == rollback_round
+            or str(transaction.get("proposal_id") or "") in origin_ids
+        )
     ]
     settlement_ids = {
         str(transaction.get("proposal_id") or "")
@@ -1013,16 +1016,34 @@ def reconcile_rollback_snapshot(
     if not isinstance(snapshot, dict):
         return snapshot
     rollback_round = int(round_number)
+    # A proposal can be created in the rolled-back round but settled later
+    # while its decision barrier was still open.  ``reverse_round_economy``
+    # reverses that late transaction via its proposal origin, so snapshot
+    # reconciliation must use the same relation instead of looking only at
+    # the transaction's settlement round.
+    origin_proposal_ids = {
+        str(item.get("id") or "")
+        for item in instance.economy.get("proposals", [])
+        if isinstance(item, dict)
+        and int(item.get("round", -1) or -1) == rollback_round
+    }
     transactions = [
         item for item in instance.economy.get("transactions", [])
         if isinstance(item, dict)
         and item.get("status") == "reversed"
-        and int(item.get("round", -1) or -1) == rollback_round
+        and (
+            int(item.get("round", -1) or -1) == rollback_round
+            or str(item.get("proposal_id") or "") in origin_proposal_ids
+        )
     ]
     if not transactions:
         return snapshot
     reconciled = deepcopy(snapshot)
-    for transaction in transactions:
+    # Undo settlements in reverse commit order.  Each transaction's ``before``
+    # value is the state immediately before that settlement; applying an
+    # earlier transaction after a later one reconstructs the round's original
+    # balance and correctly removes stacked rewards.
+    for transaction in reversed(transactions):
         for entry in transaction.get("entries", []):
             if not isinstance(entry, dict):
                 continue

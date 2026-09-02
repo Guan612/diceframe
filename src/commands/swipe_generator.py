@@ -8,10 +8,12 @@ from copy import deepcopy
 from typing import Any
 
 from src.commands.economy_effects import (
+    discard_unearned_reward_proposals,
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    unearned_reward_notice,
 )
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.round_actions import format_check_results_constraint
@@ -178,6 +180,11 @@ class SwipeGenerator:
         narration = guard_unbacked_payment_narration(
             narration, data, instance.language,
         )
+        dropped_rewards = discard_unearned_reward_proposals(
+            instance, data, narration,
+        )
+        if dropped_rewards:
+            narration = f"{narration}\n\n{unearned_reward_notice(instance.language)}".strip()
         economy_pending = has_economy_proposal(data)
         deferred_effects = defer_narrative_effects(data, response)
         if economy_pending:

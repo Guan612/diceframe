@@ -573,6 +573,44 @@ async def test_create_game_uses_created_character_before_opening(web_api):
 
 
 @pytest.mark.asyncio
+async def test_opening_conditional_reward_is_not_queued(web_api, monkeypatch):
+    """Opening narration must not turn a future promise into a reward proposal."""
+    api, _lorebook, registry, fake_llm, _worlds_dir = web_api
+
+    async def opening_with_conditional_reward(*, system_prompt, user_message, **kwargs):
+        del system_prompt, user_message, kwargs
+        return LLMResponse(
+            content=(
+                "药剂师说，完成委托后会支付你十五枚金币。\n---\n"
+                "GOLD:gm:15:完成药剂师委托的报酬"
+            ),
+            narration="药剂师说，完成委托后会支付你十五枚金币。",
+            state_update=None,
+            memory_delta=None,
+            info_asymmetry=None,
+            plot_update=None,
+            total_tokens=12,
+            is_narration_only=False,
+            provider_used="fake",
+        )
+
+    monkeypatch.setattr(fake_llm, "call", opening_with_conditional_reward)
+    result = await api.create_game(
+        "template_world",
+        "条件奖励开场",
+        gm_uid="gm",
+        players=[{"character_name": "冒险者", "attributes": {"str": 12}}],
+    )
+
+    assert result["ok"] is True
+    instance = registry.get(api._parse_key(result["game_key"]))
+    assert instance is not None
+    assert instance.pending_payments == []
+    assert instance.economy["proposals"] == []
+    assert "奖励待确认" in instance.log[-1]["gm_response"]
+
+
+@pytest.mark.asyncio
 async def test_create_game_persists_and_returns_success_when_opening_generation_fails(
     web_api, monkeypatch,
 ):

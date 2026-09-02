@@ -36,7 +36,7 @@ _COMPLETED_PAYMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _CONDITIONAL_REWARD_RE = re.compile(
-    r"(?:要是|如果|若是|完成后|之后再|等你|待你|才能|才会|以后|将会|\bif\b|\bonce\b|\bafter\b|\bwhen\b|\u3067\u304d\u305f\u3089|\u7d42\u308f\u3063\u305f\u3089)",
+    r"(?:要是|如果|若是|完成[^。！？\n]{0,20}后|之后再|等你|待你|才能|才会|以后|将会|承诺|答应|promise|promises|will pay|\bif\b|\bonce\b|\bafter\b|\bwhen\b|\u3067\u304d\u305f\u3089|\u7d42\u308f\u3063\u305f\u3089)",
     re.IGNORECASE,
 )
 _COMPLETION_EVIDENCE_RE = re.compile(

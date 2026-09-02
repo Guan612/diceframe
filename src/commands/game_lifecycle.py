@@ -11,10 +11,12 @@ from typing import Any
 
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.economy_effects import (
+    discard_unearned_reward_proposals,
     defer_narrative_effects,
     guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    unearned_reward_notice,
 )
 from src.commands.state_update_applier import StateUpdateApplier
 from src.commands.tag_parser import (
@@ -305,6 +307,16 @@ class GameLifecycle:
                 },
             )
             start_data = {}
+        # Opening narration goes through the same reward qualification gate as
+        # normal rounds.  The model may describe an NPC promising payment for
+        # a task that has not happened yet; such a GOLD tag must not become a
+        # pending GM approval (or an eventual balance change) merely because
+        # it appeared in the first response.
+        dropped_rewards = discard_unearned_reward_proposals(
+            instance, start_data, narration,
+        )
+        if dropped_rewards:
+            narration = f"{narration}\n\n{unearned_reward_notice(instance.language)}".strip()
         economy_pending = bool(response is not None and has_economy_proposal(start_data))
         narration = guard_unbacked_payment_narration(
             narration, start_data, instance.language,

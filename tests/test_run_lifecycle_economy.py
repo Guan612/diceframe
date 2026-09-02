@@ -17,6 +17,7 @@ from src.engine.economy import (
     reconcile_rollback_snapshot,
     reverse_round_economy,
     resolve_proposal,
+    _remove_reward_delta,
 )
 from src.commands.economy_effects import (
     discard_unearned_reward_proposals,
@@ -334,6 +335,89 @@ async def test_gm_rollback_restores_late_purchase_character_and_ledger_consisten
     assert recovered.pending_payments[0]["status"] == "pending"
 
 
+@pytest.mark.asyncio
+async def test_real_swipe_reconciles_purchase_settled_after_target_round(
+    web_api, monkeypatch,
+) -> None:
+    """Swipe must undo a purchase settled after the target round snapshot."""
+    api, _lorebook, registry, llm, _worlds = web_api
+    created = await api.create_game(
+        "template_world",
+        "Swipe late settlement",
+        gm_uid="gm",
+        players=[{"character_name": "Hero", "attributes": {"str": 10}, "gold": 20}],
+    )
+    assert created["ok"] is True
+    instance = registry.get(api._parse_key(created["game_key"]))
+    assert instance is not None
+    uid = next(iter(instance.players))
+    instance.gm_uid = uid
+    # The offer predates the target round; only its later settlement belongs
+    # to the round that will be rewritten, so rollback should reopen it.
+    instance.round_number = 0
+    before = _snapshot_players(instance)
+    proposal = queue_proposal(
+        instance,
+        kind="purchase",
+        payer_uid=uid,
+        recipient_uid=uid,
+        amount=5,
+        rewards=[{"name": "通行证", "category": "key_item"}],
+        reason="购买通行证",
+    )
+
+    # Enter the target round and capture its pre-settlement state, then settle
+    # while the round is in progress (the late-payment boundary).
+    instance.round_number = 1
+    target_snapshot = _snapshot_players(instance)
+    settled = await api.resolve_payment(created["game_key"], proposal["id"], True, uid)
+    assert settled["ok"] is True
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == 15
+    assert any(item.get("name") == "通行证" for item in instance.get_character_sheet(uid)["key_items"])
+
+    # This mirrors the historical edge case: the persisted target entry carries
+    # a post-settlement snapshot even though its proposal originated in round 1.
+    instance.log.append({
+        "round": 1,
+        "actions": [],
+        "gm_response": "旧分支",
+        "pre_state_snapshot": target_snapshot,
+        "swipes": ["旧分支"],
+        "current_swipe": 0,
+    })
+
+    async def replacement_swipe(*, system_prompt, user_message, **kwargs):
+        del system_prompt, user_message, kwargs
+        return LLMResponse(
+            content="新的侧路分支。\n---\nNONE",
+            narration="新的侧路分支。",
+            state_update=None,
+            memory_delta=None,
+            info_asymmetry=None,
+            plot_update=None,
+            total_tokens=6,
+            is_narration_only=True,
+            provider_used="fake",
+        )
+
+    monkeypatch.setattr(llm, "call", replacement_swipe)
+    swipe_text = await api._handler.generate_swipe(instance, 1)
+
+    assert swipe_text == "新的侧路分支。"
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == before[uid]["currency"]["amount"]
+    assert instance.get_character_sheet(uid)["key_items"] == before[uid]["key_items"]
+    assert proposal["status"] == "pending"
+    assert any(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert instance.log[-1]["current_swipe"] == 1
+
+    registry._instances.clear()
+    recovered = await registry.load(instance.game_key)
+    assert recovered is not None
+    assert recovered.get_character_sheet(uid)["currency"]["amount"] == before[uid]["currency"]["amount"]
+    assert recovered.get_character_sheet(uid)["key_items"] == before[uid]["key_items"]
+    assert recovered.pending_payments[0]["status"] == "pending"
+
+
 def test_transfer_moves_currency_between_players_with_balanced_ledger() -> None:
     instance = _instance()
     proposal = queue_proposal(
@@ -354,6 +438,72 @@ def test_transfer_moves_currency_between_players_with_balanced_ledger() -> None:
     assert instance.get_character_sheet("gm")["currency"]["amount"] == 23
     assert instance.get_character_sheet("p2")["currency"]["amount"] == 27
     assert sum(entry["delta"] for entry in result["transaction"]["entries"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_rollback_reconciles_multiple_late_settlements_in_reverse_commit_order(tmp_path) -> None:
+    """Two purchases by one player restore the earliest balance and inventory."""
+    instance = _instance()
+    uid = "gm"
+    instance.round_number = 6
+    first = queue_proposal(
+        instance, kind="purchase", payer_uid=uid, recipient_uid=uid, amount=5,
+        rewards=[{"name": "药水", "category": "consumable"}],
+    )
+    second = queue_proposal(
+        instance, kind="purchase", payer_uid=uid, recipient_uid=uid, amount=5,
+        rewards=[{"name": "绳索", "category": "misc"}],
+    )
+    instance.round_number = 7
+    resolve_proposal(instance, first["id"], actor_uid=uid, accepted=True, grant_reward=_grant_inventory_reward)
+    resolve_proposal(instance, second["id"], actor_uid=uid, accepted=True, grant_reward=_grant_inventory_reward)
+    late_snapshot = _snapshot_players(instance)
+    assert late_snapshot[uid]["currency"]["amount"] == 20
+
+    # Exercise the aggregate's real rollback path, not only the reconciliation
+    # helper.  The persisted snapshot intentionally contains post-settlement
+    # state, matching the late-payment edge case.
+    instance.log.append({
+        "round": 7,
+        "actions": [],
+        "gm_response": "late settlements",
+        "round_start_snapshot": late_snapshot,
+    })
+    instance.round_number = 8
+    assert await instance.rollback_last_round() == 7
+
+    assert instance.get_character_sheet(uid)["currency"]["amount"] == 30
+    assert instance.get_character_sheet(uid)["gold"] == 30
+    assert instance.get_character_sheet(uid)["inventory"] == []
+    assert first["status"] == second["status"] == "pending"
+    assert {item["id"] for item in instance.pending_payments} == {first["id"], second["id"]}
+    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+
+    registry = GameRegistry(tmp_path / "saves")
+    registry.register(instance)
+    await registry.save(instance)
+    registry._instances.clear()
+    recovered = await registry.load(instance.game_key)
+    assert recovered is not None
+    assert recovered.get_character_sheet(uid)["currency"]["amount"] == 30
+    assert recovered.get_character_sheet(uid)["inventory"] == []
+    assert {item["id"] for item in recovered.pending_payments} == {first["id"], second["id"]}
+
+    # Retrying both reopened proposals charges and grants exactly once.
+    resolve_proposal(recovered, first["id"], actor_uid=uid, accepted=True, grant_reward=_grant_inventory_reward)
+    resolve_proposal(recovered, second["id"], actor_uid=uid, accepted=True, grant_reward=_grant_inventory_reward)
+    assert recovered.get_character_sheet(uid)["currency"]["amount"] == 20
+    assert [item["name"] for item in recovered.get_character_sheet(uid)["inventory"]] == ["药水", "绳索"]
+    assert sum(tx["status"] == "committed" for tx in recovered.economy["transactions"]) == 2
+
+
+def test_stacked_reward_delta_preserves_original_quantity() -> None:
+    before = [{"name": "Potion", "qty": 2}]
+    after_first = [{"name": "Potion", "qty": 3}]
+    after_second = [{"name": "Potion", "qty": 5}]
+    current = _remove_reward_delta(after_second, after_first, after_second)
+    current = _remove_reward_delta(current, before, after_first)
+    assert current == before
 
 
 def test_team_split_is_all_or_nothing() -> None:
