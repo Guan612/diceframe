@@ -25,6 +25,8 @@ from src.commands.economy_effects import (
     guard_unbacked_payment_narration,
     repair_unbacked_purchase,
     defer_narrative_effects,
+    record_purchase_quote,
+    settle_purchase_quote,
 )
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
@@ -261,6 +263,144 @@ def test_purchase_guard_uses_ruleset_currency_labels() -> None:
     proposal = data["state_update"]["economy_proposals"][0]
     assert proposal["amount"] == 3
     assert proposal["items"] == ["通行证"]
+
+
+def test_purchase_quote_can_be_confirmed_on_next_turn() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "硬皮甲"}]}}
+    assert record_purchase_quote(instance, data, "硬皮甲售价260金币。")
+    instance.action_queue = [{"user_id": "gm", "text": "行成交"}]
+    confirm_data = {"state_update": {}}
+    assert settle_purchase_quote(instance, confirm_data)
+    proposal = confirm_data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 260
+    assert proposal["items"] == ["硬皮甲"]
+    assert confirm_data["state_update"].get("loot", []) == []
+    assert instance.economy["purchase_quotes"] == []
+
+
+def test_purchase_quote_requires_purchase_semantics_not_bare_currency() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}
+    assert not record_purchase_quote(instance, data, "你找到短剑。你还剩50金币。")
+    assert instance.economy.get("purchase_quotes", []) == []
+
+
+def test_persisted_purchase_quote_wins_over_later_narration() -> None:
+    instance = _instance()
+    first = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}
+    assert record_purchase_quote(instance, first, "短剑售价260金币。")
+    instance.action_queue = [{"user_id": "gm", "text": "成交"}]
+    confirmation = {"state_update": {}}
+    assert settle_purchase_quote(instance, confirmation)
+    proposal = confirmation["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 260
+    assert proposal["items"] == ["短剑"]
+    assert confirmation["state_update"].get("loot", []) == []
+
+
+def test_confirmed_quote_overrides_conflicting_llm_purchase() -> None:
+    instance = _instance()
+    first = {"state_update": {"loot": [{"player": "gm", "item": "护甲"}]}}
+    assert record_purchase_quote(instance, first, "护甲售价260金币。")
+    instance.action_queue = [{"user_id": "gm", "text": "成交"}]
+    confirmation = {"state_update": {
+        "economy_proposals": [
+            {"kind": "purchase", "uid": "gm", "amount": 300, "items": ["护甲"]},
+            {"kind": "purchase", "uid": "gm", "amount": 2, "items": ["药水"]},
+        ],
+        "loot": [{"player": "gm", "item": "护甲"}],
+    }}
+    assert settle_purchase_quote(instance, confirmation)
+    purchases = confirmation["state_update"]["economy_proposals"]
+    assert len(purchases) == 2
+    quoted = next(item for item in purchases if item["items"] == ["护甲"])
+    assert quoted["amount"] == 260
+    assert any(item["items"] == ["药水"] for item in purchases)
+    assert confirmation["state_update"]["loot"] == []
+
+
+def test_unrelated_shop_price_does_not_quote_other_loot() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}
+    assert not record_purchase_quote(instance, data, "你找到短剑。药水售价5金币。")
+    assert data["state_update"]["loot"] == [{"player": "gm", "item": "短剑"}]
+
+
+def test_purchase_intent_for_other_item_does_not_quote_unrelated_loot() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "我想买药水"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}
+    assert not record_purchase_quote(instance, data, "你找到一把短剑。你还有50金币。")
+    assert data["state_update"]["loot"] == [{"player": "gm", "item": "短剑"}]
+
+
+def test_item_and_price_in_same_offer_records_quote() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "硬皮甲"}]}}
+    assert record_purchase_quote(instance, data, "商人把硬皮甲推到你面前：硬皮甲售价260金币。")
+    quote = instance.economy["purchase_quotes"][0]
+    assert quote["amount"] == 260
+    assert quote["items"] == ["硬皮甲"]
+    assert quote["payer_uid"] == "gm"
+    assert quote["run_id"] == instance.run_id
+
+
+def test_quote_confirmation_removes_model_repeated_purchase_item() -> None:
+    instance = _instance()
+    first = {"state_update": {"loot": [{"player": "gm", "item": "短剑"}]}}
+    assert record_purchase_quote(instance, first, "短剑售价260金币。")
+    instance.action_queue = [{"user_id": "gm", "text": "成交"}]
+    confirmation = {
+        "state_update": {
+            "loot": [{"player": "gm", "item": "短剑"}],
+            "players": {"gm": {"equip_gain": "短剑"}},
+        },
+    }
+    assert settle_purchase_quote(instance, confirmation)
+    assert confirmation["state_update"]["loot"] == []
+    assert confirmation["state_update"]["players"]["gm"] == {}
+
+
+def test_origin_round_rollback_discards_open_purchase_quote() -> None:
+    instance = _instance()
+    instance.round_number = 5
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    assert record_purchase_quote(instance, data, "通行证售价5金币。")
+    assert instance.economy["purchase_quotes"]
+    reverse_round_economy(instance, 5)
+    assert instance.economy["purchase_quotes"] == []
+
+
+def test_round_zero_rollback_discards_open_purchase_quote() -> None:
+    instance = _instance()
+    instance.round_number = 0
+    data = {"state_update": {"loot": [{"player": "gm", "item": "通行证"}]}}
+    assert record_purchase_quote(instance, data, "通行证售价5金币。")
+    reverse_round_economy(instance, 0)
+    assert instance.economy["purchase_quotes"] == []
+
+
+def test_purchase_quote_confirmation_requires_payer_and_current_run() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [{"player": "gm", "item": "硬皮甲"}]}}
+    assert record_purchase_quote(instance, data, "硬皮甲售价260金币。")
+    instance.action_queue = [{"user_id": "p2", "text": "行成交"}]
+    assert not settle_purchase_quote(instance, {"state_update": {}})
+    assert instance.economy["purchase_quotes"]
+    instance.action_queue = [{"user_id": "gm", "text": "行成交"}]
+    instance.run_id = "new-run"
+    assert not settle_purchase_quote(instance, {"state_update": {}})
+
+
+def test_purchase_quote_does_not_bundle_multiple_players() -> None:
+    instance = _instance()
+    data = {"state_update": {"loot": [
+        {"player": "gm", "item": "药水"},
+        {"player": "p2", "item": "卷轴"},
+    ]}}
+    assert not record_purchase_quote(instance, data, "商品共需10金币。")
+    assert instance.economy.get("purchase_quotes", []) == []
 
 
 def test_personal_purchase_with_effect_group_remains_blocking() -> None:

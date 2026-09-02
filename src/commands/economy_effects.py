@@ -41,6 +41,14 @@ _PURCHASE_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
+_PURCHASE_CONFIRM_RE = re.compile(
+    r"(?:成交|买了|买下|购买|确认购买|接受报价|就要这个|行|可以|同意|付钱|结账|"
+    r"deal|accept|accepted|confirm|confirmed|buy it|take it|pay|yes|"
+    r"成約|購入|承知|支払う|了解です|はい|了承)", re.IGNORECASE,
+)
+_PURCHASE_OFFER_RE = re.compile(
+    r"(?:需要|需|售价|价格|费用|收费|cost|price|charge)", re.IGNORECASE,
+)
 def _currency_labels(currency_labels: Iterable[str] | None = None) -> tuple[str, ...]:
     """Return canonical rule labels plus legacy aliases for text recognition.
 
@@ -309,6 +317,200 @@ def has_server_purchase_guard(data: dict[str, Any]) -> bool:
         isinstance(proposal, dict) and proposal.get("source") == "server_purchase_guard"
         for proposal in proposals
     )
+
+def _purchase_quotes(instance: Any) -> list[dict[str, Any]]:
+    economy = getattr(instance, "economy", None)
+    if not isinstance(economy, dict):
+        return []
+    quotes = economy.setdefault("purchase_quotes", [])
+    if not isinstance(quotes, list):
+        economy["purchase_quotes"] = []
+    return economy["purchase_quotes"]
+
+
+def settle_purchase_quote(
+    instance: Any,
+    data: dict[str, Any],
+    *,
+    currency_labels: Iterable[str] | None = None,
+) -> bool:
+    """Turn an open quote into a typed proposal when a player confirms it."""
+
+    confirming_uids = {
+        str(action.get("user_id") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+        and _PURCHASE_CONFIRM_RE.search(str(action.get("text") or ""))
+        and str(action.get("user_id") or "")
+    }
+    if len(confirming_uids) != 1:
+        return False
+    quotes = _purchase_quotes(instance)
+    if len(quotes) != 1:
+        return False
+    quote = quotes[0]
+    if quote.get("status", "open") != "open":
+        return False
+    payer_uid = str(quote.get("payer_uid") or "")
+    if (
+        not payer_uid
+        or payer_uid not in getattr(instance, "players", {})
+        or confirming_uids != {payer_uid}
+        or str(quote.get("run_id") or "") != str(getattr(instance, "run_id", ""))
+    ):
+        return False
+    items = [str(item).strip() for item in quote.get("items", []) if str(item).strip()]
+    amount = int(quote.get("amount", 0) or 0)
+    if amount <= 0 or not items:
+        return False
+    state_update = data.setdefault("state_update", {})
+    # The persisted quote is the only source of truth for purchased goods.
+    # Remove any model-repeated copy from ordinary LOOT/EQUIP before the
+    # proposal is queued, so confirmation cannot reintroduce double delivery.
+    loot = state_update.get("loot")
+    if isinstance(loot, list):
+        state_update["loot"] = [
+            entry for entry in loot
+            if not (
+                isinstance(entry, dict)
+                and str(entry.get("player") or "") == payer_uid
+                and str(entry.get("item") or "").strip() in items
+            )
+        ]
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        player_update = players_update.get(payer_uid)
+        if isinstance(player_update, dict):
+            for key in ("equip_gain", "weapon_change"):
+                if str(player_update.get(key) or "").strip() in items:
+                    player_update.pop(key, None)
+    proposals = state_update.setdefault("economy_proposals", [])
+    def conflicts_with_quote(proposal: Any) -> bool:
+        if not isinstance(proposal, dict) or proposal.get("kind") != "purchase":
+            return False
+        rewards = proposal.get("rewards")
+        if isinstance(rewards, list) and any(
+            isinstance(item, dict)
+            and str(item.get("name") or item.get("item") or "").strip() in items
+            for item in rewards
+        ):
+            return True
+        proposal_items = proposal.get("items")
+        return isinstance(proposal_items, list) and any(
+            str(item).strip() in items for item in proposal_items
+        )
+
+    state_update["economy_proposals"] = [
+        proposal for proposal in proposals
+        if not conflicts_with_quote(proposal)
+    ]
+    state_update["economy_proposals"].append({
+        "kind": "purchase", "uid": payer_uid, "amount": amount,
+        "recipient_uid": str(quote.get("recipient_uid") or payer_uid),
+        "items": items, "reason": str(quote.get("reason") or "购买商品"),
+        "approval_policy": "payer", "source": "server_purchase_quote",
+    })
+    quotes.clear()
+    return True
+
+
+def record_purchase_quote(
+    instance: Any,
+    data: dict[str, Any],
+    narration: str,
+    *,
+    currency_labels: Iterable[str] | None = None,
+) -> bool:
+    """Persist one uncommitted shop quote for a later confirmation turn."""
+
+    if has_economy_proposal(data):
+        return False
+    state_update = data.get("state_update")
+    if not isinstance(state_update, dict):
+        return False
+    grants: list[tuple[str, str]] = []
+    for item in state_update.get("loot", []) if isinstance(state_update.get("loot"), list) else []:
+        if isinstance(item, dict) and str(item.get("player") or "").strip() and str(item.get("item") or "").strip():
+            grants.append((str(item["player"]), str(item["item"]).strip()))
+    players_update = state_update.get("players")
+    if isinstance(players_update, dict):
+        for uid, update in players_update.items():
+            if isinstance(update, dict):
+                for key in ("equip_gain", "weapon_change"):
+                    if str(update.get(key) or "").strip():
+                        grants.append((str(uid), str(update[key]).strip()))
+    action_text = "\n".join(
+        str(action.get("text") or "")
+        for action in getattr(instance, "action_queue", [])
+        if isinstance(action, dict)
+    )
+    amounts = _currency_amounts(narration, currency_labels)
+    offer_pattern = _PURCHASE_OFFER_RE
+    sentences = re.split(r"[。！？.!?\n]+", str(narration or ""))
+    bound_grants = [
+        grant for grant in grants
+        if any(
+            grant[1].casefold() in sentence.casefold()
+            and offer_pattern.search(sentence)
+            and _currency_amount_pattern(currency_labels).search(sentence)
+            for sentence in sentences
+        )
+        or (
+            grant[1].casefold() in action_text.casefold()
+            and len(amounts) == 1
+            and bool(offer_pattern.search(narration))
+        )
+    ]
+    grant_uids = {uid for uid, _item in bound_grants}
+    if (
+        len(bound_grants) == 0
+        or len(grant_uids) != 1
+        or len(amounts) != 1
+        or not (
+            (
+                _PURCHASE_OFFER_RE.search(narration)
+                and _currency_amount_pattern(currency_labels).search(narration)
+            )
+            or _PURCHASE_INTENT_RE.search(action_text)
+        )
+    ):
+        return False
+    quotes = _purchase_quotes(instance)
+    if any(
+        isinstance(quote, dict) and quote.get("status", "open") == "open"
+        for quote in quotes
+    ):
+        # A persisted offer is authoritative until it is confirmed or
+        # invalidated by rollback; never replace its amount/items with a
+        # later model narration.
+        return False
+    quotes[:] = [{
+        "run_id": str(getattr(instance, "run_id", "")),
+        "round": int(getattr(instance, "round_number", 0) or 0),
+        "payer_uid": bound_grants[0][0], "recipient_uid": bound_grants[0][0],
+        "amount": amounts[0], "items": [item for _uid, item in bound_grants],
+        "reason": "购买商品", "status": "open",
+    }]
+    # A quote is only an offer.  Keep its items out of the immediate state
+    # update; confirmation will re-create the typed proposal and its deferred
+    # effect group.
+    bound_pairs = set(bound_grants)
+    if isinstance(state_update.get("loot"), list):
+        state_update["loot"] = [
+            entry for entry in state_update["loot"]
+            if not (
+                isinstance(entry, dict)
+                and (str(entry.get("player") or ""), str(entry.get("item") or "").strip()) in bound_pairs
+            )
+        ]
+    if isinstance(players_update, dict):
+        for uid, update in players_update.items():
+            if not isinstance(update, dict):
+                continue
+            for key in ("equip_gain", "weapon_change"):
+                if (str(uid), str(update.get(key) or "").strip()) in bound_pairs:
+                    update.pop(key, None)
+    return True
 
 
 def discard_unearned_reward_proposals(

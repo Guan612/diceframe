@@ -23,6 +23,8 @@ from src.commands.economy_effects import (
     pending_decision_notice,
     repair_unbacked_purchase,
     currency_labels_for_rule,
+    record_purchase_quote,
+    settle_purchase_quote,
     unbacked_purchase_notice,
     unearned_reward_notice,
 )
@@ -638,12 +640,19 @@ class RoundProcessor:
             response.narration, data, instance.language,
             currency_labels=currency_labels,
         )
-        dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
-            instance, data, response.narration,
-            actions=instance.action_queue,
-            currency_labels=currency_labels,
-        )
-        if not purchase_was_ambiguous:
+        settled_quote = settle_purchase_quote(instance, data, currency_labels=currency_labels)
+        if not settled_quote:
+            record_purchase_quote(
+                instance, data, response.narration, currency_labels=currency_labels,
+            )
+            dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
+                instance, data, response.narration,
+                actions=instance.action_queue,
+                currency_labels=currency_labels,
+            )
+        else:
+            dropped_purchase_items, purchase_was_ambiguous = 0, False
+        if not settled_quote and not purchase_was_ambiguous:
             dropped_purchase_items += discard_unbacked_purchase_items(
                 data, response.narration, currency_labels=currency_labels,
             )
