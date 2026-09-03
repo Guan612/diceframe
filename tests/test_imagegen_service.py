@@ -82,10 +82,32 @@ def test_service_availability_and_config_validation(tmp_path):
     }
     with pytest.raises(ImageGenerationError, match="尚未配置或启用"):
         asyncio.run(disabled.generate(ImageGenerationRequest(prompt="harbor")))
+
+    staged = ImageGenerationService(
+        _config(imagegen_base_url="", imagegen_model=""),
+        tmp_path,
+    )
+    assert staged.enabled is True
+    assert staged.available is False
+    with pytest.raises(ImageGenerationError, match="尚未配置或启用"):
+        asyncio.run(staged.generate(ImageGenerationRequest(prompt="harbor")))
+
+    staged_with_base_url = ImageGenerationService(
+        _config(imagegen_model=""),
+        tmp_path,
+    )
+    assert staged_with_base_url.enabled is True
+    assert staged_with_base_url.available is False
+
     with pytest.raises(ValueError, match="Base URL"):
         ImageGenerationService(_config(imagegen_base_url="file:///tmp/images"), tmp_path)
-    with pytest.raises(ValueError, match="必须选择模型"):
-        ImageGenerationService(_config(imagegen_model=""), tmp_path)
+    with pytest.raises(ValueError, match="Base URL"):
+        ImageGenerationService(
+            _config(imagegen_base_url="https://user:pass@images.example/v1"),
+            tmp_path,
+        )
+    with pytest.raises(ValueError, match="provider"):
+        ImageGenerationService(_config(imagegen_provider="unsupported"), tmp_path)
 
 
 def test_service_bypasses_proxy_for_local_endpoints(tmp_path):
