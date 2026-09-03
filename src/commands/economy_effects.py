@@ -16,6 +16,32 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from src.engine.language import localized_text
+from src.engine.intent.economy_intent import (
+    AMOUNT_SOURCE_MERCHANT_OFFER,
+    AMOUNT_SOURCE_NARRATION,
+    AMOUNT_SOURCE_PLAYER_ACTION,
+    bounded_economy_collection as _bounded_economy_collection,
+    has_economy_proposal,
+    record_purchase_clarification,
+    repair_missing_economy_proposals,
+    trim_open_history as _trim_open_history,
+)
+from src.engine.intent.matcher import (
+    match_open_merchant_offers,
+    normalized_item_name as _normalized_item_name,
+)
+from src.engine.intent.parser import (
+    FREE_PURCHASE_RE as _FREE_PURCHASE_RE,
+    PURCHASE_CONFIRM_RE as _PURCHASE_CONFIRM_RE,
+    PURCHASE_INTENT_RE as _PURCHASE_INTENT_RE,
+    PURCHASE_OFFER_RE as _PURCHASE_OFFER_RE,
+    charge_pattern as _charge_pattern,
+    completed_payment_pattern as _completed_payment_pattern,
+    currency_amount_pattern as _currency_amount_pattern,
+    currency_amounts as _currency_amounts,
+    currency_labels as _currency_labels,
+    currency_labels_for_rule,
+)
 
 _MAX_PURCHASE_QUOTE_HISTORY = 24
 _MAX_MERCHANT_OFFER_HISTORY = 24
@@ -23,10 +49,6 @@ _MAX_CLARIFICATION_HISTORY = 24
 
 # Price evidence ladder for repair: the seller's persisted quote outranks the
 # current narration, which outranks the acting player's own stated amount.
-AMOUNT_SOURCE_NARRATION = "narration"
-AMOUNT_SOURCE_PLAYER_ACTION = "player_action"
-AMOUNT_SOURCE_MERCHANT_OFFER = "merchant_offer"
-
 _ECONOMY_STATE_KEYS = {"pending_payments", "economy_proposals", "merchant_offers"}
 _DEFERRED_DATA_KEYS = {
     "confirmed",
@@ -48,130 +70,6 @@ _COMPLETION_EVIDENCE_RE = re.compile(
     r"(?:完成|成功|击败|打倒|交付|归还|回收|达成|兑现|领取|earned|completed|complete|defeated|delivered|recovered|claimed|critical success|大成功)",
     re.IGNORECASE,
 )
-_PURCHASE_INTENT_RE = re.compile(
-    r"(?:买下|买了|购买|购入|买入|付费|支付|缴纳|花费|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
-    re.IGNORECASE,
-)
-_FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
-_PURCHASE_CONFIRM_RE = re.compile(
-    r"(?:成交|买了|买下|购买|确认购买|接受报价|就要这个|行|可以|同意|付钱|结账|"
-    r"deal|accept|accepted|confirm|confirmed|buy it|take it|pay|yes|"
-    r"成約|購入|承知|支払う|了解です|はい|了承)", re.IGNORECASE,
-)
-_PURCHASE_OFFER_RE = re.compile(
-    r"(?:需要|需|售价|价格|费用|收费|cost|price|charge)", re.IGNORECASE,
-)
-def _currency_labels(currency_labels: Iterable[str] | None = None) -> tuple[str, ...]:
-    """Return canonical rule labels plus legacy aliases for text recognition.
-
-    Narrative parsing is only a repair/fail-closed guard; the persisted
-    currency schema remains authoritative.  Rule-provided labels let the same
-    guard work for custom economies (USD, credits, gems, etc.) without adding
-    ruleset branches to the generic engine.
-    """
-
-    labels = {
-        "金币", "金子", "金", "gold", "credits", "credit", "dollars", "dollar",
-    }
-    for label in currency_labels or ():
-        value = str(label or "").strip()
-        if value:
-            labels.add(value)
-    return tuple(sorted(labels, key=len, reverse=True))
-
-
-def currency_labels_for_rule(rule: Any) -> tuple[str, ...]:
-    """Project declared rule currency IDs/names into the generic text guard."""
-
-    system = getattr(rule, "currency_system", None)
-    if not isinstance(system, dict) and isinstance(rule, dict):
-        system = rule.get("currency_system")
-    units = system.get("units", []) if isinstance(system, dict) else []
-    labels: list[str] = []
-    if isinstance(units, list):
-        for unit in units:
-            if isinstance(unit, dict):
-                labels.extend(
-                    str(unit.get(key) or "").strip()
-                    for key in ("id", "name", "label")
-                    if str(unit.get(key) or "").strip()
-                )
-    return _currency_labels(labels)
-
-
-def _currency_amount_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
-    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
-    return re.compile(
-        rf"(?P<amount>[0-9]+|[零〇一二三四五六七八九十百千万两]+)"
-        rf"\s*(?:枚|个)?\s*(?:{labels})",
-        re.IGNORECASE,
-    )
-
-
-def _charge_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
-    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
-    return re.compile(
-        rf"(?:需要|需|必须|须|售价|价格|费用|收费|支付|付费|购买|买下|花费|缴纳|"
-        rf"cost|price|charge|pay|purchase|spend)[^。！？\n]{{0,24}}?"
-        rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
-        rf"|(?:[一二三四五六七八九十百千万两\d]+)\s*(?:{labels})"
-        rf"[^。！？\n]{{0,16}}?"
-        rf"(?:需要|需|支付|付费|购买|买下|花费|缴纳|cost|price|charge|pay|purchase|spend)",
-        re.IGNORECASE,
-    )
-
-
-def _completed_payment_pattern(currency_labels: Iterable[str] | None = None) -> re.Pattern[str]:
-    labels = "|".join(re.escape(label) for label in _currency_labels(currency_labels))
-    return re.compile(
-        rf"(?:掏出|拿出|数出|数了|递出|放下|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
-        rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
-        rf"|(?:paid|spent|handed over|paid out)\s+"
-        rf"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:{labels})",
-        re.IGNORECASE,
-    )
-
-
-def _chinese_amount(value: str) -> int | None:
-    """Parse the small Chinese numerals commonly used in narrative prices."""
-
-    if value.isdigit():
-        return int(value)
-    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
-              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-    units = {"十": 10, "百": 100, "千": 1000, "万": 10000}
-    total = 0
-    section = 0
-    number = 0
-    for char in value:
-        if char in digits:
-            number = digits[char]
-        elif char in units:
-            unit = units[char]
-            if unit == 10000:
-                section = (section + number) * unit
-                total += section
-                section = 0
-            else:
-                section += (number or 1) * unit
-            number = 0
-        else:
-            return None
-    return total + section + number
-
-
-def _currency_amounts(
-    narration: str,
-    currency_labels: Iterable[str] | None = None,
-) -> list[int]:
-    amounts: list[int] = []
-    for match in _currency_amount_pattern(currency_labels).finditer(str(narration or "")):
-        amount = _chinese_amount(match.group("amount"))
-        if amount is not None and amount > 0:
-            amounts.append(amount)
-    return amounts
-
-
 def repair_unbacked_purchase(
     instance: Any,
     data: dict[str, Any],
@@ -180,192 +78,17 @@ def repair_unbacked_purchase(
     actions: Iterable[dict[str, Any]] | None = None,
     currency_labels: Iterable[str] | None = None,
 ) -> tuple[int, bool]:
-    """Bind an explicit purchase to an economy proposal before state apply.
+    """Bind explicit purchase intents to economy proposals before state apply.
 
-    Item tags are intentionally independent from payment tags for ordinary
-    loot, but that old shape allowed a model to emit ``EQUIP`` for a purchase
-    while omitting ``PAY``.  The server now uses the player's explicit purchase
-    intent plus one unambiguous currency amount to synthesize the same typed
-    purchase proposal.  Ambiguous prices fail closed and suppress the grant.
+    实现已下沉到 intent 层（src.engine.intent.economy_intent）：本函数只保留
+    原调用入口。每个 actor 独立证据链，详见
+    ``repair_missing_economy_proposals``。
     """
 
-    state_update = data.get("state_update")
-    if not isinstance(state_update, dict) or has_economy_proposal(data):
-        return 0, False
-    action_records = list(actions) if actions is not None else list(getattr(instance, "action_queue", []))
-    action_text = "\n".join(
-        str(action.get("text") or "")
-        for action in action_records
-        if isinstance(action, dict)
+    return repair_missing_economy_proposals(
+        instance, data, narration,
+        actions=actions, currency_labels=currency_labels,
     )
-    narrative_text = str(narration or "")
-    explicit_purchase = bool(_PURCHASE_INTENT_RE.search(action_text))
-    charge_re = _charge_pattern(currency_labels)
-    completed_payment_re = _completed_payment_pattern(currency_labels)
-    priced_narrative = bool(charge_re.search(narrative_text) or completed_payment_re.search(narrative_text))
-    if not explicit_purchase and not priced_narrative:
-        return 0, False
-    actor_uids = {
-        str(action.get("user_id") or "")
-        for action in action_records
-        if isinstance(action, dict)
-        and str(action.get("user_id") or "") in getattr(instance, "players", {})
-        and _PURCHASE_INTENT_RE.search(str(action.get("text") or ""))
-    }
-
-    grants: list[tuple[str, str]] = []
-    players_update = state_update.get("players")
-    if isinstance(players_update, dict):
-        for uid, update in players_update.items():
-            if not isinstance(update, dict):
-                continue
-            for key in ("equip_gain", "weapon_change"):
-                item = str(update.get(key) or "").strip()
-                if item:
-                    grants.append((str(uid), item))
-    loot = state_update.get("loot")
-    if isinstance(loot, list):
-        for item in loot:
-            if isinstance(item, dict):
-                uid = str(item.get("player") or "")
-                name = str(item.get("item") or "").strip()
-                if uid and name:
-                    grants.append((uid, name))
-    if not grants:
-        # An explicit purchase intent whose sale the model narrated without any
-        # structured grant cannot bind an item or a seller acceptance.  Keep
-        # the intent as a clarification instead of silently dropping it.
-        if explicit_purchase and priced_narrative:
-            record_purchase_clarification(
-                instance,
-                reason="MISSING_SELLER_PRICE_CONFIRMATION",
-                payer_uid=next(iter(actor_uids)) if len(actor_uids) == 1 else "",
-                amount_candidates=_currency_amounts(narrative_text, currency_labels),
-            )
-        return 0, False
-    if _FREE_PURCHASE_RE.search(narrative_text) and not priced_narrative:
-        return 0, False
-
-    # Bind only grants named by the purchase context.  If the narration does
-    # not name an item (legacy responses), retain the conservative behavior of
-    # treating all grants for the sole payer as transaction-bound.
-    context_text = f"{action_text}\n{narrative_text}"
-    named_grants = [
-        grant for grant in grants
-        if grant[1].casefold() in context_text.casefold()
-    ]
-    bound_grants = named_grants or grants
-
-    amounts = _currency_amounts(narrative_text, currency_labels)
-    grant_uids = {uid for uid, _item in bound_grants}
-    payer_candidates = actor_uids & grant_uids
-
-    def _drop_bound_grants() -> None:
-        if isinstance(players_update, dict):
-            for update in players_update.values():
-                if isinstance(update, dict):
-                    update.pop("equip_gain", None)
-                    update.pop("weapon_change", None)
-        if isinstance(loot, list):
-            state_update["loot"] = []
-
-    # Price evidence ladder: the seller's narration is the primary source; the
-    # acting player's own stated amount only fills a missing price field.  A
-    # player amount is evidence, never an override of a seller quote.
-    amount = 0
-    amount_source = ""
-    if len(amounts) == 1:
-        amount, amount_source = amounts[0], AMOUNT_SOURCE_NARRATION
-    elif not amounts and len(payer_candidates) == 1:
-        payer_uid = next(iter(payer_candidates))
-        intent_amounts = [
-            parsed
-            for action in action_records
-            if isinstance(action, dict)
-            and str(action.get("user_id") or "") == payer_uid
-            and _PURCHASE_INTENT_RE.search(str(action.get("text") or ""))
-            for parsed in _currency_amounts(str(action.get("text") or ""), currency_labels)
-        ]
-        unique_intent_amounts = sorted(set(intent_amounts))
-        if len(unique_intent_amounts) == 1:
-            amount, amount_source = unique_intent_amounts[0], AMOUNT_SOURCE_PLAYER_ACTION
-
-    if len(payer_candidates) != 1 or not amount or amount > 100_000:
-        _drop_bound_grants()
-        reason = (
-            "AMBIGUOUS_PAYER"
-            if len(payer_candidates) > 1
-            else "INVALID_AMOUNT"
-            if amount > 100_000
-            else "AMBIGUOUS_PRICE"
-        )
-        record_purchase_clarification(
-            instance,
-            reason=reason,
-            payer_uid=next(iter(payer_candidates)) if len(payer_candidates) == 1 else "",
-            item_candidates=[item for _uid, item in bound_grants],
-            amount_candidates=amounts,
-        )
-        return len(grants), True
-    payer_uid = next(iter(payer_candidates))
-    items = [item for uid, item in bound_grants if uid == payer_uid]
-
-    offers = match_open_merchant_offers(instance, items)
-    if len(offers) > 1:
-        _drop_bound_grants()
-        record_purchase_clarification(
-            instance,
-            reason="AMBIGUOUS_OFFER",
-            payer_uid=payer_uid,
-            item_candidates=items,
-            amount_candidates=[amount],
-        )
-        return len(grants), True
-    if len(offers) == 1:
-        offer_amount = int(offers[0].get("amount") or 0)
-        if amount != offer_amount:
-            _drop_bound_grants()
-            record_purchase_clarification(
-                instance,
-                reason="OFFER_PRICE_CONFLICT",
-                payer_uid=payer_uid,
-                item_candidates=items,
-                amount_candidates=sorted({amount, offer_amount}),
-            )
-            return len(grants), True
-        amount, amount_source = offer_amount, AMOUNT_SOURCE_MERCHANT_OFFER
-
-    proposal = {
-        "kind": "purchase",
-        "uid": payer_uid,
-        "amount": amount,
-        "recipient_uid": payer_uid,
-        "items": items,
-        "reason": f"购买 {'、'.join(items)}",
-        "approval_policy": "payer",
-        "source": "server_purchase_guard",
-        "amount_source": amount_source,
-    }
-    data.setdefault("state_update", {}).setdefault("economy_proposals", []).append(proposal)
-    # The proposal's rewards are the sole authoritative delivery path. Consume
-    # only grants bound to this payer/items; unrelated loot remains intact.
-    if isinstance(loot, list):
-        state_update["loot"] = [
-            entry for entry in loot
-            if not (
-                isinstance(entry, dict)
-                and str(entry.get("player") or "") == payer_uid
-                and str(entry.get("item") or "").strip() in items
-            )
-        ]
-    if isinstance(players_update, dict):
-        for uid, update in players_update.items():
-            if str(uid) != payer_uid or not isinstance(update, dict):
-                continue
-            for key in ("equip_gain", "weapon_change"):
-                if str(update.get(key) or "").strip() in items:
-                    update.pop(key, None)
-    return 0, False
 
 
 def _meaningful(value: Any) -> bool:
@@ -374,16 +97,6 @@ def _meaningful(value: Any) -> bool:
     if isinstance(value, (list, tuple, set)):
         return any(_meaningful(item) for item in value)
     return value not in {None, "", False, 0}
-
-
-def has_economy_proposal(data: dict[str, Any]) -> bool:
-    state_update = data.get("state_update")
-    if not isinstance(state_update, dict):
-        return False
-    return bool(
-        state_update.get("pending_payments")
-        or state_update.get("economy_proposals")
-    )
 
 
 def has_server_purchase_guard(data: dict[str, Any]) -> bool:
@@ -395,29 +108,6 @@ def has_server_purchase_guard(data: dict[str, Any]) -> bool:
         isinstance(proposal, dict) and proposal.get("source") == "server_purchase_guard"
         for proposal in proposals
     )
-
-def _bounded_economy_collection(instance: Any, key: str) -> list[dict[str, Any]]:
-    economy = getattr(instance, "economy", None)
-    if not isinstance(economy, dict):
-        return []
-    entries = economy.setdefault(key, [])
-    if not isinstance(entries, list):
-        economy[key] = []
-    return economy[key]
-
-
-def _trim_open_history(entries: list[dict[str, Any]], *, max_history: int) -> None:
-    open_entries = [
-        entry for entry in entries
-        if isinstance(entry, dict) and entry.get("status") == "open"
-    ]
-    resolved = [
-        entry for entry in entries
-        if not (isinstance(entry, dict) and entry.get("status") == "open")
-    ]
-    budget = max(0, max_history - len(open_entries))
-    entries[:] = (resolved[-budget:] if budget else []) + open_entries
-
 
 def record_merchant_offer(
     instance: Any,
@@ -471,105 +161,6 @@ def record_merchant_offer(
     _trim_open_history(offers, max_history=_MAX_MERCHANT_OFFER_HISTORY)
     return offer
 
-
-def _normalized_item_name(name: str) -> str:
-    """Casefolded name without whitespace so decoration variants compare stably."""
-
-    return "".join(str(name or "").split()).casefold()
-
-
-def match_open_merchant_offers(instance: Any, item_names: Iterable[str]) -> list[dict[str, Any]]:
-    """Open offers whose item reference matches a purchase item name.
-
-    Binding requires the purchase name to equal the offer's item reference or
-    extend it as a suffix (Chinese variants put modifiers before the head
-    noun: "矮人精钢剑" extends "精钢剑").  Bidirectional substring matching is
-    deliberately not used — "长剑鞘" must not inherit a "长剑" quote and
-    "铁剑碎片" must not inherit "铁剑"; uncertain matches fall through to
-    clarification instead of silently inheriting a price.
-    """
-
-    names = [_normalized_item_name(name) for name in item_names]
-    names = [name for name in names if name]
-    if not names:
-        return []
-    matches: list[dict[str, Any]] = []
-    for offer in _bounded_economy_collection(instance, "merchant_offers"):
-        if not isinstance(offer, dict) or offer.get("status") != "open":
-            continue
-        if (
-            offer.get("run_id")
-            and str(offer.get("run_id")) != str(getattr(instance, "run_id", ""))
-        ):
-            continue
-        display = _normalized_item_name(str(offer.get("item_display") or ""))
-        if len(display) < 2:
-            continue
-        if any(name == display or name.endswith(display) for name in names):
-            matches.append(offer)
-    return matches
-
-
-def record_purchase_clarification(
-    instance: Any,
-    *,
-    reason: str,
-    payer_uid: str = "",
-    item_candidates: Iterable[str] = (),
-    amount_candidates: Iterable[int] = (),
-) -> dict[str, Any] | None:
-    """Persist an unresolvable purchase intent as structured pending state.
-
-    A clarification is a business state, not an error: it can never settle,
-    charge, or deliver anything.  It keeps the structure of a failed
-    fail-closed binding available for GM/player resolution instead of
-    degrading it into a prose-only notice.
-    """
-
-    items: list[str] = []
-    for candidate in item_candidates:
-        name = str(candidate or "").strip()[:120]
-        if name and name not in items:
-            items.append(name)
-    amounts: list[int] = []
-    for amount_candidate in amount_candidates:
-        try:
-            parsed = int(amount_candidate)
-        except (TypeError, ValueError):
-            continue
-        if parsed > 0 and parsed not in amounts:
-            amounts.append(parsed)
-    if not items and not amounts:
-        return None
-    clarifications = _bounded_economy_collection(instance, "clarifications")
-    signature = (
-        str(payer_uid or ""), tuple(items), tuple(amounts), str(reason)[:60],
-    )
-    for entry in clarifications:
-        if not isinstance(entry, dict) or entry.get("status") != "open":
-            continue
-        entry_signature = (
-            str(entry.get("payer_uid") or ""),
-            tuple(str(item) for item in (entry.get("item_candidates") or [])),
-            tuple(int(value) for value in (entry.get("amount_candidates") or [])),
-            str(entry.get("reason") or ""),
-        )
-        if entry_signature == signature:
-            return entry
-    clarification = {
-        "id": f"clarify_{uuid4().hex}",
-        "run_id": str(getattr(instance, "run_id", "")),
-        "origin_round": int(getattr(instance, "round_number", 0) or 0),
-        "payer_uid": str(payer_uid or ""),
-        "item_candidates": items,
-        "amount_candidates": amounts,
-        "reason": str(reason)[:60],
-        "status": "open",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    clarifications.append(clarification)
-    _trim_open_history(clarifications, max_history=_MAX_CLARIFICATION_HISTORY)
-    return clarification
 
 def _purchase_quotes(instance: Any) -> list[dict[str, Any]]:
     economy = getattr(instance, "economy", None)
