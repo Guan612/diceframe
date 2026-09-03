@@ -442,13 +442,20 @@ def import_entries(
             })
             continue
         # world_id 来自路径参数：批量端点替客户端统一盖章，避免逐条重复。
+        candidate = {**raw, "world_id": world_id}
+        if str(candidate.get("id") or "").strip() and str(candidate["id"]) in existing_ids:
+            # 批量内/库内撞 id 的条目不得静默替换既有条目：改为重新生成 id，
+            # 让重复导入表现为新增而不是覆盖。
+            candidate["id"] = ""
         prepared, error = _prepare_entry(
-            dependencies, {**raw, "world_id": world_id}, existing_ids=existing_ids,
+            dependencies, candidate, existing_ids=existing_ids,
         )
-        if error:
-            failures.append({"index": index, "error": error})
+        if error or prepared is None:
+            failures.append({"index": index, "error": error or "世界书条目无效"})
             continue
         dependencies.lorebook.add_entry(prepared)
+        # 冲突集 = 库内既有 id + 本批已导入 id，防止同批后续条目复用。
+        existing_ids.add(prepared["id"])
         imported += 1
     if imported:
         rebuild_lorebook_index(dependencies, world_id)
