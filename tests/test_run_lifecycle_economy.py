@@ -558,7 +558,8 @@ def test_prose_sale_without_grants_persists_clarification() -> None:
     dropped, ambiguous = repair_unbacked_purchase(
         instance, data, "你掏出三十金币递了过去，商家点头把剑包好。",
     )
-    assert (dropped, ambiguous) == (0, False)
+    # 无 grant 的意图按 actor 记为澄清，repair 已接管（ambiguous=True 跳过 discard）。
+    assert (dropped, ambiguous) == (0, True)
     assert not data["state_update"].get("economy_proposals")
     clarification = instance.economy["clarifications"][0]
     assert clarification["reason"] == "MISSING_SELLER_PRICE_CONFIRMATION"
@@ -2547,3 +2548,77 @@ async def test_character_update_is_rejected_during_swipe(web_api) -> None:
     assert instance.players[uid] == before
     release.set()
     await asyncio.wait_for(rewrite, 1)
+
+
+def test_two_actors_same_round_repair_splits_per_payer() -> None:
+    """复刻 round-12：双人同轮各自购买，按 actor 拆成独立待确认提案。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "gm", "text": "买下《王都周边地城简录》（5金币）"},
+        {"user_id": "p2", "text": "买下那卷结构图（3金币）"},
+    ]
+    data = {"state_update": {"loot": [
+        {"player": "gm", "item": "王都周边地城简录"},
+        {"player": "p2", "item": "结构图"},
+    ]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data,
+        "“结构图三金币，简录五金币，都是旧货，不还价。”老头把两样东西并排摆在柜台上。"
+        "“我测试”掏出三枚金币搁在柜台上，抓起卷轴塞进怀里。你也数出五枚金币推过去，"
+        "老头把册子递到你手里。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposals = data["state_update"]["economy_proposals"]
+    assert len(proposals) == 2
+    by_payer = {p["uid"]: p for p in proposals}
+    assert by_payer["gm"]["amount"] == 5
+    assert by_payer["gm"]["items"] == ["王都周边地城简录"]
+    assert by_payer["p2"]["amount"] == 3
+    assert by_payer["p2"]["items"] == ["结构图"]
+    for proposal in proposals:
+        assert proposal["status"] if False else proposal["amount_source"] == "player_action"
+    # 双人的 grant 都被各自提案消费，loot 不再残留。
+    assert data["state_update"]["loot"] == []
+    assert not instance.economy.get("clarifications")
+
+
+def test_intent_without_grant_becomes_per_actor_clarification() -> None:
+    """AI 没发 grant 的那半购买：按 actor 记结构化澄清，不再无痕丢失。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "p2", "text": "买下那卷结构图（3金币）"},
+    ]
+    data = {"state_update": {}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data,
+        "“结构图三金币。”老头把发黑的卷轴推了过去，“我测试”把钱递了过去。",
+    )
+    assert (dropped, ambiguous) == (0, True)
+    assert not data["state_update"].get("economy_proposals")
+    clarifications = instance.economy["clarifications"]
+    assert len(clarifications) == 1
+    clarification = clarifications[0]
+    assert clarification["payer_uid"] == "p2"
+    assert clarification["reason"] == "MISSING_SELLER_PRICE_CONFIRMATION"
+    assert clarification["amount_candidates"] == [3]
+    assert any("结构图" in item for item in clarification["item_candidates"])
+
+
+def test_repair_binds_narration_price_per_item_sentence() -> None:
+    """叙事里商品与金额同句唯一绑定时，优先于行动自报金额。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "gm", "text": "掏9金币买下精钢剑"},
+    ]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data,
+        "霍根咧嘴：“矮人精钢剑卖三十金币，不讲价。”你把钱数给了他，剑归了你。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 30
+    assert proposal["amount_source"] == "narration"
