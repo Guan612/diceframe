@@ -464,12 +464,65 @@ def is_nonblocking_personal_purchase(
     return True
 
 
-def blocking_economy_proposals(instance: Any) -> list[dict[str, Any]]:
-    """Return pending proposals that must hold the narrative barrier."""
+def is_auto_settleable_reward(
+    instance: Any,
+    proposal: dict[str, Any],
+    *,
+    gold_cap: int = 50,
+) -> bool:
+    """Whether a pending narrative reward may settle without a GM click.
+
+    Deliberately narrow: plain single-recipient gold rewards for a current
+    player within the configured cap.  Team splits, cross-run entries and
+    anything outside the cap stay blocking so the GM keeps final say over
+    unusual or high-impact grants.
+    """
+
+    if not isinstance(proposal, dict):
+        return False
+    if proposal.get("status") != "pending" or str(proposal.get("run_id") or "") != str(instance.run_id):
+        return False
+    if str(proposal.get("kind") or "") != "reward":
+        return False
+    if proposal.get("contributors"):
+        return False
+    recipient_uid = str(proposal.get("recipient_uid") or "")
+    if not recipient_uid or recipient_uid not in instance.players:
+        return False
+    try:
+        amount = int(proposal.get("amount", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return 0 < amount <= gold_cap
+
+
+def blocking_economy_proposals(
+    instance: Any,
+    *,
+    auto_reward_gold_cap: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return pending proposals that must hold the narrative barrier.
+
+    When ``auto_reward_gold_cap`` is provided (auto-reward enabled), plain
+    rewards within the cap are not blockers: they will settle automatically
+    right after the current round completes through the standard payment
+    path.  Without the argument the behavior is unchanged (all pending
+    rewards block, as before).
+    """
+
+    def _blocked(proposal: dict[str, Any]) -> bool:
+        if not is_nonblocking_personal_purchase(instance, proposal):
+            if (
+                auto_reward_gold_cap is not None
+                and is_auto_settleable_reward(instance, proposal, gold_cap=auto_reward_gold_cap)
+            ):
+                return False
+            return True
+        return False
 
     return [
         proposal for proposal in pending_economy_proposals(instance)
-        if not is_nonblocking_personal_purchase(instance, proposal)
+        if _blocked(proposal)
     ]
 
 
@@ -499,11 +552,15 @@ def has_pending_economy_decision(instance: Any) -> bool:
     )
 
 
-def has_blocking_economy_decision(instance: Any) -> bool:
+def has_blocking_economy_decision(
+    instance: Any,
+    *,
+    auto_reward_gold_cap: int | None = None,
+) -> bool:
     """Whether unresolved economy state must stop narrative progression."""
 
     return bool(
-        blocking_economy_proposals(instance)
+        blocking_economy_proposals(instance, auto_reward_gold_cap=auto_reward_gold_cap)
         or pending_effect_groups(instance)
         or pending_memory_deliveries(instance)
         or pending_memory_reversals(instance)

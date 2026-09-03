@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from src.engine.economy import (
     has_blocking_economy_decision,
     blocking_economy_proposals,
+    is_auto_settleable_reward,
     pending_effect_groups,
     pending_memory_deliveries,
     pending_memory_reversals,
@@ -47,6 +48,10 @@ class TurnDependencies:
     resolve_luck_decision: Callable[..., Awaitable[dict[str, Any]]]
     decline_pending_luck: Callable[..., Awaitable[dict[str, Any]]]
     drain_economy_outbox: Callable[[Any], Awaitable[bool]] | None = None
+    # 奖励自动结算：settings 返回 (enabled, gold_cap)；resolve_reward 复用
+    # 标准支付确认服务（交易流水 + 效果组提交 + 存档），只是免掉 GM 点击。
+    economy_auto_reward_settings: Callable[[], tuple[bool, int]] | None = None
+    resolve_reward: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
 
 
 class TurnResult(TypedDict):
@@ -199,16 +204,87 @@ async def _process_round(
     dependencies: TurnDependencies,
     instance: "GameInstance",
     *,
+    game_key: str,
     on_delta: NarrationDelta | None,
     on_reset: NarrationReset | None,
 ) -> tuple[str, Any]:
     if dependencies.process_round is None:
         raise RuntimeError("round processor is not available")
-    return await dependencies.process_round(
+    narration, response = await dependencies.process_round(
         instance,
         on_delta=on_delta,
         on_reset=on_reset,
     )
+    await _auto_settle_rewards(dependencies, instance, game_key)
+    return narration, response
+
+
+async def _auto_settle_rewards(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+    game_key: str,
+) -> None:
+    """Auto-settle qualifying narrative reward proposals after a round.
+
+    A pending kind=reward proposal blocks the table until the GM confirms it,
+    which turns the GM into a clerk for ordinary rewards ("击杀怪物，获得 12
+    金币").  Qualifying rewards settle through the standard payment-confirm
+    service (ledger + deferred effects + save), so the authority path is
+    identical to a manual confirmation — only the click is removed.  Anything
+    over the cap or with the switch off stays pending for the GM.
+
+    每个 reward proposal 独立结算：单个失败（服务返回非 ok 或异常）只影响
+    该提案（保持 pending 交还 GM），不中断其余提案，也不保证整批原子提交。
+    """
+
+    resolve_reward = dependencies.resolve_reward
+    settings = dependencies.economy_auto_reward_settings
+    if resolve_reward is None or settings is None:
+        return
+    try:
+        enabled, gold_cap = settings()
+    except Exception:
+        logger.warning("读取奖励自动结算配置失败，本轮跳过自动结算", exc_info=True)
+        return
+    if not enabled or gold_cap < 1:
+        return
+    economy = getattr(instance, "economy", {})
+    proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
+    for proposal in list(proposals):
+        if not is_auto_settleable_reward(instance, proposal, gold_cap=gold_cap):
+            continue
+        proposal_id = str(proposal.get("id") or "")
+        if not proposal_id:
+            continue
+        try:
+            result = await resolve_reward(game_key, proposal_id, str(instance.gm_uid or ""))
+            if not result.get("ok"):
+                logger.warning(
+                    "奖励自动结算未成功，保留待确认: game=%s proposal=%s code=%s",
+                    game_key, proposal_id, result.get("code"),
+                )
+        except Exception:
+            logger.warning(
+                "奖励自动结算异常，保留待确认: game=%s proposal=%s",
+                game_key, proposal_id, exc_info=True,
+            )
+
+
+def _auto_reward_cap(dependencies: TurnDependencies) -> int | None:
+    """Gold cap for auto-settleable rewards; None when the switch is off.
+
+    Passed into the barrier check so a plain reward within the cap does not
+    block the table: it will settle automatically when the round completes.
+    """
+
+    settings = dependencies.economy_auto_reward_settings
+    if settings is None:
+        return None
+    try:
+        enabled, gold_cap = settings()
+    except Exception:
+        return None
+    return gold_cap if enabled and gold_cap >= 1 else None
 
 
 async def submit_action(
@@ -259,7 +335,9 @@ async def submit_action(
     if instance.is_dead(actor_uid):
         return _result({"error": "角色已死亡，无法提交行动"}, 403)
     await _retry_external_economy_effects(dependencies, instance)
-    if has_blocking_economy_decision(instance):
+    if has_blocking_economy_decision(
+        instance, auto_reward_gold_cap=_auto_reward_cap(dependencies),
+    ):
         return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     if instance.state == GameState.ACTIVE_JUDGMENT:
         return _result({"error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing"}, 409)
@@ -329,7 +407,7 @@ async def submit_action(
             await dependencies.save_instance(instance)
             return _result(_pending_luck_payload(instance, roll=roll_payload))
         narration, _ = await _process_round(
-            dependencies, instance, on_delta=on_delta, on_reset=on_reset,
+            dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
         )
         payload = _round_payload(
             instance,
@@ -388,10 +466,12 @@ async def resolve_luck_and_continue(
     if not instance:
         return _result({"ok": False, "error": "游戏不存在"}, 404)
     await _retry_external_economy_effects(dependencies, instance)
-    if has_blocking_economy_decision(instance):
+    if has_blocking_economy_decision(
+        instance, auto_reward_gold_cap=_auto_reward_cap(dependencies),
+    ):
         return _result(economy_decision_pending_payload(instance, actor_uid), 409)
     narration, _ = await _process_round(
-        dependencies, instance, on_delta=on_delta, on_reset=on_reset,
+        dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
     )
     payload = {
         **decision,
@@ -419,7 +499,9 @@ async def advance_round(
     if actor_uid != instance.gm_uid:
         return _result({"ok": False, "error": "仅 GM 可推进"}, 403)
     await _retry_external_economy_effects(dependencies, instance)
-    if has_blocking_economy_decision(instance):
+    if has_blocking_economy_decision(
+        instance, auto_reward_gold_cap=_auto_reward_cap(dependencies),
+    ):
         return _result(economy_decision_pending_payload(instance, actor_uid), 409)
 
     if instance.state == GameState.ACTIVE_JUDGMENT and instance.action_queue:
@@ -433,7 +515,7 @@ async def advance_round(
             advanced_declined_luck = list(declined.get("declined_luck_decisions") or [])
         logger.warning("检测到卡死状态，自动恢复 process_round - game_key=%s", game_key)
         narration, _ = await _process_round(
-            dependencies, instance, on_delta=on_delta, on_reset=on_reset,
+            dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
         )
         payload = _round_payload(instance, narration, viewer_uid=actor_uid)
         if advanced_declined_luck:
@@ -483,7 +565,7 @@ async def advance_round(
             declined = await dependencies.decline_pending_luck(game_key)
             declined_luck = list(declined.get("declined_luck_decisions") or [])
         narration, _ = await _process_round(
-            dependencies, instance, on_delta=on_delta, on_reset=on_reset,
+            dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
         )
         payload = _round_payload(instance, narration, ok=True, viewer_uid=actor_uid)
         if forced_waiting:
