@@ -13,7 +13,7 @@ from typing import Any, Iterable
 from src.engine.intent.models import PurchaseIntent
 
 PURCHASE_INTENT_RE = re.compile(
-    r"(?:买下|买了|购买|购入|买入|付费|支付|缴纳|花费|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
+    r"(?:买下|买了|购买|购入|买入|买|付费|付款|支付|缴纳|花费|给钱|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
     re.IGNORECASE,
 )
 FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
@@ -21,6 +21,14 @@ PURCHASE_CONFIRM_RE = re.compile(
     r"(?:成交|买了|买下|购买|确认购买|接受报价|就要这个|行|可以|同意|付钱|结账|"
     r"deal|accept|accepted|confirm|confirmed|buy it|take it|pay|yes|"
     r"成約|購入|承知|支払う|了解です|はい|了承)", re.IGNORECASE,
+)
+DEFERRED_PAYMENT_RE = re.compile(
+    r"(?:先[^。！？\n]{0,12}(?:拿|给|做|上)"
+    r"|赊账|记账|欠着|欠款"
+    r"|明天[^。！？\n]{0,8}付|改天[^。！？\n]{0,8}付"
+    r"|之后[^。！？\n]{0,8}付|回头[^。！？\n]{0,8}付"
+    r"|pay later|on credit|IOU)",
+    re.IGNORECASE,
 )
 PURCHASE_OFFER_RE = re.compile(
     r"(?:需要|需|售价|价格|费用|收费|cost|price|charge)", re.IGNORECASE,

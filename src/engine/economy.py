@@ -597,6 +597,7 @@ def queue_proposal(
     visibility: str = "private",
     quote_id: str = "",
     amount_source: str = "",
+    evidence_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Queue one idempotent proposal; no balance is changed here."""
 
@@ -659,6 +660,9 @@ def queue_proposal(
         # Audit of which evidence produced the amount (server guard paths
         # only): narration / player_action / merchant_offer.
         "amount_source": str(amount_source)[:40],
+        # Evidence layer links (ev_*): audit trail of what was observed;
+        # evidence itself never mutates state.
+        "evidence_ids": [str(item) for item in (evidence_ids or [])][:20],
         "approval_policy": str(approval_policy),
         "rewards": deepcopy(list(rewards or [])),
         "contributors": normalized_contributors,

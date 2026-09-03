@@ -265,6 +265,15 @@ class StateUpdateApplier:
                     if source == "server_purchase_guard"
                     else ""
                 ),
+                evidence_ids=(
+                    [
+                        str(item)
+                        for item in (proposal.get("evidence_ids") or [])
+                        if str(item)
+                    ]
+                    if source == "server_purchase_guard"
+                    else []
+                ),
             ))
             quote_id = str(proposal.get("quote_id") or "")
             if quote_id:

@@ -276,6 +276,7 @@ class GameInstance:
             self.economy.setdefault("purchase_quotes", [])
             self.economy.setdefault("merchant_offers", [])
             self.economy.setdefault("clarifications", [])
+            self.economy.setdefault("evidence", [])
             self.economy.setdefault("decision_revision", 0)
 
     def _fresh_economy_state(self) -> dict[str, Any]:
@@ -292,6 +293,7 @@ class GameInstance:
             "purchase_quotes": [],
             "merchant_offers": [],
             "clarifications": [],
+            "evidence": [],
             "decision_revision": 0,
         }
 

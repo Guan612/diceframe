@@ -205,6 +205,7 @@ def rebind_imported_game_state_payload(
             "purchase_quotes",
             "merchant_offers",
             "clarifications",
+            "evidence",
         ):
             for item in economy.get(collection_name, []) or []:
                 if isinstance(item, dict):

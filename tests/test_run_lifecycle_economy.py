@@ -38,6 +38,7 @@ from src.commands.economy_effects import (
 )
 from src.commands.state_items import append_key_item
 from src.commands.state_update_applier import StateUpdateApplier
+from src.engine.intent.evidence import record_evidence
 from src.engine.game_instance import GameInstance, GameRegistry, restore_players, _snapshot_players
 from src.llm.client import LLMResponse
 from src.llm.context_builder import build_context
@@ -2617,6 +2618,139 @@ def test_repair_binds_narration_price_per_item_sentence() -> None:
     dropped, ambiguous = repair_unbacked_purchase(
         instance, data,
         "霍根咧嘴：“矮人精钢剑卖三十金币，不讲价。”你把钱数给了他，剑归了你。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 30
+    assert proposal["amount_source"] == "narration"
+
+
+def test_repair_persists_evidence_and_links_to_proposal() -> None:
+    """恢复层为每个意图留下证据链，proposal 挂 evidence_ids；证据无权威性。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "gm", "text": "掏30金币买下精钢剑"},
+    ]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根接过金币，转身取下那柄矮人精钢剑，递到你面前。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    evidence = instance.economy["evidence"]
+    types = {item["type"] for item in evidence}
+    assert "purchase_intent" in types
+    assert "seller_grant" in types
+    for item in evidence:
+        assert item["authority"] is False
+        assert item["id"].startswith("ev_")
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["evidence_ids"]
+    assert set(proposal["evidence_ids"]) <= {item["id"] for item in evidence}
+
+
+def test_repair_twice_does_not_duplicate_proposals() -> None:
+    """重复 repair 不会重复创建提案（幂等）。"""
+
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下治疗药水"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "治疗药水"}]}}
+    first = repair_unbacked_purchase(instance, data, "霍根收了2枚金币，把治疗药水递给你。")
+    second = repair_unbacked_purchase(instance, data, "霍根收了2枚金币，把治疗药水递给你。")
+    assert first == second == (0, False)
+    proposals = data["state_update"]["economy_proposals"]
+    assert len(proposals) == 1
+
+
+def test_deferred_payment_intent_goes_to_clarification() -> None:
+    """先拿货后付款：不合成立即结算的提案，进澄清由 GM/玩家安排。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "gm", "text": "这剑我先拿走，明天付款"},
+    ]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根眯眼打量了你一番，还是把剑递了过来。",
+    )
+    assert (dropped, ambiguous) == (1, True)
+    assert not data["state_update"].get("economy_proposals")
+    clarification = instance.economy["clarifications"][0]
+    assert clarification["reason"] == "DEFERRED_PAYMENT"
+    assert clarification["payer_uid"] == "gm"
+    assert clarification["evidence_ids"]
+
+
+def test_referenced_evidence_survives_trim() -> None:
+    """被 proposal/clarification 引用的证据不参与 trim 淘汰（审计链不断）。"""
+
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "掏30金币买下精钢剑"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    repair_unbacked_purchase(
+        instance, data, "霍根接过金币，转身取下那柄矮人精钢剑，递到你面前。",
+    )
+    proposal = data["state_update"]["economy_proposals"][0]
+    referenced_ids = set(proposal["evidence_ids"])
+    assert referenced_ids
+    # 模拟 applier 入队：引用关系进入 economy["proposals"] 后才受 trim 保护。
+    instance.economy.setdefault("proposals", []).append({
+        "id": "eco_placeholder", "evidence_ids": list(referenced_ids),
+    })
+    for _ in range(150):
+        record_evidence(instance, evidence_type="noise", source="narration")
+    surviving = {item["id"] for item in instance.economy["evidence"]}
+    assert referenced_ids <= surviving
+    assert len(instance.economy["evidence"]) <= 160
+
+
+def test_npc_dialogue_does_not_trigger_deferred_payment() -> None:
+    """NPC 台词里的 pay later 不触发赊账：只有玩家行动才产生意图。"""
+
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下龙牙匕首"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "龙牙匕首"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data,
+        "商人笑道：“you can pay tomorrow, no problem。”"
+        "龙牙匕首卖30金币，说罢把匕首递到你手里。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 30
+    assert not [
+        c for c in instance.economy.get("clarifications", [])
+        if c.get("reason") == "DEFERRED_PAYMENT"
+    ]
+
+
+def test_multi_quote_price_ambiguity_stays_fail_closed() -> None:
+    """单行动混入两个报价：按句绑定无法唯一 → AMBIGUOUS_PRICE 澄清。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "gm", "text": "我买那个500金币的龙牙匕首，旁边那个200金币的戒指也拿了"},
+    ]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "龙牙匕首"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "龙牙匕首500金，戒指200金。老板把两样都包了起来。",
+    )
+    assert (dropped, ambiguous) == (1, True)
+    assert not data["state_update"].get("economy_proposals")
+    clarification = instance.economy["clarifications"][0]
+    assert clarification["reason"] == "AMBIGUOUS_PRICE"
+    assert clarification["amount_candidates"] == [200, 500]
+
+
+def test_currency_labels_regression_custom_rule() -> None:
+    """自定义规则货币（灵石）经 label 投影参与证据与绑定。"""
+
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "掏30灵石买下丹药"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "丹药"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "丹药30灵石，掌柜收了钱把药递给你。",
+        currency_labels=["灵石"],
     )
     assert (dropped, ambiguous) == (0, False)
     proposal = data["state_update"]["economy_proposals"][0]
