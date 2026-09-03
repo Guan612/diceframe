@@ -307,6 +307,12 @@ class ConfigStore:
                 saved.get("imagegen_timeout_seconds", 120)
             ),
             "test_timeout_seconds": float(saved.get("test_timeout_seconds", 30)),
+            "economy_auto_reward_enabled": bool(
+                saved.get("economy_auto_reward_enabled", True)
+            ),
+            "economy_auto_reward_gold_cap": int(
+                saved.get("economy_auto_reward_gold_cap", 50)
+            ),
             "model_request_timeout_seconds": float(
                 env.get("TRPG_MODEL_REQUEST_TIMEOUT_SECONDS")
                 or saved.get("model_request_timeout_seconds", 120)

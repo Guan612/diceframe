@@ -507,6 +507,8 @@ class WebAPI:
             resolve_luck_decision=self.resolve_luck_decision,
             decline_pending_luck=self.decline_pending_luck,
             drain_economy_outbox=self._drain_economy_outbox,
+            economy_auto_reward_settings=self.economy_auto_reward_settings,
+            resolve_reward=self.resolve_reward_as_gm,
         )
         self._map_dependencies = maps.MapDependencies(
             get_instance=self._reg.get,
@@ -1535,6 +1537,25 @@ class WebAPI:
             payment_id,
             accepted,
             session_uid,
+        )
+
+    async def resolve_reward_as_gm(self, game_key: str, payment_id: str, session_uid: str = "") -> dict[str, Any]:
+        """Settle one narrative reward through the standard payment-confirm path.
+
+        Used by the round-completion auto-settler: the authority chain
+        (ledger, deferred effects, save) is the manual confirmation path —
+        only the GM click is removed for qualifying rewards.
+        """
+
+        return await self.resolve_payment(game_key, payment_id, True, session_uid)
+
+    def economy_auto_reward_settings(self) -> tuple[bool, int]:
+        """Live economy auto-reward switch and gold cap from runtime config."""
+
+        state = self._config_state if isinstance(self._config_state, dict) else {}
+        return (
+            bool(state.get("economy_auto_reward_enabled", True)),
+            max(1, int(state.get("economy_auto_reward_gold_cap", 50) or 50)),
         )
 
     async def create_payment_proposal(

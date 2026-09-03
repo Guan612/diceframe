@@ -57,6 +57,7 @@ CONFIG_KEYS = (
     "imagegen_enabled", "imagegen_auto_scene", "imagegen_provider", "imagegen_base_url",
     "imagegen_api_key", "imagegen_model", "imagegen_square_size", "imagegen_landscape_size",
     "imagegen_quality", "imagegen_style_prefix", "imagegen_timeout_seconds", "test_timeout_seconds",
+    "economy_auto_reward_enabled", "economy_auto_reward_gold_cap",
     "model_request_timeout_seconds",
     "ai_providers", *PROVIDER_REF_KEYS,
 )
@@ -208,8 +209,14 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
                 "proxy_enabled", "qq_bot_enabled", "napcat_chat_filter_enabled",
                 "napcat_show_dropped_logs", "napcat_block_official_bots",
                 "imagegen_enabled", "imagegen_auto_scene",
+                "economy_auto_reward_enabled",
             }:
                 candidate[key] = bool(raw)
+            elif key == "economy_auto_reward_gold_cap":
+                cap_value = int(raw)
+                if cap_value < 1:
+                    return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "奖励自动结算金币上限必须大于 0")
+                candidate[key] = cap_value
             elif key in {
                 "napcat_heartbeat_sec", "napcat_reconnect_delay_sec",
                 "napcat_action_timeout_sec", "napcat_command_dedup_window_sec",
