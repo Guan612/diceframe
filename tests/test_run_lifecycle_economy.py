@@ -2756,3 +2756,33 @@ def test_currency_labels_regression_custom_rule() -> None:
     proposal = data["state_update"]["economy_proposals"][0]
     assert proposal["amount"] == 30
     assert proposal["amount_source"] == "narration"
+
+
+def test_japanese_game_language_parses_purchase_intent() -> None:
+    """日文局：剣を買います 经 ja 资源产生意图（多语言分离目标）。"""
+
+    instance = _instance()
+    instance.language = "ja"
+    instance.action_queue = [{"user_id": "gm", "text": "剣を買います"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "剣"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "商家は剣を渡した。金貨はまだ支払われていない。",
+        currency_labels=["金貨"],
+    )
+    # 有 grant 但全无价格证据：物品不得白送 → 丢弃 + AMBIGUOUS_PRICE 澄清。
+    assert (dropped, ambiguous) == (1, True)
+    clarification = instance.economy["clarifications"][0]
+    assert clarification["payer_uid"] == "gm"
+    assert not data["state_update"].get("economy_proposals")
+
+
+def test_unknown_language_falls_back_to_union() -> None:
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下精钢剑"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "精钢剑30金币，一手交钱一手交货。", currency_labels=["金币"],
+    )
+    assert (dropped, ambiguous) == (0, False)
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["amount"] == 30

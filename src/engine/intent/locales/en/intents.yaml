@@ -1,0 +1,35 @@
+# Intent language resources (en): stable intent id -> trigger patterns.
+purchase_intent:
+  - purchase
+  - buy
+  - bought
+  - pay
+  - paid
+  - spend
+purchase_confirm:
+  - deal
+  - accept
+  - accepted
+  - confirm
+  - confirmed
+  - buy it
+  - take it
+  - pay
+  - yes
+purchase_offer:
+  - cost
+  - price
+  - charge
+free_purchase:
+  - free
+  - no charge
+deferred_payment:
+  - pay later
+  - on credit
+  - \bIOU\b
+currency_labels:
+  - gold
+  - credits
+  - credit
+  - dollars
+  - dollar

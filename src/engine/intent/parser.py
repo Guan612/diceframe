@@ -1,8 +1,8 @@
-"""Narrative/intent text parsing primitives shared by the economy guards.
+"""Narrative/intent text parsing primitives, driven by language resources.
 
-这些正则与金额解析原属 economy_effects，现下沉到 engine 作为 intent 层的
-解析基座：ruleset-neutral，不依赖任何具体规则系统；规则只需通过
-``currency_labels_for_rule`` 投影自己的货币称谓。
+所有触发模式来自 lexicon 语言资源（稳定 ID → 模式列表），本模块只负责
+把资源编译成正则并封装 parsing 函数。任何函数都不硬编码具体语言文本；
+自定义规则货币经 ``extra_labels`` 投影。
 """
 
 from __future__ import annotations
@@ -10,55 +10,46 @@ from __future__ import annotations
 import re
 from typing import Any, Iterable
 
-from src.engine.intent.models import PurchaseIntent
-
-PURCHASE_INTENT_RE = re.compile(
-    r"(?:买下|买了|购买|购入|买入|买|付费|付款|支付|缴纳|花费|给钱|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
-    re.IGNORECASE,
-)
-FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
-PURCHASE_CONFIRM_RE = re.compile(
-    r"(?:成交|买了|买下|购买|确认购买|接受报价|就要这个|行|可以|同意|付钱|结账|"
-    r"deal|accept|accepted|confirm|confirmed|buy it|take it|pay|yes|"
-    r"成約|購入|承知|支払う|了解です|はい|了承)", re.IGNORECASE,
-)
-DEFERRED_PAYMENT_RE = re.compile(
-    r"(?:先[^。！？\n]{0,12}(?:拿|给|做|上)"
-    r"|赊账|记账|欠着|欠款"
-    r"|明天[^。！？\n]{0,8}付|改天[^。！？\n]{0,8}付"
-    r"|之后[^。！？\n]{0,8}付|回头[^。！？\n]{0,8}付"
-    r"|pay later|on credit|IOU)",
-    re.IGNORECASE,
-)
-PURCHASE_OFFER_RE = re.compile(
-    r"(?:需要|需|售价|价格|费用|收费|cost|price|charge)", re.IGNORECASE,
-)
-_PAYMENT_VERB_RE = re.compile(
-    r"(?:掏|拿出|递给?|付|支付|付钱|结账|给钱|花费|spend|pay|buy|purchase|bought|paid)",
-    re.IGNORECASE,
+from src.engine.intent.lexicon import (
+    currency_label_defaults,
+    instance_language,
+    intent_regex,
 )
 
-
-def currency_labels(extra_labels: Iterable[str] | None = None) -> tuple[str, ...]:
-    """Return canonical rule labels plus legacy aliases for text recognition.
-
-    Narrative parsing is only a repair/fail-closed guard; the persisted
-    currency schema remains authoritative.  Rule-provided labels let the same
-    guard work for custom economies (USD, credits, gems, etc.) without adding
-    ruleset branches to the generic engine.
-    """
-
-    labels = {
-        "金币", "金子", "金", "gold", "credits", "credit", "dollars", "dollar",
-    }
-    for label in extra_labels or ():
-        value = str(label or "").strip()
-        if value:
-            labels.add(value)
-    return tuple(sorted(labels, key=len, reverse=True))
+_PURCHASE_INTENT_ID = "purchase_intent"
+_PURCHASE_CONFIRM_ID = "purchase_confirm"
+_PURCHASE_OFFER_ID = "purchase_offer"
+_FREE_PURCHASE_ID = "free_purchase"
+_DEFERRED_PAYMENT_ID = "deferred_payment"
 
 
-def currency_labels_for_rule(rule: Any) -> tuple[str, ...]:
+def purchase_intent_pattern(language: str) -> re.Pattern[str]:
+    return intent_regex(language, _PURCHASE_INTENT_ID)
+
+
+def purchase_confirm_pattern(language: str) -> re.Pattern[str]:
+    return intent_regex(language, _PURCHASE_CONFIRM_ID)
+
+
+def purchase_offer_pattern(language: str) -> re.Pattern[str]:
+    return intent_regex(language, _PURCHASE_OFFER_ID)
+
+
+def free_purchase_pattern(language: str) -> re.Pattern[str]:
+    return intent_regex(language, _FREE_PURCHASE_ID)
+
+
+def deferred_payment_pattern(language: str) -> re.Pattern[str]:
+    return intent_regex(language, _DEFERRED_PAYMENT_ID)
+
+
+def currency_labels(language: str, extra_labels: Iterable[str] | None = None) -> tuple[str, ...]:
+    """Default currency labels for the language union plus rule projections."""
+
+    return currency_label_defaults(language, extra_labels)
+
+
+def currency_labels_for_rule(rule: Any, language: str = "") -> tuple[str, ...]:
     """Project declared rule currency IDs/names into the generic text guard."""
 
     system = getattr(rule, "currency_system", None)
@@ -74,11 +65,14 @@ def currency_labels_for_rule(rule: Any) -> tuple[str, ...]:
                     for key in ("id", "name", "label")
                     if str(unit.get(key) or "").strip()
                 )
-    return currency_labels(labels)
+    return currency_labels(language, labels)
 
 
-def currency_amount_pattern(extra_labels: Iterable[str] | None = None) -> re.Pattern[str]:
-    labels = "|".join(re.escape(label) for label in currency_labels(extra_labels))
+def currency_amount_pattern(
+    language: str,
+    extra_labels: Iterable[str] | None = None,
+) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in currency_labels(language, extra_labels))
     return re.compile(
         rf"(?P<amount>[0-9]+|[零〇一二三四五六七八九十百千万两]+)"
         rf"\s*(?:枚|个)?\s*(?:{labels})",
@@ -86,21 +80,28 @@ def currency_amount_pattern(extra_labels: Iterable[str] | None = None) -> re.Pat
     )
 
 
-def charge_pattern(extra_labels: Iterable[str] | None = None) -> re.Pattern[str]:
-    labels = "|".join(re.escape(label) for label in currency_labels(extra_labels))
+def charge_pattern(
+    language: str,
+    extra_labels: Iterable[str] | None = None,
+) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in currency_labels(language, extra_labels))
+    offer_head = intent_regex(language, _PURCHASE_OFFER_ID).pattern
     return re.compile(
-        rf"(?:需要|需|必须|须|售价|价格|费用|收费|支付|付费|购买|买下|花费|缴纳|"
-        rf"cost|price|charge|pay|purchase|spend)[^。！？\n]{{0,24}}?"
+        rf"(?:{offer_head}|"
+        rf"支付|付费|买下|花费|缴纳|pay|purchase|spend)[^。！？\n]{{0,24}}?"
         rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
         rf"|(?:[一二三四五六七八九十百千万两\d]+)\s*(?:{labels})"
         rf"[^。！？\n]{{0,16}}?"
-        rf"(?:需要|需|支付|付费|购买|买下|花费|缴纳|cost|price|charge|pay|purchase|spend)",
+        rf"(?:支付|付费|买下|花费|缴纳|pay|purchase|spend)",
         re.IGNORECASE,
     )
 
 
-def completed_payment_pattern(extra_labels: Iterable[str] | None = None) -> re.Pattern[str]:
-    labels = "|".join(re.escape(label) for label in currency_labels(extra_labels))
+def completed_payment_pattern(
+    language: str,
+    extra_labels: Iterable[str] | None = None,
+) -> re.Pattern[str]:
+    labels = "|".join(re.escape(label) for label in currency_labels(language, extra_labels))
     return re.compile(
         rf"(?:掏出|拿出|数出|数了|递出|放下|交出|付出|支付了?|缴纳了?|付清|花费了?)\s*"
         rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
@@ -139,11 +140,12 @@ def _chinese_amount(value: str) -> int | None:
 
 
 def currency_amounts(
+    language: str,
     narration: str,
     extra_labels: Iterable[str] | None = None,
 ) -> list[int]:
     amounts: list[int] = []
-    for match in currency_amount_pattern(extra_labels).finditer(str(narration or "")):
+    for match in currency_amount_pattern(language, extra_labels).finditer(str(narration or "")):
         amount = _chinese_amount(match.group("amount"))
         if amount is not None and amount > 0:
             amounts.append(amount)
@@ -151,6 +153,7 @@ def currency_amounts(
 
 
 def item_context_from_action(
+    language: str,
     text: str,
     extra_labels: Iterable[str] | None = None,
 ) -> str:
@@ -160,25 +163,34 @@ def item_context_from_action(
     宽松绑定，永远不作为价格或身份的权威来源。
     """
 
-    cleaned = currency_amount_pattern(extra_labels).sub(" ", str(text or ""))
+    cleaned = currency_amount_pattern(language, extra_labels).sub(" ", str(text or ""))
     cleaned = re.sub(r"[（(][^）)]*[)）]", " ", cleaned)
-    cleaned = PURCHASE_INTENT_RE.sub(" ", cleaned)
-    cleaned = _PAYMENT_VERB_RE.sub(" ", cleaned)
+    cleaned = purchase_intent_pattern(language).sub(" ", cleaned)
+    cleaned = re.sub(
+        r"(?:掏|拿出|递给?|付|支付|付钱|结账|给钱|花费|spend|pay|buy|purchase|bought|paid)",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
     return re.sub(r"^[\s，,。.、：:；;'-]+|[\s，,。.、：:；;'-]+$", "", cleaned)
 
 
 def parse_purchase_intents(
     action_records: Iterable[Any],
     players: Any,
+    language: str = "",
     extra_labels: Iterable[str] | None = None,
-) -> list[PurchaseIntent]:
+) -> list[Any]:
     """Parse each player's own action into one purchase intent.
 
     每个 actor 独立解析：意图只来自玩家自己的行动文本，AI 输出不参与。
     没有购买动词的行动不产生意图。
     """
 
+    from src.engine.intent.models import PurchaseIntent
+
     intents: list[PurchaseIntent] = []
+    intent_pattern = purchase_intent_pattern(language)
     for action in action_records:
         if not isinstance(action, dict):
             continue
@@ -186,13 +198,19 @@ def parse_purchase_intents(
         text = str(action.get("text") or "")
         if not actor_uid or actor_uid not in players:
             continue
-        if not PURCHASE_INTENT_RE.search(text):
+        if not intent_pattern.search(text):
             continue
-        amounts = currency_amounts(text, extra_labels)
+        amounts = currency_amounts(language, text, extra_labels)
         intents.append(PurchaseIntent(
             actor_uid=actor_uid,
             action_text=text,
-            item_context=item_context_from_action(text, extra_labels),
+            item_context=item_context_from_action(language, text, extra_labels),
             amount_candidates=tuple(sorted(set(amounts))),
         ))
     return intents
+
+
+def instance_language_hint(instance: Any) -> str:
+    """Language of an instance for lexicon lookups（供调用方统一取语言）。"""
+
+    return instance_language(instance)
