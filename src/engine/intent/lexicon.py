@@ -1,6 +1,6 @@
 """Intent 语言资源加载器：稳定 ID → 触发模式。
 
-语言资源（locales/<lang>/intents.yaml）描述"怎么识别"，逻辑只认稳定 ID
+语言资源（locales/<lang>/intents.json）描述"怎么识别"，逻辑只认稳定 ID
 （purchase_intent / purchase_confirm / purchase_offer / free_purchase /
 deferred_payment / currency_labels），永不使用文本本身作为判断依据。
 
@@ -16,7 +16,7 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-import yaml
+import json
 
 from src.engine.language import normalize_language
 
@@ -26,10 +26,10 @@ _BASE_LANGUAGES = ("en", "zh-CN")
 
 @lru_cache(maxsize=None)
 def _load_resource(language: str) -> dict[str, tuple[str, ...]]:
-    path = _RESOURCE_DIR / language / "intents.yaml"
+    path = _RESOURCE_DIR / language / "intents.json"
     if not path.is_file():
         return {}
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = json.loads(path.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         return {}
     return {
