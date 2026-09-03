@@ -19,6 +19,7 @@ from src.content.worlds import load_world_template as load_content_world
 from src.generation import creator
 from src.lorebook.bootstrap import ensure_world_from_template
 from src.template_catalog import is_user_template_file
+from src.webui.services._common import MAX_LOREBOOK_CHARS
 
 logger = logging.getLogger("trpg")
 
@@ -392,16 +393,94 @@ def save_entry(
 ) -> dict[str, Any]:
     # 导入/新增入口的防御性校验：缺键时生成 id 或返回 400 级错误，
     # 不让 KeyError 漏成 500（UI 导入的 body 可能完全不带 id 键）。
+    prepared, error = _prepare_entry(dependencies, entry, existing_ids=None)
+    if error or prepared is None:
+        return {"ok": False, "error": error or "世界书条目无效"}
+    dependencies.lorebook.add_entry(prepared)
+    rebuild_lorebook_index(dependencies, prepared["world_id"])
+    _sync_user_template_lorebook(dependencies, prepared["world_id"])
+    return {"ok": True, "entry_id": prepared["id"]}
+
+
+MAX_LOREBOOK_IMPORT_ENTRIES = 500
+
+
+def import_entries(
+    dependencies: WorldDependencies,
+    world_id: str,
+    entries: list,
+) -> dict[str, Any]:
+    """Batch-import lorebook entries in one request.
+
+    Importing entry-by-entry makes one write request per entry, which the
+    write flood guard legitimately rejects for large lorebooks (issue #213).
+    One batched request keeps that guard meaningful; index rebuild and user
+    template sync run once for the whole batch.  Best-effort per entry: data
+    problems are reported per index instead of aborting the batch.
+    """
+
+    world_id = str(world_id or "").strip()
+    if dependencies.lorebook.get_world(world_id) is None:
+        return {"ok": False, "error": "世界不存在"}
+    if not isinstance(entries, list) or not entries:
+        return {"ok": False, "error": "条目列表不能为空"}
+    if len(entries) > MAX_LOREBOOK_IMPORT_ENTRIES:
+        return {"ok": False, "error": f"单次导入条目过多（上限 {MAX_LOREBOOK_IMPORT_ENTRIES} 条）"}
+    existing_ids = {
+        str(e.get("id")) for e in dependencies.lorebook.list_entries(world_id)
+    }
+    imported = 0
+    failures: list[dict[str, Any]] = []
+    for index, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            failures.append({"index": index, "error": "世界书条目必须是对象"})
+            continue
+        if len(str(raw.get("content", ""))) > MAX_LOREBOOK_CHARS:
+            failures.append({
+                "index": index,
+                "error": f"世界书条目过长（上限 {MAX_LOREBOOK_CHARS} 字）",
+            })
+            continue
+        # world_id 来自路径参数：批量端点替客户端统一盖章，避免逐条重复。
+        candidate = {**raw, "world_id": world_id}
+        if str(candidate.get("id") or "").strip() and str(candidate["id"]) in existing_ids:
+            # 批量内/库内撞 id 的条目不得静默替换既有条目：改为重新生成 id，
+            # 让重复导入表现为新增而不是覆盖。
+            candidate["id"] = ""
+        prepared, error = _prepare_entry(
+            dependencies, candidate, existing_ids=existing_ids,
+        )
+        if error or prepared is None:
+            failures.append({"index": index, "error": error or "世界书条目无效"})
+            continue
+        dependencies.lorebook.add_entry(prepared)
+        # 冲突集 = 库内既有 id + 本批已导入 id，防止同批后续条目复用。
+        existing_ids.add(prepared["id"])
+        imported += 1
+    if imported:
+        rebuild_lorebook_index(dependencies, world_id)
+        _sync_user_template_lorebook(dependencies, world_id)
+    return {"ok": True, "imported": imported, "failed": failures}
+
+
+def _prepare_entry(
+    dependencies: WorldDependencies,
+    entry: dict,
+    *,
+    existing_ids: set[str] | None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Validate and normalize one entry; returns (entry, error)."""
+
     if not isinstance(entry, dict):
-        return {"ok": False, "error": "世界书条目必须是对象"}
+        return None, "世界书条目必须是对象"
     world_id = str(entry.get("world_id") or "").strip()
     name = str(entry.get("name") or "").strip()
     if not world_id:
-        return {"ok": False, "error": "缺少 world_id"}
+        return None, "缺少 world_id"
     if dependencies.lorebook.get_world(world_id) is None:
-        return {"ok": False, "error": "世界不存在"}
+        return None, "世界不存在"
     if not name:
-        return {"ok": False, "error": "世界书条目名称不能为空"}
+        return None, "世界书条目名称不能为空"
     entry = dict(entry)
     entry["world_id"] = world_id
     entry["name"] = name
@@ -410,14 +489,12 @@ def save_entry(
     tier = str(entry.get("tier") or "background").strip()
     entry["tier"] = tier if tier in _LOREBOOK_TIERS else "background"
     if not str(entry.get("id") or "").strip():
-        existing = {
-            str(e.get("id")) for e in dependencies.lorebook.list_entries(world_id)
-        }
-        entry["id"] = _entry_id_from_name(world_id, name, existing, 0)
-    dependencies.lorebook.add_entry(entry)
-    rebuild_lorebook_index(dependencies, world_id)
-    _sync_user_template_lorebook(dependencies, world_id)
-    return {"ok": True, "entry_id": entry["id"]}
+        if existing_ids is None:
+            existing_ids = {
+                str(e.get("id")) for e in dependencies.lorebook.list_entries(world_id)
+            }
+        entry["id"] = _entry_id_from_name(world_id, name, existing_ids, 0)
+    return entry, ""
 
 
 def _entry_id_from_name(world_id: str, name: str, existing_ids: set[str], index: int) -> str:

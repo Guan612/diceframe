@@ -1602,6 +1602,7 @@ export const zhCN = {
   worldDeleted: '已删除世界',
   jsonArrayRequired: 'JSON 格式错误：需要数组',
   importedEntries: '已导入 {count} 条',
+  importedWithFailures: '已导入 {imported} 条，{failed} 条失败：条目名称为空或内容超长',
   standaloneLorebookHint: '独立管理世界书条目。',
   chooseWorldEllipsis: '选择世界...',
   newWorld: '新建世界',

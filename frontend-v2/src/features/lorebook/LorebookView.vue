@@ -365,11 +365,17 @@ async function importLore(e: Event) {
     const text = await file.text()
     const imported = JSON.parse(text) as unknown
     if (!Array.isArray(imported)) throw new Error(t('jsonArrayRequired'))
-    for (const en of imported) {
-      if (!en || typeof en !== 'object') continue
-      await api<unknown>('/lorebook', { method: 'POST', body: JSON.stringify({ ...en, world_id: currentWorldId.value, id: undefined }) })
-    }
-    toast.success(t('importedEntries', { count: imported.length }))
+    // 一次批量请求：逐条 POST 会触发写操作频控，导致大世界书导入中途失败。
+    const entries = imported.filter((en): en is Record<string, unknown> => !!en && typeof en === 'object')
+    const r = await api<{ imported?: number; failed?: { index: number; error: string }[] }>(
+      `/lorebook/${encodeURIComponent(currentWorldId.value)}/import`,
+      { method: 'POST', body: JSON.stringify({ entries }) },
+    )
+    const importedCount = r.imported ?? 0
+    const failedCount = r.failed?.length ?? 0
+    if (failedCount && importedCount) toast.error(t('importedWithFailures', { imported: importedCount, failed: failedCount }))
+    else if (failedCount) toast.error(t('importFailed'))
+    else toast.success(t('importedEntries', { count: importedCount }))
     await loadLore()
     await loadWorlds()
     await refreshPreview()

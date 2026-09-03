@@ -1602,6 +1602,7 @@ export const ja = {
   worldDeleted: '世界を削除しました',
   jsonArrayRequired: 'JSON の形式エラー：配列が必要です',
   importedEntries: '{count} 件インポートしました',
+  importedWithFailures: '{imported} 件インポート、{failed} 件失敗（名前が空、または内容が長すぎます）',
   standaloneLorebookHint: '世界書エントリを独立して管理します。',
   chooseWorldEllipsis: '世界を選択...',
   newWorld: '新しい世界',
