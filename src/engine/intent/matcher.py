@@ -49,6 +49,7 @@ def match_open_merchant_offers(instance: Any, item_names: Iterable[str]) -> list
 
 
 def narration_price_for_items(
+    language: str,
     narration: str,
     item_names: Iterable[str],
     currency_labels: Iterable[str] | None = None,
@@ -68,6 +69,6 @@ def narration_price_for_items(
     for sentence in re.split(r"[。！？.!?\n]+", str(narration or "")):
         if not any(name in normalized_item_name(sentence) for name in names):
             continue
-        bound.extend(currency_amounts(sentence, currency_labels))
+        bound.extend(currency_amounts(language, sentence, currency_labels))
     unique = sorted(set(bound))
     return unique[0] if len(unique) == 1 else None

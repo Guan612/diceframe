@@ -22,13 +22,14 @@ from uuid import uuid4
 
 from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.intent.evidence import collect_evidence_for_intent
+from src.engine.intent.lexicon import instance_language
 from src.engine.intent.matcher import match_open_merchant_offers
 from src.engine.intent.parser import (
-    DEFERRED_PAYMENT_RE,
-    FREE_PURCHASE_RE,
     charge_pattern,
     completed_payment_pattern,
     currency_amounts,
+    deferred_payment_pattern,
+    free_purchase_pattern,
     parse_purchase_intents,
 )
 
@@ -162,6 +163,7 @@ def _collect_grants(state_update: dict[str, Any]) -> tuple[dict[str, list[str]],
 
 
 def _narration_amounts_for_items(
+    language: str,
     narration_text: str,
     item_names: list[str],
     currency_labels: Iterable[str] | None,
@@ -173,7 +175,7 @@ def _narration_amounts_for_items(
             for item in item_names
         ):
             continue
-        bound.extend(currency_amounts(sentence, currency_labels))
+        bound.extend(currency_amounts(language, sentence, currency_labels))
     return sorted(set(bound))
 
 
@@ -196,26 +198,27 @@ def repair_missing_economy_proposals(
     state_update = data.get("state_update")
     if not isinstance(state_update, dict) or has_economy_proposal(data):
         return 0, False
+    language = instance_language(instance)
     action_records = (
         list(actions) if actions is not None
         else list(getattr(instance, "action_queue", []))
     )
     intents = parse_purchase_intents(
-        action_records, getattr(instance, "players", {}), currency_labels,
+        action_records, getattr(instance, "players", {}), language, currency_labels,
     )
     narrative_text = str(narration or "")
     priced_narrative = bool(
-        charge_pattern(currency_labels).search(narrative_text)
-        or completed_payment_pattern(currency_labels).search(narrative_text)
+        charge_pattern(language, currency_labels).search(narrative_text)
+        or completed_payment_pattern(language, currency_labels).search(narrative_text)
     )
     if not intents and not priced_narrative:
         return 0, False
-    if FREE_PURCHASE_RE.search(narrative_text) and not priced_narrative:
+    if free_purchase_pattern(language).search(narrative_text) and not priced_narrative:
         return 0, False
 
     players_update = state_update.get("players")
     grants_by_uid, loot_entries = _collect_grants(state_update)
-    narration_amounts = currency_amounts(narrative_text, currency_labels)
+    narration_amounts = currency_amounts(language, narrative_text, currency_labels)
     context_text = (
         narrative_text
         + "\n"
@@ -283,7 +286,7 @@ def repair_missing_economy_proposals(
             grant_items=actor_grants,
         )
 
-        if DEFERRED_PAYMENT_RE.search(intent.action_text):
+        if deferred_payment_pattern(language).search(intent.action_text):
             # 赊账/延期付款：交易条款未当场谈定，不合成立即结算的提案。
             # 证据与意图留档，待 GM/玩家安排后再走标准确认链。
             if bound_items:
@@ -323,7 +326,7 @@ def repair_missing_economy_proposals(
             int(offers[0].get("amount") or 0) if len(offers) == 1 else None
         )
         item_bound_amounts = _narration_amounts_for_items(
-            narrative_text, bound_items, currency_labels,
+            language, narrative_text, bound_items, currency_labels,
         )
 
         amount = 0

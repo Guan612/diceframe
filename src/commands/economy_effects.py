@@ -30,17 +30,16 @@ from src.engine.intent.matcher import (
     match_open_merchant_offers,
     normalized_item_name as _normalized_item_name,
 )
+from src.engine.intent.lexicon import instance_language as _instance_language
 from src.engine.intent.parser import (
-    FREE_PURCHASE_RE as _FREE_PURCHASE_RE,
-    PURCHASE_CONFIRM_RE as _PURCHASE_CONFIRM_RE,
-    PURCHASE_INTENT_RE as _PURCHASE_INTENT_RE,
-    PURCHASE_OFFER_RE as _PURCHASE_OFFER_RE,
     charge_pattern as _charge_pattern,
     completed_payment_pattern as _completed_payment_pattern,
     currency_amount_pattern as _currency_amount_pattern,
     currency_amounts as _currency_amounts,
-    currency_labels as _currency_labels,
     currency_labels_for_rule,
+    purchase_confirm_pattern as _purchase_confirm_pattern,
+    purchase_intent_pattern as _purchase_intent_pattern,
+    purchase_offer_pattern as _purchase_offer_pattern,
 )
 
 _MAX_PURCHASE_QUOTE_HISTORY = 24
@@ -244,7 +243,9 @@ def settle_purchase_quote(
         str(action.get("user_id") or "")
         for action in getattr(instance, "action_queue", [])
         if isinstance(action, dict)
-        and _PURCHASE_CONFIRM_RE.search(str(action.get("text") or ""))
+        and _purchase_confirm_pattern(_instance_language(instance)).search(
+            str(action.get("text") or "")
+        )
         and str(action.get("user_id") or "")
     }
     if len(confirming_uids) != 1:
@@ -353,15 +354,16 @@ def record_purchase_quote(
         for action in getattr(instance, "action_queue", [])
         if isinstance(action, dict)
     )
-    amounts = _currency_amounts(narration, currency_labels)
-    offer_pattern = _PURCHASE_OFFER_RE
+    language = _instance_language(instance)
+    amounts = _currency_amounts(language, narration, currency_labels)
+    offer_pattern = _purchase_offer_pattern(language)
     sentences = re.split(r"[。！？.!?\n]+", str(narration or ""))
     bound_grants = [
         grant for grant in grants
         if any(
             grant[1].casefold() in sentence.casefold()
             and offer_pattern.search(sentence)
-            and _currency_amount_pattern(currency_labels).search(sentence)
+            and _currency_amount_pattern(language, currency_labels).search(sentence)
             for sentence in sentences
         )
         or (
@@ -377,10 +379,10 @@ def record_purchase_quote(
         or len(amounts) != 1
         or not (
             (
-                _PURCHASE_OFFER_RE.search(narration)
-                and _currency_amount_pattern(currency_labels).search(narration)
+                offer_pattern.search(narration)
+                and _currency_amount_pattern(language, currency_labels).search(narration)
             )
-            or _PURCHASE_INTENT_RE.search(action_text)
+            or _purchase_intent_pattern(language).search(action_text)
         )
     ):
         return False
@@ -518,7 +520,7 @@ def guard_unbacked_payment_narration(
     """
 
     text = str(narration or "").strip()
-    completed_payment_re = _completed_payment_pattern(currency_labels)
+    completed_payment_re = _completed_payment_pattern(language, currency_labels)
     if not text or has_economy_proposal(data) or not completed_payment_re.search(text):
         return text
     notice = {
@@ -545,8 +547,9 @@ def discard_unbacked_purchase_items(
     """
 
     narration_text = str(narration or "")
-    charge_re = _charge_pattern(currency_labels)
-    completed_payment_re = _completed_payment_pattern(currency_labels)
+    language = _instance_language(instance)
+    charge_re = _charge_pattern(language, currency_labels)
+    completed_payment_re = _completed_payment_pattern(language, currency_labels)
     if has_economy_proposal(data) or not (charge_re.search(narration_text) or completed_payment_re.search(narration_text)):
         return 0
     state_update = data.get("state_update")
@@ -580,7 +583,7 @@ def discard_unbacked_purchase_items(
             instance,
             reason="MISSING_SELLER_PRICE_CONFIRMATION",
             item_candidates=dropped_items,
-            amount_candidates=_currency_amounts(narration_text, currency_labels),
+            amount_candidates=_currency_amounts(language, narration_text, currency_labels),
         )
     return dropped
 
