@@ -232,6 +232,9 @@ async def _auto_settle_rewards(
     service (ledger + deferred effects + save), so the authority path is
     identical to a manual confirmation — only the click is removed.  Anything
     over the cap or with the switch off stays pending for the GM.
+
+    每个 reward proposal 独立结算：单个失败（服务返回非 ok 或异常）只影响
+    该提案（保持 pending 交还 GM），不中断其余提案，也不保证整批原子提交。
     """
 
     resolve_reward = dependencies.resolve_reward

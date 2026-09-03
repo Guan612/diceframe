@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -422,3 +423,48 @@ async def test_auto_settle_skips_purchases_and_team_rewards() -> None:
     assert result["status"] == 409
     assert result["payload"]["error_code"] == "ECONOMY_DECISION_PENDING"
     assert api.resolved_rewards == []
+
+
+@pytest.mark.asyncio
+async def test_auto_reward_duplicate_settlement_is_idempotent() -> None:
+    """已结算提案不会被再次自动结算；重复推进不重复入账。"""
+
+    instance = FakeInstance()
+    instance.try_advance_result = True
+    api = FakeApi(instance)
+    _reward_proposal(instance, proposal_id="reward-once", amount=30)
+
+    first = await submit_action(api.dependencies, "game", "gm", "继续前进")
+    assert first["status"] == 200
+    assert api.resolved_rewards == [("game", "reward-once", "gm")]
+
+    # 真实服务结算后提案变 committed；再次推进不得重复结算。
+    instance.economy["proposals"][0]["status"] = "committed"
+    second = await submit_action(api.dependencies, "game", "gm", "继续前进")
+    assert second["status"] == 200
+    assert api.resolved_rewards == [("game", "reward-once", "gm")]
+
+
+@pytest.mark.asyncio
+async def test_multiple_rewards_settle_independently() -> None:
+    """同轮多个奖励逐条独立结算：单个失败保持 pending，不中断其余。"""
+
+    instance = FakeInstance()
+    instance.try_advance_result = True
+    api = FakeApi(instance)
+    _reward_proposal(instance, proposal_id="reward-a", amount=10)
+    _reward_proposal(instance, proposal_id="reward-b", amount=20)
+
+    async def flaky_resolve(game_key: str, payment_id: str, session_uid: str) -> dict:
+        api.resolved_rewards.append((game_key, payment_id, session_uid))
+        if payment_id == "reward-b":
+            return {"ok": False, "code": "FORBIDDEN"}
+        return {"ok": True}
+
+    dependencies = replace(api.dependencies, resolve_reward=flaky_resolve)
+    result = await submit_action(dependencies, "game", "gm", "继续前进")
+
+    assert result["status"] == 200
+    assert [r[1] for r in api.resolved_rewards] == ["reward-a", "reward-b"]
+    by_id = {p["id"]: p for p in instance.economy["proposals"]}
+    assert by_id["reward-b"]["status"] == "pending"
