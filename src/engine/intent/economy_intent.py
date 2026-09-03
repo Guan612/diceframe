@@ -21,8 +21,10 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from src.engine.economy import MAX_ECONOMY_AMOUNT
+from src.engine.intent.evidence import collect_evidence_for_intent
 from src.engine.intent.matcher import match_open_merchant_offers
 from src.engine.intent.parser import (
+    DEFERRED_PAYMENT_RE,
     FREE_PURCHASE_RE,
     charge_pattern,
     completed_payment_pattern,
@@ -77,6 +79,7 @@ def record_purchase_clarification(
     payer_uid: str = "",
     item_candidates: Iterable[str] = (),
     amount_candidates: Iterable[int] = (),
+    evidence_ids: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Persist an unresolvable purchase intent as structured pending state.
 
@@ -124,6 +127,7 @@ def record_purchase_clarification(
         "item_candidates": items,
         "amount_candidates": amounts,
         "reason": str(reason)[:60],
+        "evidence_ids": list(evidence_ids or []),
         "status": "open",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -242,6 +246,7 @@ def repair_missing_economy_proposals(
         payer_uid: str,
         item_candidates: list[str],
         amount_candidates: list[int],
+        evidence_ids: list[str] | None = None,
     ) -> None:
         record_purchase_clarification(
             instance,
@@ -249,6 +254,7 @@ def repair_missing_economy_proposals(
             payer_uid=payer_uid,
             item_candidates=item_candidates,
             amount_candidates=amount_candidates,
+            evidence_ids=evidence_ids,
         )
 
     dropped = 0
@@ -269,6 +275,33 @@ def repair_missing_economy_proposals(
         else:
             bound_items = []
 
+        evidence_ids = collect_evidence_for_intent(
+            instance,
+            intent_actor_uid=intent.actor_uid,
+            intent_item_context=intent.item_context,
+            intent_amounts=intent.amount_candidates,
+            grant_items=actor_grants,
+        )
+
+        if DEFERRED_PAYMENT_RE.search(intent.action_text):
+            # 赊账/延期付款：交易条款未当场谈定，不合成立即结算的提案。
+            # 证据与意图留档，待 GM/玩家安排后再走标准确认链。
+            if bound_items:
+                _drop_grants(intent.actor_uid, bound_items)
+                dropped += len(bound_items)
+            _clarify(
+                reason="DEFERRED_PAYMENT",
+                payer_uid=intent.actor_uid,
+                item_candidates=bound_items if bound_items else [intent.item_context],
+                amount_candidates=[
+                    *intent.amount_candidates,
+                    *narration_amounts,
+                ],
+                evidence_ids=evidence_ids,
+            )
+            clarified_any = True
+            continue
+
         if not bound_items:
             # 无卖方接受证据（AI 未发 grant）：意图按 actor 记为澄清，
             # 不再静默丢失（round-12 结构图问题的恢复入口）。
@@ -280,6 +313,7 @@ def repair_missing_economy_proposals(
                     *intent.amount_candidates,
                     *narration_amounts,
                 ],
+                evidence_ids=evidence_ids,
             )
             clarified_any = True
             continue
@@ -302,10 +336,18 @@ def repair_missing_economy_proposals(
                 payer_uid=intent.actor_uid,
                 item_candidates=bound_items,
                 amount_candidates=[*intent.amount_candidates, *narration_amounts],
+                evidence_ids=evidence_ids,
             )
             clarified_any = True
             continue
         if offer_amount is not None:
+            offer_evidence = collect_evidence_for_intent(
+                instance,
+                intent_actor_uid=intent.actor_uid,
+                intent_item_context=intent.item_context,
+                offer=offers[0],
+            )
+            evidence_ids = [*evidence_ids, *offer_evidence]
             evidence = (
                 item_bound_amounts[0]
                 if len(item_bound_amounts) == 1
@@ -321,6 +363,7 @@ def repair_missing_economy_proposals(
                     payer_uid=intent.actor_uid,
                     item_candidates=bound_items,
                     amount_candidates=sorted({evidence, offer_amount}),
+                    evidence_ids=evidence_ids,
                 )
                 clarified_any = True
                 continue
@@ -349,9 +392,22 @@ def repair_missing_economy_proposals(
                     *intent.amount_candidates,
                     *narration_amounts,
                 ],
+                evidence_ids=evidence_ids,
             )
             clarified_any = True
             continue
+
+        proposal_evidence_ids = collect_evidence_for_intent(
+            instance,
+            intent_actor_uid=intent.actor_uid,
+            intent_item_context=intent.item_context,
+            intent_amounts=intent.amount_candidates,
+            narration_amount=(
+                amount if amount_source == AMOUNT_SOURCE_NARRATION else None
+            ),
+            grant_items=bound_items,
+        )
+        evidence_ids = [*evidence_ids, *proposal_evidence_ids]
 
         proposals.append({
             "kind": "purchase",
@@ -363,6 +419,7 @@ def repair_missing_economy_proposals(
             "approval_policy": "payer",
             "source": "server_purchase_guard",
             "amount_source": amount_source,
+            "evidence_ids": evidence_ids,
         })
         # 合成提案消费该 actor 的 grant 作为唯一发货路径；这不是丢弃，
         # 不计入 dropped（dropped 只统计进澄清的 grant）。

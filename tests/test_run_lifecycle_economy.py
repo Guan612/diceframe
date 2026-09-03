@@ -2622,3 +2622,59 @@ def test_repair_binds_narration_price_per_item_sentence() -> None:
     proposal = data["state_update"]["economy_proposals"][0]
     assert proposal["amount"] == 30
     assert proposal["amount_source"] == "narration"
+
+
+def test_repair_persists_evidence_and_links_to_proposal() -> None:
+    """恢复层为每个意图留下证据链，proposal 挂 evidence_ids；证据无权威性。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "gm", "text": "掏30金币买下精钢剑"},
+    ]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根接过金币，转身取下那柄矮人精钢剑，递到你面前。",
+    )
+    assert (dropped, ambiguous) == (0, False)
+    evidence = instance.economy["evidence"]
+    types = {item["type"] for item in evidence}
+    assert "purchase_intent" in types
+    assert "seller_grant" in types
+    for item in evidence:
+        assert item["authority"] is False
+        assert item["id"].startswith("ev_")
+    proposal = data["state_update"]["economy_proposals"][0]
+    assert proposal["evidence_ids"]
+    assert set(proposal["evidence_ids"]) <= {item["id"] for item in evidence}
+
+
+def test_repair_twice_does_not_duplicate_proposals() -> None:
+    """重复 repair 不会重复创建提案（幂等）。"""
+
+    instance = _instance()
+    instance.action_queue = [{"user_id": "gm", "text": "买下治疗药水"}]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "治疗药水"}]}}
+    first = repair_unbacked_purchase(instance, data, "霍根收了2枚金币，把治疗药水递给你。")
+    second = repair_unbacked_purchase(instance, data, "霍根收了2枚金币，把治疗药水递给你。")
+    assert first == second == (0, False)
+    proposals = data["state_update"]["economy_proposals"]
+    assert len(proposals) == 1
+
+
+def test_deferred_payment_intent_goes_to_clarification() -> None:
+    """先拿货后付款：不合成立即结算的提案，进澄清由 GM/玩家安排。"""
+
+    instance = _instance()
+    instance.action_queue = [
+        {"user_id": "gm", "text": "这剑我先拿走，明天付款"},
+    ]
+    data = {"state_update": {"loot": [{"player": "gm", "item": "矮人精钢剑"}]}}
+    dropped, ambiguous = repair_unbacked_purchase(
+        instance, data, "霍根眯眼打量了你一番，还是把剑递了过来。",
+    )
+    assert (dropped, ambiguous) == (1, True)
+    assert not data["state_update"].get("economy_proposals")
+    clarification = instance.economy["clarifications"][0]
+    assert clarification["reason"] == "DEFERRED_PAYMENT"
+    assert clarification["payer_uid"] == "gm"
+    assert clarification["evidence_ids"]
