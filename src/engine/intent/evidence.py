@@ -20,7 +20,8 @@ from uuid import uuid4
 MAX_EVIDENCE_HISTORY = 100
 
 # 证据可信度（方案约定）：merchant_offer 最高，player_action 次之，
-# narration 只作辅助。数值仅供 GM 界面排序展示，不参与任何自动判定。
+# narration 只作辅助。⚠️ 数值仅供 GM 界面排序展示——DO NOT use confidence
+# for authorization / auto-approval；任何授权判定必须走 proposal 状态机。
 EVIDENCE_CONFIDENCE = {
     "merchant_offer": 0.9,
     "player_action": 0.8,
@@ -37,6 +38,44 @@ def evidence_collection(instance: Any) -> list[dict[str, Any]]:
     if not isinstance(entries, list):
         economy["evidence"] = []
     return economy["evidence"]
+
+
+def _referenced_evidence_ids(instance: Any) -> set[str]:
+    """Evidence ids referenced by proposals or clarifications.
+
+    被引用的证据是审计链的一部分：GM 打开历史提案/澄清时依赖它们还原
+    价格来源，因此永不参与 trim 淘汰。
+    """
+
+    economy = getattr(instance, "economy", {})
+    if not isinstance(economy, dict):
+        return set()
+    referenced: set[str] = set()
+    for collection in ("proposals", "clarifications"):
+        for entry in economy.get(collection, []) or []:
+            if isinstance(entry, dict):
+                referenced.update(
+                    str(item) for item in (entry.get("evidence_ids") or []) if str(item)
+                )
+    return referenced
+
+
+def _trim_evidence(instance: Any, entries: list[dict[str, Any]]) -> None:
+    if len(entries) <= MAX_EVIDENCE_HISTORY:
+        return
+    referenced = _referenced_evidence_ids(instance)
+    kept: list[dict[str, Any]] = []
+    freed = 0
+    # 从旧到新扫描：未引用的旧证据先淘汰，被引用的与配额内的新证据保留。
+    for entry in entries:
+        entry_id = str(entry.get("id") or "")
+        if entry_id in referenced:
+            kept.append(entry)
+        elif freed < len(entries) - MAX_EVIDENCE_HISTORY:
+            freed += 1
+        else:
+            kept.append(entry)
+    entries[:] = kept
 
 
 def record_evidence(
@@ -67,8 +106,7 @@ def record_evidence(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     entries.append(evidence)
-    if len(entries) > MAX_EVIDENCE_HISTORY:
-        del entries[:-MAX_EVIDENCE_HISTORY]
+    _trim_evidence(instance, entries)
     return evidence
 
 

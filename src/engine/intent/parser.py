@@ -13,7 +13,7 @@ from typing import Any, Iterable
 from src.engine.intent.models import PurchaseIntent
 
 PURCHASE_INTENT_RE = re.compile(
-    r"(?:买下|买了|购买|购入|买入|付费|付款|支付|缴纳|花费|给钱|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
+    r"(?:买下|买了|购买|购入|买入|买|付费|付款|支付|缴纳|花费|给钱|订购|租用|换购|purchase|buy|bought|pay|paid|spend)",
     re.IGNORECASE,
 )
 FREE_PURCHASE_RE = re.compile(r"(?:免费|无需付费|不用钱|免费领取|free|no charge)", re.IGNORECASE)
