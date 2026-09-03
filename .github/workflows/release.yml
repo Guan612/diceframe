@@ -193,13 +193,13 @@ jobs:
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
           gh release upload "$tag" \
-            "dist/DiceFrame-${tag}-docker-update-linux-amd64.zip" \
-            --clobber
-          gh release upload "$tag" \
             "dist/DiceFrame-${tag}-windows-portable.zip" \
             --clobber
           gh release upload "$tag" \
             "dist/DiceFrame-${tag}-windows.zip" \
+            --clobber
+          gh release upload "$tag" \
+            "dist/DiceFrame-${tag}-docker-update-linux-amd64.zip" \
             --clobber
           gh release upload "$tag" \
             "dist/SHA256SUMS" \
