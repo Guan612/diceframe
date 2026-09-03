@@ -1,6 +1,6 @@
-# DiceFrame v2.5.1-beta.3
+# DiceFrame v2.5.1-beta.4
 
-> 预览版本。v2.5.1-beta.3 延续 v2.5.0 的功能，并补充经济结算、跨回合购买确认、报价生命周期与发布包顺序修复。重要战役升级前，请先备份完整的 `data/` 文件夹。
+> 预览版本。v2.5.1-beta.4 延续 v2.5.0 的功能，并补充经济恢复层与意图层（报价显式确认、商家报价持久化、结构化澄清、证据链、普通奖励自动结算）、意图多语言、世界书批量导入与图像生成分步配置。重要战役升级前，请先备份完整的 `data/` 文件夹。
 
 ## 中文
 
@@ -31,18 +31,20 @@
 
 ### 本预览版补充
 
-- **经济结算回滚**：多笔晚结算按逆提交顺序恢复余额、金币、物品和堆叠数量；origin-round Swipe 不再把后续轮次的状态写回旧快照。
-- **奖励资格**：开场、普通回合和 Swipe 都会拦截尚未有完成证据的条件性奖励，避免任务未完成就生成奖励提案。
-- **跨回合购买确认**：报价会持久化到原始对局回合，只能由原付款人确认；确认时以已保存的价格和物品为准，并防止重复发货或误把普通拾取物识别成商品报价。
+- **经济意图层与恢复层**：AI 漏发支付标签时，系统会从玩家自己的行动解析购买意图，并按玩家独立恢复成待确认提案——价格证据按优先级取用（商家报价 > 叙事绑定 > 行动自报），双人同轮各自购买不再互相干扰，也不再有“AI 漏标签就只剩一句报错”的死角。
+- **商家报价持久化与显式确认**：商家的报价会带服务端生成的编号跨回合保存，只能由报价中的付款人显式确认或取消；确认时以已保存的价格和商品为唯一来源，玩家自报金额不能覆盖商家报价。
+- **结构化澄清**：无法唯一确认的购买（价格冲突、多商品、多人不明、AI 未发商品授予、赊账/延期付款）会生成带候选商品、候选价格与原因的结构化澄清记录，交由 GM/玩家处理，不再只是一句报错。
+- **证据链**：每个购买意图的行动自报、叙事绑定价格、商家报价与 AI 商品授予都会留下结构化证据（仅供 GM 审计与确认参考，永远不直接改状态）。
+- **普通奖励自动结算**：上限内（默认 50 金币，可配置）的单人金币奖励在回合完成后自动到账，不再阻塞整桌等待 GM 确认；超额奖励或关闭开关时保持原有的 GM 确认流程。
+- **重置后快速重建与身份恢复**：重置后 GM/单人游玩页提供直接创建角色入口；玩家从连接注册后返回旧游玩地址时会自动恢复本地玩家身份，避免被误判为未加入本局。
+- **意图多语言**：意图识别模式迁移到语言资源文件，日文局的「剣を買います」等购买句式现在可以正确识别。
 
 ### 修复、兼容与更新可靠性
 
-- **重开、重置和战斗状态**：修复了新开/重开对局可能带入旧会话记忆、死亡或战斗状态的问题；战斗历史、死亡豁免与敌方回合的公共反馈也经过补强。
-- **冒险包确定性**：对局会固定冒险包的 identity、版本与内容摘要。内容缺失、被修改或与世界策略不匹配时会明确拒绝，而不是静默切换到另一套场景；流程编辑也会检查起点、分支、可达性和遭遇引用。
-- **世界书可见性兼容**：兼容历史 `PUBLIC` / `公开` 等别名和逗号分隔的角色名单，避免公开 lore 在保存后被误判为 GM 私密；内置世界书仅在仍能证明是旧官方默认时才会升级。
-- **模型配置写入**：修复主模型切换时写入失败仍显示新选择的问题；现在会回滚到已保存的配置。
-- **内容包与界面修复**：导入内容包时会规范资源 ID；修复设置页在窄屏与恢复桌面宽度时的导航表现、语音识别错误横幅无法关闭等问题，并调整了资料库和移动端操作布局。
-- **连接与更新链路**：为首次发布的 Docker 托管更新补齐了强制 HTTPS 健康检查、加密依赖和更新包校验；同时修复 Windows 便携版依赖锁校验。慢设备、较多存档或短暂网络波动下的启动等待与失败判断也更可靠。
+- **世界书批量导入**：超过 50 条的条目导入改为一次批量请求完成，不再触发写操作频控而中途失败（#213）；部分失败会按条目报告。
+- **图像生成分步配置**：可以先启用图像生成、稍后再选择服务商和模型；配置完整前服务保持不可用而不是报错，原有 URL 安全校验不变（#218）。
+- **重置后状态**：修复重置会清空玩家后缺少角色创建入口的问题；旧游玩地址的玩家身份恢复不再误判。
+- **经济报价生命周期**：回滚时商家报价与澄清改为标记失效而非删除，保留审计；报价与提案的引用证据不会被清理；导入存档时报价与澄清会一并收养到新对局。
 - **规则边界**：D&D 专属自动化继续限制在 D&D 运行时边界内，不会自动改变传统规则、CoC、赛博朋克或 generic d20 的玩法。
 
 ### 升级提示
@@ -51,13 +53,14 @@
 - 首次启动会在可安全判断的前提下升级内置模板与兼容数据；已经被用户修改的世界书或内容不会被系统模板无条件覆盖，无法安全判断时会保留原样。
 - 已绑定到存档的冒险包继续保持只读、不可删除，确保重开时始终使用同一份已验证的内容。
 - “重开”和“重置”会清理该局的会话派生记忆，避免叙事串到新局；它们不会删除其它存档。
+- 奖励自动结算默认开启（上限 50 金币）；如需回到全部 GM 确认模式，可在配置中关闭 `economy_auto_reward_enabled`。
 - Docker 托管更新包当前支持 `linux-amd64`。
 
 ### 下载与校验
 
-- **普通 Windows 用户**：`DiceFrame-v2.5.1-beta.3-windows-portable.zip`
-- **源码运行用户**：`DiceFrame-v2.5.1-beta.3-windows.zip`
-- **托管 Docker 更新**：`DiceFrame-v2.5.1-beta.3-docker-update-linux-amd64.zip`
+- **普通 Windows 用户**：`DiceFrame-v2.5.1-beta.4-windows-portable.zip`
+- **源码运行用户**：`DiceFrame-v2.5.1-beta.4-windows.zip`
+- **托管 Docker 更新**：`DiceFrame-v2.5.1-beta.4-docker-update-linux-amd64.zip`
 - 下载后请使用 Release 中的 `SHA256SUMS` 统一校验；重要战役建议保留旧版程序与数据备份，便于回退。
 
 ## English
@@ -89,18 +92,20 @@
 
 ### Included in this preview
 
-- **Economy rollback**: multiple late settlements now restore balances, gold, items, and stacked quantities in reverse commit order; origin-round Swipe no longer projects later-round state into an earlier snapshot.
-- **Reward eligibility**: opening, normal-round, and Swipe pipelines reject conditional rewards without completion evidence, so unfinished tasks do not create reward proposals.
-- **Cross-turn purchase confirmation**: quotes persist with their originating run and payer; confirmation uses the stored amount and items, prevents duplicate delivery, and does not misclassify ordinary loot as a shop quote.
+- **Economy intent & recovery layer**: When the model omits payment tags, the system parses purchase intents from the players' own actions and recovers them per player as pending proposals. Price evidence follows a priority ladder (merchant offer > narration binding > player-stated amount); two players buying in the same round no longer interfere, and unrecoverable cases no longer reduce to a single error line.
+- **Persisted merchant offers with explicit confirmation**: Merchant quotes persist across rounds with a server-generated id and can only be confirmed or cancelled by the quoted payer. Confirmation uses the stored amount and items as the sole source of truth; a player-stated amount can never override a merchant quote.
+- **Structured clarifications**: Purchases that cannot be uniquely confirmed (price conflicts, multiple items, unclear payers, missing AI grants, deferred/credit payment) produce structured clarification records with item and amount candidates plus a reason, for GM/player resolution instead of a bare error line.
+- **Evidence trail**: Every purchase intent records structured evidence (player-stated amounts, narration-bound prices, merchant quotes, AI grants) for GM audit and confirmation reference. Evidence never mutates state directly.
+- **Automatic reward settlement**: Plain single-recipient gold rewards within the configured cap (default 50, configurable) settle automatically after each round instead of blocking the table for a GM click. Over-cap rewards and the off switch keep the original confirmation flow.
+- **Post-reset rebuild & identity restore**: After a reset, the GM/solo play page offers a direct character-creation entry, and players returning to an old play URL after joining restore their local identity instead of being treated as not joined.
+- **Intent multilingual support**: Intent trigger patterns moved into language resource files; Japanese phrases such as「剣を買います」are now recognized.
 
 ### Fixes, compatibility, and update reliability
 
-- **Restart, reset, and combat state**: Fixed cases where a new or restarted game could inherit prior session memory, death state, or combat state. Public feedback for combat history, death saves, and enemy turns was also strengthened.
-- **Deterministic adventure packages**: Games pin an adventure package identity, version, and content digest. Missing, modified, or world-policy-incompatible content is rejected explicitly rather than silently switching scenes. Flow editing also checks starts, branches, reachability, and encounter references.
-- **Worldbook visibility compatibility**: Historical `PUBLIC` / localized public aliases and comma-separated character lists are accepted so public lore is not misclassified as GM-private when saved. Bundled worldbooks upgrade only when they can still be proven to be the old official default.
-- **Model configuration writes**: Fixed main-model selection appearing to change when the configuration write failed; the UI now rolls back to the persisted selection.
-- **Content package and UI fixes**: Content-package installs now normalize asset IDs. Settings navigation handles narrow screens and a return to desktop width correctly, dictation error banners can be dismissed, and library and mobile action layouts were refined.
-- **Connectivity and update path**: The first managed-Docker update release includes forced-HTTPS health checks, required cryptography dependencies, and update-package validation; Windows-portable dependency-lock validation was also fixed. Startup waits and failure detection are more reliable on slower devices, installations with many saves, or brief network interruptions.
+- **Lorebook batch import**: Importing more than 50 entries now completes in a single batched request instead of tripping the write flood guard mid-import (#213); per-entry failures are reported individually.
+- **Staged image generation**: Enable image generation first and pick the provider/model later. Before the configuration is complete the service reports unavailable cleanly instead of erroring, with URL security checks unchanged (#218).
+- **Post-reset state**: Fixed the missing character-creation entry after a reset cleared the roster; player identity restoration for old play URLs no longer misfires.
+- **Economy quote lifecycle**: Rollback now marks merchant offers and clarifications superseded instead of deleting them, preserving audit. Evidence referenced by proposals survives cleanup, and imported saves adopt offers and clarifications into the new run.
 - **Ruleset boundaries**: D&D-specific automation remains inside the D&D runtime boundary and does not automatically alter traditional rules, Call of Cthulhu, cyberpunk, or generic d20 play.
 
 ### Upgrade notes
@@ -109,11 +114,12 @@
 - On first startup, bundled templates and compatibility data are upgraded only when this is safe to determine. User-edited worldbooks and content are never unconditionally overwritten; uncertain cases are preserved unchanged.
 - Adventure packages bound to saves remain read-only and undeletable so restarts always use the same validated content.
 - Restart and reset clear session-derived memory for that game to prevent narrative carry-over; they do not delete other saves.
+- Automatic reward settlement is enabled by default (cap 50 gold); disable `economy_auto_reward_enabled` in the configuration to return to full GM confirmation.
 - Managed Docker updates currently support `linux-amd64`.
 
 ### Downloads and verification
 
-- **Regular Windows users**: `DiceFrame-v2.5.1-beta.3-windows-portable.zip`
-- **Source-run users**: `DiceFrame-v2.5.1-beta.3-windows.zip`
-- **Managed Docker update**: `DiceFrame-v2.5.1-beta.3-docker-update-linux-amd64.zip`
+- **Regular Windows users**: `DiceFrame-v2.5.1-beta.4-windows-portable.zip`
+- **Source-run users**: `DiceFrame-v2.5.1-beta.4-windows.zip`
+- **Managed Docker update**: `DiceFrame-v2.5.1-beta.4-docker-update-linux-amd64.zip`
 - Verify downloads with the Release `SHA256SUMS`. For important campaigns, keep the prior program version and a data backup so rollback remains possible.
