@@ -15,18 +15,14 @@ from typing import Any
 
 from src.commands.economy_effects import (
     discard_unearned_reward_proposals,
-    discard_unbacked_purchase_items,
     defer_narrative_effects,
-    guard_unbacked_payment_narration,
     has_economy_proposal,
-    has_server_purchase_guard,
     pending_decision_notice,
-    repair_unbacked_purchase,
     currency_labels_for_rule,
-    record_purchase_quote,
-    settle_purchase_quote,
     unbacked_purchase_notice,
+    unbacked_payment_notice,
     unearned_reward_notice,
+    should_warn_unbacked_payment,
 )
 from src.commands.round_effects import (
     append_state_change_messages,
@@ -42,6 +38,11 @@ from src.commands.round_effects import (
     update_quick_actions,
 )
 from src.commands.check_planner import plan_round_checks
+from src.engine.economy import (
+    economy_changes_are_resolutions_only,
+    economy_fingerprint,
+    queue_purchase_offer,
+)
 from src.commands.death_save_tracker import resolve_round_death_saves
 from src.commands.round_llm import (
     append_multistep_analysis,
@@ -59,12 +60,11 @@ from src.commands.round_actions import (
 from src.commands.state_recap import snapshot_public_player_state
 from src.commands.state_update_applier import discard_unresolved_player_damage
 from src.commands.tag_summary import summarize_tags
-from src.engine.constants import COMBAT_INTENT_KEYWORDS
 from src.engine.economy import (
-    economy_revision,
     has_blocking_economy_decision,
     queue_effect_group,
 )
+from src.engine.economy import filter_unconfirmed_purchase_grants
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
 from src.imagegen import (
@@ -236,13 +236,17 @@ class RoundProcessor:
         instance.reset_round_checks()
         deferred_indexes = self._deferred_check_indexes(instance)
         expected_run_id = instance.run_id
-        expected_economy_revision = economy_revision(instance)
+        expected_economy_fingerprint = economy_fingerprint(instance)
 
         def planning_target_is_current() -> bool:
+            current = self.registry.get(instance.game_key)
             return (
-                self.registry.get(instance.game_key) is instance
+                current is instance
                 and instance.run_id == expected_run_id
-                and economy_revision(instance) == expected_economy_revision
+                # 玩家确认既有提案不使规划过期；回滚/状态篡改仍会。
+                and economy_changes_are_resolutions_only(
+                    expected_economy_fingerprint, economy_fingerprint(instance),
+                )
             )
 
         try:
@@ -250,10 +254,9 @@ class RoundProcessor:
             planned, metadata = await plan_round_checks(instance, rule_ctx.rule, self.llm_client)
             if not planning_target_is_current():
                 logger.info(
-                    "丢弃过期检定规划: game=%s run=%s economy=%d",
+                    "丢弃过期检定规划: game=%s run=%s",
                     instance.game_key,
                     expected_run_id,
-                    expected_economy_revision,
                 )
                 instance.reset_round_checks()
                 return []
@@ -262,6 +265,28 @@ class RoundProcessor:
                 instance.round_number,
                 int((time.perf_counter() - plan_started) * 1000),
             )
+            # AI 报价落库必须在过时检查之后：创建提案会推进 revision，
+            # 提前创建会让 planning_target_is_current() 误判规划过期。
+            for offer in metadata.get("economy_offers") or []:
+                try:
+                    quantity = max(1, min(8, int(offer.get("quantity", 1) or 1)))
+                    queue_purchase_offer(
+                        instance,
+                        payer_uid=str(offer["payer_uid"]),
+                        amount=int(offer["amount"]),
+                        items=[str(offer["target"])] * quantity,
+                        reason=str(offer.get("note") or ""),
+                        source="table_offer",
+                        source_ref=(
+                            f"ai:{instance.run_id}:{instance.round_number}:"
+                            f"{offer['payer_uid']}:{offer['target']}:{quantity}:"
+                            f"{offer.get('amount_scope') or 'total'}:{offer['amount']}"
+                        ),
+                    )
+                except Exception:
+                    logger.warning(
+                        "AI 报价提案创建失败，已跳过: %s", offer, exc_info=True,
+                    )
             if not metadata.get("available"):
                 logger.warning("模型工具不可用，进入离线检定兼容路径: %s", instance.game_key)
                 return self.prepare_round_checks(instance)
@@ -499,9 +524,13 @@ class RoundProcessor:
     async def process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """实际的判定处理逻辑。"""
         expected_run_id = instance.run_id
-        expected_economy_revision = economy_revision(instance)
         if not instance.round_checks_prepared:
             await self.prepare_round_checks_ai(instance)
+        # The planning phase may create an explicitly-authorized table offer.
+        # Capture the narrative-start snapshot only after planning completes;
+        # confirmations of this snapshot may resolve while the LLM streams,
+        # but proposals created afterwards must invalidate the response.
+        expected_economy_fingerprint = economy_fingerprint(instance)
         # 只保留最近一轮的短期展示状态，避免旧提示或战斗结果常驻。
         instance.begin_round_processing()
 
@@ -578,15 +607,16 @@ class RoundProcessor:
         if (
             current_instance is not instance
             or instance.run_id != expected_run_id
-            or economy_revision(instance) != expected_economy_revision
+            # 生成期间玩家确认/拒绝既有提案不判过期；回滚等仍会丢弃。
+            or not economy_changes_are_resolutions_only(
+                expected_economy_fingerprint, economy_fingerprint(instance),
+            )
         ):
             logger.warning(
-                "丢弃过期叙事响应: game=%s expected_run=%s current_run=%s expected_economy=%d current_economy=%d",
+                "丢弃过期叙事响应: game=%s expected_run=%s current_run=%s",
                 instance.game_key,
                 expected_run_id,
                 getattr(current_instance, "run_id", "missing"),
-                expected_economy_revision,
-                economy_revision(instance),
             )
             return "", None
         runtime = self._ruleset_runtime(instance)
@@ -629,50 +659,33 @@ class RoundProcessor:
         used_budget = int(getattr(response, "token_budget_used", 0) or 0)
         instance.set_token_budget_bump(initial_budget, used_budget)
         apply_parsed_data_to_response(instance, response, data)
+        system_changes: list[str] = list(
+            getattr(response, "system_notices", []) or [],
+        )
         dropped_rewards = discard_unearned_reward_proposals(instance, data, response.narration)
         if dropped_rewards:
             # The response object was populated before the economy gate; keep
             # the authoritative state-update view in sync with the filtered
             # proposal list so it cannot be queued through the old reference.
             response.state_update = data.get("state_update") or {}
-            response.narration = f"{response.narration or ''}\n\n{unearned_reward_notice(instance.language)}".strip()
-        response.narration = guard_unbacked_payment_narration(
+            system_changes.append(unearned_reward_notice(instance.language))
+        if should_warn_unbacked_payment(
             response.narration, data, instance.language,
             currency_labels=currency_labels,
-        )
-        settled_quote = settle_purchase_quote(instance, data, currency_labels=currency_labels)
-        if not settled_quote:
-            record_purchase_quote(
-                instance, data, response.narration, currency_labels=currency_labels,
-            )
-            dropped_purchase_items, purchase_was_ambiguous = repair_unbacked_purchase(
-                instance, data, response.narration,
-                actions=instance.action_queue,
-                currency_labels=currency_labels,
-            )
-        else:
-            dropped_purchase_items, purchase_was_ambiguous = 0, False
-        if not settled_quote and not purchase_was_ambiguous:
-            dropped_purchase_items += discard_unbacked_purchase_items(
-                instance, data, response.narration, currency_labels=currency_labels,
-            )
+        ):
+            system_changes.append(unbacked_payment_notice(instance.language))
+        # Purchase authority is explicit GM order + payer confirmation. Never
+        # infer a price or create a chargeable proposal from narration text.
+        dropped_purchase_items = filter_unconfirmed_purchase_grants(instance, data)
         if dropped_purchase_items:
-            response.narration = (
-                f"{response.narration or ''}\n\n"
-                f"{unbacked_purchase_notice(instance.language)}"
-            ).strip()
-        # A server-side purchase repair may have synthesized a typed proposal
-        # from an explicit action plus an unambiguous rule currency amount.
-        # Recompute after the repair so it receives the same pending-settlement
-        # barrier and deferred-effect handling as model-emitted proposals.
+            system_changes.append(unbacked_purchase_notice(instance.language))
         economy_pending = has_economy_proposal(data)
         deferred_effects = defer_narrative_effects(
             data, response,
-            defer_state_update=not has_server_purchase_guard(data),
+            defer_state_update=True,
         )
         if economy_pending:
-            notice = pending_decision_notice(instance.language)
-            response.narration = f"{response.narration or ''}\n\n{notice}".strip()
+            system_changes.append(pending_decision_notice(instance.language))
 
         public_state_before = snapshot_public_player_state(instance)
         round_pre_snapshot = _snapshot_players(instance)
@@ -722,7 +735,9 @@ class RoundProcessor:
                 # The advisory encounter request remains visible for GM review.
                 logger.exception("D&D Director automation was rejected; waiting for GM")
         apply_revive_commands(instance, data)
-        apply_growth_rewards(instance, data, response, rule, self._progression, runtime)
+        system_changes.extend(apply_growth_rewards(
+            instance, data, response, rule, self._progression, runtime,
+        ))
         update_quick_actions(instance, data)
         await apply_memory_delta(instance, response, self.memory_store)
         # 消费待处理 embedding 队列，让新记忆在运行中也能获得向量（此前从未被调用）
@@ -734,6 +749,7 @@ class RoundProcessor:
         apply_plot_update(instance, response)
         store_private_messages(instance, response)
         state_msgs = append_state_change_messages(instance, response, public_state_before, data)
+        state_msgs.extend(system_changes)
         request = (
             instance.ruleset_state.get("encounter_request")
             if isinstance(getattr(instance, "ruleset_state", None), dict)
@@ -745,14 +761,12 @@ class RoundProcessor:
                 "zh-CN": "战斗准备已就绪，等待 GM 确认进入先攻。",
                 "ja": "戦闘準備が整いました。GM のイニシアチブ開始確認を待っています。",
             })
-            response.narration = f"{response.narration or ''}\n\n{request_note}".strip()
             state_msgs.append(request_note)
         if automation_batches:
             automation_note = summarize_automation_batches(
                 automation_batches,
                 chinese=not str(getattr(instance, "language", "") or "").lower().startswith("en"),
             )
-            response.narration = f"{response.narration or ''}\n\n{automation_note}".strip()
             state_msgs.append(automation_note)
 
         instance.consume_gm_directives(set(consumed_directive_ids))

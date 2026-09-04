@@ -11,13 +11,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Literal
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from src.engine.contracts import (
     ActionRecord,
     CheckResult,
-    PendingPayment,
     PlayerData,
     RoundLogEntry,
     StoryRecap,
@@ -110,7 +109,7 @@ class GameInstance:
     """
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
-    instance_schema_version: int = 4
+    instance_schema_version: int = 6
     run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
     memory_namespace: str = ""
     economy: dict[str, Any] = field(default_factory=dict)
@@ -229,9 +228,6 @@ class GameInstance:
     # WebUI 快捷行动建议
     quick_actions: list[str] = field(default_factory=list)
 
-    # 等待玩家确认的支付请求
-    pending_payments: list[PendingPayment] = field(default_factory=list)
-
     # 系统健康 / 降级事件
     health_events: list[dict] = field(default_factory=list)
     health_status: dict = field(default_factory=dict)
@@ -273,10 +269,6 @@ class GameInstance:
             self.economy.setdefault("effect_groups", [])
             self.economy.setdefault("external_effects_outbox", [])
             self.economy.setdefault("outcomes", [])
-            self.economy.setdefault("purchase_quotes", [])
-            self.economy.setdefault("merchant_offers", [])
-            self.economy.setdefault("clarifications", [])
-            self.economy.setdefault("evidence", [])
             self.economy.setdefault("decision_revision", 0)
 
     def _fresh_economy_state(self) -> dict[str, Any]:
@@ -290,10 +282,6 @@ class GameInstance:
             "effect_groups": [],
             "external_effects_outbox": [],
             "outcomes": [],
-            "purchase_quotes": [],
-            "merchant_offers": [],
-            "clarifications": [],
-            "evidence": [],
             "decision_revision": 0,
         }
 
@@ -617,49 +605,6 @@ class GameInstance:
 
     def clear_private_messages(self, uid: str) -> None:
         self.private_log.pop(uid, None)
-
-    def queue_payment(self, payment: PendingPayment) -> None:
-        self.pending_payments.append(payment)
-
-    def remove_payments_for_player(self, uid: str) -> None:
-        from src.engine.economy import cancel_proposals_for_player
-
-        affected_ids = cancel_proposals_for_player(self, uid)
-        self.pending_payments = [
-            payment
-            for payment in self.pending_payments
-            if (
-                payment.get("uid") != uid
-                and payment.get("recipient_uid") != uid
-                and str(payment.get("id") or "") not in affected_ids
-                and uid not in {
-                    str(item.get("uid") or "")
-                    for item in (payment.get("contributors") or [])
-                    if isinstance(item, dict)
-                }
-            )
-        ]
-
-    def prune_resolved_payments(self) -> None:
-        self.pending_payments = [
-            payment
-            for payment in self.pending_payments
-            if payment.get("status") == "pending"
-        ]
-
-    def mark_payment_resolved(
-        self,
-        payment_id: str,
-        status: Literal["accepted", "declined", "rejected"],
-        *,
-        resolved_at: float,
-    ) -> PendingPayment | None:
-        for payment in self.pending_payments:
-            if payment.get("id") == payment_id:
-                payment["status"] = status
-                payment["resolved_at"] = resolved_at
-                return payment
-        return None
 
     def record_check(self, check: CheckResult) -> None:
         """记录结构化检定，并保持 last_check 与 last_checks 一致。"""
@@ -1137,7 +1082,12 @@ class GameInstance:
             self.last_activity = datetime.now(timezone.utc).isoformat()
         await self.start_round()
 
-    async def finish_judgment_with_swipe(self, gm_response: str, original_round: int) -> None:
+    async def finish_judgment_with_swipe(
+        self,
+        gm_response: str,
+        original_round: int,
+        state_changes: list[str] | None = None,
+    ) -> None:
         """为已有轮次添加 swipe（不推进回合）。"""
         async with self._lock:
             for entry in self.log:
@@ -1148,6 +1098,8 @@ class GameInstance:
                     swipes.append(gm_response)
                     entry["current_swipe"] = len(swipes) - 1
                     entry["gm_response"] = gm_response
+                    if state_changes is not None:
+                        entry["state_changes"] = list(state_changes)
                     break
             self.total_llm_calls += 1
             self.last_activity = datetime.now(timezone.utc).isoformat()
@@ -1226,7 +1178,6 @@ class GameInstance:
             self.health_events.clear()
             self.health_status.clear()
             self.quick_actions.clear()
-            self.pending_payments.clear()
             self.confirmed_items.clear()
             self.private_log.clear()
             self.table_talk.clear()

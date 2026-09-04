@@ -270,6 +270,7 @@ async def test_plan_round_checks_uses_single_batched_tool_call() -> None:
         "total_tokens": 37,
         "errors": [],
         "overreach": [],
+        "economy_offers": [],
     }
 
 
@@ -349,3 +350,149 @@ async def test_empty_model_plan_cannot_skip_hidden_clue_search() -> None:
 
     assert len(planned) == 1
     assert planned[0][1]["planner_source"] == "deterministic_safety_net"
+
+
+
+
+def _client_returning(arguments: dict) -> object:
+    class _Client:
+        async def call_tools(self, *_args, **_kwargs):
+            return SimpleNamespace(
+                tool_calls=[{"name": "dice_checks", "arguments": arguments}],
+                total_tokens=1,
+                provider_used="fake",
+                native_tools=True,
+            )
+    return _Client()
+
+
+@pytest.mark.asyncio
+async def test_plan_round_checks_normalizes_economy_offers() -> None:
+    instance = make_instance()
+    # 中性行动，避免确定性安全网产生无关检定。
+    instance.action_queue = [
+        {"user_id": "p1", "text": "我在大厅坐着休息"},
+        {"user_id": "p2", "text": "我翻看任务板"},
+    ]
+    planned, metadata = await plan_round_checks(
+        instance, make_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "阿岚", "type": "purchase", "target": "长剑",
+                "amount": 50, "price_source": "gm_narrated", "note": "矮人摊主报价",
+            },
+            {
+                "player": "p2", "type": "purchase", "target": "口粮",
+                "amount": 3, "price_source": "player_stated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["errors"] == []
+    assert metadata["economy_offers"] == [
+        {"payer_uid": "p1", "amount": 50, "quantity": 1, "amount_scope": "total", "target": "长剑", "note": "矮人摊主报价"},
+        {"payer_uid": "p2", "amount": 3, "quantity": 1, "amount_scope": "total", "target": "口粮", "note": ""},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_economy_offer_multiplies_unit_price_by_explicit_quantity() -> None:
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "我要5瓶治疗药水"}]
+    planned, metadata = await plan_round_checks(
+        instance, make_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "p1", "type": "purchase", "target": "治疗药水",
+                "amount": 30, "quantity": 5, "amount_scope": "unit",
+                "price_source": "gm_narrated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["errors"] == []
+    assert metadata["economy_offers"] == [{
+        "payer_uid": "p1", "amount": 150, "quantity": 5,
+        "amount_scope": "unit", "target": "治疗药水", "note": "",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_economy_offer_without_stated_price_is_safely_skipped() -> None:
+    instance = make_instance()
+    planned, metadata = await plan_round_checks(
+        instance, make_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {"player": "p1", "type": "purchase", "target": "长剑", "price_source": "none"},
+            {"player": "p1", "type": "purchase", "target": "长剑"},
+            {"player": "p1", "type": "purchase", "target": "长剑", "amount": 50},
+        ]}),
+    )
+    # none / 缺 amount → 跳过且不报错；有 amount 却没有 price_source → 拒绝。
+    assert metadata["economy_offers"] == []
+    assert metadata["errors"] == ["economy_actions[2] price_source='' 无效"]
+
+
+@pytest.mark.asyncio
+async def test_economy_offer_rejects_unknown_player_and_type() -> None:
+    instance = make_instance()
+    planned, metadata = await plan_round_checks(
+        instance, make_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {"player": "幽灵", "type": "purchase", "target": "长剑",
+             "amount": 5, "price_source": "gm_narrated"},
+            {"player": "p1", "type": "sell", "target": "长剑",
+             "amount": 5, "price_source": "gm_narrated"},
+        ]}),
+    )
+    assert metadata["economy_offers"] == []
+    assert metadata["errors"] == [
+        "economy_actions[0] player 不存在",
+        "economy_actions[1] type 仅支持 purchase",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_economy_offers_queue_payer_confirmed_proposals_idempotently() -> None:
+    """同一轮重复规划经稳定 source_ref 幂等，不产生重复提案。"""
+    from src.engine.economy import queue_purchase_offer
+
+    instance = make_instance()
+    source_ref = f"ai:{instance.run_id}:1:p1:长剑"
+    first = queue_purchase_offer(
+        instance, payer_uid="p1", amount=50, items=["长剑"],
+        reason="矮人摊主报价", source="table_offer", source_ref=source_ref,
+    )
+    second = queue_purchase_offer(
+        instance, payer_uid="p1", amount=50, items=["长剑"],
+        reason="矮人摊主报价", source="table_offer", source_ref=source_ref,
+    )
+    assert first["id"] == second["id"]
+    assert [p["status"] for p in instance.economy["proposals"]] == ["pending"]
+    assert first["approval_policy"] == "payer"
+    assert first["source"] == "table_offer"
+    assert [reward["name"] for reward in first["rewards"]] == ["长剑"]
+    bulk = queue_purchase_offer(
+        instance, payer_uid="p1", amount=150, items=["治疗药水"] * 5,
+        reason="30 金币一瓶，共五瓶", source="table_offer", source_ref="ai:bulk",
+    )
+    assert len(bulk["rewards"]) == 5
+    with pytest.raises(ValueError):
+        queue_purchase_offer(
+            instance, payer_uid="p1", amount=50, items=["长剑"],
+            source="narrative", source_ref="ai:other",
+        )
+
+
+def test_economy_tool_schema_requires_price_provenance() -> None:
+    from src.llm.tools import DICE_CHECKS_TOOL
+
+    actions = (
+        DICE_CHECKS_TOOL["function"]["parameters"]["properties"]["economy_actions"]
+    )
+    props = actions["items"]["properties"]
+    assert props["price_source"]["enum"] == ["player_stated", "gm_narrated", "none"]
+    assert props["quantity"]["maximum"] == 8
+    assert props["amount_scope"]["enum"] == ["unit", "total"]
+    assert actions["items"]["required"] == ["player", "type", "target"]
+    assert "never invent, estimate, or infer a price" in props["price_source"]["description"]

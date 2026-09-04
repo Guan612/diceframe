@@ -13,14 +13,15 @@ from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.economy_effects import (
     currency_labels_for_rule,
     discard_unearned_reward_proposals,
-    discard_unbacked_purchase_items,
     defer_narrative_effects,
-    guard_unbacked_payment_narration,
     has_economy_proposal,
     pending_decision_notice,
+    should_warn_unbacked_payment,
     unbacked_purchase_notice,
+    unbacked_payment_notice,
     unearned_reward_notice,
 )
+from src.engine.economy import filter_unconfirmed_purchase_grants
 from src.commands.state_update_applier import StateUpdateApplier
 from src.commands.tag_parser import (
     parse_tag_state,
@@ -30,7 +31,7 @@ from src.commands.tag_summary import summarize_tags
 from src.engine.character_utils import reset_character_for_restart
 from src.engine.economy import queue_effect_group
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
-from src.engine.language import DEFAULT_LANGUAGE, localized_text, normalize_language
+from src.engine.language import localized_text, normalize_language
 from src.engine.narrative_perspective import narrative_perspective_instruction
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 from src.rulesets.contracts import RunLifecycleRuntime
@@ -316,27 +317,27 @@ class GameLifecycle:
         # a task that has not happened yet; such a GOLD tag must not become a
         # pending GM approval (or an eventual balance change) merely because
         # it appeared in the first response.
+        system_changes: list[str] = []
         dropped_rewards = discard_unearned_reward_proposals(
             instance, start_data, narration,
         )
         if dropped_rewards:
-            narration = f"{narration}\n\n{unearned_reward_notice(instance.language)}".strip()
+            system_changes.append(unearned_reward_notice(instance.language))
         economy_pending = bool(response is not None and has_economy_proposal(start_data))
-        narration = guard_unbacked_payment_narration(
+        if should_warn_unbacked_payment(
             narration, start_data, instance.language,
             currency_labels=currency_labels,
-        )
-        dropped_purchase_items = discard_unbacked_purchase_items(
-            instance, start_data, narration, currency_labels=currency_labels,
-        )
+        ):
+            system_changes.append(unbacked_payment_notice(instance.language))
+        dropped_purchase_items = filter_unconfirmed_purchase_grants(instance, start_data)
         if dropped_purchase_items:
-            narration = f"{narration}\n\n{unbacked_purchase_notice(instance.language)}".strip()
+            system_changes.append(unbacked_purchase_notice(instance.language))
         deferred_effects = (
             defer_narrative_effects(start_data, response)
             if response is not None else {}
         )
         if economy_pending:
-            narration = f"{narration}\n\n{pending_decision_notice(instance.language)}".strip()
+            system_changes.append(pending_decision_notice(instance.language))
         queued_proposals: list[dict[str, Any]] = []
         if start_data.get("state_update"):
             queued_proposals = self.state_applier.apply_state_update(
@@ -364,6 +365,7 @@ class GameLifecycle:
             "round": 0,
             "actions": [{"user_id": "system", "text": start_label}],
             "gm_response": narration,
+            "state_changes": system_changes,
             "tags_summary": summarize_tags(start_data),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })

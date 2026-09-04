@@ -17,30 +17,10 @@ from src.engine.intent.lexicon import (
 )
 
 _PURCHASE_INTENT_ID = "purchase_intent"
-_PURCHASE_CONFIRM_ID = "purchase_confirm"
-_PURCHASE_OFFER_ID = "purchase_offer"
-_FREE_PURCHASE_ID = "free_purchase"
-_DEFERRED_PAYMENT_ID = "deferred_payment"
 
 
 def purchase_intent_pattern(language: str) -> re.Pattern[str]:
     return intent_regex(language, _PURCHASE_INTENT_ID)
-
-
-def purchase_confirm_pattern(language: str) -> re.Pattern[str]:
-    return intent_regex(language, _PURCHASE_CONFIRM_ID)
-
-
-def purchase_offer_pattern(language: str) -> re.Pattern[str]:
-    return intent_regex(language, _PURCHASE_OFFER_ID)
-
-
-def free_purchase_pattern(language: str) -> re.Pattern[str]:
-    return intent_regex(language, _FREE_PURCHASE_ID)
-
-
-def deferred_payment_pattern(language: str) -> re.Pattern[str]:
-    return intent_regex(language, _DEFERRED_PAYMENT_ID)
 
 
 def currency_labels(language: str, extra_labels: Iterable[str] | None = None) -> tuple[str, ...]:
@@ -80,23 +60,6 @@ def currency_amount_pattern(
     )
 
 
-def charge_pattern(
-    language: str,
-    extra_labels: Iterable[str] | None = None,
-) -> re.Pattern[str]:
-    labels = "|".join(re.escape(label) for label in currency_labels(language, extra_labels))
-    offer_head = intent_regex(language, _PURCHASE_OFFER_ID).pattern
-    return re.compile(
-        rf"(?:{offer_head}|"
-        rf"支付|付费|买下|花费|缴纳|pay|purchase|spend)[^。！？\n]{{0,24}}?"
-        rf"(?:[一二三四五六七八九十百千万两\d]+)\s*(?:枚|个)?\s*(?:{labels})"
-        rf"|(?:[一二三四五六七八九十百千万两\d]+)\s*(?:{labels})"
-        rf"[^。！？\n]{{0,16}}?"
-        rf"(?:支付|付费|买下|花费|缴纳|pay|purchase|spend)",
-        re.IGNORECASE,
-    )
-
-
 def completed_payment_pattern(
     language: str,
     extra_labels: Iterable[str] | None = None,
@@ -111,47 +74,6 @@ def completed_payment_pattern(
     )
 
 
-def _chinese_amount(value: str) -> int | None:
-    """Parse the small Chinese numerals commonly used in narrative prices."""
-
-    if value.isdigit():
-        return int(value)
-    digits = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
-              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-    units = {"十": 10, "百": 100, "千": 1000, "万": 10000}
-    total = 0
-    section = 0
-    number = 0
-    for char in value:
-        if char in digits:
-            number = digits[char]
-        elif char in units:
-            unit = units[char]
-            if unit == 10000:
-                section = (section + number) * unit
-                total += section
-                section = 0
-            else:
-                section += (number or 1) * unit
-            number = 0
-        else:
-            return None
-    return total + section + number
-
-
-def currency_amounts(
-    language: str,
-    narration: str,
-    extra_labels: Iterable[str] | None = None,
-) -> list[int]:
-    amounts: list[int] = []
-    for match in currency_amount_pattern(language, extra_labels).finditer(str(narration or "")):
-        amount = _chinese_amount(match.group("amount"))
-        if amount is not None and amount > 0:
-            amounts.append(amount)
-    return amounts
-
-
 def item_context_from_action(
     language: str,
     text: str,
@@ -159,8 +81,8 @@ def item_context_from_action(
 ) -> str:
     """Derive a loose item hint from one player action.
 
-    去掉金额、货币与购买动词后剩下的片段作为商品指代；只用于澄清展示与
-    宽松绑定，永远不作为价格或身份的权威来源。
+    去掉金额、货币与购买动词后剩下的片段作为商品指代，仅用于请求展示，
+    永远不作为价格或身份的权威来源。
     """
 
     cleaned = currency_amount_pattern(language, extra_labels).sub(" ", str(text or ""))
@@ -172,7 +94,19 @@ def item_context_from_action(
         cleaned,
         flags=re.IGNORECASE,
     )
+    # Pronouns and polite fillers are not item identity.  Keeping them in the
+    # hint makes the unordered-grant gate miss the real item (e.g. "我买解毒剂"
+    # becoming "我 解毒剂"), allowing a model LOOT to slip through.
+    cleaned = re.sub(r"^(?:我|我要|我想要|请给我|给我|想买|要买)\s*", "", cleaned)
     return re.sub(r"^[\s，,。.、：:；;'-]+|[\s，,。.、：:；;'-]+$", "", cleaned)
+
+
+_INTENT_QUESTION_RE = re.compile(
+    r"(?:[买购付][^。！？\n]{0,6}(?:吗|呢))"
+    r"|(?:多少钱|多少金币|多少灵石)"
+    r"|(?:可以买了吗|买的话)",
+    re.IGNORECASE,
+)
 
 
 def parse_purchase_intents(
@@ -184,7 +118,8 @@ def parse_purchase_intents(
     """Parse each player's own action into one purchase intent.
 
     每个 actor 独立解析：意图只来自玩家自己的行动文本，AI 输出不参与。
-    没有购买动词的行动不产生意图。
+    疑问/询价句（"还有其他买的吗""可以买了吗""多少钱"）不产生意图——
+    询问价格不是购买承诺；"我要买这个"等陈述句不受影响。
     """
 
     from src.engine.intent.models import PurchaseIntent
@@ -198,14 +133,25 @@ def parse_purchase_intents(
         text = str(action.get("text") or "")
         if not actor_uid or actor_uid not in players:
             continue
-        if not intent_pattern.search(text):
+        verb_sentences = [
+            sentence
+            for sentence in re.split(r"[。！？.!?]+", text)
+            if intent_pattern.search(sentence)
+        ]
+        if not verb_sentences:
             continue
-        amounts = currency_amounts(language, text, extra_labels)
+        # 疑问句过滤：购买动词所在句是询价/疑问时不产生意图。
+        verb_sentences = [
+            sentence for sentence in verb_sentences
+            if not _INTENT_QUESTION_RE.search(sentence)
+        ]
+        if not verb_sentences:
+            continue
+        evidence_text = "。".join(verb_sentences)
         intents.append(PurchaseIntent(
             actor_uid=actor_uid,
             action_text=text,
-            item_context=item_context_from_action(language, text, extra_labels),
-            amount_candidates=tuple(sorted(set(amounts))),
+            item_context=item_context_from_action(language, evidence_text, extra_labels),
         ))
     return intents
 

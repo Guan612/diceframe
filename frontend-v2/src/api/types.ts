@@ -269,7 +269,6 @@ export interface GameDetail {
   has_room_password?: boolean
   multiplayer?: Multiplayer
   quick_actions?: string[]
-  pending_payments?: PendingPayment[]
   economy_proposals?: PendingPayment[]
   run_id?: string
   pending_luck_decisions?: CheckResult[]
@@ -310,6 +309,7 @@ export type SceneGalleryItem = GeneratedImageRecord
 export interface LogEntry {
   round?: number
   gm_response?: string
+  state_changes?: string[]
   player_actions?: unknown
   actions?: unknown
   swipes?: unknown[]

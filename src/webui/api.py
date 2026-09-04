@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.game_instance import GameRegistry
-from src.engine.economy import pending_memory_deliveries, pending_memory_reversals
+from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader
 from src.memory.delta import MemoryStore
@@ -198,12 +198,6 @@ class WebAPI:
             ),
             reverse_economy_memory=(
                 self._mem.reverse_economy_delta if self._mem is not None else None
-            ),
-            load_item_categories=(
-                handler.load_item_categories
-                if handler is not None
-                and callable(getattr(handler, "load_item_categories", None))
-                else None
             ),
         )
         self._ruleset_character_dependencies = (
@@ -1576,22 +1570,6 @@ class WebAPI:
             reason=reason,
             recipient_uid=recipient_uid,
             items=items,
-        )
-
-    async def confirm_purchase_quote(self, game_key: str, quote_id: str, session_uid: str = "") -> dict[str, Any]:
-        return await characters.confirm_purchase_quote(
-            self._character_dependencies,
-            game_key,
-            quote_id,
-            session_uid,
-        )
-
-    async def cancel_purchase_quote(self, game_key: str, quote_id: str, session_uid: str = "") -> dict[str, Any]:
-        return await characters.cancel_purchase_quote(
-            self._character_dependencies,
-            game_key,
-            quote_id,
-            session_uid,
         )
 
     async def _drain_economy_outbox(self, instance: Any) -> bool:

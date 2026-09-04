@@ -18,6 +18,7 @@ from src.engine.checks import (
 )
 from src.engine.character_utils import is_conscious
 from src.engine.dice import d20_dc_cap
+from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
 from src.llm.parser import sanitize_narration
@@ -524,6 +525,75 @@ def _apply_explicit_advantage_modes(
     return planned
 
 
+def normalize_economy_actions(
+    instance: GameInstance,
+    raw_actions: list[Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """校验模型经济报价并归一到付款人。
+
+    price_source=none 或缺价时安全跳过（没有人说出价格就不产生提案）；
+    amount 存在则 price_source 必须是明确的转述来源。单条无效不影响同批。
+    """
+    offers: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for index, raw in enumerate(raw_actions[:8]):
+        if not isinstance(raw, dict):
+            errors.append(f"economy_actions[{index}] 不是 object")
+            continue
+        if str(raw.get("type") or "") != "purchase":
+            errors.append(f"economy_actions[{index}] type 仅支持 purchase")
+            continue
+        uid = _match_player(instance, raw.get("player"))
+        if not uid:
+            errors.append(f"economy_actions[{index}] player 不存在")
+            continue
+        target = str(raw.get("target") or "").strip()[:120]
+        if not target:
+            errors.append(f"economy_actions[{index}] target 为空")
+            continue
+        amount_raw = raw.get("amount")
+        price_source = str(raw.get("price_source") or "").strip()
+        if price_source == "none" or amount_raw is None:
+            continue
+        try:
+            quantity = int(raw.get("quantity", 1) or 1)
+        except (TypeError, ValueError):
+            errors.append(f"economy_actions[{index}] quantity 无效")
+            continue
+        if not 1 <= quantity <= 8:
+            errors.append(f"economy_actions[{index}] quantity 超出范围")
+            continue
+        amount_scope = str(raw.get("amount_scope") or "total").strip()
+        if amount_scope not in {"unit", "total"}:
+            errors.append(f"economy_actions[{index}] amount_scope={amount_scope!r} 无效")
+            continue
+        try:
+            amount = int(amount_raw)
+        except (TypeError, ValueError):
+            errors.append(f"economy_actions[{index}] amount 无效")
+            continue
+        if not 0 < amount <= MAX_ECONOMY_AMOUNT:
+            errors.append(f"economy_actions[{index}] amount 超出范围")
+            continue
+        if price_source not in {"player_stated", "gm_narrated"}:
+            errors.append(f"economy_actions[{index}] price_source={price_source!r} 无效")
+            continue
+        total_amount = amount * quantity if amount_scope == "unit" else amount
+        if not 0 < total_amount <= MAX_ECONOMY_AMOUNT:
+            errors.append(f"economy_actions[{index}] total amount 超出范围")
+            continue
+        offers.append({
+            "payer_uid": uid,
+            # Downstream proposal settlement always receives the total charge.
+            "amount": total_amount,
+            "quantity": quantity,
+            "amount_scope": amount_scope,
+            "target": target,
+            "note": str(raw.get("note") or "").strip()[:160],
+        })
+    return offers, errors
+
+
 async def plan_round_checks(
     instance: GameInstance,
     rule: RuleSystem | None,
@@ -549,6 +619,7 @@ async def plan_round_checks(
         temperature=0.1,
     )
     raw_checks: list[Any] = []
+    raw_economy_actions: list[Any] = []
     overreach_notes: list[dict[str, str]] = []
     for call in response.tool_calls:
         if str(call.get("name") or "") != DICE_CHECKS_TOOL_NAME:
@@ -557,6 +628,13 @@ async def plan_round_checks(
         checks = arguments.get("checks")
         if isinstance(checks, list):
             raw_checks.extend(checks)
+        # economy_actions 与 checks/overreach 独立解析：畸形/缺失只影响报价本身。
+        try:
+            economy = arguments.get("economy_actions")
+            if isinstance(economy, list):
+                raw_economy_actions.extend(economy)
+        except Exception:
+            logger.warning("economy_actions 解析失败，已忽略 (round=%d)", instance.round_number, exc_info=True)
         # overreach 与 checks 独立解析：畸形/缺失只影响标注本身，绝不波及检定规划。
         try:
             over = arguments.get("overreach")
@@ -574,11 +652,15 @@ async def plan_round_checks(
     planned = _merge_safety_net_checks(instance, rule, planned)
     planned = _apply_explicit_advantage_modes(rule, planned)
     planned = _apply_d20_assistance(instance, rule, planned)
+    economy_offers, economy_errors = normalize_economy_actions(instance, raw_economy_actions)
     return planned, {
         "available": True,
         "native_tools": response.native_tools,
         "provider": response.provider_used,
         "total_tokens": response.total_tokens,
-        "errors": errors,
+        "errors": errors + economy_errors,
         "overreach": overreach_notes,
+        # 由调用方在过时检查通过后落库；这里不直接改动经济状态，
+        # 否则创建提案推进的 revision 会让本轮规划被误判为过期。
+        "economy_offers": economy_offers,
     }

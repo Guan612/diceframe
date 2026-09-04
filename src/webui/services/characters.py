@@ -23,23 +23,20 @@ from src.engine.language import localized_text
 from src.engine.health import record_health_event
 from src.engine.economy import (
     complete_effect_group,
+    queue_proposal,
+    queue_purchase_offer,
+    resolve_proposal,
+    cancel_proposals_for_player,
+)
+from src.engine.memory_outbox import (
     complete_memory_delivery,
     complete_memory_reversal,
     pending_memory_deliveries,
     pending_memory_reversals,
     queue_memory_delivery,
-    queue_proposal,
-    resolve_proposal,
 )
 from src.engine.game_instance import GameInstance
-from src.commands.state_items import (
-    grant_classified_item,
-    normalized_reward_entries,
-)
-from src.commands.economy_effects import (
-    close_purchase_quote,
-    link_purchase_quote_proposal,
-)
+from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
 
@@ -78,7 +75,11 @@ def _record_economy_outcome_in_round(
             "ja": f"決済不成立（{amount}）：{reason}。支払いも関連結果も発生していません。",
         })
     round_number = int(outcome.get("round", 0) or 0)
-    if str(outcome.get("visibility") or "private") != "party":
+    # Purchases are always a party-visible settlement event.  Keep the
+    # explicit private path for other GM payments, but also promote purchases
+    # created before the visibility default was corrected.
+    is_purchase = str(outcome.get("kind") or "") == "purchase"
+    if str(outcome.get("visibility") or "private") != "party" and not is_purchase:
         recipients = {
             str(outcome.get("payer_uid") or ""),
             str(outcome.get("recipient_uid") or ""),
@@ -142,7 +143,6 @@ class CharacterDependencies:
     schedule_economy_scene_image: Callable[[Any, dict[str, Any]], Any] | None = None
     apply_economy_memory: Callable[[str, str, dict[str, Any], int], Awaitable[None]] | None = None
     reverse_economy_memory: Callable[[str, str], Awaitable[bool]] | None = None
-    load_item_categories: Callable[[Any], dict[str, list[str]]] | None = None
 
 
 async def create_payment_proposal(
@@ -182,10 +182,6 @@ async def create_payment_proposal(
     reason = str(reason or "").strip()[:240]
     if not reason:
         reason = f"购买 {'、'.join(normalized_items)}" if normalized_items else "GM 发起的支付"
-    rewards = [
-        {"name": item, "category": ""}
-        for item in normalized_items
-    ]
     async with inst.authoritative_write() as write_entered, inst._lock:
         if not write_entered:
             return {
@@ -200,172 +196,36 @@ async def create_payment_proposal(
                 "code": "STALE_RUN",
                 "error": "游戏已重开或重置，请刷新后再发起支付",
             }
-        proposal = queue_proposal(
-            inst,
-            kind="purchase" if rewards else "payment",
-            payer_uid=payer_uid,
-            recipient_uid=recipient_uid,
-            amount=amount,
-            rewards=rewards,
-            reason=reason,
-            source="gm_manual",
-            source_ref=f"gm_manual:{inst.run_id}:{uuid4().hex}",
-            approval_policy="payer",
-        )
-        await dependencies.games.save_instance(inst)
-    return {"ok": True, "proposal": proposal}
-
-
-def _find_purchase_quote(inst: GameInstance, quote_id: str) -> dict[str, Any] | None:
-    quotes = [
-        quote for quote in inst.economy.get("purchase_quotes", [])
-        if isinstance(quote, dict) and str(quote.get("id") or "") == str(quote_id)
-    ]
-    return quotes[0] if len(quotes) == 1 else None
-
-
-async def confirm_purchase_quote(
-    dependencies: CharacterDependencies,
-    game_key: str,
-    quote_id: str,
-    session_uid: str = "",
-) -> dict[str, Any]:
-    """Payer explicitly accepts one persisted offer.
-
-    Confirmation only converts the offer into a pending typed proposal; the
-    balance is charged later through the standard payment confirmation path.
-    """
-
-    inst = dependencies.games.get_instance(
-        dependencies.games.parse_game_key(game_key),
-    )
-    if inst is None:
-        return {"ok": False, "error": "游戏不存在"}
-    actor_uid = str(session_uid or "").strip()
-    async with inst.authoritative_write() as write_entered, inst._lock:
-        if not write_entered:
-            return {
-                "ok": False,
-                "code": "REWRITE_IN_PROGRESS",
-                "error": "GM 正在重写历史回合，请稍后再确认报价",
-            }
-        current = dependencies.games.get_instance(inst.game_key)
-        if current is None or current is not inst:
-            return {
-                "ok": False,
-                "code": "STALE_RUN",
-                "error": "游戏已重开或重置，请刷新后再确认报价",
-            }
-        quote = _find_purchase_quote(inst, quote_id)
-        if quote is None:
-            return {"ok": False, "code": "QUOTE_NOT_FOUND", "error": "购买报价不存在"}
-        if (
-            quote.get("status", "open") == "open"
-            and str(quote.get("run_id") or "") != str(inst.run_id)
-        ):
-            return {"ok": False, "code": "STALE_RUN", "error": "这是上一局的购买报价"}
-        if quote.get("status", "open") != "open":
-            # Idempotent repeat for a confirmed offer; a cancelled offer can
-            # never be accepted afterwards.
-            if quote.get("status") == "confirmed":
-                return {
-                    "ok": True,
-                    "already_resolved": True,
-                    "status": "confirmed",
-                    "proposal_id": str(quote.get("proposal_id") or ""),
-                }
-            return {"ok": False, "code": "ALREADY_RESOLVED", "error": "购买报价已处理"}
-        if not actor_uid or actor_uid != str(quote.get("payer_uid") or ""):
-            return {"ok": False, "code": "FORBIDDEN", "error": "只有报价中的付款人可以确认"}
-        items = [str(item).strip() for item in quote.get("items", []) if str(item).strip()]
-        amount = int(quote.get("amount", 0) or 0)
-        if amount <= 0 or not items:
-            return {"ok": False, "code": "QUOTE_INVALID", "error": "报价缺少有效商品或金额"}
-        # Explicit confirmation must classify exactly like the narration path:
-        # the transport never decides where a purchased item lands.
-        categories = (
-            dependencies.load_item_categories(inst)
-            if dependencies.load_item_categories is not None
-            else {}
-        )
-        try:
+        if normalized_items:
+            try:
+                proposal = queue_purchase_offer(
+                    inst,
+                    payer_uid=payer_uid,
+                    amount=amount,
+                    items=normalized_items,
+                    reason=reason,
+                    source="gm_manual",
+                    source_ref=f"gm_manual:{inst.run_id}:{uuid4().hex}",
+                )
+            except ValueError as exc:
+                return {"ok": False, "code": "ORDER_INVALID", "error": str(exc)}
+        else:
             proposal = queue_proposal(
                 inst,
-                kind="purchase",
-                payer_uid=str(quote.get("payer_uid") or ""),
-                recipient_uid=str(quote.get("recipient_uid") or quote.get("payer_uid") or ""),
+                kind="payment",
+                payer_uid=payer_uid,
+                recipient_uid=recipient_uid,
                 amount=amount,
-                rewards=normalized_reward_entries(items, categories),
-                reason=str(quote.get("reason") or "购买商品"),
-                source="server_purchase_quote",
-                source_ref=f"purchase_quote:{quote.get('id')}",
+                rewards=[],
+                reason=reason,
+                source="gm_manual",
+                source_ref=f"gm_manual:{inst.run_id}:{uuid4().hex}",
                 approval_policy="payer",
-                quote_id=str(quote.get("id") or ""),
+                visibility="party",
             )
-        except ValueError as exc:
-            return {"ok": False, "code": "QUOTE_INVALID", "error": str(exc)}
-        if close_purchase_quote(
-            inst, quote_id, status="confirmed", resolution_code="CONFIRMED_BY_PAYER",
-        ) is None:
-            return {"ok": False, "code": "ALREADY_RESOLVED", "error": "购买报价已处理"}
-        link_purchase_quote_proposal(inst, quote_id, str(proposal.get("id") or ""))
         await dependencies.games.save_instance(inst)
     return {"ok": True, "proposal": proposal}
 
-
-async def cancel_purchase_quote(
-    dependencies: CharacterDependencies,
-    game_key: str,
-    quote_id: str,
-    session_uid: str = "",
-) -> dict[str, Any]:
-    """Close one persisted offer without any balance or item change."""
-
-    inst = dependencies.games.get_instance(
-        dependencies.games.parse_game_key(game_key),
-    )
-    if inst is None:
-        return {"ok": False, "error": "游戏不存在"}
-    actor_uid = str(session_uid or "").strip()
-    async with inst.authoritative_write() as write_entered, inst._lock:
-        if not write_entered:
-            return {
-                "ok": False,
-                "code": "REWRITE_IN_PROGRESS",
-                "error": "GM 正在重写历史回合，请稍后再处理报价",
-            }
-        current = dependencies.games.get_instance(inst.game_key)
-        if current is None or current is not inst:
-            return {
-                "ok": False,
-                "code": "STALE_RUN",
-                "error": "游戏已重开或重置，请刷新后再处理报价",
-            }
-        quote = _find_purchase_quote(inst, quote_id)
-        if quote is None:
-            return {"ok": False, "code": "QUOTE_NOT_FOUND", "error": "购买报价不存在"}
-        if quote.get("status", "open") != "open":
-            return {
-                "ok": True,
-                "already_resolved": True,
-                "status": str(quote.get("status")),
-            }
-        if actor_uid not in {
-            str(quote.get("payer_uid") or ""),
-            str(inst.gm_uid or ""),
-        }:
-            return {"ok": False, "code": "FORBIDDEN", "error": "只有付款人或 GM 可以取消报价"}
-        resolution_code = (
-            "CANCELLED_BY_GM"
-            if actor_uid == str(inst.gm_uid or "") and actor_uid != str(quote.get("payer_uid") or "")
-            else "CANCELLED_BY_PAYER"
-        )
-        if close_purchase_quote(
-            inst, quote_id, status="cancelled", resolution_code=resolution_code,
-        ) is None:
-            return {"ok": False, "code": "ALREADY_RESOLVED", "error": "购买报价已处理"}
-        await dependencies.games.save_instance(inst)
-    return {"ok": True, "quote": deepcopy(quote)}
 
 _ATTR_NAME_EN = {
     "str": "STR",
@@ -1208,7 +1068,7 @@ async def _delete_character_authority(
     removed = await inst.remove_player(user_id)
     if not removed:
         return {"ok": False, "error": "角色不存在"}
-    inst.remove_payments_for_player(user_id)
+    cancel_proposals_for_player(inst, user_id)
     inst.clear_private_messages(user_id)
     await dependencies.games.save_instance(inst)
     logger.info("角色已删除: %s (%s)", name, inst.game_key)
