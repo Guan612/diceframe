@@ -55,3 +55,7 @@ docs/I18N_PLAN_*.md
 .env
 .env.*
 !.env.example
+
+# local media tooling (AI-generated assets, E2E scratch)
+.video-data/
+videos/
