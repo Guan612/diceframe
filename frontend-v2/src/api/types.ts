@@ -239,11 +239,9 @@ export interface PendingPayment {
   description?: string
   reason?: string
   status?: string
-  kind?: 'payment' | 'purchase' | 'fee' | 'reward' | 'transfer' | string
+  kind?: 'payment' | 'purchase' | 'reward' | string
   payer_uid?: string
   approval_policy?: string
-  contributors?: Array<{ uid: string; amount: number }>
-  approvals?: Record<string, boolean>
   sequence?: number
   run_id?: string
   [key: string]: unknown
@@ -267,6 +265,14 @@ export interface GameDetail {
   rest_session?: RestSessionStatus
   player_access_open?: boolean
   has_room_password?: boolean
+  economy_reward_policy?: { mode?: string; auto_reward_cap?: number }
+  combat_extension?: {
+    scheduler?: { kind?: string; ready?: string[]; gauges?: Record<string, number>; participants?: string[] }
+    entities?: string[]
+    entity_names?: Record<string, string>
+    actions?: Array<{ id: string; kind: string; name: string; costs: Array<{ resource: string; amount: unknown }>; consume_item?: { item: string; qty: number } }>
+    pools?: Record<string, Record<string, { current: number; maximum: number | null }>>
+  }
   multiplayer?: Multiplayer
   quick_actions?: string[]
   economy_proposals?: PendingPayment[]

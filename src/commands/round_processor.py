@@ -14,14 +14,12 @@ from types import SimpleNamespace
 from typing import Any
 
 from src.commands.economy_effects import (
-    discard_unearned_reward_proposals,
     defer_narrative_effects,
     has_economy_proposal,
     pending_decision_notice,
     currency_labels_for_rule,
     unbacked_purchase_notice,
     unbacked_payment_notice,
-    unearned_reward_notice,
     should_warn_unbacked_payment,
 )
 from src.commands.round_effects import (
@@ -37,10 +35,7 @@ from src.commands.round_effects import (
     store_private_messages,
     update_quick_actions,
 )
-from src.commands.check_planner import (
-    plan_round_checks,
-    price_unpriced_purchase_intents,
-)
+from src.commands.check_planner import plan_round_checks
 from src.engine.economy import (
     economy_changes_are_resolutions_only,
     economy_fingerprint,
@@ -68,6 +63,7 @@ from src.engine.economy import (
     queue_effect_group,
 )
 from src.engine.economy import filter_unconfirmed_purchase_grants, has_pending_identical_purchase
+from src.engine import combat_narrative
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
 from src.imagegen import (
@@ -298,8 +294,8 @@ class RoundProcessor:
                     logger.warning(
                         "AI 报价提案创建失败，已跳过: %s", offer, exc_info=True,
                     )
-            # 无价购买意图留在实例回合内存中：叙事后复检一次是否有口述价格，
-            # 并在结算阶段拦截同轮模型授予（从不持久化、不产生金额）。
+            # 无价购买意图留在实例回合内存中：结算阶段拦截同轮模型授予
+            # （从不持久化、不产生金额；叙事后价格复检已按 ADR 0002 修订移除）。
             instance.round_unpriced_purchase_intents = list(
                 metadata.get("unpriced_purchase_intents") or [],
             )
@@ -549,6 +545,8 @@ class RoundProcessor:
         expected_economy_fingerprint = economy_fingerprint(instance)
         # 只保留最近一轮的短期展示状态，避免旧提示或战斗结果常驻。
         instance.begin_round_processing()
+        pending_combat_event_ids = combat_narrative.pending_event_ids(instance)
+        pending_combat_events_text = combat_narrative.format_pending_events(instance)
 
         ensure_round_managers(instance)
         actions_text = collect_actions_text(instance)
@@ -611,7 +609,8 @@ class RoundProcessor:
         context = await self._prompt.build_user_context(
             instance, gm_prompt, lorebook_matches, actions_text,
             provider_name=provider_name, world_data=world_data,
-            directives_text=gm_directives_text, overreach_text=overreach_text)
+            directives_text=gm_directives_text, overreach_text=overreach_text,
+            authoritative_events_text=pending_combat_events_text)
 
         context = await append_multistep_analysis(
             self.llm_client, instance, gm_prompt, context, actions_text, self.analysis_max_tokens)
@@ -678,64 +677,20 @@ class RoundProcessor:
         system_changes: list[str] = list(
             getattr(response, "system_notices", []) or [],
         )
-        dropped_rewards = discard_unearned_reward_proposals(instance, data, response.narration)
-        if dropped_rewards:
-            # The response object was populated before the economy gate; keep
-            # the authoritative state-update view in sync with the filtered
-            # proposal list so it cannot be queued through the old reference.
-            response.state_update = data.get("state_update") or {}
-            system_changes.append(unearned_reward_notice(instance.language))
         if should_warn_unbacked_payment(
             response.narration, data, instance.language,
             currency_labels=currency_labels,
         ):
             system_changes.append(unbacked_payment_notice(instance.language))
         # Purchase authority is explicit GM order + payer confirmation. Never
-        # infer a price or create a chargeable proposal from narration text;
-        # the same-round pass below may only report numbers a human verbatim
-        # stated in this narration (same provenance contract as the planner).
+        # infer a price or create a chargeable proposal from narration text.
+        # Unpriced purchase intents from planning stay memory-only and feed
+        # the same-round grant filter below: a purchase whose price nobody
+        # has stated cannot be delivered through narrative LOOT either
+        # (ADR 0002). A price the GM narrates this round becomes quotable by
+        # the planner next round via recent_narration, or the GM can issue
+        # the offer immediately through the manual purchase composer.
         unpriced_purchase_intents = list(instance.round_unpriced_purchase_intents)
-        if unpriced_purchase_intents:
-            try:
-                late_offers, unpriced_purchase_intents = await price_unpriced_purchase_intents(
-                    instance, self.llm_client, response.narration,
-                    unpriced_purchase_intents,
-                )
-            except Exception:
-                logger.warning(
-                    "同期购买价格复检失败，无价意图保持拦截: game=%s round=%d",
-                    instance.game_key, instance.round_number, exc_info=True,
-                )
-                late_offers = []
-            for offer in late_offers:
-                try:
-                    if has_pending_identical_purchase(
-                        instance, str(offer["payer_uid"]), str(offer["target"]),
-                    ):
-                        logger.info(
-                            "同商品购买已待确认，跳过复检重复报价: payer=%s target=%s round=%d",
-                            offer["payer_uid"], offer["target"], instance.round_number,
-                        )
-                        continue
-                    quantity = max(1, min(8, int(offer.get("quantity", 1) or 1)))
-                    queue_purchase_offer(
-                        instance,
-                        payer_uid=str(offer["payer_uid"]),
-                        amount=int(offer["amount"]),
-                        items=[str(offer["target"])] * quantity,
-                        reason=str(offer.get("note") or ""),
-                        source="table_offer",
-                        source_ref=(
-                            f"ai:{instance.run_id}:{instance.round_number}:"
-                            f"{offer['payer_uid']}:{offer['target']}:{quantity}:"
-                            f"{offer.get('amount_scope') or 'total'}:{offer['amount']}"
-                        ),
-                    )
-                except Exception:
-                    logger.warning(
-                        "复检报价提案创建失败，已跳过: %s", offer, exc_info=True,
-                    )
-            instance.round_unpriced_purchase_intents = list(unpriced_purchase_intents)
         dropped_purchase_items = filter_unconfirmed_purchase_grants(
             instance, data,
             unpriced_purchase_intents=unpriced_purchase_intents,
@@ -752,6 +707,7 @@ class RoundProcessor:
 
         public_state_before = snapshot_public_player_state(instance)
         round_pre_snapshot = _snapshot_players(instance)
+        round_pre_combat_snapshot = instance.current_combat_extension_snapshot()
 
         queued_proposals: list[dict[str, Any]] = []
         allowed_uids: set | None = None
@@ -833,7 +789,13 @@ class RoundProcessor:
             state_msgs.append(automation_note)
 
         instance.consume_gm_directives(set(consumed_directive_ids))
-        await instance.finish_judgment(response.narration, pre_state_snapshot=round_pre_snapshot, state_changes=state_msgs)
+        await instance.finish_judgment(
+            response.narration,
+            pre_state_snapshot=round_pre_snapshot,
+            state_changes=state_msgs,
+            pre_combat_extension_snapshot=round_pre_combat_snapshot,
+        )
+        combat_narrative.consume_pending_events(instance, pending_combat_event_ids)
         instance.set_latest_log_tags_summary(summarize_tags(data))
         instance.record_llm_usage(response.total_tokens, calls=0)
 

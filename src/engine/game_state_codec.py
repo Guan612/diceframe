@@ -64,6 +64,11 @@ class GameStateCodec:
             "narrative_perspective": instance.narrative_perspective,
             "language": normalize_language(instance.language),
             "luck_timeout_seconds": instance.luck_timeout_seconds,
+            "economy_reward_policy": dict(instance.economy_reward_policy or {}),
+            "combat_extension": dict(instance.combat_extension or {}),
+            "combat_extension_round_snapshots": dict(
+                instance.combat_extension_round_snapshots or {}
+            ),
             "entry_point": instance.entry_point,
             "max_players": instance.max_players,
             "gm_uid": instance.gm_uid,
@@ -157,6 +162,27 @@ class GameStateCodec:
             narrative_perspective=data.get("narrative_perspective", "auto"),
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
             luck_timeout_seconds=int(data.get("luck_timeout_seconds", 60) or 0),
+            economy_reward_policy=(
+                data.get("economy_reward_policy")
+                if isinstance(data.get("economy_reward_policy"), dict)
+                else {}
+            ),
+            combat_extension=(
+                data.get("combat_extension")
+                if isinstance(data.get("combat_extension"), dict)
+                else {}
+            ),
+            combat_extension_round_snapshots=(
+                {
+                    str(key): dict(value)
+                    for key, value in data.get(
+                        "combat_extension_round_snapshots", {}
+                    ).items()
+                    if isinstance(value, dict)
+                }
+                if isinstance(data.get("combat_extension_round_snapshots"), dict)
+                else {}
+            ),
             entry_point=data.get("entry_point", "web"),
             max_players=data.get("max_players", 6),
             gm_uid=data.get("gm_uid", ""),

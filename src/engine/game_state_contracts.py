@@ -146,6 +146,9 @@ class GamePersistedState(TypedDict, total=False):
     narrative_perspective: str
     language: str
     luck_timeout_seconds: int
+    economy_reward_policy: OpaqueState
+    combat_extension: OpaqueState
+    combat_extension_round_snapshots: dict[str, OpaqueState]
     entry_point: str
     max_players: int
     gm_uid: str

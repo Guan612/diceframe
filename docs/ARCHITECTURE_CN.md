@@ -79,11 +79,11 @@ V2 资源 ID 必须已经是 canonical 形式；注册器不会替插件把大�
 
 `GameInstance` 是单局对局的 Aggregate Root，继续拥有权威运行时状态、不变量、状态转换以及 `_authority_lock` / `_process_lock` / `_lock` 协调权。锁顺序固定为 authority → process → state；runtime lock 不进入存档，也不随 persisted-state replacement 复制。历史重写独占 authority gate，普通 live writer 通过同一原子 gate 在修改前拒绝，不能用分离的布尔检查制造 TOCTOU。玩家、战斗、回合和支付不会仅为缩短文件而拆成彼此独立的 aggregate。
 
-每个存档同时具有稳定 `game_key` 和可轮换 `run_id`。程序恢复保留 `run_id`；重置与重开在旧聚合写锁内构造候选聚合并完成原子替换，等待中的旧 run 写入在替换后按 stale run 拒绝，开场已经应用到候选角色的状态不会被旧角色整表覆盖。历史 swipe 重写与正常回合共用 `_process_lock`，并一直持锁到“恢复旧快照 → LLM → 应用新分支 → 权威存档”完成；玩家行动在重写期间于写入前拒绝。长期记忆通过持久化 `memory_namespace` 隔离，隔离不依赖先删除旧记录。重开保留角色、资产和成长但清除死亡、战斗、剧情与待处理提案；重置同时清除角色。存档 shape 的升级只经 `src/migrations/instance.py` 的顺序迁移入口。
+每个存档同时具有稳定 `game_key` 和可轮换 `run_id`。程序恢复保留 `run_id`；重置与重开在旧聚合写锁内构造候选聚合并完成原子替换，等待中的旧 run 写入在替换后按 stale run 拒绝，开场已经应用到候选角色的状态不会被旧角色整表覆盖。历史 swipe 重写与正常回合共用 `_process_lock`，并一直持锁到“恢复旧快照 → LLM → 应用新分支 → 权威存档”完成；玩家行动在重写期间于写入前拒绝。经济回滚是整轮语义（ADR 0003）：回滚到第 N 轮会撤销第 N 轮及之后的一切结算，早于该轮创建、在其后才结算的提案恢复为待确认；物品恢复使用绝对快照投影，不做选择性库存差分；swipe 同时截断目标轮之后的日志分支并从该轮重放。长期记忆通过持久化 `memory_namespace` 隔离，隔离不依赖先删除旧记录。重开保留角色、资产和成长但清除死亡、战斗、剧情与待处理提案；重置同时清除角色。存档 shape 的升级只经 `src/migrations/instance.py` 的顺序迁移入口。
 
-通用经济状态属于 `GameInstance`。叙事 `GOLD` / `PAY`、世界书文本与 AI 输出只能创建提案；余额变化必须经过服务端权限、余额、run identity 与幂等校验并写入事务流水。`currency.amount` 是余额 authority，`gold` 仅为兼容投影。个人支付由付款人确认，自由叙事奖励由 GM 确认，Web、Bot 与其它 transport 进入同一经济路径。
+通用经济状态属于 `GameInstance`。叙事 `GOLD` / `PAY`、世界书文本与 AI 输出只能创建提案；余额变化必须经过服务端权限、余额、run identity 与幂等校验并写入事务流水。`currency.amount` 是余额 authority，`gold` 仅为兼容投影。个人支付由付款人确认，自由叙事奖励由 GM 确认——小额单人纯货币奖励可在本局奖励策略允许时经同一结算路径免 GM 点击自动到账；策略按 本局覆盖 → 规则模板 `economy_defaults` → 服务器全局兜底 解析，物品奖励、多人分摊与超上限奖励一律不自动结算。叙事奖励不做“任务完成证据”启发式拦截（该层会无声吞掉应得奖励），一律进入提案交由策略与 GM 判定。Web、Bot 与其它 transport 进入同一经济路径。
 
-经济提案同时是叙事提交屏障：当前 run 仍有待决定提案、未提交效果组或待投递/待撤销外部效果时，行动、强制推进、幸运续接、SSE 与直接回合处理均不得开始下一段叙事。同一模型回复中的场景、角色状态、物品、任务、记忆、私密信息与快捷行动先持久化为挂起效果，不得在付款决定前成为权威状态。单项确认后提交一次；同轮多项提案必须全部提交后才应用整组效果，任一拒绝、取消或余额不足都会丢弃整组效果。SQLite 记忆属于跨存储外部效果：先随游戏存档写入持久 outbox，再以 delivery identity 幂等投递并记录可验证的前后镜像；swipe/rollback 会持久化撤销请求并恢复仍属于该 delivery 的记忆，且投递或撤销回执未落盘均可在启动或下一次推进前重试。交易关联的场景图 prompt 在 staged 效果中被隔离，只有第一次权威存档成功后才允许启动异步生图。最终结果写入有界经济 outcome，并作为可信服务端上下文覆盖此前模型叙事；经济修订号用于阻止决定期间仍在飞行的旧 AI 回复落地。重开与重置均清空提案、流水、outcome、挂起效果、outbox 和修订号；重开只保留已经结算进角色卡的余额，重置同时清除角色。
+经济提案同时是叙事提交屏障：当前 run 仍有待决定提案、未提交效果组或待投递/待撤销外部效果时，行动、强制推进、幸运续接、SSE 与直接回合处理均不得开始下一段叙事。同一模型回复中的场景、角色状态、物品、任务、记忆、私密信息与快捷行动先持久化为挂起效果，不得在付款决定前成为权威状态。单项确认后提交一次；同轮多项提案必须全部提交后才应用整组效果，任一拒绝、取消或余额不足都会丢弃整组效果。SQLite 记忆属于跨存储外部效果：先随游戏存档写入持久 outbox，再以 delivery identity 幂等投递并记录可验证的前后镜像；swipe/rollback 会持久化撤销请求并恢复仍属于该 delivery 的记忆，且投递或撤销回执未落盘均可在启动或下一次推进前重试。交易关联的场景图 prompt 在 staged 效果中被隔离，只有第一次权威存档成功后才允许启动异步生图。最终结果写入有界经济 outcome，并作为可信服务端上下文覆盖此前模型叙事；叙事生成前后比较经济指纹（提案 id→状态快照），决定期间的合法结算不判过期，而新增提案或回滚会使仍在飞行的旧 AI 回复失效。重开与重置均清空提案、流水、outcome、挂起效果、outbox 和修订号；重开只保留已经结算进角色卡的余额，重置同时清除角色。
 
 附属投影有独立 owner：`src/engine/game_state_codec.py` 负责稳定存档投影与重建，`src/engine/game_context_projector.py` 负责通用 LLM/展示视图；旧存档 payload 的 shape 归一化位于 `src/migrations/instance.py`，在构造聚合前对副本执行，不修改调用方输入。`GameInstance.to_dict()`、`from_dict()` 与 `to_llm_view()` 是兼容委托，不再实现这些投影。旧版属性修正、护甲求和和字符串技能默认值由独立的 `src/engine/legacy_game_projection.py` 提供，并由 `LegacyRulesetAdapter` 显式采用；Ruleset runtime 可以在通用投影之上追加自己的权威视图，但不能把具体 mechanics 写回通用 projector。
 
@@ -112,6 +112,10 @@ Backend materializes V2 locale，frontend 只渲染返回字段，不重新实�
 Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、memory、lorebook 不得反向导入任何具体规则运行时。WebAPI 和前端只通过 `ruleset_runtime` capabilities 了解体验能力。
 
 当前完成的是第一轮 ruleset capability normalization：主要 D&D 专属语义已移出 generic 层，并建立了可继续收缩的 optional runtime capability 边界。`RulesetRuntime` 主协议仍承载角色构建、验证、intent、事件、投影和迁移等较宽的基础契约；这不是“所有规则能力都已独立 capability 化”或 runtime 协议已经最小化的声明。
+
+## 通用战斗扩展
+
+通用战斗扩展（Issue 212 / ADR 0004）提供规则无关的公式 DSL、资源池、效果引擎与调度器原语。依赖方向固定为 contracts → primitives → ruleset adapter → ruleset catalog → transport，generic engine 不含任何 per-ruleset 分支。动作、效果与消耗全部是数据（通用 kind 词表），法术/遁术/丹药等身份由规则动作目录的 canonical `action_id` 表达；伤害与消耗金额经受限 JSON-AST 公式求值——白名单节点、深度/节点/骰子/结果上限、未知引用 fail closed、可注入确定性骰源，绝不 eval。资源池与调度器由规则 runtime 显式声明 capability（`combat_action_effects` / `combat_resource_pools` / `combat_scheduler`）后启用，客户端只提交 intent 并渲染服务端投影，伤害、速度与资源结算值不可信。D&D 2024 的伤害/治疗骰式已经由 D&D 侧适配器改经通用公式 AST 求值，法术位、专注、豁免与胜利判定仍归 D&D reducer；调度器与资源池的持久化随首个消费规则集落地。
 
 ## Ruleset Bundle v1
 
