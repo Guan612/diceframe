@@ -14,6 +14,88 @@ def _store(tmp_path, environ=None):
     return ConfigStore(paths, environment), paths
 
 
+def test_web_listen_topology_reads_env_and_config(tmp_path):
+    """多地址与附加 HTTP/HTTPS 端口：env 优先，且不改变 TRPG_WEB_HOST 语义。"""
+
+    store, paths = _store(
+        tmp_path,
+        {
+            "TRPG_WEB_PORT": "19001",
+            "TRPG_WEB_HOST": "0.0.0.0",
+            "TRPG_WEB_HOSTS": "::,127.0.0.1,",
+            "TRPG_WEB_HTTP_PORT": "19080",
+            "TRPG_WEB_HTTPS_PORT": "not-a-port",
+        },
+    )
+    paths.data_dir.mkdir(parents=True)
+    paths.config_file.write_text(
+        json.dumps({"web_hosts": "10.0.0.9", "web_http_port": 9000, "web_https_port": 9443}),
+        encoding="utf-8",
+    )
+
+    runtime = store.load()
+
+    # env 覆盖配置：hosts 为主地址 + 追加地址；非法 https 端口被忽略。
+    assert runtime.host == "0.0.0.0"
+    assert runtime.hosts == ("0.0.0.0", "::", "127.0.0.1")
+    assert runtime.http_port == 19080
+    assert runtime.https_port is None
+    assert runtime.state["web_hosts"] == "0.0.0.0,::,127.0.0.1"
+    assert runtime.state["web_http_port"] == 19080
+    assert runtime.state["web_https_port"] == ""
+
+
+def test_web_listen_topology_falls_back_to_saved_config(tmp_path):
+    store, paths = _store(tmp_path)
+    paths.data_dir.mkdir(parents=True)
+    paths.config_file.write_text(
+        json.dumps(
+            {
+                "web_host": "127.0.0.1",
+                "web_hosts": "10.0.0.9",
+                "web_http_port": 9000,
+                "web_https_port": 9443,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = store.load()
+
+    assert runtime.hosts == ("127.0.0.1", "10.0.0.9")
+    assert runtime.http_port == 9000
+    assert runtime.https_port == 9443
+
+
+def test_invalid_extra_ports_warn_instead_of_disappearing(tmp_path, caplog):
+    """非法端口必须在读取配置时就告警：planner 只拿到 None，看不到原始值。"""
+
+    store, _paths = _store(
+        tmp_path, {"TRPG_WEB_HTTP_PORT": "abc", "TRPG_WEB_HTTPS_PORT": "70000"}
+    )
+
+    with caplog.at_level("WARNING"):
+        runtime = store.load()
+
+    assert runtime.http_port is None
+    assert runtime.https_port is None
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("TRPG_WEB_HTTP_PORT='abc'" in message for message in messages)
+    assert any("TRPG_WEB_HTTPS_PORT='70000'" in message for message in messages)
+
+
+def test_internal_loopback_follows_ipv6_only_listen_addresses(tmp_path):
+    """纯 IPv6 监听时插件 API 基址要指向 [::1]，否则插件连不上。"""
+
+    ipv4_store, _paths = _store(tmp_path / "v4", {"TRPG_WEB_HOST": "0.0.0.0"})
+    assert ipv4_store.load().transport.endpoint.url() == "http://127.0.0.1:18000"
+
+    ipv6_store, _paths = _store(
+        tmp_path / "v6", {"TRPG_WEB_HOST": "::", "TRPG_WEB_PORT": "19001"}
+    )
+    assert ipv6_store.load().transport.endpoint.url() == "http://[::1]:19001"
+
+
 def test_legacy_ai_environment_and_files_are_ignored_but_web_env_has_priority(tmp_path):
     store, paths = _store(
         tmp_path,

@@ -1,8 +1,10 @@
 from pathlib import Path
+from dataclasses import replace
 
 import asyncio
 import logging
 import os
+import signal
 import sys
 
 from aiohttp import web
@@ -41,6 +43,14 @@ from src.webui.bootstrap import (
     WebUIBootstrap,
 )
 from src.webui.access_control import WebAccessControl
+from src.web_transport.lifecycle import run_with_graceful_shutdown
+from src.web_transport.listeners import (
+    build_listener_plan,
+    internal_api_base,
+    internal_api_listener,
+    resolve_internal_listener,
+    start_listeners,
+)
 from src.webui.config_controller import (
     ConfigController,
     ConfigControllerDependencies,
@@ -73,6 +83,26 @@ STATE = RUNTIME_CONFIG.state
 HOST = RUNTIME_CONFIG.host
 PORT = RUNTIME_CONFIG.port
 TRANSPORT = RUNTIME_CONFIG.transport
+# 监听计划在创建 app 之前就定好：插件/内部客户端用的 API 基址必须指向一个
+# 本机真的能连上的监听器（具体地址就用它自己，通配地址用同族回环）。
+LISTENER_PLAN, LISTENER_PLAN_WARNINGS = build_listener_plan(
+    hosts=RUNTIME_CONFIG.hosts,
+    port=PORT,
+    transport=TRANSPORT,
+    http_port=RUNTIME_CONFIG.http_port,
+    https_port=RUNTIME_CONFIG.https_port,
+)
+INTERNAL_LISTENER = internal_api_listener(LISTENER_PLAN)
+if INTERNAL_LISTENER is not None:
+    TRANSPORT = replace(
+        TRANSPORT,
+        endpoint=replace(
+            TRANSPORT.endpoint,
+            scheme=INTERNAL_LISTENER.scheme,
+            port=INTERNAL_LISTENER.port,
+            local_host=INTERNAL_LISTENER.connect_host(),
+        ),
+    )
 WEB_CORS_ENV_VALUE = RUNTIME_CONFIG.cors_env_value
 WEB_CORS_CONFIG_VALUE = RUNTIME_CONFIG.cors_config_value
 WEB_CORS_ORIGINS = RUNTIME_CONFIG.cors_origins
@@ -263,23 +293,87 @@ def _application_dependencies() -> ApplicationDependencies:
 
 app = create_app(_application_dependencies())
 
+
+async def _serve(loop: asyncio.AbstractEventLoop) -> bool:
+    """按配置启动所有监听器；返回是否需要重启进程。
+
+    HTTP 与 HTTPS 可以同时监听（TRPG_WEB_HTTP_PORT / TRPG_WEB_HTTPS_PORT），
+    多地址（TRPG_WEB_HOSTS）则每个地址一个 site。计划构建与单个地址失败
+    处理都在 web_transport.listeners 里，未启动任何监听器时按原语义抛错退出。
+    """
+
+    for message in LISTENER_PLAN_WARNINGS:
+        logger.warning("%s", message)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        started, failures = await start_listeners(runner, LISTENER_PLAN, TRANSPORT)
+        if not started:
+            raise OSError(failures[0] if failures else "没有可用的监听地址")
+        for item in started:
+            print(f"DiceFrame WebUI: {item.url()}  (host={item.host})")
+        await _align_internal_api(started)
+        stop_event = asyncio.Event()
+        try:
+            loop.add_signal_handler(signal.SIGINT, stop_event.set)
+            loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+        except NotImplementedError:
+            # Windows 的事件循环不支持 add_signal_handler；停止信号由
+            # run_with_graceful_shutdown 统一处理（Ctrl+C 与重启接口都走那里）。
+            pass
+        await stop_event.wait()
+    finally:
+        await runner.cleanup()
+    return bool(app["runtime_control"]["restart_requested"])
+
+
+async def _align_internal_api(started: list) -> None:
+    """监听器真正起来后复核内部 API 地址，必要时改到确实在监听的那个。"""
+
+    listener, warning = resolve_internal_listener(LISTENER_PLAN, started)
+    if warning:
+        logger.warning("%s", warning)
+    if listener is None:
+        return
+    if listener.tls:
+        logger.warning(
+            "内部 API 使用 HTTPS 监听器 %s：插件客户端不做 TLS 信任配置，"
+            "自签名或证书与地址不匹配时插件将无法连接；建议设置 TRPG_WEB_HTTP_PORT "
+            "提供一个明文内部端口",
+            listener.address,
+        )
+    plugin_host = app.get("plugin_host")
+    if plugin_host is None:
+        return
+    base = internal_api_base(listener)
+    if plugin_host.base_env.get("TRPG_API_BASE") != base:
+        plugin_host.base_env["TRPG_API_BASE"] = base
+        logger.info("插件 API 基址已调整为 %s", base)
+        # 已启动的插件在 spawn 时就快照了旧地址，只有重启进程才能拿到新基址。
+        restarted = await plugin_host.restart_api_consumers()
+        if restarted:
+            logger.info("已重启 %d 个使用内部 API 的插件以应用新基址", restarted)
+
+
 if __name__ == "__main__":
     runtime_log_path = configure_runtime_logging(DATA_DIR)
     logger.info("运行日志写入 %s（保留 %s 天）", runtime_log_path, RETENTION_DAYS)
     if TRANSPORT.degraded_error:
         logger.critical("%s", TRANSPORT.degraded_error)
-    print(f"DiceFrame WebUI: {TRANSPORT.endpoint.url('127.0.0.1')}  (host={HOST})")
     if not is_llm_config_ready(STATE):
         print("请在 WebUI 的 AI 服务商与模型配置中设置主模型。")
     runtime_loop = asyncio.new_event_loop()
     install_runtime_exception_handler(runtime_loop)
-    web.run_app(
-        app,
-        host=HOST,
-        port=PORT,
-        ssl_context=TRANSPORT.ssl_context,
-        loop=runtime_loop,
-    )
-    if app["runtime_control"]["restart_requested"]:
+    serve_task = runtime_loop.create_task(_serve(runtime_loop))
+    try:
+        restart_requested = run_with_graceful_shutdown(
+            runtime_loop,
+            serve_task,
+            lambda: bool(app["runtime_control"]["restart_requested"]),
+        )
+    finally:
+        runtime_loop.close()
+    if restart_requested:
         logger.info("DiceFrame 清理完成，正在重新启动")
         os.execv(sys.executable, [sys.executable, *sys.argv])
