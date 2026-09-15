@@ -573,8 +573,11 @@ async def test_create_game_uses_created_character_before_opening(web_api):
 
 
 @pytest.mark.asyncio
-async def test_opening_conditional_reward_is_not_queued(web_api, monkeypatch):
-    """Opening narration must not turn a future promise into a reward proposal."""
+async def test_opening_conditional_reward_queues_gm_proposal(web_api, monkeypatch):
+    """开场条件奖励不再被证据启发式丢弃：照常进入 GM 审批提案。
+
+    是否发放由奖励策略/GM 决定；开场路径不走自动结算，提案保持 pending。
+    """
     api, _lorebook, registry, fake_llm, _worlds_dir = web_api
 
     async def opening_with_conditional_reward(*, system_prompt, user_message, **kwargs):
@@ -605,9 +608,14 @@ async def test_opening_conditional_reward_is_not_queued(web_api, monkeypatch):
     assert result["ok"] is True
     instance = registry.get(api._parse_key(result["game_key"]))
     assert instance is not None
-    assert instance.economy["proposals"] == []
-    assert any("奖励待确认" in item for item in instance.log[-1]["state_changes"])
-    assert "奖励待确认" not in instance.log[-1]["gm_response"]
+    pending = [
+        item for item in instance.economy["proposals"]
+        if item["status"] == "pending"
+    ]
+    assert len(pending) == 1
+    assert pending[0]["kind"] == "reward"
+    assert pending[0]["amount"] == 15
+    assert pending[0]["approval_policy"] == "gm"
 
 
 @pytest.mark.asyncio
@@ -671,13 +679,13 @@ async def test_unconfigured_model_is_rejected_before_creating_save_data(web_api)
 
     assert result["ok"] is False
     assert result["error_code"] == "llm_not_configured"
-    assert result["missing"] == ["base_url", "model", "api_key"]
+    assert result["missing"] == ["base_url", "model"]
     assert registry.list_all() == []
     assert fake_llm.calls == []
 
 
 @pytest.mark.asyncio
-async def test_ai_generation_reports_unconfigured_model_without_calling_it(web_api):
+async def test_local_model_without_api_key_is_ready(web_api):
     api, _lorebook, _registry, fake_llm, _worlds_dir = web_api
     fake_llm.providers = {
         "fake": SimpleNamespace(
@@ -688,12 +696,10 @@ async def test_ai_generation_reports_unconfigured_model_without_calling_it(web_a
         ),
     }
 
-    result = await api.generate_rule("测试规则", "freeform_fantasy")
+    readiness = api._llm_configuration_status()
 
-    assert result["ok"] is False
-    assert result["error_code"] == "llm_not_configured"
-    assert result["missing"] == ["api_key"]
-    assert fake_llm.calls == []
+    assert readiness["ready"] is True
+    assert readiness["missing"] == []
 
 
 @pytest.mark.asyncio

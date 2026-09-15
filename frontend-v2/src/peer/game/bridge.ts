@@ -24,6 +24,7 @@ const MUTATING_OPERATIONS = new Set<PeerGameOperation>([
   'character.profile',
   'character.rest',
   'character.advancement.apply',
+  'roll.resolve',
 ])
 const MAX_REQUESTS_PER_MINUTE = 120
 const MAX_IN_FLIGHT_PER_PEER = 8
@@ -41,6 +42,8 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'game.table_talk': [],
   'game.map': [],
   'game.player_context': [],
+  'roll.requests': [],
+  'roll.resolve': ['run_id', 'request_id'],
   'player.create': [
     'character_name', 'race', 'class', 'background', 'hp',
     'attributes', 'skills', 'identity', 'portrait', 'ruleset_character',
@@ -239,6 +242,7 @@ export class PeerHostGameBridge {
     if (operation === 'game.player_context') {
       return { ok: true, preview: false, delegate: false, user_id: actorId }
     }
+    if (operation === 'roll.requests') return read('/roll-requests')
     if (operation === 'game.log') {
       const page = boundedInteger(payload.page, 1, 10_000, 1)
       const perPage = boundedInteger(payload.per_page, 1, 100, 50)
@@ -293,6 +297,13 @@ export class PeerHostGameBridge {
     }
     if (operation === 'character.advancement.apply') {
       return write(`/character/${encodeURIComponent(actorId)}/advancement/apply`, payload)
+    }
+    if (operation === 'roll.resolve') {
+      const requestId = requiredIdentifier(payload.request_id, 'request_id')
+      return write(`/roll-requests/${encodeURIComponent(requestId)}/roll`, {
+        run_id: payload.run_id,
+        target_uid: actorId,
+      })
     }
     throw new Error('peer_game_operation_not_supported')
   }
@@ -361,6 +372,7 @@ export class PeerRemoteGameClient {
     else if (method === 'GET' && parsed.tail === '/table-talk') operation = 'game.table_talk'
     else if (method === 'GET' && parsed.tail === '/map') operation = 'game.map'
     else if (method === 'GET' && parsed.tail === '/player-context') operation = 'game.player_context'
+    else if (method === 'GET' && parsed.tail === '/roll-requests') operation = 'roll.requests'
     else if (method === 'POST' && parsed.tail === '/players') operation = 'player.create'
     else if (method === 'POST' && parsed.tail === '/action') operation = 'action.submit'
     else if (method === 'POST' && parsed.tail === '/kp-question') operation = 'kp.question'
@@ -375,6 +387,7 @@ export class PeerRemoteGameClient {
       const profile = /^\/character\/([^/]+)\/profile$/u.exec(parsed.tail)
       const rest = /^\/character\/([^/]+)\/rest$/u.exec(parsed.tail)
       const advancement = /^\/character\/([^/]+)\/advancement\/(preview|apply)$/u.exec(parsed.tail)
+      const roll = /^\/roll-requests\/([^/]+)\/roll$/u.exec(parsed.tail)
       if (method === 'POST' && luck) {
         operation = 'luck.resolve'
         payload = { ...body, check_id: decodeURIComponent(luck[1]) }
@@ -396,6 +409,9 @@ export class PeerRemoteGameClient {
         operation = 'character.advancement.preview'
       } else if (method === 'POST' && advancement?.[2] === 'apply') {
         operation = 'character.advancement.apply'
+      } else if (method === 'POST' && roll) {
+        operation = 'roll.resolve'
+        payload = { ...body, request_id: decodeURIComponent(roll[1]) }
       } else if (method === 'POST' && parsed.tail === '/sse-ticket') {
         return { handled: true, value: { ticket: 'peer-data-channel' } as T }
       } else {

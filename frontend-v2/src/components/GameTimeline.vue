@@ -2,7 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { CheckmarkCircleOutline, WarningOutline, InformationCircleOutline, ReaderOutline } from '@vicons/ionicons5'
-import type { CheckResult, LogEntry, PublicAction, Player, StoryRecap } from '@/api/types'
+import type { CheckResult, LogEntry, ManualRollTimelineEntry, PublicAction, Player, StoryRecap } from '@/api/types'
 import type { DiceTag } from '@/utils/play'
 import { parseAction, playerColor } from '@/utils/play'
 import { api } from '@/api/client'
@@ -13,7 +13,7 @@ import CheckRevealCard from '@/components/play/CheckRevealCard.vue'
 import SceneImageBlock from '@/components/play/SceneImageBlock.vue'
 import { initializeTts, speakingKey, ttsSupported, ttsToggle } from '@/utils/tts'
 
-const props = defineProps<{ log: LogEntry[]; live: PublicAction[]; players: Player[]; round: number; lore?: LoreKeywords; gameKey?: string; ruleId?: string; processing?: boolean; isGm?: boolean; liveNarration?: string; pendingChecks?: CheckResult[]; revealChecks?: CheckResult[]; currentUserId?: string; luckBusyId?: string }>()
+const props = defineProps<{ log: LogEntry[]; live: PublicAction[]; players: Player[]; round: number; lore?: LoreKeywords; gameKey?: string; ruleId?: string; processing?: boolean; isGm?: boolean; liveNarration?: string; pendingChecks?: CheckResult[]; revealChecks?: CheckResult[]; currentUserId?: string; luckBusyId?: string; manualRolls?: ManualRollTimelineEntry[] }>()
 const emit = defineEmits<{ refresh: []; luck: [check: CheckResult, spend: boolean] }>()
 
 const box = ref<HTMLElement | null>(null), hasNew = ref(false), awayFromBottom = ref(false)
@@ -82,11 +82,27 @@ function emitLuck(check: CheckResult, spend: boolean) { emit('luck', check, spen
 
 const visibleLog = computed(() => props.log.slice(-visibleRoundCount.value))
 const hiddenRoundCount = computed(() => Math.max(0, props.log.length - visibleLog.value.length))
+function manualRollsForRound(round: number): ManualRollTimelineEntry[] {
+  return (props.manualRolls || []).filter(item => Number(item.round_number || 0) === round)
+}
+function manualRollResultText(result: ManualRollTimelineEntry['results'][string]): string {
+  const total = String(result.total ?? '')
+  const target = result.target == null ? '' : ` / ${result.target}`
+  const verdict = result.verdict === 'success' ? (isEnglish.value ? 'success' : '成功')
+    : result.verdict === 'failure' ? (isEnglish.value ? 'failure' : '失败')
+      : result.verdict === 'winner' ? (isEnglish.value ? 'winner' : '胜者')
+        : result.verdict === 'loss' ? (isEnglish.value ? 'loss' : '落败') : ''
+  return `${total}${target}${verdict ? ` · ${verdict}` : ''}`
+}
 const rounds = computed(() => visibleLog.value.map((entry, index) => {
   const sw = entry.swipes || []
   const cur = Number(entry.current_swipe) || 0
   return { entry, round: Number(entry.round || props.log.length - visibleLog.value.length + index), gm: entry.gm_response ? parseGMText(String(entry.gm_response), props.lore) : null, swipes: sw, swipeCur: cur, swipeCount: sw.length }
 }))
+const standaloneManualRolls = computed(() => {
+  const roundsInLog = new Set(rounds.value.map(item => item.round))
+  return (props.manualRolls || []).filter(item => !roundsInLog.has(Number(item.round_number || 0)))
+})
 const recapSignature = computed(() => props.log.flatMap(entry => recaps(entry).map(recap => recap.id || recap.text)).join('|'))
 
 async function showEarlier() {
@@ -259,6 +275,14 @@ watch(() => rounds.value, async (latest) => {
             <div class="state-card-body">{{ change }}</div>
           </div>
         </div>
+        <div v-for="roll in manualRollsForRound(item.round)" :key="`manual-roll-${roll.id}`" class="state-card-list manual-roll-timeline-list">
+          <div class="state-card good manual-roll-timeline-card">
+            <span class="state-card-title"><NIcon :component="CheckmarkCircleOutline" size="14" />{{ t('manualRollTimeline') }} · {{ roll.label || roll.formula }}</span>
+            <div class="state-card-body manual-roll-totals">
+              <span v-for="(result, uid) in roll.results" :key="uid" class="manual-roll-result">{{ roll.target_names[uid] || uid }}：{{ manualRollResultText(result) }}</span>
+            </div>
+          </div>
+        </div>
         <div v-for="recap in recaps(item.entry)" :key="recap.id || recap.text" class="message story-recap message-with-avatar" data-testid="story-recap-card">
           <span class="recap-avatar" aria-hidden="true"><NIcon :component="ReaderOutline" size="19" /></span>
           <div class="message-copy">
@@ -267,6 +291,14 @@ watch(() => rounds.value, async (latest) => {
           </div>
         </div>
       </template>
+      <div v-for="roll in standaloneManualRolls" :key="`manual-roll-standalone-${roll.id}`" class="state-card-list manual-roll-timeline-list">
+        <div class="state-card good manual-roll-timeline-card">
+          <span class="state-card-title"><NIcon :component="CheckmarkCircleOutline" size="14" />{{ t('manualRollTimeline') }} · {{ roll.label || roll.formula }}</span>
+          <div class="state-card-body manual-roll-totals">
+            <span v-for="(result, uid) in roll.results" :key="uid" class="manual-roll-result">{{ roll.target_names[uid] || uid }}：{{ manualRollResultText(result) }}</span>
+          </div>
+        </div>
+      </div>
       <div v-for="a in live" :key="a.user_id" class="message player live message-with-avatar" :style="{ borderLeftColor: playerColor(a.user_id) }">
         <PortraitImage :portrait="portrait(a.user_id)" :rule-id="ruleId" :seed="a.user_id" :name="name(a.user_id, a.character_name)" :size="42" />
         <div class="message-copy">

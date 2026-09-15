@@ -31,7 +31,9 @@ from src.webui.routes.game_control_routes import (
     api_mark_health_event,
     api_set_solo_mode,
     api_set_narrative_perspective,
+    api_set_gm_style,
     api_set_luck_timeout,
+    api_set_reward_policy,
     api_set_player_away,
     api_set_player_access,
     api_set_room_password,
@@ -49,6 +51,9 @@ from src.webui.routes.game_gameplay_routes import (
     _ruleset_gameplay_status,
     _ruleset_requester_is_gm,
     api_ruleset_available_actions,
+    api_ruleset_temporary_encounter,
+    api_combat_action,
+    api_combat_scheduler_advance,
     api_ruleset_submit_intent,
     api_ruleset_resolve_decision,
     api_luck_decision,
@@ -85,6 +90,7 @@ from src.webui.routes.game_lifecycle_routes import (
     api_switch_world,
     api_create_from_seed,
 )
+from src.webui.routes.manual_roll_routes import api_manual_roll_list, api_manual_roll_create, api_manual_roll_resolve, api_manual_roll_cancel
 
 
 async def _read_save_upload(reader) -> bytes:
@@ -107,6 +113,10 @@ def register_games(app: web.Application) -> None:
     app.router.add_post("/api/games/{game_key}/claim-gm", api_claim_gm_session)
     app.router.add_get("/api/games/{game_key}/multiplayer", api_multiplayer_status)
     app.router.add_get("/api/games/{game_key}/player-context", api_player_context)
+    app.router.add_get("/api/games/{game_key}/roll-requests", api_manual_roll_list)
+    app.router.add_post("/api/games/{game_key}/roll-requests", api_manual_roll_create)
+    app.router.add_post("/api/games/{game_key}/roll-requests/{request_id}/roll", api_manual_roll_resolve)
+    app.router.add_post("/api/games/{game_key}/roll-requests/{request_id}/cancel", api_manual_roll_cancel)
     app.router.add_get("/api/games/{game_key}/health", api_game_health)
     app.router.add_post(
         "/api/games/{game_key}/health/{event_id}/{action:resolve|ignore}",
@@ -118,7 +128,13 @@ def register_games(app: web.Application) -> None:
         api_set_narrative_perspective,
     )
     app.router.add_post(
+        "/api/games/{game_key}/settings/gm-style", api_set_gm_style
+    )
+    app.router.add_post(
         "/api/games/{game_key}/settings/luck-timeout", api_set_luck_timeout
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/settings/reward-policy", api_set_reward_policy
     )
     app.router.add_post(
         "/api/games/{game_key}/players/{user_id}/away", api_set_player_away
@@ -134,6 +150,12 @@ def register_games(app: web.Application) -> None:
         "/api/games/{game_key}/available-actions", api_ruleset_available_actions
     )
     app.router.add_post("/api/games/{game_key}/intents", api_ruleset_submit_intent)
+    app.router.add_post(
+        "/api/games/{game_key}/ruleset/temporary-encounter",
+        api_ruleset_temporary_encounter,
+    )
+    app.router.add_post("/api/games/{game_key}/combat/action", api_combat_action)
+    app.router.add_post("/api/games/{game_key}/combat/scheduler/advance", api_combat_scheduler_advance)
     app.router.add_post(
         "/api/games/{game_key}/decisions/{decision_id}",
         api_ruleset_resolve_decision,

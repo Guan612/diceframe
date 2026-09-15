@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from src.ai_providers import (
+    UNSUPPORTED_AI_CONFIG_KEYS,
     is_provider_secret_key,
     normalize_ai_providers,
     provider_secret_key,
@@ -33,6 +34,12 @@ from src.network_proxy import (
     mask_proxy_url,
 )
 from src.web_transport import ServerTransport, build_server_transport, parse_web_transport
+from src.web_transport.listeners import (
+    internal_loopback_host,
+    normalize_hosts,
+    parse_port,
+    split_hosts,
+)
 from src.webui.access_password import mask_access_password, normalize_access_password
 from src.webui.cors import normalize_cors_origins, parse_cors_origins
 from src.webui.services import legal as legal_svc
@@ -40,13 +47,6 @@ from src.webui.services import legal as legal_svc
 
 _SECRET_KEYS = frozenset(
     {
-        "api_key",
-        "embedding_api_key",
-        "fallback1_api_key",
-        "fallback2_api_key",
-        "tts_api_key",
-        "asr_api_key",
-        "imagegen_api_key",
         "access_token",
         "bot_token",
         "napcat_token",
@@ -103,6 +103,10 @@ class RuntimeConfig:
     secrets: dict[str, Any]
     host: str
     port: int
+    # 额外监听拓扑：hosts 至少含 host；两个可选端口用于同时提供 HTTP/HTTPS。
+    hosts: tuple[str, ...]
+    http_port: int | None
+    https_port: int | None
     transport: ServerTransport
     cors_env_value: str
     cors_config_value: str
@@ -157,6 +161,18 @@ class ConfigStore:
                 self.logger.error("%s无法读取且未能隔离：%s", label, exc)
             return {}
 
+    def _optional_port(self, raw: Any, name: str) -> int | None:
+        """解析可选端口；非法值必须显式告警，不能静默丢弃用户配置。"""
+
+        if raw is None or raw == "":
+            return None
+        port = parse_port(raw)
+        if port is None:
+            self.logger.warning(
+                "忽略 %s=%r：端口必须是 1-65535 的整数", name, raw
+            )
+        return port
+
     def load(self) -> RuntimeConfig:
         self.paths.data_dir.mkdir(parents=True, exist_ok=True)
         saved = self.load_json_object(self.paths.config_file, "主配置")
@@ -164,34 +180,33 @@ class ConfigStore:
         generation_defaults_migrated = migrate_generation_defaults(saved)
         env = self.environ
 
-        api_key = env.get("TRPG_LLM_API_KEY") or secret_values.get("api_key") or ""
-        base_url = env.get("TRPG_LLM_BASE_URL") or saved.get(
-            "base_url", "https://api.deepseek.com/v1"
-        )
-        model = env.get("TRPG_LLM_MODEL") or saved.get("model", "deepseek-v4-flash")
-        api_format = env.get("TRPG_LLM_API_FORMAT") or saved.get(
-            "api_format", "openai"
-        )
+        model = saved.get("model", "")
         port = int(env.get("TRPG_WEB_PORT") or saved.get("web_port", 18000))
         host = str(env.get("TRPG_WEB_HOST") or saved.get("web_host", "0.0.0.0"))
+        # 多地址监听：TRPG_WEB_HOSTS 只做追加，不改变 TRPG_WEB_HOST 的既有语义。
+        extra_hosts = normalize_hosts(
+            split_hosts(env.get("TRPG_WEB_HOSTS") or saved.get("web_hosts") or "")
+        )
+        hosts = normalize_hosts([host, *extra_hosts]) or [host]
+        http_port = self._optional_port(
+            env.get("TRPG_WEB_HTTP_PORT") or saved.get("web_http_port"),
+            "TRPG_WEB_HTTP_PORT",
+        )
+        https_port = self._optional_port(
+            env.get("TRPG_WEB_HTTPS_PORT") or saved.get("web_https_port"),
+            "TRPG_WEB_HTTPS_PORT",
+        )
         transport_config = parse_web_transport(saved.get("web_transport"), env)
         transport = build_server_transport(
             transport_config,
             self.paths.data_dir,
             port,
+            internal_loopback_host(hosts),
         )
         cors_env_value = str(env.get("TRPG_WEB_CORS_ORIGINS") or "").strip()
         cors_config_value = cors_env_value or str(saved.get("web_cors_origins") or "")
         embedding_enabled = saved.get("embedding_enabled", False)
-        embedding_base_url = saved.get("embedding_base_url", "")
-        embedding_model = env.get("TRPG_EMBEDDING_MODEL") or saved.get(
-            "embedding_model", "nomic-embed-text"
-        )
-        embedding_api_key = (
-            env.get("TRPG_EMBEDDING_API_KEY")
-            or secret_values.get("embedding_api_key")
-            or ""
-        )
+        embedding_model = saved.get("embedding_model", "nomic-embed-text")
         access_token = next(
             (
                 password
@@ -213,10 +228,7 @@ class ConfigStore:
 
         state: dict[str, Any] = {
             "generation_defaults_version": GENERATION_DEFAULTS_VERSION,
-            "api_key": api_key,
-            "base_url": base_url,
             "model": model,
-            "api_format": api_format,
             "web_port": port,
             "web_cors_origins": normalize_cors_origins(cors_config_value),
             "ai_providers": normalize_ai_providers(saved.get("ai_providers")),
@@ -233,70 +245,29 @@ class ConfigStore:
                 if is_provider_secret_key(key)
             },
             "embedding_enabled": embedding_enabled,
-            "embedding_base_url": embedding_base_url,
             "embedding_model": embedding_model,
-            "embedding_api_key": embedding_api_key,
+            "embedding_max_input": int(saved.get("embedding_max_input", 0)),
             "fallback1_enabled": saved.get("fallback1_enabled", False),
-            "fallback1_base_url": saved.get("fallback1_base_url", ""),
             "fallback1_model": saved.get("fallback1_model", ""),
-            "fallback1_api_format": saved.get("fallback1_api_format", "openai"),
-            "fallback1_api_key": secret_values.get("fallback1_api_key") or "",
             "fallback2_enabled": saved.get("fallback2_enabled", False),
-            "fallback2_base_url": saved.get("fallback2_base_url", ""),
             "fallback2_model": saved.get("fallback2_model", ""),
-            "fallback2_api_format": saved.get("fallback2_api_format", "openai"),
-            "fallback2_api_key": secret_values.get("fallback2_api_key") or "",
-            "tts_provider": str(
-                env.get("TRPG_TTS_PROVIDER") or saved.get("tts_provider", "browser")
-            ),
-            "tts_base_url": str(
-                env.get("TRPG_TTS_BASE_URL") or saved.get("tts_base_url", "")
-            ),
-            "tts_api_key": env.get("TRPG_TTS_API_KEY")
-            or secret_values.get("tts_api_key")
-            or "",
-            "tts_model": str(
-                env.get("TRPG_TTS_MODEL") or saved.get("tts_model", "tts-1")
-            ),
-            "tts_audio_format": str(
-                env.get("TRPG_TTS_AUDIO_FORMAT")
-                or saved.get("tts_audio_format", "mp3")
-            ),
-            "tts_default_voice": str(
-                env.get("TRPG_TTS_VOICE") or saved.get("tts_default_voice", "alloy")
-            ),
+            "tts_provider": str(saved.get("tts_provider", "browser")),
+            "tts_model": str(saved.get("tts_model", "tts-1")),
+            "tts_audio_format": str(saved.get("tts_audio_format", "mp3")),
+            "tts_default_voice": str(saved.get("tts_default_voice", "alloy")),
             "tts_gm_voice": str(saved.get("tts_gm_voice", "")),
             "tts_player_voice": str(saved.get("tts_player_voice", "")),
             "tts_timeout_seconds": float(saved.get("tts_timeout_seconds", 60)),
             "tts_cache_mb": int(saved.get("tts_cache_mb", 256)),
-            "asr_provider": str(
-                env.get("TRPG_ASR_PROVIDER") or saved.get("asr_provider", "disabled")
-            ),
-            "asr_base_url": str(
-                env.get("TRPG_ASR_BASE_URL") or saved.get("asr_base_url", "")
-            ),
-            "asr_api_key": env.get("TRPG_ASR_API_KEY")
-            or secret_values.get("asr_api_key")
-            or "",
-            "asr_model": str(
-                env.get("TRPG_ASR_MODEL") or saved.get("asr_model", "whisper-1")
-            ),
+            "asr_provider": str(saved.get("asr_provider", "disabled")),
+            "asr_model": str(saved.get("asr_model", "whisper-1")),
             "asr_timeout_seconds": float(saved.get("asr_timeout_seconds", 60)),
             "imagegen_enabled": bool(saved.get("imagegen_enabled", False)),
             "imagegen_auto_scene": bool(saved.get("imagegen_auto_scene", True)),
             "imagegen_provider": str(
                 saved.get("imagegen_provider") or "openai-compatible"
             ),
-            "imagegen_base_url": str(
-                env.get("TRPG_IMAGEGEN_BASE_URL")
-                or saved.get("imagegen_base_url", "")
-            ),
-            "imagegen_api_key": env.get("TRPG_IMAGEGEN_API_KEY")
-            or secret_values.get("imagegen_api_key")
-            or "",
-            "imagegen_model": str(
-                env.get("TRPG_IMAGEGEN_MODEL") or saved.get("imagegen_model", "")
-            ),
+            "imagegen_model": str(saved.get("imagegen_model", "")),
             "imagegen_square_size": str(
                 saved.get("imagegen_square_size", "1024x1024")
             ),
@@ -313,9 +284,10 @@ class ConfigStore:
                 saved.get("economy_auto_reward_enabled", True)
             ),
             "economy_auto_reward_gold_cap": int(
-                # 默认放宽到 10000：普通团奖励很少超过这个量级，50 的旧默认
-                # 会让大部分奖励退回 GM 手动确认；仍可在设置中按需调低。
-                saved.get("economy_auto_reward_gold_cap", 10000)
+                # 全局兜底默认 500：这是“新游戏未配置策略时”的服务器默认值。
+                # 各规则（D&D 金币 / COC 美元）量级不同，正常应在规则模板
+                # economy_defaults 或本局设置中按局覆盖。
+                saved.get("economy_auto_reward_gold_cap", 500)
             ),
             "model_request_timeout_seconds": float(
                 env.get("TRPG_MODEL_REQUEST_TIMEOUT_SECONDS")
@@ -420,6 +392,9 @@ class ConfigStore:
                 "legal_privacy_acknowledged_version", ""
             ),
             "web_transport": dict(saved.get("web_transport") or {}),
+            "web_hosts": ",".join(hosts),
+            "web_http_port": http_port or "",
+            "web_https_port": https_port or "",
         }
         return RuntimeConfig(
             paths=self.paths,
@@ -428,6 +403,9 @@ class ConfigStore:
             secrets=secret_values,
             host=host,
             port=port,
+            hosts=tuple(hosts),
+            http_port=http_port,
+            https_port=https_port,
             transport=transport,
             cors_env_value=cors_env_value,
             cors_config_value=cors_config_value,
@@ -444,6 +422,7 @@ class ConfigStore:
             for key, value in state.items()
             if key not in _SECRET_KEYS
             and key != "web_transport"
+            and key not in UNSUPPORTED_AI_CONFIG_KEYS
             and not is_provider_secret_key(key)
         }
         public["ai_providers"] = [
@@ -456,13 +435,6 @@ class ConfigStore:
             for entry in state.get("ai_providers", [])
         ]
         for key in (
-            "api_key",
-            "embedding_api_key",
-            "fallback1_api_key",
-            "fallback2_api_key",
-            "tts_api_key",
-            "asr_api_key",
-            "imagegen_api_key",
             "bot_token",
             "napcat_token",
         ):
@@ -497,13 +469,15 @@ class ConfigStore:
             for key, value in state.items()
             if key not in _SECRET_KEYS
             and key != "qq_bot_running"
+            and key not in UNSUPPORTED_AI_CONFIG_KEYS
             and not is_provider_secret_key(key)
         }
         self.atomic_write_json(self.paths.config_file, non_sensitive)
         sensitive = {
             key: value
             for key, value in state.items()
-            if key in _SECRET_KEYS or is_provider_secret_key(key)
+            if (key in _SECRET_KEYS or is_provider_secret_key(key))
+            and key not in UNSUPPORTED_AI_CONFIG_KEYS
         }
         if self.environ.get("TRPG_ACCESS_TOKEN"):
             sensitive.pop("access_token", None)

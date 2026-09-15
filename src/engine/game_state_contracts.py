@@ -113,6 +113,7 @@ class GamePersistedState(TypedDict, total=False):
     ruleset_runtime: OpaqueState
     ruleset_state: OpaqueState
     adventure_binding: OpaqueState
+    play_mode: str
     event_ledger: list[OpaqueState]
     scene_image: dict[str, str]
     map_background: dict[str, str]
@@ -144,8 +145,12 @@ class GamePersistedState(TypedDict, total=False):
     seed_code: str
     difficulty: str
     narrative_perspective: str
+    gm_style_override: OpaqueState | None
     language: str
     luck_timeout_seconds: int
+    economy_reward_policy: OpaqueState
+    combat_extension: OpaqueState
+    combat_extension_round_snapshots: dict[str, OpaqueState]
     entry_point: str
     max_players: int
     gm_uid: str
@@ -160,9 +165,11 @@ class GamePersistedState(TypedDict, total=False):
     health_status: OpaqueState
     last_check: CheckResult | None
     last_checks: list[CheckResult]
+    manual_roll_requests: list[dict[str, Any]]
     last_overreach: list[Any]
     round_checks_prepared: bool
     round_start_snapshot: PlayerRollbackSnapshot
+    round_entity_snapshot: OpaqueState
     death_save_outcomes: dict[str, dict[str, OpaqueState]]
     last_state_update: OpaqueState | None
     last_token_budget_bump: TokenBudgetBump | None

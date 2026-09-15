@@ -7,6 +7,19 @@ import {
 import type { MultiPeerConnectionSession } from '@/peer/session/MultiPeerConnectionSession'
 
 describe('peer host game bridge', () => {
+  it('resolves a roll for the bound actor and ignores forged target fields', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    const executor: PeerLocalApiExecutor = async (path, init) => {
+      calls.push({ path, init })
+      if (path === '/games/web%7Cgame%7Chost') return { game_key: 'web|game|host', player_access_open: true }
+      return { ok: true }
+    }
+    const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined, {}, { peer_1: 'player_1' })
+    await bridge.handle('peer_1', 'roll.resolve', { request_id: 'req_1', run_id: 'run_1', target_uid: 'forged' })
+    expect(calls[1].path).toBe('/games/web%7Cgame%7Chost/roll-requests/req_1/roll?user=player_1&share=1&delegate=1')
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({ run_id: 'run_1', target_uid: 'player_1' })
+  })
+
   it('maps allowlisted operations to a delegated player identity', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     const executor: PeerLocalApiExecutor = async (path, init) => {
@@ -306,6 +319,14 @@ describe('peer remote game client', () => {
     expect(requestGame).toHaveBeenLastCalledWith(
       'h_abcdefghijk', 'game.table_talk', {},
     )
+    await client.tryApi('/games/web%7Cgame%7Chost/roll-requests')
+    expect(requestGame).toHaveBeenLastCalledWith('h_abcdefghijk', 'roll.requests', {})
+    await client.tryApi('/games/web%7Cgame%7Chost/roll-requests/r-1/roll', {
+      method: 'POST', body: JSON.stringify({ run_id: 'run-1', target_uid: 'forged' }),
+    })
+    expect(requestGame).toHaveBeenLastCalledWith('h_abcdefghijk', 'roll.resolve', {
+      run_id: 'run-1', target_uid: 'forged', request_id: 'r-1',
+    })
     await expect(client.tryApi('/games/web%7Cgame%7Chost/export'))
       .rejects.toThrow('peer_game_operation_not_supported')
     expect(client.handlesGamePath('/games/web%7Cgame%7Chost/scene-image')).toBe(true)

@@ -43,8 +43,17 @@ def roll(formula: str) -> DiceResult:
 
     支持的格式: d20, d20+3, 2d6, 2d6+1, d100, 3d8-2
     """
-    formula = formula.strip().lower().replace(" ", "")
-    match = re.match(r"(\d+)?d(\d+)([+-]\d+)?$", formula)
+    formula, count, sides, modifier = parse_dice_formula(formula)
+    rolls = [roll_die(sides) for _ in range(count)]
+    total = sum(rolls) + modifier
+    natural = rolls[0] if count == 1 else sum(rolls)
+    return DiceResult(formula=formula, rolls=rolls, modifier=modifier, total=total, natural=natural)
+
+
+def parse_dice_formula(formula: str) -> tuple[str, int, int, int]:
+    """Validate and normalize a generic dice formula without consuming RNG."""
+    formula = str(formula or "").strip().lower().replace(" ", "")
+    match = re.fullmatch(r"(\d+)?d(\d+)([+-]\d+)?", formula)
     if not match:
         raise ValueError(f"无效的掷骰公式: {formula}")
 
@@ -59,11 +68,4 @@ def roll(formula: str) -> DiceResult:
     if not -MAX_DICE_MODIFIER <= modifier <= MAX_DICE_MODIFIER:
         raise ValueError(f"骰子修正超出范围（±{MAX_DICE_MODIFIER}）: {formula}")
 
-    rolls = [roll_die(sides) for _ in range(count)]
-    total = sum(rolls) + modifier
-    natural = rolls[0] if count == 1 else sum(rolls)
-
-    return DiceResult(
-        formula=formula, rolls=rolls, modifier=modifier,
-        total=total, natural=natural,
-    )
+    return formula, count, sides, modifier

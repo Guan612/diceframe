@@ -12,6 +12,7 @@ from typing import Any
 from src.engine.game_instance import GameState
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
+from src.content.gm_style import normalize_gm_style_override
 from src.rulesets.contracts import LiveAdvancementPolicyRuntime
 
 from src.webui.services._common import _GAME_KEY_SEP, _is_safe_world_id
@@ -90,7 +91,9 @@ async def create_game(
     scene_image: dict[str, Any] | None = None,
     map_background: dict[str, Any] | None = None,
     adventure_id: str = "",
+    play_mode: str = "",
     narrative_perspective: str = "auto",
+    gm_style_override: dict[str, Any] | None = None,
     advancement_mode: str = "milestone",
     advancement_authority: str = "ai_gm",
 ) -> dict[str, Any]:
@@ -108,8 +111,18 @@ async def create_game(
         normalized_narrative_perspective = validate_narrative_perspective(
             narrative_perspective
         )
+        normalized_gm_style = normalize_gm_style_override(gm_style_override)
     except ValueError:
-        return {"ok": False, "error": "叙事视角设置无效"}
+        return {"ok": False, "error": "叙事设置无效"}
+    normalized_play_mode = str(play_mode or "").strip().casefold()
+    if not normalized_play_mode:
+        normalized_play_mode = "adventure" if str(adventure_id or "").strip() else "free"
+    if normalized_play_mode not in {"free", "adventure"}:
+        return {"ok": False, "error": "玩法模式无效"}
+    if normalized_play_mode == "adventure" and not str(adventure_id or "").strip():
+        return {"ok": False, "error": "冒险包剧情模式必须选择冒险包"}
+    if normalized_play_mode == "free" and str(adventure_id or "").strip():
+        return {"ok": False, "error": "标准自由对局不能绑定冒险包"}
 
     try:
         default_scene_image = dependencies.resolve_default_scene_image(
@@ -227,6 +240,7 @@ async def create_game(
             "error_code": "INVALID_ADVENTURE_BINDING",
             "error": "冒险包绑定无效，未留下半成品存档。",
         }
+    instance.play_mode = normalized_play_mode
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(selected_map_background)
     # 房间密码三态：字段缺失(None) 且 多人局 → 生成随机密码回显（安全默认，
@@ -237,6 +251,7 @@ async def create_game(
         room_password=room_password or "",
         narrative_perspective=normalized_narrative_perspective,
     )
+    instance.set_gm_style_override(normalized_gm_style)
     if isinstance(runtime, LiveAdvancementPolicyRuntime):
         try:
             runtime.configure_live_advancement(

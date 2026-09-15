@@ -19,12 +19,12 @@ from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
 from src.commands.game_handler import GameHandler
+from src.commands.round_processor import RoundNotProcessed
+from src.ai_providers import resolve_provider
+from src.network_proxy import effective_proxy_url
+from src.webui.runtime_config import ConfigStore, RuntimePaths
 
-# ---------- 配置（从环境变量或默认值） ----------
-
-API_KEY = os.getenv("TRPG_LLM_API_KEY", os.getenv("TRPG_API_KEY", ""))
-BASE_URL = os.getenv("TRPG_LLM_BASE_URL", os.getenv("TRPG_BASE_URL", "https://api.deepseek.com/v1"))
-MODEL = os.getenv("TRPG_LLM_MODEL", os.getenv("TRPG_MODEL", "deepseek-v4-pro"))
+# ---------- 配置（与 WebUI 共用服务商配置契约） ----------
 DATA_DIR = Path(os.getenv("TRPG_DATA_DIR", str(ROOT / "data")))
 
 # 颜色输出
@@ -48,24 +48,28 @@ def print_warn(text: str) -> None:
 
 async def main() -> None:
     print(f"{BOLD}TRPG 独立运行器{RESET}")
-    print(f"模型: {MODEL}  |  数据目录: {DATA_DIR}")
+    config = ConfigStore(RuntimePaths.from_root(ROOT, os.environ), os.environ).load().state
+    provider = resolve_provider(config, config.get("llm_provider_ref", ""))
+    model = str(config.get("model") or "").strip()
+    if not provider or not provider["base_url"] or not model:
+        print("请先在 WebUI 的 AI 服务商与模型配置中设置主模型。")
+        return
+    print(f"模型: {model}  |  数据目录: {DATA_DIR}")
     print()
-
-    if not API_KEY:
-        api_key = input("请输入 API Key（或设置环境变量 TRPG_API_KEY）: ").strip()
-        if not api_key:
-            print("未提供 API Key，退出。")
-            return
-    else:
-        api_key = API_KEY
 
     # 初始化模块
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     providers = [ProviderConfig(
-        provider_name="default", base_url=BASE_URL,
-        api_key=api_key, model_name=MODEL,
+        provider_name="default", base_url=provider["base_url"],
+        api_key=provider["api_key"], model_name=model, api_format=provider["api_format"],
     )]
-    llm_client = LLMClient(providers=providers, default="default")
+    llm_client = LLMClient(
+        providers=providers,
+        default="default",
+        proxy_url=effective_proxy_url(
+            bool(config.get("proxy_enabled")), config.get("proxy_url", ""),
+        ),
+    )
 
     lorebook_store = LorebookStore(DATA_DIR / "lorebook.db")
     lorebook_store.open()
@@ -138,8 +142,12 @@ async def main() -> None:
         elif user_input in ("/go", "/下一轮", "/推进"):
             if instance.can_accept_actions():
                 if await instance.try_advance():
-                    narration, _ = await handler.process_round(instance)
-                    print_gm("\n" + narration + "\n")
+                    try:
+                        narration, _ = await handler.process_round(instance)
+                    except RoundNotProcessed as exc:
+                        print_warn(f"本轮未处理（{exc.reason}）：等待幸运/经济决定，或已有推进在进行中")
+                    else:
+                        print_gm("\n" + narration + "\n")
             else:
                 print_warn("当前不能推进（可能已在判定中）")
 
@@ -174,8 +182,12 @@ async def main() -> None:
                 }
             ok = await instance.add_action(uid, user_input)
             if ok and await instance.try_advance():
-                narration, _ = await handler.process_round(instance)
-                print_gm("\n" + narration + "\n")
+                try:
+                    narration, _ = await handler.process_round(instance)
+                except RoundNotProcessed as exc:
+                    print_warn(f"本轮未处理（{exc.reason}）：等待幸运/经济决定，或已有推进在进行中")
+                else:
+                    print_gm("\n" + narration + "\n")
             elif ok:
                 print_info("（行动已记录，等待更多玩家行动或输入 /go 推进）")
 

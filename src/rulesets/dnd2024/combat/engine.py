@@ -15,14 +15,12 @@ from src.rulesets.events import EventBatchError, apply_event_batch, stable_batch
 
 
 from .primitives import (
-    DICE_RE,
     INTENT_TYPES,
     CombatIntentError,
     actor_kind as _actor_kind,
     canonical as _canonical,
     enemy_actor as _enemy_actor,
     player_actor as _player_actor,
-    roll as _roll,
 )
 from .reducer import CombatReducerMixin
 from .resolution import CombatResolutionMixin
@@ -344,7 +342,18 @@ class Dnd2024CombatEngine(
                     "encounter_instance_id": self.encounter_access.encounter_instance_id,
                     "encounter_preset_id": self.encounter_access.encounter_preset_id,
                     "origin_step_id": self.encounter_access.origin_step_id,
+                    "mode": "story",
+                    "adventure_binding": {
+                        "adventure_id": self.encounter_access.adventure_id,
+                        "step_id": self.encounter_access.origin_step_id,
+                        "encounter_preset_id": self.encounter_access.encounter_preset_id,
+                        "encounter_instance_id": self.encounter_access.encounter_instance_id,
+                    },
                 })
+            else:
+                # 自由遭遇不属于任何冒险包；把这个事实写进权威状态，界面才能
+                # 持续显示“自由战斗”，而叙事文本无法改变它。
+                resolved_intent.update({"mode": "sandbox", "adventure_binding": None})
             events.append(self._start_combat_event(instance, resolved_intent, rng))
         elif intent_type == "combat.end":
             events.append({"type": "dnd2024.combat.ended", "reason": "gm"})
@@ -463,9 +472,27 @@ class Dnd2024CombatEngine(
                 "encounter_instance_id": str(combat.get("encounter_instance_id") or ""),
                 "encounter_preset_id": str(combat.get("encounter_preset_id") or ""),
                 "origin_step_id": str(combat.get("origin_step_id") or ""),
+                "mode": str(combat.get("mode") or ""),
+                "adventure_binding": deepcopy(combat.get("adventure_binding")),
                 "actors": actors,
             },
             "encounter_presets": self.encounter_presets(),
+            # 权威模式投影：前端据此区分“剧情绑定/剧情未准备/自由遭遇”，
+            # 不再靠显示名或通用目录推断当前敌情来源。
+            "encounter_access": {
+                "mode": self.encounter_access.mode,
+                "status": self.encounter_access.status,
+                # 进行中的战斗不再开放 start 入口，视图也要如实反映这一点。
+                "can_start": bool(
+                    self.encounter_access.can_start and combat.get("status") != "active"
+                ),
+                "unprepared": bool(self.encounter_access.unprepared),
+                "adventure_id": self.encounter_access.adventure_id,
+                "encounter_preset_id": self.encounter_access.encounter_preset_id,
+                "encounter_instance_id": self.encounter_access.encounter_instance_id,
+                "origin_step_id": self.encounter_access.origin_step_id,
+                "catalog": "adventure" if self.encounter_access.mode == "story" else "bundle",
+            },
         }
 
     def encounter_presets(self) -> list[dict[str, Any]]:
@@ -691,33 +718,6 @@ class Dnd2024CombatEngine(
                 and value.get("source_actor_id") == previous_actor_id
             ]:
                 target_conditions.pop(condition_id, None)
-
-    @staticmethod
-    def _spell_formula(
-        base: str, upcast: Any, spell: dict[str, Any], slot_level: int,
-        actor: dict[str, Any],
-    ) -> str:
-        match = DICE_RE.fullmatch(base)
-        if match is None:
-            raise CombatIntentError(f"unsupported spell dice formula: {base}")
-        count, sides, bonus = (int(value or 0) for value in match.groups())
-        if int(spell["level"]) == 0:
-            level = int(actor.get("build", {}).get("level", 1) or 1)
-            multiplier = 4 if level >= 17 else 3 if level >= 11 else 2 if level >= 5 else 1
-            count *= multiplier
-        elif upcast and slot_level > int(spell["level"]):
-            extra = DICE_RE.fullmatch(str(upcast))
-            if extra is None:
-                raise CombatIntentError("upcast dice formula is invalid")
-            extra_count, extra_sides, extra_bonus = (
-                int(value or 0) for value in extra.groups()
-            )
-            if extra_sides != sides:
-                raise CombatIntentError("upcast dice sides must match the base formula")
-            levels = slot_level - int(spell["level"])
-            count += extra_count * levels
-            bonus += extra_bonus * levels
-        return f"{count}d{sides}" + (f"{bonus:+d}" if bonus else "")
 
     @staticmethod
     def _last_hostile_defeated(

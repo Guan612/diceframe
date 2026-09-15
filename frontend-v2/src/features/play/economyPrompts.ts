@@ -9,7 +9,6 @@ export function isNonBlockingPersonalPurchase(proposal: PendingPayment): boolean
     && proposal.approval_policy === 'payer'
     && Boolean(payer)
     && recipient === payer
-    && !(proposal.contributors?.length)
     && Boolean(proposal.rewards?.length)
     && !proposal.effect_group_id
 }
@@ -20,14 +19,10 @@ export function isEconomyProposalActionable(
   gmUid: string,
 ): boolean {
   if (proposal.status !== 'pending') return false
-  if (proposal.approval_policy === 'all_contributors' && proposal.approvals?.[actorId]) {
-    return false
-  }
   return Boolean(
     proposal.payer_uid === actorId
     || proposal.uid === actorId
-    || (proposal.approval_policy === 'gm' && gmUid === actorId)
-    || proposal.contributors?.some(item => item.uid === actorId),
+    || (proposal.approval_policy === 'gm' && gmUid === actorId),
   )
 }
 
@@ -43,4 +38,27 @@ export function nextEconomyProposal(
       && !dismissedIds.has(id)
       && isEconomyProposalActionable(proposal, actorId, gmUid)
   })
+}
+
+/**
+ * Build the reward-policy save payload, or null when nothing should be sent.
+ *
+ * The game-settings dialog shares one save button with the room password and
+ * luck timeout. Submitting the reward policy unconditionally would clear the
+ * game's override whenever `economy_reward_policy` was missing from the
+ * loaded detail (empty mode means "clear" on the server). The request is
+ * therefore only built when the GM actually touched the reward fields;
+ * explicitly selecting the follow-default mode still clears the override.
+ */
+export function buildRewardPolicySave(
+  touched: boolean,
+  mode: string,
+  cap: string,
+): { mode: string; auto_reward_cap: number | null } | null {
+  if (!touched) return null
+  const trimmed = String(cap || '').trim()
+  return {
+    mode,
+    auto_reward_cap: trimmed !== '' ? Number(trimmed) : null,
+  }
 }

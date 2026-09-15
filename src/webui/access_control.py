@@ -284,6 +284,7 @@ class WebAccessControl:
                 "scene-image",
                 "map-background-asset",
                 "generated-images",
+                "roll-requests",
             }:
                 return uid or request.get("user_id", "")
             if request.method == "POST" and tail in {
@@ -297,6 +298,7 @@ class WebAccessControl:
                 "scene-image",
                 "generated-images",
                 "character",
+                "roll-requests",
             }:
                 return uid or request.get("user_id", "")
             if (

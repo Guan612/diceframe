@@ -166,6 +166,11 @@ export interface CheckResult {
   opponent_total?: number
   assist?: string[]
   planner_source?: string
+  /** 规划器最终采用的渠道来源与折叠审计（服务端权威）。 */
+  dc_reason?: string | null
+  advantage_reason?: string | null
+  modifier_reason?: string | null
+  planner_notes?: string[]
 }
 
 export interface PublicAction {
@@ -239,11 +244,9 @@ export interface PendingPayment {
   description?: string
   reason?: string
   status?: string
-  kind?: 'payment' | 'purchase' | 'fee' | 'reward' | 'transfer' | string
+  kind?: 'payment' | 'purchase' | 'reward' | string
   payer_uid?: string
   approval_policy?: string
-  contributors?: Array<{ uid: string; amount: number }>
-  approvals?: Record<string, boolean>
   sequence?: number
   run_id?: string
   [key: string]: unknown
@@ -267,12 +270,21 @@ export interface GameDetail {
   rest_session?: RestSessionStatus
   player_access_open?: boolean
   has_room_password?: boolean
+  economy_reward_policy?: { mode?: string; auto_reward_cap?: number }
+  combat_extension?: {
+    scheduler?: { kind?: string; ready?: string[]; gauges?: Record<string, number>; participants?: string[] }
+    entities?: string[]
+    entity_names?: Record<string, string>
+    actions?: Array<{ id: string; kind: string; name: string; costs: Array<{ resource: string; amount: unknown }>; consume_item?: { item: string; qty: number } }>
+    pools?: Record<string, Record<string, { current: number; maximum: number | null }>>
+  }
   multiplayer?: Multiplayer
   quick_actions?: string[]
   economy_proposals?: PendingPayment[]
   run_id?: string
   pending_luck_decisions?: CheckResult[]
   round_check_results?: CheckResult[]
+  manual_rolls?: ManualRollTimelineEntry[]
   total_tokens?: number
   token_budget_bump?: TokenBudgetBump | null
   ruleset_runtime?: RulesetRuntimeMeta & {
@@ -280,6 +292,28 @@ export interface GameDetail {
     state_schema_version?: number
   }
   [key: string]: unknown
+}
+
+export interface ManualRollTimelineEntry {
+  id: string
+  round_number: number
+  label?: string
+  formula: string
+  purpose?: 'free' | 'check' | 'contest' | string
+  target?: number | null
+  comparison?: 'at_least' | 'at_most' | string
+  status?: 'pending' | 'resolved' | 'cancelled' | string
+  target_names: Record<string, string>
+  results: Record<string, {
+    total?: number
+    rolls?: number[]
+    modifier?: number
+    natural?: number | null
+    target?: number
+    comparison?: 'at_least' | 'at_most' | string
+    verdict?: string
+  }>
+  created_at?: string
 }
 
 export interface TokenBudgetBump {
@@ -450,6 +484,7 @@ export interface GameSummary {
   language?: string
   solo_mode?: boolean
   narrative_perspective?: 'auto' | 'immersive' | 'third_person' | string
+  gm_style_override?: GmStyle | null
   gm_uid?: string
   round_number?: number
   player_count?: number
@@ -993,6 +1028,49 @@ export interface RulesetEncounterPreset extends JsonObject {
   enemies: JsonObject[]
 }
 
+export interface RulesetTemporaryEncounterAttack extends JsonObject {
+  id?: string
+  name?: string
+  attack_bonus?: number
+  damage?: string
+  range?: number
+  long_range?: number
+}
+
+export interface RulesetTemporaryEncounterEnemy extends JsonObject {
+  id?: string
+  name?: string
+  hp?: number
+  armor_class?: number
+  speed?: number
+  position?: number
+  initiative_modifier?: number
+  attacks?: RulesetTemporaryEncounterAttack[]
+}
+
+export interface RulesetTemporaryEncounter extends JsonObject {
+  title: string
+  description: string
+  enemies: RulesetTemporaryEncounterEnemy[]
+  balance?: {
+    difficulty?: string
+    max_enemies?: number
+    max_total_hp?: number
+    max_enemy_hp?: number
+    max_armor_class?: number
+    max_attack_bonus?: number
+    max_attack_average_damage?: number
+  }
+  planner?: JsonObject
+}
+
+export interface RulesetTemporaryEncounterResponse extends JsonObject {
+  ok?: boolean
+  code?: string
+  error?: string
+  encounter?: RulesetTemporaryEncounter
+}
+
 export interface RulesetSessionZeroAgreement extends JsonObject {
   tone: string
   difficulty: 'story' | 'standard' | 'challenging' | 'lethal' | string
@@ -1144,8 +1222,31 @@ export interface RulesetGameplayView {
     reactions: Record<string, number>
     pending_decisions: RulesetPendingDecision[]
     actors: RulesetCombatTarget[]
+    encounter_instance_id?: string
+    encounter_preset_id?: string
+    origin_step_id?: string
+    /** story=剧情绑定遭遇；sandbox=不属于冒险包的自由遭遇。 */
+    mode?: 'story' | 'sandbox' | string
+    adventure_binding?: {
+      adventure_id: string
+      step_id: string
+      encounter_preset_id: string
+      encounter_instance_id: string
+    } | null
   }
   encounter_presets: RulesetEncounterPreset[]
+  /** 服务端权威遭遇访问状态，前端据此区分剧情绑定 / 尚未准备 / 自由遭遇。 */
+  encounter_access?: {
+    mode: 'blocked' | 'story' | 'sandbox' | string
+    status: 'blocked' | 'pending' | 'active' | 'resolved' | string
+    can_start: boolean
+    unprepared: boolean
+    adventure_id?: string
+    encounter_preset_id?: string
+    encounter_instance_id?: string
+    origin_step_id?: string
+    catalog?: 'adventure' | 'bundle' | string
+  }
   encounter_request?: {
     status: 'pending' | string
     source?: string
@@ -1281,6 +1382,7 @@ export interface BotBindTokenResponse {
 export interface GmStyle {
   tone?: string
   verbosity?: 'brief' | 'normal' | 'detailed'
+  pace?: 'slow' | 'normal' | 'fast'
   custom_instructions?: string
 }
 
@@ -1805,10 +1907,11 @@ export interface BotTokenResponse {
 }
 
 export interface AppConfig {
-  base_url?: string
+  /** 服务器版本（/api/config 公开下发，供客户端做版本兼容提示） */
+  server_version?: string
+  /** 服务器仍能正确服务的最低客户端版本；客户端版本低于它应提示升级 App */
+  min_client_version?: string
   model?: string
-  api_format?: string
-  api_key?: SecretField
   ai_providers?: AiProvider[]
   llm_provider_ref?: string
   fallback1_provider_ref?: string
@@ -1818,18 +1921,10 @@ export interface AppConfig {
   asr_provider_ref?: string
   imagegen_provider_ref?: string
   fallback1_enabled?: boolean
-  fallback1_base_url?: string
-  fallback1_api_key?: SecretField
   fallback1_model?: string
-  fallback1_api_format?: string
   fallback2_enabled?: boolean
-  fallback2_base_url?: string
-  fallback2_api_key?: SecretField
   fallback2_model?: string
-  fallback2_api_format?: string
   embedding_enabled?: boolean
-  embedding_base_url?: string
-  embedding_api_key?: SecretField
   embedding_model?: string
   embedding_max_input?: number
   narrative_max_tokens?: number
@@ -1850,8 +1945,6 @@ export interface AppConfig {
   bot_token_source?: 'env' | 'generated'
   update_channel?: 'stable' | 'preview'
   tts_provider?: 'browser' | 'openai-compatible' | 'gpt-sovits' | 'edge-tts'
-  tts_base_url?: string
-  tts_api_key?: SecretField
   tts_model?: string
   tts_audio_format?: 'mp3' | 'opus' | 'aac' | 'flac' | 'wav' | 'pcm'
   tts_default_voice?: string
@@ -1860,15 +1953,11 @@ export interface AppConfig {
   tts_timeout_seconds?: number
   tts_cache_mb?: number
   asr_provider?: 'disabled' | 'openai-compatible'
-  asr_base_url?: string
-  asr_api_key?: SecretField
   asr_model?: string
   asr_timeout_seconds?: number
   imagegen_enabled?: boolean
   imagegen_auto_scene?: boolean
   imagegen_provider?: 'openai-compatible'
-  imagegen_base_url?: string
-  imagegen_api_key?: SecretField
   imagegen_model?: string
   imagegen_square_size?: string
   imagegen_landscape_size?: string

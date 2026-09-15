@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from src.engine.check_channels import normalize_check_channels
 from src.engine.checks import (
     build_check_request,
     detect_advantage_mode,
@@ -126,7 +127,11 @@ def _planner_context(instance: GameInstance, rule: RuleSystem | None) -> str:
         "dice_system": dice_system,
         "mechanic": mechanic,
         "attributes": attributes,
-        "dc_table": rule.dc_table if rule else {"easy": 8, "normal": 10, "hard": 15},
+        # 没有规则集时也要与通用 d20 尺度一致（base_d20/dnd5e 都是 10/15/20/25）；
+        # prompt 要求档位以本表为准，这里再给一套 8/10/15 会让模型收到互相矛盾的数据。
+        "dc_table": rule.dc_table if rule else {
+            "easy": 10, "normal": 15, "hard": 20, "extreme": 25,
+        },
         "target_policy": (
             "server_uses_character_sheet_percentile"
             if dice_system == "d100"
@@ -362,6 +367,24 @@ def normalize_check_specs(
             and (rule is None or rule.supports_advantage_mode(advantage))
             else ""
         )
+        # 同一情境事实只能进入一条渠道（DC / 优势劣势 / 环境 modifier）。
+        # 模型把同一不利事实重复表达（抬 DC + 负 modifier + 劣势）时按固定
+        # 优先级折叠，并留下 notes/dropped 审计信息，而不是全量执行。
+        channels = normalize_check_channels(
+            target=target if dice_system == "d20" else None,
+            modifier=modifier,
+            advantage_mode=advantage_mode,
+            baseline_dc=rule.dc_for_difficulty(instance.difficulty, "normal") if rule else None,
+            dc_cap=d20_dc_cap(rule),
+            supports_advantage=rule is None or rule.supports_advantage_mode(advantage),
+            dc_reason=str(raw.get("dc_reason") or ""),
+            advantage_reason=str(raw.get("advantage_reason") or ""),
+            modifier_reason=str(raw.get("modifier_reason") or ""),
+        )
+        if dice_system == "d20" and channels.target is not None:
+            target = channels.target
+        modifier = channels.modifier
+        advantage_mode = channels.advantage_mode
         kind = str(raw.get("kind") or "check")
         if kind not in {"check", "save", "attack"}:
             kind = "check"
@@ -401,6 +424,14 @@ def normalize_check_specs(
             "circumstance_modifier": modifier,
             "advantage_mode": advantage_mode,
             "advantage_note": str(raw.get("reason") or "")[:160] or None,
+            # 理由在策略里用完整字符串做同源比较，落库/持久化时才按 schema 声明的
+            # 160 字符上限截断（provider 不严格执行 maxLength 时也不能把超长文本
+            # 写进游戏状态），与 advantage_note 的既有做法一致。
+            "dc_reason": (channels.dc_reason[:160] or None),
+            "advantage_reason": (channels.advantage_reason[:160] or None),
+            "modifier_reason": (channels.modifier_reason[:160] or None),
+            "planner_notes": list(channels.notes),
+            "planner_dropped": dict(channels.dropped),
             "kind": kind,
             "opponent": opponent,
             "assist": assistants,
@@ -566,7 +597,7 @@ def normalize_economy_actions(
     """校验模型经济报价并归一到付款人。
 
     price_source=none 或缺价时安全跳过（没有人说出价格就不产生扣款提案），
-    但有效的意图会以 ``unpriced`` 形式返回，供叙事后复检与本轮拦截使用；
+    但有效的意图会以 ``unpriced`` 形式返回，供本轮 LOOT 拦截使用；
     它们只存在于回合内存中，从不入库，也从不产生金额。amount 存在则
     price_source 必须是明确的转述来源。单条无效不影响同批。
     """
@@ -724,82 +755,7 @@ async def plan_round_checks(
         # 由调用方在过时检查通过后落库；这里不直接改动经济状态，
         # 否则创建提案推进的 revision 会让本轮规划被误判为过期。
         "economy_offers": economy_offers,
-        # 无价购买意图只活在回合内存里：供叙事后复检报价与本轮 LOOT 拦截，
-        # 从不持久化、不产生金额（ADR 0002 修订）。
+        # 无价购买意图只活在回合内存里：供结算阶段拦截同轮模型授予
+        # （从不持久化、不产生金额；价格复检已按 ADR 0002 修订移除）。
         "unpriced_purchase_intents": economy_intents_unpriced,
     }
-
-
-def _price_pass_prompt_text(language: str) -> str:
-    suffix = localized_text(language, {"en": "en", "zh-CN": "zh", "ja": "ja"})
-    path = (
-        Path(__file__).resolve().parents[2] / "prompts" / f"purchase_price_pass_{suffix}.md"
-    )
-    return path.read_text(encoding="utf-8")
-
-
-async def price_unpriced_purchase_intents(
-    instance: GameInstance,
-    llm_client: Any,
-    narration_text: str,
-    intents: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """叙事后复检：用本轮叙述文本给无价购买意图找真人报出的价格。
-
-    复用 ``dice_checks`` 工具契约；金额必须逐字来自叙述文本中的原话，
-    系统不推断价格（ADR 0002）。返回 (可入账报价, 仍无价的意图)。
-    """
-    if not intents or not llm_client or not hasattr(llm_client, "call_tools"):
-        return [], list(intents)
-    intent_rows = []
-    for intent in intents[:8]:
-        uid = str(intent.get("payer_uid") or "")
-        if uid not in instance.players:
-            continue
-        intent_rows.append({
-            "player_id": uid,
-            "character_name": instance.players[uid].get("character_name") or uid,
-            "target": str(intent.get("target") or ""),
-            "quantity": int(intent.get("quantity", 1) or 1),
-        })
-    if not intent_rows:
-        return [], list(intents)
-    payload = json.dumps({
-        "round": instance.round_number,
-        "purchase_intents": intent_rows,
-        "narration": sanitize_narration(str(narration_text or ""))[:4000],
-    }, ensure_ascii=False, separators=(",", ":"))
-    response = await llm_client.call_tools(
-        _price_pass_prompt_text(instance.language),
-        payload,
-        tools=[DICE_CHECKS_TOOL],
-        max_tokens=1024,
-        temperature=0.1,
-    )
-    raw_actions: list[Any] = []
-    for call in response.tool_calls:
-        if str(call.get("name") or "") != DICE_CHECKS_TOOL_NAME:
-            continue
-        arguments = call.get("arguments") if isinstance(call.get("arguments"), dict) else {}
-        economy = arguments.get("economy_actions")
-        if isinstance(economy, list):
-            raw_actions.extend(economy)
-    offers, _unpriced, _errors = normalize_economy_actions(instance, raw_actions)
-    # 只保留与提交意图对应的报价：复检无权替模型造出新的购买对象。
-    intent_keys = {
-        (str(intent.get("payer_uid") or ""), str(intent.get("target") or "").casefold())
-        for intent in intents
-    }
-    priced_offers = [
-        offer for offer in offers
-        if (str(offer["payer_uid"]), str(offer["target"]).casefold()) in intent_keys
-    ]
-    consumed_keys = {
-        (str(offer["payer_uid"]), str(offer["target"]).casefold()) for offer in priced_offers
-    }
-    remaining = [
-        intent for intent in intents
-        if (str(intent.get("payer_uid") or ""), str(intent.get("target") or "").casefold())
-        not in consumed_keys
-    ]
-    return priced_offers, remaining

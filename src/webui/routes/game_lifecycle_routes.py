@@ -48,7 +48,9 @@ async def api_create_game(request: web.Request) -> web.Response:
         scene_image=body.get("scene_image"),
         map_background=body.get("map_background"),
         adventure_id=str(body.get("adventure_id", "") or ""),
+        play_mode=str(body.get("play_mode", "") or ""),
         narrative_perspective=str(body.get("narrative_perspective", "auto") or "auto"),
+        gm_style_override=body.get("gm_style_override"),
         advancement_mode=str(body.get("advancement_mode", "milestone") or "milestone"),
         advancement_authority=str(
             body.get("advancement_authority", "ai_gm") or "ai_gm"

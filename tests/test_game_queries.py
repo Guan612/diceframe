@@ -120,6 +120,38 @@ def test_generic_game_queries_do_not_import_dnd() -> None:
     assert "src.rulesets.dnd2024" not in source
 
 
+def test_game_detail_projects_manual_roll_results_with_private_visibility(tmp_path: Path) -> None:
+    registry = GameRegistry(tmp_path)
+    instance = GameInstance(
+        game_key=("web", "rolls", "bot"), gm_uid="gm", round_number=3,
+    )
+    instance.manual_roll_requests = [
+        {
+            "id": "party-roll", "round_number": 2, "label": "察觉鉴定",
+            "formula": "d20", "visibility": "party", "target_uids": ["ally"],
+            "target_names": {"ally": "Mira"}, "status": "resolved", "created_by": "gm",
+            "created_at": "2026-09-13T01:00:00+00:00",
+            "results": {"ally": {"total": 15, "rolls": [15], "modifier": 0, "natural": 15}},
+        },
+        {
+            "id": "private-roll", "round_number": 3, "label": "秘密鉴定",
+            "formula": "d20+2", "visibility": "private", "target_uids": ["ally"],
+            "target_names": {"ally": "Mira"}, "status": "resolved", "created_by": "gm",
+            "created_at": "2026-09-13T01:01:00+00:00",
+            "results": {"ally": {"total": 17, "rolls": [15], "modifier": 2, "natural": 15}},
+        },
+    ]
+    registry.register(instance)
+    dependencies = _query_dependencies(registry)
+
+    party_view = game_detail(dependencies, "web|rolls|bot", viewer_uid="ally")
+    assert party_view is not None
+    assert [item["id"] for item in party_view["manual_rolls"]] == ["party-roll", "private-roll"]
+    outsider_view = game_detail(dependencies, "web|rolls|bot", viewer_uid="outsider")
+    assert outsider_view is not None
+    assert [item["id"] for item in outsider_view["manual_rolls"]] == ["party-roll"]
+
+
 def test_player_context_projects_server_owned_identity_flags() -> None:
     assert player_context(
         preview=True, delegate=False, user_id="player-1",

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage } from '@/api/client'
-import type { AdventureSummary, AdventuresResponse, CharacterCard, CharacterCardsResponse, CharacterSheet, GameMutationResponse, GeneratedRuleResponse, GeneratedWorldResponse, RuleDetailResponse, RuleSummary, RuleTemplate, RulesResponse, SceneImageRef, WorldListResponse, WorldSummary, WorldTemplateSummary, WorldTemplatesResponse } from '@/api/types'
+import type { AdventureSummary, AdventuresResponse, CharacterCard, CharacterCardsResponse, CharacterSheet, GameMutationResponse, GeneratedRuleResponse, GeneratedWorldResponse, GmStyle, RuleDetailResponse, RuleSummary, RuleTemplate, RulesResponse, SceneImageRef, WorldListResponse, WorldSummary, WorldTemplateSummary, WorldTemplatesResponse } from '@/api/types'
 import { useToast } from '@/composables/useToast'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import CharacterWizard from '@/components/admin/CharacterWizard.vue'
@@ -29,6 +29,7 @@ interface CreateCharacter extends CharacterSheet { character_name: string }
 type CreateMode = 'template' | 'custom' | 'ai'
 type Step = 1 | 2 | 3 | 4
 type NarrativePerspective = 'immersive' | 'third_person'
+type PlayMode = 'free' | 'adventure'
 type AdvancementMode = 'milestone' | 'xp'
 type AdvancementAuthority = 'ai_gm' | 'gm'
 const DIFFICULTY_EASY = '\u8f7b\u677e'
@@ -56,6 +57,9 @@ const world = ref(''), rule = ref(''), name = ref(''), description = ref('')
 const difficulty = ref(DIFFICULTY_NORMAL), solo = ref(true), roomPassword = ref(''), openRoom = ref(false)
 const narrativePerspective = ref<NarrativePerspective>('immersive')
 const narrativePerspectiveTouched = ref(false)
+const playMode = ref<PlayMode>('free')
+const gmStyleFollowWorld = ref(true)
+const gmStyle = ref<GmStyle>({ tone: '', verbosity: 'normal', pace: 'normal', custom_instructions: '' })
 const advancementMode = ref<AdvancementMode>('milestone')
 const advancementAuthority = ref<AdvancementAuthority>('ai_gm')
 const gameLanguage = ref<Locale>(locale.value)
@@ -96,6 +100,11 @@ const showAdventurePackages = computed(() => (
   && supportsAdventurePackages.value
 ))
 const selectedAdventure = computed(() => adventures.value.find(item => item.adventure_id === adventureId.value))
+
+function selectPlayMode(value: PlayMode): void {
+  playMode.value = value
+  if (value === 'free') adventureId.value = ''
+}
 const activeWorldTemplate = computed(() => worlds.value.find(item => worldIdOf(item) === world.value))
 const defaultSceneImageRef = computed<SceneImageRef | undefined>(() => {
   if (mode.value === 'template' && activeWorldTemplate.value?.scene_image) return activeWorldTemplate.value.scene_image
@@ -214,6 +223,7 @@ watch([activeRule, world, gameLanguage, mode, loreChoice], async ([ruleId, world
   if (!ruleId || !worldId || !showAdventurePackages.value) {
     adventures.value = []
     adventureId.value = ''
+    playMode.value = 'free'
     return
   }
   try {
@@ -224,11 +234,13 @@ watch([activeRule, world, gameLanguage, mode, loreChoice], async ([ruleId, world
     adventures.value = result.adventures || []
     if (!adventures.value.some(item => item.adventure_id === adventureId.value && item.compatibility === 'compatible')) {
       adventureId.value = ''
+      if (playMode.value === 'adventure') playMode.value = 'free'
     }
   } catch {
     if (sequence !== adventureCatalogSequence) return
     adventures.value = []
     adventureId.value = ''
+    playMode.value = 'free'
   }
 }, { immediate: true })
 watch([aiPrompt, aiRule, aiAutoRule], () => { aiGeneratedRule.value = null })
@@ -417,6 +429,7 @@ function canNext() {
   if (step.value === 1) {
     if (seed.value.trim()) return true
     if (!activeRule.value) return false
+    if (showAdventurePackages.value && playMode.value === 'adventure' && !adventureId.value) return false
     if (mode.value === 'ai' && !aiPrompt.value.trim()) return false
     if (mode.value === 'custom' && !customName.value.trim()) return false
     return true
@@ -471,7 +484,7 @@ async function create() {
     const selectedMapBackground = mapBackgroundFile.value
       ? await uploadMapBackground(mapBackgroundFile.value)
       : mapBackgroundSelection(mapBackgroundChoice.value)
-    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, adventure_id: showAdventurePackages.value ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
+    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
     let worldId = ''
     if (mode.value === 'template') {
       worldId = world.value; payload.world_id = worldId
@@ -585,10 +598,20 @@ async function create() {
               <label><span>{{ t('lorebookSource') }}</span><select v-model="loreChoice"><option value="__builtin__">{{ t('builtinLorebook') }}</option><option value="__blank__">{{ t('blankLorebook') }}</option><option v-for="w in availableLoreWorlds" :key="worldIdOf(w)" :value="'copy:' + worldIdOf(w)">{{ t('copyFrom') }}{{ worldNameOf(w) }} · {{ worldLanguageLabel(w) }}</option></select></label>
               <div v-if="showAdventurePackages" class="wide create-adventure-package-field">
                 <label>
-                  <span>{{ gameDefault('冒险包（可选）', 'Adventure package (optional)') }}</span>
-                  <div class="create-adventure-select-row">
+                  <span>{{ gameDefault('玩法模式', 'Play mode') }}</span>
+                  <div class="narrative-perspective-cards">
+                    <button type="button" :class="{ active: playMode === 'free' }" @click="selectPlayMode('free')">
+                      <strong>{{ gameDefault('标准自由对局', 'Standard free play') }}</strong>
+                      <small>{{ gameDefault('由 GM 使用通用遭遇或 AI 临时遭遇，自由推进剧情。', 'The GM freely advances the story using catalogued or AI temporary encounters.') }}</small>
+                    </button>
+                    <button type="button" :class="{ active: playMode === 'adventure' }" @click="selectPlayMode('adventure')">
+                      <strong>{{ gameDefault('冒险包剧情', 'Adventure story') }}</strong>
+                      <small>{{ gameDefault('遵循冒险节点，并使用节点绑定的剧情遭遇。', 'Follow adventure nodes and their bound story encounters.') }}</small>
+                    </button>
+                  </div>
+                  <div v-if="playMode === 'adventure'" class="create-adventure-select-row">
                     <select v-model="adventureId">
-                      <option value="">{{ gameDefault('标准自由对局', 'Standard free play') }}</option>
+                      <option value="" disabled>{{ gameDefault('请选择冒险包', 'Choose an adventure package') }}</option>
                       <option v-for="item in adventures" :key="item.adventure_id" :value="item.adventure_id" :disabled="item.compatibility !== 'compatible'">
                         {{ item.name }} · {{ item.estimated_minutes }} {{ gameDefault('分钟', 'min') }}{{ item.compatibility !== 'compatible' ? gameDefault('（需匹配推荐世界）', ' (requires its recommended world)') : '' }}
                       </option>
@@ -621,6 +644,52 @@ async function create() {
                   <strong>{{ t('narrativeThirdPerson') }}</strong>
                   <small>{{ t('narrativeThirdPersonHint') }}</small>
                 </button>
+              </div>
+            </fieldset>
+            <fieldset class="wide narrative-perspective-field create-gm-style-field">
+              <legend>{{ t('gmStyleTitle') }}</legend>
+              <div class="narrative-perspective-cards">
+                <button type="button" :class="{ active: gmStyleFollowWorld }" @click="gmStyleFollowWorld = true">
+                  <strong>{{ t('gmStyleFollowWorld') }}</strong>
+                  <small>{{ gameDefault('使用当前世界保存的默认文风。', 'Use the narration style saved with this world.') }}</small>
+                </button>
+                <button type="button" :class="{ active: !gmStyleFollowWorld }" @click="gmStyleFollowWorld = false">
+                  <strong>{{ t('gmStyleOverrideCurrent') }}</strong>
+                  <small>{{ gameDefault('只覆盖本局，从下一次 AI GM 回复起生效。', 'Override only this game, starting with the next AI GM response.') }}</small>
+                </button>
+              </div>
+              <small>{{ t('gmStyleHint') }}</small>
+              <div v-if="!gmStyleFollowWorld" class="create-config-surface">
+                <label>
+                  <span>{{ t('gmStyleTone') }}</span>
+                  <select v-model="gmStyle.tone">
+                    <option value="">{{ t('gmStyleToneDefault') }}</option>
+                    <option value="literary">{{ t('gmStyleToneLiterary') }}</option>
+                    <option value="direct">{{ t('gmStyleToneDirect') }}</option>
+                    <option value="humorous">{{ t('gmStyleToneHumorous') }}</option>
+                    <option value="dark">{{ t('gmStyleToneDark') }}</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{{ t('gmStyleVerbosity') }}</span>
+                  <select v-model="gmStyle.verbosity">
+                    <option value="brief">{{ t('gmStyleVerbosityBrief') }}</option>
+                    <option value="normal">{{ t('gmStyleVerbosityNormal') }}</option>
+                    <option value="detailed">{{ t('gmStyleVerbosityDetailed') }}</option>
+                  </select>
+                </label>
+                <label>
+                  <span>{{ t('gmStylePace') }}</span>
+                  <select v-model="gmStyle.pace">
+                    <option value="slow">{{ t('gmStylePaceSlow') }}</option>
+                    <option value="normal">{{ t('gmStylePaceNormal') }}</option>
+                    <option value="fast">{{ t('gmStylePaceFast') }}</option>
+                  </select>
+                </label>
+                <label class="wide">
+                  <span>{{ t('gmStyleCustom') }}</span>
+                  <textarea v-model="gmStyle.custom_instructions" rows="3" maxlength="2000" :placeholder="t('gmStyleCustomPlaceholder')" />
+                </label>
               </div>
             </fieldset>
             <template v-if="!seed.trim()">

@@ -73,13 +73,10 @@ class WebUIBootstrap:
 
     async def embed_pending_memories(self, app: web.Application) -> None:
         state = self.dependencies.state
-        if not (
-            state.get("embedding_enabled", False)
-            and state.get("embedding_base_url", "")
-        ):
+        if not state.get("embedding_enabled", False):
             return
         subsystems: TRPGSubsystems | None = app.get("subsystems")
-        if not subsystems or not subsystems.memory_store:
+        if not subsystems or not subsystems.memory_store or not subsystems.memory_store.embedding_client:
             return
         try:
             for instance in subsystems.registry.list_all():
@@ -135,7 +132,9 @@ class WebUIBootstrap:
             dependencies.paths.data_dir / "plugins",
             builtin_dir=dependencies.paths.root / "plugins",
             base_env={
-                "TRPG_API_BASE": dependencies.transport.endpoint.url("127.0.0.1")
+                # 跟随实际监听地址族：纯 IPv6 监听时为 [::1]，避免插件连不上
+                # 根本没在监听的 127.0.0.1。
+                "TRPG_API_BASE": dependencies.transport.endpoint.url()
             },
             on_plugin_stopped=on_plugin_stopped,
             hub_client=hub_client,

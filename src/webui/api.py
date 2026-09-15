@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
+from src.engine.economy import resolve_auto_reward_policy
 from src.engine.game_instance import GameRegistry
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
@@ -24,7 +25,8 @@ from src.rulesets.builtin import (
 )
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal
+from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal, manual_rolls
+from src.webui.services import combat_extension as combat_extension_service
 from src.webui.services import ruleset_characters
 from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
@@ -344,6 +346,7 @@ class WebAPI:
                 load_rule=self._load_rule_for_game,
             )
         )
+        self._manual_rolls = manual_rolls.ManualRollService(manual_rolls.ManualRollDependencies(_parse_game_key, self._reg.get, self._reg.save, self._load_rule_for_game))
         self._game_master = game_master.GameMasterService(
             game_master.GameMasterDependencies(
                 parse_game_key=_parse_game_key,
@@ -481,6 +484,7 @@ class WebAPI:
                 apply_memory_delta=(
                     self._mem.apply_delta if self._mem is not None else None
                 ),
+                resolve_llm_client=lambda: self._llm_client,
             )
         )
         self._turn_dependencies = turns.TurnDependencies(
@@ -703,8 +707,6 @@ class WebAPI:
             missing.append("base_url")
         if not str(getattr(provider, "model_name", "") or "").strip():
             missing.append("model")
-        if not str(getattr(provider, "api_key", "") or "").strip():
-            missing.append("api_key")
         return {
             "ready": not missing,
             "missing": missing,
@@ -718,10 +720,10 @@ class WebAPI:
             return None
         english = str(language or "").lower().startswith("en")
         message = (
-            "The model API is not configured. Open Settings and fill in the API key, "
-            "base URL, and model before continuing."
+            "The main model is not configured. Add an AI provider in Settings "
+            "and assign a main model before continuing."
             if english
-            else "尚未配置模型 API，请先前往设置页填写 API Key、Base URL 和模型。"
+            else "尚未配置主模型，请先在设置页添加 AI 服务商并选择主模型。"
         )
         return {
             "ok": False,
@@ -1130,13 +1132,35 @@ class WebAPI:
     def list_games(self) -> dict[str, Any]:
         return game_queries.list_games(self._game_query_dependencies)
 
-    def game_detail(self, game_key: str, viewer_uid: str = "") -> dict[str, Any] | None:
-        return game_queries.game_detail(self._game_query_dependencies, game_key, viewer_uid)
+    def game_detail(
+        self,
+        game_key: str,
+        viewer_uid: str = "",
+        viewer_is_gm: bool = False,
+    ) -> dict[str, Any] | None:
+        return game_queries.game_detail(
+            self._game_query_dependencies,
+            game_key,
+            viewer_uid,
+            viewer_is_gm,
+        )
 
     def get_game_instance(self, game_key: str):
         """Resolve a public game key without exposing registry/parser internals."""
 
         return self._reg.get(_parse_game_key(game_key))
+
+    def manual_roll_requests(self, game_key: str, user_id: str):
+        return self._manual_rolls.list(game_key, user_id)
+
+    async def create_manual_roll_request(self, game_key, user_id, body):
+        return await self._manual_rolls.create(game_key, user_id, body)
+
+    async def resolve_manual_roll_request(self, game_key, user_id, request_id, body):
+        return await self._manual_rolls.resolve(game_key, user_id, request_id, body)
+
+    async def cancel_manual_roll_request(self, game_key, user_id, request_id, body):
+        return await self._manual_rolls.cancel(game_key, user_id, request_id, body)
 
     async def save_game_instance(self, instance) -> None:
         """Persist an already-authorized aggregate through the application facade."""
@@ -1301,6 +1325,9 @@ class WebAPI:
         return await self._game_controls.set_narrative_perspective(
             game_key, perspective,
         )
+
+    async def set_gm_style(self, game_key: str, raw: Any) -> dict[str, Any]:
+        return await self._game_controls.set_gm_style(game_key, raw)
 
     async def mark_game_health_event(
         self,
@@ -1543,15 +1570,94 @@ class WebAPI:
 
         return await self.resolve_payment(game_key, payment_id, True, session_uid)
 
-    def economy_auto_reward_settings(self) -> tuple[bool, int]:
-        """Live economy auto-reward switch and gold cap from runtime config."""
+    def economy_auto_reward_settings(self, instance: Any = None) -> tuple[bool, int]:
+        """按局解析奖励自动结算 (enabled, gold_cap)。
+
+        优先级：本局 GM 覆盖（instance.economy_reward_policy）→ 规则模板
+        economy_defaults（D&D 金币与 COC 美元的量级不同）→ 服务器全局配置
+        兜底。规则模板读取失败时按无默认值处理，不影响本局覆盖与全局兜底。
+        """
 
         state = self._config_state if isinstance(self._config_state, dict) else {}
-        return (
-            bool(state.get("economy_auto_reward_enabled", True)),
-            # 与 runtime_config 默认保持一致：放宽到 10000，配置可覆盖。
-            max(1, int(state.get("economy_auto_reward_gold_cap", 10000) or 10000)),
+        global_enabled = bool(state.get("economy_auto_reward_enabled", True))
+        global_cap = max(1, int(state.get("economy_auto_reward_gold_cap", 500) or 500))
+        if instance is None:
+            return (global_enabled, global_cap)
+        rule_template: Any = None
+        try:
+            rule = self._load_rule_for_game(instance)
+            rule_template = getattr(rule, "template", None)
+        except Exception:
+            logger.warning("读取规则模板奖励默认值失败，回退全局配置", exc_info=True)
+        return resolve_auto_reward_policy(
+            game_policy=getattr(instance, "economy_reward_policy", None),
+            rule_template=rule_template,
+            global_enabled=global_enabled,
+            global_cap=global_cap,
         )
+
+    async def set_economy_reward_policy(
+        self, game_key: str, policy: dict[str, Any],
+    ) -> dict[str, Any]:
+        instance = self.get_game_instance(game_key)
+        if instance is None:
+            return {"ok": False, "error": "not found"}
+        try:
+            instance.configure_session(economy_reward_policy=policy)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        await self.save_game_instance(instance)
+        return {"ok": True, "economy_reward_policy": instance.economy_reward_policy}
+
+    async def combat_extension_scheduler_advance(self, game_key: str) -> dict[str, Any]:
+        """通用战斗扩展：GM 推进 ATB 时间（gauge 累积至有人就绪）。"""
+
+        instance = self.get_game_instance(game_key)
+        if instance is None:
+            return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
+        async with instance.authoritative_write() as entered:
+            if not entered:
+                return {
+                    "ok": False,
+                    "code": "REWRITE_IN_PROGRESS",
+                    "error": "GM 正在重写历史回合，请等待完成后重试",
+                }
+            if self.get_game_instance(game_key) is not instance:
+                return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+            async with instance._lock:
+                rule = self._load_rule_for_game(instance)
+                result = combat_extension_service.scheduler_advance(instance, rule)
+            if result.get("ok"):
+                await self.save_game_instance(instance)
+            return result
+
+    async def combat_extension_action(
+        self, game_key: str, intent: dict[str, Any], *,
+        session_uid: str, viewer_is_gm: bool,
+    ) -> dict[str, Any]:
+        """通用战斗扩展：结算一次动作 intent（数值全部服务端求值）。"""
+
+        instance = self.get_game_instance(game_key)
+        if instance is None:
+            return {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}
+        async with instance.authoritative_write() as entered:
+            if not entered:
+                return {
+                    "ok": False,
+                    "code": "REWRITE_IN_PROGRESS",
+                    "error": "GM 正在重写历史回合，请等待完成后重试",
+                }
+            if self.get_game_instance(game_key) is not instance:
+                return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+            async with instance._lock:
+                rule = self._load_rule_for_game(instance)
+                result = combat_extension_service.resolve_combat_action(
+                    instance, rule, intent,
+                    actor_uid=session_uid, viewer_is_gm=viewer_is_gm,
+                )
+            if result.get("ok"):
+                await self.save_game_instance(instance)
+            return result
 
     async def create_payment_proposal(
         self,
@@ -1818,6 +1924,16 @@ class WebAPI:
             body,
         )
 
+    async def ruleset_plan_temporary_encounter(
+        self, game_key: str, requester_id: str, requester_is_gm: bool,
+    ) -> dict[str, Any]:
+        return await ruleset_gameplay.plan_temporary_encounter(
+            self._ruleset_gameplay_dependencies,
+            game_key,
+            requester_id,
+            requester_is_gm,
+        )
+
     # ---- 世界模板 ----
 
     def list_adventures(
@@ -1920,7 +2036,9 @@ class WebAPI:
                            scene_image: dict[str, Any] | None = None,
                            map_background: dict[str, Any] | None = None,
                            adventure_id: str = "",
+                           play_mode: str = "",
                            narrative_perspective: str = "auto",
+                           gm_style_override: dict[str, Any] | None = None,
                            advancement_mode: str = "milestone",
                            advancement_authority: str = "ai_gm") -> dict[str, Any]:
         return await self._game_lifecycle.create_game(
@@ -1933,7 +2051,9 @@ class WebAPI:
             room_password=room_password, language=language,
             scene_image=scene_image, map_background=map_background,
             adventure_id=adventure_id,
+            play_mode=play_mode,
             narrative_perspective=narrative_perspective,
+            gm_style_override=gm_style_override,
             advancement_mode=advancement_mode,
             advancement_authority=advancement_authority,
         )

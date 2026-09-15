@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
+import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, PlayForwardOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
 import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
 import { currentBackendUrl, isStandaloneFrontend } from '@/api/connection'
-import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
+import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, GmStyle, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
 import { useGame } from '@/composables/useGame'
@@ -30,12 +30,14 @@ import PlayHelpCenter from '@/components/PlayHelpCenter.vue'
 import HealthPanel from '@/components/HealthPanel.vue'
 import Modal from '@/components/ui/Modal.vue'
 import GmToolbar from '@/components/play/GmToolbar.vue'
+import CombatExtensionPanel from '@/components/play/CombatExtensionPanel.vue'
 import MultiplayerPanel from '@/components/play/MultiplayerPanel.vue'
 import MapWorkspace from '@/components/play/MapWorkspace.vue'
 import SceneGalleryModal from '@/components/play/SceneGalleryModal.vue'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePicker.vue'
 import MapBackgroundSettingsModal from '@/components/play/MapBackgroundSettingsModal.vue'
+import ManualRollsPanel from '@/features/play/manual-rolls/ManualRollsPanel.vue'
 import RulesetCharacterCenterHost from '@/features/rulesets/RulesetCharacterCenterHost.vue'
 import RulesetPlayHost from '@/features/rulesets/RulesetPlayHost.vue'
 import { resolveRulesetPlayExtension } from '@/features/rulesets/registry'
@@ -43,7 +45,7 @@ import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
 import { fetchRulesetAvailableActions } from '@/api/rulesets'
 import { currencyLabel } from '@/utils/ruleSchema'
-import { isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
+import { buildRewardPolicySave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
 
 defineOptions({ name: 'PlayView' })
 
@@ -61,6 +63,7 @@ const { locale, setLocale, t } = useLocale()
 const help = ref(false), ruleMeta = ref<RuleMeta>({}), preview = ref(false), delegate = ref(false), cards = ref<CharacterCard[]>([]), showCards = ref(false), health = ref<HealthResponse>({ events: [] })
 const showKpQuestion = ref(false)
 const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref('')
+const rewardPolicyMode = ref(''), rewardPolicyCap = ref(''), rewardPolicyTouched = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === '1')
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
 const showMap = ref(false)
@@ -242,6 +245,7 @@ const canEditOwnPortrait = computed(() => Boolean(
 const pendingLuckDecisions = computed(() => game.detail.value?.pending_luck_decisions || [])
 const revealChecks = computed(() => game.detail.value?.round_check_results || pendingLuckDecisions.value)
 const serverJudging = computed(() => game.detail.value?.state === 'active_judgment' && !pendingLuckDecisions.value.length)
+const roundJudgmentStuck = computed(() => game.detail.value?.state === 'active_judgment')
 const showGmThinking = computed(() => gmThinking.value || serverJudging.value)
 const sceneTitle = computed(() => game.detail.value?.scene || t('unknownScene'))
 const stateLabel = computed(() => {
@@ -443,7 +447,22 @@ async function command(path: string, body: JsonObject = {}) {
     if (path !== 'advance' && r.narration) toast.success(r.narration)
     else toast.success(t('operationDone'))
     await game.refresh()
-  } catch (e: unknown) { toast.error(errorMessage(e)) } finally { if (thinkingCommand) gmThinking.value = false }
+  } catch (e: unknown) {
+    toast.error(errorMessage(e))
+    // 判定失败时后端可能已回滚到行动阶段，立即刷新让"生成中"横幅消失。
+    await game.refresh()
+  } finally { if (thinkingCommand) gmThinking.value = false }
+}
+
+async function onForceAdvance() {
+  const accepted = await confirm({
+    title: t('gmForceAdvanceConfirmTitle'),
+    content: t('gmForceAdvanceConfirm'),
+    positiveText: t('gmForceAdvance'),
+    type: 'warning',
+  })
+  if (!accepted) return
+  await command('advance', { force: true })
 }
 
 async function generateStoryRecap() {
@@ -470,6 +489,9 @@ function onMode() { command('mode', { solo: !game.detail.value?.solo_mode }) }
 function onNarrativePerspective(perspective: 'auto' | 'immersive' | 'third_person') {
   command('settings/narrative-perspective', { perspective })
 }
+function onGmStyle(payload: { gm_style: GmStyle | null }) {
+  command('settings/gm-style', payload)
+}
 async function onAdvancementControl(payload: Record<string, string | number>) {
   if (!game.currentGame.value) return
   try {
@@ -489,6 +511,12 @@ function onAccess() { command('player-access', { open: game.detail.value?.player
 function onRoomPassword() {
   roomPasswordInput.value = ''
   luckTimeoutInput.value = ''
+  const policy = game.detail.value?.economy_reward_policy || {}
+  rewardPolicyMode.value = policy.mode || ''
+  rewardPolicyCap.value = policy.auto_reward_cap ? String(policy.auto_reward_cap) : ''
+  // 只有 GM 真正改动了奖励策略字段才提交：detail 未加载或未触碰时提交
+  // 会把空 mode 当作“清除本局覆盖”，改密码/超时就会误重置奖励策略。
+  rewardPolicyTouched.value = false
   showRoomPassword.value = true
 }
 async function setRoomPassword() {
@@ -501,6 +529,15 @@ async function setRoomPassword() {
       const ltR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/luck-timeout`, { method: 'POST', body: JSON.stringify({ seconds: Number(lt) }) })
       if (ltR.error || ltR.ok === false) throw new Error(ltR.error || t('settingFailed'))
       toast.success(t('luckTimeoutSaved', { seconds: lt }))
+    }
+    // 奖励策略仅在 GM 实际改动过时提交；显式选“跟随默认”仍会清除覆盖。
+    const rewardSave = buildRewardPolicySave(
+      rewardPolicyTouched.value, rewardPolicyMode.value, rewardPolicyCap.value,
+    )
+    if (rewardSave) {
+      const rpR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/reward-policy`, { method: 'POST', body: JSON.stringify(rewardSave) })
+      if (rpR.error || rpR.ok === false) throw new Error(rpR.error || t('settingFailed'))
+      if (rewardPolicyMode.value !== '') toast.success(t('rewardPolicySaved'))
     }
     showRoomPassword.value = false
     toast.success(roomPasswordInput.value ? t('roomPasswordUpdated') : t('roomPasswordCleared'))
@@ -692,10 +729,6 @@ function economyPlayerName(uid?: string): string {
   return game.players.value.find(player => player.user_id === uid)?.character_name || uid
 }
 
-function isTeamPayment(proposal: PendingPayment | null): boolean {
-  return proposal?.approval_policy === 'all_contributors'
-}
-
 function postponePendingPay() {
   const id = String(pendingPay.value?.id || pendingPay.value?.payment_id || '')
   if (id) dismissedPaymentIds.value = new Set([...dismissedPaymentIds.value, id])
@@ -710,7 +743,7 @@ function pendingEconomyHelp(proposal: PendingPayment): string {
   if (isNonBlockingPersonalPurchase(proposal)) return t('economyPersonalPurchaseHelp')
   return proposal.kind === 'reward'
     ? t('economyRewardHelp')
-    : isTeamPayment(proposal) ? t('economyTeamPaymentHelp') : t('gmPaymentHelp')
+    : t('gmPaymentHelp')
 }
 
 function reopenPendingEconomy() {
@@ -1097,6 +1130,7 @@ onBeforeUnmount(() => {
           :reveal-checks="revealChecks"
           :current-user-id="actorId"
           :luck-busy-id="luckBusyId"
+          :manual-rolls="game.detail.value.manual_rolls"
           @refresh="game.refresh"
           @luck="onLuckDecision"
         />
@@ -1209,6 +1243,20 @@ onBeforeUnmount(() => {
         <button class="rail-toggle" @click="toggleRailPanel" :title="mobilePanel === 'controls' ? t('close') : railCollapsed ? t('expandGmControls') : t('collapseGmControls')">
           <NIcon :component="railCollapsed ? ChevronBack : ChevronForward" size="16" />
         </button>
+        <section
+          v-if="game.isGm.value && roundJudgmentStuck"
+          class="gm-force-advance panel"
+        >
+          <button
+            type="button"
+            class="primary gm-force-advance-trigger"
+            data-testid="gm-force-advance"
+            :disabled="gmThinking"
+            @click="onForceAdvance"
+          ><NIcon :component="PlayForwardOutline" size="14" /> {{ t('gmForceAdvance') }}</button>
+          <p class="muted">{{ t('gmForceAdvanceHint') }}</p>
+        </section>
+
         <GmToolbar
           v-if="game.isGm.value"
           :detail="game.detail.value"
@@ -1216,12 +1264,14 @@ onBeforeUnmount(() => {
           :is-gm="game.isGm.value"
           :recap-busy="storyRecapBusy"
           @advance="command('advance', { force: true })"
+          @force-advance="onForceAdvance"
           @rollback="command('rollback')"
           @recap="generateStoryRecap"
           @invite="invite"
           @bot-bind="copyBotBind"
           @mode="onMode"
           @narrative-perspective="onNarrativePerspective"
+          @gm-style="onGmStyle"
           @advancement-control="onAdvancementControl"
           @access="onAccess"
           @command="onCommand"
@@ -1235,6 +1285,13 @@ onBeforeUnmount(() => {
           @scene-image="openSceneImageEditor"
           @map-background="openMapBackgroundEditor"
           @payment="openPaymentComposer"
+        />
+        <CombatExtensionPanel
+          :detail="game.detail.value"
+          :game-key="game.currentGame.value"
+          :self-uid="game.actorId.value"
+          :is-gm="game.isGm.value"
+          @changed="game.refresh(true)"
         />
 
         <MultiplayerPanel
@@ -1250,7 +1307,17 @@ onBeforeUnmount(() => {
           @open-character-center="showCharacterCenter = true"
         />
 
-      <HealthPanel v-if="game.isGm.value" :health="health" :detail="game.detail.value" :is-gm="game.isGm.value" @resolve="resolveHealth" />
+        <HealthPanel v-if="game.isGm.value" :health="health" :detail="game.detail.value" :is-gm="game.isGm.value" @resolve="resolveHealth" />
+        <ManualRollsPanel
+          :game-key="game.currentGame.value"
+          :run-id="String(game.detail.value.run_id || '')"
+          :actor-id="actorId"
+          :is-gm="game.isGm.value"
+          :preview="preview"
+          :delegate="delegate"
+          :last-activity="typeof game.detail.value.last_activity === 'string' ? game.detail.value.last_activity : undefined"
+          :players="game.players.value"
+        />
       </aside>
       <button
         v-if="mobilePanel"
@@ -1349,10 +1416,18 @@ onBeforeUnmount(() => {
 
     <div v-if="showRoomPassword" class="modal" @click.self="showRoomPassword = false">
       <section class="dialog">
-        <header><h2>{{ game.detail.value?.has_room_password ? t('editRoomPassword') : t('setRoomPassword') }}</h2><button @click="showRoomPassword = false">×</button></header>
+        <header><h2>{{ t('gameSettings') }}</h2><button @click="showRoomPassword = false">×</button></header>
         <p>{{ t('roomPasswordHelp') }}</p>
         <label>{{ t('newPassword') }}<input type="password" v-model="roomPasswordInput" :placeholder="t('emptyCancelsPassword')" @keyup.enter="setRoomPassword"></label>
         <label>{{ t('luckTimeoutSeconds') }}<input type="number" v-model="luckTimeoutInput" :placeholder="t('luckTimeoutPlaceholder')" min="0" max="3600"></label>
+        <label>{{ t('rewardPolicyMode') }}
+          <select v-model="rewardPolicyMode" @change="rewardPolicyTouched = true">
+            <option value="">{{ t('rewardPolicyFollowDefault') }}</option>
+            <option value="auto_small_cash">{{ t('rewardPolicyAutoSmallCash') }}</option>
+            <option value="gm_confirm">{{ t('rewardPolicyGmConfirm') }}</option>
+          </select>
+        </label>
+        <label v-if="rewardPolicyMode === 'auto_small_cash'">{{ t('rewardPolicyCap') }}<input type="number" v-model="rewardPolicyCap" :placeholder="t('rewardPolicyCapPlaceholder')" min="1" @input="rewardPolicyTouched = true"></label>
         <div class="actions">
           <button @click="showRoomPassword = false">{{ t('cancel') }}</button>
           <button class="primary" @click="setRoomPassword">{{ t('saveAction') }}</button>

@@ -20,8 +20,26 @@ async def api_games(request: web.Request) -> web.Response:
 
 
 async def api_detail(request: web.Request) -> web.Response:
-    d = _get_api(request).game_detail(
-        request.match_info["game_key"], request.get("user_id", "")
+    api = _get_api(request)
+    game_key = request.match_info["game_key"]
+    instance = api.get_game_instance(game_key)
+    viewer_uid = request.get("user_id", "")
+    # Owner sessions may omit the player query id. Keep the shared GM guard
+    # strict about empty identities, while projecting this authenticated
+    # owner's own GM view for the read-only detail endpoint.
+    effective_viewer_uid = viewer_uid or (
+        instance.gm_uid
+        if instance and request.get("owner_authenticated", False)
+        else ""
+    )
+    d = api.game_detail(
+        game_key,
+        effective_viewer_uid,
+        viewer_is_gm=is_game_gm(
+            instance,
+            effective_viewer_uid,
+            bool(request.get("owner_authenticated", False)),
+        ),
     )
     return (
         web.json_response(d)

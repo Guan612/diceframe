@@ -32,6 +32,7 @@ class GameStateCodec:
             "world_id": instance.world_id,
             "rule_id": instance.rule_id,
             "adventure_binding": instance.adventure_binding,
+            "play_mode": instance.play_mode,
             "scene_image": instance.scene_image,
             "map_background": instance.map_background,
             "world_name": instance.world_name,
@@ -62,8 +63,17 @@ class GameStateCodec:
             "seed_code": instance.seed_code,
             "difficulty": instance.difficulty,
             "narrative_perspective": instance.narrative_perspective,
+            "gm_style_override": (
+                dict(instance.gm_style_override)
+                if isinstance(instance.gm_style_override, dict) else None
+            ),
             "language": normalize_language(instance.language),
             "luck_timeout_seconds": instance.luck_timeout_seconds,
+            "economy_reward_policy": dict(instance.economy_reward_policy or {}),
+            "combat_extension": dict(instance.combat_extension or {}),
+            "combat_extension_round_snapshots": dict(
+                instance.combat_extension_round_snapshots or {}
+            ),
             "entry_point": instance.entry_point,
             "max_players": instance.max_players,
             "gm_uid": instance.gm_uid,
@@ -78,9 +88,11 @@ class GameStateCodec:
             "health_status": instance.health_status,
             "last_check": instance.last_check,
             "last_checks": instance.last_checks,
+            "manual_roll_requests": instance.manual_roll_requests,
             "last_overreach": instance.last_overreach,
             "round_checks_prepared": instance.round_checks_prepared,
             "round_start_snapshot": instance.round_start_snapshot,
+            "round_entity_snapshot": instance.round_entity_snapshot,
             "death_save_outcomes": instance.death_save_outcomes,
             "last_state_update": instance.last_state_update,
             "last_token_budget_bump": instance.last_token_budget_bump,
@@ -115,7 +127,7 @@ class GameStateCodec:
         )
         instance = instance_type(
             game_key=tuple(data["game_key"]),
-            instance_schema_version=int(data.get("instance_schema_version", 6) or 6),
+            instance_schema_version=int(data.get("instance_schema_version", 11) or 11),
             run_id=str(data.get("run_id") or ""),
             memory_namespace=str(data.get("memory_namespace") or ""),
             economy=data.get("economy") or {},
@@ -126,6 +138,16 @@ class GameStateCodec:
             ruleset_runtime=data.get("ruleset_runtime") or {},
             ruleset_state=data.get("ruleset_state") or {},
             adventure_binding=data.get("adventure_binding") or {},
+            play_mode=(
+                str(data.get("play_mode") or "")
+                if str(data.get("play_mode") or "").casefold() in {"free", "adventure"}
+                else (
+                    "adventure"
+                    if isinstance(data.get("adventure_binding"), dict)
+                    and data.get("adventure_binding", {}).get("adventure_id")
+                    else "free"
+                )
+            ),
             event_ledger=data.get("event_ledger") or [],
             scene_image=data.get("scene_image", {}),
             map_background=data.get("map_background", {}),
@@ -155,8 +177,34 @@ class GameStateCodec:
             seed_code=data.get("seed_code", ""),
             difficulty=data.get("difficulty", "标准"),
             narrative_perspective=data.get("narrative_perspective", "auto"),
+            # 旧存档无该字段 → None=跟随世界 gm_style；只有 dict 才是显式覆盖。
+            gm_style_override=(
+                data.get("gm_style_override")
+                if isinstance(data.get("gm_style_override"), dict) else None
+            ),
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
             luck_timeout_seconds=int(data.get("luck_timeout_seconds", 60) or 0),
+            economy_reward_policy=(
+                data.get("economy_reward_policy")
+                if isinstance(data.get("economy_reward_policy"), dict)
+                else {}
+            ),
+            combat_extension=(
+                data.get("combat_extension")
+                if isinstance(data.get("combat_extension"), dict)
+                else {}
+            ),
+            combat_extension_round_snapshots=(
+                {
+                    str(key): dict(value)
+                    for key, value in data.get(
+                        "combat_extension_round_snapshots", {}
+                    ).items()
+                    if isinstance(value, dict)
+                }
+                if isinstance(data.get("combat_extension_round_snapshots"), dict)
+                else {}
+            ),
             entry_point=data.get("entry_point", "web"),
             max_players=data.get("max_players", 6),
             gm_uid=data.get("gm_uid", ""),
@@ -171,9 +219,16 @@ class GameStateCodec:
             health_status=data.get("health_status", {}),
             last_check=data.get("last_check"),
             last_checks=data.get("last_checks") or [],
+            manual_roll_requests=data.get("manual_roll_requests") or [],
             last_overreach=data.get("last_overreach") or [],
             round_checks_prepared=bool(data.get("round_checks_prepared", False)),
             round_start_snapshot=data.get("round_start_snapshot") or {},
+            # 旧存档没有这个键：默认空快照，回滚时退化为按目标核对战斗缓存。
+            round_entity_snapshot=(
+                data.get("round_entity_snapshot")
+                if isinstance(data.get("round_entity_snapshot"), dict)
+                else {}
+            ),
             death_save_outcomes=death_save_outcomes,
             last_state_update=data.get("last_state_update"),
             last_token_budget_bump=data.get("last_token_budget_bump"),

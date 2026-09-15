@@ -62,6 +62,22 @@ describe('GameTimeline',()=>{
     expect(wrapper.text()).not.toContain('GM指令')
   })
 
+  it('renders manual roll results in the shared timeline',()=>{
+    i18n.global.locale.value = 'zh-CN'
+    const wrapper=mount(GameTimeline,{global:{plugins:[i18n]},props:{
+      round:2, players:[{user_id:'p1',character_name:'艾琳'}],
+      log:[{round:1,gm_response:'门缓缓打开。'}], live:[],
+      manualRolls:[{
+        id:'roll-1', round_number:1, label:'察觉鉴定', formula:'d20', status:'resolved',
+        target_names:{p1:'艾琳'}, results:{p1:{total:15,rolls:[15],modifier:0,natural:15}},
+      }],
+    }})
+
+    const card=wrapper.get('.manual-roll-timeline-card')
+    expect(card.text()).toContain('手动投掷 · 察觉鉴定')
+    expect(card.text()).toContain('艾琳：15')
+  })
+
   it('offers the check owner a direct Luck decision before narration',async()=>{
     vi.useFakeTimers()
     i18n.global.locale.value = 'zh-CN'

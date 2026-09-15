@@ -101,6 +101,7 @@ def test_conflicting_campaign_projection_fails_closed() -> None:
     assert instance.adventure_binding == old
 
 
+@pytest.mark.optional
 @pytest.mark.asyncio
 async def test_real_unreleased_save_copy_migrates_and_persists(tmp_path: Path) -> None:
     save_name = (

@@ -9,6 +9,8 @@ export type PeerGameOperation =
   | 'game.table_talk'
   | 'game.map'
   | 'game.player_context'
+  | 'roll.requests'
+  | 'roll.resolve'
   | 'player.create'
   | 'player.rebind'
   | 'player.away'
@@ -33,6 +35,8 @@ const GAME_OPERATIONS = new Set<PeerGameOperation>([
   'game.table_talk',
   'game.map',
   'game.player_context',
+  'roll.requests',
+  'roll.resolve',
   'player.create',
   'player.rebind',
   'player.away',
