@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,6 +17,24 @@ MAX_RETRIES = 3          # 总共尝试次数（含首次）
 BASE_DELAY = 2.0         # 基础重试间隔（秒）
 LENGTH_RETRY_FACTOR = 2    # finish_reason=length 时重试放大 max_tokens 的倍数
 LENGTH_RETRY_MAX_MULT = 4  # 最大放大到原始 max_tokens 的多少倍
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def strip_reasoning_from_content(text: str) -> str:
+    """删除 OpenAI 兼容代理混入正文的 reasoning 思考块，返回最终正文。
+
+    处理完整 ``<think>…</think>``（含多个块）、孤立 ``</think>`` 以及未闭合的
+    ``<think>`` 尾部；正常正文原样保留。清洗后没有正文时抛 ValueError，由
+    call()/call_stream() 的既有失败重试逻辑接手，确保思考内容不会作为正文
+    保存进 GM log 或展示给玩家。
+    """
+    cleaned = _THINK_BLOCK_RE.sub("", str(text or ""))
+    cleaned = cleaned.replace("</think>", "")
+    cleaned = cleaned.split("<think>", 1)[0].strip()
+    if not cleaned:
+        raise ValueError("模型未返回最终正文")
+    return cleaned
 
 
 def _disable_thinking_for_deepseek_v4(provider: "ProviderConfig") -> bool:
@@ -647,14 +666,11 @@ class LLMClient:
             data = await resp.json()
 
         choice = data["choices"][0]
-        content = choice["message"].get("content") or ""
         finish_reason = str(choice.get("finish_reason") or "unknown")
         if finish_reason == "length":
             raise OutputTruncatedError(finish_reason)
-        if not content.strip():
-            raise ValueError(
-                f"模型未返回最终正文 (finish_reason={finish_reason})"
-            )
+        # 部分代理会把 <think>…</think> 思考混进 content，先清洗再判空
+        content = strip_reasoning_from_content(choice["message"].get("content") or "")
         total_tokens = data.get("usage", {}).get("total_tokens", 0)
         return self._to_response(content, total_tokens, provider.provider_name)
 
@@ -813,8 +829,9 @@ class LLMClient:
         content = "".join(content_parts)
         if finish_reason == "length":
             raise OutputTruncatedError(finish_reason)
-        if not content.strip():
-            raise ValueError(f"模型未返回最终正文 (finish_reason={finish_reason})")
+        # on_delta 已按原始增量转发（玩家可见内容由上层 _NarrationDeltaFilter 过滤）；
+        # 累积正文同样清洗，保证 response.content / GM log 不含思考内容
+        content = strip_reasoning_from_content(content)
         return content, total_tokens, finish_reason
 
     async def _stream_anthropic(

@@ -10,11 +10,35 @@ from src.llm.client import (
     OutputTruncatedError,
     ProviderConfig,
     length_retry_budgets,
+    strip_reasoning_from_content,
 )
 
 
 def test_length_retry_budgets_are_shared_one_two_four_times():
     assert length_retry_budgets(2048) == (2048, 4096, 8192)
+
+
+def test_strip_reasoning_keeps_plain_content():
+    assert strip_reasoning_from_content("你看见崖壁上出现新的刻痕。") == "你看见崖壁上出现新的刻痕。"
+
+
+def test_strip_reasoning_removes_complete_think_block():
+    assert strip_reasoning_from_content("<think>内部分析</think>正式正文") == "正式正文"
+    assert strip_reasoning_from_content("<think>\nabc\n</think>\n\n正式正文") == "正式正文"
+
+
+def test_strip_reasoning_removes_multiple_think_blocks():
+    assert strip_reasoning_from_content("<think>a</think>正文A<think>b</think>正文B") == "正文A正文B"
+    assert strip_reasoning_from_content("<think>a</think>\n正文1\n<think>b</think>\n正文2") == "正文1\n\n正文2"
+
+
+def test_strip_reasoning_removes_orphan_close_tag():
+    assert strip_reasoning_from_content("</think>\n\n正式正文") == "正式正文"
+
+
+def test_strip_reasoning_raises_when_only_think_content():
+    with pytest.raises(ValueError, match="模型未返回最终正文"):
+        strip_reasoning_from_content("<think>只有思考，没有正式正文</think>")
 
 
 def test_llm_client_uses_configured_request_timeout():
@@ -248,6 +272,93 @@ async def test_openai_provider_rejects_partial_content_when_finish_reason_is_len
             temperature=0.7,
             max_tokens=512,
         )
+
+
+class _ThinkOpenAIResponse(_FakeResponse):
+    async def json(self):
+        return {
+            "choices": [{
+                "message": {"content": "<think>internal reasoning</think>铁钩擦着崖壁划出火星。"},
+                "finish_reason": "stop",
+            }],
+            "usage": {"total_tokens": 77},
+        }
+
+
+class _ThinkOnlyOpenAIResponse(_FakeResponse):
+    async def json(self):
+        return {
+            "choices": [{
+                "message": {"content": "<think>只有思考，没有正式正文</think>"},
+                "finish_reason": "stop",
+            }],
+            "usage": {"total_tokens": 66},
+        }
+
+
+class _FixedResponseSession:
+    """每次请求返回同一个响应，用于验证 call()/call_stream() 的重试次数。"""
+
+    def __init__(self, response) -> None:
+        self._response = response
+        self.calls: list[dict] = []
+
+    def post(self, url, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_strips_reasoning_from_full_response(monkeypatch):
+    session = _FixedResponseSession(_ThinkOpenAIResponse())
+    provider = ProviderConfig(
+        provider_name="think-model",
+        base_url="https://api.example.com",
+        api_key="test-key",
+        model_name="think-test",
+    )
+    client = LLMClient(providers=[provider], default=provider.provider_name)
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+
+    response = await client._call_openai_compatible(
+        provider,
+        "system",
+        "user",
+        temperature=0.7,
+        max_tokens=512,
+    )
+
+    assert response.content == "铁钩擦着崖壁划出火星。"
+    assert response.narration == "铁钩擦着崖壁划出火星。"
+    assert "internal reasoning" not in response.content
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_think_only_response_retries_then_fails(monkeypatch):
+    """清洗后没有正文时按现有失败逻辑重试，而不是把思考内容当正文保存。"""
+    session = _FixedResponseSession(_ThinkOnlyOpenAIResponse())
+    provider = ProviderConfig(
+        provider_name="think-model",
+        base_url="https://api.example.com",
+        api_key="test-key",
+        model_name="think-test",
+    )
+    client = LLMClient(providers=[provider], default=provider.provider_name)
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+    monkeypatch.setattr("src.llm.client.BASE_DELAY", 0.0)
+
+    with pytest.raises(RuntimeError, match="模型未返回最终正文"):
+        await client.call("system", "user", max_tokens=512)
+
+    assert len(session.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -655,6 +766,65 @@ async def test_call_stream_openai_yields_deltas_and_returns_response(monkeypatch
     body = session.calls[0]["json"]
     assert body["stream"] is True
     assert body["stream_options"] == {"include_usage": True}
+
+
+@pytest.mark.asyncio
+async def test_call_stream_openai_strips_think_from_accumulated_content(monkeypatch):
+    """流式正文里跨 chunk 的 <think> 标签不得进入最终 response.content。"""
+    session = _FakeStreamSession(_openai_sse_lines([
+        ("<thi", ""),
+        ("nk>secret</thi", ""),
+        ("nk>正文", "stop"),
+    ]))
+    provider = ProviderConfig(
+        provider_name="openai",
+        base_url="https://api.example.com",
+        api_key="k",
+        model_name="m",
+    )
+    client = LLMClient(providers=[provider], default="openai")
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+
+    deltas: list[str] = []
+
+    async def on_delta(text):
+        deltas.append(text)
+
+    response = await client.call_stream("system", "hello", max_tokens=64, on_delta=on_delta)
+
+    assert response.content == "正文"
+    assert response.narration == "正文"
+    assert "secret" not in response.content
+    # 客户端层原始增量原样转发；玩家可见过滤由上层 _NarrationDeltaFilter 负责
+    assert "".join(deltas) == "<think>secret</think>正文"
+
+
+@pytest.mark.asyncio
+async def test_call_stream_openai_think_only_retries_then_fails(monkeypatch):
+    """整段流式输出都是思考内容时，清洗后无正文走现有重试并最终失败。"""
+    session = _FakeStreamSession(_openai_sse_lines([("<think>只有思考</think>", "stop")]))
+    provider = ProviderConfig(
+        provider_name="openai",
+        base_url="https://api.example.com",
+        api_key="k",
+        model_name="m",
+    )
+    client = LLMClient(providers=[provider], default="openai")
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(client, "_get_session", fake_get_session)
+    monkeypatch.setattr("src.llm.client.BASE_DELAY", 0.0)
+
+    with pytest.raises(RuntimeError, match="模型未返回最终正文"):
+        await client.call_stream("system", "hello", max_tokens=512)
+
+    assert len(session.calls) == 3
 
 
 @pytest.mark.asyncio

@@ -53,6 +53,18 @@ def _replace_narration_in_content(content: str, narration: str) -> str:
     return f"{narration.strip()}\n---{content.split('---', 1)[1]}"
 
 
+_THINK_OPEN_TAG = "<think>"
+_THINK_CLOSE_TAG = "</think>"
+
+
+def _partial_think_tag_len(text: str, tag: str) -> int:
+    """返回 text 尾部恰好是 tag 真前缀的最长长度（0 表示没有）。"""
+    for length in range(min(len(tag) - 1, len(text)), 0, -1):
+        if text.endswith(tag[:length]):
+            return length
+    return 0
+
+
 class _NarrationDeltaFilter:
     """流式转发叙事正文，遇到 '---' 分隔符后停止转发。
 
@@ -60,6 +72,10 @@ class _NarrationDeltaFilter:
     不能推给前端。本类逐段接收 call_stream 的 delta，只把分隔符之前的部分经 on_delta
     推出；为避免 '---' 被拆到多个 chunk 中间，最多暂存 len(SEPARATOR)-1 个字符，
     flush() 时把剩余暂存一次性发出（纯叙事、无分隔符的场景）。
+
+    同时剔除模型混入正文流中的 reasoning 思考块：``<think>…</think>``（含多个块、
+    标签跨 chunk）与孤立 ``</think>`` 一律不转发；未闭合的 think 内容直到流结束
+    都不会经 flush() 吐给玩家。
     """
 
     SEPARATOR = "---"
@@ -70,11 +86,58 @@ class _NarrationDeltaFilter:
         self._buf = ""
         self._sent = 0
         self._sealed = False
+        self._inside_think = False
+        self._think_probe = ""
+
+    def _strip_think(self, text: str) -> str:
+        """剔除增量中的 <think>…</think> 思考内容，标签允许跨 chunk。
+
+        无法判定是否属于标签开头的尾部前缀暂存在 _think_probe，与下一批增量
+        拼接后再判定；未闭合 think 的内容一律丢弃，不进入下游缓冲。
+        """
+        text = self._think_probe + text
+        self._think_probe = ""
+        parts: list[str] = []
+        i = 0
+        while i < len(text):
+            if self._inside_think:
+                close_idx = text.find(_THINK_CLOSE_TAG, i)
+                if close_idx < 0:
+                    hold = _partial_think_tag_len(text[i:], _THINK_CLOSE_TAG)
+                    if hold:
+                        self._think_probe = text[len(text) - hold:]
+                    break
+                self._inside_think = False
+                i = close_idx + len(_THINK_CLOSE_TAG)
+                continue
+            open_idx = text.find(_THINK_OPEN_TAG, i)
+            close_idx = text.find(_THINK_CLOSE_TAG, i)
+            if open_idx < 0 and close_idx < 0:
+                hold = max(
+                    _partial_think_tag_len(text[i:], _THINK_OPEN_TAG),
+                    _partial_think_tag_len(text[i:], _THINK_CLOSE_TAG),
+                )
+                parts.append(text[i:len(text) - hold] if hold else text[i:])
+                if hold:
+                    self._think_probe = text[len(text) - hold:]
+                break
+            if open_idx >= 0 and (close_idx < 0 or open_idx < close_idx):
+                parts.append(text[i:open_idx])
+                self._inside_think = True
+                i = open_idx + len(_THINK_OPEN_TAG)
+            else:
+                # 孤立 </think>：只丢弃标签本身，不改变普通正文状态
+                parts.append(text[i:close_idx])
+                i = close_idx + len(_THINK_CLOSE_TAG)
+        return "".join(parts)
 
     async def feed(self, text: str) -> None:
         if self._sealed or not text:
             return
-        self._buf += text
+        cleaned = self._strip_think(text)
+        if not cleaned:
+            return
+        self._buf += cleaned
         separator_idx = self._buf.find(self.SEPARATOR)
         protocol_idx = find_protocol_suffix_start(self._buf)
         candidates = [
@@ -127,6 +190,9 @@ class _NarrationDeltaFilter:
     async def flush(self) -> None:
         if self._sealed:
             return
+        # 未闭合 think 的内容已在流入时丢弃；残留的疑似标签前缀一并丢弃，
+        # 宁可损失结尾几个字符也不把半截 <think 标签吐给玩家。
+        self._think_probe = ""
         boundary = find_protocol_suffix_start(self._buf)
         end = boundary if boundary is not None else len(self._buf)
         remaining = self._buf[self._sent:end]
