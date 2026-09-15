@@ -174,8 +174,8 @@
 
 .current-character-actions {
   display: grid !important;
-  grid-template-columns: repeat(3, minmax(86px, 1fr));
-  width: min(100%, 520px);
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  width: min(100%, 560px);
   min-width: 0;
   justify-self: end;
   gap: 6px;
@@ -184,13 +184,12 @@
 .current-character-actions button {
   min-width: 0;
   min-height: 38px;
-  padding-inline: 7px;
-  white-space: nowrap;
-}
-
-.current-character-actions:has(> button:nth-child(4)) {
-  grid-template-columns: repeat(2, minmax(118px, 1fr));
-  min-width: 0;
+  height: auto;
+  padding: 7px 9px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
 }
 
 .npc-strip {
@@ -255,6 +254,30 @@
   margin-top: auto;
 }
 
+.characters-page .library-character-card .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.characters-page .library-character-card .actions button {
+  flex: 1 1 120px;
+  min-width: 0;
+  height: auto;
+  min-height: 36px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
+}
+
+@media (max-width: 520px) {
+  .current-character-actions {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+}
+
 .library-character-card .character-card-summary {
   align-items: flex-start;
 }
@@ -275,16 +298,6 @@
   .current-character-card {
     grid-template-columns: minmax(0, 1fr);
     gap: 14px;
-  }
-
-  .current-character-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    min-width: 0;
-  }
-
-  .current-character-actions:has(> button:nth-child(4)) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    min-width: 0;
   }
 
   .shared-character-head {

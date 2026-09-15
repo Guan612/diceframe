@@ -78,6 +78,14 @@ def narrative_perspective_instruction(instance: Any, language: str) -> str:
                 "三人称で描写する。ひとつの公開応答で複数人を扱う場合、焦点を切り替える前に名前を明示し、"
                 "二人称の指示先を曖昧にしない。一人称は引用符内の台詞だけに使い、視点を統一する。"
             ),
+            "de": (
+                "## Erzählperspektive\n"
+                "Verwende eine immersive zweite Person ('du') für die aktuell handelnde Fokusfigur. "
+                "Nenne jedes andere Gruppenmitglied in der dritten Person beim Namen. Wenn eine öffentliche "
+                "Antwort mehrere Spieler abdeckt, nenne die neue Fokusfigur beim Namen, bevor der Fokus "
+                "wechselt, damit 'du' nie mehrdeutig ist. Erste Person ist nur innerhalb zitierter "
+                "Charakterdialoge erlaubt. Behalte die Perspektive durchgehend konsistent bei."
+            ),
         })
     return localized_text(language, {
         "en": (
@@ -95,5 +103,11 @@ def narrative_perspective_instruction(instance: Any, language: str) -> str:
             "## 語りの視点\n"
             "公開叙事では各プレイヤーキャラクターの正確な表示名を使う三人称に統一し、特定のキャラクターを"
             "二人称で呼ばない。一人称は引用符内の台詞だけに使い、全段落で視点を統一する。"
+        ),
+        "de": (
+            "## Erzählperspektive\n"
+            "Verwende in der gesamten öffentlichen Erzählung die dritte Person mit dem genauen Anzeigenamen "
+            "jeder Spielfigur. Verwende niemals 'du' für eine bestimmte Spielfigur. Erste Person ist nur "
+            "innerhalb zitierter Charakterdialoge erlaubt. Behalte die Perspektive in jedem Absatz konsistent bei."
         ),
     })

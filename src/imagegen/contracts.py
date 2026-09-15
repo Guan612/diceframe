@@ -17,6 +17,16 @@ def game_image_owner_id(game_key: Any) -> str:
 
 
 @dataclass(frozen=True)
+class ImageReference:
+    """Ephemeral image input; bytes never enter persisted generation records."""
+
+    character_id: str
+    content: bytes
+    content_type: str = "image/webp"
+    file_name: str = "reference.webp"
+
+
+@dataclass(frozen=True)
 class ImageGenerationRequest:
     prompt: str
     purpose: str = "freeform"
@@ -25,6 +35,7 @@ class ImageGenerationRequest:
     aspect_ratio: str = ""
     style: str = ""
     context: dict[str, Any] = field(default_factory=dict)
+    reference_images: tuple[ImageReference, ...] = ()
 
 
 @dataclass(frozen=True)

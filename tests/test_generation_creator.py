@@ -103,3 +103,60 @@ def test_apply_generated_visibility_public_secret_and_fail_closed():
         apply_generated_visibility(bad)
         assert bad["visible_to"] == [], bad
         assert "visibility" not in bad
+
+
+def test_generated_german_rule_keeps_german_localized_fields():
+    """#277 followup：德语 AI 生成规则的文本必须物化进 *_de 字段。
+
+    否则 localized_field(..., "de") 在 name_de 缺失时回退 *_en，德语规则
+    再次用于德语建卡/prompt 时会掉回英语。
+    """
+    from src.engine.language import localized_field
+    from src.generation.creator import _materialize_generated_de_fields
+
+    data = {
+        "rule_name": "Mein Regelwerk",
+        "rule_name_en": "My Rules",
+        "description": "Deutsche Beschreibung",
+        "attr_hint": "Deutsche Attributshilfe",
+        "gm_prompt_appendix": "Deutsche GM-Regeln",
+        "attributes": [
+            {"key": "str", "name": "Stärke", "name_en": "Strength"},
+        ],
+        "classes": [
+            {"name": "Kämpfer", "description": "Deutsche Klassenbeschreibung"},
+        ],
+        "special_stats": [
+            {"key": "sanity", "name": "Vernunft", "description": "Deutsche Nutzung"},
+        ],
+    }
+
+    _materialize_generated_de_fields(data, "de")
+
+    assert data["rule_name_de"] == "Mein Regelwerk"
+    assert data["description_de"] == "Deutsche Beschreibung"
+    assert data["attr_hint_de"] == "Deutsche Attributshilfe"
+    assert data["gm_prompt_appendix_de"] == "Deutsche GM-Regeln"
+    assert data["attributes"][0]["name_de"] == "Stärke"
+    assert data["classes"][0]["name_de"] == "Kämpfer"
+    assert data["classes"][0]["description_de"] == "Deutsche Klassenbeschreibung"
+    assert data["special_stats"][0]["description_de"] == "Deutsche Nutzung"
+
+    # 物化后 localized_field("de") 返回德语，而不是回退 *_en
+    assert localized_field(data, "rule_name", "de") == "Mein Regelwerk"
+    assert localized_field(data["attributes"][0], "name", "de") == "Stärke"
+
+    # 幂等：已有 *_de 字段不被覆盖
+    data["description_de"] = "Unverändert"
+    _materialize_generated_de_fields(data, "de")
+    assert data["description_de"] == "Unverändert"
+
+
+def test_generated_non_german_rules_do_not_get_de_fields():
+    """只有 language="de" 的生成结果才物化 *_de，en/zh/ja 不受影响。"""
+    from src.generation.creator import _materialize_generated_de_fields
+
+    data = {"rule_name": "My Rules", "description": "English description"}
+    _materialize_generated_de_fields(data, "en")
+    assert "rule_name_de" not in data
+    assert "description_de" not in data

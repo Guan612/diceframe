@@ -25,7 +25,7 @@ type Tab = 'overview' | 'profile' | 'build' | 'magic'
 const activeTab = ref<Tab>('overview')
 const busy = ref(false)
 const failure = ref('')
-const zh = computed(() => !props.language.toLowerCase().startsWith('en'))
+const zh = computed(() => props.language.toLowerCase().startsWith('zh'))
 const text = (cn: string, en: string) => zh.value ? cn : en
 const canonical = computed<JsonObject>(() => {
   const value = props.character.ruleset_character

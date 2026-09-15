@@ -32,7 +32,7 @@ function onApplied(character: CharacterSheet): void {
 
 <template>
   <Modal
-    :title="extension?.title(language) || (language.startsWith('en') ? 'Ruleset advancement' : '规则升级')"
+    :title="extension?.title(language) || (language.startsWith('zh') ? '规则升级' : 'Ruleset advancement')"
     @close="emit('cancel')"
   >
     <component
@@ -49,7 +49,7 @@ function onApplied(character: CharacterSheet): void {
       @cancel="emit('cancel')"
     />
     <p v-else class="error-banner">
-      {{ language.startsWith('en') ? 'This ruleset has no registered advancement interface.' : '当前规则尚未注册升级界面。' }}
+      {{ language.startsWith('zh') ? '当前规则尚未注册升级界面。' : 'This ruleset has no registered advancement interface.' }}
     </p>
   </Modal>
 </template>

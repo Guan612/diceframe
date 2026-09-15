@@ -19,6 +19,7 @@ from src.engine.character_utils import (
 from src.engine.game_instance import GameState
 from src.engine.health import record_health_event
 from src.rules.rule_system import RuleSystem
+from src.rulesets.contracts import CharacterRevivalRuntime
 
 GameKey = tuple[str, ...]
 RecapGenerator = Callable[[Any], Awaitable[dict[str, Any]]]
@@ -57,6 +58,7 @@ class GameMasterDependencies:
     get_instance: Callable[[GameKey], Any | None]
     save_instance: Callable[[Any], Awaitable[None]]
     load_rule: Callable[[Any], RuleSystem | None]
+    load_runtime: Callable[[Any], Any | None] | None = None
     generate_recap: RecapGenerator | None = None
     drain_economy_outbox: EconomyOutboxDrainer | None = None
 
@@ -284,6 +286,13 @@ class GameMasterService:
             self._dependencies.parse_game_key(game_key)
         )
 
+    def _sync_revived_character(self, instance: Any, user_id: str) -> None:
+        if self._dependencies.load_runtime is None:
+            return
+        runtime = self._dependencies.load_runtime(instance)
+        if isinstance(runtime, CharacterRevivalRuntime):
+            runtime.on_character_revived(instance, str(user_id))
+
     async def rollback_round(self, game_key: str) -> dict[str, Any]:
         instance = self._instance(game_key)
         if not instance:
@@ -362,6 +371,8 @@ class GameMasterService:
         if resource_change:
             if resource_change.get("error"):
                 return {"ok": False, "error": resource_change["error"]}
+            if resource_change.get("revived"):
+                self._sync_revived_character(instance, str(resource_change["uid"]))
             record_health_event(
                 instance,
                 component="gm_control",
@@ -403,6 +414,7 @@ class GameMasterService:
             if not revive_character(character_sheet, revive["method"]):
                 return {"ok": False, "error": "该角色当前并未死亡"}
             instance.set_character_sheet(revive["uid"], character_sheet)
+            self._sync_revived_character(instance, str(revive["uid"]))
             await self._dependencies.save_instance(instance)
             name = (
                 instance.players[revive["uid"]].get("character_name")

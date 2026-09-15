@@ -29,6 +29,12 @@ def append_protocol_repair_instruction(context: str, language: str) -> str:
             "プレイヤー向けの本文は `---` の前に置き、プレーンテキストの大文字状態タグは `---` の後ろにのみ1行1つ置いてください。"
             "タグにMarkdownを使わず、本文と同じ行にも置かないでください。"
         ),
+        "de": (
+            "Deine vorherige Antwort hat einen Status-Tag im Fließtext offengelegt oder den `---`-Trenner "
+            "ausgelassen. Schreibe die vollständige Antwort einmal neu: Spielersichtbarer Text steht vor "
+            "`---`; reine, großgeschriebene Status-Tags stehen nur nach `---`, einer pro Zeile. Keine "
+            "Markdown-Formatierung um Tags, und Tags nicht in derselben Zeile wie der Fließtext."
+        ),
     })
     return f"{context}\n\n⚠️ {instruction}"
 

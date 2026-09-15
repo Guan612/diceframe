@@ -37,6 +37,44 @@ class CombatReducerMixin:
                 ready_ids.discard(player_id)
             request["ready_player_ids"] = sorted(ready_ids)
             return
+        if event_type == "dnd2024.combat.player_joined":
+            actor_id = str(event["actor_id"])
+            if not actor_id.startswith("player:"):
+                raise EventBatchError("joined combat actor must be a player")
+            if actor_id in combat.get("initiative", []):
+                raise EventBatchError("player is already in combat initiative")
+            raw_id = actor_id.removeprefix("player:")
+            if raw_id not in snapshot["characters"]:
+                raise EventBatchError("joined combat player does not exist")
+            order = combat.setdefault("initiative", [])
+            insert_index = max(0, min(len(order), int(event.get("insert_index", len(order)))))
+            order.insert(insert_index, actor_id)
+            combat.setdefault("initiative_rolls", []).append({
+                "actor_id": actor_id,
+                "roll": int(event.get("roll", 0) or 0),
+                "modifier": int(event.get("modifier", 0) or 0),
+                "total": int(event.get("total", 0) or 0),
+                "kind": "player",
+                "joined_late": True,
+            })
+            combat.setdefault("positions", {})[actor_id] = int(event.get("position", 0) or 0)
+            combat.setdefault("reactions", {})[actor_id] = 1
+            return
+        if event_type == "dnd2024.character.revived":
+            kind, raw_id = _actor_kind(str(event["actor_id"]))
+            if kind != "player" or raw_id not in snapshot["characters"]:
+                raise EventBatchError("revived actor must be an existing player")
+            character = snapshot["characters"][raw_id]
+            resources = character.setdefault("resources", {})
+            max_hp = int(resources.get("max_hp", 0) or 0)
+            hp = max(1, int(event.get("hp", 1) or 1))
+            if max_hp > 0:
+                hp = min(max_hp, hp)
+            resources["hp"] = hp
+            conditions = character.setdefault("conditions", {})
+            for condition in ("dead", "unconscious", "stable", "death_saves"):
+                conditions.pop(condition, None)
+            return
         if event_type == "dnd2024.combat.started":
             state["combat"] = {
                 "status": "active", "round": event["round"], "turn_index": 0,
@@ -138,9 +176,13 @@ class CombatReducerMixin:
             return
         if event_type == "dnd2024.spell.slot_spent":
             kind, raw_id = _actor_kind(str(event["actor_id"]))
-            if kind != "player":
-                raise EventBatchError("only player spell slots are canonical")
-            slots = snapshot["characters"][raw_id]["spellcasting"]["class"]["slots_current"]
+            if kind not in {"player", "companion"}:
+                raise EventBatchError("only player/companion spell slots are canonical")
+            slots = (
+                snapshot["characters"][raw_id]
+                if kind == "player"
+                else self._companion_character(snapshot, raw_id)
+            )["spellcasting"]["class"]["slots_current"]
             level = str(event["slot_level"])
             if int(slots.get(level, 0) or 0) < 1:
                 raise EventBatchError("spell slot is already spent")
@@ -149,16 +191,20 @@ class CombatReducerMixin:
             return
         if event_type == "dnd2024.concentration.started":
             kind, raw_id = _actor_kind(str(event["actor_id"]))
-            if kind == "player":
-                snapshot["characters"][raw_id]["spellcasting"]["class"]["concentration"] = {
+            if kind in {"player", "companion"}:
+                self._canonical_of(snapshot, kind, raw_id)["spellcasting"]["class"][
+                    "concentration"
+                ] = {
                     "spell_ref": event["spell_ref"], "target_ids": deepcopy(event["target_ids"]),
                 }
             return
         if event_type == "dnd2024.concentration.ended":
             owner = str(event["actor_id"])
             kind, raw_id = _actor_kind(owner)
-            if kind == "player":
-                snapshot["characters"][raw_id]["spellcasting"]["class"]["concentration"] = None
+            if kind in {"player", "companion"}:
+                self._canonical_of(snapshot, kind, raw_id)["spellcasting"]["class"][
+                    "concentration"
+                ] = None
             self._remove_concentration_conditions(snapshot, combat, owner)
             return
         if event_type == "dnd2024.turn.advanced":
@@ -199,12 +245,33 @@ class CombatReducerMixin:
             return
         raise EventBatchError(f"unsupported event type: {event_type}")
 
+    def _companion_character(self, snapshot: dict[str, Any], companion_id: str) -> dict[str, Any]:
+        """从 detached snapshot 读取 companion 的权威 canonical 角色。"""
+        companions = (
+            snapshot["ruleset_state"].setdefault("party", {}).setdefault("companions", {})
+        )
+        companion = companions.get(companion_id)
+        if not isinstance(companion, dict) or not isinstance(
+            companion.get("ruleset_character"), dict,
+        ):
+            raise EventBatchError("companion canonical character is missing")
+        return companion["ruleset_character"]
+
+    def _canonical_of(self, snapshot: dict[str, Any], kind: str, raw_id: str) -> dict[str, Any]:
+        if kind == "player":
+            return snapshot["characters"][raw_id]
+        return self._companion_character(snapshot, raw_id)
+
     def _apply_hp_change(self, snapshot: dict[str, Any], event: dict[str, Any]) -> None:
         target_id = str(event["target_id"])
         kind, raw_id = _actor_kind(target_id)
         delta = int(event["delta"])
-        if kind == "player":
-            character = snapshot["characters"][raw_id]
+        if kind in {"player", "companion"}:
+            character = (
+                snapshot["characters"][raw_id]
+                if kind == "player"
+                else self._companion_character(snapshot, raw_id)
+            )
             resources = character["resources"]
             before = int(resources.get("hp", 0) or 0)
             maximum = int(resources.get("max_hp", 0) or 0)

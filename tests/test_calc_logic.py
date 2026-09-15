@@ -8,10 +8,6 @@
 
 from __future__ import annotations
 
-import pytest
-
-pytestmark = pytest.mark.skip(reason="legacy PAY/TEAM_PAY tag contract retired in schema 6")
-
 from src.commands.tag_handlers import LIMITS_BY_COMBAT_MODEL, parse_player_tag
 from src.commands.tag_parser import _new_result, parse_tag_state
 
@@ -53,52 +49,12 @@ def test_gold_positive_reward_requires_explicit_reason():
     assert proposal["approval_policy"] == "gm"
 
 
-def test_pay_creates_pending():
-    """PAY:3 转为待确认支付条目（不直接扣金币），等玩家在弹窗里确认。"""
-    result = _parse([("PAY", f"{UID}:3")])
-    pending = _pending(result)
-    assert len(pending) == 1
-    assert pending[0]["uid"] == UID
-    assert pending[0]["amount"] == 3
-    assert "gold_change" not in _pu(result)
 
 
-def test_pay_purchase_carries_recipient_and_items():
-    result = _parse([
-        ("PAY", f"{UID}:15:teammate:解毒草|止血苔"),
-    ])
-    payment = _pending(result)[0]
-    assert payment["uid"] == UID
-    assert payment["amount"] == 15
-    assert payment["recipient_uid"] == "teammate"
-    assert payment["items"] == ["解毒草", "止血苔"]
-    assert "解毒草" in payment["reason"]
 
 
-def test_team_pay_creates_atomic_party_proposal():
-    proposal = _economy(_parse([(
-        "TEAM_PAY", "player_a=2|player_b=3:共同租用马车",
-    )]))[0]
-
-    assert proposal == {
-        "kind": "fee",
-        "amount": 5,
-        "reason": "共同租用马车",
-        "approval_policy": "all_contributors",
-        "contributors": [
-            {"uid": "player_a", "amount": 2},
-            {"uid": "player_b", "amount": 3},
-        ],
-        "visibility": "party",
-        "source": "team_pay_tag",
-    }
 
 
-def test_pay_negative_amount_uses_abs():
-    """PAY:-5 也按 5 金币挂起（amount 取绝对值）。"""
-    pending = _pending(_parse([("PAY", f"{UID}:-5")]))
-    assert len(pending) == 1
-    assert pending[0]["amount"] == 5
 
 
 # ===== 累加：同轮多标签不再覆盖（#19 修复）=====
@@ -110,19 +66,8 @@ def test_multiple_gold_accumulate():
     assert [proposal["amount"] for proposal in proposals] == [10, 5]
 
 
-def test_gold_direct_pay_pending():
-    """GOLD 与 PAY 都只能产生待确认提案。"""
-    result = _parse([("GOLD", f"{UID}:50:完成委托"), ("PAY", f"{UID}:3")])
-    assert _economy(result)[0]["kind"] == "reward"
-    pending = _pending(result)
-    assert len(pending) == 1
-    assert pending[0]["amount"] == 3
 
 
-def test_multiple_pay_multiple_pending():
-    """多次 PAY 各挂一条待确认。"""
-    pending = _pending(_parse([("PAY", f"{UID}:3"), ("PAY", f"{UID}:5")]))
-    assert [p["amount"] for p in pending] == [3, 5]
 
 
 def test_pay_no_longer_sets_pay_tagged():
@@ -142,9 +87,6 @@ def test_pay_over_loss_ignored():
     assert "gold_change" not in _pu(result)
 
 
-def test_payment_limit_is_independent_from_combat_model():
-    pending = _pending(_parse([("PAY", f"{UID}:500")], "lethal_narrative"))
-    assert pending[0]["amount"] == 500
 
 
 # ===== HP：累加（已有 add=True，回归保护）=====
@@ -182,39 +124,10 @@ def test_parse_tag_state_gold_negative_fails_closed():
     assert "_pay_tagged" not in _pu(result)
 
 
-def test_parse_tag_state_pay_pending():
-    """GM 回复含 PAY:尤洛:3，解析后挂起待确认、不直接扣金币。"""
-    text = "尤洛支付 3 金币购买驱兽粉。\n---\nPAY:尤洛:3"
-    result = parse_tag_state(text, "hp_based")
-    pending = _pending(result)
-    assert len(pending) == 1
-    assert pending[0]["amount"] == 3
-    assert "gold_change" not in _pu(result)
-    assert "_pay_tagged" not in _pu(result)
 
 
-def test_parse_tag_state_purchase_accumulates():
-    """GOLD 奖励与 PAY 支付都等待相应 authority。"""
-    text = "尤洛卖出旧剑又买了药水。\n---\nGOLD:尤洛:20:卖出旧剑\nPAY:尤洛:3"
-    result = parse_tag_state(text, "hp_based")
-    assert _economy(result)[0]["kind"] == "reward"
-    assert len(_pending(result)) == 1
 
 
-def test_parse_tag_state_repairs_nonstandard_state_heading():
-    text = (
-        "玛尔塔把药草推到柜台上。\n\n"
-        "【**状态**变更】\n"
-        f"PAY:{UID}:15\n"
-        f"LOOT:{UID}:解毒草\n"
-        "SCENE:南街草药铺\n"
-        "QUICK_ACTIONS:确认购买|询问药效"
-    )
-    result = parse_tag_state(text, "hp_based")
-    assert _pending(result)[0]["amount"] == 15
-    assert result["state_update"]["loot"][0]["item"] == "解毒草"
-    assert result["state_update"]["scene_change"] == "南街草药铺"
-    assert result["quick_actions"] == ["确认购买", "询问药效"]
 
 
 def test_parse_tag_state_requires_separator_for_executable_tags():

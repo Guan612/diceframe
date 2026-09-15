@@ -12,6 +12,11 @@ select = ["E9", "F63", "F7", "F82"]
 # 污染主程序的 src namespace。
 testpaths = ["tests"]
 norecursedirs = ["plugins", "data/plugin-packages"]
+addopts = ["--strict-markers"]
+markers = [
+    "integration: crosses multiple application layers or persistence boundaries",
+    "optional: depends on a local or unreleased fixture and may be skipped",
+]
 
 [tool.mypy]
 python_version = "3.11"

@@ -146,6 +146,9 @@ describe('asrLanguageFor', () => {
     expect(asrLanguageFor('zh-CN')).toBe('zh-CN')
     expect(asrLanguageFor('en')).toBe('en-US')
     expect(asrLanguageFor('ja')).toBe('ja-JP')
+    expect(asrLanguageFor('de')).toBe('de-DE')
+    expect(asrLanguageFor('de-DE')).toBe('de-DE')
+    expect(asrLanguageFor('DE-de')).toBe('de-DE')
   })
 })
 

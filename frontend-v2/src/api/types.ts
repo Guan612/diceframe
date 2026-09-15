@@ -1957,6 +1957,12 @@ export interface AppConfig {
   asr_timeout_seconds?: number
   imagegen_enabled?: boolean
   imagegen_auto_scene?: boolean
+  imagegen_manual_scene?: boolean
+  imagegen_auto_use_manual_prompt?: boolean
+  imagegen_manual_rules?: string
+  imagegen_manual_prompt?: string
+  imagegen_auto_rules?: string
+  imagegen_auto_prompt?: string
   imagegen_provider?: 'openai-compatible'
   imagegen_model?: string
   imagegen_square_size?: string

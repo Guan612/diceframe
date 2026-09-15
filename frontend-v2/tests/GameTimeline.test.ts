@@ -75,7 +75,8 @@ describe('GameTimeline',()=>{
 
     const card=wrapper.get('.manual-roll-timeline-card')
     expect(card.text()).toContain('手动投掷 · 察觉鉴定')
-    expect(card.text()).toContain('艾琳：15')
+    expect(card.text()).toContain('察觉鉴定 · d20')
+    expect(card.text()).toContain('艾琳：总值 15（自然 15）')
   })
 
   it('offers the check owner a direct Luck decision before narration',async()=>{

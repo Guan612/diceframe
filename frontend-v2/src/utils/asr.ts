@@ -59,8 +59,10 @@ export function voiceInputSupported(): boolean {
 }
 
 export function asrLanguageFor(locale: string): string {
-  if (locale.startsWith('en')) return 'en-US'
-  if (locale.startsWith('ja')) return 'ja-JP'
+  const lang = String(locale || '').toLowerCase()
+  if (lang.startsWith('en')) return 'en-US'
+  if (lang.startsWith('ja')) return 'ja-JP'
+  if (lang.startsWith('de')) return 'de-DE'
   return 'zh-CN'
 }
 

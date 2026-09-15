@@ -106,9 +106,9 @@ class DiceFrameBridgeService:
         try:
             reply = await self._dispatch(command_text, message)
         except DiceFrameHTTPError as exc:
-            reply = bridge_text(language, "DiceFrame 请求失败：{error}", "DiceFrame request failed: {error}", error=exc)
+            reply = bridge_text(language, "DiceFrame 请求失败：{error}", "DiceFrame request failed: {error}", de="DiceFrame-Anfrage fehlgeschlagen: {error}", error=exc)
         except Exception as exc:
-            reply = bridge_text(language, "DiceFrame Bridge 处理失败：{error}", "DiceFrame Bridge failed: {error}", error=exc)
+            reply = bridge_text(language, "DiceFrame Bridge 处理失败：{error}", "DiceFrame Bridge failed: {error}", de="DiceFrame-Bridge-Verarbeitung fehlgeschlagen: {error}", error=exc)
         payload = {
             "platform": message.platform or "bridge",
             "kind": "text",
@@ -230,11 +230,12 @@ class DiceFrameBridgeService:
                 language,
                 "DiceFrame 连接正常。当前服务中共有 {total} 个对局。",
                 "DiceFrame is connected. The service currently has {total} games.",
+                de="DiceFrame ist verbunden. Der Dienst hat aktuell {total} Spiele.",
                 total=data.get("total", 0),
             )
         if verb == "解绑":
             await self.store.unbind_group(message.stream_id)
-            return bridge_text(language, "当前聊天流已解除 DiceFrame 绑定。", "This chat is no longer bound to DiceFrame.")
+            return bridge_text(language, "当前聊天流已解除 DiceFrame 绑定。", "This chat is no longer bound to DiceFrame.", de="Dieser Chat ist nicht mehr mit DiceFrame verbunden.")
         if verb == "邀请" or is_invite(text):
             return await self._invite(message)
         if verb in {"新建角色", "车卡", "AI车卡", "ai车卡"} or is_character_create(text) or is_ai_character_create(text):
@@ -254,6 +255,7 @@ class DiceFrameBridgeService:
                 language,
                 "现在不需要手动确认掷骰：请直接描述行动。全员提交后，或 GM 手动推进时，系统会统一判断检定并只掷一次。",
                 "Manual roll confirmation is no longer required. Describe your action; after everyone submits, or when the GM advances, the server adjudicates and rolls once.",
+                de="Eine manuelle Wurfbestätigung ist nicht mehr nötig: Beschreibe einfach deine Aktion. Sobald alle abgeschickt haben oder der GM manuell voranbringt, entscheidet der Server einheitlich über Proben und würfelt nur einmal.",
             )
         luck = luck_decision(text)
         if verb in {"幸运", "不用幸运"} or luck is not None:
@@ -309,6 +311,13 @@ class DiceFrameBridgeService:
                     f"次に、プレイヤーは {self._cmd('join キャラクター名')} を送信し、"
                     f"{self._cmd('部屋の中を調べる')} のような行動を送信してください。"
                 ),
+                "de": (
+                    f"An DiceFrame-Spiel „{world}“ gebunden.\n"
+                    "Der aktuelle Nutzer ist als GM zugeordnet.\n"
+                    f"Verfügbare Charaktere: {roster_names({'roster': players}, language)}\n"
+                    f"Als Nächstes: Spieler nutzen {self._cmd('join Character Name')}, dann Aktionen senden wie "
+                    f"{self._cmd('I inspect the area')}."
+                ),
             },
         )
 
@@ -324,6 +333,7 @@ class DiceFrameBridgeService:
                 "en": f"Player link for DiceFrame “{world}”: {link}" if link else f"DiceFrame “{world}” is bound.",
                 "zh-CN": f"DiceFrame《{world}》玩家入口：{link}" if link else f"DiceFrame《{world}》已绑定。",
                 "ja": f"DiceFrame《{world}》のプレイヤー入口：{link}" if link else f"DiceFrame《{world}》はバインド済みです。",
+                "de": f"Spieler-Link für DiceFrame „{world}“: {link}" if link else f"DiceFrame „{world}“ ist gebunden.",
             },
         )
 
@@ -338,6 +348,7 @@ class DiceFrameBridgeService:
                 language,
                 "AI 辅助车卡请在网页入口选择 AI 生成，或按群聊适配器的私聊向导继续。",
                 "Use AI generation in the web character creator, or continue through the adapter’s private-message guide.",
+                de="Für die KI-gestützte Charaktererstellung wähle im Web-Charaktereditor die KI-Generierung, oder folge dem privaten Nachrichten-Assistenten des Adapters.",
             ))
         return character_creation_text(lines, link, language)
 
@@ -348,10 +359,12 @@ class DiceFrameBridgeService:
                 language,
                 "请发送：{cmd}",
                 "Please send: {cmd}",
+                de="Bitte sende: {cmd}",
                 cmd=self._cmd(localized_text(language, {
                     "en": "join <Character Name>",
                     "zh-CN": "加入 <角色名>",
                     "ja": "join キャラクター名",
+                    "de": "join <Charaktername>",
                 })),
             )
         group, game_key, gm_uid = self._require_group(message.stream_id, language)
@@ -359,14 +372,14 @@ class DiceFrameBridgeService:
         roster = await self._refresh_roster(message.stream_id, group, gm_uid)
         matches = match_roster_character(roster, name)
         if len(matches) != 1:
-            return bridge_text(language, "没有找到唯一匹配的角色，请输入完整角色名。", "Could not find one unique character. Please enter the full character name.")
+            return bridge_text(language, "没有找到唯一匹配的角色，请输入完整角色名。", "Could not find one unique character. Please enter the full character name.", de="Es wurde kein eindeutiger Charakter gefunden. Bitte gib den vollständigen Charakternamen ein.")
         user_id = str(matches[0].get("user_id") or "")
         if not user_id:
-            return bridge_text(language, "匹配到的角色缺少 user_id，无法认领。", "The matched character has no user ID and cannot be claimed.")
+            return bridge_text(language, "匹配到的角色缺少 user_id，无法认领。", "The matched character has no user ID and cannot be claimed.", de="Dem gefundenen Charakter fehlt eine user_id, er kann nicht beansprucht werden.")
         ok = await self.store.bind_player(message.stream_id, message.platform_user_id, user_id)
         if not ok:
-            return bridge_text(language, "该角色已被其他成员认领。", "That character has already been claimed by another member.")
-        return bridge_text(language, "已认领角色：{name}", "Character claimed: {name}", name=matches[0].get("character_name") or name)
+            return bridge_text(language, "该角色已被其他成员认领。", "That character has already been claimed by another member.", de="Dieser Charakter wurde bereits von einem anderen Mitglied beansprucht.")
+        return bridge_text(language, "已认领角色：{name}", "Character claimed: {name}", de="Charakter beansprucht: {name}", name=matches[0].get("character_name") or name)
 
     async def _status(self, message: BridgeInput) -> str:
         group, game_key, actor = self._require_actor(message)
@@ -374,7 +387,7 @@ class DiceFrameBridgeService:
         data = await self.client.characters(game_key, actor)
         player = next((item for item in data.get("players", []) if isinstance(item, dict) and str(item.get("user_id") or "") == actor), None)
         if not player:
-            return bridge_text(language, "未找到当前角色。", "Current character not found.")
+            return bridge_text(language, "未找到当前角色。", "Current character not found.", de="Aktueller Charakter nicht gefunden.")
         return await self._format_status(player, group, language)
 
     async def _recap(self, message: BridgeInput) -> str:
@@ -398,6 +411,7 @@ class DiceFrameBridgeService:
                 "en": f"R{item.get('round', '?')}: {str(item.get('text') or '').strip()}",
                 "zh-CN": f"R{item.get('round', '?')}：{str(item.get('text') or '').strip()}",
                 "ja": f"R{item.get('round', '?')}：{str(item.get('text') or '').strip()}",
+                "de": f"R{item.get('round', '?')}: {str(item.get('text') or '').strip()}",
             })
             for item in messages[-6:]
             if isinstance(item, dict) and str(item.get("text") or "").strip()
@@ -407,13 +421,14 @@ class DiceFrameBridgeService:
                 "en": "Private character information:\n",
                 "zh-CN": "角色感知：\n",
                 "ja": "キャラクター専用情報：\n",
+                "de": "Private Charakterinformationen:\n",
             }) + "\n".join(lines)
-        return bridge_text(language, "暂无专属于你的角色感知。", "There is no private information for your character yet.")
+        return bridge_text(language, "暂无专属于你的角色感知。", "There is no private information for your character yet.", de="Für deinen Charakter liegen noch keine privaten Informationen vor.")
 
     async def _action(self, message: BridgeInput, text: str, *, confirm: bool = False) -> str:
         language = self._language(message)
         if not text and not confirm:
-            return bridge_text(language, "请描述你的行动。", "Please describe your action.")
+            return bridge_text(language, "请描述你的行动。", "Please describe your action.", de="Bitte beschreibe deine Aktion.")
         group, game_key, actor = self._require_actor(message)
         language = self._group_language(group)
         result = await self.client.action(game_key, actor, text, confirm=confirm, source=self.config.action_source)
@@ -426,18 +441,19 @@ class DiceFrameBridgeService:
                 language,
                 f"请发送：{self._cmd('询问 <问题>')}。这不会消耗行动或推进剧情。",
                 f"Send: {self._cmd('ask kp <question>')} or {self._cmd('ask: <question>')}. This does not consume an action or advance the story.",
+                de=f"Sende: {self._cmd('ask kp <question>')} oder {self._cmd('ask: <question>')}. Das verbraucht keine Aktion und bringt die Geschichte nicht voran.",
             )
         group, game_key, actor = self._require_actor(message)
         language = self._group_language(group)
         result = await self.client.ask_kp(game_key, actor, question)
         answer = str(result.get("answer") or "").strip()
-        return bridge_text(language, "KP：{answer}", "GM: {answer}", answer=answer)
+        return bridge_text(language, "KP：{answer}", "GM: {answer}", de="SL: {answer}", answer=answer)
 
     async def _advance(self, message: BridgeInput, text: str) -> str:
         group, game_key, gm_uid = self._require_group(message.stream_id, self._language(message))
         language = self._group_language(group)
         if not self._can_advance(group, message.platform_user_id):
-            return bridge_text(language, "只有绑定本局的 GM 或配置中的授权用户可以推进。", "Only the bound GM or an authorized user can advance the game.")
+            return bridge_text(language, "只有绑定本局的 GM 或配置中的授权用户可以推进。", "Only the bound GM or an authorized user can advance the game.", de="Nur der gebundene GM oder ein autorisierter Nutzer kann das Spiel voranbringen.")
         result = await self.client.advance(game_key, gm_uid, force=advance_force(text))
         return self._format_advance_response(result, language)
 
@@ -450,10 +466,10 @@ class DiceFrameBridgeService:
             if isinstance(check, dict) and str(check.get("actor_uid") or "") == actor
         ]
         if not pending:
-            return bridge_text(language, "当前没有等待你处理的幸运选择。", "There is no Luck decision waiting for you.")
+            return bridge_text(language, "当前没有等待你处理的幸运选择。", "There is no Luck decision waiting for you.", de="Es liegt keine Glücksentscheidung vor, die auf dich wartet.")
         index = luck_index(text)
         if index > len(pending):
-            return bridge_text(language, "没有第 {index} 个幸运选择。", "There is no Luck decision #{index}.", index=index)
+            return bridge_text(language, "没有第 {index} 个幸运选择。", "There is no Luck decision #{index}.", de="Es gibt keine Glücksentscheidung Nr. {index}.", index=index)
         check = pending[index - 1]
         result = await self.client.resolve_luck(
             game_key,
@@ -477,6 +493,10 @@ class DiceFrameBridgeService:
                     f"幸運を{cost}点消費し、判定は通常成功になりました。"
                     if spend else "幸運は使用されず、判定は失敗のままです。"
                 ),
+                "de": (
+                    f"{cost} Glückspunkte eingesetzt; die Probe ist nun ein normaler Erfolg."
+                    if spend else "Glück wurde nicht eingesetzt; der Fehlschlag bleibt bestehen."
+                ),
             },
         )
         narration = str(result.get("narration") or "").strip()
@@ -488,6 +508,7 @@ class DiceFrameBridgeService:
                 "en": " Waiting for other Luck decisions.",
                 "zh-CN": " 仍在等待其他角色选择幸运。",
                 "ja": " 他のキャラクターの幸運判定を待っています。",
+                "de": " Warte auf weitere Glücks-Entscheidungen.",
             })
             return prefix + suffix
         return prefix
@@ -499,7 +520,7 @@ class DiceFrameBridgeService:
         query = away_target_query(text)
         if query:
             if not self._can_advance(group, message.platform_user_id):
-                return bridge_text(language, "只有 GM 或授权账号可以切换其他角色的暂离状态。", "Only the GM or an authorized user can change another character’s away status.")
+                return bridge_text(language, "只有 GM 或授权账号可以切换其他角色的暂离状态。", "Only the GM or an authorized user can change another character’s away status.", de="Nur der GM oder ein autorisiertes Konto kann den Abwesenheitsstatus eines anderen Charakters ändern.")
             matches = match_roster_character(group.get("roster", []), query)
             if len(matches) == 1:
                 target_uid = str(matches[0].get("user_id") or actor)
@@ -510,6 +531,7 @@ class DiceFrameBridgeService:
             "en": f"{name} is now {'away' if away else 'back'}.",
             "zh-CN": f"{name} 已{'暂离' if away else '回来'}。",
             "ja": f"{name} は{'一時離席中' if away else '戻りました'}。",
+            "de": f"{name} ist jetzt {'abwesend' if away else 'zurück'}.",
         })
 
     async def _payment(self, message: BridgeInput, text: str, accepted: bool | None) -> str:
@@ -518,8 +540,8 @@ class DiceFrameBridgeService:
         payments = await self._pending_economy_proposals(game_key, actor)
         if accepted is None:
             if not payments:
-                return bridge_text(language, "当前没有待处理的经济提案。", "There are no pending economy proposals.")
-            lines = [localized_text(language, {"en": "Pending economy proposals:", "zh-CN": "待处理经济提案：", "ja": "保留中の経済提案："})]
+                return bridge_text(language, "当前没有待处理的经济提案。", "There are no pending economy proposals.", de="Es liegen keine ausstehenden Wirtschaftsvorschläge vor.")
+            lines = [localized_text(language, {"en": "Pending economy proposals:", "zh-CN": "待处理经济提案：", "ja": "保留中の経済提案：", "de": "Ausstehende Wirtschaftsvorschläge:"})]
             for index, payment in enumerate(payments, 1):
                 lines.append(payment_line(payment, index, language))
             first_reference = int(payments[0].get("sequence", 1) or 1)
@@ -527,10 +549,11 @@ class DiceFrameBridgeService:
                 "en": f"Confirm: {self._cmd(f'confirm pay {first_reference}')}; reject: {self._cmd(f'reject pay {first_reference}')}",
                 "zh-CN": f"确认：{self._cmd(f'确认支付 {first_reference}')}；拒绝：{self._cmd(f'拒绝支付 {first_reference}')}",
                 "ja": f"承認：{self._cmd(f'confirm pay {first_reference}')}；却下：{self._cmd(f'reject pay {first_reference}')}",
+                "de": f"Bestätigen: {self._cmd(f'confirm pay {first_reference}')}; ablehnen: {self._cmd(f'reject pay {first_reference}')}",
             }))
             return "\n".join(lines)
         if not payments:
-            return bridge_text(language, "当前没有待处理的经济提案。", "There are no pending economy proposals.")
+            return bridge_text(language, "当前没有待处理的经济提案。", "There are no pending economy proposals.", de="Es liegen keine ausstehenden Wirtschaftsvorschläge vor.")
         reference = payment_index(text)
         payment = next(
             (
@@ -548,6 +571,7 @@ class DiceFrameBridgeService:
                 "en": f"There is no pending proposal #{reference}; use “{self._cmd('pay')}” to view the list.",
                 "zh-CN": f"没有编号 #{reference} 的待处理提案；发送“{self._cmd('支付')}”查看列表。",
                 "ja": f"保留中の提案 #{reference} はありません；“{self._cmd('pay')}”で一覧を確認してください。",
+                "de": f"Es gibt keinen ausstehenden Vorschlag #{reference}; nutze „{self._cmd('pay')}“, um die Liste zu sehen.",
             })
         result = await self.client.resolve_payment(game_key, actor, str(payment.get("id") or ""), accepted)
         if result.get("ok") is False:
@@ -555,6 +579,7 @@ class DiceFrameBridgeService:
                 "en": "Payment failed",
                 "zh-CN": "支付处理失败",
                 "ja": "支払い処理に失敗しました",
+                "de": "Zahlung fehlgeschlagen",
             }))
         amount = int(payment.get("amount", 0) or 0)
         is_reward = str(payment.get("kind") or "") == "reward"
@@ -562,6 +587,7 @@ class DiceFrameBridgeService:
             "en": f"{'Reward' if is_reward else 'Payment'} of {amount} gold {'confirmed' if accepted else 'rejected'}.",
             "zh-CN": f"已{'确认' if accepted else '拒绝'}{'奖励' if is_reward else '支付'} {amount} 金币。",
             "ja": f"{amount} ゴールドの{'報酬' if is_reward else '支払い'}を{'承認' if accepted else '却下'}しました。",
+            "de": f"{'Belohnung' if is_reward else 'Zahlung'} von {amount} Gold {'bestätigt' if accepted else 'abgelehnt'}.",
         })
 
     def _require_group(self, stream_id: str, language: str = "") -> tuple[dict[str, Any], str, str]:
@@ -572,7 +598,7 @@ class DiceFrameBridgeService:
         game_key = str(group.get("game_key") or "")
         gm_uid = str(group.get("gm_uid") or "")
         if not game_key or not gm_uid:
-            raise DiceFrameHTTPError(bridge_text(language, "当前绑定信息不完整，请重新绑定。", "The binding is incomplete. Please bind this chat again."))
+            raise DiceFrameHTTPError(bridge_text(language, "当前绑定信息不完整，请重新绑定。", "The binding is incomplete. Please bind this chat again.", de="Die Bindung ist unvollständig. Bitte binde diesen Chat erneut."))
         return group, game_key, gm_uid
 
     def _require_actor(self, message: BridgeInput) -> tuple[dict[str, Any], str, str]:
@@ -584,11 +610,12 @@ class DiceFrameBridgeService:
                 "en": "join Character Name",
                 "zh-CN": "加入 角色名",
                 "ja": "join キャラクター名",
+                "de": "join Charaktername",
             }))
-            raise DiceFrameHTTPError(bridge_text(language, "你还没有认领角色。请先发送 {cmd}。", "You have not claimed a character yet. First send {cmd}.", cmd=command))
+            raise DiceFrameHTTPError(bridge_text(language, "你还没有认领角色。请先发送 {cmd}。", "You have not claimed a character yet. First send {cmd}.", de="Du hast noch keinen Charakter beansprucht. Sende zuerst {cmd}.", cmd=command))
         actor = str(player.get("user_id") or "")
         if not actor:
-            raise DiceFrameHTTPError(bridge_text(language, "你的角色映射不完整，请重新加入角色。", "Your character mapping is incomplete. Please claim the character again."))
+            raise DiceFrameHTTPError(bridge_text(language, "你的角色映射不完整，请重新加入角色。", "Your character mapping is incomplete. Please claim the character again.", de="Deine Charakterzuordnung ist unvollständig. Bitte beanspruche den Charakter erneut."))
         return group, game_key, actor
 
     def _require_actor_or_group_gm(self, message: BridgeInput) -> tuple[dict[str, Any], str, str]:
@@ -624,13 +651,14 @@ class DiceFrameBridgeService:
 
     async def _format_status(self, player: dict[str, Any], group: dict[str, Any], language: str) -> str:
         name = str(player.get("character_name") or player.get("user_id") or localized_text(
-            language, {"en": "Character", "zh-CN": "角色", "ja": "キャラクター"}
+            language, {"en": "Character", "zh-CN": "角色", "ja": "キャラクター", "de": "Charakter"}
         ))
         sheet = player.get("character_sheet") if isinstance(player.get("character_sheet"), dict) else {}
         lines = [localized_text(language, {
             "en": f"{name} status",
             "zh-CN": f"{name} 状态",
             "ja": f"{name} のステータス",
+            "de": f"{name} Status",
         })]
         hp = sheet.get("hp")
         max_hp = sheet.get("max_hp")
@@ -639,12 +667,14 @@ class DiceFrameBridgeService:
                 "en": f"HP: {hp}/{max_hp}",
                 "zh-CN": f"HP：{hp}/{max_hp}",
                 "ja": f"HP：{hp}/{max_hp}",
+                "de": f"TP: {hp}/{max_hp}",
             }))
         if sheet.get("gold") is not None:
             lines.append(localized_text(language, {
                 "en": f"Gold: {sheet.get('gold')}",
                 "zh-CN": f"金币：{sheet.get('gold')}",
                 "ja": f"ゴールド：{sheet.get('gold')}",
+                "de": f"Gold: {sheet.get('gold')}",
             }))
         attrs = sheet.get("attributes_display") or self._format_attrs(sheet.get("attributes"), language)
         if attrs:
@@ -652,6 +682,7 @@ class DiceFrameBridgeService:
                 "en": f"Attributes: {attrs}",
                 "zh-CN": f"属性：{attrs}",
                 "ja": f"属性：{attrs}",
+                "de": f"Attribute: {attrs}",
             }))
         skills = self._format_skills(sheet.get("skills"), language)
         if skills:
@@ -659,6 +690,7 @@ class DiceFrameBridgeService:
                 "en": f"Skills: {skills}",
                 "zh-CN": f"技能：{skills}",
                 "ja": f"スキル：{skills}",
+                "de": f"Fertigkeiten: {skills}",
             }))
         status = sheet.get("status")
         if status:
@@ -666,6 +698,7 @@ class DiceFrameBridgeService:
                 "en": f"Condition: {status}",
                 "zh-CN": f"状态：{status}",
                 "ja": f"状態：{status}",
+                "de": f"Zustand: {status}",
             }))
         link = await self._join_link(str(group.get("game_key") or ""), str(player.get("user_id") or ""))
         if link:
@@ -673,6 +706,7 @@ class DiceFrameBridgeService:
                 "en": f"Web page: {link}",
                 "zh-CN": f"网页入口：{link}",
                 "ja": f"ウェブページ：{link}",
+                "de": f"Webseite: {link}",
             }))
         return "\n".join(lines)
 
@@ -684,11 +718,13 @@ class DiceFrameBridgeService:
                     "en": "An economy proposal is waiting for your decision. Send “pay” to review it.",
                     "zh-CN": "当前有经济提案待确认，请发送“支付”查看。",
                     "ja": "経済提案の確認待ちです。「支払い」で確認してください。",
+                    "de": "Ein Wirtschaftsvorschlag wartet auf deine Entscheidung. Sende „pay“, um ihn zu prüfen.",
                 })
             return localized_text(language, {
                 "en": "The game is waiting for the GM or another contributor to resolve an economy proposal.",
                 "zh-CN": "当前正在等待 GM 或其他参与者处理经济提案。",
                 "ja": "GM またはほかの参加者による経済提案の処理を待っています。",
+                "de": "Das Spiel wartet darauf, dass der GM oder ein anderer Teilnehmer einen Wirtschaftsvorschlag bearbeitet.",
             })
         narration = str(result.get("narration") or result.get("message") or "").strip()
         if narration:
@@ -699,14 +735,16 @@ class DiceFrameBridgeService:
                 "en": "Default actions added for: " + ", ".join(str(item) for item in forced),
                 "zh-CN": "已为未行动角色补默认行动：" + "、".join(str(item) for item in forced),
                 "ja": "未行動のキャラクターにデフォルト行動を追加しました：" + "、".join(str(item) for item in forced),
+                "de": "Standardaktionen hinzugefügt für: " + ", ".join(str(item) for item in forced),
             }))
         auto_rolls = result.get("auto_rolls") if isinstance(result.get("auto_rolls"), list) else []
         if auto_rolls:
-            roll_text = localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、"}).join(f"{item.get('user_id')}={item.get('value')}" for item in auto_rolls if isinstance(item, dict))
+            roll_text = localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、", "de": ", "}).join(f"{item.get('user_id')}={item.get('value')}" for item in auto_rolls if isinstance(item, dict))
             lines.append(localized_text(language, {
                 "en": "Pending rolls resolved: ",
                 "zh-CN": "已自动处理待掷骰：",
                 "ja": "未処理のロールを自動処理しました：",
+                "de": "Ausstehende Würfe automatisch aufgelöst: ",
             }) + roll_text)
         pending = result.get("economy_proposals") if isinstance(result.get("economy_proposals"), list) else []
         if pending:
@@ -714,6 +752,7 @@ class DiceFrameBridgeService:
                 "en": f"Pending payments are available; send {self._cmd('pay')} to review them.",
                 "zh-CN": f"有待处理支付，发送 {self._cmd('支付')} 查看。",
                 "ja": f"支払い待ちがあります。{self._cmd('pay')} で確認してください。",
+                "de": f"Es gibt ausstehende Zahlungen; sende {self._cmd('pay')}, um sie zu prüfen.",
             }))
         quick_actions = result.get("quick_actions") if isinstance(result.get("quick_actions"), list) else []
         if quick_actions:
@@ -721,11 +760,13 @@ class DiceFrameBridgeService:
                 "en": "Suggested actions: " + "; ".join(str(item) for item in quick_actions[:4]),
                 "zh-CN": "可选行动：" + "；".join(str(item) for item in quick_actions[:4]),
                 "ja": "おすすめの行動：" + "；".join(str(item) for item in quick_actions[:4]),
+                "de": "Vorgeschlagene Aktionen: " + "; ".join(str(item) for item in quick_actions[:4]),
             }))
         return "\n".join(lines).strip() or localized_text(language, {
             "en": "Game advanced.",
             "zh-CN": "推进完成。",
             "ja": "ゲームを進行しました。",
+            "de": "Spiel fortgeschritten.",
         })
 
     def _bound_help_text(self, group: dict[str, Any] | None, language: str = "") -> str:
@@ -750,6 +791,11 @@ class DiceFrameBridgeService:
             "ja": (
                 "このチャットはまだ DiceFrame 対局にバインドされていません。\n"
                 "GM は DiceFrame のウェブページで使い捨ての Bot バインドトークンを発行し、次を送信してください：\n"
+                f"{self._cmd('bind <game_key> <one-time-token>')}"
+            ),
+            "de": (
+                "Dieser Chat ist noch mit keinem DiceFrame-Spiel verbunden.\n"
+                "Der GM sollte in DiceFrame ein einmaliges Bot-Bindungstoken erzeugen und dann senden:\n"
                 f"{self._cmd('bind <game_key> <one-time-token>')}"
             ),
         })
@@ -782,6 +828,7 @@ class DiceFrameBridgeService:
             language or self.config.default_language,
             "DiceFrame Bridge 没有返回内容。",
             "DiceFrame Bridge returned no content.",
+            de="DiceFrame Bridge hat keinen Inhalt zurückgegeben.",
         )
         return [text[index:index + max_chars] for index in range(0, len(text), max_chars)][:4]
 
@@ -794,7 +841,7 @@ class DiceFrameBridgeService:
     def _format_attrs(attrs: Any, language: str = "zh-CN") -> str:
         if not isinstance(attrs, dict) or not attrs:
             return ""
-        return localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、"}).join(f"{key}:{value}" for key, value in list(attrs.items())[:8])
+        return localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、", "de": ", "}).join(f"{key}:{value}" for key, value in list(attrs.items())[:8])
 
     @staticmethod
     def _format_skills(skills: Any, language: str = "zh-CN") -> str:
@@ -811,7 +858,7 @@ class DiceFrameBridgeService:
                 value = str(item).strip()
                 if value:
                     names.append(value)
-        return localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、"}).join(names)
+        return localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、", "de": ", "}).join(names)
 
     def _language(self, message: BridgeInput, text: str = "") -> str:
         group = self.store.group(message.stream_id)

@@ -58,7 +58,7 @@ const selectedPreset = ref('')
 const spellSearch = ref('')
 let choiceSequence = 0
 
-const zh = computed(() => !String(props.language).toLowerCase().startsWith('en'))
+const zh = computed(() => String(props.language || '').toLowerCase().startsWith('zh'))
 const text = (cn: string, en: string) => zh.value ? cn : en
 
 function selectMode(value: BuilderMode): void {
@@ -172,6 +172,22 @@ const pointBuySpent = computed(() => ABILITIES.reduce(
   (total, key) => total + (pointBuyCosts[Number(draft.value.base_abilities[key])] ?? 99), 0,
 ))
 const pointBuyRemaining = computed(() => 27 - pointBuySpent.value)
+// 职业推荐主属性：choices 暂未暴露 canonical 的 primary_ability_refs /
+// spellcasting_ability，先用 recommended_base_abilities 的最高项推断；
+// 未来协议暴露 canonical 字段后应改用 canonical，不再推断。
+const recommendedPrimaryAbility = computed(() => {
+  const entries = Object.entries(choices.value.recommended_base_abilities || {})
+  if (!entries.length) return ''
+  entries.sort((a, b) => Number(b[1]) - Number(a[1]))
+  return entries[0]?.[0] || ''
+})
+const backgroundAllowedIds = computed(() =>
+  choices.value.background_ability_refs.map(ref => ref.split(':')[1]).filter(Boolean))
+const primaryAbilityBlockedByBackground = computed(() => {
+  const primary = recommendedPrimaryAbility.value
+  if (!primary) return false
+  return backgroundAllowedIds.value.length > 0 && !backgroundAllowedIds.value.includes(primary)
+})
 const classSpells = computed<RulesetClassSpellChoices | null>(() => (
   choices.value.class_spells && 'requirements' in choices.value.class_spells
     ? choices.value.class_spells as RulesetClassSpellChoices
@@ -327,6 +343,9 @@ function setRecommendedAbilities(): void {
 }
 
 function setRecommendedBonuses(): void {
+  // Background bonuses are intentionally ranked only within
+  // background_ability_refs. Class primary abilities outside this
+  // legal set must never be injected here.
   const ids = choices.value.background_ability_refs.map(ref => ref.split(':')[1]).filter(Boolean)
   ids.sort((a, b) => Number(draft.value.base_abilities[b] || 0) - Number(draft.value.base_abilities[a] || 0))
   draft.value.background_ability_bonuses = ids.length >= 2 ? { [ids[0]]: 2, [ids[1]]: 1 } : {}
@@ -677,11 +696,22 @@ onMounted(async () => {
 
       <section v-else-if="step === 2" class="builder-step">
         <div class="step-intro"><h3>{{ text('属性决定你做事时的基础优势', 'Abilities are your basic strengths') }}</h3><p>{{ text('推荐值已经按职业排好。新手直接采用即可；背景带来的 +2/+1 已单独显示。', 'Recommended scores are arranged for your class. Beginners can keep them; background +2/+1 is shown separately.') }}</p></div>
-        <div class="ability-methods"><label v-for="method in choices.ability_methods" :key="method.id"><input type="radio" v-model="draft.ability_method" :value="method.id" @change="method.id !== 'rolled' && setRecommendedAbilities()"> {{ abilityMethodLabel(method.id) }}</label></div>
-        <p v-if="draft.ability_method === 'point_buy'" :class="['point-budget', { invalid: pointBuyRemaining !== 0 }]">{{ text(`购点已使用 ${pointBuySpent} / 27（剩余 ${pointBuyRemaining}）`, `Point buy: ${pointBuySpent} / 27 spent (${pointBuyRemaining} remaining)`) }}</p>
-        <div class="ability-grid"><label v-for="key in ABILITIES" :key="key"><span>{{ abilityName(key) }}</span><input type="number" v-model.number="draft.base_abilities[key]" :readonly="draft.ability_method === 'standard_array'" :min="draft.ability_method === 'point_buy' ? 8 : 3" :max="draft.ability_method === 'point_buy' ? 15 : draft.ability_method === 'rolled' ? 18 : 20"><small>+ {{ draft.background_ability_bonuses[key] || 0 }} = <b>{{ Number(draft.base_abilities[key] || 0) + Number(draft.background_ability_bonuses[key] || 0) }}</b></small></label></div>
-        <div class="bonus-editor"><span>{{ text('背景属性提升', 'Background bonuses') }}</span><button type="button" @click="setRecommendedBonuses">{{ text('推荐 +2/+1', 'Recommended +2/+1') }}</button><button type="button" @click="setSplitBonuses">{{ text('平均 +1/+1/+1', 'Split +1/+1/+1') }}</button><code v-if="sourceVisible">srd-5.2.1:p21:adjust-ability-scores</code></div>
-        <div v-if="mode === 'expert'" class="expert-bonuses"><label v-for="refValue in choices.background_ability_refs" :key="refValue"><span>{{ abilityName(refValue.split(':')[1]) }}</span><select v-model.number="draft.background_ability_bonuses[refValue.split(':')[1]]"><option :value="0">+0</option><option :value="1">+1</option><option :value="2">+2</option></select></label></div>
+        <fieldset class="base-ability-block"><legend>{{ text('基础属性分配', 'Base ability scores') }}</legend>
+          <p class="field-help">{{ text('这里决定 STR / DEX / CON / INT / WIS / CHA 的基础值。27 点购点可以在六项属性之间自由分配，单项范围 8–15。', 'This section sets your six base abilities. 27-point buy can be distributed across all six abilities, with each score ranging from 8 to 15.') }}</p>
+          <div class="ability-methods"><label v-for="method in choices.ability_methods" :key="method.id"><input type="radio" v-model="draft.ability_method" :value="method.id" @change="method.id !== 'rolled' && setRecommendedAbilities()"> {{ abilityMethodLabel(method.id) }}</label></div>
+          <button v-if="draft.ability_method !== 'rolled'" type="button" class="use-class-recommendation" @click="setRecommendedAbilities">{{ text('使用职业推荐', 'Use class recommendation') }}</button>
+          <p v-if="draft.ability_method === 'point_buy'" :class="['point-budget', { invalid: pointBuyRemaining !== 0 }]">{{ text(`购点已使用 ${pointBuySpent} / 27（剩余 ${pointBuyRemaining}）`, `Point buy: ${pointBuySpent} / 27 spent (${pointBuyRemaining} remaining)`) }}</p>
+          <div class="ability-grid"><label v-for="key in ABILITIES" :key="key"><span>{{ abilityName(key) }}</span><input type="number" v-model.number="draft.base_abilities[key]" :readonly="draft.ability_method === 'standard_array'" :min="draft.ability_method === 'point_buy' ? 8 : 3" :max="draft.ability_method === 'point_buy' ? 15 : draft.ability_method === 'rolled' ? 18 : 20"><small>+ {{ draft.background_ability_bonuses[key] || 0 }} = <b>{{ Number(draft.base_abilities[key] || 0) + Number(draft.background_ability_bonuses[key] || 0) }}</b></small></label></div>
+          <p v-if="recommendedPrimaryAbility" class="field-help">{{ text(`职业推荐：${abilityName(recommendedPrimaryAbility)}优先`, `Class recommendation: prioritize ${abilityName(recommendedPrimaryAbility)}`) }}</p>
+        </fieldset>
+        <fieldset class="background-bonus-block"><legend>{{ text('背景属性提升', 'Background ability bonuses') }}</legend>
+          <p class="field-help">{{ text('背景提供额外的 +2/+1 或 +1/+1/+1。这些加值只能分配到当前背景允许的属性中，不影响你在上方基础属性分配中调整其他属性。', 'Your background grants +2/+1 or +1/+1/+1. These bonuses can only be assigned to the abilities allowed by that background and do not restrict the six base scores above.') }}</p>
+          <p v-if="backgroundAllowedIds.length" class="field-help">{{ text(`当前背景可提升：${backgroundAllowedIds.map(abilityName).join(' / ')}`, `Allowed by this background: ${backgroundAllowedIds.map(abilityName).join(' / ')}`) }}</p>
+          <div class="bonus-editor"><button type="button" @click="setRecommendedBonuses">{{ text('在背景允许属性中推荐 +2/+1', 'Recommended +2/+1') }}</button><button type="button" @click="setSplitBonuses">{{ text('平均 +1/+1/+1', 'Split +1/+1/+1') }}</button><code v-if="sourceVisible">srd-5.2.1:p21:adjust-ability-scores</code></div>
+          <div v-if="mode === 'expert'" class="expert-bonuses"><label v-for="refValue in choices.background_ability_refs" :key="refValue"><span>{{ abilityName(refValue.split(':')[1]) }}</span><select v-model.number="draft.background_ability_bonuses[refValue.split(':')[1]]"><option :value="0">+0</option><option :value="1">+1</option><option :value="2">+2</option></select></label></div>
+          <p class="field-help">{{ text('仅在当前背景允许的属性中分配。', 'Only distributed among abilities allowed by the selected background.') }}</p>
+          <p v-if="primaryAbilityBlockedByBackground" class="field-help ability-conflict" role="note">{{ text(`⚠ 当前背景无法提升职业推荐主属性「${abilityName(recommendedPrimaryAbility)}」。`, `⚠ This background cannot increase your class's recommended primary ability (${abilityName(recommendedPrimaryAbility)}).`) }}{{ text('这是合法组合，只是协同较弱：你仍然可以在上方基础属性分配中提高该属性；如果希望背景加值也作用于它，可以选择允许提升该属性的背景。', 'This is a legal combination with weaker synergy: you can still raise it in the base ability scores above; pick a different background if you want the background bonus to apply to it.') }}</p>
+        </fieldset>
       </section>
 
       <section v-else-if="step === 3" class="builder-step">

@@ -37,6 +37,16 @@ def parse_world_tag(tag: str, value: str, result: dict) -> None:
         result["state_update"]["scene_change"] = value[:200]
     elif tag == "SCENE_IMAGE":
         result["scene_image_prompt"] = value[:300]
+    elif tag == "SCENE_PANEL":
+        parts = value.split("|", 2)
+        if len(parts) == 3:
+            participants, location, description = (part.strip() for part in parts)
+            if location and description:
+                result.setdefault("scene_panels", []).append({
+                    "participants": participants,
+                    "location": location[:160],
+                    "description": description[:700],
+                })
     elif tag == "NPC":
         parts = value.split(":", 1)
         if len(parts) == 2:

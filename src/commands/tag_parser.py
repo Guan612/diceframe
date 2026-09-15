@@ -35,6 +35,7 @@ def _new_result() -> dict:
         "milestone_grants": [],  # D&D live advancement entitlement targets
         "growth_skills": [],  # [{uid, skill}] 用于 CoC 技能成长检定
         "scene_image_prompt": "",  # GM 请求为本回合生成场景图（需图像生成插件）
+        "scene_panels": [],  # 多人公共分镜：[{participants, location, description}]
     }
 
 

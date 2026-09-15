@@ -17,6 +17,9 @@ import src.rulesets.dnd2024.advancement_access as advancement_access
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
+from src.rulesets.dnd2024.exploration import (
+    EXPLORATION_INTENT_TYPES, Dnd2024ExplorationEngine,
+)
 from src.rulesets.dnd2024.director import Dnd2024Director
 from src.rulesets.dnd2024.director.planner import (
     plan_adventure_choice,
@@ -189,6 +192,9 @@ class Dnd2024Runtime:
         return Dnd2024CampaignEngine(
             self.load_bundle(locale), adventure.adventure if adventure is not None else None,
         )
+
+    def _exploration_engine(self, locale: str = "") -> Dnd2024ExplorationEngine:
+        return Dnd2024ExplorationEngine(self.load_bundle(locale), locale=locale)
 
     def _combat_engine(
         self,
@@ -496,9 +502,17 @@ class Dnd2024Runtime:
             actor_id == str(getattr(instance, "gm_uid", "") or ""),
         )
         access = self._encounter_access(instance, campaign)
+        combat_engine = self._combat_engine(instance, access, locale)
+        exploration_engine = self._exploration_engine(locale)
         return [
             *campaign_engine.available_intents(instance, actor_id),
-            *self._combat_engine(instance, access, locale).available_intents(instance, actor_id),
+            # 探索态施法只在非战斗时暴露，且不与 combat 同名 action 重复。
+            *(
+                exploration_engine.available_intents(instance, actor_id)
+                if combat_engine.initialize_state(instance)["combat"].get("status") != "active"
+                else []
+            ),
+            *combat_engine.available_intents(instance, actor_id),
         ]
 
     def prepare_intent_submission(
@@ -518,6 +532,45 @@ class Dnd2024Runtime:
     def next_automatic_intent(self, instance: Any) -> dict[str, Any] | None:
         locale = str(getattr(instance, "language", "") or "")
         return self._combat_engine(instance, locale=locale).next_automatic_intent(instance)
+
+    def on_player_join(self, instance: Any, user_id: str) -> None:
+        """Enroll a late-joining character in an already active encounter."""
+
+        result = self._combat_engine(
+            instance, locale=str(getattr(instance, "language", "") or ""),
+        ).add_player_to_active_combat(instance, user_id)
+        if not result.get("ok"):
+            raise ValueError(str(result.get("error") or "unable to join active combat"))
+
+    def on_character_revived(self, instance: Any, user_id: str) -> None:
+        """Synchronize generic revival with D&D canonical combat state."""
+
+        sheet = instance.get_character_sheet(str(user_id))
+        try:
+            hp = int(sheet.get("hp", 1) or 1)
+        except (TypeError, ValueError):
+            hp = 1
+        result = self._combat_engine(
+            instance, locale=str(getattr(instance, "language", "") or ""),
+        ).revive_player(instance, str(user_id), hp)
+        if not result.get("ok"):
+            raise ValueError(str(result.get("error") or "unable to revive character"))
+        if result.get("applied"):
+            updated = deepcopy(instance.get_character_sheet(str(user_id)))
+            revision = int(updated.get("ruleset_revision", 0) or 0) + 1
+            operation_log = updated.get("ruleset_operation_log")
+            operation_log = deepcopy(operation_log) if isinstance(operation_log, list) else []
+            operation_log.append({
+                "operation_id": str(
+                    (result.get("event_batch") or {}).get("batch_id") or ""
+                ),
+                "kind": "event_batch",
+                "intent_type": "character.revive",
+                "revision": revision,
+            })
+            updated["ruleset_revision"] = revision
+            updated["ruleset_operation_log"] = operation_log[-32:]
+            instance.set_character_sheet(str(user_id), updated)
 
     @staticmethod
     def memory_deltas_from_event_batch(
@@ -539,6 +592,8 @@ class Dnd2024Runtime:
         bundle = self.load_bundle(locale)
         if str(intent.get("type") or "") in CAMPAIGN_INTENT_TYPES:
             return self._campaign_engine(instance, locale).validate_intent(instance, intent)
+        if str(intent.get("type") or "") in EXPLORATION_INTENT_TYPES:
+            return self._exploration_engine(locale).validate_intent(instance, intent)
         campaign_engine = self._campaign_engine(instance, locale)
         campaign = campaign_engine.gameplay_view(instance)
         access = self._encounter_access(instance, campaign, intent)
@@ -549,6 +604,8 @@ class Dnd2024Runtime:
         bundle = self.load_bundle(locale)
         if str(intent.get("type") or "") in CAMPAIGN_INTENT_TYPES:
             return self._campaign_engine(instance, locale).resolve_intent(instance, intent, rng)
+        if str(intent.get("type") or "") in EXPLORATION_INTENT_TYPES:
+            return self._exploration_engine(locale).resolve_intent(instance, intent, rng)
         campaign_engine = self._campaign_engine(instance, locale)
         campaign = campaign_engine.gameplay_view(instance)
         access = self._encounter_access(instance, campaign, intent)
@@ -563,7 +620,9 @@ class Dnd2024Runtime:
             uid: deepcopy(instance.get_character_sheet(uid).get("ruleset_character"))
             for uid in getattr(instance, "players", {})
         }
-        if str(batch.get("intent_type") or "") in CAMPAIGN_INTENT_TYPES:
+        if str(batch.get("intent_type") or "") in EXPLORATION_INTENT_TYPES:
+            result = self._exploration_engine(locale).apply_batch(instance, batch)
+        elif str(batch.get("intent_type") or "") in CAMPAIGN_INTENT_TYPES:
             campaign_engine = self._campaign_engine(instance, locale)
             result = campaign_engine.apply_batch(instance, batch)
             if result.get("applied"):
@@ -670,6 +729,7 @@ class Dnd2024Runtime:
             "dnd2024.position.changed", "dnd2024.spell.cast",
             "check.resolved", "resource.changed", "condition.applied",
             "condition.removed", "dnd2024.death_save.resolved",
+            "dnd2024.character.revived",
         }
         allowed_fields = {
             "type", "kind", "actor_id", "target_id", "text", "natural", "modifier",

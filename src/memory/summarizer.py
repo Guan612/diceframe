@@ -136,6 +136,47 @@ _SUMMARY_PROMPT_ROLLING_JA = """あなたはゲームログの要約担当です
 {log_text}
 """
 
+_SUMMARY_PROMPT_NEW_DE = """Du bist der Zusammenfassungs-Assistent für TRPG-Sitzungsprotokolle. Lies das folgende Spielprotokoll und erstelle eine Erzählzusammenfassung sowie wichtige Fakten.
+
+Ausgabeformat (striktes JSON):
+```json
+{{
+  "narrative": "Eine flüssige deutsche Erzählzusammenfassung dessen, was zuletzt geschah, unter 160 Wörtern.",
+  "key_facts": [
+    {{"type": "Typ wie location_discovered/npc_status/item_acquired/decision_made", "content": "Faktenbeschreibung auf Deutsch"}}
+  ]
+}}
+```
+
+Spielprotokoll:
+{log_text}
+"""
+
+_SUMMARY_PROMPT_ROLLING_DE = """Du bist der Zusammenfassungs-Assistent für TRPG-Sitzungsprotokolle. Lies die vorherige Zusammenfassung und das neue Spielprotokoll und erstelle eine zusammengeführte Erzählzusammenfassung sowie wichtige Fakten.
+
+Anforderungen:
+- Bewahre wichtige Handlungsstränge aus der vorherigen Zusammenfassung.
+- Verbinde neue Ereignisse natürlich mit der vorherigen Zusammenfassung.
+- Halte die Erzählzusammenfassung unter 180 deutschen Wörtern.
+- Behalte noch gültige alte Fakten bei und ergänze neue Fakten.
+
+Ausgabeformat (striktes JSON):
+```json
+{{
+  "narrative": "zusammengeführte Erzählzusammenfassung auf Deutsch",
+  "key_facts": [
+    {{"type": "Typ wie location_discovered/npc_status/item_acquired/decision_made", "content": "Faktenbeschreibung auf Deutsch"}}
+  ]
+}}
+```
+
+Vorherige Zusammenfassung:
+{previous_summary}
+
+Neues Spielprotokoll:
+{log_text}
+"""
+
 
 def build_summary_input(instance: GameInstance, last_n_rounds: int = 10) -> str:
     """从最近的日志中构建摘要输入。"""
@@ -173,6 +214,7 @@ async def summarize(instance: GameInstance, llm_client, system_prompt: str,
             "en": _SUMMARY_PROMPT_ROLLING_EN,
             "zh-CN": _SUMMARY_PROMPT_ROLLING,
             "ja": _SUMMARY_PROMPT_ROLLING_JA,
+            "de": _SUMMARY_PROMPT_ROLLING_DE,
         })
         prompt = template.format(
             previous_summary=prev_narrative, log_text=log_text,
@@ -182,6 +224,7 @@ async def summarize(instance: GameInstance, llm_client, system_prompt: str,
             "en": _SUMMARY_PROMPT_NEW_EN,
             "zh-CN": _SUMMARY_PROMPT_NEW,
             "ja": _SUMMARY_PROMPT_NEW_JA,
+            "de": _SUMMARY_PROMPT_NEW_DE,
         })
         prompt = template.format(log_text=log_text)
 

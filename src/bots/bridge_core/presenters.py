@@ -21,11 +21,13 @@ def format_action_result(result: dict[str, Any], language: str = "zh-CN") -> str
                 "en": "An economy proposal is waiting for your decision. Send “pay” to review it.",
                 "zh-CN": "当前有经济提案待确认，请发送“支付”查看。",
                 "ja": "経済提案の確認待ちです。「支払い」で確認してください。",
+                "de": "Ein Wirtschaftsvorschlag wartet auf deine Entscheidung. Sende „pay“, um ihn zu prüfen.",
             })
         return localized_text(language, {
             "en": "The game is waiting for the GM or another contributor to resolve an economy proposal.",
             "zh-CN": "当前正在等待 GM 或其他参与者处理经济提案。",
             "ja": "GM またはほかの参加者による経済提案の処理を待っています。",
+            "de": "Das Spiel wartet darauf, dass der GM oder ein anderer Teilnehmer einen Wirtschaftsvorschlag bearbeitet.",
         })
     lines = []
     roll = result.get("roll") or {}
@@ -40,17 +42,17 @@ def format_action_result(result: dict[str, Any], language: str = "zh-CN") -> str
     if pending_luck:
         lines.extend(luck_prompt_lines(pending_luck, language))
     return "\n".join(lines) or localized_text(
-        language, {"en": "Action recorded.", "zh-CN": "行动已记录。", "ja": "行動が記録されました。"}
+        language, {"en": "Action recorded.", "zh-CN": "行动已记录。", "ja": "行動が記録されました。", "de": "Aktion erfasst."}
     )
 
 
 def format_check_result(check: dict[str, Any], language: str = "zh-CN") -> str:
     """群聊没有网页卡片，以同一结构化结果渲染紧凑文本。"""
     actor = str(check.get("actor_name") or check.get("actor_uid") or localized_text(
-        language, {"en": "Character", "zh-CN": "角色", "ja": "キャラクター"}
+        language, {"en": "Character", "zh-CN": "角色", "ja": "キャラクター", "de": "Charakter"}
     ))
     label = str(check.get("label") or localized_text(
-        language, {"en": "Check", "zh-CN": "检定", "ja": "判定"}
+        language, {"en": "Check", "zh-CN": "检定", "ja": "判定", "de": "Probe"}
     ))
     dice = str(check.get("dice") or "d20")
     roll = check.get("roll")
@@ -64,12 +66,22 @@ def format_check_result(check: dict[str, Any], language: str = "zh-CN") -> str:
         "失败": "Failure",
         "大失败": "Critical Failure",
     }
+    verdict_map_de = {
+        "大成功": "Kritischer Erfolg",
+        "极难成功": "Extremer Erfolg",
+        "困难成功": "Schwerer Erfolg",
+        "普通成功": "Normaler Erfolg",
+        "成功": "Erfolg",
+        "失败": "Fehlschlag",
+        "大失败": "Kritischer Fehlschlag",
+    }
     verdict = localized_text(
         language,
         {
             "en": verdict_map.get(verdict_raw, verdict_raw),
             "zh-CN": verdict_raw,
             "ja": verdict_raw,
+            "de": verdict_map_de.get(verdict_raw, verdict_raw),
         },
     )
     if dice == "d100":
@@ -98,15 +110,16 @@ def luck_prompt_lines(
         "en": "Luck decision required:",
         "zh-CN": "需要决定是否使用幸运：",
         "ja": "幸運を使用するかどうか決めてください：",
+        "de": "Glücks-Entscheidung erforderlich:",
     })]
     multiple = len(checks) > 1
     for index, check in enumerate(checks, 1):
         prefix = f"{index}. " if multiple else ""
         actor = str(check.get("actor_name") or check.get("actor_uid") or localized_text(
-            language, {"en": "Character", "zh-CN": "角色", "ja": "キャラクター"}
+            language, {"en": "Character", "zh-CN": "角色", "ja": "キャラクター", "de": "Charakter"}
         ))
         label = str(check.get("label") or localized_text(
-            language, {"en": "Check", "zh-CN": "检定", "ja": "判定"}
+            language, {"en": "Check", "zh-CN": "检定", "ja": "判定", "de": "Probe"}
         ))
         roll = check.get("roll")
         threshold = check.get("threshold")
@@ -115,17 +128,20 @@ def luck_prompt_lines(
             "en": f"{prefix}{actor} · {label}: d100={roll}/{threshold}, spend {cost} Luck for a regular success.",
             "zh-CN": f"{prefix}{actor} · {label}：d100={roll}/{threshold}，可消耗 {cost} 点幸运变为普通成功。",
             "ja": f"{prefix}{actor} · {label}：d100={roll}/{threshold}、幸運を{cost}点消費して通常成功にできます。",
+            "de": f"{prefix}{actor} · {label}: d100={roll}/{threshold}, {cost} Glückspunkte für einen normalen Erfolg einsetzen.",
         }))
     lines.append(localized_text(language, {
         "en": f"Use: {command_prefix} luck; keep failure: {command_prefix} no luck",
         "zh-CN": f"使用：{command_prefix} 幸运；保留失败：{command_prefix} 不用幸运",
         "ja": f"使用：{command_prefix} luck；失敗のまま残す：{command_prefix} no luck",
+        "de": f"Verwenden: {command_prefix} luck; Fehlschlag behalten: {command_prefix} no luck",
     }))
     if multiple:
         lines.append(localized_text(language, {
             "en": "Your character is matched automatically; add a number only if that character has multiple decisions.",
             "zh-CN": "系统会自动匹配你的角色；只有同一角色有多个选择时才需要追加序号。",
             "ja": "あなたのキャラクターは自動的にマッチします；同一キャラクターに複数の選択肢がある場合のみ番号を付けてください。",
+            "de": "Dein Charakter wird automatisch zugeordnet; füge nur dann eine Nummer hinzu, wenn dieser Charakter mehrere Entscheidungen hat.",
         }))
     return lines
 
@@ -133,14 +149,15 @@ def luck_prompt_lines(
 def recap_text(detail: dict[str, Any], language: str = "zh-CN") -> str:
     recap = detail.get("recap") if isinstance(detail.get("recap"), dict) else {}
     scene = str(recap.get("current_scene") or detail.get("scene") or localized_text(
-        language, {"en": "Unknown scene", "zh-CN": "未知场景", "ja": "不明なシーン"}
+        language, {"en": "Unknown scene", "zh-CN": "未知场景", "ja": "不明なシーン", "de": "Unbekannte Szene"}
     ))
     round_no = recap.get("round_number") or detail.get("round_number") or "?"
-    lines = [localized_text(language, {"en": "Recap:", "zh-CN": "前情提要：", "ja": "これまでのあらすじ："})]
+    lines = [localized_text(language, {"en": "Recap:", "zh-CN": "前情提要：", "ja": "これまでのあらすじ：", "de": "Rückblick:"})]
     lines.append(localized_text(language, {
         "en": f"  Current: round {round_no}, scene “{scene}”.",
         "zh-CN": f"　　当前：第 {round_no} 轮，场景「{scene}」。",
         "ja": f"　　現在：第 {round_no} ラウンド、シーン「{scene}」。",
+        "de": f"  Aktuell: Runde {round_no}, Szene „{scene}“.",
     }))
     narrative = str(recap.get("narrative") or "").strip()
     if narrative:
@@ -148,10 +165,11 @@ def recap_text(detail: dict[str, Any], language: str = "zh-CN") -> str:
             "en": f"  Overview: {narrative}",
             "zh-CN": f"　　总览：{narrative}",
             "ja": f"　　概要：{narrative}",
+            "de": f"  Überblick: {narrative}",
         }))
     recent = recap.get("recent_rounds") if isinstance(recap.get("recent_rounds"), list) else []
     if recent:
-        lines.append(localized_text(language, {"en": "Recent events:", "zh-CN": "最近发生：", "ja": "最近の出来事："}))
+        lines.append(localized_text(language, {"en": "Recent events:", "zh-CN": "最近发生：", "ja": "最近の出来事：", "de": "Letzte Ereignisse:"}))
         for item in recent[-3:]:
             if not isinstance(item, dict):
                 continue
@@ -161,7 +179,7 @@ def recap_text(detail: dict[str, Any], language: str = "zh-CN") -> str:
             for action in actions[:3]:
                 if isinstance(action, dict):
                     name = str(action.get("character_name") or localized_text(
-                        language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者"}
+                        language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者", "de": "Abenteurer"}
                     ))
                     text = str(action.get("text") or "").strip()
                     if text:
@@ -169,17 +187,20 @@ def recap_text(detail: dict[str, Any], language: str = "zh-CN") -> str:
                             "en": f"{name}: {text}",
                             "zh-CN": f"{name}：{text}",
                             "ja": f"{name}：{text}",
+                            "de": f"{name}: {text}",
                         }))
             body = gm_text or localized_text(language, {
                 "en": "; ".join(action_bits),
                 "zh-CN": "；".join(action_bits),
                 "ja": "；".join(action_bits),
+                "de": "; ".join(action_bits),
             })
             if body:
                 lines.append(localized_text(language, {
                     "en": f"  R{item.get('round', '?')}: {body}",
                     "zh-CN": f"　　R{item.get('round', '?')}：{body}",
                     "ja": f"　　R{item.get('round', '?')}：{body}",
+                    "de": f"  R{item.get('round', '?')}: {body}",
                 }))
     waiting = (detail.get("multiplayer") or {}).get("waiting_players") if isinstance(detail.get("multiplayer"), dict) else []
     if isinstance(waiting, list) and waiting:
@@ -193,12 +214,14 @@ def recap_text(detail: dict[str, Any], language: str = "zh-CN") -> str:
                 "en": "Waiting for actions from: " + ", ".join(names) + ".",
                 "zh-CN": "现在等待：" + "、".join(names) + " 行动。",
                 "ja": "アクション待ち：" + "、".join(names) + "。",
+                "de": "Warte auf Aktionen von: " + ", ".join(names) + ".",
             }))
     if len(lines) <= 2:
         lines.append(localized_text(language, {
             "en": "  No previous rounds yet; submit an action to begin.",
             "zh-CN": "　　暂无历史回合；可以先发送行动开始冒险。",
             "ja": "　　まだ過去のラウンドはありません；行動を送って冒険を始めてください。",
+            "de": "  Noch keine vorherigen Runden; sende eine Aktion, um zu beginnen.",
         }))
     return "\n".join(lines)
 
@@ -211,12 +234,14 @@ def map_lines(data: dict[str, Any], language: str = "zh-CN") -> list[str]:
             "en": "No map data yet. Add locations to the lorebook or continue the story.",
             "zh-CN": "暂无地图数据；可以先在世界书补地点，或继续推进剧情。",
             "ja": "まだマップデータがありません。ワールドブックに地点を追加するか、物語を進めてください。",
+            "de": "Noch keine Kartendaten. Füge Orte im Lorebook hinzu oder setze die Geschichte fort.",
         })]
         if current_scene:
             base.insert(0, localized_text(language, {
                 "en": f"Current scene: {current_scene}",
                 "zh-CN": f"当前场景：{current_scene}",
                 "ja": f"現在のシーン：{current_scene}",
+                "de": f"Aktuelle Szene: {current_scene}",
             }))
         return base
 
@@ -229,6 +254,7 @@ def map_lines(data: dict[str, Any], language: str = "zh-CN") -> list[str]:
         "en": f"Current scene: {current_scene or 'Unknown'}",
         "zh-CN": f"当前场景：{current_scene or '未知'}",
         "ja": f"現在のシーン：{current_scene or '不明'}",
+        "de": f"Aktuelle Szene: {current_scene or 'Unbekannt'}",
     })]
     for loc in locations[:10]:
         if not isinstance(loc, dict):
@@ -244,6 +270,7 @@ def map_lines(data: dict[str, Any], language: str = "zh-CN") -> list[str]:
             "en": f": {content}",
             "zh-CN": f"：{content}",
             "ja": f"：{content}",
+            "de": f": {content}",
         }) if content else ""))
 
     edges: list[str] = []
@@ -273,12 +300,14 @@ def map_lines(data: dict[str, Any], language: str = "zh-CN") -> list[str]:
             "en": "Connections: " + "; ".join(edges),
             "zh-CN": "连接：" + "；".join(edges),
             "ja": "接続：" + "；".join(edges),
+            "de": "Verbindungen: " + "; ".join(edges),
         }))
     if len(locations) > 10:
         lines.append(localized_text(language, {
             "en": f"{len(locations) - 10} more locations are available on the web map.",
             "zh-CN": f"另有 {len(locations) - 10} 个地点，可在网页地图查看。",
             "ja": f"あと {len(locations) - 10} 地点はウェブマップで確認できます。",
+            "de": f"{len(locations) - 10} weitere Orte sind auf der Web-Karte verfügbar.",
         }))
     return lines
 
@@ -294,8 +323,8 @@ def is_current_location(loc: dict[str, Any], current_scene: str) -> bool:
 
 
 def map_text(lines: list[str], language: str = "zh-CN") -> str:
-    title = localized_text(language, {"en": "Scene map:\n", "zh-CN": "场景地图：\n", "ja": "シーンマップ：\n"})
-    indent = localized_text(language, {"en": "  ", "zh-CN": "　　", "ja": "　　"})
+    title = localized_text(language, {"en": "Scene map:\n", "zh-CN": "场景地图：\n", "ja": "シーンマップ：\n", "de": "Szenenkarte:\n"})
+    indent = localized_text(language, {"en": "  ", "zh-CN": "　　", "ja": "　　", "de": "  "})
     return title + "\n".join(indent + line for line in lines)
 
 
@@ -323,6 +352,7 @@ def payment_line(payment: dict[str, Any], index: int, language: str = "zh-CN") -
         "en": "GM-requested payment",
         "zh-CN": "GM 建议支付",
         "ja": "GM からの支払い要請",
+        "de": "Vom GM angeforderte Zahlung",
     })).strip()
     round_no = payment.get("round", "?")
     kind = str(payment.get("kind") or "payment")
@@ -330,12 +360,14 @@ def payment_line(payment: dict[str, Any], index: int, language: str = "zh-CN") -
         "en": "reward" if kind == "reward" else "payment",
         "zh-CN": "奖励" if kind == "reward" else "支付",
         "ja": "報酬" if kind == "reward" else "支払い",
+        "de": "Belohnung" if kind == "reward" else "Zahlung",
     })
     reference = int(payment.get("sequence", index) or index)
     return localized_text(language, {
         "en": f"#{reference} · R{round_no} {marker} {amount} gold: {reason}",
         "zh-CN": f"#{reference} · R{round_no} {marker} {amount} 金币：{reason}",
         "ja": f"#{reference} · R{round_no} {marker} {amount} ゴールド：{reason}",
+        "de": f"#{reference} · R{round_no} {marker} {amount} Gold: {reason}",
     })
 
 
@@ -349,6 +381,7 @@ def roster_names(group: dict[str, Any], language: str = "zh-CN") -> str:
         "en": ", ".join(names[:12]) or "No characters yet (create one on the web page first)",
         "zh-CN": "、".join(names[:12]) or "暂无角色（请先在网页创建角色）",
         "ja": "、".join(names[:12]) or "まだキャラクターがいません（先にウェブページで作成してください）",
+        "de": ", ".join(names[:12]) or "Noch keine Charaktere (bitte zuerst auf der Webseite einen erstellen)",
     })
 
 
@@ -415,6 +448,17 @@ def bind_success_text(
             "3. メンバーが揃うと自動で判定とダイスロールが行われます。ダイスコマンドは不要です。\n"
             f"4. 補足：{command_example('recap', command_prefix=command_prefix)} / {command_example('map', command_prefix=command_prefix)}；困ったら {command_example('help', command_prefix=command_prefix)} を送信してください。"
         ),
+        "de": (
+            f"An „{world}“ gebunden; GM-Identität bestätigt.\n"
+            "So geht's los:\n"
+            f"1. Charakter beanspruchen: {command_example('join Character Name', command_prefix=command_prefix)}\n"
+            f"   Verfügbar: {names}\n"
+            f"2. Aktion beschreiben: {command_example('I inspect the area', command_prefix=command_prefix)}\n"
+            "3. Proben werden automatisch entschieden und gewürfelt, sobald die Runde bereit ist.\n"
+            f"4. Auf dem Laufenden bleiben mit {command_example('recap', command_prefix=command_prefix)} oder "
+            f"{command_example('map', command_prefix=command_prefix)}; nutze "
+            f"{command_example('help', command_prefix=command_prefix)}, wenn du nicht weiterkommst."
+        ),
     })
 
 
@@ -443,6 +487,14 @@ def unbound_group_text(*, command_prefix: str = "@我", language: str = "zh-CN")
             "2. GM コントロールの「One-time Bot バインド」を選択\n"
             f"3. コピーしたコマンドをここに送信：{command_example('bind <game_key> <one-time-token>', command_prefix=command_prefix)}\n"
             f"プレイヤーはその後 {command_example('join Character Name', command_prefix=command_prefix)} でキャラクターを認領できます。"
+        ),
+        "de": (
+            "Dieser Chat ist noch mit keinem Spiel verbunden.\n"
+            "GM-Einrichtung:\n"
+            "1. Öffne das aktuelle Spiel in der Web-App\n"
+            "2. Wähle „Einmalige Bot-Bindung“ in den GM-Steuerelementen\n"
+            f"3. Sende den kopierten Befehl hierher: {command_example('bind <game_key> <one-time-token>', command_prefix=command_prefix)}\n"
+            f"Spieler können danach einen Charakter beanspruchen mit: {command_example('join Character Name', command_prefix=command_prefix)}"
         ),
     })
 
@@ -480,6 +532,15 @@ def unclaimed_player_text(
             f"前情を確認：{command_example('recap', command_prefix=command_prefix)}\n"
             f"地点を確認：{command_example('map', command_prefix=command_prefix)}\n"
             f"認領後は：{command_example('部屋の中を調べる', command_prefix=command_prefix)}"
+        ),
+        "de": (
+            "Du hast noch keinen Charakter beansprucht, daher kannst du keine Aktionen senden.\n"
+            f"Zuerst: {command_example('join Character Name', command_prefix=command_prefix)}\n"
+            f"Verfügbar: {roster_names(group, language)}\n"
+            f"Beispiel: {command_example('join Erin', command_prefix=command_prefix)}\n"
+            f"Auf dem Laufenden bleiben: {command_example('recap', command_prefix=command_prefix)}\n"
+            f"Orte ansehen: {command_example('map', command_prefix=command_prefix)}\n"
+            f"Dann handeln mit: {command_example('I inspect the area', command_prefix=command_prefix)}"
         ),
     })
 
@@ -547,6 +608,25 @@ def bound_help_text(
             f"6. GM の進行：{command_example('advance', command_prefix=command_prefix)}\n"
             f"7. 困ったら {command_example('help', command_prefix=command_prefix)} を送ってください。"
         ),
+        "de": (
+            "DiceFrame Chat-Schnellstart:\n"
+            f"1. Charakter beanspruchen: {command_example('join Character Name', command_prefix=command_prefix)}\n"
+            f"   Verfügbar: {roster_names(group, language)}\n"
+            f"   Brauchst du einen? {command_example('create character', command_prefix=command_prefix)}; "
+            f"KI-Entwurf: {command_example('AI character', command_prefix=command_prefix)}\n"
+            f"   Spieler einladen: {command_example('invite', command_prefix=command_prefix)}\n"
+            f"   Auf dem Laufenden bleiben: {command_example('recap', command_prefix=command_prefix)}; "
+            f"Karte: {command_example('map', command_prefix=command_prefix)}\n"
+            f"2. Aktion beschreiben: {command_example('I inspect the area', command_prefix=command_prefix)}\n"
+            f"   Den GM fragen, ohne zu handeln: {command_example('ask kp <question>', command_prefix=command_prefix)}\n"
+            "3. Proben werden automatisch entschieden und gewürfelt, sobald die Runde bereit ist.\n"
+            f"   Falls angeboten: {command_example('luck', command_prefix=command_prefix)} oder {command_example('no luck', command_prefix=command_prefix)}\n"
+            f"4. Charakterstatus: {command_example('status', command_prefix=command_prefix)}\n"
+            f"5. Abwesend: {command_example('away', command_prefix=command_prefix)}; "
+            f"zurück: {command_example('back', command_prefix=command_prefix)}\n"
+            f"6. GM-Fortschritt: {command_example('advance', command_prefix=command_prefix)}\n"
+            f"7. Nutze {command_example('help', command_prefix=command_prefix)}, wenn du nicht weiterkommst."
+        ),
     })
 
 
@@ -589,12 +669,14 @@ def character_creation_lines(
         "en": "Attributes: " + (", ".join(attr_names[:8]) if attr_names else "follow the web form"),
         "zh-CN": "属性：" + ("、".join(attr_names[:8]) if attr_names else "按网页表单填写"),
         "ja": "属性：" + ("、".join(attr_names[:8]) if attr_names else "ウェブフォームに従って入力"),
+        "de": "Attribute: " + (", ".join(attr_names[:8]) if attr_names else "dem Webformular folgen"),
     })
     if attr_total:
         attr_line += localized_text(language, {
             "en": f" (suggested total: {attr_total})",
             "zh-CN": f"（建议总点数 {attr_total}）",
             "ja": f"（推奨合計：{attr_total}）",
+            "de": f" (empfohlene Gesamtsumme: {attr_total})",
         })
     skill_bits = []
     if max_skills:
@@ -602,24 +684,28 @@ def character_creation_lines(
             "en": f"choose about {max_skills}",
             "zh-CN": f"建议选 {max_skills} 个左右",
             "ja": f"約 {max_skills} 個を推奨",
+            "de": f"etwa {max_skills} wählen",
         }))
     if skill_points:
         skill_bits.append(localized_text(language, {
             "en": f"suggested skill points: {skill_points}",
             "zh-CN": f"参考技能点 {skill_points}",
             "ja": f"技能ポイント目安：{skill_points}",
+            "de": f"empfohlene Fertigkeitspunkte: {skill_points}",
         }))
     if max_skill_value:
         skill_bits.append(localized_text(language, {
             "en": f"suggested per-skill maximum: {max_skill_value}",
             "zh-CN": f"单项参考 {max_skill_value}",
             "ja": f"単一スキル上限の目安：{max_skill_value}",
+            "de": f"empfohlenes Maximum pro Fertigkeit: {max_skill_value}",
         }))
     if skill_examples:
         skill_bits.append(localized_text(language, {
             "en": "Examples: " + ", ".join(skill_examples[:6]),
             "zh-CN": "例：" + "、".join(skill_examples[:6]),
             "ja": "例：" + "、".join(skill_examples[:6]),
+            "de": "Beispiele: " + ", ".join(skill_examples[:6]),
         }))
     if skill_hint:
         skill_bits.append(skill_hint)
@@ -654,6 +740,16 @@ def character_creation_lines(
             f"AI による下書き生成：{command_example('AI character', command_prefix=command_prefix)}",
             f"記入が終わったらここで送信：{command_example('join Character Name', command_prefix=command_prefix)}",
         ],
+        "de": [
+            "1. Charaktername: Wie sollen andere dich nennen?",
+            "2. Spezies/Identität: Mensch, Ermittler, Elf usw.",
+            "3. Klasse/Rolle: frei wählbar" + (f"; Beispiele: {', '.join(class_names[:6])}" if class_names else " passend zum Setting"),
+            "4. " + attr_line,
+            "5. Fertigkeiten: " + ("; ".join(skill_bits) if skill_bits else "den aktuellen Regeln und dem Webformular folgen"),
+            "6. Hintergrund: 1-3 Sätze zu Herkunft, Ziel oder Geheimnis",
+            f"KI-Entwurf gewünscht? {command_example('AI character', command_prefix=command_prefix)}",
+            f"Wenn fertig, hier zurückkehren und senden: {command_example('join Character Name', command_prefix=command_prefix)}",
+        ],
     })
 
 
@@ -662,25 +758,27 @@ def character_creation_text(lines: list[str], link: str = "", language: str = "z
         "en": "Create a character:\n",
         "zh-CN": "新建角色 / 车卡：\n",
         "ja": "キャラクター作成：\n",
+        "de": "Charakter erstellen:\n",
     }) + "\n".join(lines)
     if link:
         text += localized_text(language, {
             "en": f"\nWeb character creator: {link}",
             "zh-CN": f"\n网页建卡入口：{link}",
             "ja": f"\nウェブのキャラクター作成ページ：{link}",
+            "de": f"\nWeb-Charaktererstellung: {link}",
         })
     return text
 
 
 def character_draft_lines(draft: dict[str, Any], language: str = "zh-CN") -> list[str]:
     name = str(draft.get("character_name") or localized_text(
-        language, {"en": "Unnamed character", "zh-CN": "未命名角色", "ja": "名前のないキャラクター"}
+        language, {"en": "Unnamed character", "zh-CN": "未命名角色", "ja": "名前のないキャラクター", "de": "Unbenannter Charakter"}
     ))
     race = str(draft.get("race") or localized_text(
-        language, {"en": "Unspecified identity", "zh-CN": "未定身份", "ja": "未設定の身分"}
+        language, {"en": "Unspecified identity", "zh-CN": "未定身份", "ja": "未設定の身分", "de": "Nicht festgelegte Identität"}
     ))
     cls = str(draft.get("class") or localized_text(
-        language, {"en": "Unspecified role", "zh-CN": "未定定位", "ja": "未設定のロール"}
+        language, {"en": "Unspecified role", "zh-CN": "未定定位", "ja": "未設定のロール", "de": "Nicht festgelegte Rolle"}
     ))
     attrs = format_character_attrs(draft.get("attributes"), language)
     skills = format_character_skills(draft.get("skills"), language)
@@ -708,12 +806,20 @@ def character_draft_lines(draft: dict[str, Any], language: str = "zh-CN") -> lis
             f"スキル：{skills}",
             *bg_lines,
         ],
+        "de": [
+            f"Charakter: {name}",
+            f"Identität/Rolle: {race} · {cls}",
+            f"Attribute: {attrs}",
+            f"Fertigkeiten: {skills}",
+            *bg_lines,
+        ],
     })
     if equipment:
         lines.append(localized_text(language, {
             "en": f"Equipment/items: {equipment}",
             "zh-CN": f"装备/物品：{equipment}",
             "ja": f"装備/所持品：{equipment}",
+            "de": f"Ausrüstung/Gegenstände: {equipment}",
         }))
     return lines
 
@@ -722,11 +828,11 @@ def background_lines(background: str, language: str = "zh-CN") -> list[str]:
     """把角色背景按段落拆分，段间用空串标记（卡片渲染时段间留空行）。"""
     raw = background.strip()
     if not raw:
-        return [localized_text(language, {"en": "Background: none yet", "zh-CN": "背景：暂无背景", "ja": "背景：まだなし"})]
+        return [localized_text(language, {"en": "Background: none yet", "zh-CN": "背景：暂无背景", "ja": "背景：まだなし", "de": "Hintergrund: noch keiner"})]
     segments = [re.sub(r"[ \t]+", " ", seg.strip()) for seg in re.split(r"\n\s*\n", raw) if seg.strip()]
     if not segments:
         segments = [re.sub(r"\s+", " ", raw)]
-    lines: list[str] = [localized_text(language, {"en": "Background:", "zh-CN": "背景：", "ja": "背景："})]
+    lines: list[str] = [localized_text(language, {"en": "Background:", "zh-CN": "背景：", "ja": "背景：", "de": "Hintergrund:"})]
     for i, seg in enumerate(segments):
         if i:
             lines.append("")
@@ -739,8 +845,8 @@ def character_public_lines(draft: dict[str, Any], language: str = "zh-CN") -> li
 
 
 def character_draft_text(title: str, lines: list[str], link: str = "", language: str = "zh-CN") -> str:
-    indent = localized_text(language, {"en": "  ", "zh-CN": "　　", "ja": "　　"})
-    text = title + localized_text(language, {"en": ":\n", "zh-CN": "：\n", "ja": "：\n"}) + "\n".join(
+    indent = localized_text(language, {"en": "  ", "zh-CN": "　　", "ja": "　　", "de": "  "})
+    text = title + localized_text(language, {"en": ":\n", "zh-CN": "：\n", "ja": "：\n", "de": ":\n"}) + "\n".join(
         "" if line == "" else indent + line for line in lines
     )
     if link:
@@ -748,20 +854,21 @@ def character_draft_text(title: str, lines: list[str], link: str = "", language:
             "en": f"\nWeb character creator: {link}",
             "zh-CN": f"\n网页建卡入口：{link}",
             "ja": f"\nウェブのキャラクター作成ページ：{link}",
+            "de": f"\nWeb-Charaktererstellung: {link}",
         })
     return text
 
 
 def format_character_attrs(attrs: Any, language: str = "zh-CN") -> str:
     if not isinstance(attrs, dict) or not attrs:
-        return localized_text(language, {"en": "Follow the web rules", "zh-CN": "按网页规则填写", "ja": "ウェブのルールに従って入力"})
-    separator = localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、"})
+        return localized_text(language, {"en": "Follow the web rules", "zh-CN": "按网页规则填写", "ja": "ウェブのルールに従って入力", "de": "Den Web-Regeln folgen"})
+    separator = localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、", "de": ", "})
     return separator.join(f"{key} {value}" for key, value in list(attrs.items())[:8])
 
 
 def format_character_skills(skills: Any, language: str = "zh-CN") -> str:
     if not isinstance(skills, list) or not skills:
-        return localized_text(language, {"en": "Choose based on the character’s role", "zh-CN": "按角色定位选择", "ja": "キャラクターのロールに合わせて選択"})
+        return localized_text(language, {"en": "Choose based on the character’s role", "zh-CN": "按角色定位选择", "ja": "キャラクターのロールに合わせて選択", "de": "Passend zur Rolle des Charakters wählen"})
     names: list[str] = []
     for item in skills[:8]:
         if isinstance(item, dict):
@@ -773,11 +880,12 @@ def format_character_skills(skills: Any, language: str = "zh-CN") -> str:
             value = str(item).strip()
             if value:
                 names.append(value)
-    separator = localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、"})
+    separator = localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、", "de": ", "})
     return separator.join(names) or localized_text(language, {
         "en": "Choose based on the character’s role",
         "zh-CN": "按角色定位选择",
         "ja": "キャラクターのロールに合わせて選択",
+        "de": "Passend zur Rolle des Charakters wählen",
     })
 
 
@@ -792,7 +900,7 @@ def format_character_items(items: Any, language: str = "zh-CN") -> str:
             name = str(item).strip()
         if name:
             names.append(name)
-    return localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、"}).join(names)
+    return localized_text(language, {"en": ", ", "zh-CN": "、", "ja": "、", "de": ", "}).join(names)
 
 
 def player_tutorial_lines(*, command_prefix: str = "@我", language: str = "zh-CN") -> list[str]:
@@ -830,6 +938,19 @@ def player_tutorial_lines(*, command_prefix: str = "@我", language: str = "zh-C
             "DND メモ：有利=2d20の高い方、不利=2d20の低い方；同時の場合は相殺",
             f"その他：{command_example('map', command_prefix=command_prefix)} で地点、{command_example('sense', command_prefix=command_prefix)} でプライベート情報、{command_example('pay', command_prefix=command_prefix)} で支払い確認；困ったら {command_example('help', command_prefix=command_prefix)}",
         ],
+        "de": [
+            f"1. Auf dem Laufenden bleiben: {command_example('recap', command_prefix=command_prefix)}",
+            f"2. Brauchst du einen Charakter? {command_example('create character', command_prefix=command_prefix)}",
+            f"   KI-Entwurf gewünscht? {command_example('AI character', command_prefix=command_prefix)}",
+            f"3. Beanspruchen: {command_example('join Character Name', command_prefix=command_prefix)}",
+            f"4. Losspielen: {command_example('I inspect the area', command_prefix=command_prefix)}",
+            f"5. Proben werden automatisch entschieden und gewürfelt; Status: "
+            f"{command_example('status', command_prefix=command_prefix)}",
+            f"Weitere Befehle: {command_example('map', command_prefix=command_prefix)}, "
+            f"{command_example('sense', command_prefix=command_prefix)}, "
+            f"{command_example('pay', command_prefix=command_prefix)} oder "
+            f"{command_example('help', command_prefix=command_prefix)}",
+        ],
     })
 
 
@@ -838,5 +959,6 @@ def player_tutorial_text(lines: list[str], language: str = "zh-CN") -> str:
         "en": "New player quick start:\n",
         "zh-CN": "群聊跑团新玩家一图流：\n",
         "ja": "新規プレイヤー クイックスタート：\n",
+        "de": "Schnellstart für neue Spieler:\n",
     })
     return title + "\n".join(lines)

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 
 DEFAULT_LANGUAGE = "zh-CN"
-# 三语支持：zh-CN / en / ja。ja 已全链路实现（localized_text n-way 分叉 +
-# *_ja 规则模板/词表/prompt + 前端 ja 消息，见 P3-A）。
-SUPPORTED_LANGUAGES = {"zh-CN", "en", "ja"}
+# 四语支持：zh-CN / en / ja / de。ja 已全链路实现（localized_text n-way 分叉 +
+# *_ja 规则模板/词表/prompt + 前端 ja 消息，见 P3-A）。de（German）按同一模式
+# 追加：核心 UI/GM 输出与规则附录已支持，内置世界模板/SRD 等大体量内容仍随
+# localized_text 的回退链落回英文，尚未逐条翻译（与 ja 现状一致）。
+SUPPORTED_LANGUAGES = {"zh-CN", "en", "ja", "de"}
 
 # 本地化字段后缀登记：中文（zh-*）无后缀（直接用原字段）；
 # 新增语言在此登记后缀后，{key}_{suffix} 式字段即可被 localized_field 查到。
 # 字段可选，缺失时回退原字段，不强制维护。
-_LANG_FIELD_SUFFIXES = {"en": "en", "ja": "ja"}
+_LANG_FIELD_SUFFIXES = {"en": "en", "ja": "ja", "de": "de"}
 
 
 def normalize_language(value: object) -> str:
@@ -20,6 +22,8 @@ def normalize_language(value: object) -> str:
         return "en"
     if text in {"ja", "jp", "japanese", "日本語"}:
         return "ja"
+    if text in {"de", "de-de", "de-at", "de-ch", "german", "deutsch"}:
+        return "de"
     if text in {"zh", "zh-cn", "cn", "chinese", "简体中文", "中文"}:
         return "zh-CN"
     return DEFAULT_LANGUAGE
@@ -32,9 +36,9 @@ def is_english(value: object) -> bool:
 def localized_text(language: object, texts: dict[str, str], fallback: str = "") -> str:
     """按语言查表取文案（P3-A n-way 重构的核心 helper）。
 
-    texts = {"zh-CN": "...", "en": "...", "ja": "..."}；未命中当前语言时回退
-    en，再回退 zh-CN，最后回退 fallback。逐步替代 `if english: A else B` 的
-    二元分叉。第三语言（ja）缺失时优先回退英文。
+    texts = {"zh-CN": "...", "en": "...", "ja": "...", "de": "..."}；未命中
+    当前语言时回退 en，再回退 zh-CN，最后回退 fallback。逐步替代
+    `if english: A else B` 的二元分叉。第三/四语言（ja/de）缺失时优先回退英文。
     """
     lang = normalize_language(language)
     return texts.get(lang) or texts.get("en") or texts.get("zh-CN") or fallback
@@ -52,14 +56,14 @@ def lang_suffix(language: object) -> str:
 
 
 def localized_field(template: dict, key: str, language: object = DEFAULT_LANGUAGE):
-    """按语言取本地化字段：优先 {key}_{suffix}，第三语言（ja）缺失时回退 {key}_en，
-    再无则回退 {key}（zh 原文）。字段可选，不强制维护。"""
+    """按语言取本地化字段：优先 {key}_{suffix}，第三/四语言（ja/de）缺失时回退
+    {key}_en，再无则回退 {key}（zh 原文）。字段可选，不强制维护。"""
     suffix = lang_suffix(language)
     if suffix:
         v = template.get(f"{key}_{suffix}")
         if v is not None:
             return v
-        # ja 等非 en 语言缺失时先回退英文字段，保持与 localized_text 的回退链一致。
+        # ja/de 等非 en 语言缺失时先回退英文字段，保持与 localized_text 的回退链一致。
         if suffix != "en":
             en_v = template.get(f"{key}_en")
             if en_v is not None:
@@ -78,6 +82,8 @@ def language_name(value: object) -> str:
         return "English"
     if lang == "ja":
         return "日本語"
+    if lang == "de":
+        return "Deutsch"
     return "简体中文"
 
 
@@ -88,6 +94,21 @@ def gm_language_instruction(value: object) -> str:
     stable across languages.
     """
     lang = normalize_language(value)
+    if lang == "de":
+        return (
+            "## Ausgabesprache\n"
+            "- GM-Erzähltext, Szenenbeschreibungen, private Nachrichten und "
+            "QUICK_ACTIONS-Optionen für Spieler müssen in natürlichem Deutsch "
+            "verfasst werden.\n"
+            "- Das strukturelle Protokoll bleibt unverändert: der `---`-Trenner "
+            "und Tags wie HP, GOLD, LOOT, SCENE, PRIVATE, QUICK_ACTIONS, NONE "
+            "müssen exakt im vorgegebenen Großschreibungsformat bleiben.\n"
+            "- Charakter-IDs, Tag-Namen, JSON-Schlüssel und Würfelnotation nicht "
+            "übersetzen. Nur den für Spieler bestimmten Fließtext übersetzen.\n"
+            "- Eine Gebühr oder Belohnung nie als abgeschlossen erzählen ohne "
+            "den ausdrücklichen serverseitigen Vorschlag; Käufe laufen über den "
+            "GM-Bestellablauf."
+        )
     if lang == "en":
         return (
             "## Output Language\n"

@@ -20,10 +20,8 @@ from src.engine.language import localized_text
 from src.rules.rule_system import RuleSystem
 
 
-def _verdict_text(verdict: str, english: bool) -> str:
-    if not english:
-        return verdict
-    mapping = {
+_VERDICT_MAPPINGS = {
+    "en": {
         "大成功": "Critical Success",
         "极难成功": "Extreme Success",
         "困难成功": "Hard Success",
@@ -31,8 +29,23 @@ def _verdict_text(verdict: str, english: bool) -> str:
         "成功": "Success",
         "失败": "Failure",
         "大失败": "Critical Failure",
-    }
-    return mapping.get(verdict, verdict)
+    },
+    "de": {
+        "大成功": "Kritischer Erfolg",
+        "极难成功": "Extremer Erfolg",
+        "困难成功": "Schwerer Erfolg",
+        "普通成功": "Normaler Erfolg",
+        "成功": "Erfolg",
+        "失败": "Fehlschlag",
+        "大失败": "Kritischer Fehlschlag",
+    },
+}
+
+
+def _verdict_text(verdict: str, english: bool, lang: str = "en") -> str:
+    if not english:
+        return verdict
+    return _VERDICT_MAPPINGS.get(lang, _VERDICT_MAPPINGS["en"]).get(verdict, verdict)
 
 
 class DiceResolver:
@@ -208,6 +221,7 @@ class DiceResolver:
                     "en": f"\nLuck option: spend {luck_cost} Luck for a regular success.",
                     "zh-CN": f"\n幸运选项: 可消耗 {luck_cost} 点幸运变为普通成功。",
                     "ja": f"\n幸運オプション: {luck_cost} 点の幸運を消費して普通成功にできる。",
+                    "de": f"\nGlücksoption: {luck_cost} Glückspunkte einsetzen, um einen normalen Erfolg zu erzielen.",
                 })
             return localized_text(instance.language, {
                 "en": (
@@ -232,6 +246,14 @@ class DiceResolver:
                     f"結果: {verdict}{luck_hint}\n"
                     "要求: これはサーバー側で確定した結果。この結果に沿って叙述し、"
                     "振り直しや改変をしてはならない。\n"
+                ),
+                "de": (
+                    "\n[Systemseitige Probe - Muss befolgt werden]\n"
+                    f"Probe: d100={check['roll']} vs {subject}\n"
+                    f"Erfolgsschwellen: normal≤{threshold}, schwer≤{check['hard_threshold']}, "
+                    f"extrem≤{check['extreme_threshold']}\n"
+                    f"Ergebnis: {_verdict_text(verdict, True, 'de')}{luck_hint}\n"
+                    "Anforderung: Erzähle dieses vom Server ermittelte Ergebnis, ohne Wurf oder Ausgang zu ändern.\n"
                 ),
             })
 
@@ -268,5 +290,11 @@ class DiceResolver:
                 f"結果: {verdict}\n"
                 "要求: これはサーバー側で確定した結果。この結果に沿って叙述し、"
                 "振り直しや改変をしてはならない。\n"
+            ),
+            "de": (
+                "\n[Systemseitige Probe - Muss befolgt werden]\n"
+                f"Probe: {roll_label} + {attribute} {modifier:+d} = {total} vs SG {dc}\n"
+                f"Ergebnis: {_verdict_text(verdict, True, 'de')}\n"
+                "Anforderung: Erzähle dieses vom Server ermittelte Ergebnis, ohne Wurf oder Ausgang zu ändern.\n"
             ),
         })

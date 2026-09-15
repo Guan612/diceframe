@@ -11,7 +11,11 @@ from src.engine.character_utils import revive_character
 from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
 from src.engine.puzzle import PuzzleState
-from src.rulesets.contracts import NarrativeAdvancementRuntime, NarrativeCombatSignalRuntime
+from src.rulesets.contracts import (
+    CharacterRevivalRuntime,
+    NarrativeAdvancementRuntime,
+    NarrativeCombatSignalRuntime,
+)
 
 logger = logging.getLogger("trpg")
 
@@ -63,7 +67,9 @@ def apply_ruleset_combat_signal(
     return bool(runtime.apply_narrative_combat_signal(instance, signal, proposal))
 
 
-def apply_revive_commands(instance: GameInstance, data: dict) -> None:
+def apply_revive_commands(
+    instance: GameInstance, data: dict, runtime: Any | None = None,
+) -> None:
     revive_commands = data.get("revive_commands", [])
     # P2-O：硬核难度禁止复活，落实"硬核=角色可永久死亡"的机制差异（不只靠 GM prompt 文案）。
     hardcore = str(getattr(instance, "difficulty", "") or "") == "硬核"
@@ -79,6 +85,8 @@ def apply_revive_commands(instance: GameInstance, data: dict) -> None:
         if not revive_character(character_sheet, method):
             continue
         instance.set_character_sheet(uid, character_sheet)
+        if isinstance(runtime, CharacterRevivalRuntime):
+            runtime.on_character_revived(instance, str(uid))
         logger.info("复活: %s method=%s hp=%d",
                     instance.players[uid].get("character_name", uid),
                     method, character_sheet["hp"])

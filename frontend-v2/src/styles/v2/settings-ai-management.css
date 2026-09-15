@@ -1374,21 +1374,6 @@
   }
 }
 
-.reference-settings-page .system-status-grid {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 12px;
-  overflow-x: auto;
-  padding-bottom: 5px;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-}
-
-.reference-settings-page .system-status-card {
-  flex: 1 0 218px;
-  scroll-snap-align: start;
-}
-
 @media (max-width: 800px) {
   .reference-settings-page .system-status-grid {
     display: flex;

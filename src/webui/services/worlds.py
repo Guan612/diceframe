@@ -203,7 +203,7 @@ def clone_world_from_template(
     if not new_name:
         # 缺省名加「克隆」后缀，避免开团页世界下拉与源模板重名不可区分。
         new_name = str(source.get("world_name") or template_id).strip() + localized_text(
-            language, {"en": " (Clone)", "zh-CN": "（克隆）", "ja": "（クローン）"},
+            language, {"en": " (Clone)", "zh-CN": "（克隆）", "ja": "（クローン）", "de": " (Klon)"},
         )
     world_id = _new_user_world_id(dependencies, new_name)
     template = {

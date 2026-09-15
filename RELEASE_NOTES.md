@@ -1,47 +1,101 @@
-# DiceFrame v2.5.7-beta.1
+# DiceFrame v2.5.9
 
-> 预发布版本：修复专业战斗工具的滚动、剧情遭遇绑定与检定重复惩罚。
+> 正式版：包含 **v2.5.9-beta.1 的全部变更**（德语支持与长文本语言布局修复），并新增 D&D 2024 AI 队友（战斗 / 代检定 / 战斗外施法）、检定规划器的物品与 NPC 上下文，恢复 GM 流程两列布局，修复多人幸运选择等待可靠性。
 
 ## 中文
 
-### 修复内容
+### 新增内容（v2.5.9-beta.1 之后）
 
-- **专业战斗工具在弹窗内无法滚动**：滚动规则原本指向弹窗的直接子元素，但弹窗里多了一层宿主容器，弹窗又是 `overflow: hidden`，低高度窗口下动作卡与确认按钮被裁掉且无法滚动。现在由当前工具面板自己承担滚动，`1280×620`、`1024×600`、`390×700` 三档都能滚到动作区与结算日志；移动端的横向卡片带与键盘 PageDown 保持可用。
-- **剧情遭遇被静默替换成训练预设**：活动冒险包内没有绑定合法遭遇时，战斗工具会退回通用目录（地精巡逻、骷髅与狼）并默认选中第一条。现在改为明确的「当前剧情尚未配置专业战斗遭遇」，不提供开战入口，叙事给出的预设也不再写入请求；GM 想打自由遭遇必须显式选择「脱离冒险，准备自由遭遇」。战斗开始后模式与冒险绑定会写进权威状态，角色、先攻与可用动作全部来自同一个 encounter。
-- **检定同源重复惩罚**：同一情境事实被模型同时写进情境 DC、优势/劣势与环境修正时不再全部执行，只保留一条渠道（优先级：优势/劣势 > DC > 修正），被丢弃的原值记录在 `planner_dropped`；非零环境修正必须给出独立理由，否则按 0 处理。缺少优势/劣势理由只记录审计信息，不改写掷骰方式。
-- **检定结果更可解释**：修正明细现在列出「属性加值 / 熟练加值 / 情境修正」，结算卡显示「判定来源：难度依据 / 掷骰方式依据 / 环境修正依据」（中英日三语），可以直接从总额倒推每项来源。
-- **DC 档位以规则表为准**：检定规划 prompt 原先写死「简单 8 / 普通 10 / 困难 15 / 极限 20」，与规则表（`easy 10 / normal 15 / hard 20 / extreme 25`）不一致，导致模型把普通档 DC 15 当成"困难"上报。现在统一以 `ruleset.dc_table` 为准，默认取普通档，只有任务本身客观更难或更易时才偏离并要求说明依据。
+- **D&D 2024 AI 队友战斗**：队友是"己方角色"而不是友方怪物，全链路走同一权威 validate / resolve / apply——开战先攻 = 玩家 + 活跃队友 + 敌人；敌我、治疗、增益、攻击目标全部按阵营（side）判定；队友武器攻击走与玩家相同的装备 / 目录确定性链；队友 HP / 法术位 / 专注 / 状态写回 `ruleset_state.party.companions[*].ruleset_character` canonical 权威。AI 队友自动回合按确定性优先级行动（治疗濒危己方 → 攻击最近 / 低血敌人 → 移动 → Dodge → 结束回合），提交权威为 GM 自动化，玩家伪造队友意图会被服务端拒绝；0 HP 队友跳过回合，队友死亡不触发玩家团灭判定。
+- **队友代检定与协助**：检定请求新增 `actor_ref`（缺省 `player:<uid>`，旧路径完全兼容）——"让米拉去推门"用米拉的力量 / 运动做检定；"米拉帮我"是玩家检定 + 队友协助，规则声明 `assistance_grants` 时给优势。匹配显式前缀 / 玩家与队友名字，精确优先、歧义拒绝、不猜测叙事 NPC；安全网按 actor_uid 去重，队友检定不会被覆盖成玩家检定。
+- **战斗外施法**：新增 `exploration.cast_spell` 意图（仅非战斗中、玩家本人）：校验法术合法性 / 已知 / 法术位 / 目标 / 专注；复用 canonical `spellcasting.class.slots_current`，不建第二份资源；确定性治疗 / 增益直接结算，伤害类确定性效果在探索态拒绝；无确定性效果的已知法术扣位后交叙事层（`resolution=narrative`），禁止模型改数值。
+- **检定规划器物品与 NPC 上下文**：回合检定规划器在决定是否检定前可见行动者已有的物品摘要（小背包完整、大背包确定性筛选，每人最多 20 条）与明确 NPC 目标的关系摘要——"用已有的钥匙开门"与徒手撬锁按不同行动手段裁定；没有显式目标或行动同时命中多方时省略摘要，不按名字猜目标；英文 / 日文 / 德文 prompt 补充字段契约，中文裁定指南按裁定流程重组。
+- **前端**：先攻 / 目标列表自动包含队友（服务端投影），回合标签显示"米拉（AI 队友）正在行动…"；战斗工具页按服务端 `available_intents` 渲染「非战斗施法」卡（法术 / 法术位 / 队伍目标），不硬编码按钮。
+
+### 修复内容（v2.5.9-beta.1 之后）
+
+- **GM 控台布局**：恢复多语言布局前 GM 流程栏的两列按钮布局，桌面控制栏适度加宽；移动端保持单列。
+- **多人幸运选择等待可靠性**：多人默认超时提升为 180 秒（显式设置仍优先）；前端明确显示自己的待处理状态与仍在等待的玩家数量，服务端状态仍为唯一真值；补充手动 / 超时竞态与并发决议回归测试。
+
+### 以下为 v2.5.9-beta.1 的全部内容（随本版一并发布）
+
+#### 德语（Deutsch）支持
+
+- **德语作为第四种界面语言**：主 UI 全面支持德语（设置、创建、GM、机器人等）；GM 叙事 / 检定规划 / 战斗解说等后端 prompt 提供德语版本；浏览器语言 `de` / `de-DE` / `de-AT` / `de-CH` 自动进入德语界面。
+- **德语专业组件回退策略**：D&D 2024 建卡 / 职业升级 / 专业角色中心等暂无德语翻译的专业页面统一回退英文，而不是错误回退中文。
+- **德语 AI 规则生成字段协议统一**：德语生成的自定义规则会把德语文本物化进 `*_de` 字段，再次用于德语建卡 / prompt 时不再掉回英语；authoritative 字段协议与 `localized_field()` 回退顺序未改动。
+
+#### 德语相关修复
+
+- **语音识别语言**：德语界面语音输入使用 `de-DE`（此前被误送 `zh-CN`）。
+- **公告回退**：官方公告只有中英双语，德语 / 日语及其他非中文界面统一回退英文公告。
+- **世界语言标签**：世界卡列表能正确显示 `de` 世界的"Deutsch"标签。
+- **规则名回退**：角色页在德语 / 日语界面显示英文规则名，而不是中文 canonical 名。
+
+#### 界面自适应（长文本语言溢出修复）
+
+- **Settings 状态卡**：删除固定单行 flex 覆盖，改为自适应网格（`auto-fit minmax(220px, 1fr)`）；状态标题与标签可换行，长词自动折行；≤800px 保留横向滚动策略。
+- **GM 控台**：流程按钮组改为自适应列数（宽屏 2 列、窄屏自动 1 列）；工具栏按钮允许换行且保持完整可读（不使用省略号）；文风选择按钮改 flex 折行。
+- **Characters**：当前角色操作按钮不再强制单行，操作区按内容自适应列数（≤520px 单列）；共享角色卡按钮允许换行。
+- **语言下拉**：右上角语言名称统一为 简体中文 / English / 日本語 / Deutsch。
 
 ### 升级提示
 
-- **无存档迁移**：新增字段是可选的（`combat.mode`、`combat.adventure_binding`、检定来源字段）；旧存档读取时缺省为空，既有判定结果不变。
+- **无破坏性存档迁移**：队友状态挂在 `ruleset_state.party.companions[*].ruleset_character`，新增字段均为可选 / 追加。
 - 建议升级重要战役前备份完整 `data/` 目录。
 
 ### 下载与校验
 
-- **普通 Windows 用户**：`DiceFrame-v2.5.7-beta.1-windows-portable.zip`
-- **源码运行用户**：`DiceFrame-v2.5.7-beta.1-windows.zip`
-- **托管 Docker 更新**：`DiceFrame-v2.5.7-beta.1-docker-update-linux-amd64.zip`
+- **普通 Windows 用户**：`DiceFrame-v2.5.9-windows-portable.zip`
+- **源码运行用户**：`DiceFrame-v2.5.9-windows.zip`
+- **托管 Docker 更新**：`DiceFrame-v2.5.9-docker-update-linux-amd64.zip`
 - 下载后请使用 Release 中的 `SHA256SUMS` 校验文件。
 
 ## English
 
-### Fixes
+### New (after v2.5.9-beta.1)
 
-- **The professional combat tool could not scroll inside its dialog**: the scroll rule targeted the dialog's direct children, but a host wrapper now sits in between and the dialog uses `overflow: hidden`, so at short viewport heights the action cards and confirm button were clipped and unreachable. The active tool panel now owns the vertical scroll: `1280×620`, `1024×600` and `390×700` can all reach the action area and resolution log, while the mobile horizontal card lanes and keyboard PageDown keep working.
-- **Story encounters were silently replaced by training presets**: when an active adventure package had no bound encounter, the combat tool fell back to the generic catalog (goblin patrol, skeleton and wolf) and preselected its first entry. It now reports an explicit "the current story has no prepared encounter" state, exposes no start action, and never writes a narrative-suggested preset into the request. To fight a free encounter the GM must explicitly choose "leave the adventure and prepare a free encounter"; once combat starts the mode and adventure binding are persisted in authoritative state, and actors, initiative and available actions all come from the same encounter.
-- **Duplicate penalty channels on checks**: when the model wrote the same situational fact into the situational DC, advantage/disadvantage and the environment modifier, all three used to apply. Only one channel is kept now (priority: advantage/disadvantage > DC > modifier) and the discarded values are recorded in `planner_dropped`. A non-zero environment modifier requires an independent reason, otherwise it is treated as 0. A missing advantage reason is only recorded for audit and never rewrites the roll mode.
-- **More explainable checks**: the modifier breakdown now lists "ability bonus / proficiency or skill bonus / circumstance modifier", and the check card shows "resolution sources" for difficulty, roll mode and environment modifier.
-- **DC bands follow the ruleset table**: the planner prompt hard-coded "easy 8 / normal 10 / hard 15 / extreme 20", contradicting the ruleset table (`easy 10 / normal 15 / hard 20 / extreme 25`) and making the model report the normal DC 15 as "hard". Bands now come from `ruleset.dc_table`, defaulting to the normal tier, and any deviation must be justified.
+- **D&D 2024 AI companions in combat**: companions are party-side characters rather than friendly monsters, and the whole chain shares the same authoritative validate / resolve / apply — combat initiative = players + active companions + enemies; hostility, healing, buffing and attack targeting are all decided by side; companion weapon attacks reuse the player's equipment/catalog deterministic chain; companion HP / spell slots / concentration / conditions write back to `ruleset_state.party.companions[*].ruleset_character` as canonical authority. Automatic companion turns follow a deterministic priority (heal endangered allies → attack nearest / low-HP enemies → move → Dodge → End Turn) with GM automation as submit authority; forged companion intents from players are rejected server-side; 0 HP companions are skipped, and a companion dying never triggers the player party wipe check.
+- **Delegated checks and companion assistance**: check requests take a new `actor_ref` (default `player:<uid>`, fully backward compatible) — "let Mira push the door" runs the check with Mira's STR / Athletics; "Mira, help me" is a player check with companion assistance, gaining advantage when the rules declare `assistance_grants`. Matching accepts explicit prefixes and player/companion names — exact first, ambiguous refused, narrative NPCs never guessed; the safety net deduplicates by actor_uid so a companion check is never overwritten by the player's.
+- **Out-of-combat spellcasting**: new `exploration.cast_spell` intent (only while combat is not active, by the player themselves): validates spell legality / known / slots / targets / concentration; reuses canonical `spellcasting.class.slots_current` instead of a second resource; deterministic heals / buffs resolve directly, deterministic damage effects are refused in exploration; known spells without deterministic effects spend a slot and hand off to narration (`resolution=narrative`), with the model forbidden from touching numbers.
+- **Check planner item & NPC context**: the turn check planner now sees a read-only summary of the actor's owned items (small packs complete, large packs deterministically filtered, max 20 entries per actor) and of explicitly targeted NPCs' identity and relations — "open the door with the owned key" and bare-handed lockpicking adjudicate as different means; summaries are omitted when there is no explicit target or the action simultaneously hits several parties, never guessed from name length; en / ja / de prompts gain the same field contract and the Chinese adjudication guide is reorganized around the adjudication flow.
+- **Frontend**: initiative / target lists automatically include companions (server projection) with turn labels like "Mira (AI companion) is acting…"; the combat tool page renders the "out-of-combat spellcasting" card (spells / slots / party targets) from server `available_intents` instead of hardcoded buttons.
+
+### Fixes (after v2.5.9-beta.1)
+
+- **GM console layout**: restored the pre-multilingual two-column flow button layout and modestly widened the desktop console; mobile stays single-column.
+- **Multiplayer luck decision reliability**: the multiplayer default timeout is raised to 180 seconds (explicit settings still win); the frontend shows your own pending state and how many players are still waiting, while server state remains the single source of truth; regression tests cover manual/timeout races and concurrent resolutions.
+
+### All of v2.5.9-beta.1 (included in this release)
+
+#### German (Deutsch) support
+
+- **German as the fourth UI language**: full main-UI German coverage (settings, creation, GM, bots); backend prompts for GM narration / check planning / combat commentary ship German variants; browser locales `de` / `de-DE` / `de-AT` / `de-CH` activate the German UI automatically.
+- **German professional-page fallback**: D&D 2024 builder / advancement / professional character center pages without German translations fall back to English instead of incorrectly showing Chinese.
+- **German AI rule field protocol**: AI-generated German rules materialize German text into `*_de` fields, so reusing them in German character creation / prompts no longer falls back to English; authoritative field contracts and the `localized_field()` fallback order are unchanged.
+
+#### German-related fixes
+
+- **Speech recognition language**: German UI voice input uses `de-DE` (previously sent as `zh-CN`).
+- **Announcements fallback**: official announcements are zh/en only; German, Japanese and other non-Chinese UIs fall back to English announcements.
+- **World language labels**: world cards show a "Deutsch" label for `de` worlds.
+- **Rule name fallback**: the characters page shows English rule names in German/Japanese UIs instead of the Chinese canonical name.
+
+#### UI adaptive layout (long-language overflow fixes)
+
+- **Settings status cards**: removed the fixed single-row flex override in favor of an auto-fit grid (`minmax(220px, 1fr)`); headings and tags wrap; long words break anywhere; the ≤800px horizontal-scroll strategy is preserved.
+- **GM console**: flow button groups use adaptive columns (2 on wide, 1 on narrow); toolbar buttons wrap while staying fully readable (no ellipsis); style option buttons flex-wrap.
+- **Characters**: current-character action buttons no longer force a single line, the action area adapts its column count (single column ≤520px); shared character card buttons wrap.
+- **Language dropdown**: unified names — 简体中文 / English / 日本語 / Deutsch.
 
 ### Upgrade notes
 
-- **No save migration**: the new fields are optional (`combat.mode`, `combat.adventure_binding`, check source fields). Older saves read them as empty and existing results are unchanged.
+- **No breaking save migration**: companion state lives under `ruleset_state.party.companions[*].ruleset_character`; new fields are optional/additive.
 - Back up the complete `data/` directory before upgrading important campaigns.
 
 ### Downloads and verification
 
-- **Regular Windows users**: `DiceFrame-v2.5.7-beta.1-windows-portable.zip`
-- **Source users**: `DiceFrame-v2.5.7-beta.1-windows.zip`
-- **Managed Docker update**: `DiceFrame-v2.5.7-beta.1-docker-update-linux-amd64.zip`
+- **Regular Windows users**: `DiceFrame-v2.5.9-windows-portable.zip`
+- **Source users**: `DiceFrame-v2.5.9-windows.zip`
+- **Managed Docker update**: `DiceFrame-v2.5.9-docker-update-linux-amd64.zip`
 - Verify downloads with the `SHA256SUMS` file attached to the Release.

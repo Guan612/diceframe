@@ -158,9 +158,12 @@ function parseLines<T extends CharacterItem>(text: string, fn: (p: string[]) => 
 }
 function cardId(card: CharacterCard): string { return String(card.card_id || card.id || '') }
 function ruleNameOf(rule: RuleSummary): string {
-  return String(locale.value).startsWith('en')
-    ? String(rule.rule_name_en || rule.rule_name || rule.rule_id)
-    : String(rule.rule_name || rule.rule_id)
+  const lang = String(locale.value || '').toLowerCase()
+  if (lang.startsWith('zh')) {
+    return String(rule.rule_name || rule.rule_name_en || rule.rule_id)
+  }
+  // de/ja 等非中文界面回退英文名，而不是中文 canonical 名（#277 followup）。
+  return String(rule.rule_name_en || rule.rule_name || rule.rule_id)
 }
 function cardRuleLabel(card: CharacterCard): string {
   if (!card.rule_id) return t('unboundRule')
@@ -572,7 +575,7 @@ async function onCardAdvanced() {
   try {
     advancementCard.value = null
     await load()
-    toast.success(String(locale.value).startsWith('en') ? 'Character advanced.' : '角色升级已完成。')
+    toast.success(String(locale.value).startsWith('zh') ? '角色升级已完成。' : 'Character advanced.')
   } catch (cause: unknown) {
     error.value = errorMessage(cause)
   } finally { busy.value = false }
@@ -583,7 +586,7 @@ async function onLiveCharacterAdvanced() {
   try {
     advancementPlayer.value = null
     await load()
-    toast.success(String(locale.value).startsWith('en') ? 'Character advanced.' : '角色升级已完成。')
+    toast.success(String(locale.value).startsWith('zh') ? '角色升级已完成。' : 'Character advanced.')
   } catch (cause: unknown) {
     error.value = errorMessage(cause)
   } finally { busy.value = false }
@@ -593,8 +596,8 @@ async function onProfessionalSaved(_character?: CharacterSheet, reason?: 'profil
   professionalEdit.value = null
   await load()
   toast.success(reason === 'rest'
-    ? (String(locale.value).startsWith('en') ? 'Rest completed.' : '休息已按规则结算。')
-    : (String(locale.value).startsWith('en') ? 'Character profile saved.' : '人物资料已安全保存。'))
+    ? (String(locale.value).startsWith('zh') ? '休息已按规则结算。' : 'Rest completed.')
+    : (String(locale.value).startsWith('zh') ? '人物资料已安全保存。' : 'Character profile saved.'))
 }
 
 async function deleteCard(c: CharacterCard) {
@@ -705,8 +708,8 @@ async function onWizardSubmit(c: CharacterSheet) {
           </div>
         </div>
         <div class="actions current-character-actions">
-          <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('en') ? 'Character center' : '高级角色中心') : t('edit') }}</button>
-          <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20 && liveAdvancementRow(p.user_id)?.entitled" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('en') ? 'Class advancement' : '职业升级' }}</button>
+          <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('zh') ? '高级角色中心' : 'Character center') : t('edit') }}</button>
+          <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20 && liveAdvancementRow(p.user_id)?.entitled" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('zh') ? '职业升级' : 'Class advancement' }}</button>
           <button v-if="!isProfessionalGame() && levelUpPoints(p) > 0" class="primary" @click="openLevelUp(p)">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints(p) }) }}</button>
           <button @click="saveToCard(p)">{{ t('saveToSharedLibrary') }}</button>
           <button class="danger" @click="deleteCharacter(p)">{{ t('remove') }}</button>
@@ -780,8 +783,8 @@ async function onWizardSubmit(c: CharacterSheet) {
           </div>
         </div>
         <div class="actions">
-          <button v-if="isProfessionalCard(c) && professionalLevel(c) < 20" class="success" @click="advancementCard = c">{{ String(locale).startsWith('en') ? 'Level up' : '职业升级' }}</button>
-          <button @click="openCardEditor(c)">{{ isProfessionalCard(c) ? (String(locale).startsWith('en') ? 'Character center' : '高级角色中心') : t('editCard') }}</button>
+          <button v-if="isProfessionalCard(c) && professionalLevel(c) < 20" class="success" @click="advancementCard = c">{{ String(locale).startsWith('zh') ? '职业升级' : 'Level up' }}</button>
+          <button @click="openCardEditor(c)">{{ isProfessionalCard(c) ? (String(locale).startsWith('zh') ? '高级角色中心' : 'Character center') : t('editCard') }}</button>
           <button @click="exportSingleCard(c)">{{ t('export') }}</button>
           <button class="danger" @click="deleteCard(c)">{{ t('delete') }}</button>
         </div>
@@ -872,7 +875,7 @@ async function onWizardSubmit(c: CharacterSheet) {
       @cancel="advancementPlayer = null"
     />
 
-    <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('en') ? 'Advanced character center' : '高级角色中心'" @close="professionalEdit = null">
+    <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('zh') ? '高级角色中心' : 'Advanced character center'" @close="professionalEdit = null">
       <RulesetCharacterCenterHost
         :runtime-id="professionalEdit.runtimeId"
         :character="professionalEdit.character"

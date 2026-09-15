@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from src.engine.character_utils import (
@@ -38,7 +38,7 @@ from src.engine.memory_outbox import (
 from src.engine.game_instance import GameInstance
 from src.commands.economy_effects import pending_decision_notice
 from src.commands.state_items import grant_classified_item
-from src.rulesets.contracts import GameDetailProjectionRuntime
+from src.rulesets.contracts import GameDetailProjectionRuntime, PlayerJoinRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
 
 if TYPE_CHECKING:
@@ -72,18 +72,21 @@ def _record_economy_outcome_in_round(
             "en": f"Settlement confirmed ({amount}): {reason}. Linked results are waiting for the remaining decisions.",
             "zh-CN": f"结算已确认（{amount}）：{reason}。关联结果仍在等待其余决定。",
             "ja": f"決済確認済み（{amount}）：{reason}。関連結果は残りの判断を待っています。",
+            "de": f"Abrechnung bestätigt ({amount}): {reason}. Verknüpfte Ergebnisse warten noch auf die restlichen Entscheidungen.",
         })
     elif status == "committed":
         message = localized_text(instance.language, {
             "en": f"Settlement confirmed ({amount}): {reason}. Dependent results are now effective.",
             "zh-CN": f"结算已确认（{amount}）：{reason}。关联结果现已生效。",
             "ja": f"決済確認済み（{amount}）：{reason}。関連結果が発効しました。",
+            "de": f"Abrechnung bestätigt ({amount}): {reason}. Abhängige Ergebnisse sind jetzt wirksam.",
         })
     else:
         message = localized_text(instance.language, {
             "en": f"Settlement {status} ({amount}): {reason}. No payment or dependent result occurred.",
             "zh-CN": f"结算未成立（{amount}）：{reason}。没有付款，关联结果也未生效。",
             "ja": f"決済不成立（{amount}）：{reason}。支払いも関連結果も発生していません。",
+            "de": f"Abrechnung {status} ({amount}): {reason}. Es erfolgte weder eine Zahlung noch ein abhängiges Ergebnis.",
         })
     round_number = int(outcome.get("round", 0) or 0)
     # Purchases are always a party-visible settlement event.  Keep the
@@ -492,7 +495,7 @@ def list_characters(
         )
         lore_status = localized_text(
             getattr(inst, "language", ""),
-            {"en": "Lorebook", "zh-CN": "世界书", "ja": "ワールドブック"},
+            {"en": "Lorebook", "zh-CN": "世界书", "ja": "ワールドブック", "de": "Lorebook"},
         )
         for entry in localize_lorebook_entries(entries, world_data):
             name = entry.get("name", "")
@@ -1126,6 +1129,7 @@ async def create_player(
     )
     if not inst:
         return {"ok": False, "error": "游戏不存在"}
+    inst = cast(GameInstance, inst)
     async with inst.authoritative_write() as write_entered:
         if not write_entered:
             return {
@@ -1134,9 +1138,14 @@ async def create_player(
             }
         if dependencies.games.get_instance(inst.game_key) is not inst:
             return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
-        return await _create_player_authority(
-            dependencies, inst, character, force_uid, assign_new_id,
-        )
+        # Serialize membership changes with authoritative combat actions.  A
+        # player joining during an active encounter must be enrolled in the
+        # ruleset's live turn state before the new seat is persisted.
+        state_lock = getattr(inst, "_lock")
+        async with state_lock:
+            return await _create_player_authority(
+                dependencies, inst, character, force_uid, assign_new_id,
+            )
 
 
 async def _create_player_authority(dependencies: CharacterDependencies, inst: GameInstance, character: dict,
@@ -1172,6 +1181,7 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
     rule = dependencies.rules.load_rule_for_game(inst)
     rule_id = rule.rule_id if rule else "freeform_fantasy"
     professional_character = False
+    runtime: Any | None = None
     if rule is not None:
         runtime = dependencies.rules.ruleset_registry.resolve(rule.template)
         professional_character = runtime.capabilities.character_builder == "professional"
@@ -1269,6 +1279,14 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         "character_sheet": cs,
     }
     inst.put_player(uid, player)
+    if isinstance(runtime, PlayerJoinRuntime):
+        try:
+            runtime.on_player_join(inst, uid)
+        except Exception:
+            # Do not leave a seat visible without a corresponding ruleset
+            # combat actor if the optional live-state hook rejects the join.
+            inst.players.pop(uid, None)
+            raise
     dependencies.save_character_card({
         **player,
         "rule_id": rule_id,

@@ -7,9 +7,12 @@ import binascii
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Sequence
 from urllib.parse import urlparse, urlunparse
 
 import aiohttp
+
+from .contracts import ImageReference
 
 
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -29,6 +32,7 @@ class ProviderImage:
 
 class ImageProvider(ABC):
     provider_id: str
+    supports_reference_images: bool = False
 
     def __init__(
         self,
@@ -46,14 +50,25 @@ class ImageProvider(ABC):
         self.proxy_url = str(proxy_url or "").strip() or None
 
     @abstractmethod
-    async def generate(self, prompt: str, *, size: str, quality: str = "") -> ProviderImage:
+    async def generate(
+        self, prompt: str, *, size: str, quality: str = "",
+        reference_images: Sequence[ImageReference] = (),
+    ) -> ProviderImage:
         raise NotImplementedError
 
 
 class OpenAICompatibleImageProvider(ImageProvider):
     provider_id = "openai-compatible"
+    supports_reference_images = True
 
-    async def generate(self, prompt: str, *, size: str, quality: str = "") -> ProviderImage:
+    async def generate(
+        self, prompt: str, *, size: str, quality: str = "",
+        reference_images: Sequence[ImageReference] = (),
+    ) -> ProviderImage:
+        if reference_images:
+            return await self._generate_with_references(
+                prompt, size=size, quality=quality, reference_images=reference_images,
+            )
         headers = {"Accept": "application/json", "Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -100,6 +115,89 @@ class OpenAICompatibleImageProvider(ImageProvider):
             content_type=content_type,
             revised_prompt=str(item.get("revised_prompt") or "")[:4000],
         )
+
+    async def _generate_with_references(
+        self, prompt: str, *, size: str, quality: str,
+        reference_images: Sequence[ImageReference],
+    ) -> ProviderImage:
+        fields: list[tuple[str, str]] = [("model", self.model), ("prompt", prompt), ("n", "1"), ("size", size)]
+        if quality:
+            fields.append(("quality", quality))
+        attempts = [
+            [*fields, ("response_format", "b64_json")],
+            list(fields),
+            [item for item in fields if item[0] != "quality"],
+        ]
+        headers = {"Accept": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        response_payload: dict | None = None
+        last_error = ""
+        for index, attempt in enumerate(attempts):
+            try:
+                response_payload = await self._post_multipart(attempt, reference_images, headers)
+                break
+            except ImageProviderError as exc:
+                last_error = str(exc)
+                if "HTTP 400" not in last_error or index == len(attempts) - 1:
+                    raise
+        if response_payload is None:
+            raise ImageProviderError(last_error or "图像生成服务没有返回响应")
+        return await self._decode_image_response(response_payload, headers)
+
+    async def _decode_image_response(self, response_payload: dict, headers: dict[str, str]) -> ProviderImage:
+        items = response_payload.get("data")
+        if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+            raise ImageProviderError("图像生成服务响应缺少 data 数组")
+        item = items[0]
+        if item.get("b64_json"):
+            try:
+                body = base64.b64decode(str(item["b64_json"]), validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ImageProviderError("图像生成服务返回了无效的 Base64 图片") from exc
+            content_type = _image_content_type(body, "image/png")
+        elif item.get("url"):
+            body, content_type = await self._download_image(str(item["url"]), headers)
+        else:
+            raise ImageProviderError("图像生成服务响应中既无 b64_json 也无 url")
+        if not body:
+            raise ImageProviderError("图像生成服务返回了空图片")
+        if len(body) > MAX_IMAGE_BYTES:
+            raise ImageProviderError("生成图片不能超过 20 MB")
+        return ProviderImage(body=body, content_type=content_type, revised_prompt=str(item.get("revised_prompt") or "")[:4000])
+
+    async def _post_multipart(
+        self, fields: Sequence[tuple[str, str]], reference_images: Sequence[ImageReference], headers: dict[str, str],
+    ) -> dict:
+        timeout = aiohttp.ClientTimeout(total=self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
+        form = aiohttp.FormData()
+        for key, value in fields:
+            form.add_field(key, value)
+        field_name = "image" if len(reference_images) == 1 else "image[]"
+        for index, reference in enumerate(reference_images):
+            form.add_field(
+                field_name, reference.content,
+                filename=str(reference.file_name or f"reference-{index + 1}.webp"),
+                content_type=str(reference.content_type or "image/webp").split(";", 1)[0],
+            )
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(_openai_image_edit_url(self.base_url), data=form, headers=headers, proxy=self.proxy_url) as response:
+                    body = await _read_limited(response, MAX_JSON_RESPONSE_BYTES)
+                    if response.status >= 400:
+                        detail = body.decode("utf-8", "replace")[:1000]
+                        raise ImageProviderError(f"图像生成服务返回 HTTP {response.status}: {detail or response.reason}")
+        except ImageProviderError:
+            raise
+        except (aiohttp.ClientError, TimeoutError) as exc:
+            raise ImageProviderError(f"无法连接图像生成服务：{exc}") from exc
+        try:
+            result = json.loads(body.decode("utf-8", "replace") or "{}")
+        except ValueError as exc:
+            raise ImageProviderError("图像生成服务返回了无法解析的响应") from exc
+        if not isinstance(result, dict):
+            raise ImageProviderError("图像生成服务返回了非对象响应")
+        return result
 
     async def _post_json(self, payload: dict, headers: dict[str, str]) -> dict:
         timeout = aiohttp.ClientTimeout(total=self.timeout_seconds, connect=min(15.0, self.timeout_seconds))
@@ -165,7 +263,12 @@ class OpenAICompatibleImageProvider(ImageProvider):
 class MiniMaxImageProvider(ImageProvider):
     provider_id = "minimax"
 
-    async def generate(self, prompt: str, *, size: str, quality: str = "") -> ProviderImage:
+    async def generate(
+        self, prompt: str, *, size: str, quality: str = "",
+        reference_images: Sequence[ImageReference] = (),
+    ) -> ProviderImage:
+        if reference_images:
+            raise ImageProviderError("当前 MiniMax 图像服务商不支持头像参考图，请关闭该选项后重试")
         try:
             width_text, height_text = str(size or "").strip().lower().split("x", 1)
             width, height = int(width_text), int(height_text)
@@ -289,6 +392,18 @@ def _openai_image_url(base_url: str) -> str:
         target = path + "/images/generations"
     else:
         target = path + "/v1/images/generations"
+    return urlunparse(parsed._replace(path=target))
+
+
+def _openai_image_edit_url(base_url: str) -> str:
+    parsed = urlparse(str(base_url or "").strip())
+    path = parsed.path.rstrip("/")
+    if path.endswith("/images/edits"):
+        target = path
+    elif path.endswith("/v1"):
+        target = path + "/images/edits"
+    else:
+        target = path + "/v1/images/edits"
     return urlunparse(parsed._replace(path=target))
 
 

@@ -28,6 +28,26 @@ test('settings status summary stays structured and destructive confirmations are
   await expect(page.getByRole('button', { name: '删除存档' })).toBeVisible()
   await page.getByRole('button', { name: '取消', exact: true }).click()
 })
+
+test('settings status grid stays within viewport for German locale', async ({ page }) => {
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token())
+  await page.addInitScript(() => localStorage.setItem('diceframe_locale', 'de'))
+  await page.setViewportSize({ width: 1280, height: 1024 })
+  await page.goto('/#/settings')
+  const grid = page.locator('.system-status-grid')
+  await expect(grid).toBeVisible()
+  const overflow = await grid.evaluate(el => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }))
+  expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1)
+  // 德语界面回退英文：状态卡标题不应出现中文
+  const labels = await page.locator('.system-status-head > span').allTextContents()
+  expect(labels.length).toBeGreaterThan(0)
+  for (const label of labels) {
+    expect(label).not.toMatch(/[一-鿿]/)
+  }
+})
 test('rules page exposes structured editing for copied rules', async ({ page }) => {
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token())
   await page.goto('/#/rules')

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,7 @@ _is_non_combat_declaration = is_non_combat_declaration
 
 
 def _prompt_text(language: str) -> str:
-    suffix = localized_text(language, {"en": "en", "zh-CN": "zh", "ja": "ja"})
+    suffix = localized_text(language, {"en": "en", "zh-CN": "zh", "ja": "ja", "de": "de"})
     path = Path(__file__).resolve().parents[2] / "prompts" / f"check_planner_{suffix}.md"
     return path.read_text(encoding="utf-8")
 
@@ -93,6 +94,244 @@ def _recent_purchases(instance: GameInstance) -> list[dict[str, Any]]:
     return rows
 
 
+def _companion_roster(instance: GameInstance) -> dict[str, dict[str, Any]]:
+    """DND party companions（ruleset_state.party.companions）；其他规则集为空。
+
+    只返回活跃且有 canonical 角色卡的队友；generic planner 不感知规则集差异，
+    没有该状态时（CoC 等）自然为空。
+    """
+    state = getattr(instance, "ruleset_state", None)
+    party = state.get("party") if isinstance(state, dict) else None
+    companions = party.get("companions") if isinstance(party, dict) else None
+    if not isinstance(companions, dict):
+        return {}
+    return {
+        companion_id: companion
+        for companion_id, companion in companions.items()
+        if isinstance(companion, dict) and companion.get("active", True)
+        and isinstance(companion.get("ruleset_character"), dict)
+    }
+
+
+def _companion_sheet(instance: GameInstance, companion_id: str) -> dict[str, Any]:
+    """companion canonical 角色卡；proficiencies.skill_values 合成 skills 列表。"""
+    companion = _companion_roster(instance).get(companion_id)
+    if not companion:
+        return {}
+    sheet = companion["ruleset_character"]
+    # DND canonical 用 abilities（3-18）；generic 检定读 attributes——缺失时镜像，
+    # 与玩家侧 webui 投影（attributes/skills 镜像进 character_sheet）语义一致。
+    merged = dict(sheet)
+    if not merged.get("attributes"):
+        merged["attributes"] = dict(sheet.get("abilities") or {})
+    if not merged.get("skills"):
+        skill_values = sheet.get("proficiencies", {}).get("skill_values") or {}
+        merged["skills"] = [
+            {"name": name, "value": value}
+            for name, value in sorted(skill_values.items())
+        ]
+    return merged
+
+
+def _match_actor(instance: GameInstance, value: object) -> tuple[str, str]:
+    """把模型输出解析为检定主体 (kind, id)。
+
+    支持显式前缀（player:<uid> / companion:<id>）、玩家 uid/名、队友 id/名。
+    精确匹配优先；歧义、不存在时返回 ("", "")，绝不从纯叙事 NPC 猜测。
+    """
+    query = str(value or "").strip()
+    if not query:
+        return "", ""
+    lowered = query.lower()
+    if lowered.startswith("player:"):
+        uid = query.removeprefix("player:").strip()
+        return ("player", uid) if uid in instance.players else ("", "")
+    if lowered.startswith("companion:"):
+        companion_id = query.removeprefix("companion:").strip()
+        return (
+            ("companion", companion_id)
+            if companion_id in _companion_roster(instance) else ("", "")
+        )
+    player_uid = _match_player(instance, query)
+    if player_uid:
+        return "player", player_uid
+    matches = [
+        companion_id
+        for companion_id, companion in _companion_roster(instance).items()
+        if query.casefold() in {
+            companion_id.casefold(),
+            str(companion.get("name") or "").strip().casefold(),
+        }
+    ]
+    if len(matches) == 1:
+        return "companion", matches[0]
+    return "", ""
+def _context_match_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
+def _positive_inventory_quantity(value: Any) -> int | None:
+    """接受可可靠解释的正整数数量，不把无效数量降级成无数量物品。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        quantity = int(value)
+    except (ValueError, OverflowError):
+        return None
+    if isinstance(value, float) and value != quantity:
+        return None
+    return quantity if quantity > 0 else None
+
+
+def _action_mentions_name(action: str, name: object) -> bool:
+    """拉丁名称/ID 要求词边界；中文等名称允许紧邻中文叙述。"""
+    if not isinstance(name, str) or not name.strip():
+        return False
+    name = name.strip().casefold()
+    text = action.casefold()
+
+    def identifier_char(char: str) -> bool:
+        return (
+            char == "_" or char.isdigit()
+            or unicodedata.name(char, "").startswith("LATIN ")
+            or unicodedata.category(char).startswith("M")
+        )
+
+    pattern = r"\s*".join(re.escape(part) for part in name.split())
+    for match in re.finditer(pattern, text):
+        if identifier_char(name[0]) and match.start() and identifier_char(text[match.start() - 1]):
+            continue
+        if identifier_char(name[-1]) and match.end() < len(text) and identifier_char(text[match.end()]):
+            continue
+        return True
+    return False
+
+
+def _item_context(sheet: dict[str, Any], action: str, target: str) -> dict[str, Any]:
+    """只读压缩现有物品；partial 表示该清单不能提供物品不存在的证据。"""
+    texts = [_context_match_text(action), _context_match_text(target)]
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    partial = False
+    for source_index, source in enumerate(("equipment", "key_items", "inventory")):
+        entries = sheet.get(source)
+        if not isinstance(entries, list):
+            partial = True
+            continue
+        for entry in entries:
+            row: dict[str, Any] = {"source": source}
+            if isinstance(entry, str) and entry.strip():
+                row["name"] = entry.strip()
+            elif isinstance(entry, dict):
+                for key in ("name", "item_ref", "type"):
+                    value = entry.get(key)
+                    if isinstance(value, str) and value.strip():
+                        row[key] = value.strip()
+                    elif key in entry:
+                        partial = True
+                quantity_key = "qty" if "qty" in entry else "quantity"
+                if quantity_key in entry:
+                    quantity = entry[quantity_key]
+                    if source == "inventory":
+                        quantity = _positive_inventory_quantity(quantity)
+                        if quantity is None:
+                            partial = True
+                            continue
+                        row["qty"] = quantity
+                    elif type(quantity) is int and quantity >= 0:
+                        row["qty"] = quantity
+                    else:
+                        partial = True
+            if not row.get("name") and not row.get("item_ref"):
+                partial = True
+                continue
+            matched = any(
+                _context_match_text(row[key]) in text
+                for key in ("name", "item_ref") if row.get(key)
+                for text in texts
+            )
+            if source == "inventory" and len(entries) > 20 and not matched:
+                partial = True
+                continue
+            candidates.append((0 if matched else source_index + 1, row))
+
+    result: dict[str, Any] = {"items": [], "partial": partial}
+    for _, row in sorted(candidates, key=lambda candidate: candidate[0]):
+        result["items"].append(row)
+        if len(result["items"]) > 20 or len(json.dumps(
+            result, ensure_ascii=False, separators=(",", ":"),
+        )) > 1500:
+            result["items"].pop()
+            result["partial"] = True
+    return result
+
+
+def _npc_context(
+    instance: GameInstance, uid: str, action: str, target: str,
+) -> dict[str, Any] | None:
+    """复用目标解析，只附带明确、无歧义 NPC 的身份和已记录关系。"""
+    reference = (
+        _match_opponent(instance, target)
+        if target.strip() else find_action_opponent(instance, uid, action)
+    )
+    if not reference.startswith("npc:"):
+        return None
+    npc_id = reference[4:]
+    npc = instance.npcs.get(npc_id)
+    if not isinstance(npc, dict):
+        return None
+
+    # 原解析器的精确名称分支可能返回首个同名对象；摘要不得据此消除歧义。
+    aliases = {
+        key: {
+            value.strip().casefold()
+            for value in (key, record.get("name"), record.get("character_name"))
+            if isinstance(value, str) and value.strip()
+        }
+        for key, record in instance.npcs.items() if isinstance(record, dict)
+    }
+    if target.strip():
+        query = target.strip().casefold()
+        matches = {key for key, names in aliases.items() if query in names}
+        if not matches and len(query) >= 2:
+            matches = {
+                key for key, names in aliases.items()
+                if any(query in name or name in query for name in names)
+            }
+    else:
+        # 同时提到其他玩家或敌人，也无法仅凭名字判断谁是受话者。
+        if any(
+            _action_mentions_name(action, name)
+            for player_id, player in instance.players.items() if player_id != uid
+            for name in (player_id, player.get("character_name"))
+        ) or any(
+            _action_mentions_name(action, name)
+            for enemy in instance.combat_enemies
+            for name in (enemy.get("name"), enemy.get("character_name"))
+        ):
+            return None
+        matches = {
+            key
+            for key, names in aliases.items()
+            if any(_action_mentions_name(action, name) for name in names)
+        }
+    if matches != {npc_id}:
+        return None
+
+    name = next((
+        value.strip() for value in (npc.get("name"), npc.get("character_name"), npc_id)
+        if isinstance(value, str) and value.strip()
+    ), npc_id)
+    result = {"reference": reference, "name": name}
+    relation = npc.get("relation")
+    if isinstance(relation, str) and relation.strip():
+        result["relation"] = relation
+    if len(json.dumps(result, ensure_ascii=False, separators=(",", ":"))) > 400:
+        result.pop("relation", None)
+    if len(json.dumps(result, ensure_ascii=False, separators=(",", ":"))) > 400:
+        return None
+    return result
+
+
 def _planner_context(instance: GameInstance, rule: RuleSystem | None) -> str:
     players = []
     for action in instance.action_queue:
@@ -102,16 +341,22 @@ def _planner_context(instance: GameInstance, rule: RuleSystem | None) -> str:
         if not is_conscious(instance.get_character_sheet(uid)):
             continue
         sheet = instance.get_character_sheet(uid)
+        action_text = str(action.get("text") or "")[:1000]
+        target_text = str(action.get("target_text") or "")
         players.append({
             "player_id": uid,
             "character_name": instance.players[uid].get("character_name") or uid,
-            "action": str(action.get("text") or "")[:1000],
+            "action": action_text,
             "attributes": sheet.get("attributes", {}),
             "skills": _skill_rows(sheet),
             "selected_attribute": str(action.get("selected_attribute") or ""),
             "selected_skill": str(action.get("selected_skill") or ""),
-            "target_text": str(action.get("target_text") or ""),
+            "target_text": target_text,
+            "item_context": _item_context(sheet, action_text, target_text),
         })
+        npc_context = _npc_context(instance, uid, action_text, target_text)
+        if npc_context is not None:
+            players[-1]["npc_context"] = npc_context
     mechanic = rule.check_mechanic if rule else {
         "dice": "d20",
         "comparison": "roll_plus_modifier_gte_target",
@@ -151,6 +396,17 @@ def _planner_context(instance: GameInstance, rule: RuleSystem | None) -> str:
         "difficulty": instance.difficulty,
         "ruleset": ruleset,
         "players": players,
+        # AI 队友作为可选检定主体：模型只负责选"谁执行/什么检定"，
+        # 数值仍由服务器角色卡决定。
+        "companions": [
+            {
+                "actor_ref": f"companion:{companion_id}",
+                "character_name": str(companion.get("name") or companion_id),
+                "attributes": _companion_sheet(instance, companion_id).get("attributes", {}),
+                "skills": _skill_rows(_companion_sheet(instance, companion_id)),
+            }
+            for companion_id, companion in sorted(_companion_roster(instance).items())
+        ],
         "recent_purchases": _recent_purchases(instance),
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -264,10 +520,12 @@ def _label(
     en_suffix = {"save": "Save", "attack": "Attack"}.get(kind, "Check")
     zh_suffix = {"save": "豁免", "attack": "攻击"}.get(kind, "检定")
     ja_suffix = {"save": "セーヴ", "attack": "攻撃"}.get(kind, "判定")
+    de_suffix = {"save": "Rettungswurf", "attack": "Angriff"}.get(kind, "Probe")
     return localized_text(instance.language, {
         "en": f"{subject} {en_suffix}".strip(),
         "zh-CN": f"{subject}{zh_suffix}",
         "ja": f"{subject}{ja_suffix}",
+        "de": f"{subject} {de_suffix}".strip(),
     })
 
 
@@ -297,7 +555,25 @@ def normalize_check_specs(
         if uid in seen_players:
             errors.append(f"checks[{index}] 同一玩家每轮只允许一个主检定")
             continue
-        sheet = instance.get_character_sheet(uid)
+        # 检定主体：默认行动玩家本人；模型显式委派 AI 队友时切换到队友角色卡。
+        # 行动仍然挂回委派玩家（骰子由玩家掷，safety net 以 actor_uid 去重）。
+        actor_kind_raw, actor_id = _match_actor(instance, raw.get("actor"))
+        if raw.get("actor") and not actor_kind_raw:
+            errors.append(f"checks[{index}] actor 不存在或存在歧义")
+            continue
+        if actor_kind_raw == "player" and actor_id != uid:
+            errors.append(f"checks[{index}] actor 与行动玩家不一致")
+            continue
+        is_companion = actor_kind_raw == "companion"
+        actor_ref = f"{actor_kind_raw}:{actor_id}" if is_companion else f"player:{uid}"
+        actor_name = (
+            str(_companion_roster(instance)[actor_id].get("name") or actor_id)
+            if is_companion else (instance.players[uid].get("character_name") or uid)
+        )
+        sheet = (
+            _companion_sheet(instance, actor_id) if is_companion
+            else instance.get_character_sheet(uid)
+        )
         action = action_by_uid[uid]
         selected_attribute = str(action.get("selected_attribute") or "").strip()
         selected_skill = str(action.get("selected_skill") or "").strip()
@@ -398,13 +674,17 @@ def normalize_check_specs(
         assistants: list[str] = []
         invalid_assistant = False
         for assistant in (raw.get("assist") or [])[:5]:
-            assistant_uid = _match_player(instance, assistant)
-            if not assistant_uid:
-                errors.append(f"checks[{index}] assist 包含不存在的玩家")
+            assist_kind, assist_id = _match_actor(instance, assistant)
+            if not assist_kind:
+                errors.append(f"checks[{index}] assist 包含不存在的玩家或队友")
                 invalid_assistant = True
                 break
-            if assistant_uid != uid and assistant_uid not in assistants:
-                assistants.append(assistant_uid)
+            # 玩家沿用 uid 兼容既有显示；队友用 companion:<id> 引用。
+            assistant_ref = (
+                f"companion:{assist_id}" if assist_kind == "companion" else assist_id
+            )
+            if assistant_ref not in {uid, actor_ref} and assistant_ref not in assistants:
+                assistants.append(assistant_ref)
         if invalid_assistant:
             continue
         assistance_grant = str(rule.advantage_mechanic.get("assistance_grants") or "") if rule else ""
@@ -414,7 +694,8 @@ def normalize_check_specs(
             "check_id": uuid.uuid4().hex,
             "required": True,
             "actor_uid": uid,
-            "actor_name": instance.players[uid].get("character_name") or uid,
+            "actor_ref": actor_ref,
+            "actor_name": actor_name,
             "dice_system": "d100" if dice_system == "d100" else "d20",
             "label": _label(instance, rule, attribute, skill, kind),
             "intent": "ai_planned",
@@ -705,7 +986,7 @@ async def plan_round_checks(
         _prompt_text(instance.language),
         _planner_context(instance, rule),
         tools=[DICE_CHECKS_TOOL],
-        max_tokens=2048,
+        max_tokens=4096,
         temperature=0.1,
     )
     raw_checks: list[Any] = []

@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.engine.game_instance import GameRegistry

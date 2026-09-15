@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from src.engine.character_utils import initial_special_stat_value, set_hp
-from src.engine.language import DEFAULT_LANGUAGE, is_english, localized_field, localized_text, normalize_language
+from src.engine.language import DEFAULT_LANGUAGE, localized_field, localized_text, normalize_language
 
 logger = logging.getLogger("trpg")
 
@@ -89,6 +90,34 @@ Requirements:
 - All player-facing text must be natural English.
 - Keep JSON keys and enum values exactly as specified."""
 
+_WORLD_SYSTEM_PROMPT_DE = """Du bist ein TRPG-Weltenbauer. Erzeuge aus der kurzen Beschreibung des Nutzers eine vollständige, spielbare Weltbeschreibung.
+
+Ausgabeformat (striktes JSON, kein Text außerhalb des JSON):
+{
+  "world_name": "Ein prägnanter, ansprechender deutscher Weltname",
+  "description": "Einsätzige deutsche Zusammenfassung",
+  "world_setting": "Weltbeschreibung auf Deutsch, 180-260 Wörter, mit historischem Hintergrund, den wichtigsten Fraktionen und der aktuellen Epoche",
+  "starter_scene": "Eröffnungsszene auf Deutsch, 90-140 Wörter, knapp und für Spieler sofort handlungsfähig",
+  "suggested_difficulty": "标准",
+  "default_rule": "{rule_id}",
+   "starter_lorebook": [
+     {{"id": "{world_prefix}_npc_1", "name": "NPC-Name", "type": "npc", "keywords": ["Auslöser-Schlüsselwort"], "content": "Eintragsinhalt auf Deutsch", "tier": "core", "unreliable": false, "visibility": "public"}},
+     {{"id": "{world_prefix}_loc_1", "name": "Ortsname", "type": "location", "keywords": ["Auslöser-Schlüsselwort"], "content": "Eintragsinhalt auf Deutsch", "tier": "core", "visibility": "public"}}
+   ]
+ }
+
+Anforderungen:
+- starter_lorebook muss 3-5 Anfangseinträge enthalten, darunter mindestens 1 NSC, 1 Ort und 1 Ereignis.
+- Verwende IDs wie {world_prefix}_npc_1 und {world_prefix}_loc_1.
+- Verwende "core" für zentrale Einträge.
+- visibility hat genau zwei Werte: "public" für allgemeines Spielerwissen und "secret" für reines GM-Material. Im Zweifel "secret" verwenden.
+- visibility="public" gibt den GESAMTEN Eintragsinhalt frei: jeder Teil eines öffentlichen Eintrags muss den Spielern ohne Nachforschung bekannt sein dürfen.
+- Vermische niemals verborgene Motive, geheime Identitäten, Wendungen, Verschwörungen, unentdeckte Hinweise, versteckte Eingänge, nicht untersuchte Tatortdetails, zukünftige Enthüllungen oder reine GM-Informationen in einen öffentlichen Eintrag.
+- Wenn eine Person oder ein Ort sowohl öffentliche als auch geheime Informationen hat, teile sie in zwei getrennte Einträge auf: einen öffentlichen mit nur allgemeinem Wissen, einen geheimen mit nur den verborgenen Informationen.
+- Wenn auch nur ein Satz nicht sofort den Spielern bekannt sein sollte, muss der gesamte Eintrag geheim sein.
+- Der gesamte spielerseitige Text muss natürliches Deutsch sein.
+- Behalte JSON-Schlüssel und Enum-Werte exakt wie vorgegeben bei."""
+
 _CHARACTER_SYSTEM_PROMPT = """你是一个通用TRPG角色卡生成师。根据用户描述，生成一个适合任意题材的初始角色卡，不默认套用某个具体规则书或世界观。
 
 输出格式（严格JSON，不要包含任何JSON之外的文本）：
@@ -136,6 +165,30 @@ Requirements:
 - Put special abilities in background or skills, not as cost-free dominant powers.
 - Avoid overpowered words like invincible, omnipotent, instant kill, absolute, immortal, creator, or control-all.
 - Names, roles, skills, equipment, and background must be natural English and match the requested genre."""
+
+_CHARACTER_SYSTEM_PROMPT_DE = """Du bist ein allgemeiner TRPG-Charakterbogen-Generator. Erstelle eine Startfigur, die zur Beschreibung und zum Genre des Nutzers passt, ohne ein bestimmtes offizielles Regelwerk vorauszusetzen.
+
+Gib ausschließlich striktes JSON aus, ohne Text außerhalb des JSON:
+{
+  "character_name": "Charaktername",
+  "race": "Abstammung / Identität",
+  "class": "Rolle / Archetyp",
+  "level": 1,
+  "attributes": {"str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10},
+  "hp": 50, "max_hp": 50,
+  "skills": [{"name": "Fertigkeitsname", "value": 20}],
+  "background": "kurzer deutscher Hintergrund, unter 50 Wörtern",
+  "equipment": [{"name": "Ausrüstungsname", "type": "misc", "damage": 0, "slot": "pack", "quality": "common"}],
+  "inventory": [{"name": "Gegenstandsname", "qty": 1, "effect": "Effekt"}]
+}
+
+Anforderungen:
+- Halte die Figur auf Startniveau. Attributsumme sollte etwa 60 betragen, jeder Wert 3-18.
+- Verwende 1-3 Fertigkeiten, die Genre und Identität widerspiegeln.
+- Ausrüstung muss gewöhnliche Qualität haben; vermeide seltene, legendäre, artefaktartige oder überwältigende Gegenstände.
+- Packe besondere Fähigkeiten in Hintergrund oder Fertigkeiten, nicht als kostenlose dominante Kräfte.
+- Vermeide übermächtige Begriffe wie unbesiegbar, allmächtig, Instant-Kill, absolut, unsterblich, Schöpfer oder Alleskontrolleur.
+- Namen, Rollen, Fertigkeiten, Ausrüstung und Hintergrund müssen natürliches Deutsch sein und zum gewünschten Genre passen."""
 
 _LOREBOOK_ENTRIES_SYSTEM_PROMPT = """你是TRPG世界书编辑。用户会用自然语言描述世界观、势力、地点、人物、事件、谜题、法术或职业。
 
@@ -198,6 +251,37 @@ Requirements:
 - If any sentence should not be known to players immediately, the whole entry must be secret.
 - Do not invent overwhelming artifacts or unsolvable facts. Entries should be easy for the GM to use.
 - All player-facing text must be natural English."""
+
+_LOREBOOK_ENTRIES_SYSTEM_PROMPT_DE = """Du bist ein TRPG-Lorebook-Redakteur. Der Nutzer beschreibt Weltmaterial, Fraktionen, Orte, Figuren, Ereignisse, Rätsel, Zauber oder Klassen in natürlicher Sprache.
+
+Wandle die Beschreibung in strukturierte Lorebook-Einträge um. Gib ausschließlich striktes JSON aus, ohne Text außerhalb des JSON:
+{
+  "entries": [
+    {
+      "name": "Eintragsname",
+      "type": "npc|location|item|event|puzzle|faction|spell|class|other",
+      "keywords": ["Auslöser-Schlüsselwort", "Alias"],
+      "content": "80-180 Wörter, die erklären, wie dieser Eintrag für das Spiel relevant ist, seine Beziehungen und nutzbare Details",
+      "tier": "core|background",
+      "unreliable": false,
+      "visibility": "public"
+    }
+  ]
+}
+
+Anforderungen:
+- Erzeuge 3-8 Einträge, je nach Informationsdichte.
+- Decke ausdrücklich genannte Personen, Orte, Fraktionen oder Ereignisse ab.
+- keywords müssen Namen, Kurznamen und Aliase enthalten. Lasse sie nicht leer.
+- type darf nur die aufgeführten Enum-Werte verwenden.
+- Verwende "core" nur für zentrales Setting-Material; verwende "background" für den Rest.
+- visibility hat genau zwei Werte: "public" für allgemeines Spielerwissen und "secret" für reines GM-Material. Im Zweifel "secret" verwenden.
+- visibility="public" gibt den GESAMTEN Eintragsinhalt frei: jeder Teil eines öffentlichen Eintrags muss den Spielern ohne Nachforschung bekannt sein dürfen.
+- Vermische niemals verborgene Motive, geheime Identitäten, Wendungen, Verschwörungen, unentdeckte Hinweise, versteckte Eingänge, nicht untersuchte Tatortdetails, zukünftige Enthüllungen oder reine GM-Informationen in einen öffentlichen Eintrag.
+- Wenn eine Person oder ein Ort sowohl öffentliche als auch geheime Informationen hat, teile sie in zwei getrennte Einträge auf: einen öffentlichen mit nur allgemeinem Wissen, einen geheimen mit nur den verborgenen Informationen.
+- Wenn auch nur ein Satz nicht sofort den Spielern bekannt sein sollte, muss der gesamte Eintrag geheim sein.
+- Erfinde keine überwältigenden Artefakte oder unlösbaren Fakten. Einträge sollten für den GM leicht nutzbar sein.
+- Der gesamte spielerseitige Text muss natürliches Deutsch sein."""
 
 _JSON_REPAIR_SYSTEM_PROMPT = """你是 JSON 修复器。用户会给你一段应该是 JSON 的模型输出。
 
@@ -287,6 +371,46 @@ Requirements:
 - gm_prompt_appendix must not invent or require new uppercase protocol tags; DiceFrame supplies state-tag instructions separately.
 - Player-facing display text should be natural, concise English. Keep required JSON keys and enum values unchanged."""
 
+_RULE_SYSTEM_PROMPT_DE = """Du bist ein TRPG-Regeldesigner. Erzeuge basierend auf dem bereitgestellten Master-Regel-JSON und der Genre-Beschreibung des Nutzers ein leichtgewichtiges benutzerdefiniertes Regel-JSON, das direkt von DiceFrame verwendet werden kann.
+
+Gib ausschließlich striktes JSON aus. Behalte DiceFrame-kompatible Felder bei:
+{
+  "rule_id": "kurze englische ID mit Ziffern, Unterstrichen oder Bindestrichen",
+  "rule_name": "chinesischer Ausweichname der Regel",
+  "rule_name_en": "English rule name",
+  "description": "einsätzige deutsche Beschreibung",
+  "dice_system": "d20|d100|none",
+  "combat_model": "hp_based|lethal_narrative|none",
+  "mechanics": "Mechanik-Code",
+  "ruleset_level": "assisted",
+  "attributes": [{"key":"englischer_key","name":"deutscher Name","name_en":"English name","min":3,"max":18}],
+  "special_stats": [{"key":"englischer_key","name":"deutscher Name","name_en":"English name","max":100,"description":"deutscher Verwendungszweck"}],
+  "attribute_points": 60,
+  "attr_hint": "deutsche Anleitung zur Attributsvergabe",
+  "hp_formula": "5 + con * 3",
+  "max_skills": 4,
+  "skill_point_total": 220,
+  "max_skill_value": 80,
+  "skill_mode": "narrative",
+  "skill_hint": "deutsche Anleitung zur Fertigkeitsvergabe",
+  "currency": "Gold",
+  "classes": [{"name":"deutsche Rolle / Identität","description":"deutsche Rollenbeschreibung","starter_equipment":["Startausrüstung"]}],
+  "skill_pools": {"deutsche Rolle / Identität":["Fertigkeit 1","Fertigkeit 2"]},
+  "item_categories": {"equipment":["Gegenstand"],"consumable":["Verbrauchsgegenstand"],"misc":["Sonstiges"]},
+  "gm_prompt_appendix": "deutsche GM-Ausführungshinweise zu Genre und Regeln",
+  "difficulty_instructions": {"轻松":"deutsche Anleitung für den leichten Modus","标准":"deutsche Anleitung für den Standardmodus","硬核":"deutsche Anleitung für den harten Modus"}
+}
+
+Anforderungen:
+- Dies ist ein leichtgewichtiges Hilfsregelwerk, keine vollständige offizielle RAW-Nachbildung.
+- Wenn der Nutzer ein bestimmtes Werk erwähnt, extrahiere nur Stimmung und Struktur, ohne proprietären Text zu kopieren.
+- Attribut-Keys müssen englische Buchstaben, Ziffern oder Unterstriche verwenden.
+- Die HP-Formel darf nur Attribut-Keys sowie + - * / // min max abs int verwenden.
+- Verwende möglichst 5-8 Attribute und mache die Charaktererstellung praktikabel.
+- gm_prompt_appendix muss konkret genug sein, um die KI im Genre zu halten.
+- gm_prompt_appendix darf keine neuen großgeschriebenen Protokoll-Tags erfinden oder verlangen; DiceFrame liefert Status-Tag-Anweisungen separat.
+- Der spielerseitige Anzeigetext sollte natürliches, prägnantes Deutsch sein. Behalte erforderliche JSON-Schlüssel und Enum-Werte unverändert bei."""
+
 
 def _localized_rule_text(value: dict | str | None, language: str, fallback: str = "") -> str:
     if isinstance(value, dict):
@@ -299,18 +423,18 @@ def _build_character_prompt(rule, language: str = DEFAULT_LANGUAGE) -> str:
     attrs_desc = "、".join(
         f"{localized_field(a, 'name', language) or a.get('name') or a.get('key')}({a['key']}, {a.get('min',3)}-{a.get('max',18)})"
         for a in rule.attributes
-    ) if rule.attributes else localized_text(language, {"en": "none", "zh-CN": "无", "ja": "なし"})
+    ) if rule.attributes else localized_text(language, {"en": "none", "zh-CN": "无", "ja": "なし", "de": "keine"})
     attribute_keys = rule.attribute_keys if rule.attributes else ["str", "dex", "con", "int", "wis", "cha"]
     attr_keys = ", ".join(f'"{key}"' for key in attribute_keys)
     attrs_example = ", ".join(f'"{key}": 10' for key in attribute_keys)
-    classes_desc = ", ".join(localized_field(c, "name", language) or c.get("name") or localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者"}) for c in rule.classes) if rule.classes else localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者"})
+    classes_desc = ", ".join(localized_field(c, "name", language) or c.get("name") or localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者", "de": "Abenteurer"}) for c in rule.classes) if rule.classes else localized_text(language, {"en": "Adventurer", "zh-CN": "冒险者", "ja": "冒険者", "de": "Abenteurer"})
     total_points = rule.attribute_points
     skill_pools = rule.skill_pools
     if not isinstance(skill_pools, dict):
         skill_pools = rule.template.get("skill_pools", {})
     skills_desc = ", ".join(
         sorted(set(s for pool in skill_pools.values() for s in pool))
-    ) if skill_pools else localized_text(language, {"en": "Perception, Basic Attack", "zh-CN": "侦查、基础攻击", "ja": "知覚、基本攻撃"})
+    ) if skill_pools else localized_text(language, {"en": "Perception, Basic Attack", "zh-CN": "侦查、基础攻击", "ja": "知覚、基本攻撃", "de": "Wahrnehmung, Grundangriff"})
     ss_desc = ""
     for ss in rule.special_stats:
         name = localized_field(ss, "name", language) or ss.get("name") or ss["key"]
@@ -318,6 +442,7 @@ def _build_character_prompt(rule, language: str = DEFAULT_LANGUAGE) -> str:
             "en": f"\nSpecial stat: {name}({ss['key']}), max {ss.get('max', 99)}",
             "zh-CN": f"\n特殊属性: {name}({ss['key']}), 上限{ss.get('max', 99)}",
             "ja": f"\n特殊ステータス: {name}({ss['key']}), 上限{ss.get('max', 99)}",
+            "de": f"\nSpezialwert: {name}({ss['key']}), Maximum {ss.get('max', 99)}",
         })
 
     return localized_text(language, {
@@ -379,6 +504,35 @@ Requirements:
 - 背景简洁≤50字
 - 装备仅common品质
 - 不接受超模种族或设定""",
+        "de": f"""Du bist ein TRPG-Charaktergenerator. Erstelle einen Charakterbogen streng nach der aktuellen Regelvorlage.
+
+Regel: {getattr(rule, 'rule_name_en', '') or rule.rule_name}
+Attribute (insgesamt {total_points} Punkte): {attrs_desc}
+Attribut-Keys: {{{attr_keys}}}
+Verfügbare Rollen: {classes_desc}
+Verfügbare Fertigkeiten: {skills_desc}{ss_desc}
+
+Gib ausschließlich striktes JSON aus:
+{{{{
+  "character_name": "Charaktername",
+  "race": "Herkunft",
+  "class": "Rolle",
+  "level": 1,
+  "attributes": {{{attrs_example}}},
+  "hp": 50, "max_hp": 50,
+  "skills": [{{{{"name": "Fertigkeitsname", "value": 20}}}}],
+  "background": "deutscher Hintergrund, unter 50 Wörtern",
+  "equipment": [{{{{"name": "Ausrüstungsname", "type": "weapon", "damage": 6, "slot": "main_hand", "quality": "common"}}}}],
+  "inventory": [{{{{"name": "Gegenstandsname", "qty": 1, "effect": "Effekt"}}}}]
+}}}}
+
+Anforderungen:
+- Verteile {total_points} Attributpunkte und halte jeden Wert im Regelbereich.
+- Bevorzuge die verfügbare Rollenliste, aber genre-passende eigene Rollennamen sind erlaubt.
+- Wähle {rule.max_skills} Fertigkeiten; jede Fertigkeit braucht name und value.
+- Halte den Hintergrund knapp, unter 50 Wörtern.
+- Ausrüstung muss gewöhnliche Qualität haben.
+- Akzeptiere keine übermächtigen Spezies, Kräfte oder Konzepte.""",
         "ja": f"""あなたは TRPG のキャラクター生成器です。プレイヤーの説明に従い、現在のルールテンプレートに厳密に従ってキャラクターシートを生成してください。
 
 ルール: {rule.rule_name}
@@ -520,6 +674,7 @@ async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fanta
     system_template = localized_text(language, {
         "en": _WORLD_SYSTEM_PROMPT_EN,
         "zh-CN": _WORLD_SYSTEM_PROMPT,
+        "de": _WORLD_SYSTEM_PROMPT_DE,
         "ja": """あなたは TRPG のワールドビルダーです。ユーザーの短い説明から、そのまま遊べる完全な世界設定を生成してください。
 
 出力形式（厳密なJSONのみ。JSON 以外のテキストを出力しない）：
@@ -553,6 +708,7 @@ async def generate_world(llm_client, prompt: str, rule_id: str = "freeform_fanta
         "en": f"Create the following world setting:\n{prompt}\nRule: {rule_id}",
         "zh-CN": f"创建以下世界观：{prompt}\n使用规则：{rule_id}",
         "ja": f"以下の世界設定を作成してください：\n{prompt}\n使用ルール：{rule_id}",
+        "de": f"Erstelle die folgende Weltbeschreibung:\n{prompt}\nRegel: {rule_id}",
     })
 
     data = await _call_json_with_repair(
@@ -606,11 +762,49 @@ def _master_template_for_prompt(template: dict, language: str) -> dict:
     """生成规则 prompt 时按语言剔除另一语言的字段，减少 token。
 
     中文模式剔除 *_en 后缀字段（如 gm_prompt_appendix_en、skill_pools_en）；
-    英文模式保留全部（LLM 需参考英文字段生成英文规则）。
+    其余模式（en/ja/de）保留全部——非中文规则 prompt 都要求 LLM 参考英文
+    字段（如 rule_name_en）生成对应输出，剔除会让那些字段变成无源引用。
     """
-    if is_english(language):
+    if normalize_language(language) != "zh-CN":
         return template
     return {k: v for k, v in template.items() if not k.endswith("_en")}
+
+
+_GENERATED_DE_TOP_LEVEL_FIELDS = (
+    "rule_name",
+    "description",
+    "attr_hint",
+    "skill_hint",
+    "gm_prompt_appendix",
+    "difficulty_instructions",
+    "currency",
+    "skill_pools",
+    "item_categories",
+)
+_GENERATED_DE_NESTED_COLLECTIONS = ("attributes", "classes", "special_stats")
+
+
+def _materialize_generated_de_fields(data: dict, language: str) -> None:
+    """德语 AI 生成规则的本地化字段物化（#277 followup）。
+
+    de 生成 prompt 把德语文本写在 canonical 字段（name/description 等），而
+    localized_field(..., "de") 在 name_de 缺失时会先命中 *_en，导致生成的德语
+    规则再次用于德语建卡/prompt 时显示英语。此处把德语文本复制进 *_de 字段
+    （仅缺省时，deepcopy 防共享引用），统一字段协议；不修改 localized_field
+    的全局回退顺序。非德语生成（en/zh/ja）直接原样返回，不添加 *_de 字段。
+    """
+    if normalize_language(language) != "de":
+        return
+    for key in _GENERATED_DE_TOP_LEVEL_FIELDS:
+        if key in data and f"{key}_de" not in data:
+            data[f"{key}_de"] = copy.deepcopy(data[key])
+    for collection in _GENERATED_DE_NESTED_COLLECTIONS:
+        for item in data.get(collection) or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("name", "description"):
+                if key in item and f"{key}_de" not in item:
+                    item[f"{key}_de"] = item[key]
 
 
 async def generate_rule(
@@ -645,12 +839,19 @@ async def generate_rule(
             f"マスタールール ID：{source_rule_id}\n"
             f"マスタールール JSON：\n{json.dumps(source_rule, ensure_ascii=False, indent=2)}"
         ),
+        "de": (
+            f"Genre-Beschreibung des Nutzers:\n{prompt}\n\n"
+            f"Ziel-rule_id: {rule_id}\n"
+            f"Master-Regel-ID: {source_rule_id}\n"
+            f"Master-Regel-JSON:\n{json.dumps(source_rule, ensure_ascii=False, indent=2)}"
+        ),
     })
     data = await _call_json_with_repair(
         llm_client,
         system_prompt=localized_text(language, {
             "en": _RULE_SYSTEM_PROMPT_EN,
             "zh-CN": _RULE_SYSTEM_PROMPT,
+            "de": _RULE_SYSTEM_PROMPT_DE,
             "ja": """あなたは TRPG のルールデザイナーです。指定されたマスタールール JSON とユーザーのジャンル説明に基づいて、DiceFrame でそのまま使える軽量なカスタムルール JSON を生成してください。
 
 厳密な JSON のみを出力してください。DiceFrame 互換のフィールドを保持すること：
@@ -698,6 +899,7 @@ async def generate_rule(
     )
     if not data:
         return None
+    _materialize_generated_de_fields(data, language)
     data["rule_id"] = rule_id
     data["custom"] = True
     data["source_rule_id"] = source_rule_id
@@ -740,6 +942,7 @@ async def generate_lorebook_entries(
         "en": "; ".join((existing_names or [])[:80]),
         "zh-CN": "、".join((existing_names or [])[:80]),
         "ja": "、".join((existing_names or [])[:80]),
+        "de": "; ".join((existing_names or [])[:80]),
     })
     user_prompt = localized_text(language, {
         "en": (
@@ -757,12 +960,18 @@ async def generate_lorebook_entries(
             f"既存エントリ名：{existing or 'なし'}\n"
             f"ユーザー説明：\n{prompt}"
         ),
+        "de": (
+            f"Ziel-Lorebook: {world_name or 'Unbenannte Welt'}\n"
+            f"Vorhandene Eintragsnamen: {existing or 'Keine'}\n"
+            f"Beschreibung des Nutzers:\n{prompt}"
+        ),
     })
     data = await _call_json_with_repair(
         llm_client,
         system_prompt=localized_text(language, {
             "en": _LOREBOOK_ENTRIES_SYSTEM_PROMPT_EN,
             "zh-CN": _LOREBOOK_ENTRIES_SYSTEM_PROMPT,
+            "de": _LOREBOOK_ENTRIES_SYSTEM_PROMPT_DE,
             "ja": """あなたは TRPG のロアブック編集者です。ユーザーは設定資料・勢力・場所・人物・出来事・謎・呪文・職業を自然言語で説明します。
 
 その説明を構造化されたロアブックエントリに変換してください。厳密な JSON のみを出力し、JSON 以外のテキストを出力しない：
@@ -826,6 +1035,7 @@ async def generate_character(llm_client, prompt: str, game_key: str = "",
         system_prompt = localized_text(language, {
             "en": _CHARACTER_SYSTEM_PROMPT_EN,
             "zh-CN": _CHARACTER_SYSTEM_PROMPT,
+            "de": _CHARACTER_SYSTEM_PROMPT_DE,
             "ja": """あなたは汎用 TRPG のキャラクターシート生成器です。特定の公式ルールブックを前提とせず、ユーザーの説明とジャンルに合う初期キャラクターを作成してください。
 
 厳密な JSON のみを出力し、JSON 以外のテキストを出力しない：
@@ -856,6 +1066,7 @@ async def generate_character(llm_client, prompt: str, game_key: str = "",
         "en": f"Create this character:\n{prompt}",
         "zh-CN": f"创建以下角色：{prompt}",
         "ja": f"このキャラクターを作成してください：\n{prompt}",
+        "de": f"Erstelle diese Figur:\n{prompt}",
     })
 
     response = await llm_client.call(
@@ -949,7 +1160,7 @@ async def generate_character(llm_client, prompt: str, game_key: str = "",
     # 种族清洗（P2-L：双语；英文名同样拦截）
     race = (data.get("race", "") or "").lower()
     if any(b in race for b in _BANNED_RACES_LOWER):
-        data["race"] = localized_text(language, {"en": "Human", "zh-CN": "人类", "ja": "人間"})
+        data["race"] = localized_text(language, {"en": "Human", "zh-CN": "人类", "ja": "人間", "de": "Mensch"})
 
     # 初始化 special_stats
     if rule:

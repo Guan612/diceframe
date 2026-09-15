@@ -24,6 +24,7 @@ import type {
   RulesetGameplayResponse,
   RulesetPendingDecision,
   RulesetTemporaryEncounter,
+  RulesetTemporaryEncounterEnemy,
 } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
 import CombatLiveBar from '@/components/play/CombatLiveBar.vue'
@@ -74,6 +75,7 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   confirm: '确认并交给服务器结算', cancel: '取消', resolve: '发动反应', decline: '放弃反应',
   legalOnly: '这里只显示当前合法动作；若状态已经变化，服务器会拒绝过期请求并说明原因。',
   yourTurn: '轮到你行动', enemyTurn: 'AI GM 正在处理敌方回合', partyTurn: '队友回合', availableActions: '当前可用动作',
+  companionTurn: 'AI 队友正在行动', explorationCast: '非战斗施法',
   waiting: '尚未轮到你的角色。', waitingForTeammate: '等待队友行动', enemyActing: '敌方正在由服务器自动行动…', ended: '战斗已经结束。', conditions: '状态',
   lastResult: '最近结算', none: '无', economy: '本回合资源', available: '可用', spent: '已用',
   inRange: '可用', longRange: '远距攻击（劣势）', tooFar: '距离不足',
@@ -93,6 +95,17 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   aiFailed: '无法生成合法的临时遭遇。你仍可以手动选择自由遭遇。',
   aiPreviewTag: 'AI 生成的临时遭遇',
   aiDifficulty: '难度：普通（已按当前队伍强度限制）',
+  aiDraftHint: '勾选要保留的敌人并可直接编辑数值与数量；确认后服务器会重新校验整场遭遇。',
+  aiName: '名称',
+  aiQuantity: '数量',
+  aiInitiative: '先攻加值',
+  aiAttackBonus: '攻击加值',
+  aiDamage: '伤害公式',
+  aiNormalRange: '普通射程',
+  aiLongRange: '最远射程',
+  aiAddAttack: '新增攻击',
+  aiRemoveAttack: '删除攻击',
+  aiRestore: '恢复 AI 原稿',
   aiConfirmStart: '确认进入战斗',
   aiRegenerate: '重新生成',
   aiEncounterNote: '这场战斗不会写入冒险包的正式遭遇定义；战斗结束后仍可继续当前冒险剧情。',
@@ -123,6 +136,7 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   confirm: 'Confirm and let the server resolve', cancel: 'Cancel', resolve: 'Use Reaction', decline: 'Decline',
   legalOnly: 'Only currently legal actions are shown. The server rejects stale requests with a reason.',
   yourTurn: 'Your turn', enemyTurn: 'AI GM is resolving the enemy turn', partyTurn: 'Party turn', availableActions: 'Available actions',
+  companionTurn: 'AI companion is acting', explorationCast: 'Cast a spell (exploration)',
   waiting: 'Waiting for your character’s turn.', waitingForTeammate: 'Waiting for teammate', enemyActing: 'The enemy is acting automatically…', ended: 'Combat has ended.', conditions: 'Conditions',
   lastResult: 'Latest Resolution', none: 'None', economy: 'Turn Resources', available: 'Available', spent: 'Spent',
   inRange: 'In range', longRange: 'Long range (disadvantage)', tooFar: 'Out of range',
@@ -142,6 +156,17 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   aiFailed: 'Could not generate a legal temporary encounter. You can still prepare a free encounter manually.',
   aiPreviewTag: 'AI temporary encounter',
   aiDifficulty: 'Difficulty: Standard (bounded to the current party)',
+  aiDraftHint: 'Tick the enemies to keep and edit their stats and quantity directly; the server re-validates the whole encounter on confirm.',
+  aiName: 'Name',
+  aiQuantity: 'Qty',
+  aiInitiative: 'Initiative modifier',
+  aiAttackBonus: 'Attack bonus',
+  aiDamage: 'Damage formula',
+  aiNormalRange: 'Normal range',
+  aiLongRange: 'Long range',
+  aiAddAttack: 'Add attack',
+  aiRemoveAttack: 'Remove attack',
+  aiRestore: 'Restore AI draft',
   aiConfirmStart: 'Confirm and start combat',
   aiRegenerate: 'Regenerate',
   aiEncounterNote: 'This combat is not written into the adventure package; the story continues afterwards.',
@@ -191,9 +216,15 @@ const adventureActive = computed(() => String(
   gameplay.value?.campaign?.tutorial?.status || '',
 ) === 'active')
 const sandboxDeclared = ref(false)
-// AI 临时遭遇：只读提案（生成 → GM 预览 → 确认），与手动自由遭遇流程并行；
-// 确认走现有 combat.start(mode=sandbox)，服务端权威校验仍然完整生效。
+// AI 临时遭遇：AI 生成 → GM 编辑本地草稿 → combat.start 确认，与手动
+// 自由遭遇流程并行；确认走现有 combat.start(mode=sandbox)，服务端权威
+// 校验仍然完整生效。草稿只存在于组件状态，刷新丢失可接受，绝不持久化。
+type DraftEnemy = RulesetTemporaryEncounterEnemy & {
+  selected: boolean
+  quantity: number
+}
 const aiProposal = ref<RulesetTemporaryEncounter | null>(null)
+const aiDraft = ref<DraftEnemy[]>([])
 const aiBusy = ref(false)
 const aiError = ref('')
 const readyAction = computed(() => action('encounter.ready'))
@@ -222,6 +253,19 @@ const canPlanTemporaryEncounter = computed(() => Boolean(
 ))
 const attackAction = computed(() => action('attack'))
 const spellAction = computed(() => action('cast_spell'))
+// 非战斗施法（§35.3）：仅当 server available_intents 提供 exploration.cast_spell
+// 时渲染入口，不永久硬编码按钮。
+const explorationAction = computed(() => action('exploration.cast_spell'))
+const explorationSpellRef = ref('')
+const explorationSlot = ref(0)
+const explorationTargetId = ref('')
+const explorationSpell = computed(() => (
+  (explorationAction.value?.spells || []).find(item => item.spell_ref === explorationSpellRef.value) || null
+))
+const explorationSlotValid = computed(() => Boolean(
+  explorationSpell.value
+  && explorationSpell.value.available_slot_levels.includes(explorationSlot.value)
+))
 const moveAction = computed(() => action('move'))
 const pendingDecision = computed(() => (
   action('decision.resolve')?.decisions?.[0]
@@ -257,6 +301,10 @@ const waitingText = computed(() => {
   const current = String(combat.value?.current_actor_id || '')
   if (!current) return copy.value.waiting
   if (current.startsWith('enemy:')) return copy.value.enemyActing
+  if (current.startsWith('companion:')) {
+    // §35.1：队友回合显示"米拉正在行动…"，而不是"等待队友点击"。
+    return `${targetName(current)}（AI 队友）正在行动…`
+  }
   if (current === `player:${props.actorId}`) return copy.value.waiting
   return `${copy.value.waitingForTeammate}：${targetName(current)}`
 })
@@ -281,6 +329,7 @@ const currentTurnLabel = computed(() => {
   const actorId = String(combat.value?.current_actor_id || '')
   if (actorId === `player:${props.actorId}`) return copy.value.yourTurn
   if (actorId.startsWith('enemy:')) return copy.value.enemyTurn
+  if (actorId.startsWith('companion:')) return copy.value.companionTurn
   return copy.value.partyTurn
 })
 const stagedSummary = computed(() => {
@@ -427,6 +476,9 @@ function targetsFor(spell?: RulesetCombatSpell): RulesetCombatTarget[] {
 }
 
 function resetSelections(): void {
+  explorationSpellRef.value = ''
+  explorationSlot.value = 0
+  explorationTargetId.value = ''
   const guidedPresetId = guidedCombatStep.value?.encounter_preset_id
   const preset = guidedCombatPreset.value || requestedCombatPreset.value || selectableEncounterPresets.value[0]
   const shouldSelectEncounter = Boolean(
@@ -465,6 +517,7 @@ function clearGameScopedState(): void {
   manualEncounterOpen.value = false
   sandboxDeclared.value = false
   aiProposal.value = null
+  aiDraft.value = []
   aiError.value = ''
   movementDistance.value = 5
   staged.value = null
@@ -492,10 +545,76 @@ function declareSandboxEncounter(): void {
 
 function cancelAiProposal(): void {
   aiProposal.value = null
+  aiDraft.value = []
   aiError.value = ''
 }
 
-// 生成与开战严格分两步：这里只拿提案，绝不自动开战；失败完全无副作用。
+// 生成/重新生成成功后以 AI 原稿为底稿重建草稿：默认全选、数量 1。
+function buildDraftEnemies(proposal: RulesetTemporaryEncounter): DraftEnemy[] {
+  return (proposal.enemies || []).map(enemy => ({
+    ...enemy,
+    attacks: (enemy.attacks || []).map(attack => ({ ...attack })),
+    selected: true,
+    quantity: 1,
+  }))
+}
+
+// 恢复 AI 原稿：丢弃 GM 的全部编辑，回到未动过的提案。
+function restoreAiDraft(): void {
+  if (aiProposal.value) aiDraft.value = buildDraftEnemies(aiProposal.value)
+}
+
+function addDraftAttack(enemy: DraftEnemy): void {
+  const attacks = enemy.attacks || []
+  if (attacks.length >= 3) return
+  const used = new Set(attacks.map(attack => String(attack.id || '')))
+  let index = attacks.length + 1
+  while (used.has(`attack-${index}`)) index += 1
+  enemy.attacks = [...attacks, {
+    id: `attack-${index}`, name: '', attack_bonus: 0,
+    damage: '1d6', range: 5, long_range: 5,
+  }]
+}
+
+function removeDraftAttack(enemy: DraftEnemy, attackId: string): void {
+  if (!enemy.attacks || enemy.attacks.length <= 1) return
+  enemy.attacks = enemy.attacks.filter(attack => attack.id !== attackId)
+}
+
+// 提交前把数量展开成独立实例：首个保留原 id，其余用稳定后缀并全局去重，
+// 保证 combat.start 的敌人 id 唯一；不发送后端不支持的 count 字段。
+function expandDraftEnemies(draft: DraftEnemy[]): RulesetTemporaryEncounterEnemy[] {
+  const expanded: RulesetTemporaryEncounterEnemy[] = []
+  const used = new Set<string>()
+  const claimId = (base: string): string => {
+    let candidate = base
+    let suffix = 2
+    while (used.has(candidate)) candidate = `${base}-${suffix++}`
+    used.add(candidate)
+    return candidate
+  }
+  for (const enemy of draft) {
+    if (!enemy.selected) continue
+    const quantity = Math.max(1, Math.floor(Number(enemy.quantity) || 1))
+    for (let index = 0; index < quantity; index += 1) {
+      expanded.push({
+        id: claimId(enemy.id || `enemy-${expanded.length + 1}`),
+        name: enemy.name,
+        hp: enemy.hp,
+        armor_class: enemy.armor_class,
+        speed: enemy.speed,
+        position: enemy.position,
+        initiative_modifier: enemy.initiative_modifier,
+        attacks: (enemy.attacks || []).map(attack => ({ ...attack })),
+      })
+    }
+  }
+  return expanded
+}
+
+const selectedDraftCount = computed(() => aiDraft.value.filter(enemy => enemy.selected).length)
+
+// 生成与开战严格分两步：这里只拿提案并构建草稿，绝不自动开战；失败完全无副作用。
 async function planTemporaryEncounter(): Promise<void> {
   const gameKey = props.gameKey
   aiBusy.value = true
@@ -505,33 +624,42 @@ async function planTemporaryEncounter(): Promise<void> {
     if (props.gameKey !== gameKey) return
     if (response.encounter) {
       aiProposal.value = response.encounter
+      aiDraft.value = buildDraftEnemies(response.encounter)
     } else {
       aiProposal.value = null
+      aiDraft.value = []
       aiError.value = response.error || copy.value.aiFailed
     }
   } catch (cause: unknown) {
     if (props.gameKey !== gameKey) return
     aiProposal.value = null
+    aiDraft.value = []
     aiError.value = friendlyCombatError(cause) || copy.value.aiFailed
   } finally {
     if (props.gameKey === gameKey) aiBusy.value = false
   }
 }
 
-// 确认入口：提交现有 combat.start（mode=sandbox + enemies，不带
-// encounter_preset_id）；服务端权威校验再次完整执行，篡改预览也进不了战斗。
+// 确认入口：过滤未勾选敌人、把数量展开成独立实例后，提交现有
+// combat.start（mode=sandbox + enemies，不带 encounter_preset_id）。
+// payload 携带 temporary_encounter 标记，服务端权威入口会重走生成期
+// 同一套范围与队伍安全上限校验——标记只追加校验，不存在跳过语义，
+// 篡改后的 payload 在 combat.start 一样会被整场拒绝。
 async function confirmAiEncounter(): Promise<void> {
-  const proposal = aiProposal.value
-  if (!proposal?.enemies?.length) return
+  if (!aiProposal.value) return
+  const enemies = expandDraftEnemies(aiDraft.value)
+  if (!enemies.length) return
   await submit({
     intent_id: intentId(),
     type: 'combat.start',
     expected_version: gameplay.value?.state_version ?? 0,
     mode: 'sandbox',
-    enemies: proposal.enemies,
+    temporary_encounter: true,
+    enemies,
   })
   if (!error.value) {
     aiProposal.value = null
+    aiDraft.value = []
     aiError.value = ''
   }
 }
@@ -621,6 +749,18 @@ function stageSpell(): void {
   })
 }
 
+function stageExplorationSpell(): void {
+  const actionPayload = explorationAction.value
+  if (!actionPayload || !explorationSpell.value || !explorationSlotValid.value) return
+  stage({
+    type: 'exploration.cast_spell',
+    actor_id: String(actionPayload.actor_id || ''),
+    spell_ref: explorationSpellRef.value,
+    slot_level: explorationSlot.value,
+    target_ids: explorationTargetId.value ? [explorationTargetId.value] : [],
+  })
+}
+
 function stageMove(): void {
   if (!moveAction.value || !movementDistance.value) return
   stage({
@@ -697,6 +837,9 @@ watch(selectedSpellRef, () => {
   const spell = selectedSpell.value
   selectedSlot.value = spell?.available_slot_levels?.[0] ?? 0
   selectedTargetId.value = targetsFor(spell)[0]?.actor_id || ''
+})
+watch(explorationSpellRef, () => {
+  explorationSlot.value = explorationSpell.value?.available_slot_levels?.[0] ?? 0
 })
 watch(selectedTargetId, () => chooseUsableWeapon())
 watch(() => props.gameKey, (next, previous) => {
@@ -803,33 +946,6 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
         </div>
 
         <p v-if="aiError && !aiProposal" class="combat-error" role="alert">{{ aiError }}</p>
-          <div v-if="isGm && aiProposal" class="guided-preset ai-encounter-preview">
-          <span>{{ copy.aiPreviewTag }}</span>
-            <strong>{{ aiProposal.title }}</strong>
-            <p>{{ aiProposal.description }}</p>
-            <small class="encounter-source">{{ copy.aiDifficulty }}</small>
-          <ul class="ai-encounter-enemies">
-            <li v-for="enemy in aiProposal.enemies" :key="enemy.id">
-              <header>
-                <strong>{{ enemy.name }}</strong>
-                <small>HP {{ enemy.hp }} · AC {{ enemy.armor_class }} · {{ copy.tempSpeed }} {{ enemy.speed }}</small>
-              </header>
-              <small v-for="attack in enemy.attacks" :key="attack.id" class="ai-encounter-attack">
-                {{ attack.name }} +{{ attack.attack_bonus }} / {{ attack.damage }}
-              </small>
-            </li>
-          </ul>
-          <p class="combat-state">{{ copy.aiEncounterNote }}</p>
-          <div class="unprepared-actions">
-            <button type="button" :disabled="aiBusy" @click="planTemporaryEncounter">
-              <NIcon :component="SparklesOutline" />{{ copy.aiRegenerate }}
-            </button>
-            <button type="button" class="combat-primary" :disabled="busy" @click="confirmAiEncounter">
-              <NIcon :component="PlayForwardOutline" />{{ copy.aiConfirmStart }}
-            </button>
-            <button type="button" @click="cancelAiProposal">{{ copy.cancel }}</button>
-          </div>
-        </div>
 
         <section v-if="encounterReadiness?.required_count" class="party-readiness" aria-live="polite">
           <header>
@@ -894,6 +1010,9 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
             <button v-if="isGm && action('combat.start')" type="button" class="combat-primary" @click="toggleNextEncounter">
               <NIcon :component="PlayForwardOutline" />{{ nextEncounterOpen ? copy.cancelNextEncounter : copy.nextEncounter }}
             </button>
+            <button v-if="canPlanTemporaryEncounter" type="button" class="ai-encounter-toggle" :disabled="aiBusy" @click="planTemporaryEncounter">
+              <NIcon :component="SparklesOutline" />{{ aiBusy ? copy.aiPreparing : copy.aiPrepare }}
+            </button>
           </div>
           <div v-if="nextEncounterOpen" class="next-encounter-picker">
             <label>
@@ -910,6 +1029,59 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
             </button>
           </div>
         </section>
+
+        <!-- AI 临时遭遇草稿：战斗未开始与已结算两种状态都要可见（结算态可
+             直接由 GM 发起下一场 AI 临时遭遇），因此挂在 encounter-start
+             分支之外、不受 combat.status!=='ended' 的 v-if/v-else 链约束。 -->
+        <div v-if="isGm && aiProposal" class="guided-preset ai-encounter-preview">
+          <span>{{ copy.aiPreviewTag }}</span>
+          <strong>{{ aiProposal.title }}</strong>
+          <p>{{ aiProposal.description }}</p>
+          <small class="encounter-source">{{ copy.aiDifficulty }}</small>
+          <p class="combat-state">{{ copy.aiDraftHint }}</p>
+          <ul class="ai-encounter-enemies">
+            <li v-for="enemy in aiDraft" :key="enemy.id">
+              <header class="ai-draft-head">
+                <input v-model="enemy.selected" type="checkbox" :aria-label="enemy.name || copy.aiName" />
+                <input v-model="enemy.name" type="text" maxlength="60" :aria-label="copy.aiName" />
+                <label class="ai-draft-quantity">
+                  <span>{{ copy.aiQuantity }}</span>
+                  <input v-model.number="enemy.quantity" type="number" min="1" max="12" :aria-label="copy.aiQuantity" />
+                </label>
+              </header>
+              <div class="ai-draft-fields">
+                <label><span>{{ copy.hp }}</span><input v-model.number="enemy.hp" type="number" min="1" max="500" :aria-label="copy.hp" /></label>
+                <label><span>{{ copy.ac }}</span><input v-model.number="enemy.armor_class" type="number" min="8" max="25" :aria-label="copy.ac" /></label>
+                <label><span>{{ copy.tempSpeed }}</span><input v-model.number="enemy.speed" type="number" min="0" max="80" :aria-label="copy.tempSpeed" /></label>
+                <label><span>{{ copy.aiInitiative }}</span><input v-model.number="enemy.initiative_modifier" type="number" min="-5" max="10" :aria-label="copy.aiInitiative" /></label>
+              </div>
+              <div v-for="attack in enemy.attacks || []" :key="attack.id" class="ai-draft-attack">
+                <label><span>{{ copy.attack }}</span><input v-model="attack.name" type="text" maxlength="60" :aria-label="copy.attack" /></label>
+                <label><span>{{ copy.aiAttackBonus }}</span><input v-model.number="attack.attack_bonus" type="number" min="-2" max="15" :aria-label="copy.aiAttackBonus" /></label>
+                <label><span>{{ copy.aiDamage }}</span><input v-model="attack.damage" type="text" maxlength="40" :aria-label="copy.aiDamage" /></label>
+                <label><span>{{ copy.aiNormalRange }}</span><input v-model.number="attack.range" type="number" min="5" max="600" :aria-label="copy.aiNormalRange" /></label>
+                <label><span>{{ copy.aiLongRange }}</span><input v-model.number="attack.long_range" type="number" min="5" max="600" :aria-label="copy.aiLongRange" /></label>
+                <button type="button" :disabled="(enemy.attacks?.length || 0) <= 1" @click="removeDraftAttack(enemy, attack.id || '')">
+                  {{ copy.aiRemoveAttack }}
+                </button>
+              </div>
+              <button type="button" class="ai-draft-add-attack" :disabled="(enemy.attacks?.length || 0) >= 3" @click="addDraftAttack(enemy)">
+                <NIcon :component="SparklesOutline" />{{ copy.aiAddAttack }}
+              </button>
+            </li>
+          </ul>
+          <p class="combat-state">{{ copy.aiEncounterNote }}</p>
+          <div class="unprepared-actions">
+            <button type="button" @click="restoreAiDraft">{{ copy.aiRestore }}</button>
+            <button type="button" :disabled="aiBusy" @click="planTemporaryEncounter">
+              <NIcon :component="SparklesOutline" />{{ copy.aiRegenerate }}
+            </button>
+            <button type="button" class="combat-primary" :disabled="busy || !selectedDraftCount" @click="confirmAiEncounter">
+              <NIcon :component="PlayForwardOutline" />{{ copy.aiConfirmStart }}
+            </button>
+            <button type="button" @click="cancelAiProposal">{{ copy.cancel }}</button>
+          </div>
+        </div>
       </section>
 
       <template v-else>
@@ -1044,6 +1216,31 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
             <button :disabled="busy || !selectedSpell || !selectedTarget" @click="stageSpell"><NIcon :component="SparklesOutline" />{{ copy.cast }}</button>
           </section>
 
+          <section v-if="explorationAction" class="action-card">
+            <h3><NIcon :component="SparklesOutline" />{{ copy.explorationCast }}</h3>
+            <label>{{ copy.spell }}
+              <select v-model="explorationSpellRef">
+                <option v-for="spellItem in explorationAction.spells" :key="spellItem.spell_ref" :value="spellItem.spell_ref">
+                  {{ spellItem.name }} · {{ localizedTerm(spellItem.casting_time) }}
+                </option>
+              </select>
+            </label>
+            <label v-if="explorationSpell?.level">
+              {{ copy.slot }}
+              <select v-model.number="explorationSlot">
+                <option v-for="level in explorationSpell.available_slot_levels" :key="level" :value="level">{{ level }}</option>
+              </select>
+            </label>
+            <label>{{ copy.target }}
+              <select v-model="explorationTargetId">
+                <option v-for="targetItem in explorationAction.targets" :key="targetItem.actor_id" :value="targetItem.actor_id">
+                  {{ targetItem.name }} · {{ targetItem.hp }}/{{ targetItem.max_hp }} HP
+                </option>
+              </select>
+            </label>
+            <button :disabled="busy || !explorationSpellRef || !explorationSlotValid" @click="stageExplorationSpell"><NIcon :component="SparklesOutline" />{{ copy.cast }}</button>
+          </section>
+
           <section v-if="moveAction" class="action-card">
             <h3><NIcon :component="FootstepsOutline" />{{ copy.movement }}</h3>
             <label>{{ copy.move }}
@@ -1106,14 +1303,22 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 .guided-preset { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid #a17b3f; border-radius: 10px; background: rgb(91 62 26 / 24%); }.guided-preset span, .guided-preset small { color: #f0c975; font-size: 12px; }.guided-preset strong { font-size: 17px; }.guided-preset p { margin: 0; color: #e3d9c6; line-height: 1.5; }
 .guided-preset.unprepared { border-color: #b0803c; background: rgb(70 48 20 / 34%); }
 .guided-preset.unprepared strong { color: #f4d9a4; }
-.guided-preset .unprepared-actions { display: flex; column-gap: 14px; row-gap: 10px; flex-wrap: wrap; margin-top: 8px; }
-.guided-preset .unprepared-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 7px 12px; }
+.unprepared-actions { display: flex; column-gap: 14px; row-gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.unprepared-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 7px 12px; }
 .ai-encounter-preview { border-color: #6d6f4a; background: rgb(52 56 24 / 28%); }
 .ai-encounter-enemies { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-.ai-encounter-enemies li { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid #6d5a35; border-radius: 9px; background: rgb(14 20 24 / 42%); }
-.ai-encounter-enemies header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.ai-encounter-enemies header small { color: #cfc6b4; }
-.ai-encounter-attack { color: #b9c7b0; font-size: 12px; }
+.ai-encounter-enemies li { display: grid; gap: 7px; padding: 8px 10px; border: 1px solid #6d5a35; border-radius: 9px; background: rgb(14 20 24 / 42%); }
+.ai-draft-head { display: flex; align-items: center; gap: 8px; }
+.ai-draft-head input[type="checkbox"] { min-height: 0; width: 16px; height: 16px; accent-color: #c59443; }
+.ai-draft-head input[type="text"] { flex: 1; min-width: 0; min-height: 34px; padding-inline: 8px; border: 1px solid #4a5560; border-radius: 8px; background: #0d1319; color: #f3eee7; }
+.ai-draft-quantity { display: inline-flex; align-items: center; gap: 6px; color: #cfc6b4; font-size: 11px; }
+.ai-draft-quantity input { width: 64px; min-height: 34px; padding-inline: 8px; border: 1px solid #4a5560; border-radius: 8px; background: #0d1319; color: #f3eee7; }
+.ai-draft-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }
+.ai-draft-fields label, .ai-draft-attack label { display: grid; gap: 3px; color: #cfc6b4; font-size: 11px; }
+.ai-draft-fields input, .ai-draft-attack input { min-height: 34px; padding-inline: 8px; border: 1px solid #4a5560; border-radius: 8px; background: #0d1319; color: #f3eee7; }
+.ai-draft-attack { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; align-items: end; padding: 7px 8px; border: 1px dashed #6d5a35; border-radius: 8px; }
+.ai-draft-attack button { min-height: 34px; padding: 4px 10px; font-size: 12px; color: #e8b7a9; }
+.ai-draft-add-attack { display: inline-flex; align-items: center; justify-content: center; gap: 6px; justify-self: start; min-height: 34px; padding: 4px 10px; font-size: 12px; }
 .encounter-source { color: #d9cba6; font-size: 11px; }
 .combat-header-tools { display: flex; align-items: center; gap: 9px; }
 .combat-mode-badge { padding: 3px 9px; border: 1px solid #6d5a35; border-radius: 999px; color: #f0d79c; background: rgb(64 46 20 / 55%); font-size: 11px; letter-spacing: .04em; white-space: nowrap; }
@@ -1209,6 +1414,8 @@ button:focus-visible, select:focus-visible, input:focus-visible, .confirm-card:f
 :global(body.light .dnd-combat .guided-preset) { border-color: #b08a44; background: #fdf5e6; }
 :global(body.light .dnd-combat .guided-preset p), :global(body.light .dnd-combat .guided-preset strong) { color: #3b3226; }
 :global(body.light .dnd-combat .guided-preset.unprepared), :global(body.light .dnd-combat .combat-warning) { border-color: #b0803c; background: #fdf3de; }
+:global(body.light .dnd-combat .ai-draft-head input[type="text"]), :global(body.light .dnd-combat .ai-draft-fields input), :global(body.light .dnd-combat .ai-draft-attack input), :global(body.light .dnd-combat .ai-draft-quantity input) { border-color: #b08a44; background: #fffaf0; color: #3b3226; }
+:global(body.light .dnd-combat .ai-draft-fields label), :global(body.light .dnd-combat .ai-draft-attack label), :global(body.light .dnd-combat .ai-draft-quantity) { color: #514b43; }
 :global(body.light .dnd-combat .combat-mode-badge) { border-color: #ad8a4b; background: #f6ecd6; color: #4b3a1c; }
 :global(body.light .dnd-combat .combat-mode-badge.sandbox) { border-color: #8ba7b5; background: #eaf3f7; color: #26414d; }
 @media (max-width: 700px) {

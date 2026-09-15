@@ -397,7 +397,7 @@ def _append_public_summary(
     language = str(getattr(instance, "language", "") or "")
     parts: list[str] = []
     if damage_by_target:
-        if language.lower().startswith("en"):
+        if language.lower().startswith("en") or language.lower().startswith("de"):
             parts.append("; ".join(
                 f"{_entity_display_name(instance, target)} -{amount}"
                 for target, amount in sorted(damage_by_target.items())
@@ -415,6 +415,7 @@ def _append_public_summary(
     if healed:
         parts.append(
             f"healed {healed}" if language.lower().startswith("en")
+            else f"{healed} geheilt" if language.lower().startswith("de")
             else f"{healed} 回復" if language.lower().startswith("ja")
             else f"恢复 {healed}"
         )
@@ -425,6 +426,8 @@ def _append_public_summary(
                  + (f"（{'；'.join(parts)}）" if parts else ""),
         "ja": f"戦闘：{_entity_display_name(instance, actor_entity)} が {decl.name} を使用"
               + (f"（{'; '.join(parts)}）" if parts else ""),
+        "de": f"Kampf: {_entity_display_name(instance, actor_entity)} hat {decl.name} eingesetzt"
+              + (f" ({'; '.join(parts)})" if parts else ""),
     })
     raw_log = instance.log if isinstance(instance.log, list) else []
     try:

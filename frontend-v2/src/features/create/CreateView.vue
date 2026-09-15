@@ -41,6 +41,12 @@ const DEFAULT_MY_ADVENTURE_ZH = '\u6211\u7684\u5192\u9669'
 const DEFAULT_AI_WORLD_ZH = 'AI \u751f\u6210\u7684\u4e16\u754c'
 const BLANK_LOREBOOK_SUFFIX_ZH = '\uff08\u7a7a\u767d\u4e16\u754c\u4e66\uff09'
 const COPIED_LOREBOOK_SUFFIX_ZH = '\uff08\u590d\u5236\u4e16\u754c\u4e66\uff09'
+const DEFAULT_ADVENTURER_DE = 'Abenteurer'
+const DEFAULT_NEW_ADVENTURE_DE = 'Neues Abenteuer'
+const DEFAULT_MY_ADVENTURE_DE = 'Mein Abenteuer'
+const DEFAULT_AI_WORLD_DE = 'KI-generierte Welt'
+const BLANK_LOREBOOK_SUFFIX_DE = ' (Leeres Weltenbuch)'
+const COPIED_LOREBOOK_SUFFIX_DE = ' (Kopiertes Weltenbuch)'
 
 const router = useRouter()
 const route = useRoute()
@@ -154,6 +160,7 @@ function worldNameOf(w: WorldTemplateSummary | WorldSummary): string { return St
 function worldLanguageLabel(w: WorldTemplateSummary | WorldSummary): string {
   const language = String((w as WorldTemplateSummary).active_locale || (w as WorldSummary).language || '').toLowerCase()
   if (language.startsWith('ja')) return '日本語'
+  if (language.startsWith('de')) return t('german')
   if (language.startsWith('en')) return t('english')
   return t('chinese')
 }
@@ -161,10 +168,13 @@ function worldOptionLabel(w: WorldTemplateSummary | WorldSummary): string { retu
 function ruleNameOf(r: RuleSummary): string { return String(r.rule_name || r.rule_id) }
 function ruleDescriptionOf(r: RuleSummary): string { return String(r.description || '') }
 function cloneCharacter<T extends CharacterSheet>(value: T): T { return JSON.parse(JSON.stringify(value)) as T }
-function gameDefault(zh: string, en: string): string { return gameLanguage.value === 'en' ? en : zh }
+function gameDefault(zh: string, en: string, de?: string): string {
+  if (gameLanguage.value === 'de') return de ?? en
+  return gameLanguage.value === 'en' ? en : zh
+}
 function stepTitle(value: number): string { return t(stepTitleKeys[value - 1] || 'stepConfirm') }
 function ensureCharacter(value: CharacterSheet): CreateCharacter {
-  return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer')) }
+  return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE)) }
 }
 
 function legacyCharacterFromCard(card: CharacterCard): CreateCharacter {
@@ -256,7 +266,7 @@ watch(usesProfessionalBuilder, (enabled) => {
       if (empty) characters.value = []
     }
   } else if (!characters.value.length) {
-    characters.value = [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer'), background: '', identity: {}, attributes: {}, skills: [] }]
+    characters.value = [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE), background: '', identity: {}, attributes: {}, skills: [] }]
   }
 })
 watch(sceneImageFile, (file) => {
@@ -334,7 +344,7 @@ onMounted(async () => {
   aiRule.value = rule.value
   characters.value = usesProfessionalBuilder.value
     ? []
-    : [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer'), background: '', identity: {}, attributes: {}, skills: [] }]
+    : [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE), background: '', identity: {}, attributes: {}, skills: [] }]
 })
 
 onBeforeUnmount(() => {
@@ -356,6 +366,7 @@ function openWizard(idx: number | null) {
       toast.info(gameDefault(
         '这个角色已经高于 1 级，已可直接用于本局，不需要重新建卡。高级建卡器只负责创建 1 级角色；职业能力请在角色管理或对局内通过“职业升级”调整。',
         'This character is already above level 1 and can be used as-is. The advanced builder creates level-1 characters; use Class advancement for later levels.',
+        'Dieser Charakter ist bereits über Stufe 1 und kann direkt für dieses Spiel verwendet werden, ein erneutes Erstellen ist nicht nötig. Der erweiterte Charaktereditor erstellt nur Charaktere auf Stufe 1; Klassenfähigkeiten bitte in der Charakterverwaltung oder im Spiel über „Klassenaufstieg” anpassen.',
       ))
       return
     }
@@ -488,10 +499,10 @@ async function create() {
     let worldId = ''
     if (mode.value === 'template') {
       worldId = world.value; payload.world_id = worldId
-      payload.game_name = name.value || worldNameOf(worlds.value.find(w => worldIdOf(w) === world.value) || {}) || gameDefault(DEFAULT_NEW_ADVENTURE_ZH, 'New Adventure')
+      payload.game_name = name.value || worldNameOf(worlds.value.find(w => worldIdOf(w) === world.value) || {}) || gameDefault(DEFAULT_NEW_ADVENTURE_ZH, 'New Adventure', DEFAULT_NEW_ADVENTURE_DE)
     } else if (mode.value === 'custom') {
       worldId = 'custom_' + Date.now(); payload.world_id = worldId
-      payload.world_name = customName.value.trim() || gameDefault(DEFAULT_MY_ADVENTURE_ZH, 'My Adventure'); payload.custom_world = true; payload.description = customDesc.value
+      payload.world_name = customName.value.trim() || gameDefault(DEFAULT_MY_ADVENTURE_ZH, 'My Adventure', DEFAULT_MY_ADVENTURE_DE); payload.custom_world = true; payload.description = customDesc.value
     } else if (mode.value === 'ai') {
       if (!aiPrompt.value.trim()) throw new Error(t('enterWorldPrompt'))
       if (aiAutoRule.value && !aiGeneratedRule.value?.rule_id) await prepareAiRule()
@@ -499,16 +510,16 @@ async function create() {
       payload.rule_id = selectedRule
       const gw = await api<GeneratedWorldResponse>('/generate-world', { method: 'POST', body: JSON.stringify({ prompt: aiPrompt.value, rule_id: selectedRule, language: gameLanguage.value }) })
       if (!gw.ok && gw.error) throw new Error(gw.error)
-      worldId = gw.world_id; payload.world_id = worldId; payload.game_name = gw.world_name || gameDefault(DEFAULT_AI_WORLD_ZH, 'AI Generated World')
+      worldId = gw.world_id; payload.world_id = worldId; payload.game_name = gw.world_name || gameDefault(DEFAULT_AI_WORLD_ZH, 'AI Generated World', DEFAULT_AI_WORLD_DE)
     }
     if (loreChoice.value === '__builtin__') payload.create_lorebook = false
     else if (loreChoice.value === '__blank__') {
       payload.source_world_id = worldId; payload.world_id = worldId + '_blank_' + Date.now()
-      payload.game_name = String(payload.game_name || '') + gameDefault(BLANK_LOREBOOK_SUFFIX_ZH, ' (Blank Lorebook)'); payload.create_lorebook = true; payload.blank_lorebook = true
+      payload.game_name = String(payload.game_name || '') + gameDefault(BLANK_LOREBOOK_SUFFIX_ZH, ' (Blank Lorebook)', BLANK_LOREBOOK_SUFFIX_DE); payload.create_lorebook = true; payload.blank_lorebook = true
     } else if (loreChoice.value.startsWith('copy:')) {
       const src = loreChoice.value.slice(5)
       payload.source_world_id = worldId; payload.world_id = worldId + '_copy_' + Date.now()
-      payload.game_name = String(payload.game_name || '') + gameDefault(COPIED_LOREBOOK_SUFFIX_ZH, ' (Copied Lorebook)'); payload.create_lorebook = true; payload.lorebook_world_id = src
+      payload.game_name = String(payload.game_name || '') + gameDefault(COPIED_LOREBOOK_SUFFIX_ZH, ' (Copied Lorebook)', COPIED_LOREBOOK_SUFFIX_DE); payload.create_lorebook = true; payload.lorebook_world_id = src
     }
     const r = await api<GameMutationResponse>('/games/create', { method: 'POST', body: JSON.stringify(payload) })
     if (!r.ok && r.error) throw new Error(r.error)
@@ -559,7 +570,7 @@ async function create() {
 
         <section v-if="step === 1" class="create-step-card create-content-stage">
           <div class="create-field-grid create-field-grid-compact">
-            <label><span>{{ t('gameLanguage') }}</span><select v-model="gameLanguage"><option value="zh-CN">{{ t('chinese') }}</option><option value="en">{{ t('english') }}</option></select><small>{{ t('gameLanguageHint') }}</small></label>
+            <label><span>{{ t('gameLanguage') }}</span><select v-model="gameLanguage"><option value="zh-CN">{{ t('chinese') }}</option><option value="en">{{ t('english') }}</option><option value="de">{{ t('german') }}</option></select><small>{{ t('gameLanguageHint') }}</small></label>
             <label><span>{{ t('seedCode') }}</span><input v-model="seed" :placeholder="t('seedPlaceholder')"><small>{{ t('restoreBySeed') }}</small></label>
           </div>
           <template v-if="!seed">
@@ -577,7 +588,7 @@ async function create() {
                   <div class="rec-grid">
                     <button v-for="r in recommendedRulesList" :key="r.rule_id" type="button" :class="['rec-card', { active: rule === r.rule_id }]" @click="rule = r.rule_id">
                       <strong>{{ ruleNameOf(r) }}</strong>
-                      <span class="recommendation-badges"><small :class="{ professional: isProfessionalRule(r) }">{{ recommendationBadge(r) }}</small><small v-if="isDndAdvancedRule(r)" class="beta-badge">{{ gameDefault('测试版', 'Beta') }}</small></span>
+                      <span class="recommendation-badges"><small :class="{ professional: isProfessionalRule(r) }">{{ recommendationBadge(r) }}</small><small v-if="isDndAdvancedRule(r)" class="beta-badge">{{ gameDefault('测试版', 'Beta', 'Beta') }}</small></span>
                       <p>{{ ruleDescriptionOf(r) }}</p>
                     </button>
                   </div>
@@ -598,28 +609,28 @@ async function create() {
               <label><span>{{ t('lorebookSource') }}</span><select v-model="loreChoice"><option value="__builtin__">{{ t('builtinLorebook') }}</option><option value="__blank__">{{ t('blankLorebook') }}</option><option v-for="w in availableLoreWorlds" :key="worldIdOf(w)" :value="'copy:' + worldIdOf(w)">{{ t('copyFrom') }}{{ worldNameOf(w) }} · {{ worldLanguageLabel(w) }}</option></select></label>
               <div v-if="showAdventurePackages" class="wide create-adventure-package-field">
                 <label>
-                  <span>{{ gameDefault('玩法模式', 'Play mode') }}</span>
+                  <span>{{ gameDefault('玩法模式', 'Play mode', 'Spielmodus') }}</span>
                   <div class="narrative-perspective-cards">
                     <button type="button" :class="{ active: playMode === 'free' }" @click="selectPlayMode('free')">
-                      <strong>{{ gameDefault('标准自由对局', 'Standard free play') }}</strong>
-                      <small>{{ gameDefault('由 GM 使用通用遭遇或 AI 临时遭遇，自由推进剧情。', 'The GM freely advances the story using catalogued or AI temporary encounters.') }}</small>
+                      <strong>{{ gameDefault('标准自由对局', 'Standard free play', 'Standard-Freispiel') }}</strong>
+                      <small>{{ gameDefault('由 GM 使用通用遭遇或 AI 临时遭遇，自由推进剧情。', 'The GM freely advances the story using catalogued or AI temporary encounters.', 'Der GM treibt die Geschichte frei voran, mit katalogisierten oder KI-generierten Begegnungen.') }}</small>
                     </button>
                     <button type="button" :class="{ active: playMode === 'adventure' }" @click="selectPlayMode('adventure')">
-                      <strong>{{ gameDefault('冒险包剧情', 'Adventure story') }}</strong>
-                      <small>{{ gameDefault('遵循冒险节点，并使用节点绑定的剧情遭遇。', 'Follow adventure nodes and their bound story encounters.') }}</small>
+                      <strong>{{ gameDefault('冒险包剧情', 'Adventure story', 'Abenteuerpaket-Handlung') }}</strong>
+                      <small>{{ gameDefault('遵循冒险节点，并使用节点绑定的剧情遭遇。', 'Follow adventure nodes and their bound story encounters.', 'Folgt Abenteuerknoten und deren gebundenen Story-Begegnungen.') }}</small>
                     </button>
                   </div>
                   <div v-if="playMode === 'adventure'" class="create-adventure-select-row">
                     <select v-model="adventureId">
-                      <option value="" disabled>{{ gameDefault('请选择冒险包', 'Choose an adventure package') }}</option>
+                      <option value="" disabled>{{ gameDefault('请选择冒险包', 'Choose an adventure package', 'Abenteuerpaket wählen') }}</option>
                       <option v-for="item in adventures" :key="item.adventure_id" :value="item.adventure_id" :disabled="item.compatibility !== 'compatible'">
-                        {{ item.name }} · {{ item.estimated_minutes }} {{ gameDefault('分钟', 'min') }}{{ item.compatibility !== 'compatible' ? gameDefault('（需匹配推荐世界）', ' (requires its recommended world)') : '' }}
+                        {{ item.name }} · {{ item.estimated_minutes }} {{ gameDefault('分钟', 'min', 'Min.') }}{{ item.compatibility !== 'compatible' ? gameDefault('（需匹配推荐世界）', ' (requires its recommended world)', ' (benötigt die empfohlene Welt)') : '' }}
                       </option>
                     </select>
                     <a class="create-manage-adventures" :href="adventureManagerHref" target="_blank" rel="noopener">{{ t('manageAdventurePackages') }}</a>
                   </div>
-                  <small>{{ selectedAdventure?.summary || gameDefault('不选择冒险包时，世界书照常生效，进入正常高级规则对局。冒险包只提供剧情节点，不会替换你选择的世界书。', 'Without an adventure package, the selected world book remains active in standard advanced play. An adventure package adds story nodes without replacing that world book.') }}</small>
-                  <small v-if="selectedAdventure?.recommended_world_id" class="adventure-recommendation">{{ gameDefault('推荐世界仅供参考：', 'Recommended world: ') }}{{ selectedAdventure.recommended_world_id }}{{ gameDefault('；复制或自定义世界书也可以使用。', '; copied or custom world books are also supported.') }}</small>
+                  <small>{{ selectedAdventure?.summary || gameDefault('不选择冒险包时，世界书照常生效，进入正常高级规则对局。冒险包只提供剧情节点，不会替换你选择的世界书。', 'Without an adventure package, the selected world book remains active in standard advanced play. An adventure package adds story nodes without replacing that world book.', 'Ohne Abenteuerpaket bleibt das gewählte Weltenbuch wie gewohnt aktiv, im normalen erweiterten Regelspiel. Ein Abenteuerpaket fügt nur Handlungsknoten hinzu, ohne dein gewähltes Weltenbuch zu ersetzen.') }}</small>
+                  <small v-if="selectedAdventure?.recommended_world_id" class="adventure-recommendation">{{ gameDefault('推荐世界仅供参考：', 'Recommended world: ', 'Empfohlene Welt: ') }}{{ selectedAdventure.recommended_world_id }}{{ gameDefault('；复制或自定义世界书也可以使用。', '; copied or custom world books are also supported.', '; kopierte oder eigene Weltenbücher funktionieren ebenfalls.') }}</small>
                 </label>
               </div>
               <label class="wide"><span>{{ t('extraBackground') }}</span><textarea v-model="description" rows="4" :placeholder="t('extraBackgroundPlaceholder')"></textarea></label>
@@ -651,11 +662,11 @@ async function create() {
               <div class="narrative-perspective-cards">
                 <button type="button" :class="{ active: gmStyleFollowWorld }" @click="gmStyleFollowWorld = true">
                   <strong>{{ t('gmStyleFollowWorld') }}</strong>
-                  <small>{{ gameDefault('使用当前世界保存的默认文风。', 'Use the narration style saved with this world.') }}</small>
+                  <small>{{ gameDefault('使用当前世界保存的默认文风。', 'Use the narration style saved with this world.', 'Verwendet den mit dieser Welt gespeicherten Erzählstil.') }}</small>
                 </button>
                 <button type="button" :class="{ active: !gmStyleFollowWorld }" @click="gmStyleFollowWorld = false">
                   <strong>{{ t('gmStyleOverrideCurrent') }}</strong>
-                  <small>{{ gameDefault('只覆盖本局，从下一次 AI GM 回复起生效。', 'Override only this game, starting with the next AI GM response.') }}</small>
+                  <small>{{ gameDefault('只覆盖本局，从下一次 AI GM 回复起生效。', 'Override only this game, starting with the next AI GM response.', 'Überschreibt nur dieses Spiel, gültig ab der nächsten Antwort des KI-Spielleiters.') }}</small>
                 </button>
               </div>
               <small>{{ t('gmStyleHint') }}</small>
@@ -744,7 +755,7 @@ async function create() {
           <div class="create-confirm-grid">
             <article><span>{{ t('world') }}</span><strong>{{ confirmationWorld }}</strong></article>
             <article><span>{{ t('rule') }}</span><strong>{{ ruleNameOf(rules.find(r => r.rule_id === activeRule) || { rule_id: activeRule }) }}</strong></article>
-            <article v-if="supportsAdventurePackages"><span>{{ gameDefault('冒险模式', 'Adventure mode') }}</span><strong>{{ selectedAdventure?.name || gameDefault('标准自由对局', 'Standard free play') }}</strong></article>
+            <article v-if="supportsAdventurePackages"><span>{{ gameDefault('冒险模式', 'Adventure mode', 'Abenteuermodus') }}</span><strong>{{ selectedAdventure?.name || gameDefault('标准自由对局', 'Standard free play', 'Standard-Freispiel') }}</strong></article>
             <article><span>{{ t('narrativePerspective') }}</span><strong>{{ narrativePerspective === 'immersive' ? t('narrativeImmersive') : t('narrativeThirdPerson') }}</strong></article>
             <article v-if="supportsAdvancementPolicy && !seed.trim()"><span>{{ t('advancementMode') }}</span><strong>{{ advancementMode === 'milestone' ? t('advancementMilestone') : t('advancementXp') }} · {{ advancementAuthority === 'ai_gm' ? t('advancementAiGm') : t('advancementHumanGm') }}</strong></article>
             <article><span>{{ t('difficulty') }}</span><strong>{{ difficulty === DIFFICULTY_EASY ? t('easy') : difficulty === DIFFICULTY_HARDCORE ? t('hardcore') : t('normal') }}</strong></article>

@@ -728,6 +728,7 @@ class RuleSystem:
                 "en": " Thresholds declared by this rule are auto-flagged by the system.",
                 "zh-CN": "规则声明的结局阈值由系统自动提醒，命中后按提示推进。",
                 "ja": "ルールが宣言した閾値はシステムが自動で通知します。",
+                "de": " Von dieser Regel deklarierte Schwellenwerte werden vom System automatisch markiert.",
             })
         return localized_text(language, {
             "en": "Rule resources (settle with STAT:playerID:resourceKey:delta; "
@@ -736,6 +737,8 @@ class RuleSystem:
                      f"HP/金币/法力/理智/幸运请用各自专属标签，不要走 STAT）：{'、'.join(rows)}。{trigger_note}",
             "ja": "本ルールの特殊リソース（STAT:プレイヤーID:リソースkey:増減 で処理；"
                   f"HP/通貨/マナ/正気度/幸運は専用タグを使用）：{'、'.join(rows)}。{trigger_note}",
+            "de": "Regelspezifische Ressourcen (abrechnen mit STAT:SpielerID:RessourcenKey:Delta; "
+                  f"verwende STAT NICHT für HP/Gold/Mana/Stabilität/Glück): {', '.join(rows)}.{trigger_note}",
         })
 
     def get_difficulty_instructions(self, difficulty: str, language: str = DEFAULT_LANGUAGE) -> str:

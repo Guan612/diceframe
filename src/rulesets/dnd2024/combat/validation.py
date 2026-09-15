@@ -91,6 +91,18 @@ class CombatValidationMixin:
     def _validate_enemies(enemies: Any) -> None:
         validate_enemy_profiles(enemies)
 
+    @staticmethod
+    def _validate_temporary_encounter_enemies(instance: Any, enemies: Any) -> None:
+        # 延迟导入：director 层复用本模块的 validate_enemy_profiles，
+        # 顶层导入会形成循环依赖。
+        from src.rulesets.dnd2024.director.temporary_encounter import (
+            validate_final_temporary_enemies,
+        )
+        try:
+            validate_final_temporary_enemies(instance, enemies)
+        except ValueError as exc:
+            raise CombatIntentError(str(exc)) from None
+
     def _validate(self, instance: Any, intent: dict[str, Any]) -> None:
         if not isinstance(intent, dict):
             raise CombatIntentError("intent must be an object")
@@ -169,6 +181,13 @@ class CombatValidationMixin:
                 raise CombatIntentError("encounter preset is not available")
             if not preset_id:
                 self._validate_enemies(intent.get("enemies"))
+                if bool(intent.get("temporary_encounter")):
+                    # AI 临时遭遇确认：编辑并展开后的最终 payload 在权威入口
+                    # 重走生成期同一套收紧范围与队伍安全上限。该标记只追加
+                    # 校验，不存在“跳过校验”的语义，也不放宽既有边界。
+                    self._validate_temporary_encounter_enemies(
+                        instance, intent.get("enemies"),
+                    )
             # With a preset, the resolver replaces any submitted enemy list
             # with the catalog entry. Enemy data is intentionally optional so
             # clients cannot smuggle a forged stat block into combat.
@@ -212,6 +231,12 @@ class CombatValidationMixin:
             raise CombatIntentError("actor_id is invalid")
         if kind == "player" and submitted_by != raw_id:
             raise CombatIntentError("a player can submit intents only for their own character")
+        if kind == "companion":
+            # AI 队友由 GM/server automation authority 提交；玩家不能直接控制。
+            if submitted_by != gm_uid:
+                raise CombatIntentError("only the GM can submit companion intents")
+            if intent_type == "death_save":
+                raise CombatIntentError("companions do not make death saves")
         if kind == "enemy" and submitted_by != gm_uid:
             raise CombatIntentError("only the GM can submit enemy intents")
         actor = self._actor_view(instance, combat, actor_id)
@@ -252,9 +277,12 @@ class CombatValidationMixin:
     ) -> None:
         target_id = str(intent.get("target_id") or "")
         target = self._actor_view(instance, combat, target_id)
-        if target["kind"] == actor["kind"] or target["hp"] <= 0:
+        # 敌我判断基于 side：companion/player 同为 party，互不视为合法攻击目标。
+        actor_side = str(actor.get("side") or "")
+        target_side = str(target.get("side") or "")
+        if target_side == actor_side or target["hp"] <= 0:
             raise CombatIntentError("attack target must be a living hostile actor")
-        if actor["kind"] == "player":
+        if actor["kind"] in {"player", "companion"}:
             weapon_ref = str(intent.get("weapon_ref") or "")
             if weapon_ref not in actor["equipment_refs"]:
                 raise CombatIntentError("weapon is not equipped by the actor")
@@ -279,7 +307,7 @@ class CombatValidationMixin:
         self, instance: Any, combat: dict[str, Any], intent: dict[str, Any],
         actor: dict[str, Any], economy: dict[str, Any],
     ) -> None:
-        if actor["kind"] != "player":
+        if actor["kind"] not in {"player", "companion"}:
             raise CombatIntentError("enemy spell profiles are not enabled for this actor")
         spell_ref = str(intent.get("spell_ref") or "")
         spell = self.spells.get(spell_ref)
@@ -314,12 +342,14 @@ class CombatValidationMixin:
             raise CombatIntentError(f"spell requires 1 to {required_count} unique targets")
         for target_id in target_ids:
             target = self._actor_view(instance, combat, target_id)
+            actor_side = str(actor.get("side") or "")
+            target_side = str(target.get("side") or "")
             if effect["mode"] in {"healing", "buff"}:
-                if target["kind"] != actor["kind"]:
+                if target_side != actor_side:
                     raise CombatIntentError("healing and beneficial spells require an allied target")
                 if "dead" in target.get("conditions", {}):
                     raise CombatIntentError("dead targets require a resurrection effect")
-            elif target["kind"] == actor["kind"]:
+            elif target_side == actor_side:
                 raise CombatIntentError("offensive spells require a hostile target")
             if target["hp"] <= 0 and effect["mode"] not in {"healing", "buff"}:
                 raise CombatIntentError("spell target is not active")

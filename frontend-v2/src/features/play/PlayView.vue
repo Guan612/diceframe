@@ -34,6 +34,8 @@ import CombatExtensionPanel from '@/components/play/CombatExtensionPanel.vue'
 import MultiplayerPanel from '@/components/play/MultiplayerPanel.vue'
 import MapWorkspace from '@/components/play/MapWorkspace.vue'
 import SceneGalleryModal from '@/components/play/SceneGalleryModal.vue'
+import CurrentRoundImageModal from '@/components/play/CurrentRoundImageModal.vue'
+import { generateCurrentRoundImage } from '@/api/generatedImages'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePicker.vue'
 import MapBackgroundSettingsModal from '@/components/play/MapBackgroundSettingsModal.vue'
@@ -68,6 +70,8 @@ const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === 
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
 const showMap = ref(false)
 const showSceneGallery = ref(false)
+const showCurrentRoundImage = ref(false)
+const currentRoundImageBusy = ref(false)
 const gmThinking = ref(false)
 const storyRecapBusy = ref(false)
 const luckBusyId = ref('')
@@ -286,9 +290,14 @@ const tableNotice = computed(() => {
   if (showGmThinking.value) return t('gmProcessingNotice')
   if (pendingLuckDecisions.value.length) {
     const own = pendingLuckDecisions.value.some(check => check.actor_uid === actorId.value)
-    if (own || game.isGm.value) return t('luckDecisionOwnNotice')
-    const names = joinNames(pendingLuckDecisions.value.map(check => String(check.actor_name || check.actor_uid || '')))
-    return t('luckDecisionWaitingNotice', { names })
+    const others = pendingLuckDecisions.value.filter(check => check.actor_uid !== actorId.value)
+    if (own && others.length) {
+      const names = joinNames(others.map(check => String(check.actor_name || check.actor_uid || '')))
+      return t('luckDecisionOwnAndWaitingNotice', { count: others.length, names })
+    }
+    if (own) return t('luckDecisionOwnNotice')
+    const names = joinNames(others.map(check => String(check.actor_name || check.actor_uid || '')))
+    return t('luckDecisionWaitingNotice', { count: others.length, names })
   }
   const detail = game.detail.value
   if (!detail) return ''
@@ -481,6 +490,17 @@ async function generateStoryRecap() {
   } finally {
     storyRecapBusy.value = false
   }
+}
+
+async function generateCurrentRoundImageRequest(payload: { prompt: string; round: number; panels: unknown[]; use_avatar_references: boolean }) {
+  if (!game.currentGame.value || currentRoundImageBusy.value) return
+  currentRoundImageBusy.value = true
+  showCurrentRoundImage.value = false
+  try {
+    await generateCurrentRoundImage(game.currentGame.value, { prompt: payload.prompt, round: payload.round, panels: payload.panels, useAvatarReferences: payload.use_avatar_references })
+    await game.refresh(true)
+    toast.success(t('imageGenerated'))
+  } catch (error: unknown) { toast.error(errorMessage(error)) } finally { currentRoundImageBusy.value = false }
 }
 
 function onCommand(text: string) { command('gm-command', { command: text }) }
@@ -1263,6 +1283,8 @@ onBeforeUnmount(() => {
           :players="game.players.value"
           :is-gm="game.isGm.value"
           :recap-busy="storyRecapBusy"
+          :manual-image-enabled="Boolean(settings.config.imagegen_manual_scene)"
+          :manual-image-busy="currentRoundImageBusy"
           @advance="command('advance', { force: true })"
           @force-advance="onForceAdvance"
           @rollback="command('rollback')"
@@ -1285,6 +1307,7 @@ onBeforeUnmount(() => {
           @scene-image="openSceneImageEditor"
           @map-background="openMapBackgroundEditor"
           @payment="openPaymentComposer"
+          @generate-current-round="showCurrentRoundImage = true"
         />
         <CombatExtensionPanel
           :detail="game.detail.value"
@@ -1348,6 +1371,11 @@ onBeforeUnmount(() => {
       :is-gm="game.isGm.value"
       @close="showSceneGallery = false"
       @background-saved="refreshMapAfterBackground"
+    />
+    <CurrentRoundImageModal
+      v-if="showCurrentRoundImage && game.currentGame.value && game.detail.value"
+      open :game-key="game.currentGame.value" :detail="game.detail.value" :log="game.log.value" :players="game.players.value"
+      @close="showCurrentRoundImage = false" @generate="generateCurrentRoundImageRequest"
     />
     <button
       class="mobile-drawer-trigger mobile-drawer-trigger-left"

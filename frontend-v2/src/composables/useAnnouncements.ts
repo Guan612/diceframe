@@ -19,8 +19,8 @@ const hasContent = computed(() => Boolean(content.value))
 
 function normalizeLanguage(locale: string): AnnouncementLanguage {
   const lang = (locale || '').toLowerCase()
-  // 官方公告只有 zh/en；ja 界面回退英文公告，而非中文。
-  return lang.startsWith('en') || lang.startsWith('ja') ? 'en' : 'zh'
+  // 官方公告只有 zh/en；ja/de 及其他非中文界面都回退英文公告，而非中文。
+  return lang.startsWith('zh') ? 'zh' : 'en'
 }
 
 function storageKey(language: AnnouncementLanguage): string {

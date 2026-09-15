@@ -1,6 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { i18n } from '../src/i18n'
+import ManualRollsPanel from '../src/features/play/manual-rolls/ManualRollsPanel.vue'
 import { canRollRequest, createOperationId, isVisibleToActor } from '@/features/play/manual-rolls/useManualRolls'
 import type { ManualRollRequest } from '@/features/play/manual-rolls/types'
+import { api } from '../src/api/client'
+
+vi.mock('../src/api/client', () => {
+  class ApiError extends Error {
+    constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
+  }
+  return { api: vi.fn(), apiBlob: vi.fn(), ApiError }
+})
+
+const mockedApi = vi.mocked(api)
 
 const request: ManualRollRequest = {
   id: 'request-1', operation_id: 'operation-1', run_id: 'run-1', round_number: 2,
@@ -26,5 +39,91 @@ describe('manual roll helpers', () => {
 
   it('creates a non-empty operation id for an idempotent create retry', () => {
     expect(createOperationId()).toMatch(/\S/)
+  })
+})
+
+describe('manual rolls composer include_in_ai_context', () => {
+  const players = [{ user_id: 'p1', character_name: 'Alice' }]
+  let wrapper: ReturnType<typeof mount> | undefined
+
+  beforeEach(() => {
+    i18n.global.locale.value = 'zh-CN'
+    mockedApi.mockReset()
+    mockedApi.mockResolvedValue({ ok: true, run_id: 'run-1', requests: [] })
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = undefined
+    document.body.innerHTML = ''
+  })
+
+  async function mountPanel() {
+    const mounted = mount(ManualRollsPanel, {
+      attachTo: document.body,
+      global: { plugins: [i18n], stubs: { Teleport: true } },
+      props: { gameKey: 'web|room|bot', runId: 'run-1', actorId: 'gm', isGm: true, players },
+    })
+    await flushPromises()
+    wrapper = mounted
+    return mounted
+  }
+
+  function buttonByText(source: ReturnType<typeof mount>, text: string) {
+    const button = source.findAll('button').find(candidate => candidate.text() === text)
+    if (!button) throw new Error(`未找到按钮：${text}`)
+    return button
+  }
+
+  function lastCreateBody() {
+    const calls = mockedApi.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')
+    expect(calls.length).toBeGreaterThan(0)
+    const init = calls[calls.length - 1]![1] as RequestInit
+    return JSON.parse(String(init.body)) as Record<string, unknown>
+  }
+
+  async function openComposer(source: ReturnType<typeof mount>) {
+    await buttonByText(source, '发起投掷').trigger('click')
+    await flushPromises()
+  }
+
+  it('sends include_in_ai_context=false for free rolls by default', async () => {
+    const panel = await mountPanel()
+    await openComposer(panel)
+    const toggle = panel.get('[data-testid="manual-roll-include-ai"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+    await buttonByText(panel, '发送请求').trigger('click')
+    await flushPromises()
+    const body = lastCreateBody()
+    expect(body.purpose).toBe('free')
+    expect(body.include_in_ai_context).toBe(false)
+  })
+
+  it('sends include_in_ai_context=true after toggling the checkbox', async () => {
+    const panel = await mountPanel()
+    await openComposer(panel)
+    const toggle = panel.get('[data-testid="manual-roll-include-ai"]')
+    await toggle.setValue(true)
+    await buttonByText(panel, '发送请求').trigger('click')
+    await flushPromises()
+    const body = lastCreateBody()
+    expect(body.purpose).toBe('free')
+    expect(body.include_in_ai_context).toBe(true)
+  })
+
+  it('does not send the toggle for rule checks and contests', async () => {
+    const panel = await mountPanel()
+    for (const purpose of ['check', 'contest'] as const) {
+      mockedApi.mockClear()
+      await openComposer(panel)
+      await panel.get('select').setValue(purpose)
+      expect(panel.find('[data-testid="manual-roll-include-ai"]').exists()).toBe(false)
+      if (purpose === 'check') await panel.get('input[type="number"]').setValue(15)
+      await buttonByText(panel, '发送请求').trigger('click')
+      await flushPromises()
+      const body = lastCreateBody()
+      expect(body.purpose).toBe(purpose)
+      expect('include_in_ai_context' in body).toBe(false)
+    }
   })
 })

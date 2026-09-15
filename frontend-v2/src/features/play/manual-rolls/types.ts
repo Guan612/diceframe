@@ -28,6 +28,7 @@ export interface ManualRollRequest {
   purpose?: ManualRollPurpose
   target?: number | null
   comparison?: ManualRollComparison
+  include_in_ai_context?: boolean
   visibility: ManualRollVisibility
   target_uids: string[]
   target_names: Record<string, string>

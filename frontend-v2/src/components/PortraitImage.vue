@@ -5,6 +5,7 @@ import { apiBlob } from '@/api/client'
 import { uploadedAvatarUrl } from '@/api/avatars'
 import { generatedImageUrl } from '@/api/generatedImages'
 import { builtinPortraits, initials, resolveBuiltinPortrait } from '@/utils/portraits'
+import ImageLightbox from '@/components/common/ImageLightbox.vue'
 
 const props = withDefaults(defineProps<{
   portrait?: CharacterPortrait | null
@@ -47,6 +48,7 @@ const builtinStyle = computed(() => ({
   backgroundPosition: builtin.value.position,
   backgroundSize: 'cover',
 }))
+const lightboxOpen = ref(false)
 
 watch(
   () => {
@@ -100,8 +102,9 @@ onBeforeUnmount(() => {
 
 <template>
   <span class="portrait-image" :class="{ 'portrait-empty': !hasValidBuiltin && !hasImage }" :style="boxStyle" :title="name" role="img" :aria-label="name || 'avatar'">
-    <img v-if="hasImage && uploadUrl" :src="uploadUrl" alt="" @error="uploadFailed = true">
+    <img v-if="hasImage && uploadUrl" :src="uploadUrl" alt="" role="button" tabindex="0" @click.stop="lightboxOpen = true" @keydown.enter.stop="lightboxOpen = true" @error="uploadFailed = true">
     <span v-else-if="hasValidBuiltin" class="portrait-builtin" :style="builtinStyle"><i>{{ initials(name) }}</i></span>
     <span v-else class="portrait-empty-text">{{ initials(name) }}</span>
   </span>
+  <ImageLightbox :open="lightboxOpen" :src="uploadUrl" :alt="name" @close="lightboxOpen = false" />
 </template>

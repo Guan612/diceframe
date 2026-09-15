@@ -60,7 +60,7 @@ jobs:
             -r requirements-portable.lock
 
       - name: Run backend tests
-        run: python -m pytest -q
+        run: python -m pytest -q --cov=src --cov-report=term-missing --cov-report=xml
 
   frontend:
     name: Frontend checks

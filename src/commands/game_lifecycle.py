@@ -225,6 +225,14 @@ class GameLifecycle:
                         "キャラクターコンセプトで明示されない限り、酒場や中世ファンタジーなどのジャンルを"
                         "勝手に想定しない。\n\n簡潔な 100〜150 字の、すぐ行動できるオープニングを書くこと。"
                     ),
+                    "de": (
+                        "Dies ist eine bewusst leere Freiform-Sandbox ohne vorgegebenen Kanon, Zeitalter, "
+                        "Ort, Fraktionen oder NPCs. Nutze nur die Namen und Hintergründe der Spielfiguren, "
+                        "um eine minimale Ausgangssituation zu etablieren, und lass Raum für die Spieler, "
+                        "die Welt durch ihr Spiel selbst zu definieren. Nimm keine Taverne, mittelalterliche "
+                        "Fantasy oder ein anderes Genre an, sofern ein Charakterkonzept es nicht ausdrücklich vorgibt.\n\n"
+                        "Schreibe eine knappe Eröffnung von 100-150 Wörtern, die eine unmittelbare Wahl bietet."
+                    ),
                 },
             )
         else:
@@ -250,20 +258,54 @@ class GameLifecycle:
                         "理由なく別のジャンル・都市・時代に切り替えてはならない。\n\n"
                         "120〜180 語程度のオープニングシーンを書き、プレイヤーキャラクター名を自然に言及すること。"
                     ),
+                    "de": (
+                        "Das Spiel hat gerade erst begonnen. Halte dich als GM strikt an die obige "
+                        "Weltbeschreibung, Zeitalter, Ort und Genre. Beschreibe die Eröffnungsszene, "
+                        "stelle die aktuelle Umgebung vor und mache klar, wo sich die Spielfiguren befinden. "
+                        "Wechsle nicht ohne Grund zu einem anderen Genre, einer anderen Stadt oder Zeit.\n\n"
+                        "Schreibe etwa 120-180 Wörter für die Eröffnungsszene und erwähne die Namen der "
+                        "Spielfiguren auf natürliche Weise."
+                    ),
                 },
             )
         opening_instruction += "\n\n" + narrative_perspective_instruction(
             instance, instance.language,
         )
+        _welcome_label_sets = {
+            "en": {
+                "world": "[Current World]", "name": "Name", "summary": "Summary",
+                "setting": "World setting", "starter": "Starter scene", "none": "none",
+                "players": "[Player Characters]", "opening": "[Opening Scene]",
+            },
+            "zh-CN": {
+                "world": "【当前世界】", "name": "名称", "summary": "简介",
+                "setting": "世界设定", "starter": "模板开场", "none": "无",
+                "players": "【玩家角色】", "opening": "【开场场景】",
+            },
+            "ja": {
+                "world": "【現在の世界】", "name": "名称", "summary": "概要",
+                "setting": "世界設定", "starter": "テンプレート開幕", "none": "なし",
+                "players": "【プレイヤーキャラクター】", "opening": "【オープニングシーン】",
+            },
+            "de": {
+                "world": "[Aktuelle Welt]", "name": "Name", "summary": "Zusammenfassung",
+                "setting": "Weltbeschreibung", "starter": "Vorlagen-Eröffnung", "none": "keine",
+                "players": "[Spielfiguren]", "opening": "[Eröffnungsszene]",
+            },
+        }
+        welcome_labels = _welcome_label_sets.get(
+            normalize_language(instance.language), _welcome_label_sets["zh-CN"],
+        )
+        none_label = welcome_labels["none"]
         welcome_context = (
             f"{gm_prompt}\n\n"
-            f"【当前世界】\n"
-            f"名称：{instance.world_name}\n"
-            f"简介：{world_description or '无'}\n"
-            f"世界设定：{world_setting or '无'}\n"
-            f"模板开场：{starter_scene or '无'}\n\n"
-            f"【玩家角色】\n{players_text}\n\n"
-            f"【开场场景】\n"
+            f"{welcome_labels['world']}\n"
+            f"{welcome_labels['name']}：{instance.world_name}\n"
+            f"{welcome_labels['summary']}：{world_description or none_label}\n"
+            f"{welcome_labels['setting']}：{world_setting or none_label}\n"
+            f"{welcome_labels['starter']}：{starter_scene or none_label}\n\n"
+            f"{welcome_labels['players']}\n{players_text}\n\n"
+            f"{welcome_labels['opening']}\n"
             f"{opening_instruction}"
         )
 
@@ -309,6 +351,11 @@ class GameLifecycle:
                         f"『{instance.world_name}』を作成し、キャラクターとセーブを保存しました。"
                         "オープニング生成に失敗したため、モデル設定を確認してから続行または再試行してください。"
                     ),
+                    "de": (
+                        f"{instance.world_name} ist bereit. Die Eröffnungserzählung konnte nicht "
+                        "generiert werden, aber dein Spiel und deine Charaktere wurden gespeichert. "
+                        "Konfiguriere den Modelldienst oder versuche es erneut und fahre dann fort."
+                    ),
                 },
             )
             start_data = {}
@@ -346,7 +393,7 @@ class GameLifecycle:
         scene = (start_data.get("state_update") or {}).get("scene_change", "")
         start_label = localized_text(
             getattr(instance, "language", ""),
-            {"en": "Game Start", "zh-CN": "游戏开始", "ja": "ゲーム開始"},
+            {"en": "Game Start", "zh-CN": "游戏开始", "ja": "ゲーム開始", "de": "Spielbeginn"},
         )
         instance.set_scene(scene or start_label)
         if response is not None:
@@ -409,6 +456,15 @@ class GameLifecycle:
                     f"生存プレイヤー：{', '.join(instance.alive_players) if instance.alive_players else 'なし'}\n\n"
                     "ナレーションのみを出力し、JSON ブロックを付けないこと。"
                 ),
+                "de": (
+                    "Du bist der GM eines TRPG-Spiels, das gerade aus der Pause fortgesetzt wurde. "
+                    "Schreibe eine kurze 'Bisher geschah...'-Fortsetzung auf Deutsch, unter 80 Wörtern. "
+                    "Fasse die letzten Ereignisse zusammen und leite natürlich zur aktuellen Szene über.\n\n"
+                    f"Letztes Protokoll:\n{history_text}\n\n"
+                    f"Aktuelle Szene: {instance.scene}\n"
+                    f"Lebende Spieler: {', '.join(instance.alive_players) if instance.alive_players else 'keine'}\n\n"
+                    "Gib nur die Erzählung aus, ohne JSON-Block."
+                ),
             },
         )
 
@@ -428,6 +484,7 @@ class GameLifecycle:
                     "en": f"The GM is back online. Current scene: {instance.scene}. Continue when ready.",
                     "zh-CN": f"GM 已重新上线。当前场景：{instance.scene}。输入 /go 继续冒险。",
                     "ja": f"GM は再起動した。現在のシーン：{instance.scene}。/go で冒険を続行。",
+                    "de": f"Der GM ist wieder online. Aktuelle Szene: {instance.scene}. Fahre fort, wenn du bereit bist.",
                 },
             )
 

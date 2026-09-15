@@ -36,7 +36,6 @@
 - 存量大型/高耦合模块按计划渐进拆分，不要求贡献者在无关 PR 中顺手重构；但已有技术债也不应被当作新增同类耦合的先例。
 - 新的 provider、ruleset、plugin、transport 等实现优先复用 capability / adapter / registry / generic connector，而不是把具体实现分支追加到通用路径。
 - 不提交运行时存档、个人数据、API Key、构建产物或本机配置。
-- 自动化账号（例如 `claude[bot]`、`github-actions[bot]`、`web-flow`）的提交记录保持原样，不通过改作者信息来隐藏或冒充人工贡献。
 
 ## Pull Request
 
@@ -53,6 +52,22 @@ DiceFrame 不设置 PR 最大行数或最大文件数。
 PR 模板中的风险勾选用于提醒 reviewer 关注 API、存档、权限、多人、规则和架构等风险面，不是额外审批流程。
 
 ## 本地验证
+
+后端测试完全离线运行，测试使用临时目录和 fake 外部服务，不需要 API key：
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q --cov=src --cov-report=term-missing
+```
+
+只运行一组测试时可以指定文件或关键字：
+
+```bash
+python -m pytest -q tests/integration/test_permissions.py
+python -m pytest -q -k economy
+```
+
+新增 skip 前应说明外部条件，并优先使用明确的 pytest marker，不能用 skip 掩盖产品回归。
 
 前端改动至少运行：
 

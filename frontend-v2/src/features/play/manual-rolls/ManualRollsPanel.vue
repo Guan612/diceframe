@@ -21,6 +21,7 @@ const copy = computed(() => zh.value ? {
   party: '全队可见', private: '仅目标可见', targets: '投掷角色', later: '稍后',
   send: '发送请求', sending: '发送中…', roll: '投掷', rolling: '投掷中…',
   chooseTarget: '请至少选择一名投掷角色。',
+  tellAi: '将结果告知 AI', aiAlwaysIncluded: '规则检定与对抗比较的结果始终会告知 AI。',
 } : {
   title: 'Manual rolls', request: 'Request roll', retry: 'Retry', empty: 'Manual roll',
   pending: 'Pending', resolved: 'Resolved', cancelled: 'Cancelled', rollFor: 'Roll for',
@@ -31,25 +32,29 @@ const copy = computed(() => zh.value ? {
   visibility: 'Visibility', party: 'Party', private: 'Targets only', targets: 'Targets',
   later: 'Later', send: 'Send request', sending: 'Sending…', roll: 'Roll',
   rolling: 'Rolling…', chooseTarget: 'Select at least one target.',
+  tellAi: 'Tell the AI', aiAlwaysIncluded: 'Rule check and contest results are always shared with the AI.',
 })
 const viewerIsGm = computed(() => props.isGm && !props.preview)
 const rolls = useManualRolls(toRef(props, 'gameKey'), toRef(props, 'runId'), toRef(props, 'actorId'), viewerIsGm, toRef(props, 'lastActivity'))
 const visibleRequests = rolls.visibleRequests
 const activeRequest = rolls.activeRequest
 const composerOpen = ref(false), formula = ref('d20'), label = ref(''), purpose = ref<ManualRollPurpose>('free'), target = ref<number | null>(null), comparison = ref<ManualRollComparison>('auto'), visibility = ref<ManualRollVisibility>('party'), targetUids = ref<string[]>([])
+const includeInAi = ref(false)
 const busy = ref(false), submitError = ref(''), draftOperationId = ref('')
 const canCreate = computed(() => viewerIsGm.value)
 const canAct = computed(() => !props.preview || Boolean(props.delegate))
 const reopenable = computed(() => rolls.pendingForActor.value.filter(item => !rolls.activeRequest.value || item.id !== rolls.activeRequest.value.id))
 
-function resetComposer() { formula.value = 'd20'; label.value = ''; purpose.value = 'free'; target.value = null; comparison.value = 'auto'; visibility.value = 'party'; targetUids.value = props.players.map(player => player.user_id); submitError.value = ''; draftOperationId.value = '' }
+function resetComposer() { formula.value = 'd20'; label.value = ''; purpose.value = 'free'; target.value = null; comparison.value = 'auto'; visibility.value = 'party'; targetUids.value = props.players.map(player => player.user_id); includeInAi.value = false; submitError.value = ''; draftOperationId.value = '' }
 function openComposer() { resetComposer(); composerOpen.value = true }
 function toggleTarget(uid: string) { targetUids.value = targetUids.value.includes(uid) ? targetUids.value.filter(item => item !== uid) : [...targetUids.value, uid] }
 async function create() {
   if (!targetUids.value.length) { submitError.value = copy.value.chooseTarget; return }
   busy.value = true; submitError.value = ''
   if (purpose.value === 'check' && (target.value === null || !Number.isInteger(target.value))) { submitError.value = copy.value.targetPlaceholder; return }
-  try { draftOperationId.value = await rolls.create({ formula: formula.value, label: label.value, purpose: purpose.value, target: target.value, comparison: comparison.value, target_uids: targetUids.value, visibility: visibility.value, operation_id: draftOperationId.value || undefined }); composerOpen.value = false; draftOperationId.value = '' }
+  // 检定/对抗由服务端强制收录，前端不发送该开关；自由投掷按勾选发送严格布尔。
+  const includeInAiContext = purpose.value === 'free' ? includeInAi.value : undefined
+  try { draftOperationId.value = await rolls.create({ formula: formula.value, label: label.value, purpose: purpose.value, target: target.value, comparison: comparison.value, include_in_ai_context: includeInAiContext, target_uids: targetUids.value, visibility: visibility.value, operation_id: draftOperationId.value || undefined }); composerOpen.value = false; draftOperationId.value = '' }
   catch (error: unknown) { submitError.value = error instanceof Error ? error.message : String(error) }
   finally { busy.value = false }
 }
@@ -87,6 +92,8 @@ function purposeText(value?: ManualRollPurpose) { return value === 'check' ? cop
     <label>{{ copy.purpose }} <select v-model="purpose"><option value="free">{{ copy.free }}</option><option value="check">{{ copy.check }}</option><option value="contest">{{ copy.contest }}</option></select></label>
     <template v-if="purpose === 'check'"><label>{{ copy.target }} <input v-model.number="target" type="number" min="1" max="10000" :placeholder="copy.targetPlaceholder" /></label><label>{{ copy.comparison }} <select v-model="comparison"><option value="auto">{{ copy.auto }}</option><option value="at_least">{{ copy.atLeast }}</option><option value="at_most">{{ copy.atMost }}</option></select></label></template>
     <label>{{ copy.visibility }} <select v-model="visibility"><option value="party">{{ copy.party }}</option><option value="private">{{ copy.private }}</option></select></label>
+    <label v-if="purpose === 'free'">{{ copy.tellAi }} <input v-model="includeInAi" type="checkbox" data-testid="manual-roll-include-ai" /></label>
+    <small v-else class="manual-roll-field-hint">{{ copy.aiAlwaysIncluded }}</small>
     <fieldset class="manual-roll-targets"><legend>{{ copy.targets }}</legend><label v-for="player in players" :key="player.user_id" class="form-check"><input type="checkbox" :checked="targetUids.includes(player.user_id)" @change="toggleTarget(player.user_id)" /> <span>{{ player.character_name || player.user_id }}</span></label></fieldset>
     <p v-if="submitError" class="muted">{{ submitError }}</p>
     <template #actions><button :disabled="busy" @click="composerOpen = false">{{ copy.later }}</button><button class="primary" :disabled="busy" @click="create">{{ busy ? copy.sending : copy.send }}</button></template>

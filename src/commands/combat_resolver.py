@@ -273,6 +273,11 @@ class CombatResolver:
                             if outcome == "dead"
                             else f"（意識不明で被弾：死亡セーヴ失敗+{failures}）"
                         ),
+                        "de": (
+                            " (bewusstlos getroffen: 3. Fehlschlag, gestorben)"
+                            if outcome == "dead"
+                            else f" (bewusstlos getroffen: Rettungswurf-Fehlschläge +{failures})"
+                        ),
                     })
                 # 战斗 outcome 属于行动的下游状态，不回写或改动
                 # 已形成的 CheckResult。进程重试时复用它，既不重掷
@@ -292,12 +297,14 @@ class CombatResolver:
             "zh-CN": "【系统战斗结算·必须遵循】",
             "en": "[System Combat Resolution - Must Follow]",
             "ja": "【システム戦闘結算・必ず従うこと】",
+            "de": "[Systemseitige Kampfabrechnung - Muss befolgt werden]",
         })]
         for result, check in results:
             lines.append(localized_text(instance.language, {
                 "zh-CN": f"{result.attacker}持{result.weapon}攻击{result.target}",
                 "en": f"{result.attacker} attacks {result.target} with {result.weapon}",
                 "ja": f"{result.attacker}は{result.weapon}で{result.target}を攻撃した",
+                "de": f"{result.attacker} greift {result.target} mit {result.weapon} an",
             }))
             dice_name = str(check.get("dice") or "")
             roll_value = int(check.get("roll", 0) or 0)
@@ -314,18 +321,24 @@ class CombatResolver:
                     f"  {dice_name}={roll_value} → {result.verdict}、"
                     f"最終ダメージ={result.actual_damage}"
                 ),
+                "de": (
+                    f"  {dice_name}={roll_value} → {result.verdict}, "
+                    f"Endschaden={result.actual_damage}"
+                ),
             }))
             if result.is_critical:
                 lines.append(localized_text(instance.language, {
                     "zh-CN": "  ⚡ 大成功！",
                     "en": "  ⚡ Critical!",
                     "ja": "  ⚡ 大成功！",
+                    "de": "  ⚡ Kritischer Erfolg!",
                 }))
             if result.target_hp_after <= 0 and result.target_hp_before > 0:
                 lines.append(localized_text(instance.language, {
                     "zh-CN": f"  💀 {result.target} 倒地！",
                     "en": f"  💀 {result.target} is down!",
                     "ja": f"  💀 {result.target} は倒れた！",
+                    "de": f"  💀 {result.target} ist niedergestreckt!",
                 }))
 
         logger.info(

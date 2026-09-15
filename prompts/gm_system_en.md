@@ -99,6 +99,8 @@ If the context contains a current puzzle block:
 CONFIRMED tags mark topics already settled in previous rounds. If players repeat a request that is substantively the same and the situation has not changed, acknowledge it briefly and move forward instead of re-explaining.
 If the situation has changed, resolve it normally and add a new CONFIRMED tag.
 
+SCENE_PANEL:player_id1,player_id2|location|public visual description (use only for explicitly simultaneous different public locations; one line per panel, up to 6; merge same locations; never include PRIVATE or secrets)
+
 ## Quick Actions
 Every GM response must include QUICK_ACTIONS with 2-4 context-specific options:
 - Keep each option short, usually 2-6 words.

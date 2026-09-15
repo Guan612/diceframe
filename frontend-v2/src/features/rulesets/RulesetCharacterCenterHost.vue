@@ -51,6 +51,6 @@ function onSaved(character: CharacterSheet, reason?: 'profile' | 'rest'): void {
     @cancel="emit('cancel')"
   />
   <p v-else class="error-banner">
-    {{ language.startsWith('en') ? 'This ruleset has no registered character center.' : '当前规则尚未注册角色中心。' }}
+    {{ language.startsWith('zh') ? '当前规则尚未注册角色中心。' : 'This ruleset has no registered character center.' }}
   </p>
 </template>
