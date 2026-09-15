@@ -55,3 +55,7 @@ docs/I18N_PLAN_*.md
 .env
 .env.*
 !.env.example
+
+.video-data
+/videos
+
