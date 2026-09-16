@@ -19,6 +19,17 @@ AI 应用配置仅使用 `ai_providers` 与各能力的 `*_provider_ref`；凭�
 
 WebUI service 不直接导入另一个 service。跨域业务调用使用 composition root 注入的 callable/protocol；多域共同使用但不执行业务编排的纯契约和投影位于 `src/webui/` 根边界，例如生命周期事务上下文、规则草稿 shape 校验、休息只读投影及角色卡 identity/deduplication。类型检查专用导入不构成运行时依赖。
 
+## 访问凭据与扫码配对
+
+Owner 访问有两类平级凭据，都以 `Authorization: Bearer` 提交，由 `src/webui/access_control.py` 统一判定：
+
+- 访问密码：`STATE["access_token"]` 只保存 PBKDF2 哈希，服务端不掌握明文，任何接口都不得把它兑换出去；
+- 设备令牌：`src/webui/device_tokens.py` 的高熵随机串，落盘只存 sha256 摘要（随机 token 无需 KDF，且它在每个请求上验证），逐台可吊销，吊销不牵连主密码与其它设备。
+
+扫码登录由 `src/webui/pairing.py` 与 `src/webui/routes/pairing.py` 负责：owner 会话调 `POST /api/pairing` 签发一次性短 TTL 配对码（服务端同样只存摘要），移动端匿名调 `POST /api/pairing/claim` 兑换成设备令牌。兑换端点必须匿名可达（此刻手机还没有任何凭据），因此它与 `/api/login` 共用 abuse-guard 限流桶并写入同一份登录审计；配对码一次性、过期即作废、不续期。设备清单 `GET /api/devices` 与吊销 `DELETE /api/devices/{id}` / `POST /api/devices/revoke-all` 只对 owner 开放，清单不返回任何可用于鉴权的字段。
+
+二维码要编的地址只有服务端知道——GM 本机浏览器的 origin 往往是 localhost，对手机无意义。`GET /api/system/network`（owner 限定）基于 `src/web_transport/local_addresses.py` 返回本机可达候选地址；该模块同时是自签证书 SAN 的地址来源。
+
 ## Content V2
 
 所有输入先经过兼容边界，再进入当前 canonical model：
