@@ -225,6 +225,11 @@ class GameInstance:
     # 自己的动作与权威世界真相矛盾。
     last_world_legality: list = field(default_factory=list)
 
+    # 本轮逻辑时间推进后确定性结算的定时事件（Issue #284 / WP6）：每条形如
+    # {"event_id", "label", "due_at", "status": "applied"|"failed", "error"?}，
+    # 供 GM 可信块叙述与前端提示使用。
+    last_world_events: list = field(default_factory=list)
+
     # 最近一回合因输出截断触发的 token 预算升档（给 GM 的低打扰提示）
     last_token_budget_bump: TokenBudgetBump | None = None
 
@@ -695,6 +700,7 @@ class GameInstance:
         self.last_checks.clear()
         self.last_overreach.clear()
         self.last_world_legality.clear()
+        self.last_world_events.clear()
         self.round_unpriced_purchase_intents.clear()
         self.round_checks_prepared = prepared
 

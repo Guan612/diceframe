@@ -54,7 +54,7 @@ Design boundaries (deliberately small for the first version):
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -62,10 +62,18 @@ WORLD_STATE_SCHEMA_VERSION = 1
 
 # 事实可见性：第一版只有公开与 GM 私有。更细的 ACL / group graph 不在本层。
 FACT_VISIBILITIES = ("public", "gm")
-# 事件状态：pending 待结算（后续 work package 结算后为 applied），cancelled 由
-# cancel_event 写入。三者都是持久化值，不能靠内存标记推断。
-EVENT_STATUSES = ("pending", "applied", "cancelled")
-OP_KINDS = ("set_fact", "remove_fact", "advance_time", "schedule_event", "cancel_event")
+# 事件状态：pending 待结算；applied 已确定执行；cancelled 由 cancel_event 写入；
+# failed 表示到期时 ops 已不再可应用（例如它要移除的事实已经不存在）——失败事件
+# 不会重试，也不会让其它事件或时间推进一起卡住。四者都是持久化值，不能靠内存
+# 标记推断。
+EVENT_STATUSES = ("pending", "applied", "cancelled", "failed")
+OP_KINDS = (
+    "set_fact", "remove_fact", "advance_time", "schedule_event", "cancel_event",
+    # 仅由 server 侧结算写入（见 world_events.advance_world_time），planner 不会
+    # 产生这个 op。
+    "complete_event",
+)
+SETTLED_EVENT_STATUSES = ("applied", "failed")
 # 定时事件内部只允许改事实；不允许事件嵌套调度或自己推进时间（否则结算顺序
 # 会依赖递归，不再确定性）。
 EVENT_OP_KINDS = ("set_fact", "remove_fact")
@@ -185,6 +193,34 @@ def world_scheduled_events(state: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def clock_to_minutes(clock: Any) -> int:
+    """Absolute logical minutes of a ``{"day", "minute"}`` clock (0 = day 1)."""
+
+    minutes = _instant_minutes(clock, "clock")
+    if minutes is None:
+        raise WorldStateError(f"invalid world clock: {clock!r}")
+    return minutes
+
+
+def clock_from_minutes(total: int, *, position: int = 0) -> dict[str, int]:
+    """Inverse of :func:`clock_to_minutes`, bounded by the world clock limits."""
+
+    return _clock_from_minutes(int(total), position)
+
+
+def ensure_clock(clock: Any, *, fallback: Mapping[str, Any] | None = None) -> dict[str, int]:
+    """Validated clock, or ``fallback``/day 1 when the value is unusable."""
+
+    minutes = _instant_minutes(clock, "clock")
+    if minutes is not None:
+        return _clock_from_minutes(minutes, 0)
+    if fallback is not None:
+        fallback_minutes = _instant_minutes(fallback, "clock")
+        if fallback_minutes is not None:
+            return _clock_from_minutes(fallback_minutes, 0)
+    return {"day": 1, "minute": 0}
+
+
 def project_visible_state(
     instance: Any, *, viewer_uid: str = "", viewer_is_gm: bool = False,
 ) -> dict[str, Any]:
@@ -247,9 +283,33 @@ def apply_world_ops(
         raise WorldStateError("world ops must not be empty")
     if len(ops) > MAX_OPS_PER_BATCH:
         raise WorldStateError(f"world ops exceed {MAX_OPS_PER_BATCH} entries")
-    draft = _validated_copy(getattr(instance, "world_state", None))
+    draft, summary = apply_ops_to_state(
+        getattr(instance, "world_state", None), ops,
+        source_round=_source_round(instance, source_round),
+    )
+    instance.world_state = draft
+    return summary
+
+
+def apply_ops_to_state(
+    state: Any, ops: Sequence[Mapping[str, Any]], *, source_round: int = 0,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pure form of one world-op batch: returns ``(new_state, summary)``.
+
+    Used by :func:`apply_world_ops` and by authoritative compositions that need
+    to stack several batches (time advance plus due-event settlement) before
+    committing them once.  Nothing is written to ``instance`` here.
+    """
+
+    if not isinstance(ops, Sequence) or isinstance(ops, (str, bytes)):
+        raise WorldStateError("world ops must be a list")
+    if not ops:
+        raise WorldStateError("world ops must not be empty")
+    if len(ops) > MAX_OPS_PER_BATCH:
+        raise WorldStateError(f"world ops exceed {MAX_OPS_PER_BATCH} entries")
+    round_number = _source_round_value(source_round)
+    draft = _validated_copy(state)
     revision = int(draft["revision"]) + 1
-    round_number = _source_round(instance, source_round)
     applied: list[dict[str, Any]] = []
     for position, raw in enumerate(ops):
         applied.append(_apply_op(
@@ -268,8 +328,7 @@ def apply_world_ops(
     draft["scheduled_events"] = {
         key: draft["scheduled_events"][key] for key in sorted(draft["scheduled_events"])
     }
-    instance.world_state = draft
-    return {
+    return draft, {
         "revision": revision,
         "clock": dict(draft["clock"]),
         "applied": applied,
@@ -278,6 +337,10 @@ def apply_world_ops(
 
 def _source_round(instance: Any, source_round: int | None) -> int:
     value = source_round if source_round is not None else getattr(instance, "round_number", 0)
+    return _source_round_value(value)
+
+
+def _source_round_value(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
@@ -335,6 +398,25 @@ def _validated_copy(state: Any) -> dict[str, Any]:
     return draft
 
 
+def _validate_event_op(raw: Any, position: int) -> None:
+    """Structural validation of one nested event op (no state references)."""
+
+    if not isinstance(raw, Mapping):
+        raise WorldStateError(f"scheduled event op #{position} must be an object")
+    kind = raw.get("op")
+    if kind not in EVENT_OP_KINDS:
+        raise WorldStateError(f"scheduled event ops cannot use {kind!r}")
+    if kind == "set_fact":
+        _reject_unknown_fields(raw, {"op", "key", "value", "visibility"}, position)
+        key = _fact_key(raw.get("key"), position)
+        _fact_value(raw.get("value"), key)
+        if raw.get("visibility") is not None:
+            _visibility(raw.get("visibility"), position)
+        return
+    _reject_unknown_fields(raw, {"op", "key"}, position)
+    _fact_key(raw.get("key"), position)
+
+
 def _apply_op(
     draft: dict[str, Any],
     raw: Any,
@@ -359,7 +441,9 @@ def _apply_op(
         return _op_advance_time(draft, raw, position=position)
     if kind == "schedule_event":
         return _op_schedule_event(draft, raw, revision=revision, position=position)
-    return _op_cancel_event(draft, raw, position=position)
+    if kind == "cancel_event":
+        return _op_cancel_event(draft, raw, position=position)
+    return _op_complete_event(draft, raw, position=position)
 
 
 def _op_set_fact(
@@ -450,14 +534,11 @@ def _op_schedule_event(
         raise WorldStateError(
             f"world op #{position} event exceeds {MAX_OPS_PER_BATCH} ops"
         )
-    # 事件 ops 在调度时就按当前状态校验一次（fail closed），但只写入 scratch
-    # 副本：引用合法性以结算时刻的状态为准。
-    scratch = deepcopy(draft)
+    # 事件描述的是未来：调度时只校验结构（op 种类、key/value/visibility 形状），
+    # 引用合法性以结算时刻的状态为准（见 world_events：无法应用的事件会被标记
+    # failed，而不是让调度期拒绝一个未来才成立的 op）。
     for nested_position, nested in enumerate(raw_ops):
-        _apply_op(
-            scratch, nested, revision=revision, source_round=0,
-            position=nested_position, inside_event=True,
-        )
+        _validate_event_op(nested, nested_position)
     label = raw.get("label", "")
     if label is None:
         label = ""
@@ -492,6 +573,48 @@ def _op_cancel_event(
         )
     event["status"] = "cancelled"
     return {"op": "cancel_event", "event_id": event_id}
+
+
+def _op_complete_event(
+    draft: dict[str, Any], raw: Mapping[str, Any], *, position: int,
+) -> dict[str, Any]:
+    """Mark one due event as settled (server-side settlement only).
+
+    A pending event can move to ``applied`` or ``failed`` exactly once; the
+    pending → settled transition is what makes settlement idempotent across
+    retries, duplicate saves, and page refreshes.
+    """
+
+    _reject_unknown_fields(
+        raw, {"op", "event_id", "status", "error"}, position,
+    )
+    event_id = _event_id(raw.get("event_id"), position)
+    event = draft["scheduled_events"].get(event_id)
+    if not isinstance(event, MutableMapping):
+        raise WorldStateError(
+            f"world op #{position} completes an unknown event: {event_id!r}"
+        )
+    if event.get("status") != "pending":
+        raise WorldStateError(
+            f"world op #{position} completes a non-pending event: {event_id!r}"
+        )
+    status = raw.get("status")
+    if status not in SETTLED_EVENT_STATUSES:
+        raise WorldStateError(
+            f"world op #{position} has an invalid settled status: {status!r}"
+        )
+    error = raw.get("error", "")
+    if error is None:
+        error = ""
+    if not isinstance(error, str) or len(error) > MAX_LABEL_CHARS:
+        raise WorldStateError(f"world op #{position} event error is invalid")
+    event["status"] = str(status)
+    event["settled_at"] = dict(draft["clock"])
+    if status == "failed":
+        event["error"] = error
+    else:
+        event.pop("error", None)
+    return {"op": "complete_event", "event_id": event_id, "status": str(status)}
 
 
 # ---- 字段校验 -------------------------------------------------------------
@@ -575,9 +698,14 @@ __all__ = [
     "EVENT_STATUSES",
     "FACT_VISIBILITIES",
     "OP_KINDS",
+    "SETTLED_EVENT_STATUSES",
     "WORLD_STATE_SCHEMA_VERSION",
     "WorldStateError",
+    "apply_ops_to_state",
     "apply_world_ops",
+    "clock_from_minutes",
+    "clock_to_minutes",
+    "ensure_clock",
     "ensure_world_state",
     "fact_value",
     "fact_visibility",

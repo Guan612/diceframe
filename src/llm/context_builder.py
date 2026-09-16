@@ -431,6 +431,7 @@ async def build_context(
     overreach_text: str = "",
     world_state_text: str = "",
     world_legality_text: str = "",
+    world_events_text: str = "",
     state_view: dict | None = None,
     authoritative_events_text: str = "",
 ) -> str:
@@ -714,6 +715,9 @@ async def build_context(
     if world_legality_text:
         parts.append(world_legality_text.strip())
         sec_idx["world_legality"] = len(parts) - 1
+    if world_events_text:
+        parts.append(world_events_text.strip())
+        sec_idx["world_events"] = len(parts) - 1
     if authoritative_events_text:
         parts.append(authoritative_events_text.strip())
         sec_idx["authoritative_events"] = len(parts) - 1

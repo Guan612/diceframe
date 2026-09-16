@@ -72,6 +72,14 @@ The server compares this with authoritative world truth: a proven contradiction 
 
 This field does not affect checks planning; leave it empty when unsure.
 
+### World time advance
+
+Optional extra output `world_time_advance`: report only logical time that actually elapses in this round's narration (a rest, travel, waiting until dusk), with `minutes` as the elapsed amount (at most 1440, one day). The server advances the authoritative world clock and deterministically settles due scheduled events; `reason` is an optional one-line justification.
+
+Omit it (or use 0) when no meaningful time passes. Never estimate large stretches of time, and never inflate elapsed time to make an event fire.
+
+This field does not affect checks planning; leave it empty when unsure.
+
 ### Purchase intent
 
 Optional extra output `economy_actions`: detect purchase intents players clearly stated (in any language). Price questions (“how much?”, “多少钱?”, “いくら?”) and hypothetical discussion are not purchase intents.
