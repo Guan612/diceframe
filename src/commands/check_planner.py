@@ -18,6 +18,7 @@ from src.engine.checks import (
     find_action_opponent,
     is_explicit_attack_action,
     is_non_combat_declaration,
+    matched_action_phrases,
 )
 from src.engine.character_utils import is_conscious
 from src.engine.currency import legacy_currency_spec, parse_currency_amount
@@ -33,6 +34,12 @@ from src.rules.rule_system import RuleSystem
 logger = logging.getLogger("trpg")
 
 _SAFETY_CHECK_INTENTS = {"combat", "athletics", "stealth"}
+# Safety Net 只判断「行动者本人当前的动作」：冒号与引号之后是转述/引用内容
+# （第三方言行、过去事件），不是本轮动作。这里不做完整 NLP——只切掉明确
+# 属于转述的尾巴，宁可保守。
+_REPORTED_CONTENT_MARKERS = ("：", ":", "“", "”", "「", "」", "\"")
+# 行动者本人作主语的标记；角色名与「我」等价。
+_ACTOR_SELF_MARKERS = ("我", "自己", "本人", "i", "me", "my", "myself", "we", "our")
 _CONCEALED_OR_HAZARDOUS_WORDS = (
     "暗门", "暗室", "隐藏", "秘密", "危险", "异常", "诡异", "未知",
     "残留", "血迹", "毒", "陷阱", "追赶", "袭击",
@@ -777,6 +784,94 @@ def normalize_check_specs(
     return planned, errors
 
 
+def _safety_net_action_scope(text: object) -> str:
+    """行动者本人可能作主语的那部分文本（切掉转述/引用内容）。"""
+    source = str(text or "")
+    cut = len(source)
+    for marker in _REPORTED_CONTENT_MARKERS:
+        index = source.find(marker)
+        if 0 <= index < cut:
+            cut = index
+    return source[:cut]
+
+
+def _safety_net_subjects(
+    instance: GameInstance, uid: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(行动者本人标记, 其他已知参与者名)。只认权威状态里的参与者。"""
+    player = instance.players.get(uid) or {}
+    self_markers = list(_ACTOR_SELF_MARKERS)
+    actor_name = str(player.get("character_name") or "").strip()
+    if actor_name:
+        self_markers.append(actor_name)
+    foreign: set[str] = set()
+    for other_id, other in instance.players.items():
+        if other_id == uid:
+            continue
+        for value in (other_id, (other or {}).get("character_name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    for companion_id, companion in _companion_roster(instance).items():
+        for value in (companion_id, companion.get("name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    for npc_id, npc in (getattr(instance, "npcs", None) or {}).items():
+        if not isinstance(npc, dict):
+            continue
+        for value in (npc_id, npc.get("name"), npc.get("character_name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    for enemy in getattr(instance, "combat_enemies", None) or []:
+        if not isinstance(enemy, dict):
+            continue
+        for value in (enemy.get("name"), enemy.get("character_name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    # 长名优先，避免「阿」这类短名先命中。
+    return tuple(self_markers), tuple(sorted(foreign, key=len, reverse=True))
+
+
+def _nearest_subject_is_foreign(
+    prefix: str, self_markers: tuple[str, ...], foreign_names: tuple[str, ...],
+) -> bool:
+    """短语之前最近出现的主语是不是别人（没有主语时按行动者本人处理）。"""
+    lowered = prefix.casefold()
+    best_self = max(
+        (lowered.rfind(marker.casefold()) for marker in self_markers), default=-1,
+    )
+    best_foreign = -1
+    for name in foreign_names:
+        index = lowered.rfind(name.casefold())
+        if index >= 0:
+            best_foreign = max(best_foreign, index)
+    return best_foreign >= 0 and best_foreign > best_self
+
+
+def _safety_net_action_confirmed(
+    instance: GameInstance, uid: str, text: object, rule: RuleSystem | None, intent: str,
+) -> bool:
+    """Safety Net 是否可以为该意图补检定。
+
+    需要同时满足：命中具体动作短语（而不是裸动词），且这句话的主语是行动者
+    本人当前的动作。明确攻击仍由既有攻击关键词兜底，不受短语规则影响。
+    """
+    if intent == "combat" and is_explicit_attack_action(text):
+        return True
+    scope = _safety_net_action_scope(text)
+    if not scope:
+        return False
+    self_markers, foreign_names = _safety_net_subjects(instance, uid)
+    for phrase in matched_action_phrases(rule, intent, scope, instance.language):
+        found = re.search(re.escape(phrase), scope, flags=re.IGNORECASE)
+        if found is None:
+            continue
+        if not _nearest_subject_is_foreign(
+            scope[:found.start()], self_markers, foreign_names,
+        ):
+            return True
+    return False
+
+
 def _merge_safety_net_checks(
     instance: GameInstance,
     rule: RuleSystem | None,
@@ -827,7 +922,9 @@ def _merge_safety_net_checks(
             intent in {"investigate", "perception"}
             and any(word in text for word in _CONCEALED_OR_HAZARDOUS_WORDS)
         )
-        safety_intent = intent in _SAFETY_CHECK_INTENTS
+        safety_intent = intent in _SAFETY_CHECK_INTENTS and _safety_net_action_confirmed(
+            instance, uid, action.get("text"), rule, intent,
+        )
         if intent == "combat" and _is_non_combat_declaration(action.get("text")):
             safety_intent = False
         if not (
