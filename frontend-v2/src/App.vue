@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
   NConfigProvider, NMessageProvider, NDialogProvider, NLoadingBarProvider, NIcon,
-  zhCN, enUS, dateZhCN, dateEnUS,
+  zhCN, enUS, deDE, dateZhCN, dateEnUS, dateDeDE,
 } from 'naive-ui'
 import { useTheme } from '@/composables/useTheme'
 import { initializeBackgroundImages } from '@/composables/useBackgroundImages'
@@ -32,9 +32,17 @@ const route = useRoute()
 const { naiveTheme, overrides, loadPluginThemes, suspendPluginTheme, restorePluginTheme } = useTheme()
 const { locale, setLocale, t } = useLocale()
 const { updateAvailable } = useUpdateCheck()
-// naive-ui 无 ja locale；ja 界面回退英文组件语言，而非中文。
-const naiveLocale = computed(() => locale.value === 'zh-CN' ? zhCN : enUS)
-const naiveDateLocale = computed(() => locale.value === 'zh-CN' ? dateZhCN : dateEnUS)
+// naive-ui 无 ja locale；ja 界面回退英文组件语言，而非中文。de 有内置 locale，直接使用。
+const naiveLocale = computed(() => {
+  if (locale.value === 'zh-CN') return zhCN
+  if (locale.value === 'de') return deDE
+  return enUS
+})
+const naiveDateLocale = computed(() => {
+  if (locale.value === 'zh-CN') return dateZhCN
+  if (locale.value === 'de') return dateDeDE
+  return dateEnUS
+})
 
 const primaryItems = primaryNavItemIds.map(navItem)
 function menuTo(id: string) {
@@ -189,9 +197,10 @@ watch(publicRoute, (isPublic) => {
                     <label class="locale-select header-locale">
                       <span>{{ t('language') }}</span>
                       <select :value="locale" @change="onLocaleChange">
-                        <option value="zh-CN">中文</option>
-                        <option value="en">EN</option>
+                        <option value="zh-CN">简体中文</option>
+                        <option value="en">English</option>
                         <option value="ja">日本語</option>
+                        <option value="de">Deutsch</option>
                       </select>
                     </label>
                     <div class="operator-chip" :title="currentGameText">

@@ -67,25 +67,28 @@ def resolve_round_death_saves(instance: GameInstance, rule) -> str:
             instance.set_character_sheet(uid, cs)
         name = str(player.get("character_name") or uid)
         label = localized_text(instance.language, {
-            "zh-CN": "死亡豁免", "en": "death save", "ja": "死亡セーヴ",
+            "zh-CN": "死亡豁免", "en": "death save", "ja": "死亡セーヴ", "de": "Todesrettungswurf",
         })
         if event == "wake":
             detail = localized_text(instance.language, {
                 "zh-CN": "自然20！恢复1HP并苏醒",
                 "en": "natural 20! Regains 1 HP and wakes up",
                 "ja": "自然20！1HP回復して目覚める",
+                "de": "natürliche 20! Erhält 1 TP zurück und wacht auf",
             })
         elif event == "dead":
             detail = localized_text(instance.language, {
                 "zh-CN": "失败满3次，死亡",
                 "en": "3 failures, dies",
                 "ja": "失敗3回で死亡",
+                "de": "3 Fehlschläge, stirbt",
             })
         elif event == "stable":
             detail = localized_text(instance.language, {
                 "zh-CN": "成功满3次，伤势稳定",
                 "en": "3 successes, becomes stable",
                 "ja": "成功3回で安定",
+                "de": "3 Erfolge, wird stabilisiert",
             })
         else:
             saves = cs.get("death_saves") if isinstance(cs.get("death_saves"), dict) else {}
@@ -93,6 +96,7 @@ def resolve_round_death_saves(instance: GameInstance, rule) -> str:
                 "zh-CN": f"成功{int(saves.get('success', 0) or 0)}/失败{int(saves.get('failure', 0) or 0)}",
                 "en": f"successes {int(saves.get('success', 0) or 0)}/failures {int(saves.get('failure', 0) or 0)}",
                 "ja": f"成功{int(saves.get('success', 0) or 0)}/失敗{int(saves.get('failure', 0) or 0)}",
+                "de": f"Erfolge {int(saves.get('success', 0) or 0)}/Fehlschläge {int(saves.get('failure', 0) or 0)}",
             })
         lines.append(f"【{name}】{label} d20={value} → {detail}")
         logger.info("死亡豁免: %s d20=%d event=%s (round=%d)", name, value, event, instance.round_number)

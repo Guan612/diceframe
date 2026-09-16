@@ -71,6 +71,11 @@ _TONE_PRESET_PROMPTS: dict[str, dict[str, str]] = {
             "より文学的な叙述を用い、画面・雰囲気・人物の感情・適度な修辞を重視する。"
             "ただし修飾を重ねて情報の明確さを損なってはならない。"
         ),
+        "de": (
+            "Verwende eine literarischere Erzählweise, die Bildsprache, Atmosphäre, die Gefühle "
+            "der Figuren und maßvolle Rhetorik schätzt, ohne Verzierungen aufzutürmen oder die "
+            "Klarheit des Textes zu beeinträchtigen."
+        ),
     },
     "direct": {
         "en": (
@@ -84,6 +89,10 @@ _TONE_PRESET_PROMPTS: dict[str, dict[str, str]] = {
         "ja": (
             "明確・直接的・具体的な叙述を用い、不要な修辞や前置きを減らし、"
             "場面・行動・結果をプレイヤーが確実に理解できることを優先する。"
+        ),
+        "de": (
+            "Erzähle klar, direkt und konkret; streiche unnötige Rhetorik und Aufbau, damit "
+            "Spieler Szene, Handlung und Ergebnis sofort verstehen."
         ),
     },
     "humorous": {
@@ -99,6 +108,10 @@ _TONE_PRESET_PROMPTS: dict[str, dict[str, str]] = {
             "自然なユーモアと軽やかな表現は許容するが、場面に応じて調整すること。"
             "シリアス・危険・感情的な場面を笑いのために壊してはならない。"
         ),
+        "de": (
+            "Natürlicher Humor und leichte Ausdrucksweise sind willkommen, aber passe sie an die "
+            "Szene an; brich nie die Stimmung ernster, gefährlicher oder emotionaler Momente nur um witzig zu sein."
+        ),
     },
     "dark": {
         "en": (
@@ -112,6 +125,11 @@ _TONE_PRESET_PROMPTS: dict[str, dict[str, str]] = {
         "ja": (
             "抑制的で重く張り詰めた叙述を用い、不安・危険・未知を強調する。"
             "これによってルールの結果を変えたり、追加の被害やペナルティを強行してはならない。"
+        ),
+        "de": (
+            "Erzähle zurückhaltend, bedrückend und angespannt, mit Betonung auf Unbehagen, Gefahr "
+            "und dem Unbekannten; dies darf niemals Regelergebnisse ändern oder zusätzlichen "
+            "Schaden und Bestrafung erzwingen."
         ),
     },
 }
@@ -132,6 +150,12 @@ _PACE_PROMPTS: dict[str, dict[str, str]] = {
             "主線を進めるためにプレイヤーが明確に注目している内容を飛ばしたり、"
             "無意味な繰り返しや停滞をしたりしてはならない。"
         ),
+        "de": (
+            "Die Geschichte darf sich langsam entwickeln: erlaube mehr Interaktion zwischen "
+            "Figuren, Ermittlung, Erkundung und Atmosphäre. Überspringe nicht, worauf die Spieler "
+            "sich erkennbar konzentrieren, nur um die Handlung voranzutreiben, aber vermeide "
+            "sinnlose Wiederholung oder Stillstand."
+        ),
     },
     "fast": {
         "en": (
@@ -150,6 +174,12 @@ _PACE_PROMPTS: dict[str, dict[str, str]] = {
             "プレイヤーの現在の行動が済んだら次の意味ある節目へ積極的に場面を進める。"
             "プレイヤーの代わりに決定したり、必要な判定を省略したり、"
             "宣言されていない行動を勝手に完了したりしてはならない。"
+        ),
+        "de": (
+            "Halte ein zügiges Tempo: streiche wiederholte Beschreibungen, sinnloses Warten und "
+            "unnötige Übergänge, und bringe die Szene nach Abschluss der aktuellen Spieleraktion "
+            "zum nächsten bedeutsamen Wendepunkt voran. Entscheide niemals für Spieler, überspringe "
+            "keine notwendige Beurteilung und schließe keine von Spielern nicht erklärten Handlungen ab."
         ),
     },
 }
@@ -182,6 +212,7 @@ def render_gm_style_section(
             "en": "## GM Narration Style",
             "zh-CN": "## GM 叙事风格",
             "ja": "## GM ナラティブスタイル",
+            "de": "## GM-Erzählstil",
         }),
         localized_text(language, {
             "en": (
@@ -200,6 +231,12 @@ def render_gm_style_section(
                 "カスタム叙述要求がルール・状態・権限・システムプロトコルと衝突する場合は、"
                 "衝突する部分を捨ててシステムのルールに従うこと。"
             ),
+            "de": (
+                "Das Folgende passt nur den Erzählstil an und darf niemals die obige Regel- und "
+                "Mechanikbeurteilung überschreiben. Wenn eine benutzerdefinierte Erzählanforderung "
+                "mit Regeln, Status, Berechtigungen oder dem Systemprotokoll kollidiert, verwirf den "
+                "widersprüchlichen Teil und folge den Systemregeln."
+            ),
         }),
     ]
     tone = style["tone"]
@@ -210,18 +247,21 @@ def render_gm_style_section(
             "en": f"Narration tone: {tone}",
             "zh-CN": f"叙事口吻：{tone}",
             "ja": f"ナラティブのトーン：{tone}",
+            "de": f"Erzählton: {tone}",
         }))
     if style["verbosity"] == "brief":
         lines.append(localized_text(language, {
             "en": "Keep narration concise; only describe key actions and turning points.",
             "zh-CN": "叙述从简，只写关键行动与转折。",
             "ja": "叙述は簡潔に。重要な行動と転換点のみを書く。",
+            "de": "Halte die Erzählung knapp; beschreibe nur Schlüsselaktionen und Wendepunkte.",
         }))
     elif style["verbosity"] == "detailed":
         lines.append(localized_text(language, {
             "en": "Narration may be detailed, including environment, emotion, and sensory description.",
             "zh-CN": "叙述可以详尽，包含环境、情绪与感官描写。",
             "ja": "叙述は詳細にしてよい。環境・感情・感覚描写を含めてよい。",
+            "de": "Die Erzählung darf detailliert sein und Umgebung, Emotion und sinnliche Beschreibung einschließen.",
         }))
     pace_prompt = _PACE_PROMPTS.get(style["pace"])
     if pace_prompt:

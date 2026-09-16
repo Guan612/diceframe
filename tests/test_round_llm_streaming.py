@@ -160,6 +160,114 @@ async def test_narration_delta_filter_hides_single_markdown_protocol_line():
 
 
 @pytest.mark.asyncio
+async def test_narration_delta_filter_passes_plain_text_through():
+    received: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        received.append(text)
+
+    filt = _NarrationDeltaFilter(on_delta)
+    await filt.feed("你看见崖壁上出现新的刻痕。")
+    await filt.flush()
+
+    assert "".join(received) == "你看见崖壁上出现新的刻痕。"
+
+
+@pytest.mark.asyncio
+async def test_narration_delta_filter_drops_complete_think_block():
+    received: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        received.append(text)
+
+    filt = _NarrationDeltaFilter(on_delta)
+    await filt.feed("<think>内部分析</think>正式正文")
+    await filt.flush()
+
+    streamed = "".join(received)
+    assert streamed == "正式正文"
+    assert "内部分析" not in streamed
+
+
+@pytest.mark.asyncio
+async def test_narration_delta_filter_drops_multiple_think_blocks():
+    received: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        received.append(text)
+
+    filt = _NarrationDeltaFilter(on_delta)
+    await filt.feed("<think>a</think>正文A<think>b</think>正文B")
+    await filt.flush()
+
+    streamed = "".join(received)
+    assert streamed == "正文A正文B"
+    assert "think" not in streamed
+
+
+@pytest.mark.asyncio
+async def test_narration_delta_filter_drops_think_after_prose():
+    received: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        received.append(text)
+
+    filt = _NarrationDeltaFilter(on_delta)
+    await filt.feed("正文A<think>内部分析</think>正文B")
+    await filt.flush()
+
+    assert "".join(received) == "正文A正文B"
+
+
+@pytest.mark.asyncio
+async def test_narration_delta_filter_drops_orphan_close_tag():
+    received: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        received.append(text)
+
+    filt = _NarrationDeltaFilter(on_delta)
+    await filt.feed("</think>正式正文")
+    await filt.flush()
+
+    assert "".join(received) == "正式正文"
+
+
+@pytest.mark.asyncio
+async def test_narration_delta_filter_hides_think_tags_split_across_chunks():
+    received: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        received.append(text)
+
+    filt = _NarrationDeltaFilter(on_delta)
+    for chunk in ("<thi", "nk>secret", "</thi", "nk>正文"):
+        await filt.feed(chunk)
+    await filt.flush()
+
+    streamed = "".join(received)
+    assert streamed == "正文"
+    assert "<thi" not in streamed
+    assert "secret" not in streamed
+
+
+@pytest.mark.asyncio
+async def test_narration_delta_filter_never_flushes_unclosed_think():
+    received: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        received.append(text)
+
+    filt = _NarrationDeltaFilter(on_delta)
+    await filt.feed("<think>")
+    await filt.feed("Problem...")
+    await filt.feed("Decision...")
+    await filt.flush()
+
+    assert received == []
+
+
+@pytest.mark.asyncio
 async def test_call_llm_with_tag_retry_streams_narration_only():
     content = "古墓深处传来低语。\n---\nKEY_ITEM:u1:青铜钥匙"
     llm = StreamingLLM([content])

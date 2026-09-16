@@ -66,10 +66,15 @@ from src.engine.economy import filter_unconfirmed_purchase_grants, has_pending_i
 from src.engine import combat_narrative
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
+from src.llm.parser import sanitize_narration
 from src.imagegen import (
     ImageGenerationError,
     ImageGenerationRequest,
     game_image_owner_id,
+    infer_scene_panels,
+    normalize_scene_panels,
+    public_character_appearances,
+    storyboard_layout,
 )
 from src.memory.summarizer import needs_summary, summarize
 from src.rulesets.contracts import (
@@ -88,13 +93,64 @@ def overreach_guard_enabled() -> bool:
     return os.environ.get("TRPG_OVERREACH_GUARD", "") == "1"
 
 
-def _last_scene_image_prompt(instance: GameInstance) -> str:
-    """最近一张场景图的画面描述；用于无场景切换时的重复生成节流。"""
+def _log_round(item: Any, default: int = -1) -> int:
+    """Read a persisted log round without turning valid round 0 into -1."""
+    try:
+        value = item.get("round") if isinstance(item, dict) else None
+        return default if value is None or str(value).strip() == "" else int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _last_scene_image_signature(instance: GameInstance) -> tuple[str, tuple[tuple[Any, ...], ...]]:
+    """Return the latest prompt/panel signature for duplicate-generation throttling."""
     for entry in reversed(instance.log):
         record = entry.get("scene_image")
         if isinstance(record, dict) and record.get("status") == "ready":
-            return str(record.get("prompt") or "")
-    return ""
+            panels, _ = normalize_scene_panels(record.get("panels"))
+            panel_key = tuple(
+                (tuple(panel.get("participants") or []), panel.get("location", ""), panel.get("description", ""))
+                for panel in panels
+            )
+            return str(record.get("prompt") or ""), panel_key
+    return "", ()
+
+
+def _scene_storyboard_payload(data: dict) -> tuple[str, list[dict[str, Any]], int]:
+    """Return a shared prompt plus normalized public panels for this round."""
+    raw_panels = data.get("scene_panels")
+    panels, compressed_count = normalize_scene_panels(raw_panels)
+    if not panels:
+        return "", [], compressed_count
+    global_prompt = str(data.get("scene_image_prompt") or "").strip()
+    # The image service is the single owner of provider prompt composition.
+    # Keep this value as the ordinary/global prompt so it cannot be composed twice.
+    return global_prompt, panels, compressed_count
+
+
+def _build_recent_public_narration_context(
+    instance: GameInstance,
+    *,
+    rounds: int = 3,
+    max_chars: int = 2400,
+) -> str:
+    """收集最近若干回合已公开给玩家的 GM 正文，供叙事二次压缩阶段核对 QUICK_ACTIONS（#272）。
+
+    数据源只有 instance.log 的 gm_response（玩家已看到的公开内容），经
+    sanitize_narration 清理；绝不接入完整 context / 世界书 / 记忆 / 私密日志——
+    QUICK_ACTIONS 的知识边界以玩家已知为限。无历史时返回空串。总长超限时
+    丢弃更旧的回合，保留最近内容。
+    """
+    chunks: list[str] = []
+    for entry in list(getattr(instance, "log", None) or [])[-rounds:]:
+        text = sanitize_narration(str(entry.get("gm_response", "") or "")).strip()
+        if text:
+            chunks.append(f"Round {entry.get('round', '?')}:\n{text}")
+    while chunks and sum(len(chunk) for chunk in chunks) + 2 * (len(chunks) - 1) > max_chars:
+        chunks.pop(0)
+    if not chunks:
+        return ""
+    return "\n\n".join(chunks)
 
 
 def format_overreach_block(instance: GameInstance) -> str:
@@ -122,6 +178,12 @@ def format_overreach_block(instance: GameInstance) -> str:
             "【権限裁定・必ず従うこと】\n"
             "以下の宣言はレフェリーにより権限越えと判定された。試みと世界の反応として叙述し、"
             "世界事実として受け入れず、これにより判定や状態を変更してはならない："
+        ),
+        "de": (
+            "## Autoritätsentscheid · Muss befolgt werden\n"
+            "Der Schiedsrichter hat die folgenden Aussagen als Kompetenzüberschreitung markiert. "
+            "Erzähle sie als Versuche und die Reaktion der Welt; akzeptiere sie niemals als Welttatsachen, "
+            "und lass sie niemals Proben oder Status verändern:"
         ),
     })
     return f"{heading}\n" + "\n".join(lines)
@@ -441,9 +503,14 @@ class RoundProcessor:
         """为每条 pending 幸运检定挂独立超时；到点只 decline 该条，全清则重新推进回合。
 
         每玩家每轮只有一条主检定，故 per-check 即 per-player。已在计时的不重复挂。
+        默认实时单人局为 60 秒，多人局自动放宽到 180 秒；显式配置仍优先，
         luck_timeout_seconds=0 时禁用（异步局可设 0 让幸运选择无限等待）。
         """
-        timeout = int(getattr(instance, "luck_timeout_seconds", 60) or 0)
+        effective_timeout = getattr(instance, "effective_luck_timeout_seconds", None)
+        timeout = int(
+            effective_timeout() if callable(effective_timeout)
+            else getattr(instance, "luck_timeout_seconds", 60) or 0
+        )
         if timeout <= 0:
             return
         for check in instance.pending_luck_checks():
@@ -512,20 +579,50 @@ class RoundProcessor:
         return task
 
     def _maybe_schedule_scene_image(self, instance: GameInstance, data: dict) -> asyncio.Task | None:
-        """按 GM 的 SCENE_IMAGE 标签调度后台生图；能力关闭或节流命中时返回 None。"""
+        """Schedule scene art only when the GM emits an explicit SCENE_IMAGE."""
         service = self._image_generation
         if service is None or not service.available or not service.auto_scene:
             return None
         prompt = str(data.get("scene_image_prompt") or "").strip()
+        completed_round = int(instance.round_number) - 1
+        if completed_round < 0:
+            return None
+        _, panels, compressed_count = _scene_storyboard_payload(data)
         if not prompt:
             return None
-        completed_round = int(instance.round_number) - 1
-        if completed_round < 1:
-            return None
-        scene_change = str((data.get("state_update") or {}).get("scene_change") or "").strip()
-        # 场景切换时即使描述与上一张相同也重新生成（场景确实变了）；
-        # 否则与上一张相同的描述视为模型复读，跳过。
-        return self.schedule_scene_image(instance, prompt, completed_round, force=bool(scene_change))
+        # Explicit image directives still use the normal duplicate throttle.
+        return self.schedule_scene_image(
+            instance,
+            prompt,
+            completed_round,
+            force=False,
+            panels=panels,
+            compressed_count=compressed_count,
+        )
+
+    def schedule_opening_scene_image(self, instance: GameInstance) -> asyncio.Task | None:
+        """Schedule an opening image only when round zero explicitly requested one."""
+        opening = next(
+            (
+                item for item in reversed(instance.log)
+                if _log_round(item, -1) == 0
+                and str(item.get("gm_response") or "").strip()
+            ),
+            {},
+        )
+        prompt = str(opening.get("scene_image_prompt") or "").strip()
+        panels, compressed_count = normalize_scene_panels(opening.get("scene_panels"))
+        return (
+            self.schedule_scene_image(
+                instance,
+                prompt,
+                0,
+                force=True,
+                panels=panels,
+                compressed_count=compressed_count,
+            )
+            if prompt else None
+        )
 
     def schedule_deferred_scene_image(
         self,
@@ -543,14 +640,29 @@ class RoundProcessor:
         completed_round: int,
         *,
         force: bool = False,
+        panels: list[dict[str, Any]] | None = None,
+        compressed_count: int = 0,
     ) -> asyncio.Task | None:
         """为指定回合调度一次场景图生成（叙事已推送，生图在后台进行）。"""
         service = self._image_generation
         prompt = str(prompt or "").strip()
+        normalized_panels, removed = normalize_scene_panels(panels)
+        character_appearances = public_character_appearances(
+            getattr(instance, "players", {}),
+        )
         if service is None or not service.available or not service.auto_scene or not prompt:
             return None
-        if not force and prompt == _last_scene_image_prompt(instance):
-            return None
+        compressed_count = max(0, int(compressed_count or 0)) + removed
+        panel_key = tuple(
+            (tuple(panel.get("participants") or []), panel.get("location", ""), panel.get("description", ""))
+            for panel in normalized_panels
+        )
+        if not force:
+            last_prompt, last_panel_key = _last_scene_image_signature(instance)
+            if prompt == last_prompt and (
+                not normalized_panels or panel_key == last_panel_key
+            ):
+                return None
         game_key = instance.game_key
         expected_run_id = instance.run_id
         task_key = (game_key, expected_run_id)
@@ -560,6 +672,8 @@ class RoundProcessor:
         task = asyncio.create_task(
             self._generate_scene_image_background(
                 game_key, expected_run_id, completed_round, prompt,
+                normalized_panels, compressed_count, character_appearances,
+                str(getattr(instance, "scene", "") or ""),
             )
         )
         self._scene_image_tasks[task_key] = task
@@ -578,24 +692,71 @@ class RoundProcessor:
         expected_run_id: str,
         round_number: int,
         prompt: str,
+        panels: list[dict[str, Any]] | None = None,
+        compressed_count: int = 0,
+        character_appearances: dict[str, str] | None = None,
+        current_scene: str = "",
     ) -> None:
         try:
             current = self.registry.get(game_key)
             if current is None or current.run_id != expected_run_id:
                 return
             if not any(
-                item.get("round") == round_number for item in current.log
+                _log_round(item, -1) == round_number
+                and str(item.get("gm_response") or "").strip()
+                for item in current.log
             ):
                 return  # 该回合已被回滚删除，放弃本次生图
             if self._image_generation is None:
                 return
+            entry = next(
+                (
+                    item for item in reversed(current.log)
+                    if _log_round(item, -1) == round_number
+                    and str(item.get("gm_response") or "").strip()
+                ),
+                None,
+            )
+            if entry is None:
+                return
+            inferred_panels, inferred_compressed = await infer_scene_panels(
+                self.llm_client,
+                narration=str(entry.get("gm_response") or ""),
+                actions=entry.get("actions") or [],
+                current_scene=current_scene or str(getattr(current, "scene", "") or ""),
+                players=getattr(current, "players", {}),
+                global_prompt=prompt,
+                declared_panels=panels,
+            )
+            panels = inferred_panels
+            compressed_count = (
+                max(0, int(compressed_count or 0))
+                + max(0, int(inferred_compressed or 0))
+            )
+            context: dict[str, Any] = {
+                "round": round_number,
+                "run_id": expected_run_id,
+                "scene": current_scene or str(getattr(current, "scene", "") or ""),
+                "narration": str(entry.get("gm_response") or "")[:1600],
+                "actions": str(entry.get("actions") or "")[:1200],
+                "panels": panels,
+            }
+            if panels:
+                context["storyboard"] = {
+                    "panels": panels,
+                    "compressed_count": max(0, int(compressed_count or 0)),
+                }
+                if character_appearances:
+                    context["storyboard"]["character_appearances"] = dict(
+                        character_appearances,
+                    )
             result = await self._image_generation.generate(ImageGenerationRequest(
                 prompt=prompt,
                 purpose="scene",
                 owner_type="game",
                 owner_id=game_image_owner_id(game_key),
                 aspect_ratio="16:9",
-                context={"round": round_number, "run_id": expected_run_id},
+                context=context,
             ))
             # 重开/重置可能发生在生图 await 期间。旧任务不得写入新一局，
             # 同一局的 swipe 也可能已经删除或替换目标回合。
@@ -603,12 +764,18 @@ class RoundProcessor:
             if current is None or current.run_id != expected_run_id:
                 return
             entry = next(
-                (item for item in current.log if item.get("round") == round_number),
+                (
+                    item for item in reversed(current.log)
+                    if _log_round(item, -1) == round_number
+                    and str(item.get("gm_response") or "").strip()
+                ),
                 None,
             )
             if entry is None:
                 return  # 该回合已被回滚删除，放弃本次生图
             reference = {"kind": "generated", "asset_id": result.asset_id}
+            old_scene_image = deepcopy(entry.get("scene_image"))
+            old_top_scene_image = deepcopy(current.scene_image)
             current.set_scene_image(reference)
             entry["scene_image"] = {
                 "reference": reference,
@@ -618,7 +785,21 @@ class RoundProcessor:
                 "status": "ready",
                 "swipe_index": int(entry.get("current_swipe") or 0),
             }
-            await self.registry.save(current)
+            if panels:
+                entry["scene_image"].update({
+                    "layout": storyboard_layout(len(panels)),
+                    "panels": panels,
+                    "compressed_count": max(0, int(compressed_count or 0)),
+                })
+            try:
+                await self.registry.save(current)
+            except Exception:
+                if old_scene_image is None:
+                    entry.pop("scene_image", None)
+                else:
+                    entry["scene_image"] = old_scene_image
+                current.scene_image = old_top_scene_image
+                raise
             logger.info("场景图已生成 (round=%d, asset=%s)", round_number, result.asset_id)
         except ImageGenerationError as exc:
             logger.warning("场景图生成失败 (round=%d): %s", round_number, exc)
@@ -709,7 +890,8 @@ class RoundProcessor:
         response, data = await call_llm_with_tag_retry(
             self.llm_client, instance, gm_prompt, context, combat_model,
             dice_block, self.narrative_max_tokens, actions_text,
-            on_delta=on_delta, on_reset=on_reset)
+            on_delta=on_delta, on_reset=on_reset,
+            public_narration_context=_build_recent_public_narration_context(instance))
         current_instance = self.registry.get(instance.game_key)
         if (
             current_instance is not instance
@@ -847,7 +1029,7 @@ class RoundProcessor:
             except (ValueError, KeyError, TypeError):
                 # The advisory encounter request remains visible for GM review.
                 logger.exception("D&D Director automation was rejected; waiting for GM")
-        apply_revive_commands(instance, data)
+        apply_revive_commands(instance, data, runtime)
         system_changes.extend(apply_growth_rewards(
             instance, data, response, rule, self._progression, runtime,
         ))
@@ -873,6 +1055,7 @@ class RoundProcessor:
                 "en": "Combat is ready. Waiting for the GM to confirm initiative.",
                 "zh-CN": "战斗准备已就绪，等待 GM 确认进入先攻。",
                 "ja": "戦闘準備が整いました。GM のイニシアチブ開始確認を待っています。",
+                "de": "Der Kampf ist bereit. Es wird auf die Bestätigung der Initiative durch den GM gewartet.",
             })
             state_msgs.append(request_note)
         if automation_batches:

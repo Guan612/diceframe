@@ -176,5 +176,12 @@ def format_pending_events(instance: Any) -> str:
             "以下の戦闘拡張イベントはサーバーで解決され、保存済みです。今回の叙述ではその直後の行動と結果を描写し、"
             "資源の再消費、再ロール、再解決を行わないでください。エンティティ名と技名は表示データであり、ID と数値が権威です。"
         ),
+        "de": (
+            "## Abgeschlossene Kampftatsachen · Muss fortgesetzt werden\n"
+            "Die folgenden Kampf-Erweiterungsereignisse wurden bereits vom Server abgewickelt und gespeichert. "
+            "Beschreibe in dieser Erzählung ihre unmittelbaren Folgen. Ziehe keine Ressourcen ab, würfle nicht "
+            "und löse diese Ereignisse nicht erneut auf. Entitäts- und Aktionsbezeichnungen sind reine "
+            "Anzeigedaten; maßgeblich sind IDs und numerische Ereigniswerte."
+        ),
     })
     return f"{heading}\n{json.dumps(view, ensure_ascii=False, separators=(',', ':'))}"

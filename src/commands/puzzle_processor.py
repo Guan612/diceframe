@@ -32,18 +32,20 @@ class PuzzleProcessor:
             return ""
 
         language = instance.language
-        puzzle_lines: list[str] = [localized_text(language, {"en": "[Current Puzzle]", "zh-CN": "【当前谜题】", "ja": "【現在の謎】"})]
+        puzzle_lines: list[str] = [localized_text(language, {"en": "[Current Puzzle]", "zh-CN": "【当前谜题】", "ja": "【現在の謎】", "de": "[Aktuelles Rätsel]"})]
         for puzzle in active_puzzles:
             skill = puzzle.required_skill or (puzzle.allowed_skills[0] if puzzle.allowed_skills else None)
             status = localized_text(language, {
                 "en": f"Status: active (attempts {puzzle.attempts}/{puzzle.max_attempts})",
                 "zh-CN": f"状态: active (已尝试{puzzle.attempts}/{puzzle.max_attempts})",
                 "ja": f"状態: active (試行{puzzle.attempts}/{puzzle.max_attempts})",
+                "de": f"Status: aktiv (Versuche {puzzle.attempts}/{puzzle.max_attempts})",
             })
             puzzle_lines.append(localized_text(language, {
                 "en": f"Name: {puzzle.name}",
                 "zh-CN": f"名称: {puzzle.name}",
                 "ja": f"名前: {puzzle.name}",
+                "de": f"Name: {puzzle.name}",
             }))
             puzzle_lines.append(status)
             if skill:
@@ -51,12 +53,14 @@ class PuzzleProcessor:
                     "en": f"Required skill: {skill} DC {puzzle.required_dc}",
                     "zh-CN": f"所需技能: {skill} DC {puzzle.required_dc}",
                     "ja": f"必要技能: {skill} DC {puzzle.required_dc}",
+                    "de": f"Benötigte Fertigkeit: {skill} SG {puzzle.required_dc}",
                 }))
             if puzzle.hint_given:
                 puzzle_lines.append(localized_text(language, {
                     "en": f"Hint: {puzzle.description}",
                     "zh-CN": f"提示: {puzzle.description}",
                     "ja": f"ヒント: {puzzle.description}",
+                    "de": f"Hinweis: {puzzle.description}",
                 }))
 
             # 技能检定型谜题：自动掷骰
@@ -86,12 +90,14 @@ class PuzzleProcessor:
                         "en": f"Check: d20={d20_result.natural}+{attr_mod}={total} >= DC {puzzle.required_dc} -> Success!",
                         "zh-CN": f"检定: d20={d20_result.natural}+{attr_mod}={total} ≥ DC {puzzle.required_dc} → 成功！",
                         "ja": f"判定: d20={d20_result.natural}+{attr_mod}={total} ≥ DC {puzzle.required_dc} → 成功！",
+                        "de": f"Probe: d20={d20_result.natural}+{attr_mod}={total} >= SG {puzzle.required_dc} -> Erfolg!",
                     }))
                     if puzzle.success_narration:
                         puzzle_lines.append(localized_text(language, {
                             "en": f"Result: {puzzle.success_narration}",
                             "zh-CN": f"结果: {puzzle.success_narration}",
                             "ja": f"結果: {puzzle.success_narration}",
+                            "de": f"Ergebnis: {puzzle.success_narration}",
                         }))
                 else:
                     can_continue = puzzle.attempt()
@@ -99,12 +105,14 @@ class PuzzleProcessor:
                         "en": f"Check: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} -> Failure",
                         "zh-CN": f"检定: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} → 失败",
                         "ja": f"判定: d20={d20_result.natural}+{attr_mod}={total} < DC {puzzle.required_dc} → 失敗",
+                        "de": f"Probe: d20={d20_result.natural}+{attr_mod}={total} < SG {puzzle.required_dc} -> Fehlschlag",
                     }))
                     if not can_continue:
                         puzzle_lines.append(localized_text(language, {
                             "en": "Result: maximum attempts exceeded; the puzzle fails.",
                             "zh-CN": "结果: 超过最大尝试次数，谜题失败！",
                             "ja": "結果: 最大試行回数を超えました。謎は失敗します！",
+                            "de": "Ergebnis: maximale Versuchszahl überschritten; das Rätsel ist gescheitert.",
                         }))
                         if puzzle.failure_narration:
                             puzzle_lines.append(puzzle.failure_narration)
@@ -113,6 +121,7 @@ class PuzzleProcessor:
             "en": "Requirement: GM narration must reflect the puzzle check result and state change.",
             "zh-CN": "要求: GM叙事必须体现谜题的检定结果和状态变化",
             "ja": "要件: GMのナレーションは謎の判定結果と状態変化を反映すること",
+            "de": "Anforderung: Die GM-Erzählung muss das Rätsel-Probenergebnis und die Statusänderung widerspiegeln",
         }))
 
         logger.info(

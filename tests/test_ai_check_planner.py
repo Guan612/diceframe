@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from src.commands.check_planner import normalize_check_specs, plan_round_checks
+from src.commands.check_planner import _planner_context, normalize_check_specs, plan_round_checks
 from src.engine.checks import resolve_check_request
 from src.engine.game_instance import GameInstance
 from src.rules.rule_system import RuleSystem
@@ -458,7 +460,7 @@ async def test_economy_offer_without_stated_price_is_safely_skipped() -> None:
     )
     # none / 缺 amount → 跳过且不报错；有 amount 却没有 price_source → 拒绝。
     assert metadata["economy_offers"] == []
-    assert metadata["errors"] == ["economy_actions[2] price_source='' 无效"]
+    assert metadata["errors"] == ["economy_actions[2] price_source='' 无效；已降级为 unpriced purchase intent"]
 
 
 @pytest.mark.asyncio
@@ -876,3 +878,498 @@ def test_duplicate_note_line_follows_the_interface_language(language: str, expec
     check = _resolve(instance, rule, request, roll=10)
     assert check["planner_notes"] == ["same_fact_as_dc"]
     assert expected in check["modifier_breakdown"]
+
+
+def test_planner_item_context_is_compact_actor_scoped_and_read_only() -> None:
+    instance = make_instance()
+    instance.players["p3"] = deepcopy(instance.players["p1"])
+    instance.players["p3"]["character_sheet"]["inventory"] = ["未行动者的密信"]
+    instance.get_character_sheet("p1").update({
+        "equipment": [{"name": "锤子", "type": "tool", "description": "不要传入", "damage": "1d4"}],
+        "key_items": ["黄铜钥匙"],
+        "inventory": [
+            {"name": "绳索", "item_ref": "item:rope", "qty": 2, "quantity": 99, "price": 50},
+            {"name": "火把", "quantity": 2},
+            "干粮",
+        ],
+        "background": "不要传入的背景",
+    })
+    instance.get_character_sheet("p2").update({
+        "equipment": [], "key_items": [], "inventory": ["白露的药水"],
+    })
+    instance.action_queue[0]["text"] = "看看 ITEM: ROPE，再用那把钥匙"
+    before = deepcopy((instance.players, instance.action_queue))
+    players = json.loads(_planner_context(instance, make_rule()))["players"]
+    assert [player["player_id"] for player in players] == ["p1", "p2"]
+    assert players[0]["item_context"] == {
+        "items": [
+            {"source": "inventory", "name": "绳索", "item_ref": "item:rope", "qty": 2},
+            {"source": "equipment", "name": "锤子", "type": "tool"},
+            {"source": "key_items", "name": "黄铜钥匙"},
+            {"source": "inventory", "name": "火把", "qty": 2},
+            {"source": "inventory", "name": "干粮"},
+        ],
+        "partial": False,
+    }
+    assert players[1]["item_context"]["items"] == [{"source": "inventory", "name": "白露的药水"}]
+    assert (instance.players, instance.action_queue) == before
+
+
+@pytest.mark.parametrize("quantity_fields", [
+    {"qty": 0}, {"qty": -1}, {"quantity": 0}, {"quantity": -2},
+    {"qty": 0, "quantity": 99},
+    {"qty": "0"}, {"qty": "-1"}, {"qty": 0.0}, {"qty": -1.0},
+    {"qty": False}, {"qty": True}, {"qty": None}, {"qty": "unknown"},
+    {"qty": []}, {"qty": {}}, {"qty": 1.5}, {"qty": float("inf")},
+    {"quantity": "0"}, {"quantity": False}, {"quantity": None},
+    {"qty": "0", "quantity": 99},
+])
+def test_planner_excludes_nonpositive_inventory_even_when_named(quantity_fields) -> None:
+    instance = make_instance()
+    instance.get_character_sheet("p1").update({
+        "equipment": [], "key_items": [],
+        "inventory": [{"name": "绳索", **quantity_fields}, {"name": "火把", "qty": 1}],
+    })
+    instance.action_queue[0]["text"] = "使用绳索"
+    before = deepcopy(instance.players)
+    context = json.loads(_planner_context(instance, None))["players"][0]["item_context"]
+    assert context["items"] == [{"source": "inventory", "name": "火把", "qty": 1}]
+    assert context["partial"] is True
+    assert instance.players == before
+
+
+@pytest.mark.parametrize("quantity", [2, "2", " +2 ", 2.0])
+@pytest.mark.parametrize("field", ["qty", "quantity"])
+def test_planner_preserves_reliably_positive_inventory_quantity(field, quantity) -> None:
+    instance = make_instance()
+    instance.get_character_sheet("p1").update({
+        "equipment": [], "key_items": [], "inventory": [{"name": "绳索", field: quantity}],
+    })
+    context = json.loads(_planner_context(instance, None))["players"][0]["item_context"]
+    assert context == {"items": [{"source": "inventory", "name": "绳索", "qty": 2}], "partial": False}
+
+
+@pytest.mark.parametrize("size", [20, 21])
+def test_planner_large_inventory_only_includes_explicit_matches(size: int) -> None:
+    instance = make_instance()
+    instance.get_character_sheet("p1").update({
+        "equipment": [], "key_items": [],
+        "inventory": [f"物品{i:02}" for i in range(size - 1)] + ["铜钥匙"],
+    })
+    instance.action_queue[0].update(text="仔细看它", target_text="铜钥匙")
+    context = json.loads(_planner_context(instance, None))["players"][0]["item_context"]
+    assert context["items"][0]["name"] == "铜钥匙"
+    assert len(context["items"]) == (20 if size == 20 else 1)
+    assert context["partial"] is (size > 20)
+
+
+def test_planner_item_limits_preserve_priority_and_whole_entries() -> None:
+    instance = make_instance()
+    sheet = instance.get_character_sheet("p1")
+    sheet.update({
+        "equipment": [f"装备{i:02}" for i in range(21)],
+        "key_items": ["钥匙"], "inventory": ["目标物"],
+    })
+    instance.action_queue[0]["text"] = "使用目标物"
+    context = json.loads(_planner_context(instance, None))["players"][0]["item_context"]
+    assert len(context["items"]) == 20
+    assert [row["name"] for row in context["items"]] == ["目标物", *sheet["equipment"][:19]]
+    assert context["partial"] is True
+
+    sheet.update({"equipment": ["长" * 1500, *["工具" + str(i) + "细" * 200 for i in range(9)]],
+                  "key_items": [], "inventory": ["目标物"]})
+    context = json.loads(_planner_context(instance, None))["players"][0]["item_context"]
+    assert len(json.dumps(context, ensure_ascii=False, separators=(",", ":"))) <= 1500
+    assert context["partial"] is True
+    assert context["items"][0]["name"] == "目标物"
+    assert all(row["name"] in sheet[row["source"]] for row in context["items"])
+    assert "长" * 1500 not in [row["name"] for row in context["items"]]
+
+
+def test_planner_missing_and_malformed_items_are_partial_without_invented_values() -> None:
+    instance = make_instance()
+    assert json.loads(_planner_context(instance, None))["players"][0]["item_context"] == {
+        "items": [], "partial": True,
+    }
+    instance.get_character_sheet("p1").update({
+        "equipment": {"name": "不是清单"}, "key_items": None,
+        "inventory": [None, 12, {}, " ", {"name": []},
+                      {"name": "药水", "qty": "2", "quantity": 3, "type": {}},
+                      {"name": "干粮", "qty": True}, {"item_ref": "item:rope"}],
+    })
+    context = json.loads(_planner_context(instance, None))["players"][0]["item_context"]
+    assert context == {"partial": True, "items": [
+        {"source": "inventory", "name": "药水", "qty": 2},
+        {"source": "inventory", "item_ref": "item:rope"},
+    ]}
+
+
+@pytest.mark.parametrize(("target", "action", "expected"), [
+    ("keeper", "询问另一人", "keeper"),
+    ("老汤姆", "看看周围", "keeper"),
+    ("主任", "看看周围", "professor"),
+    ("", "问老汤姆旅店是否营业", "keeper"),
+    ("", "问keeper旅店是否营业", "keeper"),
+    ("不存在", "询问老汤姆", None),
+    ("敌人", "询问老汤姆", None),
+    ("", "看看周围", None),
+    ("", "攻击敌人", None),
+    ("白露", "询问老汤姆", None),
+])
+def test_planner_npc_context_requires_an_explicit_resolved_npc(target, action, expected) -> None:
+    instance = make_instance()
+    instance.npcs = {
+        "keeper": {"name": "老汤姆", "relation": "friendly", "hp": 20, "description": "长篇背景"},
+        "professor": {"character_name": "考古学系主任"},
+    }
+    instance.scene = "老汤姆和考古学系主任所在的旅店"
+    instance.combat_state = "active"
+    instance.combat_enemies = [{"name": "强盗", "hp": 10}]
+    instance.action_queue[0].update(text=action, target_text=target)
+    before = deepcopy(instance.npcs)
+    player = json.loads(_planner_context(instance, None))["players"][0]
+    if expected == "keeper":
+        assert player["npc_context"] == {
+            "reference": "npc:keeper", "name": "老汤姆", "relation": "friendly",
+        }
+    elif expected == "professor":
+        assert player["npc_context"] == {"reference": "npc:professor", "name": "考古学系主任"}
+    else:
+        assert "npc_context" not in player
+    assert instance.npcs == before
+
+
+@pytest.mark.parametrize(("target", "action", "names"), [
+    ("守卫", "询问守卫", ["守卫", "守卫"]),
+    ("", "询问守卫", ["守卫", "守卫"]),
+    ("主任", "询问守卫", ["考古学系主任", "历史系主任"]),
+])
+def test_planner_npc_context_rejects_ambiguous_names(target, action, names) -> None:
+    instance = make_instance()
+    instance.npcs = {f"npc{i}": {"name": name} for i, name in enumerate(names)}
+    instance.action_queue[0].update(text=action, target_text=target)
+    player = json.loads(_planner_context(instance, None))["players"][0]
+    assert "npc_context" not in player
+
+
+@pytest.mark.parametrize(("action", "target", "expected"), [
+    ("问教授老汤姆在哪里", "", None),
+    ("问老汤姆教授在哪里", "", None),
+    ("问教授老汤姆在哪里", "教授", "professor"),
+    ("问教授老汤姆在哪里", "老汤姆", "keeper"),
+    ("问教授老汤姆在哪里", "不存在", None),
+    ("问教授，professor能帮忙吗", "", "professor"),
+])
+def test_planner_requires_explicit_target_when_action_names_multiple_npcs(action, target, expected) -> None:
+    instance = make_instance()
+    instance.npcs = {
+        "professor": {"name": "教授", "relation": "neutral"},
+        "keeper": {"name": "老汤姆", "relation": "friendly"},
+    }
+    instance.action_queue[0].update(text=action, target_text=target)
+    player = json.loads(_planner_context(instance, None))["players"][0]
+    if expected is None:
+        assert "npc_context" not in player
+    else:
+        assert player["npc_context"] == {
+            "reference": f"npc:{expected}", **instance.npcs[expected],
+        }
+
+
+@pytest.mark.parametrize(("name", "action", "expected"), [
+    ("Ann", "I cannot open the door.", False),
+    ("Ann", "Ask Annette about the door.", False),
+    ("Ann", "Ask ANN about the door.", True),
+    ("Ann", "问Ann门在哪里", True),
+    ("Ann", "Ask (Ann).", True),
+    ("Li", "Listen to the door.", False),
+    ("Émile", "Ask PréÉmile.", False),
+    ("Émile", "Ask ÉMILE.", True),
+    ("Mary Ann", "Ask Mary Annette.", False),
+    ("Mary Ann", "Ask Mary  Ann.", True),
+    ("npc_1", "Ask npc_12.", False),
+    ("npc_1", "Ask npc_1.", True),
+    ("老汤姆", "问老汤姆门在哪里", True),
+])
+def test_planner_npc_mentions_respect_latin_boundaries(name, action, expected) -> None:
+    instance = make_instance()
+    instance.npcs = {"person": {"name": name, "relation": "friendly"}}
+    instance.action_queue[0]["text"] = action
+    player = json.loads(_planner_context(instance, None))["players"][0]
+    assert ("npc_context" in player) is expected
+
+
+@pytest.mark.parametrize(("action", "target", "expected"), [
+    ("问白露老汤姆在哪里", "", False),
+    ("问守卫老汤姆在哪里", "", False),
+    ("问p2老汤姆在哪里", "", False),
+    ("问白露老汤姆在哪里", "老汤姆", True),
+    ("问守卫老汤姆在哪里", "老汤姆", True),
+    ("问老汤姆门在哪里", "", True),
+    ("阿岚问老汤姆门在哪里", "", True),
+])
+def test_planner_npc_inference_rejects_player_and_enemy_ambiguity(action, target, expected) -> None:
+    instance = make_instance()
+    instance.npcs = {"keeper": {"name": "老汤姆", "relation": "friendly"}}
+    instance.combat_enemies = [{"name": "守卫", "hp": 10}]
+    instance.action_queue[0].update(text=action, target_text=target)
+    player = json.loads(_planner_context(instance, None))["players"][0]
+    assert ("npc_context" in player) is expected
+
+
+def test_planner_npc_context_drops_oversized_fields_without_truncating_identity() -> None:
+    instance = make_instance()
+    instance.npcs = {"keeper": {"name": "老汤姆", "relation": "长" * 401}}
+    instance.action_queue[0]["target_text"] = "keeper"
+    context = json.loads(_planner_context(instance, None))["players"][0]["npc_context"]
+    assert context == {"reference": "npc:keeper", "name": "老汤姆"}
+    instance.npcs["keeper"]["name"] = "长" * 401
+    assert "npc_context" not in json.loads(_planner_context(instance, None))["players"][0]
+
+
+@pytest.mark.asyncio
+async def test_new_context_reaches_single_planner_call_without_changing_safety_net() -> None:
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "询问老汤姆", "selected_attribute": "str"}]
+    instance.get_character_sheet("p1").update({
+        "equipment": [], "key_items": ["旅店钥匙"], "inventory": [],
+    })
+    instance.npcs = {"keeper": {"name": "老汤姆", "relation": "friendly"}}
+
+    class CapturingClient:
+        calls = 0
+
+        async def call_tools(self, prompt, context, **kwargs):
+            self.calls += 1
+            player = json.loads(context)["players"][0]
+            assert player["item_context"]["items"][0]["name"] == "旅店钥匙"
+            assert player["npc_context"]["reference"] == "npc:keeper"
+            assert kwargs["tools"][0]["function"]["name"] == "dice_checks"
+            return SimpleNamespace(
+                tool_calls=[{"name": "dice_checks", "arguments": {"checks": []}}],
+                total_tokens=10, provider_used="fake", native_tools=True,
+            )
+
+    client = CapturingClient()
+    planned, metadata = await plan_round_checks(instance, make_rule(), client)
+    assert client.calls == 1
+    assert metadata["errors"] == []
+    assert len(planned) == 1
+    assert planned[0][1]["planner_source"] == "deterministic_safety_net"
+
+
+def make_currency_rule() -> RuleSystem:
+    """Currency V2 规则（美元/美分）：验证 amount 字符串 + unit 协议。"""
+
+    return RuleSystem({
+        "rule_id": "test_coc",
+        "name": "Test CoC",
+        "dice_system": "d20",
+        "currency": "美元",
+        "currency_system": {
+            "schema_version": 2,
+            "base_unit": "cent",
+            "display_unit": "dollar",
+            "units": [
+                {"id": "dollar", "name": "美元", "symbol": "$", "rate": 100},
+                {"id": "cent", "name": "美分", "rate": 1},
+            ],
+        },
+    })
+
+
+@pytest.mark.asyncio
+async def test_economy_offer_decimal_amount_with_canonical_unit() -> None:
+    """新协议：amount 是十进制字符串、unit 是 canonical unit id；服务端换算。"""
+
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "我买一瓶药水"}]
+    planned, metadata = await plan_round_checks(
+        instance, make_currency_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "p1", "type": "purchase", "target": "药水",
+                "amount": "0.25", "unit": "dollar", "price_source": "gm_narrated",
+            },
+            {
+                "player": "p1", "type": "purchase", "target": "火柴",
+                "amount": "25", "unit": "cent", "price_source": "player_stated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["errors"] == []
+    assert [offer["amount"] for offer in metadata["economy_offers"]] == [25, 25]
+
+
+@pytest.mark.asyncio
+async def test_economy_offer_unknown_unit_and_fractional_minor_rejected() -> None:
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "我买点东西"}]
+    planned, metadata = await plan_round_checks(
+        instance, make_currency_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "p1", "type": "purchase", "target": "药水",
+                "amount": "1", "unit": "euro", "price_source": "gm_narrated",
+            },
+            {
+                "player": "p1", "type": "purchase", "target": "纽扣",
+                "amount": "0.001", "unit": "dollar", "price_source": "gm_narrated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["economy_offers"] == []
+    assert any("euro" in error for error in metadata["errors"])
+    assert any("无法精确转换" in error or "0.001" in error for error in metadata["errors"])
+
+
+def test_planner_context_lists_currency_units() -> None:
+    import json as _json
+
+    from src.commands.check_planner import _planner_context
+
+    instance = make_instance()
+    payload = _json.loads(_planner_context(instance, make_currency_rule()))
+    units = payload["ruleset"]["currency_units"]
+    assert {unit["id"] for unit in units} == {"dollar", "cent"}
+    assert payload["ruleset"]["currency_display_unit"] == "dollar"
+
+
+# ===== 购买 fail-safe：价格不可结算时降级为 unpriced，绝不丢失购买意图 =====
+
+@pytest.mark.asyncio
+async def test_unknown_unit_downgrades_to_unpriced_intent() -> None:
+    """玩家说「元」而规则只有 dollar/cent：意图保留，价格不可结算。"""
+
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "买个2.5元的面包"}]
+    planned, metadata = await plan_round_checks(
+        instance, make_currency_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "p1", "type": "purchase", "target": "黑麦面包",
+                "amount": "2.5", "unit": "yuan", "quantity": 5,
+                "amount_scope": "total", "price_source": "player_stated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["economy_offers"] == []
+    assert metadata["errors"] and "已降级为 unpriced" in metadata["errors"][0]
+    assert metadata["unpriced_purchase_intents"] == [
+        {"payer_uid": "p1", "target": "黑麦面包", "quantity": 5},
+    ]
+
+
+def test_fractional_minor_amount_downgrades_to_unpriced() -> None:
+    """0.5 灵石无法 canonicalize：不报价，但拦截该商品的免费发放。"""
+
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(instance, [
+        {"player": "p1", "type": "purchase", "target": "灵砂",
+         "amount": "0.5", "unit": "unit", "price_source": "player_stated"},
+    ])
+    assert offers == []
+    assert unpriced == [{"payer_uid": "p1", "target": "灵砂", "quantity": 1}]
+    assert errors and "无法精确转换" in errors[0]
+
+
+def test_invalid_scope_price_source_and_overflow_downgrade_to_unpriced() -> None:
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(
+        instance,
+        [
+            {"player": "p1", "type": "purchase", "target": "绷带",
+             "amount": "1", "unit": "dollar", "amount_scope": "weird",
+             "price_source": "player_stated"},
+            {"player": "p1", "type": "purchase", "target": "吗啡",
+             "amount": "1", "unit": "dollar", "price_source": "model_guessed"},
+            {"player": "p1", "type": "purchase", "target": "左轮手枪",
+             "amount": "99999999", "unit": "cent", "price_source": "player_stated"},
+        ],
+        make_currency_rule(),
+    )
+    assert offers == []
+    assert {intent["target"] for intent in unpriced} == {"绷带", "吗啡", "左轮手枪"}
+    assert len(errors) == 3
+    assert all("已降级为 unpriced" in error for error in errors)
+
+
+def test_intent_invalid_fields_do_not_create_unpriced() -> None:
+    """player 不存在 / target 为空 / type 非法：意图不可靠，直接丢弃。"""
+
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(instance, [
+        {"player": "不存在", "type": "purchase", "target": "面包",
+         "amount": "1", "price_source": "player_stated"},
+        {"player": "p1", "type": "purchase", "target": "",
+         "amount": "1", "price_source": "player_stated"},
+        {"player": "p1", "type": "sale", "target": "面包"},
+    ], make_currency_rule())
+    assert offers == []
+    assert unpriced == []
+    assert len(errors) == 3
+
+
+def test_mixed_batch_keeps_valid_offer_and_downgrades_bad_price() -> None:
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(
+        instance,
+        [
+            {"player": "p1", "type": "purchase", "target": "火把",
+             "amount": "0.25", "unit": "dollar", "price_source": "player_stated"},
+            {"player": "p1", "type": "purchase", "target": "面包",
+             "amount": "2.5", "unit": "yuan", "price_source": "player_stated"},
+        ],
+        make_currency_rule(),
+    )
+    assert [offer["amount"] for offer in offers] == [25]
+    assert [intent["target"] for intent in unpriced] == ["面包"]
+    assert len(errors) == 1
+
+
+def test_unpriced_intent_blocks_same_round_loot_grant() -> None:
+    """端到端：unknown unit → unpriced intent → LOOT gate 拦截免费发放。"""
+
+    from src.commands.check_planner import normalize_economy_actions
+    from src.engine.economy import filter_unconfirmed_purchase_grants
+
+    instance = make_instance()
+    _, unpriced, _ = normalize_economy_actions(
+        instance,
+        [{"player": "p1", "type": "purchase", "target": "黑麦面包",
+          "amount": "2.5", "unit": "yuan", "price_source": "player_stated"}],
+        make_currency_rule(),
+    )
+    assert unpriced
+    data = {"state_update": {"loot": [
+        {"player": "p1", "item": "黑麦面包"},
+    ]}}
+    removed = filter_unconfirmed_purchase_grants(
+        instance, data, unpriced_purchase_intents=unpriced,
+    )
+    assert removed == 1
+    assert data["state_update"].get("loot") == []
+
+
+def test_price_source_none_keeps_unpriced_behavior() -> None:
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(instance, [
+        {"player": "p1", "type": "purchase", "target": "面包",
+         "price_source": "none"},
+    ], make_currency_rule())
+    assert offers == []
+    assert unpriced == [{"payer_uid": "p1", "target": "面包", "quantity": 1}]
+    assert errors == []

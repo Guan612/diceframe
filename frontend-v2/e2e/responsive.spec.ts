@@ -374,3 +374,36 @@ test('character management remains contained on narrow phones', async ({ page })
     expect(geometry.actionRight).toBeLessThanOrEqual(width + 1)
   }
 })
+
+test('character management stays contained with German locale', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => {
+    localStorage.setItem('trpg_access_token', value)
+    localStorage.setItem('diceframe_locale', 'de')
+    localStorage.setItem('currentGame', 'web|e2e-room|web_bot')
+  }, token)
+
+  for (const width of [900, 1280]) {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto('/#/characters')
+    await expect(page.locator('.characters-page')).toBeVisible()
+    await expect(page.locator('.current-character-card').first()).toBeVisible()
+    const geometry = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll<HTMLElement>('.current-character-actions button'))
+      const cards = Array.from(document.querySelectorAll<HTMLElement>('.current-character-card'))
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        pageRight: document.querySelector<HTMLElement>('.characters-page')!.getBoundingClientRect().right,
+        cardRight: Math.max(...cards.map(card => card.getBoundingClientRect().right)),
+        buttonRight: Math.max(...buttons.map(button => button.getBoundingClientRect().right)),
+        longestText: buttons.map(button => button.textContent?.trim() ?? '').join('|'),
+      }
+    })
+    expect(geometry.overflow, `character page overflow at ${width}px (de)`).toBe(0)
+    expect(geometry.pageRight).toBeLessThanOrEqual(width + 1)
+    expect(geometry.cardRight).toBeLessThanOrEqual(width + 1)
+    expect(geometry.buttonRight).toBeLessThanOrEqual(width + 1)
+    // 德语回退英文：操作按钮不应出现中文
+    expect(geometry.longestText).not.toMatch(/[一-鿿]/)
+  }
+})

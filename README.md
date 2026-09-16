@@ -34,6 +34,7 @@ QQ 交流群：1060613588
 ## 功能概览
 
 - WebUI：顶部以“总览 / 游玩 / 角色 / 内容 / 管理”组织主要工作区；内容区包含世界书、世界、冒险包和规则，管理区包含记忆、日志、插件和设置。
+- 多语言：WebUI 支持简体中文、English、日本語、Deutsch；对局语言支持简体中文、English、Deutsch，缺失内容优先回退 English。
 - 多人桌：邀请链接、玩家等待、暂离/回来、GM 强制推进、SSE 实时同步；实验性玩家直连可通过一次性链接码建立 WebRTC 对局。
 - 骰子与状态：D&D 5e 轻量规则、自定义 d20、CoC 7e 轻量 d100 与无骰叙事分层处理；支持规则声明的优势/劣势、CoC 奖惩骰，以及 HP、理智、金币、物品、经验、死亡/复活等状态标签。
 - 世界书：NPC、地点、物品、事件、谜题、势力等条目，按关键词注入上下文。
@@ -178,6 +179,8 @@ DiceFrame 提供独立的 Android 客户端，源码在 [diceframe-mobile](https
 
 DiceFrame Bot API Token 由宿主自动生成并注入，内置 QQ / NapCat 无需填写。外部 MaiBot Bridge 等适配器可在“管理 → 设置 → Bot API”复制服务地址和 Token。
 
+Bot 图片卡片需要系统提供中文字体：Windows 与 Docker 镜像（已内置 `fonts-noto-cjk`）开箱可用；直接在 Linux 主机上运行 `python web_server.py` 时请自行安装 CJK 字体（如 Debian/Ubuntu 的 `fonts-noto-cjk`），否则卡片渲染会失败并自动降级为纯文本消息。
+
 Bot 会跟随绑定对局的语言显示帮助和主要操作提示；中文与英文对局都可直接使用对应语言的命令。
 
 群聊里常用命令：
@@ -218,6 +221,23 @@ DiceFrame Hub 为插件商店提供审核信息、版本状态和详情。Hub �
 | 插件开发 | [插件开发](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-development.md) | [Plugin development](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-development.md) |
 | 插件索引与审核 | [插件索引与审核](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/plugin-registry.md) | [Plugin registry](https://github.com/diceframe/diceframe-content/blob/main/docs/en/plugin-registry.md) |
 | Bot Bridge 核心 | [Bot Bridge 核心](https://github.com/diceframe/diceframe-content/blob/main/docs/zh/bot-bridge-core.md) | [Bot Bridge Core](https://github.com/diceframe/diceframe-content/blob/main/docs/en/bot-bridge-core.md) |
+
+## 语言支持
+
+DiceFrame WebUI 目前支持以下界面语言：
+
+- 简体中文
+- English
+- 日本語
+- Deutsch
+
+> 注：德语支持自 v2.5.9-beta.1 版本起提供。
+
+首次打开时会根据浏览器语言自动选择界面语言，也可以随时在右上角手动切换；手动选择后会记住该设置。
+
+对局语言目前支持简体中文、English 和 Deutsch，可用于 AI GM 叙事、提示词与主要游戏流程。部分尚未提供对应翻译的规则内容或专业界面会回退到 English。
+
+日本語目前已支持 WebUI 与主要界面文本；部分对局内容与规则资源仍可能使用 English 回退。
 
 
 ## 数据与隐私

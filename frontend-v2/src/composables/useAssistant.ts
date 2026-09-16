@@ -97,7 +97,7 @@ async function send(text: string, locale = 'zh-CN') {
     } else {
       assistantMessage.error = error instanceof Error
         ? error.message
-        : (locale.startsWith('en') ? 'Assistant request failed.' : '助手请求失败，请重试。')
+        : (locale.startsWith('zh') ? '助手请求失败，请重试。' : 'Assistant request failed.')
     }
   } finally {
     controller = null

@@ -309,7 +309,7 @@ def _coerce_bounded_int(
         raise ValueError(f"敌人 {field_name} 必须是整数") from None
     if not minimum <= number <= maximum:
         raise ValueError(
-            f"敌人 {field_name} 超出临时生成允许范围（{minimum}-{maximum}）",
+            f"敌人 {field_name} 超出临时遭遇允许范围（{minimum}-{maximum}）",
         )
     return number
 
@@ -343,6 +343,58 @@ def _assign_unique_ids(enemies: list[dict[str, Any]]) -> None:
                 suffix += 1
             attack["id"] = candidate
             attack_seen.add(candidate)
+
+
+def validate_final_temporary_enemies(instance: Any, enemies: Any) -> None:
+    """combat.start 确认入口：对 GM 编辑并展开后的最终敌人重走临时遭遇边界。
+
+    服务端不信任 AI 原始预览，也不信任前端的"已校验"标记；id 格式/唯一性、
+    字段类型与伤害公式由 combat.start 现有的 validate_enemy_profiles 负责，
+    这里在其之上复用生成期同一套收紧范围与队伍安全上限。只校验、不改写，
+    任何越界都整场拒绝，绝不部分开战。
+    """
+
+    if not isinstance(enemies, list) or not 1 <= len(enemies) <= MAX_TEMPORARY_ENEMIES:
+        raise ValueError(f"临时遭遇需要 1 到 {MAX_TEMPORARY_ENEMIES} 个敌人")
+    checked: list[dict[str, Any]] = []
+    for enemy in enemies:
+        if not isinstance(enemy, dict):
+            raise ValueError("敌人数据无效")
+        label = str(enemy.get("name") or "") or "敌人"
+        profile: dict[str, Any] = {
+            field_name: _coerce_bounded_int(
+                enemy.get(field_name), field_name, bounds,
+                _ENEMY_FIELD_DEFAULTS.get(field_name),
+            )
+            for field_name, bounds in _ENEMY_FIELD_BOUNDS.items()
+        }
+        raw_attacks = enemy.get("attacks")
+        if not isinstance(raw_attacks, list) or not 1 <= len(raw_attacks) <= 3:
+            raise ValueError(f"敌人 {label} 需要 1 到 3 个攻击")
+        attacks: list[dict[str, Any]] = []
+        for raw_attack in raw_attacks:
+            if not isinstance(raw_attack, dict):
+                raise ValueError(f"敌人 {label} 的攻击数据无效")
+            attack: dict[str, Any] = {
+                "attack_bonus": _coerce_bounded_int(
+                    raw_attack.get("attack_bonus"), "attack_bonus",
+                    _ATTACK_FIELD_BOUNDS["attack_bonus"],
+                ),
+                "damage": str(raw_attack.get("damage") or "").strip()[:40],
+                "range": _coerce_bounded_int(
+                    raw_attack.get("range"), "range",
+                    _ATTACK_FIELD_BOUNDS["range"], _ATTACK_FIELD_DEFAULTS["range"],
+                ),
+            }
+            attack["long_range"] = _coerce_bounded_int(
+                raw_attack.get("long_range"), "long_range",
+                _ATTACK_FIELD_BOUNDS["long_range"], attack["range"],
+            )
+            attacks.append(attack)
+        profile["attacks"] = attacks
+        checked.append(profile)
+    # 队伍安全上限与生成期完全同一份实现。
+    validate_temporary_encounter_balance(instance, {"enemies": checked})
 
 
 def normalize_temporary_encounter(payload: Any) -> dict[str, Any]:

@@ -37,6 +37,16 @@ def parse_world_tag(tag: str, value: str, result: dict) -> None:
         result["state_update"]["scene_change"] = value[:200]
     elif tag == "SCENE_IMAGE":
         result["scene_image_prompt"] = value[:300]
+    elif tag == "SCENE_PANEL":
+        parts = value.split("|", 2)
+        if len(parts) == 3:
+            participants, location, description = (part.strip() for part in parts)
+            if location and description:
+                result.setdefault("scene_panels", []).append({
+                    "participants": participants,
+                    "location": location[:160],
+                    "description": description[:700],
+                })
     elif tag == "NPC":
         parts = value.split(":", 1)
         if len(parts) == 2:
@@ -66,6 +76,18 @@ def parse_loot_tag(tag: str, value: str, result: dict) -> None:
             name, quantity = split_item_quantity(item)
             entry: dict = {"player": uid, "item": name[:120], "qty": quantity}
             result["state_update"]["loot"].append(entry)
+    elif tag == "FREE_GRANT":
+        # 本轮「明确免费」授权标记：只作为 purchase grant gate 的放行凭据，
+        # 自身不发物品、不改余额、不创建提案，也不会被持久化。
+        parts = value.split(":", 1)
+        if len(parts) == 2:
+            uid, item = parts[0].strip(), parts[1].strip()
+            name, _quantity = split_item_quantity(item)
+            if uid and name:
+                result["state_update"].setdefault("free_grants", []).append({
+                    "player": uid,
+                    "item": name[:120],
+                })
     elif tag == "KEY_ITEM":
         parts = value.split(":", 1)
         if len(parts) == 2:

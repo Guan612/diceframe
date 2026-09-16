@@ -120,8 +120,8 @@ class WebAPI:
                  memory: MemoryStore, rules_dir: Path,
                  handler=None, llm_client=None, worlds_dir: Path | None = None,
                  adventures_dir: Path | None = None,
-                 character_gen_max_tokens: int = 2048,
-                 text_gen_max_tokens: int = 1024, plugin_host=None, hub_client=None,
+                 character_gen_max_tokens: int = 4096,
+                 text_gen_max_tokens: int = 4096, plugin_host=None, hub_client=None,
                  speech_service=None, asr_service=None, imagegen_service=None,
                  ruleset_registry: RulesetRuntimeRegistry | None = None,
                  content_cache_dir: Path | None = None,
@@ -353,6 +353,7 @@ class WebAPI:
                 get_instance=self._reg.get,
                 save_instance=self._reg.save,
                 load_rule=self._load_rule_for_game,
+                load_runtime=self._load_runtime_for_game,
                 generate_recap=(
                     self._handler.generate_story_recap
                     if self._handler is not None
@@ -557,6 +558,9 @@ class WebAPI:
             rules_dir=self._rules_dir,
             ruleset_registry=self._ruleset_registry,
             plugin_host=plugin_host,
+            has_games_using_rule=lambda rule_id: any(
+                instance.rule_id == rule_id for instance in self._reg.list_all()
+            ),
         )
         self._ruleset_builder_dependencies = ruleset_builder.RulesetBuilderDependencies(
             load_rule=self._load_rule_by_id,
@@ -641,7 +645,10 @@ class WebAPI:
             generated_images.GeneratedImageDependencies(
                 imagegen=imagegen_service,
                 get_instance=self.get_game_instance,
+                save_instance=self._reg.save,
                 update_map_background=self.update_map_background,
+                avatar_file=lambda asset_id: self.avatar_file(asset_id),
+                llm_client=self._llm_client,
             )
         )
         self._game_lifecycle = game_lifecycle.GameLifecycleService(
@@ -1101,6 +1108,10 @@ class WebAPI:
             or "freeform_fantasy"
         )
         return self._load_rule_by_id(rule_id, language)
+
+    def _load_runtime_for_game(self, inst):
+        rule = self._load_rule_for_game(inst)
+        return self._ruleset_registry.resolve(rule.template) if rule else None
 
     def _project_game_rule_id(self, instance) -> str:
         return game_queries.projected_rule_id(
@@ -1733,6 +1744,14 @@ class WebAPI:
 
     async def generate_generated_image(self, **request: Any) -> dict[str, Any]:
         return await self._generated_images.generate_image(**request)
+
+    async def generate_current_round_image(
+        self, game_key: str, user_id: str, prompt: str, round_number: int,
+        panels: Any = None, use_avatar_references: bool = False,
+    ) -> dict[str, Any]:
+        return await self._generated_images.generate_current_round(
+            game_key, user_id, prompt, round_number, panels, use_avatar_references,
+        )
 
     def list_game_generated_images(
         self, game_key: str, user_id: str, *, purpose: str = "",

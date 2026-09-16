@@ -177,6 +177,20 @@ class GameDetailProjectionRuntime(Protocol):
 
 
 @runtime_checkable
+class PlayerJoinRuntime(Protocol):
+    """Optional hook for rulesets that must enroll a new player in live state."""
+
+    def on_player_join(self, instance: Any, user_id: str) -> None: ...
+
+
+@runtime_checkable
+class CharacterRevivalRuntime(Protocol):
+    """Optional hook for rulesets that own canonical revival state."""
+
+    def on_character_revived(self, instance: Any, user_id: str) -> None: ...
+
+
+@runtime_checkable
 class LiveAdvancementPolicyRuntime(Protocol):
     """Optional lifecycle hooks for a ruleset-owned live advancement policy."""
 

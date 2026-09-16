@@ -96,12 +96,30 @@ async def api_generated_image_as_map_background(request: web.Request) -> web.Res
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 
+async def api_generate_current_round_image(request: web.Request) -> web.Response:
+    body = await request.json() if request.can_read_body else {}
+    if not isinstance(body, dict):
+        return web.json_response({"ok": False, "error": "生图请求必须是 JSON 对象"}, status=400)
+    try:
+        round_number = int(body.get("round") or 0)
+    except (TypeError, ValueError):
+        round_number = 0
+    result = await _get_api(request).generate_current_round_image(
+        str(request.match_info.get("game_key") or ""),
+        str(request.get("user_id", "") or ""),
+        str(body.get("prompt") or ""), round_number,
+        body.get("panels"), bool(body.get("use_avatar_references", False)),
+    )
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
 def register_generated_images(app: web.Application) -> None:
     app.router.add_get("/api/image-generation", api_image_generation_status)
     app.router.add_post("/api/generated-images", api_generate_image)
     app.router.add_get("/api/generated-images/{asset_id}", api_generated_image_file)
     app.router.add_get("/api/games/{game_key}/generated-images", api_game_generated_images)
     app.router.add_post("/api/games/{game_key}/generated-images", api_generate_image)
+    app.router.add_post("/api/games/{game_key}/generated-images/current-round", api_generate_current_round_image)
     app.router.add_get(
         "/api/games/{game_key}/generated-images/{asset_id}",
         api_generated_image_file,

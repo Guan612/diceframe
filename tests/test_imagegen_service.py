@@ -278,6 +278,27 @@ def test_generate_supports_all_purposes_and_normalizes_assets(
     assert records[0]["context"] == {"round": 3}
 
 
+def test_automatic_advanced_rules_extend_explicit_scene_prompt(tmp_path):
+    provider = _FakeProvider()
+    service = _service(
+        tmp_path,
+        provider,
+        imagegen_auto_rules="Keep public characters consistent; use a six-panel storyboard when supplied.",
+        imagegen_auto_prompt="Editorial fantasy concept art, restrained lighting.",
+    )
+
+    asyncio.run(service.generate(ImageGenerationRequest(
+        prompt="misty harbor at dusk",
+        purpose="scene",
+        context={"scene": "Fog Harbor"},
+    )))
+
+    generated_prompt = provider.calls[0][0]
+    assert "Keep public characters consistent" in generated_prompt
+    assert "Editorial fantasy concept art" in generated_prompt
+    assert "misty harbor at dusk" in generated_prompt
+
+
 def test_content_addressing_reuses_asset_but_keeps_generation_history(tmp_path):
     provider = _FakeProvider()
     service = _service(tmp_path, provider)

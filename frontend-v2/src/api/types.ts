@@ -4,7 +4,8 @@ export interface CharacterResource { current?: number; max?: number; min?: numbe
 
 export interface CharacterIdentity { [key: string]: string | number | undefined }
 
-export interface CharacterSkill { name: string; value?: number }
+/** `effect` is player-authored skill description: display / AI context only, never mechanics. */
+export interface CharacterSkill { name: string; value?: number; effect?: string }
 
 export interface CharacterItem { name?: string; type?: string; damage?: number; slot?: string; quality?: string; qty?: number; effect?: string; category?: string; note?: string; [key: string]: unknown }
 
@@ -55,6 +56,20 @@ export interface MapBackgroundOption {
   plugin_name?: string
   url?: string
   selection?: MapBackgroundSelection
+}
+
+export interface CurrencyUnit {
+  id: string
+  name: string
+  symbol?: string
+  rate: number
+}
+
+export interface CurrencySystem {
+  schema_version?: number
+  base_unit: string
+  display_unit?: string
+  units: CurrencyUnit[]
 }
 
 export interface CharacterSheet {
@@ -718,6 +733,7 @@ export interface RuleMeta {
   hp_formula?: string
   mechanics?: string
   currency?: string
+  currency_system?: CurrencySystem
   auto_hp?: boolean
   attribute_points?: number
   attributes?: RuleAttribute[]
@@ -1541,6 +1557,7 @@ export interface RuleTemplate extends JsonObject {
   max_skills?: number
   skill_point_total?: number
   currency?: string
+  currency_system?: CurrencySystem
   hp_formula?: string
   gm_prompt_appendix?: string
   attributes?: RuleAttributeEdit[]
@@ -1568,6 +1585,12 @@ export interface RuleForm {
   max_skills: number
   skill_point_total: number
   currency: string
+  currency_has_minor: boolean
+  currency_major: string
+  currency_minor: string
+  currency_rate: number
+  currency_symbol: string
+  currency_simple_editable: boolean
   hp_formula: string
   gm_prompt_appendix: string
   attributes: RuleAttributeEdit[]
@@ -1957,6 +1980,12 @@ export interface AppConfig {
   asr_timeout_seconds?: number
   imagegen_enabled?: boolean
   imagegen_auto_scene?: boolean
+  imagegen_manual_scene?: boolean
+  imagegen_auto_use_manual_prompt?: boolean
+  imagegen_manual_rules?: string
+  imagegen_manual_prompt?: string
+  imagegen_auto_rules?: string
+  imagegen_auto_prompt?: string
   imagegen_provider?: 'openai-compatible'
   imagegen_model?: string
   imagegen_square_size?: string

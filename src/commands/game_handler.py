@@ -53,10 +53,10 @@ class GameHandler:
         prompts_dir: Path | None = None,
         rules_dir: Path | None = None,
         worlds_dir: Path | None = None,
-        narrative_max_tokens: int = 2048,
-        summary_max_tokens: int = 1024,
-        brief_max_tokens: int = 1024,
-        analysis_max_tokens: int = 1024,
+        narrative_max_tokens: int = 4096,
+        summary_max_tokens: int = 4096,
+        brief_max_tokens: int = 4096,
+        analysis_max_tokens: int = 4096,
         ruleset_registry: RulesetRuntimeRegistry | None = None,
     ):
         self.registry = registry

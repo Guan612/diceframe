@@ -31,7 +31,7 @@ const preview = ref<RulesetAdvancementPreview | null>(null)
 const busy = ref(false)
 const error = ref('')
 const currentRevision = ref(props.revision)
-const zh = computed(() => !props.language.toLowerCase().startsWith('en'))
+const zh = computed(() => props.language.toLowerCase().startsWith('zh'))
 const text = (cn: string, en: string) => zh.value ? cn : en
 const requirements = computed(() => preview.value?.requirements || [])
 const diff = computed(() => (preview.value?.diff || {}) as JsonObject)

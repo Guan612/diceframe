@@ -34,6 +34,14 @@ DICE_CHECKS_TOOL: dict[str, Any] = {
                                 "type": "string",
                                 "description": "Exact player id or character name from the supplied roster.",
                             },
+                            "actor": {
+                                "type": "string",
+                                "description": (
+                                    "Optional explicit check subject as player:<uid> or companion:<id> "
+                                    "from the supplied roster/companion list. Use it when the player action "
+                                    "delegates the task to an AI companion; omit to default to the player."
+                                ),
+                            },
                             "attribute": {
                                 "type": "string",
                                 "description": (
@@ -164,7 +172,10 @@ DICE_CHECKS_TOOL: dict[str, Any] = {
                         "Price questions ('多少钱?', 'いくら?', 'how much?') or hypothetical talk are NOT "
                         "intents. Report only prices that a human actually stated in this round's text. "
                         "The payer always confirms in a dialog before anything is deducted; you cannot "
-                        "charge anyone directly. Leave empty when unsure."
+                        "charge anyone directly. If a clear purchase intent uses a price unit that cannot "
+                        "be mapped to any provided canonical currency unit, still emit the action with "
+                        "player/type/target/quantity, omit amount and unit, and use price_source=\"none\" — "
+                        "never drop the purchase intent. Leave empty when unsure."
                     ),
                     "items": {
                         "type": "object",
@@ -188,11 +199,22 @@ DICE_CHECKS_TOOL: dict[str, Any] = {
                                 ),
                             },
                             "amount": {
-                                "type": "integer",
-                                "minimum": 1,
+                                "type": "string",
+                                "pattern": "^[0-9]+(\\.[0-9]+)?$",
                                 "description": (
-                                    "The price a human stated in this round's text. Omit when nobody has "
-                                    "stated one; never infer, estimate, or invent a price yourself."
+                                    "The price a human stated in this round's text, as a decimal string in "
+                                    "that stated unit (e.g. \"0.25\" with unit \"dollar\", \"25\" with unit "
+                                    "\"cent\"). Never convert or exchange units yourself. Omit when nobody "
+                                    "has stated a price; never infer, estimate, or invent a price yourself."
+                                ),
+                            },
+                            "unit": {
+                                "type": "string",
+                                "description": (
+                                    "Canonical currency unit id from the ruleset's currency_units list, "
+                                    "matching the unit the human's stated amount was expressed in. "
+                                    "Use the display unit only when the human did not name a smaller "
+                                    "unit. The server converts to the canonical amount."
                                 ),
                             },
                             "quantity": {

@@ -91,3 +91,29 @@ it('keeps routing unavailable when the backend does not support provider configu
   expect(wrapper.get('.model-routing-save').attributes('disabled')).toBeDefined()
   wrapper.unmount()
 })
+
+it('keeps image generation basics visible and exposes advanced fields on demand', async () => {
+  const { wrapper } = setup({
+    ai_providers: [{ id: 'image', name: 'Image', base_url: 'http://localhost:8000/v1', api_format: 'openai', models: ['image-1'] }],
+    imagegen_enabled: true,
+    imagegen_auto_scene: true,
+    imagegen_manual_scene: false,
+    imagegen_provider_ref: 'image',
+    imagegen_model: 'image-1',
+  })
+
+  expect(wrapper.text()).toContain('自动生成场景图')
+  expect(wrapper.text()).toContain('手动生成场景图')
+  expect(wrapper.text()).toContain('统一风格前缀')
+  expect(wrapper.text()).toContain('高级图像设置')
+  expect(wrapper.text()).toContain('手动提示词模板')
+  expect(wrapper.find('textarea').exists()).toBe(true)
+  const advancedSettings = wrapper.get('.imagegen-advanced-settings')
+  expect(advancedSettings.text()).toContain('高级图像设置')
+  expect(advancedSettings.element).not.toHaveProperty('open', true)
+  await advancedSettings.find('summary').trigger('click')
+  await flushPromises()
+  expect(advancedSettings.element).toHaveProperty('open', true)
+  expect(wrapper.text()).toContain('留空使用默认尺寸')
+  wrapper.unmount()
+})

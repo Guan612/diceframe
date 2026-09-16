@@ -21,9 +21,9 @@ const host = ref<HTMLElement | null>(null)
 const returnFocus = typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
   ? document.activeElement
   : null
-const dialogLabel = computed(() => props.language.toLowerCase().startsWith('en')
-  ? 'Professional character builder'
-  : '高级角色创建器')
+const dialogLabel = computed(() => props.language.toLowerCase().startsWith('zh')
+  ? '高级角色创建器'
+  : 'Professional character builder')
 
 function onDialogKey(event: KeyboardEvent): void {
   if (props.embedded) return

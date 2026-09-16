@@ -76,6 +76,23 @@ function response(status: 'none' | 'active' = 'none') {
   }
 }
 
+function explorationResponse(availableSlotLevels: number[] = [1, 2]) {
+  const result = response('active') as any
+  result.available_actions = [{
+    type: 'exploration.cast_spell', label: 'Cast a spell', actor_id: 'player:gm',
+    expected_version: 0,
+    spells: [{
+      spell_ref: 'spell:cure_wounds', name: 'Cure Wounds', level: 1,
+      casting_time: 'action', available_slot_levels: availableSlotLevels,
+    }],
+    targets: [{
+      actor_id: 'player:gm', kind: 'player', name: 'Guardian',
+      hp: 8, max_hp: 12, position: 0,
+    }],
+  }]
+  return result
+}
+
 describe('D&D 2024 combat panel', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -84,6 +101,35 @@ describe('D&D 2024 combat panel', () => {
     mocks.submit.mockReset().mockResolvedValue(response('active'))
     mocks.decide.mockReset().mockResolvedValue(response('active'))
     mocks.plan.mockReset().mockResolvedValue({ ok: false, error: 'unavailable' })
+  })
+
+  it('uses the first legal slot for an exploration spell and rejects an empty slot list', async () => {
+    mocks.fetch.mockResolvedValueOnce(explorationResponse())
+    const wrapper = mount(Dnd2024CombatPanel, {
+      props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
+    })
+    await flushPromises()
+
+    const card = wrapper.findAll('.action-card').find(item => item.text().includes('Cure Wounds'))!
+    await card.find('select').setValue('spell:cure_wounds')
+    await card.get('button').trigger('click')
+    await wrapper.get('.confirm-card .combat-primary').trigger('click')
+    await flushPromises()
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({
+      type: 'exploration.cast_spell', spell_ref: 'spell:cure_wounds', slot_level: 1,
+    })
+    wrapper.unmount()
+
+    mocks.fetch.mockResolvedValueOnce(explorationResponse([]))
+    const unavailable = mount(Dnd2024CombatPanel, {
+      props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
+    })
+    await flushPromises()
+    const unavailableCard = unavailable.findAll('.action-card')
+      .find(item => item.text().includes('Cure Wounds'))!
+    await unavailableCard.find('select').setValue('spell:cure_wounds')
+    expect(unavailableCard.get('button').attributes('disabled')).toBeDefined()
+    unavailable.unmount()
   })
 
   it('keeps the catalog hidden in a fresh game and starts from a server-provided preset after explicit preparation', async () => {
@@ -563,6 +609,129 @@ describe('D&D 2024 combat panel', () => {
 
     expect(mocks.submit.mock.calls[0][1]).toMatchObject({ type: 'combat.end' })
     expect(wrapper.emitted('navigate')).toEqual([['campaign']])
+    wrapper.unmount()
+  })
+
+  // ---- AI 临时遭遇草稿：勾选、编辑、数量展开、恢复原稿 ----
+
+  function aiEncounter() {
+    return {
+      ok: true,
+      encounter: {
+        title: 'Wolf Pack', description: 'Three wolves stalk the ruins.',
+        enemies: [
+          {
+            id: 'wolf-1', name: 'Wolf', hp: 11, armor_class: 13, speed: 40,
+            position: 25, initiative_modifier: 2,
+            attacks: [{ id: 'bite', name: 'Bite', attack_bonus: 4, damage: '1d6+2', range: 5, long_range: 5 }],
+          },
+          {
+            id: 'wolf-2', name: 'Wolf', hp: 11, armor_class: 13, speed: 40, position: 30,
+            attacks: [{ id: 'bite', name: 'Bite', attack_bonus: 4, damage: '1d6+2', range: 5, long_range: 5 }],
+          },
+          {
+            id: 'dire-wolf', name: 'Dire Wolf', hp: 18, armor_class: 14, speed: 40, position: 35,
+            attacks: [{ id: 'bite', name: 'Bite', attack_bonus: 5, damage: '2d6+3', range: 5, long_range: 5 }],
+          },
+        ],
+      },
+    }
+  }
+
+  async function mountWithDraft() {
+    mocks.plan.mockResolvedValue(aiEncounter())
+    const wrapper = mount(Dnd2024CombatPanel, {
+      props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
+    })
+    await flushPromises()
+    await wrapper.get('.ai-encounter-toggle').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  function draftInput(wrapper: ReturnType<typeof mount>, label: string, index = 0) {
+    return wrapper.findAll(`.ai-encounter-enemies input[aria-label="${label}"]`)[index]
+  }
+
+  function submittedEnemies() {
+    return mocks.submit.mock.calls[0][1].enemies as Array<Record<string, any>>
+  }
+
+  it('sends only the selected enemies after the GM unticks one draft entry', async () => {
+    const wrapper = await mountWithDraft()
+    const checkboxes = wrapper.findAll('.ai-encounter-enemies input[type="checkbox"]')
+    expect(checkboxes.length).toBe(3)
+    await checkboxes[1].setValue(false)
+    await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
+    await flushPromises()
+
+    expect(mocks.submit).toHaveBeenCalledOnce()
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({
+      type: 'combat.start', mode: 'sandbox', temporary_encounter: true,
+    })
+    expect(submittedEnemies().map(enemy => enemy.id)).toEqual(['wolf-1', 'dire-wolf'])
+    wrapper.unmount()
+  })
+
+  it('expands draft quantities into uniquely identified instances with the edited stats', async () => {
+    const wrapper = await mountWithDraft()
+    await draftInput(wrapper, 'Qty').setValue('3')
+    await draftInput(wrapper, 'HP').setValue('9')
+    await draftInput(wrapper, 'Armor Class').setValue('15')
+    await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
+    await flushPromises()
+
+    const enemies = submittedEnemies()
+    expect(enemies.map(enemy => enemy.id)).toEqual([
+      'wolf-1', 'wolf-1-2', 'wolf-1-3', 'wolf-2', 'dire-wolf',
+    ])
+    expect(enemies[1]).toMatchObject({ id: 'wolf-1-2', hp: 9, armor_class: 15 })
+    expect(enemies[0]).not.toHaveProperty('quantity')
+    expect(enemies[0]).not.toHaveProperty('selected')
+    wrapper.unmount()
+  })
+
+  it('submits the edited enemy and attack fields to combat.start', async () => {
+    const wrapper = await mountWithDraft()
+    await draftInput(wrapper, 'Name').setValue('Grey Wolf')
+    await draftInput(wrapper, 'HP').setValue('9')
+    await draftInput(wrapper, 'Attack bonus').setValue('6')
+    await draftInput(wrapper, 'Damage formula').setValue('1d8+2')
+    await draftInput(wrapper, 'Normal range').setValue('10')
+    await draftInput(wrapper, 'Long range').setValue('20')
+    await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
+    await flushPromises()
+
+    const [first] = submittedEnemies()
+    expect(first).toMatchObject({
+      id: 'wolf-1', name: 'Grey Wolf', hp: 9, armor_class: 13,
+      attacks: [{ id: 'bite', name: 'Bite', attack_bonus: 6, damage: '1d8+2', range: 10, long_range: 20 }],
+    })
+    wrapper.unmount()
+  })
+
+  it('disables the start action when every draft enemy is unticked', async () => {
+    const wrapper = await mountWithDraft()
+    for (const checkbox of wrapper.findAll('.ai-encounter-enemies input[type="checkbox"]')) {
+      await checkbox.setValue(false)
+    }
+    expect(wrapper.get('.ai-encounter-preview .combat-primary').attributes('disabled')).toBeDefined()
+    expect(mocks.submit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('restores the untouched AI proposal after edits', async () => {
+    const wrapper = await mountWithDraft()
+    await draftInput(wrapper, 'Name').setValue('Grey Wolf')
+    await draftInput(wrapper, 'HP').setValue('99')
+    await wrapper.get('.ai-encounter-preview .unprepared-actions button:first-child').trigger('click')
+
+    expect((draftInput(wrapper, 'Name').element as HTMLInputElement).value).toBe('Wolf')
+    expect((draftInput(wrapper, 'HP').element as HTMLInputElement).value).toBe('11')
+    await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
+    await flushPromises()
+    const [first] = submittedEnemies()
+    expect(first).toMatchObject({ id: 'wolf-1', name: 'Wolf', hp: 11, armor_class: 13 })
     wrapper.unmount()
   })
 })

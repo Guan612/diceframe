@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
+from src.engine.language import normalize_language
 from src.webui.routes._common import _get_api
 _MAX_MESSAGES = 20
 _MAX_MESSAGE_CHARS = 8000
@@ -35,7 +36,8 @@ def _validated_messages(body: object) -> tuple[list[dict[str, str]], str]:
         raise ValueError("对话历史过长")
     if not messages or messages[-1]["role"] != "user":
         raise ValueError("最后一条消息必须是非空用户消息")
-    language = "en" if str(body.get("language") or "").lower().startswith("en") else "zh-CN"
+    norm_lang = normalize_language(body.get("language"))
+    language = norm_lang if norm_lang in ("en", "de") else "zh-CN"
     return messages, language
 
 

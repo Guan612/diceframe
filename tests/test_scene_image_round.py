@@ -30,6 +30,12 @@ def test_scene_image_tag_absent_by_default():
     assert data["scene_image_prompt"] == ""
 
 
+def test_scene_tag_alone_does_not_request_image():
+    data = parse_tag_state("正文。\n---\nSCENE:雾港码头\n")
+    assert data["state_update"]["scene_change"] == "雾港码头"
+    assert data["scene_image_prompt"] == ""
+
+
 class _FakeImageGenerationService:
     available = True
     auto_scene = True
@@ -101,7 +107,11 @@ async def test_schedule_scene_image_updates_log_and_generated_reference():
     assert request.owner_type == "game"
     assert request.owner_id == "web:room:test"
     assert request.aspect_ratio == "16:9"
-    assert request.context == {"round": 3, "run_id": registry.instance.run_id}
+    assert request.context["round"] == 3
+    assert request.context["run_id"] == registry.instance.run_id
+    assert request.context["scene"] == registry.instance.scene
+    assert "narration" in request.context
+    assert "panels" in request.context
     assert registry.saved == [registry.instance.game_key]
 
 
@@ -156,7 +166,20 @@ async def test_maybe_schedule_applies_prompt_and_feature_throttles():
 
     task = processor._maybe_schedule_scene_image(
         registry.instance,
-        {"scene_image_prompt": "harbor at dusk", "state_update": {"scene_change": "雾港码头"}},
+        {"scene_image_prompt": "harbor at dusk", "state_update": {}},
+    )
+    assert task is None
+
+    # A normal SCENE transition is not an image directive.  The legacy
+    # SCENE_IMAGE protocol remains the default trigger.
+    assert processor._maybe_schedule_scene_image(
+        registry.instance,
+        {"scene_image_prompt": "", "scene_panels": [], "state_update": {"scene_change": "雾港码头"}},
+    ) is None
+
+    task = processor._maybe_schedule_scene_image(
+        registry.instance,
+        {"scene_image_prompt": "new harbor view", "state_update": {"scene_change": "雾港码头"}},
     )
     assert task is not None
     task.cancel()
@@ -166,6 +189,73 @@ async def test_maybe_schedule_applies_prompt_and_feature_throttles():
         registry.instance,
         {"scene_image_prompt": "new scene"},
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_maybe_schedule_requires_scene_image_tag_by_default():
+    """普通 SCENE 或单独 SCENE_PANEL 不应改变原版自动触发契约。"""
+    registry = _FakeRegistry()
+    registry.instance = _instance_with_log()
+    registry.instance.round_number = 4
+    service = _FakeImageGenerationService()
+    processor = _processor(registry, service)
+
+    assert processor._maybe_schedule_scene_image(
+        registry.instance,
+        {"state_update": {"scene_change": "雾港码头"}},
+    ) is None
+    assert processor._maybe_schedule_scene_image(
+        registry.instance,
+        {
+            "scene_panels": [
+                {"participants": "Alice", "location": "码头", "description": "雾中守望"},
+            ],
+            "state_update": {"scene_change": "雾港码头"},
+        },
+    ) is None
+    assert service.requests == []
+
+
+@pytest.mark.asyncio
+async def test_scene_image_tag_triggers_and_scene_panels_are_attached_data():
+    registry = _FakeRegistry()
+    registry.instance = _instance_with_log()
+    registry.instance.round_number = 4
+    service = _FakeImageGenerationService()
+    processor = _processor(registry, service)
+
+    task = processor._maybe_schedule_scene_image(
+        registry.instance,
+        {
+            "scene_image_prompt": "harbor at dusk",
+            "scene_panels": [
+                {"participants": "Alice", "location": "码头", "description": "雾中守望"},
+            ],
+            "state_update": {"scene_change": "雾港码头"},
+        },
+    )
+    assert task is not None
+    await task
+    assert len(service.requests) == 1
+    request = service.requests[0]
+    assert request.prompt == "harbor at dusk"
+    assert request.context["storyboard"]["panels"][0]["location"] == "码头"
+
+
+@pytest.mark.asyncio
+async def test_opening_scene_panels_without_scene_image_do_not_trigger():
+    registry = _FakeRegistry()
+    registry.instance = _instance_with_log()
+    registry.instance.log[-1]["round"] = 0
+    registry.instance.log[-1]["scene_panels"] = [
+        {"participants": "Alice", "location": "码头", "description": "雾中守望"},
+    ]
+    registry.instance.round_number = 1
+    service = _FakeImageGenerationService()
+    processor = _processor(registry, service)
+
+    assert processor.schedule_opening_scene_image(registry.instance) is None
+    assert service.requests == []
 
     processor.set_image_generation_service(None)
     assert processor._maybe_schedule_scene_image(

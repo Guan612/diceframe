@@ -46,6 +46,7 @@ def unbacked_payment_notice(language: str) -> str:
         "en": "No payment was charged: the GM must issue an explicit payment order.",
         "zh-CN": "本次未扣款：需要由 GM 明确发起支付订单。",
         "ja": "支払いは実行されていません。GM が明示的な支払い注文を発行してください。",
+        "de": "Keine Zahlung erfolgt: Der GM muss einen ausdrücklichen Zahlungsauftrag erteilen.",
     })
 
 
@@ -63,6 +64,7 @@ def unbacked_purchase_notice(language: str) -> str:
         "en": "The item was not granted because its payment is not confirmed yet.",
         "zh-CN": "支付尚未确认，本次购买的物品未发放。",
         "ja": "支払いが確認されていないため、購入品は付与されませんでした。",
+        "de": "Der Gegenstand wurde nicht übergeben, da die Zahlung noch nicht bestätigt ist.",
     })
 
 
@@ -112,4 +114,5 @@ def pending_decision_notice(language: str) -> str:
         "en": "Settlement pending: dependent results are not effective yet.",
         "zh-CN": "结算待确认：关联结果尚未生效。",
         "ja": "決済確認待ち：関連結果はまだ発効していません。",
+        "de": "Abrechnung ausstehend: Abhängige Ergebnisse sind noch nicht wirksam.",
     })

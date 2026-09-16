@@ -8,7 +8,7 @@ export function fetchManualRollRequests(gameKey: string) {
 }
 
 export function createManualRollRequest(gameKey: string, body: {
-  operation_id: string; run_id: string; formula: string; label: string; purpose: ManualRollPurpose; target?: number | null; comparison?: ManualRollComparison; target_uids: string[]; visibility: ManualRollVisibility
+  operation_id: string; run_id: string; formula: string; label: string; purpose: ManualRollPurpose; target?: number | null; comparison?: ManualRollComparison; include_in_ai_context?: boolean; target_uids: string[]; visibility: ManualRollVisibility
 }) {
   return api<{ ok: true; request: ManualRollRequest }>(path(gameKey), { method: 'POST', body: JSON.stringify(body) })
 }

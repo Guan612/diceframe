@@ -271,6 +271,7 @@ const canEditStyle = computed(() => Boolean(previewCard.value && previewCard.val
 function languageLabel(card: GalleryCard): string {
   const language = card.language.toLowerCase()
   if (language.startsWith('ja')) return '日本語'
+  if (language.startsWith('de')) return t('german')
   if (language.startsWith('en')) return t('english')
   return t('chinese')
 }

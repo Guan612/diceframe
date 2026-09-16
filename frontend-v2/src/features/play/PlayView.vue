@@ -34,6 +34,8 @@ import CombatExtensionPanel from '@/components/play/CombatExtensionPanel.vue'
 import MultiplayerPanel from '@/components/play/MultiplayerPanel.vue'
 import MapWorkspace from '@/components/play/MapWorkspace.vue'
 import SceneGalleryModal from '@/components/play/SceneGalleryModal.vue'
+import CurrentRoundImageModal from '@/components/play/CurrentRoundImageModal.vue'
+import { generateCurrentRoundImage } from '@/api/generatedImages'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import AdventureSceneImagePicker from '@/components/common/AdventureSceneImagePicker.vue'
 import MapBackgroundSettingsModal from '@/components/play/MapBackgroundSettingsModal.vue'
@@ -45,6 +47,8 @@ import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { fileToBase64, resolveGameSceneImageUrl, revokeSceneImageUrl, sceneImageStyle } from '@/api/sceneImages'
 import { fetchRulesetAvailableActions } from '@/api/rulesets'
 import { currencyLabel } from '@/utils/ruleSchema'
+import { currencyAmountToInputText, currencyEditableUnitLabel } from '@/utils/currency'
+import type { CurrencySystem } from '@/utils/currency'
 import { buildRewardPolicySave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
 
 defineOptions({ name: 'PlayView' })
@@ -68,6 +72,8 @@ const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === 
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
 const showMap = ref(false)
 const showSceneGallery = ref(false)
+const showCurrentRoundImage = ref(false)
+const currentRoundImageBusy = ref(false)
 const gmThinking = ref(false)
 const storyRecapBusy = ref(false)
 const luckBusyId = ref('')
@@ -286,9 +292,14 @@ const tableNotice = computed(() => {
   if (showGmThinking.value) return t('gmProcessingNotice')
   if (pendingLuckDecisions.value.length) {
     const own = pendingLuckDecisions.value.some(check => check.actor_uid === actorId.value)
-    if (own || game.isGm.value) return t('luckDecisionOwnNotice')
-    const names = joinNames(pendingLuckDecisions.value.map(check => String(check.actor_name || check.actor_uid || '')))
-    return t('luckDecisionWaitingNotice', { names })
+    const others = pendingLuckDecisions.value.filter(check => check.actor_uid !== actorId.value)
+    if (own && others.length) {
+      const names = joinNames(others.map(check => String(check.actor_name || check.actor_uid || '')))
+      return t('luckDecisionOwnAndWaitingNotice', { count: others.length, names })
+    }
+    if (own) return t('luckDecisionOwnNotice')
+    const names = joinNames(others.map(check => String(check.actor_name || check.actor_uid || '')))
+    return t('luckDecisionWaitingNotice', { count: others.length, names })
   }
   const detail = game.detail.value
   if (!detail) return ''
@@ -483,6 +494,17 @@ async function generateStoryRecap() {
   }
 }
 
+async function generateCurrentRoundImageRequest(payload: { prompt: string; round: number; panels: unknown[]; use_avatar_references: boolean }) {
+  if (!game.currentGame.value || currentRoundImageBusy.value) return
+  currentRoundImageBusy.value = true
+  showCurrentRoundImage.value = false
+  try {
+    await generateCurrentRoundImage(game.currentGame.value, { prompt: payload.prompt, round: payload.round, panels: payload.panels, useAvatarReferences: payload.use_avatar_references })
+    await game.refresh(true)
+    toast.success(t('imageGenerated'))
+  } catch (error: unknown) { toast.error(errorMessage(error)) } finally { currentRoundImageBusy.value = false }
+}
+
 function onCommand(text: string) { command('gm-command', { command: text }) }
 function onPerception(uid: string, text: string) { command('private-message', { user_id: uid, text }) }
 function onMode() { command('mode', { solo: !game.detail.value?.solo_mode }) }
@@ -513,7 +535,9 @@ function onRoomPassword() {
   luckTimeoutInput.value = ''
   const policy = game.detail.value?.economy_reward_policy || {}
   rewardPolicyMode.value = policy.mode || ''
-  rewardPolicyCap.value = policy.auto_reward_cap ? String(policy.auto_reward_cap) : ''
+  rewardPolicyCap.value = policy.auto_reward_cap
+    ? currencyAmountToInputText(policy.auto_reward_cap, economyCurrencySystem.value)
+    : ''
   // 只有 GM 真正改动了奖励策略字段才提交：detail 未加载或未触碰时提交
   // 会把空 mode 当作“清除本局覆盖”，改密码/超时就会误重置奖励策略。
   rewardPolicyTouched.value = false
@@ -533,6 +557,7 @@ async function setRoomPassword() {
     // 奖励策略仅在 GM 实际改动过时提交；显式选“跟随默认”仍会清除覆盖。
     const rewardSave = buildRewardPolicySave(
       rewardPolicyTouched.value, rewardPolicyMode.value, rewardPolicyCap.value,
+      economyCurrencySystem.value,
     )
     if (rewardSave) {
       const rpR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/reward-policy`, { method: 'POST', body: JSON.stringify(rewardSave) })
@@ -697,6 +722,12 @@ const pendingPay = ref<PendingPayment | null>(null)
 const payResolving = ref(false)
 const dismissedPaymentIds = ref<Set<string>>(new Set())
 const economyCurrencyName = computed(() => currencyLabel(ruleMeta.value))
+const economyCurrencySystem = computed<CurrencySystem | null>(() => ruleMeta.value.currency_system || null)
+const economyEditableUnitSuffix = computed(() => {
+  // 奖励上限输入按可编辑单位解析（rate=3 等结构回退 base unit），标签必须一致。
+  const name = currencyEditableUnitLabel(economyCurrencySystem.value)
+  return name ? `（${name}）` : ''
+})
 const economyProposalList = computed(() => game.detail.value?.economy_proposals || [])
 const actionableEconomyProposals = computed(() => economyProposalList.value.filter(proposal => (
   isEconomyProposalActionable(
@@ -1140,6 +1171,7 @@ onBeforeUnmount(() => {
           :proposal="pendingPay"
           :busy="payResolving"
           :currency="economyCurrencyName"
+          :currency-system="economyCurrencySystem"
           :player-name="economyPlayerName"
           :dismiss-label="pendingEconomyDismissLabel(pendingPay)"
           :help="pendingEconomyHelp(pendingPay)"
@@ -1263,6 +1295,8 @@ onBeforeUnmount(() => {
           :players="game.players.value"
           :is-gm="game.isGm.value"
           :recap-busy="storyRecapBusy"
+          :manual-image-enabled="Boolean(settings.config.imagegen_manual_scene)"
+          :manual-image-busy="currentRoundImageBusy"
           @advance="command('advance', { force: true })"
           @force-advance="onForceAdvance"
           @rollback="command('rollback')"
@@ -1285,6 +1319,7 @@ onBeforeUnmount(() => {
           @scene-image="openSceneImageEditor"
           @map-background="openMapBackgroundEditor"
           @payment="openPaymentComposer"
+          @generate-current-round="showCurrentRoundImage = true"
         />
         <CombatExtensionPanel
           :detail="game.detail.value"
@@ -1332,6 +1367,7 @@ onBeforeUnmount(() => {
       :payer-uid="composerPayerUid"
       :recipient-uid="composerRecipientUid"
       :busy="paymentBusy"
+      :currency-system="economyCurrencySystem"
       @close="showPaymentComposer = false"
       @submit="createPaymentProposal"
     />
@@ -1348,6 +1384,11 @@ onBeforeUnmount(() => {
       :is-gm="game.isGm.value"
       @close="showSceneGallery = false"
       @background-saved="refreshMapAfterBackground"
+    />
+    <CurrentRoundImageModal
+      v-if="showCurrentRoundImage && game.currentGame.value && game.detail.value"
+      open :game-key="game.currentGame.value" :detail="game.detail.value" :log="game.log.value" :players="game.players.value"
+      @close="showCurrentRoundImage = false" @generate="generateCurrentRoundImageRequest"
     />
     <button
       class="mobile-drawer-trigger mobile-drawer-trigger-left"
@@ -1427,7 +1468,7 @@ onBeforeUnmount(() => {
             <option value="gm_confirm">{{ t('rewardPolicyGmConfirm') }}</option>
           </select>
         </label>
-        <label v-if="rewardPolicyMode === 'auto_small_cash'">{{ t('rewardPolicyCap') }}<input type="number" v-model="rewardPolicyCap" :placeholder="t('rewardPolicyCapPlaceholder')" min="1" @input="rewardPolicyTouched = true"></label>
+        <label v-if="rewardPolicyMode === 'auto_small_cash'">{{ t('rewardPolicyCap') }}{{ economyEditableUnitSuffix }}<input type="text" inputmode="decimal" v-model="rewardPolicyCap" :placeholder="t('rewardPolicyCapPlaceholder')" @input="rewardPolicyTouched = true"></label>
         <div class="actions">
           <button @click="showRoomPassword = false">{{ t('cancel') }}</button>
           <button class="primary" @click="setRoomPassword">{{ t('saveAction') }}</button>

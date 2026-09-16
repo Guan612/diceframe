@@ -283,3 +283,156 @@ describe('D&D 2024 professional character builder', () => {
     expect(prepared[0].checked).toBe(false)
   })
 })
+
+describe('D&D 2024 ability page: point buy vs background bonuses', () => {
+  // Sorcerer（主属性 CHA）+ Sage 类背景（只允许 CON / INT / WIS）的典型场景
+  const sorcererPointBuyDraft = {
+    ...legalDraft,
+    ability_method: 'point_buy',
+    base_abilities: { str: 10, dex: 13, con: 14, int: 8, wis: 12, cha: 13 },
+    background_ability_bonuses: {},
+  }
+  const sorcererChoices = {
+    ...choices,
+    ability_methods: [
+      { id: 'standard_array', values: [15, 14, 13, 12, 10, 8] },
+      { id: 'point_buy' },
+      { id: 'rolled' },
+    ],
+    recommended_base_abilities: { str: 10, dex: 13, con: 14, int: 8, wis: 12, cha: 15 },
+    background_ability_refs: ['ability:con', 'ability:int', 'ability:wis'],
+    quick_presets: [{ ...choices.quick_presets[0], draft: sorcererPointBuyDraft }],
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+    mocks.choices.mockReset().mockResolvedValue({ ok: true, rule_id: 'dnd2024_srd', choices: sorcererChoices })
+    mocks.validate.mockReset().mockResolvedValue({ ok: true, valid: true, errors: [] })
+    mocks.derive.mockReset().mockResolvedValue({ ok: true, character: {} })
+    mocks.finalize.mockReset().mockResolvedValue({
+      ok: true, rule_id: 'dnd2024_srd', character: {
+        character_name: '阿岚', rule_id: 'dnd2024_srd', ruleset_character: { rule_binding: {} },
+      },
+    })
+  })
+
+  async function reachAbilityStep(wrapper: VueWrapper, { nameLabel = '角色名', nextLabel = '下一步', tabLabel = '引导创建' } = {}) {
+    await wrapper.findAll('button').find(item => item.text().includes('可靠守护者'))!.trigger('click')
+    const nameInput = wrapper.findAll('label').find(item => item.text().includes(nameLabel))!.find('input')
+    await nameInput.setValue('阿岚')
+    await wrapper.findAll('[role="tab"]').find(item => item.text() === tabLabel)!.trigger('click')
+    await buttonByText(wrapper, nextLabel).trigger('click')
+    await wrapper.vm.$nextTick()
+  }
+
+  it('Test A: point buy always shows all six abilities (CHA not hidden by Sage)', async () => {
+    const wrapper = mountBuilder({})
+    await flushPromises()
+    await reachAbilityStep(wrapper)
+
+    const panel = wrapper.get('[role="tabpanel"]')
+    for (const name of ['力量', '敏捷', '体质', '智力', '感知', '魅力']) {
+      expect(panel.text()).toContain(name)
+    }
+    expect(panel.text()).toContain('基础属性分配')
+    expect(panel.text()).toContain('购点已使用 23 / 27（剩余 4）')
+  })
+
+  it('Test B: background bonus scope stays CON / INT / WIS', async () => {
+    const wrapper = mountBuilder({})
+    await flushPromises()
+    await reachAbilityStep(wrapper)
+
+    const bonusBlock = wrapper.findAll('fieldset').find(item => item.text().includes('背景属性提升'))!
+    expect(bonusBlock.text()).toContain('当前背景可提升：体质 / 智力 / 感知')
+    for (const select of bonusBlock.findAll('select')) {
+      expect(select.text()).not.toContain('魅力')
+    }
+  })
+
+  it('Test C: warns when the background cannot raise the class primary ability', async () => {
+    const wrapper = mountBuilder({})
+    await flushPromises()
+    await reachAbilityStep(wrapper)
+
+    const panel = wrapper.get('[role="tabpanel"]')
+    expect(panel.text()).toContain('当前背景无法提升职业推荐主属性「魅力」')
+    expect(panel.text()).toContain('这是合法组合')
+    expect(panel.text()).toContain('基础属性分配中提高该属性')
+  })
+
+  it('Test D: no warning when the background includes the primary ability', async () => {
+    mocks.choices.mockResolvedValue({
+      ok: true,
+      rule_id: 'dnd2024_srd',
+      choices: {
+        ...sorcererChoices,
+        background_ability_refs: ['ability:cha', 'ability:con', 'ability:dex'],
+      },
+    })
+    const wrapper = mountBuilder({})
+    await flushPromises()
+    await reachAbilityStep(wrapper)
+
+    expect(wrapper.get('[role="tabpanel"]').text()).not.toContain('当前背景无法提升职业推荐主属性')
+  })
+
+  it('Test E: recommended +2/+1 never leaves the background-legal abilities', async () => {
+    const wrapper = mountBuilder({})
+    await flushPromises()
+    await reachAbilityStep(wrapper)
+
+    await buttonByText(wrapper, '在背景允许属性中推荐 +2/+1').trigger('click')
+    await wrapper.vm.$nextTick()
+
+    const label = (name: string) =>
+      wrapper.findAll('.ability-grid label').find(item => item.text().includes(name))!
+    expect(label('体质').text()).toContain('+ 2 = 16')
+    expect(label('感知').text()).toContain('+ 1 = 13')
+    expect(label('智力').text()).toContain('+ 0 = 8')
+    expect(label('魅力').text()).toContain('+ 0 = 13')
+  })
+
+  it('Test F: point buy can still raise CHA and updates the budget', async () => {
+    const wrapper = mountBuilder({})
+    await flushPromises()
+    await reachAbilityStep(wrapper)
+
+    const chaLabel = wrapper.findAll('.ability-grid label').find(item => item.text().includes('魅力'))!
+    await chaLabel.find('input').setValue(15)
+
+    const panel = wrapper.get('[role="tabpanel"]')
+    expect(panel.text()).toContain('购点已使用 27 / 27（剩余 0）')
+    expect(chaLabel.text()).toContain('= 15')
+  })
+
+  it('hides the class-recommendation shortcut when scores are rolled', async () => {
+    const wrapper = mountBuilder({})
+    await flushPromises()
+    await reachAbilityStep(wrapper)
+
+    // point buy 下快捷按钮可见
+    expect(wrapper.findAll('button').some(item => item.text().includes('使用职业推荐'))).toBe(true)
+
+    // 切到掷骰生成后按钮必须消失：不允许把职业推荐数组伪装成掷骰结果
+    const rolled = wrapper.findAll('.ability-methods label').find(item => item.text().includes('掷骰生成'))!
+    await rolled.find('input').setValue(true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findAll('button').some(item => item.text().includes('使用职业推荐'))).toBe(false)
+  })
+
+  it('falls back to English (never Chinese) when language is de', async () => {
+    const wrapper = mountBuilder({ language: 'de' })
+    await flushPromises()
+    await reachAbilityStep(wrapper, { nameLabel: 'Character name', nextLabel: 'Next', tabLabel: 'Guided' })
+
+    const panel = wrapper.get('[role="tabpanel"]').text()
+    expect(panel).toContain('Base ability scores')
+    expect(panel).toContain('Background ability bonuses')
+    expect(panel).toContain('Class recommendation: prioritize Charisma')
+    expect(panel).not.toContain('基础属性分配')
+    expect(panel).not.toContain('背景属性提升')
+    expect(panel).not.toContain('职业推荐')
+  })
+})

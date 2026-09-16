@@ -89,9 +89,9 @@ export function resolveRulesetAdvancementExtension(
   }
   return {
     component,
-    title: language => language.startsWith('en')
-      ? 'D&D 2024 advancement'
-      : 'D&D 2024 职业升级',
+    title: language => language.startsWith('zh')
+      ? 'D&D 2024 职业升级'
+      : 'D&D 2024 advancement',
   }
 }
 

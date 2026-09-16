@@ -75,9 +75,9 @@ export const MODEL_ROUTING_CONFIG_KEYS = [
   'embedding_enabled', 'embedding_provider_ref', 'embedding_model', 'embedding_max_input',
   'tts_provider', 'tts_provider_ref', 'tts_model', 'tts_default_voice',
   'asr_provider', 'asr_provider_ref', 'asr_model',
-  'imagegen_enabled', 'imagegen_auto_scene', 'imagegen_provider_ref', 'imagegen_model',
+  'imagegen_enabled', 'imagegen_auto_scene', 'imagegen_manual_scene', 'imagegen_auto_use_manual_prompt', 'imagegen_provider_ref', 'imagegen_model',
   'imagegen_square_size', 'imagegen_landscape_size', 'imagegen_quality',
-  'imagegen_style_prefix', 'imagegen_timeout_seconds',
+  'imagegen_style_prefix', 'imagegen_timeout_seconds', 'imagegen_manual_rules', 'imagegen_manual_prompt', 'imagegen_auto_rules', 'imagegen_auto_prompt',
 ] as const
 
 export function hydrateProviderDrafts(list: AppConfig['ai_providers']): ProviderDraft[] {

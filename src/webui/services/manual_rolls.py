@@ -33,6 +33,15 @@ class ManualRollService:
         return normalized if normalized in {"free", "check", "contest"} else "free"
 
     @staticmethod
+    def _include_in_ai_context(purpose: str, value: object) -> bool:
+        # AI 上下文契约：检定/对抗结果服务端强制收录；自由投掷默认不收录，
+        # 仅当客户端发来 JSON 真布尔 true 时才收录（字符串 "true"/数字 1 等
+        # 一律视为 False，存严格布尔）。
+        # 旧存档缺失字段时由读取方按同一规则解释（context_builder.format_manual_roll_context）。
+        if purpose in {"check", "contest"}: return True
+        return value is True
+
+    @staticmethod
     def _comparison(value: object, rule: Any | None) -> str:
         raw = str(value or "").strip().lower()
         if raw in {"at_least", "at_most"}:
@@ -65,7 +74,7 @@ class ManualRollService:
         for old in inst.manual_roll_requests:
             if old.get("operation_id")==op:
                 return {"ok":True,"request":old,"idempotent":True}
-        req={"id":f"mr_{uuid4().hex}","operation_id":op,"run_id":inst.run_id,"round_number":inst.round_number,"created_by":uid,"created_at":_now(),"label":str(body.get("label") or "")[:200],"formula":formula,"purpose":purpose,"target":target,"comparison":comparison,"visibility":"private" if body.get("visibility")=="private" else "party","target_uids":targets,"target_names":{u:inst.players[u].get("character_name") or u for u in targets},"status":"pending","results":{}}
+        req={"id":f"mr_{uuid4().hex}","operation_id":op,"run_id":inst.run_id,"round_number":inst.round_number,"created_by":uid,"created_at":_now(),"label":str(body.get("label") or "")[:200],"formula":formula,"purpose":purpose,"target":target,"comparison":comparison,"include_in_ai_context":self._include_in_ai_context(purpose,body.get("include_in_ai_context")),"visibility":"private" if body.get("visibility")=="private" else "party","target_uids":targets,"target_names":{u:inst.players[u].get("character_name") or u for u in targets},"status":"pending","results":{}}
         inst.manual_roll_requests.append(req); inst.last_activity=_now(); await self.d.save_instance(inst)
         return {"ok":True,"request":req}
     async def resolve(self,key,uid,rid,body):

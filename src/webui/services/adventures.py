@@ -367,7 +367,7 @@ def create_adventure(
                 "minimum_version": minimum_runtime_version,
             },
             "default_locale": "zh-CN",
-            "supported_locales": ["zh-CN", "en"],
+            "supported_locales": ["zh-CN", "en", "de"],
             "custom": True,
         },
         "adventure.json": {
@@ -398,9 +398,15 @@ def create_adventure(
             "npc_refs": [],
         },
     }
-    for locale in ("zh-CN", "en"):
-        localized_name = name if locale == "zh-CN" else name
-        localized_summary = summary if locale == "zh-CN" else summary
+    _SCAFFOLD_TEXT = {
+        "zh-CN": {"chapter_1": "第一章", "opening": "开场", "narration": "冒险从这里开始。", "opening_scene": "开场场景"},
+        "en": {"chapter_1": "Chapter 1", "opening": "Opening", "narration": "The adventure begins here.", "opening_scene": "Opening Scene"},
+        "de": {"chapter_1": "Kapitel 1", "opening": "Eröffnung", "narration": "Das Abenteuer beginnt hier.", "opening_scene": "Eröffnungsszene"},
+    }
+    for locale in ("zh-CN", "en", "de"):
+        localized_name = name
+        localized_summary = summary
+        scaffold_text = _SCAFFOLD_TEXT[locale]
         files[f"locales/{locale}/adventure.json"] = {
             "locale_schema_version": 1,
             "locale": locale,
@@ -408,12 +414,12 @@ def create_adventure(
             "fields": {"tutorial": {
                 "name": localized_name,
                 "summary": localized_summary,
-                "chapters": {chapter_id: {"name": "第一章" if locale == "zh-CN" else "Chapter 1"}},
+                "chapters": {chapter_id: {"name": scaffold_text["chapter_1"]}},
                 "steps": {step_id: {
-                    "title": "开场" if locale == "zh-CN" else "Opening",
-                    "narration": "冒险从这里开始。" if locale == "zh-CN" else "The adventure begins here.",
-                    "objective": "" if locale == "zh-CN" else "",
-                    "hint": "" if locale == "zh-CN" else "",
+                    "title": scaffold_text["opening"],
+                    "narration": scaffold_text["narration"],
+                    "objective": "",
+                    "hint": "",
                 }},
                 "choices": {},
             }},
@@ -422,7 +428,7 @@ def create_adventure(
             "locale_schema_version": 1,
             "locale": locale,
             "target": {"kind": "scene", "id": scene_id},
-            "fields": {"name": "开场场景" if locale == "zh-CN" else "Opening Scene", "description": ""},
+            "fields": {"name": scaffold_text["opening_scene"], "description": ""},
         }
     staged, temporary = _validated_stage(dependencies, directory_id, files)
     try:

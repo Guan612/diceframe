@@ -13,7 +13,7 @@ import {
 import type { GameDetail, GmStyle, Player } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
 
-const props = defineProps<{ detail: GameDetail; players: Player[]; isGm: boolean; recapBusy?: boolean }>()
+const props = defineProps<{ detail: GameDetail; players: Player[]; isGm: boolean; recapBusy?: boolean; manualImageEnabled?: boolean; manualImageBusy?: boolean }>()
 // 强制推进 = 中止在飞生成并重新处理本回合；只有本轮真的在判定/生成时才有意义
 // （平时点它等同于「推进」，所以平时禁用，避免两个按钮行为重复）。
 const forceAdvanceAvailable = computed(() => props.detail?.state === 'active_judgment')
@@ -40,6 +40,7 @@ const emit = defineEmits<{
   'scene-image': []
   'map-background': []
   payment: []
+  'generate-current-round': []
 }>()
 
 const cmdText = ref('')
@@ -140,6 +141,7 @@ function awardXp(userId: string) {
       <button @click="emit('rollback')"><NIcon :component="ArrowUndoOutline" size="14" /> {{ t('rollback') }}</button>
       <button @click="emit('payment')"><NIcon :component="CashOutline" size="14" /> {{ t('createPaymentProposal') }}</button>
       <button :disabled="recapBusy" @click="emit('recap')"><NIcon :component="ReaderOutline" size="14" /> {{ recapBusy ? t('storyRecapGenerating') : t('storyRecapGenerate') }}</button>
+      <button v-if="manualImageEnabled" :disabled="manualImageBusy" @click="emit('generate-current-round')"><NIcon :component="ImageOutline" size="14" /> {{ manualImageBusy ? t('generatingImage') : t('generateRoundImage') }}</button>
       <button @click="emit('room-password')"><NIcon :component="KeyOutline" size="14" /> {{ t('gameSettings') }}</button>
     </div>
     <div class="gm-group gm-grow gm-command-group">
@@ -157,7 +159,6 @@ function awardXp(userId: string) {
     </details>
     <details class="perc gm-perc gm-console-section" open><summary>{{ t('gmNarrativeStyleTitle') }}</summary>
       <div class="gm-console-section-actions">
-        <button @click="emit('mode')"><NIcon :component="PeopleOutline" size="14" /> {{ t('switchToMode', { mode: detail.solo_mode ? t('multiplayer') : t('solo') }) }}</button>
         <label class="gm-narrative-setting">
           <span>{{ t('narrativePerspective') }}</span>
           <select :value="detail.narrative_perspective || 'auto'" @change="changeNarrativePerspective">
@@ -247,6 +248,7 @@ function awardXp(userId: string) {
     </details>
     <details class="perc gm-perc gm-console-section"><summary>{{ t('saveGroup') }}</summary>
       <div class="gm-console-section-actions">
+        <button @click="emit('mode')"><NIcon :component="PeopleOutline" size="14" /> {{ t('switchToMode', { mode: detail.solo_mode ? t('multiplayer') : t('solo') }) }}</button>
         <button @click="emit('export')"><NIcon :component="DownloadOutline" size="14" /> {{ t('export') }}</button>
         <button @click="emit('scene-image')"><NIcon :component="ImageOutline" size="14" /> {{ t('sceneImageManage') }}</button>
         <button @click="emit('map-background')"><NIcon :component="MapOutline" size="14" /> {{ t('mapBackgroundManage') }}</button>

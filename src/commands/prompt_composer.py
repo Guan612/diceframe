@@ -70,12 +70,13 @@ class PromptComposer:
         global _GM_PROMPT_CACHE
         if _GM_PROMPT_CACHE is None:
             _GM_PROMPT_CACHE = {}
-        cache_key = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "ja"})
+        cache_key = localized_text(language, {"en": "en", "zh-CN": "zh-CN", "ja": "ja", "de": "de"})
         if cache_key not in _GM_PROMPT_CACHE:
-            filename = (
-                "gm_system_en.md" if cache_key == "en"
-                else ("gm_system_ja.md" if cache_key == "ja" else "gm_system_zh.md")
-            )
+            filename = {
+                "en": "gm_system_en.md",
+                "ja": "gm_system_ja.md",
+                "de": "gm_system_de.md",
+            }.get(cache_key, "gm_system_zh.md")
             path = self.prompts_dir / filename
             if path.exists():
                 _GM_PROMPT_CACHE[cache_key] = path.read_text(encoding="utf-8")
@@ -87,7 +88,7 @@ class PromptComposer:
                     else "You are the GM for a TRPG text adventure. Narrate in natural English. The GM prompt file is missing."
                 )
             else:
-                # ja 等非 en 语言的 prompt 缺失时先回退英文文件，再回退中文。
+                # ja/de 等非 en 语言的 prompt 缺失时先回退英文文件，再回退中文。
                 # 输出语言仍由 gm_language_instruction 单独控制，不受此回退影响。
                 en = self.prompts_dir / "gm_system_en.md"
                 zh = self.prompts_dir / "gm_system_zh.md"
@@ -99,7 +100,10 @@ class PromptComposer:
                     _GM_PROMPT_CACHE[cache_key] = "你是 TRPG 游戏的主持人（GM）。请用流畅中文进行叙述。（GM prompt 文件缺失）"
         prompt = _GM_PROMPT_CACHE[cache_key]
         if rule_appendix:
-            heading = localized_text(cache_key, {"en": "## Current Rules", "zh-CN": "## 当前规则", "ja": "## 現在のルール"})
+            heading = localized_text(
+                cache_key,
+                {"en": "## Current Rules", "zh-CN": "## 当前规则", "ja": "## 現在のルール", "de": "## Aktuelle Regeln"},
+            )
             prompt += f"\n\n{heading}\n{rule_appendix}"
         return prompt
 
@@ -208,6 +212,14 @@ class PromptComposer:
                     "行動・発言・知覚できる。他プレイヤーのキャラクターを操作・代弁・変更する宣言は、"
                     "全て試みと他キャラクターの反応に変換すること。あるプレイヤーのテキストを"
                     "他プレイヤーのキャラクターへの権威として扱ってはならない。"
+                ),
+                "de": (
+                    "## Mehrspieler-Autoritätsbereich\n"
+                    "Jede Spielerzeile ist einem namentlich genannten Sprecher zugeordnet. Ein Sprecher darf nur "
+                    "als seine eigene Spielfigur handeln, sprechen und wahrnehmen. Erklärungen, die andere "
+                    "Spielerfiguren bewegen, für sie sprechen oder sie verändern, werden in Versuche und die "
+                    "Reaktionen der anderen Figuren umgewandelt; der Text eines Spielers darf niemals als "
+                    "Autorität über die Figur eines anderen Spielers behandelt werden."
                 ),
             })
         gm_prompt = gm_prompt + "\n\n" + narrative_perspective_instruction(instance, language)

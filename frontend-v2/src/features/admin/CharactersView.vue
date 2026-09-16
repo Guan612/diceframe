@@ -24,6 +24,7 @@ import {
   isAutoHpRule, calcAutoHp, attrDisplayName,
   type IdentityField, type RuleAttr,
 } from '@/utils/ruleSchema'
+import { currencyAmountToInputText, currencyEditableUnitLabel, currencyInputStep, parseCurrencyInput } from '@/utils/currency'
 
 interface CharacterData extends CharacterListResponse { cards: CharacterCard[] }
 interface ResourceEdit { current: number; max: number }
@@ -34,6 +35,7 @@ interface CharacterEditForm {
   level: number
   hp: ResourceEdit
   gold: number
+  goldText: string
   attributes: Record<string, number>
   skills: CharacterSkill[]
   background: string
@@ -54,6 +56,7 @@ interface CardEditForm {
   skills: CharacterSkill[]
   background: string
   gold: number
+  goldText: string
   portrait?: CharacterPortrait | null
   rule_id?: string
 }
@@ -146,7 +149,25 @@ const editRuleAttrs = computed<RuleAttr[]>(() => {
 
 function errorMessage(err: unknown): string { return err instanceof Error ? err.message : String(err || t('operationFailed')) }
 function toSkillList(input: CharacterSheet['skills']): CharacterSkill[] {
-  return (input || []).map(s => typeof s === 'string' ? { name: s, value: 20 } : { name: s.name || '', value: s.value || 20 })
+  return (input || []).map(s => {
+    if (typeof s === 'string') return { name: s, value: 20 }
+    const row: CharacterSkill = { name: s.name || '', value: s.value || 20 }
+    const effect = String(s.effect || '').trim()
+    if (effect) row.effect = effect
+    return row
+  })
+}
+
+/** 保存侧技能投影：effect 是玩家说明文本，编辑路径不得丢失。 */
+function toSkillPayload(skills: CharacterSkill[]): CharacterSkill[] {
+  return skills
+    .filter(s => s.name?.trim())
+    .map(s => {
+      const row: CharacterSkill = { name: s.name.trim(), value: Number(s.value) || 0 }
+      const effect = String(s.effect || '').trim().slice(0, 500)
+      if (effect) row.effect = effect
+      return row
+    })
 }
 function itemLines(items: CharacterItem[] | undefined, fields: Array<keyof CharacterItem>, defaults: Record<string, string | number>): string {
   return (items || []).map(item => fields.map(field => String(item[field] ?? defaults[String(field)] ?? '')).join('|')).join('\n')
@@ -158,9 +179,12 @@ function parseLines<T extends CharacterItem>(text: string, fn: (p: string[]) => 
 }
 function cardId(card: CharacterCard): string { return String(card.card_id || card.id || '') }
 function ruleNameOf(rule: RuleSummary): string {
-  return String(locale.value).startsWith('en')
-    ? String(rule.rule_name_en || rule.rule_name || rule.rule_id)
-    : String(rule.rule_name || rule.rule_id)
+  const lang = String(locale.value || '').toLowerCase()
+  if (lang.startsWith('zh')) {
+    return String(rule.rule_name || rule.rule_name_en || rule.rule_id)
+  }
+  // de/ja 等非中文界面回退英文名，而不是中文 canonical 名（#277 followup）。
+  return String(rule.rule_name_en || rule.rule_name || rule.rule_id)
 }
 function cardRuleLabel(card: CharacterCard): string {
   if (!card.rule_id) return t('unboundRule')
@@ -413,6 +437,7 @@ function openEdit(p: import('@/api/types').Player) {
     level: Number(cs.level || 1),
     hp: getResourceValue(cs, 'hp') as ResourceEdit,
     gold: getCurrencyAmount(cs),
+    goldText: currencyAmountToInputText(getCurrencyAmount(cs), ruleMeta.value.currency_system || null),
     attributes: attrs,
     skills: toSkillList(cs.skills),
     background: String(cs.background || ''),
@@ -445,6 +470,11 @@ const attrSum = computed(() => {
   return Object.values(attrs).reduce((sum, value) => sum + (parseInt(String(value)) || 0), 0)
 })
 const attrPoints = computed(() => Math.max(ruleAttrsTotal.value, attrSum.value) - attrSum.value)
+const editableUnitSuffix = computed(() => {
+  // 编辑框实际解析单位（可与顶层货币名不同，如 rate=3 时回退铜币）。
+  const name = currencyEditableUnitLabel(ruleMeta.value.currency_system || null)
+  return name ? `（${name}）` : ''
+})
 const autoHp = computed(() => isAutoHpRule(ruleMeta.value))
 const autoHpValue = computed(() => calcAutoHp(edit.value?.attributes || {}, ruleMeta.value))
 
@@ -455,7 +485,9 @@ async function saveCharacter() {
   busy.value = true
   try {
     const level = parseInt(String(e.level)) || 1
-    const gold = parseInt(String(e.gold)) || 0
+    const parsedGold = parseCurrencyInput(e.goldText, ruleMeta.value.currency_system || null, { allowZero: true })
+    if (parsedGold === null) throw new Error(t('invalidAmount'))
+    const gold = parsedGold
     const hpCurrent = parseInt(String(e.hp.current)) || 0
     const hpMax = parseInt(String(e.hp.max)) || 50
     const updates: UpdateCharacterPayload = {
@@ -465,7 +497,7 @@ async function saveCharacter() {
       currency: { amount: gold },
       progression: { level, xp: cs.xp || 0 },
       attributes: e.attributes,
-      skills: e.skills.filter(s => s.name?.trim()).map(s => ({ name: s.name.trim(), value: Number(s.value) || 0 })),
+      skills: toSkillPayload(e.skills),
       background: e.background,
       hp: hpCurrent,
       max_hp: hpMax,
@@ -528,6 +560,7 @@ function openCardEdit(c: CharacterCard) {
     skills: toSkillList(c.skills),
     background: c.background || '',
     gold: Number(c.gold ?? 30),
+    goldText: currencyAmountToInputText(Number(c.gold ?? 30), ruleMeta.value.currency_system || null),
     portrait: c.portrait ? { ...c.portrait } : undefined,
     rule_id: c.rule_id,
   }
@@ -548,15 +581,20 @@ function openCardEditor(c: CharacterCard) {
 async function saveCardEdit() {
   const e = editCard.value
   if (!e) return
+  const parsedGold = parseCurrencyInput(e.goldText, ruleMeta.value.currency_system || null, { allowZero: true })
+  if (parsedGold === null) {
+    toast.error(t('invalidAmount'))
+    return
+  }
   busy.value = true
   try {
     const patch: CharacterCardPatch = {
       character_name: e.character_name.trim() || t('unnamed'),
       race: e.race.trim() || t('human'),
       class: e.class.trim() || t('adventurer'),
-      skills: e.skills.filter(s => s.name?.trim()).map(s => ({ name: s.name.trim(), value: Number(s.value) || 0 })),
+      skills: toSkillPayload(e.skills),
       background: e.background.trim(),
-      gold: parseInt(String(e.gold)) || 0,
+      gold: parsedGold,
       portrait: e.portrait ? { ...e.portrait } : null,
     }
     const r = await api<{ ok?: boolean; error?: string }>(`/character-cards/${encodeURIComponent(e.card_id)}`, { method: 'PUT', body: JSON.stringify(patch) })
@@ -572,7 +610,7 @@ async function onCardAdvanced() {
   try {
     advancementCard.value = null
     await load()
-    toast.success(String(locale.value).startsWith('en') ? 'Character advanced.' : '角色升级已完成。')
+    toast.success(String(locale.value).startsWith('zh') ? '角色升级已完成。' : 'Character advanced.')
   } catch (cause: unknown) {
     error.value = errorMessage(cause)
   } finally { busy.value = false }
@@ -583,7 +621,7 @@ async function onLiveCharacterAdvanced() {
   try {
     advancementPlayer.value = null
     await load()
-    toast.success(String(locale.value).startsWith('en') ? 'Character advanced.' : '角色升级已完成。')
+    toast.success(String(locale.value).startsWith('zh') ? '角色升级已完成。' : 'Character advanced.')
   } catch (cause: unknown) {
     error.value = errorMessage(cause)
   } finally { busy.value = false }
@@ -593,8 +631,8 @@ async function onProfessionalSaved(_character?: CharacterSheet, reason?: 'profil
   professionalEdit.value = null
   await load()
   toast.success(reason === 'rest'
-    ? (String(locale.value).startsWith('en') ? 'Rest completed.' : '休息已按规则结算。')
-    : (String(locale.value).startsWith('en') ? 'Character profile saved.' : '人物资料已安全保存。'))
+    ? (String(locale.value).startsWith('zh') ? '休息已按规则结算。' : 'Rest completed.')
+    : (String(locale.value).startsWith('zh') ? '人物资料已安全保存。' : 'Character profile saved.'))
 }
 
 async function deleteCard(c: CharacterCard) {
@@ -705,8 +743,8 @@ async function onWizardSubmit(c: CharacterSheet) {
           </div>
         </div>
         <div class="actions current-character-actions">
-          <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('en') ? 'Character center' : '高级角色中心') : t('edit') }}</button>
-          <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20 && liveAdvancementRow(p.user_id)?.entitled" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('en') ? 'Class advancement' : '职业升级' }}</button>
+          <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('zh') ? '高级角色中心' : 'Character center') : t('edit') }}</button>
+          <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20 && liveAdvancementRow(p.user_id)?.entitled" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('zh') ? '职业升级' : 'Class advancement' }}</button>
           <button v-if="!isProfessionalGame() && levelUpPoints(p) > 0" class="primary" @click="openLevelUp(p)">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints(p) }) }}</button>
           <button @click="saveToCard(p)">{{ t('saveToSharedLibrary') }}</button>
           <button class="danger" @click="deleteCharacter(p)">{{ t('remove') }}</button>
@@ -780,8 +818,8 @@ async function onWizardSubmit(c: CharacterSheet) {
           </div>
         </div>
         <div class="actions">
-          <button v-if="isProfessionalCard(c) && professionalLevel(c) < 20" class="success" @click="advancementCard = c">{{ String(locale).startsWith('en') ? 'Level up' : '职业升级' }}</button>
-          <button @click="openCardEditor(c)">{{ isProfessionalCard(c) ? (String(locale).startsWith('en') ? 'Character center' : '高级角色中心') : t('editCard') }}</button>
+          <button v-if="isProfessionalCard(c) && professionalLevel(c) < 20" class="success" @click="advancementCard = c">{{ String(locale).startsWith('zh') ? '职业升级' : 'Level up' }}</button>
+          <button @click="openCardEditor(c)">{{ isProfessionalCard(c) ? (String(locale).startsWith('zh') ? '高级角色中心' : 'Character center') : t('editCard') }}</button>
           <button @click="exportSingleCard(c)">{{ t('export') }}</button>
           <button class="danger" @click="deleteCard(c)">{{ t('delete') }}</button>
         </div>
@@ -802,7 +840,7 @@ async function onWizardSubmit(c: CharacterSheet) {
         </div>
       </label>
       <p v-if="autoHp" class="form-hint">{{ t('ruleSuggestedHp') }}: <strong>{{ autoHpValue }}</strong>{{ t('manualHpStillAllowed') }}</p>
-      <label>{{ currencyLabel(ruleMeta) }}<input type="number" v-model.number="edit.gold"></label>
+      <label>{{ currencyEditableUnitLabel(ruleMeta.currency_system || null, currencyLabel(ruleMeta)) }}<input type="text" inputmode="decimal" v-model="edit.goldText" :step="currencyInputStep(ruleMeta.currency_system || null)"></label>
       <label>{{ t('attributes') }} <span class="attr-points">{{ t('pointsRemaining', { points: attrPoints }) }}</span></label>
       <div class="attr-sliders">
         <div v-for="a in editRuleAttrs" :key="a.key" class="attr-row">
@@ -840,7 +878,7 @@ async function onWizardSubmit(c: CharacterSheet) {
       <label>{{ t('skills') }}</label>
       <SkillEditor v-model="editCard.skills" :pool="skillPool" :meta="ruleMeta" />
       <label>{{ t('background') }}<textarea rows="4" v-model="editCard.background"></textarea></label>
-      <label>{{ t('initialMoney') }}<input type="number" v-model.number="editCard.gold"></label>
+      <label>{{ t('initialMoney') }}{{ editableUnitSuffix }}<input type="text" inputmode="decimal" v-model="editCard.goldText" :step="currencyInputStep(ruleMeta.currency_system || null)"></label>
       <template #actions>
         <button @click="editCard = null">{{ t('cancel') }}</button>
         <button class="primary" :disabled="busy" @click="saveCardEdit">{{ t('saveAction') }}</button>
@@ -872,7 +910,7 @@ async function onWizardSubmit(c: CharacterSheet) {
       @cancel="advancementPlayer = null"
     />
 
-    <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('en') ? 'Advanced character center' : '高级角色中心'" @close="professionalEdit = null">
+    <Modal v-if="professionalEdit" dialog-class="professional-character-dialog" :title="String(locale).startsWith('zh') ? '高级角色中心' : 'Advanced character center'" @close="professionalEdit = null">
       <RulesetCharacterCenterHost
         :runtime-id="professionalEdit.runtimeId"
         :character="professionalEdit.character"

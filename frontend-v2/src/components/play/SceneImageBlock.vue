@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { generatedImageUrl } from '@/api/generatedImages'
+import ImageLightbox from '@/components/common/ImageLightbox.vue'
 
 const props = defineProps<{ assetId: string; gameKey?: string; alt?: string }>()
 const url = ref('')
+const lightboxOpen = ref(false)
 let loadVersion = 0
 
 function clearUrl() {
@@ -40,8 +42,9 @@ onBeforeUnmount(() => {
 
 <template>
   <figure v-if="url" class="scene-image-block" data-testid="scene-image">
-    <img :src="url" :alt="alt || ''" loading="lazy" />
+    <img :src="url" :alt="alt || ''" loading="lazy" role="button" tabindex="0" @click="lightboxOpen = true" @keydown.enter="lightboxOpen = true" />
   </figure>
+  <ImageLightbox :open="lightboxOpen" :src="url" :alt="alt" @close="lightboxOpen = false" />
 </template>
 
 <style scoped>
@@ -57,5 +60,6 @@ onBeforeUnmount(() => {
   display: block;
   width: 100%;
   height: auto;
+  cursor: zoom-in;
 }
 </style>

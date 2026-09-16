@@ -440,8 +440,28 @@
 
 .play-control-rail .gm-toolbar .gm-flow-group {
   display: grid;
+  /* Preserve the classic two-column flow controls. Translated labels may
+     wrap inside a button, but the flow itself should not collapse to one
+     button per row in the desktop control rail. */
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+.play-control-rail .gm-toolbar button {
+  min-width: 0;
+  height: auto;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.play-control-rail .gm-toolbar button .n-icon {
+  flex: 0 0 auto;
 }
 
 .play-control-rail .gm-toolbar .gm-flow-group h4,
@@ -484,6 +504,9 @@
 
 .gm-console-section-actions button {
   width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .gm-narrative-setting {
@@ -515,12 +538,14 @@
 }
 
 .gm-style-source-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .gm-style-source-options button {
+  flex: 1 1 110px;
+  min-width: 0;
   min-height: 36px;
   padding: 5px 7px;
   white-space: normal;
@@ -534,17 +559,18 @@
 }
 
 .gm-style-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 5px;
 }
 
 .gm-style-options button {
+  flex: 1 1 110px;
   min-width: 0;
   min-height: 32px;
   padding: 4px 5px;
   font-size: 11px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .gm-style-options button.active {

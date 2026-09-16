@@ -264,6 +264,12 @@ class ConfigStore:
             "asr_timeout_seconds": float(saved.get("asr_timeout_seconds", 60)),
             "imagegen_enabled": bool(saved.get("imagegen_enabled", False)),
             "imagegen_auto_scene": bool(saved.get("imagegen_auto_scene", True)),
+            "imagegen_manual_scene": bool(saved.get("imagegen_manual_scene", False)),
+            "imagegen_auto_use_manual_prompt": bool(saved.get("imagegen_auto_use_manual_prompt", False)),
+            "imagegen_manual_rules": str(saved.get("imagegen_manual_rules", "")),
+            "imagegen_manual_prompt": str(saved.get("imagegen_manual_prompt", "")),
+            "imagegen_auto_rules": str(saved.get("imagegen_auto_rules", "")),
+            "imagegen_auto_prompt": str(saved.get("imagegen_auto_prompt", "")),
             "imagegen_provider": str(
                 saved.get("imagegen_provider") or "openai-compatible"
             ),
@@ -301,23 +307,23 @@ class ConfigStore:
             ),
             "character_gen_max_tokens": int(
                 env.get("TRPG_CHARACTER_GEN_MAX_TOKENS")
-                or saved.get("character_gen_max_tokens", 2048)
+                or saved.get("character_gen_max_tokens", 4096)
             ),
             "summary_max_tokens": int(
                 env.get("TRPG_SUMMARY_MAX_TOKENS")
-                or saved.get("summary_max_tokens", 1024)
+                or saved.get("summary_max_tokens", 4096)
             ),
             "brief_max_tokens": int(
                 env.get("TRPG_BRIEF_MAX_TOKENS")
-                or saved.get("brief_max_tokens", 1024)
+                or saved.get("brief_max_tokens", 4096)
             ),
             "analysis_max_tokens": int(
                 env.get("TRPG_ANALYSIS_MAX_TOKENS")
-                or saved.get("analysis_max_tokens", 1024)
+                or saved.get("analysis_max_tokens", 4096)
             ),
             "text_gen_max_tokens": int(
                 env.get("TRPG_TEXT_GEN_MAX_TOKENS")
-                or saved.get("text_gen_max_tokens", 1024)
+                or saved.get("text_gen_max_tokens", 4096)
             ),
             "access_token": access_token,
             "bot_token": env.get("TRPG_BOT_TOKEN")

@@ -11,13 +11,14 @@ from urllib.parse import urlparse
 from .assets import ImageAssetError, ImageAssetStore
 from .contracts import IMAGE_PROVIDER_IDS, IMAGE_PURPOSES, ImageGenerationRequest, ImageGenerationResult
 from .providers import ImageProvider, ImageProviderError, create_image_provider
+from .storyboards import build_storyboard_prompt, overlay_storyboard_dividers
 
 
 PURPOSE_PROMPT_SUFFIXES = {
     "scene": "Wide cinematic environment scene, no text, no interface elements.",
     "avatar": "Single character portrait, centered composition, clear face, no text, no frame.",
     "item": "Single isolated item illustration, centered composition, no text, no interface elements.",
-    "map": "Detailed location map background, readable terrain and landmarks, no labels, no interface elements.",
+    "map": "Simple practical top-down tabletop map, clear terrain, rooms and paths, restrained colors, no labels, no interface elements.",
     "freeform": "No text or interface elements unless explicitly requested.",
 }
 
@@ -39,6 +40,12 @@ class ImageGenerationService:
         self.style_prefix = str(config.get("imagegen_style_prefix") or "").strip()
         self.timeout_seconds = float(config.get("imagegen_timeout_seconds") or 120)
         self.auto_scene = bool(config.get("imagegen_auto_scene", True))
+        self.manual_scene = bool(config.get("imagegen_manual_scene", False))
+        self.auto_use_manual_prompt = bool(config.get("imagegen_auto_use_manual_prompt", False))
+        self.manual_rules = str(config.get("imagegen_manual_rules") or "").strip()
+        self.manual_prompt = str(config.get("imagegen_manual_prompt") or "").strip()
+        self.auto_rules = str(config.get("imagegen_auto_rules") or "").strip()
+        self.auto_prompt = str(config.get("imagegen_auto_prompt") or "").strip()
         self.proxy_url = "" if _is_local_endpoint(self.base_url) else str(proxy_url or "").strip()
         self.assets = ImageAssetStore(assets_dir)
         self._semaphore = asyncio.Semaphore(2)
@@ -64,24 +71,61 @@ class ImageGenerationService:
         if purpose not in IMAGE_PURPOSES:
             raise ImageGenerationError("不支持的图片用途")
         prompt = str(request.prompt or "").strip()
+        original_prompt = prompt
         if not prompt:
             raise ImageGenerationError("画面描述为空")
         if len(prompt) > 8000:
             raise ImageGenerationError("画面描述不能超过 8000 个字符")
-        composed_prompt = self._compose_prompt(prompt, purpose, request.style)
+        storyboard = request.context.get("storyboard") if isinstance(request.context, dict) else None
+        storyboard_metadata: dict[str, Any] = {}
+        if purpose == "scene" and isinstance(storyboard, dict):
+            storyboard_prompt, storyboard_metadata = build_storyboard_prompt(
+                storyboard.get("panels"),
+                global_prompt=prompt,
+                character_appearances=storyboard.get("character_appearances"),
+            )
+            try:
+                storyboard_metadata["compressed_count"] += max(0, int(storyboard.get("compressed_count") or 0))
+            except (TypeError, ValueError):
+                pass
+            prompt = storyboard_prompt
+        composed_prompt = self._compose_prompt(prompt, purpose, request.style, request.context)
         size = self._size_for(request, purpose)
         try:
             provider = self._provider()
+            references = tuple(request.reference_images or ())
+            if references and purpose != "scene":
+                raise ImageGenerationError("头像参考图仅支持场景生图，地图生图不会上传头像")
+            if references and not getattr(provider, "supports_reference_images", False):
+                raise ImageGenerationError("当前图像服务商不支持头像参考图，请关闭该选项后重试")
+            if len(references) > 8:
+                raise ImageGenerationError("头像参考图最多支持 8 张")
+            total_bytes = 0
+            for reference in references:
+                content = bytes(reference.content or b"")
+                if not content or len(content) > 3 * 1024 * 1024:
+                    raise ImageGenerationError("头像参考图无效或超过 3 MB")
+                total_bytes += len(content)
+            if total_bytes > 12 * 1024 * 1024:
+                raise ImageGenerationError("头像参考图总大小不能超过 12 MB")
+            if references:
+                request.context["reference_character_ids"] = list(dict.fromkeys(
+                    str(reference.character_id or "")[:80] for reference in references if str(reference.character_id or "").strip()
+                ))
+                request.context["reference_count"] = len(references)
             async with self._semaphore:
-                generated = await provider.generate(
-                    composed_prompt,
-                    size=size,
-                    quality=self.quality,
-                )
+                if references:
+                    generated = await provider.generate(composed_prompt, size=size, quality=self.quality, reference_images=references)
+                else:
+                    generated = await provider.generate(composed_prompt, size=size, quality=self.quality)
+            body = generated.body
+            if storyboard_metadata:
+                body = overlay_storyboard_dividers(body, len(storyboard_metadata.get("panels") or []))
+                request.context.setdefault("storyboard", {}).update(storyboard_metadata)
             return self.assets.store(
-                generated.body,
+                body,
                 purpose=purpose,
-                prompt=prompt,
+                prompt=original_prompt,
                 revised_prompt=generated.revised_prompt,
                 provider=getattr(provider, "provider_id", self.provider_id),
                 model=self.model,
@@ -106,8 +150,22 @@ class ImageGenerationService:
         except ImageProviderError as exc:
             raise ImageGenerationError(str(exc)) from exc
 
-    def _compose_prompt(self, prompt: str, purpose: str, request_style: str) -> str:
-        parts = [self.style_prefix, str(request_style or "").strip(), prompt, PURPOSE_PROMPT_SUFFIXES[purpose]]
+    def _compose_prompt(self, prompt: str, purpose: str, request_style: str, context: dict[str, Any]) -> str:
+        configured_rules = self.manual_rules if context.get("manual") else self.auto_rules
+        configured_prompt = self.manual_prompt if context.get("manual") else self.auto_prompt
+        if not context.get("manual") and self.auto_use_manual_prompt:
+            configured_rules, configured_prompt = self.manual_rules, self.manual_prompt
+        replacements = {
+            "scene": str(context.get("scene") or ""),
+            "narration": str(context.get("narration") or ""),
+            "actions": str(context.get("actions") or ""),
+            "panels": str(context.get("panels") or context.get("storyboard") or ""),
+        }
+        def render(value: str) -> str:
+            for key, replacement in replacements.items():
+                value = value.replace("{" + key + "}", replacement)
+            return value
+        parts = [self.style_prefix, str(request_style or "").strip(), render(configured_rules), render(configured_prompt), prompt, PURPOSE_PROMPT_SUFFIXES[purpose]]
         return "\n\n".join(part for part in parts if part)[:12000]
 
     def _size_for(self, request: ImageGenerationRequest, purpose: str) -> str:

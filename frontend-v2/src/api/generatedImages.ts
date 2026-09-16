@@ -46,6 +46,14 @@ export async function generateImage(input: GenerateImageInput): Promise<Generate
   return result
 }
 
+export async function generateCurrentRoundImage(gameKey: string, input: { prompt: string; round?: number; panels?: unknown[]; useAvatarReferences?: boolean }): Promise<GenerateImageResponse> {
+  const result = await api<GenerateImageResponse>(`/games/${encodeURIComponent(gameKey)}/generated-images/current-round`, {
+    method: 'POST', body: JSON.stringify({ prompt: input.prompt, round: input.round || 0, panels: input.panels || [], use_avatar_references: !!input.useAvatarReferences }),
+  })
+  if (!result.ok || !result.asset_id) throw new Error(result.error || 'image-generation-failed')
+  return result
+}
+
 function currentGameKey(): string {
   return new URLSearchParams(location.hash.split('?')[1] || '').get('game') || ''
 }

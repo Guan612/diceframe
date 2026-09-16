@@ -25,35 +25,35 @@ def test_generation_defaults_migration_raises_only_the_old_narrative_default():
 
     assert web_server._migrate_generation_defaults(old_default) is True
     assert old_default["narrative_max_tokens"] == web_server.DEFAULT_NARRATIVE_MAX_TOKENS
-    assert old_default["generation_defaults_version"] == 5
+    assert old_default["generation_defaults_version"] == 6
     assert web_server._migrate_generation_defaults(old_default) is False
 
     assert web_server._migrate_generation_defaults(previous_default) is True
     assert previous_default["narrative_max_tokens"] == web_server.DEFAULT_NARRATIVE_MAX_TOKENS
-    assert previous_default["generation_defaults_version"] == 5
+    assert previous_default["generation_defaults_version"] == 6
 
     assert web_server._migrate_generation_defaults(custom) is True
     assert custom["narrative_max_tokens"] == 1280
-    assert custom["generation_defaults_version"] == 5
+    assert custom["generation_defaults_version"] == 6
 
 
 def test_generation_defaults_migration_raises_old_analysis_default():
-    """v4: 旧默认 analysis_max_tokens=512 提升到 1024，自定义值保留。"""
+    """v4/v6: 旧默认 analysis_max_tokens=512 一路提升到 4096，自定义值保留。"""
     old_analysis = {"analysis_max_tokens": 512, "generation_defaults_version": 3}
     custom_analysis = {"analysis_max_tokens": 768, "generation_defaults_version": 3}
 
     assert web_server._migrate_generation_defaults(old_analysis) is True
-    assert old_analysis["analysis_max_tokens"] == 1024
-    assert old_analysis["generation_defaults_version"] == 5
+    assert old_analysis["analysis_max_tokens"] == 4096
+    assert old_analysis["generation_defaults_version"] == 6
     assert web_server._migrate_generation_defaults(old_analysis) is False
 
     assert web_server._migrate_generation_defaults(custom_analysis) is True
     assert custom_analysis["analysis_max_tokens"] == 768
-    assert custom_analysis["generation_defaults_version"] == 5
+    assert custom_analysis["generation_defaults_version"] == 6
 
 
 def test_generation_defaults_migration_raises_old_summary_brief_textgen_defaults():
-    """v5: summary/brief/text_gen 旧默认提升到 1024，自定义值保留。"""
+    """v5/v6: summary/brief/text_gen 旧默认提升到 4096，自定义值保留。"""
     old_defaults = {
         "summary_max_tokens": 400,
         "brief_max_tokens": 300,
@@ -68,17 +68,50 @@ def test_generation_defaults_migration_raises_old_summary_brief_textgen_defaults
     }
 
     assert web_server._migrate_generation_defaults(old_defaults) is True
-    assert old_defaults["summary_max_tokens"] == 1024
-    assert old_defaults["brief_max_tokens"] == 1024
-    assert old_defaults["text_gen_max_tokens"] == 1024
-    assert old_defaults["generation_defaults_version"] == 5
+    assert old_defaults["summary_max_tokens"] == 4096
+    assert old_defaults["brief_max_tokens"] == 4096
+    assert old_defaults["text_gen_max_tokens"] == 4096
+    assert old_defaults["generation_defaults_version"] == 6
     assert web_server._migrate_generation_defaults(old_defaults) is False
 
     assert web_server._migrate_generation_defaults(custom) is True
     assert custom["summary_max_tokens"] == 500
     assert custom["brief_max_tokens"] == 350
     assert custom["text_gen_max_tokens"] == 600
-    assert custom["generation_defaults_version"] == 5
+    assert custom["generation_defaults_version"] == 6
+
+
+def test_generation_defaults_migration_v6_raises_all_caps_to_4096():
+    """v6: 全部生成类 token 上限统一提升到 4096，自定义值保留。"""
+    previous_defaults = {
+        "narrative_max_tokens": 2048,
+        "character_gen_max_tokens": 2048,
+        "analysis_max_tokens": 1024,
+        "summary_max_tokens": 1024,
+        "brief_max_tokens": 1024,
+        "text_gen_max_tokens": 1024,
+        "generation_defaults_version": 5,
+    }
+    custom = {
+        "narrative_max_tokens": 6144,
+        "text_gen_max_tokens": 8192,
+        "generation_defaults_version": 5,
+    }
+
+    assert web_server._migrate_generation_defaults(previous_defaults) is True
+    assert previous_defaults["narrative_max_tokens"] == 4096
+    assert previous_defaults["character_gen_max_tokens"] == 4096
+    assert previous_defaults["analysis_max_tokens"] == 4096
+    assert previous_defaults["summary_max_tokens"] == 4096
+    assert previous_defaults["brief_max_tokens"] == 4096
+    assert previous_defaults["text_gen_max_tokens"] == 4096
+    assert previous_defaults["generation_defaults_version"] == 6
+    assert web_server._migrate_generation_defaults(previous_defaults) is False
+
+    assert web_server._migrate_generation_defaults(custom) is True
+    assert custom["narrative_max_tokens"] == 6144
+    assert custom["text_gen_max_tokens"] == 8192
+    assert custom["generation_defaults_version"] == 6
 
 
 def test_invalid_config_is_quarantined_instead_of_silently_discarded(tmp_path):

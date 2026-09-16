@@ -85,14 +85,31 @@ const hiddenRoundCount = computed(() => Math.max(0, props.log.length - visibleLo
 function manualRollsForRound(round: number): ManualRollTimelineEntry[] {
   return (props.manualRolls || []).filter(item => Number(item.round_number || 0) === round)
 }
+function manualRollTitle(roll: ManualRollTimelineEntry): string {
+  // 说明与公式同时展示：公式是核对投掷的权威信息，不能只留一个数字结果。
+  return [roll.label || '', roll.formula || ''].filter(Boolean).join(' · ')
+}
 function manualRollResultText(result: ManualRollTimelineEntry['results'][string]): string {
   const total = String(result.total ?? '')
-  const target = result.target == null ? '' : ` / ${result.target}`
+  const modifier = Number(result.modifier || 0)
+  const modifierText = modifier
+    ? ` ${modifier > 0 ? '+' : '-'} ${Math.abs(modifier)}`
+    : ''
+  const detail = result.natural != null
+    ? (isEnglish.value
+        ? `total ${total} (natural ${result.natural}${modifierText})`
+        : `总值 ${total}（自然 ${result.natural}${modifierText}）`)
+    : (isEnglish.value
+        ? `total ${total}${modifier ? ` (modifier ${modifier > 0 ? '+' : ''}${modifier})` : ''}`
+        : `总值 ${total}${modifier ? `（修正 ${modifier > 0 ? '+' : ''}${modifier}）` : ''}`)
+  const parts = [detail]
+  if (result.target != null) parts.push(isEnglish.value ? `target ${result.target}` : `目标 ${result.target}`)
   const verdict = result.verdict === 'success' ? (isEnglish.value ? 'success' : '成功')
     : result.verdict === 'failure' ? (isEnglish.value ? 'failure' : '失败')
       : result.verdict === 'winner' ? (isEnglish.value ? 'winner' : '胜者')
         : result.verdict === 'loss' ? (isEnglish.value ? 'loss' : '落败') : ''
-  return `${total}${target}${verdict ? ` · ${verdict}` : ''}`
+  if (verdict) parts.push(verdict)
+  return parts.join(' · ')
 }
 const rounds = computed(() => visibleLog.value.map((entry, index) => {
   const sw = entry.swipes || []
@@ -277,8 +294,9 @@ watch(() => rounds.value, async (latest) => {
         </div>
         <div v-for="roll in manualRollsForRound(item.round)" :key="`manual-roll-${roll.id}`" class="state-card-list manual-roll-timeline-list">
           <div class="state-card good manual-roll-timeline-card">
-            <span class="state-card-title"><NIcon :component="CheckmarkCircleOutline" size="14" />{{ t('manualRollTimeline') }} · {{ roll.label || roll.formula }}</span>
+            <span class="state-card-title"><NIcon :component="CheckmarkCircleOutline" size="14" />{{ t('manualRollTimeline') }} · {{ manualRollTitle(roll) }}</span>
             <div class="state-card-body manual-roll-totals">
+              <span v-if="!Object.keys(roll.results || {}).length" class="manual-roll-result">{{ isEnglish ? 'Awaiting rolls' : '待投掷' }}</span>
               <span v-for="(result, uid) in roll.results" :key="uid" class="manual-roll-result">{{ roll.target_names[uid] || uid }}：{{ manualRollResultText(result) }}</span>
             </div>
           </div>
@@ -293,8 +311,9 @@ watch(() => rounds.value, async (latest) => {
       </template>
       <div v-for="roll in standaloneManualRolls" :key="`manual-roll-standalone-${roll.id}`" class="state-card-list manual-roll-timeline-list">
         <div class="state-card good manual-roll-timeline-card">
-          <span class="state-card-title"><NIcon :component="CheckmarkCircleOutline" size="14" />{{ t('manualRollTimeline') }} · {{ roll.label || roll.formula }}</span>
+          <span class="state-card-title"><NIcon :component="CheckmarkCircleOutline" size="14" />{{ t('manualRollTimeline') }} · {{ manualRollTitle(roll) }}</span>
           <div class="state-card-body manual-roll-totals">
+            <span v-if="!Object.keys(roll.results || {}).length" class="manual-roll-result">{{ isEnglish ? 'Awaiting rolls' : '待投掷' }}</span>
             <span v-for="(result, uid) in roll.results" :key="uid" class="manual-roll-result">{{ roll.target_names[uid] || uid }}：{{ manualRollResultText(result) }}</span>
           </div>
         </div>

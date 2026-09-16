@@ -2,7 +2,8 @@
 
 覆盖：GM 生成（无副作用）、玩家 403、剧情遭遇不可覆盖、AI 非法怪物拒绝、
 确认走现有 combat.start(mode=sandbox)、篡改 preview 被权威校验拒绝、
-LLM 失败无副作用、Adventure 绑定保持。核心原则：AI 提案、GM 确认、
+GM 编辑并展开数量后的最终 payload 重走临时遭遇边界与队伍安全上限、
+LLM 失败无副作用、Adventure 绑定保持。核心原则：AI 提案、GM 编辑确认、
 Combat Engine 权威结算。
 """
 
@@ -453,3 +454,114 @@ def test_adventure_binding_survives_temporary_combat() -> None:
     view = runtime.gameplay_view(instance, "gm", True)
     assert view["combat"]["status"] == "active"
     assert instance.adventure_binding == binding_before
+
+
+# ---- GM 编辑草稿：最终 payload 在 combat.start 权威入口重走校验 ----
+
+
+def _expand_with_quantity(enemies: list[dict], quantity: int) -> list[dict]:
+    """模拟前端数量展开：首个实例保留原 id，其余使用稳定后缀。"""
+
+    expanded: list[dict] = []
+    for enemy in enemies:
+        for index in range(quantity):
+            instance_enemy = copy.deepcopy(enemy)
+            if index:
+                instance_enemy["id"] = f"{enemy['id']}-{index + 1}"
+            expanded.append(instance_enemy)
+    return expanded
+
+
+def _resolve_temporary_start(
+    runtime: Dnd2024Runtime,
+    instance: GameInstance,
+    enemies: list[dict],
+    *,
+    submitted_by: str = "gm",
+) -> dict:
+    version = int(instance.ruleset_state.get("version", 0) or 0)
+    return runtime.resolve_intent(instance, {
+        "intent_id": f"temporary-edit-{submitted_by}-{version}",
+        "type": "combat.start", "expected_version": version,
+        "submitted_by": submitted_by, "mode": "sandbox",
+        "temporary_encounter": True, "enemies": enemies,
+    }, random.Random(7))
+
+
+def test_valid_edited_payload_with_expanded_quantities_starts_combat() -> None:
+    runtime, instance = _runtime_instance()
+    apply_ruleset_combat_signal(instance, {"combat_command": "start"}, runtime)
+    enemies = normalize_temporary_encounter(copy.deepcopy(_WOLF_RAW))["enemies"]
+    enemies[0]["name"] = "Grey Wolf"
+    enemies[0]["hp"] = 9
+    enemies[0]["armor_class"] = 15
+    expanded = _expand_with_quantity(enemies, 2)
+
+    _submit(runtime, instance, "combat.start", mode="sandbox", temporary_encounter=True, enemies=expanded)
+
+    view = runtime.gameplay_view(instance, "gm", True)
+    assert view["combat"]["status"] == "active"
+    enemy_actors = [actor for actor in view["combat"]["actors"] if actor["kind"] == "enemy"]
+    hp_by_id = {actor["actor_id"]: actor["hp"] for actor in enemy_actors}
+    assert sorted(hp_by_id) == [
+        "enemy:corrupted_wolf", "enemy:corrupted_wolf-2",
+        "enemy:corrupted_wolf_2", "enemy:corrupted_wolf_2-2",
+    ]
+    assert hp_by_id["enemy:corrupted_wolf"] == 9
+    assert hp_by_id["enemy:corrupted_wolf_2"] == 11
+    assert {actor["name"] for actor in enemy_actors} == {"Grey Wolf", "Corrupted Wolf"}
+
+
+def test_edited_payload_over_party_limit_is_rejected() -> None:
+    runtime, instance = _runtime_instance()
+    apply_ruleset_combat_signal(instance, {"combat_command": "start"}, runtime)
+    enemies = normalize_temporary_encounter(copy.deepcopy(_WOLF_RAW))["enemies"]
+    # 两只狼各 3 只：展开 6 个实例，超过当前队伍的普通难度上限（4）。
+    expanded = _expand_with_quantity(enemies, 3)
+
+    resolved = _resolve_temporary_start(runtime, instance, expanded)
+
+    assert resolved["ok"] is False
+    assert "普通难度上限" in str(resolved.get("error") or "")
+    assert instance.ruleset_state.get("combat", {}).get("status") != "active"
+
+
+def test_edited_payload_exceeding_temporary_bounds_is_rejected() -> None:
+    runtime, instance = _runtime_instance()
+    apply_ruleset_combat_signal(instance, {"combat_command": "start"}, runtime)
+    enemies = normalize_temporary_encounter(copy.deepcopy(_WOLF_RAW))["enemies"]
+    # hp=600 在底层边界（≤10000）内，但超出临时遭遇允许范围（≤500）：
+    # 最终 payload 必须重走生成期同一套收紧范围，不能绕过。
+    enemies[0]["hp"] = 600
+
+    resolved = _resolve_temporary_start(runtime, instance, enemies)
+
+    assert resolved["ok"] is False
+    assert "临时遭遇允许范围" in str(resolved.get("error") or "")
+    assert instance.ruleset_state.get("combat", {}).get("status") != "active"
+
+
+def test_edited_payload_with_illegal_damage_formula_is_rejected() -> None:
+    runtime, instance = _runtime_instance()
+    apply_ruleset_combat_signal(instance, {"combat_command": "start"}, runtime)
+    enemies = normalize_temporary_encounter(copy.deepcopy(_WOLF_RAW))["enemies"]
+    enemies[0]["attacks"][0]["damage"] = "造成大量伤害"
+
+    resolved = _resolve_temporary_start(runtime, instance, enemies)
+
+    assert resolved["ok"] is False
+    assert "attack" in str(resolved.get("error") or "")
+    assert instance.ruleset_state.get("combat", {}).get("status") != "active"
+
+
+def test_non_gm_cannot_confirm_edited_temporary_encounter() -> None:
+    runtime, instance = _runtime_instance()
+    apply_ruleset_combat_signal(instance, {"combat_command": "start"}, runtime)
+    enemies = normalize_temporary_encounter(copy.deepcopy(_WOLF_RAW))["enemies"]
+
+    resolved = _resolve_temporary_start(
+        runtime, instance, enemies, submitted_by="ally",
+    )
+
+    assert resolved["ok"] is False
+    assert instance.ruleset_state.get("combat", {}).get("status") != "active"

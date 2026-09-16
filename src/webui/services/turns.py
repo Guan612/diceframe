@@ -280,6 +280,8 @@ def _round_failure_result(instance: "GameInstance", *, rolled_back: bool) -> Tur
                   "revise your actions and try again.",
             "ja": "物語の生成に失敗しました。このターンは行動フェーズに戻りました。"
                   "行動を修正して再試行してください。",
+            "de": "Die Erzählungsgenerierung ist fehlgeschlagen. Diese Runde wurde in die Aktionsphase "
+                  "zurückgesetzt; überarbeite deine Aktionen und versuche es erneut.",
         })
         error_code = "ROUND_PROCESSING_FAILED"
     else:
@@ -287,6 +289,8 @@ def _round_failure_result(instance: "GameInstance", *, rolled_back: bool) -> Tur
             "zh-CN": "本轮已推进完成，但收尾步骤失败，请刷新查看",
             "en": "The round advanced, but a follow-up step failed. Refresh to see the result.",
             "ja": "このターンは進行しましたが、後処理に失敗しました。再読み込みして確認してください。",
+            "de": "Die Runde wurde fortgesetzt, aber ein Folgeschritt ist fehlgeschlagen. Aktualisiere die "
+                  "Seite, um das Ergebnis zu sehen.",
         })
         error_code = "ROUND_POST_COMMIT_FAILED"
     return _result({
@@ -308,6 +312,7 @@ def _not_processed_result(instance: "GameInstance", reason: str) -> TurnResult:
                 "zh-CN": "本轮仍在生成剧情，请稍候再试；若长时间无响应请稍后再点强制推进",
                 "en": "This round is still being generated. Wait a moment and try again.",
                 "ja": "このターンはまだ生成中です。少し待ってから再試行してください。",
+                "de": "Diese Runde wird noch generiert. Warte einen Moment und versuche es erneut.",
             }),
             "phase": "processing",
             "reason": reason,
@@ -322,6 +327,8 @@ def _not_processed_result(instance: "GameInstance", reason: str) -> TurnResult:
                       "Review your action and submit again.",
                 "ja": "GM がこのターンの生成を中止し、行動フェーズに戻しました。"
                       "行動を確認して再提出してください。",
+                "de": "Der GM hat die Generierung dieser Runde abgebrochen; sie befindet sich wieder in "
+                      "der Aktionsphase. Überprüfe deine Aktion und reiche sie erneut ein.",
             }),
             "phase": "error",
             "reason": reason,
@@ -335,6 +342,8 @@ def _not_processed_result(instance: "GameInstance", reason: str) -> TurnResult:
                   "decision). Refresh and try again.",
             "ja": "このターンの状態が変化しました（進行済み・撤回済み・または決定待ち）。"
                   "再読み込みして再試行してください。",
+            "de": "Der Status dieser Runde hat sich bereits geändert (fortgesetzt, zurückgesetzt oder "
+                  "wartet noch auf eine Entscheidung). Aktualisiere die Seite und versuche es erneut.",
         }),
         "phase": "error",
         "reason": reason,

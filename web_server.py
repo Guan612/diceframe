@@ -309,6 +309,10 @@ async def _serve(loop: asyncio.AbstractEventLoop) -> bool:
     处理都在 web_transport.listeners 里，未启动任何监听器时按原语义抛错退出。
     """
 
+    # 地址在进 bootstrap 之前就打印：这是用户最关心的一行，不能沉到
+    # on_startup 的一屏初始化日志下面。个别地址随后绑定失败会有 ERROR 日志。
+    for item in LISTENER_PLAN:
+        print(f"DiceFrame WebUI: {item.url()}  (host={item.host})")
     for message in LISTENER_PLAN_WARNINGS:
         logger.warning("%s", message)
 
@@ -318,8 +322,6 @@ async def _serve(loop: asyncio.AbstractEventLoop) -> bool:
         started, failures = await start_listeners(runner, LISTENER_PLAN, TRANSPORT)
         if not started:
             raise OSError(failures[0] if failures else "没有可用的监听地址")
-        for item in started:
-            print(f"DiceFrame WebUI: {item.url()}  (host={item.host})")
         await _align_internal_api(started)
         stop_event = asyncio.Event()
         try:

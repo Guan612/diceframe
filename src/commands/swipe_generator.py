@@ -24,6 +24,7 @@ from src.commands.state_update_applier import StateUpdateApplier, discard_unreso
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
+from src.imagegen.storyboards import normalize_scene_panels
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -93,7 +94,14 @@ class SwipeGenerator:
                     raise
                 if scene_payload and self._scene_image_hook:
                     try:
-                        self._scene_image_hook(instance, str(scene_payload.get("prompt") or ""), int(scene_payload.get("round", round_num) or round_num), force=True)
+                        self._scene_image_hook(
+                            instance,
+                            str(scene_payload.get("prompt") or ""),
+                            int(scene_payload.get("round", round_num) or round_num),
+                            force=True,
+                            panels=scene_payload.get("panels") or [],
+                            compressed_count=int(scene_payload.get("compressed_count") or 0),
+                        )
                     except Exception:
                         logger.exception("Swipe 场景图调度失败 (round=%d)", round_num)
                 return narration
@@ -247,8 +255,15 @@ class SwipeGenerator:
         )
         scene_payload = None
         swipe_prompt = str(data.get("scene_image_prompt") or "").strip()
-        if swipe_prompt:
-            scene_payload = {"prompt": swipe_prompt, "round": round_num}
+        swipe_panels = data.get("scene_panels")
+        normalized_panels, compressed_count = normalize_scene_panels(swipe_panels)
+        if swipe_prompt or normalized_panels:
+            scene_payload = {
+                "prompt": swipe_prompt,
+                "round": round_num,
+                "panels": normalized_panels,
+                "compressed_count": compressed_count,
+            }
         logger.info("Swipe 生成: round=%d swipe=%d/%d", round_num,
                     len(swipes) + 1, len(swipes) + 1)
         return narration, scene_payload

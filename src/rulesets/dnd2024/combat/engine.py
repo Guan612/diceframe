@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+from random import SystemRandom
 from typing import Any
 
 from src.rulesets.bundle import LoadedRulesetBundle
@@ -18,6 +19,7 @@ from .primitives import (
     INTENT_TYPES,
     CombatIntentError,
     actor_kind as _actor_kind,
+    companion_actor as _companion_actor,
     canonical as _canonical,
     enemy_actor as _enemy_actor,
     player_actor as _player_actor,
@@ -49,6 +51,10 @@ class Dnd2024CombatEngine(
         state.setdefault("state_schema_version", 1)
         state.setdefault("version", 0)
         state.setdefault("combat_history", [])
+        # AI 队友的权威角色资源挂在 DND 自己的 party 状态下（不进 instance.players）；
+        # 旧存档缺省自动补齐，行为不变。
+        state.setdefault("party", {"companions": {}})
+        state["party"].setdefault("companions", {})
         state.setdefault("combat", {
             "status": "none", "round": 0, "turn_index": 0,
             "initiative": [], "enemies": {}, "positions": {},
@@ -211,14 +217,20 @@ class Dnd2024CombatEngine(
                 "option": option,
             }
         actor_id = self._current_actor(combat)
-        if not actor_id.startswith("enemy:"):
+        if not actor_id.startswith(("enemy:", "companion:")):
             return None
         base = {
-            "intent_id": f"auto:enemy:{version}:{actor_id}",
+            "intent_id": (
+                f"auto:{_actor_kind(actor_id)[0]}:{version}:{actor_id}"
+            ),
             "expected_version": version,
             "submitted_by": gm_uid,
             "actor_id": actor_id,
         }
+        if actor_id.startswith("companion:"):
+            # AI 队友第一阶段：确定性优先级（治疗濒危 → 攻击 → 移动 → Dodge →
+            # End Turn），由 GM/server automation authority 提交，走同一权威链。
+            return self._companion_automatic_intent(instance, combat, base)
         actor = self._actor_view(instance, combat, actor_id)
         targets = [
             target for target in self._hostile_targets(instance, combat, actor_id)
@@ -281,6 +293,123 @@ class Dnd2024CombatEngine(
             "intent_id": f"{base['intent_id']}:end",
             "type": "end_turn",
         }
+
+    def _companion_automatic_intent(
+        self, instance: Any, combat: dict[str, Any], base: dict[str, Any],
+    ) -> dict[str, Any]:
+        """AI 队友第一阶段确定性自动行动（不接 LLM，不做复杂战术）。
+
+        优先级：治疗濒危己方 → 攻击最近敌对目标 → 向目标移动 → Dodge →
+        End Turn。intent 仍走 validate/resolve/apply 同一权威链。
+        """
+        actor_id = base["actor_id"]
+        actor = self._actor_view(instance, combat, actor_id)
+        economy = combat.get("economy") or {}
+        can_act = (
+            int(economy.get("action", 0) or 0) > 0
+            or int(economy.get("attacks_remaining", 0) or 0) > 0
+        )
+        allies = [
+            target for target in self._all_targets(instance, combat)
+            if target["side"] == "party" and target["actor_id"] != actor_id
+        ]
+        if can_act:
+            downed = [target for target in allies if int(target.get("hp", 0) or 0) <= 0]
+            wounded = [
+                target for target in allies
+                if int(target.get("max_hp", 0) or 0) > 0
+                and 0 < int(target.get("hp", 0) or 0) / int(target["max_hp"]) <= 0.4
+            ]
+            candidates = downed or wounded
+            healing = sorted(self._companion_healing_options(actor))
+            if candidates and healing:
+                spell_ref, slot_level = healing[0]
+                return {
+                    **base,
+                    "intent_id": f"{base['intent_id']}:cast",
+                    "type": "cast_spell", "spell_ref": spell_ref,
+                    "slot_level": slot_level,
+                    "target_ids": [str(candidates[0]["actor_id"])],
+                }
+            targets = [
+                target for target in self._hostile_targets(instance, combat, actor_id)
+                if int(target.get("hp", 0) or 0) > 0
+            ]
+            targets.sort(key=lambda target: (
+                self._distance(combat, actor_id, str(target["actor_id"])),
+                int(target.get("hp", 0) or 0),
+                str(target["actor_id"]),
+            ))
+            if targets:
+                target = targets[0]
+                distance = self._distance(combat, actor_id, str(target["actor_id"]))
+                weapons = [
+                    weapon for weapon in self._available_weapons(actor)
+                    if distance <= int(weapon.get("long_range") or weapon.get("range", 5) or 5)
+                ]
+                weapons.sort(key=lambda weapon: (
+                    distance > int(weapon.get("range", 5) or 5),
+                    str(weapon.get("weapon_ref") or weapon.get("id") or ""),
+                ))
+                if weapons:
+                    return {
+                        **base,
+                        "intent_id": f"{base['intent_id']}:attack",
+                        "type": "attack",
+                        "target_id": str(target["actor_id"]),
+                        "weapon_ref": str(weapons[0].get("weapon_ref") or ""),
+                    }
+                movement = int(economy.get("movement", 0) or 0)
+                if movement > 0:
+                    actor_position = self._position(combat, actor_id)
+                    target_position = self._position(combat, str(target["actor_id"]))
+                    desired_range = max(
+                        (
+                            int(weapon.get("range", 5) or 5)
+                            for weapon in self._available_weapons(actor)
+                        ),
+                        default=5,
+                    )
+                    needed = max(0, abs(target_position - actor_position) - desired_range)
+                    distance_to_move = min(movement, needed)
+                    if distance_to_move > 0:
+                        signed = (
+                            distance_to_move
+                            if target_position > actor_position else -distance_to_move
+                        )
+                        return {
+                            **base,
+                            "intent_id": f"{base['intent_id']}:move",
+                            "type": "move", "distance": signed,
+                        }
+            return {**base, "intent_id": f"{base['intent_id']}:dodge", "type": "dodge"}
+        return {**base, "intent_id": f"{base['intent_id']}:end", "type": "end_turn"}
+
+    def _companion_healing_options(self, actor: dict[str, Any]) -> list[tuple[str, int]]:
+        """companion 当前可用的确定性治疗法术（spell_ref, slot_level）。"""
+        options: list[tuple[str, int]] = []
+        for spell_ref in actor.get("spell_refs") or []:
+            spell = self.spells.get(spell_ref)
+            effect = self.catalog.spell_effects.get(str(spell_ref).removeprefix("spell:"))
+            if spell is None or effect is None or str(effect.get("mode")) != "healing":
+                continue
+            level = int(spell.get("level") or 0)
+            if level == 0:
+                options.append((spell_ref, 0))
+                continue
+            slot_level = next(
+                (
+                    candidate for candidate in sorted(
+                        int(key) for key in actor.get("slots") or {}
+                    )
+                    if int((actor.get("slots") or {}).get(str(candidate), 0) or 0) > 0
+                    and candidate >= level
+                ),
+                None,
+            )
+            if slot_level is not None:
+                options.append((spell_ref, slot_level))
+        return options
 
     def validate_intent(self, instance: Any, intent: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -393,6 +522,107 @@ class Dnd2024CombatEngine(
             "source_ref": "srd-5.2.1:p24-p27:playing-the-game",
         }
         return {"ok": True, "event_batch": batch, "pending_decision": pending}
+
+    def add_player_to_active_combat(self, instance: Any, user_id: str) -> dict[str, Any]:
+        """Enroll a newly joined player after the current combat actor.
+
+        Membership changes happen outside the combat intent form, but still use
+        the same versioned event ledger so stale client intents cannot skip the
+        newly added actor.  The caller holds the instance state lock while this
+        method runs.
+        """
+
+        state = self.initialize_state(instance)
+        combat = state["combat"]
+        if combat.get("status") != "active":
+            return {"ok": True, "changed": False}
+        actor_id = _player_actor(str(user_id))
+        order = list(combat.get("initiative") or [])
+        if actor_id in order:
+            return {"ok": True, "changed": False}
+        if str(user_id) not in instance.players:
+            return {"ok": False, "error": "player does not exist"}
+        turn_index = int(combat.get("turn_index", 0) or 0)
+        insert_index = max(0, min(len(order), turn_index + 1))
+        canonical = _canonical(instance.get_character_sheet(str(user_id)))
+        modifier = int(canonical.get("derived", {}).get("initiative", 0) or 0)
+        roll = SystemRandom().randint(1, 20)
+        expected_version = int(state.get("version", 0) or 0)
+        intent = {
+            "intent_id": f"player-join:{expected_version}:{user_id}",
+            "type": "combat.player_joined",
+            "expected_version": expected_version,
+            "user_id": str(user_id),
+        }
+        batch = {
+            "batch_id": stable_batch_id(intent, intent["expected_version"]),
+            "intent_id": intent["intent_id"],
+            "intent_type": intent["type"],
+            "expected_version": intent["expected_version"],
+            "result_version": expected_version + 1,
+            "events": [
+                {
+                    "type": "intent.submitted",
+                    "intent_type": intent["type"],
+                    "actor_id": actor_id,
+                    "submitted_by": str(user_id),
+                },
+                {
+                    "type": "dnd2024.combat.player_joined",
+                    "actor_id": actor_id,
+                    "insert_index": insert_index,
+                    "roll": roll,
+                    "modifier": modifier,
+                    "total": roll + modifier,
+                    "position": 0,
+                },
+            ],
+            "source_ref": "srd-5.2.1:p24-p27:playing-the-game",
+        }
+        result = self.apply_batch(instance, batch)
+        result["changed"] = bool(result.get("applied"))
+        return result
+
+    def revive_player(self, instance: Any, user_id: str, hp: int) -> dict[str, Any]:
+        """Apply a ruleset-owned revival to canonical character state.
+
+        Revival is versioned even when combat is not active so any previously
+        issued combat action cannot race the newly conscious character state.
+        """
+
+        state = self.initialize_state(instance)
+        if str(user_id) not in instance.players:
+            return {"ok": False, "error": "player does not exist"}
+        actor_id = _player_actor(str(user_id))
+        expected_version = int(state.get("version", 0) or 0)
+        intent = {
+            "intent_id": f"player-revive:{expected_version}:{user_id}",
+            "type": "character.revive",
+            "expected_version": expected_version,
+            "user_id": str(user_id),
+        }
+        batch = {
+            "batch_id": stable_batch_id(intent, expected_version),
+            "intent_id": intent["intent_id"],
+            "intent_type": intent["type"],
+            "expected_version": expected_version,
+            "result_version": expected_version + 1,
+            "events": [
+                {
+                    "type": "intent.submitted",
+                    "intent_type": intent["type"],
+                    "actor_id": actor_id,
+                    "submitted_by": str(user_id),
+                },
+                {
+                    "type": "dnd2024.character.revived",
+                    "actor_id": actor_id,
+                    "hp": int(hp),
+                },
+            ],
+            "source_ref": "srd-5.2.1:p24-p27:playing-the-game",
+        }
+        return self.apply_batch(instance, batch)
 
     def apply_batch(self, instance: Any, batch: dict[str, Any]) -> dict[str, Any]:
         state = self.initialize_state(instance)
@@ -572,7 +802,8 @@ class Dnd2024CombatEngine(
 
     @staticmethod
     def _attacks_per_action(actor: dict[str, Any]) -> int:
-        if actor["kind"] != "player":
+        # Companion 复用玩家职业 Extra Attack 语义（canonical build 相同）。
+        if actor["kind"] not in {"player", "companion"}:
             return 1
         class_levels = actor.get("build", {}).get("class_levels") or []
         row = class_levels[0] if class_levels else {}
@@ -674,6 +905,10 @@ class Dnd2024CombatEngine(
         kind, raw_id = _actor_kind(actor_id)
         if kind == "player":
             return snapshot["characters"][raw_id].setdefault("conditions", {})
+        if kind == "companion":
+            companions = snapshot["ruleset_state"].setdefault("party", {}).setdefault("companions", {})
+            companion = companions[raw_id]["ruleset_character"]
+            return companion.setdefault("conditions", {})
         if kind == "enemy":
             return combat["enemies"][raw_id].setdefault("conditions", {})
         raise EventBatchError("condition target actor is invalid")
@@ -683,6 +918,12 @@ class Dnd2024CombatEngine(
     ) -> None:
         actor_ids = [
             *(_player_actor(uid) for uid in snapshot["characters"]),
+            *(
+                _companion_actor(companion_id)
+                for companion_id in (snapshot["ruleset_state"].get("party", {}) or {}).get(
+                    "companions", {},
+                )
+            ),
             *(_enemy_actor(enemy_id) for enemy_id in combat.get("enemies", {})),
         ]
         for actor_id in actor_ids:
@@ -707,6 +948,12 @@ class Dnd2024CombatEngine(
             conditions.pop(condition_id, None)
         all_actor_ids = [
             *(_player_actor(uid) for uid in snapshot["characters"]),
+            *(
+                _companion_actor(companion_id)
+                for companion_id in (snapshot["ruleset_state"].get("party", {}) or {}).get(
+                    "companions", {},
+                )
+            ),
             *(_enemy_actor(enemy_id) for enemy_id in combat.get("enemies", {})),
         ]
         for target_id in all_actor_ids:

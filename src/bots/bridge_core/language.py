@@ -15,8 +15,18 @@ def bridge_is_english(value: object) -> bool:
     return is_english(bridge_language(value))
 
 
-def bridge_text(language: object, zh: str, en: str, ja: str | None = None, **values: object) -> str:
-    template = en if bridge_is_english(language) else (ja or zh)
+def bridge_text(
+    language: object, zh: str, en: str, ja: str | None = None, de: str | None = None, **values: object
+) -> str:
+    lang = bridge_language(language)
+    if lang == "en":
+        template = en
+    elif lang == "ja":
+        template = ja or zh
+    elif lang == "de":
+        template = de or en or zh
+    else:
+        template = zh
     return template.format(**values)
 
 
