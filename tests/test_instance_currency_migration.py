@@ -81,7 +81,7 @@ def test_non_coc_rules_are_not_migrated():
         assert payload["players"]["p1"]["character_sheet"]["gold"] == 100
         assert payload["economy"]["proposals"][0]["amount"] == 25
         assert payload["economy_reward_policy"]["auto_reward_cap"] == 50
-        assert payload["instance_schema_version"] == 12
+        assert payload["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
 
 
 def test_pre_rule_id_save_is_not_guessed():
@@ -96,7 +96,7 @@ def test_pre_rule_id_save_is_not_guessed():
 
 
 def test_older_save_passes_through_v11_migration_chain():
-    """v1 存档按顺序迁移到 v12，CoC 金额同样只缩放一次。"""
+    """v1 存档按顺序迁移到当前 schema，CoC 金额同样只缩放一次。"""
 
     payload = migrate_game_state_payload({
         "instance_schema_version": 1,

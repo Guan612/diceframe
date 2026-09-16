@@ -1,4 +1,4 @@
-﻿"""GameInstance 状态机 —— 单个跑团游戏的全部运行时状态与生命周期。"""
+"""GameInstance 状态机 —— 单个跑团游戏的全部运行时状态与生命周期。"""
 
 from __future__ import annotations
 
@@ -34,6 +34,8 @@ from src.engine.game_state_contracts import (
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
+from src.engine.world_state import ensure_world_state, fresh_world_state
+from src.migrations.instance import CURRENT_INSTANCE_SCHEMA_VERSION
 
 if TYPE_CHECKING:
     from src.engine.plot_tracker import PlotTracker
@@ -109,7 +111,7 @@ class GameInstance:
     """
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
-    instance_schema_version: int = 11
+    instance_schema_version: int = CURRENT_INSTANCE_SCHEMA_VERSION
     run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
     memory_namespace: str = ""
     economy: dict[str, Any] = field(default_factory=dict)
@@ -166,6 +168,11 @@ class GameInstance:
     log: list[RoundLogEntry] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
     key_facts: list = field(default_factory=list)
+
+    # 权威世界真相（Issue #284）：世界事实 / 逻辑时钟 / 定时事件容器。它不是
+    # key_facts 这类叙事摘要，也不属于 ruleset_state；唯一写入口是
+    # ``src.engine.world_state.apply_world_ops``。
+    world_state: dict[str, Any] = field(default_factory=fresh_world_state)
 
     # 运行时跟踪：chatlog.jsonl 已持久化的 log 条数（不入存档，仅用于增量追加）
     last_saved_log_count: int = 0
@@ -292,6 +299,9 @@ class GameInstance:
             self.run_id = f"run_{uuid4().hex}"
         if not self.memory_namespace:
             self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
+        # 世界真相容器：未设置/损坏 → 空世界；未知 schema 原样保留，由写入路径
+        # 明确拒绝，绝不把用户数据猜成默认值。
+        self.world_state = ensure_world_state(self.world_state)
         if not isinstance(self.economy, dict) or not self.economy:
             self.economy = self._fresh_economy_state()
         else:
@@ -1067,6 +1077,10 @@ class GameInstance:
                 if not self.restore_combat_extension_snapshot(combat_snapshot):
                     self.combat_extension = {}
             self.discard_combat_extension_snapshots_from(rolled_back_round)
+            # 世界真相同样是"这一轮结算出来的东西"：回滚到第 N 轮时，第 N 轮及
+            # 之后写入的 world ops 必须一起撤销，否则世界会记住一个被丢弃的分支。
+            if isinstance(last.get("pre_world_state"), dict) and last["pre_world_state"]:
+                self.world_state = ensure_world_state(last["pre_world_state"])
             self.round_number = max(1, rolled_back_round)
             self.action_queue.clear()
             self.pending_actions.clear()
@@ -1603,6 +1617,7 @@ class GameInstance:
             "combat_active": bool(self.combat_active),
             "initiative_order": copy.deepcopy(list(self.initiative_order or [])),
             "initiative_current": int(self.initiative_current or 0),
+            "world_state": copy.deepcopy(self.world_state),
         }
 
     def restore_round_entity_snapshot(self) -> bool:
@@ -1616,6 +1631,9 @@ class GameInstance:
         self.combat_active = bool(snapshot.get("combat_active"))
         self.initiative_order = copy.deepcopy(list(snapshot.get("initiative_order") or []))
         self.initiative_current = int(snapshot.get("initiative_current") or 0)
+        # 世界真相按整轮语义回滚（ADR 0003）：本轮写入的 world ops 随本轮撤销。
+        if "world_state" in snapshot:
+            self.world_state = ensure_world_state(snapshot.get("world_state"))
         return True
 
     async def finish_judgment(
@@ -1676,6 +1694,11 @@ class GameInstance:
                     pre_combat_extension_snapshot
                     if pre_combat_extension_snapshot is not None
                     else self.current_combat_extension_snapshot()
+                ),
+                # 判定入口的世界真相：整轮回滚 / swipe 分支切换时一起撤销本轮
+                # 写入的 world ops（与玩家、战斗扩展快照同一语义）。
+                "pre_world_state": copy.deepcopy(
+                    self.round_entity_snapshot.get("world_state", self.world_state)
                 ),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
@@ -1770,6 +1793,8 @@ class GameInstance:
             self.log.clear()
             self.summary.clear()
             self.key_facts.clear()
+            # 世界真相属于这一轮 run：重置与重开都从空世界重新开始。
+            self.world_state = fresh_world_state()
             self.total_llm_calls = 0
             self.total_tokens = 0
             self.started_at = ""

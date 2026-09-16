@@ -121,6 +121,14 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 通用战斗扩展（Issue 212 / ADR 0004）提供规则无关的公式 DSL、资源池、效果引擎与调度器原语。依赖方向固定为 contracts → primitives → ruleset adapter → ruleset catalog → transport，generic engine 不含任何 per-ruleset 分支。动作、效果与消耗全部是数据（通用 kind 词表），法术/遁术/丹药等身份由规则动作目录的 canonical `action_id` 表达；伤害与消耗金额经受限 JSON-AST 公式求值——白名单节点、深度/节点/骰子/结果上限、未知引用 fail closed、可注入确定性骰源，绝不 eval。资源池与调度器由规则 runtime 显式声明 capability（`combat_action_effects` / `combat_resource_pools` / `combat_scheduler`）后启用，客户端只提交 intent 并渲染服务端投影，伤害、速度与资源结算值不可信。D&D 2024 的伤害/治疗骰式已经由 D&D 侧适配器改经通用公式 AST 求值，法术位、专注、豁免与胜利判定仍归 D&D reducer；调度器与资源池的持久化随首个消费规则集落地。
 
+## 世界状态（World State）
+
+`GameInstance.world_state` 是“当前世界真相”的唯一权威容器，仍属于单局聚合根，不引入第二个 aggregate、独立数据库或后台运行器。第一版结构固定为 `schema_version / revision / clock / facts / scheduled_events`：fact 是 canonical key（`actor:<uid>.location`、`bridge:old.passable` 这类坐标，不接受翻译后的 display name）加标量值与 `public | gm` 可见性，并记录 `source_round` 与 `updated_revision`；`clock` 是逻辑世界时间（day + minute）；`scheduled_events` 是待结算事件的持久化数据，按稳定 `event_id` 索引。
+
+唯一写入口是 `src/engine/world_state.py` 的 `apply_world_ops(instance, ops)`：整批 op 先校验再原子提交，越界、未知 op/字段、非法 key/value、损坏或未来 schema 都 fail closed 且不写入；事实可见性只由 world ops 决定，缺省更新不会把 GM 私有事实降级为公开。世界真相不使用 `ruleset_state`、`key_facts`、`lorebook_timed_state` 或 memory 作为容器，也不允许 LLM 直接写入。
+
+持久化与生命周期遵循既有 `GameInstance` / codec / migration 模式：schema 12 → 13 为旧存档补一个空世界容器（不猜测任何事实，且可重复执行）；save/load、import/rebind 保留世界真相并隔离 run 身份；重置与重开从空世界重新开始；世界 ops 属于写入它的那一轮，整轮回滚、判定中止与 swipe 分支切换都按 ADR 0003 的整轮语义把它一起撤销。本层只提供数据与写入口：玩家可见性投影与行动合法性判定、定时事件结算分别由后续工作落地。
+
 ## Ruleset Bundle v1
 
 `templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。
