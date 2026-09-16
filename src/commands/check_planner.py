@@ -26,6 +26,12 @@ from src.engine.dice import d20_dc_cap
 from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.engine.world_legality import (
+    MAX_ROUTE_HOPS,
+    MAX_WORLD_REQUIREMENTS,
+    REQUIREMENT_KINDS,
+)
+from src.engine.world_state import project_visible_state
 from src.llm.parser import sanitize_narration
 from src.llm.tools import DICE_CHECKS_TOOL, DICE_CHECKS_TOOL_NAME
 from src.rules.rule_system import RuleSystem
@@ -463,6 +469,18 @@ def _planner_context(instance: GameInstance, rule: RuleSystem | None) -> str:
         ],
         "recent_purchases": _recent_purchases(instance),
     }
+    # 权威世界真相（Issue #284）：只给模型 canonical 事实与取值，让它能用稳定的
+    # 地点 id 提出 world_requirements；玩家可见投影走 project_visible_state。
+    visible_world = project_visible_state(instance, viewer_is_gm=True)
+    if visible_world["facts"]:
+        payload["world_state"] = {
+            "revision": visible_world["revision"],
+            "clock": visible_world["clock"],
+            "facts": {
+                key: fact.get("value")
+                for key, fact in visible_world["facts"].items()
+            },
+        }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -1082,6 +1100,7 @@ async def plan_round_checks(
     raw_checks: list[Any] = []
     raw_economy_actions: list[Any] = []
     overreach_notes: list[dict[str, str]] = []
+    world_requirements: list[dict[str, Any]] = []
     for call in response.tool_calls:
         if str(call.get("name") or "") != DICE_CHECKS_TOOL_NAME:
             continue
@@ -1109,6 +1128,40 @@ async def plan_round_checks(
                         overreach_notes.append({"player": uid, "reason": reason})
         except Exception:
             logger.warning("overreach 标注解析失败，已忽略 (round=%d)", instance.round_number, exc_info=True)
+        # world_requirements 与 checks/overreach 独立解析：畸形/缺失只影响世界
+        # 合法性判定本身，绝不波及检定规划。这里只做形状与花名册校验；「是否真的
+        # 与世界真相矛盾」由 server 侧 world_legality 判定。
+        try:
+            raw_requirements = arguments.get("world_requirements")
+            if isinstance(raw_requirements, list):
+                for item in raw_requirements[:MAX_WORLD_REQUIREMENTS]:
+                    if len(world_requirements) >= MAX_WORLD_REQUIREMENTS:
+                        break
+                    if not isinstance(item, dict):
+                        continue
+                    uid = _match_player(instance, item.get("player"))
+                    kind = str(item.get("kind") or "act").strip()
+                    location = str(item.get("location") or "").strip()[:120]
+                    if not uid or not location or kind not in REQUIREMENT_KINDS:
+                        continue
+                    requirement: dict[str, Any] = {
+                        "player": uid, "kind": kind, "location": location,
+                    }
+                    raw_via = item.get("via")
+                    if isinstance(raw_via, list):
+                        via = [
+                            str(hop).strip()[:120]
+                            for hop in raw_via[:MAX_ROUTE_HOPS]
+                            if isinstance(hop, str) and str(hop).strip()
+                        ]
+                        if via:
+                            requirement["via"] = list(dict.fromkeys(via))
+                    world_requirements.append(requirement)
+        except Exception:
+            logger.warning(
+                "world_requirements 解析失败，已忽略 (round=%d)",
+                instance.round_number, exc_info=True,
+            )
     planned, errors = normalize_check_specs(instance, rule, raw_checks)
     planned = _merge_safety_net_checks(instance, rule, planned)
     planned = _apply_explicit_advantage_modes(rule, planned)
@@ -1123,6 +1176,9 @@ async def plan_round_checks(
         "total_tokens": response.total_tokens,
         "errors": errors + economy_errors,
         "overreach": overreach_notes,
+        # 结构化世界要求（模型提议）：由 server 侧 world_legality 与权威世界真相
+        # 对照后才决定阻断或写入移动。
+        "world_requirements": world_requirements,
         # 由调用方在过时检查通过后落库；这里不直接改动经济状态，
         # 否则创建提案推进的 revision 会让本轮规划被误判为过期。
         "economy_offers": economy_offers,

@@ -219,6 +219,12 @@ class GameInstance:
     # 本轮裁判标注的越权声明（仅多人局且开关启用时注入 GM 上下文）
     last_overreach: list = field(default_factory=list)
 
+    # 本轮由 server 判定的行动合法性矛盾（Issue #284）：每条含
+    # player / code / location / current，供可信裁定块与前端提示使用。
+    # 与 last_overreach 分开：越权是玩家替世界/他人声明事实，合法性是玩家
+    # 自己的动作与权威世界真相矛盾。
+    last_world_legality: list = field(default_factory=list)
+
     # 最近一回合因输出截断触发的 token 预算升档（给 GM 的低打扰提示）
     last_token_budget_bump: TokenBudgetBump | None = None
 
@@ -688,6 +694,7 @@ class GameInstance:
         self.last_check = None
         self.last_checks.clear()
         self.last_overreach.clear()
+        self.last_world_legality.clear()
         self.round_unpriced_purchase_intents.clear()
         self.round_checks_prepared = prepared
 

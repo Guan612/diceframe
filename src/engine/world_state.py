@@ -185,6 +185,45 @@ def world_scheduled_events(state: Any) -> dict[str, dict[str, Any]]:
     }
 
 
+def project_visible_state(
+    instance: Any, *, viewer_uid: str = "", viewer_is_gm: bool = False,
+) -> dict[str, Any]:
+    """World truth as one specific viewer is allowed to see it.
+
+    ``public`` facts are visible to everyone; ``gm`` facts only to the GM.
+    Player-facing surfaces must go through this projection instead of reading
+    ``instance.world_state`` directly, so hidden world truth cannot leak into a
+    player context by accident.  A corrupt container projects as an empty world
+    rather than raising.
+    """
+
+    state = getattr(instance, "world_state", None)
+    facts = world_facts(state)
+    if not viewer_is_gm:
+        facts = {
+            key: fact for key, fact in facts.items()
+            if str(fact.get("visibility") or "") == "public"
+        }
+    if viewer_is_gm:
+        viewer = "gm"
+    else:
+        viewer = f"player:{viewer_uid}" if viewer_uid else "player"
+    return {
+        "schema_version": WORLD_STATE_SCHEMA_VERSION,
+        "viewer": viewer,
+        "revision": world_revision(state),
+        "clock": world_clock(state),
+        "facts": facts,
+    }
+
+
+def fact_visibility(state: Any, key: str) -> str:
+    """Visibility of one fact, or an empty string when it is not established."""
+
+    fact = world_facts(state).get(str(key or ""))
+    return str(fact.get("visibility") or "") if fact is not None else ""
+
+
 # ---- 写入口 ---------------------------------------------------------------
 
 
@@ -541,7 +580,9 @@ __all__ = [
     "apply_world_ops",
     "ensure_world_state",
     "fact_value",
+    "fact_visibility",
     "fresh_world_state",
+    "project_visible_state",
     "world_clock",
     "world_facts",
     "world_revision",

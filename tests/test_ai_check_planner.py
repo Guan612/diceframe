@@ -299,6 +299,7 @@ async def test_plan_round_checks_uses_single_batched_tool_call() -> None:
         "total_tokens": 37,
         "errors": [],
         "overreach": [],
+        "world_requirements": [],
         "economy_offers": [],
         "unpriced_purchase_intents": [],
     }

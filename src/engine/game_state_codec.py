@@ -91,6 +91,7 @@ class GameStateCodec:
             "last_checks": instance.last_checks,
             "manual_roll_requests": instance.manual_roll_requests,
             "last_overreach": instance.last_overreach,
+            "last_world_legality": instance.last_world_legality,
             "round_checks_prepared": instance.round_checks_prepared,
             "round_start_snapshot": instance.round_start_snapshot,
             "round_entity_snapshot": instance.round_entity_snapshot,
@@ -228,6 +229,7 @@ class GameStateCodec:
             last_checks=data.get("last_checks") or [],
             manual_roll_requests=data.get("manual_roll_requests") or [],
             last_overreach=data.get("last_overreach") or [],
+            last_world_legality=data.get("last_world_legality") or [],
             round_checks_prepared=bool(data.get("round_checks_prepared", False)),
             round_start_snapshot=data.get("round_start_snapshot") or {},
             # 旧存档没有这个键：默认空快照，回滚时退化为按目标核对战斗缓存。

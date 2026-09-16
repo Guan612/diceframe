@@ -1,0 +1,211 @@
+"""Server-side action legality against the authoritative world state (#284).
+
+`#284` reported the "implicit teleport": a player says they are in the east
+village, then next round declares an action that only makes sense in the west
+village, and the table silently accepts that they are already there.  The same
+class of problem covers walking over a bridge the world already marked as
+impassable.
+
+Legality stays deliberately small and evidence-based.  The planner may *propose*
+structured world requirements (where an action happens, where a character wants
+to move); only this module decides whether that proposal is consistent with
+world truth:
+
+- ``kind: act``  -- the action is performed at ``location``.  A proven mismatch
+  with the actor's authoritative location blocks it: the outcome is "you have to
+  move first", never a silent teleport.
+- ``kind: move``  -- the actor wants to end up at ``location`` (optionally via
+  ``via``).  Any declared stop on the route (or the destination itself) that the
+  world marks with ``location:<id>.passable = false`` blocks it.  A route with no
+  proven obstacle is applied server-side as the actor's new location.
+
+Boundaries:
+
+- No keyword parsing.  A location mentioned only inside free text is never used
+  as blocking evidence; requirements come from the structured planner proposal,
+  and both sides are canonical world ids.
+- No pathfinding, distance, or map topology: only the hops the planner actually
+  declared are checked.
+- Insufficient information never manufactures a block.  An unknown location, an
+  actor whose location was never established, or an empty world all mean "no
+  evidence" and are left to the GM/planner.
+- Separate from overreach: overreach is about a player claiming authority over
+  the world or other characters; legality is about the player's own action
+  contradicting authoritative world truth.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from src.engine.world_state import (
+    WorldStateError,
+    apply_world_ops,
+    world_facts,
+)
+
+logger = logging.getLogger("trpg")
+
+# 与 overreach / economy_actions 同一量级：单轮最多 8 条结构化世界要求。
+MAX_WORLD_REQUIREMENTS = 8
+MAX_ROUTE_HOPS = 8
+REQUIREMENT_KINDS = ("act", "move")
+# 服务端判定出的矛盾类型（渲染文案由调用方按语言本地化）。
+BLOCK_CODES = ("ACTION_LOCATION_MISMATCH", "ROUTE_IMPASSABLE")
+_ACTOR_LOCATION_SUFFIX = ".location"
+_LOCATION_PREFIX = "location:"
+_PASSABLE_SUFFIX = ".passable"
+
+
+def actor_location_fact_key(uid: str) -> str:
+    """Canonical fact key holding one actor's authoritative location."""
+
+    return f"actor:{uid}{_ACTOR_LOCATION_SUFFIX}"
+
+
+def passable_fact_key(location_id: str) -> str:
+    """Canonical fact key marking whether a world location can be passed."""
+
+    return f"{_LOCATION_PREFIX}{location_id}{_PASSABLE_SUFFIX}"
+
+
+def evaluate_world_requirements(
+    instance: Any, requirements: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Evaluate planner-proposed world requirements; never raise on bad input.
+
+    Returns ``{"notes": [...], "applied": [...]}``: ``notes`` are proven
+    contradictions the narration must honor, ``applied`` are server-validated
+    movements that were written to world truth.
+    """
+
+    notes: list[dict[str, Any]] = []
+    applied: list[dict[str, Any]] = []
+    if not isinstance(requirements, Sequence) or isinstance(requirements, (str, bytes)):
+        return {"notes": notes, "applied": applied}
+    if not requirements:
+        return {"notes": notes, "applied": applied}
+    try:
+        facts = world_facts(getattr(instance, "world_state", None))
+    except Exception:  # pragma: no cover - world_facts is already defensive
+        logger.warning("世界真相读取失败，本轮不做合法性判定", exc_info=True)
+        return {"notes": notes, "applied": applied}
+    if not facts:
+        # 空世界（旧游戏、未建立任何事实）没有任何可证明的矛盾。
+        return {"notes": notes, "applied": applied}
+    known_locations = _known_locations(facts)
+    players = getattr(instance, "players", None) or {}
+    for raw in list(requirements)[:MAX_WORLD_REQUIREMENTS]:
+        if not isinstance(raw, Mapping):
+            continue
+        uid = str(raw.get("player") or "")
+        if uid not in players:
+            continue
+        kind = str(raw.get("kind") or "act")
+        if kind not in REQUIREMENT_KINDS:
+            continue
+        location = raw.get("location")
+        if not isinstance(location, str) or not location:
+            continue
+        if location not in known_locations:
+            # 信息不足：世界没有登记这个地点，不能凭空判非法。
+            continue
+        current = _actor_location(facts, uid)
+        route = _route(raw.get("via"), location)
+        if kind == "act":
+            if current and current != location:
+                notes.append({
+                    "player": uid,
+                    "code": "ACTION_LOCATION_MISMATCH",
+                    "location": location,
+                    "current": current,
+                })
+            continue
+        blocked = _first_impassable(facts, [current, *route])
+        if blocked:
+            notes.append({
+                "player": uid,
+                "code": "ROUTE_IMPASSABLE",
+                "location": blocked,
+                "destination": location,
+                "current": current,
+            })
+            continue
+        if current == location:
+            applied.append({"player": uid, "location": location, "from": current})
+            continue
+        try:
+            apply_world_ops(instance, [{
+                "op": "set_fact",
+                "key": actor_location_fact_key(uid),
+                "value": location,
+            }])
+        except WorldStateError as exc:
+            # 世界容器损坏/版本不受支持：合法性层保持惰性，不阻断这一轮叙事。
+            logger.warning("移动写入世界真相被拒绝: %s", exc)
+            continue
+        applied.append({"player": uid, "location": location, "from": current})
+    return {"notes": notes, "applied": applied}
+
+
+def _known_locations(facts: Mapping[str, Mapping[str, Any]]) -> set[str]:
+    """Canonical locations the world has actually established.
+
+    A location counts as known when some ``location:<id>.*`` fact exists or when
+    it appears as the value of a ``*.location`` fact (the actor locations the
+    server itself writes).  Anything else is unknown, and unknown means "no
+    evidence" rather than "illegal".
+    """
+
+    known: set[str] = set()
+    for key, fact in facts.items():
+        if key.startswith(_LOCATION_PREFIX):
+            location_id = key[len(_LOCATION_PREFIX):].split(".", 1)[0]
+            if location_id:
+                known.add(location_id)
+        elif key.endswith(_ACTOR_LOCATION_SUFFIX):
+            value = fact.get("value")
+            if isinstance(value, str) and value:
+                known.add(value)
+    return known
+
+
+def _actor_location(facts: Mapping[str, Mapping[str, Any]], uid: str) -> str:
+    fact = facts.get(actor_location_fact_key(uid))
+    value = fact.get("value") if isinstance(fact, Mapping) else None
+    return value if isinstance(value, str) else ""
+
+
+def _route(via: Any, destination: str) -> list[str]:
+    hops: list[str] = []
+    if isinstance(via, Sequence) and not isinstance(via, (str, bytes)):
+        for item in list(via)[:MAX_ROUTE_HOPS]:
+            if isinstance(item, str) and item and item not in hops:
+                hops.append(item)
+    if destination not in hops:
+        hops.append(destination)
+    return hops
+
+
+def _first_impassable(
+    facts: Mapping[str, Mapping[str, Any]], route: Sequence[str],
+) -> str:
+    for location_id in route:
+        if not location_id:
+            continue
+        fact = facts.get(passable_fact_key(location_id))
+        if isinstance(fact, Mapping) and fact.get("value") is False:
+            return str(location_id)
+    return ""
+
+
+__all__ = [
+    "BLOCK_CODES",
+    "MAX_WORLD_REQUIREMENTS",
+    "REQUIREMENT_KINDS",
+    "actor_location_fact_key",
+    "evaluate_world_requirements",
+    "passable_fact_key",
+]

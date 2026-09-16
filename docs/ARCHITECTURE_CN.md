@@ -127,7 +127,9 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 唯一写入口是 `src/engine/world_state.py` 的 `apply_world_ops(instance, ops)`：整批 op 先校验再原子提交，越界、未知 op/字段、非法 key/value、损坏或未来 schema 都 fail closed 且不写入；事实可见性只由 world ops 决定，缺省更新不会把 GM 私有事实降级为公开。世界真相不使用 `ruleset_state`、`key_facts`、`lorebook_timed_state` 或 memory 作为容器，也不允许 LLM 直接写入。
 
-持久化与生命周期遵循既有 `GameInstance` / codec / migration 模式：schema 12 → 13 为旧存档补一个空世界容器（不猜测任何事实，且可重复执行）；save/load、import/rebind 保留世界真相并隔离 run 身份；重置与重开从空世界重新开始；世界 ops 属于写入它的那一轮，整轮回滚、判定中止与 swipe 分支切换都按 ADR 0003 的整轮语义把它一起撤销。本层只提供数据与写入口：玩家可见性投影与行动合法性判定、定时事件结算分别由后续工作落地。
+持久化与生命周期遵循既有 `GameInstance` / codec / migration 模式：schema 12 → 13 为旧存档补一个空世界容器（不猜测任何事实，且可重复执行）；save/load、import/rebind 保留世界真相并隔离 run 身份；重置与重开从空世界重新开始；世界 ops 属于写入它的那一轮，整轮回滚、判定中止与 swipe 分支切换都按 ADR 0003 的整轮语义把它一起撤销。
+
+世界真相不等于玩家可见真相：`project_visible_state(instance, viewer_is_gm=...)` 是唯一的读取入口，`gm` 私有事实只进入 GM 上下文块（并明确标注玩家不可见），玩家视角只拿 `public` 投影。行动合法性由 server 侧 `world_legality` 判定，模型只能通过结构化 `world_requirements`（`act` / `move` + canonical 地点 id）提议；判定只使用已登记地点与明确 `passable=false` 这类可证明证据，空世界、未知地点、行动者位置未知一律不阻断，已证明矛盾则向 GM 注入「需要先移动 / 未能完成」的可信裁定块，合法移动由 server 写入世界真相。该通道与 overreach 相互独立：overreach 管玩家替世界或他人声明事实，合法性管玩家自己的动作与权威世界事实矛盾。定时事件的到期结算与逻辑时间推进由后续工作在同一写入口上实现。
 
 ## Ruleset Bundle v1
 

@@ -168,9 +168,23 @@ older saves (guessing no facts, repeatably); save/load and import/rebind keep
 world truth while isolating run identity; reset and restart begin from an empty
 world; and world ops belong to the round that wrote them, so whole-round
 rollback, aborted judgment, and swipe branch cuts revert them together under the
-ADR 0003 whole-round semantics. This layer is data plus a write entry point:
-player-visible projection, action legality, and scheduled-event settlement land
-in later work.
+ADR 0003 whole-round semantics.
+
+World truth is not player-visible truth: `project_visible_state(instance,
+viewer_is_gm=...)` is the only read entry point, `gm` facts reach only the GM
+context block (marked as invisible to players), and player-facing surfaces get
+the `public` projection. Action legality is decided server-side by
+`world_legality`: the model may only *propose* structured `world_requirements`
+(`act` / `move` plus canonical location ids), and the decision uses provable
+evidence only (registered locations, explicit `passable = false`). An empty
+world, an unknown location, or an actor without an established location never
+blocks; a proven contradiction injects a trusted "move first / cannot complete"
+verdict into the GM context, and a legal move is written to world truth by the
+server. This channel stays separate from overreach: overreach covers a player
+declaring world facts or controlling others, while legality covers a player's
+own action contradicting authoritative world facts. Scheduled-event settlement
+and logical time advancement land in the follow-up work on the same write entry
+point.
 
 ## D&D 2024 Authoritative Play State
 
