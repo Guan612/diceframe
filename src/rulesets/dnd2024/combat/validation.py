@@ -282,21 +282,11 @@ class CombatValidationMixin:
         target_side = str(target.get("side") or "")
         if target_side == actor_side or target["hp"] <= 0:
             raise CombatIntentError("attack target must be a living hostile actor")
-        if actor["kind"] in {"player", "companion"}:
-            weapon_ref = str(intent.get("weapon_ref") or "")
-            if weapon_ref not in actor["equipment_refs"]:
-                raise CombatIntentError("weapon is not equipped by the actor")
-            weapon_id = weapon_ref.removeprefix("item:")
-            weapon = self.catalog.weapons.get(weapon_id)
-            if weapon is None:
-                raise CombatIntentError("weapon has no deterministic combat profile")
-        else:
-            attack_id = str(intent.get("attack_id") or "")
-            weapon = next(
-                (item for item in actor["attacks"] if item.get("id") == attack_id), None,
-            )
-            if weapon is None:
-                raise CombatIntentError("enemy attack is not available")
+        weapon = self._declared_attack(actor, intent)
+        if weapon is None:
+            # 一个 lookup 同时覆盖装备武器、徒手打击与敌人 attack profile：
+            # 客户端无法声明角色并不真正拥有的攻击档案。
+            raise CombatIntentError("attack profile is not available to the actor")
         distance = self._distance(combat, actor["actor_id"], target_id)
         normal_range = int(weapon.get("thrown_range") or weapon.get("range", 5))
         long_range = int(weapon.get("long_range") or normal_range)

@@ -21,6 +21,10 @@
     "sickle": {"category": "simple", "damage": "1d4", "damage_type": "slashing", "range": 5},
     "spear": {"category": "simple", "damage": "1d6", "damage_type": "piercing", "range": 5, "long_range": 60, "thrown_range": 20}
   },
+  "unarmed_strike": {"damage": "1", "damage_type": "bludgeoning", "range": 5},
+  "labels": {
+    "unarmed_strike": "Unarmed Strike"
+  },
   "spell_effects": {
     "eldritch_blast": {"mode": "spell_attack", "damage": "1d10", "damage_type": "force", "range": 120},
     "ray_of_frost": {"mode": "spell_attack", "damage": "1d8", "damage_type": "cold", "range": 60, "condition": "slowed_10", "condition_duration": "target_turn_start"},

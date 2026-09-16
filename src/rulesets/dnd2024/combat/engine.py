@@ -140,7 +140,7 @@ class Dnd2024CombatEngine(
         if int(economy.get("action", 0) or 0) > 0 or int(
             economy.get("attacks_remaining", 0) or 0
         ) > 0:
-            weapons = self._available_weapons(actor)
+            weapons = self._available_attacks(actor)
             if weapons:
                 actions.append({
                     "type": "attack", "label": "Attack", "actor_id": current,
@@ -344,7 +344,7 @@ class Dnd2024CombatEngine(
                 target = targets[0]
                 distance = self._distance(combat, actor_id, str(target["actor_id"]))
                 weapons = [
-                    weapon for weapon in self._available_weapons(actor)
+                    weapon for weapon in self._available_attacks(actor)
                     if distance <= int(weapon.get("long_range") or weapon.get("range", 5) or 5)
                 ]
                 weapons.sort(key=lambda weapon: (
@@ -366,7 +366,7 @@ class Dnd2024CombatEngine(
                     desired_range = max(
                         (
                             int(weapon.get("range", 5) or 5)
-                            for weapon in self._available_weapons(actor)
+                            for weapon in self._available_attacks(actor)
                         ),
                         default=5,
                     )

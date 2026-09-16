@@ -99,20 +99,25 @@ class CombatResolutionMixin:
         actor = self._actor_view(instance, combat, actor_id)
         target = self._actor_view(instance, combat, target_id)
         if actor["kind"] in {"player", "companion"}:
-            # Companion 是"己方角色"：武器攻击走玩家同一套装备/目录确定性链，
+            # Companion 是"己方角色"：武器与徒手攻击走玩家同一套目录/能力确定性链，
             # 不走 enemy attack profile。
-            weapon_id = str(intent["weapon_ref"]).removeprefix("item:")
-            weapon = self.catalog.weapons[weapon_id]
+            weapon = self._declared_attack(actor, intent)
+            if weapon is None:  # pragma: no cover - validation guards this
+                raise CombatIntentError("attack profile is not available to the actor")
             distance = self._distance(combat, actor_id, target_id)
             ranged_use = bool(weapon.get("ranged")) or distance > 5
             ability = "dex" if ranged_use else "str"
             if weapon.get("finesse"):
                 ability = max(("str", "dex"), key=lambda key: ability_modifier(actor["abilities"][key]))
             modifier = ability_modifier(actor["abilities"][ability])
-            proficiency = (
-                actor["proficiency_bonus"]
-                if f"weapon_category:{weapon['category']}" in actor["weapon_category_refs"] else 0
-            )
+            if weapon.get("unarmed") or (
+                f"weapon_category:{weapon.get('category')}" in actor["weapon_category_refs"]
+            ):
+                # 徒手打击是每个 player-like actor 都会使用的天然攻击：熟练加值始终生效，
+                # 不依赖 weapon_category 熟练列表。
+                proficiency = actor["proficiency_bonus"]
+            else:
+                proficiency = 0
             attack_bonus = modifier + proficiency
             damage_formula = str(weapon["damage"])
             damage_type = str(weapon["damage_type"])
