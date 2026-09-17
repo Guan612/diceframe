@@ -14,6 +14,8 @@ settles due scheduled events.  The contract under test:
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from webapi_harness import web_api  # noqa: F401  (lifecycle fixture)
@@ -59,6 +61,14 @@ def schedule_ritual(instance: GameInstance, *, due_minute: int = 840) -> None:
         "ops": [{"op": "set_fact", "key": "ritual:clearing.status",
                  "value": "completed"}],
     }])
+
+
+def _with_event_ops(state: dict, ops: list) -> dict:
+    """A detached copy of ``state`` whose scheduled event carries ``ops``."""
+
+    corrupted = deepcopy(state)
+    corrupted["scheduled_events"]["ritual:clearing"]["ops"] = ops
+    return corrupted
 
 
 # ---- §8.6 示例：12:00 安排 14:00 的事件 --------------------------------------
@@ -229,6 +239,56 @@ def test_corrupt_or_unsupported_world_state_makes_advance_inert() -> None:
 
     assert instance.world_state == {"schema_version": 99}
     assert world_clock(before) == before
+
+
+def test_corrupt_persisted_event_ops_fail_closed_instead_of_applying_nothing() -> None:
+    """#309 原始复现：``ops=[123]`` 曾被静默过滤成空，事件却仍被标记 applied。"""
+
+    instance = make_instance()
+    at_noon(instance)
+    schedule_ritual(instance, due_minute=780)
+    # 模拟损坏的存档：写路径永远不会产生这种事件，只有坏数据会走到这里。
+    instance.world_state = _with_event_ops(instance.world_state, [123])
+    corrupted = instance.world_state
+
+    with pytest.raises(WorldStateError):
+        advance_world_time(instance, 60)
+
+    # fail closed：时钟不推进、事件不变 applied、坏 op 不被静默丢弃。
+    assert instance.world_state is corrupted
+    assert world_clock(instance.world_state) == {"day": 1, "minute": 720}
+    stored = world_scheduled_events(instance.world_state)["ritual:clearing"]
+    assert stored["status"] == "pending"
+    assert stored["ops"] == [123]
+
+
+@pytest.mark.parametrize("payload", [
+    123,
+    "not-an-object",
+    {},
+    {"op": "teleport"},
+    {"op": "advance_time", "minutes": 30},
+    {"op": "schedule_event", "event_id": "nested"},
+    {"op": "set_fact", "key": "not a canonical key", "value": 1},
+])
+def test_persisted_event_ops_obey_the_write_path_shape_contract(payload: object) -> None:
+    """读取路径不得比写入路径宽松：同一套 op shape contract。"""
+
+    instance = make_instance()
+    at_noon(instance)
+    schedule_ritual(instance, due_minute=780)
+    instance.world_state = _with_event_ops(instance.world_state, [payload])
+    corrupted = instance.world_state
+
+    with pytest.raises(WorldStateError):
+        advance_world_time(instance, 60)
+
+    assert instance.world_state is corrupted
+    assert world_clock(instance.world_state) == {"day": 1, "minute": 720}
+    stored = world_scheduled_events(instance.world_state)["ritual:clearing"]
+    assert stored["status"] == "pending"
+    assert stored["ops"] == [payload]
+    assert fact_value(instance.world_state, "ritual:clearing.status") is None
 
 
 # ---- rollback / run 隔离（§8.7） --------------------------------------------

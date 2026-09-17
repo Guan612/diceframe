@@ -392,6 +392,10 @@ def _validated_copy(state: Any) -> dict[str, Any]:
         event_ops = event.get("ops")
         if not isinstance(event_ops, list) or not event_ops:
             raise WorldStateError(f"scheduled event ops are invalid: {key!r}")
+        # 读取路径必须和写入路径服从同一套 op shape contract：损坏的持久化事件
+        # 不能被静默归一化成一个「什么都没做却标记 applied」的成功结果。
+        for nested_position, nested in enumerate(event_ops):
+            _validate_event_op(nested, nested_position)
     draft["facts"] = dict(facts)
     draft["scheduled_events"] = dict(events)
     draft["clock"] = dict(clock)

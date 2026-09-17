@@ -31,7 +31,6 @@ Boundaries:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from src.engine.world_state import (
@@ -75,7 +74,9 @@ def advance_world_time(
         event_id = str(event["event_id"])
         label = str(event.get("label") or "")
         due_at = dict(event.get("due_at") or {})
-        nested = [dict(op) for op in (event.get("ops") or []) if isinstance(op, Mapping)]
+        # 持久化状态在 apply_ops_to_state 入口已按 op shape contract 校验过：这里
+        # 不再静默过滤非法 op（那会把「事件没执行任何东西」伪装成 applied）。
+        nested = [dict(op) for op in (event.get("ops") or [])]
         try:
             draft, _ = apply_ops_to_state(
                 draft,
