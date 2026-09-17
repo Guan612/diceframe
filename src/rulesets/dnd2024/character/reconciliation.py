@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 from .derivation import derive_armor_class
@@ -45,6 +46,38 @@ _GENERIC_SLOTS = {
     "shield": "off_hand",
     "focus": "accessory",
 }
+
+
+# Fields play owns, and a lifecycle re-projection must therefore never rebuild.
+#
+# The list is an explicit allow-list rather than "everything except resources":
+# HP, hit dice and spell slots are ruleset-owned precisely because rest, combat
+# and advancement are supposed to move them.  Getting that backwards would make
+# a long rest fail to heal.
+LIVE_OWNED_FIELDS: tuple[str, ...] = (
+    "inventory", "equipment", "key_items", "currency", "gold",
+)
+
+
+def merge_live_character_projection(
+    current: Mapping[str, Any], projected: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Re-project a character without rolling back what play has changed.
+
+    ``project_legacy`` rebuilds the whole legacy sheet from the creation
+    packages.  That is right when a character is created or imported, and wrong
+    for one that has been played: a rest or a level up would hand back the
+    starter kit, resurrect sold gear and refill the purse.
+
+    Live-owned fields are taken from ``current``; everything else comes from
+    the fresh projection.
+    """
+
+    merged = dict(projected)
+    for field in LIVE_OWNED_FIELDS:
+        if field in current:
+            merged[field] = deepcopy(current[field])
+    return merged
 
 
 def _normalized(text: Any) -> str:
