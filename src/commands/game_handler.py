@@ -11,6 +11,7 @@ from src.llm.client import LLMClient
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
+from src.commands.ai_player import fill_ai_player_actions
 from src.commands.combat_resolver import CombatResolver
 from src.commands.dice_resolver import DiceResolver
 from src.commands.game_factory import GameFactory
@@ -76,7 +77,10 @@ class GameHandler:
         self.worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
         self._plugin_host = None
         self._factory = GameFactory(self.registry, self.lorebook_store, self.worlds_dir)
-        self._state_applier = StateUpdateApplier(self.rules_dir, self.worlds_dir, self._load_world_template)
+        self._state_applier = StateUpdateApplier(
+            self.rules_dir, self.worlds_dir, self._load_world_template,
+            ruleset_registry=self.ruleset_registry,
+        )
         self._progression = ProgressionResolver(self.rules_dir, self.worlds_dir)
         self._last_matcher_scope: tuple[str, str] | None = None
         self._round_processor = RoundProcessor(
@@ -254,6 +258,14 @@ class GameHandler:
     async def prepare_round_checks_ai(self, instance: GameInstance) -> list[dict]:
         """由模型工具规划并结算本轮检定。"""
         return await self._round_processor.prepare_round_checks_ai(instance)
+
+    async def fill_ai_player_actions(self, instance: GameInstance) -> list[dict]:
+        """让 AI 托管席位在真人交齐后，走同一行动管线声明本轮行动。"""
+        return await fill_ai_player_actions(
+            instance,
+            llm_client=self.llm_client,
+            prompt_composer=self._prompt,
+        )
 
     async def _process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """兼容旧内部调用；实际逻辑已拆到 RoundProcessor。

@@ -6,6 +6,8 @@ import re
 from copy import deepcopy
 from typing import Any
 
+from src.engine.player_control import is_ai_controlled
+
 from .primitives import (
     DICE_RE,
     INTENT_TYPES,
@@ -229,8 +231,16 @@ class CombatValidationMixin:
         kind, raw_id = _actor_kind(actor_id)
         if not kind:
             raise CombatIntentError("actor_id is invalid")
-        if kind == "player" and submitted_by != raw_id:
-            raise CombatIntentError("a player can submit intents only for their own character")
+        if kind == "player":
+            if is_ai_controlled(instance, raw_id):
+                # AI 托管席位由 GM/server automation authority 代为提交（与
+                # companion 同一条自动链路）。席位一旦被真人接管就不再走这里。
+                if submitted_by != gm_uid:
+                    raise CombatIntentError(
+                        "only the GM can submit intents for an AI-hosted character"
+                    )
+            elif submitted_by != raw_id:
+                raise CombatIntentError("a player can submit intents only for their own character")
         if kind == "companion":
             # AI 队友由 GM/server automation authority 提交；玩家不能直接控制。
             if submitted_by != gm_uid:

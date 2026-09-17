@@ -177,6 +177,21 @@ function ensureCharacter(value: CharacterSheet): CreateCharacter {
   return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE)) }
 }
 
+// 每张角色卡由谁负责：'' 表示跟随房间默认（未认领角色的默认行为）。
+// 默认第一张是「我来控制」、其余跟随默认，避免改动纯单人/纯真人流程的既有手感。
+const cardControl = ref<string[]>(['human'])
+const unclaimedControlDefault = ref<'unclaimed' | 'ai'>('unclaimed')
+function applyControlDefault(index: number) {
+  if (index === 0 && !cardControl.value[0]) cardControl.value[0] = 'human'
+  if (cardControl.value.length < characters.value.length) {
+    cardControl.value = characters.value.map((_, i) => cardControl.value[i] ?? (i === 0 ? 'human' : ''))
+  }
+}
+watch(() => characters.value.length, (length) => {
+  const next = Array.from({ length }, (_, i) => cardControl.value[i] ?? (i === 0 ? 'human' : ''))
+  if (next.length !== cardControl.value.length || next.some((v, i) => v !== cardControl.value[i])) cardControl.value = next
+})
+
 function legacyCharacterFromCard(card: CharacterCard): CreateCharacter {
   return ensureCharacter({
     character_name: card.character_name,
@@ -483,7 +498,13 @@ async function create() {
   busy.value = true; error.value = ''
   try {
     requireApiConfiguration()
-    const players = characters.value.map(cloneCharacter)
+    const players = characters.value.map((c, i) => {
+      const card = cloneCharacter(c)
+      const explicit = cardControl.value[i]
+      // 只有用户明确选过的卡才带 control，其余交给房间默认解析，
+      // 这样「逐卡覆盖优先于全局默认」的优先级只有服务端一处实现。
+      return explicit ? { ...card, control: explicit } : card
+    })
     const selectedSceneImage = sceneImageFile.value ? await uploadSceneImage(sceneImageFile.value) : undefined
     if (seed.value.trim()) {
       const r = await api<GameMutationResponse>('/games/create-from-seed', { method: 'POST', body: JSON.stringify({ seed_code: seed.value.trim(), solo: solo.value, players, language: gameLanguage.value, scene_image: selectedSceneImage, narrative_perspective: narrativePerspective.value }) })
@@ -495,7 +516,7 @@ async function create() {
     const selectedMapBackground = mapBackgroundFile.value
       ? await uploadMapBackground(mapBackgroundFile.value)
       : mapBackgroundSelection(mapBackgroundChoice.value)
-    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
+    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm', unclaimed_control_default: unclaimedControlDefault.value }
     let worldId = ''
     if (mode.value === 'template') {
       worldId = world.value; payload.world_id = worldId
@@ -762,6 +783,22 @@ async function create() {
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>
           <div class="create-confirm-characters"><span v-for="(c, i) in characters" :key="i">{{ c.character_name }}</span></div>
+          <div class="create-control-stage">
+            <fieldset class="create-control-default">
+              <legend>{{ t('controlUnclaimedDefault') }}</legend>
+              <label><input v-model="unclaimedControlDefault" type="radio" value="unclaimed"> {{ t('controlUnclaimed') }}</label>
+              <label><input v-model="unclaimedControlDefault" type="radio" value="ai"> {{ t('controlAi') }}</label>
+            </fieldset>
+            <div class="create-control-cards">
+              <fieldset v-for="(c, i) in characters" :key="i" class="create-control-card">
+                <legend>{{ c.character_name || t('unnamed') }}</legend>
+                <label><input v-model="cardControl[i]" type="radio" value="human" @change="applyControlDefault(i)"> {{ t('controlHuman') }}</label>
+                <label><input v-model="cardControl[i]" type="radio" value="unclaimed" @change="applyControlDefault(i)"> {{ t('controlUnclaimed') }}</label>
+                <label><input v-model="cardControl[i]" type="radio" value="ai" @change="applyControlDefault(i)"> {{ t('controlAi') }}</label>
+                <label><input v-model="cardControl[i]" type="radio" value="" @change="applyControlDefault(i)"> {{ t('controlFollowDefault') }}</label>
+              </fieldset>
+            </div>
+          </div>
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>

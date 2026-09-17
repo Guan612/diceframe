@@ -12,6 +12,7 @@ const emit = defineEmits<{
   'copy-link': [uid: string]
   edit: [uid: string]
   'set-away': [uid: string, away: boolean]
+  'set-control': [uid: string, mode: 'ai' | 'human']
   'open-character-center': []
 }>()
 const { t } = useLocale()
@@ -25,6 +26,22 @@ const myRestStatus = computed(() => restSession.value?.participants.find(row => 
 function hasActed(p: Player) { return actedSet.value.has(p.user_id) }
 function needsDice(p: Player) { return Boolean(actionByUser.value.get(p.user_id)?.dice_pending) }
 function isAway(p: Player) { return awaySet.value.has(p.user_id) }
+function controlMode(p: Player): 'human' | 'ai' | 'unclaimed' {
+  const mode = p.control?.mode
+  return mode === 'ai' || mode === 'unclaimed' ? mode : 'human'
+}
+/** 「AI 临时托管」（暂离托管）与「AI 托管」（GM/房间决定）是两种不同状态。 */
+function isTemporaryHost(p: Player) { return controlMode(p) === 'ai' && Boolean(p.control?.temporary) }
+function controlBadge(p: Player): string {
+  const mode = controlMode(p)
+  if (mode === 'ai') return isTemporaryHost(p) ? t('controlAiTemporary') : t('controlAi')
+  if (mode === 'unclaimed') return t('controlUnclaimed')
+  return t('controlHuman')
+}
+function controlBadgeClass(p: Player) {
+  const mode = controlMode(p)
+  return ['tag', 'tag-control', `control-${mode}`, isTemporaryHost(p) ? 'control-temporary' : '']
+}
 </script>
 
 <template>
@@ -52,6 +69,7 @@ function isAway(p: Player) { return awaySet.value.has(p.user_id) }
           <strong>{{ p.character_name || p.user_id }}</strong>
           <small v-if="p.user_id === currentUserId" class="tag tag-self">{{ t('you') }}</small>
           <small v-if="p.user_id === detail.gm_uid" class="tag tag-gm">GM</small>
+          <small :class="controlBadgeClass(p)">{{ controlBadge(p) }}</small>
           <small v-if="isAway(p)" class="tag">{{ t('away') }}</small>
         </div>
         <div class="player-meta" v-if="detail.solo_mode === false">
@@ -63,6 +81,8 @@ function isAway(p: Player) { return awaySet.value.has(p.user_id) }
           <button @click="emit('copy-link', p.user_id)"><NIcon :component="LinkOutline" size="14" /> {{ t('operationLink') }}</button>
           <button @click="emit('edit', p.user_id)"><NIcon :component="CreateOutline" size="14" /> {{ t('edit') }}</button>
           <button v-if="p.user_id !== currentUserId" @click="emit('set-away', p.user_id, !isAway(p))">{{ isAway(p) ? t('back') : t('away') }}</button>
+          <button v-if="controlMode(p) === 'ai' && !isTemporaryHost(p)" @click="emit('set-control', p.user_id, 'human')">{{ t('controlStopAi') }}</button>
+          <button v-else-if="controlMode(p) !== 'ai'" @click="emit('set-control', p.user_id, 'ai')">{{ t('controlSetAi') }}</button>
           <button v-if="canKick && p.user_id !== currentUserId && p.user_id !== detail.gm_uid" class="danger" @click="emit('kick', p.user_id)"><NIcon :component="CloseCircleOutline" size="14" /> {{ t('kick') }}</button>
         </div>
       </li>

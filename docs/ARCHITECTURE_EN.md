@@ -28,6 +28,8 @@ Owner access accepts two peer credentials, both sent as `Authorization: Bearer` 
 
 QR sign-in lives in `src/webui/pairing.py` and `src/webui/routes/pairing.py`: an owner session calls `POST /api/pairing` for a single-use, short-TTL pairing code (also stored as a digest only), and the mobile client anonymously calls `POST /api/pairing/claim` to exchange it for a device token. The claim endpoint must stay anonymous (the phone holds no credential yet), so it shares the abuse-guard login bucket with `/api/login` and writes to the same login audit; pairing codes are single-use, expire, and are never renewed. The device list `GET /api/devices` and revocation `DELETE /api/devices/{id}` / `POST /api/devices/revoke-all` are owner-only, and the listing returns no field usable for authentication.
 
+On a passwordless server `POST /api/pairing` is open to any client that can reach it, so a device token issued then means "whoever can connect is the owner". Configuring an access password for the first time (`access_token` going from unset to set) therefore revokes every device token and pending pairing code as well; changing an already configured password does not — device tokens are credentials that rank alongside the access password, and the settings page has its own per-device / revoke-all entry points.
+
 Only the server knows which address the QR code should carry — the GM's browser origin is usually localhost, which is useless to a phone. `GET /api/system/network` (owner-only) returns reachable local candidates via `src/web_transport/local_addresses.py`, which is also the address source for self-signed certificate SANs.
 
 ## Content V2
@@ -208,6 +210,130 @@ background tick and no separate scheduler; an event can never run twice because
 of a retry, duplicate save, or page refresh, and because the settlement lives
 inside `world_state` it inherits the whole-round rollback, swipe, reset, and
 restart semantics unchanged.
+
+## Player Control
+
+`players[uid].control` is the authoritative record of who controls a seat:
+`human` (a real player is responsible), `ai` (the server produces this
+character's actions) or `unclaimed` (the seat exists but nobody plays it yet),
+carrying `revision`, `temporary` and `resume_mode`. It answers "who plays this
+character", not "what this character is": the character itself -- HP, equipment,
+spell slots, conditions, world position and the combat actor (`player:<uid>`) --
+exists exactly once in every mode, and switching controllers neither copies,
+moves nor re-keys anything. The first vocabulary is deliberately closed and does
+not include gm / remote_bot / script / hybrid.
+
+The only write entry point is `set_control` in `src/engine/player_control.py`,
+and every read goes through the same module: an unknown seat reads as the
+conservative default, a corrupted record degrades to `human` (the
+pre-contract behaviour), while writes fail closed on an unknown seat, an
+unknown mode, or temporary hosting without a resume target. Control is desktop
+session state, not a story outcome: `revision` increases only when the record
+actually changes, and whole-round rollback, aborted judgment and swipe revert
+character sheets and world facts without ever re-assigning a seat.
+`temporary = true` hosting must be able to return to `resume_mode` and must not
+become permanent after a restart.
+
+Persistence uses schema **13 -> 14**: every seat of an older save becomes
+`human`, the migration never guesses an AI controller from online state,
+character name or history, and it is repeatable. `control` sits beside
+`character_sheet`, so it is part of the player record itself: it round-trips
+through save/load and disappears together with the seat when a seat is cleaned
+up (for example the ghost-player cleanup on load), leaving no orphan control.
+
+The control mode is now the authoritative admission rule as well.
+`submission_block(instance, uid)` decides whether a human may submit an ordinary
+action: an `ai` seat returns `PLAYER_AI_CONTROLLED`, an `unclaimed` seat returns
+`PLAYER_UNCLAIMED`, and the shared `turns.submit_action` service (used by the
+Web endpoint and by SSE) answers 409 for both. It only refuses a human acting
+for that seat; it does not change whether the server AI acts on its own.
+
+The multiplayer ready barrier counts humans only: `active_human_players` is
+alive, present and `control.mode == human`, and `all_alive_ready()` plus the
+ready / waiting sets of `multiplayer_status()` are computed from it, so AI-hosted
+and unclaimed seats never block the round; they are reported separately as
+`ai_players` / `unclaimed_players` with their counts. An away human still does
+not block, and `active_alive_players` keeps its previous meaning for call sites
+such as the Luck timeout that only need a head count.
+
+Claim transitions go through the same authority: `claim_seat` is the canonical
+entry point for joining an existing seat in the Web path, turning `ai` /
+`unclaimed` into `human` without moving anything (character sheet, HP, equipment,
+spells, world position and combat actor all stay put), and it fails closed with
+`CONTROL_STALE` on a stale `expected_revision` and with `CONTROL_NOT_CLAIMABLE`
+on a seat that is already human-controlled. A brand-new seat is still born
+`human` via `put_player`. `control_change_block` names the safe boundary for a
+control change: `""` only while the table is in `ACTIVE_ACTION` with no round in
+flight, otherwise `CONTROL_CHANGE_BUSY`.
+
+In ordinary exploration rounds an `ai` seat declares its action through
+`src/commands/ai_player.py`. The gate is `GameInstance.human_actions_ready()`
+(the human side is complete -- deliberately a different question from
+`should_advance()`), and it is invoked exactly once at the single advance entry
+point, in `turns.submit_action` after the human gate and before `try_advance()`.
+One plain-text call per seat, sequentially in uid order, so a seat sees only its
+own character sheet, the player-safe public context and the actions already
+declared this round -- never GM-only world facts, `gm_directives`, another
+player's `private_log`, future plot, or an extra lorebook channel. The output is
+ordinary action prose with no DC, modifier or success flag; it is appended
+through `add_action`, the same canonical entry point humans use, and the existing
+Check Planner and WorldState legality decide the rest. The action carries
+`source` / `control_revision` / `generated_for_round` metadata used for
+de-duplication and debugging only. The run, round, seat and `control.revision`
+are captured before the call and all re-verified with the phase afterwards: any
+change discards the result. Provider errors or unusable output record
+`AI_ACTION_SKIPPED` and never block the round.
+
+Authoritative combat outside exploration takes a different road. An AI-hosted
+PC's combat turn is submitted as a **structured intent** by
+`next_automatic_intent` under server/GM automation authority, reusing the
+companion's existing deterministic ladder (`_allied_automatic_intent`: heal a
+downed ally, attack the nearest hostile, move toward it, Dodge, End Turn). No
+second combat engine is introduced and no LLM is involved at this stage. The one
+real difference from a companion is 0 HP: a companion makes no death save, but a
+player character must, or combat would stall on that seat. Intents still travel
+validate / resolve / apply on the same authoritative chain and obey the same
+action economy (action / attacks_remaining / movement), reading only that seat's
+own character sheet; a candidate that is not legal in the current state falls
+back to a legal `end_turn`, so a hosted seat's turn always terminates. Validation
+is tightened in step: a `player:` actor may only be submitted by `gm_uid` while
+the seat really is `ai`-hosted, otherwise "a player can submit intents only for
+their own character" still holds, so a human can neither play an AI seat by hand
+nor control it manually. A `human` or `unclaimed` seat never yields an automatic
+intent.
+
+The room and the table can now *express* who plays a seat. At creation each
+character card chooses "I control it / wait for a player to claim it / AI hosted",
+with a room-level default for unclaimed cards that a per-card choice overrides;
+when neither is given the legacy behaviour stands (every seat `human`), and an
+unknown mode fails closed at creation (`INVALID_PLAYER_CONTROL`) instead of
+quietly building a default seat. The roster shows four badges: human, AI hosted,
+unclaimed, and temporarily AI hosted.
+
+What "away" means is a room setting, `away_control_policy`, defaulting to
+`pause`: stepping away changes presence only and **never** hands the character to
+the AI. Under `ai_takeover`, stepping away hands the seat to the server AI in its
+*temporary* shape (`{mode: ai, temporary: true, resume_mode: human}`) and coming
+back returns it, clearing `temporary` / `resume_mode`; temporary hosting is still
+returnable after a restart and never becomes permanent. The GM also has "set to
+AI / stop AI hosting", which changes only the control record -- it does not copy
+the character, touch the Web identity or Bot mapping, reset ready state, reset HP,
+or rebuild the combat actor. Every control change only happens at a safe boundary
+(`ACTIVE_ACTION` with no round in flight), otherwise the caller gets the retryable
+`CONTROL_CHANGE_BUSY`. A disconnect **never** triggers takeover: only an explicit
+GM action, an explicit player away, or an explicit room setting can. The setting
+is persisted, so the instance schema moves **14 → 15**: every older save becomes
+`pause`, which is what it actually did, and a corrupt value degrades to `pause` too.
+
+The chat (Bot) entry point is equivalent to the Web one: `host Character Name` /
+`unhost Character Name` let the GM change a seat's controller from the group, over
+the same server-side control API -- the bridge holds no control state of its own
+and there is no second authority. These are a different contract from
+`away` / `back` (which change presence, not the controller), and they require the
+GM or an authorized account; the target must match exactly one roster character,
+otherwise the bot lists what is available instead of guessing. When the server
+answers `CONTROL_CHANGE_BUSY`, the group gets a friendly "retry after this round"
+notice rather than a raw failure.
 
 ## D&D 2024 Authoritative Play State
 

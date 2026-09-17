@@ -6,7 +6,6 @@ from collections import Counter
 from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
-import re
 from typing import Any, Awaitable, Callable, Protocol
 
 from src.engine.language import normalize_language
@@ -22,7 +21,11 @@ from src.imagegen import (
     storyboard_layout,
     storyboard_source_revision,
 )
-from src.imagegen.contracts import ImageReference
+from src.imagegen.contracts import (
+    ImageReference,
+    PROMPT_TEMPLATE_VARIABLE_RE,
+    PROMPT_TEMPLATE_VARIABLES,
+)
 
 
 PROMPT_FIELD_LIMITS = {
@@ -39,8 +42,6 @@ PROMPT_FIELD_KINDS = {
     "auto_rules": "automatic image-generation rules",
     "auto_prompt": "automatic reusable image prompt template",
 }
-PROMPT_VARIABLE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
-ALLOWED_PROMPT_VARIABLES = frozenset({"scene", "narration", "actions", "panels"})
 
 
 class ImageAssetBackend(Protocol):
@@ -185,8 +186,8 @@ class GeneratedImageService:
             raise ImageGenerationError("请先填写需要优化的提示词")
         if len(source) > 12_000:
             raise ImageGenerationError("待优化提示词不能超过 12000 个字符")
-        variables = PROMPT_VARIABLE_RE.findall(source)
-        if any(variable not in ALLOWED_PROMPT_VARIABLES for variable in variables):
+        variables = PROMPT_TEMPLATE_VARIABLE_RE.findall(source)
+        if any(variable not in PROMPT_TEMPLATE_VARIABLES for variable in variables):
             raise ImageGenerationError("提示词包含不支持的模板变量")
         llm_client = self._dependencies.llm_client
         if llm_client is None:
@@ -224,8 +225,8 @@ class GeneratedImageService:
             raise ImageGenerationError("AI 没有返回可用的优化结果")
         if len(optimized) > output_limit:
             raise ImageGenerationError(f"AI 优化结果超过 {output_limit} 个字符，请重试")
-        optimized_variables = PROMPT_VARIABLE_RE.findall(optimized)
-        if any(variable not in ALLOWED_PROMPT_VARIABLES for variable in optimized_variables):
+        optimized_variables = PROMPT_TEMPLATE_VARIABLE_RE.findall(optimized)
+        if any(variable not in PROMPT_TEMPLATE_VARIABLES for variable in optimized_variables):
             raise ImageGenerationError("AI 优化结果包含不支持的模板变量")
         if Counter(variables) != Counter(optimized_variables):
             raise ImageGenerationError("AI 优化结果遗漏了原有模板变量，请重试")

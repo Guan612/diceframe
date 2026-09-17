@@ -55,6 +55,8 @@ async def api_create_game(request: web.Request) -> web.Response:
         advancement_authority=str(
             body.get("advancement_authority", "ai_gm") or "ai_gm"
         ),
+        # 逐卡控制方式与「未认领角色默认」；缺省时保持旧行为（每个席位 human）。
+        unclaimed_control_default=str(body.get("unclaimed_control_default", "") or ""),
     )
     return web.json_response(result)
 

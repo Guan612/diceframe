@@ -19,9 +19,10 @@ from src.engine.economy import (
     pending_effect_groups,
     pending_economy_proposals,
 )
+from src.engine.game_instance import GameState
 from src.engine.language import localized_text
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
-from src.engine.game_instance import GameState
+from src.engine.player_control import submission_block
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
 
 if TYPE_CHECKING:
@@ -29,6 +30,12 @@ if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
+
+# 控制权拒绝真人提交时的对外文案；键与 player_control.SUBMISSION_BLOCK_CODES 一致。
+_SUBMISSION_BLOCK_MESSAGES = {
+    "PLAYER_AI_CONTROLLED": "该角色当前由 AI 托管，真人无法提交行动（可先接管该角色）",
+    "PLAYER_UNCLAIMED": "该角色尚未被认领，请先认领角色再提交行动",
+}
 
 
 NarrationDelta = Callable[[str], Awaitable[None]]
@@ -75,6 +82,9 @@ class TurnDependencies:
     # 策略按局解析：本局覆盖 → 规则模板默认 → 服务器全局配置。
     economy_auto_reward_settings: Callable[[Any], tuple[bool, int]] | None = None
     resolve_reward: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
+    # AI 托管席位补行动（src/commands/ai_player.py）：只在真人闸门满足之后、
+    # 本轮推进之前调用一次。None 表示该运行时没有配置这条能力（行为不变）。
+    fill_ai_player_actions: Callable[[Any], Awaitable[Any]] | None = None
 
 
 class TurnResult(TypedDict):
@@ -218,6 +228,27 @@ async def _prepare_checks(
         return list((await ai_prepare(instance)) or [])
     legacy_prepare = dependencies.prepare_round_checks
     return list((legacy_prepare(instance) if legacy_prepare else []) or [])
+
+
+async def _fill_ai_player_actions(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+    *,
+    game_key: str,
+) -> None:
+    """让 AI 托管席位在真人交齐后补上本轮行动（失败不阻塞本轮）。
+
+    补行动本身是一个独立的命令层能力；这个服务只负责在唯一的推进入口调用
+    它一次。``ai_player`` 内部已按席位隔离失败并自行记录 ``AI_ACTION_SKIPPED``，
+    这里的兜底只防住实现缺陷，绝不让它把真人的这一轮卡住。
+    """
+    fill = dependencies.fill_ai_player_actions
+    if fill is None or not instance.human_actions_ready():
+        return
+    try:
+        await fill(instance)
+    except Exception:
+        logger.exception("AI 托管席位补行动失败，本轮继续: game=%s", game_key)
 
 
 async def _process_round(
@@ -466,6 +497,15 @@ async def submit_action(
         return _result({"error": "游戏不存在，请刷新页面重新开始"}, 404)
     if actor_uid not in instance.players:
         return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
+    # 控制权是权威的准入判定：AI 托管 / 未认领的席位不接受真人提交的行动。
+    # 这里只拒绝"真人代打"，不改变服务器 AI 自身是否行动（本 PR 不让 AI 自动出招）。
+    block = submission_block(instance, actor_uid)
+    if block:
+        return _result({
+            "ok": False,
+            "error_code": block,
+            "error": _SUBMISSION_BLOCK_MESSAGES.get(block, "当前角色无法提交行动"),
+        }, 409)
     rule = dependencies.load_rule_for_game(instance)
     if rule is not None:
         try:
@@ -563,6 +603,11 @@ async def submit_action(
                 await dependencies.save_instance(instance)
             except Exception:
                 logger.exception("保存行动/购买请求失败: game=%s", game_key)
+
+    # AI 托管席位的补行动只有一个注入点：真人闸门满足之后、本轮推进之前。
+    # 这里不做任何 AI 判断（闸门、顺序、幂等、竞争守卫都在 ai_player 里），
+    # 也不让它的失败挡住真人这一轮。
+    await _fill_ai_player_actions(dependencies, instance, game_key=game_key)
 
     if await instance.try_advance():
         await _prepare_checks(dependencies, instance)

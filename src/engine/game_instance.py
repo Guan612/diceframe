@@ -34,6 +34,21 @@ from src.engine.game_state_contracts import (
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
+from src.engine.player_control import (
+    DEFAULT_AWAY_CONTROL_POLICY,
+    PlayerControlError,
+    ai_controlled_players,
+    away_control_policy,
+    begin_away_hosting,
+    control_change_block,
+    control_mode,
+    end_away_hosting,
+    ensure_control,
+    ensure_controls,
+    get_control,
+    set_control,
+    unclaimed_players,
+)
 from src.engine.world_state import ensure_world_state, fresh_world_state
 from src.migrations.instance import CURRENT_INSTANCE_SCHEMA_VERSION
 
@@ -153,6 +168,9 @@ class GameInstance:
     max_players: int = 6
     gm_uid: str = ""  # 创建游戏的 GM 的 user_id
     player_access_open: bool = True  # False 时所有玩家分享链接失效
+    # 房间级「暂离语义」：pause（默认，暂离不把角色交给 AI）或 ai_takeover。
+    # 旧存档没有这个字段，migration 一律补 pause（旧版本的真实行为）。
+    away_control_policy: str = DEFAULT_AWAY_CONTROL_POLICY
     bot_bind_token: str = ""  # 渠道 Bot 绑定本局的一次性管理凭证
     room_password: str = ""  # 房间密码（空=开放）；玩家凭此进入游戏，替代后台 access_token
     room_token: str = ""  # 玩家凭房间密码换取的会话凭证（random secrets，校验通过后颁发）
@@ -313,6 +331,10 @@ class GameInstance:
         # 世界真相容器：未设置/损坏 → 空世界；未知 schema 原样保留，由写入路径
         # 明确拒绝，绝不把用户数据猜成默认值。
         self.world_state = ensure_world_state(self.world_state)
+        # 每个席位都带一个显式控制器（human / ai / unclaimed）：旧存档、内存构造
+        # 与手工修改过的 players 都在这里补齐，读取方永远不必自己猜。唯一写入口
+        # 仍是 src.engine.player_control.set_control。
+        ensure_controls(self)
         if not isinstance(self.economy, dict) or not self.economy:
             self.economy = self._fresh_economy_state()
         else:
@@ -414,6 +436,19 @@ class GameInstance:
         """当前需要参与行动等待的存活玩家。暂离玩家仍在队伍中，但不阻塞回合。"""
         return self.alive_players.difference(self.away_players)
 
+    @property
+    def active_human_players(self) -> set[str]:
+        """当前需要等待行动的真人席位：存活、未暂离且控制模式为 ``human``。
+
+        AI 托管与未认领的席位由服务器或无人负责，不能阻塞多人的 ready
+        barrier；``active_alive_players`` 仍是"在场存活"的完整集合，供幸运
+        超时等只看人数的地方使用。
+        """
+        return {
+            uid for uid in self.active_alive_players
+            if control_mode(self, uid) == "human"
+        }
+
     def get_character_sheet(self, uid: str) -> dict:
         """获取指定玩家的角色卡，不存在时返回空 dict。"""
         return self.players.get(uid, {}).get("character_sheet", {})
@@ -430,6 +465,9 @@ class GameInstance:
 
     def put_player(self, uid: str, player: PlayerData) -> None:
         """Insert or replace one complete player record."""
+        # 席位写入即带控制器：新建角色、规则快照恢复等所有路径都经过这里，因此
+        # 内存中的名册与落盘后的名册不会出现"有的席位没有 control"的差别。
+        ensure_control(player)
         self.players[uid] = player
 
     def set_player_name(self, uid: str, character_name: str) -> bool:
@@ -553,6 +591,8 @@ class GameInstance:
         self.map_background = dict(selection or {})
 
     def replace_players(self, players: dict[str, PlayerData]) -> None:
+        for player in players.values():
+            ensure_control(player)
         self.players = players
 
     def restore_ruleset_transaction(self, snapshot: dict[str, Any]) -> None:
@@ -1340,19 +1380,46 @@ class GameInstance:
         luck_resolver._cancel_luck_timer(self, check_id)
 
     def all_alive_ready(self) -> bool:
-        """多人模式下，所有未暂离的存活角色都提交行动后才自动推进。"""
-        active = self.active_alive_players
+        """多人模式下，所有未暂离的存活真人席位都提交行动后才自动推进。
+
+        AI 托管与未认领的席位不参与等待：它们不是"还没交行动的真人"。
+        """
+        active = self.active_human_players
+        if not active:
+            return False
+        return active.issubset(self.ready_players)
+
+    def human_actions_ready(self) -> bool:
+        """真人一侧是否已经交齐，可以轮到服务器 AI 补行动。
+
+        这是 AI 托管席位补行动的唯一闸门（``src/commands/ai_player.py``）：AI
+        只在真人行动齐了之后出手，绝不与尚未提交的真人并行。没有真人席位、
+        还没有人提交、或真人行动仍在等掷骰时都是 ``False``——"AI 不该现在行动"
+        与"这一轮不能推进"是两件事，因此 ``should_advance()`` 的语义保持不变。
+        """
+        if self.has_pending_dice():
+            return False
+        active = self.active_human_players
         if not active:
             return False
         return active.issubset(self.ready_players)
 
     def multiplayer_status(self) -> dict:
-        """返回多人协调所需的轻量状态。"""
+        """返回多人协调所需的轻量状态。
+
+        ready / waiting 只统计真人席位（``active_human_players``），因此 AI
+        托管与未认领的席位不会出现在 ``waiting_players`` 里、也不会阻塞推进；
+        它们分别在 ``ai_players`` / ``unclaimed_players`` 中列出，说明"还差谁"
+        之外的那部分席位由谁负责。``active_count`` 仍是"在场存活"席位总数。
+        """
         alive = self.alive_players
         active = self.active_alive_players
-        ready = active.intersection(self.ready_players)
-        waiting = active.difference(self.ready_players)
+        human_active = self.active_human_players
+        ready = human_active.intersection(self.ready_players)
+        waiting = human_active.difference(self.ready_players)
         away = alive.intersection(self.away_players)
+        ai_hosted = ai_controlled_players(self)
+        unclaimed = unclaimed_players(self)
 
         def player_label(uid: str) -> str:
             return self.players.get(uid, {}).get("character_name") or uid
@@ -1379,6 +1446,16 @@ class GameInstance:
                 {"user_id": uid, "character_name": player_label(uid)}
                 for uid in sorted(away)
             ],
+            "ai_players": [
+                {"user_id": uid, "character_name": player_label(uid)}
+                for uid in ai_hosted
+            ],
+            "unclaimed_players": [
+                {"user_id": uid, "character_name": player_label(uid)}
+                for uid in unclaimed
+            ],
+            "ai_count": len(ai_hosted),
+            "unclaimed_count": len(unclaimed),
             "can_accept_actions": self.can_accept_actions(),
             "can_advance": self.can_accept_actions() and bool(self.action_queue),
             "action_count": len(self.action_queue),
@@ -1399,6 +1476,7 @@ class GameInstance:
             "pending_action_count": len(self.pending_actions),
             "gm_uid": self.gm_uid,
             "player_access_open": self.player_access_open,
+            "away_control_policy": away_control_policy(self),
         }
 
     # ---------- 回合推进 ------------------------------------
@@ -1436,72 +1514,211 @@ class GameInstance:
                          target_text: str = "", source: str = "",
                          dice_pending: bool = False, dice_system: str = "",
                          check_request: dict | None = None,
-                         count_revision: bool = True) -> bool:
+                         count_revision: bool = True,
+                         action_metadata: dict | None = None,
+                         defer_out_of_phase: bool = True) -> bool:
         """玩家声明行动。判决阶段中的发言缓存到下一轮。
 
         selected_attribute/selected_skill/target_text 为前端可选提交的结构化
         归因字段（P1），供检定与 prompt 直接使用，避免靠文本启发式猜。
+
+        ``action_metadata`` 是调用方自带的机器可读标记（例如服务器 AI 行动的
+        ``source`` / ``control_revision`` / ``generated_for_round``），只用于去重
+        与调试，不参与任何裁定；``defer_out_of_phase=False`` 表示这条行动带有
+        轮次身份，判定阶段只能拒绝，不得缓存进下一轮。
         """
         async with self.authoritative_write() as write_entered, self._lock:
             if not write_entered or self._process_lock.locked():
                 return False
-            if user_id in self.players:
-                cs = self.get_character_sheet(user_id)
-                if cs.get("deceased"):
-                    return False  # 死亡玩家不能行动
-                self.away_players.discard(user_id)
-            action_entry: ActionRecord = {
-                "user_id": user_id, "text": action_text,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "selected_attribute": selected_attribute,
-                "selected_skill": selected_skill,
-                "target_text": target_text,
-                "source": source,
-            }
-            if dice_pending:
-                action_entry["dice_pending"] = True
-                action_entry["dice_system"] = dice_system or "d20"
-            if check_request:
-                action_entry["check_request"] = dict(check_request)
-            if not self.can_accept_actions():
-                self.pending_actions.append(action_entry)
-                return False
-            # 切换行动时替换同玩家的旧条目（solo 与多人一致）：
-            # 避免 solo 模式反复追加堆积多条行动、触发 3 条上限，
-            # 也让未掷骰的旧检定随替换作废，不再卡住掷骰。
-            existing_index = next(
-                (index for index, action in enumerate(self.action_queue)
-                 if action.get("user_id") == user_id),
-                None,
+            return self._add_action_locked(
+                user_id, action_text,
+                selected_attribute=selected_attribute,
+                selected_skill=selected_skill,
+                target_text=target_text,
+                source=source,
+                dice_pending=dice_pending,
+                dice_system=dice_system,
+                check_request=check_request,
+                count_revision=count_revision,
+                action_metadata=action_metadata,
+                defer_out_of_phase=defer_out_of_phase,
             )
-            if existing_index is not None:
-                existing = self.action_queue[existing_index]
-                old_roll = next(
-                    (line for line in str(existing.get("text", "")).splitlines()
-                     if line.startswith("(系统掷骰:") and line.endswith(")")),
-                    "",
-                )
-                if old_roll:
-                    clean_text = "\n".join(
-                        line for line in str(action_text).splitlines()
-                        if not (line.startswith("(系统掷骰:") and line.endswith(")"))
-                    ).rstrip()
-                    action_entry["text"] = f"{clean_text}\n{old_roll}"
-                    action_entry["dice_pending"] = False
-                    action_entry["dice_system"] = existing.get("dice_system", "")
-                    action_entry["dice_roll_source"] = existing.get("dice_roll_source", "")
-                    action_entry["dice_value"] = existing.get("dice_value")
-                    action_entry["dice_rolls"] = list(existing.get("dice_rolls") or [])
-                    action_entry["check_request"] = existing.get("check_request")
-                old_revision = int(existing.get("revision_count", 1) or 1)
-                action_entry["revision_count"] = old_revision + 1 if count_revision else old_revision
-                self.action_queue[existing_index] = action_entry
-            else:
-                action_entry["revision_count"] = 1
-                self.action_queue.append(action_entry)
-            self.ready_players.add(user_id)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
+
+    def _add_action_locked(self, user_id: str, action_text: str, *,
+                           selected_attribute: str = "", selected_skill: str = "",
+                           target_text: str = "", source: str = "",
+                           dice_pending: bool = False, dice_system: str = "",
+                           check_request: dict | None = None,
+                           count_revision: bool = True,
+                           action_metadata: dict | None = None,
+                           defer_out_of_phase: bool = True) -> bool:
+        """``add_action`` 的持锁实现（调用方必须已持有写权限与 ``_lock``）。
+
+        单独抽出来是为了让需要「先复核再写入」的调用方能在**同一个** boundary
+        内完成两件事：自己在锁内复核，再调用这里追加，而不是写两层加锁。
+        """
+        if user_id in self.players:
+            cs = self.get_character_sheet(user_id)
+            if cs.get("deceased"):
+                return False  # 死亡玩家不能行动
+            self.away_players.discard(user_id)
+        action_entry: ActionRecord = {
+            "user_id": user_id, "text": action_text,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "selected_attribute": selected_attribute,
+            "selected_skill": selected_skill,
+            "target_text": target_text,
+            "source": source,
+        }
+        if action_metadata:
+            action_entry["metadata"] = dict(action_metadata)
+        if dice_pending:
+            action_entry["dice_pending"] = True
+            action_entry["dice_system"] = dice_system or "d20"
+        if check_request:
+            action_entry["check_request"] = dict(check_request)
+        if not self.can_accept_actions():
+            if not defer_out_of_phase:
+                return False
+            self.pending_actions.append(action_entry)
+            return False
+        # 切换行动时替换同玩家的旧条目（solo 与多人一致）：
+        # 避免 solo 模式反复追加堆积多条行动、触发 3 条上限，
+        # 也让未掷骰的旧检定随替换作废，不再卡住掷骰。
+        existing_index = next(
+            (index for index, action in enumerate(self.action_queue)
+             if action.get("user_id") == user_id),
+            None,
+        )
+        if existing_index is not None:
+            existing = self.action_queue[existing_index]
+            old_roll = next(
+                (line for line in str(existing.get("text", "")).splitlines()
+                 if line.startswith("(系统掷骰:") and line.endswith(")")),
+                "",
+            )
+            if old_roll:
+                clean_text = "\n".join(
+                    line for line in str(action_text).splitlines()
+                    if not (line.startswith("(系统掷骰:") and line.endswith(")"))
+                ).rstrip()
+                action_entry["text"] = f"{clean_text}\n{old_roll}"
+                action_entry["dice_pending"] = False
+                action_entry["dice_system"] = existing.get("dice_system", "")
+                action_entry["dice_roll_source"] = existing.get("dice_roll_source", "")
+                action_entry["dice_value"] = existing.get("dice_value")
+                action_entry["dice_rolls"] = list(existing.get("dice_rolls") or [])
+                action_entry["check_request"] = existing.get("check_request")
+            old_revision = int(existing.get("revision_count", 1) or 1)
+            action_entry["revision_count"] = old_revision + 1 if count_revision else old_revision
+            self.action_queue[existing_index] = action_entry
+        else:
+            action_entry["revision_count"] = 1
+            self.action_queue.append(action_entry)
+        self.ready_players.add(user_id)
+        self.last_activity = datetime.now(timezone.utc).isoformat()
+        return True
+
+    def has_action_from_source(self, user_id: str, round_number: int, source: str) -> bool:
+        """这一轮该席位是否已有一条来自 ``source`` 的行动（持锁与只读都安全）。"""
+        return any(
+            str(action.get("user_id") or "") == user_id
+            and isinstance(action.get("metadata"), Mapping)
+            and str(action["metadata"].get("source") or "") == source
+            and int(action["metadata"].get("generated_for_round", -1) or -1) == round_number
+            for action in self.action_queue
+        )
+
+    async def commit_ai_player_action(
+        self,
+        user_id: str,
+        action_text: str,
+        *,
+        source: str,
+        expected_run_id: str,
+        expected_round_number: int,
+        expected_control_revision: int,
+        action_metadata: dict | None = None,
+    ) -> str:
+        """Atomically re-confirm a hosted seat and commit its action.
+
+        The LLM call deliberately happens *outside* every lock; the danger is that
+        the world moves between "the model answered" and "we write the answer".
+        So the re-confirmation and the write are one boundary: this method takes
+        the authoritative write permission and ``_lock`` once, re-checks every
+        identity the caller captured (run, round, seat, control mode, control
+        revision, phase), re-checks that the **human gate is still open**, that
+        this round has no action from ``source`` yet, and only then appends.
+
+        The human gate matters on its own: a hosted seat only ever acts *after*
+        the humans are done. If somebody claims another seat (or a player returns
+        from away) while this result was in flight, the table suddenly has an
+        active human who has not submitted yet, and an action written now would
+        break "AI acts after the humans" — so it is discarded instead.
+
+        Returns ``""`` on commit, otherwise the reason the result was dropped:
+        ``rejected`` / ``run_changed`` / ``round_changed`` / ``seat_removed`` /
+        ``control_changed`` / ``phase_changed`` / ``human_gate_changed`` /
+        ``duplicate`` / ``action_rejected``.  Callers must treat a non-empty
+        result as "write nothing"; the action never lands.
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered or self._process_lock.locked():
+                # 判定/重写正在进行：这一轮不再接受带轮次身份的行动。
+                return "rejected"
+            stale = self.ai_player_action_stale_reason(
+                user_id,
+                expected_run_id=expected_run_id,
+                expected_round_number=expected_round_number,
+                expected_control_revision=expected_control_revision,
+            )
+            if stale:
+                return stale
+            # 真人闸门也要在这个 boundary 内复核：模型调用期间别的席位可能被真人
+            # 接管、或暂离的真人回来了，此时桌面上多了一个还没提交的 active human，
+            # 现在写入就会违反"AI 只在真人全部行动之后才行动"。
+            if not self.human_actions_ready():
+                return "human_gate_changed"
+            # 去重与复核必须在同一个 boundary 内：否则两个并发的补行动请求会各自
+            # 读到"还没有 AI 行动"，然后各写一条。
+            if self.has_action_from_source(user_id, expected_round_number, source):
+                return "duplicate"
+            added = self._add_action_locked(
+                user_id, action_text,
+                source=source,
+                action_metadata=action_metadata,
+                defer_out_of_phase=False,
+            )
+            return "" if added else "action_rejected"
+
+    def ai_player_action_stale_reason(
+        self,
+        user_id: str,
+        *,
+        expected_run_id: str,
+        expected_round_number: int,
+        expected_control_revision: int,
+    ) -> str:
+        """Why an in-flight hosted-seat result must be discarded, else ``""``.
+
+        Owned by the aggregate so there is exactly one definition of "this result
+        still belongs to the seat it was produced for"; callers must invoke it
+        inside the same boundary as the write it guards.
+        """
+        if str(getattr(self, "run_id", "") or "") != expected_run_id:
+            return "run_changed"
+        if int(self.round_number or 0) != expected_round_number:
+            return "round_changed"
+        if user_id not in self.players:
+            return "seat_removed"
+        record = get_control(self, user_id)
+        if record["mode"] != "ai":
+            return "control_changed"
+        if int(record["revision"]) != expected_control_revision:
+            return "control_changed"
+        if self.state != GameState.ACTIVE_ACTION:
+            return "phase_changed"
+        return ""
 
     def has_pending_dice(self, user_id: str | None = None) -> bool:
         return any(
@@ -1570,15 +1787,78 @@ class GameInstance:
     async def set_player_away(self, user_id: str, away: bool = True) -> bool:
         """标记玩家暂离/回来。暂离玩家仍在队伍中，但不阻塞多人回合。"""
         async with self._lock:
-            if user_id not in self.players or not self.is_alive(user_id):
-                return False
-            if away:
-                self.away_players.add(user_id)
-                self.ready_players.discard(user_id)
-            else:
-                self.away_players.discard(user_id)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
+            return self._set_player_away_locked(user_id, away)
+
+    def _set_player_away_locked(self, user_id: str, away: bool) -> bool:
+        """``set_player_away`` 的持锁实现（调用方必须已持有 ``_lock``）。
+
+        单独抽出来是为了让「暂离」和它可能触发的控制权转换能在**同一个**
+        transaction 内完成：``self._lock`` 不可重入，所以调用方不能在持锁时再调
+        :meth:`set_player_away`。
+        """
+        if user_id not in self.players or not self.is_alive(user_id):
+            return False
+        if away:
+            self.away_players.add(user_id)
+            self.ready_players.discard(user_id)
+        else:
+            self.away_players.discard(user_id)
+        self.last_activity = datetime.now(timezone.utc).isoformat()
+        return True
+
+    async def apply_away_transition(self, user_id: str, away: bool, *, policy: str) -> str:
+        """暂离/回来：安全边界复核 + 在场状态 + 控制权转换，同一个 transaction。
+
+        "暂离"和"把角色交给 AI"必须是**一次**可观察的状态变更：如果先写
+        ``away_players`` 再另起一个事务去改控制权，中间就会存在
+        ``away=true`` + ``control=human`` 的窗口，而那个组合恰恰是「玩家已经离开、
+        但 AI 没有接手」——一个谁都不负责的席位。
+
+        ``policy`` 为 ``pause`` 时只改在场状态（旧语义，不做安全边界检查）；
+        ``ai_takeover`` 的托管与"回来"的归还都要求安全边界，否则返回
+        ``CONTROL_CHANGE_BUSY``。成功返回 ``""``。
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered:
+                return "CONTROL_CHANGE_BUSY"
+            handover = away and policy == "ai_takeover"
+            if handover or not away:
+                block = control_change_block(self)
+                if block:
+                    return block
+            if not self._set_player_away_locked(user_id, away):
+                return "UNKNOWN_PLAYER"
+            if handover:
+                begin_away_hosting(self, user_id)
+            elif not away:
+                # 只在席位确实是「临时托管」时归还；GM 永久交给 AI 的席位不会被抢回。
+                end_away_hosting(self, user_id)
+            return ""
+
+    async def apply_player_control_change(self, user_id: str, mode: str) -> str:
+        """GM 托管控件：安全边界复核 + 控制权变更，同一个 transaction。
+
+        返回 ``""`` 表示已切换；否则 ``CONTROL_CHANGE_BUSY`` / ``UNKNOWN_PLAYER``
+        / ``CONTROL_REJECTED``。复核与实际写入之间没有任何 ``await``，因此回合处理
+        一旦开始占用边界，控制权转换就不可能插进去。
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered or self._process_lock.locked():
+                return "CONTROL_CHANGE_BUSY"
+            block = control_change_block(self)
+            if block:
+                return block
+            if user_id not in self.players:
+                return "UNKNOWN_PLAYER"
+            try:
+                set_control(self, user_id, mode)
+            except PlayerControlError:
+                logger.warning(
+                    "拒绝托管切换: game_key=%s uid=%s mode=%s",
+                    self.game_key, user_id, mode, exc_info=True,
+                )
+                return "CONTROL_REJECTED"
+            return ""
 
     async def advance_round(self) -> bool:
         """显式推进回合。未行动的存活玩家标记为已就绪。"""
