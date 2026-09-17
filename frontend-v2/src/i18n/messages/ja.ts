@@ -456,6 +456,7 @@ export const ja = {
   controlSetAi: 'AI に任せる',
   controlStopAi: 'AI 托管を停止',
   controlNowAi: 'AI に任せました',
+  controlAiTakingOver: 'AI が引き継いでいます…',
   controlNowHuman: 'プレイヤーに戻しました',
   controlUnclaimedDefault: '未認領キャラの既定',
   importedCharacter: '{name} をインポートしました',

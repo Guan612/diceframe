@@ -456,6 +456,7 @@ export const en = {
   controlSetAi: 'Set to AI',
   controlStopAi: 'Stop AI hosting',
   controlNowAi: 'Handed to the AI',
+  controlAiTakingOver: 'AI is taking over…',
   controlNowHuman: 'Returned to the player',
   controlUnclaimedDefault: 'Default for unclaimed characters',
   importedCharacter: 'Imported {name}',

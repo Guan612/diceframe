@@ -80,6 +80,8 @@ const currentRoundImageBusy = ref(false)
 const gmThinking = ref(false)
 const storyRecapBusy = ref(false)
 const luckBusyId = ref('')
+/** 正在把某个席位交给 AI：服务器可能正在为它生成探索行动。 */
+const hostingUid = ref('')
 const showPortraitEditor = ref(false)
 const showCharacterCenter = ref(false)
 const portraitDraft = ref<CharacterPortrait | null>()
@@ -716,6 +718,9 @@ async function kick(uid: string) {
 }
 
 async function setAway(uid: string, away: boolean) {
+  // ai_takeover 房间里"暂离"也会把席位交给 AI：服务器可能立刻替这个角色行动。
+  const handsOverToAi = away && String(game.detail.value?.away_control_policy || '') === 'ai_takeover'
+  if (handsOverToAi) hostingUid.value = uid
   try {
     const r = await api<{ ok?: boolean; error?: string; character_name?: string }>(
       `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/away`,
@@ -724,10 +729,13 @@ async function setAway(uid: string, away: boolean) {
     if (r.error || r.ok === false) throw new Error(r.error || t('statusSwitchFailed'))
     toast.success(t('playerAwayChanged', { name: r.character_name || uid, state: away ? t('away') : t('returned') }))
     await game.refresh()
-  } catch (e: unknown) { toast.error(errorMessage(e)) }
+  } catch (e: unknown) { toast.error(errorMessage(e)) } finally { hostingUid.value = '' }
 }
 
 async function setControl(uid: string, mode: 'ai' | 'human') {
+  // 交给 AI 时服务器会立刻接管：探索回合会先补行动再推进，权威战斗会直接
+  // 走完这个席位的回合，所以请求期间先把"AI 正在接管"显示出来。
+  if (mode === 'ai') hostingUid.value = uid
   try {
     const r = await api<{ ok?: boolean; error?: string }>(
       `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/control`,
@@ -738,7 +746,7 @@ async function setControl(uid: string, mode: 'ai' | 'human') {
       ? t('controlNowAi')
       : t('controlNowHuman'))
     await game.refresh()
-  } catch (e: unknown) { toast.error(errorMessage(e)) }
+  } catch (e: unknown) { toast.error(errorMessage(e)) } finally { hostingUid.value = '' }
 }
 
 /** 单个玩家的接管链接：同样走二维码弹窗，链接里带 user 参数 */
@@ -1380,6 +1388,7 @@ onBeforeUnmount(() => {
           :detail="game.detail.value"
           :is-gm="game.isGm.value"
           :current-user-id="actorId"
+          :hosting-uid="hostingUid"
           @kick="kick"
           @set-away="setAway"
           @set-control="setControl"

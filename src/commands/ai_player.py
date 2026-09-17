@@ -10,6 +10,10 @@ This module owns only the part that is specific to the AI controller:
 * *what the model may see* -- the existing player-safe context builder, so the
   prompt contains the seat's own character sheet, the public story and the
   actions already declared this round, and never GM truth;
+* *what the model is asked to do* -- role-play the character on that sheet
+  (identity, personality, values, goals, relationships, known clues, private
+  perceptions, current body and resources) rather than play the tactically
+  optimal move, and never invent a persona the sheet does not contain;
 * *how many calls* -- one plain-text call per AI seat, sequentially in sorted
   uid order, so a later seat sees the earlier AI declarations of the same pass;
 * *what is written* -- plain prose through ``GameInstance.add_action``.
@@ -26,6 +30,8 @@ Boundaries:
 - Failure is non-blocking: a provider error, timeout or unusable output is logged
   with the literal ``AI_ACTION_SKIPPED`` marker, recorded in the returned
   per-seat results, and the pass (and the round) continues.
+- A seat that already declared an action this round is never filled again: a seat
+  the GM only *later* handed to the AI keeps the action its human already made.
 - A control handover while a call is in flight discards the result: the seat must
   still be ``ai``, in the same run and round, with the same control revision and
   at the same phase, or nothing at all is written.
@@ -70,7 +76,12 @@ _ACTION_PROMPT = {
         "4. 只使用上下文里这个角色理应知道的信息：自己的角色卡、公开剧情、以及本轮"
         "已经公开的行动；不得引用秘密、其他角色的私有信息或尚未发生的情节。\n"
         "5. 不替其他角色行动、说话或决定结果，只声明自己的尝试。\n"
-        "6. 行动文本使用简体中文。"
+        "6. 你是在扮演角色，不是在替玩家做战术最优决策。决定行动时优先遵循角色卡中的："
+        "身份与背景、性格、价值观、目标 / 动机、已建立的人际关系、个人经历、自己已经"
+        "知道的线索、私密感知、当前身体与资源状态。如果「战术最优」与「角色性格一致」"
+        "冲突，只要行为仍然合理且合法，就优先保持角色一致性。不要编造角色卡中不存在的"
+        "人设、经历或关系。\n"
+        "7. 行动文本使用简体中文。"
     ),
     "en": (
         "You are one player at this table, playing {name} (seat {uid}). You speak only "
@@ -90,7 +101,15 @@ _ACTION_PROMPT = {
         "information, or events that have not happened yet.\n"
         "5. Do not act, speak or decide for other characters; declare only your own "
         "attempt.\n"
-        "6. Write the action text in English."
+        "6. You are role-playing this character, not making the tactically optimal "
+        "decision for a player: choose the action by following the character sheet "
+        "first -- identity and background, personality, values, goals and motivations, "
+        "established relationships, personal history, the clues this character already "
+        "knows, private perceptions, and its current body and resources. When tactical "
+        "optimality conflicts with staying in character, prefer character consistency "
+        "as long as the behaviour is still reasonable and legal. Never invent a "
+        "persona, history or relationship that is not on the character sheet.\n"
+        "7. Write the action text in English."
     ),
     "ja": (
         "あなたはこの卓のプレイヤーの一人で、キャラクター「{name}」（席 {uid}）を演じます。"
@@ -106,7 +125,14 @@ _ACTION_PROMPT = {
         "シート、公開された物語、このラウンドで既に公開された行動。秘密、他キャラクターの"
         "非公開情報、まだ起きていない出来事を引用しないこと。\n"
         "5. 他キャラクターの行動・発言・結果を代行せず、自分の試みだけを宣言すること。\n"
-        "6. 行動テキストは日本語で書くこと。"
+        "6. あなたはこのキャラクターを演じているのであって、プレイヤーのために戦術的な"
+        "最適解を出すのではありません。行動はキャラクターシートの次の項目に従って決める"
+        "こと：身元と背景、性格、価値観、目的・動機、築かれた人間関係、個人的な経歴、"
+        "このキャラクターが既に知っている手掛かり、非公開の知覚、現在の身体と資源の状態。"
+        "「戦術的な最適」と「キャラクターらしさ」が衝突する場合は、行動がなお合理的で"
+        "合法である限り、キャラクターの一貫性を優先すること。キャラクターシートに存在"
+        "しない人設・経歴・関係を捏造しないこと。\n"
+        "7. 行動テキストは日本語で書くこと。"
     ),
     "de": (
         "Du bist ein Spieler an diesem Tisch und spielst {name} (Sitz {uid}). Du "
@@ -126,7 +152,16 @@ _ACTION_PROMPT = {
         "Informationen anderer Figuren und keine noch nicht eingetretenen Ereignisse.\n"
         "5. Handle, sprich und entscheide nicht für andere Figuren; erkläre nur den "
         "eigenen Versuch.\n"
-        "6. Schreibe den Aktionstext auf Deutsch."
+        "6. Du spielst diese Figur, du triffst nicht die taktisch optimale Entscheidung "
+        "für einen Spieler: Wähle die Aktion zuerst nach dem Charakterbogen -- "
+        "Identität und Hintergrund, Persönlichkeit, Werte, Ziele und Motivationen, "
+        "bestehende Beziehungen, persönliche Vorgeschichte, die Hinweise, die diese "
+        "Figur bereits kennt, private Wahrnehmungen sowie ihren aktuellen Körper- und "
+        "Ressourcenzustand. Wenn taktische Optimalität mit der Figurentreue kollidiert, "
+        "hat die Figurentreue Vorrang, solange das Verhalten weiterhin vernünftig und "
+        "legal ist. Erfinde keine Persönlichkeit, Vorgeschichte oder Beziehung, die "
+        "nicht auf dem Charakterbogen steht.\n"
+        "7. Schreibe den Aktionstext auf Deutsch."
     ),
 }
 
@@ -271,6 +306,10 @@ async def _fill_one(
         # 幂等：同一 (run, round, uid) 至多一条 AI 行动。重复服务调用、SSE 重连
         # 或重试都会走到这里，而不是产生第二条行动。
         return _outcome(uid, "duplicate", "already_declared")
+    if _declared_action(instance, uid) is not None:
+        # 该席位本轮已经声明过行动（例如真人先出手、GM 之后才把它设为 AI）：
+        # "补行动"只补还没行动的席位，绝不能覆盖真人已经公开的那一条。
+        return _outcome(uid, "duplicate", "already_declared")
     run_id = str(getattr(instance, "run_id", "") or "")
     control = get_control(instance, uid)
 
@@ -363,6 +402,22 @@ def _existing_ai_action(
         if _metadata_round(metadata) == round_number:
             return action
     return None
+
+
+def _declared_action(instance: GameInstance, uid: str) -> dict[str, Any] | None:
+    """该席位本轮在行动队列里的条目（无论来源），没有则 ``None``。
+
+    行动队列是逐轮的（``start_round`` 清空），所以"在这个队列里出现过"就等于
+    "本轮已经声明过行动"。真人行动没有 ``metadata``，因此不能靠来源判断。
+    """
+
+    return next(
+        (
+            action for action in instance.action_queue
+            if str(action.get("user_id") or "") == uid
+        ),
+        None,
+    )
 
 
 def _metadata_round(metadata: dict[str, Any]) -> int:

@@ -6,7 +6,7 @@ import type { GameDetail, Player } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
 import { playerColor } from '@/utils/play'
 
-const props = defineProps<{ players: Player[]; detail: GameDetail; isGm: boolean; currentUserId?: string }>()
+const props = defineProps<{ players: Player[]; detail: GameDetail; isGm: boolean; currentUserId?: string; hostingUid?: string }>()
 const emit = defineEmits<{
   kick: [uid: string]
   'copy-link': [uid: string]
@@ -42,6 +42,8 @@ function controlBadgeClass(p: Player) {
   const mode = controlMode(p)
   return ['tag', 'tag-control', `control-${mode}`, isTemporaryHost(p) ? 'control-temporary' : '']
 }
+/** 服务器正在为这个席位接管：控制权切换请求还没回来。 */
+function isHosting(p: Player) { return Boolean(props.hostingUid) && p.user_id === props.hostingUid }
 </script>
 
 <template>
@@ -73,8 +75,8 @@ function controlBadgeClass(p: Player) {
           <small v-if="isAway(p)" class="tag">{{ t('away') }}</small>
         </div>
         <div class="player-meta" v-if="detail.solo_mode === false">
-          <span :class="['acted', isAway(p) ? 'done' : needsDice(p) ? 'wait' : hasActed(p) ? 'done' : 'wait']">
-            {{ isAway(p) ? t('awayFollowing') : needsDice(p) ? t('needsRoll') : hasActed(p) ? t('acted') : t('waitingAction') }}
+          <span :class="['acted', isHosting(p) ? 'wait' : isAway(p) ? 'done' : needsDice(p) ? 'wait' : hasActed(p) ? 'done' : 'wait']">
+            {{ isHosting(p) ? t('controlAiTakingOver') : isAway(p) ? t('awayFollowing') : needsDice(p) ? t('needsRoll') : hasActed(p) ? t('acted') : t('waitingAction') }}
           </span>
         </div>
         <div v-if="isGm" class="player-actions">

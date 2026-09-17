@@ -15,6 +15,13 @@ Behaviour under test:
 * the prompt is a *player-safe* context: the AI seat's own sheet and the public
   story, never GM-only world truth, GM directives, or another player's private
   log (an explicit regression check reads the prompt string the model received);
+* the system prompt explicitly requires *role-playing* the character on that
+  sheet -- identity, personality, values, goals, relationships, known clues,
+  private perceptions, current body and resources -- rather than playing the
+  tactically optimal move, and forbids inventing a persona the sheet lacks
+  (B11/B15).  The sheet itself reaches the model through the player-safe context,
+  so the tests assert on *prompt and context construction*, never on real LLM
+  output;
 * the emitted text is plain prose appended through the same canonical seam
   humans use (``GameInstance.add_action``), so the existing Check Planner runs on
   it and the AI seat's own sheet supplies its attributes and modifier;
@@ -41,6 +48,7 @@ from src.commands.ai_player import (
     AI_ACTION_SOURCE,
     DISCARD_MARKER,
     SKIP_MARKER,
+    build_ai_player_prompt,
     fill_ai_player_actions,
 )
 from src.commands.check_planner import plan_round_checks
@@ -54,6 +62,34 @@ from src.webui.services.turns import TurnDependencies, submit_action
 
 HUMAN_SHEET = {"hp": 10, "max_hp": 10, "attributes": {"str": 14, "dex": 10}}
 AI_SHEET = {"hp": 8, "max_hp": 8, "attributes": {"str": 8, "dex": 16}}
+
+# 一个"胆小、讨厌教会、习惯回避正面冲突"的角色卡。人设只来自现有
+# ``character_sheet``：本 PR 不新增任何 persona 存储（B12）。
+PERSONA_SHEET = {
+    "hp": 8,
+    "max_hp": 8,
+    "attributes": {"str": 8, "dex": 16},
+    "background": "PERSONA-BACKGROUND-3f8a：出生在曾被教会烧毁的村子。",
+    "personality": "PERSONA-TRAIT-9c1d：胆小，讨厌教会，习惯回避正面冲突。",
+    "ideals": "PERSONA-IDEAL-5b7e：只想活着看到下一个春天。",
+    "bonds": "PERSONA-BOND-2d4f：欠阿岚一次救命之恩。",
+    "goals": "PERSONA-GOAL-8e6a：找到教会纵火的证据，但绝不跟人正面冲突。",
+}
+
+# 「扮演角色」约束必须真的进了 system prompt；逐语言锁定关键句（B11/B15）。
+PERSONA_PROMPT_MARKERS = {
+    "zh-CN": ("不是在替玩家做战术最优决策", "角色卡", "不要编造角色卡中不存在"),
+    "en": ("role-playing this character", "character sheet", "Never invent a persona"),
+    "ja": ("演じているのであって", "キャラクターシート", "捏造しないこと"),
+    "de": ("Du spielst diese Figur", "Charakterbogen", "Erfinde keine Persönlichkeit"),
+}
+# 强化人设不得削弱既有的边界：不替别人行动、不决定结果、不做 GM 叙述（B14）。
+BOUNDARY_PROMPT_MARKERS = {
+    "zh-CN": ("不替其他角色行动、说话或决定结果",),
+    "en": ("Do not act, speak or decide for other characters",),
+    "ja": ("他キャラクターの行動・発言・結果を代行せず",),
+    "de": ("Handle, sprich und entscheide nicht für andere Figuren",),
+}
 
 
 def make_instance(
@@ -717,3 +753,63 @@ async def test_pure_human_table_behaves_exactly_as_before() -> None:
     # ready barrier 语义不变：两个真人都就绪，没有 AI/未认领席位参与。
     assert instance.all_alive_ready() is True
     assert instance.active_human_players == {"h1", "h2"}
+
+
+# ---- 13. 人设约束必须真的进入 prompt（B11 / B15）-----------------------------
+
+
+@pytest.mark.parametrize("language", sorted(PERSONA_PROMPT_MARKERS))
+def test_persona_constraint_is_in_the_system_prompt_for_every_locale(
+    language: str,
+) -> None:
+    """「按角色卡扮演」是硬性约束，四语言都必须出现在 system prompt 里。"""
+
+    instance = make_instance(humans=("h1",), ai=("a1",))
+    instance.language = language
+
+    prompt = build_ai_player_prompt(instance, "a1")
+
+    for marker in PERSONA_PROMPT_MARKERS[language]:
+        assert marker in prompt, f"{language} system prompt 缺少人设约束: {marker!r}"
+    # 人设强化不能突破"只代表自己这个角色"的边界。
+    for marker in BOUNDARY_PROMPT_MARKERS[language]:
+        assert marker in prompt, f"{language} system prompt 丢了角色边界: {marker!r}"
+
+
+@pytest.mark.asyncio
+async def test_persona_constraint_and_character_sheet_reach_the_model() -> None:
+    """人设约束进 system prompt，角色卡进 player-safe context（B15）。
+
+    不断言真实模型输出——单元测试只锁定"约束被送入 prompt、角色卡被送入
+    context"，这才是不依赖服务商的契约。
+    """
+
+    instance = make_instance(humans=("h1",), ai=("a1",), solo=True)
+    instance.language = "zh-CN"
+    instance.players["a1"]["character_name"] = "提莫"
+    sheet = instance.players["a1"]["character_sheet"]
+    sheet.update(PERSONA_SHEET)
+    sheet["attributes"] = dict(PERSONA_SHEET["attributes"])
+    # 另一个角色的角色卡绝不能出现在这个席位的 context 里（B13）。
+    instance.players["h1"]["character_sheet"]["personality"] = "OTHER-SHEET-7a3c"
+    await instance.add_action("h1", "我点亮提灯。")
+    llm = FakePlayerLLM(replies=["我缩到墙角，等他们走远了再动。"])
+
+    records = await fill_ai_player_actions(instance, llm_client=llm)
+
+    assert [record["status"] for record in records] == ["added"]
+    assert len(llm.calls) == 1
+    system_prompt = llm.calls[0]["system"]
+    context = llm.calls[0]["user"]
+
+    # 1) system prompt 明确要求遵循角色卡、按角色扮演。
+    assert "扮演角色" in system_prompt
+    assert "角色卡" in system_prompt
+    # 2) player-safe context 确实把该席位自己的 character_sheet 送了进去。
+    assert '"character_sheet"' in context
+    for field in ("background", "personality", "ideals", "bonds", "goals"):
+        assert PERSONA_SHEET[field] in context, f"角色卡字段 {field} 没有进入 context"
+    assert "提莫" in context
+    # 3) 别人的角色卡依然不可见。
+    assert "OTHER-SHEET-7a3c" not in context
+
