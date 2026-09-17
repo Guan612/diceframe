@@ -456,6 +456,7 @@ export const de = {
   controlSetAi: 'An KI übergeben',
   controlStopAi: 'KI-Führung beenden',
   controlNowAi: 'An die KI übergeben',
+  controlAiTakingOver: 'Die KI übernimmt…',
   controlNowHuman: 'An den Spieler zurückgegeben',
   controlUnclaimedDefault: 'Standard für nicht beanspruchte Charaktere',
   importedCharacter: '{name} importiert',

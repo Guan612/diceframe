@@ -11,11 +11,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.webui.ruleset_draft_validation import validate_draft_shape
+from src.rulesets.automation import (
+    advance_automatic_intents,
+    append_public_timeline_entry,
+    is_public_story_milestone,
+)
 from src.rulesets.contracts import (
     AdventureBindingMigrationRuntime,
     AuthoritativeIntentHooks,
     AutomaticIntentRuntime,
-    PublicTimelineProjectionRuntime,
     TemporaryEncounterPlannerRuntime,
 )
 from src.rulesets.registry import RulesetRuntimeRegistry
@@ -41,57 +45,75 @@ def _error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message}
 
 
-def _append_ruleset_timeline_entry(
-    runtime: PublicTimelineProjectionRuntime,
-    instance: Any,
-    batch: dict[str, Any],
+def _seat_actor_id(uid: str) -> str:
+    """Map a seat uid to its authoritative combat actor identity.
+
+    ``player:<uid>`` is the actor identity convention the engine and the ruleset
+    layer already share (``src/engine/checks.py`` and
+    ``src/webui/services/combat_extension.py`` build the same string).  Generic
+    code must not import the concrete ruleset, so this one string convention is
+    kept here and used only to answer "is it this seat's turn right now?".
+    """
+
+    return f"player:{uid}"
+
+
+def _active_combat(instance: Any) -> dict[str, Any] | None:
+    state = getattr(instance, "ruleset_state", None)
+    combat = state.get("combat") if isinstance(state, dict) else None
+    if isinstance(combat, dict) and combat.get("status") == "active":
+        return combat
+    return None
+
+
+def _project_public_batch(
+    runtime: Any, instance: Any, batch: dict[str, Any], applied: dict[str, Any],
 ) -> None:
-    intent_type = str(batch.get("intent_type") or "")
-    projection = runtime.public_timeline_projection(
-        batch, str(getattr(instance, "language", "") or ""),
-    )
-    action_text = str(projection.get("action_text") or "")
-    gm_response = str(projection.get("gm_response") or "")
-    submitted_by = next(
-        (
-            str(event.get("submitted_by") or "")
-            for event in batch.get("events", [])
-            if isinstance(event, dict) and event.get("type") == "intent.submitted"
+    if applied.get("applied") and is_public_story_milestone(runtime, batch):
+        append_public_timeline_entry(runtime, instance, batch)
+
+
+def _automatic_segment(
+    runtime: Any, instance: Any, rng: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The bounded server-owned automation ladder, or nothing without one."""
+
+    if not isinstance(runtime, AutomaticIntentRuntime):
+        return [], []
+    return advance_automatic_intents(
+        runtime, instance, rng,
+        on_applied=lambda batch, applied: _project_public_batch(
+            runtime, instance, batch, applied,
         ),
-        "",
     )
-    next_round = max(
-        int(getattr(instance, "round_number", 0) or 0) + 1,
-        max((int(item.get("round", 0) or 0) for item in instance.log), default=0) + 1,
-    )
-    instance.round_number = next_round
-    instance.append_log_entry({
-        "round": next_round,
-        "actions": [{
-            "user_id": submitted_by,
-            "text": action_text,
-            "source": "ruleset_authority",
-            "intent_type": intent_type,
-            "operation_id": str(batch.get("intent_id") or ""),
-        }],
-        "gm_response": gm_response,
-        "state_changes": [
-            str(event.get("type") or "")
-            for event in batch.get("events", [])
-            if isinstance(event, dict) and str(event.get("type") or "") != "intent.submitted"
-        ],
-        "check_results": [],
-        "swipes": [],
-        "current_swipe": 0,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    })
 
 
-def _is_public_story_milestone(runtime: Any, batch: dict[str, Any]) -> bool:
-    return (
-        isinstance(runtime, PublicTimelineProjectionRuntime)
-        and runtime.is_public_story_milestone(batch)
-    )
+async def _project_batch_memory(
+    dependencies: RulesetGameplayDependencies,
+    runtime: Any,
+    instance: Any,
+    batches: list[dict[str, Any]],
+) -> None:
+    """Best-effort long-term memory projection of already-persisted batches."""
+
+    if not dependencies.apply_memory_delta:
+        return
+    memories = [
+        memory
+        for batch in batches
+        for memory in runtime.memory_deltas_from_event_batch(batch, instance)
+    ]
+    for memory in memories:
+        try:
+            await dependencies.apply_memory_delta(
+                instance.memory_namespace, {"add": [memory]},
+                int(getattr(instance, "round_number", 0) or 0),
+            )
+        except Exception:
+            # Long-term memory is a derived projection of the persisted
+            # EventBatch. A projection failure must not roll back or
+            # contradict the already-saved authoritative campaign state.
+            logger.exception("D&D chapter-summary memory projection failed")
 
 
 def _context(
@@ -364,34 +386,10 @@ async def submit_intent(
             if not isinstance(batch, dict):
                 return _error("INVALID_EVENT_BATCH", "规则运行时没有返回有效事件批次")
             applied = runtime.apply_event_batch(instance, batch)
-            if applied.get("applied") and _is_public_story_milestone(runtime, batch):
-                _append_ruleset_timeline_entry(runtime, instance, batch)
-            automatic_batches: list[dict[str, Any]] = []
-            automatic_results: list[dict[str, Any]] = []
-            if isinstance(runtime, AutomaticIntentRuntime):
-                for _ in range(256):
-                    automatic_intent = runtime.next_automatic_intent(instance)
-                    if automatic_intent is None:
-                        break
-                    automatic = runtime.resolve_intent(instance, automatic_intent, rng)
-                    if not automatic.get("ok"):
-                        raise ValueError(
-                            str(automatic.get("error") or "automatic combat intent was rejected")
-                        )
-                    automatic_batch = automatic.get("event_batch")
-                    if not isinstance(automatic_batch, dict):
-                        raise ValueError("automatic combat intent returned no event batch")
-                    automatic_applied = runtime.apply_event_batch(instance, automatic_batch)
-                    if not automatic_applied.get("applied"):
-                        raise ValueError("automatic combat intent did not advance state")
-                    automatic_batches.append(deepcopy(automatic_batch))
-                    automatic_results.append(deepcopy(automatic_applied))
-                    if _is_public_story_milestone(runtime, automatic_batch):
-                        _append_ruleset_timeline_entry(
-                            runtime, instance, automatic_batch,
-                        )
-                else:
-                    raise ValueError("automatic combat turn exceeded the safety limit")
+            _project_public_batch(runtime, instance, batch, applied)
+            automatic_batches, automatic_results = _automatic_segment(
+                runtime, instance, rng,
+            )
             instance.last_activity = datetime.now(timezone.utc).isoformat()
             await dependencies.save_instance(instance)
         except (ValueError, KeyError, TypeError) as exc:
@@ -400,23 +398,9 @@ async def submit_intent(
         except Exception:
             instance.restore_ruleset_transaction(before)
             raise
-        resolved_batches = [batch, *automatic_batches]
-        if dependencies.apply_memory_delta:
-            for memory in [
-                memory
-                for resolved_batch in resolved_batches
-                for memory in runtime.memory_deltas_from_event_batch(resolved_batch, instance)
-            ]:
-                try:
-                    await dependencies.apply_memory_delta(
-                        instance.memory_namespace, {"add": [memory]},
-                        int(getattr(instance, "round_number", 0) or 0),
-                    )
-                except Exception:
-                    # Long-term memory is a derived projection of the persisted
-                    # EventBatch. A projection failure must not roll back or
-                    # contradict the already-saved authoritative campaign state.
-                    logger.exception("D&D chapter-summary memory projection failed")
+        await _project_batch_memory(
+            dependencies, runtime, instance, [batch, *automatic_batches],
+        )
         return _response(
             dependencies, rule, runtime, instance, effective_requester,
             requester_is_gm=requester_is_gm,
@@ -426,6 +410,115 @@ async def submit_intent(
                 "pending_decision": deepcopy(resolved.get("pending_decision")),
                 "automatic_event_batches": automatic_batches,
                 "automatic_results": automatic_results,
-                "resolved_event_batches": resolved_batches,
+                "resolved_event_batches": [batch, *automatic_batches],
             },
         )
+
+
+async def resume_authoritative_combat(
+    dependencies: RulesetGameplayDependencies,
+    game_key: str,
+    seat_uid: str,
+) -> dict[str, Any]:
+    """控制权变更后，立刻把该席位的权威回合走完。
+
+    这是 B8 的唯一入口：``next_automatic_intent()`` 已经能识别
+    「此刻由 AI 托管的 ``player:<uid>``」，这里只补上触发时机——控制权刚写入
+    就复用同一条确定性自动阶梯，直到轮到真人、战斗结束或没有自动意图为止，
+    而不是等某个人再点一次攻击。
+
+    ``handled=False`` 表示本局不是权威意图运行时（例如自由文本规则），调用方
+    应当继续走探索回合的推进边界。**绝不**替不属于该席位的 actor 出手：只有
+    ``next_automatic_intent()`` 现在给出的 actor 就是该席位时才继续，所以
+    "当前 actor 不是这个 PC" 时不会有任何状态变化（B17 第二种情形）。
+
+    失败时回滚整段事务并返回结构化错误，不半提交（B19）。
+    """
+
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
+    if instance is None:
+        return {
+            "ok": False, "handled": True, "resumed": False,
+            "error_code": "GAME_NOT_FOUND", "error": "游戏不存在",
+        }
+    rule = dependencies.load_rule_for_game(instance)
+    if rule is None:
+        # 没有规则就没有权威意图；交给探索回合的边界处理。
+        return {"ok": True, "handled": False, "resumed": False, "reason": "no_rule"}
+    try:
+        runtime = dependencies.ruleset_registry.resolve(rule.template)
+    except ValueError as exc:
+        return {
+            "ok": False, "handled": True, "resumed": False,
+            "error_code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
+        }
+    if not runtime.capabilities.authoritative_intents or _active_combat(instance) is None:
+        return {
+            "ok": True, "handled": False, "resumed": False,
+            "reason": "not_authoritative_combat",
+        }
+    if not isinstance(runtime, AutomaticIntentRuntime):
+        return {
+            "ok": True, "handled": True, "resumed": False,
+            "reason": "no_automatic_intent_runtime",
+        }
+
+    async with instance._lock:
+        binding_error = await _ensure_compatible_adventure_binding(
+            dependencies, runtime, instance,
+        )
+        if binding_error:
+            return {**binding_error, "handled": True, "resumed": False}
+        # 复核与推进在同一个持锁区段内：飞行期间回合可能已经易主，此时
+        # "轮到谁"必须以写入那一刻的状态为准。
+        pending = runtime.next_automatic_intent(instance)
+        if pending is None or str(pending.get("actor_id") or "") != _seat_actor_id(seat_uid):
+            return {
+                "ok": True, "handled": True, "resumed": False,
+                "reason": "not_this_seat",
+            }
+        before = {
+            "ruleset_state": deepcopy(instance.ruleset_state),
+            "event_ledger": deepcopy(instance.event_ledger),
+            "players": deepcopy(instance.players),
+            "combat_state": instance.combat_state,
+            "combat_active": instance.combat_active,
+            "initiative_order": deepcopy(instance.initiative_order),
+            "initiative_current": instance.initiative_current,
+            "last_activity": instance.last_activity,
+            "log": deepcopy(instance.log),
+            "round_number": instance.round_number,
+        }
+        try:
+            rng = random.SystemRandom()
+            automatic_batches, automatic_results = _automatic_segment(
+                runtime, instance, rng,
+            )
+            instance.last_activity = datetime.now(timezone.utc).isoformat()
+            await dependencies.save_instance(instance)
+        except (ValueError, KeyError, TypeError) as exc:
+            instance.restore_ruleset_transaction(before)
+            logger.warning(
+                "控制权变更后的权威回合推进失败，已回滚: game=%s uid=%s",
+                game_key, seat_uid, exc_info=True,
+            )
+            return {
+                "ok": False, "handled": True, "resumed": False,
+                "error_code": "AUTOMATIC_TURN_FAILED", "error": str(exc),
+            }
+        except Exception:
+            instance.restore_ruleset_transaction(before)
+            raise
+        await _project_batch_memory(
+            dependencies, runtime, instance, automatic_batches,
+        )
+    return {
+        "ok": True,
+        "handled": True,
+        "resumed": True,
+        "automatic_event_batches": automatic_batches,
+        "automatic_results": automatic_results,
+    }
+

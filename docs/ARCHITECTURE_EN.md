@@ -246,7 +246,8 @@ The control mode is now the authoritative admission rule as well.
 action: an `ai` seat returns `PLAYER_AI_CONTROLLED`, an `unclaimed` seat returns
 `PLAYER_UNCLAIMED`, and the shared `turns.submit_action` service (used by the
 Web endpoint and by SSE) answers 409 for both. It only refuses a human acting
-for that seat; it does not change whether the server AI acts on its own.
+for that seat; it does not change when the server AI acts on its own (see the
+hosted-action paragraphs below).
 
 The multiplayer ready barrier counts humans only: `active_human_players` is
 alive, present and `control.mode == human`, and `all_alive_ready()` plus the
@@ -282,14 +283,47 @@ Check Planner and WorldState legality decide the rest. The action carries
 de-duplication and debugging only. The run, round, seat and `control.revision`
 are captured before the call and all re-verified with the phase afterwards: any
 change discards the result. Provider errors or unusable output record
-`AI_ACTION_SKIPPED` and never block the round.
+`AI_ACTION_SKIPPED` and never block the round. A seat that already declared an
+action this round (a human acted first, the GM handed the seat over afterwards)
+is never filled again: the pass only fills seats that have not declared yet.
+
+The system prompt explicitly requires **role-playing that character sheet**
+rather than playing the tactically optimal move: identity and background,
+personality, values, goals and motivations, established relationships, personal
+history, the clues the character already knows, private perceptions and its
+current body and resources come first, and when tactical optimality conflicts
+with staying in character the character wins as long as the behaviour is still
+reasonable and legal; inventing a persona, history or relationship that is not on
+the sheet is forbidden. The character sheet remains the single source of who the
+character is: no second store such as `ai_persona` is introduced, and the
+visibility channels are unchanged (own sheet, public story, own private
+perceptions, knowledge explicitly visible to that character).
+
+A control change is itself a wake-up call: once `human -> ai` has been written,
+`GameControlService.set_player_control` (and an `ai_takeover` away) calls
+`turns.resume_after_control_change`, which only asks whether the phase can move
+on and whether the human gate is satisfied and then invokes the **same** advance
+entry point described above. No human has to submit anything, no empty action is
+ever faked, a still-pending human is still waited for, a repeated `set ai` in the
+same round stays idempotent, and a hosted action written without the round
+advancing is persisted on the spot. `ai -> human` is untouched: the control
+revision race guard still discards an in-flight AI result.
 
 Authoritative combat outside exploration takes a different road. An AI-hosted
 PC's combat turn is submitted as a **structured intent** by
 `next_automatic_intent` under server/GM automation authority, reusing the
 companion's existing deterministic ladder (`_allied_automatic_intent`: heal a
 downed ally, attack the nearest hostile, move toward it, Dodge, End Turn). No
-second combat engine is introduced and no LLM is involved at this stage. The one
+second combat engine is introduced and no LLM is involved at this stage. When a
+control change hands over the seat that is currently the actor, the single entry
+point is `ruleset_gameplay.resume_authoritative_combat`: it reuses the same
+automatic ladder loop (`advance_automatic_intents` in
+`src/rulesets/automation.py`, which `submit_intent` also uses), advances until a
+human's turn, the end of combat or no automatic intent is left, and persists the
+advance together with the control record. When the current actor is somebody
+else, not a single byte of state changes -- no actor is ever seized. A failure
+rolls the whole transaction back and returns a structured
+`AUTOMATIC_TURN_FAILED` error instead of half-committing. The one
 real difference from a companion is 0 HP: a companion makes no death save, but a
 player character must, or combat would stall on that seat. Intents still travel
 validate / resolve / apply on the same authoritative chain and obey the same

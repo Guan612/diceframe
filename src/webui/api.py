@@ -344,6 +344,13 @@ class WebAPI:
                 get_instance=self._reg.get,
                 save_instance=self._reg.save,
                 load_rule=self._load_rule_for_game,
+                # 延迟到调用时解析：回合依赖在下面才创建，而且这里只做组合，
+                # 不把 WebAPI 自己变成 service locator。
+                resume_after_control_change=lambda game_key, seat_uid: (
+                    turns.resume_after_control_change(
+                        self._turn_dependencies, game_key, seat_uid=seat_uid,
+                    )
+                ),
             )
         )
         self._manual_rolls = manual_rolls.ManualRollService(manual_rolls.ManualRollDependencies(_parse_game_key, self._reg.get, self._reg.save, self._load_rule_for_game))
@@ -501,6 +508,11 @@ class WebAPI:
             ),
             fill_ai_player_actions=getattr(
                 self._handler, "fill_ai_player_actions", None,
+            ),
+            resume_authoritative_combat=lambda game_key, seat_uid: (
+                ruleset_gameplay.resume_authoritative_combat(
+                    self._ruleset_gameplay_dependencies, game_key, seat_uid,
+                )
             ),
             resolve_pending_dice=self.resolve_pending_dice_for_game,
             roll_for_game=self.roll_for_game,
