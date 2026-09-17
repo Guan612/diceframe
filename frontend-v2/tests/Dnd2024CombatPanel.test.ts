@@ -1053,10 +1053,44 @@ describe('D&D 2024 combat panel class capabilities', () => {
     wrapper.unmount()
   })
 
+  it('still renders a legacy sheet whose actors carry no class-resource projection', async () => {
+    // 升级前的老角色卡（以及升级前的服务端）根本没有这两个投影字段：面板必须
+    // 照常渲染，只是不显示职业资源。
+    const payload = monkResponse({ focus: null, capabilities: [] })
+    for (const actor of payload.gameplay.combat.actors) {
+      delete (actor as any).class_resources
+      delete (actor as any).class_features
+    }
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.find('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(wrapper.find('.capability-card').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders a server-provided capability for a legacy sheet without resources', async () => {
+    // 能力来自服务端 available_actions，资源投影缺失时只影响资源条。
+    const payload = monkResponse({
+      focus: null,
+      capabilities: [{ id: 'bonus_unarmed_strike', label: 'Bonus Unarmed Strike', costs: capabilityCosts(false) }],
+    })
+    for (const actor of payload.gameplay.combat.actors) {
+      delete (actor as any).class_resources
+    }
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(capabilityButtons(wrapper)).toHaveLength(1)
+    wrapper.unmount()
+  })
+
   it('still renders while an enemy actor holds the turn and projects no class resources', async () => {
     // 敌人 actor 没有职业资源，服务端的 per-actor 投影对它们曾经发过 `{}`；
     // 前端只能渲染数组，遇到别的形状必须退化为「没有职业资源」，绝不能让
-    // 一次渲染异常把整块战斗面板（以及整页）带下去。
+    // 一次渲染异常把整块战斗面板（以及整页）带下去（Browser smoke 的实际故障）。
     const payload = monkResponse({ focus: null, capabilities: [] })
     payload.gameplay.combat.current_actor_id = 'enemy:goblin-1'
     payload.gameplay.combat.actors[1].class_resources = {}
