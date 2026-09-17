@@ -15,6 +15,9 @@ from src.rulesets.bundle import LoadedRulesetBundle, RulesetBundleLoader
 from src.rulesets.contracts import RulesetCapabilities
 import src.rulesets.dnd2024.advancement_access as advancement_access
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
+from src.rulesets.dnd2024.character.reconciliation import (
+    Dnd2024CharacterStateReconciler,
+)
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
 from src.rulesets.dnd2024.exploration import (
@@ -1048,6 +1051,40 @@ class Dnd2024Runtime:
         ):
             filtered["scene_change"] = ""
         return filtered
+
+    def reconcile_character_state(
+        self,
+        instance: Any,
+        user_id: str,
+        changed_domains: frozenset[str],
+    ) -> dict[str, Any] | None:
+        """Re-derive canonical mechanics after generic live state changed.
+
+        Thin delegate on purpose: the equipment projection, the armor class
+        re-derivation and the revision/log bookkeeping all live in
+        :mod:`~src.rulesets.dnd2024.character.reconciliation`.
+        """
+
+        sheet = instance.get_character_sheet(user_id)
+        if not isinstance(sheet, dict) or not isinstance(sheet.get("ruleset_character"), dict):
+            # 不是专业角色卡（legacy 导入 / 尚未建卡）：没有可投影的 canonical state。
+            return None
+        locale = str(
+            sheet["ruleset_character"].get("locale")
+            or getattr(instance, "language", "")
+            or ""
+        )
+        bundle = self.load_bundle(locale)
+        result = Dnd2024CharacterStateReconciler(
+            bundle,
+            locale_bundles=[
+                self.load_bundle(supported)
+                for supported in bundle.manifest.supported_locales
+            ],
+        ).reconcile(sheet, changed_domains)
+        if result is not None:
+            instance.set_character_sheet(user_id, sheet)
+        return result
 
     def project_legacy_character(self, character: dict[str, Any]) -> dict[str, Any]:
         locale = str(character.get("locale") or "")
