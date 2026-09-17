@@ -11,17 +11,20 @@ from src.bots.bridge_core.client import DiceFrameClient, build_join_link
 from src.bots.bridge_core.commands import (
     advance_force,
     away_target_query,
+    hosting_target_query,
     is_advance,
     is_ai_character_create,
     is_away,
     is_character_create,
     is_help,
+    is_host_ai,
     is_invite,
     is_map,
     is_payment_list,
     is_private_log,
     is_recap,
     is_return,
+    is_stop_hosting,
     kp_question,
     luck_decision,
     luck_index,
@@ -266,6 +269,11 @@ class DiceFrameBridgeService:
             return await self._away(message, text, away=True)
         if verb == "回来" or is_return(text):
             return await self._away(message, text, away=False)
+        # 取消托管必须先判：它的关键词包含「托管」。
+        if verb in {"取消托管", "停止托管"} or is_stop_hosting(text):
+            return await self._set_hosting(message, text, host=False)
+        if verb == "托管" or is_host_ai(text):
+            return await self._set_hosting(message, text, host=True)
         decision = payment_decision(text)
         if verb == "支付":
             return await self._payment(message, text, accepted=True if rest else None)
@@ -274,6 +282,71 @@ class DiceFrameBridgeService:
         if verb in {"行动", "做"}:
             return await self._action(message, rest)
         return await self._action(message, text)
+
+    async def _set_hosting(self, message: BridgeInput, text: str, *, host: bool) -> str:
+        """GM 在群里把某个角色交给服务器 AI，或把 AI 托管停掉交回真人。
+
+        只调一次服务端的控制权 API：托管不是「再建一个 AI 角色」，而是改变
+        席位由谁负责，所以这里没有任何本地状态，也不复制角色。
+        """
+
+        group, game_key, actor = self._require_actor(message)
+        language = self._group_language(group)
+        query = hosting_target_query(text)
+        if not query:
+            return bridge_text(
+                language,
+                "请在指令后写上角色名，例如「托管 阿岚」。",
+                "Add the character name, for example \"host Erin\".",
+                de="Bitte gib den Charakternamen an, z. B. \"host Erin\".",
+            )
+        if not self._can_advance(group, message.platform_user_id):
+            return bridge_text(
+                language,
+                "只有 GM 或授权账号可以切换角色的托管状态。",
+                "Only the GM or an authorized user can change a character's hosting.",
+                de="Nur der GM oder ein autorisiertes Konto kann die KI-Führung eines Charakters ändern.",
+            )
+        matches = match_roster_character(group.get("roster", []), query)
+        if len(matches) != 1:
+            return bridge_text(
+                language,
+                "没有唯一匹配到「{query}」的角色。可用：{names}",
+                "No single character matched \"{query}\". Available: {names}",
+                de="Kein eindeutiger Charakter für \"{query}\". Verfügbar: {names}",
+                query=query,
+                names=roster_names(group, language),
+            )
+        target_uid = str(matches[0].get("user_id") or "")
+        if not target_uid:
+            return bridge_text(
+                language,
+                "匹配到的角色缺少 user_id，无法托管。",
+                "The matched character has no user ID and cannot be hosted.",
+                de="Dem gefundenen Charakter fehlt eine user_id, er kann nicht geführt werden.",
+            )
+        # 托管别人的角色属于 GM 权限，因此以 GM 身份提交；托管自己则用自己。
+        api_actor = actor if target_uid == actor else str(group.get("gm_uid") or actor)
+        try:
+            result = await self.client.set_player_control(
+                game_key, api_actor, target_uid, mode="ai" if host else "human",
+            )
+        except DiceFrameHTTPError as exc:
+            if getattr(exc, "status", 0) == 409:
+                return bridge_text(
+                    language,
+                    "正在推进剧情，请等本轮结束后再切换托管状态。",
+                    "The round is being processed; change hosting after it finishes.",
+                    de="Die Runde wird gerade verarbeitet; ändere die Führung danach.",
+                )
+            raise
+        name = str(result.get("character_name") or matches[0].get("character_name") or target_uid)
+        return localized_text(language, {
+            "en": f"{name} is now {'hosted by the AI' if host else 'played by its player again'}.",
+            "zh-CN": f"{name} 现在{'由 AI 托管' if host else '已交回真人'}。",
+            "ja": f"{name} は{'AI 托管になりました' if host else 'プレイヤーに戻りました'}。",
+            "de": f"{name} wird jetzt {'von der KI geführt' if host else 'wieder von der Person gespielt'}.",
+        })
 
     async def _bind(self, message: BridgeInput, game_key: str, bind_token: str) -> str:
         result = await self.client.bind_game(game_key, bind_token)

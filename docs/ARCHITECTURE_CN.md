@@ -164,6 +164,8 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 「暂离」的含义由房间设置 `away_control_policy` 决定，默认 `pause`：暂离只改在场状态，**绝不**把角色交给 AI。设为 `ai_takeover` 时，玩家暂离会把席位交给服务器 AI 的**临时**形态（`{mode: ai, temporary: true, resume_mode: human}`），点「回来」即归还并清空 `temporary` / `resume_mode`；临时托管在重启后仍可归还，不会变成永久 AI。GM 另有托管控件「设为 AI / 停止 AI 托管」，只改控制记录——不复制角色、不动 Web 身份与 Bot 绑定、不重置 ready、不重置 HP、不重建战斗 actor。所有控制权变更只发生在安全边界（`ACTIVE_ACTION` 且没有在飞处理锁），否则返回可重试的 `CONTROL_CHANGE_BUSY`。断线**不会**触发 AI 接管：接管只能来自 GM 的明确操作、玩家的明确暂离，或房间的明确配置。该房间设置随存档持久化，schema 为 **14 → 15**，旧存档一律补 `pause`（即旧版本的真实行为），损坏值同样降级为 `pause`。
 
+群聊（Bot）入口与 Web 等价：`托管 角色名` / `取消托管 角色名` 让 GM 在群里直接改变席位归属，走的是同一个服务端控制权 API（桥接层不保存任何控制状态，也没有第二份权威）。这两条与 `暂离` / `回来` 是不同契约——后者改在场状态、前者改控制者——且都需要 GM 或授权账号；目标角色必须唯一匹配 roster，否则回复可用角色而不是猜测。服务端返回 `CONTROL_CHANGE_BUSY` 时，群里得到的是「本轮结束后再试」的友好提示，而不是原始失败文案。
+
 ## Ruleset Bundle v1
 
 `templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。
