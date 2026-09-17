@@ -293,6 +293,8 @@ export interface GameDetail {
   advancement?: LiveAdvancementStatus
   rest_session?: RestSessionStatus
   player_access_open?: boolean
+  /** 房间级暂离语义：pause（默认，暂离不交给 AI）/ ai_takeover。 */
+  away_control_policy?: 'pause' | 'ai_takeover' | string
   has_room_password?: boolean
   economy_reward_policy?: { mode?: string; auto_reward_cap?: number }
   combat_extension?: {
