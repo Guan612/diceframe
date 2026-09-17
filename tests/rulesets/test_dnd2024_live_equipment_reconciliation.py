@@ -218,6 +218,100 @@ def test_equipping_armor_then_shield_walks_the_reported_ac_path(runtime) -> None
     assert game.armor_class == unarmored
 
 
+# --------------------------------------------------------------------------
+# §old saves: canonical preparation must happen before the generic equip slots
+# --------------------------------------------------------------------------
+
+
+def test_an_old_row_without_metadata_is_prepared_before_the_first_equip(runtime) -> None:
+    """旧存档里没有 canonical metadata 的装备行，第一次直接装备也要落对槽位。
+
+    升级后玩家第一次 `equip Shield` 时，generic 层拿不到任何规则信息，会把非武器
+    一律当成 ``armor/body``，于是把身上的锁子甲顶回背包——之后再 reconcile 也救不
+    回来。规则集的 canonical 准备必须发生在这个槽位替换之前。
+    """
+
+    game = _Game(runtime)
+    game.strip()
+    game.buy("Chain Mail")
+    game.equip("Chain Mail")
+    assert game.armor_class == 16
+
+    # 旧存档：背包里已经有盾，但只有名字和数量，没有任何 canonical metadata。
+    # 刻意不先手工 reconcile。
+    game.sheet["inventory"].append({"name": "Shield", "qty": 1, "category": "equipment"})
+
+    game.equip("Shield")
+
+    names = [str(row.get("name") or "") for row in game.sheet["equipment"]]
+    assert "Chain Mail" in names, names
+    shield = next(row for row in game.sheet["equipment"] if row.get("name") == "Shield")
+    assert shield["slot"] == "off_hand"
+    assert shield["type"] == "shield"
+    assert shield["item_ref"] == "item:shield"
+    assert {"item:chain_mail", "item:shield"} <= set(game.item_refs)
+    assert game.armor_class == 18
+    assert game.mirror_armor_class == 18
+    assert game.combat_actor()["armor_class"] == 18
+
+
+def test_stale_wrong_metadata_is_repaired_before_equip(runtime) -> None:
+    """历史遗留的错误 ``type`` / ``slot`` 必须能被 canonical 定义修正。
+
+    generic 层曾经把盾牌写成 ``armor/body``；既然已经能可靠解析出
+    ``item_ref=item:shield``，那么由规则定义推导出的 ``type`` / ``slot`` 属于技术
+    metadata，应当以 canonical 为准，而不是"已有值就不动"。
+    """
+
+    game = _Game(runtime)
+    game.strip()
+    game.buy("Chain Mail")
+    game.equip("Chain Mail")
+
+    game.sheet["inventory"].append({
+        "name": "Shield", "qty": 1, "category": "equipment",
+        "item_ref": "item:shield", "item_key": "shield",
+        "type": "armor", "slot": "body",
+    })
+
+    game.equip("Shield")
+
+    names = [str(row.get("name") or "") for row in game.sheet["equipment"]]
+    assert "Chain Mail" in names, names
+    shield = next(row for row in game.sheet["equipment"] if row.get("name") == "Shield")
+    assert shield["type"] == "shield"
+    assert shield["slot"] == "off_hand"
+    assert game.armor_class == 18
+    assert game.mirror_armor_class == 18
+    assert game.combat_actor()["armor_class"] == 18
+
+
+def test_canonical_preparation_keeps_player_owned_metadata(runtime) -> None:
+    """修正技术 metadata 时不得覆盖玩家的名称 / 效果 / 数量等非规则字段。"""
+
+    game = _Game(runtime)
+    game.strip()
+
+    game.sheet["inventory"].append({
+        "name": "Shield", "qty": 3, "category": "equipment",
+        "effect": "家传的盾，边缘刻着家徽",
+        "quality": "rare",
+        "item_ref": "item:shield", "type": "armor", "slot": "body",
+    })
+
+    game.equip("Shield")
+
+    shield = next(row for row in game.sheet["equipment"] if row.get("name") == "Shield")
+    assert shield["slot"] == "off_hand"
+    assert shield["type"] == "shield"
+    # 非规则 metadata 原样保留。
+    assert shield["quality"] == "rare"
+    assert shield["effect"] == "家传的盾，边缘刻着家徽"
+    # 装备走的是"从背包取一件"，剩余数量仍归玩家。
+    remaining = [row for row in game.sheet["inventory"] if row.get("name") == "Shield"]
+    assert sum(int(row.get("qty", 0) or 0) for row in remaining) == 2
+
+
 def test_unarmored_armor_class_follows_the_bundle_formula(runtime) -> None:
     game = _Game(runtime)
     game.strip()

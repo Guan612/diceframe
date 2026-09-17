@@ -1086,6 +1086,40 @@ class Dnd2024Runtime:
             instance.set_character_sheet(user_id, sheet)
         return result
 
+    def prepare_owned_items(
+        self,
+        instance: Any,
+        user_id: str,
+        item_names: frozenset[str],
+    ) -> None:
+        """Canonicalize owned rows before the generic layer equips them.
+
+        The generic equip derives a target slot from the row it is handed, so an
+        old save whose shield row carries no ruleset metadata would be placed at
+        ``body`` and evict the armor actually worn.  Doing this first keeps that
+        knowledge in the ruleset: the generic layer only asks "prepare these
+        owned item names", and never learns what a shield is.
+        """
+
+        sheet = instance.get_character_sheet(user_id)
+        if not isinstance(sheet, dict) or not isinstance(sheet.get("ruleset_character"), dict):
+            return
+        locale = str(
+            sheet["ruleset_character"].get("locale")
+            or getattr(instance, "language", "")
+            or ""
+        )
+        bundle = self.load_bundle(locale)
+        prepared = Dnd2024CharacterStateReconciler(
+            bundle,
+            locale_bundles=[
+                self.load_bundle(supported)
+                for supported in bundle.manifest.supported_locales
+            ],
+        ).prepare_owned_rows(sheet, item_names)
+        if prepared:
+            instance.set_character_sheet(user_id, sheet)
+
     def project_legacy_character(self, character: dict[str, Any]) -> dict[str, Any]:
         locale = str(character.get("locale") or "")
         return Dnd2024CharacterBuilder(self.load_bundle(locale)).project_legacy(character)

@@ -23,7 +23,10 @@ from src.commands.state_items import (
     grant_classified_item,
 )
 from src.rules.rule_system import RuleSystem
-from src.rulesets.contracts import CharacterStateReconciliationRuntime
+from src.rulesets.contracts import (
+    CharacterItemPreparationRuntime,
+    CharacterStateReconciliationRuntime,
+)
 from src.engine.economy import queue_proposal
 
 logger = logging.getLogger("trpg")
@@ -120,6 +123,17 @@ class StateUpdateApplier:
         # 先解析 runtime：没有 reconciliation 能力的规则（legacy / freeform）完全
         # 不进入快照与 reconcile 分支，保持原有行为与开销。
         reconciler = self._reconciliation_runtime(rule)
+        # 旧存档的装备行可能没有 canonical metadata：generic equip 会按"非武器一律
+        # body"处理并把真正穿着的护甲顶回背包，而之后的 reconciliation 救不回来。
+        # 因此先让绑定的规则集把这次要装备的行 canonical 化（只有实现了该能力的
+        # runtime 才会被调用；generic 层仍然不知道任何具体规则）。
+        preparer = (
+            reconciler
+            if isinstance(reconciler, CharacterItemPreparationRuntime)
+            else None
+        )
+        if preparer is not None:
+            self._prepare_owned_items(preparer, instance, update.get("players", {}))
         snapshots = (
             self._snapshot_live_items(instance, update) if reconciler is not None else {}
         )
@@ -258,6 +272,42 @@ class StateUpdateApplier:
             )
             return None
         return runtime if isinstance(runtime, CharacterStateReconciliationRuntime) else None
+
+    def _prepare_owned_items(
+        self, preparer: Any, instance: GameInstance, players_update: Any,
+    ) -> None:
+        """Ask the bound ruleset to canonicalize the rows this update will equip.
+
+        Only the display names travel: the runtime re-reads the authoritative
+        character sheet itself, so the generic layer never carries rule
+        knowledge.  Failures are logged and swallowed -- an unprepared old row
+        must not abort the round; it simply behaves as it did before.
+        """
+
+        if not isinstance(players_update, dict):
+            return
+        for uid, player_update in players_update.items():
+            if not isinstance(player_update, dict):
+                continue
+            operations = player_update.get("equipment_ops")
+            if not isinstance(operations, list):
+                continue
+            names = {
+                str(op.get("name") or "").strip()
+                for op in operations
+                if isinstance(op, dict) and str(op.get("op") or "") != "unequip"
+            }
+            names.discard("")
+            if not names or str(uid) not in instance.players:
+                continue
+            try:
+                preparer.prepare_owned_items(
+                    instance, str(uid), frozenset(names),
+                )
+            except Exception:
+                logger.warning(
+                    "装备行 canonical 准备失败，按原行为继续: uid=%s", uid, exc_info=True,
+                )
 
     @staticmethod
     def _snapshot_live_items(

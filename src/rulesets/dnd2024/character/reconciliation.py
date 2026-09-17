@@ -162,27 +162,91 @@ class Dnd2024CharacterStateReconciler:
         generic layer has nothing to place them by.  Filling in ``item_ref``,
         ``type`` and ``slot`` here means a later equip lands in the right slot
         without the generic layer ever learning a D&D rule, and the localized
-        name is never consulted again for this row.  Existing values are left
-        alone: this annotates, it never overrides.
+        name is never consulted again for this row.
+
+        Identity and placement are *technical* metadata derived from the ruleset
+        item definition, so a value that contradicts the definition is repaired
+        rather than preserved: a save written back when the generic layer had to
+        guess placed a shield at ``armor/body``, and keeping that guess would
+        evict the real body armor forever.  Player-owned metadata (``name``,
+        ``effect``, ``quality``, ``qty``, custom descriptions) is never touched.
         """
 
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            item_id = self._resolve_item_id(row)
-            if not item_id:
+            self._annotate_row(row)
+
+    def _annotate_row(self, row: dict[str, Any]) -> bool:
+        """Annotate one live row in place; return whether anything changed."""
+
+        item_id = self._resolve_item_id(row)
+        if not item_id:
+            return False
+        item = self.bundle.get("item", item_id) or {}
+        item_type = str(item.get("item_type") or "")
+        slot = _GENERIC_SLOTS.get(item_type, "")
+        changed = False
+        if row.get("item_ref") != f"item:{item_id}":
+            row["item_ref"] = f"item:{item_id}"
+            changed = True
+        if row.get("item_key") != item_id:
+            row["item_key"] = item_id
+            changed = True
+        # 技术 metadata：以规则定义为准，冲突值直接修正。
+        if item_type and row.get("type") != item_type:
+            row["type"] = item_type
+            changed = True
+        if slot and str(row.get("slot") or "") != slot:
+            row["slot"] = slot
+            changed = True
+        return changed
+
+    def prepare_owned_rows(
+        self, sheet: dict[str, Any], item_names: Iterable[str] = (),
+    ) -> list[str]:
+        """Canonicalize owned rows *before* the generic layer equips them.
+
+        The generic equip resolves a target slot from the row it is given: with
+        no ruleset metadata a non-weapon falls back to ``body`` and evicts the
+        armor actually worn.  Running this first means the row already carries
+        ``item_ref`` / ``type`` / ``slot`` when that decision is made, so the
+        ruleset's knowledge is applied by the ruleset, and the generic layer
+        still learns nothing about D&D.
+
+        ``item_names`` limits the work to the rows this mutation will touch;
+        an empty iterable means every row.  Returns the canonical ids that were
+        (re-)established on rows whose identity resolved.
+        """
+
+        wanted = {
+            _normalized(name) for name in item_names if _normalized(name)
+        }
+        prepared: list[str] = []
+        for field in ("equipment", "inventory"):
+            rows = sheet.get(field)
+            if not isinstance(rows, list):
                 continue
-            item = self.bundle.get("item", item_id) or {}
-            item_type = str(item.get("item_type") or "")
-            if not row.get("item_ref"):
-                row["item_ref"] = f"item:{item_id}"
-            if not row.get("item_key"):
-                row["item_key"] = item_id
-            if item_type and not row.get("type"):
-                row["type"] = item_type
-            slot = _GENERIC_SLOTS.get(item_type, "")
-            if slot and not str(row.get("slot") or ""):
-                row["slot"] = slot
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if wanted and _normalized(row.get("name")) not in wanted:
+                    continue
+                item_id = self._resolve_item_id(row)
+                if not item_id:
+                    continue
+                before = (
+                    row.get("item_ref"), row.get("item_key"),
+                    row.get("type"), row.get("slot"),
+                )
+                self._annotate_row(row)
+                after = (
+                    row.get("item_ref"), row.get("item_key"),
+                    row.get("type"), row.get("slot"),
+                )
+                if after != before or not wanted:
+                    prepared.append(item_id)
+        return list(dict.fromkeys(prepared))
 
     # ------------------------------------------------------------------
     # reconciliation

@@ -323,3 +323,29 @@ class CharacterStateReconciliationRuntime(Protocol):
         user_id: str,
         changed_domains: frozenset[str],
     ) -> dict[str, Any] | None: ...
+
+
+@runtime_checkable
+class CharacterItemPreparationRuntime(Protocol):
+    """Optional hook: canonicalize owned item rows *before* a generic mutation.
+
+    Reconciliation runs after the mutation and can only describe the result.  A
+    generic equip, however, decides which slot to replace from the row it is
+    given; an old save whose rows carry no ruleset metadata therefore lands in
+    the wrong slot and evicts equipment that the later reconciliation cannot put
+    back.  This hook exists so the ruleset can establish canonical identity and
+    placement first, while the generic layer still knows nothing about any
+    specific rule.
+
+    ``item_names`` are the display names this mutation is about to equip; the
+    runtime re-reads the authoritative character sheet itself.  Implementations
+    must be safe to call with names that are absent, already canonical, or
+    unresolvable -- unresolvable rows are left exactly as they are.
+    """
+
+    def prepare_owned_items(
+        self,
+        instance: Any,
+        user_id: str,
+        item_names: frozenset[str],
+    ) -> None: ...
