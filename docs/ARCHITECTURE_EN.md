@@ -176,20 +176,27 @@ context block (marked as invisible to players), and player-facing surfaces get
 the `public` projection. Action legality is decided server-side by
 `world_legality`: the model may only *propose* structured `world_requirements`
 (`act` / `move` plus canonical location ids), and the decision uses provable
-evidence only (registered locations, explicit `passable = false`). An empty
-world, an unknown location, or an actor without an established location never
-blocks; a proven contradiction injects a trusted "move first / cannot complete"
-verdict into the GM context, and a legal move is written to world truth by the
-server. This channel stays separate from overreach: overreach covers a player
-declaring world facts or controlling others, while legality covers a player's
-own action contradicting authoritative world facts. Logical world time moves
-only through `world_events.advance_world_time(+N)`, which advances the clock,
-settles due events in stable `(day, minute, event_id)` order, and persists each
-event as `applied` or `failed` (its ops no longer apply at settlement time).
-There is no background tick and no separate scheduler; an event can never run
-twice because of a retry, duplicate save, or page refresh, and because the
-settlement lives inside `world_state` it inherits the whole-round rollback,
-swipe, reset, and restart semantics unchanged.
+evidence only (registered locations, explicit `passable = false`). `passable =
+false` blocks entering, passing through, and arriving at a place, so a `move`
+checks only the declared `via` hops and the destination -- the actor's current
+location is never part of that check, and a character already standing in an
+impassable place can still leave. An empty world, an unknown location, or an
+actor without an established location never blocks; a proven contradiction
+injects a trusted "move first / cannot complete" verdict into the GM context,
+and a legal move is written to world truth by the server. This channel stays
+separate from overreach: overreach covers a player declaring world facts or
+controlling others, while legality covers a player's own action contradicting
+authoritative world facts. Logical world time moves only through
+`world_events.advance_world_time(+N)`, which advances the clock, settles due
+events in stable `(day, minute, event_id)` order, and persists each event as
+`applied` or `failed` (its ops no longer apply at settlement time). A persisted
+event's `ops` are validated entry by entry under the same structural contract as
+the `schedule_event` write path, so corrupted data fails closed instead of being
+silently filtered into a false "applied" that executed nothing. There is no
+background tick and no separate scheduler; an event can never run twice because
+of a retry, duplicate save, or page refresh, and because the settlement lives
+inside `world_state` it inherits the whole-round rollback, swipe, reset, and
+restart semantics unchanged.
 
 ## D&D 2024 Authoritative Play State
 
