@@ -18,6 +18,7 @@ import {
   submitRulesetIntent,
 } from '@/features/rulesets/dnd2024/api'
 import type {
+  CharacterClassResource,
   JsonObject,
   RulesetCombatAction,
   RulesetCombatSpell,
@@ -276,9 +277,12 @@ const capabilityTargets = computed<RulesetCombatTarget[]>(() => (
   capabilityActions.value.find(item => item.requires_target)?.targets || []
 ))
 const capabilityTargetId = ref('')
-const currentClassResources = computed(() => (
-  (currentActor.value?.class_resources || []).filter(row => Number(row.maximum) > 0)
-))
+// 只有服务端投影出的数组才渲染：老存档 / 敌人 actor / 缺失投影一律退化为「没有
+// 职业资源」，绝不能让一个不是数组的值把整块战斗面板渲染炸掉。
+const currentClassResources = computed<CharacterClassResource[]>(() => {
+  const rows = currentActor.value?.class_resources
+  return Array.isArray(rows) ? rows.filter(row => Number(row.maximum) > 0) : []
+})
 function capabilityCostLabel(capability: RulesetCombatAction): string {
   return (capability.costs || []).map(cost => cost.kind === 'resource'
     ? `${cost.name} ${cost.amount}（${cost.current}/${cost.maximum}）`

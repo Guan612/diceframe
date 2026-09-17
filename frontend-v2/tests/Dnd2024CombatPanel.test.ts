@@ -1052,4 +1052,36 @@ describe('D&D 2024 combat panel class capabilities', () => {
     expect(wrapper.text()).not.toContain('Class features')
     wrapper.unmount()
   })
+
+  it('still renders while an enemy actor holds the turn and projects no class resources', async () => {
+    // 敌人 actor 没有职业资源，服务端的 per-actor 投影对它们曾经发过 `{}`；
+    // 前端只能渲染数组，遇到别的形状必须退化为「没有职业资源」，绝不能让
+    // 一次渲染异常把整块战斗面板（以及整页）带下去。
+    const payload = monkResponse({ focus: null, capabilities: [] })
+    payload.gameplay.combat.current_actor_id = 'enemy:goblin-1'
+    payload.gameplay.combat.actors[1].class_resources = {}
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.get('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(wrapper.find('.capability-card').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('ignores a legacy class-resource map instead of rendering or crashing on it', async () => {
+    // 老存档可能保留另一种形状（id -> {current, maximum}）。它不是本 PR 的投影，
+    // 里面没有本地化名字，因此只允许被忽略，不允许被当成列表使用。
+    const payload = monkResponse({ focus: null, capabilities: [] })
+    ;(payload.gameplay.combat.actors[0] as any).class_resources = {
+      focus_points: { current: 2, maximum: 2 },
+    }
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.get('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('undefined')
+    wrapper.unmount()
+  })
 })

@@ -460,3 +460,22 @@ def test_capability_targets_only_list_hostiles() -> None:
     # 不需要目标的能力不会附带 targets 字段，前端据此决定是否进入选靶流程。
     step = capability_action(engine, instance, "step_of_the_wind")
     assert step is not None and "targets" not in step
+
+
+
+def test_every_combat_actor_view_projects_class_resources_as_a_list() -> None:
+    """同一个字段只能有一种形状：客户端把它当数组渲染。
+
+    敌人没有职业资源，投影必须是空列表；``{}`` 之类的第二种形状会让前端在渲染
+    战斗面板时抛错，把整块面板（以及整页）带下去（Browser smoke 的实际故障）。
+    """
+
+    engine, instance = _setup(level=2)
+
+    actors = engine.gameplay_view(instance)["combat"]["actors"]
+    by_id = {actor["actor_id"]: actor for actor in actors}
+
+    assert isinstance(by_id["player:gm"]["class_resources"], list)
+    assert [row["id"] for row in by_id["player:gm"]["class_resources"]] == ["focus_points"]
+    # 敌人没有职业资源，但字段仍然存在，并且仍然是同一张列表。
+    assert by_id["enemy:goblin-1"]["class_resources"] == []

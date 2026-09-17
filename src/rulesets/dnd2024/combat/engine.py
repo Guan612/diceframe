@@ -740,7 +740,10 @@ class Dnd2024CombatEngine(
                     "conditions": deepcopy(view["conditions"]),
                     "concentration": deepcopy(view.get("concentration")),
                     "death_saves": deepcopy(view.get("death_saves") or {}),
-                    "class_resources": deepcopy(view.get("class_resources") or {}),
+                    # 职业资源投影永远是一张列表（player / companion 视图给出角色
+                    # 真实条目，enemy 视图没有职业资源，就是空列表）。这里绝不能
+                    # 退回 ``{}``：同一个字段出现两种形状会让客户端把对象当数组用。
+                    "class_resources": deepcopy(view.get("class_resources") or []),
                 })
         initiative = list(combat.get("initiative") or [])
         turn_index = int(combat.get("turn_index", 0) or 0)
