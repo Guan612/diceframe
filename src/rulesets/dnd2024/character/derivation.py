@@ -2,10 +2,70 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from typing import Any
 
 from .primitives import ABILITY_IDS, ability_modifier, proficiency_bonus, ref_id as _ref_id
+
+
+def derive_armor_class(
+    abilities: Mapping[str, int],
+    equipped_item_refs: Iterable[str],
+    bundle: Any,
+    *,
+    warnings: list[str] | None = None,
+) -> int:
+    """The one and only D&D 2024 armor class formula.
+
+    Character creation and live equipment reconciliation both call this, so the
+    rule exists exactly once.  Every number comes from the ruleset bundle's own
+    item definitions -- never from an LLM, the frontend, the generic layer, or a
+    localized display name.
+
+    The result is independent of the order ``equipped_item_refs`` arrives in.
+    Abnormal live state is contained rather than amplified: several armors
+    resolve to the single best one instead of stacking their bases, only one
+    shield bonus is ever applied, and an item the bundle does not define is
+    skipped with a warning instead of guessing at a lookalike.
+    """
+
+    dex_modifier = ability_modifier(int(abilities["dex"]))
+    unarmored = 10 + dex_modifier
+    best_armor: int | None = None
+    shield_bonus = 0
+    for raw_ref in equipped_item_refs:
+        ref = str(raw_ref or "")
+        item = bundle.get("item", _ref_id(ref, "item"))
+        if item is None:
+            if warnings is not None:
+                warnings.append(f"unknown item reference ignored by armor class: {ref}")
+            continue
+        item_type = item.get("item_type")
+        if item_type == "armor":
+            dex_bonus = 0
+            if item.get("use_dex", True):
+                dex_bonus = dex_modifier
+                dex_cap = item.get("dex_cap")
+                if dex_cap is not None:
+                    dex_bonus = min(dex_bonus, int(dex_cap))
+            candidate = int(item.get("ac_base", 10)) + dex_bonus
+            if best_armor is None:
+                best_armor = candidate
+            else:
+                # 同时穿着多件盔甲是非法 live state：取一件合法的，绝不相加。
+                if warnings is not None:
+                    warnings.append(f"extra armor ignored by armor class: {ref}")
+                best_armor = max(best_armor, candidate)
+        elif item_type == "shield":
+            bonus = int(item.get("ac_bonus", 0) or 0)
+            if shield_bonus:
+                # 同理：两面盾不能 +2 +2。
+                if warnings is not None:
+                    warnings.append(f"extra shield ignored by armor class: {ref}")
+                continue
+            shield_bonus = bonus
+    return max(unarmored, best_armor if best_armor is not None else unarmored) + shield_bonus
 
 
 class CharacterDerivationMixin:
@@ -80,19 +140,10 @@ class CharacterDerivationMixin:
                     {"item_ref": ref, "quantity": 1}
                     for ref in (selected_package.get("item_refs") or [])
                 )
-        armor_class = 10 + ability_modifier(abilities["dex"])
         for ref in item_refs:
-            item = self._required_entity(ref, "item")
-            if item.get("item_type") == "armor":
-                dex_bonus = 0
-                if item.get("use_dex", True):
-                    dex_bonus = ability_modifier(abilities["dex"])
-                    dex_cap = item.get("dex_cap")
-                    if dex_cap is not None:
-                        dex_bonus = min(dex_bonus, int(dex_cap))
-                armor_class = max(armor_class, int(item.get("ac_base", 10)) + dex_bonus)
-            elif item.get("item_type") == "shield":
-                armor_class += int(item.get("ac_bonus", 0) or 0)
+            # 建卡阶段仍要求装备包里每个引用都真实存在（validation 已保证）。
+            self._required_entity(ref, "item")
+        armor_class = derive_armor_class(abilities, item_refs, self.bundle)
 
         hit_die = int(class_entity["hit_die"])
         con_modifier = ability_modifier(abilities["con"])
