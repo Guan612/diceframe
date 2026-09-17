@@ -31,6 +31,12 @@ Design boundaries:
   / ``restore_players``) only snapshot and restore character-sheet fields, so
   "AI took over, then the GM rolled the round back" cannot silently re-assign the
   seat.  Control still travels with ordinary save/load.
+- **The room says what "away" means.**  :data:`AWAY_CONTROL_POLICIES` is the
+  table-wide setting that decides whether stepping away hands the seat to the
+  server AI for a moment; it belongs to the same contract because it produces
+  control transitions through :func:`set_control` and nothing else.  Only an
+  explicit GM action, an explicit player 暂离, or this explicit room setting can
+  ever produce an AI controller -- disconnects never do.
 """
 
 from __future__ import annotations
@@ -50,6 +56,11 @@ DEFAULT_CONTROL_MODE = "human"
 
 # temporary=true 表示「真人暂离、AI 临时托管」，恢复目标只能是真人或未认领。
 RESUME_MODES = ("human", "unclaimed")
+
+# 房间级「暂离语义」。旧存档没有这个设置，唯一不猜测的答案是旧版本行为：
+# 暂离只改在场状态，绝不把角色交给 AI。
+AWAY_CONTROL_POLICIES = ("pause", "ai_takeover")
+DEFAULT_AWAY_CONTROL_POLICY = "pause"
 
 # 真人发起的一次普通行动被控制权拒绝时，唯一允许的两个对外错误码。
 SUBMISSION_BLOCK_CODES = ("PLAYER_AI_CONTROLLED", "PLAYER_UNCLAIMED")
@@ -275,6 +286,83 @@ def is_ai_controlled(instance: Any, uid: str) -> bool:
     return control_mode(instance, uid) == "ai"
 
 
+def is_temporarily_ai_controlled(instance: Any, uid: str) -> bool:
+    """Is this seat only *temporarily* hosted by the server AI?
+
+    Temporary hosting is the away-takeover shape (``temporary=True`` with a
+    ``resume_mode``), so the roster can show it differently from a seat the GM or
+    the room deliberately handed to the AI for good.
+    """
+
+    record = get_control(instance, uid)
+    return record["mode"] == "ai" and bool(record["temporary"])
+
+
+def normalize_away_control_policy(raw: Any) -> str:
+    """Coerce a stored room policy to a known value; unknown reads as the default.
+
+    Same read/write asymmetry as the control record: reading degrades to the
+    legacy behaviour (``pause``, i.e. away never hands a character to the AI)
+    because that is the behaviour a save written before this setting existed
+    actually had.  :func:`set_away_control_policy` still refuses unknown values.
+    """
+
+    value = str(raw or "").strip()
+    return value if value in AWAY_CONTROL_POLICIES else DEFAULT_AWAY_CONTROL_POLICY
+
+
+def away_control_policy(instance: Any) -> str:
+    """The room's away semantics, defaulting to the legacy ``pause``."""
+
+    return normalize_away_control_policy(
+        getattr(instance, "away_control_policy", DEFAULT_AWAY_CONTROL_POLICY)
+    )
+
+
+def set_away_control_policy(instance: Any, policy: Any) -> str:
+    """Set the room-level away policy; fail closed on an unknown value."""
+
+    value = str(policy or "").strip()
+    if value not in AWAY_CONTROL_POLICIES:
+        raise PlayerControlError(
+            f"unknown away_control_policy {policy!r}; "
+            f"expected one of {AWAY_CONTROL_POLICIES}"
+        )
+    instance.away_control_policy = value
+    return value
+
+
+def begin_away_hosting(instance: Any, uid: str) -> dict[str, Any]:
+    """Hand a human seat to the server AI because its player stepped away.
+
+    Only meaningful for a seat a human actually controls: an ``unclaimed`` or
+    already-``ai`` seat has no human to hand over.  The result is the temporary
+    shape ``{mode: ai, temporary: true, resume_mode: human}``, so the seat can
+    always be handed back and can never quietly become a permanent AI.
+    """
+
+    current = control_mode(instance, uid)
+    if current != "human":
+        return get_control(instance, uid)
+    return set_control(instance, uid, "ai", temporary=True, resume_mode="human")
+
+
+def end_away_hosting(instance: Any, uid: str) -> dict[str, Any]:
+    """Return a temporarily hosted seat to whoever it was taken from.
+
+    A no-op unless the seat really is temporarily hosted, so an ordinary "I am
+    back" on a seat the GM permanently gave to the AI does not steal it back.
+    """
+
+    record = get_control(instance, uid)
+    if record["mode"] != "ai" or not record["temporary"]:
+        return record
+    resume = str(record.get("resume_mode") or "human")
+    if resume not in RESUME_MODES:
+        resume = "human"
+    return set_control(instance, uid, resume)
+
+
 def is_unclaimed(instance: Any, uid: str) -> bool:
     return control_mode(instance, uid) == "unclaimed"
 
@@ -368,27 +456,35 @@ def _player_record(instance: Any, uid: str) -> MutableMapping[str, Any] | None:
 
 
 __all__ = [
+    "AWAY_CONTROL_POLICIES",
     "CONTROL_KEY",
     "CONTROL_MODES",
+    "DEFAULT_AWAY_CONTROL_POLICY",
     "DEFAULT_CONTROL_MODE",
     "MAX_CONTROL_REVISION",
     "PlayerControlError",
     "RESUME_MODES",
     "SUBMISSION_BLOCK_CODES",
     "ai_controlled_players",
+    "away_control_policy",
+    "begin_away_hosting",
     "claim_seat",
     "control_change_block",
     "control_mode",
     "default_control",
+    "end_away_hosting",
     "ensure_control",
     "ensure_controls",
     "get_control",
     "human_controlled_players",
     "is_ai_controlled",
     "is_human_controlled",
+    "is_temporarily_ai_controlled",
     "is_unclaimed",
+    "normalize_away_control_policy",
     "normalize_control",
     "release_temporary_controls",
+    "set_away_control_policy",
     "set_control",
     "submission_block",
     "unclaimed_players",

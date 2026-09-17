@@ -35,11 +35,18 @@ from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.engine.player_control import (
+    DEFAULT_AWAY_CONTROL_POLICY,
+    PlayerControlError,
     ai_controlled_players,
+    away_control_policy,
+    begin_away_hosting,
+    control_change_block,
     control_mode,
+    end_away_hosting,
     ensure_control,
     ensure_controls,
     get_control,
+    set_control,
     unclaimed_players,
 )
 from src.engine.world_state import ensure_world_state, fresh_world_state
@@ -161,6 +168,9 @@ class GameInstance:
     max_players: int = 6
     gm_uid: str = ""  # 创建游戏的 GM 的 user_id
     player_access_open: bool = True  # False 时所有玩家分享链接失效
+    # 房间级「暂离语义」：pause（默认，暂离不把角色交给 AI）或 ai_takeover。
+    # 旧存档没有这个字段，migration 一律补 pause（旧版本的真实行为）。
+    away_control_policy: str = DEFAULT_AWAY_CONTROL_POLICY
     bot_bind_token: str = ""  # 渠道 Bot 绑定本局的一次性管理凭证
     room_password: str = ""  # 房间密码（空=开放）；玩家凭此进入游戏，替代后台 access_token
     room_token: str = ""  # 玩家凭房间密码换取的会话凭证（random secrets，校验通过后颁发）
@@ -1466,6 +1476,7 @@ class GameInstance:
             "pending_action_count": len(self.pending_actions),
             "gm_uid": self.gm_uid,
             "player_access_open": self.player_access_open,
+            "away_control_policy": away_control_policy(self),
         }
 
     # ---------- 回合推进 ------------------------------------
@@ -1776,15 +1787,78 @@ class GameInstance:
     async def set_player_away(self, user_id: str, away: bool = True) -> bool:
         """标记玩家暂离/回来。暂离玩家仍在队伍中，但不阻塞多人回合。"""
         async with self._lock:
-            if user_id not in self.players or not self.is_alive(user_id):
-                return False
-            if away:
-                self.away_players.add(user_id)
-                self.ready_players.discard(user_id)
-            else:
-                self.away_players.discard(user_id)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
+            return self._set_player_away_locked(user_id, away)
+
+    def _set_player_away_locked(self, user_id: str, away: bool) -> bool:
+        """``set_player_away`` 的持锁实现（调用方必须已持有 ``_lock``）。
+
+        单独抽出来是为了让「暂离」和它可能触发的控制权转换能在**同一个**
+        transaction 内完成：``self._lock`` 不可重入，所以调用方不能在持锁时再调
+        :meth:`set_player_away`。
+        """
+        if user_id not in self.players or not self.is_alive(user_id):
+            return False
+        if away:
+            self.away_players.add(user_id)
+            self.ready_players.discard(user_id)
+        else:
+            self.away_players.discard(user_id)
+        self.last_activity = datetime.now(timezone.utc).isoformat()
+        return True
+
+    async def apply_away_transition(self, user_id: str, away: bool, *, policy: str) -> str:
+        """暂离/回来：安全边界复核 + 在场状态 + 控制权转换，同一个 transaction。
+
+        "暂离"和"把角色交给 AI"必须是**一次**可观察的状态变更：如果先写
+        ``away_players`` 再另起一个事务去改控制权，中间就会存在
+        ``away=true`` + ``control=human`` 的窗口，而那个组合恰恰是「玩家已经离开、
+        但 AI 没有接手」——一个谁都不负责的席位。
+
+        ``policy`` 为 ``pause`` 时只改在场状态（旧语义，不做安全边界检查）；
+        ``ai_takeover`` 的托管与"回来"的归还都要求安全边界，否则返回
+        ``CONTROL_CHANGE_BUSY``。成功返回 ``""``。
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered:
+                return "CONTROL_CHANGE_BUSY"
+            handover = away and policy == "ai_takeover"
+            if handover or not away:
+                block = control_change_block(self)
+                if block:
+                    return block
+            if not self._set_player_away_locked(user_id, away):
+                return "UNKNOWN_PLAYER"
+            if handover:
+                begin_away_hosting(self, user_id)
+            elif not away:
+                # 只在席位确实是「临时托管」时归还；GM 永久交给 AI 的席位不会被抢回。
+                end_away_hosting(self, user_id)
+            return ""
+
+    async def apply_player_control_change(self, user_id: str, mode: str) -> str:
+        """GM 托管控件：安全边界复核 + 控制权变更，同一个 transaction。
+
+        返回 ``""`` 表示已切换；否则 ``CONTROL_CHANGE_BUSY`` / ``UNKNOWN_PLAYER``
+        / ``CONTROL_REJECTED``。复核与实际写入之间没有任何 ``await``，因此回合处理
+        一旦开始占用边界，控制权转换就不可能插进去。
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered or self._process_lock.locked():
+                return "CONTROL_CHANGE_BUSY"
+            block = control_change_block(self)
+            if block:
+                return block
+            if user_id not in self.players:
+                return "UNKNOWN_PLAYER"
+            try:
+                set_control(self, user_id, mode)
+            except PlayerControlError:
+                logger.warning(
+                    "拒绝托管切换: game_key=%s uid=%s mode=%s",
+                    self.game_key, user_id, mode, exc_info=True,
+                )
+                return "CONTROL_REJECTED"
+            return ""
 
     async def advance_round(self) -> bool:
         """显式推进回合。未行动的存活玩家标记为已就绪。"""
