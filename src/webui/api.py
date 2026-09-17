@@ -1742,15 +1742,28 @@ class WebAPI:
     def image_generation_status(self) -> dict[str, Any]:
         return self._generated_images.public_config()
 
+    async def optimize_image_prompt(self, **request: Any) -> dict[str, Any]:
+        return await self._generated_images.optimize_prompt(**request)
+
+    def storyboard_draft(self, game_key: str, user_id: str, round_number: int = 0) -> dict[str, Any]:
+        return self._generated_images.storyboard_draft(game_key, user_id, round_number)
+
+    async def analyze_storyboard(self, game_key: str, user_id: str, round_number: int = 0, panel_count: int | None = None) -> dict[str, Any]:
+        return await self._generated_images.analyze_storyboard(game_key, user_id, round_number, panel_count)
+
+    def preview_image_prompt(self, game_key: str, user_id: str, prompt: str, panels: Any = None) -> dict[str, Any]:
+        return self._generated_images.preview_prompt(game_key, user_id, prompt, panels)
+
     async def generate_generated_image(self, **request: Any) -> dict[str, Any]:
         return await self._generated_images.generate_image(**request)
 
     async def generate_current_round_image(
         self, game_key: str, user_id: str, prompt: str, round_number: int,
         panels: Any = None, use_avatar_references: bool = False,
+        panel_count: int | None = None,
     ) -> dict[str, Any]:
         return await self._generated_images.generate_current_round(
-            game_key, user_id, prompt, round_number, panels, use_avatar_references,
+            game_key, user_id, prompt, round_number, panels, use_avatar_references, panel_count,
         )
 
     def list_game_generated_images(

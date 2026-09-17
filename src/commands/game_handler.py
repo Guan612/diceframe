@@ -190,6 +190,8 @@ class GameHandler:
         self._plugin_host = plugin_host
 
     def set_image_generation_service(self, service) -> None:
+        if hasattr(self._prompt, "set_auto_storyboard"):
+            self._prompt.set_auto_storyboard(bool(getattr(service, "auto_storyboard", False)))
         if hasattr(self._round_processor, "set_image_generation_service"):
             self._round_processor.set_image_generation_service(service)
         if hasattr(self._swipe_generator, "set_scene_image_hook"):

@@ -98,6 +98,24 @@ def test_reference_free_speech_roundtrip(tmp_path, mode, voice):
     assert reloaded["asr_provider"] == "disabled"
 
 
+def test_image_prompt_fields_enforce_length_and_template_variables():
+    state = {"imagegen_style_prefix": ""}
+    too_long = prepare_config_update(
+        state, {"imagegen_style_prefix": "x" * 12001},
+    )
+    assert "12000" in too_long.error
+
+    unknown_variable = prepare_config_update(
+        state, {"imagegen_manual_prompt": "Draw {private_notes}"},
+    )
+    assert "不支持的变量" in unknown_variable.error
+
+    valid = prepare_config_update(
+        state, {"imagegen_manual_prompt": "Draw {scene} with {panels}"},
+    )
+    assert not valid.error
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enabled", [True, False])
 async def test_cli_passes_effective_proxy_to_local_keyless_model(monkeypatch, tmp_path, enabled):

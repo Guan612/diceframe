@@ -35,8 +35,7 @@ STRING_CONFIG_KEYS = frozenset({
     "tts_model", "tts_default_voice", "tts_gm_voice", "tts_player_voice",
     "asr_model",
     "imagegen_model", "imagegen_square_size",
-    "imagegen_landscape_size", "imagegen_quality", "imagegen_style_prefix",
-    "imagegen_manual_rules", "imagegen_manual_prompt", "imagegen_auto_rules", "imagegen_auto_prompt",
+    "imagegen_landscape_size", "imagegen_quality",
     *PROVIDER_REF_KEYS,
 })
 CONFIG_KEYS = (
@@ -55,7 +54,7 @@ CONFIG_KEYS = (
     "tts_provider", "tts_model", "tts_audio_format",
     "tts_default_voice", "tts_gm_voice", "tts_player_voice", "tts_timeout_seconds", "tts_cache_mb",
     "asr_provider", "asr_model", "asr_timeout_seconds",
-    "imagegen_enabled", "imagegen_auto_scene", "imagegen_manual_scene", "imagegen_auto_use_manual_prompt", "imagegen_provider",
+    "imagegen_enabled", "imagegen_auto_scene", "imagegen_manual_scene", "imagegen_auto_storyboard", "imagegen_auto_use_manual_prompt", "imagegen_provider",
     "imagegen_model", "imagegen_square_size", "imagegen_landscape_size",
     "imagegen_quality", "imagegen_style_prefix", "imagegen_manual_rules", "imagegen_manual_prompt", "imagegen_auto_rules", "imagegen_auto_prompt", "imagegen_timeout_seconds", "test_timeout_seconds",
     "economy_auto_reward_enabled", "economy_auto_reward_gold_cap",
@@ -78,7 +77,7 @@ API_RUNTIME_CONFIG_KEYS = frozenset({
     "tts_provider", "tts_model", "tts_audio_format",
     "tts_default_voice", "tts_gm_voice", "tts_player_voice", "tts_timeout_seconds", "tts_cache_mb",
     "asr_provider", "asr_model", "asr_timeout_seconds",
-    "imagegen_enabled", "imagegen_auto_scene", "imagegen_manual_scene", "imagegen_auto_use_manual_prompt", "imagegen_provider",
+    "imagegen_enabled", "imagegen_auto_scene", "imagegen_manual_scene", "imagegen_auto_storyboard", "imagegen_auto_use_manual_prompt", "imagegen_provider",
     "imagegen_model", "imagegen_square_size", "imagegen_landscape_size",
     "imagegen_quality", "imagegen_style_prefix", "imagegen_manual_rules", "imagegen_manual_prompt", "imagegen_auto_rules", "imagegen_auto_prompt", "imagegen_timeout_seconds",
     "ai_providers", "tts_provider_ref", "asr_provider_ref", "imagegen_provider_ref",
@@ -212,7 +211,7 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
             elif key in {
                 "proxy_enabled", "qq_bot_enabled", "napcat_chat_filter_enabled",
                 "napcat_show_dropped_logs", "napcat_block_official_bots",
-                "imagegen_enabled", "imagegen_auto_scene", "imagegen_manual_scene", "imagegen_auto_use_manual_prompt",
+                "imagegen_enabled", "imagegen_auto_scene", "imagegen_manual_scene", "imagegen_auto_storyboard", "imagegen_auto_use_manual_prompt",
                 "economy_auto_reward_enabled",
             }:
                 candidate[key] = bool(raw)
@@ -276,7 +275,7 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
                 if provider not in IMAGE_PROVIDER_IDS:
                     return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "图像生成 Provider 无效")
                 candidate[key] = provider
-            elif key in {"imagegen_manual_rules", "imagegen_manual_prompt", "imagegen_auto_rules", "imagegen_auto_prompt"}:
+            elif key in {"imagegen_style_prefix", "imagegen_manual_rules", "imagegen_manual_prompt", "imagegen_auto_rules", "imagegen_auto_prompt"}:
                 value = clean_text_value(raw)
                 if len(value) > 12000:
                     return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "图像提示词配置不能超过 12000 个字符")

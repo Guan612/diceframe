@@ -55,6 +55,10 @@ class PromptComposer:
         self.rules_dir = rules_dir
         self.memory_store = memory_store
         self.ruleset_registry = ruleset_registry
+        self.auto_storyboard = False
+
+    def set_auto_storyboard(self, enabled: bool) -> None:
+        self.auto_storyboard = bool(enabled)
 
     def _runtime(self, instance: GameInstance):
         binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
@@ -180,6 +184,11 @@ class PromptComposer:
         """构造系统 prompt：基础 prompt + 规则附录 + 世界 GM 风格 + 剧情追踪 + 多人权限范围。"""
         language = getattr(instance, "language", DEFAULT_LANGUAGE)
         gm_prompt = self.load_gm_prompt(rule_appendix, language)
+        if not self.auto_storyboard:
+            gm_prompt = "\n".join(
+                line for line in gm_prompt.splitlines()
+                if not line.lstrip().startswith("SCENE_PANEL:")
+            )
         # 有效风格二选一：对局覆盖非 None 时只渲染覆盖，否则渲染世界 gm_style。
         style_section = render_gm_style_section(
             world_data,

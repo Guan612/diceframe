@@ -25,7 +25,7 @@ from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
 from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
-from src.imagegen.storyboards import normalize_scene_panels
+from src.imagegen.storyboards import normalize_scene_panels, storyboard_panel_metadata, storyboard_source_revision
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -262,7 +262,40 @@ class SwipeGenerator:
         scene_payload = None
         swipe_prompt = str(data.get("scene_image_prompt") or "").strip()
         swipe_panels = data.get("scene_panels")
-        normalized_panels, compressed_count = normalize_scene_panels(swipe_panels)
+        normalized_panels, compressed_count = normalize_scene_panels(
+            swipe_panels, merge_same_location=False,
+        )
+        # A swipe is a new public-story revision. Keep its storyboard draft
+        # beside the narration (never derive it later from an old image).
+        original_panels = deepcopy(target_entry.get("scene_panels") or [])
+        original_prompt = str(target_entry.get("scene_image_prompt") or "")
+        target_entry["scene_panels"] = normalized_panels
+        target_entry["scene_image_prompt"] = swipe_prompt[:300]
+        target_entry["scene_panel_meta"] = storyboard_panel_metadata(
+            normalized_panels,
+            narration=str(target_entry.get("gm_response") or ""),
+            actions=target_entry.get("actions") or [],
+            current_scene=str(getattr(instance, "scene", "") or ""),
+            source_revision=storyboard_source_revision(target_entry),
+        )
+        prompt_history = target_entry.setdefault("swipe_scene_image_prompts", [])
+        if not isinstance(prompt_history, list):
+            prompt_history = []
+            target_entry["swipe_scene_image_prompts"] = prompt_history
+        while len(prompt_history) < len(target_entry.get("swipes", [])) - 1:
+            prompt_history.append(original_prompt if not prompt_history else "")
+        prompt_history.append(swipe_prompt[:300])
+        swipe_panel_history = target_entry.setdefault("swipe_scene_panels", [])
+        if not isinstance(swipe_panel_history, list):
+            swipe_panel_history = []
+            target_entry["swipe_scene_panels"] = swipe_panel_history
+        # The first item corresponds to the original swipe; subsequent items
+        # follow the same order as the public ``swipes`` text list.
+        while len(swipe_panel_history) < len(target_entry.get("swipes", [])) - 1:
+            swipe_panel_history.append(deepcopy(original_panels) if not swipe_panel_history else [])
+        swipe_panel_history.append(deepcopy(normalized_panels))
+        if not normalized_panels:
+            target_entry.pop("scene_panel_meta", None)
         if swipe_prompt or normalized_panels:
             scene_payload = {
                 "prompt": swipe_prompt,

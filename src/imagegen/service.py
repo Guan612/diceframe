@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from .assets import ImageAssetError, ImageAssetStore
 from .contracts import IMAGE_PROVIDER_IDS, IMAGE_PURPOSES, ImageGenerationRequest, ImageGenerationResult
 from .providers import ImageProvider, ImageProviderError, create_image_provider
-from .storyboards import build_storyboard_prompt, overlay_storyboard_dividers
+from .storyboards import build_storyboard_prompt
 
 
 PURPOSE_PROMPT_SUFFIXES = {
@@ -21,6 +21,9 @@ PURPOSE_PROMPT_SUFFIXES = {
     "map": "Simple practical top-down tabletop map, clear terrain, rooms and paths, restrained colors, no labels, no interface elements.",
     "freeform": "No text or interface elements unless explicitly requested.",
 }
+
+DEFAULT_PROMPT_CHAR_LIMIT = 12_000
+MINIMAX_STORYBOARD_CHAR_BUDGET = 1_000
 
 
 class ImageGenerationError(RuntimeError):
@@ -41,7 +44,8 @@ class ImageGenerationService:
         self.timeout_seconds = float(config.get("imagegen_timeout_seconds") or 120)
         self.auto_scene = bool(config.get("imagegen_auto_scene", True))
         self.manual_scene = bool(config.get("imagegen_manual_scene", False))
-        self.auto_use_manual_prompt = bool(config.get("imagegen_auto_use_manual_prompt", False))
+        self.auto_storyboard = bool(config.get("imagegen_auto_storyboard", False))
+        self.auto_use_manual_prompt = bool(config.get("imagegen_auto_use_manual_prompt", True))
         self.manual_rules = str(config.get("imagegen_manual_rules") or "").strip()
         self.manual_prompt = str(config.get("imagegen_manual_prompt") or "").strip()
         self.auto_rules = str(config.get("imagegen_auto_rules") or "").strip()
@@ -56,12 +60,16 @@ class ImageGenerationService:
         return self.enabled and bool(self.base_url and self.model)
 
     def public_config(self) -> dict[str, Any]:
+        provider = self._provider()
         return {
             "enabled": self.enabled,
             "available": self.available,
-            "provider": self._provider().provider_id,
+            "provider": provider.provider_id,
             "model": self.model,
             "auto_scene": self.auto_scene,
+            "prompt_char_limit": int(
+                getattr(provider, "prompt_char_limit", DEFAULT_PROMPT_CHAR_LIMIT)
+            ),
         }
 
     async def generate(self, request: ImageGenerationRequest) -> ImageGenerationResult:
@@ -76,6 +84,10 @@ class ImageGenerationService:
             raise ImageGenerationError("画面描述为空")
         if len(prompt) > 8000:
             raise ImageGenerationError("画面描述不能超过 8000 个字符")
+        provider = self._provider()
+        prompt_limit = int(
+            getattr(provider, "prompt_char_limit", DEFAULT_PROMPT_CHAR_LIMIT)
+        )
         storyboard = request.context.get("storyboard") if isinstance(request.context, dict) else None
         storyboard_metadata: dict[str, Any] = {}
         if purpose == "scene" and isinstance(storyboard, dict):
@@ -83,16 +95,23 @@ class ImageGenerationService:
                 storyboard.get("panels"),
                 global_prompt=prompt,
                 character_appearances=storyboard.get("character_appearances"),
+                max_chars=(
+                    MINIMAX_STORYBOARD_CHAR_BUDGET
+                    if prompt_limit <= 1_500
+                    else 8_000
+                ),
             )
             try:
                 storyboard_metadata["compressed_count"] += max(0, int(storyboard.get("compressed_count") or 0))
             except (TypeError, ValueError):
                 pass
             prompt = storyboard_prompt
-        composed_prompt = self._compose_prompt(prompt, purpose, request.style, request.context)
+        composed_prompt, prompt_budget = self._compose_prompt(
+            prompt, purpose, request.style, request.context, prompt_limit,
+        )
+        request.context["prompt_budget"] = prompt_budget
         size = self._size_for(request, purpose)
         try:
-            provider = self._provider()
             references = tuple(request.reference_images or ())
             if references and purpose != "scene":
                 raise ImageGenerationError("头像参考图仅支持场景生图，地图生图不会上传头像")
@@ -120,7 +139,6 @@ class ImageGenerationService:
                     generated = await provider.generate(composed_prompt, size=size, quality=self.quality)
             body = generated.body
             if storyboard_metadata:
-                body = overlay_storyboard_dividers(body, len(storyboard_metadata.get("panels") or []))
                 request.context.setdefault("storyboard", {}).update(storyboard_metadata)
             return self.assets.store(
                 body,
@@ -150,11 +168,23 @@ class ImageGenerationService:
         except ImageProviderError as exc:
             raise ImageGenerationError(str(exc)) from exc
 
-    def _compose_prompt(self, prompt: str, purpose: str, request_style: str, context: dict[str, Any]) -> str:
+    def preview_prompt(self, prompt: str, purpose: str, context: dict[str, Any], request_style: str = "") -> tuple[str, dict[str, Any]]:
+        provider = self._provider()
+        return self._compose_prompt(prompt, purpose, request_style, context, int(getattr(provider, "prompt_char_limit", DEFAULT_PROMPT_CHAR_LIMIT)))
+
+    def _compose_prompt(
+        self,
+        prompt: str,
+        purpose: str,
+        request_style: str,
+        context: dict[str, Any],
+        prompt_limit: int = DEFAULT_PROMPT_CHAR_LIMIT,
+    ) -> tuple[str, dict[str, Any]]:
         configured_rules = self.manual_rules if context.get("manual") else self.auto_rules
         configured_prompt = self.manual_prompt if context.get("manual") else self.auto_prompt
         if not context.get("manual") and self.auto_use_manual_prompt:
-            configured_rules, configured_prompt = self.manual_rules, self.manual_prompt
+            configured_rules = self.manual_rules or self.auto_rules
+            configured_prompt = self.manual_prompt or self.auto_prompt
         replacements = {
             "scene": str(context.get("scene") or ""),
             "narration": str(context.get("narration") or ""),
@@ -165,8 +195,45 @@ class ImageGenerationService:
             for key, replacement in replacements.items():
                 value = value.replace("{" + key + "}", replacement)
             return value
-        parts = [self.style_prefix, str(request_style or "").strip(), render(configured_rules), render(configured_prompt), prompt, PURPOSE_PROMPT_SUFFIXES[purpose]]
-        return "\n\n".join(part for part in parts if part)[:12000]
+        segments = {
+            "style_prefix": self.style_prefix,
+            "request_style": str(request_style or "").strip(),
+            "rules": render(configured_rules),
+            "template": render(configured_prompt),
+            "scene": prompt,
+            "purpose": PURPOSE_PROMPT_SUFFIXES[purpose],
+        }
+        reference_names = context.get("avatar_reference_names")
+        if isinstance(reference_names, dict) and reference_names:
+            segments["reference_labels"] = "Uploaded portrait references correspond to these visible characters: " + ", ".join(
+                f"{str(name)[:100]} ({str(uid)[:80]})" for uid, name in reference_names.items() if str(name).strip()
+            ) + ". Keep their identity and appearance consistent."
+        reduced: list[str] = []
+
+        def compose() -> str:
+            return "\n\n".join(part for part in segments.values() if part)
+
+        prompt_limit = max(
+            len(segments["purpose"]),
+            int(prompt_limit or DEFAULT_PROMPT_CHAR_LIMIT),
+        )
+        for key in ("style_prefix", "rules", "template", "request_style", "reference_labels", "scene"):
+            overflow = len(compose()) - prompt_limit
+            if overflow <= 0:
+                break
+            current = segments[key]
+            if not current:
+                continue
+            segments[key] = current[:max(0, len(current) - overflow)]
+            reduced.append(key)
+
+        composed = compose()
+        return composed, {
+            "limit": prompt_limit,
+            "used": len(composed),
+            "adjusted": bool(reduced),
+            "reduced_segments": reduced,
+        }
 
     def _size_for(self, request: ImageGenerationRequest, purpose: str) -> str:
         ratio = str(request.aspect_ratio or "").strip()

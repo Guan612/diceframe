@@ -30,6 +30,7 @@ _AI_EXACT_PATHS = frozenset({
     "/api/generate-rule",
     "/api/generate-character",
     "/api/generate-text",
+    "/api/image-prompts/optimize",
     "/api/test-connection",
     "/api/test-embedding",
     "/api/assistant/chat",

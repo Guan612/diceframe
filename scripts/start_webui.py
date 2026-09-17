@@ -21,6 +21,21 @@ STATIC_DIR = ROOT / "static-v2"
 ASSET_REF_RE = re.compile(r"""(?:src|href)=["'](/v2-assets/[^"']+)["']""")
 
 
+def _frontend_source_mtime() -> float:
+    candidates = [
+        FRONTEND_DIR / "package.json",
+        FRONTEND_DIR / "package-lock.json",
+        FRONTEND_DIR / "vite.config.ts",
+        FRONTEND_DIR / "tsconfig.json",
+    ]
+    candidates.extend(
+        path for root_name in ("src", "public")
+        for path in (FRONTEND_DIR / root_name).rglob("*")
+        if path.is_file()
+    )
+    return max((path.stat().st_mtime for path in candidates if path.is_file()), default=0.0)
+
+
 def frontend_built() -> bool:
     assets_dir = STATIC_DIR / "assets"
     index_path = STATIC_DIR / "index.html"
@@ -31,6 +46,8 @@ def frontend_built() -> bool:
         relative = ref.removeprefix("/v2-assets/")
         if not (STATIC_DIR / relative).exists():
             return False
+    if _frontend_source_mtime() > index_path.stat().st_mtime:
+        return False
     return True
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -92,7 +93,7 @@ class _Registry:
 
 
 class _FakeApi:
-    def __init__(self, file_path: Path, *, error: str = ""):
+    def __init__(self, file_path: Path, *, error: str = "", llm_client=None):
         self._imagegen = _FakeImageGenerationService(file_path, error=error)
         self._reg = _Registry(_FakeInstance())
         self.background_updates = []
@@ -100,6 +101,7 @@ class _FakeApi:
             imagegen=self._imagegen,
             get_instance=self.get_game_instance,
             update_map_background=self.update_map_background,
+            llm_client=llm_client,
         ))
 
     def _parse_key(self, game_key):
@@ -113,6 +115,9 @@ class _FakeApi:
 
     def image_generation_status(self):
         return self.generated_images.public_config()
+
+    async def optimize_image_prompt(self, **request):
+        return await self.generated_images.optimize_prompt(**request)
 
     async def generate_generated_image(self, **request):
         return await self.generated_images.generate_image(**request)
@@ -146,6 +151,7 @@ class _Request:
         owner_authenticated=False,
         access_password_configured=False,
         asset_id=ASSET_ID,
+        confirmed=True,
     ):
         self.app = {"api": api}
         self.match_info = {"asset_id": asset_id}
@@ -159,6 +165,7 @@ class _Request:
             ACCESS_PASSWORD_CONFIGURED_KEY: access_password_configured,
         }
         self.can_read_body = body is not None
+        self.headers = {"X-TRPG-Confirm": "true"} if confirmed else {}
 
     def get(self, key, default=None):
         return self._values.get(key, default)
@@ -178,6 +185,92 @@ async def test_status_exposes_public_image_generation_config(tmp_path):
         "model": "image-model",
         "auto_scene": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_prompt_optimizer_is_admin_only_and_returns_preview(tmp_path):
+    class _Llm:
+        async def call(self, **kwargs):
+            assert kwargs["temperature"] == 0.3
+            assert "{scene}" in kwargs["user_message"]
+            return SimpleNamespace(
+                narration="Cinematic scene: {scene}",
+                content="Cinematic scene: {scene}",
+            )
+
+    api = _FakeApi(tmp_path, llm_client=_Llm())
+    denied = await generated_images.api_optimize_image_prompt(_Request(
+        api,
+        body={"field": "manual_prompt", "text": "Draw {scene}"},
+        query={"share": "1"},
+        game_key="",
+    ))
+    assert denied.status == 403
+
+    response = await generated_images.api_optimize_image_prompt(_Request(
+        api,
+        body={
+            "field": "manual_prompt",
+            "text": "Draw {scene}",
+            "language": "en",
+        },
+        game_key="",
+        access_password_configured=True,
+        owner_authenticated=True,
+    ))
+    assert response.status == 200
+    assert json.loads(response.text) == {
+        "ok": True,
+        "text": "Cinematic scene: {scene}",
+        "input_chars": 12,
+        "output_chars": 24,
+    }
+
+
+@pytest.mark.asyncio
+async def test_prompt_optimizer_rejects_dropped_or_unknown_variables(tmp_path):
+    class _Llm:
+        async def call(self, **_kwargs):
+            return SimpleNamespace(narration="Cinematic harbor", content="")
+
+    service = GeneratedImageService(GeneratedImageDependencies(
+        imagegen=None,
+        get_instance=lambda _key: None,
+        update_map_background=lambda *_args: None,
+        llm_client=_Llm(),
+    ))
+    with pytest.raises(ImageGenerationError, match="遗漏"):
+        await service.optimize_prompt(
+            field="auto_prompt", text="Draw {scene}", language="zh-CN",
+        )
+    with pytest.raises(ImageGenerationError, match="不支持的模板变量"):
+        await service.optimize_prompt(
+            field="auto_prompt", text="Draw {secret}", language="zh-CN",
+        )
+
+
+def test_avatar_references_only_include_explicit_panel_participants(tmp_path):
+    alice_avatar = tmp_path / "alice.webp"
+    bob_avatar = tmp_path / "bob.webp"
+    alice_avatar.write_bytes(b"alice")
+    bob_avatar.write_bytes(b"bob")
+    instance = SimpleNamespace(players={
+        "alice": {"character_sheet": {"portrait": {"kind": "upload", "asset_id": "a"}}},
+        "bob": {"character_sheet": {"portrait": {"kind": "upload", "asset_id": "b"}}},
+    })
+    service = GeneratedImageService(GeneratedImageDependencies(
+        imagegen=None,
+        get_instance=lambda _key: instance,
+        update_map_background=lambda *_args: None,
+        avatar_file=lambda asset_id: {"a": alice_avatar, "b": bob_avatar}.get(asset_id),
+    ))
+
+    references = service._avatar_references(instance, [
+        {"participants": ["alice"]},
+        {"participants": []},
+    ])
+
+    assert [reference.character_id for reference in references] == ["alice"]
 
 
 @pytest.mark.asyncio

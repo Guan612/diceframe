@@ -1751,6 +1751,12 @@ class GameInstance:
                     return False
                 entry["current_swipe"] = swipe_idx
                 entry["gm_response"] = swipes[swipe_idx]
+                panel_history = entry.get("swipe_scene_panels")
+                if isinstance(panel_history, list) and swipe_idx < len(panel_history):
+                    entry["scene_panels"] = copy.deepcopy(panel_history[swipe_idx])
+                prompt_history = entry.get("swipe_scene_image_prompts")
+                if isinstance(prompt_history, list) and swipe_idx < len(prompt_history):
+                    entry["scene_image_prompt"] = str(prompt_history[swipe_idx] or "")
                 logger.info("Swipe 切换: round=%d → %d/%d", round_num, swipe_idx, len(swipes))
                 return True
         return False
