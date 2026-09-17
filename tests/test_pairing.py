@@ -265,3 +265,75 @@ def test_corrupt_device_file_denies_access_instead_of_trusting_it(tmp_path):
 
     assert store.entries() == []
     assert store.verify("anything") is None
+
+
+class _ConfigRequest:
+    """api_config_post 只用到 headers / json() / app，这里按最小面搭壳。"""
+
+    def __init__(self, body: dict, app: dict) -> None:
+        self._body = body
+        self.headers = CONFIRM
+        self.app = app
+
+    async def json(self) -> dict:
+        return self._body
+
+
+def _lockdown_app(tmp_path) -> dict:
+    devices = DeviceTokenStore(tmp_path)
+    return {
+        DEVICE_TOKENS_KEY: devices,
+        PAIRING_SERVICE_KEY: PairingService(devices),
+    }
+
+
+def _prepare_config_post(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(web_server, "ACCESS_TOKEN_FILE", tmp_path / "access_token.txt")
+    monkeypatch.setattr(web_server, "save_config", lambda: None)
+    monkeypatch.setitem(web_server.STATE, "proxy_enabled", False)
+
+
+@pytest.mark.asyncio
+async def test_first_access_password_revokes_passwordless_era_credentials(tmp_path, monkeypatch):
+    """免密期任何人都能自助签发配对码；锁门时这批凭据必须一起作废。
+
+    否则「设置访问密码」只挡住了不知道密码的人，却放过了在免密窗口里
+    配过对的设备——它们在锁门后依然是 owner。
+    """
+    _prepare_config_post(tmp_path, monkeypatch)
+    monkeypatch.setitem(web_server.STATE, "access_token", "")
+    app = _lockdown_app(tmp_path)
+    devices, pairing = app[DEVICE_TOKENS_KEY], app[PAIRING_SERVICE_KEY]
+    token, _device = devices.issue("免密期配对的手机")
+    pending = pairing.store.issue().code
+
+    response = await web_server.api_config_post(
+        _ConfigRequest({"access_token": PASSWORD}, app)
+    )
+
+    assert response.status == 200
+    assert json.loads(response.text)["access_password_changed"] is True
+    assert devices.verify(token) is None
+    assert devices.entries() == []
+    assert pairing.store.consume(pending) is False
+
+
+@pytest.mark.asyncio
+async def test_changing_an_existing_password_keeps_paired_devices(tmp_path, monkeypatch):
+    """改密码不吊销设备令牌：两者是平级的独立凭据。
+
+    设置页有逐台 / 全部吊销入口；把改密码悄悄变成「全设备下线」会让
+    已配对的手机在用户毫无预期时集体掉线。
+    """
+    _prepare_config_post(tmp_path, monkeypatch)
+    monkeypatch.setitem(web_server.STATE, "access_token", hash_access_password("old-password"))
+    app = _lockdown_app(tmp_path)
+    devices = app[DEVICE_TOKENS_KEY]
+    token, _device = devices.issue("早就配好的手机")
+
+    response = await web_server.api_config_post(
+        _ConfigRequest({"access_token": PASSWORD}, app)
+    )
+
+    assert response.status == 200
+    assert devices.verify(token) is not None

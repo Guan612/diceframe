@@ -38,6 +38,7 @@ from src.engine.memory_outbox import (
     queue_memory_delivery,
 )
 from src.engine.game_instance import GameInstance
+from src.engine.player_control import claim_seat, is_human_controlled
 from src.commands.economy_effects import pending_decision_notice
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime, PlayerJoinRuntime
@@ -1154,10 +1155,31 @@ async def create_player(
             )
 
 
+def _record_seat_claim(inst: GameInstance, uid: str) -> bool:
+    """把"重新加入一个已有席位"记录为一次控制权认领。
+
+    新席位由 ``put_player`` 直接生成为 ``human``；只有当前是 ``ai`` /
+    ``unclaimed`` 的已有席位才存在需要记录的转换，因此普通真人重连不会触发
+    ``CONTROL_NOT_CLAIMABLE``。转换走 :func:`claim_seat`，与其它控制权变更是
+    同一个写入口。
+
+    返回是否真的发生了转换：认领是持久化状态，必须立刻落盘，否则真人认领过的
+    席位会在重启后变回 AI；而普通重连什么都没改，不能因此在热路径上多写一次盘。
+    """
+
+    if is_human_controlled(inst, uid):
+        return False
+    claim_seat(inst, uid)
+    return True
+
+
 async def _create_player_authority(dependencies: CharacterDependencies, inst: GameInstance, character: dict,
                        force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
     requested_uid = str(character.get("user_id") or "").strip()
     if requested_uid and requested_uid in inst.players:
+        # 已有席位被重新加入：按控制权权威记录这次认领（已经是真人则是普通重连）。
+        if _record_seat_claim(inst, requested_uid):
+            await dependencies.games.save_instance(inst)
         return {
             "ok": True,
             "user_id": requested_uid,
@@ -1169,6 +1191,9 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         uid = "player_" + str(time.time_ns())[-12:]
     elif force_uid:
         if force_uid in inst.players:
+            # 同上：session 身份命中的是已有席位，而不是新建席位。
+            if _record_seat_claim(inst, force_uid):
+                await dependencies.games.save_instance(inst)
             return {"ok": True, "user_id": force_uid,
                     "character_name": inst.players[force_uid].get("character_name", force_uid),
                     "reused": True}
@@ -1285,6 +1310,7 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         "character_sheet": cs,
     }
     inst.put_player(uid, player)
+    # 新建席位由 put_player/ensure_control 直接生成为 human 控制，无需认领转换。
     if isinstance(runtime, PlayerJoinRuntime):
         try:
             runtime.on_player_join(inst, uid)

@@ -43,7 +43,15 @@ class PlayerStateApplier:
         players_update: dict,
         rule=None,
         allowed_player_uids: set | None = None,
-    ) -> None:
+    ) -> dict[str, frozenset[str]]:
+        """应用玩家字段更新，并汇总每个角色本轮真正变化的 live state 域。
+
+        返回值只说明"哪一类角色事实动过"，不含任何规则数值；调用方据此在本轮
+        全部 mutation 完成后，对同一角色只触发一次 ruleset reconciliation。
+        没有实际变化的角色不会出现在返回值里。
+        """
+
+        changed_domains: dict[str, frozenset[str]] = {}
         for uid, pud in players_update.items():
             if uid not in instance.players:
                 continue
@@ -78,7 +86,7 @@ class PlayerStateApplier:
             if "status" in pud:
                 cs["status"] = pud["status"]
             # 物品事件：固定顺序 获得 -> 装备/卸下 -> 使用，再结算其它资源状态。
-            self._apply_item_events(instance, uid, cs, pud, rule)
+            domains = self._apply_item_events(instance, uid, cs, pud, rule)
             # 法力变化
             mana_change = pud.get("mana_change")
             if isinstance(mana_change, (int, float)):
@@ -173,6 +181,9 @@ class PlayerStateApplier:
                             instance.players[uid].get("character_name", uid),
                             instance.round_number, cs.get("hp", 0))
             instance.set_character_sheet(uid, cs)
+            if domains:
+                changed_domains[uid] = frozenset(domains)
+        return changed_domains
 
     def _apply_item_events(
         self,
@@ -181,14 +192,20 @@ class PlayerStateApplier:
         cs: dict,
         pud: dict,
         rule=None,
-    ) -> None:
+    ) -> set[str]:
         """结算一轮的物品事件，固定顺序：获得 -> 装备/卸下 -> 使用。
 
         所有物品事件都是列表，同一轮多条同类标签全部按原始顺序执行，不再互相
         覆盖。旧版单值字段（equip_gain/weapon_change/use_item）作为 compatibility
         input 继续接受；对应列表字段存在时跳过 scalar，避免同轮重复结算。
+
+        返回本轮真正发生的 live state 域。被拒绝的操作（装备未拥有的物品、卸下
+        未装备的物品、使用不存在的道具）不计入，因此"标签有但没生效"不会触发
+        无谓的 reconciliation。装备操作同时记 equipment 与 inventory：物品要么
+        离开背包，要么把被替换的旧装备退回背包。
         """
 
+        domains: set[str] = set()
         item_gains = pud.get("item_gains")
         if isinstance(item_gains, list):
             for gain in item_gains:
@@ -207,6 +224,7 @@ class PlayerStateApplier:
                     add_owned_equipment_to_inventory(cs, name, qty=qty)
                 else:
                     append_inventory_item(cs, name, qty=qty)
+                domains.add("inventory")
         equipment_ops = pud.get("equipment_ops")
         if isinstance(equipment_ops, list):
             for op in equipment_ops:
@@ -216,10 +234,10 @@ class PlayerStateApplier:
                 if not name:
                     continue
                 if op.get("op") == "unequip":
-                    unequip_item(cs, name)
+                    changed = unequip_item(cs, name)
                 else:
                     custom_damage = op.get("damage")
-                    equip_owned_item(
+                    changed = equip_owned_item(
                         cs,
                         name,
                         slot=str(op.get("slot") or ""),
@@ -227,6 +245,8 @@ class PlayerStateApplier:
                         legacy_gain=bool(op.get("legacy")),
                         rule=rule,
                     )
+                if changed:
+                    domains.update(("equipment", "inventory"))
         item_uses = pud.get("item_uses")
         if isinstance(item_uses, list):
             for use in item_uses:
@@ -234,28 +254,34 @@ class PlayerStateApplier:
                     str(use.get("name") or "").strip()
                     if isinstance(use, dict) else str(use or "").strip()
                 )
-                if name:
-                    self._use_inventory_item(instance, uid, cs, name)
+                if name and self._use_inventory_item(instance, uid, cs, name):
+                    domains.add("inventory")
         # ---- legacy 单值字段兼容（旧解析器/外部注入的数据）----
         if "item_gains" not in pud and "equipment_ops" not in pud:
             equip_gain = pud.get("equip_gain")
             if equip_gain:
                 # EQUIP 在叙事协议里只代表"获得装备"，不改变当前穿戴。
                 add_owned_equipment_to_inventory(cs, str(equip_gain))
+                domains.add("inventory")
             weapon_name = pud.get("weapon_change")
-            if weapon_name:
-                equip_owned_item(
-                    cs, str(weapon_name), slot="main_hand", legacy_gain=True, rule=rule,
-                )
+            if weapon_name and equip_owned_item(
+                cs, str(weapon_name), slot="main_hand", legacy_gain=True, rule=rule,
+            ):
+                domains.update(("equipment", "inventory"))
         if "item_uses" not in pud:
             use_item = pud.get("use_item")
-            if use_item:
-                self._use_inventory_item(instance, uid, cs, str(use_item))
+            if use_item and self._use_inventory_item(instance, uid, cs, str(use_item)):
+                domains.add("inventory")
+        return domains
 
     def _use_inventory_item(
         self, instance: GameInstance, uid: str, cs: dict, item_name: str,
-    ) -> None:
-        """使用一件背包物品：qty -1（永不为负），effect 含 HP 数字时回血。"""
+    ) -> bool:
+        """使用一件背包物品：qty -1（永不为负），effect 含 HP 数字时回血。
+
+        返回是否真的消耗了一件；未拥有该物品时返回 False，调用方据此不把
+        inventory 记为已变化。
+        """
 
         for item in cs.get("inventory", []):
             if (
@@ -271,8 +297,9 @@ class PlayerStateApplier:
                 if m:
                     apply_hp_delta(cs, int(m.group()), bounded=False)
             logger.info("道具已使用: %s x %s, HP=%d", item_name, effect, cs.get("hp", 0))
-            return
+            return True
         logger.warning(
             "忽略使用未拥有的物品: uid=%s item=%s round=%d",
             uid, item_name, instance.round_number,
         )
+        return False

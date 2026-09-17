@@ -90,6 +90,39 @@ def away_target_query(text: str) -> str:
     return raw.strip()
 
 
+# 托管指令必须用 startswith 判定：日常叙事里「托管」不会出现在句首，
+# 而 GM 指令总是以动词开头。取消托管必须先于托管判定（前者包含后者）。
+def is_host_ai(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    compact = normalized.replace(" ", "")
+    return compact.startswith(("托管", "交给ai", "设为ai", "让ai接管", "ai托管")) or normalized.startswith(
+        ("host ", "ai host ")
+    )
+
+
+def is_stop_hosting(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    compact = normalized.replace(" ", "")
+    return compact.startswith(
+        ("取消托管", "停止托管", "解除托管", "收回托管", "交回真人", "停止ai托管", "取消ai托管")
+    ) or normalized.startswith(("unhost ", "stop host ", "stop hosting "))
+
+
+def hosting_target_query(text: str) -> str:
+    raw = str(text or "").strip()
+    raw = re.sub(r"^(请|把|让|给)?\s*", "", raw)
+    raw = re.sub(
+        r"^(取消托管|取消ai托管|停止托管|停止ai托管|解除托管|收回托管|交回真人|"
+        r"托管|交给ai|设为ai|让ai接管|ai托管)\s*",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    raw = re.sub(r"^(unhost|stop hosting|stop host|ai host|host)\s+", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*(托管|取消托管|host|unhost)$", "", raw, flags=re.IGNORECASE)
+    return raw.strip()
+
+
 def is_advance(text: str) -> bool:
     normalized = re.sub(r"\s+", "", text.strip().lower())
     return normalized in {

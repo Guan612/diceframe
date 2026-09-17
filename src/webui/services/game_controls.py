@@ -9,6 +9,13 @@ from src.engine.checks import build_check_request, roll_check_request
 from src.engine.dice import d20_critical_thresholds, roll
 from src.engine.game_instance import GameState
 from src.engine.health import mark_health_event
+from src.engine.player_control import (
+    PlayerControlError,
+    away_control_policy,
+    control_mode,
+    get_control,
+    set_away_control_policy,
+)
 from src.rules.rule_system import RuleSystem
 
 GameKey = tuple[str, ...]
@@ -41,9 +48,20 @@ class GameControlService:
             return {"ok": False, "error": "游戏不存在"}
         if user_id not in instance.players:
             return {"ok": False, "error": "玩家不存在"}
-        ok = await instance.set_player_away(user_id, away)
-        if not ok:
-            return {"ok": False, "error": "无法切换该玩家状态"}
+        # 暂离是否把角色交给服务器 AI，由房间设置决定；默认 pause 保持旧行为。
+        # 安全边界复核、在场状态与控制权转换由聚合在**一个** transaction 内完成，
+        # 因此外部永远观察不到「已暂离但仍由真人控制」这种没人负责的中间态。
+        code = await instance.apply_away_transition(
+            user_id, away, policy=away_control_policy(instance),
+        )
+        if code:
+            return {
+                "ok": False,
+                "error_code": code,
+                "error": {
+                    "UNKNOWN_PLAYER": "无法切换该玩家状态",
+                }.get(code, "正在推进剧情，请等待本轮结束后再切换暂离状态"),
+            }
         await self._dependencies.save_instance(instance)
         return {
             "ok": True,
@@ -53,8 +71,68 @@ class GameControlService:
                 or user_id
             ),
             "away": bool(away),
+            "control": get_control(instance, user_id),
             "multiplayer": instance.multiplayer_status(),
         }
+
+    async def set_player_control(
+        self, game_key: str, user_id: str, mode: str,
+    ) -> dict[str, Any]:
+        """GM 托管控件：把席位交给 AI，或停止 AI 托管交回真人。
+
+        只改 Control Contract：不复制角色、不动 Web 身份 / Bot 绑定、不重置
+        ready、不重置 HP、不重建战斗 actor。安全边界复核与写入由聚合在同一
+        transaction 内完成。
+        """
+
+        instance = self._instance(game_key)
+        if not instance:
+            return {"ok": False, "error": "游戏不存在"}
+        if user_id not in instance.players:
+            return {"ok": False, "error": "玩家不存在"}
+        if mode not in ("ai", "human"):
+            return {
+                "ok": False,
+                "error_code": "CONTROL_MODE_UNSUPPORTED",
+                "error": "只能设为 AI 托管或交回真人",
+            }
+        code = await instance.apply_player_control_change(user_id, mode)
+        if code:
+            return {
+                "ok": False,
+                "error_code": code,
+                "error": {
+                    "UNKNOWN_PLAYER": "玩家不存在",
+                    "CONTROL_REJECTED": "该角色无法切换托管状态",
+                }.get(code, "正在推进剧情，请等待本轮结束后再切换托管状态"),
+            }
+        await self._dependencies.save_instance(instance)
+        return {
+            "ok": True,
+            "user_id": user_id,
+            "mode": control_mode(instance, user_id),
+            "control": get_control(instance, user_id),
+            "multiplayer": instance.multiplayer_status(),
+        }
+
+    async def set_away_control_policy(
+        self, game_key: str, policy: str,
+    ) -> dict[str, Any]:
+        """房间设置：暂离语义 pause（默认）/ ai_takeover。"""
+
+        instance = self._instance(game_key)
+        if not instance:
+            return {"ok": False, "error": "游戏不存在"}
+        try:
+            value = set_away_control_policy(instance, policy)
+        except PlayerControlError:
+            return {
+                "ok": False,
+                "error_code": "AWAY_POLICY_UNSUPPORTED",
+                "error": f"未知的暂离策略：{policy!r}",
+            }
+        await self._dependencies.save_instance(instance)
+        return {"ok": True, "away_control_policy": value}
 
     async def set_player_access(
         self, game_key: str, open_access: bool,

@@ -15,6 +15,10 @@ from src.rulesets.bundle import LoadedRulesetBundle, RulesetBundleLoader
 from src.rulesets.contracts import RulesetCapabilities
 import src.rulesets.dnd2024.advancement_access as advancement_access
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
+from src.rulesets.dnd2024.character.reconciliation import (
+    Dnd2024CharacterStateReconciler,
+    merge_live_character_projection,
+)
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
 from src.rulesets.dnd2024.exploration import (
@@ -451,12 +455,7 @@ class Dnd2024Runtime:
         bundle = self.load_bundle(locale)
         advanced = Dnd2024AdvancementEngine(bundle).apply_next_level(character, choices)
         advanced = self._sync_class_resources(bundle, advanced)
-        builder = Dnd2024CharacterBuilder(bundle)
-        return {
-            **builder.project_legacy(advanced),
-            "rule_binding": deepcopy(advanced["rule_binding"]),
-            "ruleset_character": advanced,
-        }
+        return self._live_projection(character, advanced, bundle)
 
     def complete_rest(
         self, rule: Any, character: dict[str, Any], rest: str,
@@ -475,13 +474,7 @@ class Dnd2024Runtime:
             result = engine.complete_long_rest(character)
         else:
             raise ValueError("rest must be short or long")
-        rebuilt = result["character"]
-        builder = Dnd2024CharacterBuilder(bundle)
-        result["character"] = {
-            **builder.project_legacy(rebuilt),
-            "rule_binding": deepcopy(rebuilt["rule_binding"]),
-            "ruleset_character": rebuilt,
-        }
+        result["character"] = self._live_projection(character, result["character"], bundle)
         return result
 
     @staticmethod
@@ -1048,6 +1041,105 @@ class Dnd2024Runtime:
         ):
             filtered["scene_change"] = ""
         return filtered
+
+    def _reconciler(self, bundle: Any) -> Dnd2024CharacterStateReconciler:
+        return Dnd2024CharacterStateReconciler(
+            bundle,
+            locale_bundles=[
+                self.load_bundle(supported)
+                for supported in bundle.manifest.supported_locales
+            ],
+        )
+
+    def _live_projection(
+        self, current: dict[str, Any], canonical: dict[str, Any], bundle: Any,
+    ) -> dict[str, Any]:
+        """Project a played character forward without rolling live state back.
+
+        Used by the lifecycle operations that rebuild a character (rest,
+        advancement).  Creation and import keep the plain ``project_legacy``
+        path, where the packages legitimately are the source of truth.
+        """
+
+        projected = {
+            **Dnd2024CharacterBuilder(bundle).project_legacy(canonical),
+            "rule_binding": deepcopy(canonical["rule_binding"]),
+            "ruleset_character": canonical,
+        }
+        merged = merge_live_character_projection(current, projected)
+        # 带上既有的 revision / operation log，让随后的 reconcile 是在真实历史上
+        # 继续推进，而不是从零重新计数。
+        for field in ("ruleset_revision", "ruleset_operation_log"):
+            if field in current:
+                merged[field] = deepcopy(current[field])
+        # §35/§36：canonical 更新 -> live merge -> 按当前装备重算规则状态，
+        # 否则长休/升级之后 AC 会掉回开卡时的数值。
+        self._reconciler(bundle).reconcile(
+            merged, frozenset({"equipment", "inventory"}),
+        )
+        return merged
+
+    def reconcile_character_state(
+        self,
+        instance: Any,
+        user_id: str,
+        changed_domains: frozenset[str],
+    ) -> dict[str, Any] | None:
+        """Re-derive canonical mechanics after generic live state changed.
+
+        Thin delegate on purpose: the equipment projection, the armor class
+        re-derivation and the revision/log bookkeeping all live in
+        :mod:`~src.rulesets.dnd2024.character.reconciliation`.
+        """
+
+        sheet = instance.get_character_sheet(user_id)
+        if not isinstance(sheet, dict) or not isinstance(sheet.get("ruleset_character"), dict):
+            # 不是专业角色卡（legacy 导入 / 尚未建卡）：没有可投影的 canonical state。
+            return None
+        locale = str(
+            sheet["ruleset_character"].get("locale")
+            or getattr(instance, "language", "")
+            or ""
+        )
+        bundle = self.load_bundle(locale)
+        result = self._reconciler(bundle).reconcile(sheet, changed_domains)
+        if result is not None:
+            instance.set_character_sheet(user_id, sheet)
+        return result
+
+    def prepare_owned_items(
+        self,
+        instance: Any,
+        user_id: str,
+        item_names: frozenset[str],
+    ) -> None:
+        """Canonicalize owned rows before the generic layer equips them.
+
+        The generic equip derives a target slot from the row it is handed, so an
+        old save whose shield row carries no ruleset metadata would be placed at
+        ``body`` and evict the armor actually worn.  Doing this first keeps that
+        knowledge in the ruleset: the generic layer only asks "prepare these
+        owned item names", and never learns what a shield is.
+        """
+
+        sheet = instance.get_character_sheet(user_id)
+        if not isinstance(sheet, dict) or not isinstance(sheet.get("ruleset_character"), dict):
+            return
+        locale = str(
+            sheet["ruleset_character"].get("locale")
+            or getattr(instance, "language", "")
+            or ""
+        )
+        bundle = self.load_bundle(locale)
+        prepared = Dnd2024CharacterStateReconciler(
+            bundle,
+            locale_bundles=[
+                self.load_bundle(supported)
+                for supported in bundle.manifest.supported_locales
+            ],
+        ).prepare_owned_rows(sheet, item_names)
+        if prepared:
+            instance.set_character_sheet(user_id, sheet)
 
     def project_legacy_character(self, character: dict[str, Any]) -> dict[str, Any]:
         locale = str(character.get("locale") or "")
