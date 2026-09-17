@@ -22,10 +22,30 @@ const props = withDefaults(defineProps<{
 
 const QUIET_ZONE = 4
 
+/**
+ * 把文本按 UTF-8 编码成字节，供 qrcode 使用。
+ *
+ * qrcode-generator v2 的 **ESM 构建不再提供 `stringToBytesFuncs`**（只有 CJS 构建
+ * `dist/qrcode.js` 有），而 Vite 在 dev 与 build 都按 `exports.import` 解析到
+ * `dist/qrcode.mjs`。该包同时只有一个主入口的 exports 映射，拿不到它自带的
+ * `qrcode_UTF8` 子模块（`exports` 里没有子路径）。
+ *
+ * 直接写 `qrcode.stringToBytesFuncs['UTF-8']` 会在 ESM 下抛 TypeError，并且因为它
+ * 发生在 computed 里，整个二维码会静默不渲染。类型定义（v1 风格 `export =` 的
+ * .d.ts）仍然声明了 `stringToBytesFuncs`，所以 typecheck 也发现不了。
+ *
+ * 因此：包自带表存在时优先用它；否则用标准 `TextEncoder`（所有目标浏览器与 jsdom
+ * 都有），保留"非 ASCII 不被编坏"的原始意图。
+ */
+function utf8StringToBytes(factory: typeof qrcode): (text: string) => number[] {
+  const fromPackage = factory.stringToBytesFuncs?.['UTF-8']
+  if (typeof fromPackage === 'function') return fromPackage
+  return (text: string) => Array.from(new TextEncoder().encode(text))
+}
+
 const model = computed(() => {
   if (!props.value) return null
-  // 默认的 stringToBytes 走 SJIS，非 ASCII 会编坏；统一按 UTF-8 编码。
-  qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8']
+  qrcode.stringToBytes = utf8StringToBytes(qrcode)
   const qr = qrcode(0, props.level)
   qr.addData(props.value)
   qr.make()
