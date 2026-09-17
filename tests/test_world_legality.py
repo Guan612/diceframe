@@ -215,6 +215,48 @@ def test_gm_only_impassable_fact_still_blocks_the_actor() -> None:
     assert [note["code"] for note in result["notes"]] == ["ROUTE_IMPASSABLE"]
 
 
+def test_actor_can_leave_an_impassable_current_location() -> None:
+    """passable=false 阻止进入 / 经过 / 抵达，不把行动者锁死在原地。"""
+
+    instance = make_instance()
+    apply_world_ops(instance, [
+        {"op": "set_fact", "key": actor_location_fact_key("p1"), "value": "bridge_old"},
+    ])
+    assert fact_value(instance.world_state, actor_location_fact_key("p1")) == "bridge_old"
+    assert fact_value(instance.world_state, passable_fact_key("bridge_old")) is False
+
+    result = evaluate_world_requirements(instance, [
+        requirement(kind="move", location="village_west"),
+    ])
+
+    # 当前位置不参与路线检查：不能因为「已经站在不可通行的地方」就无法离开。
+    assert result["notes"] == []
+    assert result["applied"] == [{
+        "player": "p1", "location": "village_west", "from": "bridge_old",
+    }]
+    assert fact_value(instance.world_state, actor_location_fact_key("p1")) == "village_west"
+
+
+def test_impassable_current_location_does_not_soften_the_route_check() -> None:
+    """当前位置被豁免，不代表声明的途经点被豁免。"""
+
+    instance = make_instance()
+    apply_world_ops(instance, [
+        {"op": "set_fact", "key": actor_location_fact_key("p1"), "value": "bridge_old"},
+    ])
+
+    result = evaluate_world_requirements(instance, [
+        requirement(kind="move", location="village_west", via=["north_tower"]),
+    ])
+
+    assert result["notes"] == [{
+        "player": "p1", "code": "ROUTE_IMPASSABLE", "location": "north_tower",
+        "destination": "village_west", "current": "bridge_old",
+    }]
+    assert result["applied"] == []
+    assert fact_value(instance.world_state, actor_location_fact_key("p1")) == "bridge_old"
+
+
 def test_empty_world_and_unknown_locations_never_block() -> None:
     """§7.7：信息不足不产生虚假硬阻断（旧游戏路径保持正常）。"""
 

@@ -15,9 +15,12 @@ world truth:
   with the actor's authoritative location blocks it: the outcome is "you have to
   move first", never a silent teleport.
 - ``kind: move``  -- the actor wants to end up at ``location`` (optionally via
-  ``via``).  Any declared stop on the route (or the destination itself) that the
-  world marks with ``location:<id>.passable = false`` blocks it.  A route with no
-  proven obstacle is applied server-side as the actor's new location.
+  ``via``).  The declared route -- the ``via`` hops plus the destination itself --
+  is checked against ``location:<id>.passable = false``.  The actor's *current*
+  location is deliberately not part of that check: ``passable = false`` blocks
+  entering, passing through and arriving at a place, it does not trap whoever is
+  already standing there.  A route with no proven obstacle is applied
+  server-side as the actor's new location.
 
 Boundaries:
 
@@ -123,7 +126,9 @@ def evaluate_world_requirements(
                     "current": current,
                 })
             continue
-        blocked = _first_impassable(facts, [current, *route])
+        # 只检查声明的路线（via + 目的地）：passable=false 阻止进入/经过/抵达，
+        # 不能因为行动者已经身处该地点就永久阻止其离开。
+        blocked = _first_impassable(facts, route)
         if blocked:
             notes.append({
                 "player": uid,
