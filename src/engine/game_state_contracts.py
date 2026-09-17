@@ -137,6 +137,7 @@ class GamePersistedState(TypedDict, total=False):
     log: list[RoundLogEntry]
     summary: OpaqueState
     key_facts: list[Any]
+    world_state: OpaqueState
     total_llm_calls: int
     total_tokens: int
     started_at: str

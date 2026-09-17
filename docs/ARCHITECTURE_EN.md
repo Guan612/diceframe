@@ -142,6 +142,36 @@ spell slots, concentration, saves, and victory detection remain in the D&D
 reducer. Scheduler and pool persistence lands with the first consuming
 ruleset.
 
+## World State
+
+`GameInstance.world_state` is the single authoritative container for "what is
+currently true in the world". It stays inside the per-game aggregate: no second
+aggregate, separate database, or background runtime. The first version has a
+fixed shape -- `schema_version / revision / clock / facts / scheduled_events`.
+A fact is a canonical key (`actor:<uid>.location`, `bridge:old.passable`, never
+a translated display name) plus a scalar value and `public | gm` visibility,
+recorded with `source_round` and `updated_revision`; `clock` is logical world
+time (day plus minute); `scheduled_events` is the persisted container of events
+to settle later, indexed by a stable `event_id`.
+
+The only write entry point is `apply_world_ops(instance, ops)` in
+`src/engine/world_state.py`: a batch is validated and committed atomically, and
+out-of-bounds values, unknown ops or fields, invalid keys/values, and corrupted
+or future schemas all fail closed without writing. Fact visibility is decided by
+world ops alone -- an update that omits it never downgrades a GM-private fact to
+public. World truth never lives in `ruleset_state`, `key_facts`,
+`lorebook_timed_state`, or memory, and the LLM cannot write it directly.
+
+Persistence and lifecycle follow the existing `GameInstance` / codec /
+migration pattern: schema 12 -> 13 materializes an empty world container for
+older saves (guessing no facts, repeatably); save/load and import/rebind keep
+world truth while isolating run identity; reset and restart begin from an empty
+world; and world ops belong to the round that wrote them, so whole-round
+rollback, aborted judgment, and swipe branch cuts revert them together under the
+ADR 0003 whole-round semantics. This layer is data plus a write entry point:
+player-visible projection, action legality, and scheduled-event settlement land
+in later work.
+
 ## D&D 2024 Authoritative Play State
 
 `core:dnd2024` combat, Session 0, and campaign records share `GameInstance.ruleset_state.version` and one EventBatch ledger. An optional adventure supplies story input through its exact binding but is not part of the Ruleset Bundle. Combat and campaign events have separate reducers; the runtime composition root dispatches explicit intent types without making the generic engine import D&D code.

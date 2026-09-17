@@ -23,6 +23,7 @@ from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
+from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
 from src.imagegen.storyboards import normalize_scene_panels
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
@@ -152,6 +153,11 @@ class SwipeGenerator:
             if isinstance(combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(combat_snapshot):
                     instance.combat_extension = {}
+            # 世界真相同属被丢弃的分支：swipe 切回目标轮时，本轮之后写入的
+            # world ops 一起撤销（ADR 0003 整轮语义）。
+            world_snapshot = target_entry.get("pre_world_state")
+            if isinstance(world_snapshot, dict) and world_snapshot:
+                instance.world_state = ensure_world_state(world_snapshot)
             instance.discard_combat_extension_snapshots_from(round_num)
             logger.info("Swipe: 已恢复 pre-state snapshot (round=%d)", round_num)
 
