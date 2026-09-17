@@ -51,6 +51,9 @@ DEFAULT_CONTROL_MODE = "human"
 # temporary=true 表示「真人暂离、AI 临时托管」，恢复目标只能是真人或未认领。
 RESUME_MODES = ("human", "unclaimed")
 
+# 真人发起的一次普通行动被控制权拒绝时，唯一允许的两个对外错误码。
+SUBMISSION_BLOCK_CODES = ("PLAYER_AI_CONTROLLED", "PLAYER_UNCLAIMED")
+
 MAX_CONTROL_REVISION = 2**31 - 1
 
 
@@ -132,6 +135,27 @@ def control_mode(instance: Any, uid: str) -> str:
     return str(get_control(instance, uid)["mode"])
 
 
+def submission_block(instance: Any, uid: str) -> str:
+    """Why a *human-initiated* action from this seat must be refused.
+
+    Returns one of :data:`SUBMISSION_BLOCK_CODES`, or ``""`` when a human is
+    allowed to submit.  Pure deterministic read: the answer comes from the
+    control record alone, so AI hosting never changes whether the server itself
+    may act on a character.  An unknown seat returns ``""`` because callers
+    already reject seats that are not on the roster; this helper does not invent
+    a second "not a player" error.
+    """
+
+    if _player_record(instance, uid) is None:
+        return ""
+    mode = control_mode(instance, uid)
+    if mode == "ai":
+        return "PLAYER_AI_CONTROLLED"
+    if mode == "unclaimed":
+        return "PLAYER_UNCLAIMED"
+    return ""
+
+
 def set_control(
     instance: Any,
     uid: str,
@@ -181,6 +205,66 @@ def set_control(
     requested["revision"] = int(current["revision"]) + 1
     player[CONTROL_KEY] = requested
     return dict(requested)
+
+
+def claim_seat(
+    instance: Any,
+    uid: str,
+    *,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    """Claim an existing seat for a human: the canonical join entry point.
+
+    A seat that is currently ``ai`` or ``unclaimed`` becomes ``human`` through
+    :func:`set_control`, so the transition is recorded by the same single write
+    entry point every other control change uses.  Nothing about the character
+    moves: HP, equipment, spell slots, world position and the combat actor stay
+    exactly where they were (``无损认领``).
+
+    Fails closed with :class:`PlayerControlError` on an unknown seat, on a seat
+    that is already human-controlled (``CONTROL_NOT_CLAIMABLE``: it is a re-join,
+    not a claim), and on a stale ``expected_revision`` (``CONTROL_STALE``: the
+    caller decided to claim a control record that has since changed).
+    """
+
+    player = _player_record(instance, uid)
+    if player is None:
+        raise PlayerControlError(f"unknown player seat: {uid!r}")
+    current = normalize_control(player.get(CONTROL_KEY))
+    if expected_revision is not None and (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision != current["revision"]
+    ):
+        raise PlayerControlError(
+            "CONTROL_STALE: control revision changed, "
+            f"expected {expected_revision!r} but found {current['revision']!r}"
+        )
+    if current["mode"] == "human":
+        raise PlayerControlError(
+            f"CONTROL_NOT_CLAIMABLE: seat {uid!r} is already human-controlled"
+        )
+    return set_control(instance, uid, "human")
+
+
+def control_change_block(instance: Any) -> str:
+    """Why a control change must wait, or ``""`` at a safe boundary.
+
+    A control handover is only safe while the table is accepting actions and no
+    round is in flight, otherwise a seat could change controller halfway through
+    judgment.  ``PLAYER_AI_CONTROLLED`` / ``PLAYER_UNCLAIMED`` describe a seat;
+    this one describes the table, and callers surface it as a retryable conflict.
+    """
+
+    # 延迟导入：GameState 属于 game_instance，而 game_instance 在模块级导入本模块。
+    from src.engine.game_instance import GameState
+
+    if getattr(instance, "state", None) != GameState.ACTIVE_ACTION:
+        return "CONTROL_CHANGE_BUSY"
+    process_lock = getattr(instance, "_process_lock", None)
+    if process_lock is not None and process_lock.locked():
+        return "CONTROL_CHANGE_BUSY"
+    return ""
 
 
 def is_human_controlled(instance: Any, uid: str) -> bool:
@@ -290,7 +374,10 @@ __all__ = [
     "MAX_CONTROL_REVISION",
     "PlayerControlError",
     "RESUME_MODES",
+    "SUBMISSION_BLOCK_CODES",
     "ai_controlled_players",
+    "claim_seat",
+    "control_change_block",
     "control_mode",
     "default_control",
     "ensure_control",
@@ -303,5 +390,6 @@ __all__ = [
     "normalize_control",
     "release_temporary_controls",
     "set_control",
+    "submission_block",
     "unclaimed_players",
 ]

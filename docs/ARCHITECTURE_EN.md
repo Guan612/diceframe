@@ -238,8 +238,31 @@ character name or history, and it is repeatable. `control` sits beside
 `character_sheet`, so it is part of the player record itself: it round-trips
 through save/load and disappears together with the seat when a seat is cleaned
 up (for example the ghost-player cleanup on load), leaving no orphan control.
-Whether a controller gates action submission, the ready barrier and the claim
-flow is left to later work packages building on this same contract.
+
+The control mode is now the authoritative admission rule as well.
+`submission_block(instance, uid)` decides whether a human may submit an ordinary
+action: an `ai` seat returns `PLAYER_AI_CONTROLLED`, an `unclaimed` seat returns
+`PLAYER_UNCLAIMED`, and the shared `turns.submit_action` service (used by the
+Web endpoint and by SSE) answers 409 for both. It only refuses a human acting
+for that seat; it does not change whether the server AI acts on its own.
+
+The multiplayer ready barrier counts humans only: `active_human_players` is
+alive, present and `control.mode == human`, and `all_alive_ready()` plus the
+ready / waiting sets of `multiplayer_status()` are computed from it, so AI-hosted
+and unclaimed seats never block the round; they are reported separately as
+`ai_players` / `unclaimed_players` with their counts. An away human still does
+not block, and `active_alive_players` keeps its previous meaning for call sites
+such as the Luck timeout that only need a head count.
+
+Claim transitions go through the same authority: `claim_seat` is the canonical
+entry point for joining an existing seat in the Web path, turning `ai` /
+`unclaimed` into `human` without moving anything (character sheet, HP, equipment,
+spells, world position and combat actor all stay put), and it fails closed with
+`CONTROL_STALE` on a stale `expected_revision` and with `CONTROL_NOT_CLAIMABLE`
+on a seat that is already human-controlled. A brand-new seat is still born
+`human` via `put_player`. `control_change_block` names the safe boundary for a
+control change: `""` only while the table is in `ACTIVE_ACTION` with no round in
+flight, otherwise `CONTROL_CHANGE_BUSY`.
 
 ## D&D 2024 Authoritative Play State
 

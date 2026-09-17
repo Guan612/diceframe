@@ -34,7 +34,13 @@ from src.engine.game_state_contracts import (
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
-from src.engine.player_control import ensure_control, ensure_controls
+from src.engine.player_control import (
+    ai_controlled_players,
+    control_mode,
+    ensure_control,
+    ensure_controls,
+    unclaimed_players,
+)
 from src.engine.world_state import ensure_world_state, fresh_world_state
 from src.migrations.instance import CURRENT_INSTANCE_SCHEMA_VERSION
 
@@ -418,6 +424,19 @@ class GameInstance:
     def active_alive_players(self) -> set[str]:
         """当前需要参与行动等待的存活玩家。暂离玩家仍在队伍中，但不阻塞回合。"""
         return self.alive_players.difference(self.away_players)
+
+    @property
+    def active_human_players(self) -> set[str]:
+        """当前需要等待行动的真人席位：存活、未暂离且控制模式为 ``human``。
+
+        AI 托管与未认领的席位由服务器或无人负责，不能阻塞多人的 ready
+        barrier；``active_alive_players`` 仍是"在场存活"的完整集合，供幸运
+        超时等只看人数的地方使用。
+        """
+        return {
+            uid for uid in self.active_alive_players
+            if control_mode(self, uid) == "human"
+        }
 
     def get_character_sheet(self, uid: str) -> dict:
         """获取指定玩家的角色卡，不存在时返回空 dict。"""
@@ -1350,19 +1369,31 @@ class GameInstance:
         luck_resolver._cancel_luck_timer(self, check_id)
 
     def all_alive_ready(self) -> bool:
-        """多人模式下，所有未暂离的存活角色都提交行动后才自动推进。"""
-        active = self.active_alive_players
+        """多人模式下，所有未暂离的存活真人席位都提交行动后才自动推进。
+
+        AI 托管与未认领的席位不参与等待：它们不是"还没交行动的真人"。
+        """
+        active = self.active_human_players
         if not active:
             return False
         return active.issubset(self.ready_players)
 
     def multiplayer_status(self) -> dict:
-        """返回多人协调所需的轻量状态。"""
+        """返回多人协调所需的轻量状态。
+
+        ready / waiting 只统计真人席位（``active_human_players``），因此 AI
+        托管与未认领的席位不会出现在 ``waiting_players`` 里、也不会阻塞推进；
+        它们分别在 ``ai_players`` / ``unclaimed_players`` 中列出，说明"还差谁"
+        之外的那部分席位由谁负责。``active_count`` 仍是"在场存活"席位总数。
+        """
         alive = self.alive_players
         active = self.active_alive_players
-        ready = active.intersection(self.ready_players)
-        waiting = active.difference(self.ready_players)
+        human_active = self.active_human_players
+        ready = human_active.intersection(self.ready_players)
+        waiting = human_active.difference(self.ready_players)
         away = alive.intersection(self.away_players)
+        ai_hosted = ai_controlled_players(self)
+        unclaimed = unclaimed_players(self)
 
         def player_label(uid: str) -> str:
             return self.players.get(uid, {}).get("character_name") or uid
@@ -1389,6 +1420,16 @@ class GameInstance:
                 {"user_id": uid, "character_name": player_label(uid)}
                 for uid in sorted(away)
             ],
+            "ai_players": [
+                {"user_id": uid, "character_name": player_label(uid)}
+                for uid in ai_hosted
+            ],
+            "unclaimed_players": [
+                {"user_id": uid, "character_name": player_label(uid)}
+                for uid in unclaimed
+            ],
+            "ai_count": len(ai_hosted),
+            "unclaimed_count": len(unclaimed),
             "can_accept_actions": self.can_accept_actions(),
             "can_advance": self.can_accept_actions() and bool(self.action_queue),
             "action_count": len(self.action_queue),

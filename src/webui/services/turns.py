@@ -19,9 +19,10 @@ from src.engine.economy import (
     pending_effect_groups,
     pending_economy_proposals,
 )
+from src.engine.game_instance import GameState
 from src.engine.language import localized_text
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
-from src.engine.game_instance import GameState
+from src.engine.player_control import submission_block
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
 
 if TYPE_CHECKING:
@@ -29,6 +30,12 @@ if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
+
+# 控制权拒绝真人提交时的对外文案；键与 player_control.SUBMISSION_BLOCK_CODES 一致。
+_SUBMISSION_BLOCK_MESSAGES = {
+    "PLAYER_AI_CONTROLLED": "该角色当前由 AI 托管，真人无法提交行动（可先接管该角色）",
+    "PLAYER_UNCLAIMED": "该角色尚未被认领，请先认领角色再提交行动",
+}
 
 
 NarrationDelta = Callable[[str], Awaitable[None]]
@@ -466,6 +473,15 @@ async def submit_action(
         return _result({"error": "游戏不存在，请刷新页面重新开始"}, 404)
     if actor_uid not in instance.players:
         return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
+    # 控制权是权威的准入判定：AI 托管 / 未认领的席位不接受真人提交的行动。
+    # 这里只拒绝"真人代打"，不改变服务器 AI 自身是否行动（本 PR 不让 AI 自动出招）。
+    block = submission_block(instance, actor_uid)
+    if block:
+        return _result({
+            "ok": False,
+            "error_code": block,
+            "error": _SUBMISSION_BLOCK_MESSAGES.get(block, "当前角色无法提交行动"),
+        }, 409)
     rule = dependencies.load_rule_for_game(instance)
     if rule is not None:
         try:
