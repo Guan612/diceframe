@@ -1063,7 +1063,7 @@ describe('D&D 2024 combat panel class capabilities', () => {
 
     const wrapper = await mountMonk(payload)
 
-    expect(wrapper.get('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.turn-banner').exists()).toBe(true)
     expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
     expect(wrapper.find('.capability-card').exists()).toBe(false)
     wrapper.unmount()
@@ -1079,7 +1079,7 @@ describe('D&D 2024 combat panel class capabilities', () => {
 
     const wrapper = await mountMonk(payload)
 
-    expect(wrapper.get('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.turn-banner').exists()).toBe(true)
     expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('undefined')
     wrapper.unmount()
