@@ -20,7 +20,11 @@ from src.ai_providers import (
     strip_orphan_provider_secrets,
 )
 from src.asr.contracts import SUPPORTED_ASR_PROVIDER_IDS
-from src.imagegen.contracts import IMAGE_PROVIDER_IDS
+from src.imagegen.contracts import (
+    IMAGE_PROVIDER_IDS,
+    PROMPT_TEMPLATE_VARIABLE_RE,
+    PROMPT_TEMPLATE_VARIABLES,
+)
 from src.tts.contracts import SUPPORTED_PROVIDER_IDS
 from src.webui.access_password import hash_access_password
 from src.webui.cors import invalid_cors_origins, normalize_cors_origins
@@ -279,7 +283,10 @@ def prepare_config_update(current: dict[str, Any], body: dict[str, Any]) -> Prep
                 value = clean_text_value(raw)
                 if len(value) > 12000:
                     return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "图像提示词配置不能超过 12000 个字符")
-                if any(token not in {"scene", "narration", "actions", "panels"} for token in __import__("re").findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", value)):
+                if any(
+                    token not in PROMPT_TEMPLATE_VARIABLES
+                    for token in PROMPT_TEMPLATE_VARIABLE_RE.findall(value)
+                ):
                     return PreparedConfigUpdate(candidate, changed_keys, access_password_changed, "图像提示词包含不支持的变量")
                 candidate[key] = value
             elif key == "imagegen_timeout_seconds":

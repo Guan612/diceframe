@@ -49,6 +49,10 @@ _AI_GAME_SUFFIXES = (
     "/restart",
     "/switch-world",
     "/speech",
+    # 分镜分析走的是主文本模型，和上面几条一样要占 AI 槽位。
+    # 生图接口（/current-round、POST .../generated-images）故意不进这里：
+    # 单次可长达 imagegen_timeout_seconds，占满槽位会把玩家行动一起饿死。
+    "/storyboard/analyze",
 )
 
 
