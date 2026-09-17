@@ -158,6 +158,8 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 `ai` 席位在普通探索轮由 `src/commands/ai_player.py` 补行动：闸门是 `GameInstance.human_actions_ready()`（真人一侧交齐，且与 `should_advance()` 是两个不同问题），在唯一的推进入口——`turns.submit_action` 里真人闸门满足之后、`try_advance()` 之前——调用一次。每个席位一次 plain-text 调用、按 uid 串行，因此它只知道自己的角色卡、player-safe 公开上下文与本轮已宣告的行动，读不到 GM 私有世界事实、`gm_directives`、他人 `private_log` 或未来剧情，也不额外传 lorebook。产出只是一段普通行动文本（不含 DC / 加值 / 成败），经 `add_action` 走真人同一条 canonical 入口，由既有 Check Planner 与 WorldState 合法性裁定；行动带 `source` / `control_revision` / `generated_for_round` 元数据，仅用于去重与调试。调用前捕获 run / round / 席位 / `control.revision`，返回后四者与阶段全部复核，任一变化即丢弃；供应商错误或不可用输出记录 `AI_ACTION_SKIPPED` 后继续，不阻塞本轮。
 
+探索之外的权威战斗走另一条路：AI 托管 PC 的战斗回合由 `next_automatic_intent` 以 server/GM automation authority 提交**结构化意图**，而不是叙事行动，并且复用 companion 已有的同一条确定性阶梯（`_allied_automatic_intent`：治疗濒危 → 攻击最近敌对 → 移动 → Dodge → End Turn），不新增第二套战斗引擎，本阶段也不接 LLM。它与 companion 的唯一真实差异是 0 HP：companion 不做死亡豁免，玩家角色必须做，否则战斗会卡在该席位。意图仍走 validate / resolve / apply 同一权威链，受同一行动经济约束（action / attacks_remaining / movement），只看该席位自己的角色卡；候选意图在当前状态下不合法时退回合法 `end_turn`，保证托管席位的回合一定结束。校验侧同步收紧：`player:` actor 只有在席位确实处于 `ai` 托管时才允许 `submitted_by == gm_uid` 代提交，否则维持「玩家只能提交自己角色」；真人既不能代打 AI 席位，也不能手动操控它。`human` 与 `unclaimed` 席位永远不产生自动意图。
+
 ## Ruleset Bundle v1
 
 `templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。

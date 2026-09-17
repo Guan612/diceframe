@@ -282,6 +282,24 @@ are captured before the call and all re-verified with the phase afterwards: any
 change discards the result. Provider errors or unusable output record
 `AI_ACTION_SKIPPED` and never block the round.
 
+Authoritative combat outside exploration takes a different road. An AI-hosted
+PC's combat turn is submitted as a **structured intent** by
+`next_automatic_intent` under server/GM automation authority, reusing the
+companion's existing deterministic ladder (`_allied_automatic_intent`: heal a
+downed ally, attack the nearest hostile, move toward it, Dodge, End Turn). No
+second combat engine is introduced and no LLM is involved at this stage. The one
+real difference from a companion is 0 HP: a companion makes no death save, but a
+player character must, or combat would stall on that seat. Intents still travel
+validate / resolve / apply on the same authoritative chain and obey the same
+action economy (action / attacks_remaining / movement), reading only that seat's
+own character sheet; a candidate that is not legal in the current state falls
+back to a legal `end_turn`, so a hosted seat's turn always terminates. Validation
+is tightened in step: a `player:` actor may only be submitted by `gm_uid` while
+the seat really is `ai`-hosted, otherwise "a player can submit intents only for
+their own character" still holds, so a human can neither play an AI seat by hand
+nor control it manually. A `human` or `unclaimed` seat never yields an automatic
+intent.
+
 ## D&D 2024 Authoritative Play State
 
 `core:dnd2024` combat, Session 0, and campaign records share `GameInstance.ruleset_state.version` and one EventBatch ledger. An optional adventure supplies story input through its exact binding but is not part of the Ruleset Bundle. Combat and campaign events have separate reducers; the runtime composition root dispatches explicit intent types without making the generic engine import D&D code.
