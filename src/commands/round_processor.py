@@ -1,8 +1,9 @@
-﻿"""完整回合推进流程。"""
+"""完整回合推进流程。"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -66,6 +67,11 @@ from src.engine.economy import filter_unconfirmed_purchase_grants, has_pending_i
 from src.engine import combat_narrative
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
+from src.engine.world_legality import evaluate_world_requirements
+from src.llm.world_prompt import (
+    format_world_legality_block,
+    format_world_state_block,
+)
 from src.llm.parser import sanitize_narration
 from src.imagegen import (
     ImageGenerationError,
@@ -408,6 +414,12 @@ class RoundProcessor:
             if errors:
                 logger.warning("部分 AI 检定参数被拒绝: %s", "; ".join(str(item) for item in errors))
             instance.last_overreach = list(metadata.get("overreach") or [])
+            # 世界合法性：模型只提议结构化地点，server 对照权威世界真相后才阻断或
+            # 落库合法移动；空世界/未知地点一律不阻断（旧游戏行为不变）。
+            world_result = evaluate_world_requirements(
+                instance, metadata.get("world_requirements") or [],
+            )
+            instance.last_world_legality = list(world_result.get("notes") or [])
             build_dice_constraint_block(
                 instance,
                 actions_text,
@@ -876,6 +888,10 @@ class RoundProcessor:
         overreach_text = (
             format_overreach_block(instance) if overreach_guard_enabled() else ""
         )
+        # 权威世界真相与行动合法性：都是服务端组装的可信块，玩家文本无法注入。
+        # GM 视角包含 gm 私有事实（并标注玩家不可见）。
+        world_state_text = format_world_state_block(instance, viewer_is_gm=True)
+        world_legality_text = format_world_legality_block(instance)
 
         gm_prompt = self._prompt.compose_gm_prompt(instance, rule_appendix, world_data=world_data)
         provider_name = self.llm_client.default if self.llm_client else ""
@@ -883,6 +899,8 @@ class RoundProcessor:
             instance, gm_prompt, lorebook_matches, actions_text,
             provider_name=provider_name, world_data=world_data,
             directives_text=gm_directives_text, overreach_text=overreach_text,
+            world_state_text=world_state_text,
+            world_legality_text=world_legality_text,
             authoritative_events_text=pending_combat_events_text)
 
         context = await append_multistep_analysis(

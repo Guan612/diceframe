@@ -159,6 +159,62 @@ DICE_CHECKS_TOOL: dict[str, Any] = {
                         "required": ["player", "reason"],
                     },
                 },
+                # 世界要求（可选）：与 checks 规划完全独立的附加输出。
+                # 只在这一轮的行动确实发生在某个已登记地点、或角色明确要移动到
+                # 某个已登记地点时输出；服务端会与权威世界真相对照，矛盾时阻断
+                # 「瞬移」，合法移动才由服务端写入。缺失/畸形不影响 checks。
+                "world_requirements": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "description": (
+                        "Optional and independent of checks. Emit an entry only when this round's "
+                        "action happens at a canonical location listed in context.world_state, or when "
+                        "the character explicitly moves to one. Use canonical location ids from "
+                        "world_state facts (never free text, never translated names). "
+                        "kind='act' means the action is performed at 'location'; kind='move' means the "
+                        "character ends up at 'location' (list the canonical places passed through in "
+                        "'via'). The server compares this with authoritative world truth: a proven "
+                        "contradiction is narrated as 'you must move first / the action cannot complete', "
+                        "and a legal move is recorded server-side. Omit when the location is unknown or "
+                        "unclear; guessing here can block a legitimate action."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "player": {
+                                "type": "string",
+                                "description": "Exact player id or character name from the supplied roster.",
+                            },
+                            "kind": {
+                                "type": "string",
+                                "enum": ["act", "move"],
+                                "description": (
+                                    "'act' = the action is performed at this location; "
+                                    "'move' = the character travels to this location."
+                                ),
+                            },
+                            "location": {
+                                "type": "string",
+                                "maxLength": 120,
+                                "description": (
+                                    "Canonical location id taken from world_state facts (e.g. village_west). "
+                                    "Never a display name, never a raw phrase from the player's text."
+                                ),
+                            },
+                            "via": {
+                                "type": "array",
+                                "maxItems": 8,
+                                "items": {"type": "string", "maxLength": 120},
+                                "description": (
+                                    "For kind='move' only: canonical locations the route passes through, "
+                                    "in order. Omit when the route is unknown."
+                                ),
+                            },
+                        },
+                        "required": ["player", "kind", "location"],
+                    },
+                },
                 # 经济报价（可选）：与 checks 规划完全独立的附加输出。
                 # 只转述人类在本轮文本中明确说出的价格；AI 绝不推断、估算或
                 # 发明价格。服务端生成待确认提案，付款人弹窗确认后才扣款。
