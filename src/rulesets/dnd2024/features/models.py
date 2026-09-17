@@ -25,6 +25,10 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 # v1 只表达本 PR 真正实现的效果原语；未知 kind 必须 fail closed，而不是被静默忽略。
 ACTION_KINDS = frozenset({"unarmed_strike", "dash", "dodge", "disengage"})
 ACTION_COST_KINDS = ("bonus_action", "action")
+# 装备前提里可声明的武器类别；同样 fail closed。``simple_melee`` 是 SRD 的
+# Simple Melee 武器栏，``martial_melee_light`` 是带 Light 的 Martial Melee 武器。
+WEAPON_KINDS = frozenset({"simple_melee", "martial_melee_light"})
+EQUIPMENT_REQUIREMENT_KEYS = frozenset({"unarmored", "no_shield", "weapon_kinds"})
 
 
 class ClassFeatureError(ValueError):
@@ -61,6 +65,22 @@ def _require_scalar(value: Any, field_name: str) -> Any:
     if isinstance(value, str):
         return value
     raise ClassFeatureError(f"{field_name} must contain scalars only")
+
+
+@dataclass(frozen=True, slots=True)
+class EquipmentRequirement:
+    """The canonical equipment precondition a class feature declares.
+
+    ``unarmored`` / ``no_shield`` are evaluated against the character's item
+    types; a non-empty ``weapon_kinds`` additionally requires *every* wielded
+    weapon to match one of the declared kinds.  The same kinds are the weapons
+    the feature's own weapon benefits cover (Martial Arts: the Monk Weapon), so
+    a feature never repeats the weapon definition in a second table.
+    """
+
+    unarmored: bool = False
+    no_shield: bool = False
+    weapon_kinds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +131,50 @@ class ClassFeatureDefinition:
     resource_id: str
     option_of: str
     capabilities: tuple[FeatureCapability, ...]
+    equipment_requirement: EquipmentRequirement | None = None
+
+
+def _parse_equipment_requirement(
+    feature_id: str, raw: Any,
+) -> EquipmentRequirement | None:
+    """Validate a declared equipment precondition, failing closed on unknowns."""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ClassFeatureError(f"{feature_id}.equipment_requirement must be an object")
+    unknown = {str(key) for key in raw}.difference(EQUIPMENT_REQUIREMENT_KEYS)
+    if unknown:
+        raise ClassFeatureError(
+            f"{feature_id}.equipment_requirement has an unknown field: {sorted(unknown)[0]}"
+        )
+    flags: dict[str, bool] = {}
+    for key in ("unarmored", "no_shield"):
+        value = raw.get(key, False)
+        if not isinstance(value, bool):
+            raise ClassFeatureError(f"{feature_id}.equipment_requirement.{key} must be a boolean")
+        flags[key] = value
+    raw_kinds = raw.get("weapon_kinds")
+    if raw_kinds is None:
+        raw_kinds = []
+    if not isinstance(raw_kinds, list):
+        raise ClassFeatureError(
+            f"{feature_id}.equipment_requirement.weapon_kinds must be an array"
+        )
+    kinds: list[str] = []
+    for raw_kind in raw_kinds:
+        kind = str(raw_kind or "")
+        if kind not in WEAPON_KINDS:
+            raise ClassFeatureError(
+                f"{feature_id}.equipment_requirement has an unknown weapon kind: {raw_kind!r}"
+            )
+        if kind not in kinds:
+            kinds.append(kind)
+    return EquipmentRequirement(
+        unarmored=flags["unarmored"],
+        no_shield=flags["no_shield"],
+        weapon_kinds=tuple(kinds),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +291,9 @@ class Dnd2024ClassFeatureCatalog:
             resource_id=resource_id,
             option_of=option_of,
             capabilities=tuple(capabilities),
+            equipment_requirement=_parse_equipment_requirement(
+                feature_id, raw.get("equipment_requirement"),
+            ),
         )
 
     @classmethod
@@ -294,7 +361,13 @@ class Dnd2024ClassFeatureCatalog:
 
 @dataclass(frozen=True, slots=True)
 class FeatureView:
-    """Presentation-safe view of one feature the character actually owns."""
+    """Presentation-safe view of one feature the character actually owns.
+
+    ``active`` says whether the feature's declared equipment precondition
+    currently holds.  An owned-but-inactive feature keeps its identity (the
+    character really does have it) but exposes no effect values: the numbers
+    that are not in force right now must not be rendered as if they were.
+    """
 
     id: str
     name: str
@@ -302,6 +375,7 @@ class FeatureView:
     source_ref: str
     minimum_level: int
     values: Mapping[str, Any] = field(default_factory=dict)
+    active: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -311,6 +385,7 @@ class FeatureView:
             "source_ref": self.source_ref,
             "minimum_level": self.minimum_level,
             "values": dict(self.values),
+            "active": self.active,
         }
 
 

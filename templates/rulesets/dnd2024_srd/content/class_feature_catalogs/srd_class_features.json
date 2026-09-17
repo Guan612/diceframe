@@ -33,6 +33,11 @@
             "unarmed_damage_die_format": "1d{die}",
             "unarmed_ability_choice": ["str", "dex"]
           },
+          "equipment_requirement": {
+            "unarmored": true,
+            "no_shield": true,
+            "weapon_kinds": ["simple_melee", "martial_melee_light"]
+          },
           "capabilities": [
             {
               "id": "bonus_unarmed_strike",

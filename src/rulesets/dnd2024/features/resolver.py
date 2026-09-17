@@ -23,8 +23,9 @@ from src.rulesets.dnd2024.progression.catalog import (
 from .combat import (
     CombatContext,
     combat_capabilities as _project_capabilities,
-    unarmed_strike_profile as _unarmed_profile,
+    martial_arts_profile as _martial_arts_profile,
 )
+from .equipment import Dnd2024EquipmentCatalog
 from .models import (
     ClassFeatureDefinition,
     ClassFeatureError,
@@ -54,6 +55,9 @@ class Dnd2024ClassFeatureResolver:
 
     def __init__(self, bundle: LoadedRulesetBundle):
         self.bundle = bundle
+        # canonical 装备元数据是惰性构建的：它只在真的有 feature 声明了装备前提
+        # 时才被读取，避免每次角色投影都白拷一份物品目录。
+        self._equipment: Dnd2024EquipmentCatalog | None = None
         # 与 ``Dnd2024Runtime._sync_class_resources`` 相同的边界：bundle 没有
         # 声明这套可选内容时，职业特性整体降级为「不存在」，而不是让每一个
         # 角色投影都失败。声明存在但格式非法时仍然 fail closed。
@@ -71,6 +75,14 @@ class Dnd2024ClassFeatureResolver:
         self.resources = Dnd2024ClassResourceCatalog.from_bundle(bundle)
         self.progression = Dnd2024ProgressionCatalog.from_bundle(bundle)
         self._validate_declarations()
+
+    @property
+    def equipment(self) -> Dnd2024EquipmentCatalog:
+        """The canonical item / weapon metadata equipment eligibility is read from."""
+
+        if self._equipment is None:
+            self._equipment = Dnd2024EquipmentCatalog.from_bundle(self.bundle)
+        return self._equipment
 
     # ------------------------------------------------------------------
     # identity
@@ -141,6 +153,34 @@ class Dnd2024ClassFeatureResolver:
             return False
         return any(item.id == wanted for item in self.features_for(character))
 
+    def feature_is_active(
+        self, character: Mapping[str, Any] | None, definition: ClassFeatureDefinition,
+    ) -> bool:
+        """Whether one owned feature's declared equipment precondition holds now.
+
+        Ownership (``features_for``) never changes with equipment; only the
+        benefits a feature grants do.  Monk's Focus, Flurry of Blows, Patient
+        Defense and Step of the Wind declare no equipment requirement, so they
+        keep working while Martial Arts is suppressed.
+        """
+
+        requirement = definition.equipment_requirement
+        if requirement is None:
+            return True
+        if not self.available:
+            return True
+        return self.equipment.requirement_met(character, requirement)
+
+    def active_features_for(
+        self, character: Mapping[str, Any] | None,
+    ) -> tuple[ClassFeatureDefinition, ...]:
+        """Owned features whose benefits currently apply, in catalog order."""
+
+        return tuple(
+            definition for definition in self.features_for(character)
+            if self.feature_is_active(character, definition)
+        )
+
     def feature_value(
         self,
         character: Mapping[str, Any] | None,
@@ -169,22 +209,30 @@ class Dnd2024ClassFeatureResolver:
     def feature_views(
         self, character: Mapping[str, Any] | None,
     ) -> tuple[FeatureView, ...]:
-        """Presentation-safe views of the owned features, with resolved values."""
+        """Presentation-safe views of the owned features, with resolved values.
+
+        An owned feature whose equipment precondition does not hold is still
+        listed (the character really has it) but reports ``active = False`` and
+        no effect values, so a client never renders a die or an ability choice
+        that is not currently in force.
+        """
 
         views: list[FeatureView] = []
         for definition in self.features_for(character):
+            active = self.feature_is_active(character, definition)
             values: dict[str, Any] = {}
-            for key, raw in definition.parameters.items():
-                if key.endswith("_format"):
-                    continue
-                if key.endswith("_track"):
-                    resolved = self._value(
-                        definition, character, key[: -len("_track")], None,
-                    )
-                    if resolved is not None:
-                        values[key[: -len("_track")]] = resolved
-                else:
-                    values[key] = deepcopy(raw)
+            if active:
+                for key, raw in definition.parameters.items():
+                    if key.endswith("_format"):
+                        continue
+                    if key.endswith("_track"):
+                        resolved = self._value(
+                            definition, character, key[: -len("_track")], None,
+                        )
+                        if resolved is not None:
+                            values[key[: -len("_track")]] = resolved
+                    else:
+                        values[key] = deepcopy(raw)
             views.append(FeatureView(
                 id=definition.id,
                 name=self.catalog.label(definition.id, _humanize(definition.id)),
@@ -192,6 +240,7 @@ class Dnd2024ClassFeatureResolver:
                 source_ref=definition.source_ref,
                 minimum_level=definition.minimum_level,
                 values=values,
+                active=active,
             ))
         return tuple(views)
 
@@ -200,18 +249,43 @@ class Dnd2024ClassFeatureResolver:
 
         Combat keeps consuming plain data: the actor's canonical class
         resources (with their localized names), and the feature-derived
-        Unarmed Strike parameters.  Neither the combat engine nor the frontend
-        re-derives a class level or a Martial Arts die.
+        Unarmed Strike / Monk Weapon parameters.  Neither the combat engine nor
+        the frontend re-derives a class level, a Martial Arts die, or whether
+        Martial Arts is currently active.
         """
 
         owned = self.features_for(character)
+        active = tuple(
+            definition for definition in owned
+            if self.feature_is_active(character, definition)
+        )
         return {
             "class_resources": [
                 definition.to_dict()
                 for definition in self._resource_definitions(owned, character)
             ],
-            "unarmed_damage_die": self._unarmed_die(owned, character),
-            "unarmed_ability_choice": list(self._ability_choice(owned, character)),
+            "unarmed_damage_die": self._unarmed_die(active, character),
+            "unarmed_ability_choice": list(self._ability_choice(active, character)),
+            "martial_arts_weapon_refs": list(
+                self._benefitting_weapon_refs(character, active)
+            ),
+        }
+
+    def projection_fields(self, character: Mapping[str, Any] | None) -> dict[str, Any]:
+        """The legacy-sheet class feature / class resource rows.
+
+        The single place that defines this projection shape: character creation,
+        advancement, rest and live equipment reconciliation all publish the same
+        two fields instead of each re-deriving them.
+        """
+
+        return {
+            "class_features": [view.to_dict() for view in self.feature_views(character)],
+            "class_resources": [
+                definition.to_dict()
+                for definition in self.resource_definitions(character)
+                if int(definition.maximum) > 0
+            ],
         }
 
     # ------------------------------------------------------------------
@@ -293,15 +367,21 @@ class Dnd2024ClassFeatureResolver:
         *,
         include_unavailable: bool = False,
     ) -> tuple[CombatCapabilityView, ...]:
-        """Capabilities the character may declare in the given combat context."""
+        """Capabilities the character may declare in the given combat context.
 
-        owned = self.features_for(character)
+        Only features whose equipment precondition currently holds contribute
+        capabilities: Bonus Unarmed Strike is a Martial Arts benefit and must
+        disappear with it, while the Focus actions (a different class feature)
+        stay available.
+        """
+
+        active = self.active_features_for(character)
         definitions = {
             definition.id: definition for definition in self.resource_definitions(character)
         }
         return _project_capabilities(
             self.catalog,
-            owned,
+            active,
             CombatContext.from_economy(combat_context),
             definitions,
             include_unavailable=include_unavailable,
@@ -310,10 +390,10 @@ class Dnd2024ClassFeatureResolver:
     def declared_capability(
         self, character: Mapping[str, Any] | None, capability_id: str,
     ) -> FeatureCapability | None:
-        """The owned capability declaration with this id, or ``None``."""
+        """The currently active capability declaration with this id, or ``None``."""
 
         wanted = str(capability_id or "")
-        for definition in self.features_for(character):
+        for definition in self.active_features_for(character):
             for capability in definition.capabilities:
                 if capability.id == wanted:
                     return capability
@@ -322,7 +402,7 @@ class Dnd2024ClassFeatureResolver:
     def unarmed_strike_die(self, character: Mapping[str, Any] | None) -> str:
         """The feature-derived base damage of this character's Unarmed Strike."""
 
-        return self._unarmed_die(self.features_for(character), character)
+        return self._unarmed_die(self.active_features_for(character), character)
 
     def _unarmed_die(
         self, owned: tuple[ClassFeatureDefinition, ...], character: Mapping[str, Any] | None,
@@ -336,9 +416,9 @@ class Dnd2024ClassFeatureResolver:
     def unarmed_ability_choice(
         self, character: Mapping[str, Any] | None,
     ) -> tuple[str, ...]:
-        """The abilities this character may use for Unarmed Strikes."""
+        """The abilities this character may use for Unarmed Strikes (and Monk Weapons)."""
 
-        return self._ability_choice(self.features_for(character), character)
+        return self._ability_choice(self.active_features_for(character), character)
 
     def _ability_choice(
         self, owned: tuple[ClassFeatureDefinition, ...], character: Mapping[str, Any] | None,
@@ -354,7 +434,36 @@ class Dnd2024ClassFeatureResolver:
     ) -> dict[str, Any]:
         """The actor-specific effective profile of the canonical Unarmed Strike."""
 
-        return _unarmed_profile(base, martial_arts_die=self.unarmed_strike_die(character))
+        return _martial_arts_profile(
+            base,
+            damage_die=self.unarmed_strike_die(character),
+            ability_choice=self.unarmed_ability_choice(character),
+        )
+
+    def _benefitting_weapon_refs(
+        self,
+        character: Mapping[str, Any] | None,
+        active: tuple[ClassFeatureDefinition, ...],
+    ) -> tuple[str, ...]:
+        """Equipped weapon refs that currently receive a feature's weapon benefits.
+
+        The feature that supplies the Unarmed Strike damage die also declares
+        which canonical weapon kinds it covers (Martial Arts: the Monk Weapon),
+        so a wielded Monk Weapon gets the same ability choice and damage-die
+        treatment as the canonical Unarmed Strike.  Returns nothing while that
+        feature is inactive, and nothing for a character with no such feature.
+        """
+
+        if not self.available:
+            return ()
+        for definition in active:
+            if not self._value(definition, character, "unarmed_damage_die", ""):
+                continue
+            requirement = definition.equipment_requirement
+            if requirement is None or not requirement.weapon_kinds:
+                continue
+            return self.equipment.weapon_refs_of_kinds(character, requirement.weapon_kinds)
+        return ()
 
     # ------------------------------------------------------------------
     # internals

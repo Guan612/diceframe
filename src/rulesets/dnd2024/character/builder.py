@@ -422,14 +422,8 @@ class Dnd2024CharacterBuilder(CharacterValidationMixin, CharacterDerivationMixin
             "currency": {"amount": character["equipment"]["coins_gp"]},
             # 职业能力与职业资源是规则运行时对用户可见的投影；数值本身仍以
             # ruleset_character.resources.class 为唯一权威，这里只做展示。
-            "class_features": [
-                view.to_dict() for view in resolver.feature_views(character)
-            ],
-            "class_resources": [
-                definition.to_dict()
-                for definition in resolver.resource_definitions(character)
-                if int(definition.maximum) > 0
-            ],
+            # 投影形状由 feature boundary 定义一次，live equipment reconcile 复用同一份。
+            **resolver.projection_fields(character),
         }
 
     def _validate_choice_refs(

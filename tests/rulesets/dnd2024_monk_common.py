@@ -7,11 +7,13 @@ advancement path to higher levels, and a minimal combat instance.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
 from src.engine.game_instance import GameInstance
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
+from src.rulesets.dnd2024.features import Dnd2024ClassFeatureResolver
 from src.rulesets.dnd2024.play import EncounterAccess
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 
@@ -116,6 +118,27 @@ def monk_sheet(
     if level > 1:
         sheet = advance(runtime, sheet, level)
     return sheet
+
+
+def with_equipment(
+    runtime: Dnd2024Runtime, sheet: dict[str, Any], *item_refs: str, locale: str = "en",
+) -> dict[str, Any]:
+    """Return the sheet wearing/wielding exactly ``item_refs``.
+
+    ``ruleset_character.equipment.item_refs`` is the canonical authority for
+    what is worn and wielded -- the live equipment path writes that same field.
+    The user-visible projection fields are refreshed through the feature
+    boundary (the same call the runtime's reconcile uses), so a test never
+    hand-rolls a projection of its own.
+    """
+
+    updated = deepcopy(sheet)
+    canonical = updated["ruleset_character"]
+    canonical["equipment"]["item_refs"] = [str(ref) for ref in item_refs]
+    updated.update(
+        Dnd2024ClassFeatureResolver(runtime.load_bundle(locale)).projection_fields(canonical)
+    )
+    return updated
 
 
 def goblin(*, position: int = 5, hp: int = 40) -> dict[str, Any]:

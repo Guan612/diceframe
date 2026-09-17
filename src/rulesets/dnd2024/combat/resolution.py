@@ -111,18 +111,19 @@ class CombatResolutionMixin:
             ability = "dex" if ranged_use else "str"
             if weapon.get("finesse"):
                 ability = max(("str", "dex"), key=lambda key: ability_modifier(actor["abilities"][key]))
-            if weapon.get("unarmed"):
-                # Martial Arts：徒手打击可以改用力量或敏捷。客户端不能每次
-                # 手选属性，因此第一版采用确定性规则——取修正值较高者。
-                choices = [
-                    str(key) for key in actor.get("unarmed_ability_choice") or []
-                    if str(key) in actor["abilities"]
-                ]
-                if choices:
-                    ability = max(
-                        choices,
-                        key=lambda key: ability_modifier(actor["abilities"][key]),
-                    )
+            # 职业特性投影出来的属性选择（武艺：徒手打击与 Monk Weapon 都可以改用
+            # 力量或敏捷）。客户端不能每次手选属性，因此第一版采用确定性规则——
+            # 取修正值较高者，由 feature boundary 投影到武器档案上，Combat 不判断职业。
+            # 远程/投掷使用仍沿用既有 ranged 规则，不被特性改写。
+            choices = [
+                str(key) for key in weapon.get("ability_choice") or []
+                if str(key) in actor["abilities"]
+            ]
+            if choices and not ranged_use:
+                ability = max(
+                    choices,
+                    key=lambda key: ability_modifier(actor["abilities"][key]),
+                )
             modifier = ability_modifier(actor["abilities"][ability])
             if weapon.get("unarmed") or (
                 f"weapon_category:{weapon.get('category')}" in actor["weapon_category_refs"]

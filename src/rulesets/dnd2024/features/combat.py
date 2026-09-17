@@ -8,9 +8,10 @@ never by the combat engine, and never by the frontend.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .models import (
     ClassFeatureDefinition,
@@ -20,6 +21,39 @@ from .models import (
     FeatureCapability,
 )
 from .resources import ResourceDefinition
+
+
+_DICE_FORMULA_RE = re.compile(r"^(\d+)d(\d+)(?:\+(\d+))?$")
+_FLAT_FORMULA_RE = re.compile(r"^(\d+)$")
+
+
+def damage_mean(formula: str) -> float | None:
+    """Expected value of a canonical damage formula, or ``None`` if unparsed."""
+
+    text = str(formula or "").strip()
+    match = _DICE_FORMULA_RE.fullmatch(text)
+    if match is not None:
+        count, sides = int(match.group(1)), int(match.group(2))
+        return count * (sides + 1) / 2 + int(match.group(3) or 0)
+    match = _FLAT_FORMULA_RE.fullmatch(text)
+    if match is not None:
+        return float(match.group(1))
+    return None
+
+
+def martial_arts_die_is_better(candidate: str, current: str) -> bool:
+    """Whether the feature die improves on the profile's own damage formula.
+
+    V1 deterministic automation must never *downgrade* a weapon: when the
+    profile's own dice are at least as good, or cannot be compared at all, the
+    weapon keeps its own damage formula and only the ability choice applies.
+    """
+
+    candidate_mean = damage_mean(candidate)
+    current_mean = damage_mean(current)
+    if candidate_mean is None or current_mean is None:
+        return False
+    return candidate_mean > current_mean
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,18 +172,33 @@ def combat_capabilities(
     return tuple(result)
 
 
-def unarmed_strike_profile(
-    base: Mapping[str, Any], *, martial_arts_die: str,
+def martial_arts_profile(
+    base: Mapping[str, Any],
+    *,
+    damage_die: str,
+    ability_choice: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Return the actor-specific effective profile of the canonical Unarmed Strike.
+    """Return the actor-specific effective profile of a canonical attack.
 
-    The canonical identity, damage type, and reach still come from the combat
-    catalog; only the base damage is replaced by the feature-derived Martial
-    Arts die.  No new attack identity is ever created here.
+    Used for the canonical Unarmed Strike and for a wielded Monk Weapon: the
+    canonical identity, damage type, properties, range and proficiency still
+    come from the combat catalog, and only the *effective* base damage and
+    attack-ability choice are feature-derived.  No new attack identity is ever
+    created here.
+
+    V1 自动化是确定性的：属性取投影给出的选择中修正值更高者，伤害骰只在
+    Martial Arts Die 更优时才替换，绝不把武器自己的伤害骰降级。
     """
 
     profile = deepcopy(dict(base))
-    if martial_arts_die:
-        profile["damage"] = martial_arts_die
+    applied = False
+    if damage_die and martial_arts_die_is_better(damage_die, str(base.get("damage") or "")):
+        profile["damage"] = damage_die
+        applied = True
+    choice = [str(item) for item in ability_choice if str(item)]
+    if choice:
+        profile["ability_choice"] = choice
+        applied = True
+    if applied:
         profile["martial_arts"] = True
     return profile
