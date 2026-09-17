@@ -215,6 +215,37 @@ DICE_CHECKS_TOOL: dict[str, Any] = {
                         "required": ["player", "kind", "location"],
                     },
                 },
+                # 世界时间推进（可选）：与 checks 规划完全独立的附加输出。
+                # 只报告这一轮叙事里明确经过的逻辑时间（例如休息、赶路、等
+                # 到黄昏）；服务端推进世界时钟并确定性结算到期事件。
+                "world_time_advance": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "description": (
+                        "Optional and independent of checks. Report how much logical world time this "
+                        "round actually covers (rest, travel, waiting until dusk). The server advances "
+                        "the authoritative world clock by this amount and deterministically settles any "
+                        "scheduled event that becomes due. Omit (or use 0) when the round covers no "
+                        "meaningful elapsed time; never guess large amounts."
+                    ),
+                    "properties": {
+                        "minutes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1440,
+                            "description": (
+                                "Elapsed logical minutes for this round (max one day). "
+                                "Use 0 when nothing meaningful elapsed."
+                            ),
+                        },
+                        "reason": {
+                            "type": "string",
+                            "maxLength": 160,
+                            "description": "Short private reason (e.g. \"short rest\", \"travel to the next village\").",
+                        },
+                    },
+                    "required": ["minutes"],
+                },
                 # 经济报价（可选）：与 checks 规划完全独立的附加输出。
                 # 只转述人类在本轮文本中明确说出的价格；AI 绝不推断、估算或
                 # 发明价格。服务端生成待确认提案，付款人弹窗确认后才扣款。

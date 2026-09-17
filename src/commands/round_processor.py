@@ -67,8 +67,11 @@ from src.engine.economy import filter_unconfirmed_purchase_grants, has_pending_i
 from src.engine import combat_narrative
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
+from src.engine.world_events import advance_world_time
 from src.engine.world_legality import evaluate_world_requirements
+from src.engine.world_state import WorldStateError
 from src.llm.world_prompt import (
+    format_world_events_block,
     format_world_legality_block,
     format_world_state_block,
 )
@@ -420,6 +423,25 @@ class RoundProcessor:
                 instance, metadata.get("world_requirements") or [],
             )
             instance.last_world_legality = list(world_result.get("notes") or [])
+            # 逻辑世界时间：模型只报告本轮经过的时间，server 推进时钟并确定性
+            # 结算到期事件（无后台 tick、无独立 scheduler）。
+            time_advance = metadata.get("world_time_advance")
+            if isinstance(time_advance, dict) and time_advance.get("minutes"):
+                try:
+                    outcome = advance_world_time(
+                        instance, int(time_advance["minutes"]),
+                        source_round=instance.round_number,
+                    )
+                except (WorldStateError, ValueError, TypeError) as exc:
+                    logger.warning("世界时间推进被拒绝: %s", exc)
+                else:
+                    instance.last_world_events = [
+                        {**item, "status": "applied"}
+                        for item in outcome.get("applied") or []
+                    ] + [
+                        {**item, "status": "failed"}
+                        for item in outcome.get("failed") or []
+                    ]
             build_dice_constraint_block(
                 instance,
                 actions_text,
@@ -892,6 +914,7 @@ class RoundProcessor:
         # GM 视角包含 gm 私有事实（并标注玩家不可见）。
         world_state_text = format_world_state_block(instance, viewer_is_gm=True)
         world_legality_text = format_world_legality_block(instance)
+        world_events_text = format_world_events_block(instance)
 
         gm_prompt = self._prompt.compose_gm_prompt(instance, rule_appendix, world_data=world_data)
         provider_name = self.llm_client.default if self.llm_client else ""
@@ -901,6 +924,7 @@ class RoundProcessor:
             directives_text=gm_directives_text, overreach_text=overreach_text,
             world_state_text=world_state_text,
             world_legality_text=world_legality_text,
+            world_events_text=world_events_text,
             authoritative_events_text=pending_combat_events_text)
 
         context = await append_multistep_analysis(

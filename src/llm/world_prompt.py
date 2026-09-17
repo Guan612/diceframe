@@ -100,6 +100,42 @@ _LEGALITY_NOTE = {
 }
 
 
+_EVENTS_HEADING = {
+    "en": (
+        "## Settled World Events · Must Follow\n"
+        "Logical world time advanced and these scheduled events took effect this round. Narrate "
+        "their consequences; they are settled facts, not suggestions:"
+    ),
+    "zh-CN": (
+        "【世界时间推进·已结算事件】\n"
+        "世界逻辑时间已经推进，以下定时事件在本轮生效：请叙述它们的后果，"
+        "它们是已结算事实，不是建议："
+    ),
+    "ja": (
+        "【世界時間の進行・確定したイベント】\n"
+        "世界の論理時間が進み、以下の予定イベントがこのラウンドで確定した。"
+        "その結果を叙述すること。これは提案ではなく確定事実である："
+    ),
+    "de": (
+        "## Abgeschlossene Weltereignisse · Muss befolgt werden\n"
+        "Die logische Weltzeit ist vorangeschritten und diese geplanten Ereignisse sind in dieser "
+        "Runde eingetreten. Erzähle ihre Folgen; sie sind feststehende Tatsachen, keine Vorschläge:"
+    ),
+}
+_EVENT_LINE = {
+    "en": "{label} ({event_id}) took effect at day {day}, minute {minute}",
+    "zh-CN": "{label}（{event_id}）于第 {day} 天 {minute} 分生效",
+    "ja": "{label}（{event_id}）が {day} 日目 {minute} 分に発動",
+    "de": "{label} ({event_id}) ist an Tag {day}, Minute {minute} eingetreten",
+}
+_EVENT_FAILED_LINE = {
+    "en": "{label} ({event_id}) could not be settled: {error}",
+    "zh-CN": "{label}（{event_id}）未能结算：{error}",
+    "ja": "{label}（{event_id}）は確定できなかった：{error}",
+    "de": "{label} ({event_id}) konnte nicht abgeschlossen werden: {error}",
+}
+
+
 def format_world_state_block(
     instance: Any, *, viewer_is_gm: bool, viewer_uid: str = "",
 ) -> str:
@@ -154,4 +190,36 @@ def format_world_legality_block(instance: Any) -> str:
     return f"{localized_text(language, _LEGALITY_HEADING)}\n" + "\n".join(lines)
 
 
-__all__ = ["format_world_legality_block", "format_world_state_block"]
+def format_world_events_block(instance: Any) -> str:
+    """Render the scheduled events settled by this round's time advance."""
+
+    events = list(getattr(instance, "last_world_events", []) or [])
+    if not events:
+        return ""
+    language = getattr(instance, "language", "zh-CN")
+    lines = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        due = event.get("due_at") if isinstance(event.get("due_at"), dict) else {}
+        values = {
+            "label": str(event.get("label") or event.get("event_id") or ""),
+            "event_id": str(event.get("event_id") or ""),
+            "day": due.get("day", 1),
+            "minute": due.get("minute", 0),
+            "error": str(event.get("error") or ""),
+        }
+        template = (
+            _EVENT_FAILED_LINE if event.get("status") == "failed" else _EVENT_LINE
+        )
+        lines.append("- " + localized_text(language, template).format(**values))
+    if not lines:
+        return ""
+    return f"{localized_text(language, _EVENTS_HEADING)}\n" + "\n".join(lines)
+
+
+__all__ = [
+    "format_world_events_block",
+    "format_world_legality_block",
+    "format_world_state_block",
+]

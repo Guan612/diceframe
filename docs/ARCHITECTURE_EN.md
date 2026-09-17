@@ -182,9 +182,14 @@ blocks; a proven contradiction injects a trusted "move first / cannot complete"
 verdict into the GM context, and a legal move is written to world truth by the
 server. This channel stays separate from overreach: overreach covers a player
 declaring world facts or controlling others, while legality covers a player's
-own action contradicting authoritative world facts. Scheduled-event settlement
-and logical time advancement land in the follow-up work on the same write entry
-point.
+own action contradicting authoritative world facts. Logical world time moves
+only through `world_events.advance_world_time(+N)`, which advances the clock,
+settles due events in stable `(day, minute, event_id)` order, and persists each
+event as `applied` or `failed` (its ops no longer apply at settlement time).
+There is no background tick and no separate scheduler; an event can never run
+twice because of a retry, duplicate save, or page refresh, and because the
+settlement lives inside `world_state` it inherits the whole-round rollback,
+swipe, reset, and restart semantics unchanged.
 
 ## D&D 2024 Authoritative Play State
 

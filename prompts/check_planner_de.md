@@ -72,6 +72,14 @@ Der Server vergleicht dies mit der verbindlichen Welttatsache: ein bewiesener Wi
 
 Dieses Feld beeinflusst die Probenplanung nicht; im Zweifel leer lassen.
 
+### Voranschreiten der Weltzeit
+
+Optionale Zusatzausgabe `world_time_advance`: Melde nur logische Zeit, die in dieser Runde tatsächlich vergeht (Rast, Reise, Warten bis zum Abend), mit `minutes` als vergangene Menge (höchstens 1440, also ein Tag). Der Server schreitet mit der verbindlichen Weltuhr voran und schließt fällige geplante Ereignisse deterministisch ab; `reason` ist eine optionale einzeilige Begründung.
+
+Nicht ausgeben (oder 0), wenn keine bedeutsame Zeit vergeht. Niemals große Zeiträume schätzen und niemals die verstrichene Zeit aufblähen, damit ein Ereignis ausgelöst wird.
+
+Dieses Feld beeinflusst die Probenplanung nicht; im Zweifel leer lassen.
+
 ### Kaufabsicht
 
 Optionale Zusatzausgabe `economy_actions`: Erkene Kaufabsichten, die Spieler eindeutig geäußert haben (in beliebiger Sprache). Preisfragen („wie viel?“, „how much?“, 「いくら?」) und hypothetische Gespräche sind keine Kaufabsichten.

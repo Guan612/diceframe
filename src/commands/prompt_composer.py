@@ -244,6 +244,7 @@ class PromptComposer:
         overreach_text: str = "",
         world_state_text: str = "",
         world_legality_text: str = "",
+        world_events_text: str = "",
         authoritative_events_text: str = "",
     ) -> str:
         """调用 context_builder 生成本轮 user context。"""
@@ -264,6 +265,7 @@ class PromptComposer:
             overreach_text=overreach_text,
             world_state_text=world_state_text,
             world_legality_text=world_legality_text,
+            world_events_text=world_events_text,
             state_view=state_view,
             authoritative_events_text=authoritative_events_text,
         )

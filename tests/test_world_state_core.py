@@ -242,14 +242,27 @@ def test_scheduled_events_fail_closed_on_bad_schedules() -> None:
             "due_at": {"day": 1, "minute": 700},
             "ops": [{"op": "advance_time", "minutes": 10}],
         }])
-    with pytest.raises(WorldStateError, match="unknown fact"):
+    with pytest.raises(WorldStateError, match="fact value"):
         apply_world_ops(instance, [{
-            "op": "schedule_event", "event_id": "stale",
+            "op": "schedule_event", "event_id": "malformed",
             "due_at": {"day": 1, "minute": 700},
-            "ops": [{"op": "remove_fact", "key": "never.set"}],
+            "ops": [{"op": "set_fact", "key": "a.b", "value": {"bad": "shape"}}],
         }])
+    with pytest.raises(WorldStateError, match="event ops cannot use"):
+        apply_world_ops(instance, [{
+            "op": "schedule_event", "event_id": "complete-too-early",
+            "due_at": {"day": 1, "minute": 700},
+            "ops": [{"op": "complete_event", "event_id": "x", "status": "applied"}],
+        }])
+    # 事件描述未来：调度期只校验结构，引用合法性由结算时刻决定（见
+    # tests/test_world_events.py 的 failed 事件用例）。
+    apply_world_ops(instance, [{
+        "op": "schedule_event", "event_id": "future-reference",
+        "due_at": {"day": 1, "minute": 700},
+        "ops": [{"op": "remove_fact", "key": "never.set"}],
+    }])
 
-    assert world_scheduled_events(instance.world_state) == {}
+    assert set(world_scheduled_events(instance.world_state)) == {"future-reference"}
 
 
 def test_duplicate_event_ids_and_non_pending_cancels_are_rejected() -> None:

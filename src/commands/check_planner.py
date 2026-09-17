@@ -27,6 +27,7 @@ from src.engine.dice import d20_dc_cap
 from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.engine.world_events import MAX_ADVANCE_MINUTES
 from src.engine.world_legality import (
     MAX_ROUTE_HOPS,
     MAX_WORLD_REQUIREMENTS,
@@ -1198,6 +1199,7 @@ async def plan_round_checks(
     raw_economy_actions: list[Any] = []
     overreach_notes: list[dict[str, str]] = []
     world_requirements: list[dict[str, Any]] = []
+    world_time_advance: dict[str, Any] | None = None
     for call in response.tool_calls:
         if str(call.get("name") or "") != DICE_CHECKS_TOOL_NAME:
             continue
@@ -1259,6 +1261,26 @@ async def plan_round_checks(
                 "world_requirements 解析失败，已忽略 (round=%d)",
                 instance.round_number, exc_info=True,
             )
+        # world_time_advance 与 checks 独立解析：只报告本轮确实经过的逻辑时间，
+        # 由 server 推进世界时钟并结算到期事件。
+        try:
+            raw_time = arguments.get("world_time_advance")
+            if isinstance(raw_time, dict):
+                raw_minutes = raw_time.get("minutes")
+                if (
+                    isinstance(raw_minutes, int) and not isinstance(raw_minutes, bool)
+                    and 0 < raw_minutes <= MAX_ADVANCE_MINUTES
+                ):
+                    advance = {"minutes": raw_minutes}
+                    note = str(raw_time.get("reason") or "").strip()[:160]
+                    if note:
+                        advance["reason"] = note
+                    world_time_advance = advance
+        except Exception:
+            logger.warning(
+                "world_time_advance 解析失败，已忽略 (round=%d)",
+                instance.round_number, exc_info=True,
+            )
     planned, errors = normalize_check_specs(instance, rule, raw_checks)
     planned = _merge_safety_net_checks(instance, rule, planned)
     planned = _apply_explicit_advantage_modes(rule, planned)
@@ -1276,6 +1298,8 @@ async def plan_round_checks(
         # 结构化世界要求（模型提议）：由 server 侧 world_legality 与权威世界真相
         # 对照后才决定阻断或写入移动。
         "world_requirements": world_requirements,
+        # 本轮经过的逻辑时间（模型提议，server 推进并结算到期事件）。
+        "world_time_advance": world_time_advance,
         # 由调用方在过时检查通过后落库；这里不直接改动经济状态，
         # 否则创建提案推进的 revision 会让本轮规划被误判为过期。
         "economy_offers": economy_offers,
