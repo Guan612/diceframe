@@ -9,6 +9,7 @@ from typing import Any, Callable
 from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.player_control import away_control_policy
 from src.llm.parser import sanitize_narration
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.rulesets.registry import RulesetRuntimeRegistry
@@ -169,6 +170,8 @@ def game_detail(
         "player_access_open": bool(
             getattr(instance, "player_access_open", True)
         ),
+        # 房间级暂离语义（pause 默认 / ai_takeover）：前端房间设置要显示当前值。
+        "away_control_policy": away_control_policy(instance),
         "has_room_password": bool(getattr(instance, "room_password", "")),
         "economy_reward_policy": dict(
             getattr(instance, "economy_reward_policy", {}) or {}

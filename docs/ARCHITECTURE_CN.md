@@ -144,6 +144,30 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 世界真相不等于玩家可见真相：`project_visible_state(instance, viewer_is_gm=...)` 是唯一的读取入口，`gm` 私有事实只进入 GM 上下文块（并明确标注玩家不可见），玩家视角只拿 `public` 投影。行动合法性由 server 侧 `world_legality` 判定，模型只能通过结构化 `world_requirements`（`act` / `move` + canonical 地点 id）提议；判定只使用已登记地点与明确 `passable=false` 这类可证明证据——`passable=false` 阻止的是进入 / 经过 / 抵达，因此 `move` 只检查声明的 `via` 与目的地，行动者当前所在地点不参与该检查，已经身处不可通行地点的角色仍然可以离开；空世界、未知地点、行动者位置未知一律不阻断，已证明矛盾则向 GM 注入「需要先移动 / 未能完成」的可信裁定块，合法移动由 server 写入世界真相。该通道与 overreach 相互独立：overreach 管玩家替世界或他人声明事实，合法性管玩家自己的动作与权威世界事实矛盾。逻辑世界时间只经 `world_events.advance_world_time(+N)` 推进：它把时钟推到新的时刻，按 `(day, minute, event_id)` 稳定顺序结算到期事件，并把每个事件持久化为 `applied` 或 `failed`（到期时 ops 已不可应用）——没有后台 tick、没有独立 scheduler；持久化事件的 `ops` 在读取时按与 `schedule_event` 写入路径同一套结构契约逐条校验，损坏数据 fail closed，不会被静默过滤成「没有执行任何 op 却标记 applied」的伪成功状态；同一事件不会因重试、重复保存或刷新页面执行两次，结算结果与时钟同属 `world_state`，因此完整继承整轮回滚 / swipe / 重置 / 重开语义。
 
+## 玩家控制（Player Control）
+
+`players[uid].control` 是席位控制者的权威记录：`human`（真人负责）/ `ai`（服务器负责产生行动）/ `unclaimed`（席位已存在但暂无人玩），并带 `revision`、`temporary` 与 `resume_mode`。它回答的是“谁在玩这个角色”，不是“这个角色是什么”：角色本体、HP、装备、法术槽、状态、世界位置与战斗 actor（`player:<uid>`）在任何模式下都只有一份，控制器切换不复制、不搬运、不改键。第一版词汇表刻意封闭，不含 gm / remote_bot / script / hybrid 等模式。
+
+唯一写入口是 `src/engine/player_control.py` 的 `set_control`；所有读取也经过同一模块——未知席位读出保守默认值，损坏记录降级为 `human`（即契约出现前的行为），而写入对未知席位、未知模式、缺少恢复目标的临时托管一律 fail closed。控制器属于桌面会话状态而非剧情世界结果：`revision` 只在记录真正变化时递增，整轮回滚、判定中止与 swipe 只回滚角色卡与世界事实，不重新指派席位；`temporary=true` 的暂离托管必须能回到 `resume_mode`，不得在重启后变成永久 AI。
+
+持久化使用 schema **13 → 14**：旧存档的每个席位一律获得 `human`，迁移不按在线状态、角色名或历史行为猜测谁是 AI，且可重复执行。`control` 与 `character_sheet` 同级，属于玩家记录本身，因此随 save/load 往返，并在席位被清理（例如加载时的幽灵玩家清理）时一并消失，不会留下 orphan control。
+
+控制模式现在是权威的准入判定：`submission_block(instance, uid)` 决定真人能否提交普通行动——`ai` 席位返回 `PLAYER_AI_CONTROLLED`、`unclaimed` 返回 `PLAYER_UNCLAIMED`，Web 与 SSE 共用的 `turns.submit_action` 对两者返回 409；它只决定"真人不得代打"，不改变服务器 AI 自身是否行动（本 PR 不让 AI 自动出招）。
+
+多人 ready barrier 只看真人：`GameInstance.active_human_players` = 存活、未暂离且 `control.mode == human`，`all_alive_ready()` 与 `multiplayer_status()` 的 ready / waiting 集合都由它计算，因此 AI 托管与未认领的席位不会阻塞推进；它们分别在 `ai_players` / `unclaimed_players` 及其计数中列出，说明"还差谁"以外那部分席位由谁负责。暂离真人依旧不阻塞（`active_alive_players` 语义未变，仍供幸运超时等只看人数的调用点使用）。
+
+认领转换统一走同一权威：`claim_seat` 是 Web 加入已有席位的规范入口，把 `ai` / `unclaimed` 无损转为 `human`（角色本体、HP、装备、法术、世界位置与战斗 actor 都不搬运），并在 `expected_revision` 过期时以 `CONTROL_STALE`、对已是真人的席位以 `CONTROL_NOT_CLAIMABLE` fail closed；新建席位仍由 `put_player` 直接生成为 `human`。控制权变更的安全边界由 `control_change_block` 判定：只有处于 `ACTIVE_ACTION` 且没有在飞处理锁时为 `""`，否则 `CONTROL_CHANGE_BUSY`。
+
+`ai` 席位在普通探索轮由 `src/commands/ai_player.py` 补行动：闸门是 `GameInstance.human_actions_ready()`（真人一侧交齐，且与 `should_advance()` 是两个不同问题），在唯一的推进入口——`turns.submit_action` 里真人闸门满足之后、`try_advance()` 之前——调用一次。每个席位一次 plain-text 调用、按 uid 串行，因此它只知道自己的角色卡、player-safe 公开上下文与本轮已宣告的行动，读不到 GM 私有世界事实、`gm_directives`、他人 `private_log` 或未来剧情，也不额外传 lorebook。产出只是一段普通行动文本（不含 DC / 加值 / 成败），经 `add_action` 走真人同一条 canonical 入口，由既有 Check Planner 与 WorldState 合法性裁定；行动带 `source` / `control_revision` / `generated_for_round` 元数据，仅用于去重与调试。调用前捕获 run / round / 席位 / `control.revision`，返回后四者与阶段全部复核，任一变化即丢弃；供应商错误或不可用输出记录 `AI_ACTION_SKIPPED` 后继续，不阻塞本轮。
+
+探索之外的权威战斗走另一条路：AI 托管 PC 的战斗回合由 `next_automatic_intent` 以 server/GM automation authority 提交**结构化意图**，而不是叙事行动，并且复用 companion 已有的同一条确定性阶梯（`_allied_automatic_intent`：治疗濒危 → 攻击最近敌对 → 移动 → Dodge → End Turn），不新增第二套战斗引擎，本阶段也不接 LLM。它与 companion 的唯一真实差异是 0 HP：companion 不做死亡豁免，玩家角色必须做，否则战斗会卡在该席位。意图仍走 validate / resolve / apply 同一权威链，受同一行动经济约束（action / attacks_remaining / movement），只看该席位自己的角色卡；候选意图在当前状态下不合法时退回合法 `end_turn`，保证托管席位的回合一定结束。校验侧同步收紧：`player:` actor 只有在席位确实处于 `ai` 托管时才允许 `submitted_by == gm_uid` 代提交，否则维持「玩家只能提交自己角色」；真人既不能代打 AI 席位，也不能手动操控它。`human` 与 `unclaimed` 席位永远不产生自动意图。
+
+房间与桌面可以**表达**谁来玩：开房时逐张角色卡可选「我来控制 / 等待玩家认领 / AI 托管」，另有「未认领角色默认」的全局快捷项，逐卡选择优先于全局默认；两者都缺省时保持旧行为（每个席位 `human`），未知模式在开房阶段直接 fail closed（`INVALID_PLAYER_CONTROL`），不会悄悄建成默认席位。席位列表按控制记录显示四种徽章：真人 / AI 托管 / 等待认领 / AI 临时托管。
+
+「暂离」的含义由房间设置 `away_control_policy` 决定，默认 `pause`：暂离只改在场状态，**绝不**把角色交给 AI。设为 `ai_takeover` 时，玩家暂离会把席位交给服务器 AI 的**临时**形态（`{mode: ai, temporary: true, resume_mode: human}`），点「回来」即归还并清空 `temporary` / `resume_mode`；临时托管在重启后仍可归还，不会变成永久 AI。GM 另有托管控件「设为 AI / 停止 AI 托管」，只改控制记录——不复制角色、不动 Web 身份与 Bot 绑定、不重置 ready、不重置 HP、不重建战斗 actor。所有控制权变更只发生在安全边界（`ACTIVE_ACTION` 且没有在飞处理锁），否则返回可重试的 `CONTROL_CHANGE_BUSY`。断线**不会**触发 AI 接管：接管只能来自 GM 的明确操作、玩家的明确暂离，或房间的明确配置。该房间设置随存档持久化，schema 为 **14 → 15**，旧存档一律补 `pause`（即旧版本的真实行为），损坏值同样降级为 `pause`。
+
+群聊（Bot）入口与 Web 等价：`托管 角色名` / `取消托管 角色名` 让 GM 在群里直接改变席位归属，走的是同一个服务端控制权 API（桥接层不保存任何控制状态，也没有第二份权威）。这两条与 `暂离` / `回来` 是不同契约——后者改在场状态、前者改控制者——且都需要 GM 或授权账号；目标角色必须唯一匹配 roster，否则回复可用角色而不是猜测。服务端返回 `CONTROL_CHANGE_BUSY` 时，群里得到的是「本轮结束后再试」的友好提示，而不是原始失败文案。
+
 ## Ruleset Bundle v1
 
 `templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。

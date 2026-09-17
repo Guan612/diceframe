@@ -96,6 +96,7 @@ async def create_game(
     gm_style_override: dict[str, Any] | None = None,
     advancement_mode: str = "milestone",
     advancement_authority: str = "ai_gm",
+    unclaimed_control_default: str = "",
 ) -> dict[str, Any]:
     if not dependencies.handler or not dependencies.registry:
         return {"ok": False, "error": "系统未就绪"}
@@ -282,6 +283,7 @@ async def create_game(
         gm_uid,
         exception_error="创建角色失败，未留下半成品存档，请重试。",
         log_context="创建游戏角色失败，已回滚",
+        unclaimed_control_default=unclaimed_control_default,
     )
     if player_error is not None:
         return player_error

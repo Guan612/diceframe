@@ -499,6 +499,9 @@ class WebAPI:
             prepare_round_checks=getattr(
                 self._handler, "prepare_round_checks", None,
             ),
+            fill_ai_player_actions=getattr(
+                self._handler, "fill_ai_player_actions", None,
+            ),
             resolve_pending_dice=self.resolve_pending_dice_for_game,
             roll_for_game=self.roll_for_game,
             save_instance=self._reg.save,
@@ -1231,6 +1234,12 @@ class WebAPI:
 
     async def set_player_away(self, game_key: str, user_id: str, away: bool) -> dict[str, Any]:
         return await self._game_controls.set_player_away(game_key, user_id, away)
+
+    async def set_player_control(self, game_key: str, user_id: str, mode: str) -> dict[str, Any]:
+        return await self._game_controls.set_player_control(game_key, user_id, mode)
+
+    async def set_away_control_policy(self, game_key: str, policy: str) -> dict[str, Any]:
+        return await self._game_controls.set_away_control_policy(game_key, policy)
 
     async def set_player_access(self, game_key: str, open_access: bool) -> dict[str, Any]:
         return await self._game_controls.set_player_access(game_key, open_access)
@@ -2072,7 +2081,8 @@ class WebAPI:
                            narrative_perspective: str = "auto",
                            gm_style_override: dict[str, Any] | None = None,
                            advancement_mode: str = "milestone",
-                           advancement_authority: str = "ai_gm") -> dict[str, Any]:
+                           advancement_authority: str = "ai_gm",
+                           unclaimed_control_default: str = "") -> dict[str, Any]:
         return await self._game_lifecycle.create_game(
             world_id=world_id, game_name=game_name, group_name=group_name,
             rule_id=rule_id, solo=solo, lorebook_world_id=lorebook_world_id,
@@ -2088,6 +2098,7 @@ class WebAPI:
             gm_style_override=gm_style_override,
             advancement_mode=advancement_mode,
             advancement_authority=advancement_authority,
+            unclaimed_control_default=unclaimed_control_default,
         )
 
     # ---- 重开引用码 ----
