@@ -148,7 +148,13 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 唯一写入口是 `src/engine/player_control.py` 的 `set_control`；所有读取也经过同一模块——未知席位读出保守默认值，损坏记录降级为 `human`（即契约出现前的行为），而写入对未知席位、未知模式、缺少恢复目标的临时托管一律 fail closed。控制器属于桌面会话状态而非剧情世界结果：`revision` 只在记录真正变化时递增，整轮回滚、判定中止与 swipe 只回滚角色卡与世界事实，不重新指派席位；`temporary=true` 的暂离托管必须能回到 `resume_mode`，不得在重启后变成永久 AI。
 
-持久化使用 schema **13 → 14**：旧存档的每个席位一律获得 `human`，迁移不按在线状态、角色名或历史行为猜测谁是 AI，且可重复执行。`control` 与 `character_sheet` 同级，属于玩家记录本身，因此随 save/load 往返，并在席位被清理（例如加载时的幽灵玩家清理）时一并消失，不会留下 orphan control。控制者是否影响提交权限、ready barrier 与认领流程，由后续 work package 在同一 contract 上增量实现。
+持久化使用 schema **13 → 14**：旧存档的每个席位一律获得 `human`，迁移不按在线状态、角色名或历史行为猜测谁是 AI，且可重复执行。`control` 与 `character_sheet` 同级，属于玩家记录本身，因此随 save/load 往返，并在席位被清理（例如加载时的幽灵玩家清理）时一并消失，不会留下 orphan control。
+
+控制模式现在是权威的准入判定：`submission_block(instance, uid)` 决定真人能否提交普通行动——`ai` 席位返回 `PLAYER_AI_CONTROLLED`、`unclaimed` 返回 `PLAYER_UNCLAIMED`，Web 与 SSE 共用的 `turns.submit_action` 对两者返回 409；它只决定"真人不得代打"，不改变服务器 AI 自身是否行动（本 PR 不让 AI 自动出招）。
+
+多人 ready barrier 只看真人：`GameInstance.active_human_players` = 存活、未暂离且 `control.mode == human`，`all_alive_ready()` 与 `multiplayer_status()` 的 ready / waiting 集合都由它计算，因此 AI 托管与未认领的席位不会阻塞推进；它们分别在 `ai_players` / `unclaimed_players` 及其计数中列出，说明"还差谁"以外那部分席位由谁负责。暂离真人依旧不阻塞（`active_alive_players` 语义未变，仍供幸运超时等只看人数的调用点使用）。
+
+认领转换统一走同一权威：`claim_seat` 是 Web 加入已有席位的规范入口，把 `ai` / `unclaimed` 无损转为 `human`（角色本体、HP、装备、法术、世界位置与战斗 actor 都不搬运），并在 `expected_revision` 过期时以 `CONTROL_STALE`、对已是真人的席位以 `CONTROL_NOT_CLAIMABLE` fail closed；新建席位仍由 `put_player` 直接生成为 `human`。控制权变更的安全边界由 `control_change_block` 判定：只有处于 `ACTIVE_ACTION` 且没有在飞处理锁时为 `""`，否则 `CONTROL_CHANGE_BUSY`。
 
 ## Ruleset Bundle v1
 
