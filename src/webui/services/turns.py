@@ -82,6 +82,9 @@ class TurnDependencies:
     # 策略按局解析：本局覆盖 → 规则模板默认 → 服务器全局配置。
     economy_auto_reward_settings: Callable[[Any], tuple[bool, int]] | None = None
     resolve_reward: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
+    # AI 托管席位补行动（src/commands/ai_player.py）：只在真人闸门满足之后、
+    # 本轮推进之前调用一次。None 表示该运行时没有配置这条能力（行为不变）。
+    fill_ai_player_actions: Callable[[Any], Awaitable[Any]] | None = None
 
 
 class TurnResult(TypedDict):
@@ -225,6 +228,27 @@ async def _prepare_checks(
         return list((await ai_prepare(instance)) or [])
     legacy_prepare = dependencies.prepare_round_checks
     return list((legacy_prepare(instance) if legacy_prepare else []) or [])
+
+
+async def _fill_ai_player_actions(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+    *,
+    game_key: str,
+) -> None:
+    """让 AI 托管席位在真人交齐后补上本轮行动（失败不阻塞本轮）。
+
+    补行动本身是一个独立的命令层能力；这个服务只负责在唯一的推进入口调用
+    它一次。``ai_player`` 内部已按席位隔离失败并自行记录 ``AI_ACTION_SKIPPED``，
+    这里的兜底只防住实现缺陷，绝不让它把真人的这一轮卡住。
+    """
+    fill = dependencies.fill_ai_player_actions
+    if fill is None or not instance.human_actions_ready():
+        return
+    try:
+        await fill(instance)
+    except Exception:
+        logger.exception("AI 托管席位补行动失败，本轮继续: game=%s", game_key)
 
 
 async def _process_round(
@@ -579,6 +603,11 @@ async def submit_action(
                 await dependencies.save_instance(instance)
             except Exception:
                 logger.exception("保存行动/购买请求失败: game=%s", game_key)
+
+    # AI 托管席位的补行动只有一个注入点：真人闸门满足之后、本轮推进之前。
+    # 这里不做任何 AI 判断（闸门、顺序、幂等、竞争守卫都在 ai_player 里），
+    # 也不让它的失败挡住真人这一轮。
+    await _fill_ai_player_actions(dependencies, instance, game_key=game_key)
 
     if await instance.try_advance():
         await _prepare_checks(dependencies, instance)

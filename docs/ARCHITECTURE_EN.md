@@ -264,6 +264,24 @@ on a seat that is already human-controlled. A brand-new seat is still born
 control change: `""` only while the table is in `ACTIVE_ACTION` with no round in
 flight, otherwise `CONTROL_CHANGE_BUSY`.
 
+In ordinary exploration rounds an `ai` seat declares its action through
+`src/commands/ai_player.py`. The gate is `GameInstance.human_actions_ready()`
+(the human side is complete -- deliberately a different question from
+`should_advance()`), and it is invoked exactly once at the single advance entry
+point, in `turns.submit_action` after the human gate and before `try_advance()`.
+One plain-text call per seat, sequentially in uid order, so a seat sees only its
+own character sheet, the player-safe public context and the actions already
+declared this round -- never GM-only world facts, `gm_directives`, another
+player's `private_log`, future plot, or an extra lorebook channel. The output is
+ordinary action prose with no DC, modifier or success flag; it is appended
+through `add_action`, the same canonical entry point humans use, and the existing
+Check Planner and WorldState legality decide the rest. The action carries
+`source` / `control_revision` / `generated_for_round` metadata used for
+de-duplication and debugging only. The run, round, seat and `control.revision`
+are captured before the call and all re-verified with the phase afterwards: any
+change discards the result. Provider errors or unusable output record
+`AI_ACTION_SKIPPED` and never block the round.
+
 ## D&D 2024 Authoritative Play State
 
 `core:dnd2024` combat, Session 0, and campaign records share `GameInstance.ruleset_state.version` and one EventBatch ledger. An optional adventure supplies story input through its exact binding but is not part of the Ruleset Bundle. Combat and campaign events have separate reducers; the runtime composition root dispatches explicit intent types without making the generic engine import D&D code.
