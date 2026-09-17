@@ -113,10 +113,19 @@ export interface CharacterCard extends CharacterSheet {
   ruleset_revision?: number
 }
 
+export interface PlayerControl {
+  mode: 'human' | 'ai' | 'unclaimed' | string
+  revision?: number
+  temporary?: boolean
+  resume_mode?: string | null
+}
+
 export interface Player {
   user_id: string
   character_name: string
   character_sheet?: CharacterSheet
+  /** 谁在玩这个角色：真人 / 服务器 AI / 尚未认领（AI 队友控制契约）。 */
+  control?: PlayerControl
   [key: string]: unknown
 }
 

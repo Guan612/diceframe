@@ -9,6 +9,16 @@ from src.engine.checks import build_check_request, roll_check_request
 from src.engine.dice import d20_critical_thresholds, roll
 from src.engine.game_instance import GameState
 from src.engine.health import mark_health_event
+from src.engine.player_control import (
+    PlayerControlError,
+    away_control_policy,
+    begin_away_hosting,
+    control_change_block,
+    end_away_hosting,
+    get_control,
+    set_away_control_policy,
+    set_control,
+)
 from src.rules.rule_system import RuleSystem
 
 GameKey = tuple[str, ...]
@@ -41,9 +51,26 @@ class GameControlService:
             return {"ok": False, "error": "游戏不存在"}
         if user_id not in instance.players:
             return {"ok": False, "error": "玩家不存在"}
+        # 暂离是否把角色交给服务器 AI，由房间设置决定；默认 pause 保持旧行为。
+        # 只有显式的房间配置 + 玩家点击暂离才会产生 AI 托管，断线绝不触发。
+        handover = away and away_control_policy(instance) == "ai_takeover"
+        recovery = not away
+        if handover or recovery:
+            block = control_change_block(instance)
+            if block:
+                return {
+                    "ok": False,
+                    "error_code": block,
+                    "error": "正在推进剧情，请等待本轮结束后再切换暂离状态",
+                }
         ok = await instance.set_player_away(user_id, away)
         if not ok:
             return {"ok": False, "error": "无法切换该玩家状态"}
+        if handover:
+            begin_away_hosting(instance, user_id)
+        elif recovery:
+            # 只在席位确实是「临时托管」时归还；GM 永久交给 AI 的席位不会被抢回。
+            end_away_hosting(instance, user_id)
         await self._dependencies.save_instance(instance)
         return {
             "ok": True,
@@ -53,8 +80,70 @@ class GameControlService:
                 or user_id
             ),
             "away": bool(away),
+            "control": get_control(instance, user_id),
             "multiplayer": instance.multiplayer_status(),
         }
+
+    async def set_player_control(
+        self, game_key: str, user_id: str, mode: str,
+    ) -> dict[str, Any]:
+        """GM 托管控件：把席位交给 AI，或停止 AI 托管交回真人。
+
+        只改 Control Contract：不复制角色、不动 Web 身份 / Bot 绑定、不重置
+        ready、不重置 HP、不重建战斗 actor。
+        """
+
+        instance = self._instance(game_key)
+        if not instance:
+            return {"ok": False, "error": "游戏不存在"}
+        if user_id not in instance.players:
+            return {"ok": False, "error": "玩家不存在"}
+        if mode not in ("ai", "human"):
+            return {
+                "ok": False,
+                "error_code": "CONTROL_MODE_UNSUPPORTED",
+                "error": "只能设为 AI 托管或交回真人",
+            }
+        block = control_change_block(instance)
+        if block:
+            return {
+                "ok": False,
+                "error_code": block,
+                "error": "正在推进剧情，请等待本轮结束后再切换托管状态",
+            }
+        try:
+            # set_control 是唯一写入口：交给 AI 时清掉临时托管语义（这是 GM 的
+            # 明确决定，不属于「暂离临时托管」），交回真人时同样清空。
+            record = set_control(instance, user_id, mode)
+        except PlayerControlError as exc:
+            return {"ok": False, "error_code": "CONTROL_REJECTED", "error": str(exc)}
+        await self._dependencies.save_instance(instance)
+        return {
+            "ok": True,
+            "user_id": user_id,
+            "mode": record["mode"],
+            "control": record,
+            "multiplayer": instance.multiplayer_status(),
+        }
+
+    async def set_away_control_policy(
+        self, game_key: str, policy: str,
+    ) -> dict[str, Any]:
+        """房间设置：暂离语义 pause（默认）/ ai_takeover。"""
+
+        instance = self._instance(game_key)
+        if not instance:
+            return {"ok": False, "error": "游戏不存在"}
+        try:
+            value = set_away_control_policy(instance, policy)
+        except PlayerControlError:
+            return {
+                "ok": False,
+                "error_code": "AWAY_POLICY_UNSUPPORTED",
+                "error": f"未知的暂离策略：{policy!r}",
+            }
+        await self._dependencies.save_instance(instance)
+        return {"ok": True, "away_control_policy": value}
 
     async def set_player_access(
         self, game_key: str, open_access: bool,

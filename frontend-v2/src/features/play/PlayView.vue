@@ -704,6 +704,20 @@ async function setAway(uid: string, away: boolean) {
   } catch (e: unknown) { toast.error(errorMessage(e)) }
 }
 
+async function setControl(uid: string, mode: 'ai' | 'human') {
+  try {
+    const r = await api<{ ok?: boolean; error?: string }>(
+      `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/control`,
+      { method: 'POST', body: JSON.stringify({ mode }) },
+    )
+    if (r.error || r.ok === false) throw new Error(r.error || t('statusSwitchFailed'))
+    toast.success(mode === 'ai'
+      ? t('controlNowAi')
+      : t('controlNowHuman'))
+    await game.refresh()
+  } catch (e: unknown) { toast.error(errorMessage(e)) }
+}
+
 /** 单个玩家的接管链接：同样走二维码弹窗，链接里带 user 参数 */
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
@@ -1345,6 +1359,7 @@ onBeforeUnmount(() => {
           :current-user-id="actorId"
           @kick="kick"
           @set-away="setAway"
+          @set-control="setControl"
           @copy-link="copyLink"
           @edit="onEdit"
           @open-character-center="showCharacterCenter = true"

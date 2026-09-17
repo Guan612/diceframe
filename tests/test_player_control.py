@@ -87,9 +87,9 @@ def legacy_payload(*, version: int = 13, **player_extra) -> dict:
 def test_new_game_declares_the_current_schema() -> None:
     instance = make_instance()
 
-    assert CURRENT_INSTANCE_SCHEMA_VERSION == 14
+    assert CURRENT_INSTANCE_SCHEMA_VERSION >= 14
     assert instance.to_dict()["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
-    assert instance.instance_schema_version == 14
+    assert instance.instance_schema_version == CURRENT_INSTANCE_SCHEMA_VERSION
 
 
 def test_every_seat_has_an_explicit_control_record_after_construction() -> None:
@@ -335,7 +335,9 @@ def test_ensure_controls_repairs_hand_edited_records_idempotently() -> None:
 def test_v13_save_gains_human_control_on_every_seat() -> None:
     migrated = migrate_game_state_payload(legacy_payload(version=13))
 
-    assert migrated["instance_schema_version"] == 14
+    # v13 存档会一路链到当前 schema；这里只断言它落在当前版本上，
+    # 而不是把某一次 bump 的编号写死。
+    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
     assert migrated["players"]["p1"][CONTROL_KEY] == default_control()
     assert migrated["players"]["p1"][CONTROL_KEY]["mode"] == "human"
 
@@ -346,7 +348,7 @@ def test_legacy_v1_save_also_lands_on_human_control() -> None:
 
     migrated = migrate_game_state_payload(payload)
 
-    assert migrated["instance_schema_version"] == 14
+    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
     assert migrated["players"]["p1"][CONTROL_KEY]["mode"] == "human"
 
 
@@ -390,7 +392,7 @@ def test_save_load_roundtrip_preserves_control(mode: str) -> None:
     assert get_control(recovered, "p2") == {
         "mode": "ai", "revision": 1, "temporary": True, "resume_mode": "human",
     }
-    assert recovered.to_dict()["instance_schema_version"] == 14
+    assert recovered.to_dict()["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
 
 
 def test_loading_a_save_without_control_never_invents_an_ai_seat() -> None:

@@ -300,6 +300,29 @@ their own character" still holds, so a human can neither play an AI seat by hand
 nor control it manually. A `human` or `unclaimed` seat never yields an automatic
 intent.
 
+The room and the table can now *express* who plays a seat. At creation each
+character card chooses "I control it / wait for a player to claim it / AI hosted",
+with a room-level default for unclaimed cards that a per-card choice overrides;
+when neither is given the legacy behaviour stands (every seat `human`), and an
+unknown mode fails closed at creation (`INVALID_PLAYER_CONTROL`) instead of
+quietly building a default seat. The roster shows four badges: human, AI hosted,
+unclaimed, and temporarily AI hosted.
+
+What "away" means is a room setting, `away_control_policy`, defaulting to
+`pause`: stepping away changes presence only and **never** hands the character to
+the AI. Under `ai_takeover`, stepping away hands the seat to the server AI in its
+*temporary* shape (`{mode: ai, temporary: true, resume_mode: human}`) and coming
+back returns it, clearing `temporary` / `resume_mode`; temporary hosting is still
+returnable after a restart and never becomes permanent. The GM also has "set to
+AI / stop AI hosting", which changes only the control record -- it does not copy
+the character, touch the Web identity or Bot mapping, reset ready state, reset HP,
+or rebuild the combat actor. Every control change only happens at a safe boundary
+(`ACTIVE_ACTION` with no round in flight), otherwise the caller gets the retryable
+`CONTROL_CHANGE_BUSY`. A disconnect **never** triggers takeover: only an explicit
+GM action, an explicit player away, or an explicit room setting can. The setting
+is persisted, so the instance schema moves **14 → 15**: every older save becomes
+`pause`, which is what it actually did, and a corrupt value degrades to `pause` too.
+
 ## D&D 2024 Authoritative Play State
 
 `core:dnd2024` combat, Session 0, and campaign records share `GameInstance.ruleset_state.version` and one EventBatch ledger. An optional adventure supplies story input through its exact binding but is not part of the Ruleset Bundle. Combat and campaign events have separate reducers; the runtime composition root dispatches explicit intent types without making the generic engine import D&D code.

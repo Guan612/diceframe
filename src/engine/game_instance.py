@@ -35,7 +35,9 @@ from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.engine.player_control import (
+    DEFAULT_AWAY_CONTROL_POLICY,
     ai_controlled_players,
+    away_control_policy,
     control_mode,
     ensure_control,
     ensure_controls,
@@ -161,6 +163,9 @@ class GameInstance:
     max_players: int = 6
     gm_uid: str = ""  # 创建游戏的 GM 的 user_id
     player_access_open: bool = True  # False 时所有玩家分享链接失效
+    # 房间级「暂离语义」：pause（默认，暂离不把角色交给 AI）或 ai_takeover。
+    # 旧存档没有这个字段，migration 一律补 pause（旧版本的真实行为）。
+    away_control_policy: str = DEFAULT_AWAY_CONTROL_POLICY
     bot_bind_token: str = ""  # 渠道 Bot 绑定本局的一次性管理凭证
     room_password: str = ""  # 房间密码（空=开放）；玩家凭此进入游戏，替代后台 access_token
     room_token: str = ""  # 玩家凭房间密码换取的会话凭证（random secrets，校验通过后颁发）
@@ -1466,6 +1471,7 @@ class GameInstance:
             "pending_action_count": len(self.pending_actions),
             "gm_uid": self.gm_uid,
             "player_access_open": self.player_access_open,
+            "away_control_policy": away_control_policy(self),
         }
 
     # ---------- 回合推进 ------------------------------------

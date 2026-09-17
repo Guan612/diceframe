@@ -160,6 +160,10 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 探索之外的权威战斗走另一条路：AI 托管 PC 的战斗回合由 `next_automatic_intent` 以 server/GM automation authority 提交**结构化意图**，而不是叙事行动，并且复用 companion 已有的同一条确定性阶梯（`_allied_automatic_intent`：治疗濒危 → 攻击最近敌对 → 移动 → Dodge → End Turn），不新增第二套战斗引擎，本阶段也不接 LLM。它与 companion 的唯一真实差异是 0 HP：companion 不做死亡豁免，玩家角色必须做，否则战斗会卡在该席位。意图仍走 validate / resolve / apply 同一权威链，受同一行动经济约束（action / attacks_remaining / movement），只看该席位自己的角色卡；候选意图在当前状态下不合法时退回合法 `end_turn`，保证托管席位的回合一定结束。校验侧同步收紧：`player:` actor 只有在席位确实处于 `ai` 托管时才允许 `submitted_by == gm_uid` 代提交，否则维持「玩家只能提交自己角色」；真人既不能代打 AI 席位，也不能手动操控它。`human` 与 `unclaimed` 席位永远不产生自动意图。
 
+房间与桌面可以**表达**谁来玩：开房时逐张角色卡可选「我来控制 / 等待玩家认领 / AI 托管」，另有「未认领角色默认」的全局快捷项，逐卡选择优先于全局默认；两者都缺省时保持旧行为（每个席位 `human`），未知模式在开房阶段直接 fail closed（`INVALID_PLAYER_CONTROL`），不会悄悄建成默认席位。席位列表按控制记录显示四种徽章：真人 / AI 托管 / 等待认领 / AI 临时托管。
+
+「暂离」的含义由房间设置 `away_control_policy` 决定，默认 `pause`：暂离只改在场状态，**绝不**把角色交给 AI。设为 `ai_takeover` 时，玩家暂离会把席位交给服务器 AI 的**临时**形态（`{mode: ai, temporary: true, resume_mode: human}`），点「回来」即归还并清空 `temporary` / `resume_mode`；临时托管在重启后仍可归还，不会变成永久 AI。GM 另有托管控件「设为 AI / 停止 AI 托管」，只改控制记录——不复制角色、不动 Web 身份与 Bot 绑定、不重置 ready、不重置 HP、不重建战斗 actor。所有控制权变更只发生在安全边界（`ACTIVE_ACTION` 且没有在飞处理锁），否则返回可重试的 `CONTROL_CHANGE_BUSY`。断线**不会**触发 AI 接管：接管只能来自 GM 的明确操作、玩家的明确暂离，或房间的明确配置。该房间设置随存档持久化，schema 为 **14 → 15**，旧存档一律补 `pause`（即旧版本的真实行为），损坏值同样降级为 `pause`。
+
 ## Ruleset Bundle v1
 
 `templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。

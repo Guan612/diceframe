@@ -15,12 +15,13 @@ from uuid import NAMESPACE_URL, uuid5
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
 from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
 from src.engine.player_control import CONTROL_KEY, normalize_control
+from src.engine.player_control import normalize_away_control_policy
 from src.engine.world_state import fresh_world_state
 
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 14
+CURRENT_INSTANCE_SCHEMA_VERSION = 15
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -283,6 +284,25 @@ def _migrate_v13_to_v14(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v14_to_v15(payload: dict[str, Any]) -> dict[str, Any]:
+    """Room away policy (AI teammate PR5): the table says what "away" means.
+
+    A save written before this setting existed had exactly one behaviour: going
+    away changed presence only and never handed the character to the AI.  So the
+    only answer that does not invent a controller is ``pause``, and an upgraded
+    table never finds a character silently taken over by the server.  A stored
+    value that already normalizes to itself is left untouched, so the step is
+    idempotent.
+    """
+
+    stored = payload.get("away_control_policy")
+    policy = normalize_away_control_policy(stored)
+    if stored != policy:
+        payload["away_control_policy"] = policy
+    payload["instance_schema_version"] = 15
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -329,6 +349,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 13:
         payload = _migrate_v13_to_v14(payload)
         version = 14
+    if version == 14:
+        payload = _migrate_v14_to_v15(payload)
+        version = 15
     payload["instance_schema_version"] = version
     return payload
 
