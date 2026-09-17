@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,11 +23,17 @@ from src.commands.state_items import (
     grant_classified_item,
 )
 from src.rules.rule_system import RuleSystem
+from src.rulesets.contracts import CharacterStateReconciliationRuntime
 from src.engine.economy import queue_proposal
 
 logger = logging.getLogger("trpg")
 
 _MAX_LOOT_PER_ROUND = 20
+
+# 归 live state 所有的物品字段。reconciliation 失败时只回滚这几项，让"装备没穿
+# 上"与"同轮的扣血/资源结算"互不牵连；字段 ownership 的完整定义由后续 lifecycle
+# merge helper 收口，这里只覆盖物品事件真正会写的部分。
+_LIVE_ITEM_FIELDS = ("equipment", "inventory", "key_items", "cyberware")
 
 
 def discard_unresolved_player_damage(instance: GameInstance, update: dict) -> None:
@@ -69,6 +76,7 @@ class StateUpdateApplier:
         rules_dir: Path,
         worlds_dir: Path | None,
         load_world_template: Callable[[str, str], dict],
+        ruleset_registry: Any = None,
     ):
         self._madness = MadnessTracker()
         self._players = PlayerStateApplier(self._madness)
@@ -76,6 +84,9 @@ class StateUpdateApplier:
         self._item_cats = ItemCategoryResolver(rules_dir, worlds_dir, load_world_template)
         self._rules_dir = rules_dir
         self._load_world_template = load_world_template
+        # 由 GameHandler 注入；不在这里 build_default_ruleset_registry()，避免第二份
+        # registry lifecycle。未注入时 reconciliation 整体停用，行为与改造前一致。
+        self._ruleset_registry = ruleset_registry
 
     def _load_rule(self, instance: GameInstance) -> RuleSystem | None:
         try:
@@ -105,13 +116,23 @@ class StateUpdateApplier:
     ) -> list[dict[str, Any]]:
         """将 LLM 输出的 state_update 应用到游戏状态。"""
         queued_proposals: list[dict[str, Any]] = []
-        # 玩家状态更新（带当前规则，供 STAT 资源结算与阈值触发器使用）
-        self._players.apply_players(
-            instance,
-            update.get("players", {}),
-            rule=self._load_rule(instance),
-            allowed_player_uids=allowed_player_uids,
+        rule = self._load_rule(instance)
+        # 先解析 runtime：没有 reconciliation 能力的规则（legacy / freeform）完全
+        # 不进入快照与 reconcile 分支，保持原有行为与开销。
+        reconciler = self._reconciliation_runtime(rule)
+        snapshots = (
+            self._snapshot_live_items(instance, update) if reconciler is not None else {}
         )
+        # 玩家状态更新（带当前规则，供 STAT 资源结算与阈值触发器使用）
+        changed_domains: dict[str, set[str]] = {
+            uid: set(domains)
+            for uid, domains in self._players.apply_players(
+                instance,
+                update.get("players", {}),
+                rule=rule,
+                allowed_player_uids=allowed_player_uids,
+            ).items()
+        }
 
         # NPC 状态更新
         self._npcs.apply_npcs(instance, update.get("npcs", {}))
@@ -146,6 +167,14 @@ class StateUpdateApplier:
             except (TypeError, ValueError):
                 quantity = 1
             grant_classified_item(cs, item_name, category, qty=quantity)
+            # 战利品同样是 live inventory mutation，且不经过 PlayerStateApplier；
+            # 汇总在这里，保证同角色同轮仍然只 reconcile 一次。
+            changed_domains.setdefault(str(uid), set()).add("inventory")
+
+        # 本轮该角色的全部 generic mutation 到此结束，再统一交给 ruleset 重新解释。
+        # 放在经济提案入队之前：reconciliation 失败时不会留下半截已排队的提案。
+        if reconciler is not None and changed_domains:
+            self._reconcile_characters(instance, reconciler, changed_domains, snapshots)
 
         for proposal_index, proposal in enumerate(update.get("economy_proposals", [])):
             uid = str(proposal.get("uid") or "")
@@ -207,6 +236,105 @@ class StateUpdateApplier:
                 visibility="private",
             ))
         return queued_proposals
+
+    def _reconciliation_runtime(self, rule: RuleSystem | None) -> Any:
+        """Resolve the bound runtime only when it opted into reconciliation.
+
+        Generic code must not know which rule this is; the decision is made by
+        the registry binding plus a structural Protocol check.  Legacy and
+        assisted rules simply do not implement the hook and stay untouched.
+        """
+
+        registry = self._ruleset_registry
+        if registry is None or rule is None:
+            return None
+        try:
+            runtime = registry.resolve(rule.template)
+        except Exception:
+            # 绑定缺失/版本不满足都不该让一轮叙事失败：退回改造前的无 hook 行为。
+            logger.warning(
+                "角色状态 reconciliation runtime 解析失败，本轮跳过: rule_id=%s",
+                getattr(rule, "rule_id", ""), exc_info=True,
+            )
+            return None
+        return runtime if isinstance(runtime, CharacterStateReconciliationRuntime) else None
+
+    @staticmethod
+    def _snapshot_live_items(
+        instance: GameInstance, update: dict,
+    ) -> dict[str, dict[str, Any]]:
+        """Snapshot the live item fields of every character this update may touch."""
+
+        uids: set[str] = set()
+        players_update = update.get("players")
+        if isinstance(players_update, dict):
+            uids.update(str(uid) for uid in players_update)
+        loot_entries = update.get("loot")
+        if isinstance(loot_entries, list):
+            uids.update(
+                str(entry.get("player") or "")
+                for entry in loot_entries
+                if isinstance(entry, dict)
+            )
+        snapshots: dict[str, dict[str, Any]] = {}
+        for uid in uids:
+            if uid not in instance.players:
+                continue
+            sheet = instance.get_character_sheet(uid)
+            snapshots[uid] = {
+                field: deepcopy(sheet[field])
+                for field in _LIVE_ITEM_FIELDS
+                if field in sheet
+            }
+        return snapshots
+
+    def _reconcile_characters(
+        self,
+        instance: GameInstance,
+        reconciler: Any,
+        changed_domains: dict[str, set[str]],
+        snapshots: dict[str, dict[str, Any]],
+    ) -> None:
+        """Let the bound ruleset re-derive its own projection, once per character.
+
+        Only the domain names travel; the runtime re-reads the authoritative
+        sheet itself.  A failure rolls the character's live item fields back to
+        the pre-mutation snapshot, so the run never keeps "the armor is worn but
+        the rules never saw it".  The rollback is deliberately limited to those
+        fields: an unrelated HP or resource change settled in the same round is
+        not collateral damage, and nothing else in the round is discarded.
+        """
+
+        for uid in sorted(changed_domains):
+            domains = frozenset(changed_domains[uid])
+            if not domains:
+                continue
+            try:
+                reconciler.reconcile_character_state(instance, uid, domains)
+            except Exception:
+                logger.error(
+                    "角色状态 reconciliation 失败，已回滚该角色本轮物品变化: "
+                    "uid=%s domains=%s round=%d",
+                    uid, sorted(domains), instance.round_number, exc_info=True,
+                )
+                self._rollback_live_items(instance, uid, snapshots.get(uid))
+
+    @staticmethod
+    def _rollback_live_items(
+        instance: GameInstance, uid: str, snapshot: dict[str, Any] | None,
+    ) -> None:
+        """Restore one character's live item fields from a pre-mutation snapshot."""
+
+        if snapshot is None or uid not in instance.players:
+            return
+        sheet = instance.get_character_sheet(uid)
+        for field in _LIVE_ITEM_FIELDS:
+            if field in snapshot:
+                sheet[field] = deepcopy(snapshot[field])
+            else:
+                # 快照时该字段还不存在：本轮新建的，回滚就该把它去掉。
+                sheet.pop(field, None)
+        instance.set_character_sheet(uid, sheet)
 
     def apply_madness(self, instance: GameInstance, uid: str, cs: dict, loss: int) -> None:
         """兼容旧内部调用；实际逻辑已拆到 MadnessTracker。"""

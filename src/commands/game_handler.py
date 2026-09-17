@@ -77,7 +77,10 @@ class GameHandler:
         self.worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
         self._plugin_host = None
         self._factory = GameFactory(self.registry, self.lorebook_store, self.worlds_dir)
-        self._state_applier = StateUpdateApplier(self.rules_dir, self.worlds_dir, self._load_world_template)
+        self._state_applier = StateUpdateApplier(
+            self.rules_dir, self.worlds_dir, self._load_world_template,
+            ruleset_registry=self.ruleset_registry,
+        )
         self._progression = ProgressionResolver(self.rules_dir, self.worlds_dir)
         self._last_matcher_scope: tuple[str, str] | None = None
         self._round_processor = RoundProcessor(

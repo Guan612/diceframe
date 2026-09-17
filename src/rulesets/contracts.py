@@ -291,3 +291,35 @@ class PublicTimelineProjectionRuntime(Protocol):
     def public_timeline_projection(
         self, batch: dict[str, Any], locale: str,
     ) -> dict[str, str]: ...
+
+
+# 只描述"哪一类角色事实动过"，不描述动成了什么。Ruleset 收到提示后自行重读
+# 当前权威角色状态，因此 live state 始终是唯一 authority，projection 不会退化
+# 成第二份业务事实。第一版只有 equipment / inventory 会被实际发出。
+CHARACTER_MUTATION_DOMAINS: frozenset[str] = frozenset({
+    "equipment", "inventory", "resources",
+})
+
+
+@runtime_checkable
+class CharacterStateReconciliationRuntime(Protocol):
+    """Optional hook: re-derive ruleset-owned projections from live character state.
+
+    ``changed_domains`` is a hint drawn from :data:`CHARACTER_MUTATION_DOMAINS`,
+    never a payload.  It names the kind of live fact that moved and nothing
+    else; the runtime re-reads the authoritative character sheet itself.  That
+    keeps the generic layer free of rule knowledge and stops the projection
+    from becoming a second, separately maintained source of truth.
+
+    Implementations must be idempotent: reconciling twice without an
+    intervening live mutation must not rewrite canonical state, bump a
+    revision, or append an operation log entry.  Return ``None`` when the
+    projection was already current.
+    """
+
+    def reconcile_character_state(
+        self,
+        instance: Any,
+        user_id: str,
+        changed_domains: frozenset[str],
+    ) -> dict[str, Any] | None: ...
