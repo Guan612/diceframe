@@ -24,6 +24,12 @@ import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadSceneImage } from '@/api/sceneImages'
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
 import { isLlmConfigReady } from '@/utils/modelConfiguration'
+import {
+  CARD_CONTROL_MODES,
+  defaultCardControl,
+  syncCardControls,
+  type CardControlMode,
+} from '@/features/create/cardControl'
 
 interface CreateCharacter extends CharacterSheet { character_name: string }
 type CreateMode = 'template' | 'custom' | 'ai'
@@ -177,20 +183,20 @@ function ensureCharacter(value: CharacterSheet): CreateCharacter {
   return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE)) }
 }
 
-// 每张角色卡由谁负责：'' 表示跟随房间默认（未认领角色的默认行为）。
-// 默认第一张是「我来控制」、其余跟随默认，避免改动纯单人/纯真人流程的既有手感。
-const cardControl = ref<string[]>(['human'])
-const unclaimedControlDefault = ref<'unclaimed' | 'ai'>('unclaimed')
-function applyControlDefault(index: number) {
-  if (index === 0 && !cardControl.value[0]) cardControl.value[0] = 'human'
-  if (cardControl.value.length < characters.value.length) {
-    cardControl.value = characters.value.map((_, i) => cardControl.value[i] ?? (i === 0 ? 'human' : ''))
-  }
+// 每张角色卡由谁负责：控制方式在「角色」步骤直接选，确认页只做摘要。
+// 默认第一张是「真人」、其余「等待认领」——与既有产品默认一致，但以明确的值呈现。
+const cardControl = ref<CardControlMode[]>(['human'])
+function controlLabel(mode: string): string {
+  if (mode === 'ai') return t('controlAi')
+  if (mode === 'unclaimed') return t('controlUnclaimed')
+  return t('controlHuman')
 }
+// 任何进入 characters[] 的路径（手动创建 / 角色卡选择器 / 导入 / 专业建卡）都会
+// 经过这里补齐控制方式，不会出现「导入的角色没有控制方式」。
 watch(() => characters.value.length, (length) => {
-  const next = Array.from({ length }, (_, i) => cardControl.value[i] ?? (i === 0 ? 'human' : ''))
+  const next = syncCardControls(length, cardControl.value)
   if (next.length !== cardControl.value.length || next.some((v, i) => v !== cardControl.value[i])) cardControl.value = next
-})
+}, { immediate: true })
 
 function legacyCharacterFromCard(card: CharacterCard): CreateCharacter {
   return ensureCharacter({
@@ -500,10 +506,10 @@ async function create() {
     requireApiConfiguration()
     const players = characters.value.map((c, i) => {
       const card = cloneCharacter(c)
-      const explicit = cardControl.value[i]
-      // 只有用户明确选过的卡才带 control，其余交给房间默认解析，
-      // 这样「逐卡覆盖优先于全局默认」的优先级只有服务端一处实现。
-      return explicit ? { ...card, control: explicit } : card
+      // 每张卡在「角色」步骤都有明确的控制方式，创建 payload 直接带上它；
+      // 服务端把它写成 players[uid].control.mode（human / ai / unclaimed），
+      // 前端不自己造 AI 状态，也不修改 control revision。
+      return { ...card, control: cardControl.value[i] ?? defaultCardControl(i) }
     })
     const selectedSceneImage = sceneImageFile.value ? await uploadSceneImage(sceneImageFile.value) : undefined
     if (seed.value.trim()) {
@@ -516,7 +522,7 @@ async function create() {
     const selectedMapBackground = mapBackgroundFile.value
       ? await uploadMapBackground(mapBackgroundFile.value)
       : mapBackgroundSelection(mapBackgroundChoice.value)
-    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm', unclaimed_control_default: unclaimedControlDefault.value }
+    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
     let worldId = ''
     if (mode.value === 'template') {
       worldId = world.value; payload.world_id = worldId
@@ -765,6 +771,12 @@ async function create() {
             <article v-for="(c, i) in characters" :key="i" class="create-character-card">
               <PortraitImage :portrait="c.portrait" :rule-id="activeRule" :seed="c.character_name || String(i)" :name="c.character_name" :size="72" />
               <div><h3>{{ c.character_name || t('unnamed') }}</h3><p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p><small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small></div>
+              <label class="create-character-control">
+                <span>{{ t('controlMode') }}</span>
+                <select v-model="cardControl[i]" :aria-label="t('controlMode')">
+                  <option v-for="mode in CARD_CONTROL_MODES" :key="mode" :value="mode">{{ controlLabel(mode) }}</option>
+                </select>
+              </label>
               <div class="actions"><button @click="openWizard(i)">{{ t('edit') }}</button><button class="danger" @click="removeCharacter(i)">{{ t('remove') }}</button></div>
             </article>
             <button class="create-character-empty" @click="openWizard(null)"><b>＋</b><span>{{ t('newCharacter') }}</span></button>
@@ -783,22 +795,14 @@ async function create() {
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>
           <div class="create-confirm-characters"><span v-for="(c, i) in characters" :key="i">{{ c.character_name }}</span></div>
-          <div class="create-control-stage">
-            <fieldset class="create-control-default">
-              <legend>{{ t('controlUnclaimedDefault') }}</legend>
-              <label><input v-model="unclaimedControlDefault" type="radio" value="unclaimed"> {{ t('controlUnclaimed') }}</label>
-              <label><input v-model="unclaimedControlDefault" type="radio" value="ai"> {{ t('controlAi') }}</label>
-            </fieldset>
-            <div class="create-control-cards">
-              <fieldset v-for="(c, i) in characters" :key="i" class="create-control-card">
-                <legend>{{ c.character_name || t('unnamed') }}</legend>
-                <label><input v-model="cardControl[i]" type="radio" value="human" @change="applyControlDefault(i)"> {{ t('controlHuman') }}</label>
-                <label><input v-model="cardControl[i]" type="radio" value="unclaimed" @change="applyControlDefault(i)"> {{ t('controlUnclaimed') }}</label>
-                <label><input v-model="cardControl[i]" type="radio" value="ai" @change="applyControlDefault(i)"> {{ t('controlAi') }}</label>
-                <label><input v-model="cardControl[i]" type="radio" value="" @change="applyControlDefault(i)"> {{ t('controlFollowDefault') }}</label>
-              </fieldset>
-            </div>
-          </div>
+          <!-- 确认页只做摘要：每张角色一行「名字 + 最终控制方式」，配置本身在「角色」步骤。 -->
+          <ul class="create-confirm-controls">
+            <li v-for="(c, i) in characters" :key="i">
+              <span>{{ c.character_name || t('unnamed') }}</span>
+              <strong>{{ controlLabel(cardControl[i] ?? defaultCardControl(i)) }}</strong>
+            </li>
+          </ul>
+          <button class="create-confirm-edit" @click="prevStep">{{ t('controlBackToCharacters') }}</button>
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>

@@ -101,6 +101,12 @@ async def test_creation_applies_a_per_card_control_choice(web_api) -> None:
     assert [player.get("control", {}).get("mode") for player in created["players"]] == [
         "human", "ai", "unclaimed",
     ]
+    # 创建时选的 AI 托管是「房间明确设置」的永久托管，不是暂离临时托管：
+    # 它不带恢复目标，也不会因为某个玩家点「回来」而被交回。
+    ai_record = get_control(instance, uids[1])
+    assert ai_record["temporary"] is False
+    assert ai_record["resume_mode"] is None
+    assert is_temporarily_ai_controlled(instance, uids[1]) is False
 
 
 @pytest.mark.asyncio

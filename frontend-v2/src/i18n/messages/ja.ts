@@ -458,7 +458,6 @@ export const ja = {
   controlNowAi: 'AI に任せました',
   controlNowHuman: 'プレイヤーに戻しました',
   controlUnclaimedDefault: '未認領キャラの既定',
-  controlFollowDefault: '既定に従う',
   importedCharacter: '{name} をインポートしました',
   exported: 'エクスポートしました',
   resetFailed: 'リセットに失敗',
@@ -2311,6 +2310,11 @@ export const ja = {
   // 未収録のエラーコードはフロントエンドが原文を表示します。
   // ---- 招待 / 端末ペアリング ----
   inviteCopyLink: 'リンクをコピー',
+  inviteAddressHint: 'ヒント：招待リンクのアドレスに友人がアクセスできる必要があります。同じネットワークなら LAN アドレス、遠隔なら公衆またはトンネル経由のアドレスを使ってください。',
+  inviteAddressSettingsLink: '共有アドレスを変更',
+  inviteLocalOnlyWarning: 'このアドレスはこの端末からのみアクセスできます。他の端末はこのアドレスでは参加できません。アクセス可能な共有アドレスを設定してください。',
+  controlMode: '操作',
+  controlBackToCharacters: 'キャラクター設定に戻る',
   inviteScanHint: 'DiceFrame アプリで読み取ってもらうか、下のリンクを送ってください。',
   inviteQrHint: '読み取るとこのセッションに参加してキャラクターを作成できます。',
   controlLink: '操作リンク',

@@ -433,6 +433,63 @@
   font-size: 11px;
 }
 
+/* 角色步骤的紧凑控制方式下拉：附着在角色卡右下，不展开成大段 radio。 */
+.create-character-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--df-text-muted);
+}
+
+.create-character-control select {
+  min-width: 96px;
+  padding: 4px 6px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 6px;
+  color: var(--df-text-primary);
+  background: var(--df-control-bg);
+  font-size: 11px;
+}
+
+/* 确认页只做摘要：每张角色一行「名字 + 最终控制方式」。 */
+.create-confirm-controls {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.create-confirm-controls li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 7px;
+  background: var(--df-control-bg);
+  font-size: 12px;
+}
+
+.create-confirm-controls strong {
+  color: var(--df-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.create-confirm-edit {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--df-accent);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .create-actions {
   position: static;
   z-index: auto;
