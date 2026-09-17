@@ -86,7 +86,7 @@ class PairingCodeStore:
         return expires_at is not None and expires_at > now
 
     def revoke_all(self) -> None:
-        """访问密码变更后旧配对码兑换出来的就是旧密码，必须立即作废。"""
+        """作废所有待兑换的配对码。"""
         self._codes.clear()
 
     @property
@@ -145,8 +145,18 @@ class PairingService:
             200,
         )
 
-    def revoke_all(self) -> None:
+    def revoke_all(self) -> int:
+        """服务器从免密切换到有访问密码时，作废免密期发出的全部配对凭据。
+
+        免密期间 ``POST /api/pairing`` 对任何能连上的人开放，那时签发的设备
+        令牌等价于「谁连得上谁就是 owner」。设置访问密码这一步必须把它们一起
+        收回，否则锁门之前发出去的钥匙还留在外面，而且它们在锁门后依然有效。
+
+        已有密码时再改密码不走这里：设备令牌是与访问密码平级的独立凭据，
+        设置页有单独的逐台 / 全部吊销入口（见 device_tokens.py）。
+        """
         self._store.revoke_all()
+        return self._devices.revoke_all()
 
     def _record(self, ip: str, success: bool) -> None:
         if not self._audit:

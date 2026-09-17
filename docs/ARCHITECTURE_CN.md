@@ -28,6 +28,8 @@ Owner 访问有两类平级凭据，都以 `Authorization: Bearer` 提交，由 
 
 扫码登录由 `src/webui/pairing.py` 与 `src/webui/routes/pairing.py` 负责：owner 会话调 `POST /api/pairing` 签发一次性短 TTL 配对码（服务端同样只存摘要），移动端匿名调 `POST /api/pairing/claim` 兑换成设备令牌。兑换端点必须匿名可达（此刻手机还没有任何凭据），因此它与 `/api/login` 共用 abuse-guard 限流桶并写入同一份登录审计；配对码一次性、过期即作废、不续期。设备清单 `GET /api/devices` 与吊销 `DELETE /api/devices/{id}` / `POST /api/devices/revoke-all` 只对 owner 开放，清单不返回任何可用于鉴权的字段。
 
+免密服务器上 `POST /api/pairing` 对任何能连上的客户端开放，那时签发的设备令牌等价于「谁连得上谁就是 owner」。因此首次设置访问密码（`access_token` 从未配置变为已配置）会连带吊销全部设备令牌与待兑换配对码；已有密码时再改密码不吊销——设备令牌是与访问密码平级的独立凭据，设置页有单独的逐台 / 全部吊销入口。
+
 二维码要编的地址只有服务端知道——GM 本机浏览器的 origin 往往是 localhost，对手机无意义。`GET /api/system/network`（owner 限定）基于 `src/web_transport/local_addresses.py` 返回本机可达候选地址；该模块同时是自签证书 SAN 的地址来源。
 
 ## Content V2
