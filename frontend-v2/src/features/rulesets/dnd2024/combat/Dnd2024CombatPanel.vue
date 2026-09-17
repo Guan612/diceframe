@@ -19,6 +19,7 @@ import {
 } from '@/features/rulesets/dnd2024/api'
 import type {
   JsonObject,
+  RulesetCombatAction,
   RulesetCombatSpell,
   RulesetCombatTarget,
   RulesetCombatWeapon,
@@ -122,6 +123,9 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   nextEncounter: '准备下一场遭遇', nextEncounterHint: '当前战斗已经结算。可返回冒险，或由 GM 明确准备下一场战斗。', returnToAdventure: '返回冒险', cancelNextEncounter: '暂不准备',
   turnGuide: '本回合可以组合使用移动、一个动作和可用的附赠动作；完成操作后请手动结束回合。脱离接战只会避免本回合的机会攻击，仍需移动离开敌人范围。',
   canEndTurn: '当前可结束回合',
+  classFeatures: '职业能力',
+  noCapabilityTarget: '当前没有可指定的敌对目标',
+  noCapabilityAvailable: '本回合没有可用的职业能力。',
 } : {
   title: 'Combat', authority: 'D&D 5E 2024 · Authoritative resolution', rulesNote: 'Resolution rules',
   loading: 'Synchronizing combat…', refresh: 'Refresh', start: 'Confirm Combat',
@@ -183,6 +187,9 @@ const copy = computed(() => locale.value.startsWith('zh') ? {
   nextEncounter: 'Prepare next encounter', nextEncounterHint: 'This combat is resolved. Return to the adventure, or have the GM explicitly prepare another encounter.', returnToAdventure: 'Return to adventure', cancelNextEncounter: 'Not yet',
   turnGuide: 'You can combine movement, one action, and an available bonus action this turn. End the turn when finished. Disengage prevents opportunity attacks for this turn; you still need to move out of enemy range.',
   canEndTurn: 'You can end the turn now',
+  classFeatures: 'Class features',
+  noCapabilityTarget: 'No hostile target is available',
+  noCapabilityAvailable: 'No class capability is available this turn.',
 })
 
 const gameplay = computed(() => data.value?.gameplay)
@@ -260,6 +267,23 @@ const canPlanTemporaryEncounter = computed(() => Boolean(
 ))
 const attackAction = computed(() => action('attack'))
 const spellAction = computed(() => action('cast_spell'))
+// 职业特性提供的战斗能力：服务端只返回当前真实可用的 capability，前端只渲染
+// 服务端给的 id / 名称 / 成本 / 目标要求，绝不自己判断职业或等级。
+const capabilityActions = computed<RulesetCombatAction[]>(() => (
+  actions.value.filter(item => item.type === 'class_capability')
+))
+const capabilityTargets = computed<RulesetCombatTarget[]>(() => (
+  capabilityActions.value.find(item => item.requires_target)?.targets || []
+))
+const capabilityTargetId = ref('')
+const currentClassResources = computed(() => (
+  (currentActor.value?.class_resources || []).filter(row => Number(row.maximum) > 0)
+))
+function capabilityCostLabel(capability: RulesetCombatAction): string {
+  return (capability.costs || []).map(cost => cost.kind === 'resource'
+    ? `${cost.name} ${cost.amount}（${cost.current}/${cost.maximum}）`
+    : cost.name).join(' · ')
+}
 // 非战斗施法（§35.3）：仅当 server available_intents 提供 exploration.cast_spell
 // 时渲染入口，不永久硬编码按钮。
 const explorationAction = computed(() => action('exploration.cast_spell'))
@@ -351,6 +375,15 @@ const stagedSummary = computed(() => {
   }
   if (type === 'cast_spell') return `${copy.value.cast} · ${selectedSpell.value?.name || payload.spell_ref} → ${target}`
   if (type === 'move') return `${copy.value.move} · ${Number(payload.distance || 0)} ${copy.value.feet}`
+  if (type === 'class_capability') {
+    const capability = capabilityActions.value.find(
+      item => item.capability_id === payload.capability_id,
+    )
+    const label = capability?.label || String(payload.capability_id || '')
+    const cost = capability ? capabilityCostLabel(capability) : ''
+    const aimed = capability?.requires_target ? ` → ${target}` : ''
+    return [label, cost].filter(Boolean).join(' · ') + aimed
+  }
   return localizedTerm(type)
 })
 
@@ -506,6 +539,7 @@ function resetSelections(): void {
   selectedSlot.value = spell?.available_slot_levels?.[0] ?? 0
   const targets = spell ? targetsFor(spell) : attackAction.value?.targets || []
   selectedTargetId.value = targets[0]?.actor_id || ''
+  capabilityTargetId.value = capabilityTargets.value[0]?.actor_id || ''
   chooseUsableWeapon()
   movementDistance.value = Math.min(5, Number(moveAction.value?.movement_remaining || 5))
 }
@@ -842,6 +876,23 @@ function stageSimple(type: string): void {
   const item = action(type)
   if (!item) return
   stage({ type, actor_id: item.actor_id })
+}
+
+// 职业能力统一走 canonical intent：只提交 capability id 与目标，成本与结算
+// 全部由服务端 capability 声明和既有攻击链决定。
+function stageCapability(capability: RulesetCombatAction): void {
+  if (!capability.capability_id) return
+  const payload: JsonObject = {
+    type: 'class_capability',
+    actor_id: capability.actor_id,
+    capability_id: capability.capability_id,
+  }
+  if (capability.requires_target) {
+    const targetId = capabilityTargetId.value
+    if (!targetId) return
+    payload.target_id = targetId
+  }
+  stage(payload)
 }
 
 async function startCombat(): Promise<void> {
@@ -1291,6 +1342,39 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
             <button :disabled="busy || !selectedWeapon || !selectedTargetId || !selectedWeaponRange?.usable" @click="stageAttack"><NIcon :component="FlashOutline" />{{ copy.attack }}</button>
           </section>
 
+          <section v-if="capabilityActions.length || currentClassResources.length" class="action-card capability-card">
+            <h3><NIcon :component="SparklesOutline" />{{ copy.classFeatures }}</h3>
+            <div v-if="currentClassResources.length" class="class-resource-strip">
+              <span v-for="resource in currentClassResources" :key="resource.id">
+                <small>{{ resource.name }}</small>
+                <strong>{{ resource.current }} / {{ resource.maximum }}</strong>
+              </span>
+            </div>
+            <template v-if="capabilityActions.length">
+              <label v-if="capabilityTargets.length">{{ copy.target }}
+                <select v-model="capabilityTargetId">
+                  <option v-for="targetItem in capabilityTargets" :key="targetItem.actor_id" :value="targetItem.actor_id">
+                    {{ targetItem.name }} · {{ targetItem.hp }}/{{ targetItem.max_hp }} HP
+                  </option>
+                </select>
+              </label>
+              <p v-else-if="capabilityActions.some(item => item.requires_target)" class="range-guide blocked">
+                {{ copy.noCapabilityTarget }}
+              </p>
+              <button
+                v-for="capability in capabilityActions"
+                :key="capability.capability_id"
+                :disabled="busy || (capability.requires_target && !capabilityTargetId)"
+                @click="stageCapability(capability)"
+              >
+                <NIcon :component="SparklesOutline" />
+                <span class="capability-button-label">{{ capability.label }}</span>
+                <small class="capability-button-cost">{{ capabilityCostLabel(capability) }}</small>
+              </button>
+            </template>
+            <p v-else class="range-guide">{{ copy.noCapabilityAvailable }}</p>
+          </section>
+
           <section v-if="spellAction" class="action-card">
             <h3><NIcon :component="SparklesOutline" />{{ copy.action }} / {{ copy.bonus }} · {{ copy.cast }}</h3>
             <label>{{ copy.spell }}
@@ -1495,6 +1579,14 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 button, select, input { min-height: 44px; font: inherit; }
 .action-card select, .action-card input, .encounter-start select { width: 100%; min-height: 44px; padding-inline: 10px; border: 1px solid #4a5560; border-radius: 8px; background: #0d1319; color: #f3eee7; }
 .compact-actions { align-content: start; }
+.capability-card { align-content: start; }
+.capability-card > button { justify-content: flex-start; flex-wrap: wrap; row-gap: 2px; text-align: left; }
+.capability-button-label { font-weight: 700; }
+.capability-button-cost { width: 100%; color: #c8c2b8; font-size: 11px; }
+.class-resource-strip { display: flex; gap: 8px; flex-wrap: wrap; }
+.class-resource-strip > span { display: grid; gap: 2px; padding: 6px 9px; border: 1px solid #4a5560; border-radius: 8px; background: #0d1319; }
+.class-resource-strip small { color: #9ca6ae; font-size: 11px; }
+.class-resource-strip strong { font-size: 14px; }
 .end-turn-ready { display: flex; align-items: center; gap: 6px; margin: 2px 0 0; padding: 8px 9px; border: 1px solid #b88b3e; border-radius: 8px; background: rgb(197 148 67 / 14%); color: #f2d28f; font-size: 12px; font-weight: 700; }
 .decision-card, .confirm-card { padding: 12px; border: 1px solid #c2974a; border-radius: 12px; background: #322716; }
 .decision-card div, .confirm-card div { display: flex; gap: 7px; flex-wrap: wrap; }
@@ -1511,6 +1603,8 @@ button:focus-visible, select:focus-visible, input:focus-visible, .confirm-card:f
 :global(body.light .dnd-combat .actor-card), :global(body.light .dnd-combat .action-card), :global(body.light .dnd-combat .combat-summary span) { border-color: #b8b2a6; background: #fff; }
 :global(body.light .dnd-combat .tactical-track) { border-color: #b8b2a6; background: #f7f9fa; }
 :global(body.light .dnd-combat .action-card select), :global(body.light .dnd-combat .action-card input), :global(body.light .dnd-combat .encounter-start select) { border-color: #908779; background: #fff; color: #211e1a; }
+:global(body.light .dnd-combat .class-resource-strip > span) { border-color: #b8b2a6; background: #fff; }
+:global(body.light .dnd-combat .capability-button-cost) { color: #514b43; }
 :global(body.light .dnd-combat .turn-banner) { border-color: #8ca4b0; background: linear-gradient(135deg, #edf6fa, #fff); }
 :global(body.light .dnd-combat .turn-banner.enemy) { border-color: #c59b9b; background: linear-gradient(135deg, #fff0ef, #fff); }
 :global(body.light .dnd-combat .turn-banner small), :global(body.light .dnd-combat .combat-rules-note), :global(body.light .dnd-combat .preset-description), :global(body.light .dnd-combat .combat-state), :global(body.light .dnd-combat .combat-summary small) { color: #514b43; }

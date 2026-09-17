@@ -92,6 +92,34 @@ export interface CharacterSheet {
   inventory?: CharacterItem[]
   key_items?: CharacterItem[]
   portrait?: CharacterPortrait | null
+  /**
+   * Ruleset-projected class features of this character (display only). The
+   * server owns identity, availability and derived values; the frontend must
+   * never compute a class level, a die, or a resource maximum itself.
+   */
+  class_features?: CharacterClassFeature[]
+  /** Ruleset-projected class resources (current / maximum), server authority. */
+  class_resources?: CharacterClassResource[]
+  [key: string]: unknown
+}
+
+export interface CharacterClassFeature {
+  id: string
+  name: string
+  summary?: string
+  source_ref?: string
+  minimum_level?: number
+  values?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface CharacterClassResource {
+  id: string
+  name: string
+  current: number
+  maximum: number
+  source_ref?: string
+  recovery?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -1010,6 +1038,17 @@ export interface RulesetCombatTarget {
   conditions?: Record<string, JsonObject>
   concentration?: JsonObject | null
   death_saves?: Record<string, number>
+  /** Server-projected class resources of this actor (id, localized name, current/max). */
+  class_resources?: CharacterClassResource[]
+}
+
+/** One user-visible price of a server-provided combat capability. */
+export interface RulesetCapabilityCost {
+  kind: string
+  name: string
+  amount: number
+  current: number
+  maximum: number
 }
 
 export interface RulesetCombatWeapon extends JsonObject {
@@ -1054,6 +1093,11 @@ export interface RulesetCombatAction extends JsonObject {
   requires?: string[]
   choice_ids?: string[]
   submitted?: Record<string, string>
+  /** Feature-provided combat capability (server decides whether it is available). */
+  capability_id?: string
+  feature_id?: string
+  costs?: RulesetCapabilityCost[]
+  requires_target?: boolean
 }
 
 export interface RulesetEncounterPreset extends JsonObject {

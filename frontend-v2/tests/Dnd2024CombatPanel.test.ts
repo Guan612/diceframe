@@ -868,3 +868,188 @@ describe('D&D 2024 combat panel', () => {
     wrapper.unmount()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Class feature capabilities (Monk v1)
+//
+// These tests mock the real server contract: available intents shaped like the
+// D&D runtime's `class_capability` entries plus the actor's projected
+// `class_resources`.  They never mock "is a monk" -- the panel has no such
+// concept, and the frontend must never invent a capability the server omitted.
+// ---------------------------------------------------------------------------
+
+interface CapabilityFixture {
+  id: string
+  label: string
+  costs: Array<Record<string, unknown>>
+  requiresTarget?: boolean
+}
+
+function capabilityCosts(includeFocus: boolean): Array<Record<string, unknown>> {
+  const costs: Array<Record<string, unknown>> = [
+    { kind: 'bonus_action', name: 'Bonus Action', amount: 1, current: 1, maximum: 1 },
+  ]
+  if (includeFocus) {
+    costs.push({
+      kind: 'resource', name: 'Focus Points', amount: 1, current: 2, maximum: 2,
+    })
+  }
+  return costs
+}
+
+const MONK_TARGET = {
+  actor_id: 'enemy:goblin-1', kind: 'enemy', name: 'Goblin',
+  hp: 7, max_hp: 7, position: 5,
+}
+
+function monkResponse(options: {
+  focus?: number | null
+  bonusActionAvailable?: boolean
+  capabilities?: CapabilityFixture[]
+} = {}) {
+  const result = response('active') as any
+  const focus = options.focus
+  if (options.bonusActionAvailable === false) {
+    result.gameplay.combat.economy.bonus_action = 0
+  }
+  result.gameplay.combat.actors[0].class_resources = focus === null || focus === undefined
+    ? []
+    : [{ id: 'focus_points', name: 'Focus Points', current: focus, maximum: 2 }]
+  result.available_actions = [
+    ...result.available_actions,
+    ...(options.capabilities || []).map(capability => ({
+      type: 'class_capability',
+      actor_id: 'player:gm',
+      expected_version: 1,
+      capability_id: capability.id,
+      label: capability.label,
+      costs: capability.costs,
+      requires_target: capability.requiresTarget !== false,
+      ...(capability.requiresTarget === false ? {} : { targets: [MONK_TARGET] }),
+    })),
+  ]
+  return result
+}
+
+function levelTwoCapabilities(): CapabilityFixture[] {
+  return [
+    { id: 'bonus_unarmed_strike', label: 'Bonus Unarmed Strike', costs: capabilityCosts(false) },
+    { id: 'flurry_of_blows', label: 'Flurry of Blows', costs: capabilityCosts(true) },
+    { id: 'patient_defense', label: 'Patient Defense', costs: capabilityCosts(false), requiresTarget: false },
+    { id: 'step_of_the_wind', label: 'Step of the Wind', costs: capabilityCosts(false), requiresTarget: false },
+  ]
+}
+
+async function mountMonk(payload: ReturnType<typeof monkResponse>) {
+  mocks.fetch.mockResolvedValueOnce(payload)
+  const wrapper = mount(Dnd2024CombatPanel, {
+    props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
+  })
+  await flushPromises()
+  return wrapper
+}
+
+function capabilityButtons(wrapper: ReturnType<typeof mount>) {
+  return wrapper.findAll('.capability-card button')
+}
+
+describe('D&D 2024 combat panel class capabilities', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mocks.locale = 'en'
+    mocks.fetch.mockReset().mockResolvedValue(response('none'))
+    mocks.submit.mockReset().mockResolvedValue(response('active'))
+    mocks.decide.mockReset().mockResolvedValue(response('active'))
+    mocks.plan.mockReset().mockResolvedValue({ ok: false, error: 'unavailable' })
+  })
+
+  it('renders the server-provided capabilities with their costs and the projected Focus', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: 2, capabilities: levelTwoCapabilities(),
+    }))
+
+    const card = wrapper.get('.capability-card')
+    expect(card.text()).toContain('Class features')
+    expect(card.text()).toContain('Flurry of Blows')
+    expect(card.text()).toContain('Focus Points 1（2/2）')
+    expect(card.text()).toContain('Bonus Unarmed Strike')
+    expect(wrapper.get('.class-resource-strip').text()).toContain('Focus Points')
+    expect(wrapper.get('.class-resource-strip').text()).toContain('2 / 2')
+    expect(capabilityButtons(wrapper).map(button => button.text())).toHaveLength(4)
+    wrapper.unmount()
+  })
+
+  it('submits the canonical capability intent and refreshes Focus and the bonus action at once', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: 2, capabilities: levelTwoCapabilities(),
+    }))
+    const spent = monkResponse({ focus: 1, bonusActionAvailable: false, capabilities: [] })
+    mocks.submit.mockResolvedValueOnce(spent)
+
+    const flurry = capabilityButtons(wrapper)
+      .find(button => button.text().includes('Flurry of Blows'))!
+    await flurry.trigger('click')
+    await wrapper.get('.confirm-card .combat-primary').trigger('click')
+    await flushPromises()
+
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({
+      type: 'class_capability',
+      actor_id: 'player:gm',
+      capability_id: 'flurry_of_blows',
+      target_id: 'enemy:goblin-1',
+    })
+    // 服务端在同一份响应里返回新状态：专注点与附赠动作立即刷新，无需重新加载。
+    expect(wrapper.get('.class-resource-strip').text()).toContain('1 / 2')
+    expect(wrapper.text()).toContain('No class capability is available this turn.')
+    expect(capabilityButtons(wrapper)).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('never invents a capability the server did not return', async () => {
+    const wrapper = await mountMonk(monkResponse({ focus: 2, capabilities: [] }))
+
+    expect(capabilityButtons(wrapper)).toHaveLength(0)
+    // 资源仍然可见（服务端投影了 Focus），但按钮只可能来自服务端 capability。
+    expect(wrapper.get('.class-resource-strip').text()).toContain('2 / 2')
+    wrapper.unmount()
+  })
+
+  it('omits the target field for capabilities the server does not require a target for', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: 2,
+      capabilities: [{
+        id: 'step_of_the_wind', label: 'Step of the Wind',
+        costs: capabilityCosts(false), requiresTarget: false,
+      }],
+    }))
+
+    await capabilityButtons(wrapper)[0].trigger('click')
+    await wrapper.get('.confirm-card .combat-primary').trigger('click')
+    await flushPromises()
+
+    const payload = mocks.submit.mock.calls[0][1]
+    expect(payload).toMatchObject({ type: 'class_capability', capability_id: 'step_of_the_wind' })
+    expect(payload).not.toHaveProperty('target_id')
+    wrapper.unmount()
+  })
+
+  it('shows a level 1 monk capability without any Focus resource', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: null,
+      capabilities: [{ id: 'bonus_unarmed_strike', label: 'Bonus Unarmed Strike', costs: capabilityCosts(false) }],
+    }))
+
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(capabilityButtons(wrapper)).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('hides the whole card for a character without class resources or capabilities', async () => {
+    // 非武僧（也没有任何职业能力）：不出现空的 Bonus Action / 职业能力入口。
+    const wrapper = await mountMonk(response('active') as any)
+
+    expect(wrapper.find('.capability-card').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Class features')
+    wrapper.unmount()
+  })
+})
