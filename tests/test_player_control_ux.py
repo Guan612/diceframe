@@ -401,6 +401,230 @@ async def test_away_and_back_work_at_the_safe_boundary(web_api) -> None:
     assert (await api.set_player_away(game_key, uid, False))["ok"] is True
 
 
+# ---- 5b. authority transaction：复核与写入必须原子 ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_gm_control_change_is_refused_while_processing_holds_the_boundary(
+    web_api,
+) -> None:
+    """Case A：处理边界一旦被占用，控制权转换不能插进去。"""
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    await api.set_away_control_policy(game_key, "ai_takeover")
+    uid = sorted(instance.players)[0]
+    before = dict(get_control(instance, uid))
+
+    async with instance._process_lock:
+        blocked = await api.set_player_control(game_key, uid, "ai")
+        away = await api.set_player_away(game_key, uid, True)
+
+    assert blocked["ok"] is False
+    assert blocked.get("error_code") == "CONTROL_CHANGE_BUSY"
+    # ai_takeover 的暂离会改控制权，因此同样必须等安全边界。
+    assert away["ok"] is False
+    assert away.get("error_code") == "CONTROL_CHANGE_BUSY"
+    assert get_control(instance, uid) == before
+    assert uid not in instance.away_players
+
+
+@pytest.mark.asyncio
+async def test_the_safe_boundary_check_and_the_control_write_are_one_section(
+    web_api, monkeypatch,
+) -> None:
+    """Case A 的结构性锁定：安全边界复核必须发生在**引擎事务内部**。
+
+    在 ``control_change_block`` 判定安全的那一刻往事件循环排一个「立刻进入判定
+    阶段」的回调，并断言写入先于它——即复核与写入之间没有让出事件循环。
+
+    注意这条测试的证明边界：它真正锁死的是"复核不再位于服务层、而是随写入一起
+    在聚合事务内执行"。如果有人把复核搬回服务层（本 blocker 之前的形态），补丁就
+    打不中，``events`` 会为空而失败。它**不**单独证明任意实现下都没有 await。
+    """
+
+    import asyncio
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    uid = sorted(instance.players)[0]
+
+    events: list[str] = []
+    # 补丁必须打在 game_instance 的命名空间上：它是按名字导入的绑定，
+    # 改 player_control 的模块属性不会影响已绑定的引用。
+    from src.engine import game_instance as gi
+
+    original_check = gi.control_change_block
+
+    def spy_check(target: Any) -> str:
+        result = original_check(target)
+        if not result:
+            asyncio.get_running_loop().call_soon(
+                lambda: (events.append("processing"), setattr(
+                    instance, "state", GameState.ACTIVE_JUDGMENT,
+                )),
+            )
+        return result
+
+    monkeypatch.setattr(gi, "control_change_block", spy_check)
+
+    result = await api.set_player_control(game_key, uid, "ai")
+    await asyncio.sleep(0)
+
+    assert result["ok"] is True
+    assert control_mode(instance, uid) == "ai"
+    # 写入先发生；"开始处理"只能排在它之后。
+    assert events == ["processing"]
+
+
+@pytest.mark.asyncio
+async def test_away_takeover_never_exposes_away_without_a_controller(
+    web_api, monkeypatch,
+) -> None:
+    """Case B：暂离成功时，不可观察到 ``away=true`` 而控制者仍是真人。
+
+    两件事一起断言：
+    1. 在"在场状态写入"之后排一个记录回调，最终只可能观察到 ``(True, "ai")``
+       ——已经离开却没有任何 AI 接手的席位是没人负责的状态；
+    2. 控制权转换是在**持有 ``_lock``** 时发生的（引擎事务内），而不是像修复前
+       那样由服务层在两次 await 之间另行调用。
+    """
+
+    import asyncio
+
+    from src.engine import game_instance as gi
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    await api.set_away_control_policy(game_key, "ai_takeover")
+    uid = sorted(instance.players)[0]
+
+    observed: list[tuple[bool, str]] = []
+    lock_held_during_handover: list[bool] = []
+    original_locked = GameInstance._set_player_away_locked
+    original_begin = gi.begin_away_hosting
+
+    def spy_locked(self: GameInstance, user_id: str, away: bool) -> bool:
+        ok = original_locked(self, user_id, away)
+        if ok and away:
+            asyncio.get_running_loop().call_soon(
+                lambda: observed.append((user_id in self.away_players, control_mode(self, user_id))),
+            )
+        return ok
+
+    def spy_begin(target: GameInstance, user_id: str) -> dict[str, Any]:
+        lock_held_during_handover.append(target._lock.locked())
+        return original_begin(target, user_id)
+
+    monkeypatch.setattr(GameInstance, "_set_player_away_locked", spy_locked)
+    monkeypatch.setattr(gi, "begin_away_hosting", spy_begin)
+
+    result = await api.set_player_away(game_key, uid, True)
+    await asyncio.sleep(0)
+
+    assert result["ok"] is True
+    assert observed == [(True, "ai")]
+    assert lock_held_during_handover == [True]
+    assert get_control(instance, uid)["temporary"] is True
+
+
+@pytest.mark.asyncio
+async def test_returning_restores_presence_and_control_together(web_api) -> None:
+    """Case C：回来时四项必须一起变，不会出现"回来了但控制权还在 AI"。"""
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    await api.set_away_control_policy(game_key, "ai_takeover")
+    uid = sorted(instance.players)[0]
+    await api.set_player_away(game_key, uid, True)
+    assert get_control(instance, uid)["temporary"] is True
+
+    result = await api.set_player_away(game_key, uid, False)
+
+    assert result["ok"] is True
+    assert uid not in instance.away_players
+    assert control_mode(instance, uid) == "human"
+    assert get_control(instance, uid)["temporary"] is False
+    assert get_control(instance, uid)["resume_mode"] is None
+
+
+@pytest.mark.asyncio
+async def test_returning_through_the_service_does_not_steal_a_permanent_ai_seat(
+    web_api,
+) -> None:
+    """Case D：GM 永久托管给 AI 的席位，不会被玩家点"回来"抢走。"""
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    await api.set_away_control_policy(game_key, "ai_takeover")
+    uid = sorted(instance.players)[0]
+    await api.set_player_control(game_key, uid, "ai")
+    assert is_temporarily_ai_controlled(instance, uid) is False
+
+    result = await api.set_player_away(game_key, uid, False)
+
+    assert result["ok"] is True
+    assert control_mode(instance, uid) == "ai"
+    assert uid not in instance.away_players
+
+
+@pytest.mark.asyncio
+async def test_control_change_is_refused_while_a_rewrite_owns_the_authority_gate(
+    web_api,
+) -> None:
+    """历史重写期间不得改变控制权。
+
+    ``control_change_block`` 只看 ``state`` 与 ``_process_lock``，对"正在分阶段
+    重写历史"一无所知；因此仅靠它做判定，控制权变更可以落进一次重写中间。正确
+    的边界是 ``authoritative_write``——重写期间写者必须被拒绝。
+
+    这里直接置位 ``_rewrite_in_progress`` 来模拟"重写由别的 task 持有"：同一 task
+    内 ``authoritative_write`` 是可重入的，用 ``historical_rewrite()`` 包住调用
+    反而会走重入豁免，测不到拒绝路径。
+    """
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    await api.set_away_control_policy(game_key, "ai_takeover")
+    uid = sorted(instance.players)[0]
+    before = dict(get_control(instance, uid))
+
+    instance._rewrite_in_progress = True
+    try:
+        blocked = await api.set_player_control(game_key, uid, "ai")
+        away = await api.set_player_away(game_key, uid, True)
+    finally:
+        instance._rewrite_in_progress = False
+
+    assert blocked["ok"] is False
+    assert blocked.get("error_code") == "CONTROL_CHANGE_BUSY"
+    assert away["ok"] is False
+    assert away.get("error_code") == "CONTROL_CHANGE_BUSY"
+    assert get_control(instance, uid) == before
+    assert uid not in instance.away_players
+
+    # 重写结束后同样的操作必须恢复正常，证明拒绝来自边界而不是永久失效。
+    recovered = await api.set_player_control(game_key, uid, "ai")
+    assert recovered["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_pause_away_does_not_require_a_processing_boundary(web_api) -> None:
+    """pause 只改在场状态，不涉及控制权，因此不引入新的拒绝路径。"""
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    uid = sorted(instance.players)[0]
+    assert away_control_policy(instance) == "pause"
+
+    async with instance._process_lock:
+        result = await api.set_player_away(game_key, uid, True)
+
+    assert result["ok"] is True
+    assert uid in instance.away_players
+    assert control_mode(instance, uid) == "human"
+
+
 # ---- 6. 徽章状态可从服务端派生 ------------------------------------------------
 
 

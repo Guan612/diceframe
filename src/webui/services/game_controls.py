@@ -12,12 +12,9 @@ from src.engine.health import mark_health_event
 from src.engine.player_control import (
     PlayerControlError,
     away_control_policy,
-    begin_away_hosting,
-    control_change_block,
-    end_away_hosting,
+    control_mode,
     get_control,
     set_away_control_policy,
-    set_control,
 )
 from src.rules.rule_system import RuleSystem
 
@@ -52,25 +49,19 @@ class GameControlService:
         if user_id not in instance.players:
             return {"ok": False, "error": "玩家不存在"}
         # 暂离是否把角色交给服务器 AI，由房间设置决定；默认 pause 保持旧行为。
-        # 只有显式的房间配置 + 玩家点击暂离才会产生 AI 托管，断线绝不触发。
-        handover = away and away_control_policy(instance) == "ai_takeover"
-        recovery = not away
-        if handover or recovery:
-            block = control_change_block(instance)
-            if block:
-                return {
-                    "ok": False,
-                    "error_code": block,
-                    "error": "正在推进剧情，请等待本轮结束后再切换暂离状态",
-                }
-        ok = await instance.set_player_away(user_id, away)
-        if not ok:
-            return {"ok": False, "error": "无法切换该玩家状态"}
-        if handover:
-            begin_away_hosting(instance, user_id)
-        elif recovery:
-            # 只在席位确实是「临时托管」时归还；GM 永久交给 AI 的席位不会被抢回。
-            end_away_hosting(instance, user_id)
+        # 安全边界复核、在场状态与控制权转换由聚合在**一个** transaction 内完成，
+        # 因此外部永远观察不到「已暂离但仍由真人控制」这种没人负责的中间态。
+        code = await instance.apply_away_transition(
+            user_id, away, policy=away_control_policy(instance),
+        )
+        if code:
+            return {
+                "ok": False,
+                "error_code": code,
+                "error": {
+                    "UNKNOWN_PLAYER": "无法切换该玩家状态",
+                }.get(code, "正在推进剧情，请等待本轮结束后再切换暂离状态"),
+            }
         await self._dependencies.save_instance(instance)
         return {
             "ok": True,
@@ -90,7 +81,8 @@ class GameControlService:
         """GM 托管控件：把席位交给 AI，或停止 AI 托管交回真人。
 
         只改 Control Contract：不复制角色、不动 Web 身份 / Bot 绑定、不重置
-        ready、不重置 HP、不重建战斗 actor。
+        ready、不重置 HP、不重建战斗 actor。安全边界复核与写入由聚合在同一
+        transaction 内完成。
         """
 
         instance = self._instance(game_key)
@@ -104,25 +96,22 @@ class GameControlService:
                 "error_code": "CONTROL_MODE_UNSUPPORTED",
                 "error": "只能设为 AI 托管或交回真人",
             }
-        block = control_change_block(instance)
-        if block:
+        code = await instance.apply_player_control_change(user_id, mode)
+        if code:
             return {
                 "ok": False,
-                "error_code": block,
-                "error": "正在推进剧情，请等待本轮结束后再切换托管状态",
+                "error_code": code,
+                "error": {
+                    "UNKNOWN_PLAYER": "玩家不存在",
+                    "CONTROL_REJECTED": "该角色无法切换托管状态",
+                }.get(code, "正在推进剧情，请等待本轮结束后再切换托管状态"),
             }
-        try:
-            # set_control 是唯一写入口：交给 AI 时清掉临时托管语义（这是 GM 的
-            # 明确决定，不属于「暂离临时托管」），交回真人时同样清空。
-            record = set_control(instance, user_id, mode)
-        except PlayerControlError as exc:
-            return {"ok": False, "error_code": "CONTROL_REJECTED", "error": str(exc)}
         await self._dependencies.save_instance(instance)
         return {
             "ok": True,
             "user_id": user_id,
-            "mode": record["mode"],
-            "control": record,
+            "mode": control_mode(instance, user_id),
+            "control": get_control(instance, user_id),
             "multiplayer": instance.multiplayer_status(),
         }
 
