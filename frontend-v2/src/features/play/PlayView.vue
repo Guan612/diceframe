@@ -50,7 +50,7 @@ import { fetchRulesetAvailableActions } from '@/api/rulesets'
 import { currencyLabel } from '@/utils/ruleSchema'
 import { currencyAmountToInputText, currencyEditableUnitLabel } from '@/utils/currency'
 import type { CurrencySystem } from '@/utils/currency'
-import { buildRewardPolicySave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
+import { buildRewardPolicySave, buildRoomPasswordSave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
 
 defineOptions({ name: 'PlayView' })
 
@@ -537,9 +537,12 @@ function onAccess() { command('player-access', { open: game.detail.value?.player
 // 房间级暂离语义：只有 GM 真正改过才提交，避免「保存密码」时把它一并覆盖掉。
 const awayPolicyInput = ref<'pause' | 'ai_takeover'>('pause')
 const awayPolicyTouched = ref(false)
+// 密码同理：打开弹窗会清空输入框，无条件提交等于把原密码删掉。
+const passwordTouched = ref(false)
 
 function onRoomPassword() {
   roomPasswordInput.value = ''
+  passwordTouched.value = false
   luckTimeoutInput.value = ''
   awayPolicyInput.value = game.detail.value?.away_control_policy === 'ai_takeover' ? 'ai_takeover' : 'pause'
   awayPolicyTouched.value = false
@@ -555,8 +558,13 @@ function onRoomPassword() {
 }
 async function setRoomPassword() {
   try {
-    const r = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/room-password`, { method: 'POST', body: JSON.stringify({ password: roomPasswordInput.value }) })
-    if (r.error || r.ok === false) throw new Error(r.error || t('settingFailed'))
+    // 只有 GM 真的编辑过密码输入框才提交：否则「只改暂离设置」也会 POST 一个空
+    // 密码，把房间里已有的密码静默删掉。明确清空输入框仍是一次显式移除密码。
+    const passwordSave = buildRoomPasswordSave(passwordTouched.value, roomPasswordInput.value)
+    if (passwordSave) {
+      const r = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/room-password`, { method: 'POST', body: JSON.stringify(passwordSave) })
+      if (r.error || r.ok === false) throw new Error(r.error || t('settingFailed'))
+    }
     // 同弹窗一并设置幸运超时（仅在填写时）
     const lt = String(luckTimeoutInput.value || '').trim()
     if (lt !== '') {
@@ -581,7 +589,10 @@ async function setRoomPassword() {
       toast.success(t('awayPolicySaved'))
     }
     showRoomPassword.value = false
-    toast.success(roomPasswordInput.value ? t('roomPasswordUpdated') : t('roomPasswordCleared'))
+    // 只在真的提交过密码时报告密码结果；没碰密码却提示"已取消密码"是误导。
+    if (passwordSave) {
+      toast.success(passwordSave.password ? t('roomPasswordUpdated') : t('roomPasswordCleared'))
+    }
     await game.refresh()
   } catch (e: unknown) { toast.error(errorMessage(e)) }
 }
@@ -1503,7 +1514,7 @@ onBeforeUnmount(() => {
       <section class="dialog">
         <header><h2>{{ t('gameSettings') }}</h2><button @click="showRoomPassword = false">×</button></header>
         <p>{{ t('roomPasswordHelp') }}</p>
-        <label>{{ t('newPassword') }}<input type="password" v-model="roomPasswordInput" :placeholder="t('emptyCancelsPassword')" @keyup.enter="setRoomPassword"></label>
+        <label>{{ t('newPassword') }}<input type="password" v-model="roomPasswordInput" :placeholder="t('emptyCancelsPassword')" @input="passwordTouched = true" @keyup.enter="setRoomPassword"></label>
         <label>{{ t('luckTimeoutSeconds') }}<input type="number" v-model="luckTimeoutInput" :placeholder="t('luckTimeoutPlaceholder')" min="0" max="3600"></label>
         <label>{{ t('rewardPolicyMode') }}
           <select v-model="rewardPolicyMode" @change="rewardPolicyTouched = true">

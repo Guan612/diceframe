@@ -69,3 +69,20 @@ export function buildRewardPolicySave(
   }
   return { mode, auto_reward_cap }
 }
+
+/**
+ * The same dialog owns the room password. Opening it blanks the field so the GM
+ * can type a new password, which means an unconditional save would post an empty
+ * password and silently remove the existing one whenever the GM only changed
+ * some *other* setting (for example the away policy). The request is therefore
+ * only built when the password field was actually edited; leaving it untouched
+ * keeps the current password, and editing it to empty is still an explicit
+ * "remove the password".
+ */
+export function buildRoomPasswordSave(
+  touched: boolean,
+  password: string,
+): { password: string } | null {
+  if (!touched) return null
+  return { password: String(password ?? '') }
+}
