@@ -26,6 +26,7 @@
 | spell metadata rows | 339 | 339 | 0 | 0 |
 | advancement feats | 13 | 2 | 11 | 0 |
 | rest policies | 2 | 2 | 0 | 0 |
+| class feature catalog (Monk) | 1 | 1 | 0 | 0 |
 | combat weapon profiles | 15 | 15 | 0 | 0 |
 | deterministic spell effects | 21 | 21 | 0 | 0 |
 | original encounter presets | 3 | 3 | 0 | 0 |
@@ -51,6 +52,7 @@
 - Intent/EventBatch 的版本校验、原子应用、幂等重放和同 ID 改包拒绝。
 - 先攻、轮次、动作/附赠动作/反应/移动、距离、近战/远程攻击、优势/劣势和暴击。
 - 15 种武器档案、徒手打击（无装备武器的 player-like actor 也可以攻击）与 21 种常用法术效果、法术位、戏法成长、升环、专注和常见条件。
+- Monk 1–2 级的职业特性：武艺（力量/敏捷取高者 + 由成长表派生的 Martial Arts Die）、附赠徒手打击、专注点、疾风连击、坚守防御与疾风步（含专注增强版本）；两次攻击与资源/附赠动作扣减在同一个 EventBatch 内原子结算，AI 托管与 Companion 沿用同一条权威链。
 - 治疗、0 HP、死亡豁免、稳定、死亡、机会攻击待决策和胜负结束。
 - canonical HP/资源写入、存档恢复和 LegacyProjection；高级战斗不经过自由文本状态写入。
 - 服务端可用动作 API、预设遭遇和按 capability 动态加载的高级战斗界面。
@@ -61,7 +63,7 @@
 
 仍为 guided/reference：
 
-- 职业特性、物种特性和专长在战斗/探索中的完整执行。
+- 职业特性、物种特性和专长在战斗/探索中的完整执行（当前只有 Monk 的职业特性战斗能力；其余职业、子职特性与专长仍为 guided）。
 - 未列入 21 种确定性效果目录的法术，以及职业、物种、专长的完整游戏内效果。
 - 完整怪物图鉴、网格 VTT、擒抱/推撞等尚未建模的战斗动作。
 - 复活效果；普通治疗明确不能令死亡角色复活。

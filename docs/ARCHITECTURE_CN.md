@@ -194,6 +194,8 @@ Bundle locale 只能物化白名单展示字段。效果使用白名单 DSL；�
 
 高级规则角色的机械权威是 `ruleset_character`。创建、共享卡库导入/编辑、加入游戏、游戏内资料编辑、升级和休息均经由 `character_lifecycle` capability；legacy 顶层角色字段只是兼容投影。资料编辑不得覆盖属性、HP、AC、成长历史、runtime/content/state 版本等机械字段，机械更新必须从 canonical 选择与历史重新验证或回放。
 
+职业特性边界是 `src/rulesets/dnd2024/features/`：它只回答“这个角色拥有什么”——职业与职业等级、已获得的 feature、feature 的标量参数、职业资源当前值/上限，以及当前可用的 combat capability。职业表（`progression_catalog`）仍是获得等级的权威，`class_feature_catalog` 只做 parameterize 与展示标签（含 locale overlay）。Combat 只消费 capability id、动作/资源成本、目标要求与底层 canonical action，不在 generic engine 或前端判断职业；职业资源仍写在既有 `resources.class` 结构里，创建、升级与休息恢复继续由现有 rest/advancement 路径负责，没有第二套资源表、第二套 action economy 或第二套攻击结算。
+
 Session 0 的每次修订都会清空旧成员确认，只有全部当前玩家接受后 GM 才能锁定。任务、线索、事实、重要物品和关系先保存为 pending proposal，再由 GM 以独立 Intent 确认或拒绝。章节摘要是已确认事件的确定性投影，并在存档成功后写入长期记忆；记忆投影失败不得回滚或伪装已经持久化的权威状态。
 
 自然语言行动继续使用 DiceFrame 唯一的 `/action` 回合流程：单人即时推进，多人先收齐当前存活且在场成员的行动，再统一进行检定与 GM 回复。D&D runtime 只向同一 LLM 上下文追加权威战斗、战役和当前冒险节点的只读信息；所选 Worldbook 与匹配 lore 仍由通用叙事管线提供。LLM 不得直接创建战役事实、扣减资源或推进权威冒险步骤。
