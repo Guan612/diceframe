@@ -542,6 +542,71 @@ async def test_two_concurrent_fills_commit_exactly_one_action() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_seat_claimed_by_a_human_mid_flight_closes_the_human_gate() -> None:
+    """LLM 飞行期间另一个 AI 席位被真人接管 → 取消提交。
+
+    AI 补行动的前提是"真人已经全部行动完成"。模型调用在锁外，所以它返回时桌面
+    可能已经变了：多出一个尚未提交的 active human。此时若仍写入，就违反了
+    「AI 只在真人全部行动之后才行动」这条核心契约。
+    """
+
+    instance = make_instance(humans=("h1",), ai=("a1", "a2"), solo=True)
+    await instance.add_action("h1", "我点亮提灯。")
+    assert instance.human_actions_ready() is True
+
+    def hand_over_a2(index: int) -> None:
+        if index == 0:
+            # 只有第一个模型调用（a1）在飞；期间 a2 被真人接管且尚未行动。
+            set_control(instance, "a2", "human")
+
+    records = await fill_ai_player_actions(
+        instance, llm_client=FakePlayerLLM(on_call=hand_over_a2),
+    )
+
+    assert instance.human_actions_ready() is False
+    assert records[0]["status"] == "discarded"
+    assert records[0]["reason"] == "human_gate_changed"
+    assert ai_actions(instance, "a1") == []
+
+
+@pytest.mark.asyncio
+async def test_an_away_human_returning_mid_flight_closes_the_human_gate() -> None:
+    """暂离的真人回来（重新成为 active human 且未提交）同样取消提交。"""
+
+    instance = make_instance(humans=("h1", "h2"), ai=("a1",), solo=True)
+    await instance.set_player_away("h2", True)
+    await instance.add_action("h1", "我点亮提灯。")
+    # h2 暂离时不阻塞，所以此刻闸门是开的。
+    assert instance.human_actions_ready() is True
+
+    def bring_h2_back(index: int) -> None:
+        if index == 0:
+            instance.away_players.discard("h2")
+
+    records = await fill_ai_player_actions(
+        instance, llm_client=FakePlayerLLM(on_call=bring_h2_back),
+    )
+
+    assert instance.human_actions_ready() is False
+    assert records[0]["status"] == "discarded"
+    assert records[0]["reason"] == "human_gate_changed"
+    assert ai_actions(instance, "a1") == []
+
+
+@pytest.mark.asyncio
+async def test_an_open_human_gate_still_commits() -> None:
+    """反向对照：闸门仍然开着时正常提交，证明上面两条不是"永远拒绝"。"""
+
+    instance = make_instance(humans=("h1",), ai=("a1",), solo=True)
+    await instance.add_action("h1", "我点亮提灯。")
+
+    records = await fill_ai_player_actions(instance, llm_client=FakePlayerLLM())
+
+    assert records[0]["status"] == "added"
+    assert len(ai_actions(instance, "a1")) == 1
+
+
+@pytest.mark.asyncio
 async def test_repeated_service_call_does_not_generate_a_second_action() -> None:
     instance = make_instance(humans=("h1", "h2"), ai=("a1",))
     llm = FakePlayerLLM()

@@ -1636,13 +1636,20 @@ class GameInstance:
         So the re-confirmation and the write are one boundary: this method takes
         the authoritative write permission and ``_lock`` once, re-checks every
         identity the caller captured (run, round, seat, control mode, control
-        revision, phase) **and** that this round has no action from ``source``
-        yet, and only then appends.
+        revision, phase), re-checks that the **human gate is still open**, that
+        this round has no action from ``source`` yet, and only then appends.
+
+        The human gate matters on its own: a hosted seat only ever acts *after*
+        the humans are done. If somebody claims another seat (or a player returns
+        from away) while this result was in flight, the table suddenly has an
+        active human who has not submitted yet, and an action written now would
+        break "AI acts after the humans" — so it is discarded instead.
 
         Returns ``""`` on commit, otherwise the reason the result was dropped:
         ``rejected`` / ``run_changed`` / ``round_changed`` / ``seat_removed`` /
-        ``control_changed`` / ``phase_changed`` / ``duplicate``.  Callers must
-        treat a non-empty result as "write nothing"; the action never lands.
+        ``control_changed`` / ``phase_changed`` / ``human_gate_changed`` /
+        ``duplicate`` / ``action_rejected``.  Callers must treat a non-empty
+        result as "write nothing"; the action never lands.
         """
         async with self.authoritative_write() as write_entered, self._lock:
             if not write_entered or self._process_lock.locked():
@@ -1656,6 +1663,11 @@ class GameInstance:
             )
             if stale:
                 return stale
+            # 真人闸门也要在这个 boundary 内复核：模型调用期间别的席位可能被真人
+            # 接管、或暂离的真人回来了，此时桌面上多了一个还没提交的 active human，
+            # 现在写入就会违反"AI 只在真人全部行动之后才行动"。
+            if not self.human_actions_ready():
+                return "human_gate_changed"
             # 去重与复核必须在同一个 boundary 内：否则两个并发的补行动请求会各自
             # 读到"还没有 AI 行动"，然后各写一条。
             if self.has_action_from_source(user_id, expected_round_number, source):
