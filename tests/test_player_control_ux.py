@@ -226,6 +226,38 @@ async def test_room_policy_is_settable_through_the_api(web_api) -> None:
     assert bad.get("error_code") == "AWAY_POLICY_UNSUPPORTED"
 
 
+@pytest.mark.asyncio
+async def test_the_policy_reaches_the_frontend_detail_payload(web_api) -> None:
+    """房间设置要有 UI 入口，前提是详情 payload 带着当前值。
+
+    否则前端只能硬编码默认值——GM 改成 ai_takeover 之后，弹窗会显示错误状态。
+    """
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, _instance = await _create(api)
+
+    default_detail = api.game_detail(game_key)
+    assert default_detail["away_control_policy"] == "pause"
+
+    await api.set_away_control_policy(game_key, "ai_takeover")
+
+    updated_detail = api.game_detail(game_key)
+    assert updated_detail["away_control_policy"] == "ai_takeover"
+
+
+@pytest.mark.asyncio
+async def test_the_policy_survives_a_reload_into_the_detail_payload(web_api) -> None:
+    """刷新页面 / 重开进程后，房间设置仍然是 GM 选过的那个值。"""
+
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    await api.set_away_control_policy(game_key, "ai_takeover")
+
+    reloaded = GameInstance.from_dict(instance.to_dict())
+
+    assert away_control_policy(reloaded) == "ai_takeover"
+
+
 # ---- 3. 暂离语义 -------------------------------------------------------------
 
 

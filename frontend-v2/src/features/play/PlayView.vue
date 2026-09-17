@@ -534,9 +534,15 @@ async function onAdvancementControl(payload: Record<string, string | number>) {
 }
 function onAccess() { command('player-access', { open: game.detail.value?.player_access_open === false }) }
 
+// 房间级暂离语义：只有 GM 真正改过才提交，避免「保存密码」时把它一并覆盖掉。
+const awayPolicyInput = ref<'pause' | 'ai_takeover'>('pause')
+const awayPolicyTouched = ref(false)
+
 function onRoomPassword() {
   roomPasswordInput.value = ''
   luckTimeoutInput.value = ''
+  awayPolicyInput.value = game.detail.value?.away_control_policy === 'ai_takeover' ? 'ai_takeover' : 'pause'
+  awayPolicyTouched.value = false
   const policy = game.detail.value?.economy_reward_policy || {}
   rewardPolicyMode.value = policy.mode || ''
   rewardPolicyCap.value = policy.auto_reward_cap
@@ -567,6 +573,12 @@ async function setRoomPassword() {
       const rpR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/reward-policy`, { method: 'POST', body: JSON.stringify(rewardSave) })
       if (rpR.error || rpR.ok === false) throw new Error(rpR.error || t('settingFailed'))
       if (rewardPolicyMode.value !== '') toast.success(t('rewardPolicySaved'))
+    }
+    // 暂离语义仅在 GM 实际改动过时提交，理由同上。
+    if (awayPolicyTouched.value) {
+      const apR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/away-control-policy`, { method: 'POST', body: JSON.stringify({ away_control_policy: awayPolicyInput.value }) })
+      if (apR.error || apR.ok === false) throw new Error(apR.error || t('settingFailed'))
+      toast.success(t('awayPolicySaved'))
     }
     showRoomPassword.value = false
     toast.success(roomPasswordInput.value ? t('roomPasswordUpdated') : t('roomPasswordCleared'))
@@ -1501,6 +1513,13 @@ onBeforeUnmount(() => {
           </select>
         </label>
         <label v-if="rewardPolicyMode === 'auto_small_cash'">{{ t('rewardPolicyCap') }}{{ economyEditableUnitSuffix }}<input type="text" inputmode="decimal" v-model="rewardPolicyCap" :placeholder="t('rewardPolicyCapPlaceholder')" @input="rewardPolicyTouched = true"></label>
+        <label>{{ t('awayPolicy') }}
+          <select v-model="awayPolicyInput" @change="awayPolicyTouched = true">
+            <option value="pause">{{ t('awayPolicyPause') }}</option>
+            <option value="ai_takeover">{{ t('awayPolicyAiTakeover') }}</option>
+          </select>
+        </label>
+        <p class="muted">{{ t('awayPolicyHelp') }}</p>
         <div class="actions">
           <button @click="showRoomPassword = false">{{ t('cancel') }}</button>
           <button class="primary" @click="setRoomPassword">{{ t('saveAction') }}</button>
