@@ -499,6 +499,9 @@ class WebAPI:
             prepare_round_checks=getattr(
                 self._handler, "prepare_round_checks", None,
             ),
+            fill_ai_player_actions=getattr(
+                self._handler, "fill_ai_player_actions", None,
+            ),
             resolve_pending_dice=self.resolve_pending_dice_for_game,
             roll_for_game=self.roll_for_game,
             save_instance=self._reg.save,

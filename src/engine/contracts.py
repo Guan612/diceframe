@@ -34,6 +34,9 @@ class ActionRecord(TypedDict, total=False):
     check_request: dict[str, Any] | None
     combat_outcome: dict[str, Any]
     revision_count: int
+    # 调用方自带的机器可读标记（例如服务器 AI 行动的 source / control_revision /
+    # generated_for_round）。只用于去重与调试，绝不是规则权威。
+    metadata: dict[str, Any]
 
 
 class CheckRequest(TypedDict, total=False):

@@ -1378,6 +1378,21 @@ class GameInstance:
             return False
         return active.issubset(self.ready_players)
 
+    def human_actions_ready(self) -> bool:
+        """真人一侧是否已经交齐，可以轮到服务器 AI 补行动。
+
+        这是 AI 托管席位补行动的唯一闸门（``src/commands/ai_player.py``）：AI
+        只在真人行动齐了之后出手，绝不与尚未提交的真人并行。没有真人席位、
+        还没有人提交、或真人行动仍在等掷骰时都是 ``False``——"AI 不该现在行动"
+        与"这一轮不能推进"是两件事，因此 ``should_advance()`` 的语义保持不变。
+        """
+        if self.has_pending_dice():
+            return False
+        active = self.active_human_players
+        if not active:
+            return False
+        return active.issubset(self.ready_players)
+
     def multiplayer_status(self) -> dict:
         """返回多人协调所需的轻量状态。
 
@@ -1487,11 +1502,18 @@ class GameInstance:
                          target_text: str = "", source: str = "",
                          dice_pending: bool = False, dice_system: str = "",
                          check_request: dict | None = None,
-                         count_revision: bool = True) -> bool:
+                         count_revision: bool = True,
+                         action_metadata: dict | None = None,
+                         defer_out_of_phase: bool = True) -> bool:
         """玩家声明行动。判决阶段中的发言缓存到下一轮。
 
         selected_attribute/selected_skill/target_text 为前端可选提交的结构化
         归因字段（P1），供检定与 prompt 直接使用，避免靠文本启发式猜。
+
+        ``action_metadata`` 是调用方自带的机器可读标记（例如服务器 AI 行动的
+        ``source`` / ``control_revision`` / ``generated_for_round``），只用于去重
+        与调试，不参与任何裁定；``defer_out_of_phase=False`` 表示这条行动带有
+        轮次身份，判定阶段只能拒绝，不得缓存进下一轮。
         """
         async with self.authoritative_write() as write_entered, self._lock:
             if not write_entered or self._process_lock.locked():
@@ -1509,12 +1531,16 @@ class GameInstance:
                 "target_text": target_text,
                 "source": source,
             }
+            if action_metadata:
+                action_entry["metadata"] = dict(action_metadata)
             if dice_pending:
                 action_entry["dice_pending"] = True
                 action_entry["dice_system"] = dice_system or "d20"
             if check_request:
                 action_entry["check_request"] = dict(check_request)
             if not self.can_accept_actions():
+                if not defer_out_of_phase:
+                    return False
                 self.pending_actions.append(action_entry)
                 return False
             # 切换行动时替换同玩家的旧条目（solo 与多人一致）：
