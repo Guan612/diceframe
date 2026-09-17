@@ -13,6 +13,9 @@ class PlayerData(TypedDict, total=False):
     user_id: str
     character_name: str
     character_sheet: dict[str, Any]
+    # 谁在玩这个角色（human / ai / unclaimed），见 src.engine.player_control。
+    # 它与 character_sheet 同级：控制器可以换，角色本身不换。
+    control: dict[str, Any]
 
 
 class ActionRecord(TypedDict, total=False):

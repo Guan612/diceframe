@@ -209,6 +209,38 @@ of a retry, duplicate save, or page refresh, and because the settlement lives
 inside `world_state` it inherits the whole-round rollback, swipe, reset, and
 restart semantics unchanged.
 
+## Player Control
+
+`players[uid].control` is the authoritative record of who controls a seat:
+`human` (a real player is responsible), `ai` (the server produces this
+character's actions) or `unclaimed` (the seat exists but nobody plays it yet),
+carrying `revision`, `temporary` and `resume_mode`. It answers "who plays this
+character", not "what this character is": the character itself -- HP, equipment,
+spell slots, conditions, world position and the combat actor (`player:<uid>`) --
+exists exactly once in every mode, and switching controllers neither copies,
+moves nor re-keys anything. The first vocabulary is deliberately closed and does
+not include gm / remote_bot / script / hybrid.
+
+The only write entry point is `set_control` in `src/engine/player_control.py`,
+and every read goes through the same module: an unknown seat reads as the
+conservative default, a corrupted record degrades to `human` (the
+pre-contract behaviour), while writes fail closed on an unknown seat, an
+unknown mode, or temporary hosting without a resume target. Control is desktop
+session state, not a story outcome: `revision` increases only when the record
+actually changes, and whole-round rollback, aborted judgment and swipe revert
+character sheets and world facts without ever re-assigning a seat.
+`temporary = true` hosting must be able to return to `resume_mode` and must not
+become permanent after a restart.
+
+Persistence uses schema **13 -> 14**: every seat of an older save becomes
+`human`, the migration never guesses an AI controller from online state,
+character name or history, and it is repeatable. `control` sits beside
+`character_sheet`, so it is part of the player record itself: it round-trips
+through save/load and disappears together with the seat when a seat is cleaned
+up (for example the ghost-player cleanup on load), leaving no orphan control.
+Whether a controller gates action submission, the ready barrier and the claim
+flow is left to later work packages building on this same contract.
+
 ## D&D 2024 Authoritative Play State
 
 `core:dnd2024` combat, Session 0, and campaign records share `GameInstance.ruleset_state.version` and one EventBatch ledger. An optional adventure supplies story input through its exact binding but is not part of the Ruleset Bundle. Combat and campaign events have separate reducers; the runtime composition root dispatches explicit intent types without making the generic engine import D&D code.
