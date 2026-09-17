@@ -426,6 +426,121 @@ async def test_repeated_fill_appends_only_one_action() -> None:
     assert len(ai_actions(instance, "a1")) == 1
 
 
+# ---- 9b. 原子性：复核与写入必须在同一个 authority boundary --------------------
+
+
+@pytest.mark.asyncio
+async def test_the_recheck_and_the_commit_are_one_critical_section(monkeypatch) -> None:
+    """Case B：锁死真正的 TOCTOU，而不是只测「LLM 返回之前改控制权」。
+
+    做法：在复核**通过**的那一刻，往事件循环里排一个「立刻把席位改成 human」的
+    回调。如果复核与提交之间存在任何 ``await``，事件循环会先跑那个回调，提交就会
+    落在一个人人控制的席位上。
+
+    因此可靠的断言是顺序：先 append，后 flip。同时断言复核确实发生在持锁状态
+    ——旧实现（先在外面 ``_stale_reason``、再另调 ``add_action``）两条都不满足。
+    """
+
+    import asyncio
+
+    instance = make_instance(humans=("h1",), ai=("a1",), solo=True)
+    llm = FakePlayerLLM()
+    await instance.add_action("h1", "我点亮提灯。")
+
+    events: list[str] = []
+    lock_held_during_recheck: list[bool] = []
+
+    original_reason = GameInstance.ai_player_action_stale_reason
+    original_add = GameInstance._add_action_locked
+
+    def flip() -> None:
+        events.append("flip")
+        set_control(instance, "a1", "human")
+
+    def spy_reason(self: GameInstance, uid: str, **kwargs: Any) -> str:
+        reason = original_reason(self, uid, **kwargs)
+        if not reason:
+            lock_held_during_recheck.append(self._lock.locked())
+            asyncio.get_running_loop().call_soon(flip)
+        return reason
+
+    def spy_add(self: GameInstance, uid: str, text: str, **kwargs: Any) -> bool:
+        if uid == "a1":
+            events.append("append")
+        return original_add(self, uid, text, **kwargs)
+
+    monkeypatch.setattr(GameInstance, "ai_player_action_stale_reason", spy_reason)
+    monkeypatch.setattr(GameInstance, "_add_action_locked", spy_add)
+
+    records = await fill_ai_player_actions(instance, llm_client=llm)
+    # 让出一次事件循环，给那个被排队的控制权变更执行的机会。
+    await asyncio.sleep(0)
+
+    # 复核发生在持锁状态下，且提交先于那个被排队的控制权变更。
+    assert lock_held_during_recheck == [True]
+    assert events == ["append", "flip"]
+    assert [record["status"] for record in records] == ["added"]
+    assert len(ai_actions(instance, "a1")) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_control_change_between_llm_and_commit_writes_nothing() -> None:
+    """Case B 的行为面：LLM 已返回、控制权已易主时，一个字节都不写。"""
+
+    instance = make_instance(humans=("h1",), ai=("a1",), solo=True)
+    await instance.add_action("h1", "我点亮提灯。")
+    before = [dict(action) for action in instance.action_queue]
+
+    # LLM 返回后立刻把席位交给真人：复核必须看到 human 并拒绝写入。
+    def hand_over(_index: int) -> None:
+        set_control(instance, "a1", "human")
+
+    llm = FakePlayerLLM(on_call=hand_over)
+
+    records = await fill_ai_player_actions(instance, llm_client=llm)
+
+    assert [record["status"] for record in records] == ["discarded"]
+    assert records[0]["reason"] == "control_changed"
+    assert instance.action_queue == before
+    assert ai_actions(instance, "a1") == []
+
+
+@pytest.mark.asyncio
+async def test_two_concurrent_fills_commit_exactly_one_action() -> None:
+    """Case C：两个并发的补行动请求，同一 (run, round, uid) 只能落一条。
+
+    两个请求都会各自调用一次 LLM（去重预检查在锁外，这是刻意的：不能为了省一次
+    模型调用而让模型请求占住 writer/state lock）。真正的保证在提交处：复核与
+    去重同在一个 boundary 内，因此后到的那个必然看到 duplicate。
+    """
+
+    import asyncio
+
+    instance = make_instance(humans=("h1",), ai=("a1",), solo=True)
+    await instance.add_action("h1", "我点亮提灯。")
+
+    class SlowPlayerLLM(FakePlayerLLM):
+        async def call(self, system_prompt: str, user_message: str, **kwargs: Any) -> Any:
+            # 让出一次事件循环，强制两个 fill 真正交错。
+            await asyncio.sleep(0)
+            return await super().call(system_prompt, user_message, **kwargs)
+
+    first_llm = SlowPlayerLLM()
+    second_llm = SlowPlayerLLM()
+
+    results = await asyncio.gather(
+        fill_ai_player_actions(instance, llm_client=first_llm),
+        fill_ai_player_actions(instance, llm_client=second_llm),
+    )
+
+    assert len(ai_actions(instance, "a1")) == 1
+    # 只断言"最终只有一条"不够：``add_action`` 对同一 uid 是替换语义，所以即使
+    # 两个请求都提交，最终也可能只剩一条（后写覆盖先写）。真正要锁死的是**只有
+    # 一个**请求认为自己成功提交了，另一个必须在提交边界内看到 duplicate。
+    statuses = sorted(record["status"] for batch in results for record in batch)
+    assert statuses == ["added", "duplicate"]
+
+
 @pytest.mark.asyncio
 async def test_repeated_service_call_does_not_generate_a_second_action() -> None:
     instance = make_instance(humans=("h1", "h2"), ai=("a1",))

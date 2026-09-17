@@ -295,29 +295,34 @@ async def _fill_one(
     if not text:
         return _skip(uid, "unusable_output", tokens=tokens)
 
-    stale = _stale_reason(instance, uid, run_id, round_number, control)
-    if stale:
-        logger.warning(
-            "%s uid=%s round=%s reason=%s", DISCARD_MARKER, uid, round_number, stale,
-        )
-        return _outcome(uid, "discarded", stale, tokens=tokens)
-
+    # 复核与写入必须是同一个 boundary：LLM 可以一直在权威边界之外跑，但它返回
+    # 之后必须在**一次**加锁里重新确认身份、确认本轮还没有该席位的 AI 行动，
+    # 然后提交。这里刻意不做"先检查、再另外调用 add_action"，那中间有并发窗口。
     metadata = {
         "source": AI_ACTION_SOURCE,
         "control_revision": int(control["revision"]),
         "generated_for_round": round_number,
     }
-    added = await instance.add_action(
+    outcome = await instance.commit_ai_player_action(
         uid,
         text,
         source=AI_ACTION_SOURCE,
+        expected_run_id=run_id,
+        expected_round_number=round_number,
+        expected_control_revision=int(control["revision"]),
         action_metadata=metadata,
-        defer_out_of_phase=False,
     )
-    if not added:
-        # 行动管线在锁内拒绝了写入（重写历史、阶段变化）：什么都不写。
+    if not outcome:
+        return _outcome(uid, "added", "", tokens=tokens)
+    if outcome == "duplicate":
+        # 另一个并发的补行动请求已经先提交了同一 (run, round, uid)。
+        return _outcome(uid, "duplicate", "already_declared", tokens=tokens)
+    if outcome == "action_rejected":
         return _skip(uid, "action_rejected", tokens=tokens)
-    return _outcome(uid, "added", "", tokens=tokens)
+    logger.warning(
+        "%s uid=%s round=%s reason=%s", DISCARD_MARKER, uid, round_number, outcome,
+    )
+    return _outcome(uid, "discarded", outcome, tokens=tokens)
 
 
 async def _build_player_context(
@@ -342,33 +347,6 @@ async def _build_player_context(
     return await build_player_safe_context(
         instance, system_prompt, [], request, uid, provider_name=provider_name,
     )
-
-
-def _stale_reason(
-    instance: GameInstance,
-    uid: str,
-    run_id: str,
-    round_number: int,
-    control: dict[str, Any],
-) -> str:
-    """Why the in-flight result must be discarded, or ``""`` when it is current.
-
-    All four captured identities (run, round, seat, control revision) must still
-    match; the action phase is checked as well because a result produced for a
-    round that already advanced must never be written into the next one.
-    """
-
-    if str(getattr(instance, "run_id", "") or "") != run_id:
-        return "run_changed"
-    if int(instance.round_number or 0) != round_number:
-        return "round_changed"
-    if uid not in instance.players:
-        return "seat_removed"
-    if get_control(instance, uid) != control:
-        return "control_changed"
-    if instance.state != GameState.ACTIVE_ACTION:
-        return "phase_changed"
-    return ""
 
 
 def _existing_ai_action(
