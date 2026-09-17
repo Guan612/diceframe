@@ -37,6 +37,7 @@ from typing import Any
 
 import pytest
 
+from src.commands.ai_player import AI_ACTION_SOURCE
 from src.engine.game_instance import GameInstance, GameState
 from src.engine.player_control import (
     DEFAULT_AWAY_CONTROL_POLICY,
@@ -347,6 +348,49 @@ async def test_temporary_hosting_does_not_become_permanent(web_api) -> None:
 
 
 # ---- 4. GM 托管控件 ----------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handing_the_last_pending_human_to_the_ai_continues_through_the_api(
+    web_api,
+) -> None:
+    """端到端：真实 WebAPI + 真实 GameHandler 下，切换后立刻继续（PR B）。
+
+    这个测试锁的是组合根接线：`api.set_player_control` 必须把控制权写入后的
+    即时接管接到既有的回合推进入口上，而不是只在服务单测里成立。
+    """
+
+    api, _lorebook, _registry, fake_llm, _worlds_dir = web_api
+    game_key, instance = await _create(api)
+    uids = sorted(instance.players)
+    # 三个席位里的两个真人先交行动，最后一个还没交。
+    for uid in (uids[0], uids[2]):
+        submitted = await api.submit_action(game_key, uid, "我点亮提灯。")
+        assert submitted["payload"]["advanced"] is False
+    assert instance.human_actions_ready() is False  # 真人一侧还没交齐
+    calls_before = len(fake_llm.calls)
+
+    hosted = await api.set_player_control(game_key, uids[1], "ai")
+
+    assert hosted["ok"] is True
+    assert control_mode(instance, uids[1]) == "ai"
+    # 服务器立刻替该席位补了行动并推进，不需要真人再提交一次。
+    new_calls = fake_llm.calls[calls_before:]
+    assert new_calls, "切换之后服务器没有任何模型调用"
+    # 其中至少一次是「按玩家身份扮演角色」的补行动调用，而不是 GM 叙事调用。
+    assert any(
+        "你只代表这一个角色" in str(call["system_prompt"]) for call in new_calls
+    )
+    assert hosted["resume"]["resumed"] is True
+    assert hosted["resume"]["advanced"] is True
+    # 本轮已经完成并进入日志：AI 席位补上的行动与真人行动在同一条队列里，
+    # 且没有任何伪造的空行动。
+    recorded = list(instance.log[-1]["actions"])
+    by_uid = {str(action.get("user_id") or ""): action for action in recorded}
+    assert set(by_uid) == set(uids)
+    assert by_uid[uids[1]]["metadata"]["source"] == AI_ACTION_SOURCE
+    assert str(by_uid[uids[1]]["text"]).strip()
+    assert all(str(action.get("text") or "").strip() for action in recorded)
 
 
 @pytest.mark.asyncio
