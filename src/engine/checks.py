@@ -20,7 +20,7 @@ from src.engine.dice import (
     roll,
 )
 from src.engine.game_instance import GameInstance
-from src.engine.language import localized_text
+from src.engine.language import localized_text, normalize_language
 from src.rules.rule_system import RuleSystem
 
 logger = logging.getLogger("trpg")
@@ -80,6 +80,73 @@ def is_explicit_attack_action(text: object) -> bool:
     return any(keyword in raw for keyword in COMBAT_ATTACK_KEYWORDS) or bool(
         _EXPLICIT_ATTACK_WORD.search(raw)
     )
+
+
+# ---- Safety Net：具体动作短语 -------------------------------------------------
+# Planner 词表（rule.intent_aliases）是宽泛语义表：它包含单个动词
+# （推、拉、举、撞、push、lift…）。这些词在普通叙述里极易作为构词成分或
+# 比喻出现（推动提案 / 拉动经济 / 举例说明 / 撞上好运），词表命中本身只说明
+# 「这句话和运动有点关系」，不足以证明玩家本轮正在做一个需要检定的身体动作。
+# Deterministic safety net 因此只在命中「具体动作短语」时才把意图升格为强制
+# 检定：同一个动作在短语里带上了结果（推开 / 撬开 / 搬起 / pry open /
+# swim across）。判定不引入第二份词表——用的是同一份 rule vocabulary，只是
+# 排除单个动词；模糊写法仍交给 LLM Planner。
+_ACTION_PHRASE_MIN_TOKENS = 2
+
+
+def is_concrete_action_phrase(alias: object, *, word_match: bool) -> bool:
+    """别名是否是「具体动作短语」，而不是单个泛用动词。
+
+    英文按整词边界匹配，单个 alias 本身就是完整动词/动词短语；中文/日文按
+    子串匹配，单个汉字只是构词成分（「推」出现在「推动」里），因此要求复合
+    形式（≥2 字符）。两种模式统一要求「≥2 个 token」。
+    """
+    text = str(alias or "").strip()
+    if not text:
+        return False
+    if word_match:
+        return len(text.split()) >= _ACTION_PHRASE_MIN_TOKENS
+    return len(re.sub(r"\s+", "", text)) >= _ACTION_PHRASE_MIN_TOKENS
+
+
+def matched_action_phrases(
+    rule: RuleSystem | None,
+    intent: str,
+    text: object,
+    language: str = "",
+) -> tuple[str, ...]:
+    """文本中命中的具体动作短语（与 ``RuleSystem.find_intent`` 同一匹配方式）。
+
+    规则词表缺失时退回全局兜底词表，保证没有自带 intents 的规则行为一致。
+    """
+    if not intent:
+        return ()
+    source = str(text or "")
+    if rule is not None:
+        aliases = rule.intent_aliases(intent, language)
+        word_match = rule.intent_match_mode(intent, language) == "word"
+    else:
+        aliases = next(
+            (
+                alias_list
+                for name, alias_list, *_rest in _fallback_intent_specs(language)
+                if name == intent
+            ),
+            (),
+        )
+        word_match = normalize_language(language) == "en"
+    haystack = source if word_match else re.sub(r"\s+", "", source).lower()
+    matched: list[str] = []
+    for alias in aliases:
+        if not is_concrete_action_phrase(alias, word_match=word_match):
+            continue
+        candidate = str(alias)
+        if word_match:
+            if re.search(rf"\b{re.escape(candidate)}\b", haystack):
+                matched.append(candidate)
+        elif candidate.lower() in haystack:
+            matched.append(candidate)
+    return tuple(matched)
 
 
 def find_action_opponent(instance: GameInstance, actor_uid: str, text: object) -> str:

@@ -7,6 +7,7 @@ from typing import Any
 
 from .primitives import (
     CombatIntentError,
+    UNARMED_STRIKE_REF,
     actor_kind as _actor_kind,
     actor_side as _actor_side,
     canonical as _canonical,
@@ -144,7 +145,17 @@ class CombatViewMixin:
             "ruleset_character": deepcopy(character),
         }
 
-    def _available_weapons(self, actor: dict[str, Any]) -> list[dict[str, Any]]:
+    def _available_attacks(self, actor: dict[str, Any]) -> list[dict[str, Any]]:
+        """Every attack profile this actor may declare right now.
+
+        Enemy actors expose their stat-block attacks.  Player-like actors expose
+        their equipped weapons plus the canonical Unarmed Strike, which is a
+        natural capability rather than an inventory item: it is never part of
+        ``equipment.item_refs`` and cannot be removed by equipment changes.
+        Equipped weapons stay first so callers that prefer the first usable
+        profile keep preferring real weapons.
+        """
+
         if actor["kind"] == "enemy":
             return deepcopy(actor["attacks"])
         result = []
@@ -159,7 +170,52 @@ class CombatViewMixin:
                     **deepcopy(weapon),
                     "name": str(item.get("name") or weapon.get("name") or weapon_id),
                 })
+        unarmed = self._unarmed_strike(actor)
+        if unarmed is not None:
+            result.append(unarmed)
         return result
+
+    def _unarmed_strike(self, actor: dict[str, Any]) -> dict[str, Any] | None:
+        """Canonical Unarmed Strike profile, or None when content omits it."""
+
+        if actor["kind"] not in {"player", "companion"}:
+            return None
+        profile = self.catalog.unarmed_strike
+        if not profile:
+            return None
+        return {
+            **deepcopy(profile),
+            "weapon_ref": UNARMED_STRIKE_REF,
+            "id": UNARMED_STRIKE_REF,
+            "name": self.catalog.labels.get(UNARMED_STRIKE_REF) or UNARMED_STRIKE_REF,
+            "unarmed": True,
+        }
+
+    def _declared_attack(
+        self, actor: dict[str, Any], intent: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Resolve the attack an intent declares against this actor's authority.
+
+        Player-like actors declare ``weapon_ref`` (an equipped item or the
+        canonical unarmed strike); enemy stat blocks declare ``attack_id``.
+        Validation and resolution share this one lookup so a client cannot
+        declare a profile the actor does not actually have.
+        """
+
+        if actor["kind"] == "enemy":
+            attack_id = str(intent.get("attack_id") or "")
+            return next(
+                (deepcopy(item) for item in actor["attacks"] if item.get("id") == attack_id),
+                None,
+            )
+        weapon_ref = str(intent.get("weapon_ref") or "")
+        return next(
+            (
+                item for item in self._available_attacks(actor)
+                if item["weapon_ref"] == weapon_ref
+            ),
+            None,
+        )
 
     def _available_spells(
         self, actor: dict[str, Any], economy: dict[str, Any],
