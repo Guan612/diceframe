@@ -2340,6 +2340,13 @@ export const en = {
   pairingRevoked: 'Revoked "{name}"',
   pairingRevokedAll: 'Revoked {count} device(s)',
 
+  // ---- AI temporary encounter: default summary + edit dialog ----
+  encounterSummary: 'Encounter summary',
+  encounterNoEnemiesSelected: 'No enemies kept yet; keep at least one before confirming combat.',
+  encounterEditEnemies: 'Edit enemies',
+  encounterEditorTitle: 'Edit temporary encounter',
+  encounterSaveChanges: 'Save changes',
+
   apiErrors: {
     hub_connection_unavailable: 'Could not reach DiceFrame Hub. Check your network and try again.',
     game_not_found: 'Game not found',

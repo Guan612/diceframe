@@ -32,7 +32,6 @@ import ProviderCatalogModal from '@/features/admin/settings/ProviderCatalogModal
 import ModelRoutingPane from '@/features/admin/settings/ModelRoutingPane.vue'
 import ProviderModelRow from '@/features/admin/settings/ProviderModelRow.vue'
 import ProviderTestSection from '@/features/admin/settings/ProviderTestSection.vue'
-import DevicePairingPanel from '@/features/admin/settings/DevicePairingPanel.vue'
 import HelpButton from '@/components/common/HelpButton.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -735,12 +734,9 @@ watch(section, () => {
   const sc = document.querySelector('.n-layout-scroll-container') as HTMLElement | null
   sc?.scrollTo({ top: 0 })
 })
-const devicePairing = ref<InstanceType<typeof DevicePairingPanel> | null>(null)
 watch(section, value => {
   if (value === 'access') {
     void loadLoginHistory()
-    // 扫码配对的地址与设备清单只在进入本区块时拉取，不拖慢其它设置页。
-    void devicePairing.value?.initialize()
   }
   if (value === 'security') void loadSecurityStatus()
 })
@@ -1902,7 +1898,6 @@ function redownloadUpdatePackage() {
               </nav>
             </template>
             <p v-else-if="!loginHistoryLoading" class="muted">{{ t('noLoginHistory') }}</p>
-            <DevicePairingPanel ref="devicePairing" :public-base-url="store.config.public_base_url" />
           </div>
 
           <div v-show="section === 'advanced'" class="settings-pane advanced-settings-pane">

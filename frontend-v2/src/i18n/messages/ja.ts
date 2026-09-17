@@ -2341,6 +2341,13 @@ export const ja = {
   pairingRevoked: '「{name}」を失効しました',
   pairingRevokedAll: '{count} 台の端末を失効しました',
 
+  // ---- AI 一時遭遇：既定は概要 + 編集ダイアログ ----
+  encounterSummary: '遭遇の概要',
+  encounterNoEnemiesSelected: 'まだ敵が残っていません。戦闘を確定する前に 1 体以上残してください。',
+  encounterEditEnemies: '敵を編集',
+  encounterEditorTitle: '一時遭遇を編集',
+  encounterSaveChanges: '変更を保存',
+
   apiErrors: {
     hub_connection_unavailable: 'DiceFrame Hub に接続できません。ネットワークを確認して再試行してください。',
     game_not_found: 'ゲームが見つかりません',

@@ -36,6 +36,8 @@ const codeIssuing = ref(false)
 const secondsLeft = ref(0)
 const devices = ref<PairedDevice[]>([])
 const devicesLoading = ref(false)
+// 已配对设备默认折起来：主界面只需要二维码，设备清单是点开才看的管理面。
+const devicesOpen = ref(false)
 let countdown: ReturnType<typeof setInterval> | undefined
 
 const payload = computed(() =>
@@ -186,28 +188,42 @@ defineExpose({ initialize })
       </NButton>
     </div>
 
-    <div class="pairing-devices-head">
-      <h4>{{ t('pairingDevicesTitle') }}</h4>
-      <NButton v-if="devices.length" size="small" quaternary type="error" @click="revokeAll">
-        {{ t('pairingRevokeAll') }}
-      </NButton>
-    </div>
-    <NSpin :show="devicesLoading">
-      <div v-if="devices.length" class="pairing-device-list">
-        <div v-for="device in devices" :key="device.id" class="pairing-device-row">
-          <NIcon :component="PhonePortraitOutline" />
-          <div class="pairing-device-text">
-            <strong>{{ device.label || t('pairingUnnamedDevice') }}</strong>
-            <small>{{ t('pairingLastSeen', { at: formatTime(device.last_seen_at) }) }}</small>
-          </div>
-          <NButton size="tiny" quaternary type="error" @click="revokeDevice(device)">
-            <template #icon><NIcon :component="TrashOutline" /></template>
-            {{ t('pairingRevoke') }}
+    <div class="pairing-devices">
+      <button
+        type="button"
+        class="pairing-devices-toggle"
+        :aria-expanded="devicesOpen"
+        @click="devicesOpen = !devicesOpen"
+      >
+        <NIcon :component="PhonePortraitOutline" />
+        <strong>{{ t('pairingDevicesTitle') }}</strong>
+        <span class="pairing-devices-count">{{ devices.length }}</span>
+        <span class="pairing-devices-chevron" aria-hidden="true">{{ devicesOpen ? '▾' : '›' }}</span>
+      </button>
+      <template v-if="devicesOpen">
+        <div class="pairing-devices-head">
+          <NButton v-if="devices.length" size="small" quaternary type="error" @click="revokeAll">
+            {{ t('pairingRevokeAll') }}
           </NButton>
         </div>
-      </div>
-      <p v-else-if="!devicesLoading" class="muted">{{ t('pairingNoDevices') }}</p>
-    </NSpin>
+        <NSpin :show="devicesLoading">
+          <div v-if="devices.length" class="pairing-device-list">
+            <div v-for="device in devices" :key="device.id" class="pairing-device-row">
+              <NIcon :component="PhonePortraitOutline" />
+              <div class="pairing-device-text">
+                <strong>{{ device.label || t('pairingUnnamedDevice') }}</strong>
+                <small>{{ t('pairingLastSeen', { at: formatTime(device.last_seen_at) }) }}</small>
+              </div>
+              <NButton size="tiny" quaternary type="error" @click="revokeDevice(device)">
+                <template #icon><NIcon :component="TrashOutline" /></template>
+                {{ t('pairingRevoke') }}
+              </NButton>
+            </div>
+          </div>
+          <p v-else-if="!devicesLoading" class="muted">{{ t('pairingNoDevices') }}</p>
+        </NSpin>
+      </template>
+    </div>
   </section>
 </template>
 
@@ -223,8 +239,12 @@ defineExpose({ initialize })
 .pairing-code{font-family:var(--df-font-mono);font-size:18px;letter-spacing:2px;background:color-mix(in srgb,var(--df-accent) 12%,transparent);padding:4px 10px;border-radius:6px}
 .pairing-placeholder{display:flex;align-items:center;gap:12px;padding:24px;border:1px dashed var(--df-border-soft);border-radius:10px;width:100%;box-sizing:border-box;color:var(--df-text-muted)}
 .pairing-placeholder p{margin:0}
-.pairing-devices-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
-.pairing-devices-head h4{margin:0}
+.pairing-devices{margin-top:6px;border-top:1px solid var(--df-border-soft);padding-top:12px}
+.pairing-devices-toggle{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;padding:6px 10px;border:1px solid var(--df-border-soft);border-radius:8px;background:var(--df-control-bg);color:var(--df-text-secondary);cursor:pointer}
+.pairing-devices-toggle strong{font-weight:700}
+.pairing-devices-count{min-width:20px;padding:1px 6px;border-radius:999px;background:color-mix(in srgb,var(--df-accent) 16%,transparent);font-size:12px;text-align:center}
+.pairing-devices-chevron{margin-left:auto;color:var(--df-text-muted)}
+.pairing-devices-head{display:flex;align-items:center;justify-content:flex-end;gap:12px;margin:10px 0 8px}
 .pairing-device-list{display:flex;flex-direction:column;gap:8px}
 .pairing-device-row{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--df-border-soft);border-radius:8px}
 .pairing-device-text{display:flex;flex-direction:column;flex:1;min-width:0}
