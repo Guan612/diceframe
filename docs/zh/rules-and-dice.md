@@ -46,6 +46,47 @@ DiceFrame 会为每名角色、每个回合记录检定，避免同一行动在�
 
 世界模板只用 `default_rule` 选择规则；世界书负责设定和上下文，不应复制判定算法。规则可通过 `extends` 继承基础模板，再覆盖自己需要改变的字段。
 
+## 内容包如何声明战斗扩展（行动条 / 动作伤害公式）
+
+默认战斗仍是“一轮一次、先手固定”。如果规则需要**行动速度攒到阈值才出手**（ATB 行动条），或需要**法术/技艺自带伤害公式**，用规则的 `combat` 块显式声明；没有 `combat` 块时引擎不会猜测启用，玩法保持原样。
+
+```json
+{
+  "attributes": [{"key": "wu_xing", "name": "悟性"}, {"key": "shen_fa", "name": "身法"}],
+  "special_stats": [{"key": "ling_li", "name": "灵力", "max": 100, "initial": 100}],
+  "combat": {
+    "scheduler": {
+      "kind": "threshold", "gauge": "action_gauge", "speed": "action_speed",
+      "threshold": 100, "overflow": "carry", "consume": "reset",
+      "speed_formula": {"op": "multiply", "args": [
+        {"op": "attribute", "id": "shen_fa"}, {"op": "constant", "value": 4}]}
+    },
+    "resources": [
+      {"id": "hp", "source": "hp"},
+      {"id": "ling_li", "source": "special_stat", "stat": "ling_li"}
+    ],
+    "actions": [
+      {"id": "spell:fireball", "kind": "ability", "name": "火球术",
+       "costs": [{"resource": "ling_li", "amount": {"op": "constant", "value": 10}}],
+       "effects": [{"kind": "damage", "damage_type": "fire", "amount": {
+         "op": "multiply", "args": [
+           {"op": "attribute", "id": "wu_xing"}, {"op": "constant", "value": 3}]}}]},
+      {"id": "technique:escape_light", "kind": "ability", "name": "遁术·轻身",
+       "costs": [{"resource": "ling_li", "amount": {"op": "constant", "value": 5}}],
+       "effects": [{"kind": "modify_stat", "resource": "action_speed",
+                    "duration": 2, "amount": {"op": "constant", "value": 40}}]}
+    ]
+  }
+}
+```
+
+- `scheduler.kind` 支持 `threshold`（ATB 行动条）、`initiative`、`round_robin`；`threshold` 下每个实体按 `speed_formula` 求值累积 `gauge`，攒满 `threshold` 才轮到他，`overflow` 决定溢出取 `carry` 还是 `clamp`，`consume` 决定出手后 `reset` 还是 `carry`。GM 通过“推进时间”让行动条前进。
+- `speed_formula` 只读角色属性与常数（不允许骰子）：行动速度因此可以真的由身法/敏捷这类属性派生，而不是写死的数字。
+- `resources` 声明可结算的资源池：`hp`（生命）、`special_stat`（角色卡的灵力/内力等字段）、`combat_state`（战斗会话内的护盾等，配合 `"damage_priority": "before_hp"` 可先扣盾再扣血）。未声明的字段不会自动变成可消耗资源。
+- `actions` 是动作目录：`kind` 只有通用类别 `attack` / `ability` / `consumable`；具体是法术、遁术还是丹药由规则自己命名 canonical `action_id`（例如 `spell:fireball`、`technique:escape_light`）。`costs` 是资源消耗，`effects` 支持 `damage`、`resource_change`、`modify_stat`（状态修正，带 `duration`，可用来提升 `action_speed` 实现“遁术加速”），`consume_item` 可从背包扣物品。
+- 数值与消耗都是受限公式 AST：白名单节点 `constant` / `attribute` / `resource` / `dice` / `add` / `subtract` / `multiply` / `min` / `max` / `negate`（本适配层不支持 `derived_stat` / `equipment_stat`），未知引用直接拒绝，不会 `eval`，也不会回退成猜测值。
+- 客户端只提交 `action_id` + 目标；伤害、速度、资源与行动条数值全部由服务端结算，客户端提交的数值一律忽略。
+
 ## 旧存档兼容
 
 现有存档不需要转换。只要对应的 `rule_id` 仍然存在，角色、世界书和剧情日志会原样保留，并继续使用当前版本的骰子与判定实现。
