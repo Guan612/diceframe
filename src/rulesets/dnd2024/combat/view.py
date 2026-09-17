@@ -5,6 +5,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from src.rulesets.dnd2024.features import CombatCapabilityView
+from src.rulesets.dnd2024.features.combat import unarmed_strike_profile
+
 from .primitives import (
     CombatIntentError,
     UNARMED_STRIKE_REF,
@@ -98,16 +101,20 @@ class CombatViewMixin:
             "speed": enemy["speed"], "conditions": {}, "build": {},
         }
 
-    @staticmethod
-    def _player_view(uid: str, character: dict[str, Any]) -> dict[str, Any]:
+    def _player_view(self, uid: str, character: dict[str, Any]) -> dict[str, Any]:
         class_magic = character.get("spellcasting", {}).get("class")
         class_magic = class_magic if isinstance(class_magic, dict) else {}
         conditions = character.get("conditions")
         conditions = conditions if isinstance(conditions, dict) else {}
+        resources = character.get("resources")
+        resources = resources if isinstance(resources, dict) else {}
+        # 职业资源与 feature-derived 攻击参数在此一次性投影：后面的 combat 代码
+        # 只消费结果，不再各自解析职业等级或 level -> 武艺骰。
+        feature_projection = self.features.actor_projection(character)
         return {
             "actor_id": _player_actor(uid), "kind": "player", "id": uid, "side": "party",
-            "hp": int(character.get("resources", {}).get("hp", 0) or 0),
-            "max_hp": int(character.get("resources", {}).get("max_hp", 0) or 0),
+            "hp": int(resources.get("hp", 0) or 0),
+            "max_hp": int(resources.get("max_hp", 0) or 0),
             "armor_class": int(character.get("derived", {}).get("armor_class", 10) or 10),
             "speed": int(character.get("derived", {}).get("speed", 30) or 30),
             "abilities": deepcopy(character.get("abilities") or {}),
@@ -134,13 +141,18 @@ class CombatViewMixin:
             "conditions": deepcopy(conditions),
             "death_saves": deepcopy(conditions.get("death_saves") or {}),
             "build": deepcopy(character.get("build") or {}),
+            "class_resources": deepcopy(feature_projection["class_resources"]),
+            "martial_arts_die": str(feature_projection["unarmed_damage_die"]),
+            "unarmed_ability_choice": list(feature_projection["unarmed_ability_choice"]),
         }
 
     def _project_character(self, character: dict[str, Any]) -> dict[str, Any]:
         from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
 
         return {
-            **Dnd2024CharacterBuilder(self.bundle).project_legacy(character),
+            **Dnd2024CharacterBuilder(self.bundle).project_legacy(
+                character, features=self.features,
+            ),
             "rule_binding": deepcopy(character["rule_binding"]),
             "ruleset_character": deepcopy(character),
         }
@@ -176,15 +188,24 @@ class CombatViewMixin:
         return result
 
     def _unarmed_strike(self, actor: dict[str, Any]) -> dict[str, Any] | None:
-        """Canonical Unarmed Strike profile, or None when content omits it."""
+        """Canonical Unarmed Strike profile, or None when content omits it.
+
+        The identity, damage type and reach come from the combat catalog exactly
+        once; the feature boundary only supplies the actor-specific effective
+        base damage (the Martial Arts die), so no combat file re-derives a
+        ``level -> die`` table.
+        """
 
         if actor["kind"] not in {"player", "companion"}:
             return None
         profile = self.catalog.unarmed_strike
         if not profile:
             return None
+        effective = unarmed_strike_profile(
+            profile, martial_arts_die=str(actor.get("martial_arts_die") or ""),
+        )
         return {
-            **deepcopy(profile),
+            **effective,
             "weapon_ref": UNARMED_STRIKE_REF,
             "id": UNARMED_STRIKE_REF,
             "name": self.catalog.labels.get(UNARMED_STRIKE_REF) or UNARMED_STRIKE_REF,
@@ -215,6 +236,45 @@ class CombatViewMixin:
                 if item["weapon_ref"] == weapon_ref
             ),
             None,
+        )
+
+    @staticmethod
+    def _feature_character(actor: dict[str, Any]) -> dict[str, Any]:
+        """The feature-relevant slice of an actor's canonical character.
+
+        The actor view already carries exactly what the feature boundary reads
+        (canonical build and the canonical class resource entries), so combat
+        never reaches back into the instance for a second copy of character
+        state.  The round trip is lossless for the two fields the boundary
+        consumes: ``current`` and ``maximum``.
+        """
+
+        class_state: dict[str, Any] = {}
+        for entry in actor.get("class_resources") or []:
+            if not isinstance(entry, dict) or not entry.get("id"):
+                continue
+            class_state[str(entry["id"])] = {
+                "current": entry.get("current", 0),
+                "maximum": entry.get("maximum", 0),
+            }
+        return {
+            "build": actor.get("build") or {},
+            "abilities": actor.get("abilities") or {},
+            "resources": {"class": class_state},
+        }
+
+    def _available_class_capabilities(
+        self, actor: dict[str, Any], economy: dict[str, Any],
+        *, include_unavailable: bool = False,
+    ) -> tuple[CombatCapabilityView, ...]:
+        """Feature-provided combat capabilities for this actor, in catalog order."""
+
+        if actor.get("kind") not in {"player", "companion"}:
+            return ()
+        return self.features.combat_capabilities(
+            self._feature_character(actor),
+            economy,
+            include_unavailable=include_unavailable,
         )
 
     def _available_spells(

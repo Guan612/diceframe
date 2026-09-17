@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.rulesets.bundle import LoadedRulesetBundle
+from src.rulesets.dnd2024.features import Dnd2024ClassFeatureResolver
 
 
 from .derivation import CharacterDerivationMixin
@@ -354,10 +355,18 @@ class Dnd2024CharacterBuilder(CharacterValidationMixin, CharacterDerivationMixin
         }
         return self.finalize(draft)
 
-    def project_legacy(self, character: dict[str, Any]) -> dict[str, Any]:
+    def project_legacy(
+        self,
+        character: dict[str, Any],
+        *,
+        features: Dnd2024ClassFeatureResolver | None = None,
+    ) -> dict[str, Any]:
         class_ref = character["build"]["class_levels"][0]["class_ref"]
         species_ref = character["identity"]["species_ref"]
         background_ref = character["identity"]["background_ref"]
+        resolver = (
+            features if features is not None else Dnd2024ClassFeatureResolver(self.bundle)
+        )
         class_entity = self._required_entity(class_ref, "class")
         species = self._required_entity(species_ref, "species")
         background = self._required_entity(background_ref, "background")
@@ -411,6 +420,16 @@ class Dnd2024CharacterBuilder(CharacterValidationMixin, CharacterDerivationMixin
             "inventory": inventory,
             "gold": character["equipment"]["coins_gp"],
             "currency": {"amount": character["equipment"]["coins_gp"]},
+            # 职业能力与职业资源是规则运行时对用户可见的投影；数值本身仍以
+            # ruleset_character.resources.class 为唯一权威，这里只做展示。
+            "class_features": [
+                view.to_dict() for view in resolver.feature_views(character)
+            ],
+            "class_resources": [
+                definition.to_dict()
+                for definition in resolver.resource_definitions(character)
+                if int(definition.maximum) > 0
+            ],
         }
 
     def _validate_choice_refs(
