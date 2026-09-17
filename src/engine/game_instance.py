@@ -34,6 +34,7 @@ from src.engine.game_state_contracts import (
 from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
+from src.engine.player_control import ensure_control, ensure_controls
 from src.engine.world_state import ensure_world_state, fresh_world_state
 from src.migrations.instance import CURRENT_INSTANCE_SCHEMA_VERSION
 
@@ -313,6 +314,10 @@ class GameInstance:
         # 世界真相容器：未设置/损坏 → 空世界；未知 schema 原样保留，由写入路径
         # 明确拒绝，绝不把用户数据猜成默认值。
         self.world_state = ensure_world_state(self.world_state)
+        # 每个席位都带一个显式控制器（human / ai / unclaimed）：旧存档、内存构造
+        # 与手工修改过的 players 都在这里补齐，读取方永远不必自己猜。唯一写入口
+        # 仍是 src.engine.player_control.set_control。
+        ensure_controls(self)
         if not isinstance(self.economy, dict) or not self.economy:
             self.economy = self._fresh_economy_state()
         else:
@@ -430,6 +435,9 @@ class GameInstance:
 
     def put_player(self, uid: str, player: PlayerData) -> None:
         """Insert or replace one complete player record."""
+        # 席位写入即带控制器：新建角色、规则快照恢复等所有路径都经过这里，因此
+        # 内存中的名册与落盘后的名册不会出现"有的席位没有 control"的差别。
+        ensure_control(player)
         self.players[uid] = player
 
     def set_player_name(self, uid: str, character_name: str) -> bool:
@@ -553,6 +561,8 @@ class GameInstance:
         self.map_background = dict(selection or {})
 
     def replace_players(self, players: dict[str, PlayerData]) -> None:
+        for player in players.values():
+            ensure_control(player)
         self.players = players
 
     def restore_ruleset_transaction(self, snapshot: dict[str, Any]) -> None:

@@ -77,6 +77,9 @@ class PlayerContextView(TypedDict, total=False):
     character_name: str
     attendance: str
     character_sheet: CharacterSheetView
+    # 席位控制器（human / ai / unclaimed）。投影是否对外暴露由各消费者决定，
+    # 这里只固定字段契约，见 src.engine.player_control。
+    control: OpaqueState
 
 
 class GameContextView(TypedDict, total=False):

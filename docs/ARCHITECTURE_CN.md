@@ -142,6 +142,14 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 世界真相不等于玩家可见真相：`project_visible_state(instance, viewer_is_gm=...)` 是唯一的读取入口，`gm` 私有事实只进入 GM 上下文块（并明确标注玩家不可见），玩家视角只拿 `public` 投影。行动合法性由 server 侧 `world_legality` 判定，模型只能通过结构化 `world_requirements`（`act` / `move` + canonical 地点 id）提议；判定只使用已登记地点与明确 `passable=false` 这类可证明证据——`passable=false` 阻止的是进入 / 经过 / 抵达，因此 `move` 只检查声明的 `via` 与目的地，行动者当前所在地点不参与该检查，已经身处不可通行地点的角色仍然可以离开；空世界、未知地点、行动者位置未知一律不阻断，已证明矛盾则向 GM 注入「需要先移动 / 未能完成」的可信裁定块，合法移动由 server 写入世界真相。该通道与 overreach 相互独立：overreach 管玩家替世界或他人声明事实，合法性管玩家自己的动作与权威世界事实矛盾。逻辑世界时间只经 `world_events.advance_world_time(+N)` 推进：它把时钟推到新的时刻，按 `(day, minute, event_id)` 稳定顺序结算到期事件，并把每个事件持久化为 `applied` 或 `failed`（到期时 ops 已不可应用）——没有后台 tick、没有独立 scheduler；持久化事件的 `ops` 在读取时按与 `schedule_event` 写入路径同一套结构契约逐条校验，损坏数据 fail closed，不会被静默过滤成「没有执行任何 op 却标记 applied」的伪成功状态；同一事件不会因重试、重复保存或刷新页面执行两次，结算结果与时钟同属 `world_state`，因此完整继承整轮回滚 / swipe / 重置 / 重开语义。
 
+## 玩家控制（Player Control）
+
+`players[uid].control` 是席位控制者的权威记录：`human`（真人负责）/ `ai`（服务器负责产生行动）/ `unclaimed`（席位已存在但暂无人玩），并带 `revision`、`temporary` 与 `resume_mode`。它回答的是“谁在玩这个角色”，不是“这个角色是什么”：角色本体、HP、装备、法术槽、状态、世界位置与战斗 actor（`player:<uid>`）在任何模式下都只有一份，控制器切换不复制、不搬运、不改键。第一版词汇表刻意封闭，不含 gm / remote_bot / script / hybrid 等模式。
+
+唯一写入口是 `src/engine/player_control.py` 的 `set_control`；所有读取也经过同一模块——未知席位读出保守默认值，损坏记录降级为 `human`（即契约出现前的行为），而写入对未知席位、未知模式、缺少恢复目标的临时托管一律 fail closed。控制器属于桌面会话状态而非剧情世界结果：`revision` 只在记录真正变化时递增，整轮回滚、判定中止与 swipe 只回滚角色卡与世界事实，不重新指派席位；`temporary=true` 的暂离托管必须能回到 `resume_mode`，不得在重启后变成永久 AI。
+
+持久化使用 schema **13 → 14**：旧存档的每个席位一律获得 `human`，迁移不按在线状态、角色名或历史行为猜测谁是 AI，且可重复执行。`control` 与 `character_sheet` 同级，属于玩家记录本身，因此随 save/load 往返，并在席位被清理（例如加载时的幽灵玩家清理）时一并消失，不会留下 orphan control。控制者是否影响提交权限、ready barrier 与认领流程，由后续 work package 在同一 contract 上增量实现。
+
 ## Ruleset Bundle v1
 
 `templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。
