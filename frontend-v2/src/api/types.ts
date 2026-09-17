@@ -2222,3 +2222,30 @@ export interface ApplicationHealthResponse {
   pid:number
   boot_id:string
 }
+
+export interface NetworkAddress {
+  host: string
+  url: string
+}
+export interface NetworkAddressesResponse {
+  ok: boolean
+  scheme: string
+  port: number
+  addresses: NetworkAddress[]
+}
+export interface PairingCodeResponse {
+  ok: boolean
+  code: string
+  expires_in: number
+  expires_at: number
+}
+export interface PairedDevice {
+  id: string
+  label: string
+  created_at: string
+  last_seen_at: string
+}
+export interface PairedDeviceListResponse {
+  ok: boolean
+  devices: PairedDevice[]
+}

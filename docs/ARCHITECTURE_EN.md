@@ -19,6 +19,17 @@ Template synchronization and migrated-default persistence happen only during rea
 
 A WebUI service does not import another service directly. Cross-domain business calls use callables or protocols injected by the composition root. Pure contracts and projections shared by multiple domains but performing no business orchestration live at the `src/webui/` root boundary, including lifecycle transaction context, ruleset draft-shape validation, read-only rest projection, and character-card identity/deduplication. Type-checking-only imports are not runtime dependencies.
 
+## Access Credentials and QR Pairing
+
+Owner access accepts two peer credentials, both sent as `Authorization: Bearer` and resolved in `src/webui/access_control.py`:
+
+- the access password, stored in `STATE["access_token"]` as a PBKDF2 hash only — the server never holds the plaintext, and no endpoint may hand it back;
+- device tokens (`src/webui/device_tokens.py`), high-entropy random strings persisted as sha256 digests only (random tokens need no KDF, and they are verified on every request), revocable per device without touching the master password or other devices.
+
+QR sign-in lives in `src/webui/pairing.py` and `src/webui/routes/pairing.py`: an owner session calls `POST /api/pairing` for a single-use, short-TTL pairing code (also stored as a digest only), and the mobile client anonymously calls `POST /api/pairing/claim` to exchange it for a device token. The claim endpoint must stay anonymous (the phone holds no credential yet), so it shares the abuse-guard login bucket with `/api/login` and writes to the same login audit; pairing codes are single-use, expire, and are never renewed. The device list `GET /api/devices` and revocation `DELETE /api/devices/{id}` / `POST /api/devices/revoke-all` are owner-only, and the listing returns no field usable for authentication.
+
+Only the server knows which address the QR code should carry — the GM's browser origin is usually localhost, which is useless to a phone. `GET /api/system/network` (owner-only) returns reachable local candidates via `src/web_transport/local_addresses.py`, which is also the address source for self-signed certificate SANs.
+
 ## Content V2
 
 Inputs cross a compatibility boundary before entering the current canonical model:

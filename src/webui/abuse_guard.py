@@ -25,6 +25,8 @@ AI_SLOT_WAIT_SECONDS = 2.0
 MAX_TRACKED_BUCKETS = 2000
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# 凭据兑换端点与登录共用限流桶：两者都能用于暴力猜测 owner 访问权。
+_LOGIN_PATHS = frozenset({"/api/login", "/api/pairing/claim"})
 _AI_EXACT_PATHS = frozenset({
     "/api/generate-world",
     "/api/generate-rule",
@@ -150,7 +152,7 @@ class AbuseGuard:
     ) -> web.StreamResponse:
         ip = (request.remote or "unknown")[:128]
 
-        if request.method == "POST" and request.path == "/api/login":
+        if request.method == "POST" and request.path in _LOGIN_PATHS:
             denied = self._check_pair(
                 "login-ip",
                 ip,

@@ -11,6 +11,7 @@ from src.webui.access_password import (
     normalize_access_password,
     verify_access_password,
 )
+from src.webui.device_tokens import DEVICE_TOKENS_KEY
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 
 
@@ -57,6 +58,11 @@ class WebAccessControl:
         owner_authenticated = bool(
             access_password_configured and verify_access_password(bearer, token)
         )
+        if not owner_authenticated and bearer:
+            # 设备令牌与访问密码平级：扫码配对过的设备不需要知道主密码，
+            # 丢失时也能单独吊销而不牵连其它设备（见 device_tokens.py）。
+            devices = request.app.get(DEVICE_TOKENS_KEY)
+            owner_authenticated = bool(devices and devices.verify(bearer))
         request["owner_authenticated"] = owner_authenticated
         request[ACCESS_PASSWORD_CONFIGURED_KEY] = access_password_configured
         share_uid = self.share_player_user_id(request)
@@ -116,6 +122,10 @@ class WebAccessControl:
         if request.method == "GET" and request.path == "/api/system/update/health":
             return await handler(request)
         if request.method == "POST" and request.path == "/api/login":
+            return await handler(request)
+        # 扫码兑换：手机此刻还没有任何凭据，必须匿名可达。安全性落在配对码
+        # 本身（一次性 + 短 TTL）与 abuse_guard 的 login 级限流上。
+        if request.method == "POST" and request.path == "/api/pairing/claim":
             return await handler(request)
         if access_password_configured and request.path.startswith("/api/"):
             if not owner_authenticated:

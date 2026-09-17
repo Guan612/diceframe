@@ -13,6 +13,7 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useSettingsStore } from '@/stores/useSettingsStore'
+import InviteQrModal from '@/features/play/InviteQrModal.vue'
 import { buildJoinLink } from '@/utils/shareLink'
 import { copyToClipboard } from '@/utils/clipboard'
 import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
@@ -67,6 +68,8 @@ const { locale, setLocale, t } = useLocale()
 const help = ref(false), ruleMeta = ref<RuleMeta>({}), preview = ref(false), delegate = ref(false), cards = ref<CharacterCard[]>([]), showCards = ref(false), health = ref<HealthResponse>({ events: [] })
 const showKpQuestion = ref(false)
 const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref('')
+// 邀请/接管二维码弹窗：link 非空即展示，关闭时置空
+const inviteLink = ref(''), inviteTitle = ref(''), inviteHint = ref('')
 const rewardPolicyMode = ref(''), rewardPolicyCap = ref(''), rewardPolicyTouched = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === '1')
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
@@ -577,15 +580,17 @@ async function ensureSettingsLoaded() {
   }
 }
 
+/** 出示加入二维码（含可复制原文）；玩家掏手机扫一下就进，不用转发链接 */
 async function invite() {
   await ensureSettingsLoaded()
-  await copyToClipboard(buildJoinLink(
+  inviteTitle.value = t('inviteLink')
+  inviteHint.value = t('inviteQrHint')
+  inviteLink.value = buildJoinLink(
     game.currentGame.value,
     settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
     undefined,
     currentBackendUrl(),
-  ))
-  toast.success(t('inviteCopied'))
+  )
 }
 
 async function copyBotBind() {
@@ -699,15 +704,17 @@ async function setAway(uid: string, away: boolean) {
   } catch (e: unknown) { toast.error(errorMessage(e)) }
 }
 
+/** 单个玩家的接管链接：同样走二维码弹窗，链接里带 user 参数 */
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
-  await copyToClipboard(buildJoinLink(
+  inviteTitle.value = t('controlLink')
+  inviteHint.value = t('controlLinkQrHint')
+  inviteLink.value = buildJoinLink(
     game.currentGame.value,
     settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
     uid,
     currentBackendUrl(),
-  ))
-  toast.success(t('controlLinkCopied'))
+  )
 }
 
 function onEdit(uid: string) {
@@ -1456,6 +1463,14 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </div>
+
+    <InviteQrModal
+      v-if="inviteLink"
+      :link="inviteLink"
+      :title="inviteTitle"
+      :hint="inviteHint"
+      @close="inviteLink = ''"
+    />
 
     <div v-if="showRoomPassword" class="modal" @click.self="showRoomPassword = false">
       <section class="dialog">

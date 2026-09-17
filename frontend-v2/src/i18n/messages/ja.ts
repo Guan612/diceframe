@@ -2294,6 +2294,34 @@ export const ja = {
   // apiErrors：key はバックエンドが返す安定したエラーコード（error_code）、value は画面言語の文言。
   // 翻訳時は英語の値だけを参照すればよく、バックエンドの原文を理解する必要はありません。
   // 未収録のエラーコードはフロントエンドが原文を表示します。
+  // ---- 招待 / 端末ペアリング ----
+  inviteCopyLink: 'リンクをコピー',
+  inviteScanHint: 'DiceFrame アプリで読み取ってもらうか、下のリンクを送ってください。',
+  inviteQrHint: '読み取るとこのセッションに参加してキャラクターを作成できます。',
+  controlLink: '操作リンク',
+  controlLinkQrHint: '読み取ると、そのプレイヤーはスマホでこのキャラクターを再開できます。',
+  pairingTitle: 'QR コードでログイン',
+  pairingHelp: 'DiceFrame アプリで一度読み取るだけでこのサーバーに接続できます。IP やパスワードの入力は不要です。',
+  pairingAddressLabel: 'スマホが接続するアドレス',
+  pairingAddressPlaceholder: 'LAN アドレスを選択',
+  pairingAddressHint: 'スマホから実際に到達できるアドレスを選んでください。通常は同じ Wi-Fi の LAN IP です。',
+  pairingGenerate: 'ペアリング QR を生成',
+  pairingRegenerate: '新しい QR を生成',
+  pairingIdleHint: '下のボタンで使い捨てのペアリング QR を生成します。',
+  pairingScanHint: 'アプリのログイン画面で「QR でログイン」をタップしてください。期限切れの場合は再生成すれば大丈夫です。',
+  pairingExpiresIn: '{seconds} 秒後に失効',
+  pairingDevicesTitle: 'ペアリング済み端末',
+  pairingNoDevices: 'QR でログインした端末はまだありません。',
+  pairingUnnamedDevice: '名称未設定の端末',
+  pairingLastSeen: '最終アクティブ：{at}',
+  pairingNeverSeen: '未使用',
+  pairingRevoke: '失効',
+  pairingRevokeAll: 'すべて失効',
+  pairingRevokeConfirm: '「{name}」を失効すると、その端末は直ちに管理者権限を失い、再度ペアリングが必要になります。よろしいですか？',
+  pairingRevokeAllConfirm: 'すべてのペアリング済み端末が直ちに管理者権限を失い、再ペアリングが必要になります。よろしいですか？',
+  pairingRevoked: '「{name}」を失効しました',
+  pairingRevokedAll: '{count} 台の端末を失効しました',
+
   apiErrors: {
     hub_connection_unavailable: 'DiceFrame Hub に接続できません。ネットワークを確認して再試行してください。',
     game_not_found: 'ゲームが見つかりません',
