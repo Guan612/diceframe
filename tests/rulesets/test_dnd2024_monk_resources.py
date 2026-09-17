@@ -8,10 +8,12 @@ by advancement, and recovered by the existing short/long rest engine.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
 from src.engine.game_instance import GameInstance
+from src.rulesets.dnd2024.resting import Dnd2024RestEngine, RestError
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 
 from dnd2024_monk_common import (
@@ -100,7 +102,7 @@ def test_client_cannot_forge_focus() -> None:
     assert instance.ruleset_state["combat"]["economy"]["bonus_action"] == 0
 
 
-def test_advancement_resizes_focus_without_refilling_a_legal_current() -> None:
+def test_advancement_preserves_a_legal_focus_current_without_refilling() -> None:
     runtime = Dnd2024Runtime()
     sheet = monk_sheet(runtime, level=2)
     sheet["ruleset_character"]["resources"]["class"]["focus_points"]["current"] = 1
@@ -108,8 +110,10 @@ def test_advancement_resizes_focus_without_refilling_a_legal_current() -> None:
     advanced = advance(runtime, sheet, 3)
     focus = advanced["ruleset_character"]["resources"]["class"]["focus_points"]
 
-    # 上限按职业表提高，合法 current 被保留（只补上限差值）。
-    assert (focus["current"], focus["maximum"]) == (2, 3)
+    # 上限按职业表提高，合法 current 原样保留：升级不会自动补回专注点。
+    assert (focus["current"], focus["maximum"]) == (1, 3)
+    assert advanced["class_resources"][0]["current"] == 1
+    assert advanced["class_resources"][0]["maximum"] == 3
 
 
 def test_advancement_clamps_a_current_above_the_new_maximum() -> None:
@@ -124,8 +128,74 @@ def test_advancement_clamps_a_current_above_the_new_maximum() -> None:
     advanced = advance(runtime, sheet, 3)
     focus = advanced["ruleset_character"]["resources"]["class"]["focus_points"]
 
-    assert focus["maximum"] == 3
-    assert 0 <= focus["current"] <= focus["maximum"]
+    # 异常旧数据被夹到新的上限，而不是把 99 带进新等级。
+    assert (focus["current"], focus["maximum"]) == (3, 3)
+
+
+def _minimal_character(class_ref: str, level: int, resources: dict) -> dict:
+    return {
+        "build": {"class_levels": [{"class_ref": class_ref, "level": level}]},
+        "abilities": {"str": 16, "dex": 12, "con": 14, "int": 8, "wis": 10, "cha": 8},
+        "resources": {"class": resources},
+    }
+
+
+def test_focus_resize_policy_preserves_current_clamps_and_never_refills() -> None:
+    runtime = Dnd2024Runtime()
+    engine = Dnd2024RestEngine(runtime.load_bundle("en"))
+
+    def sync(focus: dict | None) -> dict:
+        resources = {"focus_points": focus} if focus is not None else {}
+        character = _minimal_character("class:monk", 3, resources)
+        return engine.sync_resources(character)["resources"]["class"]["focus_points"]
+
+    assert sync({"current": 1, "maximum": 2})["current"] == 1
+    assert sync({"current": 99, "maximum": 99})["current"] == 3
+    assert sync({"current": 0, "maximum": 2})["current"] == 0
+    # 资源此前不存在（首次被授予）时仍然是满的。
+    assert sync(None)["current"] == 3
+
+
+def test_a_resource_without_the_policy_keeps_the_preserve_spent_semantics() -> None:
+    """默认策略必须保持既有行为：未声明的资源继续「保留已消费数量」。"""
+
+    runtime = Dnd2024Runtime()
+    engine = Dnd2024RestEngine(runtime.load_bundle("en"))
+    character = _minimal_character(
+        "class:barbarian", 3, {"rages": {"current": 1, "maximum": 2}},
+    )
+
+    rages = engine.sync_resources(character)["resources"]["class"]["rages"]
+
+    assert (rages["current"], rages["maximum"]) == (2, 3)
+
+
+def test_the_resize_policy_is_a_per_resource_declaration() -> None:
+    runtime = Dnd2024Runtime()
+    rules = Dnd2024RestEngine(runtime.load_bundle("en")).rules["class_resources"]
+    policies = {
+        (class_id, str(spec["id"])): str(spec.get("resize_policy", "preserve_spent"))
+        for class_id, specs in rules.items()
+        for spec in specs
+    }
+
+    assert policies[("monk", "focus_points")] == "preserve_current"
+    # 只有 Focus 显式选择了新语义，其它职业资源全部保持默认。
+    assert {
+        policy for key, policy in policies.items() if key != ("monk", "focus_points")
+    } == {"preserve_spent"}
+
+
+def test_an_unknown_resize_policy_fails_closed() -> None:
+    runtime = Dnd2024Runtime()
+    bundle = runtime.load_bundle("en")
+    entities = deepcopy(bundle.entities)
+    entities["rest_catalog"]["srd_recovery"]["class_resources"]["monk"][0][
+        "resize_policy"
+    ] = "preserve_everything"
+
+    with pytest.raises(RestError, match="unknown resize policy"):
+        Dnd2024RestEngine(replace(bundle, entities=entities))
 
 
 def test_short_rest_restores_focus() -> None:
