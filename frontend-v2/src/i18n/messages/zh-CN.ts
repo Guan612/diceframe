@@ -2336,6 +2336,13 @@ export const zhCN = {
   pairingRevoked: '已吊销「{name}」',
   pairingRevokedAll: '已吊销 {count} 台设备',
 
+  // ---- AI 临时遭遇：默认摘要 + 编辑弹窗 ----
+  encounterSummary: '遭遇摘要',
+  encounterNoEnemiesSelected: '还没有保留任何敌人；确认进入战斗前至少要保留一个。',
+  encounterEditEnemies: '编辑敌人',
+  encounterEditorTitle: '编辑临时遭遇',
+  encounterSaveChanges: '保存修改',
+
   apiErrors: {
     hub_connection_unavailable: '暂时无法连接 DiceFrame Hub，请检查网络后重试',
     game_not_found: '游戏不存在',

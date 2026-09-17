@@ -121,3 +121,26 @@
   border-color: var(--df-border-soft);
   background: color-mix(in srgb, var(--df-surface-2) 86%, transparent);
 }
+/* 手机扫码登录弹窗：顶栏二维码按钮的主入口，内容仍复用配对面板。 */
+.dialog.device-pairing-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dialog.device-pairing-dialog .pairing-panel {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+@media (max-width: 720px) {
+  .dialog.device-pairing-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 10px;
+  }
+}

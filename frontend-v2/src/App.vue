@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import {
   NConfigProvider, NMessageProvider, NDialogProvider, NLoadingBarProvider, NIcon,
@@ -13,6 +13,7 @@ import { useAnnouncements } from '@/composables/useAnnouncements'
 import ThemeToggle from '@/components/ThemeToggle.vue'
 import AnnouncementButton from '@/components/AnnouncementButton.vue'
 import AnnouncementPanel from '@/components/AnnouncementPanel.vue'
+import DevicePairingButton from '@/components/DevicePairingButton.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import NaiveBridge from '@/components/common/NaiveBridge.vue'
 import StartupPrivacyChoice from '@/components/common/StartupPrivacyChoice.vue'
@@ -83,6 +84,11 @@ async function loadOwnerPluginThemes() {
 
 const { hasUnread, load, markRead } = useAnnouncements()
 const announcementOpen = ref(false)
+// 配对弹窗按需加载：不打开就不会把 QrCode/配对面板带进首屏包。
+const DevicePairingModal = defineAsyncComponent(
+  () => import('@/features/admin/settings/DevicePairingModal.vue'),
+)
+const pairingOpen = ref(false)
 const startupPrivacySettled = ref(false)
 const startupUpdateSettled = ref(false)
 
@@ -123,6 +129,7 @@ watch(publicRoute, (isPublic) => {
     startupPrivacySettled.value = false
     startupUpdateSettled.value = false
     announcementOpen.value = false
+    pairingOpen.value = false
     suspendPluginTheme()
     return
   }
@@ -193,6 +200,9 @@ watch(publicRoute, (isPublic) => {
                   <div class="app-header-actions">
                     <AnnouncementButton @open="announcementOpen = true" />
                     <AnnouncementPanel v-model:show="announcementOpen" />
+                    <!-- owner-only：publicRoute（join / 公开访问 / play?user=）没有顶栏，
+                         这里再显式挡一次，避免任何公共入口拿到配对能力。 -->
+                    <DevicePairingButton v-if="!publicRoute" @open="pairingOpen = true" />
                     <ThemeToggle />
                     <label class="locale-select header-locale">
                       <span>{{ t('language') }}</span>
@@ -212,6 +222,8 @@ watch(publicRoute, (isPublic) => {
                   </div>
                 </div>
               </header>
+
+              <DevicePairingModal v-if="pairingOpen && !publicRoute" @close="pairingOpen = false" />
 
               <main class="app-workspace">
                 <RouterView v-slot="{ Component }">

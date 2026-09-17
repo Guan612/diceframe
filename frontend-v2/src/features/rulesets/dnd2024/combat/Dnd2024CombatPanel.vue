@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   CheckmarkCircleOutline,
+  ChevronDownOutline,
   FlashOutline,
   FootstepsOutline,
   HourglassOutline,
@@ -28,6 +29,7 @@ import type {
 } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
 import CombatLiveBar from '@/components/play/CombatLiveBar.vue'
+import Modal from '@/components/ui/Modal.vue'
 
 const props = defineProps<{
   gameKey: string
@@ -39,7 +41,7 @@ const emit = defineEmits<{
   refresh: []
   navigate: [target: 'campaign']
 }>()
-const { locale } = useLocale()
+const { locale, t } = useLocale()
 
 const data = ref<RulesetGameplayResponse | null>(null)
 const busy = ref(false)
@@ -216,9 +218,9 @@ const adventureActive = computed(() => String(
   gameplay.value?.campaign?.tutorial?.status || '',
 ) === 'active')
 const sandboxDeclared = ref(false)
-// AI 临时遭遇：AI 生成 → GM 编辑本地草稿 → combat.start 确认，与手动
-// 自由遭遇流程并行；确认走现有 combat.start(mode=sandbox)，服务端权威
-// 校验仍然完整生效。草稿只存在于组件状态，刷新丢失可接受，绝不持久化。
+// AI 临时遭遇：AI 生成 → 只读摘要 → 需要时才打开弹窗编辑草稿 → combat.start
+// 确认，与手动自由遭遇流程并行；确认走现有 combat.start(mode=sandbox)，服务端
+// 权威校验仍然完整生效。草稿只存在于组件状态，刷新丢失可接受，绝不持久化。
 type DraftEnemy = RulesetTemporaryEncounterEnemy & {
   selected: boolean
   quantity: number
@@ -227,6 +229,11 @@ const aiProposal = ref<RulesetTemporaryEncounter | null>(null)
 const aiDraft = ref<DraftEnemy[]>([])
 const aiBusy = ref(false)
 const aiError = ref('')
+// 编辑弹窗只在 GM 显式点击「编辑敌人」后打开，并编辑一份工作副本；保存前
+// 摘要与提交都只看 aiDraft，因此弹窗里的临时修改不会泄漏到摘要。
+const enemyEditorOpen = ref(false)
+const editDraft = ref<DraftEnemy[]>([])
+const expandedEnemies = ref<string[]>([])
 const readyAction = computed(() => action('encounter.ready'))
 const unreadyAction = computed(() => action('encounter.unready'))
 const isReady = computed(() => Boolean(
@@ -547,6 +554,7 @@ function cancelAiProposal(): void {
   aiProposal.value = null
   aiDraft.value = []
   aiError.value = ''
+  closeEnemyEditor()
 }
 
 // 生成/重新生成成功后以 AI 原稿为底稿重建草稿：默认全选、数量 1。
@@ -559,9 +567,51 @@ function buildDraftEnemies(proposal: RulesetTemporaryEncounter): DraftEnemy[] {
   }))
 }
 
-// 恢复 AI 原稿：丢弃 GM 的全部编辑，回到未动过的提案。
-function restoreAiDraft(): void {
-  if (aiProposal.value) aiDraft.value = buildDraftEnemies(aiProposal.value)
+// 工作副本：弹窗里的编辑只有点了「保存修改」才回到 aiDraft。
+function cloneDraftEnemies(draft: DraftEnemy[]): DraftEnemy[] {
+  return draft.map(enemy => ({
+    ...enemy,
+    attacks: (enemy.attacks || []).map(attack => ({ ...attack })),
+  }))
+}
+
+function openEnemyEditor(): void {
+  if (!aiProposal.value) return
+  editDraft.value = cloneDraftEnemies(aiDraft.value)
+  expandedEnemies.value = []
+  enemyEditorOpen.value = true
+}
+
+function closeEnemyEditor(): void {
+  enemyEditorOpen.value = false
+  editDraft.value = []
+  expandedEnemies.value = []
+}
+
+// 取消编辑：丢弃工作副本，摘要与确认仍然使用保存过的 aiDraft。
+function cancelEnemyEditor(): void {
+  closeEnemyEditor()
+}
+
+function saveEnemyEdits(): void {
+  aiDraft.value = editDraft.value
+  closeEnemyEditor()
+}
+
+// 恢复 AI 原稿：丢弃弹窗里的全部编辑，回到未动过的提案（仍需保存才生效）。
+function restoreEditDraft(): void {
+  if (aiProposal.value) editDraft.value = buildDraftEnemies(aiProposal.value)
+}
+
+function isEnemyExpanded(enemy: DraftEnemy): boolean {
+  return expandedEnemies.value.includes(enemy.id || '')
+}
+
+function toggleEnemyExpanded(enemy: DraftEnemy): void {
+  const id = enemy.id || ''
+  expandedEnemies.value = isEnemyExpanded(enemy)
+    ? expandedEnemies.value.filter(candidate => candidate !== id)
+    : [...expandedEnemies.value, id]
 }
 
 function addDraftAttack(enemy: DraftEnemy): void {
@@ -614,6 +664,20 @@ function expandDraftEnemies(draft: DraftEnemy[]): RulesetTemporaryEncounterEnemy
 
 const selectedDraftCount = computed(() => aiDraft.value.filter(enemy => enemy.selected).length)
 
+// 摘要按名称合并同种敌人，只显示勾选保留的部分；数量语义与提交展开一致。
+const aiSummary = computed<Array<{ name: string; quantity: number }>>(() => {
+  const entries: Array<{ name: string; quantity: number }> = []
+  for (const enemy of aiDraft.value) {
+    if (!enemy.selected) continue
+    const name = String(enemy.name || '').trim() || copy.value.aiName
+    const quantity = Math.max(1, Math.floor(Number(enemy.quantity) || 1))
+    const existing = entries.find(entry => entry.name === name)
+    if (existing) existing.quantity += quantity
+    else entries.push({ name, quantity })
+  }
+  return entries
+})
+
 // 生成与开战严格分两步：这里只拿提案并构建草稿，绝不自动开战；失败完全无副作用。
 async function planTemporaryEncounter(): Promise<void> {
   const gameKey = props.gameKey
@@ -625,16 +689,20 @@ async function planTemporaryEncounter(): Promise<void> {
     if (response.encounter) {
       aiProposal.value = response.encounter
       aiDraft.value = buildDraftEnemies(response.encounter)
+      // 重新生成即换底稿：任何未保存的弹窗编辑都必须作废，不能留在旧 draft 上。
+      closeEnemyEditor()
     } else {
       aiProposal.value = null
       aiDraft.value = []
       aiError.value = response.error || copy.value.aiFailed
+      closeEnemyEditor()
     }
   } catch (cause: unknown) {
     if (props.gameKey !== gameKey) return
     aiProposal.value = null
     aiDraft.value = []
     aiError.value = friendlyCombatError(cause) || copy.value.aiFailed
+    closeEnemyEditor()
   } finally {
     if (props.gameKey === gameKey) aiBusy.value = false
   }
@@ -661,6 +729,7 @@ async function confirmAiEncounter(): Promise<void> {
     aiProposal.value = null
     aiDraft.value = []
     aiError.value = ''
+    closeEnemyEditor()
   }
 }
 
@@ -1033,46 +1102,21 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
         <!-- AI 临时遭遇草稿：战斗未开始与已结算两种状态都要可见（结算态可
              直接由 GM 发起下一场 AI 临时遭遇），因此挂在 encounter-start
              分支之外、不受 combat.status!=='ended' 的 v-if/v-else 链约束。 -->
+        <!-- 默认只给摘要：十几个输入框直接铺开体验过重，编辑收进「编辑敌人」弹窗。 -->
         <div v-if="isGm && aiProposal" class="guided-preset ai-encounter-preview">
           <span>{{ copy.aiPreviewTag }}</span>
           <strong>{{ aiProposal.title }}</strong>
           <p>{{ aiProposal.description }}</p>
           <small class="encounter-source">{{ copy.aiDifficulty }}</small>
-          <p class="combat-state">{{ copy.aiDraftHint }}</p>
-          <ul class="ai-encounter-enemies">
-            <li v-for="enemy in aiDraft" :key="enemy.id">
-              <header class="ai-draft-head">
-                <input v-model="enemy.selected" type="checkbox" :aria-label="enemy.name || copy.aiName" />
-                <input v-model="enemy.name" type="text" maxlength="60" :aria-label="copy.aiName" />
-                <label class="ai-draft-quantity">
-                  <span>{{ copy.aiQuantity }}</span>
-                  <input v-model.number="enemy.quantity" type="number" min="1" max="12" :aria-label="copy.aiQuantity" />
-                </label>
-              </header>
-              <div class="ai-draft-fields">
-                <label><span>{{ copy.hp }}</span><input v-model.number="enemy.hp" type="number" min="1" max="500" :aria-label="copy.hp" /></label>
-                <label><span>{{ copy.ac }}</span><input v-model.number="enemy.armor_class" type="number" min="8" max="25" :aria-label="copy.ac" /></label>
-                <label><span>{{ copy.tempSpeed }}</span><input v-model.number="enemy.speed" type="number" min="0" max="80" :aria-label="copy.tempSpeed" /></label>
-                <label><span>{{ copy.aiInitiative }}</span><input v-model.number="enemy.initiative_modifier" type="number" min="-5" max="10" :aria-label="copy.aiInitiative" /></label>
-              </div>
-              <div v-for="attack in enemy.attacks || []" :key="attack.id" class="ai-draft-attack">
-                <label><span>{{ copy.attack }}</span><input v-model="attack.name" type="text" maxlength="60" :aria-label="copy.attack" /></label>
-                <label><span>{{ copy.aiAttackBonus }}</span><input v-model.number="attack.attack_bonus" type="number" min="-2" max="15" :aria-label="copy.aiAttackBonus" /></label>
-                <label><span>{{ copy.aiDamage }}</span><input v-model="attack.damage" type="text" maxlength="40" :aria-label="copy.aiDamage" /></label>
-                <label><span>{{ copy.aiNormalRange }}</span><input v-model.number="attack.range" type="number" min="5" max="600" :aria-label="copy.aiNormalRange" /></label>
-                <label><span>{{ copy.aiLongRange }}</span><input v-model.number="attack.long_range" type="number" min="5" max="600" :aria-label="copy.aiLongRange" /></label>
-                <button type="button" :disabled="(enemy.attacks?.length || 0) <= 1" @click="removeDraftAttack(enemy, attack.id || '')">
-                  {{ copy.aiRemoveAttack }}
-                </button>
-              </div>
-              <button type="button" class="ai-draft-add-attack" :disabled="(enemy.attacks?.length || 0) >= 3" @click="addDraftAttack(enemy)">
-                <NIcon :component="SparklesOutline" />{{ copy.aiAddAttack }}
-              </button>
-            </li>
+          <ul class="ai-encounter-summary" :aria-label="t('encounterSummary')">
+            <li v-for="entry in aiSummary" :key="entry.name">{{ entry.name }} ×{{ entry.quantity }}</li>
           </ul>
+          <p v-if="!aiSummary.length" class="combat-state">{{ t('encounterNoEnemiesSelected') }}</p>
           <p class="combat-state">{{ copy.aiEncounterNote }}</p>
           <div class="unprepared-actions">
-            <button type="button" @click="restoreAiDraft">{{ copy.aiRestore }}</button>
+            <button type="button" class="ai-encounter-edit" @click="openEnemyEditor">
+              {{ t('encounterEditEnemies') }}
+            </button>
             <button type="button" :disabled="aiBusy" @click="planTemporaryEncounter">
               <NIcon :component="SparklesOutline" />{{ copy.aiRegenerate }}
             </button>
@@ -1082,6 +1126,61 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
             <button type="button" @click="cancelAiProposal">{{ copy.cancel }}</button>
           </div>
         </div>
+
+        <!-- 编辑弹窗：编辑工作副本，保存后才回到草稿与摘要；每个敌人默认折叠。 -->
+        <Modal
+          v-if="isGm && aiProposal && enemyEditorOpen"
+          :title="t('encounterEditorTitle')"
+          dialog-class="encounter-editor-dialog"
+          @close="cancelEnemyEditor"
+        >
+          <p class="combat-state">{{ copy.aiDraftHint }}</p>
+          <ul class="ai-encounter-enemies">
+            <li v-for="enemy in editDraft" :key="enemy.id">
+              <header class="ai-draft-head">
+                <input v-model="enemy.selected" type="checkbox" :aria-label="enemy.name || copy.aiName" />
+                <button
+                  type="button"
+                  class="ai-draft-toggle"
+                  :aria-expanded="isEnemyExpanded(enemy)"
+                  @click="toggleEnemyExpanded(enemy)"
+                >
+                  <NIcon :component="ChevronDownOutline" :class="['ai-draft-chevron', { open: isEnemyExpanded(enemy) }]" />
+                  <span>{{ enemy.name || copy.aiName }}</span>
+                  <small>×{{ enemy.quantity }}</small>
+                </button>
+              </header>
+              <template v-if="isEnemyExpanded(enemy)">
+                <div class="ai-draft-fields">
+                  <label><span>{{ copy.aiName }}</span><input v-model="enemy.name" type="text" maxlength="60" :aria-label="copy.aiName" /></label>
+                  <label><span>{{ copy.aiQuantity }}</span><input v-model.number="enemy.quantity" type="number" min="1" max="12" :aria-label="copy.aiQuantity" /></label>
+                  <label><span>{{ copy.hp }}</span><input v-model.number="enemy.hp" type="number" min="1" max="500" :aria-label="copy.hp" /></label>
+                  <label><span>{{ copy.ac }}</span><input v-model.number="enemy.armor_class" type="number" min="8" max="25" :aria-label="copy.ac" /></label>
+                  <label><span>{{ copy.tempSpeed }}</span><input v-model.number="enemy.speed" type="number" min="0" max="80" :aria-label="copy.tempSpeed" /></label>
+                  <label><span>{{ copy.aiInitiative }}</span><input v-model.number="enemy.initiative_modifier" type="number" min="-5" max="10" :aria-label="copy.aiInitiative" /></label>
+                </div>
+                <div v-for="attack in enemy.attacks || []" :key="attack.id" class="ai-draft-attack">
+                  <label><span>{{ copy.attack }}</span><input v-model="attack.name" type="text" maxlength="60" :aria-label="copy.attack" /></label>
+                  <label><span>{{ copy.aiAttackBonus }}</span><input v-model.number="attack.attack_bonus" type="number" min="-2" max="15" :aria-label="copy.aiAttackBonus" /></label>
+                  <label><span>{{ copy.aiDamage }}</span><input v-model="attack.damage" type="text" maxlength="40" :aria-label="copy.aiDamage" /></label>
+                  <label><span>{{ copy.aiNormalRange }}</span><input v-model.number="attack.range" type="number" min="5" max="600" :aria-label="copy.aiNormalRange" /></label>
+                  <label><span>{{ copy.aiLongRange }}</span><input v-model.number="attack.long_range" type="number" min="5" max="600" :aria-label="copy.aiLongRange" /></label>
+                  <button type="button" :disabled="(enemy.attacks?.length || 0) <= 1" @click="removeDraftAttack(enemy, attack.id || '')">
+                    {{ copy.aiRemoveAttack }}
+                  </button>
+                </div>
+                <button type="button" class="ai-draft-add-attack" :disabled="(enemy.attacks?.length || 0) >= 3" @click="addDraftAttack(enemy)">
+                  <NIcon :component="SparklesOutline" />{{ copy.aiAddAttack }}
+                </button>
+              </template>
+            </li>
+          </ul>
+          <template #actions>
+            <button type="button" @click="restoreEditDraft">{{ copy.aiRestore }}</button>
+            <button type="button" @click="cancelEnemyEditor">{{ copy.cancel }}</button>
+            <button type="button" class="combat-primary" @click="saveEnemyEdits">{{ t('encounterSaveChanges') }}</button>
+          </template>
+        </Modal>
       </section>
 
       <template v-else>
@@ -1306,11 +1405,16 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 .unprepared-actions { display: flex; column-gap: 14px; row-gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .unprepared-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; padding: 7px 12px; }
 .ai-encounter-preview { border-color: #6d6f4a; background: rgb(52 56 24 / 28%); }
+.ai-encounter-summary { display: flex; gap: 8px 14px; flex-wrap: wrap; margin: 2px 0; padding: 0; list-style: none; }
+.ai-encounter-summary li { padding: 4px 10px; border: 1px solid #6d5a35; border-radius: 999px; color: #f0d79c; background: rgb(14 20 24 / 42%); font-size: 13px; }
 .ai-encounter-enemies { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .ai-encounter-enemies li { display: grid; gap: 7px; padding: 8px 10px; border: 1px solid #6d5a35; border-radius: 9px; background: rgb(14 20 24 / 42%); }
 .ai-draft-head { display: flex; align-items: center; gap: 8px; }
 .ai-draft-head input[type="checkbox"] { min-height: 0; width: 16px; height: 16px; accent-color: #c59443; }
-.ai-draft-head input[type="text"] { flex: 1; min-width: 0; min-height: 34px; padding-inline: 8px; border: 1px solid #4a5560; border-radius: 8px; background: #0d1319; color: #f3eee7; }
+.ai-draft-toggle { display: inline-flex; flex: 1; align-items: center; gap: 8px; min-width: 0; min-height: 34px; padding: 4px 10px; border: 1px solid #4a5560; border-radius: 8px; color: #f3eee7; background: #0d1319; font-size: 13px; text-align: left; cursor: pointer; }
+.ai-draft-toggle small { margin-left: auto; color: #cfc6b4; font-size: 11px; }
+.ai-draft-chevron { transition: transform .15s ease; }
+.ai-draft-chevron.open { transform: rotate(180deg); }
 .ai-draft-quantity { display: inline-flex; align-items: center; gap: 6px; color: #cfc6b4; font-size: 11px; }
 .ai-draft-quantity input { width: 64px; min-height: 34px; padding-inline: 8px; border: 1px solid #4a5560; border-radius: 8px; background: #0d1319; color: #f3eee7; }
 .ai-draft-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 6px; }

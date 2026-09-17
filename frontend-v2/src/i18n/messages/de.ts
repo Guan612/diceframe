@@ -2334,6 +2334,13 @@ export const de = {
   pairingRevoked: '„{name}“ widerrufen',
   pairingRevokedAll: '{count} Gerät(e) widerrufen',
 
+  // ---- KI-Begegnung auf Zeit: Standardübersicht + Bearbeitungsdialog ----
+  encounterSummary: 'Begegnungsübersicht',
+  encounterNoEnemiesSelected: 'Noch keine Gegner behalten; vor dem Bestätigen mindestens einen behalten.',
+  encounterEditEnemies: 'Gegner bearbeiten',
+  encounterEditorTitle: 'Temporäre Begegnung bearbeiten',
+  encounterSaveChanges: 'Änderungen speichern',
+
   apiErrors: {
     hub_connection_unavailable: 'DiceFrame Hub war nicht erreichbar. Prüfe dein Netzwerk und versuche es erneut.',
     game_not_found: 'Spiel nicht gefunden',
