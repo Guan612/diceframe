@@ -28,6 +28,8 @@ Owner access accepts two peer credentials, both sent as `Authorization: Bearer` 
 
 QR sign-in lives in `src/webui/pairing.py` and `src/webui/routes/pairing.py`: an owner session calls `POST /api/pairing` for a single-use, short-TTL pairing code (also stored as a digest only), and the mobile client anonymously calls `POST /api/pairing/claim` to exchange it for a device token. The claim endpoint must stay anonymous (the phone holds no credential yet), so it shares the abuse-guard login bucket with `/api/login` and writes to the same login audit; pairing codes are single-use, expire, and are never renewed. The device list `GET /api/devices` and revocation `DELETE /api/devices/{id}` / `POST /api/devices/revoke-all` are owner-only, and the listing returns no field usable for authentication.
 
+On a passwordless server `POST /api/pairing` is open to any client that can reach it, so a device token issued then means "whoever can connect is the owner". Configuring an access password for the first time (`access_token` going from unset to set) therefore revokes every device token and pending pairing code as well; changing an already configured password does not — device tokens are credentials that rank alongside the access password, and the settings page has its own per-device / revoke-all entry points.
+
 Only the server knows which address the QR code should carry — the GM's browser origin is usually localhost, which is useless to a phone. `GET /api/system/network` (owner-only) returns reachable local candidates via `src/web_transport/local_addresses.py`, which is also the address source for self-signed certificate SANs.
 
 ## Content V2
