@@ -458,7 +458,6 @@ export const zhCN = {
   controlNowAi: '已交给 AI 托管',
   controlNowHuman: '已交回真人',
   controlUnclaimedDefault: '未认领角色默认',
-  controlFollowDefault: '跟随默认',
   importedCharacter: '已导入 {name}',
   exported: '已导出',
   resetFailed: '重置失败',
@@ -2310,6 +2309,11 @@ export const zhCN = {
   // 翻译时参照英文值即可，无需理解后端原始消息；未收录的错误码由前端回退显示原文。
   // ---- 邀请 / 扫码配对 ----
   inviteCopyLink: '复制链接',
+  inviteAddressHint: '提示：好友需要能够访问邀请链接中的地址。局域网联机使用局域网地址；异地联机请使用公网或内网穿透地址。',
+  inviteAddressSettingsLink: '修改分享地址',
+  inviteLocalOnlyWarning: '当前地址仅本机可访问，其他设备无法通过该地址加入。请配置可访问的分享地址。',
+  controlMode: '控制方式',
+  controlBackToCharacters: '返回角色设置',
   inviteScanHint: '让玩家用 DiceFrame App 扫码，或把下面的链接发给他们。',
   inviteQrHint: '扫码即可加入本局并创建角色。',
   controlLink: '接管链接',

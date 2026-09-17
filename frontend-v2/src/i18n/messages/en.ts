@@ -458,7 +458,6 @@ export const en = {
   controlNowAi: 'Handed to the AI',
   controlNowHuman: 'Returned to the player',
   controlUnclaimedDefault: 'Default for unclaimed characters',
-  controlFollowDefault: 'Follow default',
   importedCharacter: 'Imported {name}',
   exported: 'Exported',
   resetFailed: 'Reset failed',
@@ -2310,6 +2309,11 @@ export const en = {
   // 翻译时参照英文值即可，无需理解后端原始消息；未收录的错误码由前端回退显示原文。
   // ---- Invites / device pairing ----
   inviteCopyLink: 'Copy link',
+  inviteAddressHint: 'Heads up: your friends must be able to reach the address in this link. Use a LAN address on the same network, or a public / tunneled address for remote play.',
+  inviteAddressSettingsLink: 'Change sharing address',
+  inviteLocalOnlyWarning: 'This address only works on this machine, so other devices cannot join with it. Please configure a reachable sharing address.',
+  controlMode: 'Control',
+  controlBackToCharacters: 'Back to characters',
   inviteScanHint: 'Have players scan this with the DiceFrame app, or send them the link below.',
   inviteQrHint: 'Scanning joins this game and creates a character.',
   controlLink: 'Control link',
