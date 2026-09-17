@@ -93,6 +93,12 @@ def normalize_control(raw: Any) -> dict[str, Any]:
     resume_mode = raw.get("resume_mode")
     if resume_mode not in RESUME_MODES:
         resume_mode = None
+    # 「AI 临时托管」必须知道要还给谁：``temporary=True`` 却没有恢复目标是自相
+    # 矛盾的记录（存档损坏、旧版本写坏、人为改文件）。既不能猜一个恢复目标继续
+    # 托管，也不能留在 ``ai`` 上假装它可恢复 —— 安全降级为真人，并保留合法
+    # revision（revision 只描述记录被改过几次，降级不改变这个事实）。
+    if mode == "ai" and temporary and resume_mode is None:
+        mode = DEFAULT_CONTROL_MODE
     # ``temporary`` / ``resume_mode`` 只在「AI 临时托管」时有意义：一个由真人
     # 控制的席位不能同时携带恢复目标，否则读出来就是自相矛盾的状态。
     if mode != "ai" or not temporary:

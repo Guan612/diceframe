@@ -187,6 +187,81 @@ def test_temporary_takeover_requires_a_resume_target() -> None:
     assert get_control(instance, "p1") == default_control()
 
 
+@pytest.mark.parametrize("resume_mode", [None, "ai", "script", "", "human_gm", 7])
+def test_a_temporary_ai_record_without_a_valid_resume_target_degrades_to_human(
+    resume_mode: object,
+) -> None:
+    """``temporary=true`` 却没有可用的恢复目标是自相矛盾的记录。
+
+    这种记录既不能猜一个恢复目标继续托管，也不能留在 ``ai`` 上假装它可恢复：
+    读出来必须安全降级为真人，并保留合法的 revision（降级不改变"这条记录被改过
+    几次"这个事实）。
+    """
+
+    record = normalize_control({
+        "mode": "ai",
+        "revision": 4,
+        "temporary": True,
+        "resume_mode": resume_mode,
+    })
+
+    assert record == {
+        "mode": "human", "revision": 4, "temporary": False, "resume_mode": None,
+    }
+
+
+def test_no_normalization_ever_yields_a_temporary_ai_without_a_resume_target() -> None:
+    """穷举 ``temporary`` × ``resume_mode`` 的组合，非法状态不得漏出。"""
+
+    for resume_mode in [None, "ai", "script", "", "human", "unclaimed", 7, True]:
+        for temporary in [True, False]:
+            record = normalize_control({
+                "mode": "ai",
+                "revision": 4,
+                "temporary": temporary,
+                "resume_mode": resume_mode,
+            })
+            illegal = (
+                record["mode"] == "ai"
+                and record["temporary"] is True
+                and record["resume_mode"] is None
+            )
+            assert not illegal, (temporary, resume_mode, record)
+
+
+def test_a_legal_temporary_record_and_a_permanent_ai_record_are_untouched() -> None:
+    """安全降级不得误伤合法记录：临时托管仍可恢复，永久 AI 仍是永久 AI。"""
+
+    temporary = normalize_control({
+        "mode": "ai", "revision": 4, "temporary": True, "resume_mode": "human",
+    })
+    assert temporary == {
+        "mode": "ai", "revision": 4, "temporary": True, "resume_mode": "human",
+    }
+
+    permanent = normalize_control({"mode": "ai", "revision": 4})
+    assert permanent == {
+        "mode": "ai", "revision": 4, "temporary": False, "resume_mode": None,
+    }
+    # 幂等：归一化过的记录再归一化不变。
+    assert normalize_control(temporary) == temporary
+    assert normalize_control(permanent) == permanent
+
+
+def test_a_degraded_temporary_record_is_still_releasable() -> None:
+    """降级之后的席位必须能被正常当作真人席位使用（不是"读得出来但用不了"）。"""
+
+    instance = make_instance()
+    instance.players["p1"]["control"] = {
+        "mode": "ai", "revision": 4, "temporary": True, "resume_mode": None,
+    }
+
+    assert control_mode(instance, "p1") == "human"
+    assert is_human_controlled(instance, "p1") is True
+    assert ai_controlled_players(instance) == []
+    assert human_controlled_players(instance) == ["p1", "p2"]
+
+
 def test_temporary_takeover_releases_back_to_its_resume_mode() -> None:
     instance = make_instance()
     set_control(instance, "p1", "ai", temporary=True, resume_mode="human")
