@@ -323,6 +323,16 @@ GM action, an explicit player away, or an explicit room setting can. The setting
 is persisted, so the instance schema moves **14 → 15**: every older save becomes
 `pause`, which is what it actually did, and a corrupt value degrades to `pause` too.
 
+The chat (Bot) entry point is equivalent to the Web one: `host Character Name` /
+`unhost Character Name` let the GM change a seat's controller from the group, over
+the same server-side control API -- the bridge holds no control state of its own
+and there is no second authority. These are a different contract from
+`away` / `back` (which change presence, not the controller), and they require the
+GM or an authorized account; the target must match exactly one roster character,
+otherwise the bot lists what is available instead of guessing. When the server
+answers `CONTROL_CHANGE_BUSY`, the group gets a friendly "retry after this round"
+notice rather than a raw failure.
+
 ## D&D 2024 Authoritative Play State
 
 `core:dnd2024` combat, Session 0, and campaign records share `GameInstance.ruleset_state.version` and one EventBatch ledger. An optional adventure supplies story input through its exact binding but is not part of the Ruleset Bundle. Combat and campaign events have separate reducers; the runtime composition root dispatches explicit intent types without making the generic engine import D&D code.

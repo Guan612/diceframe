@@ -569,6 +569,7 @@ def bound_help_text(
             f"5. Step away: {command_example('away', command_prefix=command_prefix)}; "
             f"return: {command_example('back', command_prefix=command_prefix)}\n"
             f"6. GM progression: {command_example('advance', command_prefix=command_prefix)}\n"
+            f"   AI hosting: {command_example('host Character Name', command_prefix=command_prefix)} / {command_example('unhost Character Name', command_prefix=command_prefix)}\n"
             f"7. Use {command_example('help', command_prefix=command_prefix)} whenever you get stuck."
         ),
         "zh-CN": (
@@ -586,6 +587,7 @@ def bound_help_text(
             f"4. 查看自己状态：{command_example('状态', command_prefix=command_prefix)}\n"
             f"5. 临时离开：{command_example('暂离', command_prefix=command_prefix)}；回来：{command_example('回来', command_prefix=command_prefix)}\n"
             f"6. GM 推进：{command_example('推进', command_prefix=command_prefix)} / {command_example('下一轮', command_prefix=command_prefix)}\n"
+            f"   AI 托管：{command_example('托管 角色名', command_prefix=command_prefix)} / {command_example('取消托管 角色名', command_prefix=command_prefix)}\n"
             "7. DND局小抄：优势=2d20取高，劣势=2d20取低，同时出现会抵消\n"
             f"8. 看这份说明：{command_example('帮助', command_prefix=command_prefix)}"
         ),
@@ -606,6 +608,7 @@ def bound_help_text(
             f"5. 一時離席：{command_example('away', command_prefix=command_prefix)}；"
             f"復帰：{command_example('back', command_prefix=command_prefix)}\n"
             f"6. GM の進行：{command_example('advance', command_prefix=command_prefix)}\n"
+            f"   AI 托管：{command_example('host Character Name', command_prefix=command_prefix)} / {command_example('unhost Character Name', command_prefix=command_prefix)}\n"
             f"7. 困ったら {command_example('help', command_prefix=command_prefix)} を送ってください。"
         ),
         "de": (
@@ -625,6 +628,7 @@ def bound_help_text(
             f"5. Abwesend: {command_example('away', command_prefix=command_prefix)}; "
             f"zurück: {command_example('back', command_prefix=command_prefix)}\n"
             f"6. GM-Fortschritt: {command_example('advance', command_prefix=command_prefix)}\n"
+            f"   KI-Führung: {command_example('host Character Name', command_prefix=command_prefix)} / {command_example('unhost Character Name', command_prefix=command_prefix)}\n"
             f"7. Nutze {command_example('help', command_prefix=command_prefix)}, wenn du nicht weiterkommst."
         ),
     })
