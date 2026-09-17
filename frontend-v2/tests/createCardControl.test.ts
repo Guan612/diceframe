@@ -7,6 +7,7 @@ import {
   cardControlPayload,
   defaultCardControl,
   normalizeCardControl,
+  removeCardControl,
   syncCardControls,
 } from '../src/features/create/cardControl'
 
@@ -50,6 +51,35 @@ describe('create-game per-card control', () => {
   })
 })
 
+/**
+ * 角色与控制方式按 index 平行保存，删除角色必须同步删除对应控制方式。
+ * 只删角色会让后面的角色继承被删角色的 control（删 A(human) 后 B 变成 human）。
+ */
+describe('deleting a character keeps control aligned', () => {
+  it('Case A — deleting the first character shifts the rest correctly', () => {
+    // A human / B ai / C unclaimed → 删 A → B 仍是 ai、C 仍是 unclaimed
+    expect(removeCardControl(['human', 'ai', 'unclaimed'], 0)).toEqual(['ai', 'unclaimed'])
+  })
+
+  it('Case B — deleting a middle character keeps its neighbours intact', () => {
+    // 删 B → A 仍是 human、C 仍是 unclaimed
+    expect(removeCardControl(['human', 'ai', 'unclaimed'], 1)).toEqual(['human', 'unclaimed'])
+  })
+
+  it('deleting the last character only drops the last control value', () => {
+    expect(removeCardControl(['human', 'ai', 'unclaimed'], 2)).toEqual(['human', 'ai'])
+  })
+
+  it('an out-of-range index never removes anything', () => {
+    expect(removeCardControl(['human', 'ai'], 5)).toEqual(['human', 'ai'])
+    expect(removeCardControl(['human', 'ai'], -1)).toEqual(['human', 'ai'])
+  })
+
+  it('converges junk values while removing, so bad data cannot reach the payload', () => {
+    expect(removeCardControl(['human', 'script', 'ai'], 0)).toEqual(['unclaimed', 'ai'])
+  })
+})
+
 describe('CreateView control placement contract', () => {
   it('offers a compact per-card control in the character step', () => {
     // 角色步骤：每张角色卡旁一个 select，而不是一组 radio。
@@ -57,6 +87,14 @@ describe('CreateView control placement contract', () => {
       /create-character-card[\s\S]*?<select v-model="cardControl\[i\]"/,
     )
     expect(createView).toContain('v-for="mode in CARD_CONTROL_MODES"')
+  })
+
+  it('removes the matching control when a character is removed', () => {
+    // 结构性锁定：removeCharacter 必须同时更新 cardControl，否则会再次错位。
+    const body = createView.slice(createView.indexOf('function removeCharacter'))
+    const fn = body.slice(0, body.indexOf('\n}'))
+    expect(fn).toContain('characters.value.splice(idx, 1)')
+    expect(fn).toContain('removeCardControl(cardControl.value, idx)')
   })
 
   it('keeps the confirm step a summary instead of a second config page', () => {

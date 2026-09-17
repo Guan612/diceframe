@@ -27,6 +27,7 @@ import { isLlmConfigReady } from '@/utils/modelConfiguration'
 import {
   CARD_CONTROL_MODES,
   defaultCardControl,
+  removeCardControl,
   syncCardControls,
   type CardControlMode,
 } from '@/features/create/cardControl'
@@ -455,6 +456,9 @@ function onImportDfCard(e: Event) {
 function removeCharacter(idx: number) {
   if (characters.value.length <= 1) { toast.error(t('atLeastOneCharacter')); return }
   characters.value.splice(idx, 1)
+  // 控制方式与角色按 index 平行保存，必须一起删；否则后面的角色会继承被删角色的
+  // control（删掉 A(human) 之后 B 会变成 human，而它原本是 ai）。
+  cardControl.value = removeCardControl(cardControl.value, idx)
 }
 
 function canNext() {

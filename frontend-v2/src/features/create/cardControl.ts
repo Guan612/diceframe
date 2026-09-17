@@ -52,3 +52,23 @@ export function cardControlPayload(
 ): CardControlMode[] {
   return syncCardControls(count, current)
 }
+
+/**
+ * 删除某一张角色时，同步删除它对应的控制方式。
+ *
+ * 角色与控制方式是按 index 平行保存的（`characters[i]` ↔ `cardControl[i]`）。只删
+ * 角色不删控制方式，后面的角色就会**继承前一个角色的 control**：删掉 A(human) 之后
+ * B 会拿到 human，而不是它原本的 ai。所以两者必须一起删。
+ *
+ * 越界 index 返回归一化后的原数组（不抛错、不误删）。归一化顺带把非法值收敛成合法
+ * 模式，避免把坏值带进创建 payload。
+ */
+export function removeCardControl(
+  current: readonly unknown[],
+  index: number,
+): CardControlMode[] {
+  const next = syncCardControls(current.length, current)
+  if (index < 0 || index >= next.length) return next
+  next.splice(index, 1)
+  return next
+}
