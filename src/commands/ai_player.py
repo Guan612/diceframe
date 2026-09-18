@@ -264,7 +264,7 @@ async def fill_ai_player_actions(
     results: list[dict[str, Any]] = []
     if llm_client is None or not hasattr(llm_client, "call"):
         return results
-    if instance.state != GameState.ACTIVE_ACTION or not instance.human_actions_ready():
+    if instance.state != GameState.ACTIVE_ACTION or not _ai_fill_gate_open(instance):
         return results
     provider_name = str(getattr(llm_client, "default", "") or "")
     for uid in _ai_seats(instance):
@@ -278,6 +278,33 @@ async def fill_ai_player_actions(
             temperature=temperature,
         ))
     return results
+
+
+def _ai_fill_gate_open(instance: GameInstance) -> bool:
+    """AI 席位是否可以在此时补行动。
+
+    常规情况沿用 :meth:`GameInstance.human_actions_ready`：有真人时，必须等真人
+    一侧全部交齐，AI 绝不与未提交的真人并行。
+
+    但**全 AI 桌**（例如单人局把房主自己设为 AI 托管）没有真人可等：
+    ``human_actions_ready`` 会因为没有真人席位而恒为 ``False``，同时该席位的
+    人工提交会被 ``submission_block`` 以 ``PLAYER_AI_CONTROLLED`` 拒绝，于是
+    "没人能提交、AI 也不补行动"，整桌发不出任何内容。这里补上这一条：没有
+    活跃真人、且**确实存在 AI 席位**时允许补行动。
+
+    ``unclaimed`` 席位不属于 AI，因此只有未认领席位的桌子不会被这条兜底唤醒；
+    AI 也不会因为这条兜底而与未提交的真人并行（那时 ``active_human_players``
+    非空，仍必须走原闸门）。触发时机不变：仍由房主显式推进（或控制权变更）进入
+    唯一的推进边界，本函数只决定"进去之后 AI 能不能出手"。
+    """
+
+    if instance.human_actions_ready():
+        return True
+    if instance.has_pending_dice():
+        return False
+    if instance.active_human_players:
+        return False
+    return bool(_ai_seats(instance))
 
 
 def _ai_seats(instance: GameInstance) -> list[str]:
