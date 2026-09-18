@@ -453,6 +453,33 @@
   font-size: 11px;
 }
 
+/* 确认页只做只读摘要：每张角色一行「名字 + 最终控制方式」。 */
+.create-confirm-controls {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.create-confirm-controls li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 7px;
+  background: var(--df-control-bg);
+  font-size: 12px;
+}
+
+.create-confirm-controls strong {
+  color: var(--df-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .create-actions {
   position: static;
   z-index: auto;

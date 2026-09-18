@@ -185,10 +185,12 @@ function ensureCharacter(value: CharacterSheet): CreateCharacter {
 }
 
 // 每张角色卡由谁负责：控制方式在「角色」步骤直接选，确认页只做摘要。
-// 默认第一张是「玩家」、其余「AI 托管」——创建时只在这两者间选，不提供「等待认领」。
+// 默认第一张是「玩家」、其余「等待认领」——与后端三态契约（human / ai / unclaimed）一致。
 const cardControl = ref<CardControlMode[]>(['human'])
 function controlLabel(mode: string): string {
-  return mode === 'ai' ? t('controlAi') : t('controlHuman')
+  if (mode === 'ai') return t('controlAi')
+  if (mode === 'unclaimed') return t('controlUnclaimed')
+  return t('controlHuman')
 }
 // 任何进入 characters[] 的路径（手动创建 / 角色卡选择器 / 导入 / 专业建卡）都会
 // 经过这里补齐控制方式，不会出现「导入的角色没有控制方式」。
@@ -801,6 +803,13 @@ async function create() {
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>
           <div class="create-confirm-characters"><span v-for="(c, i) in characters" :key="i">{{ c.character_name }}</span></div>
+          <!-- 确认页只做只读摘要：每张角色一行「名字 + 最终控制方式」，配置本身留在「角色」步骤。 -->
+          <ul class="create-confirm-controls">
+            <li v-for="(c, i) in characters" :key="i">
+              <span>{{ c.character_name || t('unnamed') }}</span>
+              <strong>{{ controlLabel(cardControl[i] ?? defaultCardControl(i)) }}</strong>
+            </li>
+          </ul>
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>
