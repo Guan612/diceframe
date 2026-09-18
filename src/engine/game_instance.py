@@ -1677,7 +1677,11 @@ class GameInstance:
             # 真人闸门也要在这个 boundary 内复核：模型调用期间别的席位可能被真人
             # 接管、或暂离的真人回来了，此时桌面上多了一个还没提交的 active human，
             # 现在写入就会违反"AI 只在真人全部行动之后才行动"。
-            if not self.human_actions_ready():
+            # 没有活跃真人的桌子（全 AI 桌，例如单人局把房主自己设为 AI 托管）没有
+            # 真人可等：此时 human_actions_ready() 恒为 False，照旧判定会把刚生成好的
+            # 行动误丢（reason=human_gate_changed），整桌永远发不出内容。因此只有
+            # "确实存在未提交的活跃真人"才算闸门关闭。
+            if self.active_human_players and not self.human_actions_ready():
                 return "human_gate_changed"
             # 去重与复核必须在同一个 boundary 内：否则两个并发的补行动请求会各自
             # 读到"还没有 AI 行动"，然后各写一条。
