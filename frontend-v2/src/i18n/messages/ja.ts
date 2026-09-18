@@ -2312,6 +2312,9 @@ export const ja = {
   // 未収録のエラーコードはフロントエンドが原文を表示します。
   // ---- 招待 / 端末ペアリング ----
   inviteCopyLink: 'リンクをコピー',
+  inviteAddressLabel: 'プレイヤーが開くアドレス',
+  inviteAddressResolving: '利用できるアドレスを取得中…',
+  inviteAddressPlaceholder: 'プレイヤーがアクセスできるアドレスを選択',
   inviteAddressHint: 'ヒント：招待リンクのアドレスに友人がアクセスできる必要があります。同じネットワークなら LAN アドレス、遠隔なら公衆またはトンネル経由のアドレスを使ってください。',
   inviteAddressSettingsLink: '共有アドレスを変更',
   inviteLocalOnlyWarning: 'このアドレスはこの端末からのみアクセスできます。他の端末はこのアドレスでは参加できません。アクセス可能な共有アドレスを設定してください。',
