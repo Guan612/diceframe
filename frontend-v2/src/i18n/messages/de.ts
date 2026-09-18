@@ -2313,7 +2313,6 @@ export const de = {
   inviteAddressSettingsLink: 'Freigabe-Adresse ändern',
   inviteLocalOnlyWarning: 'Diese Adresse funktioniert nur auf diesem Gerät, andere Geräte können damit nicht beitreten. Bitte eine erreichbare Freigabe-Adresse konfigurieren.',
   controlMode: 'Steuerung',
-  controlBackToCharacters: 'Zurück zu den Charakteren',
   inviteScanHint: 'Lass die Spielenden das mit der DiceFrame-App scannen oder schick ihnen den Link unten.',
   inviteQrHint: 'Scannen tritt dieser Runde bei und legt einen Charakter an.',
   controlLink: 'Steuerungslink',

@@ -17,37 +17,44 @@ const createView = readFileSync(
 )
 
 describe('create-game per-card control', () => {
-  it('uses the existing contract vocabulary only', () => {
-    // 后端 Player Control Contract 的三个 mode，前端不得引入第四种。
-    expect([...CARD_CONTROL_MODES]).toEqual(['human', 'ai', 'unclaimed'])
+  it('offers only the two modes a creator can commit to', () => {
+    // 后端 Player Control Contract 有 human / ai / unclaimed 三个 mode，但 unclaimed
+    // 是游戏内的中间态，创建阶段不提供——每张卡在进 payload 前必须落到明确的控制方。
+    expect([...CARD_CONTROL_MODES]).toEqual(['human', 'ai'])
   })
 
-  it('defaults the first character to human and the rest to unclaimed', () => {
+  it('defaults the first character to human and the rest to ai', () => {
     expect(defaultCardControl(0)).toBe('human')
-    expect(defaultCardControl(1)).toBe('unclaimed')
-    expect(syncCardControls(3, [])).toEqual(['human', 'unclaimed', 'unclaimed'])
+    expect(defaultCardControl(1)).toBe('ai')
+    expect(syncCardControls(3, [])).toEqual(['human', 'ai', 'ai'])
   })
 
   it('keeps the user choices and fills newly added characters', () => {
     // 导入 / 选择器新增角色时，已做的选择不能被重置。
     const chosen = ['ai', 'human']
-    expect(syncCardControls(4, chosen)).toEqual(['ai', 'human', 'unclaimed', 'unclaimed'])
+    expect(syncCardControls(4, chosen)).toEqual(['ai', 'human', 'ai', 'ai'])
     // 删掉角色时数组跟着收缩。
     expect(syncCardControls(1, chosen)).toEqual(['ai'])
   })
 
   it('converges junk values to a legal mode instead of sending them', () => {
     expect(normalizeCardControl('', 0)).toBe('human')
-    expect(normalizeCardControl('script', 2)).toBe('unclaimed')
+    expect(normalizeCardControl('script', 2)).toBe('ai')
     expect(normalizeCardControl(undefined, 0)).toBe('human')
     expect(normalizeCardControl('ai', 1)).toBe('ai')
   })
 
-  it('produces the payload control values for human / ai / unclaimed', () => {
+  it('converges a stale unclaimed value from an older draft', () => {
+    // unclaimed 曾经是创建期的合法选项；旧草稿恢复回来时按位置落到默认值，
+    // 而不是把一个创建阶段已经不支持的 mode 带进 payload。
+    expect(normalizeCardControl('unclaimed', 0)).toBe('human')
+    expect(normalizeCardControl('unclaimed', 1)).toBe('ai')
+    expect(cardControlPayload(3, ['human', 'unclaimed', 'ai'])).toEqual(['human', 'ai', 'ai'])
+  })
+
+  it('produces the payload control values for human / ai', () => {
     // 每张角色都带明确的 control，创建 payload 直接使用这些值。
-    expect(cardControlPayload(3, ['human', 'ai', 'unclaimed'])).toEqual([
-      'human', 'ai', 'unclaimed',
-    ])
+    expect(cardControlPayload(3, ['human', 'ai', 'human'])).toEqual(['human', 'ai', 'human'])
   })
 })
 
@@ -57,17 +64,17 @@ describe('create-game per-card control', () => {
  */
 describe('deleting a character keeps control aligned', () => {
   it('Case A — deleting the first character shifts the rest correctly', () => {
-    // A human / B ai / C unclaimed → 删 A → B 仍是 ai、C 仍是 unclaimed
-    expect(removeCardControl(['human', 'ai', 'unclaimed'], 0)).toEqual(['ai', 'unclaimed'])
+    // A human / B ai / C human → 删 A → B 仍是 ai、C 仍是 human
+    expect(removeCardControl(['human', 'ai', 'human'], 0)).toEqual(['ai', 'human'])
   })
 
   it('Case B — deleting a middle character keeps its neighbours intact', () => {
-    // 删 B → A 仍是 human、C 仍是 unclaimed
-    expect(removeCardControl(['human', 'ai', 'unclaimed'], 1)).toEqual(['human', 'unclaimed'])
+    // A human / B ai / C human → 删 B → A 仍是 human、C 仍是 human
+    expect(removeCardControl(['human', 'ai', 'human'], 1)).toEqual(['human', 'human'])
   })
 
   it('deleting the last character only drops the last control value', () => {
-    expect(removeCardControl(['human', 'ai', 'unclaimed'], 2)).toEqual(['human', 'ai'])
+    expect(removeCardControl(['human', 'ai', 'human'], 2)).toEqual(['human', 'ai'])
   })
 
   it('an out-of-range index never removes anything', () => {
@@ -76,7 +83,7 @@ describe('deleting a character keeps control aligned', () => {
   })
 
   it('converges junk values while removing, so bad data cannot reach the payload', () => {
-    expect(removeCardControl(['human', 'script', 'ai'], 0)).toEqual(['unclaimed', 'ai'])
+    expect(removeCardControl(['human', 'script', 'ai'], 0)).toEqual(['ai', 'ai'])
   })
 })
 
@@ -100,9 +107,12 @@ describe('CreateView control placement contract', () => {
   it('keeps the confirm step a summary instead of a second config page', () => {
     const confirmSection = createView.slice(createView.indexOf('create-confirm-stage'))
     const summary = confirmSection.slice(0, confirmSection.indexOf('</section>'))
-    // 确认页展示结果摘要……
-    expect(summary).toContain('controlLabel(')
-    // ……但不再铺任何 radio 配置控件。
+    // 确认页只报角色名单……
+    expect(summary).toContain('create-confirm-characters')
+    // ……不再逐张重复「名字 + 控制方式」：名字在上面的名单里已经出现过一次，
+    // 控制方式属于「角色」步骤，确认页既不展示也不提供任何配置控件。
+    expect(summary).not.toContain('controlLabel(')
+    expect(summary).not.toContain('cardControl[')
     expect(summary).not.toContain('type="radio"')
   })
 

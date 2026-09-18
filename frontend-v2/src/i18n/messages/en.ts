@@ -2315,7 +2315,6 @@ export const en = {
   inviteAddressSettingsLink: 'Change sharing address',
   inviteLocalOnlyWarning: 'This address only works on this machine, so other devices cannot join with it. Please configure a reachable sharing address.',
   controlMode: 'Control',
-  controlBackToCharacters: 'Back to characters',
   inviteScanHint: 'Have players scan this with the DiceFrame app, or send them the link below.',
   inviteQrHint: 'Scanning joins this game and creates a character.',
   controlLink: 'Control link',

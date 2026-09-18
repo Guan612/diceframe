@@ -2315,7 +2315,6 @@ export const zhCN = {
   inviteAddressSettingsLink: '修改分享地址',
   inviteLocalOnlyWarning: '当前地址仅本机可访问，其他设备无法通过该地址加入。请配置可访问的分享地址。',
   controlMode: '控制方式',
-  controlBackToCharacters: '返回角色设置',
   inviteScanHint: '让玩家用 DiceFrame App 扫码，或把下面的链接发给他们。',
   inviteQrHint: '扫码即可加入本局并创建角色。',
   controlLink: '接管链接',
