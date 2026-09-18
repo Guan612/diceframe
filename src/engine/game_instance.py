@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
 
-from src.engine import round_snapshots, turn_state
+from src.engine import round_recovery, round_snapshots, turn_state
 from src.engine.contracts import (
     ActionRecord,
     CheckResult,
@@ -803,61 +803,14 @@ class GameInstance:
             self.puzzle_manager = PuzzleManager()
 
     async def rollback_last_round(self) -> int | None:
-        """恢复到上一轮开始前；返回恢复后的轮次，没有日志时返回 None。"""
-        async with self._lock:
-            if not self.log:
-                return None
-            last = self.log.pop()
-            from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
+        """恢复到上一轮开始前；返回恢复后的轮次，没有日志时返回 None。
 
-            rolled_back_round = int(last.get("round", self.round_number) or self.round_number)
-            current_combat_snapshot = self.combat_extension_round_snapshots.get(
-                str(self.round_number),
-            )
-            if (
-                self.round_number >= rolled_back_round
-                and isinstance(current_combat_snapshot, dict)
-            ):
-                if not self.restore_combat_extension_snapshot(current_combat_snapshot):
-                    self.combat_extension = {}
-            reverse_round_economy(self, rolled_back_round)
-            missing = object()
-            combat_snapshot: Any = last.get("combat_extension_round_start", missing)
-            if combat_snapshot is missing:
-                combat_snapshot = self.combat_extension_round_snapshots.get(
-                    str(rolled_back_round), missing,
-                )
-            snapshot = last.get("round_start_snapshot") or last.get("pre_state_snapshot", {})
-            if isinstance(snapshot, dict) and snapshot:
-                restore_players(self, reconcile_rollback_snapshot(self, snapshot, rolled_back_round))
-            # Combat actions run during ACTIVE_ACTION, before the ordinary
-            # round snapshot is captured at judgment entry. Restore their
-            # earlier source-field snapshot last so HP/inventory are not
-            # overwritten by the later round_start_snapshot.
-            if combat_snapshot is not missing:
-                if not self.restore_combat_extension_snapshot(combat_snapshot):
-                    self.combat_extension = {}
-            self.discard_combat_extension_snapshots_from(rolled_back_round)
-            # 世界真相同样是"这一轮结算出来的东西"：回滚到第 N 轮时，第 N 轮及
-            # 之后写入的 world ops 必须一起撤销，否则世界会记住一个被丢弃的分支。
-            if isinstance(last.get("pre_world_state"), dict) and last["pre_world_state"]:
-                self.world_state = ensure_world_state(last["pre_world_state"])
-            self.round_number = max(1, rolled_back_round)
-            self.action_queue.clear()
-            self.pending_actions.clear()
-            self.ready_players.clear()
-            # ``reverse_round_economy`` restores still-valid proposals whose
-            # settlement happened in the rolled-back round.  Do not clear the
-            # compatibility projection after that restoration.
-            self.reset_round_checks()
-            # Explicit rollback starts a fresh attempt for that round; do not
-            # let a discarded outcome affect the replay or a later round.
-            self.death_save_outcomes.clear()
-            self.round_start_snapshot.clear()
-            self.round_entity_snapshot.clear()
-            self.state = GameState.ACTIVE_ACTION
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return self.round_number
+        这是"回滚一个已经完成的历史回合"（historical rollback），与判定失败的
+        :meth:`abort_round_processing` 是两个不同 contract。实现见
+        ``round_recovery.rollback_last_round_locked``。
+        """
+        async with self._lock:
+            return round_recovery.rollback_last_round_locked(self)
 
     async def abort_round_processing(self) -> bool:
         """判定阶段处理失败：回退到行动阶段，保留行动队列等待重试。
@@ -875,33 +828,7 @@ class GameInstance:
         ``_drop_stale_combat_caches``。
         """
         async with self._lock:
-            if self.state != GameState.ACTIVE_JUDGMENT:
-                return False
-            restored = False
-            if self.round_start_snapshot:
-                restore_players(self, self.round_start_snapshot)
-                restored = True
-            combat_snapshot = self.combat_extension_round_snapshots.get(
-                str(self.round_number),
-            )
-            if isinstance(combat_snapshot, dict):
-                if not self.restore_combat_extension_snapshot(combat_snapshot):
-                    self.combat_extension = {}
-                restored = True
-            # 旧版战斗路径直接改写的实体（npcs/combat_enemies/战斗状态）。
-            entities_restored = self.restore_round_entity_snapshot()
-            restored = restored or entities_restored
-            if restored:
-                self._drop_stale_combat_caches(all_targets=entities_restored)
-            for check_id in list(self._luck_timers):
-                self._cancel_luck_timer(check_id)
-            self.reset_round_checks()
-            self.death_save_outcomes.clear()
-            self.round_start_snapshot.clear()
-            self.round_entity_snapshot.clear()
-            self.state = GameState.ACTIVE_ACTION
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
+            return round_recovery.abort_round_processing_locked(self)
 
     def _drop_stale_combat_caches(self, *, all_targets: bool = False) -> None:
         """丢弃"状态已回滚、缓存却仍记录伤害"的战斗结算缓存（逻辑见 round_snapshots）。"""
@@ -1358,62 +1285,14 @@ class GameInstance:
         确保 swipe 重生成时恢复到本轮初始状态而非应用后状态。
         state_changes 为本轮玩家可见状态变动摘要，随 log entry 持久化供群机器人单独转发。
         """
-        import copy
         async with self._lock:
-            pending_combat_summaries: list[str] = []
-            raw_schema = (
-                self.combat_extension.get("schema_version")
-                if isinstance(self.combat_extension, dict)
-                else None
+            round_recovery.finish_judgment_locked(
+                self,
+                gm_response,
+                pre_state_snapshot=pre_state_snapshot,
+                state_changes=state_changes,
+                pre_combat_extension_snapshot=pre_combat_extension_snapshot,
             )
-            if isinstance(self.combat_extension, dict) and (
-                raw_schema is None
-                or (isinstance(raw_schema, int) and not isinstance(raw_schema, bool)
-                    and raw_schema == 1)
-            ):
-                raw_pending = self.combat_extension.pop("pending_summaries", [])
-                if isinstance(raw_pending, list):
-                    pending_combat_summaries = [
-                        str(item) for item in raw_pending if str(item).strip()
-                    ][-50:]
-            combined_state_changes = list(state_changes or [])
-            for item in pending_combat_summaries:
-                if item not in combined_state_changes:
-                    combined_state_changes.append(item)
-            self.log.append({
-                "round": self.round_number,
-                "actions": list(self.action_queue),
-                "gm_response": gm_response,
-                "state_changes": combined_state_changes,
-                "check_results": [dict(item) for item in self.last_checks],
-                "round_start_snapshot": (
-                    copy.deepcopy(self.round_start_snapshot)
-                    if self.round_start_snapshot else _snapshot_players(self)
-                ),
-                "combat_extension_round_start": copy.deepcopy(
-                    self.combat_extension_round_snapshots.get(
-                        str(self.round_number),
-                        self.combat_extension if isinstance(self.combat_extension, dict) else {},
-                    )
-                ),
-                "swipes": [],
-                "current_swipe": 0,
-                "pre_state_snapshot": pre_state_snapshot if pre_state_snapshot is not None else _snapshot_players(self),
-                "pre_combat_extension_snapshot": copy.deepcopy(
-                    pre_combat_extension_snapshot
-                    if pre_combat_extension_snapshot is not None
-                    else self.current_combat_extension_snapshot()
-                ),
-                # 判定入口的世界真相：整轮回滚 / swipe 分支切换时一起撤销本轮
-                # 写入的 world ops（与玩家、战斗扩展快照同一语义）。
-                "pre_world_state": copy.deepcopy(
-                    self.round_entity_snapshot.get("world_state", self.world_state)
-                ),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-            self.combat_extension_round_snapshots.pop(str(self.round_number), None)
-            self.total_llm_calls += 1
-            self.last_activity = datetime.now(timezone.utc).isoformat()
         await self.start_round()
 
     async def finish_judgment_with_swipe(
@@ -1424,38 +1303,13 @@ class GameInstance:
     ) -> None:
         """为已有轮次添加 swipe（不推进回合）。"""
         async with self._lock:
-            for entry in self.log:
-                if entry.get("round") == original_round:
-                    swipes = entry.setdefault("swipes", [])
-                    if not swipes:
-                        swipes.append(entry.get("gm_response", ""))
-                    swipes.append(gm_response)
-                    entry["current_swipe"] = len(swipes) - 1
-                    entry["gm_response"] = gm_response
-                    if state_changes is not None:
-                        entry["state_changes"] = list(state_changes)
-                    break
-            self.total_llm_calls += 1
-            self.last_activity = datetime.now(timezone.utc).isoformat()
+            round_recovery.finish_judgment_with_swipe_locked(
+                self, gm_response, original_round, state_changes=state_changes,
+            )
 
     async def switch_swipe(self, round_num: int, swipe_idx: int) -> bool:
-        """切换指定轮次的 swipe 展示。"""
-        for entry in self.log:
-            if entry.get("round") == round_num:
-                swipes = entry.get("swipes", [])
-                if not swipes or swipe_idx >= len(swipes):
-                    return False
-                entry["current_swipe"] = swipe_idx
-                entry["gm_response"] = swipes[swipe_idx]
-                panel_history = entry.get("swipe_scene_panels")
-                if isinstance(panel_history, list) and swipe_idx < len(panel_history):
-                    entry["scene_panels"] = copy.deepcopy(panel_history[swipe_idx])
-                prompt_history = entry.get("swipe_scene_image_prompts")
-                if isinstance(prompt_history, list) and swipe_idx < len(prompt_history):
-                    entry["scene_image_prompt"] = str(prompt_history[swipe_idx] or "")
-                logger.info("Swipe 切换: round=%d → %d/%d", round_num, swipe_idx, len(swipes))
-                return True
-        return False
+        """切换指定轮次的 swipe 展示（实现见 round_recovery；并发语义与基线一致）。"""
+        return round_recovery.switch_swipe(self, round_num, swipe_idx)
 
     # ---------- 状态转换 ------------------------------------
 
