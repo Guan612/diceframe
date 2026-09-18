@@ -277,7 +277,7 @@ export const ja = {
   advancementXpHint: '目標達成で XP を獲得し、次の基準に達すると成長資格が一度付与されます。',
   advancementAuthority: '資格の付与者',
   advancementAiGm: 'AI GM が自動判定',
-  advancementHumanGm: '人間 GM が手動付与',
+  advancementHumanGm: 'プレイヤー GM が手動付与',
   advancementEntitlementHint: 'どちらの方式も次レベルへの資格を一度だけ付与し、選択はプレイヤーが完了します。',
   advancementGranted: 'レベル {level} への成長資格あり',
   advancementWaiting: '成長資格を待っています',

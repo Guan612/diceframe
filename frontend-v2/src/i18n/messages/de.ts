@@ -277,7 +277,7 @@ export const de = {
   advancementXpHint: 'Belohnungen aus Zielen sammeln XP; das Überschreiten der nächsten Schwelle gewährt eine Aufstiegsberechtigung.',
   advancementAuthority: 'Berechtigungsvergabe',
   advancementAiGm: 'KI-Spielleiter automatisch',
-  advancementHumanGm: 'Menschlicher Spielleiter manuell',
+  advancementHumanGm: 'Spielleiter (Spieler) manuell',
   advancementEntitlementHint: 'Beide Methoden gewähren eine Berechtigung für die nächste Stufe; der Spieler trifft dann die Wahlmöglichkeiten dieser Stufe.',
   advancementGranted: 'Berechtigt zum Aufstieg auf Stufe {level}',
   advancementWaiting: 'Warte auf Aufstiegsberechtigung',
