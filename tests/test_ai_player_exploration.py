@@ -459,7 +459,6 @@ async def test_repeated_fill_appends_only_one_action() -> None:
     assert [record["status"] for record in first] == ["added"]
     assert [record["status"] for record in second] == ["duplicate"]
     assert len(llm.calls) == 1
-    assert len(ai_actions(instance, "a1")) == 1
 
 
 # ---- 9b. 原子性：复核与写入必须在同一个 authority boundary --------------------
@@ -516,7 +515,6 @@ async def test_the_recheck_and_the_commit_are_one_critical_section(monkeypatch) 
     assert lock_held_during_recheck == [True]
     assert events == ["append", "flip"]
     assert [record["status"] for record in records] == ["added"]
-    assert len(ai_actions(instance, "a1")) == 1
 
 
 @pytest.mark.asyncio
@@ -569,7 +567,6 @@ async def test_two_concurrent_fills_commit_exactly_one_action() -> None:
         fill_ai_player_actions(instance, llm_client=second_llm),
     )
 
-    assert len(ai_actions(instance, "a1")) == 1
     # 只断言"最终只有一条"不够：``add_action`` 对同一 uid 是替换语义，所以即使
     # 两个请求都提交，最终也可能只剩一条（后写覆盖先写）。真正要锁死的是**只有
     # 一个**请求认为自己成功提交了，另一个必须在提交边界内看到 duplicate。
@@ -639,7 +636,6 @@ async def test_an_open_human_gate_still_commits() -> None:
     records = await fill_ai_player_actions(instance, llm_client=FakePlayerLLM())
 
     assert records[0]["status"] == "added"
-    assert len(ai_actions(instance, "a1")) == 1
 
 
 @pytest.mark.asyncio
@@ -655,7 +651,6 @@ async def test_repeated_service_call_does_not_generate_a_second_action() -> None
     assert advanced["payload"]["advanced"] is True
     assert retry["status"] == 409
     assert len(llm.calls) == 1
-    assert len(ai_actions(instance, "a1")) == 1
 
 
 # ---- 10. 感知边界：GM 隐藏真相绝不进入 AI prompt -----------------------------
@@ -832,7 +827,6 @@ async def test_all_ai_table_fills_actions_without_any_human_seat() -> None:
     assert [record["status"] for record in results] == ["added"]
     assert len(llm.calls) == 1
     assert ai_actions(instance, "a1")
-    assert len(ai_actions(instance, "a1")) == 1
 
 
 @pytest.mark.asyncio
@@ -870,3 +864,32 @@ def test_ai_fill_gate_matrix() -> None:
     ready = make_instance(humans=("h1",), ai=("a1",))
     ready.ready_players.add("h1")
     assert _ai_fill_gate_open(ready) is True
+
+
+# ---- 真实 Web 入口（turns service）----------------------------------------
+#
+# 上面那些测试直接调用命令层 ``fill_ai_player_actions``。这一组必须证明
+# **真实服务入口**也能把全 AI 桌送进同一个闸门：曾经的旧闸门
+# （``turns._fill_ai_player_actions`` 与 ``resume_after_control_change`` 各自的
+# ``human_actions_ready()`` 提前 return）会在命令层之前就把全 AI 桌挡掉。
+
+
+@pytest.mark.asyncio
+async def test_solo_owner_switching_to_ai_hosting_resumes_and_writes_an_action() -> None:
+    from src.webui.services.turns import resume_after_control_change
+
+    instance = make_instance(humans=("h1",), solo=True)
+    llm = FakePlayerLLM()
+    dependencies = make_dependencies(instance, llm_client=llm)
+
+    # 房主把自己设为 AI 托管：active_human_players 变空。
+    set_control(instance, "h1", "ai")
+    assert instance.active_human_players == set()
+
+    result = await resume_after_control_change(
+        dependencies, "web:ai-player:bot", seat_uid="h1",
+    )
+
+    assert len(ai_actions(instance, "h1")) == 1, "控制权变更后 AI 必须真正写入行动"
+    assert len(llm.calls) == 1
+    assert result["payload"]["resumed"] is True

@@ -249,7 +249,10 @@ async def _fill_ai_player_actions(
     补了行动但本轮没有推进时，那条行动不能只留在内存里。
     """
     fill = dependencies.fill_ai_player_actions
-    if fill is None or not instance.human_actions_ready():
+    # 闸门只有一个所有者：``ai_player.fill_ai_player_actions`` 自己决定该不该行动
+    # （真人交齐，或"全 AI 桌没有真人可等"）。这里再拦一道旧闸门会让全 AI 桌永远
+    # 进不去——没有活跃真人时 ``human_actions_ready()`` 恒为 False，正是要修的场景。
+    if fill is None:
         return False
     try:
         records = await fill(instance)
@@ -549,9 +552,9 @@ async def resume_after_control_change(
 ) -> TurnResult:
     """控制权写入成功后，立即唤醒现有的唯一推进边界。
 
-    这个 helper 只做四件事：确认控制权已经落盘、判断当前 phase 是否可推进、
-    判断真人闸门是否满足、然后调用既有 progression。它不生成 prompt、不产生
-    AI 行动、不规划检定、不写叙事、不碰战斗规则。
+    这个 helper 只做三件事：确认控制权已经落盘、判断当前 phase 是否可推进、
+    然后调用既有 progression（AI 补行动的闸门属于 ``ai_player``，这里不再重复
+    判断）。它不生成 prompt、不产生 AI 行动、不规划检定、不写叙事、不碰战斗规则。
 
     权威战斗由 ``resume_authoritative_combat``（同一注入能力）接管：控制权一变
     就沿着既有的确定性自动阶梯走完该席位的回合；否则走自由文本回合的推进
@@ -574,8 +577,10 @@ async def resume_after_control_change(
         return _result({
             "ok": True, "resumed": False, "reason": "phase_not_actionable",
         })
-    # 真人闸门是探索补行动的唯一前提：仍有真人没交行动时，AI 不抢跑。
-    if not instance.human_actions_ready():
+    # 只在"确实存在还没交行动的活跃真人"时才算闸门未开（AI 不抢跑，保持既有语义与
+    # 对外 reason）。没有活跃真人时（单人局把房主自己设为 AI 托管）没有真人可等，
+    # 必须继续往下走，否则"设为 AI 托管"之后永远不 resume。
+    if instance.active_human_players and not instance.human_actions_ready():
         return _result({
             "ok": True, "resumed": False, "reason": "human_gate_open",
         })
