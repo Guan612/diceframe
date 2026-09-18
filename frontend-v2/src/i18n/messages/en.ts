@@ -277,7 +277,7 @@ export const en = {
   advancementXpHint: 'Objective rewards accumulate XP; crossing the next threshold grants one advancement entitlement.',
   advancementAuthority: 'Entitlement issuer',
   advancementAiGm: 'AI GM automatic',
-  advancementHumanGm: 'Human GM manual',
+  advancementHumanGm: 'Player GM manual',
   advancementEntitlementHint: 'Both methods grant one entitlement for the next level; the player then completes that level’s choices.',
   advancementGranted: 'Entitled to advance to level {level}',
   advancementWaiting: 'Waiting for advancement entitlement',
