@@ -417,6 +417,101 @@ def format_manual_roll_context(
     )
 
 
+# ---- 世界书 Prompt Projection（施工方案 §24 / §25） ---------------------------
+#
+# 模型需要知道：id / type / tier / unreliable / name / content。
+# 模型不需要知道 matcher 运行时元数据：probability / cooldown / delay / sticky /
+# group_weight / match_mode —— 它们是"什么时候触发"的实现细节，不是设定本身。
+_LORE_HEADING = {
+    "en": "## Currently Relevant World Setting",
+    "zh-CN": "【当前相关世界设定】",
+    "ja": "## 現在関連する世界設定",
+    "de": "## Aktuell relevante Weltfakten",
+}
+
+_LORE_INTRO = {
+    "en": "The following comes from the current worldbook and is the established setting relevant to this scene.",
+    "zh-CN": "以下内容来自当前世界书，是与本轮场景相关的既有设定。",
+    "ja": "以下は現在のワールドブックに基づく、この場面に関連する既存の設定です。",
+    "de": "Das Folgende stammt aus dem aktuellen Weltenbuch und beschreibt die für diese Szene relevanten etablierten Fakten.",
+}
+
+# 权威顺序与自由度保护：Lorebook 只是"已定义事实的边界"，不是剧本。
+_LORE_CONSISTENCY_RULES = {
+    "en": (
+        "Consistency rules:\n"
+        "- Authoritative WorldState / system rulings / ruleset runtime outrank the worldbook.\n"
+        "- The worldbook constrains only the facts it explicitly states.\n"
+        "- Anything unstated is open space and may be improvised plausibly.\n"
+        "- The worldbook is not a script; players are not required to follow a preset route.\n"
+        "- Later changes caused by players or the system are governed by the current WorldState.\n"
+        "- Entries marked unreliable are rumours, NPC beliefs, or subjective claims; never promote them to objective fact."
+    ),
+    "zh-CN": (
+        "一致性规则：\n"
+        "- 权威 WorldState / 系统裁定 / Ruleset Runtime 高于 Lorebook。\n"
+        "- Lorebook 只约束它明确声明的事实。\n"
+        "- 未声明部分属于开放空间，可以合理即兴补充。\n"
+        "- Lorebook 不是剧情脚本，不要求玩家按预定路线行动。\n"
+        "- 玩家与系统造成的后续变化以当前 WorldState 为准。\n"
+        "- unreliable 条目只表示传闻、NPC 认知或主观陈述，不得自动提升为客观事实。"
+    ),
+    "ja": (
+        "一貫性ルール：\n"
+        "- 権威ある WorldState / システム裁定 / ルールセット・ランタイムは世界書より上位です。\n"
+        "- 世界書が拘束するのは、それが明示した事実だけです。\n"
+        "- 明示されていない部分はオープンな余地であり、妥当な即興を加えてかまいません。\n"
+        "- 世界書はシナリオではなく、プレイヤーに既定の道筋を強いるものではありません。\n"
+        "- プレイヤーやシステムによる以降の変化は、現在の WorldState が優先します。\n"
+        "- unreliable の項目は噂・NPC の認識・主観的な主張であり、客観的事実に昇格させてはいけません。"
+    ),
+    "de": (
+        "Konsistenzregeln:\n"
+        "- Autoritativer WorldState / Systementscheidungen / Ruleset-Runtime stehen über dem Weltenbuch.\n"
+        "- Das Weltenbuch bindet nur die Tatsachen, die es ausdrücklich nennt.\n"
+        "- Nicht genannte Bereiche sind offener Raum und dürfen plausibel ergänzt werden.\n"
+        "- Das Weltenbuch ist kein Drehbuch; Spieler müssen keiner vorgegebenen Route folgen.\n"
+        "- Spätere Änderungen durch Spieler oder System richten sich nach dem aktuellen WorldState.\n"
+        "- Als unreliable markierte Einträge sind Gerüchte, NPC-Überzeugungen oder subjektive Aussagen und dürfen nie zu objektiven Fakten erhoben werden."
+    ),
+}
+
+# 玩家安全路径只保留一条最小约束：权威高于本段，且 unreliable 不是客观真相。
+_PLAYER_SAFE_LORE_RULE = {
+    "en": "Authoritative WorldState and system rulings outrank this section; entries marked unreliable are rumours or uncertain claims, not established fact.",
+    "zh-CN": "权威 WorldState 与系统裁定高于本段；标记 unreliable 的条目只是传闻或不确信的说法，不是既定事实。",
+    "ja": "権威ある WorldState とシステム裁定が本節より上位です。unreliable の項目は噂や不確かな話であり、確定した事実ではありません。",
+    "de": "Autoritativer WorldState und Systementscheidungen stehen über diesem Abschnitt; als unreliable markierte Einträge sind Gerüchte oder unsichere Aussagen, keine etablierten Fakten.",
+}
+
+
+def lore_entry_projection(entry: object, *, vis_hint: str = "") -> str:
+    """单个 Lore 条目进入 prompt 的统一投影（施工方案 §25）。
+
+    头部暴露 ``id`` / ``type`` / ``tier``（以及 ``unreliable`` 标记），正文保留
+    ``name`` / ``content``；matcher 运行时元数据一律不出现。
+    """
+
+    if not isinstance(entry, dict):
+        return ""
+    tags = []
+    entry_id = str(entry.get("id") or "").strip()
+    if entry_id:
+        tags.append(f"id={entry_id}")
+    tags.append(f"type={str(entry.get('type') or 'other').strip()}")
+    tags.append(f"tier={str(entry.get('tier') or 'background').strip()}")
+    if entry.get("unreliable"):
+        tags.append("unreliable")
+    head = "[" + "][".join(tags) + "]"
+    name = str(entry.get("name") or "").strip()
+    content = str(entry.get("content") or "").strip()
+    return f"{head}{vis_hint}\n{name}:\n{content}"
+
+
+def _lore_rules_text(language: str, table: dict[str, str]) -> str:
+    return localized_text(language, table)
+
+
 async def build_context(
     instance: GameInstance,
     gm_prompt_filled: str,
@@ -482,8 +577,11 @@ async def build_context(
     sec_idx["state"] = len(parts) - 1
 
     # 2. Lorebook 条目（核心 NPC/场景优先）
+    #    投影按 §24/§25：标题声明"相关既有设定"+ 权威/自由度规则，条目带 id/type/tier/
+    #    unreliable；matcher 运行时元数据不进 prompt。
     lorebook_text = ""
     trimmed: list[str] = []
+    injected_ids: list[str] = []
     for entry in lorebook_entries:
         visible = entry.get("visible_to", [])
         vis_hint = ""
@@ -494,17 +592,30 @@ async def build_context(
                 "ja": f" [{','.join(visible)}のみに表示]",
                 "de": f" [nur sichtbar für {','.join(visible)}]",
             })
-        entry_text = f"[{entry.get('type', 'other')}]{vis_hint} {entry.get('name', '')}: {entry.get('content', '')}"
+        entry_text = lore_entry_projection(entry, vis_hint=vis_hint)
+        if not entry_text:
+            continue
         if len(lorebook_text) + len(entry_text) > budget_lorebook:
-            trimmed.append(entry.get("name", entry.get("id", "?")))
+            trimmed.append(str(entry.get("id") or entry.get("name") or "?"))
             continue
         lorebook_text += entry_text + "\n"
+        injected_ids.append(str(entry.get("id") or entry.get("name") or "?"))
     if trimmed:
         logger.info("Lorebook 预算裁剪: 丢弃 %d 条 (%s), budget=%d",
                      len(trimmed), ", ".join(trimmed[:5]), budget_lorebook)
     if lorebook_text:
-        parts.append(localized_text(language, {"en": "## World Knowledge", "zh-CN": "【世界观知识】", "ja": "## 世界知識", "de": "## Weltwissen"}) + f"\n{lorebook_text.strip()}")
+        header = "\n".join((
+            _lore_rules_text(language, _LORE_HEADING),
+            _lore_rules_text(language, _LORE_INTRO),
+            _lore_rules_text(language, _LORE_CONSISTENCY_RULES),
+        ))
+        parts.append(f"{header}\n\n{lorebook_text.strip()}")
         sec_idx["lorebook"] = len(parts) - 1
+    # §33 诊断：区分"没命中"与"命中了但没进 prompt（被预算裁掉）"。
+    logger.debug(
+        "Lore projection: world=%s language=%s budget=%d final_hits=%s trimmed=%s",
+        getattr(instance, "world_id", ""), language, budget_lorebook, injected_ids, trimmed,
+    )
 
     # 3. 摘要 + 关键事实
     summary = sanitize_narration(instance.summary.get("narrative", ""))
@@ -883,7 +994,9 @@ async def build_player_safe_context(
     lore_lines: list[str] = []
     used_lore = 0
     for entry in safe_lore:
-        line = f"[{entry.get('type', 'other')}] {entry.get('name', '')}: {entry.get('content', '')}"
+        line = lore_entry_projection(entry)
+        if not line:
+            continue
         if used_lore + len(line) > budget_lorebook:
             continue
         lore_lines.append(line)
@@ -894,7 +1007,7 @@ async def build_player_safe_context(
             "zh-CN": "【明确授权给该角色的知识】",
             "ja": "## このキャラクターに明示公開された知識",
             "de": "## Ausdrücklich für diese Figur freigegebenes Wissen",
-        }) + "\n" + "\n".join(lore_lines))
+        }) + "\n" + _lore_rules_text(language, _PLAYER_SAFE_LORE_RULE) + "\n" + "\n".join(lore_lines))
         sec_idx["lorebook"] = len(parts) - 1
 
     summary_parts: list[str] = []
