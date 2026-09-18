@@ -520,6 +520,7 @@ export const zhCN = {
   combatExtDone: '动作已执行',
   combatExtSelectTarget: '请选择目标',
   combatExtActionPhaseOnly: '只能在玩家行动阶段使用战斗动作',
+  combatExtActionEntry: '战斗动作',
   combatEditorTitle: '战斗扩展（可选声明）',
   combatEditorScheduler: '调度器',
   combatEditorDisabled: '不启用',
