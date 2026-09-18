@@ -10,16 +10,16 @@
  * 里的 `control`，由服务端写成 `players[uid].control.mode`。
  */
 
-export const CARD_CONTROL_MODES = ['human', 'ai', 'unclaimed'] as const
+export const CARD_CONTROL_MODES = ['human', 'ai'] as const
 
 export type CardControlMode = (typeof CARD_CONTROL_MODES)[number]
 
 /**
- * 第一张默认「真人」、其余默认「等待认领」：与既有产品默认一致，但以一个明确的
- * 值呈现，用户不需要再理解一层「跟随默认」。
+ * 第一张默认「玩家」、其余默认「AI 托管」：创建时不提供「等待认领」这个中间态，
+ * 每张卡在创建阶段就必须落到一个明确的控制方，避免半成品进入 payload。
  */
 export function defaultCardControl(index: number): CardControlMode {
-  return index === 0 ? 'human' : 'unclaimed'
+  return index === 0 ? 'human' : 'ai'
 }
 
 /** 把一个（可能来自旧状态或用户输入的）值收敛为合法的控制方式。 */

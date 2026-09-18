@@ -449,7 +449,7 @@ export const en = {
   operationLink: 'Control Link',
   back: 'Back',
   kick: 'Kick',
-  controlHuman: 'Human',
+  controlHuman: 'Player',
   controlAi: 'AI hosted',
   controlAiTemporary: 'AI hosting (temporary)',
   controlUnclaimed: 'Unclaimed',

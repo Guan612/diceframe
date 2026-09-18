@@ -449,7 +449,7 @@ export const de = {
   operationLink: 'Steuerlink',
   back: 'Zurück',
   kick: 'Hinauswerfen',
-  controlHuman: 'Mensch',
+  controlHuman: 'Spieler',
   controlAi: 'KI-geführt',
   controlAiTemporary: 'KI temporär',
   controlUnclaimed: 'Nicht beansprucht',

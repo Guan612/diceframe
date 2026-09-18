@@ -185,12 +185,10 @@ function ensureCharacter(value: CharacterSheet): CreateCharacter {
 }
 
 // 每张角色卡由谁负责：控制方式在「角色」步骤直接选，确认页只做摘要。
-// 默认第一张是「真人」、其余「等待认领」——与既有产品默认一致，但以明确的值呈现。
+// 默认第一张是「玩家」、其余「AI 托管」——创建时只在这两者间选，不提供「等待认领」。
 const cardControl = ref<CardControlMode[]>(['human'])
 function controlLabel(mode: string): string {
-  if (mode === 'ai') return t('controlAi')
-  if (mode === 'unclaimed') return t('controlUnclaimed')
-  return t('controlHuman')
+  return mode === 'ai' ? t('controlAi') : t('controlHuman')
 }
 // 任何进入 characters[] 的路径（手动创建 / 角色卡选择器 / 导入 / 专业建卡）都会
 // 经过这里补齐控制方式，不会出现「导入的角色没有控制方式」。
@@ -774,13 +772,17 @@ async function create() {
           <div class="create-character-grid">
             <article v-for="(c, i) in characters" :key="i" class="create-character-card">
               <PortraitImage :portrait="c.portrait" :rule-id="activeRule" :seed="c.character_name || String(i)" :name="c.character_name" :size="72" />
-              <div><h3>{{ c.character_name || t('unnamed') }}</h3><p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p><small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small></div>
-              <label class="create-character-control">
-                <span>{{ t('controlMode') }}</span>
-                <select v-model="cardControl[i]" :aria-label="t('controlMode')">
-                  <option v-for="mode in CARD_CONTROL_MODES" :key="mode" :value="mode">{{ controlLabel(mode) }}</option>
-                </select>
-              </label>
+              <div>
+                <h3>{{ c.character_name || t('unnamed') }}</h3>
+                <p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p>
+                <small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small>
+                <label class="create-character-control">
+                  <span>{{ t('controlMode') }}</span>
+                  <select v-model="cardControl[i]" :aria-label="t('controlMode')">
+                    <option v-for="mode in CARD_CONTROL_MODES" :key="mode" :value="mode">{{ controlLabel(mode) }}</option>
+                  </select>
+                </label>
+              </div>
               <div class="actions"><button @click="openWizard(i)">{{ t('edit') }}</button><button class="danger" @click="removeCharacter(i)">{{ t('remove') }}</button></div>
             </article>
             <button class="create-character-empty" @click="openWizard(null)"><b>＋</b><span>{{ t('newCharacter') }}</span></button>
@@ -799,14 +801,6 @@ async function create() {
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>
           <div class="create-confirm-characters"><span v-for="(c, i) in characters" :key="i">{{ c.character_name }}</span></div>
-          <!-- 确认页只做摘要：每张角色一行「名字 + 最终控制方式」，配置本身在「角色」步骤。 -->
-          <ul class="create-confirm-controls">
-            <li v-for="(c, i) in characters" :key="i">
-              <span>{{ c.character_name || t('unnamed') }}</span>
-              <strong>{{ controlLabel(cardControl[i] ?? defaultCardControl(i)) }}</strong>
-            </li>
-          </ul>
-          <button class="create-confirm-edit" @click="prevStep">{{ t('controlBackToCharacters') }}</button>
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>

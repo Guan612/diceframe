@@ -449,7 +449,7 @@ export const zhCN = {
   operationLink: '操作链接',
   back: '回来',
   kick: '踢出',
-  controlHuman: '真人',
+  controlHuman: '玩家',
   controlAi: 'AI 托管',
   controlAiTemporary: 'AI 临时托管',
   controlUnclaimed: '等待认领',
