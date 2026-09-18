@@ -105,7 +105,7 @@ test('custom backgrounds stay browser-local and can be restored', async ({ page 
     if (['POST', 'PUT', 'PATCH'].includes(request.method())) writes.push(request.url())
   })
   await page.goto('/#/settings?section=appearance')
-  const card = page.locator('.background-option-card').first()
+  const card = page.getByTestId('background-option-card').first()
   const input = card.locator('input[type="file"]')
   await input.setInputFiles({
     name: 'local-background.png',

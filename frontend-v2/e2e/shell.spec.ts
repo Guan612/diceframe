@@ -14,15 +14,15 @@ test('new shell and Vue login route render', async ({ page }) => {
   await expect(page.locator('.login-announcement')).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '📋 DiceFrame 使用指引', exact: true })).toHaveCount(0)
 
-  const emblem = page.locator('.login-emblem-wrap')
-  const mark = emblem.locator('.brand-mark')
-  await expect(emblem.locator('.login-emblem-geometry')).toBeVisible()
+  const emblem = page.getByTestId('login-emblem-wrap')
+  const mark = emblem.getByTestId('brand-mark')
+  await expect(emblem.getByTestId('login-emblem-geometry')).toBeVisible()
   const [emblemBox, markBox] = await Promise.all([emblem.boundingBox(), mark.boundingBox()])
   expect(emblemBox).not.toBeNull()
   expect(markBox).not.toBeNull()
   expect(Math.abs((emblemBox!.x + emblemBox!.width / 2) - (markBox!.x + markBox!.width / 2))).toBeLessThanOrEqual(1)
   expect(Math.abs((emblemBox!.y + emblemBox!.height / 2) - (markBox!.y + markBox!.height / 2))).toBeLessThanOrEqual(1)
-  const lowerRing = await page.locator('.login-page').evaluate(element => getComputedStyle(element, '::before').content)
+  const lowerRing = await page.getByTestId('login-page').evaluate(element => getComputedStyle(element, '::before').content)
   expect(lowerRing).toBe('none')
 })
 
@@ -48,10 +48,10 @@ test('hub controls whether the overview shows the direct-connect entry', async (
 
   entryVisible = true
   await page.reload()
-  await expect(page.locator('.adventure-library')).toBeVisible()
+  await expect(page.getByTestId('adventure-library')).toBeVisible()
   const peerButton = page.getByRole('button', { name: '联机冒险' })
   await expect(peerButton).toBeVisible()
-  const overviewActions = page.locator('.overview-actions')
+  const overviewActions = page.getByTestId('overview-actions')
   const importButton = overviewActions.getByRole('button', { name: '导入存档' })
   const createButton = overviewActions.getByRole('button', { name: '创建新冒险' })
   const [peerBox, importBox, createBox] = await Promise.all([
@@ -67,7 +67,7 @@ test('hub controls whether the overview shows the direct-connect entry', async (
   expect(Math.abs(peerBox!.y - importBox!.y)).toBeLessThanOrEqual(1)
   expect(Math.abs(importBox!.y - createBox!.y)).toBeLessThanOrEqual(1)
 
-  const sortField = page.locator('.save-sort-field')
+  const sortField = page.getByTestId('save-sort-field')
   const selectAll = page.getByRole('button', { name: '全选' })
   const invert = page.getByRole('button', { name: '反选' })
   const clear = page.getByRole('button', { name: '取消选择' })
@@ -97,14 +97,14 @@ test('hub controls whether the overview shows the direct-connect entry', async (
   await expect(page.getByRole('heading', { name: '和朋友一起进入冒险' })).toBeVisible()
   await page.getByRole('button', { name: '创建或加入' }).click()
   const peerSetupHeading = page.getByRole('heading', { name: '创建或加入多人游戏' })
-  const peerSetupBadge = page.locator('.peer-modal-toolbar .peer-experimental-badge')
+  const peerSetupBadge = page.getByTestId('peer-modal-toolbar').getByTestId('peer-experimental-badge')
   await expect(peerSetupHeading).toBeVisible()
   await expect(peerSetupBadge).toBeVisible()
   await expect(page.getByText('P2P 多人冒险')).toHaveCount(0)
   await expect(page.getByText('不会发送、接收或显示自定义测试文本。')).toHaveCount(0)
   const [setupBox, statusBox] = await Promise.all([
-    page.locator('.peer-setup').boundingBox(),
-    page.locator('.peer-status').boundingBox(),
+    page.getByTestId('peer-setup').boundingBox(),
+    page.getByTestId('peer-status').boundingBox(),
   ])
   expect(setupBox).not.toBeNull()
   expect(statusBox).not.toBeNull()
@@ -118,7 +118,7 @@ test('direct share route follows browser locale and exposes a language switch', 
   const page = await context.newPage()
   await page.goto('/#/join?game=missing&share=1')
 
-  const locale = page.locator('.join-actions select')
+  const locale = page.getByTestId('join-actions').locator('select')
   await expect(locale).toHaveValue('en')
   await locale.selectOption('zh-CN')
   await expect(locale).toHaveValue('zh-CN')
@@ -209,7 +209,7 @@ test('solo save asks before conversion and only then creates an online room', as
   await page.getByLabel('要开放的多人冒险').selectOption('web|solo-room|web_bot')
   await expect(page.getByLabel('要开放的多人冒险')).toContainText('单人存档，创建时转换')
   await page.getByLabel('STUN 服务').selectOption('none')
-  await page.locator('.peer-direct-consent input').check()
+  await page.getByTestId('peer-direct-consent').locator('input').check()
   await page.getByRole('button', { name: '创建临时直连房间' }).click()
   await expect(page.getByText('转换为多人存档？')).toBeVisible()
   expect(gmClaimed).toBe(false)
@@ -219,8 +219,8 @@ test('solo save asks before conversion and only then creates an online room', as
   await expect.poll(() => gmClaimed).toBe(true)
   await expect.poll(() => converted).toBe(true)
   await expect.poll(() => roomRequests).toBe(1)
-  await expect(page.locator('.peer-status .peer-invite textarea')).toHaveValue(/^DFP2-/)
-  await expect(page.locator('.peer-setup .peer-invite')).toHaveCount(0)
+  await expect(page.getByTestId('peer-invite').locator('textarea')).toHaveValue(/^DFP2-/)
+  await expect(page.getByTestId('peer-setup').getByTestId('peer-invite')).toHaveCount(0)
 })
 
 test('a full save can issue a direct-connect code for an occupied character', async ({ page, request }) => {
@@ -313,17 +313,17 @@ test('a full save can issue a direct-connect code for an occupied character', as
   await expect(page.getByLabel('要开放的多人冒险')).toContainText('满员存档')
   await expect(page.getByText('夜莺', { exact: true }).first()).toBeVisible()
   await expect(page.getByText(/存档席位 2\/2：可重新邀请 1 个已有角色/)).toBeVisible()
-  await expect(page.locator('.peer-room-batch')).toContainText('开房后一次生成 1 枚 P2P 链接码')
-  await expect(page.locator('.peer-room-batch')).toContainText('夜莺')
+  await expect(page.getByTestId('peer-room-batch')).toContainText('开房后一次生成 1 枚 P2P 链接码')
+  await expect(page.getByTestId('peer-room-batch')).toContainText('夜莺')
   await page.getByLabel('STUN 服务').selectOption('none')
-  await page.locator('.peer-direct-consent input').check()
+  await page.getByTestId('peer-direct-consent').locator('input').check()
   await page.getByRole('button', { name: '创建临时直连房间' }).click()
 
   await expect.poll(() => gmClaimed).toBe(true)
   await expect.poll(() => requestedPeerCount).toBe(2)
-  await expect(page.locator('.peer-status .peer-invite-meta > strong')).toHaveText('夜莺')
-  await expect(page.locator('.peer-status .peer-invite textarea')).toHaveValue(/^DFP2-/)
-  await expect(page.locator('.peer-status-room')).toContainText('FULLROOM')
-  await expect(page.locator('.peer-status .peer-invite-peer-state')).toContainText('等待另一客户端')
-  await expect(page.locator('.peer-status .peer-member-states')).toHaveCount(0)
+  await expect(page.getByTestId('peer-invite-meta').locator(':scope > strong')).toHaveText('夜莺')
+  await expect(page.getByTestId('peer-invite').locator('textarea')).toHaveValue(/^DFP2-/)
+  await expect(page.getByTestId('peer-status-room')).toContainText('FULLROOM')
+  await expect(page.getByTestId('peer-invite-peer-state')).toContainText('等待另一客户端')
+  await expect(page.getByTestId('peer-member-states')).toHaveCount(0)
 })

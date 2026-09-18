@@ -41,7 +41,7 @@ function updateNewMirror(patch: Partial<PluginMirror>) {
     </NButton>
   </section>
 
-  <div class="mirror-form">
+  <div class="mirror-form" data-testid="mirror-form">
     <NInput :value="newMirror.id" class="mirror-field-id" :placeholder="t('mirrorIdPlaceholder')" @update:value="updateNewMirror({ id: $event })" />
     <NInput :value="newMirror.name" class="mirror-field-name" :placeholder="t('name')" @update:value="updateNewMirror({ name: $event })" />
     <NInput :value="newMirror.raw_prefix" class="mirror-url-input mirror-field-raw" :placeholder="t('rawPrefix')" @update:value="updateNewMirror({ raw_prefix: $event })" />
@@ -56,7 +56,7 @@ function updateNewMirror(patch: Partial<PluginMirror>) {
 
   <NSpin :show="mirrorLoading">
     <div class="mirror-list">
-      <article v-for="mirror in mirrors" :key="mirror.id" class="mirror-row">
+      <article v-for="mirror in mirrors" :key="mirror.id" class="mirror-row" data-testid="mirror-row">
         <div class="mirror-main">
           <div class="mirror-heading">
             <NSwitch :value="mirror.enabled" @update:value="saveMirror(mirror, { enabled: $event })" />

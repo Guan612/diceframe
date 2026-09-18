@@ -221,12 +221,12 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <div v-if="nodes.length" class="map-viewport">
-      <img v-if="backgroundUrl" :src="backgroundUrl" alt="" class="map-background-image">
+      <img v-if="backgroundUrl" :src="backgroundUrl" alt="" class="map-background-image" data-testid="map-background-image">
       <span v-if="backgroundUrl" class="map-background-shade" aria-hidden="true" />
       <svg
       ref="svgEl"
       :viewBox="viewBox"
-      class="map-svg"
+      class="map-svg" data-testid="map-svg"
       role="img"
       :aria-label="mapName"
       preserveAspectRatio="xMidYMid meet"

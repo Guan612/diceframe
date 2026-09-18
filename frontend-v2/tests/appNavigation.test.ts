@@ -31,14 +31,15 @@ describe('app navigation', () => {
   })
 
   it('keeps navigation styling out of the generic layout stylesheet', () => {
+    // navigation.css 已拆分进 App.vue 自己的 <style scoped>，不再是独立的全局表；
+    // 这里改为断言「顶栏/导航样式不泄漏进仍然全局的 layout.css，也没有多余的旧类名」。
     const layoutCss = readFileSync(resolve(process.cwd(), 'src/styles/v2/layout.css'), 'utf8')
-    const navigationCss = readFileSync(resolve(process.cwd(), 'src/styles/v2/navigation.css'), 'utf8')
-    const entryCss = readFileSync(resolve(process.cwd(), 'src/styles/v2.css'), 'utf8')
+    const appSource = readFileSync(resolve(process.cwd(), 'src/App.vue'), 'utf8')
 
     expect(layoutCss).not.toContain('.desktop-nav')
     expect(layoutCss).not.toContain('.mobile-bottom-nav')
-    expect(navigationCss).not.toContain('.desktop-nav-menu')
-    expect(navigationCss).not.toContain('.mobile-nav-panel')
-    expect(entryCss).toContain("@import './v2/navigation.css';")
+    expect(appSource).not.toContain('.desktop-nav-menu')
+    expect(appSource).not.toContain('.mobile-nav-panel')
+    expect(appSource).toContain('.mobile-bottom-nav')
   })
 })

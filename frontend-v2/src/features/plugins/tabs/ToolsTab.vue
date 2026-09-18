@@ -67,7 +67,7 @@ const toolGroups = computed<PluginToolGroupState[]>(() => {
     </NButton>
   </section>
   <NSpin :show="toolsLoading">
-    <div v-if="toolGroups.length" class="plugin-tool-groups">
+    <div v-if="toolGroups.length" class="plugin-tool-groups" data-testid="plugin-tool-groups">
       <PluginToolGroup
         v-for="group in toolGroups"
         :key="group.plugin.id"

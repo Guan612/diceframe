@@ -233,7 +233,7 @@ onBeforeUnmount(() => {
         <h1>{{ t('overviewTitle') }}</h1>
         <p>{{ t('overviewSubtitle') }}</p>
       </div>
-      <div class="overview-actions">
+      <div class="overview-actions" data-testid="overview-actions">
         <button v-if="peerEntryVisible" class="peer-launch-button" @click="peerModalOpen = true"><NIcon :component="LinkOutline" />{{ t('peerDirectConnect') }}</button>
         <button @click="saveImportInput?.click()" :disabled="busy">{{ t('importSave') }}</button>
         <input ref="saveImportInput" type="file" accept=".zip" @change="onImportSave" hidden>
@@ -250,11 +250,11 @@ onBeforeUnmount(() => {
 
     <p v-if="error" class="error-banner">{{ error }}</p>
 
-    <section v-if="games.length" class="adventure-library">
+    <section v-if="games.length" class="adventure-library" data-testid="adventure-library">
       <header class="library-heading">
         <div class="library-heading-copy"><span><i />{{ t('recentAdventures') }}</span><small>{{ games.length }} {{ t('totalSaves') }}</small></div>
-        <div class="library-heading-actions">
-          <label class="save-sort-field">
+        <div class="library-heading-actions" data-testid="library-heading-actions">
+          <label class="save-sort-field" data-testid="save-sort-field">
             <span>{{ t('saveSort') }}</span>
             <select v-model="saveSort" class="save-sort-select" :aria-label="t('saveSort')">
               <option value="recent">{{ t('saveSortRecent') }}</option>

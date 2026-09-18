@@ -57,9 +57,9 @@ test('phone security setup stacks ACME guidance above the action button', async 
   await page.goto('/#/settings?section=security')
 
   // Let's Encrypt 申请流程默认折叠在「申请配置」里：先展开再断言
-  await page.locator('.security-lets-encrypt-setup .n-collapse-item__header').click()
+  await page.getByTestId('security-lets-encrypt-setup').locator('.n-collapse-item__header').click()
 
-  const actions = page.locator('.security-acme-actions')
+  const actions = page.getByTestId('security-acme-actions')
   const hint = actions.locator('small')
   const button = actions.getByRole('button', { name: '申请并启用' })
   await expect(actions).toBeVisible()
@@ -90,7 +90,7 @@ test('long admin pages keep the workspace background through all content', async
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
   await page.addInitScript(() => localStorage.setItem('currentGame', 'web|e2e-room|web_bot'))
   await page.goto('/#/lorebook')
-  await expect(page.locator('.lorebook-page')).toBeVisible()
+  await expect(page.getByTestId('lorebook-page')).toBeVisible()
 
   const geometry = await page.evaluate(() => {
     const workspace = document.querySelector<HTMLElement>('.app-workspace')!.getBoundingClientRect()
@@ -116,8 +116,8 @@ test('phone play side panels open as drawers without entering document flow', as
   await page.goto('/#/play?game=web%7Ce2e-room%7Cweb_bot')
   await expect(page.getByRole('heading', { name: 'E2E Adventure' })).toBeVisible()
 
-  const sidebar = page.locator('.game-sidebar')
-  const controls = page.locator('.play-control-rail')
+  const sidebar = page.getByTestId('game-sidebar')
+  const controls = page.getByTestId('play-control-rail')
   await expect(sidebar).toBeHidden()
   await expect(controls).toBeHidden()
 
@@ -142,7 +142,7 @@ test('phone play side panels open as drawers without entering document flow', as
   expect(Math.abs(controlBounds.viewportHeight - controlBounds.bottom)).toBeLessThanOrEqual(1)
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
   expect(overflow).toBe(0)
-  await controls.locator('.rail-toggle').click()
+  await controls.getByTestId('rail-toggle').click()
   await expect(controls).toBeHidden()
 })
 
@@ -154,12 +154,12 @@ test('equipment details modal stays above the open phone character drawer', asyn
   await expect(page.getByRole('heading', { name: 'E2E Adventure' })).toBeVisible()
 
   await page.getByRole('button', { name: '状态' }).click()
-  const sidebar = page.locator('.game-sidebar')
+  const sidebar = page.getByTestId('game-sidebar')
   await expect(sidebar).toBeVisible()
   await sidebar.locator('summary').filter({ hasText: '装备与背包' }).click()
   await sidebar.getByRole('button', { name: '查看全部详情' }).click()
 
-  const modal = page.locator('body > .modal')
+  const modal = page.getByTestId('modal')
   await expect(modal).toBeVisible()
   await expect(modal.getByRole('heading', { name: '装备与背包' })).toBeVisible()
   const layers = await page.evaluate(() => ({
@@ -239,13 +239,13 @@ test('phone play opens the scene map as a full-screen workspace', async ({ page 
   await expect(page.locator('.composer')).toBeVisible()
 
   await page.getByRole('button', { name: '地图', exact: true }).click()
-  const workspace = page.locator('.map-workspace-shell')
+  const workspace = page.getByTestId('map-workspace-shell')
   await expect(workspace).toBeVisible()
   await expect(workspace.getByPlaceholder('搜索地点或关键词')).toBeVisible()
-  const background = workspace.locator('.map-background-image')
+  const background = workspace.getByTestId('map-background-image')
   await expect(background).toHaveAttribute('src', /fantasy-region-v1\.webp$/)
   await expect(background).toBeVisible()
-  const mapSvg = workspace.locator('.map-svg')
+  const mapSvg = workspace.getByTestId('map-svg')
   const mapBounds = await mapSvg.boundingBox()
   if (!mapBounds) throw new Error('map viewport has no bounds')
   const backgroundBefore = await background.boundingBox()
@@ -287,7 +287,7 @@ test('phone play opens the scene map as a full-screen workspace', async ({ page 
   expect(Math.abs(bounds.left)).toBeLessThanOrEqual(1)
   expect(Math.abs(bounds.width - bounds.right)).toBeLessThanOrEqual(1)
   expect(Math.abs(bounds.height - bounds.bottom)).toBeLessThanOrEqual(1)
-  const titleIcon = await workspace.locator('.map-workspace-title-icon').evaluate(element => {
+  const titleIcon = await workspace.getByTestId('map-workspace-title-icon').evaluate(element => {
     const box = element.getBoundingClientRect()
     const svg = element.querySelector('svg')!.getBoundingClientRect()
     return {
@@ -308,7 +308,7 @@ test('phone character actions can scroll clear of bottom navigation', async ({ p
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/#/characters')
-  const finalAction = page.locator('.shared-character-section button').last()
+  const finalAction = page.getByTestId('shared-character-section').locator('button').last()
   await finalAction.scrollIntoViewIfNeeded()
   const positions = await page.evaluate(() => {
     const action = document.querySelectorAll<HTMLElement>('.shared-character-section button')
@@ -355,8 +355,8 @@ test('character management remains contained on narrow phones', async ({ page })
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 })
     await page.goto('/#/characters')
-    await expect(page.locator('.characters-page')).toBeVisible()
-    await expect(page.locator('.current-character-card').first()).toBeVisible()
+    await expect(page.getByTestId('characters-page')).toBeVisible()
+    await expect(page.getByTestId('current-character-card').first()).toBeVisible()
     const geometry = await page.evaluate(() => {
       const pageView = document.querySelector<HTMLElement>('.characters-page')!.getBoundingClientRect()
       const cards = Array.from(document.querySelectorAll<HTMLElement>('.current-character-card'))
@@ -386,8 +386,8 @@ test('character management stays contained with German locale', async ({ page })
   for (const width of [900, 1280]) {
     await page.setViewportSize({ width, height: 844 })
     await page.goto('/#/characters')
-    await expect(page.locator('.characters-page')).toBeVisible()
-    await expect(page.locator('.current-character-card').first()).toBeVisible()
+    await expect(page.getByTestId('characters-page')).toBeVisible()
+    await expect(page.getByTestId('current-character-card').first()).toBeVisible()
     const geometry = await page.evaluate(() => {
       const buttons = Array.from(document.querySelectorAll<HTMLElement>('.current-character-actions button'))
       const cards = Array.from(document.querySelectorAll<HTMLElement>('.current-character-card'))

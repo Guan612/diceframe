@@ -309,7 +309,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 </script>
 
 <template>
-  <section class="campaign-panel" aria-labelledby="dnd-campaign-title">
+  <section class="campaign-panel" data-testid="campaign-panel" aria-labelledby="dnd-campaign-title">
     <header class="campaign-head">
       <div><p>{{ hasAdventure ? copy.eyebrow : copy.standardEyebrow }}</p><h2 id="dnd-campaign-title">{{ hasAdventure ? copy.title : copy.standardTitle }}</h2></div>
       <button :disabled="busy" @click="load()">{{ copy.refresh }}</button>
@@ -325,10 +325,10 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
         <button v-if="quickStartAction" class="campaign-primary" :disabled="busy" @click="submit({ type: 'session_zero.quick_start' })">{{ copy.quickStart }}</button>
       </section>
 
-      <details :open="session.status !== 'locked' && !quickStartAction" class="campaign-card session-card">
+      <details :open="session.status !== 'locked' && !quickStartAction" class="campaign-card session-card" data-testid="session-card">
         <summary><strong>{{ session.status === 'locked' ? copy.sessionZero : copy.manualSetup }}</strong><span>{{ session.status === 'locked' ? copy.locked : copy.pending }} · {{ copy.revision }} {{ session.revision }}</span></summary>
         <p class="muted">{{ copy.sessionIntro }}</p>
-        <div v-if="isGm" class="agreement-grid">
+        <div v-if="isGm" class="agreement-grid" data-testid="agreement-grid">
           <label>{{ copy.tone }}<select v-model="agreement.tone"><option v-for="value in toneOptions" :key="value" :value="value">{{ enumLabel('tone', value) }}</option></select><small>{{ copy.toneHint }}</small></label>
           <label>{{ copy.difficulty }}<select v-model="agreement.difficulty"><option v-for="value in ['story', 'standard', 'challenging', 'lethal']" :key="value" :value="value">{{ enumLabel('difficulty', value) }}</option></select><small>{{ copy.difficultyHint }}</small></label>
           <label>{{ copy.rating }}<select v-model="agreement.content_rating"><option v-for="value in ['family', 'teen', 'mature']" :key="value" :value="value">{{ enumLabel('rating', value) }}</option></select><small>{{ copy.ratingHint }}</small></label>

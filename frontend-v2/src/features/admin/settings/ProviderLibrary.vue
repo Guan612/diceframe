@@ -51,7 +51,7 @@ function providerStyle(providerId: string) {
         v-for="provider in filteredProviders"
         :key="provider.id"
         type="button"
-        :class="['provider-list-item', { active: activeProviderId === provider.id }]"
+        :class="['provider-list-item', { active: activeProviderId === provider.id }]" data-testid="provider-list-item"
         @click="emit('update:activeProviderId', provider.id)"
       >
         <span class="provider-avatar" :style="providerStyle(provider.id)">{{ providerMark(provider) }}</span>
@@ -65,7 +65,7 @@ function providerStyle(providerId: string) {
         {{ t('providerSearchEmpty') }}
       </p>
     </div>
-    <footer class="provider-library-footer">
+    <footer class="provider-library-footer" data-testid="provider-library-footer">
       <button type="button" :disabled="!canAdd" @click="emit('add')">
         <NIcon :component="AddOutline" />
         {{ t('providerAdd') }}

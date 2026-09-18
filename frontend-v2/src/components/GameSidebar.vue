@@ -50,7 +50,7 @@ function perceptionKey(m: PrivateMessage | string, i: number) {
 </script>
 
 <template>
-  <aside class="game-sidebar" :class="{ collapsed }">
+  <aside class="game-sidebar" data-testid="game-sidebar" :class="{ collapsed }">
     <button class="sidebar-toggle" @click="emit('toggle-sidebar')" :title="collapsed ? t('expandSidebar') : t('collapseSidebar')">
       <NIcon :component="collapsed ? ChevronForward : ChevronBack" size="16" />
     </button>

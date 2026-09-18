@@ -17,17 +17,17 @@ async function authenticate(page: Page, options?: { light?: boolean }) {
 test('template adventure confirmation identifies the selected world instead of AI generation', async ({ page }) => {
   await authenticate(page)
   await page.goto('/#/create')
-  await expect(page.locator('.create-mode-cards button').first()).toHaveClass(/active/)
-  await page.locator('.create-actions .primary').click()
-  await expect(page.locator('.create-game-settings-stage')).toBeVisible()
-  await page.locator('.create-actions .primary').click()
-  await expect(page.locator('.create-character-card')).toHaveCount(1)
-  await page.locator('.create-actions .primary').click()
+  await expect(page.getByTestId('create-mode-cards').locator('button').first()).toHaveClass(/active/)
+  await page.getByTestId('create-actions').locator('.primary').click()
+  await expect(page.getByTestId('create-game-settings-stage')).toBeVisible()
+  await page.getByTestId('create-actions').locator('.primary').click()
+  await expect(page.getByTestId('create-character-card')).toHaveCount(1)
+  await page.getByTestId('create-actions').locator('.primary').click()
 
-  const confirmation = page.locator('.create-confirm-cover p')
+  const confirmation = page.getByTestId('create-confirm-cover').locator('p')
   await expect(confirmation).not.toBeEmpty()
   await expect(confirmation).not.toHaveText(/AI\s*生成/i)
-  await expect(page.locator('.create-confirm-grid article').first().locator('strong')).toHaveText(await confirmation.textContent() || '')
+  await expect(page.getByTestId('create-confirm-grid').locator('article').first().locator('strong')).toHaveText(await confirmation.textContent() || '')
 })
 
 test('light mode uses semantic neutral surfaces across rebuilt pages', async ({ page }, testInfo) => {
@@ -50,15 +50,15 @@ test('light mode uses semantic neutral surfaces across rebuilt pages', async ({ 
   await assertNoLegacyGold('.overview-stats article')
 
   await page.goto('/#/characters')
-  await expect(page.locator('.characters-page')).toBeVisible()
+  await expect(page.getByTestId('characters-page')).toBeVisible()
   await assertNoLegacyGold('.characters-page article, .characters-page button')
 
   await page.goto('/#/lorebook')
-  await expect(page.locator('.lorebook-page')).toBeVisible()
+  await expect(page.getByTestId('lorebook-page')).toBeVisible()
   await assertNoLegacyGold('.lore-type-tabs button, .lorebook-page article')
 
   await page.goto('/#/logs')
-  await expect(page.locator('.reference-logs-page')).toBeVisible()
+  await expect(page.getByTestId('reference-logs-page')).toBeVisible()
   await assertNoLegacyGold('.mode-tabs button, .log-reader article')
 })
 
@@ -67,7 +67,7 @@ test('appearance and advanced settings obey the compact layout contract', async 
   await authenticate(page)
   await page.goto('/#/settings?section=appearance')
 
-  const modeButtons = page.locator('.appearance-mode-grid > button')
+  const modeButtons = page.getByTestId('appearance-mode-grid').locator('> button')
   await expect(modeButtons.first()).toBeVisible()
   const modeBoxes = await modeButtons.evaluateAll(elements =>
     elements.map(element => element.getBoundingClientRect()).map(rect => ({ width: rect.width, height: rect.height, top: rect.top })),
@@ -78,12 +78,12 @@ test('appearance and advanced settings obey the compact layout contract', async 
     expect(box.width / box.height).toBeGreaterThan(2)
   }
 
-  const backgroundCards = page.locator('.background-option-card')
+  const backgroundCards = page.getByTestId('background-option-card')
   await expect(backgroundCards.first()).toBeVisible()
   for (let index = 0; index < await backgroundCards.count(); index += 1) {
     const card = backgroundCards.nth(index)
     await expect(card.getByText('内置', { exact: true })).toBeVisible()
-    const alignment = await card.locator('.background-option-actions').evaluate(element => {
+    const alignment = await card.getByTestId('background-option-actions').evaluate(element => {
       const [choose, reset] = Array.from(element.children).map(child => child.getBoundingClientRect())
       return {
         centerDelta: Math.abs((choose.top + choose.height / 2) - (reset.top + reset.height / 2)),
@@ -93,7 +93,7 @@ test('appearance and advanced settings obey the compact layout contract', async 
     })
     expect(alignment.centerDelta).toBeLessThanOrEqual(2)
     expect(Math.abs(alignment.chooseHeight - alignment.resetHeight)).toBeLessThanOrEqual(2)
-    const image = await card.locator('.background-option-preview').evaluate(element => getComputedStyle(element).backgroundImage)
+    const image = await card.getByTestId('background-option-preview').evaluate(element => getComputedStyle(element).backgroundImage)
     const imagePath = image.match(/url\(["']?([^"')]+)["']?\)/)?.[1]
     expect(imagePath).toContain('/v2-assets/ui/')
     expect((await page.request.get(imagePath!)).ok()).toBe(true)
@@ -106,7 +106,7 @@ test('appearance and advanced settings obey the compact layout contract', async 
   await expect(advancedPane.getByRole('button', { name: '保存' }).first()).toBeEnabled()
 
   await page.goto('/#/settings?section=about')
-  await expect(page.locator('.about-card')).toBeVisible()
+  await expect(page.getByTestId('about-card')).toBeVisible()
   await expect(page.getByText('1060613588')).toHaveCount(0)
 })
 
@@ -114,7 +114,7 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
   await authenticate(page)
 
   await page.goto('/#/settings?section=api')
-  const providerHeader = page.locator('.ai-manager-header')
+  const providerHeader = page.getByTestId('ai-manager-header')
   await providerHeader.getByRole('button', { name: '帮助' }).click()
   await expect(page.getByRole('dialog').getByText('https://api.deepseek.com')).toBeVisible()
   await expect(page.getByRole('dialog').getByText('deepseek-v4-pro')).toBeVisible()
@@ -123,16 +123,16 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
 
   await page.goto('/#/settings?section=models')
   await expect(page.locator('.settings-nav').getByText('向量记忆', { exact: true })).toHaveCount(0)
-  const routingHeader = page.locator('.model-routing-header')
+  const routingHeader = page.getByTestId('model-routing-header')
   await routingHeader.getByRole('button', { name: '帮助' }).click()
   await expect(page.getByRole('dialog').getByRole('heading', { name: '如何配置模型', exact: true })).toBeVisible()
   await expect(page.getByRole('dialog').getByText(/deepseek-v4-pro/)).toBeVisible()
   await page.keyboard.press('Escape')
 
-  const modelCards = page.locator('.model-routing-grid')
-  const mainCard = page.locator('.model-role-card-main')
-  const embeddingCard = page.locator('.model-role-card-embedding')
-  await expect(mainCard.locator('.model-fallback-slot')).toHaveCount(2)
+  const modelCards = page.getByTestId('model-routing-grid')
+  const mainCard = page.getByTestId('model-role-card-main')
+  const embeddingCard = page.getByTestId('model-role-card-embedding')
+  await expect(mainCard.getByTestId('model-fallback-slot')).toHaveCount(2)
   await expect(mainCard.getByText('备用 1', { exact: true })).toBeVisible()
   await expect(mainCard.getByText('备用 2', { exact: true })).toBeVisible()
   await expect(embeddingCard.getByText('向量记忆', { exact: true })).toBeVisible()
@@ -143,7 +143,7 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
     display: getComputedStyle(element).display,
     headerBackground: getComputedStyle(element.previousElementSibling!).backgroundImage,
   }))
-  const capabilityLayout = await page.locator('.model-capability-grid').evaluate(element => ({
+  const capabilityLayout = await page.getByTestId('model-capability-grid').evaluate(element => ({
     display: getComputedStyle(element).display,
     columns: getComputedStyle(element).gridTemplateColumns.split(' ').length,
     alignItems: getComputedStyle(element).alignItems,
@@ -160,7 +160,7 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
   })
 
   await page.goto('/#/settings?section=advanced')
-  const timeoutSection = page.locator('.test-timeout-section')
+  const timeoutSection = page.getByTestId('test-timeout-section')
   await expect(timeoutSection.getByRole('heading', { name: '连接测试超时' })).toBeVisible()
   await expect(timeoutSection.locator('input')).toHaveValue('30')
   await expect(timeoutSection).toContainText('不改变正常游戏生成')
@@ -172,7 +172,7 @@ test('plugin marketplace cards align titles and stretch evenly per row', async (
   await authenticate(page)
   await page.goto('/#/plugins')
   await page.locator('.n-tabs-tab').filter({ hasText: '市场' }).click()
-  const cards = page.locator('.market-card')
+  const cards = page.getByTestId('market-card')
   await expect(cards.first()).toBeVisible()
 
   const geometry = await cards.evaluateAll(elements => elements.map(element => {
@@ -199,7 +199,7 @@ test('multi-player character actions stay in a separate even row', async ({ page
   await page.setViewportSize({ width: 1940, height: 1080 })
   await page.goto('/#/characters')
 
-  const cards = page.locator('.current-character-card')
+  const cards = page.getByTestId('current-character-card')
   await expect(cards.first()).toBeVisible()
   await page.evaluate(() => {
     const grid = document.querySelector<HTMLElement>('.current-character-grid')
@@ -241,10 +241,10 @@ test('avatar picker keeps distinct realistic and anime packs for every ruleset',
   await page.addInitScript(() => localStorage.setItem('currentGame', 'web|e2e-room|web_bot'))
   await page.goto('/#/characters')
 
-  await page.locator('.current-character-card .current-character-actions button').first().click()
+  await page.getByTestId('current-character-card').getByTestId('current-character-actions').locator('button').first().click()
   const currentOptions = page.locator('.portrait-picker > .portrait-options .portrait-option')
   await expect(currentOptions.first()).toBeVisible()
-  const currentImages = await currentOptions.locator('.portrait-builtin').evaluateAll(elements =>
+  const currentImages = await currentOptions.getByTestId('portrait-builtin').evaluateAll(elements =>
     elements.map(element => getComputedStyle(element).backgroundImage),
   )
   expect(currentImages.length).toBeGreaterThanOrEqual(2)
@@ -253,10 +253,10 @@ test('avatar picker keeps distinct realistic and anime packs for every ruleset',
   expect(currentImages.some(image => image.includes('/anime-'))).toBe(true)
 
   await page.getByRole('button', { name: '从所有头像中选择', exact: true }).click()
-  const groups = page.locator('.portrait-all-group')
+  const groups = page.getByTestId('portrait-all-group')
   await expect(groups.first()).toBeVisible()
   for (let index = 0; index < await groups.count(); index += 1) {
-    const images = await groups.nth(index).locator('.portrait-builtin').evaluateAll(elements =>
+    const images = await groups.nth(index).getByTestId('portrait-builtin').evaluateAll(elements =>
       elements.map(element => getComputedStyle(element).backgroundImage),
     )
     expect(images.length).toBeGreaterThanOrEqual(2)
@@ -265,7 +265,7 @@ test('avatar picker keeps distinct realistic and anime packs for every ruleset',
     const directories = new Set(images.map(image => image.match(/avatars\/v3\/([^/]+)\//)?.[1]).filter(Boolean))
     expect(directories.size).toBe(1)
   }
-  const ruleDirectories = await page.locator('.portrait-all-group .portrait-builtin').evaluateAll(elements => [
+  const ruleDirectories = await page.getByTestId('portrait-all-group').getByTestId('portrait-builtin').evaluateAll(elements => [
     ...new Set(elements.map(element =>
       getComputedStyle(element).backgroundImage.match(/avatars\/v3\/([^/]+)\//)?.[1],
     ).filter(Boolean)),
@@ -277,8 +277,8 @@ test('settings status stays in one readable horizontal row', async ({ page }, te
   await authenticate(page)
   await page.goto('/#/settings')
 
-  const grid = page.locator('.system-status-grid')
-  const cards = page.locator('.system-status-card')
+  const grid = page.getByTestId('system-status-grid')
+  const cards = page.getByTestId('system-status-card')
   await expect(cards.first()).toBeVisible()
   const layout = await grid.evaluate(element => ({
     display: getComputedStyle(element).display,
@@ -318,7 +318,7 @@ test('about, header and content-pack controls use the final layout contract', as
   await authenticate(page)
 
   await page.goto('/#/settings?section=about')
-  await expect(page.locator('.about-project-logo .brand-mark')).toBeVisible()
+  await expect(page.getByTestId('about-project-logo').getByTestId('brand-mark')).toBeVisible()
   await expect(page.locator('.about-monogram')).toHaveCount(0)
   await expect(page.locator('.update-card > .setting-row')).toHaveCount(0)
   await expect(page.locator('.update-card > .setting-hint')).toHaveCount(0)
@@ -344,7 +344,7 @@ test('about, header and content-pack controls use the final layout contract', as
   expect(Math.abs(aboutGeometry.sponsorTop - aboutGeometry.starTop)).toBeLessThanOrEqual(2)
   expect(aboutGeometry.sponsorLeft).toBeGreaterThan(aboutGeometry.starRight)
   expect(aboutGeometry.aboutBottom).toBeGreaterThan(aboutGeometry.sponsorBottom)
-  const sponsorCopy = await page.locator('.about-card .sponsor-cta').evaluate(element => {
+  const sponsorCopy = await page.getByTestId('about-card').getByTestId('sponsor-cta').evaluate(element => {
     const button = element.getBoundingClientRect()
     const title = element.querySelector<HTMLElement>('strong')!
     const detail = element.querySelector<HTMLElement>('small')!
@@ -371,8 +371,8 @@ test('about, header and content-pack controls use the final layout contract', as
   await expect(page.locator('.operator-avatar')).toHaveCount(0)
 
   await page.goto('/#/plugins')
-  await page.locator('.plugin-surface-tabs > .n-tabs-nav .n-tabs-tab').nth(2).click()
-  const toolbar = page.locator('.content-pack-toolbar')
+  await page.getByTestId('plugin-surface-tabs').locator('> .n-tabs-nav .n-tabs-tab').nth(2).click()
+  const toolbar = page.getByTestId('content-pack-toolbar')
   await expect(toolbar).toBeVisible()
   const buttonGeometry = await toolbar.locator('.n-button').evaluateAll(buttons => buttons.map(button => {
     const rect = button.getBoundingClientRect()
@@ -389,7 +389,7 @@ test('reference toolbars and rule headers keep stable single-line alignment', as
   await page.addInitScript(() => localStorage.setItem('currentGame', 'web|e2e-room|web_bot'))
 
   await page.goto('/#/memory')
-  const memoryButtons = page.locator('.memory-search button')
+  const memoryButtons = page.getByTestId('memory-search').locator('button')
   await expect(memoryButtons.first()).toBeVisible()
   const memoryGeometry = await memoryButtons.evaluateAll(buttons => buttons.map(button => {
     const rect = button.getBoundingClientRect()
@@ -400,12 +400,12 @@ test('reference toolbars and rule headers keep stable single-line alignment', as
   for (const item of memoryGeometry) expect(item.whiteSpace).toBe('nowrap')
 
   await page.goto('/#/logs')
-  const perPageLabel = page.locator('.log-toolbar label')
+  const perPageLabel = page.getByTestId('log-toolbar').locator('label')
   await expect(perPageLabel).toBeVisible()
   await expect(perPageLabel).toHaveCSS('white-space', 'nowrap')
 
   await page.goto('/#/lorebook')
-  const languageLabel = page.locator('.lore-language-filter > span')
+  const languageLabel = page.getByTestId('lore-language-filter').locator('> span')
   await expect(languageLabel).toBeVisible()
   await expect(languageLabel).toHaveCSS('white-space', 'nowrap')
 
@@ -427,12 +427,12 @@ test('overview keeps list selection controls beside the adventure library', asyn
   await authenticate(page)
   await page.goto('/#/overview')
 
-  const heroActions = page.locator('.overview-actions')
+  const heroActions = page.getByTestId('overview-actions')
   await expect(heroActions.getByRole('button', { name: '导入存档' })).toBeVisible()
   await expect(heroActions.getByRole('button', { name: '创建新冒险' })).toBeVisible()
   await expect(heroActions.getByRole('button', { name: '全选' })).toHaveCount(0)
 
-  const libraryActions = page.locator('.library-heading-actions')
+  const libraryActions = page.getByTestId('library-heading-actions')
   await expect(libraryActions.getByRole('button', { name: '全选' })).toBeVisible()
   await expect(libraryActions.getByRole('button', { name: '反选' })).toBeVisible()
   await expect(libraryActions.getByRole('button', { name: '取消选择' })).toBeDisabled()

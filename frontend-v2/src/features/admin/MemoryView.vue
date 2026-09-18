@@ -100,7 +100,7 @@ async function deleteMemory(item: MemoryEntry) {
         <p v-if="game">{{ t('currentSave') }}: {{ game }}</p>
         <p v-else class="muted">{{ t('noSaveSelectedHint') }}</p>
       </div>
-      <div class="memory-search">
+      <div class="memory-search" data-testid="memory-search">
         <input v-model="keyword" :placeholder="t('searchByEntity')" @keyup.enter="search" :disabled="!game" />
         <button @click="search" :disabled="!game || busy">{{ t('search') }}</button>
         <button v-if="searchKeyword" class="ghost" @click="clearSearch" :disabled="busy">{{ t('clear') }}</button>
@@ -151,3 +151,10 @@ async function deleteMemory(item: MemoryEntry) {
     </Modal>
   </section>
 </template>
+
+<style scoped>
+/* 与 CharactersView.vue 等页面共享的页宽约束，拆分自 characters.css。 */
+.memory-page {
+  width: min(1540px, 100%);
+}
+</style>

@@ -1190,11 +1190,11 @@ function redownloadUpdatePackage() {
         </div>
         <NButton :loading="store.loading" @click="store.load()">{{ t('refresh') }}</NButton>
       </header>
-      <section class="system-status-grid" :aria-label="t('settingsSystemStatusAria')">
-        <article v-for="item in systemStatusItems" :key="item.label" class="system-status-card">
+      <section class="system-status-grid" data-testid="system-status-grid" :aria-label="t('settingsSystemStatusAria')">
+        <article v-for="item in systemStatusItems" :key="item.label" class="system-status-card" data-testid="system-status-card">
           <NIcon :component="item.icon" class="system-status-icon" />
           <div class="system-status-copy">
-            <div class="system-status-head">
+            <div class="system-status-head" data-testid="system-status-head">
               <span>{{ item.label }}</span>
               <NTag :type="item.tone" :class="['system-status-tag', `tone-${item.tone}`]" size="small" round>{{ item.value }}</NTag>
             </div>
@@ -1234,7 +1234,7 @@ function redownloadUpdatePackage() {
       <div class="settings-content">
         <NSpin :show="store.loading">
           <div v-show="section === 'api'" class="settings-pane ai-management-pane">
-            <header class="ai-manager-header">
+            <header class="ai-manager-header" data-testid="ai-manager-header">
               <div>
                 <h3>{{ t('aiProviders') }}</h3>
                 <p>{{ t('aiProvidersHint') }}</p>
@@ -1556,7 +1556,7 @@ function redownloadUpdatePackage() {
             </div>
             <section class="appearance-mode-section">
               <h4>{{ t('appearanceMode') }}</h4>
-              <div class="appearance-mode-grid">
+              <div class="appearance-mode-grid" data-testid="appearance-mode-grid">
                 <button :class="{ active: themeMode === 'dark' }" @click="applyThemeMode('dark')">
                   <span class="mode-preview mode-preview-dark" aria-hidden="true"><i /><i /><i /></span>
                   <strong>{{ t('darkMode') }}</strong>
@@ -1592,9 +1592,9 @@ function redownloadUpdatePackage() {
                 </NButton>
               </div>
               <div class="appearance-background-grid" :class="{ loading: backgroundsLoading }">
-                <article v-for="item in backgroundOptions" :key="item.id" class="background-option-card">
+                <article v-for="item in backgroundOptions" :key="item.id" class="background-option-card" data-testid="background-option-card">
                   <div
-                    class="background-option-preview"
+                    class="background-option-preview" data-testid="background-option-preview"
                     :style="{ backgroundImage: `linear-gradient(180deg, transparent, color-mix(in srgb, var(--df-canvas) 66%, transparent)), url('${backgroundPreviews[item.id]}')` }"
                   >
                     <span v-if="customBackgrounds[item.id]">{{ t('localCustomImage') }}</span>
@@ -1604,7 +1604,7 @@ function redownloadUpdatePackage() {
                     <strong>{{ t(item.titleKey) }}</strong>
                     <small>{{ t(item.descriptionKey) }}</small>
                   </div>
-                  <div class="background-option-actions">
+                  <div class="background-option-actions" data-testid="background-option-actions">
                     <label class="background-file-button">
                       <input type="file" accept="image/jpeg,image/png,image/webp,image/avif" @change="onBackgroundFile(item.id, $event)">
                       <span>{{ t('chooseImage') }}</span>
@@ -1733,7 +1733,7 @@ function redownloadUpdatePackage() {
                   </div>
                   <NTag v-if="securityStatus?.tls_mode === 'lets_encrypt'" type="success" size="small" round>{{ t('securityModeActive') }}</NTag>
                 </div>
-                <NCollapse class="security-lets-encrypt-setup" :display-directive="'show'">
+                <NCollapse class="security-lets-encrypt-setup" data-testid="security-lets-encrypt-setup" :display-directive="'show'">
                   <NCollapseItem :title="t('securityAcmeSetupTitle')" name="lets-encrypt-setup">
                     <div class="security-acme-workflow">
                       <label class="security-acme-step">
@@ -1767,7 +1767,7 @@ function redownloadUpdatePackage() {
                         </span>
                       </label>
                     </div>
-                    <div class="security-acme-actions">
+                    <div class="security-acme-actions" data-testid="security-acme-actions">
                       <small>{{ t('securityAcmeActionHint') }}</small>
                       <NButton type="primary" :loading="securityBusy === 'acme'" :disabled="securityBusy !== ''" @click="enableLetsEncrypt">
                         {{ securityStatus?.tls_mode === 'lets_encrypt' ? t('securityReissueLetsEncrypt') : t('securityEnableLetsEncrypt') }}
@@ -1950,7 +1950,7 @@ function redownloadUpdatePackage() {
                 </NButton>
               </div>
             </section>
-            <section class="advanced-section test-timeout-section">
+            <section class="advanced-section test-timeout-section" data-testid="test-timeout-section">
               <header class="advanced-section-head">
                 <NIcon :component="ServerOutline" />
                 <div><h3>{{ t('testTimeoutTitle') }}</h3><p>{{ t('testTimeoutHint') }}</p></div>
@@ -2182,9 +2182,9 @@ function redownloadUpdatePackage() {
                 </NButton>
               </div>
             </section>
-            <section class="about-card">
+            <section class="about-card" data-testid="about-card">
               <header class="about-identity">
-                <BrandLogo :size="58" :with-text="false" class="about-project-logo" />
+                <BrandLogo :size="58" :with-text="false" class="about-project-logo" data-testid="about-project-logo" />
                 <div><h3>{{ t('aboutDiceFrame') }}</h3><p>{{ t('aboutIntro1') }}</p><p class="muted">{{ t('aboutIntro2') }}</p></div>
               </header>
               <div class="about-detail-grid">
@@ -2218,7 +2218,7 @@ function redownloadUpdatePackage() {
                   <strong>⭐ {{ t('starOnGithub') }}</strong>
                   <small>{{ t('starOnGithubHint') }}</small>
                 </a>
-                <button class="sponsor-cta" @click="sponsorModalOpen = true">
+                <button class="sponsor-cta" data-testid="sponsor-cta" @click="sponsorModalOpen = true">
                   <strong>{{ t('supportProject') }}</strong>
                   <small>{{ t('supportProjectText') }}</small>
                 </button>
@@ -2236,3 +2236,12 @@ function redownloadUpdatePackage() {
     </div>
   </section>
 </template>
+
+<style scoped>
+/* 移动端底栏遮挡：拆分自 light.css 的跨页共享规则（原是 5 个页面组合选择器）。 */
+@media (max-width: 800px) {
+  .reference-settings-page {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+}
+</style>
