@@ -25,8 +25,8 @@ import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadScene
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
 import { isLlmConfigReady } from '@/utils/modelConfiguration'
 import {
-  CARD_CONTROL_MODES,
-  defaultCardControl,
+  cardControlAt,
+  cycleCardControl,
   removeCardControl,
   syncCardControls,
   type CardControlMode,
@@ -191,6 +191,18 @@ function controlLabel(mode: string): string {
   if (mode === 'ai') return t('controlAi')
   if (mode === 'unclaimed') return t('controlUnclaimed')
   return t('controlHuman')
+}
+/** 角色步骤与确认页共用同一个答案，避免确认页显示与刚才选择不同的值。 */
+function controlOf(index: number): CardControlMode {
+  return cardControlAt(cardControl.value, index)
+}
+/** 单个循环按钮：点一下换下一个控制方式（玩家 → AI 托管 → 等待认领 → 玩家）。 */
+function cycleControl(index: number) {
+  cardControl.value = cycleCardControl(cardControl.value, index)
+}
+/** 按钮只显示当前状态，所以用 title / aria-label 说明「点它会切换」。 */
+function controlSwitchHint(index: number): string {
+  return t('controlSwitchHint', { mode: controlLabel(controlOf(index)) })
 }
 // 任何进入 characters[] 的路径（手动创建 / 角色卡选择器 / 导入 / 专业建卡）都会
 // 经过这里补齐控制方式，不会出现「导入的角色没有控制方式」。
@@ -513,7 +525,7 @@ async function create() {
       // 每张卡在「角色」步骤都有明确的控制方式，创建 payload 直接带上它；
       // 服务端把它写成 players[uid].control.mode（human / ai / unclaimed），
       // 前端不自己造 AI 状态，也不修改 control revision。
-      return { ...card, control: cardControl.value[i] ?? defaultCardControl(i) }
+      return { ...card, control: cardControlAt(cardControl.value, i) }
     })
     const selectedSceneImage = sceneImageFile.value ? await uploadSceneImage(sceneImageFile.value) : undefined
     if (seed.value.trim()) {
@@ -778,14 +790,20 @@ async function create() {
                 <h3>{{ c.character_name || t('unnamed') }}</h3>
                 <p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p>
                 <small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small>
-                <label class="create-character-control">
-                  <span>{{ t('controlMode') }}</span>
-                  <select v-model="cardControl[i]" :aria-label="t('controlMode')">
-                    <option v-for="mode in CARD_CONTROL_MODES" :key="mode" :value="mode">{{ controlLabel(mode) }}</option>
-                  </select>
-                </label>
               </div>
-              <div class="actions"><button @click="openWizard(i)">{{ t('edit') }}</button><button class="danger" @click="removeCharacter(i)">{{ t('remove') }}</button></div>
+              <div class="actions">
+                <!-- 控制方式是一个按钮而不是下拉：按钮显示当前状态，点一下切到下一个
+                     （玩家 → AI 托管 → 等待认领 → 玩家），与「编辑 / 删除」同一排。 -->
+                <button
+                  type="button"
+                  class="create-character-control-button"
+                  :title="controlSwitchHint(i)"
+                  :aria-label="controlSwitchHint(i)"
+                  @click="cycleControl(i)"
+                >{{ controlLabel(controlOf(i)) }}</button>
+                <button @click="openWizard(i)">{{ t('edit') }}</button>
+                <button class="danger" @click="removeCharacter(i)">{{ t('remove') }}</button>
+              </div>
             </article>
             <button class="create-character-empty" @click="openWizard(null)"><b>＋</b><span>{{ t('newCharacter') }}</span></button>
           </div>
@@ -803,13 +821,8 @@ async function create() {
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>
           <div class="create-confirm-characters"><span v-for="(c, i) in characters" :key="i">{{ c.character_name }}</span></div>
-          <!-- 确认页只做只读摘要：每张角色一行「名字 + 最终控制方式」，配置本身留在「角色」步骤。 -->
-          <ul class="create-confirm-controls">
-            <li v-for="(c, i) in characters" :key="i">
-              <span>{{ c.character_name || t('unnamed') }}</span>
-              <strong>{{ controlLabel(cardControl[i] ?? defaultCardControl(i)) }}</strong>
-            </li>
-          </ul>
+          <!-- 确认页不再逐张列出「名字 + 控制方式」：名字上面已经有胶囊，控制方式在
+               「角色」步骤的按钮上就是当前状态，重复一遍没有信息量。 -->
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>

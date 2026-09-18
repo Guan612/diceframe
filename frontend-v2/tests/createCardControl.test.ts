@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CARD_CONTROL_MODES,
+  cardControlAt,
   cardControlPayload,
+  cycleCardControl,
   defaultCardControl,
   normalizeCardControl,
   removeCardControl,
@@ -90,20 +92,73 @@ describe('deleting a character keeps control aligned', () => {
   })
 })
 
-describe('CreateView control placement contract', () => {
-  it('offers a compact per-card control in the character step', () => {
-    // 角色步骤：每张角色卡旁一个 select，而不是一组 radio。
-    expect(createView).toMatch(
-      /create-character-card[\s\S]*?<select v-model="cardControl\[i\]"/,
-    )
-    expect(createView).toContain('v-for="mode in CARD_CONTROL_MODES"')
+/**
+ * Case H — 单个循环按钮的唯一写入口。
+ *
+ * 角色卡上只有一个按钮显示当前控制方式，点一下切到下一个：循环顺序、坏数据收敛与
+ * 越界保护都必须发生在这个模块内，不能让创建 payload 拿到契约之外的控制方式。
+ */
+describe('cycling a card control from the single button', () => {
+  it('walks the contract order human → ai → unclaimed and wraps around', () => {
+    expect(cycleCardControl(['human'], 0)).toEqual(['ai'])
+    expect(cycleCardControl(['ai'], 0)).toEqual(['unclaimed'])
+    expect(cycleCardControl(['unclaimed'], 0)).toEqual(['human'])
   })
 
-  it('keeps the control dropdown inside the character info column', () => {
-    // 布局修复：控制方式跟在名字 / 出身 / 技能数之后，而不是自己占一列 grid。
+  it('cycles only the clicked card and leaves its neighbours alone', () => {
+    // 第 1 张是 unclaimed，按契约顺序切到 human；左右两张保持原值。
+    expect(cycleCardControl(['human', 'unclaimed', 'ai'], 1)).toEqual(['human', 'human', 'ai'])
+  })
+
+  it('does not mutate the array it was given', () => {
+    const current = ['human', 'unclaimed'] as const
+    cycleCardControl(current, 0)
+    expect([...current]).toEqual(['human', 'unclaimed'])
+  })
+
+  it('normalizes a junk value first, then cycles from the normalized mode', () => {
+    // 'script' 在第 1 位按位置收敛成 unclaimed，再切到下一个 = human（不是跳过一格）。
+    expect(cycleCardControl(['human', 'script'], 1)).toEqual(['human', 'human'])
+  })
+
+  it('an out-of-range index changes nothing', () => {
+    expect(cycleCardControl(['human', 'ai'], 5)).toEqual(['human', 'ai'])
+    expect(cycleCardControl(['human', 'ai'], -1)).toEqual(['human', 'ai'])
+  })
+
+  it('reads the same answer for the character step and the confirm summary', () => {
+    expect(cardControlAt(['human', 'ai'], 0)).toBe('human')
+    expect(cardControlAt(['human', 'ai'], 1)).toBe('ai')
+    // 缺失值按位置给默认，与 defaultCardControl 同源。
+    expect(cardControlAt([], 0)).toBe(defaultCardControl(0))
+    expect(cardControlAt([], 2)).toBe(defaultCardControl(2))
+  })
+})
+
+describe('CreateView control placement contract', () => {
+  it('offers a single cycling control button in the character step', () => {
+    // 角色步骤：每张角色卡一个按钮显示当前控制方式，点一下切下一个；不再有需要展开的
+    // 下拉，也不是铺开成整块的 radio 表单。
+    expect(createView).toMatch(
+      /create-character-card[\s\S]*?class="create-character-control-button"[\s\S]*?@click="cycleControl\(i\)"/,
+    )
+    expect(createView).toContain('cycleCardControl(cardControl.value, index)')
+    // 按钮显示的是当前状态，因此必须说明点它会切换（title + aria-label）。
+    expect(createView).toContain(':title="controlSwitchHint(i)"')
+    expect(createView).toContain(':aria-label="controlSwitchHint(i)"')
+    expect(createView).not.toContain('<select v-model="cardControl')
+    expect(createView).not.toContain('<option v-for="mode in CARD_CONTROL_MODES"')
+  })
+
+  it('keeps the control button in the same action row as 编辑 / 删除', () => {
+    // 布局契约：控制方式按钮与「编辑 / 删除」并排，不再单独占信息列里的一行。
     const card = createView.slice(createView.indexOf('class="create-character-card"'))
+    const actions = card.slice(card.indexOf('class="actions"'), card.indexOf('</article>'))
+    expect(actions).toContain('create-character-control-button')
+    expect(actions).toContain('create-character-control-button"')
+    // 信息列（名字 / 出身 / 技能数）里不再渲染控制方式。
     const info = card.slice(card.indexOf('<div>'), card.indexOf('class="actions"'))
-    expect(info).toContain('create-character-control')
+    expect(info).not.toContain('create-character-control')
   })
 
   it('removes the matching control when a character is removed', () => {
@@ -114,13 +169,15 @@ describe('CreateView control placement contract', () => {
     expect(fn).toContain('removeCardControl(cardControl.value, idx)')
   })
 
-  it('Case G — keeps the confirm step a read-only summary, not a second config page', () => {
+  it('Case G — the confirm step no longer repeats the per-character control', () => {
     const confirmSection = createView.slice(createView.indexOf('create-confirm-stage'))
     const summary = confirmSection.slice(0, confirmSection.indexOf('</section>'))
-    // 确认页展示每张角色的最终控制方式：这会决定谁要行动、谁被 AI 托管、谁等人认领。
-    expect(summary).toContain('create-confirm-controls')
-    expect(summary).toContain('controlLabel(cardControl[i] ?? defaultCardControl(i))')
-    // ……但只是只读摘要，不提供第二套配置入口。
+    // 角色名仍有胶囊展示，但「名字 + 控制方式」那条清单已按人类反馈拿掉：控制方式在
+    // 「角色」步骤的按钮上就是当前状态，确认页重复一遍没有信息量。
+    expect(summary).toContain('create-confirm-characters')
+    expect(summary).not.toContain('create-confirm-controls')
+    expect(summary).not.toContain('controlLabel(')
+    // 确认页始终只有只读摘要，不提供第二套配置入口。
     expect(summary).not.toContain('<select')
     expect(summary).not.toContain('type="radio"')
     expect(summary).not.toContain('v-model="cardControl')

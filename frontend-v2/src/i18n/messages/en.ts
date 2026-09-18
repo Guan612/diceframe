@@ -459,6 +459,7 @@ export const en = {
   controlAiTakingOver: 'AI is taking over…',
   controlNowHuman: 'Returned to the player',
   controlUnclaimedDefault: 'Default for unclaimed characters',
+  controlSwitchHint: 'Control: {mode} — click to switch',
   importedCharacter: 'Imported {name}',
   exported: 'Exported',
   resetFailed: 'Reset failed',

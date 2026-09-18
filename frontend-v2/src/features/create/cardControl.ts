@@ -58,6 +58,34 @@ export function cardControlPayload(
 }
 
 /**
+ * 读某张角色当前生效的控制方式：越界或缺失时给出该位置应有的默认值。
+ *
+ * 「角色步骤显示什么」与「确认页摘要什么」必须用同一个答案，否则用户会在确认页
+ * 看到与刚才选择不同的值。默认规则也只有这里一份（{@link defaultCardControl}）。
+ */
+export function cardControlAt(current: readonly unknown[], index: number): CardControlMode {
+  return normalizeCardControl(current[index], index)
+}
+
+/**
+ * 三态循环按钮：返回把某张卡切到**下一个**控制方式后的新数组。
+ *
+ * 顺序就是契约顺序 human → ai → unclaimed → human，循环长度取自
+ * {@link CARD_CONTROL_MODES}，以后契约变化不需要改这里的魔法数。先归一化再取下一个，
+ * 因此坏数据被点到时也会先落回合法模式而不是被跳过。越界 index 不写入。
+ */
+export function cycleCardControl(
+  current: readonly unknown[],
+  index: number,
+): CardControlMode[] {
+  const next = syncCardControls(current.length, current)
+  if (index < 0 || index >= next.length) return next
+  const position = CARD_CONTROL_MODES.indexOf(next[index])
+  next[index] = CARD_CONTROL_MODES[(position + 1) % CARD_CONTROL_MODES.length]
+  return next
+}
+
+/**
  * 删除某一张角色时，同步删除它对应的控制方式。
  *
  * 角色与控制方式是按 index 平行保存的（`characters[i]` ↔ `cardControl[i]`）。只删

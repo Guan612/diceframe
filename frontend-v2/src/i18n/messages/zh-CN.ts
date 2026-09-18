@@ -459,6 +459,7 @@ export const zhCN = {
   controlAiTakingOver: 'AI 正在接管…',
   controlNowHuman: '已交回真人',
   controlUnclaimedDefault: '未认领角色默认',
+  controlSwitchHint: '控制方式：{mode}，点击切换',
   importedCharacter: '已导入 {name}',
   exported: '已导出',
   resetFailed: '重置失败',

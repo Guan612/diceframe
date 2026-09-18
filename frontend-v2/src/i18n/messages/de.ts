@@ -459,6 +459,7 @@ export const de = {
   controlAiTakingOver: 'Die KI übernimmt…',
   controlNowHuman: 'An den Spieler zurückgegeben',
   controlUnclaimedDefault: 'Standard für nicht beanspruchte Charaktere',
+  controlSwitchHint: 'Steuerung: {mode} – zum Wechseln klicken',
   importedCharacter: '{name} importiert',
   exported: 'Exportiert',
   resetFailed: 'Zurücksetzen fehlgeschlagen',

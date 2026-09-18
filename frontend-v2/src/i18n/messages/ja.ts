@@ -459,6 +459,7 @@ export const ja = {
   controlAiTakingOver: 'AI が引き継いでいます…',
   controlNowHuman: 'プレイヤーに戻しました',
   controlUnclaimedDefault: '未認領キャラの既定',
+  controlSwitchHint: '操作：{mode}（クリックで切替）',
   importedCharacter: '{name} をインポートしました',
   exported: 'エクスポートしました',
   resetFailed: 'リセットに失敗',
