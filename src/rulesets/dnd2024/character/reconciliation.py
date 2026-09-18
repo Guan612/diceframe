@@ -22,6 +22,7 @@ from typing import Any
 
 from .derivation import derive_armor_class
 from .primitives import ref_id as _ref_id
+from src.rulesets.dnd2024.features import Dnd2024ClassFeatureResolver
 
 logger = logging.getLogger("trpg")
 
@@ -337,6 +338,10 @@ class Dnd2024CharacterStateReconciler:
 
         canonical_equipment["item_refs"] = item_refs
         derived["armor_class"] = armor_class
+        # 装备是职业特性生效前提的一部分（武艺要求未穿甲、未持盾、只持 Monk
+        # Weapon）。canonical 装备刚变过，用户可见的职业特性/资源投影必须跟着
+        # 变，否则界面会继续展示已经不再生效的武艺骰。
+        sheet.update(Dnd2024ClassFeatureResolver(self.bundle).projection_fields(canonical))
         # §28：legacy / public mirror 必须与 canonical 一致，因为 Combat、UI、
         # LLM view 可能读不同层；但计算 authority 仍然只有上面那一处。
         sheet["armor_class"] = armor_class

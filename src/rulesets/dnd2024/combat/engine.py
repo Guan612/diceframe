@@ -11,6 +11,7 @@ from src.engine.player_control import is_ai_controlled
 from src.rulesets.bundle import LoadedRulesetBundle
 from src.rulesets.dnd2024.character.builder import ability_modifier
 from src.rulesets.dnd2024.combat.catalog import Dnd2024CombatCatalog
+from src.rulesets.dnd2024.features import Dnd2024ClassFeatureResolver
 from src.rulesets.dnd2024.play.contracts import EncounterAccess
 from src.rulesets.dnd2024.spells.catalog import Dnd2024SpellCatalog
 from src.rulesets.events import EventBatchError, apply_event_batch, stable_batch_id
@@ -18,6 +19,7 @@ from src.rulesets.events import EventBatchError, apply_event_batch, stable_batch
 
 from .primitives import (
     INTENT_TYPES,
+    UNARMED_STRIKE_REF,
     CombatIntentError,
     actor_kind as _actor_kind,
     companion_actor as _companion_actor,
@@ -40,10 +42,12 @@ class Dnd2024CombatEngine(
     encounter_catalog: dict[str, Any] | None = None
     catalog: Dnd2024CombatCatalog = field(init=False)
     spells: Dnd2024SpellCatalog = field(init=False)
+    features: Dnd2024ClassFeatureResolver = field(init=False)
 
     def __post_init__(self) -> None:
         self.catalog = Dnd2024CombatCatalog.from_bundle(self.bundle)
         self.spells = Dnd2024SpellCatalog.from_bundle(self.bundle)
+        self.features = Dnd2024ClassFeatureResolver(self.bundle)
 
     def initialize_state(self, instance: Any) -> dict[str, Any]:
         state = instance.ruleset_state
@@ -170,6 +174,19 @@ class Dnd2024CombatEngine(
                 "expected_version": version, "spells": spells,
                 "targets": self._all_targets(instance, combat),
             })
+        # 职业特性提供的战斗能力（v1: Monk 的附赠徒手打击 / 疾风连击 /
+        # 坚守防御 / 疾风步）。服务端只暴露当前真实可用的 capability，因此
+        # 不会出现空的「附赠动作」入口；按钮自带成本与目标要求。
+        for capability in self._available_class_capabilities(actor, economy):
+            entry = capability.to_dict()
+            entry.update({
+                "type": "class_capability",
+                "actor_id": current,
+                "expected_version": version,
+            })
+            if capability.requires_hostile_target:
+                entry["targets"] = self._hostile_targets(instance, combat, current)
+            actions.append(entry)
         if int(economy.get("movement", 0) or 0) > 0:
             actions.append({
                 "type": "move", "label": "Move", "actor_id": current,
@@ -538,6 +555,8 @@ class Dnd2024CombatEngine(
             })
         elif intent_type == "attack":
             events.extend(self._attack_events(instance, combat, intent, rng))
+        elif intent_type == "class_capability":
+            events.extend(self._class_capability_events(instance, combat, intent, rng))
         elif intent_type == "cast_spell":
             events.extend(self._spell_events(instance, combat, intent, rng))
         elif intent_type == "move":
@@ -721,6 +740,10 @@ class Dnd2024CombatEngine(
                     "conditions": deepcopy(view["conditions"]),
                     "concentration": deepcopy(view.get("concentration")),
                     "death_saves": deepcopy(view.get("death_saves") or {}),
+                    # 职业资源投影永远是一张列表（player / companion 视图给出角色
+                    # 真实条目，enemy 视图没有职业资源，就是空列表）。这里绝不能
+                    # 退回 ``{}``：同一个字段出现两种形状会让客户端把对象当数组用。
+                    "class_resources": deepcopy(view.get("class_resources") or []),
                 })
         initiative = list(combat.get("initiative") or [])
         turn_index = int(combat.get("turn_index", 0) or 0)

@@ -180,13 +180,28 @@ def test_weaponless_player_gets_a_canonical_unarmed_attack() -> None:
     assert [item["weapon_ref"] for item in attack["weapons"]] == ["unarmed_strike"]
     unarmed = attack["weapons"][0]
     assert unarmed["name"] == "Unarmed Strike"
-    assert unarmed["damage"] == "1"
+    # 武僧的武艺特性把徒手打击的基础伤害换成 Martial Arts Die（此处 1d6）；
+    # 攻击身份仍然是同一个 canonical unarmed_strike。
+    assert unarmed["damage"] == "1d6"
+    assert unarmed["martial_arts"] is True
     assert unarmed["damage_type"] == "bludgeoning"
     assert unarmed["range"] == 5
     assert unarmed["unarmed"] is True
     assert {item["type"] for item in engine.available_intents(instance, "gm")} >= {
         "attack", "dash", "dodge", "disengage", "move", "end_turn",
     }
+
+
+def test_non_monk_unarmed_strike_keeps_the_base_damage() -> None:
+    # 非武僧（此处为战士）不获得武艺：徒手打击仍然是基础 1 点钝击。
+    engine, instance = _preset_instance("stalwart_guardian")
+    _start(engine, instance)
+
+    unarmed = _attack_intent(engine, instance)["weapons"][-1]
+
+    assert unarmed["weapon_ref"] == "unarmed_strike"
+    assert unarmed["damage"] == "1"
+    assert "martial_arts" not in unarmed
 
 
 def test_unarmed_strike_resolves_through_the_authoritative_chain() -> None:
@@ -209,15 +224,16 @@ def test_unarmed_strike_resolves_through_the_authoritative_chain() -> None:
     canonical = instance.get_character_sheet("gm")["ruleset_character"]
 
     assert applied["applied"] is True and applied["state_version"] == 2
-    # 徒手打击：STR 修正 (+1) 加熟练加值 (+2)；伤害为基础 1 点加 STR 修正。
-    assert check["modifier"] == 3 and check["success"] is True
-    assert damage["amount"] == 2 and damage["damage_type"] == "bludgeoning"
-    assert damage["rolls"] == []
-    assert instance.ruleset_state["combat"]["enemies"]["goblin-1"]["hp"] == 16
+    # 武艺允许力量/敏捷中修正值较高者：DEX 14(+2) 高于 STR 12(+1)，取 DEX，
+    # 再加熟练加值 (+2)；伤害为 1d6 加 DEX 修正（骰点 3 + 2）。
+    assert check["modifier"] == 4 and check["success"] is True
+    assert damage["amount"] == 5 and damage["damage_type"] == "bludgeoning"
+    assert damage["rolls"] == [3]
+    assert instance.ruleset_state["combat"]["enemies"]["goblin-1"]["hp"] == 13
     # 徒手打击是天然能力：不写入 inventory / equipment。
     assert canonical["equipment"]["item_refs"] == []
     assert replayed["duplicate"] is True
-    assert instance.ruleset_state["combat"]["enemies"]["goblin-1"]["hp"] == 16
+    assert instance.ruleset_state["combat"]["enemies"]["goblin-1"]["hp"] == 13
 
 
 def test_unarmed_strike_shares_the_attack_action_economy() -> None:

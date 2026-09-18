@@ -11,6 +11,7 @@ from src.engine.player_control import is_ai_controlled
 from .primitives import (
     DICE_RE,
     INTENT_TYPES,
+    UNARMED_STRIKE_REF,
     CombatIntentError,
     actor_kind as _actor_kind,
     canonical as _canonical,
@@ -274,6 +275,8 @@ class CombatValidationMixin:
                 raise CombatIntentError("movement exceeds the remaining speed")
         if intent_type == "attack":
             self._validate_attack(instance, combat, intent, actor)
+        if intent_type == "class_capability":
+            self._validate_class_capability(instance, combat, intent, actor, economy)
         if intent_type == "cast_spell":
             self._validate_spell(instance, combat, intent, actor, economy)
         if intent_type == "stabilize":
@@ -281,6 +284,56 @@ class CombatValidationMixin:
             if target["kind"] != "player" or target["hp"] > 0:
                 raise CombatIntentError("stabilize requires a player at 0 HP")
             self._require_range(combat, actor_id, target["actor_id"], 5)
+
+    def _validate_class_capability(
+        self, instance: Any, combat: dict[str, Any], intent: dict[str, Any],
+        actor: dict[str, Any], economy: dict[str, Any],
+    ) -> None:
+        """Authoritative gate for feature-provided combat capabilities.
+
+        The UI only ever offers capabilities the server reported as available;
+        this check is what actually protects the boundary, so a forged
+        capability id, a forged target, or a stale resource state is rejected
+        here even when the button was never rendered.
+        """
+
+        if actor.get("kind") not in {"player", "companion"}:
+            raise CombatIntentError("class capabilities are not available to this actor")
+        capability_id = str(intent.get("capability_id") or "")
+        if not capability_id:
+            raise CombatIntentError("capability_id is required")
+        views = {
+            view.id: view
+            for view in self._available_class_capabilities(
+                actor, economy, include_unavailable=True,
+            )
+        }
+        view = views.get(capability_id)
+        if view is None:
+            raise CombatIntentError("class capability is not available to this actor")
+        if not view.available:
+            raise CombatIntentError(view.blocked_reason or "class capability is not available")
+        capability = self.features.declared_capability(
+            self._feature_character(actor), capability_id,
+        )
+        if capability is None:  # pragma: no cover - availability already proved it
+            raise CombatIntentError("class capability is not available to this actor")
+        has_unarmed_strike = any(
+            action.kind == "unarmed_strike" for action in capability.actions
+        )
+        if has_unarmed_strike:
+            # 复用 canonical 徒手打击校验：目标必须存活且敌对、射程由同一份
+            # 攻击档案决定，Combat 不自己算命中/伤害。
+            self._validate_attack(instance, combat, {
+                "target_id": str(intent.get("target_id") or ""),
+                "weapon_ref": UNARMED_STRIKE_REF,
+            }, actor)
+        elif capability.requires_hostile_target:
+            target = self._actor_view(
+                instance, combat, str(intent.get("target_id") or ""),
+            )
+            if str(target.get("side") or "") == str(actor.get("side") or "") or target["hp"] <= 0:
+                raise CombatIntentError("this capability requires a living hostile target")
 
     def _validate_attack(
         self, instance: Any, combat: dict[str, Any], intent: dict[str, Any], actor: dict[str, Any],

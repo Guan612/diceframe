@@ -16,6 +16,7 @@ from .action_adapter import (
 )
 from .primitives import (
     CombatIntentError,
+    UNARMED_STRIKE_REF,
     actor_kind as _actor_kind,
     canonical as _canonical,
     companion_actor as _companion_actor,
@@ -93,6 +94,7 @@ class CombatResolutionMixin:
 
     def _attack_events(
         self, instance: Any, combat: dict[str, Any], intent: dict[str, Any], rng: Any,
+        *, spend_attack_action: bool = True,
     ) -> list[dict[str, Any]]:
         actor_id = str(intent["actor_id"])
         target_id = str(intent["target_id"])
@@ -105,10 +107,27 @@ class CombatResolutionMixin:
             if weapon is None:  # pragma: no cover - validation guards this
                 raise CombatIntentError("attack profile is not available to the actor")
             distance = self._distance(combat, actor_id, target_id)
-            ranged_use = bool(weapon.get("ranged")) or distance > 5
+            # 真正的远程武器 vs 近战武器被投掷：2024 Thrown 规定，投掷一把 melee
+            # weapon 时，攻击与伤害沿用**近战使用该武器时相同的属性修正**。所以
+            # "在远处使用" 不等于 "这是远程武器"。属性选择只应被前者（真远程武器）
+            # 排除，否则武僧把长矛/手斧扔出去就会被强制成 DEX。
+            is_ranged_weapon = bool(weapon.get("ranged"))
+            ranged_use = is_ranged_weapon or distance > 5
             ability = "dex" if ranged_use else "str"
             if weapon.get("finesse"):
                 ability = max(("str", "dex"), key=lambda key: ability_modifier(actor["abilities"][key]))
+            # 职业特性投影出来的属性选择（武艺：徒手打击与 Monk Weapon 都可以改用
+            # 力量或敏捷）。客户端不能每次手选属性，因此第一版采用确定性规则——
+            # 取修正值较高者，由 feature boundary 投影到武器档案上，Combat 不判断职业。
+            choices = [
+                str(key) for key in weapon.get("ability_choice") or []
+                if str(key) in actor["abilities"]
+            ]
+            if choices and not is_ranged_weapon:
+                ability = max(
+                    choices,
+                    key=lambda key: ability_modifier(actor["abilities"][key]),
+                )
             modifier = ability_modifier(actor["abilities"][ability])
             if weapon.get("unarmed") or (
                 f"weapon_category:{weapon.get('category')}" in actor["weapon_category_refs"]
@@ -143,7 +162,9 @@ class CombatResolutionMixin:
         target_ac = target["armor_class"] + (2 if "shield_of_faith" in target["conditions"] else 0)
         critical = natural == 20
         hit = natural != 1 and (critical or total >= target_ac)
-        events: list[dict[str, Any]] = [self._attack_cost_event(combat, actor)]
+        events: list[dict[str, Any]] = (
+            [self._attack_cost_event(combat, actor)] if spend_attack_action else []
+        )
         events.append({
             "type": "check.resolved", "kind": "attack", "actor_id": actor_id,
             "target_id": target_id, "rolls": [value for value in (first, second) if value],
@@ -372,11 +393,14 @@ class CombatResolutionMixin:
     @staticmethod
     def _basic_action_events(
         combat: dict[str, Any], intent_type: str, actor_id: str,
+        *, spend_action: bool = True,
     ) -> list[dict[str, Any]]:
-        events = [{
-            "type": "dnd2024.action.spent", "actor_id": actor_id,
-            "resource": "action", "amount": 1,
-        }]
+        events: list[dict[str, Any]] = []
+        if spend_action:
+            events.append({
+                "type": "dnd2024.action.spent", "actor_id": actor_id,
+                "resource": "action", "amount": 1,
+            })
         if intent_type == "dash":
             speed = int(combat.get("economy", {}).get("speed", 0) or 0)
             events.append({
@@ -388,6 +412,65 @@ class CombatResolutionMixin:
                 "condition": "dodging" if intent_type == "dodge" else "disengaged",
                 "duration": "actor_turn_start", "source_actor_id": actor_id,
             })
+        return events
+
+    def _class_capability_events(
+        self, instance: Any, combat: dict[str, Any], intent: dict[str, Any], rng: Any,
+    ) -> list[dict[str, Any]]:
+        """Resolve a feature-provided combat capability as one atomic batch.
+
+        The capability declaration supplies the cost and the underlying
+        canonical actions; the resource spend, the action-economy spend, and
+        every canonical attack resolution land in the *same* EventBatch, so a
+        rejected second strike can never leave a half-charged Focus point or a
+        spent bonus action behind.
+        """
+
+        actor_id = str(intent["actor_id"])
+        actor = self._actor_view(instance, combat, actor_id)
+        capability_id = str(intent.get("capability_id") or "")
+        capability = self.features.declared_capability(
+            self._feature_character(actor), capability_id,
+        )
+        if capability is None:  # pragma: no cover - validation guards this
+            raise CombatIntentError("class capability is not available to this actor")
+        events: list[dict[str, Any]] = []
+        if capability.cost.action:
+            events.append({
+                "type": "dnd2024.action.spent", "actor_id": actor_id,
+                "resource": capability.cost.action, "amount": 1,
+            })
+        for resource_cost in capability.cost.resources:
+            events.append({
+                "type": "dnd2024.class_resource.spent", "actor_id": actor_id,
+                "resource_id": resource_cost.resource_id, "amount": resource_cost.amount,
+            })
+        target_id = str(intent.get("target_id") or "")
+        for action in capability.actions:
+            if action.kind == "unarmed_strike":
+                for _ in range(action.count):
+                    strike_events = self._attack_events(
+                        instance,
+                        combat,
+                        {
+                            "actor_id": actor_id, "target_id": target_id,
+                            "weapon_ref": UNARMED_STRIKE_REF,
+                        },
+                        rng,
+                        spend_attack_action=False,
+                    )
+                    events.extend(strike_events)
+                    if any(
+                        event["type"] == "dnd2024.combat.ended" for event in strike_events
+                    ):
+                        # 战斗已经结束：不再追加注定落空的后续打击。
+                        return events
+            elif action.kind in {"dash", "dodge", "disengage"}:
+                events.extend(self._basic_action_events(
+                    combat, action.kind, actor_id, spend_action=False,
+                ))
+            else:  # pragma: no cover - catalog validation guards this
+                raise CombatIntentError("unsupported class capability action")
         return events
 
     def _end_turn_events(self, instance: Any, combat: dict[str, Any]) -> list[dict[str, Any]]:

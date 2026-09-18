@@ -60,6 +60,9 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
     'agreement', 'kind', 'visibility', 'entity_id', 'title', 'summary',
     'proposal_id', 'mode', 'adventure_id',
     'encounter_preset_id', 'encounter_instance_id', 'enemies',
+    // 职业特性提供的战斗能力只提交 capability id 与目标；成本与结算仍由
+    // 服务端 capability 声明决定，P2P 与 Web 走同一条权威链。
+    'capability_id',
   ],
   'ruleset.decision': [
     'intent_id', 'type', 'expected_version', 'decision_id', 'option',
