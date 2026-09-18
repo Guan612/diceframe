@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
 
-from src.engine import round_recovery, round_snapshots, turn_state
+from src.engine import instance_lifecycle, round_recovery, round_snapshots, turn_state
 from src.engine.contracts import (
     ActionRecord,
     CheckResult,
@@ -1312,99 +1312,32 @@ class GameInstance:
         return round_recovery.switch_swipe(self, round_num, swipe_idx)
 
     # ---------- 状态转换 ------------------------------------
+    # 持锁 mutation detail 见 src/engine/instance_lifecycle.py。
 
     async def activate(self) -> None:
         async with self._lock:
-            self.state = GameState.ACTIVE_ACTION
-            if not self.started_at:
-                self.started_at = datetime.now(timezone.utc).isoformat()
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            logger.info("游戏激活 - game_key=%s", self.game_key)
+            instance_lifecycle.activate_locked(self)
 
     async def pause(self) -> None:
         async with self._lock:
-            self.state = GameState.PAUSED
+            instance_lifecycle.pause_locked(self)
 
     async def resume(self) -> None:
         async with self._lock:
-            self.state = GameState.ACTIVE_ACTION
+            instance_lifecycle.resume_locked(self)
 
     async def end(self) -> None:
         async with self._lock:
-            self.state = GameState.ENDED
+            instance_lifecycle.end_locked(self)
 
     async def reset(self, keep_seed: bool = True) -> None:
+        """重开一局：保留配置身份，轮换 run identity 并清空运行时状态。
+
+        真实契约由 ``tests/test_game_instance_reset_characterization.py`` 冻结；
+        实现是基线 reset() 的机械迁移（见 ``instance_lifecycle.reset_locked``）。
+        """
         async with self._lock:
-            saved_seed = self.seed_code if keep_seed else ""
-            saved_world_id = self.world_id
-            saved_world_name = self.world_name
-            saved_group_name = self.group_name
-            saved_solo = self.solo_mode
-            saved_narrative_perspective = self.narrative_perspective
-            saved_gm_style_override = copy.deepcopy(self.gm_style_override)
-            saved_language = normalize_language(self.language)
-            saved_ruleset_runtime = copy.deepcopy(self.ruleset_runtime)
-            saved_adventure_binding = copy.deepcopy(self.adventure_binding)
-            self.rotate_run_identity()
-            self.players.clear()
-            self.npcs.clear()
-            self.round_number = 0
-            self.action_queue.clear()
-            self.pending_actions.clear()
-            self.ready_players.clear()
-            self.combat_active = False
-            self.combat_enemies.clear()
-            self.combat_state = "none"
-            self.initiative_order.clear()
-            self.initiative_current = 0
-            self.scene = ""
-            self.game_time = ""
-            self.log.clear()
-            self.summary.clear()
-            self.key_facts.clear()
-            # 世界真相属于这一轮 run：重置与重开都从空世界重新开始。
-            self.world_state = fresh_world_state()
-            self.total_llm_calls = 0
-            self.total_tokens = 0
-            self.started_at = ""
-            self.last_activity = ""
-            self.puzzle_manager = None
-            self.plot_tracker = None
-            self.pending_combat_results.clear()
-            self.combat_extension = {}
-            self.combat_extension_round_snapshots.clear()
-            self.lorebook_timed_state.clear()
-            self.health_events.clear()
-            self.health_status.clear()
-            self.quick_actions.clear()
-            self.confirmed_items.clear()
-            self.private_log.clear()
-            self.table_talk.clear()
-            self.last_check = None
-            self.last_checks.clear()
-            self.round_checks_prepared = False
-            self.round_start_snapshot.clear()
-            self.round_entity_snapshot.clear()
-            self.last_state_update = None
-            self.last_token_budget_bump = None
-            self.gm_directives.clear()
-            self.ruleset_runtime = saved_ruleset_runtime
-            self.ruleset_state = (
-                {"state_schema_version": int(saved_ruleset_runtime.get("state_schema_version", 1) or 1)}
-                if saved_ruleset_runtime else {}
-            )
-            self.adventure_binding = saved_adventure_binding
-            self.event_ledger.clear()
-            self.state = GameState.CREATED
-            self.world_id = saved_world_id
-            self.world_name = saved_world_name
-            self.group_name = saved_group_name
-            self.solo_mode = saved_solo
-            self.narrative_perspective = saved_narrative_perspective
-            self.gm_style_override = saved_gm_style_override
-            self.language = saved_language
-            self.seed_code = saved_seed
-            logger.info("游戏已重置 (seed=%s) - game_key=%s", self.seed_code, self.game_key)
+            instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
 
     # ---------- 序列化 --------------------------------------
 
