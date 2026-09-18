@@ -68,6 +68,8 @@ World locale 只能修改 `world_name`、`description`、`world_setting`、`star
 
 世界书数据库保存 canonical/core 条目；关键词匹配、prompt 和谜题初始化按每局 `GameInstance.language` 构造只读本地化视图，不把译文写回共享数据库。
 
+所有 Ruleset 共用同一套通用 Lore 检索（`src/lorebook/retrieval.py`）：正常回合、swipe 与桌外问答都走同一个 `LoreRetriever`，检索输入是本轮行动加当前 scene / canonical location / 在场 NPC 锚点。既有 `KeywordMatcher` 仍是基础检索，语义检索只是可选的增强——沿用现有 embedding 配置，并复用 `MemoryStore.embedding_client` 这一个 `EmbeddingClient` 实例，不新建第二套 embedding 客户端；未配置或调用失败时自动退回锚点加关键词，绝不阻断回合。条目向量存在 `lorebook.db` 的 `lorebook_embeddings` 派生缓存里（按 entry / language / embedding_profile 隔离，`content_hash` 变化即重建），它不是 authority，删掉可自动重建。语义命中只代表"可能相关"，仍要过可见性与预算，既不写 WorldState 也不改 Ruleset 裁定，也不触发任何事件。
+
 ## Plugin Content V2
 
 Manifest 当前支持：`schema_version = 1`、`content_schema_version = 1 or 2`、`locale_schema_version = 1`，以及 package locale fallback 的 `default_locale`。Locale fallback 为 exact requested locale -> base locale -> package/default locale -> base(default locale) -> canonical/core display fallback。

@@ -58,6 +58,19 @@ CREATE TABLE lorebook_entries_new (
 """
 
 
+_EMBEDDINGS_SQL = """
+CREATE TABLE IF NOT EXISTS lorebook_embeddings (
+    entry_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    embedding_profile TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (entry_id, language, embedding_profile)
+);
+"""
+
+
 def _entry_select_expression(column: str) -> str:
     """Normalize historical unconstrained values while rebuilding v3."""
     quoted = f'"{column}"'
@@ -222,5 +235,17 @@ def _v2(conn: sqlite3.Connection) -> None:
         ensure_column(conn, "lorebook_entries", name, definition)
 
 
+def _v4(conn: sqlite3.Connection) -> None:
+    """新增纯派生的 world lore embedding 缓存表。
+
+    这是**派生缓存**而不是 authority：删掉整表后系统仍可自动重建，因此不加迁移期
+    数据回填。主键 ``(entry_id, language, embedding_profile)`` 保证三种隔离——同一
+    entry 的不同语言文本、以及换模型/端点后的旧向量都不会互相混用；``content_hash``
+    记录真正送入 embedding 的文本指纹，内容变化即 cache miss。
+    """
+
+    conn.execute(_EMBEDDINGS_SQL)
+
+
 def migrate(conn: sqlite3.Connection) -> int:
-    return run_migrations(conn, ((1, _v1), (2, _v2), (3, _v3)))
+    return run_migrations(conn, ((1, _v1), (2, _v2), (3, _v3), (4, _v4)))

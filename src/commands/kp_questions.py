@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any, Callable, Literal
 
 from src.engine.game_instance import GameInstance
@@ -12,6 +11,7 @@ from src.llm.context_builder import (
     filter_public_lorebook_entries,
 )
 from src.llm.parser import sanitize_narration
+from src.lorebook.retrieval import LoreRetriever
 
 
 MAX_KP_ANSWER_CHARS = 2000
@@ -132,9 +132,11 @@ class KPQuestionResponder:
         load_world_template: Callable[[str, str], dict | None],
         ensure_matcher_for_world: Callable[[str, str], None],
         max_tokens: int = 768,
+        lore_retriever: Any | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.matcher = matcher
+        self.lore_retriever = lore_retriever or LoreRetriever(matcher)
         self.prompt_composer = prompt_composer
         self.load_world_template = load_world_template
         self.ensure_matcher_for_world = ensure_matcher_for_world
@@ -151,11 +153,16 @@ class KPQuestionResponder:
         actor_name = str(actor.get("character_name") or actor_uid)
         if instance.world_id:
             self.ensure_matcher_for_world(instance.world_id, instance.language)
-        matches = self.matcher.match_with_recursive(
+        # 与正常回合 / swipe 同一个 LoreRetriever，差异只由参数表达：玩家视角（公开
+        # 或本人可见）+ 不修改计时器。Lorebook 匹配正常会激活 sticky/cooldown/delay，
+        # 桌外提问必须观察这些计时器而不改变它们。
+        matches = await self.lore_retriever.retrieve(
+            instance,
             question,
-            # Lorebook matching normally activates sticky/cooldown/delay entries.
-            # Table talk must observe those timers without changing them.
-            timed_state=copy.deepcopy(instance.lorebook_timed_state),
+            viewer_is_gm=False,
+            viewer_uid=None if visibility == "party" else actor_uid,
+            viewer_name="" if visibility == "party" else actor_name,
+            mutate_timers=False,
         )
         matches = (
             filter_public_lorebook_entries(matches)
