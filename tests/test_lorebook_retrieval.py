@@ -701,3 +701,215 @@ def test_case_q_normal_round_and_swipe_and_kp_share_one_retriever() -> None:
         source = io.open(Path(path), encoding="utf-8").read()
         assert "self.lore_retriever.retrieve(" in source
         assert "match_with_recursive(" not in source
+
+
+# ---- Review 修复：Hybrid 最终排序（Blocker A） -------------------------------
+
+
+def _merge(keyword_entries, semantic_entries):
+    from src.lorebook.retrieval import LoreRetriever
+
+    return LoreRetriever._merge_and_sort(list(keyword_entries), list(semantic_entries))
+
+
+def test_review_case1_tier_and_order_beat_source_priority() -> None:
+    """Case 1：keyword=archived/order=500 不得排在 semantic=core/order=1 之前。"""
+
+    low = _entry("low_keyword", "旧档案", keywords=["旧档案"], tier="archived")
+    low["order"] = 500
+    high = _entry("high_semantic", "核心设定", keywords=["无关词"], tier="core")
+    high["order"] = 1
+    high["_semantic_score"] = 0.91
+
+    assert [e["id"] for e in _merge([low], [high])] == ["high_semantic", "low_keyword"]
+
+
+def test_review_case2_keyword_wins_only_on_equal_tier_and_order() -> None:
+    """Case 2：同 tier + 同 order 时 keyword 命中优先于 pure semantic。"""
+
+    keyword = _entry("kw", "关键词命中", keywords=["桥"], tier="core")
+    keyword["order"] = 10
+    semantic = _entry("sem", "纯语义命中", keywords=["无关词"], tier="core")
+    semantic["order"] = 10
+    semantic["_semantic_score"] = 0.99
+
+    assert [e["id"] for e in _merge([keyword], [semantic])] == ["kw", "sem"]
+
+
+def test_review_case3_semantic_score_breaks_ties_between_semantic_hits() -> None:
+    """Case 3：两条 semantic 同 tier/order 时，cosine 高的排前。"""
+
+    high = _entry("a_high", "高相似", keywords=["x"], tier="background")
+    high["order"] = 20
+    high["_semantic_score"] = 0.88
+    low = _entry("b_low", "低相似", keywords=["y"], tier="background")
+    low["order"] = 20
+    low["_semantic_score"] = 0.61
+
+    assert [e["id"] for e in _merge([], [low, high])] == ["a_high", "b_low"]
+
+
+def test_review_case4_fully_equal_entries_sort_by_id() -> None:
+    """Case 4：完全同级时用 canonical id 提供稳定排序。"""
+
+    first = _entry("aaa", "甲", keywords=["x"], tier="core")
+    second = _entry("bbb", "乙", keywords=["x"], tier="core")
+    first["_semantic_score"] = second["_semantic_score"] = 0.7
+
+    assert [e["id"] for e in _merge([], [second, first])] == ["aaa", "bbb"]
+
+
+# ---- Review 修复：malformed vector fail-soft（Blocker B） --------------------
+
+
+def test_normalize_vector_rejects_malformed_values() -> None:
+    from src.lorebook.retrieval import normalize_vector
+
+    assert normalize_vector([1, 0.5]) == [1.0, 0.5]
+    assert normalize_vector(("1", 2)) == [1.0, 2.0]
+    assert normalize_vector("not-a-vector") is None
+    assert normalize_vector([]) is None
+    assert normalize_vector(None) is None
+    assert normalize_vector(["oops", 0.3]) is None
+    assert normalize_vector([float("nan"), 0.3]) is None
+    assert normalize_vector([float("inf"), 0.2]) is None
+    assert normalize_vector([float("-inf"), 0.2]) is None
+    assert normalize_vector([True, 0.2]) is None
+
+
+class _BadCacheStore(_MatcherStore):
+    """缓存里放一条坏向量，用于验证 fail-soft。"""
+
+    def __init__(self, entries, bad_vector):
+        super().__init__(entries)
+        self.bad_vector = bad_vector
+
+    def load_embedding_cache(self, entry_ids, language, embedding_profile):
+        from src.lorebook.retrieval import lore_entry_content_hash
+
+        return {
+            str(entry["id"]): {
+                "content_hash": lore_entry_content_hash(entry),
+                "embedding": list(self.bad_vector),
+            }
+            for entry in self.entries
+            if str(entry["id"]) in {str(i) for i in entry_ids}
+        }
+
+
+@pytest.mark.asyncio
+async def test_review_cached_bad_vector_reembeds_without_crashing() -> None:
+    """缓存向量 ["oops", 0.3]：不 crash，坏条目重新 embedding，keyword 结果继续。"""
+
+    keyword_entry = _entry("kw", "旧石桥", keywords=["旧桥"])
+    broken = _entry("broken", "档案室", keywords=["无关词"])
+    client = _FakeEmbeddingClient({
+        lore_entry_embedding_text(keyword_entry): [1.0, 0.0],
+        lore_entry_embedding_text(broken): [1.0, 0.0],
+    })
+    matcher = KeywordMatcher()
+    matcher.build([keyword_entry, broken])
+    retriever = LoreRetriever(
+        matcher,
+        store=_BadCacheStore([keyword_entry, broken], ["oops", 0.3]),
+        embedding_client_provider=lambda: client,
+    )
+    retriever.ensure_world("w1", "zh-CN")
+
+    hits = await _ids(retriever, _instance(), "我去旧桥看看")
+    assert "kw" in hits
+    assert len(client.batch_calls) == 1  # 坏缓存触发重新 embedding
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_query", [["bad", 0.1], ["nan", 0.1]])
+async def test_review_bad_query_vector_skips_semantic_only(bad_query) -> None:
+    """query 向量非法（非数字）：semantic 跳过，keyword 结果继续。"""
+
+    keyword_entry = _entry("kw", "旧石桥", keywords=["旧桥"])
+    semantic_only = _entry("sem", "档案室", keywords=["无关词"])
+    client = _FakeEmbeddingClient({
+        lore_entry_embedding_text(semantic_only): [1.0, 0.0],
+    })
+    client.query_vector = bad_query
+    retriever = _retriever([keyword_entry, semantic_only], client)
+
+    assert await _ids(retriever, _instance(), "我去旧桥看看") == ["kw"]
+    assert client.batch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_review_nan_query_vector_skips_semantic() -> None:
+    keyword_entry = _entry("kw", "旧石桥", keywords=["旧桥"])
+    client = _FakeEmbeddingClient({}, query_vector=[float("nan"), 0.1])
+    retriever = _retriever([keyword_entry], client)
+
+    assert await _ids(retriever, _instance(), "我去旧桥看看") == ["kw"]
+
+
+@pytest.mark.asyncio
+async def test_review_inf_entry_vector_skips_that_entry() -> None:
+    """embed_batch 返回 [Inf, 0.2]：该条目跳过，不 crash。"""
+
+    keyword_entry = _entry("kw", "旧石桥", keywords=["旧桥"])
+    broken = _entry("broken", "档案室", keywords=["无关词"])
+    client = _FakeEmbeddingClient({
+        lore_entry_embedding_text(keyword_entry): [1.0, 0.0],
+        lore_entry_embedding_text(broken): [float("inf"), 0.2],
+    })
+    retriever = _retriever([keyword_entry, broken], client)
+
+    assert await _ids(retriever, _instance(), "我去旧桥看看") == ["kw"]
+
+
+# ---- Review 修复：lexical query 不含结构标签（Blocker C） --------------------
+
+
+def test_review_lexical_query_has_no_structural_labels() -> None:
+    from src.lorebook.retrieval import build_lore_lexical_query, build_lore_retrieval_queries
+
+    instance = _instance(
+        scene="地下档案室里，院长正背对着门。",
+        npcs={"npc_warden": {"character_name": "院长"}},
+        world_state=_world_state("st_mary_archive"),
+    )
+    lexical = build_lore_lexical_query(instance, "我检查桌子下面")
+
+    for label in ("[action]", "[scene]", "[location]", "[present_npcs]"):
+        assert label not in lexical
+    assert "我检查桌子下面" in lexical
+    assert "地下档案室" in lexical
+    assert "st_mary_archive" in lexical
+    assert "院长" in lexical
+
+    # semantic query 仍保留结构标签
+    queries = build_lore_retrieval_queries(instance, "我检查桌子下面")
+    assert "[scene]" in queries["semantic"]
+    assert "[location]" in queries["semantic"]
+    assert "[present_npcs]" in queries["semantic"]
+    assert "[scene]" not in queries["lexical"]
+
+
+@pytest.mark.asyncio
+async def test_review_structural_label_keywords_do_not_false_match() -> None:
+    """关键词 location / scene 不得因为 [location]/[scene] 标签误命中。"""
+
+    labelled = [
+        _entry("kw_location", "地点标签", keywords=["location"], content="无关。"),
+        _entry("kw_scene", "场景标签", keywords=["scene"], content="无关。"),
+    ]
+    retriever = _retriever(labelled)
+    instance = _instance(scene="圣玛丽精神病院 · 地下档案室")
+
+    assert await _ids(retriever, instance, "我看看桌子") == []
+
+
+@pytest.mark.asyncio
+async def test_review_real_location_value_still_matches() -> None:
+    """对照：真正的 location 值就是 "location" 时，正常命中。"""
+
+    entries = [_entry("kw_location", "地点标签", keywords=["location"], content="无关。")]
+    retriever = _retriever(entries)
+    instance = _instance(world_state=_world_state("location"))
+
+    assert await _ids(retriever, instance, "我看看桌子") == ["kw_location"]

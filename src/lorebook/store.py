@@ -289,7 +289,8 @@ class LorebookStore:
         """读取 (entry_id, language, profile) 命中的向量缓存。
 
         返回 ``entry_id -> {"content_hash": str, "embedding": list[float]}``。缓存行损坏
-        （embedding 不是合法 JSON 数组）按缺失处理，由调用方重新 embedding。
+        （不是合法 JSON 数组，或含非数字 / NaN / Inf）一律按缺失处理，由调用方重新
+        embedding —— 派生缓存的坏数据不能让正常回合抛异常。
         """
 
         ids = [str(entry_id).strip() for entry_id in entry_ids or [] if str(entry_id).strip()]
@@ -314,9 +315,19 @@ class LorebookStore:
                         continue
                     if not isinstance(vector, list) or not vector:
                         continue
+                    # 坏向量（非数字 / NaN / Inf）按缺失处理，绝不抛给调用方。
+                    try:
+                        numbers = [float(value) for value in vector]
+                    except (TypeError, ValueError):
+                        continue
+                    if any(
+                        number != number or number in (float("inf"), float("-inf"))
+                        for number in numbers
+                    ):
+                        continue
                     result[str(data.get("entry_id") or "")] = {
                         "content_hash": str(data.get("content_hash") or ""),
-                        "embedding": [float(value) for value in vector],
+                        "embedding": numbers,
                     }
         return result
 

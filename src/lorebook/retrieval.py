@@ -21,6 +21,7 @@ import copy
 import hashlib
 import json
 import logging
+import math
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -35,6 +36,9 @@ logger = logging.getLogger("trpg")
 # 语义召回规模与阈值：第一版内部常量，不作为永久产品契约（施工方案 §17）。
 DEFAULT_SEMANTIC_TOP_K = 4
 DEFAULT_SEMANTIC_THRESHOLD = 0.60
+
+# 最终排序的 tier 优先级：与 KeywordMatcher._sort_by_tier 保持一致。
+_TIER_RANK = {"core": 0, "background": 1, "archived": 2}
 
 # embedding_profile 的版本前缀：profile 算法本身变化时必须让旧缓存整体失效。
 EMBEDDING_PROFILE_VERSION = "v1"
@@ -125,36 +129,132 @@ def build_lore_retrieval_query(
     location: str | None = None,
     present_npcs: Sequence[str] | None = None,
 ) -> str:
-    """把本轮检索输入拼成统一场景锚点文本（施工方案 §5）。
+    """semantic query：带结构标签，供 embedding 使用（施工方案 §5）。"""
 
-    第一版只用 action / scene / location / present NPC，**不扫描多轮历史**：旧关键词
-    持续命中会反复激活 sticky / cooldown / delay（施工方案 §6）。
+    values = _lore_query_values(
+        instance, actions_text,
+        viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+        location=location, present_npcs=present_npcs,
+    )
+    sections: list[str] = []
+    if values["action"]:
+        sections.append(f"[action]\n{values['action']}")
+    if values["scene"]:
+        sections.append(f"[scene]\n{values['scene']}")
+    if values["location"]:
+        sections.append(f"[location]\n{values['location']}")
+    if values["present_npcs"]:
+        sections.append("[present_npcs]\n" + "\n".join(values["present_npcs"]))
+    return "\n\n".join(sections)
 
-    ``location`` / ``present_npcs`` 省略时按当前视角解析；显式传入则原样使用，便于
-    调用方复用同一次解析结果。
+
+def build_lore_lexical_query(
+    instance: Any,
+    actions_text: str,
+    *,
+    viewer_is_gm: bool = True,
+    viewer_uid: str = "",
+    location: str | None = None,
+    present_npcs: Sequence[str] | None = None,
+) -> str:
+    """lexical query：只有"值"，**不含** ``[action]`` / ``[scene]`` / ``[location]`` /
+    ``[present_npcs]`` 这些结构标签，供 KeywordMatcher 使用。
+
+    否则标签本身会参与关键词匹配：英文世界书里关键词若是 ``scene`` / ``location`` /
+    ``action``，每一轮都会因为标签固定误命中。
     """
 
-    scene = str(getattr(instance, "scene", "") or "").strip()
-    if location is None:
-        location = lore_query_location(
-            instance, viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
-        )
-    if present_npcs is None:
-        present_npcs = present_npc_names(instance, scene)
+    values = _lore_query_values(
+        instance, actions_text,
+        viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+        location=location, present_npcs=present_npcs,
+    )
+    lines = [values["action"], values["scene"], values["location"], *values["present_npcs"]]
+    return "\n\n".join(line for line in lines if line)
 
-    sections: list[str] = []
-    action = str(actions_text or "").strip()
-    if action:
-        sections.append(f"[action]\n{action}")
-    if scene:
-        sections.append(f"[scene]\n{scene}")
-    anchor_location = str(location or "").strip()
-    if anchor_location:
-        sections.append(f"[location]\n{anchor_location}")
-    npc_names = [str(name).strip() for name in (present_npcs or []) if str(name).strip()]
-    if npc_names:
-        sections.append("[present_npcs]\n" + "\n".join(npc_names))
-    return "\n\n".join(sections)
+
+def build_lore_retrieval_queries(
+    instance: Any,
+    actions_text: str,
+    *,
+    viewer_is_gm: bool = True,
+    viewer_uid: str = "",
+) -> dict[str, str]:
+    """一次解析锚点，返回 ``{"lexical": ..., "semantic": ...}``（不重复 anchor 解析）。"""
+
+    anchors = lore_query_anchors(instance, viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid)
+    kwargs = {
+        "viewer_is_gm": viewer_is_gm,
+        "viewer_uid": str(viewer_uid or ""),
+        "location": anchors["location"],
+        "present_npcs": anchors["present_npcs"],
+    }
+    return {
+        "lexical": build_lore_lexical_query(instance, actions_text, **kwargs),
+        "semantic": build_lore_retrieval_query(instance, actions_text, **kwargs),
+    }
+
+
+def lore_query_anchors(
+    instance: Any, *, viewer_is_gm: bool = True, viewer_uid: str = "",
+) -> dict[str, Any]:
+    """本轮锚点：scene / canonical location / 在场 NPC。"""
+
+    scene = str(getattr(instance, "scene", "") or "").strip()
+    return {
+        "scene": scene,
+        "location": lore_query_location(
+            instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
+        ),
+        "present_npcs": present_npc_names(instance, scene),
+    }
+
+
+def _lore_query_values(
+    instance: Any,
+    actions_text: str,
+    *,
+    viewer_is_gm: bool = True,
+    viewer_uid: str = "",
+    location: str | None = None,
+    present_npcs: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """lexical / semantic 两种 query 共用的"值"解析（只解析一次）。"""
+
+    anchors = lore_query_anchors(instance, viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid)
+    resolved_location = anchors["location"] if location is None else str(location or "").strip()
+    resolved_npcs = anchors["present_npcs"] if present_npcs is None else [
+        str(name).strip() for name in present_npcs if str(name).strip()
+    ]
+    return {
+        "action": str(actions_text or "").strip(),
+        "scene": anchors["scene"],
+        "location": resolved_location,
+        "present_npcs": resolved_npcs,
+    }
+
+
+def normalize_vector(value: object) -> list[float] | None:
+    """把任意向量输入收敛成"全是 finite float"的列表，否则 None（fail-soft 边界）。
+
+    非 list/tuple、空、元素不能 ``float()``、NaN、Inf / -Inf 一律返回 None：坏向量只应
+    让语义检索跳过该条目或本轮，绝不能让正常回合崩在 ``cosine_similarity`` 里。
+    """
+
+    if not isinstance(value, (list, tuple)) or not value:
+        return None
+    numbers: list[float] = []
+    for item in value:
+        if isinstance(item, bool):
+            return None
+        try:
+            number = float(item)
+        except (TypeError, ValueError):
+            return None
+        if math.isnan(number) or math.isinf(number):
+            return None
+        numbers.append(number)
+    return numbers
 
 
 # ---- Embedding 文本 / profile / content hash（施工方案 §10 / §13 / §14) ------
@@ -300,24 +400,19 @@ class LoreRetriever:
         观察计时器但不改变它们。
         """
 
-        anchors: dict[str, Any] = {
-            "scene": str(getattr(instance, "scene", "") or "").strip(),
-            "location": lore_query_location(
-                instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
-            ),
-        }
-        anchors["present_npcs"] = present_npc_names(instance, anchors["scene"])
-        query = build_lore_retrieval_query(
-            instance,
-            actions_text,
-            viewer_is_gm=viewer_is_gm,
-            viewer_uid=str(viewer_uid or ""),
-            location=anchors["location"],
-            present_npcs=anchors["present_npcs"],
+        anchors = lore_query_anchors(
+            instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
+        )
+        queries = build_lore_retrieval_queries(
+            instance, actions_text,
+            viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
         )
 
         timed_state = self._timed_state(instance, mutate_timers=mutate_timers)
-        keyword_hits = list(self._matcher.match_with_recursive(query, timed_state=timed_state))
+        # 关键词只吃 lexical query（无结构标签）；embedding 吃带标签的 semantic query。
+        keyword_hits = list(
+            self._matcher.match_with_recursive(queries["lexical"], timed_state=timed_state)
+        )
         hits = self._visible_entries(
             keyword_hits,
             viewer_is_gm=viewer_is_gm,
@@ -326,7 +421,7 @@ class LoreRetriever:
         )
 
         semantic_hits = await self._semantic_hits(
-            query,
+            queries["semantic"],
             timed_state=timed_state,
             viewer_is_gm=viewer_is_gm,
             viewer_uid=viewer_uid,
@@ -335,7 +430,7 @@ class LoreRetriever:
                 str(entry.get("id") or "") for entry in hits if entry.get("id")
             },
         )
-        merged = hits + semantic_hits
+        merged = self._merge_and_sort(hits, semantic_hits)
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -350,6 +445,42 @@ class LoreRetriever:
         return merged
 
     # ---- 内部步骤 -----------------------------------------------------------
+
+    @staticmethod
+    def _order_of(entry: dict) -> int:
+        try:
+            return int(entry.get("order", 100))
+        except (TypeError, ValueError):
+            return 100
+
+    @classmethod
+    def _sort_key(cls, entry: dict, *, source_rank: int, score: float) -> tuple:
+        """Hybrid 最终排序键（施工方案 review Blocker A）。
+
+        ``tier`` 最高优先，其次 ``order``；``source priority``（keyword 优先 pure
+        semantic）只在同 tier + 同 order 时作为 tie-break，绝不允许压过 tier/order；
+        同级 semantic 之间用 cosine 分数降序；最后用 canonical id 保证稳定。
+        """
+
+        return (
+            _TIER_RANK.get(str(entry.get("tier") or "background"), 1),
+            cls._order_of(entry),
+            int(source_rank),
+            -float(score or 0.0),
+            str(entry.get("id") or ""),
+        )
+
+    @classmethod
+    def _merge_and_sort(cls, keyword_hits: list[dict], semantic_hits: list[dict]) -> list[dict]:
+        """按 canonical id 去重后统一稳定排序（keyword 命中已去重，语义只补新条目）。"""
+
+        scored = [
+            (entry, 0, 0.0) for entry in keyword_hits
+        ] + [
+            (entry, 1, float(entry.get("_semantic_score") or 0.0)) for entry in semantic_hits
+        ]
+        scored.sort(key=lambda item: cls._sort_key(item[0], source_rank=item[1], score=item[2]))
+        return [entry for entry, _source, _score in scored]
 
     @staticmethod
     def _timed_state(instance: Any, *, mutate_timers: bool) -> dict[str, dict] | None:
@@ -425,12 +556,12 @@ class LoreRetriever:
         language = self._language
 
         try:
-            query_vector = await client.embed(query)
+            query_vector = normalize_vector(await client.embed(query))
         except Exception:
             logger.warning("Lore semantic query embedding 失败，跳过语义检索", exc_info=True)
             return []
-        if not query_vector or not isinstance(query_vector, (list, tuple)):
-            logger.warning("Lore semantic query embedding 无结果，跳过语义检索")
+        if query_vector is None:
+            logger.warning("Lore semantic query embedding 不是合法向量，跳过语义检索")
             return []
 
         vectors = await self._entry_vectors(client, candidates, query_vector, language=language)
@@ -490,8 +621,10 @@ class LoreRetriever:
             if record.get("content_hash") != lore_entry_content_hash(entry):
                 stale.append(entry)
                 continue
-            vector = record.get("embedding")
-            if not isinstance(vector, list) or not vector:
+            vector = normalize_vector(record.get("embedding"))
+            if vector is None:
+                # 坏向量（非数字 / NaN / Inf）按 stale 处理：重新 embedding，不 crash。
+                logger.warning("Lore 缓存向量非法 (entry=%s)，重新 embedding", entry_id)
                 stale.append(entry)
                 continue
             if query_size and len(vector) != query_size:
@@ -502,7 +635,7 @@ class LoreRetriever:
                 )
                 stale.append(entry)
                 continue
-            fresh[entry_id] = [float(value) for value in vector]
+            fresh[entry_id] = vector
 
         if not stale:
             return fresh
@@ -518,11 +651,13 @@ class LoreRetriever:
             return fresh
 
         rows: list[dict] = []
-        for entry, vector in zip(stale, vectors):
+        for entry, raw_vector in zip(stale, vectors):
             entry_id = str(entry.get("id") or "")
-            if not entry_id or not isinstance(vector, (list, tuple)) or not vector:
+            values = normalize_vector(raw_vector)
+            if not entry_id or values is None:
+                if entry_id:
+                    logger.warning("Lore batch embedding 返回非法向量 (entry=%s)，跳过该条目", entry_id)
                 continue
-            values = [float(value) for value in vector]
             if query_size and len(values) != query_size:
                 logger.warning(
                     "Lore embedding 维度与 query 不一致 (entry=%s)，本轮跳过该条目", entry_id,
