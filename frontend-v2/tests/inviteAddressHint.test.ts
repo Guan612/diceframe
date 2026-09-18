@@ -1,10 +1,12 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { i18n } from '../src/i18n'
 
 const mocks = vi.hoisted(() => ({
   networkAddresses: vi.fn(),
+  copyToClipboard: vi.fn(),
   publicBaseUrl: '',
   backendUrl: '',
   origin: 'https://table.example',
@@ -12,6 +14,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../src/api/pairing', () => ({
   pairingApi: { networkAddresses: mocks.networkAddresses },
+}))
+vi.mock('../src/utils/clipboard', () => ({
+  copyToClipboard: mocks.copyToClipboard,
 }))
 vi.mock('../src/api/connection', async (original) => ({
   ...(await original<typeof import('../src/api/connection')>()),
@@ -40,14 +45,32 @@ vi.mock('@/composables/useToast', () => ({
 
 import InviteQrModal from '../src/features/play/InviteQrModal.vue'
 
-async function render(user?: string) {
-  const wrapper = mount(InviteQrModal, {
+function mountModal(user?: string) {
+  return mount(InviteQrModal, {
     // 二维码本身与本文件无关（qrcode-generator 在 jsdom 下不可用），stub 掉。
     global: { plugins: [i18n], stubs: { Teleport: true, QrCode: true } },
     props: { gameKey: 'web|room|bot', user, title: '邀请链接' },
   })
+}
+
+async function render(user?: string) {
+  const wrapper = mountModal(user)
   await flushPromises()
   return wrapper
+}
+
+/** 手动控制 /api/system/network 何时返回，用来卡住「还在解析地址」那一瞬间。 */
+function deferredAddresses() {
+  let settle!: (addresses: { host: string; url: string }[]) => void
+  let fail!: (error: Error) => void
+  const promise = new Promise<{ addresses: { host: string; url: string }[] }>(
+    (resolve, reject) => {
+      settle = (addresses) => resolve({ addresses })
+      fail = reject
+    },
+  )
+  mocks.networkAddresses.mockReturnValue(promise)
+  return { settle, fail }
 }
 
 function setOrigin(origin: string) {
@@ -61,6 +84,7 @@ describe('invite address guidance', () => {
     mocks.publicBaseUrl = ''
     mocks.backendUrl = ''
     mocks.networkAddresses.mockReset().mockResolvedValue({ addresses: [] })
+    mocks.copyToClipboard.mockReset().mockResolvedValue(undefined)
     setOrigin('https://table.example')
   })
 
@@ -167,5 +191,90 @@ describe('invite address guidance', () => {
     const wrapper = await render()
 
     expect(wrapper.get('.invite-link').text()).toContain('http://localhost:5173/')
+  })
+})
+
+/**
+ * 地址解析是异步的：`/api/system/network` 回来之前 selectedBase 还是空串，
+ * buildJoinLink 只能退回当前浏览器 origin。GM 在本机开发时那就是 localhost——
+ * 二维码已经等到解析完才出，复制按钮必须跟着等，否则那一两秒里点一下就把
+ * localhost 链接发给了朋友，而界面稍后才悄悄换成 192.168.x.x。
+ */
+describe('invite link copy waits for the address to resolve', () => {
+  beforeEach(() => {
+    i18n.global.locale.value = 'zh-CN'
+    push.mockClear()
+    mocks.publicBaseUrl = ''
+    mocks.backendUrl = ''
+    mocks.networkAddresses.mockReset().mockResolvedValue({ addresses: [] })
+    mocks.copyToClipboard.mockReset().mockResolvedValue(undefined)
+    setOrigin('https://table.example')
+  })
+
+  it('Case A — cannot copy while the candidate list is still in flight', async () => {
+    const pending = deferredAddresses()
+    setOrigin('http://localhost:5173')
+
+    const wrapper = mountModal()
+    await nextTick()
+
+    // 还在解析：占位文案在，二维码和链接原文都还没出。
+    expect(wrapper.get('.qr-stage-placeholder').text()).toBe('正在获取可用地址…')
+    expect(wrapper.find('.invite-link').exists()).toBe(false)
+
+    const copyButton = wrapper.get('.actions .primary')
+    expect(copyButton.attributes('disabled')).toBeDefined()
+
+    // 即使绕过 disabled 直接触发，也不该把半成品链接写进剪贴板。
+    await copyButton.trigger('click')
+    expect(mocks.copyToClipboard).not.toHaveBeenCalled()
+
+    pending.settle([])
+    await flushPromises()
+  })
+
+  it('Case B — copies the LAN link, not the localhost one, once resolved', async () => {
+    const pending = deferredAddresses()
+    setOrigin('http://localhost:5173')
+
+    const wrapper = mountModal()
+    await nextTick()
+    expect(wrapper.get('.actions .primary').attributes('disabled')).toBeDefined()
+
+    pending.settle([{ host: '192.168.1.20', url: 'http://192.168.1.20:8000' }])
+    await flushPromises()
+
+    const copyButton = wrapper.get('.actions .primary')
+    expect(copyButton.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('.invite-link').text()).toContain('http://192.168.1.20:5173/')
+
+    await copyButton.trigger('click')
+
+    const copied = mocks.copyToClipboard.mock.calls[0][0] as string
+    expect(copied).toContain('http://192.168.1.20:5173/')
+    expect(copied).not.toContain('localhost')
+    // 复制的就是屏幕上那条：显示内容、复制内容、选中地址三者一致。
+    expect(copied).toBe(wrapper.get('.invite-link').text())
+  })
+
+  it('Case C — a refused candidate list still ends up copyable via the fallback', async () => {
+    // 候选接口不可用 ≠ 二维码功能不可用：退回当前 origin 后照样要能复制。
+    const pending = deferredAddresses()
+    setOrigin('http://localhost:5173')
+
+    const wrapper = mountModal()
+    await nextTick()
+    expect(wrapper.get('.actions .primary').attributes('disabled')).toBeDefined()
+
+    pending.fail(new Error('需要管理员会话'))
+    await flushPromises()
+
+    const copyButton = wrapper.get('.actions .primary')
+    expect(copyButton.attributes('disabled')).toBeUndefined()
+
+    await copyButton.trigger('click')
+
+    expect(mocks.copyToClipboard).toHaveBeenCalledTimes(1)
+    expect(mocks.copyToClipboard.mock.calls[0][0]).toContain('http://localhost:5173/')
   })
 })

@@ -105,6 +105,19 @@ const link = computed(() => {
 /** 选中的地址只指向本机时，其它设备必然打不开——提示而已，不拦复制。 */
 const localOnly = computed(() => resolved.value && isLoopbackUrl(link.value))
 
+/**
+ * 复制与出码共用同一个闸门。
+ *
+ * selectedBase 还是空串时，buildJoinLink 会退回当前浏览器 origin——GM 在本机开发
+ * 时那就是一条 localhost 链接。二维码已经等到 resolved 才出，复制按钮如果不等，
+ * 「正在解析地址」的那一两秒里点一下拿到的就是这条半成品链接，等候选回来才悄悄
+ * 换成 192.168.x.x，而剪贴板里的已经错了。
+ *
+ * 刷新候选期间同样关掉：此时屏幕上还是上一轮解析好的地址，不让复制比让两者可能
+ * 对不上更省事。显示内容、复制内容、selectedBase 始终是同一个值。
+ */
+const canCopy = computed(() => resolved.value && !addressesLoading.value)
+
 /** 默认给一个别的设备真打得开的地址：本机 origin 是回环时才换成局域网候选。 */
 function pickDefaultBase() {
   if (baseOptions.value.some((option) => option.value === selectedBase.value)) return
@@ -133,6 +146,8 @@ onMounted(async () => {
 })
 
 async function copy() {
+  // 不只依赖 UI 的 disabled：按钮之外还有键盘、脚本和未来的调用方。
+  if (!canCopy.value) return
   await copyToClipboard(link.value)
   toast.success(t('inviteCopied'))
 }
@@ -180,7 +195,7 @@ function openShareSettings() {
 
     <template #actions>
       <button @click="emit('close')">{{ t('close') }}</button>
-      <button class="primary" @click="copy">{{ t('inviteCopyLink') }}</button>
+      <button class="primary" :disabled="!canCopy" @click="copy">{{ t('inviteCopyLink') }}</button>
     </template>
   </Modal>
 </template>
