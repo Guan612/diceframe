@@ -485,18 +485,24 @@ _PLAYER_SAFE_LORE_RULE = {
 }
 
 
-def lore_entry_projection(entry: object, *, vis_hint: str = "") -> str:
+def lore_entry_projection(
+    entry: object, *, vis_hint: str = "", include_id: bool = True,
+) -> str:
     """单个 Lore 条目进入 prompt 的统一投影（施工方案 §25）。
 
     头部暴露 ``id`` / ``type`` / ``tier``（以及 ``unreliable`` 标记），正文保留
     ``name`` / ``content``；matcher 运行时元数据一律不出现。
+
+    ``include_id=False`` 用于玩家安全路径：内部 canonical id 本身可能泄露幕后信息
+    （``npc_traitor_mary`` / ``clue_real_murderer_john`` 之类），即使该条目的
+    name/content 已授权玩家看到，也没有必要把 ID 交给玩家侧模型。
     """
 
     if not isinstance(entry, dict):
         return ""
     tags = []
     entry_id = str(entry.get("id") or "").strip()
-    if entry_id:
+    if entry_id and include_id:
         tags.append(f"id={entry_id}")
     tags.append(f"type={str(entry.get('type') or 'other').strip()}")
     tags.append(f"tier={str(entry.get('tier') or 'background').strip()}")
@@ -506,6 +512,37 @@ def lore_entry_projection(entry: object, *, vis_hint: str = "") -> str:
     name = str(entry.get("name") or "").strip()
     content = str(entry.get("content") or "").strip()
     return f"{head}{vis_hint}\n{name}:\n{content}"
+
+
+def project_player_safe_lore(
+    entries: list[dict], *, language: str, budget_lorebook: int = 0,
+) -> str:
+    """玩家安全路径的世界书投影（§24/§25 + review 修复）。
+
+    与 GM 路径共用 ``lore_entry_projection``，但 **不带 canonical id**；``type`` /
+    ``tier`` / ``unreliable`` / ``name`` / ``content`` 仍保留，并附一条最小权威约束。
+    """
+
+    lines: list[str] = []
+    used = 0
+    for entry in entries:
+        line = lore_entry_projection(entry, include_id=False)
+        if not line:
+            continue
+        if budget_lorebook and used + len(line) > budget_lorebook:
+            continue
+        lines.append(line)
+        used += len(line) + 1
+    if not lines:
+        return ""
+    header = localized_text(language, {
+        "en": "## Explicitly Visible Character Knowledge",
+        "zh-CN": "【明确授权给该角色的知识】",
+        "ja": "## このキャラクターに明示公開された知識",
+        "de": "## Ausdrücklich für diese Figur freigegebenes Wissen",
+    })
+    rules = _lore_rules_text(language, _PLAYER_SAFE_LORE_RULE)
+    return f"{header}\n{rules}\n" + "\n".join(lines)
 
 
 def _lore_rules_text(language: str, table: dict[str, str]) -> str:
@@ -991,23 +1028,11 @@ async def build_player_safe_context(
     )
     sec_idx["state"] = len(parts) - 1
 
-    lore_lines: list[str] = []
-    used_lore = 0
-    for entry in safe_lore:
-        line = lore_entry_projection(entry)
-        if not line:
-            continue
-        if used_lore + len(line) > budget_lorebook:
-            continue
-        lore_lines.append(line)
-        used_lore += len(line) + 1
-    if lore_lines:
-        parts.append(localized_text(language, {
-            "en": "## Explicitly Visible Character Knowledge",
-            "zh-CN": "【明确授权给该角色的知识】",
-            "ja": "## このキャラクターに明示公開された知識",
-            "de": "## Ausdrücklich für diese Figur freigegebenes Wissen",
-        }) + "\n" + _lore_rules_text(language, _PLAYER_SAFE_LORE_RULE) + "\n" + "\n".join(lore_lines))
+    safe_lore_block = project_player_safe_lore(
+        safe_lore, language=language, budget_lorebook=budget_lorebook,
+    )
+    if safe_lore_block:
+        parts.append(safe_lore_block)
         sec_idx["lorebook"] = len(parts) - 1
 
     summary_parts: list[str] = []

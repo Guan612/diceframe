@@ -1068,7 +1068,7 @@ export const de = {
   modelRoleMainHint: 'Erzeugt Erzählung, Entscheidungen und allgemeine Inhalte.',
   modelRoleFallbackHint: 'Wird verwendet, wenn das Hauptmodell fehlschlägt; Ausweichmodell 1 wird vor 2 versucht.',
   modelRoleEmbedding: 'Embedding-Modell',
-  modelRoleEmbeddingHint: 'Aktiviere hier das Vektor-/Semantiksuche und konfiguriere Modell, Eingabegrenze und Verbindungstest.',
+  modelRoleEmbeddingHint: 'Aktiviere hier die Vektor-/Semantiksuche und konfiguriere Modell, Eingabegrenze und Verbindungstest.',
   modelRoleTts: 'Sprachausgabe',
   modelRoleTtsHint: 'Wandelt Erzählung in gesprochenes Audio um.',
   modelRoleAsr: 'Spracherkennung',
