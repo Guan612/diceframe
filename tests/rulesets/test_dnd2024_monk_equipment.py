@@ -449,3 +449,85 @@ def test_malformed_equipment_requirements_fail_closed(mutate) -> None:
 
     with pytest.raises(ClassFeatureError):
         Dnd2024ClassFeatureResolver(replace(bundle, entities=entities))
+
+
+# --------------------------------------------------------------------------
+# Thrown Monk Weapon：属性选择（2024 Thrown）
+# --------------------------------------------------------------------------
+
+# 近战武器，但 catalog 里带 thrown_range，因此可以被投掷：
+#   handaxe / spear thrown_range 20，javelin 30 —— 都没有 "ranged" 标记。
+THROWN_MONK_WEAPONS = ("item:handaxe", "item:spear", "item:javelin")
+
+
+def _strong_monk_sheet(runtime: Dnd2024Runtime) -> dict:
+    """STR 18 / DEX 12：让「取较高者」与「被强制 DEX」得到不同结果。"""
+
+    sheet = monk_sheet(runtime)
+    sheet["ruleset_character"]["abilities"].update({"str": 18, "dex": 12})
+    return sheet
+
+
+def _attack_check_modifier(engine, instance, ref: str, *, intent_id: str) -> int:
+    """Attack with ``ref`` against the goblin and return the resolved attack bonus."""
+
+    _apply(engine, instance, {
+        "intent_id": intent_id, "type": "attack",
+        "expected_version": instance.ruleset_state["version"], "submitted_by": "gm",
+        "actor_id": "player:gm", "target_id": "enemy:goblin-1",
+        "weapon_ref": ref,
+    }, SequenceRng([15, 4]))
+    check = next(
+        event for event in instance.event_ledger[-1]["events"]
+        if event["type"] == "check.resolved"
+    )
+    return int(check["modifier"])
+
+
+@pytest.mark.parametrize("ref", THROWN_MONK_WEAPONS)
+def test_a_thrown_monk_weapon_still_chooses_the_higher_ability(ref: str) -> None:
+    """投掷近战 Monk Weapon 不是「远程武器」，属性选择必须继续生效。
+
+    2024 Thrown：投掷一把 melee weapon 时，攻击与伤害沿用**近战使用该武器时相同的
+    属性修正**。所以「在远处使用」不等于「这是远程武器」——只有真正的远程武器才排除
+    武艺的 STR/DEX 选择，否则 STR 18 / DEX 12 的武僧把手斧扔出去会被强制成 DEX。
+    """
+
+    runtime = Dnd2024Runtime()
+    sheet = with_equipment(runtime, _strong_monk_sheet(runtime), ref)
+    engine, instance = monk_instance(runtime, sheet)
+    start_combat(engine, instance, position=15)  # > 5：投掷使用，且在 thrown_range 内
+
+    weapon = _weapon(_attack_action(engine, instance), ref)
+    assert weapon["ability_choice"] == ["str", "dex"]
+    assert not weapon.get("ranged")
+
+    # STR 18 (+4) + 熟练 (+2) = 6；若被当成远程武器强制 DEX 会是 1 + 2 = 3。
+    assert _attack_check_modifier(engine, instance, ref, intent_id="thrown-1") == 6
+
+
+def test_a_thrown_monk_weapon_at_melee_range_also_chooses_the_higher_ability() -> None:
+    """同一把武器在近战距离用，也是同一个选择（修复不能倒过来破坏近战）。"""
+
+    runtime = Dnd2024Runtime()
+    sheet = with_equipment(runtime, _strong_monk_sheet(runtime), "item:handaxe")
+    engine, instance = monk_instance(runtime, sheet)
+    start_combat(engine, instance, position=5)
+
+    assert _attack_check_modifier(engine, instance, "item:handaxe", intent_id="melee-1") == 6
+
+
+def test_a_true_ranged_weapon_never_gets_the_melee_ability_choice() -> None:
+    """真正的远程武器仍然用 DEX，且不会被授予近战的属性选择。"""
+
+    runtime = Dnd2024Runtime()
+    sheet = with_equipment(runtime, _strong_monk_sheet(runtime), "item:longbow")
+    engine, instance = monk_instance(runtime, sheet)
+    start_combat(engine, instance, position=15)
+
+    weapon = _weapon(_attack_action(engine, instance), "item:longbow")
+    assert "ability_choice" not in weapon
+
+    # DEX 12 (+1)；武僧对 longbow（Martial 且非 Light）不熟练，所以没有熟练加值。
+    # 断言 1 也就同时证明了用的是 DEX 而不是 STR（否则会是 +4）。
+    assert _attack_check_modifier(engine, instance, "item:longbow", intent_id="bow-1") == 1

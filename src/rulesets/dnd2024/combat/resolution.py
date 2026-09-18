@@ -107,19 +107,23 @@ class CombatResolutionMixin:
             if weapon is None:  # pragma: no cover - validation guards this
                 raise CombatIntentError("attack profile is not available to the actor")
             distance = self._distance(combat, actor_id, target_id)
-            ranged_use = bool(weapon.get("ranged")) or distance > 5
+            # 真正的远程武器 vs 近战武器被投掷：2024 Thrown 规定，投掷一把 melee
+            # weapon 时，攻击与伤害沿用**近战使用该武器时相同的属性修正**。所以
+            # "在远处使用" 不等于 "这是远程武器"。属性选择只应被前者（真远程武器）
+            # 排除，否则武僧把长矛/手斧扔出去就会被强制成 DEX。
+            is_ranged_weapon = bool(weapon.get("ranged"))
+            ranged_use = is_ranged_weapon or distance > 5
             ability = "dex" if ranged_use else "str"
             if weapon.get("finesse"):
                 ability = max(("str", "dex"), key=lambda key: ability_modifier(actor["abilities"][key]))
             # 职业特性投影出来的属性选择（武艺：徒手打击与 Monk Weapon 都可以改用
             # 力量或敏捷）。客户端不能每次手选属性，因此第一版采用确定性规则——
             # 取修正值较高者，由 feature boundary 投影到武器档案上，Combat 不判断职业。
-            # 远程/投掷使用仍沿用既有 ranged 规则，不被特性改写。
             choices = [
                 str(key) for key in weapon.get("ability_choice") or []
                 if str(key) in actor["abilities"]
             ]
-            if choices and not ranged_use:
+            if choices and not is_ranged_weapon:
                 ability = max(
                     choices,
                     key=lambda key: ability_modifier(actor["abilities"][key]),
