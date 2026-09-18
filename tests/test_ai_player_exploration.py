@@ -813,3 +813,60 @@ async def test_persona_constraint_and_character_sheet_reach_the_model() -> None:
     # 3) 别人的角色卡依然不可见。
     assert "OTHER-SHEET-7a3c" not in context
 
+
+# ---- 全 AI 桌（没有任何真人席位）------------------------------------------
+#
+# 单人局把房主自己设为 AI 托管后，``active_human_players`` 为空：
+# ``human_actions_ready()`` 因为没有真人席位恒为 False，而该席位的人工提交会被
+# ``submission_block`` 以 PLAYER_AI_CONTROLLED 拒绝。若闸门只认前者，这一桌就
+# 「没人能提交、AI 也不补行动」，永远发不出内容。这四条锁住修正后的语义。
+
+
+@pytest.mark.asyncio
+async def test_all_ai_table_fills_actions_without_any_human_seat() -> None:
+    instance = make_instance(humans=(), ai=("a1",), solo=True)
+    llm = FakePlayerLLM()
+
+    results = await fill_ai_player_actions(instance, llm_client=llm)
+
+    assert [record["status"] for record in results] == ["added"]
+    assert len(llm.calls) == 1
+    assert ai_actions(instance, "a1")
+    assert len(ai_actions(instance, "a1")) == 1
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_only_table_is_never_filled() -> None:
+    """只有未认领席位的桌子不属于 AI，兜底不得把它唤醒。"""
+
+    instance = make_instance(humans=(), unclaimed=("u1",))
+    llm = FakePlayerLLM()
+
+    assert await fill_ai_player_actions(instance, llm_client=llm) == []
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_pending_human_still_blocks_every_ai_seat() -> None:
+    """有真人但未交齐时，AI 依旧完全不行动（不与未提交的真人并行）。"""
+
+    instance = make_instance(humans=("h1",), ai=("a1",))
+    llm = FakePlayerLLM()
+
+    assert await fill_ai_player_actions(instance, llm_client=llm) == []
+    assert llm.calls == []
+
+
+def test_ai_fill_gate_matrix() -> None:
+    from src.commands.ai_player import _ai_fill_gate_open
+
+    # 全 AI 桌：允许（本次修复）
+    assert _ai_fill_gate_open(make_instance(humans=(), ai=("a1",))) is True
+    # 只有 unclaimed：不允许
+    assert _ai_fill_gate_open(make_instance(humans=(), unclaimed=("u1",))) is False
+    # 有真人未交齐：不允许
+    assert _ai_fill_gate_open(make_instance(humans=("h1",), ai=("a1",))) is False
+    # 真人交齐：允许（原有语义）。直接置 ready 集合，避免在此处引入异步写入。
+    ready = make_instance(humans=("h1",), ai=("a1",))
+    ready.ready_players.add("h1")
+    assert _ai_fill_gate_open(ready) is True
