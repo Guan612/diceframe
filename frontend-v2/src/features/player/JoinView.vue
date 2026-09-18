@@ -303,7 +303,7 @@ async function create() {
           <p>{{ detail.scene || t('createCharacterStartAdventure') }}</p>
         </div>
       </div>
-      <div class="join-actions">
+      <div class="join-actions" data-testid="join-actions">
         <label class="locale-select">
           <span>{{ t('language') }}</span>
           <select :value="locale" @change="onLocaleChange">

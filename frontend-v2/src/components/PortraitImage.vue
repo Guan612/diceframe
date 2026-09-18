@@ -103,7 +103,7 @@ onBeforeUnmount(() => {
 <template>
   <span class="portrait-image" :class="{ 'portrait-empty': !hasValidBuiltin && !hasImage }" :style="boxStyle" :title="name" role="img" :aria-label="name || 'avatar'">
     <img v-if="hasImage && uploadUrl" :src="uploadUrl" alt="" role="button" tabindex="0" @click.stop="lightboxOpen = true" @keydown.enter.stop="lightboxOpen = true" @error="uploadFailed = true">
-    <span v-else-if="hasValidBuiltin" class="portrait-builtin" :style="builtinStyle"><i>{{ initials(name) }}</i></span>
+    <span v-else-if="hasValidBuiltin" class="portrait-builtin" data-testid="portrait-builtin" :style="builtinStyle"><i>{{ initials(name) }}</i></span>
     <span v-else class="portrait-empty-text">{{ initials(name) }}</span>
   </span>
   <ImageLightbox :open="lightboxOpen" :src="uploadUrl" :alt="name" @close="lightboxOpen = false" />

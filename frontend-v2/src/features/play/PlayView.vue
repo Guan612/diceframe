@@ -1339,10 +1339,10 @@ onBeforeUnmount(() => {
 
       <aside
         v-if="game.isGm.value || game.detail.value.solo_mode === false"
-        class="play-control-rail"
+        class="play-control-rail" data-testid="play-control-rail"
         :class="{ collapsed: railCollapsed, 'mobile-open': mobilePanel === 'controls' }"
       >
-        <button class="rail-toggle" @click="toggleRailPanel" :title="mobilePanel === 'controls' ? t('close') : railCollapsed ? t('expandGmControls') : t('collapseGmControls')">
+        <button class="rail-toggle" data-testid="rail-toggle" @click="toggleRailPanel" :title="mobilePanel === 'controls' ? t('close') : railCollapsed ? t('expandGmControls') : t('collapseGmControls')">
           <NIcon :component="railCollapsed ? ChevronBack : ChevronForward" size="16" />
         </button>
         <section

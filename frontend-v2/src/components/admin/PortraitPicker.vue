@@ -190,7 +190,7 @@ async function generatePortrait() {
     <small class="form-hint">{{ t('avatarUploadHint') }}</small>
 
     <Modal v-if="allOpen" :title="t('allAvatars')" @close="allOpen = false">
-      <div v-for="group in allGroups" :key="group.ruleId" class="portrait-all-group" :class="{ current: group.current }">
+      <div v-for="group in allGroups" :key="group.ruleId" class="portrait-all-group" data-testid="portrait-all-group" :class="{ current: group.current }">
         <div class="portrait-all-head">
           <strong>{{ group.label }}</strong>
           <small v-if="group.current" class="muted">{{ t('currentRule') }}</small>

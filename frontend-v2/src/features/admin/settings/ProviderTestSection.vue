@@ -31,7 +31,7 @@ const { t } = useLocale()
 </script>
 
 <template>
-  <section class="provider-editor-section provider-test-section">
+  <section class="provider-editor-section provider-test-section" data-testid="provider-test-section">
     <label class="provider-field">
       <span>{{ t('providerTestModel') }}</span>
       <NInput
@@ -50,7 +50,7 @@ const { t } = useLocale()
         @update:value="emit('update:modeValue', String($event || 'auto'))"
       />
     </label>
-    <div class="provider-test-actions">
+    <div class="provider-test-actions" data-testid="provider-test-actions">
       <NButton size="large" :loading="testing" @click="emit('test')">{{ actionLabel }}</NButton>
       <NButton size="large" type="primary" :loading="saving" :disabled="!canSave" @click="emit('save')">
         {{ t('providerSave') }}

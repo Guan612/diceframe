@@ -34,7 +34,7 @@ function contentPortrait(item: PluginContentResource): CharacterPortrait | undef
 </script>
 
 <template>
-  <section class="toolbar-row content-pack-toolbar">
+  <section class="toolbar-row content-pack-toolbar" data-testid="content-pack-toolbar">
     <NSelect
       :value="contentTargetWorldId"
       :options="worldOptions"

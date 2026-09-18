@@ -605,7 +605,7 @@ async function create() {
             <label><span>{{ t('seedCode') }}</span><input v-model="seed" :placeholder="t('seedPlaceholder')"><small>{{ t('restoreBySeed') }}</small></label>
           </div>
           <template v-if="!seed">
-            <div class="create-mode-cards">
+            <div class="create-mode-cards" data-testid="create-mode-cards">
               <button type="button" :class="{ active: mode === 'template' }" @click="mode = 'template'"><b>◇</b><strong>{{ t('modeTemplate') }}</strong></button>
               <button type="button" :class="{ active: mode === 'custom' }" @click="mode = 'custom'"><b>✎</b><strong>{{ t('modeCustom') }}</strong></button>
               <button type="button" :class="{ active: mode === 'ai' }" @click="mode = 'ai'"><b>✦</b><strong>{{ t('modeAi') }}</strong></button>
@@ -614,10 +614,10 @@ async function create() {
               <template v-if="mode === 'template'">
                 <label><span>{{ t('worldTemplate') }}</span><select v-model="world"><option v-for="w in availableWorlds" :key="worldIdOf(w)" :value="worldIdOf(w)">{{ worldOptionLabel(w) }}</option></select></label>
                 <label><span>{{ t('adventureName') }}</span><input v-model="name" :placeholder="t('useWorldName')"></label>
-                <div v-if="recommendedRulesList.length" class="create-recommended-rules wide">
+                <div v-if="recommendedRulesList.length" class="create-recommended-rules wide" data-testid="create-recommended-rules">
                   <span class="rec-head">{{ t('recommendedRules') }}</span>
                   <div class="rec-grid">
-                    <button v-for="r in recommendedRulesList" :key="r.rule_id" type="button" :class="['rec-card', { active: rule === r.rule_id }]" @click="rule = r.rule_id">
+                    <button v-for="r in recommendedRulesList" :key="r.rule_id" type="button" :class="['rec-card', { active: rule === r.rule_id }]" data-testid="rec-card" @click="rule = r.rule_id">
                       <strong>{{ ruleNameOf(r) }}</strong>
                       <span class="recommendation-badges"><small :class="{ professional: isProfessionalRule(r) }">{{ recommendationBadge(r) }}</small><small v-if="isDndAdvancedRule(r)" class="beta-badge">{{ gameDefault('测试版', 'Beta', 'Beta') }}</small></span>
                       <p>{{ ruleDescriptionOf(r) }}</p>
@@ -669,7 +669,7 @@ async function create() {
           </template>
         </section>
 
-        <section v-else-if="step === 2" class="create-step-card create-game-settings-stage">
+        <section v-else-if="step === 2" class="create-step-card create-game-settings-stage" data-testid="create-game-settings-stage">
           <div class="create-config-surface">
             <label :class="{ wide: seed.trim() }"><span>{{ t('gameMode') }}</span><select v-model.number="solo"><option :value="true">{{ t('solo') }}</option><option :value="false">{{ t('multiplayer') }}</option></select></label>
             <template v-if="!seed.trim()">
@@ -767,12 +767,12 @@ async function create() {
         </section>
 
         <section v-else-if="step === 3" class="create-step-card create-character-stage">
-          <div class="create-character-actions">
+          <div class="create-character-actions" data-testid="create-character-actions">
             <button class="primary" @click="openWizard(null)">＋ {{ t('newCharacter') }}</button><button @click="showPicker = true">{{ t('pickFromLibrary') }}</button><button @click="dfInput?.click()">{{ t('importDiceframeCard') }}</button><button @click="fileInput?.click()">{{ t('importStCard') }}</button>
             <input ref="dfInput" type="file" accept=".json,application/json" hidden @change="onImportDfCard"><input ref="fileInput" type="file" accept=".png,.json" hidden @change="onStImport">
           </div>
           <div class="create-character-grid">
-            <article v-for="(c, i) in characters" :key="i" class="create-character-card">
+            <article v-for="(c, i) in characters" :key="i" class="create-character-card" data-testid="create-character-card">
               <PortraitImage :portrait="c.portrait" :rule-id="activeRule" :seed="c.character_name || String(i)" :name="c.character_name" :size="72" />
               <div><h3>{{ c.character_name || t('unnamed') }}</h3><p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p><small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small></div>
               <label class="create-character-control">
@@ -788,8 +788,8 @@ async function create() {
         </section>
 
         <section v-else class="create-step-card create-confirm-stage">
-          <div class="create-confirm-cover" :style="sceneImageStyle(selectedSceneImageUrl)"><span>✦</span><h2>{{ t('confirmCreate') }}</h2><p>{{ confirmationName }}</p></div>
-          <div class="create-confirm-grid">
+          <div class="create-confirm-cover" data-testid="create-confirm-cover" :style="sceneImageStyle(selectedSceneImageUrl)"><span>✦</span><h2>{{ t('confirmCreate') }}</h2><p>{{ confirmationName }}</p></div>
+          <div class="create-confirm-grid" data-testid="create-confirm-grid">
             <article><span>{{ t('world') }}</span><strong>{{ confirmationWorld }}</strong></article>
             <article><span>{{ t('rule') }}</span><strong>{{ ruleNameOf(rules.find(r => r.rule_id === activeRule) || { rule_id: activeRule }) }}</strong></article>
             <article v-if="supportsAdventurePackages"><span>{{ gameDefault('冒险模式', 'Adventure mode', 'Abenteuermodus') }}</span><strong>{{ selectedAdventure?.name || gameDefault('标准自由对局', 'Standard free play', 'Standard-Freispiel') }}</strong></article>
@@ -810,7 +810,7 @@ async function create() {
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>
-        <footer class="create-actions"><button @click="router.push({ name: 'overview' })">{{ t('cancel') }}</button><button v-if="step > 1" @click="prevStep">{{ t('previous') }}</button><button v-if="step < 4" class="primary" :disabled="busy || !canNext()" @click="nextStep">{{ busy && step === 1 ? t('preparing') : t('next') }} →</button><button v-else class="primary" :disabled="busy" @click="create">{{ busy ? t('creating') : t('createAndEnter') }} →</button></footer>
+        <footer class="create-actions" data-testid="create-actions"><button @click="router.push({ name: 'overview' })">{{ t('cancel') }}</button><button v-if="step > 1" @click="prevStep">{{ t('previous') }}</button><button v-if="step < 4" class="primary" :disabled="busy || !canNext()" @click="nextStep">{{ busy && step === 1 ? t('preparing') : t('next') }} →</button><button v-else class="primary" :disabled="busy" @click="create">{{ busy ? t('creating') : t('createAndEnter') }} →</button></footer>
       </main>
     </div>
 
@@ -819,3 +819,12 @@ async function create() {
     <CharacterCardPicker v-if="showPicker" :cards="cards" :target-rule-id="activeRule" @pick="onPickerPick" @close="showPicker = false" />
   </section>
 </template>
+
+<style scoped>
+/* 移动端底栏遮挡：拆分自 light.css 的跨页共享规则（原是 5 个页面组合选择器）。 */
+@media (max-width: 800px) {
+  .reference-create-page {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+}
+</style>

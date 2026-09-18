@@ -84,7 +84,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <main class="login-page">
+  <main class="login-page" data-testid="login-page">
     <div v-if="firstVisit" class="lang-picker">
       <BrandLogo :size="56" :with-text="false" class="login-emblem" />
       <h1>DiceFrame</h1>
@@ -108,8 +108,8 @@ onMounted(() => {
         <div class="login-card-corner corner-bl" aria-hidden="true" />
         <div class="login-card-corner corner-br" aria-hidden="true" />
         <header class="login-card-head">
-          <span class="login-emblem-wrap">
-            <svg class="login-emblem-geometry" viewBox="0 0 96 96" aria-hidden="true">
+          <span class="login-emblem-wrap" data-testid="login-emblem-wrap">
+            <svg class="login-emblem-geometry" data-testid="login-emblem-geometry" viewBox="0 0 96 96" aria-hidden="true">
               <path class="emblem-ray" d="M48 1V13M48 83V95M1 48H13M83 48H95" />
               <path class="emblem-octagon" d="M31 8H65L88 31V65L65 88H31L8 65V31Z" />
               <rect class="emblem-diamond" x="20" y="20" width="56" height="56" />

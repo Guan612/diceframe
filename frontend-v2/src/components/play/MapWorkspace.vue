@@ -87,10 +87,10 @@ watch(
 <template>
   <Teleport to="body">
     <div class="map-workspace-overlay" @click.self="close">
-      <section class="map-workspace-shell" role="dialog" aria-modal="true" :aria-label="mapTitle">
+      <section class="map-workspace-shell" data-testid="map-workspace-shell" role="dialog" aria-modal="true" :aria-label="mapTitle">
         <header class="map-workspace-header">
           <div class="map-workspace-title">
-            <span class="map-workspace-title-icon" aria-hidden="true">
+            <span class="map-workspace-title-icon" data-testid="map-workspace-title-icon" aria-hidden="true">
               <NIcon :component="MapOutline" />
             </span>
             <div class="map-workspace-title-copy">

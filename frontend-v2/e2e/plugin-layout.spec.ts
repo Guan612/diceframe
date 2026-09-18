@@ -6,8 +6,8 @@ const TAB = { installed: 0, marketplace: 1, content: 2, themes: 3, tools: 4, mir
 
 async function openPluginTab(page: Page, index: number) {
   await page.goto('/#/plugins')
-  await expect(page.locator('.plugin-workspace')).toBeVisible()
-  await page.locator('.plugin-surface-tabs > .n-tabs-nav .n-tabs-tab').nth(index).click()
+  await expect(page.getByTestId('plugin-workspace')).toBeVisible()
+  await page.getByTestId('plugin-surface-tabs').locator('> .n-tabs-nav .n-tabs-tab').nth(index).click()
 }
 
 // 等待 NTabs animated 切换动画结束：布局稳定后元素才回到最终几何，
@@ -55,7 +55,7 @@ test('theme cards stay contained and even on desktop and phone', async ({ page }
 
 test('mirror form and rows stay contained on desktop and phone', async ({ page }) => {
   await openPluginTab(page, TAB.mirrors)
-  const form = page.locator('.mirror-form')
+  const form = page.getByTestId('mirror-form')
   await expect(form).toBeVisible()
   await waitContained(page, '.mirror-form')
   const box = await form.evaluate(element => {
@@ -64,7 +64,7 @@ test('mirror form and rows stay contained on desktop and phone', async ({ page }
   })
   expect(box.right).toBeLessThanOrEqual(Math.ceil(box.workspaceRight) + 1)
 
-  const rows = page.locator('.mirror-row')
+  const rows = page.getByTestId('mirror-row')
   if (await rows.count()) {
     await expectContainedAndEven(page, '.mirror-row')
   }
@@ -72,7 +72,7 @@ test('mirror form and rows stay contained on desktop and phone', async ({ page }
 
 test('install panel and store cards stay contained on desktop and phone', async ({ page }) => {
   await openPluginTab(page, TAB.installed)
-  const install = page.locator('.plugin-install')
+  const install = page.getByTestId('plugin-install')
   await expect(install).toBeVisible()
   await waitContained(page, '.plugin-install')
   const installBox = await install.evaluate(element => {
@@ -87,7 +87,7 @@ test('install panel and store cards stay contained on desktop and phone', async 
 
 test('content toolbar and tool groups stay contained on desktop and phone', async ({ page }) => {
   await openPluginTab(page, TAB.content)
-  const toolbar = page.locator('.content-pack-toolbar')
+  const toolbar = page.getByTestId('content-pack-toolbar')
   await expect(toolbar).toBeVisible()
   await waitContained(page, '.content-pack-toolbar')
   const toolbarBox = await toolbar.evaluate(element => {
@@ -97,7 +97,7 @@ test('content toolbar and tool groups stay contained on desktop and phone', asyn
   expect(toolbarBox.right).toBeLessThanOrEqual(Math.ceil(toolbarBox.workspaceRight) + 1)
 
   await openPluginTab(page, TAB.tools)
-  const groups = page.locator('.plugin-tool-groups')
+  const groups = page.getByTestId('plugin-tool-groups')
   if (await groups.count()) {
     await waitContained(page, '.plugin-tool-groups')
     const groupsBox = await groups.evaluate(element => {

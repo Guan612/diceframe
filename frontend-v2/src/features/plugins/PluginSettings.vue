@@ -195,7 +195,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="plugin-workspace">
+  <section class="plugin-workspace" data-testid="plugin-workspace">
     <header class="view-title archive-hero">
       <div>
         <span class="section-kicker">{{ t('pluginsKicker') }}</span>
@@ -203,7 +203,7 @@ onMounted(async () => {
         <p class="muted">{{ t('pluginWorkspaceSubtitle') }}</p>
       </div>
     </header>
-  <NTabs type="line" animated class="plugin-surface-tabs">
+  <NTabs type="line" animated class="plugin-surface-tabs" data-testid="plugin-surface-tabs">
     <NTabPane name="installed" :tab="t('pluginsInstalledTab')">
       <InstalledTab
         :loading="loading"

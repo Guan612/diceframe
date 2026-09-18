@@ -44,7 +44,7 @@ const copy = computed(() => extension.value?.copy(String(locale.value)) || {
 </script>
 
 <template>
-  <Modal :title="copy.title" dialog-class="dnd-toolbox-dialog" @close="emit('close')">
+  <Modal :title="copy.title" dialog-class="dnd-toolbox-dialog" testid="dnd-toolbox-dialog" @close="emit('close')">
     <div v-if="extension" class="ruleset-play-host">
     <nav class="dnd-toolbox-tabs" :aria-label="copy.menu">
       <button

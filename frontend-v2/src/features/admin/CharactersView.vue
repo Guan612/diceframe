@@ -688,7 +688,7 @@ async function onWizardSubmit(c: CharacterSheet) {
 </script>
 
 <template>
-  <section class="view archive-page characters-page">
+  <section class="view archive-page characters-page" data-testid="characters-page">
     <header class="view-title archive-hero">
       <div>
         <span class="section-kicker">{{ t('charactersKicker') }}</span>
@@ -713,7 +713,7 @@ async function onWizardSubmit(c: CharacterSheet) {
     <section v-if="game" class="character-section current-character-section">
       <header class="character-section-head"><h2>{{ t('currentGameCharacters') }}</h2><span>{{ data?.players?.length || 0 }}</span></header>
       <div class="current-character-grid">
-      <article v-for="p in data?.players || []" :key="p.user_id" class="char-card current-character-card">
+      <article v-for="p in data?.players || []" :key="p.user_id" class="char-card current-character-card" data-testid="current-character-card">
         <div class="current-character-identity">
           <button type="button" class="portrait-edit-button" :title="t('clickToChangeAvatar')" @click="openPlayerEditor(p)">
             <PortraitImage :portrait="p.character_sheet?.portrait" :rule-id="ruleId" :seed="p.user_id" :name="p.character_name" :size="96" />
@@ -742,7 +742,7 @@ async function onWizardSubmit(c: CharacterSheet) {
             </p>
           </div>
         </div>
-        <div class="actions current-character-actions">
+        <div class="actions current-character-actions" data-testid="current-character-actions">
           <button class="success" @click="openPlayerEditor(p)">{{ isProfessionalGame() ? (String(locale).startsWith('zh') ? '高级角色中心' : 'Character center') : t('edit') }}</button>
           <button v-if="isProfessionalGame() && p.character_sheet && professionalLevel(p.character_sheet) < 20 && liveAdvancementRow(p.user_id)?.entitled" class="primary" @click="advancementPlayer = p">{{ String(locale).startsWith('zh') ? '职业升级' : 'Class advancement' }}</button>
           <button v-if="!isProfessionalGame() && levelUpPoints(p) > 0" class="primary" @click="openLevelUp(p)">{{ t('allocateAttributePointsWithCount', { points: levelUpPoints(p) }) }}</button>
@@ -771,7 +771,7 @@ async function onWizardSubmit(c: CharacterSheet) {
       </div>
     </section>
 
-    <section class="character-section shared-character-section">
+    <section class="character-section shared-character-section" data-testid="shared-character-section">
       <header class="character-section-head shared-character-head">
         <div><h2>{{ t('sharedCharacterLibrary') }}</h2><span>{{ data?.cards?.length || 0 }}</span></div>
       </header>
@@ -953,3 +953,634 @@ async function onWizardSubmit(c: CharacterSheet) {
     />
   </section>
 </template>
+
+<style scoped>
+/* Character archive: featured current sheets, NPC rail, dense reusable library.
+   页宽约束原是 5 个页面共享的一条规则，拆分后每个组件各自持有自己那一份
+   （见 RulesView.vue / MemoryView.vue / LorebookView.vue / LogsView.vue）。 */
+.characters-page {
+  width: min(1540px, 100%);
+}
+
+.character-section {
+  display: grid;
+  gap: 11px;
+  margin-top: 18px;
+}
+
+.character-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  padding: 0 3px 7px;
+  border-bottom: 1px solid var(--df-border-soft);
+}
+
+.character-section-head h2,
+.character-section-head > div > h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.character-section-head > span,
+.character-section-head > div > span {
+  min-width: 26px;
+  padding: 2px 7px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 999px;
+  color: var(--df-accent-strong);
+  background: var(--df-control-bg);
+  font-size: 11px;
+  text-align: center;
+}
+
+.current-character-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.current-character-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  min-height: 142px;
+  padding: 15px 20px;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--df-accent) 38%, var(--df-border-soft));
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--df-accent) 8%, transparent), transparent 46%),
+    radial-gradient(circle at 73% 30%, color-mix(in srgb, var(--df-interactive) 7%, transparent), transparent 34%),
+    var(--df-surface-1);
+}
+
+.current-character-card::after {
+  position: absolute;
+  right: 23%;
+  width: 310px;
+  height: 310px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 50%;
+  content: "";
+  opacity: .12;
+  transform: translateY(-22%);
+  box-shadow: inset 0 0 0 24px transparent, inset 0 0 0 25px var(--df-border-soft);
+}
+
+.current-character-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.current-character-identity {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
+
+.current-character-card .portrait-edit-button {
+  min-width: 96px;
+  min-height: 96px;
+}
+
+.current-character-card .portrait-image {
+  border-color: color-mix(in srgb, var(--df-accent) 55%, var(--df-border-soft));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--df-canvas) 68%, transparent), 0 12px 30px rgba(0, 0, 0, .32);
+}
+
+.current-character-copy {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.character-name-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.character-name-line h2 {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 24px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.character-name-line .badge {
+  flex: 0 0 auto;
+}
+
+.character-identity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.character-identity-chips > span {
+  padding: 3px 8px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 4px;
+  color: var(--df-text-muted);
+  background: color-mix(in srgb, var(--df-control-bg) 76%, transparent);
+  font-size: 11px;
+}
+
+.character-resource-line {
+  display: grid;
+  grid-template-columns: 28px minmax(110px, 260px) auto;
+  align-items: center;
+  gap: 9px;
+  color: var(--df-danger-strong);
+  font-size: 11px;
+}
+
+.character-resource-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--df-danger) 13%, var(--df-control-bg));
+}
+
+.character-resource-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--df-danger), var(--df-danger-strong));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--df-danger-strong) 40%, transparent);
+}
+
+.character-resource-line strong {
+  color: var(--df-text-secondary);
+  font-family: var(--df-font-mono);
+  font-size: 11px;
+}
+
+.character-level-notice {
+  margin: 0;
+  font-size: 11px;
+}
+
+.current-character-actions {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  width: min(100%, 560px);
+  min-width: 0;
+  justify-self: end;
+  gap: 6px;
+}
+
+.current-character-actions button {
+  min-width: 0;
+  min-height: 38px;
+  height: auto;
+  padding: 7px 9px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.npc-strip {
+  display: grid;
+  grid-auto-columns: minmax(230px, 1fr);
+  grid-auto-flow: column;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 5px;
+  scroll-snap-type: x proximity;
+}
+
+.npc-mini-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 92px;
+  padding: 12px;
+  scroll-snap-align: start;
+  background:
+    radial-gradient(circle at 0 50%, color-mix(in srgb, var(--df-accent) 8%, transparent), transparent 48%),
+    var(--df-surface-1);
+}
+
+.npc-mini-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 5px;
+  font-size: 15px;
+}
+
+.npc-mini-card p {
+  max-width: 210px;
+  margin: 0;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shared-character-head > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.character-library-grid {
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 11px;
+}
+
+.library-character-card {
+  min-height: 156px;
+  padding: 13px;
+  background: linear-gradient(145deg, var(--df-surface-2), var(--df-surface-1));
+}
+
+/* 职业卡（5E 2024 等）比普通卡多「职业升级/高级角色中心」按钮，动作区会折行；
+   把动作区钉在卡片底部，折行向上生长，各卡的按钮行保持同一底边。 */
+.library-character-card .actions {
+  margin-top: auto;
+}
+
+.characters-page .library-character-card .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.characters-page .library-character-card .actions button {
+  flex: 1 1 120px;
+  min-width: 0;
+  height: auto;
+  min-height: 36px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  text-align: center;
+}
+
+@media (max-width: 520px) {
+  .current-character-actions {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+  }
+}
+
+.library-character-card .character-card-summary {
+  align-items: flex-start;
+}
+
+.library-character-card h2 {
+  margin: 1px 0 5px;
+  font-size: 16px;
+}
+
+.library-character-card .card-bg {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (max-width: 800px) {
+  .current-character-card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .shared-character-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .shared-character-head .actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .current-character-card { padding: 14px; }
+  .current-character-identity { align-items: flex-start; gap: 13px; }
+  .current-character-card .portrait-edit-button { min-width: 76px; min-height: 76px; }
+  .current-character-card .portrait-image { width: 76px !important; height: 76px !important; }
+  .character-name-line { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .character-name-line h2 { font-size: 20px; }
+  .character-resource-line { grid-template-columns: 24px minmax(70px, 1fr); }
+  .character-resource-line strong { grid-column: 2; }
+  .current-character-actions { grid-template-columns: minmax(0, 1fr); }
+  .character-library-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.characters-page .npc-mini-card {
+  flex-direction: row;
+}
+
+.characters-page .npc-mini-card h2,
+.characters-page .current-character-card h2 {
+  min-height: 0;
+}
+
+/* --- moved from styles/v2/roster.css --- */
+/* Character roster: campaign hero, horizontal NPC rail, searchable library. */
+.characters-page .archive-hero {
+  margin-bottom: 14px;
+}
+
+.characters-page .character-section {
+  margin-top: 11px;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.characters-page .character-section-head {
+  min-height: 46px;
+  padding: 10px 3px;
+  border-bottom: 1px solid var(--df-border-soft);
+  background: transparent;
+}
+
+.characters-page .current-character-grid {
+  grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+  gap: 12px;
+  padding: 0;
+}
+
+.characters-page .current-character-card {
+  min-height: 132px;
+  gap: 14px;
+  padding: 14px;
+  border-radius: var(--df-radius-md);
+  background:
+    radial-gradient(circle at 0 50%, color-mix(in srgb, var(--df-interactive) 8%, transparent), transparent 48%),
+    linear-gradient(145deg, var(--df-surface-2), var(--df-surface-1));
+}
+
+.characters-page .current-character-card::after {
+  display: none;
+}
+
+.characters-page .current-character-card .portrait-image {
+  width: 78px !important;
+  height: 92px !important;
+  border-radius: 7px;
+}
+
+.characters-page .current-character-card .portrait-edit-button {
+  min-width: 78px;
+  min-height: 92px;
+}
+
+.characters-page .current-character-actions {
+  align-content: center;
+  grid-template-columns: repeat(3, minmax(86px, 1fr));
+  min-width: 0;
+  gap: 6px;
+}
+
+.characters-page .current-character-actions:has(> button:nth-child(4)) {
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
+  min-width: 0;
+}
+
+@media (min-width: 801px) {
+  .characters-page .current-character-card:only-child {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, auto);
+    align-items: center;
+  }
+
+  .characters-page .current-character-card:only-child .current-character-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: min(100%, 520px);
+  }
+
+  .characters-page .current-character-card:only-child .current-character-actions:has(> button:nth-child(4)) {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.characters-page .npc-strip {
+  padding: 11px 13px 14px;
+}
+
+.characters-page .npc-mini-card {
+  min-width: 215px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+}
+
+.character-library-toolbar {
+  display: grid;
+  grid-template-columns: minmax(210px, 1fr) 160px auto minmax(280px, auto);
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-2) 62%, transparent);
+}
+
+.character-view-switch {
+  display: flex;
+  gap: 4px;
+}
+
+.character-view-switch button {
+  width: 39px;
+  padding: 0;
+  font-size: 18px;
+}
+
+.character-view-switch button.active {
+  border-color: var(--df-interactive);
+  color: var(--df-interactive-strong);
+  background: var(--df-hover);
+}
+
+.character-import-actions {
+  justify-content: flex-end;
+}
+
+.characters-page .character-library-grid {
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+  padding: 14px 0 0;
+}
+
+.characters-page .library-character-card {
+  position: relative;
+  display: flex;
+  min-height: 304px;
+  flex-direction: column;
+  gap: 12px;
+  padding: 11px;
+}
+
+.characters-page .library-character-card .character-card-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.characters-page .library-character-card .portrait-image {
+  width: 100% !important;
+  height: 132px !important;
+  border-radius: 7px;
+}
+
+.characters-page .library-character-card .portrait-edit-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 132px;
+}
+
+.characters-page .library-character-card .card-select {
+  position: absolute;
+  z-index: 2;
+  top: 19px;
+  right: 19px;
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  border-radius: 4px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--df-canvas) 58%, transparent);
+}
+
+.characters-page .library-character-card .actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: auto;
+}
+
+.characters-page .library-character-card .actions button {
+  min-width: 0;
+  padding-inline: 5px;
+  font-size: 10px;
+}
+
+.characters-page .character-library-grid.view-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.characters-page .view-list .library-character-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 104px;
+}
+
+.characters-page .view-list .library-character-card .actions {
+  align-self: center;
+  margin: 0;
+}
+
+/* 移动端底栏遮挡：拆分自 light.css 的跨页共享规则（原是 5 个页面组合选择器）。 */
+@media (max-width: 800px) {
+  .characters-page {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+}
+
+/* 拆分自 play-cinematic.css 的 characters-page 响应式覆盖。
+   注意：选择器必须保留 .characters-page 前缀原样——Vue scoped 编译只给复合选择器
+   最后一节加 data-v 属性，简化前缀会意外降低特异性，导致覆盖不了 roster.css 那份基础规则。 */
+@media (max-width: 800px) {
+  .characters-page .current-character-card {
+    background:
+      radial-gradient(circle at 0 50%, color-mix(in srgb, var(--df-interactive) 8%, transparent), transparent 48%),
+      linear-gradient(145deg, var(--df-surface-2), var(--df-surface-1));
+  }
+
+  .characters-page .character-library-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .characters-page .character-library-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    padding: 12px 0 0;
+  }
+
+  .characters-page .library-character-card {
+    min-height: 278px;
+    padding: 9px;
+  }
+
+  .characters-page .library-character-card .character-card-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .characters-page .library-character-card .portrait-edit-button {
+    grid-column: auto;
+  }
+
+  .characters-page .library-character-card .portrait-image {
+    width: 100% !important;
+    height: 108px !important;
+  }
+
+  .characters-page .library-character-card .actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* 拆分自 play-panels.css 的 characters-page 响应式覆盖。 */
+@media (max-width: 800px) {
+  .characters-page {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .characters-page .current-character-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .characters-page .current-character-card {
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+
+  .characters-page .current-character-identity {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .characters-page .current-character-actions,
+  .characters-page .current-character-actions:has(> button:nth-child(4)) {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .characters-page .current-character-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .characters-page .current-character-actions:has(> button:nth-child(4)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .characters-page .character-library-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .characters-page .current-character-identity {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr);
+    align-items: start;
+  }
+}
+</style>

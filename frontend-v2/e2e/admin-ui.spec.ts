@@ -7,8 +7,8 @@ test('settings status summary stays structured and destructive confirmations are
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token())
 
   await page.goto('/#/settings')
-  await expect(page.locator('.system-status-grid')).toBeVisible()
-  const statusCards = page.locator('.system-status-card')
+  await expect(page.getByTestId('system-status-grid')).toBeVisible()
+  const statusCards = page.getByTestId('system-status-card')
   await expect(statusCards.first()).toBeVisible()
   const summaries = await statusCards.evaluateAll(elements => elements.map(element => ({
     label: element.querySelector('.system-status-head > span')?.textContent?.trim() ?? '',
@@ -34,7 +34,7 @@ test('settings status grid stays within viewport for German locale', async ({ pa
   await page.addInitScript(() => localStorage.setItem('diceframe_locale', 'de'))
   await page.setViewportSize({ width: 1280, height: 1024 })
   await page.goto('/#/settings')
-  const grid = page.locator('.system-status-grid')
+  const grid = page.getByTestId('system-status-grid')
   await expect(grid).toBeVisible()
   const overflow = await grid.evaluate(el => ({
     scrollWidth: el.scrollWidth,
@@ -42,7 +42,7 @@ test('settings status grid stays within viewport for German locale', async ({ pa
   }))
   expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1)
   // 德语界面回退英文：状态卡标题不应出现中文
-  const labels = await page.locator('.system-status-head > span').allTextContents()
+  const labels = await page.getByTestId('system-status-head').locator('> span').allTextContents()
   expect(labels.length).toBeGreaterThan(0)
   for (const label of labels) {
     expect(label).not.toMatch(/[一-鿿]/)
@@ -55,22 +55,22 @@ test('rules page exposes structured editing for copied rules', async ({ page }) 
   await expect(page.getByRole('heading', { name: '复制并编辑规则' })).toBeVisible()
   await expect(page.getByLabel('规则 ID')).toBeVisible()
   await expect(page.getByLabel('规则名称')).toBeVisible()
-  await expect(page.locator('.rule-editor-section').filter({ hasText: '属性' })).toBeVisible()
+  await expect(page.getByTestId('rule-editor-section').filter({ hasText: '属性' })).toBeVisible()
   await expect(page.getByText('高级 JSON')).toBeVisible()
   await page.getByRole('button', { name: '取消' }).click()
 })
 test('provider controls and the add action remain usable', async ({ page }) => {
   await page.goto('/#/settings?section=api')
-  const testSection = page.locator('.provider-test-section')
+  const testSection = page.getByTestId('provider-test-section')
   await expect(testSection).toBeVisible()
   await expect(testSection.locator('.provider-field .n-input')).toBeVisible()
   await expect(testSection.locator('.provider-field .n-select')).toBeVisible()
-  await expect(testSection.locator('.provider-test-actions .n-button').first()).toBeVisible()
+  await expect(testSection.getByTestId('provider-test-actions').locator('.n-button').first()).toBeVisible()
 
-  const addProvider = page.locator('.provider-library-footer button')
+  const addProvider = page.getByTestId('provider-library-footer').locator('button')
   await expect(addProvider).toBeVisible()
   await expect(addProvider).toBeEnabled()
-  const providerItems = page.locator('.provider-list-item')
+  const providerItems = page.getByTestId('provider-list-item')
   const providerCount = await providerItems.count()
   await addProvider.click()
   await expect(providerItems).toHaveCount(providerCount + 1)
@@ -78,17 +78,17 @@ test('provider controls and the add action remain usable', async ({ page }) => {
 
 test('model routing pane keeps provider and model assignment reactive after extraction', async ({ page }) => {
   await page.goto('/#/settings?section=models')
-  const pane = page.locator('.model-routing-pane')
+  const pane = page.getByTestId('model-routing-pane')
   await expect(pane).toBeVisible()
-  await expect(pane.locator('.model-role-card-main')).toBeVisible()
+  await expect(pane.getByTestId('model-role-card-main')).toBeVisible()
 
-  const mainProvider = pane.locator('.model-role-card-main > label select').nth(0)
-  const mainModel = pane.locator('.model-role-card-main > label select').nth(1)
+  const mainProvider = pane.getByTestId('model-role-card-main').locator('> label select').nth(0)
+  const mainModel = pane.getByTestId('model-role-card-main').locator('> label select').nth(1)
   const providerOptions = await mainProvider.locator('option').count()
   expect(providerOptions).toBeGreaterThan(1)
   await mainProvider.selectOption({ index: 1 })
 
   await expect(mainModel).toBeEnabled()
   await expect(mainModel).not.toHaveValue('')
-  await expect(pane.locator('.model-role-card-embedding')).toBeVisible()
+  await expect(pane.getByTestId('model-role-card-embedding')).toBeVisible()
 })

@@ -672,7 +672,7 @@ onMounted(async () => {
     <main v-else-if="mode === 'quick'" id="builder-mode-panel" class="quick-builder" role="tabpanel" :aria-labelledby="`builder-mode-${mode}`">
       <div class="beginner-callout"><b>{{ text('第一次玩？从这里开始。', 'First game? Start here.') }}</b><span>{{ text('选一个你喜欢的玩法，只需要再填写名字。之后仍可进入引导模式微调。', 'Pick a play style, then add a name. You can still fine-tune it in Guided mode.') }}</span></div>
       <div class="preset-grid">
-        <button v-for="preset in choices.quick_presets" :key="preset.ref" :class="['preset-card', { selected: selectedPreset === preset.ref }]" @click="choosePreset(preset)">
+        <button v-for="preset in choices.quick_presets" :key="preset.ref" :class="['preset-card', { selected: selectedPreset === preset.ref }]" data-testid="preset-card" @click="choosePreset(preset)">
           <span class="preset-top"><b>{{ preset.name }}</b><small>{{ difficultyLabel(preset.difficulty) }}</small></span>
           <span>{{ preset.summary }}</span><em>{{ preset.recommendation_reason }}</em>
           <span class="tag-row"><i v-for="tag in preset.fantasy_tags" :key="tag">{{ tag }}</i></span>
@@ -682,7 +682,7 @@ onMounted(async () => {
       <div class="quick-actions"><button @click="mode = 'guided'">{{ text('进入引导模式微调', 'Fine-tune in Guided mode') }}</button><button class="primary" :disabled="busy || !selectedPreset || !draft.name.trim()" @click="finish">{{ busy ? text('检查中…', 'Checking…') : text('完成并使用这个角色', 'Use this character') }}</button></div>
     </main>
 
-    <main v-else id="builder-mode-panel" class="guided-builder" role="tabpanel" :aria-labelledby="`builder-mode-${mode}`">
+    <main v-else id="builder-mode-panel" class="guided-builder" data-testid="guided-builder" role="tabpanel" :aria-labelledby="`builder-mode-${mode}`">
       <ProgressRail :steps="steps" :current="step" />
 
       <section v-if="step === 1" class="builder-step">
@@ -751,7 +751,7 @@ onMounted(async () => {
       </section>
 
       <p v-if="error" class="builder-error" role="alert">{{ error }}</p>
-      <footer class="builder-actions"><button @click="emit('cancel')">{{ text('取消', 'Cancel') }}</button><button v-if="step > 1" @click="step--">{{ text('上一步', 'Back') }}</button><button v-if="step < 4" class="primary" :disabled="busy || (step === 3 && !ruleChoicesReady)" @click="next">{{ busy ? text('检查中…', 'Checking…') : step === 3 && !ruleChoicesReady ? text(`还差 ${incompleteRuleChoices.length} 项`, `${incompleteRuleChoices.length} remaining`) : text('下一步', 'Next') }}</button><button v-else class="primary" :disabled="busy" @click="finish">{{ busy ? text('正在完成…', 'Finalizing…') : text('完成角色', 'Finish character') }}</button></footer>
+      <footer class="builder-actions" data-testid="builder-actions"><button @click="emit('cancel')">{{ text('取消', 'Cancel') }}</button><button v-if="step > 1" @click="step--">{{ text('上一步', 'Back') }}</button><button v-if="step < 4" class="primary" :disabled="busy || (step === 3 && !ruleChoicesReady)" @click="next">{{ busy ? text('检查中…', 'Checking…') : step === 3 && !ruleChoicesReady ? text(`还差 ${incompleteRuleChoices.length} 项`, `${incompleteRuleChoices.length} remaining`) : text('下一步', 'Next') }}</button><button v-else class="primary" :disabled="busy" @click="finish">{{ busy ? text('正在完成…', 'Finalizing…') : text('完成角色', 'Finish character') }}</button></footer>
     </main>
   </section>
 </template>
