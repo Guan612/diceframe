@@ -23,8 +23,6 @@ from src.engine.contracts import (
     TableTalkExchange,
     TokenBudgetBump,
 )
-from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
-from src.engine.character_utils import apply_resource_delta, get_resource
 from src.engine.game_state import GameState
 from src.engine.game_state_codec import GameStateCodec
 from src.engine.game_state_contracts import (
@@ -32,7 +30,6 @@ from src.engine.game_state_contracts import (
     GamePersistedState,
     PlayerRollbackSnapshot,
 )
-from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.engine.player_control import (
