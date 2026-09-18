@@ -15,8 +15,12 @@ export const CARD_CONTROL_MODES = ['human', 'ai', 'unclaimed'] as const
 export type CardControlMode = (typeof CARD_CONTROL_MODES)[number]
 
 /**
- * 第一张默认「真人」、其余默认「等待认领」：与既有产品默认一致，但以一个明确的
- * 值呈现，用户不需要再理解一层「跟随默认」。
+ * 第一张默认「玩家」、其余默认「等待认领」：与既有产品默认一致，但以一个明确的值
+ * 呈现，用户不需要再理解一层「跟随默认」。
+ *
+ * 其余角色默认 `unclaimed` 而不是 `ai`：`unclaimed` 是「席位存在但暂时无人负责」，
+ * 角色不会自动行动；`ai` 是「服务端 AI 真的替这个角色行动」。开房时常见的做法是先
+ * 建好几张卡等朋友认领，把默认值改成 `ai` 会直接改变游戏行为。
  */
 export function defaultCardControl(index: number): CardControlMode {
   return index === 0 ? 'human' : 'unclaimed'

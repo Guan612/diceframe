@@ -433,11 +433,12 @@
   font-size: 11px;
 }
 
-/* 角色步骤的紧凑控制方式下拉：附着在角色卡右下，不展开成大段 radio。 */
+/* 角色步骤的紧凑控制方式下拉：跟在角色信息（名字/出身/技能数）下方，不展开成大段 radio。 */
 .create-character-control {
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-top: 8px;
   font-size: 11px;
   color: var(--df-text-muted);
 }
@@ -452,7 +453,7 @@
   font-size: 11px;
 }
 
-/* 确认页只做摘要：每张角色一行「名字 + 最终控制方式」。 */
+/* 确认页只做只读摘要：每张角色一行「名字 + 最终控制方式」。 */
 .create-confirm-controls {
   display: grid;
   gap: 6px;
@@ -477,17 +478,6 @@
   color: var(--df-text-secondary);
   font-size: 12px;
   font-weight: 600;
-}
-
-.create-confirm-edit {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--df-accent);
-  font-size: 12px;
-  text-decoration: underline;
-  cursor: pointer;
 }
 
 .create-actions {

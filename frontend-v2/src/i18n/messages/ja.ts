@@ -2319,7 +2319,6 @@ export const ja = {
   inviteAddressSettingsLink: '共有アドレスを変更',
   inviteLocalOnlyWarning: 'このアドレスはこの端末からのみアクセスできます。他の端末はこのアドレスでは参加できません。アクセス可能な共有アドレスを設定してください。',
   controlMode: '操作',
-  controlBackToCharacters: 'キャラクター設定に戻る',
   inviteScanHint: 'DiceFrame アプリで読み取ってもらうか、下のリンクを送ってください。',
   inviteQrHint: '読み取るとこのセッションに参加してキャラクターを作成できます。',
   controlLink: '操作リンク',
