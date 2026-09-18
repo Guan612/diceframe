@@ -520,6 +520,7 @@ export const de = {
   combatExtDone: 'Aktion ausgeführt',
   combatExtSelectTarget: 'Ziel auswählen',
   combatExtActionPhaseOnly: 'Kampfaktionen sind nur in der Aktionsphase der Spieler verfügbar',
+  combatExtActionEntry: 'Kampfaktionen',
   combatEditorTitle: 'Kampferweiterung (optional)',
   combatEditorScheduler: 'Ablaufsteuerung',
   combatEditorDisabled: 'Deaktiviert',

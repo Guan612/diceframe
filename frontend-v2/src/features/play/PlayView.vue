@@ -31,7 +31,7 @@ import PlayHelpCenter from '@/components/PlayHelpCenter.vue'
 import HealthPanel from '@/components/HealthPanel.vue'
 import Modal from '@/components/ui/Modal.vue'
 import GmToolbar from '@/components/play/GmToolbar.vue'
-import CombatExtensionPanel from '@/components/play/CombatExtensionPanel.vue'
+import CombatActionsTool from '@/components/play/CombatActionsTool.vue'
 import MultiplayerPanel from '@/components/play/MultiplayerPanel.vue'
 import MapWorkspace from '@/components/play/MapWorkspace.vue'
 import SceneGalleryModal from '@/components/play/SceneGalleryModal.vue'
@@ -180,7 +180,10 @@ const directorProposal = ref<RulesetDirectorProposal | null>(null)
 const rulesetGameplay = ref<RulesetGameplayView | null>(null)
 const rulesetCombatStatus = ref('none')
 const rulesetCampaignStatus = ref('')
+const hasCombatExtension = computed(() => Boolean(game.detail.value?.combat_extension))
 const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value)
+// 自由规则可能只开启 combat_extension：此时 tools 栏也必须出现，否则「战斗动作」没有入口。
+const hasComposerTools = computed(() => hasProfessionalTools.value || canAskKp.value || hasCombatExtension.value)
 const rulesetToolCopy = computed(() => (
   resolveRulesetPlayExtension(String(game.detail.value?.ruleset_runtime?.id || ''))
     ?.copy(String(locale.value))
@@ -1247,7 +1250,7 @@ onBeforeUnmount(() => {
           @open-combat="openRulesetTool('combat')"
         >
           <template #tools>
-            <div v-if="hasProfessionalTools || canAskKp" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+            <div v-if="hasComposerTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
               <button
                 v-if="canAskKp"
                 class="kp-question-tool-trigger"
@@ -1256,6 +1259,13 @@ onBeforeUnmount(() => {
                 :aria-label="t('kpQuestionAction')"
                 @click="showKpQuestion = true"
               ><NIcon :component="ChatbubbleEllipsesOutline" /><span>{{ t('kpQuestionAction') }}</span></button>
+              <CombatActionsTool
+                :detail="game.detail.value"
+                :game-key="game.currentGame.value"
+                :self-uid="game.actorId.value"
+                :is-gm="game.isGm.value"
+                @changed="game.refresh(true)"
+              />
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"
@@ -1288,7 +1298,7 @@ onBeforeUnmount(() => {
           @refresh="game.refresh"
         >
           <template #tools>
-            <div v-if="hasProfessionalTools || canAskKp" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+            <div v-if="hasComposerTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
               <button
                 v-if="canAskKp"
                 class="kp-question-tool-trigger"
@@ -1297,6 +1307,13 @@ onBeforeUnmount(() => {
                 :aria-label="t('kpQuestionAction')"
                 @click="showKpQuestion = true"
               ><NIcon :component="ChatbubbleEllipsesOutline" /><span>{{ t('kpQuestionAction') }}</span></button>
+              <CombatActionsTool
+                :detail="game.detail.value"
+                :game-key="game.currentGame.value"
+                :self-uid="game.actorId.value"
+                :is-gm="game.isGm.value"
+                @changed="game.refresh(true)"
+              />
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"
@@ -1374,14 +1391,6 @@ onBeforeUnmount(() => {
           @payment="openPaymentComposer"
           @generate-current-round="showCurrentRoundImage = true"
         />
-        <CombatExtensionPanel
-          :detail="game.detail.value"
-          :game-key="game.currentGame.value"
-          :self-uid="game.actorId.value"
-          :is-gm="game.isGm.value"
-          @changed="game.refresh(true)"
-        />
-
         <MultiplayerPanel
           v-if="game.detail.value.solo_mode === false"
           :players="game.players.value"

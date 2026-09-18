@@ -520,6 +520,7 @@ export const en = {
   combatExtDone: 'Action executed',
   combatExtSelectTarget: 'Select a target',
   combatExtActionPhaseOnly: 'Combat actions are available during the player action phase',
+  combatExtActionEntry: 'Combat Actions',
   combatEditorTitle: 'Combat extension (optional)',
   combatEditorScheduler: 'Scheduler',
   combatEditorDisabled: 'Disabled',

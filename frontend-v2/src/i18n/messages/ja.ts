@@ -520,6 +520,7 @@ export const ja = {
   combatExtDone: 'アクションを実行しました',
   combatExtSelectTarget: '対象を選択',
   combatExtActionPhaseOnly: '戦闘アクションはプレイヤー行動フェーズで使用できます',
+  combatExtActionEntry: '戦闘アクション',
   combatEditorTitle: '戦闘拡張（任意）',
   combatEditorScheduler: 'スケジューラ',
   combatEditorDisabled: '無効',
