@@ -25,11 +25,14 @@ AI_SLOT_WAIT_SECONDS = 2.0
 MAX_TRACKED_BUCKETS = 2000
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# 凭据兑换端点与登录共用限流桶：两者都能用于暴力猜测 owner 访问权。
+_LOGIN_PATHS = frozenset({"/api/login", "/api/pairing/claim"})
 _AI_EXACT_PATHS = frozenset({
     "/api/generate-world",
     "/api/generate-rule",
     "/api/generate-character",
     "/api/generate-text",
+    "/api/image-prompts/optimize",
     "/api/test-connection",
     "/api/test-embedding",
     "/api/assistant/chat",
@@ -46,6 +49,10 @@ _AI_GAME_SUFFIXES = (
     "/restart",
     "/switch-world",
     "/speech",
+    # 分镜分析走的是主文本模型，和上面几条一样要占 AI 槽位。
+    # 生图接口（/current-round、POST .../generated-images）故意不进这里：
+    # 单次可长达 imagegen_timeout_seconds，占满槽位会把玩家行动一起饿死。
+    "/storyboard/analyze",
 )
 
 
@@ -149,7 +156,7 @@ class AbuseGuard:
     ) -> web.StreamResponse:
         ip = (request.remote or "unknown")[:128]
 
-        if request.method == "POST" and request.path == "/api/login":
+        if request.method == "POST" and request.path in _LOGIN_PATHS:
             denied = self._check_pair(
                 "login-ip",
                 ip,

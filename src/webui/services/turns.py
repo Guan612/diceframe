@@ -19,9 +19,10 @@ from src.engine.economy import (
     pending_effect_groups,
     pending_economy_proposals,
 )
+from src.engine.game_instance import GameState
 from src.engine.language import localized_text
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
-from src.engine.game_instance import GameState
+from src.engine.player_control import submission_block
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
 
 if TYPE_CHECKING:
@@ -29,6 +30,12 @@ if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
+
+# 控制权拒绝真人提交时的对外文案；键与 player_control.SUBMISSION_BLOCK_CODES 一致。
+_SUBMISSION_BLOCK_MESSAGES = {
+    "PLAYER_AI_CONTROLLED": "该角色当前由 AI 托管，真人无法提交行动（可先接管该角色）",
+    "PLAYER_UNCLAIMED": "该角色尚未被认领，请先认领角色再提交行动",
+}
 
 
 NarrationDelta = Callable[[str], Awaitable[None]]
@@ -75,6 +82,12 @@ class TurnDependencies:
     # 策略按局解析：本局覆盖 → 规则模板默认 → 服务器全局配置。
     economy_auto_reward_settings: Callable[[Any], tuple[bool, int]] | None = None
     resolve_reward: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
+    # AI 托管席位补行动（src/commands/ai_player.py）：只在真人闸门满足之后、
+    # 本轮推进之前调用一次。None 表示该运行时没有配置这条能力（行为不变）。
+    fill_ai_player_actions: Callable[[Any], Awaitable[Any]] | None = None
+    # 权威战斗的即时接管（src/webui/services/ruleset_gameplay.py）：控制权变更
+    # 之后立刻把该席位的确定性回合走完。None 表示该运行时没有这条能力。
+    resume_authoritative_combat: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
 
 
 class TurnResult(TypedDict):
@@ -218,6 +231,37 @@ async def _prepare_checks(
         return list((await ai_prepare(instance)) or [])
     legacy_prepare = dependencies.prepare_round_checks
     return list((legacy_prepare(instance) if legacy_prepare else []) or [])
+
+
+async def _fill_ai_player_actions(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+    *,
+    game_key: str,
+) -> bool:
+    """让 AI 托管席位在真人交齐后补上本轮行动（失败不阻塞本轮）。
+
+    补行动本身是一个独立的命令层能力；这个服务只负责在唯一的推进入口调用
+    它一次。``ai_player`` 内部已按席位隔离失败并自行记录 ``AI_ACTION_SKIPPED``，
+    这里的兜底只防住实现缺陷，绝不让它把真人的这一轮卡住。
+
+    返回"这一遍是否真的写入了至少一条行动"，供调用方决定是否需要单独落盘：
+    补了行动但本轮没有推进时，那条行动不能只留在内存里。
+    """
+    fill = dependencies.fill_ai_player_actions
+    if fill is None or not instance.human_actions_ready():
+        return False
+    try:
+        records = await fill(instance)
+    except Exception:
+        logger.exception("AI 托管席位补行动失败，本轮继续: game=%s", game_key)
+        return False
+    if not isinstance(records, (list, tuple)):
+        return False
+    return any(
+        isinstance(record, dict) and str(record.get("status") or "") == "added"
+        for record in records
+    )
 
 
 async def _process_round(
@@ -442,6 +486,111 @@ def _auto_reward_cap(dependencies: TurnDependencies, instance: Any) -> int | Non
     return gold_cap if enabled and gold_cap >= 1 else None
 
 
+async def _advance_progression(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+    *,
+    game_key: str,
+    viewer_uid: str = "",
+    include_recap: bool = False,
+    on_delta: NarrationDelta | None = None,
+    on_reset: NarrationReset | None = None,
+    roll_payload: dict[str, Any] | None = None,
+) -> TurnResult | None:
+    """本局唯一的"让 AI 补行动并推进本轮"边界；未推进时返回 ``None``。
+
+    普通玩家提交与控制权变更都走这里，因此 AI 席位的补行动、真人闸门、
+    检定准备与叙事生成只有一份实现。调用方只负责决定要不要调用，以及
+    "没有推进"时对外说什么。
+    """
+    # AI 托管席位的补行动只有一个注入点：真人闸门满足之后、本轮推进之前。
+    # 这里不做任何 AI 判断（闸门、顺序、幂等、竞争守卫都在 ai_player 里），
+    # 也不让它的失败挡住真人这一轮。
+    wrote_ai_actions = await _fill_ai_player_actions(
+        dependencies, instance, game_key=game_key,
+    )
+
+    if not await instance.try_advance():
+        if wrote_ai_actions:
+            # 补了行动但本轮没有推进（例如还有待确认的经济提案）：必须现在落盘，
+            # 否则会出现"控制权已保存、AI 行动却只在内存里"的状态。
+            await dependencies.save_instance(instance)
+        return None
+    await _prepare_checks(dependencies, instance)
+    if instance.pending_luck_checks():
+        await dependencies.save_instance(instance)
+        return _result(_pending_luck_payload(instance, roll=roll_payload))
+    try:
+        narration, _ = await _process_round(
+            dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
+        )
+    except RoundProcessingError as exc:
+        return exc.result
+    payload = _round_payload(
+        instance,
+        narration,
+        phase="done",
+        include_recap=include_recap,
+        viewer_uid=viewer_uid,
+    )
+    payload["advanced"] = True
+    if roll_payload:
+        payload["roll"] = roll_payload
+    return _result(payload)
+
+
+async def resume_after_control_change(
+    dependencies: TurnDependencies,
+    game_key: str,
+    *,
+    seat_uid: str = "",
+    on_delta: NarrationDelta | None = None,
+    on_reset: NarrationReset | None = None,
+) -> TurnResult:
+    """控制权写入成功后，立即唤醒现有的唯一推进边界。
+
+    这个 helper 只做四件事：确认控制权已经落盘、判断当前 phase 是否可推进、
+    判断真人闸门是否满足、然后调用既有 progression。它不生成 prompt、不产生
+    AI 行动、不规划检定、不写叙事、不碰战斗规则。
+
+    权威战斗由 ``resume_authoritative_combat``（同一注入能力）接管：控制权一变
+    就沿着既有的确定性自动阶梯走完该席位的回合；否则走自由文本回合的推进
+    边界。没有任何可推进条件时返回 ``resumed=False`` 与原因，**绝不伪造行动**，
+    也绝不为等人而空转。
+    """
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
+    if not instance:
+        return _result({"ok": False, "resumed": False, "error": "游戏不存在"}, 404)
+
+    combat = dependencies.resume_authoritative_combat
+    if combat is not None:
+        combat_outcome = await combat(game_key, seat_uid)
+        if combat_outcome.get("handled"):
+            return _result(dict(combat_outcome))
+
+    if instance.state != GameState.ACTIVE_ACTION:
+        return _result({
+            "ok": True, "resumed": False, "reason": "phase_not_actionable",
+        })
+    # 真人闸门是探索补行动的唯一前提：仍有真人没交行动时，AI 不抢跑。
+    if not instance.human_actions_ready():
+        return _result({
+            "ok": True, "resumed": False, "reason": "human_gate_open",
+        })
+    advanced = await _advance_progression(
+        dependencies, instance, game_key=game_key, include_recap=True,
+        on_delta=on_delta, on_reset=on_reset,
+    )
+    if advanced is None:
+        return _result({
+            "ok": True, "resumed": False, "reason": "not_advanceable",
+        })
+    advanced["payload"]["resumed"] = True
+    return advanced
+
+
 async def submit_action(
     dependencies: TurnDependencies,
     game_key: str,
@@ -466,6 +615,15 @@ async def submit_action(
         return _result({"error": "游戏不存在，请刷新页面重新开始"}, 404)
     if actor_uid not in instance.players:
         return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
+    # 控制权是权威的准入判定：AI 托管 / 未认领的席位不接受真人提交的行动。
+    # 这里只拒绝"真人代打"，不改变服务器 AI 自身是否行动（本 PR 不让 AI 自动出招）。
+    block = submission_block(instance, actor_uid)
+    if block:
+        return _result({
+            "ok": False,
+            "error_code": block,
+            "error": _SUBMISSION_BLOCK_MESSAGES.get(block, "当前角色无法提交行动"),
+        }, 409)
     rule = dependencies.load_rule_for_game(instance)
     if rule is not None:
         try:
@@ -564,28 +722,16 @@ async def submit_action(
             except Exception:
                 logger.exception("保存行动/购买请求失败: game=%s", game_key)
 
-    if await instance.try_advance():
-        await _prepare_checks(dependencies, instance)
-        if instance.pending_luck_checks():
-            await dependencies.save_instance(instance)
-            return _result(_pending_luck_payload(instance, roll=roll_payload))
-        try:
-            narration, _ = await _process_round(
-                dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
-            )
-        except RoundProcessingError as exc:
-            return exc.result
-        payload = _round_payload(
-            instance,
-            narration,
-            phase="done",
-            include_recap=True,
-            viewer_uid=actor_uid,
-        )
-        payload["advanced"] = True
-        if roll_payload:
-            payload["roll"] = roll_payload
-        return _result(payload)
+    # 真人提交之后与"控制权变更之后"共用同一个推进入口：AI 托管席位的补行动
+    # （真人闸门、顺序、幂等、竞争守卫都在 ai_player 里）、检定准备与叙事生成
+    # 只有一份实现，它的失败也不会挡住真人这一轮。
+    advanced = await _advance_progression(
+        dependencies, instance, game_key=game_key, viewer_uid=actor_uid,
+        include_recap=True, on_delta=on_delta, on_reset=on_reset,
+        roll_payload=roll_payload,
+    )
+    if advanced is not None:
+        return advanced
 
     multiplayer = instance.multiplayer_status()
     waiting_names = [

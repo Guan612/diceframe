@@ -19,6 +19,19 @@ Template synchronization and migrated-default persistence happen only during rea
 
 A WebUI service does not import another service directly. Cross-domain business calls use callables or protocols injected by the composition root. Pure contracts and projections shared by multiple domains but performing no business orchestration live at the `src/webui/` root boundary, including lifecycle transaction context, ruleset draft-shape validation, read-only rest projection, and character-card identity/deduplication. Type-checking-only imports are not runtime dependencies.
 
+## Access Credentials and QR Pairing
+
+Owner access accepts two peer credentials, both sent as `Authorization: Bearer` and resolved in `src/webui/access_control.py`:
+
+- the access password, stored in `STATE["access_token"]` as a PBKDF2 hash only — the server never holds the plaintext, and no endpoint may hand it back;
+- device tokens (`src/webui/device_tokens.py`), high-entropy random strings persisted as sha256 digests only (random tokens need no KDF, and they are verified on every request), revocable per device without touching the master password or other devices.
+
+QR sign-in lives in `src/webui/pairing.py` and `src/webui/routes/pairing.py`: an owner session calls `POST /api/pairing` for a single-use, short-TTL pairing code (also stored as a digest only), and the mobile client anonymously calls `POST /api/pairing/claim` to exchange it for a device token. The claim endpoint must stay anonymous (the phone holds no credential yet), so it shares the abuse-guard login bucket with `/api/login` and writes to the same login audit; pairing codes are single-use, expire, and are never renewed. The device list `GET /api/devices` and revocation `DELETE /api/devices/{id}` / `POST /api/devices/revoke-all` are owner-only, and the listing returns no field usable for authentication.
+
+On a passwordless server `POST /api/pairing` is open to any client that can reach it, so a device token issued then means "whoever can connect is the owner". Configuring an access password for the first time (`access_token` going from unset to set) therefore revokes every device token and pending pairing code as well; changing an already configured password does not — device tokens are credentials that rank alongside the access password, and the settings page has its own per-device / revoke-all entry points.
+
+Only the server knows which address the QR code should carry — the GM's browser origin is usually localhost, which is useless to a phone. `GET /api/system/network` (owner-only) returns reachable local candidates via `src/web_transport/local_addresses.py`, which is also the address source for self-signed certificate SANs.
+
 ## Content V2
 
 Inputs cross a compatibility boundary before entering the current canonical model:
@@ -141,6 +154,220 @@ now evaluate through the generic formula AST via a D&D-side adapter, while
 spell slots, concentration, saves, and victory detection remain in the D&D
 reducer. Scheduler and pool persistence lands with the first consuming
 ruleset.
+
+## World State
+
+`GameInstance.world_state` is the single authoritative container for "what is
+currently true in the world". It stays inside the per-game aggregate: no second
+aggregate, separate database, or background runtime. The first version has a
+fixed shape -- `schema_version / revision / clock / facts / scheduled_events`.
+A fact is a canonical key (`actor:<uid>.location`, `bridge:old.passable`, never
+a translated display name) plus a scalar value and `public | gm` visibility,
+recorded with `source_round` and `updated_revision`; `clock` is logical world
+time (day plus minute); `scheduled_events` is the persisted container of events
+to settle later, indexed by a stable `event_id`.
+
+The only write entry point is `apply_world_ops(instance, ops)` in
+`src/engine/world_state.py`: a batch is validated and committed atomically, and
+out-of-bounds values, unknown ops or fields, invalid keys/values, and corrupted
+or future schemas all fail closed without writing. Fact visibility is decided by
+world ops alone -- an update that omits it never downgrades a GM-private fact to
+public. World truth never lives in `ruleset_state`, `key_facts`,
+`lorebook_timed_state`, or memory, and the LLM cannot write it directly.
+
+Persistence and lifecycle follow the existing `GameInstance` / codec /
+migration pattern: schema 12 -> 13 materializes an empty world container for
+older saves (guessing no facts, repeatably); save/load and import/rebind keep
+world truth while isolating run identity; reset and restart begin from an empty
+world; and world ops belong to the round that wrote them, so whole-round
+rollback, aborted judgment, and swipe branch cuts revert them together under the
+ADR 0003 whole-round semantics.
+
+World truth is not player-visible truth: `project_visible_state(instance,
+viewer_is_gm=...)` is the only read entry point, `gm` facts reach only the GM
+context block (marked as invisible to players), and player-facing surfaces get
+the `public` projection. Action legality is decided server-side by
+`world_legality`: the model may only *propose* structured `world_requirements`
+(`act` / `move` plus canonical location ids), and the decision uses provable
+evidence only (registered locations, explicit `passable = false`). `passable =
+false` blocks entering, passing through, and arriving at a place, so a `move`
+checks only the declared `via` hops and the destination -- the actor's current
+location is never part of that check, and a character already standing in an
+impassable place can still leave. An empty world, an unknown location, or an
+actor without an established location never blocks; a proven contradiction
+injects a trusted "move first / cannot complete" verdict into the GM context,
+and a legal move is written to world truth by the server. This channel stays
+separate from overreach: overreach covers a player declaring world facts or
+controlling others, while legality covers a player's own action contradicting
+authoritative world facts. Logical world time moves only through
+`world_events.advance_world_time(+N)`, which advances the clock, settles due
+events in stable `(day, minute, event_id)` order, and persists each event as
+`applied` or `failed` (its ops no longer apply at settlement time). A persisted
+event's `ops` are validated entry by entry under the same structural contract as
+the `schedule_event` write path, so corrupted data fails closed instead of being
+silently filtered into a false "applied" that executed nothing. There is no
+background tick and no separate scheduler; an event can never run twice because
+of a retry, duplicate save, or page refresh, and because the settlement lives
+inside `world_state` it inherits the whole-round rollback, swipe, reset, and
+restart semantics unchanged.
+
+## Player Control
+
+`players[uid].control` is the authoritative record of who controls a seat:
+`human` (a real player is responsible), `ai` (the server produces this
+character's actions) or `unclaimed` (the seat exists but nobody plays it yet),
+carrying `revision`, `temporary` and `resume_mode`. It answers "who plays this
+character", not "what this character is": the character itself -- HP, equipment,
+spell slots, conditions, world position and the combat actor (`player:<uid>`) --
+exists exactly once in every mode, and switching controllers neither copies,
+moves nor re-keys anything. The first vocabulary is deliberately closed and does
+not include gm / remote_bot / script / hybrid.
+
+The only write entry point is `set_control` in `src/engine/player_control.py`,
+and every read goes through the same module: an unknown seat reads as the
+conservative default, a corrupted record degrades to `human` (the
+pre-contract behaviour), while writes fail closed on an unknown seat, an
+unknown mode, or temporary hosting without a resume target. Control is desktop
+session state, not a story outcome: `revision` increases only when the record
+actually changes, and whole-round rollback, aborted judgment and swipe revert
+character sheets and world facts without ever re-assigning a seat.
+`temporary = true` hosting must be able to return to `resume_mode` and must not
+become permanent after a restart.
+
+Persistence uses schema **13 -> 14**: every seat of an older save becomes
+`human`, the migration never guesses an AI controller from online state,
+character name or history, and it is repeatable. `control` sits beside
+`character_sheet`, so it is part of the player record itself: it round-trips
+through save/load and disappears together with the seat when a seat is cleaned
+up (for example the ghost-player cleanup on load), leaving no orphan control.
+
+The control mode is now the authoritative admission rule as well.
+`submission_block(instance, uid)` decides whether a human may submit an ordinary
+action: an `ai` seat returns `PLAYER_AI_CONTROLLED`, an `unclaimed` seat returns
+`PLAYER_UNCLAIMED`, and the shared `turns.submit_action` service (used by the
+Web endpoint and by SSE) answers 409 for both. It only refuses a human acting
+for that seat; it does not change when the server AI acts on its own (see the
+hosted-action paragraphs below).
+
+The multiplayer ready barrier counts humans only: `active_human_players` is
+alive, present and `control.mode == human`, and `all_alive_ready()` plus the
+ready / waiting sets of `multiplayer_status()` are computed from it, so AI-hosted
+and unclaimed seats never block the round; they are reported separately as
+`ai_players` / `unclaimed_players` with their counts. An away human still does
+not block, and `active_alive_players` keeps its previous meaning for call sites
+such as the Luck timeout that only need a head count.
+
+Claim transitions go through the same authority: `claim_seat` is the canonical
+entry point for joining an existing seat in the Web path, turning `ai` /
+`unclaimed` into `human` without moving anything (character sheet, HP, equipment,
+spells, world position and combat actor all stay put), and it fails closed with
+`CONTROL_STALE` on a stale `expected_revision` and with `CONTROL_NOT_CLAIMABLE`
+on a seat that is already human-controlled. A brand-new seat is still born
+`human` via `put_player`. `control_change_block` names the safe boundary for a
+control change: `""` only while the table is in `ACTIVE_ACTION` with no round in
+flight, otherwise `CONTROL_CHANGE_BUSY`.
+
+In ordinary exploration rounds an `ai` seat declares its action through
+`src/commands/ai_player.py`. The gate is `GameInstance.human_actions_ready()`
+(the human side is complete -- deliberately a different question from
+`should_advance()`), and it is invoked exactly once at the single advance entry
+point, in `turns.submit_action` after the human gate and before `try_advance()`.
+One plain-text call per seat, sequentially in uid order, so a seat sees only its
+own character sheet, the player-safe public context and the actions already
+declared this round -- never GM-only world facts, `gm_directives`, another
+player's `private_log`, future plot, or an extra lorebook channel. The output is
+ordinary action prose with no DC, modifier or success flag; it is appended
+through `add_action`, the same canonical entry point humans use, and the existing
+Check Planner and WorldState legality decide the rest. The action carries
+`source` / `control_revision` / `generated_for_round` metadata used for
+de-duplication and debugging only. The run, round, seat and `control.revision`
+are captured before the call and all re-verified with the phase afterwards: any
+change discards the result. Provider errors or unusable output record
+`AI_ACTION_SKIPPED` and never block the round. A seat that already declared an
+action this round (a human acted first, the GM handed the seat over afterwards)
+is never filled again: the pass only fills seats that have not declared yet.
+
+The system prompt explicitly requires **role-playing that character sheet**
+rather than playing the tactically optimal move: identity and background,
+personality, values, goals and motivations, established relationships, personal
+history, the clues the character already knows, private perceptions and its
+current body and resources come first, and when tactical optimality conflicts
+with staying in character the character wins as long as the behaviour is still
+reasonable and legal; inventing a persona, history or relationship that is not on
+the sheet is forbidden. The character sheet remains the single source of who the
+character is: no second store such as `ai_persona` is introduced, and the
+visibility channels are unchanged (own sheet, public story, own private
+perceptions, knowledge explicitly visible to that character).
+
+A control change is itself a wake-up call: once `human -> ai` has been written,
+`GameControlService.set_player_control` (and an `ai_takeover` away) calls
+`turns.resume_after_control_change`, which only asks whether the phase can move
+on and whether the human gate is satisfied and then invokes the **same** advance
+entry point described above. No human has to submit anything, no empty action is
+ever faked, a still-pending human is still waited for, a repeated `set ai` in the
+same round stays idempotent, and a hosted action written without the round
+advancing is persisted on the spot. `ai -> human` is untouched: the control
+revision race guard still discards an in-flight AI result.
+
+Authoritative combat outside exploration takes a different road. An AI-hosted
+PC's combat turn is submitted as a **structured intent** by
+`next_automatic_intent` under server/GM automation authority, reusing the
+companion's existing deterministic ladder (`_allied_automatic_intent`: heal a
+downed ally, attack the nearest hostile, move toward it, Dodge, End Turn). No
+second combat engine is introduced and no LLM is involved at this stage. When a
+control change hands over the seat that is currently the actor, the single entry
+point is `ruleset_gameplay.resume_authoritative_combat`: it reuses the same
+automatic ladder loop (`advance_automatic_intents` in
+`src/rulesets/automation.py`, which `submit_intent` also uses), advances until a
+human's turn, the end of combat or no automatic intent is left, and persists the
+advance together with the control record. When the current actor is somebody
+else, not a single byte of state changes -- no actor is ever seized. A failure
+rolls the whole transaction back and returns a structured
+`AUTOMATIC_TURN_FAILED` error instead of half-committing. The one
+real difference from a companion is 0 HP: a companion makes no death save, but a
+player character must, or combat would stall on that seat. Intents still travel
+validate / resolve / apply on the same authoritative chain and obey the same
+action economy (action / attacks_remaining / movement), reading only that seat's
+own character sheet; a candidate that is not legal in the current state falls
+back to a legal `end_turn`, so a hosted seat's turn always terminates. Validation
+is tightened in step: a `player:` actor may only be submitted by `gm_uid` while
+the seat really is `ai`-hosted, otherwise "a player can submit intents only for
+their own character" still holds, so a human can neither play an AI seat by hand
+nor control it manually. A `human` or `unclaimed` seat never yields an automatic
+intent.
+
+The room and the table can now *express* who plays a seat. At creation each
+character card chooses "I control it / wait for a player to claim it / AI hosted",
+with a room-level default for unclaimed cards that a per-card choice overrides;
+when neither is given the legacy behaviour stands (every seat `human`), and an
+unknown mode fails closed at creation (`INVALID_PLAYER_CONTROL`) instead of
+quietly building a default seat. The roster shows four badges: human, AI hosted,
+unclaimed, and temporarily AI hosted.
+
+What "away" means is a room setting, `away_control_policy`, defaulting to
+`pause`: stepping away changes presence only and **never** hands the character to
+the AI. Under `ai_takeover`, stepping away hands the seat to the server AI in its
+*temporary* shape (`{mode: ai, temporary: true, resume_mode: human}`) and coming
+back returns it, clearing `temporary` / `resume_mode`; temporary hosting is still
+returnable after a restart and never becomes permanent. The GM also has "set to
+AI / stop AI hosting", which changes only the control record -- it does not copy
+the character, touch the Web identity or Bot mapping, reset ready state, reset HP,
+or rebuild the combat actor. Every control change only happens at a safe boundary
+(`ACTIVE_ACTION` with no round in flight), otherwise the caller gets the retryable
+`CONTROL_CHANGE_BUSY`. A disconnect **never** triggers takeover: only an explicit
+GM action, an explicit player away, or an explicit room setting can. The setting
+is persisted, so the instance schema moves **14 → 15**: every older save becomes
+`pause`, which is what it actually did, and a corrupt value degrades to `pause` too.
+
+The chat (Bot) entry point is equivalent to the Web one: `host Character Name` /
+`unhost Character Name` let the GM change a seat's controller from the group, over
+the same server-side control API -- the bridge holds no control state of its own
+and there is no second authority. These are a different contract from
+`away` / `back` (which change presence, not the controller), and they require the
+GM or an authorized account; the target must match exactly one roster character,
+otherwise the bot lists what is available instead of guessing. When the server
+answers `CONTROL_CHANGE_BUSY`, the group gets a friendly "retry after this round"
+notice rather than a raw failure.
 
 ## D&D 2024 Authoritative Play State
 

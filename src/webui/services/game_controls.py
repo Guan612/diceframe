@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -9,7 +10,16 @@ from src.engine.checks import build_check_request, roll_check_request
 from src.engine.dice import d20_critical_thresholds, roll
 from src.engine.game_instance import GameState
 from src.engine.health import mark_health_event
+from src.engine.player_control import (
+    PlayerControlError,
+    away_control_policy,
+    control_mode,
+    get_control,
+    set_away_control_policy,
+)
 from src.rules.rule_system import RuleSystem
+
+logger = logging.getLogger("trpg")
 
 GameKey = tuple[str, ...]
 
@@ -20,6 +30,12 @@ class GameControlDependencies:
     get_instance: Callable[[GameKey], Any | None]
     save_instance: Callable[[Any], Awaitable[None]]
     load_rule: Callable[[Any], RuleSystem | None]
+    # 控制权写入成功之后的即时接管（src/webui/services/turns.py）：席位刚变成
+    # AI，如果当前已经具备推进条件就立刻继续，不必等真人再发一句话。
+    # None 表示该运行时没有配置这条能力（行为与以前一致）。
+    resume_after_control_change: (
+        Callable[[str, str], Awaitable[dict[str, Any]]] | None
+    ) = None
 
 
 class GameControlService:
@@ -33,6 +49,34 @@ class GameControlService:
             self._dependencies.parse_game_key(game_key)
         )
 
+    async def _resume_after_control_change(
+        self, game_key: str, user_id: str,
+    ) -> dict[str, Any] | None:
+        """控制权已经落盘后，立即唤醒现有推进边界；失败不改变控制权结果。
+
+        控制权本身已经写入并保存，所以即时接管的任何失败都不能把这次切换
+        报成失败——那会让 GM 以为切换没生效而重复操作。失败只记录并作为
+        ``resume`` 字段回传，UI 因此能看到"仍未推进"而不是伪造成功。
+
+        ``resume_after_control_change`` 与其它回合入口一样返回应用服务的
+        ``TurnResult``；这里只把它的 payload 摊平进响应，让 route / 前端拿到的是
+        一个可读的结果对象（``resumed`` / ``reason`` / ``advanced`` / ``narration``），
+        而不是内部的 ``{payload, status}`` 信封。控制权切换本身的状态码不变。
+        """
+        resume = self._dependencies.resume_after_control_change
+        if resume is None:
+            return None
+        fallback = {"ok": False, "resumed": False, "error_code": "RESUME_FAILED"}
+        try:
+            outcome = await resume(game_key, user_id)
+        except Exception:
+            logger.exception(
+                "控制权变更后的即时接管失败: game=%s uid=%s", game_key, user_id,
+            )
+            return fallback
+        payload = outcome.get("payload") if isinstance(outcome, dict) else None
+        return payload if isinstance(payload, dict) else fallback
+
     async def set_player_away(
         self, game_key: str, user_id: str, away: bool,
     ) -> dict[str, Any]:
@@ -41,11 +85,22 @@ class GameControlService:
             return {"ok": False, "error": "游戏不存在"}
         if user_id not in instance.players:
             return {"ok": False, "error": "玩家不存在"}
-        ok = await instance.set_player_away(user_id, away)
-        if not ok:
-            return {"ok": False, "error": "无法切换该玩家状态"}
+        # 暂离是否把角色交给服务器 AI，由房间设置决定；默认 pause 保持旧行为。
+        # 安全边界复核、在场状态与控制权转换由聚合在**一个** transaction 内完成，
+        # 因此外部永远观察不到「已暂离但仍由真人控制」这种没人负责的中间态。
+        code = await instance.apply_away_transition(
+            user_id, away, policy=away_control_policy(instance),
+        )
+        if code:
+            return {
+                "ok": False,
+                "error_code": code,
+                "error": {
+                    "UNKNOWN_PLAYER": "无法切换该玩家状态",
+                }.get(code, "正在推进剧情，请等待本轮结束后再切换暂离状态"),
+            }
         await self._dependencies.save_instance(instance)
-        return {
+        result = {
             "ok": True,
             "user_id": user_id,
             "character_name": (
@@ -53,8 +108,84 @@ class GameControlService:
                 or user_id
             ),
             "away": bool(away),
+            "control": get_control(instance, user_id),
             "multiplayer": instance.multiplayer_status(),
         }
+        # 暂离把席位交给 AI（ai_takeover）同样是一次 human→ai：如果此刻已经
+        # 具备推进条件，服务器立即接手，而不是等下一次真人提交。"回来"不会触发
+        # 接管（它只会把席位还给真人），所以这里同时要求 ``away``。
+        if away and control_mode(instance, user_id) == "ai":
+            resume = await self._resume_after_control_change(game_key, user_id)
+            if resume is not None:
+                result["resume"] = resume
+                result["multiplayer"] = instance.multiplayer_status()
+        return result
+
+    async def set_player_control(
+        self, game_key: str, user_id: str, mode: str,
+    ) -> dict[str, Any]:
+        """GM 托管控件：把席位交给 AI，或停止 AI 托管交回真人。
+
+        只改 Control Contract：不复制角色、不动 Web 身份 / Bot 绑定、不重置
+        ready、不重置 HP、不重建战斗 actor。安全边界复核与写入由聚合在同一
+        transaction 内完成。写入成功后，如果席位此刻由 AI 负责，就立刻唤醒现有
+        推进边界（探索补行动 / 权威战斗自动回合），不需要真人再提交一次。
+        """
+
+        instance = self._instance(game_key)
+        if not instance:
+            return {"ok": False, "error": "游戏不存在"}
+        if user_id not in instance.players:
+            return {"ok": False, "error": "玩家不存在"}
+        if mode not in ("ai", "human"):
+            return {
+                "ok": False,
+                "error_code": "CONTROL_MODE_UNSUPPORTED",
+                "error": "只能设为 AI 托管或交回真人",
+            }
+        code = await instance.apply_player_control_change(user_id, mode)
+        if code:
+            return {
+                "ok": False,
+                "error_code": code,
+                "error": {
+                    "UNKNOWN_PLAYER": "玩家不存在",
+                    "CONTROL_REJECTED": "该角色无法切换托管状态",
+                }.get(code, "正在推进剧情，请等待本轮结束后再切换托管状态"),
+            }
+        await self._dependencies.save_instance(instance)
+        result = {
+            "ok": True,
+            "user_id": user_id,
+            "mode": control_mode(instance, user_id),
+            "control": get_control(instance, user_id),
+            "multiplayer": instance.multiplayer_status(),
+        }
+        if control_mode(instance, user_id) == "ai":
+            resume = await self._resume_after_control_change(game_key, user_id)
+            if resume is not None:
+                result["resume"] = resume
+                result["multiplayer"] = instance.multiplayer_status()
+        return result
+
+    async def set_away_control_policy(
+        self, game_key: str, policy: str,
+    ) -> dict[str, Any]:
+        """房间设置：暂离语义 pause（默认）/ ai_takeover。"""
+
+        instance = self._instance(game_key)
+        if not instance:
+            return {"ok": False, "error": "游戏不存在"}
+        try:
+            value = set_away_control_policy(instance, policy)
+        except PlayerControlError:
+            return {
+                "ok": False,
+                "error_code": "AWAY_POLICY_UNSUPPORTED",
+                "error": f"未知的暂离策略：{policy!r}",
+            }
+        await self._dependencies.save_instance(instance)
+        return {"ok": True, "away_control_policy": value}
 
     async def set_player_access(
         self, game_key: str, open_access: bool,

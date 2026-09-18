@@ -4,13 +4,13 @@ import { NButton, NIcon, NModal } from 'naive-ui'
 import { HelpCircleOutline } from '@vicons/ionicons5'
 import { useLocale } from '@/composables/useLocale'
 
-defineProps<{ title: string; buttonLabel?: string }>()
+const props = defineProps<{ title: string; buttonLabel?: string; compact?: boolean }>()
 const { t } = useLocale()
 const show = ref(false)
 </script>
 
 <template>
-  <NButton size="small" secondary class="help-btn" @click="show = true">
+  <NButton size="small" secondary class="help-btn" :class="{ compact: props.compact }" :title="title" :aria-label="title" @click="show = true">
     <template #icon>
       <NIcon :component="HelpCircleOutline" />
     </template>
@@ -25,6 +25,7 @@ const show = ref(false)
 
 <style scoped>
 .help-btn{min-height:30px;font-size:12px;font-weight:650;color:var(--df-interactive-strong)}
+.help-btn.compact{min-height:20px;min-width:20px;padding:0 4px;margin-left:4px;border-radius:50%;font-size:12px;line-height:1;vertical-align:middle}
 .help-btn :deep(.n-button__icon){font-size:16px}
 .help-tutorial h4{margin:14px 0 4px}
 .help-tutorial h4:first-child{margin-top:0}

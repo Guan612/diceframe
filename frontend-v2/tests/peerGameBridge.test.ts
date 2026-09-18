@@ -120,6 +120,23 @@ describe('peer host game bridge', () => {
     )
     const luckBody = JSON.parse(String(calls[3].init?.body))
     expect(luckBody).toEqual({ spend: true })
+
+    // 职业特性能力 intent：只放行 capability id 与目标，伪造的成本字段被剥离，
+    // 与 Web 端一样仍由服务端 capability 声明决定实际消耗。
+    await bridge.handle('p_abcdefghijk', 'ruleset.intent', {
+      intent_id: 'intent-monk-1', type: 'class_capability', expected_version: 4,
+      actor_id: 'player:someone', target_id: 'enemy:goblin',
+      capability_id: 'flurry_of_blows', costs: [], focus_points: 99,
+    })
+    const capabilityCall = calls[calls.length - 1]
+    expect(capabilityCall.path).toBe(
+      '/games/web%7Cgame%7Chost/intents?user=player_123&share=1&delegate=1',
+    )
+    expect(JSON.parse(String(capabilityCall.init?.body))).toEqual({
+      intent_id: 'intent-monk-1', type: 'class_capability', expected_version: 4,
+      actor_id: 'player:someone', target_id: 'enemy:goblin',
+      capability_id: 'flurry_of_blows',
+    })
   })
 
   it('forwards the canonical professional character for authoritative host validation', async () => {

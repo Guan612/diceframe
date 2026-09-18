@@ -344,6 +344,13 @@ class WebAPI:
                 get_instance=self._reg.get,
                 save_instance=self._reg.save,
                 load_rule=self._load_rule_for_game,
+                # 延迟到调用时解析：回合依赖在下面才创建，而且这里只做组合，
+                # 不把 WebAPI 自己变成 service locator。
+                resume_after_control_change=lambda game_key, seat_uid: (
+                    turns.resume_after_control_change(
+                        self._turn_dependencies, game_key, seat_uid=seat_uid,
+                    )
+                ),
             )
         )
         self._manual_rolls = manual_rolls.ManualRollService(manual_rolls.ManualRollDependencies(_parse_game_key, self._reg.get, self._reg.save, self._load_rule_for_game))
@@ -498,6 +505,14 @@ class WebAPI:
             ),
             prepare_round_checks=getattr(
                 self._handler, "prepare_round_checks", None,
+            ),
+            fill_ai_player_actions=getattr(
+                self._handler, "fill_ai_player_actions", None,
+            ),
+            resume_authoritative_combat=lambda game_key, seat_uid: (
+                ruleset_gameplay.resume_authoritative_combat(
+                    self._ruleset_gameplay_dependencies, game_key, seat_uid,
+                )
             ),
             resolve_pending_dice=self.resolve_pending_dice_for_game,
             roll_for_game=self.roll_for_game,
@@ -1232,6 +1247,12 @@ class WebAPI:
     async def set_player_away(self, game_key: str, user_id: str, away: bool) -> dict[str, Any]:
         return await self._game_controls.set_player_away(game_key, user_id, away)
 
+    async def set_player_control(self, game_key: str, user_id: str, mode: str) -> dict[str, Any]:
+        return await self._game_controls.set_player_control(game_key, user_id, mode)
+
+    async def set_away_control_policy(self, game_key: str, policy: str) -> dict[str, Any]:
+        return await self._game_controls.set_away_control_policy(game_key, policy)
+
     async def set_player_access(self, game_key: str, open_access: bool) -> dict[str, Any]:
         return await self._game_controls.set_player_access(game_key, open_access)
 
@@ -1742,15 +1763,28 @@ class WebAPI:
     def image_generation_status(self) -> dict[str, Any]:
         return self._generated_images.public_config()
 
+    async def optimize_image_prompt(self, **request: Any) -> dict[str, Any]:
+        return await self._generated_images.optimize_prompt(**request)
+
+    def storyboard_draft(self, game_key: str, user_id: str, round_number: int = 0) -> dict[str, Any]:
+        return self._generated_images.storyboard_draft(game_key, user_id, round_number)
+
+    async def analyze_storyboard(self, game_key: str, user_id: str, round_number: int = 0, panel_count: int | None = None) -> dict[str, Any]:
+        return await self._generated_images.analyze_storyboard(game_key, user_id, round_number, panel_count)
+
+    def preview_image_prompt(self, game_key: str, user_id: str, prompt: str, panels: Any = None) -> dict[str, Any]:
+        return self._generated_images.preview_prompt(game_key, user_id, prompt, panels)
+
     async def generate_generated_image(self, **request: Any) -> dict[str, Any]:
         return await self._generated_images.generate_image(**request)
 
     async def generate_current_round_image(
         self, game_key: str, user_id: str, prompt: str, round_number: int,
         panels: Any = None, use_avatar_references: bool = False,
+        panel_count: int | None = None,
     ) -> dict[str, Any]:
         return await self._generated_images.generate_current_round(
-            game_key, user_id, prompt, round_number, panels, use_avatar_references,
+            game_key, user_id, prompt, round_number, panels, use_avatar_references, panel_count,
         )
 
     def list_game_generated_images(
@@ -2059,7 +2093,8 @@ class WebAPI:
                            narrative_perspective: str = "auto",
                            gm_style_override: dict[str, Any] | None = None,
                            advancement_mode: str = "milestone",
-                           advancement_authority: str = "ai_gm") -> dict[str, Any]:
+                           advancement_authority: str = "ai_gm",
+                           unclaimed_control_default: str = "") -> dict[str, Any]:
         return await self._game_lifecycle.create_game(
             world_id=world_id, game_name=game_name, group_name=group_name,
             rule_id=rule_id, solo=solo, lorebook_world_id=lorebook_world_id,
@@ -2075,6 +2110,7 @@ class WebAPI:
             gm_style_override=gm_style_override,
             advancement_mode=advancement_mode,
             advancement_authority=advancement_authority,
+            unclaimed_control_default=unclaimed_control_default,
         )
 
     # ---- 重开引用码 ----

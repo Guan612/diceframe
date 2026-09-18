@@ -735,7 +735,9 @@ watch(section, () => {
   sc?.scrollTo({ top: 0 })
 })
 watch(section, value => {
-  if (value === 'access') void loadLoginHistory()
+  if (value === 'access') {
+    void loadLoginHistory()
+  }
   if (value === 'security') void loadSecurityStatus()
 })
 

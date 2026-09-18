@@ -18,6 +18,7 @@ from src.engine.checks import (
     find_action_opponent,
     is_explicit_attack_action,
     is_non_combat_declaration,
+    matched_action_phrases,
 )
 from src.engine.character_utils import is_conscious
 from src.engine.currency import legacy_currency_spec, parse_currency_amount
@@ -26,6 +27,13 @@ from src.engine.dice import d20_dc_cap
 from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.engine.world_events import MAX_ADVANCE_MINUTES
+from src.engine.world_legality import (
+    MAX_ROUTE_HOPS,
+    MAX_WORLD_REQUIREMENTS,
+    REQUIREMENT_KINDS,
+)
+from src.engine.world_state import project_visible_state
 from src.llm.parser import sanitize_narration
 from src.llm.tools import DICE_CHECKS_TOOL, DICE_CHECKS_TOOL_NAME
 from src.rules.rule_system import RuleSystem
@@ -33,6 +41,12 @@ from src.rules.rule_system import RuleSystem
 logger = logging.getLogger("trpg")
 
 _SAFETY_CHECK_INTENTS = {"combat", "athletics", "stealth"}
+# Safety Net 只判断「行动者本人当前的动作」：冒号与引号之后是转述/引用内容
+# （第三方言行、过去事件），不是本轮动作。这里不做完整 NLP——只切掉明确
+# 属于转述的尾巴，宁可保守。
+_REPORTED_CONTENT_MARKERS = ("：", ":", "“", "”", "「", "」", "\"")
+# 行动者本人作主语的标记；角色名与「我」等价。
+_ACTOR_SELF_MARKERS = ("我", "自己", "本人", "i", "me", "my", "myself", "we", "our")
 _CONCEALED_OR_HAZARDOUS_WORDS = (
     "暗门", "暗室", "隐藏", "秘密", "危险", "异常", "诡异", "未知",
     "残留", "血迹", "毒", "陷阱", "追赶", "袭击",
@@ -463,6 +477,18 @@ def _planner_context(instance: GameInstance, rule: RuleSystem | None) -> str:
         ],
         "recent_purchases": _recent_purchases(instance),
     }
+    # 权威世界真相（Issue #284）：只给模型 canonical 事实与取值，让它能用稳定的
+    # 地点 id 提出 world_requirements；玩家可见投影走 project_visible_state。
+    visible_world = project_visible_state(instance, viewer_is_gm=True)
+    if visible_world["facts"]:
+        payload["world_state"] = {
+            "revision": visible_world["revision"],
+            "clock": visible_world["clock"],
+            "facts": {
+                key: fact.get("value")
+                for key, fact in visible_world["facts"].items()
+            },
+        }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -777,6 +803,94 @@ def normalize_check_specs(
     return planned, errors
 
 
+def _safety_net_action_scope(text: object) -> str:
+    """行动者本人可能作主语的那部分文本（切掉转述/引用内容）。"""
+    source = str(text or "")
+    cut = len(source)
+    for marker in _REPORTED_CONTENT_MARKERS:
+        index = source.find(marker)
+        if 0 <= index < cut:
+            cut = index
+    return source[:cut]
+
+
+def _safety_net_subjects(
+    instance: GameInstance, uid: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(行动者本人标记, 其他已知参与者名)。只认权威状态里的参与者。"""
+    player = instance.players.get(uid) or {}
+    self_markers = list(_ACTOR_SELF_MARKERS)
+    actor_name = str(player.get("character_name") or "").strip()
+    if actor_name:
+        self_markers.append(actor_name)
+    foreign: set[str] = set()
+    for other_id, other in instance.players.items():
+        if other_id == uid:
+            continue
+        for value in (other_id, (other or {}).get("character_name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    for companion_id, companion in _companion_roster(instance).items():
+        for value in (companion_id, companion.get("name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    for npc_id, npc in (getattr(instance, "npcs", None) or {}).items():
+        if not isinstance(npc, dict):
+            continue
+        for value in (npc_id, npc.get("name"), npc.get("character_name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    for enemy in getattr(instance, "combat_enemies", None) or []:
+        if not isinstance(enemy, dict):
+            continue
+        for value in (enemy.get("name"), enemy.get("character_name")):
+            if str(value or "").strip():
+                foreign.add(str(value).strip())
+    # 长名优先，避免「阿」这类短名先命中。
+    return tuple(self_markers), tuple(sorted(foreign, key=len, reverse=True))
+
+
+def _nearest_subject_is_foreign(
+    prefix: str, self_markers: tuple[str, ...], foreign_names: tuple[str, ...],
+) -> bool:
+    """短语之前最近出现的主语是不是别人（没有主语时按行动者本人处理）。"""
+    lowered = prefix.casefold()
+    best_self = max(
+        (lowered.rfind(marker.casefold()) for marker in self_markers), default=-1,
+    )
+    best_foreign = -1
+    for name in foreign_names:
+        index = lowered.rfind(name.casefold())
+        if index >= 0:
+            best_foreign = max(best_foreign, index)
+    return best_foreign >= 0 and best_foreign > best_self
+
+
+def _safety_net_action_confirmed(
+    instance: GameInstance, uid: str, text: object, rule: RuleSystem | None, intent: str,
+) -> bool:
+    """Safety Net 是否可以为该意图补检定。
+
+    需要同时满足：命中具体动作短语（而不是裸动词），且这句话的主语是行动者
+    本人当前的动作。明确攻击仍由既有攻击关键词兜底，不受短语规则影响。
+    """
+    if intent == "combat" and is_explicit_attack_action(text):
+        return True
+    scope = _safety_net_action_scope(text)
+    if not scope:
+        return False
+    self_markers, foreign_names = _safety_net_subjects(instance, uid)
+    for phrase in matched_action_phrases(rule, intent, scope, instance.language):
+        found = re.search(re.escape(phrase), scope, flags=re.IGNORECASE)
+        if found is None:
+            continue
+        if not _nearest_subject_is_foreign(
+            scope[:found.start()], self_markers, foreign_names,
+        ):
+            return True
+    return False
+
+
 def _merge_safety_net_checks(
     instance: GameInstance,
     rule: RuleSystem | None,
@@ -827,7 +941,9 @@ def _merge_safety_net_checks(
             intent in {"investigate", "perception"}
             and any(word in text for word in _CONCEALED_OR_HAZARDOUS_WORDS)
         )
-        safety_intent = intent in _SAFETY_CHECK_INTENTS
+        safety_intent = intent in _SAFETY_CHECK_INTENTS and _safety_net_action_confirmed(
+            instance, uid, action.get("text"), rule, intent,
+        )
         if intent == "combat" and _is_non_combat_declaration(action.get("text")):
             safety_intent = False
         if not (
@@ -1082,6 +1198,8 @@ async def plan_round_checks(
     raw_checks: list[Any] = []
     raw_economy_actions: list[Any] = []
     overreach_notes: list[dict[str, str]] = []
+    world_requirements: list[dict[str, Any]] = []
+    world_time_advance: dict[str, Any] | None = None
     for call in response.tool_calls:
         if str(call.get("name") or "") != DICE_CHECKS_TOOL_NAME:
             continue
@@ -1109,6 +1227,60 @@ async def plan_round_checks(
                         overreach_notes.append({"player": uid, "reason": reason})
         except Exception:
             logger.warning("overreach 标注解析失败，已忽略 (round=%d)", instance.round_number, exc_info=True)
+        # world_requirements 与 checks/overreach 独立解析：畸形/缺失只影响世界
+        # 合法性判定本身，绝不波及检定规划。这里只做形状与花名册校验；「是否真的
+        # 与世界真相矛盾」由 server 侧 world_legality 判定。
+        try:
+            raw_requirements = arguments.get("world_requirements")
+            if isinstance(raw_requirements, list):
+                for item in raw_requirements[:MAX_WORLD_REQUIREMENTS]:
+                    if len(world_requirements) >= MAX_WORLD_REQUIREMENTS:
+                        break
+                    if not isinstance(item, dict):
+                        continue
+                    uid = _match_player(instance, item.get("player"))
+                    kind = str(item.get("kind") or "act").strip()
+                    location = str(item.get("location") or "").strip()[:120]
+                    if not uid or not location or kind not in REQUIREMENT_KINDS:
+                        continue
+                    requirement: dict[str, Any] = {
+                        "player": uid, "kind": kind, "location": location,
+                    }
+                    raw_via = item.get("via")
+                    if isinstance(raw_via, list):
+                        via = [
+                            str(hop).strip()[:120]
+                            for hop in raw_via[:MAX_ROUTE_HOPS]
+                            if isinstance(hop, str) and str(hop).strip()
+                        ]
+                        if via:
+                            requirement["via"] = list(dict.fromkeys(via))
+                    world_requirements.append(requirement)
+        except Exception:
+            logger.warning(
+                "world_requirements 解析失败，已忽略 (round=%d)",
+                instance.round_number, exc_info=True,
+            )
+        # world_time_advance 与 checks 独立解析：只报告本轮确实经过的逻辑时间，
+        # 由 server 推进世界时钟并结算到期事件。
+        try:
+            raw_time = arguments.get("world_time_advance")
+            if isinstance(raw_time, dict):
+                raw_minutes = raw_time.get("minutes")
+                if (
+                    isinstance(raw_minutes, int) and not isinstance(raw_minutes, bool)
+                    and 0 < raw_minutes <= MAX_ADVANCE_MINUTES
+                ):
+                    advance = {"minutes": raw_minutes}
+                    note = str(raw_time.get("reason") or "").strip()[:160]
+                    if note:
+                        advance["reason"] = note
+                    world_time_advance = advance
+        except Exception:
+            logger.warning(
+                "world_time_advance 解析失败，已忽略 (round=%d)",
+                instance.round_number, exc_info=True,
+            )
     planned, errors = normalize_check_specs(instance, rule, raw_checks)
     planned = _merge_safety_net_checks(instance, rule, planned)
     planned = _apply_explicit_advantage_modes(rule, planned)
@@ -1123,6 +1295,11 @@ async def plan_round_checks(
         "total_tokens": response.total_tokens,
         "errors": errors + economy_errors,
         "overreach": overreach_notes,
+        # 结构化世界要求（模型提议）：由 server 侧 world_legality 与权威世界真相
+        # 对照后才决定阻断或写入移动。
+        "world_requirements": world_requirements,
+        # 本轮经过的逻辑时间（模型提议，server 推进并结算到期事件）。
+        "world_time_advance": world_time_advance,
         # 由调用方在过时检查通过后落库；这里不直接改动经济状态，
         # 否则创建提案推进的 revision 会让本轮规划被误判为过期。
         "economy_offers": economy_offers,

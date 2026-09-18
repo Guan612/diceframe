@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.engine.game_state_contracts import GamePersistedState
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.player_control import away_control_policy, normalize_away_control_policy
 from src.migrations.instance import normalize_game_state_payload
 
 if TYPE_CHECKING:
@@ -55,6 +56,7 @@ class GameStateCodec:
             "log": instance.log[-100:],
             "summary": instance.summary,
             "key_facts": instance.key_facts,
+            "world_state": instance.world_state,
             "total_llm_calls": instance.total_llm_calls,
             "total_tokens": instance.total_tokens,
             "started_at": instance.started_at,
@@ -78,6 +80,7 @@ class GameStateCodec:
             "max_players": instance.max_players,
             "gm_uid": instance.gm_uid,
             "player_access_open": instance.player_access_open,
+            "away_control_policy": away_control_policy(instance),
             "bot_bind_token": instance.bot_bind_token,
             "room_password": instance.room_password,
             "room_token": instance.room_token,
@@ -90,6 +93,8 @@ class GameStateCodec:
             "last_checks": instance.last_checks,
             "manual_roll_requests": instance.manual_roll_requests,
             "last_overreach": instance.last_overreach,
+            "last_world_legality": instance.last_world_legality,
+            "last_world_events": instance.last_world_events,
             "round_checks_prepared": instance.round_checks_prepared,
             "round_start_snapshot": instance.round_start_snapshot,
             "round_entity_snapshot": instance.round_entity_snapshot,
@@ -169,6 +174,12 @@ class GameStateCodec:
             log=data.get("log", []),
             summary=data.get("summary", {}),
             key_facts=data.get("key_facts", []),
+            # 旧存档没有这个键：空世界（不是"猜测世界事实"）。
+            world_state=(
+                data.get("world_state")
+                if isinstance(data.get("world_state"), dict)
+                else {}
+            ),
             total_llm_calls=data.get("total_llm_calls", 0),
             total_tokens=data.get("total_tokens", 0),
             started_at=data.get("started_at", ""),
@@ -209,6 +220,9 @@ class GameStateCodec:
             max_players=data.get("max_players", 6),
             gm_uid=data.get("gm_uid", ""),
             player_access_open=data.get("player_access_open", True),
+            away_control_policy=normalize_away_control_policy(
+                data.get("away_control_policy")
+            ),
             bot_bind_token=data.get("bot_bind_token", ""),
             room_password=data.get("room_password", ""),
             room_token=data.get("room_token", ""),
@@ -221,6 +235,8 @@ class GameStateCodec:
             last_checks=data.get("last_checks") or [],
             manual_roll_requests=data.get("manual_roll_requests") or [],
             last_overreach=data.get("last_overreach") or [],
+            last_world_legality=data.get("last_world_legality") or [],
+            last_world_events=data.get("last_world_events") or [],
             round_checks_prepared=bool(data.get("round_checks_prepared", False)),
             round_start_snapshot=data.get("round_start_snapshot") or {},
             # 旧存档没有这个键：默认空快照，回滚时退化为按目标核对战斗缓存。

@@ -15,6 +15,12 @@ class RestError(ValueError):
     """Raised when a rest cannot legally be completed."""
 
 
+# 升级时 current 如何随新的 maximum 调整。默认值必须保持既有语义（见
+# ``sync_resources``）：任何没有显式声明的职业资源都继续沿用旧行为。
+RESIZE_POLICIES = ("preserve_spent", "preserve_current")
+DEFAULT_RESIZE_POLICY = "preserve_spent"
+
+
 def _canonical(payload: dict[str, Any]) -> dict[str, Any]:
     nested = payload.get("ruleset_character")
     return nested if isinstance(nested, dict) else payload
@@ -53,6 +59,11 @@ class Dnd2024RestEngine:
                 }
                 if len(maximum_fields) != 1:
                     raise RestError(f"class_resources.{class_id}.{resource_id} needs one maximum")
+                resize_policy = spec.get("resize_policy", DEFAULT_RESIZE_POLICY)
+                if resize_policy not in RESIZE_POLICIES:
+                    raise RestError(
+                        f"class_resources.{class_id}.{resource_id} has an unknown resize policy"
+                    )
                 if not str(spec.get("source_ref") or "").startswith("srd-5.2.1:"):
                     raise RestError(f"class_resources.{class_id}.{resource_id} source is invalid")
         spell_slots = rules.get("spell_slots")
@@ -61,7 +72,21 @@ class Dnd2024RestEngine:
         self.rules = rules
 
     def sync_resources(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Add or resize class resources without silently refilling spent uses."""
+        """Add or resize class resources without silently refilling spent uses.
+
+        How ``current`` follows a changed ``maximum`` is a declarative,
+        per-resource policy (``resize_policy``), so a class can state its own
+        semantics without any code branching on a class or resource id:
+
+        * ``preserve_spent`` (the default, and today's behaviour for every
+          resource that does not opt in): keep the number of *spent* uses, i.e.
+          ``current`` grows together with the maximum;
+        * ``preserve_current``: keep a legal ``current`` and clamp it to the new
+          maximum, so advancing never hands out free uses.
+
+        A resource that does not exist yet is always created full: the grant is
+        the first time the character receives it.
+        """
 
         character = deepcopy(_canonical(payload))
         class_ref, class_id, level = self._class_state(character)
@@ -84,7 +109,12 @@ class Dnd2024RestEngine:
             previous = previous if isinstance(previous, dict) else {}
             previous_maximum = int(previous.get("maximum", 0) or 0)
             previous_current = int(previous.get("current", previous_maximum) or 0)
-            current = min(maximum, max(0, previous_current + max(0, maximum - previous_maximum)))
+            if not previous:
+                current = maximum
+            elif spec.get("resize_policy", DEFAULT_RESIZE_POLICY) == "preserve_current":
+                current = min(maximum, max(0, previous_current))
+            else:
+                current = min(maximum, max(0, previous_current + max(0, maximum - previous_maximum)))
             class_state[spec["id"]] = {
                 "current": current,
                 "maximum": maximum,

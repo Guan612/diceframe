@@ -24,6 +24,13 @@ import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadSceneImage } from '@/api/sceneImages'
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
 import { isLlmConfigReady } from '@/utils/modelConfiguration'
+import {
+  CARD_CONTROL_MODES,
+  defaultCardControl,
+  removeCardControl,
+  syncCardControls,
+  type CardControlMode,
+} from '@/features/create/cardControl'
 
 interface CreateCharacter extends CharacterSheet { character_name: string }
 type CreateMode = 'template' | 'custom' | 'ai'
@@ -176,6 +183,21 @@ function stepTitle(value: number): string { return t(stepTitleKeys[value - 1] ||
 function ensureCharacter(value: CharacterSheet): CreateCharacter {
   return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE)) }
 }
+
+// 每张角色卡由谁负责：控制方式在「角色」步骤直接选，确认页只做摘要。
+// 默认第一张是「真人」、其余「等待认领」——与既有产品默认一致，但以明确的值呈现。
+const cardControl = ref<CardControlMode[]>(['human'])
+function controlLabel(mode: string): string {
+  if (mode === 'ai') return t('controlAi')
+  if (mode === 'unclaimed') return t('controlUnclaimed')
+  return t('controlHuman')
+}
+// 任何进入 characters[] 的路径（手动创建 / 角色卡选择器 / 导入 / 专业建卡）都会
+// 经过这里补齐控制方式，不会出现「导入的角色没有控制方式」。
+watch(() => characters.value.length, (length) => {
+  const next = syncCardControls(length, cardControl.value)
+  if (next.length !== cardControl.value.length || next.some((v, i) => v !== cardControl.value[i])) cardControl.value = next
+}, { immediate: true })
 
 function legacyCharacterFromCard(card: CharacterCard): CreateCharacter {
   return ensureCharacter({
@@ -434,6 +456,9 @@ function onImportDfCard(e: Event) {
 function removeCharacter(idx: number) {
   if (characters.value.length <= 1) { toast.error(t('atLeastOneCharacter')); return }
   characters.value.splice(idx, 1)
+  // 控制方式与角色按 index 平行保存，必须一起删；否则后面的角色会继承被删角色的
+  // control（删掉 A(human) 之后 B 会变成 human，而它原本是 ai）。
+  cardControl.value = removeCardControl(cardControl.value, idx)
 }
 
 function canNext() {
@@ -483,7 +508,13 @@ async function create() {
   busy.value = true; error.value = ''
   try {
     requireApiConfiguration()
-    const players = characters.value.map(cloneCharacter)
+    const players = characters.value.map((c, i) => {
+      const card = cloneCharacter(c)
+      // 每张卡在「角色」步骤都有明确的控制方式，创建 payload 直接带上它；
+      // 服务端把它写成 players[uid].control.mode（human / ai / unclaimed），
+      // 前端不自己造 AI 状态，也不修改 control revision。
+      return { ...card, control: cardControl.value[i] ?? defaultCardControl(i) }
+    })
     const selectedSceneImage = sceneImageFile.value ? await uploadSceneImage(sceneImageFile.value) : undefined
     if (seed.value.trim()) {
       const r = await api<GameMutationResponse>('/games/create-from-seed', { method: 'POST', body: JSON.stringify({ seed_code: seed.value.trim(), solo: solo.value, players, language: gameLanguage.value, scene_image: selectedSceneImage, narrative_perspective: narrativePerspective.value }) })
@@ -744,6 +775,12 @@ async function create() {
             <article v-for="(c, i) in characters" :key="i" class="create-character-card">
               <PortraitImage :portrait="c.portrait" :rule-id="activeRule" :seed="c.character_name || String(i)" :name="c.character_name" :size="72" />
               <div><h3>{{ c.character_name || t('unnamed') }}</h3><p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p><small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small></div>
+              <label class="create-character-control">
+                <span>{{ t('controlMode') }}</span>
+                <select v-model="cardControl[i]" :aria-label="t('controlMode')">
+                  <option v-for="mode in CARD_CONTROL_MODES" :key="mode" :value="mode">{{ controlLabel(mode) }}</option>
+                </select>
+              </label>
               <div class="actions"><button @click="openWizard(i)">{{ t('edit') }}</button><button class="danger" @click="removeCharacter(i)">{{ t('remove') }}</button></div>
             </article>
             <button class="create-character-empty" @click="openWizard(null)"><b>＋</b><span>{{ t('newCharacter') }}</span></button>
@@ -762,6 +799,14 @@ async function create() {
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>
           <div class="create-confirm-characters"><span v-for="(c, i) in characters" :key="i">{{ c.character_name }}</span></div>
+          <!-- 确认页只做摘要：每张角色一行「名字 + 最终控制方式」，配置本身在「角色」步骤。 -->
+          <ul class="create-confirm-controls">
+            <li v-for="(c, i) in characters" :key="i">
+              <span>{{ c.character_name || t('unnamed') }}</span>
+              <strong>{{ controlLabel(cardControl[i] ?? defaultCardControl(i)) }}</strong>
+            </li>
+          </ul>
+          <button class="create-confirm-edit" @click="prevStep">{{ t('controlBackToCharacters') }}</button>
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>

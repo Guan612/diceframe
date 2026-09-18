@@ -12,6 +12,7 @@ from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
 from src.knowledge.visibility import PUBLIC_VISIBILITY_MARKERS, visibility_values
 from src.llm.parser import sanitize_narration
+from src.llm.world_prompt import format_world_state_block
 
 logger = logging.getLogger("trpg")
 
@@ -428,6 +429,9 @@ async def build_context(
     history_override: list[dict] | None = None,
     directives_text: str = "",
     overreach_text: str = "",
+    world_state_text: str = "",
+    world_legality_text: str = "",
+    world_events_text: str = "",
     state_view: dict | None = None,
     authoritative_events_text: str = "",
 ) -> str:
@@ -705,6 +709,15 @@ async def build_context(
         parts.append(directives_text.strip())
     if overreach_text:
         parts.append(overreach_text.strip())
+    if world_state_text:
+        parts.append(world_state_text.strip())
+        sec_idx["world_state"] = len(parts) - 1
+    if world_legality_text:
+        parts.append(world_legality_text.strip())
+        sec_idx["world_legality"] = len(parts) - 1
+    if world_events_text:
+        parts.append(world_events_text.strip())
+        sec_idx["world_events"] = len(parts) - 1
     if authoritative_events_text:
         parts.append(authoritative_events_text.strip())
         sec_idx["authoritative_events"] = len(parts) - 1
@@ -913,6 +926,14 @@ async def build_player_safe_context(
             "de": "## Öffentlich bestätigte Punkte",
         }) + "\n" + _truncate(confirmed, budget_confirmed))
         sec_idx["confirmed"] = len(parts) - 1
+
+    # 权威世界真相：玩家视角只投影 public 事实（gm 私有事实绝不会出现在这里）。
+    world_text = format_world_state_block(
+        instance, viewer_is_gm=False, viewer_uid=actor_uid,
+    )
+    if world_text:
+        parts.append(world_text)
+        sec_idx["world_state"] = len(parts) - 1
 
     # 权威手动投掷：玩家视角只保留本人为目标的私密投掷；全队可见回答会被
     # 多人查看，fail closed 排除全部私密投掷（viewer_uid 置空即不匹配目标）。

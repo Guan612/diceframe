@@ -25,3 +25,15 @@ export function buildJoinLink(gameKey: string, publicBaseUrl?: string, user?: st
   url.hash = `/join?${params.toString()}`
   return url.toString()
 }
+
+/**
+ * 移动端扫码登录的二维码载荷。
+ *
+ * 用 App 自己的 scheme 而不是 http 链接：这段内容只对 DiceFrame App 有意义，
+ * 用 http 反而会让系统相机把 GM 引到浏览器里去。配对码是一次性短时效凭据，
+ * 出现在二维码里是设计的一部分（见后端 src/webui/pairing.py）。
+ */
+export function buildPairingPayload(backendUrl: string, code: string): string {
+  const params = new URLSearchParams({ s: normalizePublicBaseUrl(backendUrl), c: code })
+  return `diceframe://pair?${params.toString()}`
+}

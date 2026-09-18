@@ -13,6 +13,7 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useSettingsStore } from '@/stores/useSettingsStore'
+import InviteQrModal from '@/features/play/InviteQrModal.vue'
 import { buildJoinLink } from '@/utils/shareLink'
 import { copyToClipboard } from '@/utils/clipboard'
 import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
@@ -30,7 +31,7 @@ import PlayHelpCenter from '@/components/PlayHelpCenter.vue'
 import HealthPanel from '@/components/HealthPanel.vue'
 import Modal from '@/components/ui/Modal.vue'
 import GmToolbar from '@/components/play/GmToolbar.vue'
-import CombatExtensionPanel from '@/components/play/CombatExtensionPanel.vue'
+import CombatActionsTool from '@/components/play/CombatActionsTool.vue'
 import MultiplayerPanel from '@/components/play/MultiplayerPanel.vue'
 import MapWorkspace from '@/components/play/MapWorkspace.vue'
 import SceneGalleryModal from '@/components/play/SceneGalleryModal.vue'
@@ -49,7 +50,7 @@ import { fetchRulesetAvailableActions } from '@/api/rulesets'
 import { currencyLabel } from '@/utils/ruleSchema'
 import { currencyAmountToInputText, currencyEditableUnitLabel } from '@/utils/currency'
 import type { CurrencySystem } from '@/utils/currency'
-import { buildRewardPolicySave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
+import { buildRewardPolicySave, buildRoomPasswordSave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
 
 defineOptions({ name: 'PlayView' })
 
@@ -67,6 +68,8 @@ const { locale, setLocale, t } = useLocale()
 const help = ref(false), ruleMeta = ref<RuleMeta>({}), preview = ref(false), delegate = ref(false), cards = ref<CharacterCard[]>([]), showCards = ref(false), health = ref<HealthResponse>({ events: [] })
 const showKpQuestion = ref(false)
 const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref('')
+// 邀请/接管二维码弹窗：link 非空即展示，关闭时置空
+const inviteLink = ref(''), inviteTitle = ref(''), inviteHint = ref('')
 const rewardPolicyMode = ref(''), rewardPolicyCap = ref(''), rewardPolicyTouched = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === '1')
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
@@ -77,6 +80,8 @@ const currentRoundImageBusy = ref(false)
 const gmThinking = ref(false)
 const storyRecapBusy = ref(false)
 const luckBusyId = ref('')
+/** 正在把某个席位交给 AI：服务器可能正在为它生成探索行动。 */
+const hostingUid = ref('')
 const showPortraitEditor = ref(false)
 const showCharacterCenter = ref(false)
 const portraitDraft = ref<CharacterPortrait | null>()
@@ -175,7 +180,10 @@ const directorProposal = ref<RulesetDirectorProposal | null>(null)
 const rulesetGameplay = ref<RulesetGameplayView | null>(null)
 const rulesetCombatStatus = ref('none')
 const rulesetCampaignStatus = ref('')
+const hasCombatExtension = computed(() => Boolean(game.detail.value?.combat_extension))
 const hasProfessionalTools = computed(() => hasCampaignGuidance.value || hasAuthoritativeCombat.value)
+// 自由规则可能只开启 combat_extension：此时 tools 栏也必须出现，否则「战斗动作」没有入口。
+const hasComposerTools = computed(() => hasProfessionalTools.value || canAskKp.value || hasCombatExtension.value)
 const rulesetToolCopy = computed(() => (
   resolveRulesetPlayExtension(String(game.detail.value?.ruleset_runtime?.id || ''))
     ?.copy(String(locale.value))
@@ -494,14 +502,15 @@ async function generateStoryRecap() {
   }
 }
 
-async function generateCurrentRoundImageRequest(payload: { prompt: string; round: number; panels: unknown[]; use_avatar_references: boolean }) {
+async function generateCurrentRoundImageRequest(payload: { prompt: string; round: number; panels: unknown[]; panel_count?: number; use_avatar_references: boolean }) {
   if (!game.currentGame.value || currentRoundImageBusy.value) return
   currentRoundImageBusy.value = true
   showCurrentRoundImage.value = false
   try {
-    await generateCurrentRoundImage(game.currentGame.value, { prompt: payload.prompt, round: payload.round, panels: payload.panels, useAvatarReferences: payload.use_avatar_references })
+    const result = await generateCurrentRoundImage(game.currentGame.value, { prompt: payload.prompt, round: payload.round, panels: payload.panels, panelCount: payload.panel_count, useAvatarReferences: payload.use_avatar_references })
     await game.refresh(true)
     toast.success(t('imageGenerated'))
+    if (result.prompt_budget?.adjusted) toast.warning(t('imagePromptAdjusted'))
   } catch (error: unknown) { toast.error(errorMessage(error)) } finally { currentRoundImageBusy.value = false }
 }
 
@@ -530,9 +539,18 @@ async function onAdvancementControl(payload: Record<string, string | number>) {
 }
 function onAccess() { command('player-access', { open: game.detail.value?.player_access_open === false }) }
 
+// 房间级暂离语义：只有 GM 真正改过才提交，避免「保存密码」时把它一并覆盖掉。
+const awayPolicyInput = ref<'pause' | 'ai_takeover'>('pause')
+const awayPolicyTouched = ref(false)
+// 密码同理：打开弹窗会清空输入框，无条件提交等于把原密码删掉。
+const passwordTouched = ref(false)
+
 function onRoomPassword() {
   roomPasswordInput.value = ''
+  passwordTouched.value = false
   luckTimeoutInput.value = ''
+  awayPolicyInput.value = game.detail.value?.away_control_policy === 'ai_takeover' ? 'ai_takeover' : 'pause'
+  awayPolicyTouched.value = false
   const policy = game.detail.value?.economy_reward_policy || {}
   rewardPolicyMode.value = policy.mode || ''
   rewardPolicyCap.value = policy.auto_reward_cap
@@ -545,8 +563,13 @@ function onRoomPassword() {
 }
 async function setRoomPassword() {
   try {
-    const r = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/room-password`, { method: 'POST', body: JSON.stringify({ password: roomPasswordInput.value }) })
-    if (r.error || r.ok === false) throw new Error(r.error || t('settingFailed'))
+    // 只有 GM 真的编辑过密码输入框才提交：否则「只改暂离设置」也会 POST 一个空
+    // 密码，把房间里已有的密码静默删掉。明确清空输入框仍是一次显式移除密码。
+    const passwordSave = buildRoomPasswordSave(passwordTouched.value, roomPasswordInput.value)
+    if (passwordSave) {
+      const r = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/room-password`, { method: 'POST', body: JSON.stringify(passwordSave) })
+      if (r.error || r.ok === false) throw new Error(r.error || t('settingFailed'))
+    }
     // 同弹窗一并设置幸运超时（仅在填写时）
     const lt = String(luckTimeoutInput.value || '').trim()
     if (lt !== '') {
@@ -564,8 +587,17 @@ async function setRoomPassword() {
       if (rpR.error || rpR.ok === false) throw new Error(rpR.error || t('settingFailed'))
       if (rewardPolicyMode.value !== '') toast.success(t('rewardPolicySaved'))
     }
+    // 暂离语义仅在 GM 实际改动过时提交，理由同上。
+    if (awayPolicyTouched.value) {
+      const apR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/away-control-policy`, { method: 'POST', body: JSON.stringify({ away_control_policy: awayPolicyInput.value }) })
+      if (apR.error || apR.ok === false) throw new Error(apR.error || t('settingFailed'))
+      toast.success(t('awayPolicySaved'))
+    }
     showRoomPassword.value = false
-    toast.success(roomPasswordInput.value ? t('roomPasswordUpdated') : t('roomPasswordCleared'))
+    // 只在真的提交过密码时报告密码结果；没碰密码却提示"已取消密码"是误导。
+    if (passwordSave) {
+      toast.success(passwordSave.password ? t('roomPasswordUpdated') : t('roomPasswordCleared'))
+    }
     await game.refresh()
   } catch (e: unknown) { toast.error(errorMessage(e)) }
 }
@@ -576,15 +608,17 @@ async function ensureSettingsLoaded() {
   }
 }
 
+/** 出示加入二维码（含可复制原文）；玩家掏手机扫一下就进，不用转发链接 */
 async function invite() {
   await ensureSettingsLoaded()
-  await copyToClipboard(buildJoinLink(
+  inviteTitle.value = t('inviteLink')
+  inviteHint.value = t('inviteQrHint')
+  inviteLink.value = buildJoinLink(
     game.currentGame.value,
     settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
     undefined,
     currentBackendUrl(),
-  ))
-  toast.success(t('inviteCopied'))
+  )
 }
 
 async function copyBotBind() {
@@ -687,6 +721,9 @@ async function kick(uid: string) {
 }
 
 async function setAway(uid: string, away: boolean) {
+  // ai_takeover 房间里"暂离"也会把席位交给 AI：服务器可能立刻替这个角色行动。
+  const handsOverToAi = away && String(game.detail.value?.away_control_policy || '') === 'ai_takeover'
+  if (handsOverToAi) hostingUid.value = uid
   try {
     const r = await api<{ ok?: boolean; error?: string; character_name?: string }>(
       `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/away`,
@@ -695,18 +732,37 @@ async function setAway(uid: string, away: boolean) {
     if (r.error || r.ok === false) throw new Error(r.error || t('statusSwitchFailed'))
     toast.success(t('playerAwayChanged', { name: r.character_name || uid, state: away ? t('away') : t('returned') }))
     await game.refresh()
-  } catch (e: unknown) { toast.error(errorMessage(e)) }
+  } catch (e: unknown) { toast.error(errorMessage(e)) } finally { hostingUid.value = '' }
 }
 
+async function setControl(uid: string, mode: 'ai' | 'human') {
+  // 交给 AI 时服务器会立刻接管：探索回合会先补行动再推进，权威战斗会直接
+  // 走完这个席位的回合，所以请求期间先把"AI 正在接管"显示出来。
+  if (mode === 'ai') hostingUid.value = uid
+  try {
+    const r = await api<{ ok?: boolean; error?: string }>(
+      `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/control`,
+      { method: 'POST', body: JSON.stringify({ mode }) },
+    )
+    if (r.error || r.ok === false) throw new Error(r.error || t('statusSwitchFailed'))
+    toast.success(mode === 'ai'
+      ? t('controlNowAi')
+      : t('controlNowHuman'))
+    await game.refresh()
+  } catch (e: unknown) { toast.error(errorMessage(e)) } finally { hostingUid.value = '' }
+}
+
+/** 单个玩家的接管链接：同样走二维码弹窗，链接里带 user 参数 */
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
-  await copyToClipboard(buildJoinLink(
+  inviteTitle.value = t('controlLink')
+  inviteHint.value = t('controlLinkQrHint')
+  inviteLink.value = buildJoinLink(
     game.currentGame.value,
     settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
     uid,
     currentBackendUrl(),
-  ))
-  toast.success(t('controlLinkCopied'))
+  )
 }
 
 function onEdit(uid: string) {
@@ -1194,7 +1250,7 @@ onBeforeUnmount(() => {
           @open-combat="openRulesetTool('combat')"
         >
           <template #tools>
-            <div v-if="hasProfessionalTools || canAskKp" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+            <div v-if="hasComposerTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
               <button
                 v-if="canAskKp"
                 class="kp-question-tool-trigger"
@@ -1203,6 +1259,13 @@ onBeforeUnmount(() => {
                 :aria-label="t('kpQuestionAction')"
                 @click="showKpQuestion = true"
               ><NIcon :component="ChatbubbleEllipsesOutline" /><span>{{ t('kpQuestionAction') }}</span></button>
+              <CombatActionsTool
+                :detail="game.detail.value"
+                :game-key="game.currentGame.value"
+                :self-uid="game.actorId.value"
+                :is-gm="game.isGm.value"
+                @changed="game.refresh(true)"
+              />
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"
@@ -1235,7 +1298,7 @@ onBeforeUnmount(() => {
           @refresh="game.refresh"
         >
           <template #tools>
-            <div v-if="hasProfessionalTools || canAskKp" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
+            <div v-if="hasComposerTools" class="ruleset-context-tools" :aria-label="rulesetToolCopy.menu">
               <button
                 v-if="canAskKp"
                 class="kp-question-tool-trigger"
@@ -1244,6 +1307,13 @@ onBeforeUnmount(() => {
                 :aria-label="t('kpQuestionAction')"
                 @click="showKpQuestion = true"
               ><NIcon :component="ChatbubbleEllipsesOutline" /><span>{{ t('kpQuestionAction') }}</span></button>
+              <CombatActionsTool
+                :detail="game.detail.value"
+                :game-key="game.currentGame.value"
+                :self-uid="game.actorId.value"
+                :is-gm="game.isGm.value"
+                @changed="game.refresh(true)"
+              />
               <button
                 v-if="hasCampaignGuidance"
                 class="campaign-tool-trigger"
@@ -1321,22 +1391,16 @@ onBeforeUnmount(() => {
           @payment="openPaymentComposer"
           @generate-current-round="showCurrentRoundImage = true"
         />
-        <CombatExtensionPanel
-          :detail="game.detail.value"
-          :game-key="game.currentGame.value"
-          :self-uid="game.actorId.value"
-          :is-gm="game.isGm.value"
-          @changed="game.refresh(true)"
-        />
-
         <MultiplayerPanel
           v-if="game.detail.value.solo_mode === false"
           :players="game.players.value"
           :detail="game.detail.value"
           :is-gm="game.isGm.value"
           :current-user-id="actorId"
+          :hosting-uid="hostingUid"
           @kick="kick"
           @set-away="setAway"
+          @set-control="setControl"
           @copy-link="copyLink"
           @edit="onEdit"
           @open-character-center="showCharacterCenter = true"
@@ -1388,6 +1452,7 @@ onBeforeUnmount(() => {
     <CurrentRoundImageModal
       v-if="showCurrentRoundImage && game.currentGame.value && game.detail.value"
       open :game-key="game.currentGame.value" :detail="game.detail.value" :log="game.log.value" :players="game.players.value"
+      :auto-storyboard="!!settings.config.imagegen_auto_storyboard"
       @close="showCurrentRoundImage = false" @generate="generateCurrentRoundImageRequest"
     />
     <button
@@ -1455,11 +1520,19 @@ onBeforeUnmount(() => {
       </section>
     </div>
 
+    <InviteQrModal
+      v-if="inviteLink"
+      :link="inviteLink"
+      :title="inviteTitle"
+      :hint="inviteHint"
+      @close="inviteLink = ''"
+    />
+
     <div v-if="showRoomPassword" class="modal" @click.self="showRoomPassword = false">
       <section class="dialog">
         <header><h2>{{ t('gameSettings') }}</h2><button @click="showRoomPassword = false">×</button></header>
         <p>{{ t('roomPasswordHelp') }}</p>
-        <label>{{ t('newPassword') }}<input type="password" v-model="roomPasswordInput" :placeholder="t('emptyCancelsPassword')" @keyup.enter="setRoomPassword"></label>
+        <label>{{ t('newPassword') }}<input type="password" v-model="roomPasswordInput" :placeholder="t('emptyCancelsPassword')" @input="passwordTouched = true" @keyup.enter="setRoomPassword"></label>
         <label>{{ t('luckTimeoutSeconds') }}<input type="number" v-model="luckTimeoutInput" :placeholder="t('luckTimeoutPlaceholder')" min="0" max="3600"></label>
         <label>{{ t('rewardPolicyMode') }}
           <select v-model="rewardPolicyMode" @change="rewardPolicyTouched = true">
@@ -1469,6 +1542,13 @@ onBeforeUnmount(() => {
           </select>
         </label>
         <label v-if="rewardPolicyMode === 'auto_small_cash'">{{ t('rewardPolicyCap') }}{{ economyEditableUnitSuffix }}<input type="text" inputmode="decimal" v-model="rewardPolicyCap" :placeholder="t('rewardPolicyCapPlaceholder')" @input="rewardPolicyTouched = true"></label>
+        <label>{{ t('awayPolicy') }}
+          <select v-model="awayPolicyInput" @change="awayPolicyTouched = true">
+            <option value="pause">{{ t('awayPolicyPause') }}</option>
+            <option value="ai_takeover">{{ t('awayPolicyAiTakeover') }}</option>
+          </select>
+        </label>
+        <p class="muted">{{ t('awayPolicyHelp') }}</p>
         <div class="actions">
           <button @click="showRoomPassword = false">{{ t('cancel') }}</button>
           <button class="primary" @click="setRoomPassword">{{ t('saveAction') }}</button>

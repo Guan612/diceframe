@@ -45,7 +45,7 @@
       {"id": "indomitable", "minimum_level": 9, "maximum_track": "indomitable", "short": "none", "long": "all", "source_ref": "srd-5.2.1:p48:indomitable"}
     ],
     "monk": [
-      {"id": "focus_points", "minimum_level": 2, "maximum_track": "focus_points", "short": "all", "long": "all", "source_ref": "srd-5.2.1:p50:monks-focus"},
+      {"id": "focus_points", "minimum_level": 2, "maximum_track": "focus_points", "short": "all", "long": "all", "resize_policy": "preserve_current", "source_ref": "srd-5.2.1:p50:monks-focus"},
       {"id": "uncanny_metabolism", "minimum_level": 2, "maximum_fixed": 1, "short": "none", "long": "all", "source_ref": "srd-5.2.1:p51:uncanny-metabolism"}
     ],
     "paladin": [

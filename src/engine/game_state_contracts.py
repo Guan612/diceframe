@@ -77,6 +77,9 @@ class PlayerContextView(TypedDict, total=False):
     character_name: str
     attendance: str
     character_sheet: CharacterSheetView
+    # 席位控制器（human / ai / unclaimed）。投影是否对外暴露由各消费者决定，
+    # 这里只固定字段契约，见 src.engine.player_control。
+    control: OpaqueState
 
 
 class GameContextView(TypedDict, total=False):
@@ -137,6 +140,7 @@ class GamePersistedState(TypedDict, total=False):
     log: list[RoundLogEntry]
     summary: OpaqueState
     key_facts: list[Any]
+    world_state: OpaqueState
     total_llm_calls: int
     total_tokens: int
     started_at: str
@@ -167,6 +171,8 @@ class GamePersistedState(TypedDict, total=False):
     last_checks: list[CheckResult]
     manual_roll_requests: list[dict[str, Any]]
     last_overreach: list[Any]
+    last_world_legality: list[Any]
+    last_world_events: list[Any]
     round_checks_prepared: bool
     round_start_snapshot: PlayerRollbackSnapshot
     round_entity_snapshot: OpaqueState

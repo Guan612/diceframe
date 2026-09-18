@@ -210,6 +210,39 @@ async def api_set_player_away(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": "GM or self only"}, status=403)
     body = await request.json()
     result = await api.set_player_away(gk, uid, bool(body.get("away")))
+    status = 200 if result.get("ok") else (409 if result.get("error_code") == "CONTROL_CHANGE_BUSY" else 400)
+    return web.json_response(result, status=status)
+
+
+async def api_set_player_control(request: web.Request) -> web.Response:
+    """GM 托管控件：设为 AI / 停止 AI 托管。"""
+
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    uid = request.match_info["user_id"]
+    inst = api.get_game_instance(gk)
+    if not inst:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+    if request.get("user_id", "") != inst.gm_uid:
+        return web.json_response({"ok": False, "error": "GM only"}, status=403)
+    body = await request.json()
+    result = await api.set_player_control(gk, uid, str(body.get("mode") or ""))
+    status = 200 if result.get("ok") else (409 if result.get("error_code") == "CONTROL_CHANGE_BUSY" else 400)
+    return web.json_response(result, status=status)
+
+
+async def api_set_away_control_policy(request: web.Request) -> web.Response:
+    """房间设置：暂离语义 pause / ai_takeover。"""
+
+    api = _get_api(request)
+    gk = request.match_info["game_key"]
+    inst = api.get_game_instance(gk)
+    if not inst:
+        return web.json_response({"ok": False, "error": "not found"}, status=404)
+    if request.get("user_id", "") != inst.gm_uid:
+        return web.json_response({"ok": False, "error": "GM only"}, status=403)
+    body = await request.json()
+    result = await api.set_away_control_policy(gk, str(body.get("away_control_policy") or ""))
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 

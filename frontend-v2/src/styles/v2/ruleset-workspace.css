@@ -126,3 +126,28 @@
     z-index: 2;
   }
 }
+
+/* AI 临时遭遇编辑弹窗：默认摘要不铺开输入框，只有点「编辑敌人」才需要这一层。 */
+.dialog.encounter-editor-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(880px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dialog.encounter-editor-dialog > ul {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+@media (max-width: 720px) {
+  .dialog.encounter-editor-dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 10px;
+  }
+}

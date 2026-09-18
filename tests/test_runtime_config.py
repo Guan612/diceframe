@@ -14,6 +14,18 @@ def _store(tmp_path, environ=None):
     return ConfigStore(paths, environment), paths
 
 
+def test_image_prompt_reuse_defaults_on_but_preserves_explicit_off(tmp_path):
+    default_store, _ = _store(tmp_path / "default")
+    assert default_store.load().state["imagegen_auto_use_manual_prompt"] is True
+
+    explicit_store, explicit_paths = _store(tmp_path / "explicit")
+    explicit_paths.data_dir.mkdir(parents=True)
+    explicit_paths.config_file.write_text(
+        json.dumps({"imagegen_auto_use_manual_prompt": False}), encoding="utf-8",
+    )
+    assert explicit_store.load().state["imagegen_auto_use_manual_prompt"] is False
+
+
 def test_web_listen_topology_reads_env_and_config(tmp_path):
     """多地址与附加 HTTP/HTTPS 端口：env 优先，且不改变 TRPG_WEB_HOST 语义。"""
 

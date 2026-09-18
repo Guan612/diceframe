@@ -1,8 +1,9 @@
-﻿"""完整回合推进流程。"""
+"""完整回合推进流程。"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -66,6 +67,14 @@ from src.engine.economy import filter_unconfirmed_purchase_grants, has_pending_i
 from src.engine import combat_narrative
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.language import localized_text
+from src.engine.world_events import advance_world_time
+from src.engine.world_legality import evaluate_world_requirements
+from src.engine.world_state import WorldStateError
+from src.llm.world_prompt import (
+    format_world_events_block,
+    format_world_legality_block,
+    format_world_state_block,
+)
 from src.llm.parser import sanitize_narration
 from src.imagegen import (
     ImageGenerationError,
@@ -75,6 +84,8 @@ from src.imagegen import (
     normalize_scene_panels,
     public_character_appearances,
     storyboard_layout,
+    storyboard_source_revision,
+    storyboard_panel_metadata,
 )
 from src.memory.summarizer import needs_summary, summarize
 from src.rulesets.contracts import (
@@ -107,7 +118,9 @@ def _last_scene_image_signature(instance: GameInstance) -> tuple[str, tuple[tupl
     for entry in reversed(instance.log):
         record = entry.get("scene_image")
         if isinstance(record, dict) and record.get("status") == "ready":
-            panels, _ = normalize_scene_panels(record.get("panels"))
+            panels, _ = normalize_scene_panels(
+                record.get("panels"), merge_same_location=False,
+            )
             panel_key = tuple(
                 (tuple(panel.get("participants") or []), panel.get("location", ""), panel.get("description", ""))
                 for panel in panels
@@ -119,7 +132,9 @@ def _last_scene_image_signature(instance: GameInstance) -> tuple[str, tuple[tupl
 def _scene_storyboard_payload(data: dict) -> tuple[str, list[dict[str, Any]], int]:
     """Return a shared prompt plus normalized public panels for this round."""
     raw_panels = data.get("scene_panels")
-    panels, compressed_count = normalize_scene_panels(raw_panels)
+    panels, compressed_count = normalize_scene_panels(
+        raw_panels, merge_same_location=False,
+    )
     if not panels:
         return "", [], compressed_count
     global_prompt = str(data.get("scene_image_prompt") or "").strip()
@@ -408,6 +423,31 @@ class RoundProcessor:
             if errors:
                 logger.warning("部分 AI 检定参数被拒绝: %s", "; ".join(str(item) for item in errors))
             instance.last_overreach = list(metadata.get("overreach") or [])
+            # 世界合法性：模型只提议结构化地点，server 对照权威世界真相后才阻断或
+            # 落库合法移动；空世界/未知地点一律不阻断（旧游戏行为不变）。
+            world_result = evaluate_world_requirements(
+                instance, metadata.get("world_requirements") or [],
+            )
+            instance.last_world_legality = list(world_result.get("notes") or [])
+            # 逻辑世界时间：模型只报告本轮经过的时间，server 推进时钟并确定性
+            # 结算到期事件（无后台 tick、无独立 scheduler）。
+            time_advance = metadata.get("world_time_advance")
+            if isinstance(time_advance, dict) and time_advance.get("minutes"):
+                try:
+                    outcome = advance_world_time(
+                        instance, int(time_advance["minutes"]),
+                        source_round=instance.round_number,
+                    )
+                except (WorldStateError, ValueError, TypeError) as exc:
+                    logger.warning("世界时间推进被拒绝: %s", exc)
+                else:
+                    instance.last_world_events = [
+                        {**item, "status": "applied"}
+                        for item in outcome.get("applied") or []
+                    ] + [
+                        {**item, "status": "failed"}
+                        for item in outcome.get("failed") or []
+                    ]
             build_dice_constraint_block(
                 instance,
                 actions_text,
@@ -611,7 +651,9 @@ class RoundProcessor:
             {},
         )
         prompt = str(opening.get("scene_image_prompt") or "").strip()
-        panels, compressed_count = normalize_scene_panels(opening.get("scene_panels"))
+        panels, compressed_count = normalize_scene_panels(
+            opening.get("scene_panels"), merge_same_location=False,
+        )
         return (
             self.schedule_scene_image(
                 instance,
@@ -646,7 +688,9 @@ class RoundProcessor:
         """为指定回合调度一次场景图生成（叙事已推送，生图在后台进行）。"""
         service = self._image_generation
         prompt = str(prompt or "").strip()
-        normalized_panels, removed = normalize_scene_panels(panels)
+        normalized_panels, removed = normalize_scene_panels(
+            panels, merge_same_location=False,
+        )
         character_appearances = public_character_appearances(
             getattr(instance, "players", {}),
         )
@@ -719,15 +763,28 @@ class RoundProcessor:
             )
             if entry is None:
                 return
-            inferred_panels, inferred_compressed = await infer_scene_panels(
-                self.llm_client,
-                narration=str(entry.get("gm_response") or ""),
-                actions=entry.get("actions") or [],
-                current_scene=current_scene or str(getattr(current, "scene", "") or ""),
-                players=getattr(current, "players", {}),
-                global_prompt=prompt,
-                declared_panels=panels,
-            )
+            source_revision = storyboard_source_revision(entry)
+            if panels:
+                inferred_panels, inferred_compressed = normalize_scene_panels(
+                    panels, merge_same_location=False,
+                )
+            # Real image services always expose the explicit setting (default
+            # false).  Keep a true compatibility default for lightweight
+            # injected test/extension services that predate this attribute.
+            elif bool(getattr(self._image_generation, "auto_storyboard", True)):
+                inferred_panels, inferred_compressed = await infer_scene_panels(
+                    self.llm_client,
+                    narration=str(entry.get("gm_response") or ""),
+                    actions=entry.get("actions") or [],
+                    current_scene=current_scene or str(getattr(current, "scene", "") or ""),
+                    players=getattr(current, "players", {}),
+                    global_prompt=prompt,
+                    declared_panels=panels,
+                    strict=(hasattr(self._image_generation, "auto_storyboard")
+                            and bool(getattr(self._image_generation, "auto_storyboard", False))),
+                )
+            else:
+                inferred_panels, inferred_compressed = [], 0
             panels = inferred_panels
             compressed_count = (
                 max(0, int(compressed_count or 0))
@@ -736,6 +793,7 @@ class RoundProcessor:
             context: dict[str, Any] = {
                 "round": round_number,
                 "run_id": expected_run_id,
+                "source_revision": source_revision,
                 "scene": current_scene or str(getattr(current, "scene", "") or ""),
                 "narration": str(entry.get("gm_response") or "")[:1600],
                 "actions": str(entry.get("actions") or "")[:1200],
@@ -773,6 +831,8 @@ class RoundProcessor:
             )
             if entry is None:
                 return  # 该回合已被回滚删除，放弃本次生图
+            if storyboard_source_revision(entry) != source_revision:
+                return  # 公开剧情已变化，旧任务不得覆盖新版本
             reference = {"kind": "generated", "asset_id": result.asset_id}
             old_scene_image = deepcopy(entry.get("scene_image"))
             old_top_scene_image = deepcopy(current.scene_image)
@@ -791,6 +851,13 @@ class RoundProcessor:
                     "panels": panels,
                     "compressed_count": max(0, int(compressed_count or 0)),
                 })
+                entry["scene_panel_meta"] = storyboard_panel_metadata(
+                    panels,
+                    narration=str(entry.get("gm_response") or ""),
+                    actions=entry.get("actions") or [],
+                    current_scene=current_scene or str(getattr(current, "scene", "") or ""),
+                    source_revision=source_revision,
+                )
             try:
                 await self.registry.save(current)
             except Exception:
@@ -876,6 +943,11 @@ class RoundProcessor:
         overreach_text = (
             format_overreach_block(instance) if overreach_guard_enabled() else ""
         )
+        # 权威世界真相与行动合法性：都是服务端组装的可信块，玩家文本无法注入。
+        # GM 视角包含 gm 私有事实（并标注玩家不可见）。
+        world_state_text = format_world_state_block(instance, viewer_is_gm=True)
+        world_legality_text = format_world_legality_block(instance)
+        world_events_text = format_world_events_block(instance)
 
         gm_prompt = self._prompt.compose_gm_prompt(instance, rule_appendix, world_data=world_data)
         provider_name = self.llm_client.default if self.llm_client else ""
@@ -883,6 +955,9 @@ class RoundProcessor:
             instance, gm_prompt, lorebook_matches, actions_text,
             provider_name=provider_name, world_data=world_data,
             directives_text=gm_directives_text, overreach_text=overreach_text,
+            world_state_text=world_state_text,
+            world_legality_text=world_legality_text,
+            world_events_text=world_events_text,
             authoritative_events_text=pending_combat_events_text)
 
         context = await append_multistep_analysis(
@@ -1072,6 +1147,23 @@ class RoundProcessor:
             state_changes=state_msgs,
             pre_combat_extension_snapshot=round_pre_combat_snapshot,
         )
+        # Keep the GM's public image directives with the completed round so
+        # manual generation and later restores use the same source.
+        if bool(getattr(self._image_generation, "auto_storyboard", False)):
+            completed = next((item for item in reversed(instance.log)
+                              if _log_round(item, -1) == int(instance.round_number) - 1), None)
+            if isinstance(completed, dict):
+                completed["scene_panels"] = normalize_scene_panels(
+                    data.get("scene_panels"), merge_same_location=False,
+                )[0]
+                completed["scene_image_prompt"] = str(data.get("scene_image_prompt") or "")[:300]
+                completed["scene_panel_meta"] = storyboard_panel_metadata(
+                    completed["scene_panels"],
+                    narration=str(completed.get("gm_response") or ""),
+                    actions=completed.get("actions") or [],
+                    current_scene=str(getattr(instance, "scene", "") or ""),
+                    source_revision=storyboard_source_revision(completed),
+                )
         combat_narrative.consume_pending_events(instance, pending_combat_event_ids)
         instance.set_latest_log_tags_summary(summarize_tags(data))
         instance.record_llm_usage(response.total_tokens, calls=0)

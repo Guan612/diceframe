@@ -19,6 +19,19 @@ AI 应用配置仅使用 `ai_providers` 与各能力的 `*_provider_ref`；凭�
 
 WebUI service 不直接导入另一个 service。跨域业务调用使用 composition root 注入的 callable/protocol；多域共同使用但不执行业务编排的纯契约和投影位于 `src/webui/` 根边界，例如生命周期事务上下文、规则草稿 shape 校验、休息只读投影及角色卡 identity/deduplication。类型检查专用导入不构成运行时依赖。
 
+## 访问凭据与扫码配对
+
+Owner 访问有两类平级凭据，都以 `Authorization: Bearer` 提交，由 `src/webui/access_control.py` 统一判定：
+
+- 访问密码：`STATE["access_token"]` 只保存 PBKDF2 哈希，服务端不掌握明文，任何接口都不得把它兑换出去；
+- 设备令牌：`src/webui/device_tokens.py` 的高熵随机串，落盘只存 sha256 摘要（随机 token 无需 KDF，且它在每个请求上验证），逐台可吊销，吊销不牵连主密码与其它设备。
+
+扫码登录由 `src/webui/pairing.py` 与 `src/webui/routes/pairing.py` 负责：owner 会话调 `POST /api/pairing` 签发一次性短 TTL 配对码（服务端同样只存摘要），移动端匿名调 `POST /api/pairing/claim` 兑换成设备令牌。兑换端点必须匿名可达（此刻手机还没有任何凭据），因此它与 `/api/login` 共用 abuse-guard 限流桶并写入同一份登录审计；配对码一次性、过期即作废、不续期。设备清单 `GET /api/devices` 与吊销 `DELETE /api/devices/{id}` / `POST /api/devices/revoke-all` 只对 owner 开放，清单不返回任何可用于鉴权的字段。
+
+免密服务器上 `POST /api/pairing` 对任何能连上的客户端开放，那时签发的设备令牌等价于「谁连得上谁就是 owner」。因此首次设置访问密码（`access_token` 从未配置变为已配置）会连带吊销全部设备令牌与待兑换配对码；已有密码时再改密码不吊销——设备令牌是与访问密码平级的独立凭据，设置页有单独的逐台 / 全部吊销入口。
+
+二维码要编的地址只有服务端知道——GM 本机浏览器的 origin 往往是 localhost，对手机无意义。`GET /api/system/network`（owner 限定）基于 `src/web_transport/local_addresses.py` 返回本机可达候选地址；该模块同时是自签证书 SAN 的地址来源。
+
 ## Content V2
 
 所有输入先经过兼容边界，再进入当前 canonical model：
@@ -121,6 +134,44 @@ Ruleset runtime 可导入通用 engine 原语；generic engine、generic d20、m
 
 通用战斗扩展（Issue 212 / ADR 0004）提供规则无关的公式 DSL、资源池、效果引擎与调度器原语。依赖方向固定为 contracts → primitives → ruleset adapter → ruleset catalog → transport，generic engine 不含任何 per-ruleset 分支。动作、效果与消耗全部是数据（通用 kind 词表），法术/遁术/丹药等身份由规则动作目录的 canonical `action_id` 表达；伤害与消耗金额经受限 JSON-AST 公式求值——白名单节点、深度/节点/骰子/结果上限、未知引用 fail closed、可注入确定性骰源，绝不 eval。资源池与调度器由规则 runtime 显式声明 capability（`combat_action_effects` / `combat_resource_pools` / `combat_scheduler`）后启用，客户端只提交 intent 并渲染服务端投影，伤害、速度与资源结算值不可信。D&D 2024 的伤害/治疗骰式已经由 D&D 侧适配器改经通用公式 AST 求值，法术位、专注、豁免与胜利判定仍归 D&D reducer；调度器与资源池的持久化随首个消费规则集落地。
 
+## 世界状态（World State）
+
+`GameInstance.world_state` 是“当前世界真相”的唯一权威容器，仍属于单局聚合根，不引入第二个 aggregate、独立数据库或后台运行器。第一版结构固定为 `schema_version / revision / clock / facts / scheduled_events`：fact 是 canonical key（`actor:<uid>.location`、`bridge:old.passable` 这类坐标，不接受翻译后的 display name）加标量值与 `public | gm` 可见性，并记录 `source_round` 与 `updated_revision`；`clock` 是逻辑世界时间（day + minute）；`scheduled_events` 是待结算事件的持久化数据，按稳定 `event_id` 索引。
+
+唯一写入口是 `src/engine/world_state.py` 的 `apply_world_ops(instance, ops)`：整批 op 先校验再原子提交，越界、未知 op/字段、非法 key/value、损坏或未来 schema 都 fail closed 且不写入；事实可见性只由 world ops 决定，缺省更新不会把 GM 私有事实降级为公开。世界真相不使用 `ruleset_state`、`key_facts`、`lorebook_timed_state` 或 memory 作为容器，也不允许 LLM 直接写入。
+
+持久化与生命周期遵循既有 `GameInstance` / codec / migration 模式：schema 12 → 13 为旧存档补一个空世界容器（不猜测任何事实，且可重复执行）；save/load、import/rebind 保留世界真相并隔离 run 身份；重置与重开从空世界重新开始；世界 ops 属于写入它的那一轮，整轮回滚、判定中止与 swipe 分支切换都按 ADR 0003 的整轮语义把它一起撤销。
+
+世界真相不等于玩家可见真相：`project_visible_state(instance, viewer_is_gm=...)` 是唯一的读取入口，`gm` 私有事实只进入 GM 上下文块（并明确标注玩家不可见），玩家视角只拿 `public` 投影。行动合法性由 server 侧 `world_legality` 判定，模型只能通过结构化 `world_requirements`（`act` / `move` + canonical 地点 id）提议；判定只使用已登记地点与明确 `passable=false` 这类可证明证据——`passable=false` 阻止的是进入 / 经过 / 抵达，因此 `move` 只检查声明的 `via` 与目的地，行动者当前所在地点不参与该检查，已经身处不可通行地点的角色仍然可以离开；空世界、未知地点、行动者位置未知一律不阻断，已证明矛盾则向 GM 注入「需要先移动 / 未能完成」的可信裁定块，合法移动由 server 写入世界真相。该通道与 overreach 相互独立：overreach 管玩家替世界或他人声明事实，合法性管玩家自己的动作与权威世界事实矛盾。逻辑世界时间只经 `world_events.advance_world_time(+N)` 推进：它把时钟推到新的时刻，按 `(day, minute, event_id)` 稳定顺序结算到期事件，并把每个事件持久化为 `applied` 或 `failed`（到期时 ops 已不可应用）——没有后台 tick、没有独立 scheduler；持久化事件的 `ops` 在读取时按与 `schedule_event` 写入路径同一套结构契约逐条校验，损坏数据 fail closed，不会被静默过滤成「没有执行任何 op 却标记 applied」的伪成功状态；同一事件不会因重试、重复保存或刷新页面执行两次，结算结果与时钟同属 `world_state`，因此完整继承整轮回滚 / swipe / 重置 / 重开语义。
+
+## 玩家控制（Player Control）
+
+`players[uid].control` 是席位控制者的权威记录：`human`（真人负责）/ `ai`（服务器负责产生行动）/ `unclaimed`（席位已存在但暂无人玩），并带 `revision`、`temporary` 与 `resume_mode`。它回答的是“谁在玩这个角色”，不是“这个角色是什么”：角色本体、HP、装备、法术槽、状态、世界位置与战斗 actor（`player:<uid>`）在任何模式下都只有一份，控制器切换不复制、不搬运、不改键。第一版词汇表刻意封闭，不含 gm / remote_bot / script / hybrid 等模式。
+
+唯一写入口是 `src/engine/player_control.py` 的 `set_control`；所有读取也经过同一模块——未知席位读出保守默认值，损坏记录降级为 `human`（即契约出现前的行为），而写入对未知席位、未知模式、缺少恢复目标的临时托管一律 fail closed。控制器属于桌面会话状态而非剧情世界结果：`revision` 只在记录真正变化时递增，整轮回滚、判定中止与 swipe 只回滚角色卡与世界事实，不重新指派席位；`temporary=true` 的暂离托管必须能回到 `resume_mode`，不得在重启后变成永久 AI。
+
+持久化使用 schema **13 → 14**：旧存档的每个席位一律获得 `human`，迁移不按在线状态、角色名或历史行为猜测谁是 AI，且可重复执行。`control` 与 `character_sheet` 同级，属于玩家记录本身，因此随 save/load 往返，并在席位被清理（例如加载时的幽灵玩家清理）时一并消失，不会留下 orphan control。
+
+控制模式现在是权威的准入判定：`submission_block(instance, uid)` 决定真人能否提交普通行动——`ai` 席位返回 `PLAYER_AI_CONTROLLED`、`unclaimed` 返回 `PLAYER_UNCLAIMED`，Web 与 SSE 共用的 `turns.submit_action` 对两者返回 409；它只决定"真人不得代打"，不改变服务器 AI 自身何时出手（见下文的补行动与即时接管）。
+
+多人 ready barrier 只看真人：`GameInstance.active_human_players` = 存活、未暂离且 `control.mode == human`，`all_alive_ready()` 与 `multiplayer_status()` 的 ready / waiting 集合都由它计算，因此 AI 托管与未认领的席位不会阻塞推进；它们分别在 `ai_players` / `unclaimed_players` 及其计数中列出，说明"还差谁"以外那部分席位由谁负责。暂离真人依旧不阻塞（`active_alive_players` 语义未变，仍供幸运超时等只看人数的调用点使用）。
+
+认领转换统一走同一权威：`claim_seat` 是 Web 加入已有席位的规范入口，把 `ai` / `unclaimed` 无损转为 `human`（角色本体、HP、装备、法术、世界位置与战斗 actor 都不搬运），并在 `expected_revision` 过期时以 `CONTROL_STALE`、对已是真人的席位以 `CONTROL_NOT_CLAIMABLE` fail closed；新建席位仍由 `put_player` 直接生成为 `human`。控制权变更的安全边界由 `control_change_block` 判定：只有处于 `ACTIVE_ACTION` 且没有在飞处理锁时为 `""`，否则 `CONTROL_CHANGE_BUSY`。
+
+`ai` 席位在普通探索轮由 `src/commands/ai_player.py` 补行动：闸门是 `GameInstance.human_actions_ready()`（真人一侧交齐，且与 `should_advance()` 是两个不同问题），在唯一的推进入口——`turns.submit_action` 里真人闸门满足之后、`try_advance()` 之前——调用一次。每个席位一次 plain-text 调用、按 uid 串行，因此它只知道自己的角色卡、player-safe 公开上下文与本轮已宣告的行动，读不到 GM 私有世界事实、`gm_directives`、他人 `private_log` 或未来剧情，也不额外传 lorebook。产出只是一段普通行动文本（不含 DC / 加值 / 成败），经 `add_action` 走真人同一条 canonical 入口，由既有 Check Planner 与 WorldState 合法性裁定；行动带 `source` / `control_revision` / `generated_for_round` 元数据，仅用于去重与调试。调用前捕获 run / round / 席位 / `control.revision`，返回后四者与阶段全部复核，任一变化即丢弃；供应商错误或不可用输出记录 `AI_ACTION_SKIPPED` 后继续，不阻塞本轮。席位在本轮已经声明过行动时（例如真人先出手、GM 之后才把它交给 AI）不会被补行动覆盖——补行动只补还没行动的席位。
+
+System prompt 明确要求**按角色卡扮演**而不是替玩家做战术最优决策：身份与背景、性格、价值观、目标 / 动机、已建立的人际关系、个人经历、自己已经知道的线索、私密感知、当前身体与资源状态优先，冲突时只要行为仍合理合法就保持角色一致性，且不得编造角色卡里不存在的人设、经历或关系。角色卡仍是唯一的人物设定来源：不新增 `ai_persona` 之类的第二份存储，可见性通道也不变（自己的角色卡 / 公开剧情 / 本人私密感知 / 明确对该角色可见的知识）。
+
+控制权变更本身就是一次唤醒：`human → ai` 写入成功后，`GameControlService.set_player_control`（以及 `ai_takeover` 的暂离托管）调用 `turns.resume_after_control_change`——它只判断阶段是否可推进、真人闸门是否满足，然后调用上面**同一个**推进入口，因此不需要真人再发一句话，也绝不伪造空行动；仍有真人未行动时照样不抢跑，同一 round 重复 `set ai` 仍幂等，AI 席位的补行动若已写入则一并落盘。`ai → human` 不受影响：飞行中的旧 AI 结果继续由 control revision 竞争守卫丢弃。
+
+探索之外的权威战斗走另一条路：AI 托管 PC 的战斗回合由 `next_automatic_intent` 以 server/GM automation authority 提交**结构化意图**，而不是叙事行动，并且复用 companion 已有的同一条确定性阶梯（`_allied_automatic_intent`：治疗濒危 → 攻击最近敌对 → 移动 → Dodge → End Turn），不新增第二套战斗引擎，本阶段也不接 LLM。控制权变更时，如果当前 actor 正是刚交给 AI 的席位，唯一入口是 `ruleset_gameplay.resume_authoritative_combat`：它复用同一个自动阶梯循环（`src/rulesets/automation.py` 的 `advance_automatic_intents`，`submit_intent` 也走它），一直推进到轮到真人、战斗结束或没有自动意图，并把推进与控制权一起落盘；当前 actor 不是该席位时一个状态字节都不改，绝不顺手替别的 actor 出手。失败时整段事务回滚并返回结构化错误（`AUTOMATIC_TURN_FAILED`），不半提交。它与 companion 的唯一真实差异是 0 HP：companion 不做死亡豁免，玩家角色必须做，否则战斗会卡在该席位。意图仍走 validate / resolve / apply 同一权威链，受同一行动经济约束（action / attacks_remaining / movement），只看该席位自己的角色卡；候选意图在当前状态下不合法时退回合法 `end_turn`，保证托管席位的回合一定结束。校验侧同步收紧：`player:` actor 只有在席位确实处于 `ai` 托管时才允许 `submitted_by == gm_uid` 代提交，否则维持「玩家只能提交自己角色」；真人既不能代打 AI 席位，也不能手动操控它。`human` 与 `unclaimed` 席位永远不产生自动意图。
+
+房间与桌面可以**表达**谁来玩：开房时逐张角色卡可选「我来控制 / 等待玩家认领 / AI 托管」，另有「未认领角色默认」的全局快捷项，逐卡选择优先于全局默认；两者都缺省时保持旧行为（每个席位 `human`），未知模式在开房阶段直接 fail closed（`INVALID_PLAYER_CONTROL`），不会悄悄建成默认席位。席位列表按控制记录显示四种徽章：真人 / AI 托管 / 等待认领 / AI 临时托管。
+
+「暂离」的含义由房间设置 `away_control_policy` 决定，默认 `pause`：暂离只改在场状态，**绝不**把角色交给 AI。设为 `ai_takeover` 时，玩家暂离会把席位交给服务器 AI 的**临时**形态（`{mode: ai, temporary: true, resume_mode: human}`），点「回来」即归还并清空 `temporary` / `resume_mode`；临时托管在重启后仍可归还，不会变成永久 AI。GM 另有托管控件「设为 AI / 停止 AI 托管」，只改控制记录——不复制角色、不动 Web 身份与 Bot 绑定、不重置 ready、不重置 HP、不重建战斗 actor。所有控制权变更只发生在安全边界（`ACTIVE_ACTION` 且没有在飞处理锁），否则返回可重试的 `CONTROL_CHANGE_BUSY`。断线**不会**触发 AI 接管：接管只能来自 GM 的明确操作、玩家的明确暂离，或房间的明确配置。该房间设置随存档持久化，schema 为 **14 → 15**，旧存档一律补 `pause`（即旧版本的真实行为），损坏值同样降级为 `pause`。
+
+群聊（Bot）入口与 Web 等价：`托管 角色名` / `取消托管 角色名` 让 GM 在群里直接改变席位归属，走的是同一个服务端控制权 API（桥接层不保存任何控制状态，也没有第二份权威）。这两条与 `暂离` / `回来` 是不同契约——后者改在场状态、前者改控制者——且都需要 GM 或授权账号；目标角色必须唯一匹配 roster，否则回复可用角色而不是猜测。服务端返回 `CONTROL_CHANGE_BUSY` 时，群里得到的是「本轮结束后再试」的友好提示，而不是原始失败文案。
+
 ## Ruleset Bundle v1
 
 `templates/rulesets/<directory_id>/` 是第一方高级规则的离线内容快照，不是 Plugin Content V2 的替代。Bundle manifest 绑定 `bundle_id`、`runtime_id`、规则/内容版本、locale 与归属文件。Canonical entity 必须具有稳定 `kind:id`、`source_ref` 和 `automation_level`。
@@ -142,6 +193,8 @@ Bundle locale 只能物化白名单展示字段。效果使用白名单 DSL；�
 `core:dnd2024` 的战斗、Session 0 与战役记录共享 `GameInstance.ruleset_state.version` 和 EventBatch ledger；可选冒险通过精确绑定向同一状态机提供剧情输入，但不是 Ruleset Bundle 的一部分。战斗事件只由战斗 reducer 应用，战役事件只由 campaign reducer 应用；runtime composition root 按显式 `intent_type` 分派，generic engine 不导入 D&D 实现。
 
 高级规则角色的机械权威是 `ruleset_character`。创建、共享卡库导入/编辑、加入游戏、游戏内资料编辑、升级和休息均经由 `character_lifecycle` capability；legacy 顶层角色字段只是兼容投影。资料编辑不得覆盖属性、HP、AC、成长历史、runtime/content/state 版本等机械字段，机械更新必须从 canonical 选择与历史重新验证或回放。
+
+职业特性边界是 `src/rulesets/dnd2024/features/`：它只回答“这个角色拥有什么”——职业与职业等级、已获得的 feature、feature 的标量参数、职业资源当前值/上限，以及当前可用的 combat capability。职业表（`progression_catalog`）仍是获得等级的权威，`class_feature_catalog` 只做 parameterize 与展示标签（含 locale overlay）。Combat 只消费 capability id、动作/资源成本、目标要求与底层 canonical action，不在 generic engine 或前端判断职业；职业资源仍写在既有 `resources.class` 结构里，创建、升级与休息恢复继续由现有 rest/advancement 路径负责，没有第二套资源表、第二套 action economy 或第二套攻击结算。feature 的**装备前提**也由这个边界回答（`features/equipment.py`）：它只读 canonical `equipment.item_refs` 的 item type 与 combat catalog 的武器档案（category / ranged / 是否 Light），因此武艺不再只看职业等级，装备变化经既有 reconciliation 重新投影，前端与战斗结算只消费投影结果。职业资源如何随升级后的新上限调整是 rest catalog 上的显式 `resize_policy`（默认 `preserve_spent` 保持既有语义，`preserve_current` 保留合法 current 并夹取溢出），没有任何按 class / resource id 的分支。
 
 Session 0 的每次修订都会清空旧成员确认，只有全部当前玩家接受后 GM 才能锁定。任务、线索、事实、重要物品和关系先保存为 pending proposal，再由 GM 以独立 Intent 确认或拒绝。章节摘要是已确认事件的确定性投影，并在存档成功后写入长期记忆；记忆投影失败不得回滚或伪装已经持久化的权威状态。
 
