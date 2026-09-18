@@ -9,7 +9,6 @@ from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
@@ -25,6 +24,7 @@ from src.engine.contracts import (
 )
 from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
 from src.engine.character_utils import apply_resource_delta, get_resource
+from src.engine.game_state import GameState
 from src.engine.game_state_codec import GameStateCodec
 from src.engine.game_state_contracts import (
     GameContextView,
@@ -65,17 +65,8 @@ MAX_SAVE_UNPACKED_BYTES = 128 * 1024 * 1024
 
 
 # ---------- 游戏状态枚举 ------------------------------------
-
-class GameState(Enum):
-    """游戏生命周期状态。"""
-    CREATED = "created"                  # 已创建，等待开始
-    WAITING = "waiting"                  # 等待玩家加入
-    ACTIVE_ACTION = "active_action"      # 行动阶段：接受玩家声明
-    ACTIVE_JUDGMENT = "active_judgment"  # 判定阶段：LLM 处理中
-    PUZZLE = "puzzle"                    # 谜题阶段：等待玩家解谜
-    PAUSED = "paused"                    # 暂停（bot 重启后恢复为此状态）
-    ENDED = "ended"                      # 已结束
-
+# GameState 已抽到 src/engine/game_state.py（无依赖契约模块）；
+# 此处 re-export 保持 `from src.engine.game_instance import GameState` 兼容。
 
 def _snapshot_players(instance: GameInstance) -> PlayerRollbackSnapshot:
     """快照所有玩家可回滚状态（含死亡玩家，便于 swipe 复活）。

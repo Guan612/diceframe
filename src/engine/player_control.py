@@ -44,6 +44,8 @@ from __future__ import annotations
 from collections.abc import Mapping, MutableMapping
 from typing import Any
 
+from src.engine.game_state import GameState
+
 # 玩家记录里的控制键；与 ``character_sheet`` 同级，不属于角色状态。
 CONTROL_KEY = "control"
 
@@ -266,9 +268,6 @@ def control_change_block(instance: Any) -> str:
     judgment.  ``PLAYER_AI_CONTROLLED`` / ``PLAYER_UNCLAIMED`` describe a seat;
     this one describes the table, and callers surface it as a retryable conflict.
     """
-
-    # 延迟导入：GameState 属于 game_instance，而 game_instance 在模块级导入本模块。
-    from src.engine.game_instance import GameState
 
     if getattr(instance, "state", None) != GameState.ACTIVE_ACTION:
         return "CONTROL_CHANGE_BUSY"
