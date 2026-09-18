@@ -2311,6 +2311,9 @@ export const zhCN = {
   // 翻译时参照英文值即可，无需理解后端原始消息；未收录的错误码由前端回退显示原文。
   // ---- 邀请 / 扫码配对 ----
   inviteCopyLink: '复制链接',
+  inviteAddressLabel: '玩家要访问的地址',
+  inviteAddressResolving: '正在获取可用地址…',
+  inviteAddressPlaceholder: '选择一个玩家能访问的地址',
   inviteAddressHint: '提示：好友需要能够访问邀请链接中的地址。局域网联机使用局域网地址；异地联机请使用公网或内网穿透地址。',
   inviteAddressSettingsLink: '修改分享地址',
   inviteLocalOnlyWarning: '当前地址仅本机可访问，其他设备无法通过该地址加入。请配置可访问的分享地址。',

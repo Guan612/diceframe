@@ -2311,6 +2311,9 @@ export const en = {
   // 翻译时参照英文值即可，无需理解后端原始消息；未收录的错误码由前端回退显示原文。
   // ---- Invites / device pairing ----
   inviteCopyLink: 'Copy link',
+  inviteAddressLabel: 'Address players will open',
+  inviteAddressResolving: 'Looking up reachable addresses…',
+  inviteAddressPlaceholder: 'Pick an address players can reach',
   inviteAddressHint: 'Heads up: your friends must be able to reach the address in this link. Use a LAN address on the same network, or a public / tunneled address for remote play.',
   inviteAddressSettingsLink: 'Change sharing address',
   inviteLocalOnlyWarning: 'This address only works on this machine, so other devices cannot join with it. Please configure a reachable sharing address.',

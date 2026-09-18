@@ -106,7 +106,7 @@ describe('device pairing header entry', () => {
     await flushPromises()
 
     expect(wrapper.find('qr-code-stub').exists()).toBe(false)
-    await wrapper.get('.pairing-stage button').trigger('click')
+    await wrapper.get('.pairing-generate-btn').trigger('click')
     await flushPromises()
 
     expect(mocks.issueCode).toHaveBeenCalledOnce()

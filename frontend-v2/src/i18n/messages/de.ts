@@ -2309,6 +2309,9 @@ export const de = {
   mapBackgroundInvalidFile: 'Wähle ein PNG-, JPEG- oder WebP-Bild mit höchstens 8 MB',
   // ---- Einladungen / Geräte-Kopplung ----
   inviteCopyLink: 'Link kopieren',
+  inviteAddressLabel: 'Adresse, die Spieler öffnen',
+  inviteAddressResolving: 'Erreichbare Adressen werden ermittelt …',
+  inviteAddressPlaceholder: 'Eine für Spieler erreichbare Adresse wählen',
   inviteAddressHint: 'Hinweis: Deine Freunde müssen die Adresse in diesem Link erreichen können. Im selben Netzwerk eine LAN-Adresse, für Fernrunden eine öffentliche oder getunnelte Adresse verwenden.',
   inviteAddressSettingsLink: 'Freigabe-Adresse ändern',
   inviteLocalOnlyWarning: 'Diese Adresse funktioniert nur auf diesem Gerät, andere Geräte können damit nicht beitreten. Bitte eine erreichbare Freigabe-Adresse konfigurieren.',

@@ -28,7 +28,7 @@ onMounted(async () => {
 <template>
   <Modal
     :title="t('pairingTitle')"
-    dialog-class="device-pairing-dialog"
+    dialog-class="qr-share-dialog"
     @close="emit('close')"
   >
     <DevicePairingPanel ref="panel" :public-base-url="settings.config.public_base_url" />
