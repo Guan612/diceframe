@@ -197,8 +197,114 @@ async def test_build_context_does_not_duplicate_system_prompt():
     )
     assert "GM_SYSTEM_SENTINEL" not in context
     assert "【游戏状态】" in context
-    assert "【世界观知识】" in context
+    assert "【当前相关世界设定】" in context
     assert "【玩家发言】" in context
+
+
+@pytest.mark.asyncio
+async def test_lore_projection_keeps_id_type_tier_unreliable_and_authority_rules():
+    """§25 / §45：投影保留 id/type/tier/unreliable，并声明权威与自由度边界。"""
+
+    context = await build_context(
+        DummyInstance(),
+        gm_prompt_filled="你是测试 GM。",
+        lorebook_entries=[
+            {
+                "id": "old_bridge",
+                "type": "location",
+                "tier": "core",
+                "name": "旧石桥",
+                "content": "十年前洪水后已经断裂。",
+                "unreliable": False,
+            },
+            {
+                "id": "mine_rumor",
+                "type": "other",
+                "tier": "background",
+                "name": "矿井传闻",
+                "content": "村民声称午夜能听见地下钟声。",
+                "unreliable": True,
+                # matcher 运行时元数据不得进入 prompt
+                "probability": 40,
+                "cooldown": 3,
+                "delay": 2,
+                "sticky": 5,
+                "group_weight": 9,
+                "match_mode": "not_any",
+            },
+        ],
+        player_message="我看看桥。",
+        provider_name="deepseek",
+    )
+
+    assert "[id=old_bridge][type=location][tier=core]" in context
+    assert "[id=mine_rumor][type=other][tier=background][unreliable]" in context
+    # §45：模型不需要 matcher runtime metadata
+    for leaked in ("probability=40", "cooldown=3", "delay=2", "sticky=5", "group_weight=9", "not_any"):
+        assert leaked not in context
+    # §45：WorldState / Ruleset 高于 Lore、不是剧本、未定义部分可即兴、unreliable 不是客观真相
+    assert "权威 WorldState / 系统裁定 / Ruleset Runtime 高于 Lorebook" in context
+    assert "Lorebook 不是剧情脚本" in context
+    assert "未声明部分属于开放空间" in context
+    assert "不得自动提升为客观事实" in context
+
+
+def test_review_gm_projection_keeps_id_but_player_safe_drops_it():
+    """§25 + review：GM 路径保留 canonical id；玩家安全路径不得暴露 canonical id，
+    同时仍保留 type / tier / unreliable / name / content 与权威约束。"""
+
+    from src.llm.context_builder import lore_entry_projection, project_player_safe_lore
+
+    entry = {
+        "id": "clue_real_murderer_john",
+        "type": "item",
+        "tier": "core",
+        "name": "大学徽记",
+        "content": "该角色在上一幕见过它。",
+        "unreliable": True,
+    }
+
+    gm = lore_entry_projection(entry)
+    assert "[id=clue_real_murderer_john]" in gm
+
+    safe = project_player_safe_lore([entry], language="zh-CN", budget_lorebook=0)
+    assert "clue_real_murderer_john" not in safe
+    assert "id=" not in safe
+    assert "[type=item][tier=core][unreliable]" in safe
+    assert "大学徽记:" in safe
+    assert "该角色在上一幕见过它。" in safe
+    assert "【明确授权给该角色的知识】" in safe
+    assert "权威 WorldState 与系统裁定高于本段" in safe
+
+
+def test_review_player_safe_projection_keeps_contract_for_all_locales():
+    from src.llm.context_builder import project_player_safe_lore
+
+    entry = {"id": "secret_id", "type": "location", "tier": "background", "name": "旧石桥", "content": "已断裂。"}
+    for language in ("zh-CN", "en", "ja", "de"):
+        rendered = project_player_safe_lore([entry], language=language, budget_lorebook=0)
+        assert "secret_id" not in rendered
+        assert "[type=location][tier=background]" in rendered
+        assert "旧石桥" in rendered
+
+
+def test_review_player_safe_projection_respects_budget():
+    from src.llm.context_builder import lore_entry_projection, project_player_safe_lore
+
+    small = {"id": "a", "type": "item", "tier": "core", "name": "甲", "content": "内容"}
+    big = {"id": "b", "type": "item", "tier": "core", "name": "乙", "content": "内容" * 40}
+    budget = len(lore_entry_projection(small, include_id=False)) + 1
+    rendered = project_player_safe_lore([small, big], language="zh-CN", budget_lorebook=budget)
+    assert "甲" in rendered
+    assert "乙" not in rendered
+
+
+def test_player_safe_rule_text_states_authority_over_unreliable():
+    from src.llm.context_builder import _PLAYER_SAFE_LORE_RULE
+
+    text = _PLAYER_SAFE_LORE_RULE["zh-CN"]
+    assert "权威 WorldState 与系统裁定高于本段" in text
+    assert "unreliable" in text
 
 
 @pytest.mark.asyncio
