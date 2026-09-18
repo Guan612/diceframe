@@ -38,6 +38,7 @@ files = [
     "src/engine/luck_resolver.py",
     "src/engine/persistence.py",
     "src/migrations/instance.py",
+    "src/lorebook/retrieval.py",
     "src/plugin_host/capabilities.py",
     "src/plugin_host/content.py",
     "src/plugin_host/contracts.py",

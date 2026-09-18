@@ -68,6 +68,8 @@ For example, core ID `npc_innkeeper` may have `npc_innkeeper.name = 老汤姆` i
 
 The lorebook database stores canonical/core entries. Keyword matching, prompt construction, and puzzle initialization build a read-only localized view for each `GameInstance.language`; translated text is never written back to the shared database.
 
+Every ruleset shares one generic lore retrieval layer (`src/lorebook/retrieval.py`): normal rounds, swipes, and out-of-character questions all go through the same `LoreRetriever`, whose input is this round's actions plus the current scene, canonical location, and present-NPC anchors. `KeywordMatcher` remains the base retrieval; semantic retrieval is an optional enhancement that reuses the existing embedding configuration and the single `EmbeddingClient` owned by `MemoryStore` (no second embedding client), and silently falls back to anchors plus keywords when it is unconfigured or fails — it never blocks a round. Entry vectors live in the derived `lorebook_embeddings` cache in `lorebook.db` (isolated by entry / language / embedding_profile, rebuilt when `content_hash` changes); it is not an authority and can be dropped and rebuilt at any time. A semantic hit only means "possibly relevant": it still passes visibility and budget, never writes WorldState, never changes ruleset verdicts, and never triggers events.
+
 ## Plugin Content V2
 
 The manifest currently supports `schema_version = 1`, `content_schema_version = 1 or 2`, `locale_schema_version = 1`, and `default_locale` as the package locale fallback. Locale fallback is exact requested locale -> base locale -> package/default locale -> base(default locale) -> canonical/core display fallback.

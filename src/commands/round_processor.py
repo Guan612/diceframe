@@ -76,6 +76,7 @@ from src.llm.world_prompt import (
     format_world_state_block,
 )
 from src.llm.parser import sanitize_narration
+from src.lorebook.retrieval import LoreRetriever
 from src.imagegen import (
     ImageGenerationError,
     ImageGenerationRequest,
@@ -254,10 +255,12 @@ class RoundProcessor:
         narrative_max_tokens: int,
         summary_max_tokens: int,
         analysis_max_tokens: int,
+        lore_retriever: Any | None = None,
     ):
         self.registry = registry
         self.llm_client = llm_client
         self.matcher = matcher
+        self.lore_retriever = lore_retriever or LoreRetriever(matcher)
         self.lorebook_store = lorebook_store
         self.memory_store = memory_store
         self._prompt = prompt
@@ -893,8 +896,9 @@ class RoundProcessor:
 
         if instance.world_id:
             self._ensure_matcher_for_world(instance.world_id, instance.language)
-        lorebook_matches = self.matcher.match_with_recursive(
-            actions_text, timed_state=instance.lorebook_timed_state)
+        # 统一走通用 LoreRetriever（锚点 + 关键词 + 可选语义）：正常回合是 GM 视角，
+        # 沿用既有计时器语义（匹配到的 sticky/cooldown/delay 会写回实例）。
+        lorebook_matches = await self.lore_retriever.retrieve(instance, actions_text)
 
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
         rule_appendix = rule_ctx.rule_appendix

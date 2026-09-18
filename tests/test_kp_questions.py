@@ -162,7 +162,10 @@ async def test_question_service_rejects_while_the_game_is_processing() -> None:
 
 class _Matcher:
     def match_with_recursive(self, question: str, **_kwargs):
-        assert question == "我知道这枚徽记吗？"
+        # 检索文本现在是通用 LoreRetriever 的锚点 query：玩家提问必须原样出现在
+        # [action] 段里（scene / location / present_npc 由锚点追加）。
+        assert "[action]" in question
+        assert "我知道这枚徽记吗？" in question
         _kwargs["timed_state"]["question-only"] = {"status": "active", "remaining": 2}
         return [
             {

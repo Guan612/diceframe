@@ -11,6 +11,7 @@ from __future__ import annotations
 from peewee import (
     BooleanField,
     CharField,
+    CompositeKey,
     IntegerField,
     Model,
     SQL,
@@ -72,3 +73,25 @@ class LorebookEntry(Model):
     class Meta:
         database = database
         table_name = "lorebook_entries"
+
+
+class LorebookEmbedding(Model):
+    """World lore embedding 派生缓存（migration v4）。
+
+    不是 authority：整表删掉后可由内容自动重建。复合主键
+    ``(entry_id, language, embedding_profile)`` 表达三种隔离——同一 entry 的不同语言
+    文本、以及换模型/端点后的旧向量都不互相混用；``content_hash`` 是送入 embedding
+    的文本指纹，内容变化即 cache miss。
+    """
+
+    entry_id = CharField()
+    language = CharField()
+    embedding_profile = CharField()
+    content_hash = CharField()
+    embedding = TextField(default="[]")
+    updated_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
+
+    class Meta:
+        database = database
+        table_name = "lorebook_embeddings"
+        primary_key = CompositeKey("entry_id", "language", "embedding_profile")
