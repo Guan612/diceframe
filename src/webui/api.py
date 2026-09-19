@@ -13,6 +13,7 @@ from typing import Any, Literal
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
 from src.engine.economy import resolve_auto_reward_policy
 from src.engine.game_instance import GameRegistry
+from src.engine import persistence
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader
@@ -413,6 +414,12 @@ class WebAPI:
             adventure_registry=self._adventure_source_registry,
             ruleset_registry=self._ruleset_registry,
             list_instances=self._reg.list_all,
+            # FIX-01 §3.7：绑定存档保护必须覆盖所有持久化存档（paused / ended /
+            # 加载失败但元数据可读），不能只看内存 active GameInstance。
+            list_save_metadata=lambda: persistence.scan_save_metadata(self._reg),
+            # FIX-01 §3.6：destructive module action 前刷新来源注册表。
+            refresh_adventure_sources=self._sync_plugin_adventure_sources,
+            default_runtime_requirement=default_adventure_runtime_requirement,
         )
         self._world_dependencies = worlds.WorldDependencies(
             lorebook=self._lore,
@@ -803,8 +810,43 @@ class WebAPI:
     def preview_module_import(self, payload: bytes) -> dict[str, Any]:
         if self._plugins is None:
             return {"ok": False, "error": "插件宿主未启用"}
-        _, manifest = self._plugins.inspect_package_manifest(payload)
-        return modules.preview_module_install(self._module_dependencies, manifest)
+        # FIX-01 §3.3：预览与安装共用同一套深度校验（真实解压 + Adventure/catalog
+        # 真装载），所以"预览显示 blocker"与"直接 API 安装被拒"结论一致。
+        return self._plugins.validate_package(
+            payload,
+            lambda directory, manifest: modules.preview_module_install(
+                self._module_dependencies, manifest, directory=directory,
+            ),
+        )
+
+    def validate_module_package(
+        self, directory: Any, manifest: dict[str, Any],
+    ) -> None:
+        """Install-transaction hook: refuse the package when it has blockers."""
+
+        modules.validate_module_directory(
+            self._module_dependencies, directory, manifest,
+            require_content_pack=False,
+        )
+
+    def guard_module_mutation(self, plugin_id: str, action: str) -> None:
+        """Package-mutation hook shared by every install/uninstall path."""
+
+        modules.assert_module_action_allowed(
+            self._module_dependencies, plugin_id, action,
+        )
+
+    def attach_package_hooks(self, plugin_host: Any) -> None:
+        """Wire the FIX-01 install-transaction hooks onto the plugin host.
+
+        单一接线点：bootstrap 与测试共用，保证本地导入 / 市场安装 / 覆盖安装 /
+        后台自动更新 / 卸载都经过同一条校验与 bound-save guard。
+        """
+
+        plugin_host.set_package_hooks(
+            package_validator=self.validate_module_package,
+            content_module_guard=self.guard_module_mutation,
+        )
 
     async def get_official_announcement(self, language: str = "zh-CN") -> dict[str, Any]:
         return await self._announcements.fetch(language)
@@ -968,9 +1010,12 @@ class WebAPI:
             self._plugin_lifecycle_dependencies, plugin_id, action,
         )
 
-    async def install_plugin(self, payload: bytes, overwrite: bool = False) -> dict[str, Any]:
+    async def install_plugin(
+        self, payload: bytes, overwrite: bool = False, expected_plugin_type: str = "",
+    ) -> dict[str, Any]:
         result = await plugins.install_plugin(
             self._plugin_lifecycle_dependencies, payload, overwrite,
+            expected_plugin_type=expected_plugin_type,
         )
         if result.get("ok"):
             self._sync_plugin_adventure_sources()
@@ -982,9 +1027,12 @@ class WebAPI:
             self._plugin_host_dependencies,
         )
 
-    async def install_marketplace_plugin(self, plugin_id: str, overwrite: bool = False) -> dict[str, Any]:
+    async def install_marketplace_plugin(
+        self, plugin_id: str, overwrite: bool = False, expected_plugin_type: str = "",
+    ) -> dict[str, Any]:
         result = await plugins.install_marketplace_plugin(
             self._plugin_lifecycle_dependencies, plugin_id, overwrite,
+            expected_plugin_type=expected_plugin_type,
         )
         if result.get("ok"):
             self._sync_plugin_adventure_sources()
@@ -992,16 +1040,24 @@ class WebAPI:
         return result
 
     async def import_module(self, payload: bytes, overwrite: bool = False) -> dict[str, Any]:
-        """Install a local content-module package through the canonical host."""
+        """Install a local content-module package through the canonical host.
 
-        return await self.install_plugin(payload, overwrite)
+        FIX-01 §3.1：模组安装面只接受 data-only content-pack——类型门在服务端
+        package inspection 之后强制（前端分类不可信）。
+        """
+
+        return await self.install_plugin(
+            payload, overwrite, expected_plugin_type=modules.MODULE_PLUGIN_TYPE,
+        )
 
     async def install_marketplace_module(
         self, module_id: str, overwrite: bool = False,
     ) -> dict[str, Any]:
         """Install a marketplace content module through the canonical host."""
 
-        return await self.install_marketplace_plugin(module_id, overwrite)
+        return await self.install_marketplace_plugin(
+            module_id, overwrite, expected_plugin_type=modules.MODULE_PLUGIN_TYPE,
+        )
 
     async def update_marketplace_plugin(self, plugin_id: str) -> dict[str, Any]:
         modules.assert_module_action_allowed(self._module_dependencies, plugin_id, "update")
