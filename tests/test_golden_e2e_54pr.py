@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 import random
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -138,6 +139,7 @@ def _adventure_record() -> dict:
                 "name": "Cellar Gate",
                 "encounter_ref": f"encounter_profile:{ENCOUNTER_ID}",
                 "transitions": [
+                    {"to": "vault"},
                     {"to": "aftermath", "conditions": [
                         {"type": "world.process_status", "id": "ritual",
                          "value": "completed"},
@@ -154,7 +156,7 @@ def _adventure_record() -> dict:
                 ],
             },
             {
-                # 12：item reward 走权威奖励路径（当前 fail closed，见文件头）。
+                # 12：item reward 走权威奖励路径（提案 → GM 确认 → 物品）。
                 "id": "vault", "type": "scene", "chapter_id": "public_chapter",
                 "name": "Vault",
                 "transitions": [{"to": "aftermath"}],
@@ -513,7 +515,7 @@ async def test_golden_steps_8_to_11_encounter_uses_module_monsters(golden) -> No
         golden.api._adventure_runtime_dependencies, instance, "gate",
     )
 
-    assert result["activated_nodes"] == []
+    assert result["activated_nodes"] == ["vault"]
     assert instance.adventure_progress["completed_nodes"] == ["gate"]
     assert "obj_open" in instance.adventure_progress["completed_objectives"]
     # 步骤 13：GM 的秘密进程已启动（gm 可见性）。
@@ -523,75 +525,88 @@ async def test_golden_steps_8_to_11_encounter_uses_module_monsters(golden) -> No
     assert "aftermath" not in instance.adventure_progress["active_nodes"]
 
 
-# ---- 12：item reward（待决策） ---------------------------------------------
+# ---- 12：item reward 走权威奖励路径 ----------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_golden_e2e_step12_item_reward_is_fail_closed_until_decided(
+async def test_golden_step12_item_reward_goes_through_the_reward_authority(
     golden,
 ) -> None:
-    """步骤 12 当前**故意**未接线：没有权威出口时宁可整节点回滚。
+    """步骤 12：``item_reward`` → ContentRef 解析 → reward intent → 既有提案权威
+    → GM 确认 → 角色 inventory。**任何时候都不直接写 inventory**。"""
 
-    既有经济权威没有"免费发放物品"语义：``queue_proposal`` 要求
-    ``0 < amount``，``is_auto_settleable_reward`` 明确把 item 奖励排除在自动
-    结算之外。所以 item_reward 要么等用户授权改结算语义，要么保持 fail closed。
-    本用例冻结后者：世界与进度都不得出现"改了一半"。
-    """
+    created = await _created_golden(golden)
+    game_key = created["game_key"]
+    instance = golden.instance(game_key)
+    gm_uid = str(created["players"][0]["user_id"])
+    deps = golden.api._adventure_runtime_dependencies
+
+    adventure_runtime.complete_adventure_node(deps, instance, "gate")
+    result = adventure_runtime.complete_adventure_node(
+        deps, instance, "vault", recipient_uid=gm_uid,
+    )
+
+    # ① 转换器把裸物品 ref 解析成模组 catalog 里的 intent（来源 = owning module）。
+    assert [intent["name"] for intent in result["reward_intents"]] == ["Brass Key"]
+    assert result["reward_intents"][0]["ref"]["source"] == MODULE_LABEL
+    # ② 权威出口只排队了一条 pending 提案，物品**还没有**进 inventory。
+    proposal_id = result["queued_rewards"][0]["proposal_id"]
+    proposal = next(
+        item for item in instance.economy["proposals"] if item["id"] == proposal_id
+    )
+    assert proposal["kind"] == "reward"
+    assert proposal["amount"] == 0
+    assert proposal["status"] == "pending"
+    assert proposal["approval_policy"] == "gm"
+    assert proposal["rewards"] == [{"name": "Brass Key", "category": "key_item"}]
+    sheet = instance.get_character_sheet(gm_uid) or {}
+    assert "Brass Key" not in json.dumps(sheet, ensure_ascii=False)
+
+    # ③ GM 用既有确认路径结算 → 物品由角色状态权威写入（带 before-image）。
+    settled = await golden.api.resolve_payment(game_key, proposal_id, True, gm_uid)
+    assert settled["ok"] is True, settled
+    sheet = instance.get_character_sheet(gm_uid) or {}
+    assert "Brass Key" in json.dumps(sheet, ensure_ascii=False)
+    transaction = next(
+        item for item in instance.economy["transactions"]
+        if item.get("proposal_id") == proposal_id
+    )
+    assert transaction["status"] == "committed"
+    assert [row["recipient_uid"] for row in transaction["reward_snapshots"]] == [gm_uid]
+
+    # ④ 幂等：同一批奖励（同一 source_ref）不会被排两次队。
+    queued_again = golden.api._queue_adventure_reward_intents(
+        instance, result["reward_intents"],
+    )
+    assert queued_again[0]["proposal_id"] == proposal_id
+    assert len([item for item in instance.economy["proposals"]]) == 1
+
+
+@pytest.mark.asyncio
+async def test_golden_step12_item_reward_without_a_sink_fails_closed(
+    golden,
+) -> None:
+    """没有权威出口时必须整节点回滚（世界/进度/inventory 不留半格）。"""
 
     created = await _created_golden(golden)
     instance = golden.instance(created["game_key"])
-    # 把 gate 改成含 item_reward 的节点（重绑一个同构包，避免改动模组文件）。
-    from copy import deepcopy
-
-    graph = deepcopy(_adventure_record())
-    gate = next(node for node in graph["nodes"] if node["id"] == "gate")
-    gate["on_complete"] = [
-        {"type": "world_op", "op": {"op": "set_fact", "key": "gate.open", "value": True}},
-        {"type": "item_reward", "ref": f"item:{ITEM_ID}"},
-    ]
-    deps = _runtime_deps_with_reward_converter(golden, instance, graph)
-    before_world = deepcopy(instance.world_state)
-    before_progress = deepcopy(instance.adventure_progress)
+    deps = replace(
+        golden.api._adventure_runtime_dependencies, queue_reward_intents=None,
+    )
+    adventure_runtime.complete_adventure_node(deps, instance, "gate")
+    before_world = json.loads(json.dumps(instance.world_state))
+    before_progress = json.loads(json.dumps(instance.adventure_progress))
 
     with pytest.raises(
         adventure_runtime.AdventureRuntimeError, match="reward sink",
     ):
-        adventure_runtime.complete_adventure_node(deps, instance, "gate")
+        adventure_runtime.complete_adventure_node(deps, instance, "vault")
 
     assert instance.world_state == before_world
     assert instance.adventure_progress == before_progress
-    # inventory 从未被触碰（不直接写 inventory）。
     for uid in instance.players:
         sheet = instance.get_character_sheet(uid) or {}
         assert ITEM_ID not in json.dumps(sheet, ensure_ascii=False)
-
-
-def _runtime_deps_with_reward_converter(golden, instance, graph):
-    """Build runtime deps whose resolver serves ``graph`` (no reward sink)."""
-
-    from src.adventures.resolver import AdventureResolution
-    from src.adventures.bundle import AdventureBundleManifest, LoadedAdventureBundle
-    from src.adventures.graph_v2 import validate_graph_v2
-
-    validated = validate_graph_v2(graph)
-    manifest = AdventureBundleManifest(
-        schema_version=1, adventure_id=ADVENTURE_ID, version="1.0.0",
-        format=ADVENTURE_GRAPH_FORMAT_V2, world_policy="portable",
-        recommended_world_id=WORLD_ID,
-        required_runtime_id="core:dnd2024", required_runtime_version=1,
-        default_locale="zh-CN", supported_locales=("zh-CN",),
-    )
-    bundle = LoadedAdventureBundle(
-        root=Path("golden"), manifest=manifest, locale="zh-CN",
-        content_digest="sha256:golden",
-        entities={"adventure": {ADVENTURE_DIRECTORY: validated}},
-    )
-    resolution = AdventureResolution(bundle, "plugin", MODULE_ID)
-    return adventure_runtime.AdventureRuntimeDependencies(
-        resolve_binding=lambda _instance: resolution,
-        materialize_world_seed=golden.api._adventure_runtime_dependencies.materialize_world_seed,
-        reward_converter=golden.runtime().adventure_reward_converter,
-    )
 
 
 # ---- 13–17：进程结算 → 公开后果 → 权威记忆 ---------------------------------
@@ -695,8 +710,18 @@ async def test_golden_steps_22_to_23_rollback_restores_world_and_progress(golden
     progress_before = json.loads(json.dumps(instance.adventure_progress))
     memories_before = golden.api.list_memories(game_key, viewer_is_gm=True)["total"]
 
-    # 本轮结算：完成节点（世界 + 进度）+ 时间推进（进程结算 + 权威记忆投递）。
+    # 本轮结算：完成节点（世界 + 进度）+ 物品奖励 + 时间推进（进程结算 + 权威记忆）。
     adventure_runtime.complete_adventure_node(deps, instance, "gate")
+    gm_uid = str(created["players"][0]["user_id"])
+    reward = adventure_runtime.complete_adventure_node(
+        deps, instance, "vault", recipient_uid=gm_uid,
+    )
+    await golden.api.resolve_payment(
+        game_key, reward["queued_rewards"][0]["proposal_id"], True, gm_uid,
+    )
+    assert "Brass Key" in json.dumps(
+        instance.get_character_sheet(gm_uid) or {}, ensure_ascii=False,
+    )
     outcome = advance_world_time(instance, 24 * 60, source_round=instance.round_number)
     queue_world_memory(instance, outcome["events"], round_number=instance.round_number)
     assert await golden.api.drain_economy_outbox(game_key) is True
@@ -713,6 +738,10 @@ async def test_golden_steps_22_to_23_rollback_restores_world_and_progress(golden
     assert instance.world_state == world_before
     assert instance.adventure_progress == progress_before
     assert instance.adventure_progress["completed_nodes"] == []
+    # 物品奖励同样被撤销（reward_snapshots 的 before-image）。
+    assert "Brass Key" not in json.dumps(
+        instance.get_character_sheet(gm_uid) or {}, ensure_ascii=False,
+    )
     # 权威世界记忆：回滚同步撤销已投递的投递记录，记忆回到本轮之前的条数。
     assert pending_memory_reversals(instance) == []
     assert [
