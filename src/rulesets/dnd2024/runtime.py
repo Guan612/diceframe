@@ -247,9 +247,12 @@ class Dnd2024Runtime:
     def _party_level(instance: Any) -> int:
         def level_of(sheet: Any) -> int:
             sheet = sheet if isinstance(sheet, dict) else {}
-            canonical = sheet.get("ruleset_character")
-            canonical = canonical if isinstance(canonical, dict) else {}
-            build = canonical.get("build") if isinstance(canonical.get("build"), dict) else {}
+            raw_canonical = sheet.get("ruleset_character")
+            canonical: dict[str, Any] = (
+                raw_canonical if isinstance(raw_canonical, dict) else {}
+            )
+            raw_build = canonical.get("build")
+            build: dict[str, Any] = raw_build if isinstance(raw_build, dict) else {}
             levels = build.get("class_levels") or sheet.get("class_levels") or []
             highest = max(
                 (
@@ -295,7 +298,8 @@ class Dnd2024Runtime:
 
         state = getattr(instance, "ruleset_state", None)
         state = state if isinstance(state, dict) else {}
-        combat = state.get("combat") if isinstance(state.get("combat"), dict) else {}
+        raw_combat = state.get("combat")
+        combat: dict[str, Any] = raw_combat if isinstance(raw_combat, dict) else {}
         if str(outcome_id or "") == "combat_ended":
             status = str(combat.get("status") or "none")
             if status == "ended":
