@@ -4,7 +4,6 @@ import { NIcon } from 'naive-ui'
 import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, PlayForwardOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
 import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
-import { currentBackendUrl, isStandaloneFrontend } from '@/api/connection'
 import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, GmStyle, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
@@ -14,7 +13,6 @@ import { useConfirm } from '@/composables/useConfirm'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useSettingsStore } from '@/stores/useSettingsStore'
 import InviteQrModal from '@/features/play/InviteQrModal.vue'
-import { buildJoinLink } from '@/utils/shareLink'
 import { copyToClipboard } from '@/utils/clipboard'
 import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
 import { characterCardNeedsConversion, characterCardRuleName } from '@/utils/characterCards'
@@ -68,8 +66,9 @@ const { locale, setLocale, t } = useLocale()
 const help = ref(false), ruleMeta = ref<RuleMeta>({}), preview = ref(false), delegate = ref(false), cards = ref<CharacterCard[]>([]), showCards = ref(false), health = ref<HealthResponse>({ events: [] })
 const showKpQuestion = ref(false)
 const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref('')
-// 邀请/接管二维码弹窗：link 非空即展示，关闭时置空
-const inviteLink = ref(''), inviteTitle = ref(''), inviteHint = ref('')
+// 邀请/接管二维码弹窗：title 非空即展示，关闭时置空。链接由弹窗自己按选中的
+// 可达地址算（见 InviteQrModal），这里只交代给谁开、开哪一局。
+const inviteTitle = ref(''), inviteHint = ref(''), inviteUser = ref('')
 const rewardPolicyMode = ref(''), rewardPolicyCap = ref(''), rewardPolicyTouched = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === '1')
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
@@ -611,14 +610,9 @@ async function ensureSettingsLoaded() {
 /** 出示加入二维码（含可复制原文）；玩家掏手机扫一下就进，不用转发链接 */
 async function invite() {
   await ensureSettingsLoaded()
-  inviteTitle.value = t('inviteLink')
+  inviteUser.value = ''
   inviteHint.value = t('inviteQrHint')
-  inviteLink.value = buildJoinLink(
-    game.currentGame.value,
-    settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
-    undefined,
-    currentBackendUrl(),
-  )
+  inviteTitle.value = t('inviteLink')
 }
 
 async function copyBotBind() {
@@ -755,14 +749,9 @@ async function setControl(uid: string, mode: 'ai' | 'human') {
 /** 单个玩家的接管链接：同样走二维码弹窗，链接里带 user 参数 */
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
-  inviteTitle.value = t('controlLink')
+  inviteUser.value = uid
   inviteHint.value = t('controlLinkQrHint')
-  inviteLink.value = buildJoinLink(
-    game.currentGame.value,
-    settings.config.public_base_url || (isStandaloneFrontend() ? location.origin : undefined),
-    uid,
-    currentBackendUrl(),
-  )
+  inviteTitle.value = t('controlLink')
 }
 
 function onEdit(uid: string) {
@@ -1521,11 +1510,12 @@ onBeforeUnmount(() => {
     </div>
 
     <InviteQrModal
-      v-if="inviteLink"
-      :link="inviteLink"
+      v-if="inviteTitle"
+      :game-key="game.currentGame.value"
+      :user="inviteUser || undefined"
       :title="inviteTitle"
       :hint="inviteHint"
-      @close="inviteLink = ''"
+      @close="inviteTitle = ''"
     />
 
     <div v-if="showRoomPassword" class="modal" @click.self="showRoomPassword = false">

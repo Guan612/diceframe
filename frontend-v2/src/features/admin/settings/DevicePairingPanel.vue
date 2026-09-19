@@ -3,22 +3,27 @@
  * 扫码配对面板：出示二维码让 DiceFrame App 扫码登录，并管理已配对设备。
  *
  * 为什么地址要问服务端：GM 在本机打开的多半是 localhost，直接把 location.origin
- * 编进二维码，手机扫到的是一个它永远连不上的地址。候选地址只有服务端知道
- * （GET /api/system/network）。
+ * 编进二维码，手机扫到的是一个它永远连不上的地址。候选地址只有服务端知道，走
+ * useReachableAddresses——邀请/接管链接问的是同一件事，共用同一份清单。
+ *
+ * 地址选择器与二维码取景卡片也是共享组件（AddressPicker / QrStage），两个扫码
+ * 弹窗因此保持同一套排版。
  *
  * 配对码本身是一次性、短时效的，过期后本面板不续期、只重新签发。
  */
 import { computed, onUnmounted, ref } from 'vue'
-import { NButton, NIcon, NSelect, NSpin, NTag } from 'naive-ui'
-import { PhonePortraitOutline, QrCodeOutline, RefreshOutline, TrashOutline } from '@vicons/ionicons5'
+import { NButton, NIcon, NSpin, NTag } from 'naive-ui'
+import { PhonePortraitOutline, QrCodeOutline, TrashOutline } from '@vicons/ionicons5'
 
-import QrCode from '@/components/common/QrCode.vue'
+import AddressPicker from '@/components/common/AddressPicker.vue'
+import QrStage from '@/components/common/QrStage.vue'
 import { pairingApi } from '@/api/pairing'
 import { errorMessage } from '@/api/client'
 import { currentBackendUrl } from '@/api/connection'
 import { buildPairingPayload, normalizePublicBaseUrl } from '@/utils/shareLink'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocale } from '@/composables/useLocale'
+import { useReachableAddresses } from '@/composables/useReachableAddresses'
 import { useToast } from '@/composables/useToast'
 import type { PairedDevice } from '@/api/types'
 
@@ -28,9 +33,15 @@ const { t } = useLocale()
 const toast = useToast()
 const { confirm } = useConfirm()
 
-const addresses = ref<string[]>([])
+// 候选地址与邀请/接管链接共用同一份服务端探测结果。App 配对连的是后端入口，
+// 所以这里取 url 而不是 host。
+const {
+  urls: reachableUrls,
+  loading: addressesLoading,
+  error: addressesError,
+  load: loadReachable,
+} = useReachableAddresses()
 const selectedAddress = ref('')
-const addressesLoading = ref(false)
 const code = ref('')
 const codeIssuing = ref(false)
 const secondsLeft = ref(0)
@@ -43,6 +54,14 @@ let countdown: ReturnType<typeof setInterval> | undefined
 const payload = computed(() =>
   code.value && selectedAddress.value ? buildPairingPayload(selectedAddress.value, code.value) : '',
 )
+
+/** 配了公网地址/隧道时它才是手机真正能连上的入口，排在候选首位。 */
+const publicUrl = computed(() =>
+  props.publicBaseUrl ? normalizePublicBaseUrl(props.publicBaseUrl) : '',
+)
+const addresses = computed(() => [
+  ...new Set([...(publicUrl.value ? [publicUrl.value] : []), ...reachableUrls.value]),
+])
 const addressOptions = computed(() => addresses.value.map((url) => ({ label: url, value: url })))
 
 function stopCountdown() {
@@ -59,20 +78,11 @@ function expireCode() {
 }
 
 async function loadAddresses() {
-  addressesLoading.value = true
-  try {
-    const result = await pairingApi.networkAddresses()
-    const candidates = (result.addresses || []).map((entry) => entry.url)
-    // 配了公网地址/隧道时它才是手机真正能连上的入口，排在候选首位。
-    const publicUrl = props.publicBaseUrl ? normalizePublicBaseUrl(props.publicBaseUrl) : ''
-    addresses.value = [...new Set([...(publicUrl ? [publicUrl] : []), ...candidates])]
-    if (!addresses.value.includes(selectedAddress.value)) {
-      selectedAddress.value = addresses.value[0] || normalizePublicBaseUrl(currentBackendUrl())
-    }
-  } catch (e: unknown) {
-    toast.error(errorMessage(e))
-  } finally {
-    addressesLoading.value = false
+  await loadReachable()
+  // 配对面板没有别的地址来源可退，拿不到候选要让 GM 知道原因。
+  if (addressesError.value) toast.error(addressesError.value)
+  if (!addresses.value.includes(selectedAddress.value)) {
+    selectedAddress.value = addresses.value[0] || normalizePublicBaseUrl(currentBackendUrl())
   }
 }
 
@@ -145,48 +155,46 @@ defineExpose({ initialize })
 
 <template>
   <section class="pairing-panel">
-    <header class="pairing-head">
-      <div>
-        <h4>{{ t('pairingTitle') }}</h4>
-        <p class="muted">{{ t('pairingHelp') }}</p>
-      </div>
-      <NButton size="small" :loading="devicesLoading" @click="initialize">
-        <template #icon><NIcon :component="RefreshOutline" /></template>
-        {{ t('refresh') }}
-      </NButton>
-    </header>
+    <p class="pairing-desc">{{ t('pairingHelp') }}</p>
 
-    <div class="form-row">
-      <label>{{ t('pairingAddressLabel') }}</label>
-      <NSelect
-        v-model:value="selectedAddress"
-        :options="addressOptions"
-        :loading="addressesLoading"
-        :placeholder="t('pairingAddressPlaceholder')"
-        @update:value="expireCode"
-      />
-    </div>
-    <p class="muted pairing-address-hint">{{ t('pairingAddressHint') }}</p>
+    <AddressPicker
+      v-model:value="selectedAddress"
+      :options="addressOptions"
+      :label="t('pairingAddressLabel')"
+      :hint="t('pairingAddressHint')"
+      :placeholder="t('pairingAddressPlaceholder')"
+      :loading="addressesLoading"
+      :busy="devicesLoading"
+      @update:value="expireCode"
+      @refresh="initialize"
+    />
 
-    <div class="pairing-stage">
-      <div v-if="payload" class="pairing-qr">
-        <QrCode :value="payload" :size="208" level="M" />
-        <div class="pairing-qr-meta">
-          <NTag type="warning" size="small" round>{{ t('pairingExpiresIn', { seconds: secondsLeft }) }}</NTag>
-          <!-- 扫码失败时的兜底：配对码本身可以在 App 里手输 -->
-          <code class="pairing-code">{{ code }}</code>
-          <p class="muted">{{ t('pairingScanHint') }}</p>
-        </div>
-      </div>
-      <div v-else class="pairing-placeholder">
-        <NIcon :component="QrCodeOutline" size="36" />
+    <QrStage :value="payload">
+      <template #badge>
+        <NTag class="pairing-expire-tag" type="warning" size="small" round>
+          {{ t('pairingExpiresIn', { seconds: secondsLeft }) }}
+        </NTag>
+      </template>
+      <template #placeholder>
+        <NIcon :component="QrCodeOutline" size="40" />
         <p class="muted">{{ t('pairingIdleHint') }}</p>
+      </template>
+      <div v-if="payload" class="pairing-qr-meta">
+        <!-- 扫码失败时的兜底：配对码本身可以在 App 里手输 -->
+        <code class="pairing-code">{{ code }}</code>
+        <p class="muted">{{ t('pairingScanHint') }}</p>
       </div>
-      <NButton type="primary" :loading="codeIssuing" :disabled="!selectedAddress" @click="issueCode">
+      <NButton
+        type="primary"
+        class="pairing-generate-btn"
+        :loading="codeIssuing"
+        :disabled="!selectedAddress"
+        @click="issueCode"
+      >
         <template #icon><NIcon :component="QrCodeOutline" /></template>
         {{ code ? t('pairingRegenerate') : t('pairingGenerate') }}
       </NButton>
-    </div>
+    </QrStage>
 
     <div class="pairing-devices">
       <button
@@ -228,17 +236,16 @@ defineExpose({ initialize })
 </template>
 
 <style scoped>
-.pairing-panel{margin-top:28px;padding-top:20px;border-top:1px solid var(--df-border-soft)}
-.pairing-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}
-.pairing-head h4{margin:0 0 4px}
-.pairing-address-hint{margin:6px 0 0;font-size:12px}
-.pairing-stage{display:flex;flex-direction:column;align-items:flex-start;gap:14px;margin:18px 0 24px}
-.pairing-qr{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.pairing-qr-meta{display:flex;flex-direction:column;align-items:flex-start;gap:8px}
-.pairing-qr-meta p{margin:0;max-width:280px;line-height:1.6}
+.pairing-panel{margin-top:0;padding-top:0}
+.pairing-desc{margin:0 0 18px;color:var(--df-text-muted);font-size:13px;line-height:1.6}
+
+/* 地址选择器与二维码取景卡片的排版都在共享组件里（AddressPicker / QrStage），
+   这里只留配对特有的东西：过期标签、配对码、出码按钮。 */
+.pairing-expire-tag{align-self:center}
+.pairing-qr-meta{display:flex;flex-direction:column;align-items:center;gap:6px}
+.pairing-qr-meta p{margin:0;max-width:320px;line-height:1.6;font-size:12px}
 .pairing-code{font-family:var(--df-font-mono);font-size:18px;letter-spacing:2px;background:color-mix(in srgb,var(--df-accent) 12%,transparent);padding:4px 10px;border-radius:6px}
-.pairing-placeholder{display:flex;align-items:center;gap:12px;padding:24px;border:1px dashed var(--df-border-soft);border-radius:10px;width:100%;box-sizing:border-box;color:var(--df-text-muted)}
-.pairing-placeholder p{margin:0}
+.pairing-generate-btn{width:100%}
 .pairing-devices{margin-top:6px;border-top:1px solid var(--df-border-soft);padding-top:12px}
 .pairing-devices-toggle{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;padding:6px 10px;border:1px solid var(--df-border-soft);border-radius:8px;background:var(--df-control-bg);color:var(--df-text-secondary);cursor:pointer}
 .pairing-devices-toggle strong{font-weight:700}

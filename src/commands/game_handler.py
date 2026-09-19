@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.llm.client import LLMClient
@@ -33,8 +33,8 @@ from src.commands.state_recap import (
 )
 from src.commands.story_recap import StoryRecapGenerator
 from src.commands.swipe_generator import SwipeGenerator
-from src.content.worlds import localize_lorebook_entries
 from src.engine.language import DEFAULT_LANGUAGE
+from src.lorebook.retrieval import LoreRetriever
 from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.registry import RulesetRuntimeRegistry
 
@@ -76,13 +76,22 @@ class GameHandler:
         )
         self.worlds_dir = worlds_dir or (Path(__file__).parent.parent.parent / "templates" / "worlds")
         self._plugin_host = None
+        # 通用 Lore 检索：所有走标准回合管线的 Ruleset 共用同一实例。embedding 客户端
+        # 复用现有 MemoryStore.embedding_client（同一份 embedding_enabled /
+        # embedding_provider_ref / embedding_model / embedding_max_input 配置），
+        # 因此这里用 provider 惰性取，不新建第二套 embedding 配置或客户端。
+        self.lore_retriever = LoreRetriever(
+            self.matcher,
+            store=self.lorebook_store,
+            load_world_template=self._load_world_template,
+            embedding_client_provider=self._embedding_client,
+        )
         self._factory = GameFactory(self.registry, self.lorebook_store, self.worlds_dir)
         self._state_applier = StateUpdateApplier(
             self.rules_dir, self.worlds_dir, self._load_world_template,
             ruleset_registry=self.ruleset_registry,
         )
         self._progression = ProgressionResolver(self.rules_dir, self.worlds_dir)
-        self._last_matcher_scope: tuple[str, str] | None = None
         self._round_processor = RoundProcessor(
             self.registry,
             self.llm_client,
@@ -100,6 +109,7 @@ class GameHandler:
             narrative_max_tokens,
             summary_max_tokens,
             analysis_max_tokens,
+            lore_retriever=self.lore_retriever,
         )
         self._swipe_generator = SwipeGenerator(
             self.llm_client,
@@ -111,6 +121,7 @@ class GameHandler:
             narrative_max_tokens,
             self.registry.get,
             self.registry.save,
+            lore_retriever=self.lore_retriever,
         )
         self._lifecycle = GameLifecycle(
             self.registry,
@@ -132,25 +143,26 @@ class GameHandler:
             self._load_world_template,
             self._ensure_matcher_for_world,
             max_tokens=min(768, max(128, brief_max_tokens)),
+            lore_retriever=self.lore_retriever,
         )
         self.narrative_max_tokens = narrative_max_tokens
         self.summary_max_tokens = summary_max_tokens
         self.brief_max_tokens = brief_max_tokens
         self.analysis_max_tokens = analysis_max_tokens
 
+    def _embedding_client(self) -> Any | None:
+        """复用现有 embedding 客户端（未配置时为 None，语义检索自动跳过）。"""
+
+        return getattr(self.memory_store, "embedding_client", None)
+
     def _ensure_matcher_for_world(self, world_id: str, language: str = "") -> None:
-        """确保关键词匹配器已加载当前世界的条目。"""
-        scope = (str(world_id or ""), str(language or DEFAULT_LANGUAGE))
-        if world_id and scope != self._last_matcher_scope and self.lorebook_store:
-            entries = self.lorebook_store.list_entries(world_id)
-            entries = localize_lorebook_entries(entries, self._load_world_template(world_id, language))
-            self.matcher.build(entries)
-            self._last_matcher_scope = scope
+        """确保当前 world + language 的条目已装进匹配器与语义候选。"""
+
+        self.lore_retriever.ensure_world(world_id, language)
 
     def invalidate_matcher_for_world(self, world_id: str) -> None:
         """Force the next round to rebuild a locale-correct lorebook view."""
-        if self._last_matcher_scope and self._last_matcher_scope[0] == str(world_id or ""):
-            self._last_matcher_scope = None
+        self.lore_retriever.invalidate_world(world_id)
 
     # ---- 新建游戏 ----
 

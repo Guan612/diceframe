@@ -15,8 +15,12 @@ export const CARD_CONTROL_MODES = ['human', 'ai', 'unclaimed'] as const
 export type CardControlMode = (typeof CARD_CONTROL_MODES)[number]
 
 /**
- * 第一张默认「真人」、其余默认「等待认领」：与既有产品默认一致，但以一个明确的
- * 值呈现，用户不需要再理解一层「跟随默认」。
+ * 第一张默认「玩家」、其余默认「等待认领」：与既有产品默认一致，但以一个明确的值
+ * 呈现，用户不需要再理解一层「跟随默认」。
+ *
+ * 其余角色默认 `unclaimed` 而不是 `ai`：`unclaimed` 是「席位存在但暂时无人负责」，
+ * 角色不会自动行动；`ai` 是「服务端 AI 真的替这个角色行动」。开房时常见的做法是先
+ * 建好几张卡等朋友认领，把默认值改成 `ai` 会直接改变游戏行为。
  */
 export function defaultCardControl(index: number): CardControlMode {
   return index === 0 ? 'human' : 'unclaimed'
@@ -51,6 +55,34 @@ export function cardControlPayload(
   current: readonly unknown[],
 ): CardControlMode[] {
   return syncCardControls(count, current)
+}
+
+/**
+ * 读某张角色当前生效的控制方式：越界或缺失时给出该位置应有的默认值。
+ *
+ * 「角色步骤显示什么」与「确认页摘要什么」必须用同一个答案，否则用户会在确认页
+ * 看到与刚才选择不同的值。默认规则也只有这里一份（{@link defaultCardControl}）。
+ */
+export function cardControlAt(current: readonly unknown[], index: number): CardControlMode {
+  return normalizeCardControl(current[index], index)
+}
+
+/**
+ * 三态循环按钮：返回把某张卡切到**下一个**控制方式后的新数组。
+ *
+ * 顺序就是契约顺序 human → ai → unclaimed → human，循环长度取自
+ * {@link CARD_CONTROL_MODES}，以后契约变化不需要改这里的魔法数。先归一化再取下一个，
+ * 因此坏数据被点到时也会先落回合法模式而不是被跳过。越界 index 不写入。
+ */
+export function cycleCardControl(
+  current: readonly unknown[],
+  index: number,
+): CardControlMode[] {
+  const next = syncCardControls(current.length, current)
+  if (index < 0 || index >= next.length) return next
+  const position = CARD_CONTROL_MODES.indexOf(next[index])
+  next[index] = CARD_CONTROL_MODES[(position + 1) % CARD_CONTROL_MODES.length]
+  return next
 }
 
 /**

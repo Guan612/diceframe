@@ -1,4 +1,4 @@
-﻿"""Lorebook SQLite 存储 —— 世界书条目的 CRUD 操作。
+"""Lorebook SQLite 存储 —— 世界书条目的 CRUD 操作。
 
 查询构造走 peewee（src.lorebook.models）；连接、PRAGMA、SCHEMA 建表、
 user_version 迁移与事务提交仍由本类持有，行为契约与迁移前一致。
@@ -15,11 +15,14 @@ from typing import Any
 
 from peewee import SQL
 
-from src.lorebook.models import LorebookEntry, World
+from src.lorebook.models import LorebookEntry, LorebookEmbedding, World
 from src.lorebook.models import database as _models_database
 from src.migrations.lorebook import migrate as migrate_lorebook
 
 logger = logging.getLogger("trpg")
+
+# 单次 IN(...) 查询的 entry 数量上限，避免撞 SQLite 的参数个数限制。
+_CACHE_CHUNK = 400
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS worlds (
@@ -59,6 +62,16 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     source_plugin TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS lorebook_embeddings (
+    entry_id TEXT NOT NULL,
+    language TEXT NOT NULL,
+    embedding_profile TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (entry_id, language, embedding_profile)
 );
 """
 
@@ -211,12 +224,19 @@ class LorebookStore:
     def delete_entry(self, entry_id: str) -> None:
         with self._lock:
             LorebookEntry.delete().where(LorebookEntry.id == entry_id).execute()
+            # 派生缓存跟着条目走，避免删除后残留向量行。
+            self._delete_embeddings_locked([entry_id])
             self._conn.commit()
 
     def delete_world_cascade(self, world_id: str) -> None:
         """删除世界及其所有条目。"""
         with self._lock:
+            entry_ids = [
+                str(row.id) for row in
+                LorebookEntry.select(LorebookEntry.id).where(LorebookEntry.world_id == world_id)
+            ]
             LorebookEntry.delete().where(LorebookEntry.world_id == world_id).execute()
+            self._delete_embeddings_locked(entry_ids)
             World.delete().where(World.id == world_id).execute()
             self._conn.commit()
 
@@ -229,9 +249,16 @@ class LorebookStore:
     def delete_entries_by_plugin(self, plugin_id: str) -> int:
         """删除该插件来源的全部世界书条目，返回删除条数。"""
         with self._lock:
+            entry_ids = [
+                str(row.id) for row in
+                LorebookEntry.select(LorebookEntry.id).where(
+                    LorebookEntry.source_plugin == plugin_id,
+                )
+            ]
             rowcount = LorebookEntry.delete().where(
                 LorebookEntry.source_plugin == plugin_id,
             ).execute()
+            self._delete_embeddings_locked(entry_ids)
             self._conn.commit()
         return rowcount
 
@@ -253,6 +280,89 @@ class LorebookStore:
                 query = query.where(LorebookEntry.type == entry_type)
             rows = list(query.order_by(LorebookEntry.tier, LorebookEntry.name))
         return [_entry_to_dict(e) for e in rows]
+
+    # ---- embedding 派生缓存（migration v4） ----
+
+    def load_embedding_cache(
+        self, entry_ids: list[str], language: str, embedding_profile: str,
+    ) -> dict[str, dict]:
+        """读取 (entry_id, language, profile) 命中的向量缓存。
+
+        返回 ``entry_id -> {"content_hash": str, "embedding": list[float]}``。缓存行损坏
+        （不是合法 JSON 数组，或含非数字 / NaN / Inf）一律按缺失处理，由调用方重新
+        embedding —— 派生缓存的坏数据不能让正常回合抛异常。
+        """
+
+        ids = [str(entry_id).strip() for entry_id in entry_ids or [] if str(entry_id).strip()]
+        if not ids:
+            return {}
+        result: dict[str, dict] = {}
+        with self._lock:
+            for start in range(0, len(ids), _CACHE_CHUNK):
+                chunk = ids[start:start + _CACHE_CHUNK]
+                rows = list(
+                    LorebookEmbedding.select().where(
+                        (LorebookEmbedding.language == str(language or ""))
+                        & (LorebookEmbedding.embedding_profile == str(embedding_profile or ""))
+                        & (LorebookEmbedding.entry_id.in_(chunk))
+                    )
+                )
+                for row in rows:
+                    data = dict(row.__data__)
+                    try:
+                        vector = json.loads(data.get("embedding") or "[]")
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if not isinstance(vector, list) or not vector:
+                        continue
+                    # 坏向量（非数字 / NaN / Inf）按缺失处理，绝不抛给调用方。
+                    try:
+                        numbers = [float(value) for value in vector]
+                    except (TypeError, ValueError):
+                        continue
+                    if any(
+                        number != number or number in (float("inf"), float("-inf"))
+                        for number in numbers
+                    ):
+                        continue
+                    result[str(data.get("entry_id") or "")] = {
+                        "content_hash": str(data.get("content_hash") or ""),
+                        "embedding": numbers,
+                    }
+        return result
+
+    def save_embedding_cache(self, rows: list[dict]) -> None:
+        """写入 / 覆盖派生缓存行；坏行（无 id 或空向量）直接跳过。"""
+
+        payload = []
+        for row in rows or []:
+            entry_id = str(row.get("entry_id") or "").strip()
+            vector = row.get("embedding")
+            if not entry_id or not isinstance(vector, (list, tuple)) or not vector:
+                continue
+            payload.append({
+                "entry_id": entry_id,
+                "language": str(row.get("language") or ""),
+                "embedding_profile": str(row.get("embedding_profile") or ""),
+                "content_hash": str(row.get("content_hash") or ""),
+                "embedding": json.dumps([float(value) for value in vector]),
+            })
+        if not payload:
+            return
+        with self._lock:
+            for row in payload:
+                LorebookEmbedding.insert(**row).on_conflict_replace().execute()
+            self._conn.commit()
+
+    def _delete_embeddings_locked(self, entry_ids: list[str]) -> None:
+        """删除若干 entry 的缓存行（调用方必须已持有 ``self._lock``）。"""
+
+        ids = [str(entry_id).strip() for entry_id in entry_ids or [] if str(entry_id).strip()]
+        for start in range(0, len(ids), _CACHE_CHUNK):
+            chunk = ids[start:start + _CACHE_CHUNK]
+            LorebookEmbedding.delete().where(
+                LorebookEmbedding.entry_id.in_(chunk),
+            ).execute()
 
     def search_entries(self, world_id: str, keyword: str) -> list[dict]:
         # peewee 的 SQLite 方言把 ilike 编译为 SQL LIKE（like 会被编译成 GLOB，
