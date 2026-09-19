@@ -25,6 +25,18 @@ test('all required viewport widths remain contained', async ({ page }) => {
   }
 })
 
+test('phone module recovery stays contained and exposes local import', async ({ page }) => {
+  const token = accessToken()
+  await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/#/modules?adventure=core%3Acastle&version=1.0.0')
+  await expect(page.getByRole('heading', { name: '模组' })).toBeVisible()
+  await expect(page.getByText('恢复本局冒险')).toBeVisible()
+  await expect(page.locator('.module-import input[type="file"]')).toBeVisible()
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+  expect(overflow).toBe(0)
+})
+
 test('phone shell uses a compact header and fixed bottom navigation', async ({ page }) => {
   const token = accessToken()
   await page.addInitScript(value => localStorage.setItem('trpg_access_token', value), token)
