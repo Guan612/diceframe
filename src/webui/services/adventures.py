@@ -837,12 +837,28 @@ def game_adventure_projection(
                 "reason": "package_invalid",
             },
         }
+    projection = project_graph_v2(graph, viewer_is_gm=viewer_is_gm)
+    visible_node_ids = {
+        str(node.get("id") or "")
+        for node in projection.get("nodes", [])
+        if isinstance(node, dict)
+    }
+    progress = getattr(instance, "adventure_progress", {})
+    progress = progress if isinstance(progress, dict) else {}
+    active_nodes = [
+        node_id
+        for node_id in progress.get("active_nodes", [])
+        if isinstance(node_id, str) and node_id in visible_node_ids
+    ]
+    # The client receives only server-derived, viewer-safe active identities.
+    # It never infers completable nodes from graph transitions.
+    projection["progress"] = {"active_nodes": active_nodes}
     return {
         "ok": True,
         "adventure": {
             "binding": public_binding,
             "available": True,
             "format": bundle.manifest.format,
-            "projection": project_graph_v2(graph, viewer_is_gm=viewer_is_gm),
+            "projection": projection,
         },
     }

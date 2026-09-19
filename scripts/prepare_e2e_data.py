@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from src.adventures import AdventureBundleLoader, AdventureResolver
 from src.adventures.graph_v2 import ADVENTURE_GRAPH_FORMAT_V2
+from src.adventures.progress import new_progress
 from src.engine.game_instance import GameInstance, GameState
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.webui.services.legal import bundled_documents
@@ -297,6 +298,12 @@ def prepare_e2e_data(data_dir: Path) -> Path:
     adventure_instance.players = _e2e_players()
     if not adventure_instance.bind_adventure(_write_e2e_adventure(data_dir)):
         raise RuntimeError("failed to bind the E2E adventure in the fixture")
+    # Mirror the real v2 create lifecycle: the panel must receive an
+    # authoritative active node, never infer it from the graph transition.
+    adventure_bundle = AdventureBundleLoader(
+        data_dir / "templates" / "adventures",
+    ).resolve(E2E_ADVENTURE_ID, "zh-CN")
+    adventure_instance.adventure_progress = new_progress(adventure_bundle.adventure)
     _write_save(data_dir, adventure_instance)
 
     runtime = Dnd2024Runtime()

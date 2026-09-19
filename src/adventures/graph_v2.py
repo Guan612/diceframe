@@ -508,6 +508,11 @@ def project_graph_v2(graph: dict[str, Any], *, viewer_is_gm: bool = False) -> di
             # 尚未发放的 item_reward）。玩家投影不携带 on_complete —— 由 GM/服务端
             # 在推进时执行，绝不通过只读投影泄漏。
             projected.pop("on_complete", None)
+            # These references identify internal content records. A public
+            # node's prose may be player-safe while its encounter/NPC ids are
+            # still spoilers, so a player projection never carries them.
+            projected.pop("npc_refs", None)
+            projected.pop("encounter_ref", None)
             # A public node may have come from an older package which predates
             # the validator.  Do not expose its dangling GM chapter identity.
             if projected.get("chapter_id") not in visible_chapter_ids:

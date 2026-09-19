@@ -100,6 +100,7 @@ export const en = {
   adventureNextNodes: 'Next: {nodes}',
   adventureUnsortedNodes: 'Other nodes',
   adventureGoals: 'Objectives and milestones',
+  adventureCompleteNode: 'Complete node',
   adventureNode_scene: 'Scene', adventureNode_objective: 'Objective',
   adventureNode_encounter: 'Encounter', adventureNode_decision: 'Decision',
   adventureNode_milestone: 'Milestone', adventureNode_reference: 'Reference',

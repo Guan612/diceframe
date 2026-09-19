@@ -42,9 +42,11 @@ from __future__ import annotations
 
 import json
 import random
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import quote
 from unittest.mock import patch
 
 import pytest
@@ -524,22 +526,24 @@ async def test_golden_steps_8_to_11_encounter_uses_module_monsters(golden) -> No
     ]
     assert presets[ENCOUNTER_ID]["enemies"][0]["hp"] == 11
 
-    # 步骤 10：Combat Runtime 真的能开打（权威 intent → 事件批）。剧情已绑定
-    # 遭遇，所以按引擎的剧情语义声明预设（不接受 "sandbox" 摘出去）。
-    resolved = runtime.resolve_intent(instance, {
+    # 步骤 10：以真实 application seam 启动战斗。此处必须让 resolver、reducer、
+    # save 与 authoritative combat state 都经过正常 /intents 路径。
+    gm_uid = str(created["players"][0]["user_id"])
+    resolved = await golden.api.ruleset_submit_intent(created["game_key"], gm_uid, True, {
         "intent_id": "golden-combat-1",
         "type": "combat.start",
         "expected_version": int(instance.ruleset_state.get("version", 0) or 0),
-        "submitted_by": str(created["players"][0]["user_id"]),
         "encounter_preset_id": ENCOUNTER_ID,
-    }, random.Random(11))
+    })
     assert resolved["ok"] is True, resolved
-    started = next(
-        event for event in resolved["event_batch"]["events"]
-        if event["type"] == "dnd2024.combat.started"
-    )
-    assert set(started["enemies"]) == {f"{MONSTER_ID}_1", f"{MONSTER_ID}_2"}
-    assert started["enemies"][f"{MONSTER_ID}_1"]["attacks"][0]["damage"] == "1d4+1"
+    combat = instance.ruleset_state["combat"]
+    assert combat["status"] == "active"
+    assert combat["encounter_preset_id"] == ENCOUNTER_ID
+    assert set(combat["enemies"]) == {f"{MONSTER_ID}_1", f"{MONSTER_ID}_2"}
+    assert combat["enemies"][f"{MONSTER_ID}_1"]["hp"] == 11
+    assert combat["enemies"][f"{MONSTER_ID}_1"]["armor_class"] == 13
+    assert combat["enemies"][f"{MONSTER_ID}_1"]["attacks"][0]["damage"] == "1d4+1"
+    assert resolved["gameplay"]["combat"]["status"] == "active"
 
     # 步骤 8/11：完成公开节点（objective 完成 + 秘密进程启动）。
     result = await _complete_node(golden, created, "gate")
@@ -552,6 +556,66 @@ async def test_golden_steps_8_to_11_encounter_uses_module_monsters(golden) -> No
     assert ritual["status"] == "running" and ritual["visibility"] == "gm"
     # 后果节点要等进程结算（gate: world.process_status）——现在还不该开放。
     assert "aftermath" not in instance.adventure_progress["active_nodes"]
+
+
+@pytest.mark.asyncio
+async def test_golden_adventure_completion_intent_enforces_gm_and_active_node(golden) -> None:
+    created = await _created_golden(golden)
+    game_key = created["game_key"]
+    gm_uid = str(created["players"][0]["user_id"])
+    player_uid = str(created["players"][1]["user_id"])
+
+    @web.middleware
+    async def identity(request, handler):
+        request["user_id"] = request.headers.get("X-Test-User", "")
+        request["owner_authenticated"] = request.headers.get("X-Test-Owner") == "1"
+        return await handler(request)
+
+    app = web.Application(middlewares=[identity])
+    app["api"] = golden.api
+    register_game_query_routes(app)
+    path = f"/api/games/{quote(game_key, safe='')}/intents"
+    async with TestClient(TestServer(app)) as client:
+        denied_response = await client.post(
+            path, headers={"X-Test-User": player_uid},
+            json={"type": "adventure.node.complete", "node_id": "gate"},
+        )
+        denied = await denied_response.json()
+        inactive_response = await client.post(
+            path, headers={"X-Test-User": gm_uid, "X-Test-Owner": "1"},
+            json={"type": "adventure.node.complete", "node_id": "vault"},
+        )
+        inactive = await inactive_response.json()
+        completed_response = await client.post(
+            path, headers={"X-Test-User": gm_uid, "X-Test-Owner": "1"},
+            json={"type": "adventure.node.complete", "node_id": "gate"},
+        )
+        completed = await completed_response.json()
+
+    assert denied_response.status == 403
+    assert denied["ok"] is False and denied["code"] == "GM_ONLY"
+    assert inactive_response.status == 422
+    assert inactive["ok"] is False and inactive["code"] == "ADVENTURE_NODE_REJECTED"
+    assert completed_response.status == 200
+    assert completed["ok"] is True, completed
+    assert completed["result"]["adventure_node"]["activated_nodes"] == ["vault"]
+
+
+@pytest.mark.asyncio
+async def test_golden_world_time_transaction_restores_on_unexpected_adventure_failure(golden) -> None:
+    created = await _created_golden(golden)
+    instance = golden.instance(created["game_key"])
+    before_world = deepcopy(instance.world_state)
+    before_progress = deepcopy(instance.adventure_progress)
+
+    def fail_after_world_advance(_instance):
+        raise RuntimeError("injected adventure gate failure")
+
+    golden.api._handler.set_adventure_world_advance(fail_after_world_advance)
+    await _advance_time_through_round_processor(golden, instance, 60)
+
+    assert instance.world_state == before_world
+    assert instance.adventure_progress == before_progress
 
 
 # ---- 12：item reward 走权威奖励路径 ----------------------------------------

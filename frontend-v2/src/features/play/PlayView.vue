@@ -1189,6 +1189,7 @@ onBeforeUnmount(() => {
           v-if="hasAdventureBinding"
           :game-key="game.currentGame.value"
           :is-gm="game.isGm.value"
+          @completed="refreshRulesetPanels"
         />
 
         <DirectorProposalCard

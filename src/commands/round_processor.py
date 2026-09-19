@@ -458,15 +458,13 @@ class RoundProcessor:
                     )
                     if self._advance_adventure_world is not None:
                         self._advance_adventure_world(instance)
-                except (WorldStateError, ValueError, TypeError) as exc:
+                except Exception as exc:
                     # World settlement and its dependent Adventure gate update
                     # are one in-memory authority transaction.  Restoring the
                     # before-images makes a retry perform the same settlement
                     # exactly once rather than advancing only half the state.
-                    if before_world is not None:
-                        instance.world_state = before_world
-                    if before_progress is not None:
-                        instance.adventure_progress = before_progress
+                    instance.world_state = before_world
+                    instance.adventure_progress = before_progress
                     logger.warning("世界时间推进被拒绝: %s", exc)
                 else:
                     instance.last_world_events = [

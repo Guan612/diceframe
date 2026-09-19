@@ -69,6 +69,7 @@ def test_player_game_projection_never_exposes_bound_v2_secrets(tmp_path: Path) -
     bundle = loader.resolve("core:lanterns_of_greymoor", "zh-CN")
     instance = SimpleNamespace(
         adventure_binding=bundle.binding("greymoor"), language="zh-CN", world_id="greymoor",
+        adventure_progress={"active_nodes": ["gate", "ritual"]},
     )
 
     player = adventures.game_adventure_projection(
@@ -82,6 +83,7 @@ def test_player_game_projection_never_exposes_bound_v2_secrets(tmp_path: Path) -
     assert "ritual" not in rendered
     gate = player["adventure"]["projection"]["nodes"][0]
     assert gate["transitions"] == []
+    assert player["adventure"]["projection"]["progress"] == {"active_nodes": ["gate"]}
 
 
 def test_gm_game_projection_receives_complete_bound_v2_graph(tmp_path: Path) -> None:
@@ -89,11 +91,13 @@ def test_gm_game_projection_receives_complete_bound_v2_graph(tmp_path: Path) -> 
     bundle = loader.resolve("core:lanterns_of_greymoor", "zh-CN")
     instance = SimpleNamespace(
         adventure_binding=bundle.binding("greymoor"), language="zh-CN", world_id="greymoor",
+        adventure_progress={"active_nodes": ["gate", "ritual"]},
     )
 
     gm = adventures.game_adventure_projection(dependencies, instance, viewer_is_gm=True)
 
     assert {node["id"] for node in gm["adventure"]["projection"]["nodes"]} == {"gate", "ritual"}
+    assert gm["adventure"]["projection"]["progress"] == {"active_nodes": ["gate", "ritual"]}
 
 
 def test_changed_bound_package_is_not_projected(tmp_path: Path) -> None:

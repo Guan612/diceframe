@@ -241,6 +241,29 @@ def test_player_projection_never_leaks_secret_content_or_ids() -> None:
     assert all(transition["to"] != "secret_ritual" for transition in throne["transitions"])
 
 
+def test_player_projection_hides_internal_public_node_refs() -> None:
+    """Public story copy must not disclose internal encounter/NPC identities."""
+
+    graph = _adventure()
+    graph["nodes"][0].update({
+        "encounter_ref": "encounter:secret_boss",
+        "npc_refs": ["npc:secret_traitor"],
+    })
+    validated = validate_graph_v2(graph)
+
+    gm = project_graph_v2(validated, viewer_is_gm=True)
+    player = project_graph_v2(validated, viewer_is_gm=False)
+    gm_gate = next(node for node in gm["nodes"] if node["id"] == "gate")
+    player_rendered = json.dumps(player, ensure_ascii=False)
+
+    assert gm_gate["encounter_ref"] == "encounter:secret_boss"
+    assert gm_gate["npc_refs"] == ["npc:secret_traitor"]
+    assert "secret_boss" not in player_rendered
+    assert "secret_traitor" not in player_rendered
+    assert "encounter_ref" not in player_rendered
+    assert "npc_refs" not in player_rendered
+
+
 def test_gm_sees_transitions_into_secret_nodes() -> None:
     view = project_graph_v2(_graph_with_secrets(), viewer_is_gm=True)
     throne = next(node for node in view["nodes"] if node["id"] == "throne")

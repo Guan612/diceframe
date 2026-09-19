@@ -100,6 +100,7 @@ export const ja = {
   adventureGoals: '目標とマイルストーン',
   adventureNode_scene: 'シーン', adventureNode_objective: '目標', adventureNode_encounter: '遭遇',
   adventureNode_decision: '決定', adventureNode_milestone: 'マイルストーン', adventureNode_reference: '参照',
+  adventureCompleteNode: 'ノードを完了',
   contentWorkspaceLorebookHint: '資料、人物、隠された真実',
   contentWorkspaceWorldsHint: '舞台、カバー、語り口',
   contentWorkspaceAdventuresHint: '章、シーン、物語構造',

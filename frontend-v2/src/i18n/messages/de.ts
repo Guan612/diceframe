@@ -98,6 +98,7 @@ export const de = {
   adventureSceneRef: 'Szene: {ref}', adventureEncounterRef: 'Begegnung: {ref}',
   adventureNextNodes: 'Danach: {nodes}', adventureUnsortedNodes: 'Weitere Knoten',
   adventureGoals: 'Ziele und Meilensteine',
+  adventureCompleteNode: 'Knoten abschließen',
   adventureNode_scene: 'Szene', adventureNode_objective: 'Ziel', adventureNode_encounter: 'Begegnung',
   adventureNode_decision: 'Entscheidung', adventureNode_milestone: 'Meilenstein', adventureNode_reference: 'Referenz',
   contentWorkspaceLorebookHint: 'Personen, Orte und verborgene Wahrheiten',

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/api/client'
+import { submitRulesetIntent } from '@/api/rulesets'
 import { useLocale } from '@/composables/useLocale'
 
 type AdventureNode = {
@@ -21,6 +22,7 @@ type AdventureGraph = {
   nodes: AdventureNode[]
   objectives: Array<{ id: string; name?: string; node_ids?: string[] }>
   milestones: Array<{ id: string; name?: string; node_ids?: string[] }>
+  progress?: { active_nodes?: string[] }
 }
 type AdventureResponse = {
   adventure: null | {
@@ -40,14 +42,19 @@ type AdventureResponse = {
 }
 
 const props = defineProps<{ gameKey: string; isGm: boolean }>()
+const emit = defineEmits<{ completed: [] }>()
 const { t } = useLocale()
 const router = useRouter()
 const loading = ref(false)
 const error = ref('')
 const adventure = ref<AdventureResponse['adventure']>(null)
+const completingNodeId = ref('')
 
 const graph = computed(() => adventure.value?.projection || null)
 const chapters = computed(() => graph.value?.chapters || [])
+const activeNodeIds = computed(() => new Set(
+  (graph.value?.progress?.active_nodes || []).filter(nodeId => typeof nodeId === 'string'),
+))
 const ungroupedNodes = computed(() => (
   graph.value?.nodes.filter(node => !node.chapter_id) || []
 ))
@@ -76,6 +83,26 @@ function linkedNames(ids: string[] | undefined): string {
   if (!ids?.length) return t('adventureNoLinkedNodes')
   const labels = new Map((graph.value?.nodes || []).map(node => [node.id, nodeLabel(node)]))
   return ids.map(id => labels.get(id) || id).join(' · ')
+}
+function isActiveNode(nodeId: string): boolean {
+  return activeNodeIds.value.has(nodeId)
+}
+async function completeNode(nodeId: string): Promise<void> {
+  if (!props.isGm || !isActiveNode(nodeId) || completingNodeId.value) return
+  completingNodeId.value = nodeId
+  error.value = ''
+  try {
+    await submitRulesetIntent(props.gameKey, {
+      type: 'adventure.node.complete',
+      node_id: nodeId,
+    })
+    await load()
+    emit('completed')
+  } catch (caught: unknown) {
+    error.value = caught instanceof Error ? caught.message : String(caught || t('operationFailed'))
+  } finally {
+    completingNodeId.value = ''
+  }
 }
 function openModuleRecovery(): void {
   const binding = adventure.value?.binding || {}
@@ -149,6 +176,14 @@ onMounted(() => { void load() })
           <p v-if="node.scene_ref" class="muted">{{ t('adventureSceneRef', { ref: node.scene_ref }) }}</p>
           <p v-if="node.encounter_ref" class="muted">{{ t('adventureEncounterRef', { ref: node.encounter_ref }) }}</p>
           <p v-if="node.transitions?.length" class="muted">{{ t('adventureNextNodes', { nodes: linkedNames(node.transitions.map(item => item.to)) }) }}</p>
+          <button
+            v-if="isGm && isActiveNode(node.id)"
+            :data-testid="`adventure-complete-${node.id}`"
+            class="primary adventure-complete"
+            type="button"
+            :disabled="loading || Boolean(completingNodeId)"
+            @click="completeNode(node.id)"
+          >{{ t('adventureCompleteNode') }}</button>
         </article>
       </section>
       <section v-if="ungroupedNodes.length" class="adventure-chapter">
@@ -156,6 +191,14 @@ onMounted(() => { void load() })
         <article v-for="node in ungroupedNodes" :key="node.id" class="adventure-node">
           <div class="adventure-node-heading"><strong>{{ nodeLabel(node) }}</strong><span>{{ nodeKindLabel(node.type) }}</span></div>
           <p v-if="node.description">{{ node.description }}</p>
+          <button
+            v-if="isGm && isActiveNode(node.id)"
+            :data-testid="`adventure-complete-${node.id}`"
+            class="primary adventure-complete"
+            type="button"
+            :disabled="loading || Boolean(completingNodeId)"
+            @click="completeNode(node.id)"
+          >{{ t('adventureCompleteNode') }}</button>
         </article>
       </section>
       <section v-if="graph.objectives.length || graph.milestones.length" class="adventure-goals">
@@ -181,6 +224,7 @@ onMounted(() => { void load() })
 .adventure-node-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .adventure-node-heading span { color: var(--text-tertiary); font-size: .75rem; }
 .adventure-node p, .adventure-goals p { font-size: .82rem; line-height: 1.45; }
+.adventure-complete { justify-self: start; min-height: 32px; }
 .error-copy { color: var(--error); }
 @media (max-width: 480px) {
   .adventure-panel { gap: 10px; margin-bottom: 10px; }

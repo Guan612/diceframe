@@ -42,6 +42,8 @@ test('owner and shared player both read the bound adventure projection', async (
   await expect(gmPanel).toContainText('E2E Secret Ritual')
   await expect(playerPanel).toContainText('E2E Public Gate')
   await expect(playerPanel).not.toContainText('E2E Secret Ritual')
+  await expect(gmPanel.getByTestId('adventure-complete-public_gate')).toBeVisible()
+  await expect(playerPanel.getByTestId('adventure-complete-public_gate')).toHaveCount(0)
   // 行动输入区仍然可见（Play 基础可用）。
   await expect(gmPage.locator('.composer')).toBeVisible()
   await expect(playerPage.locator('.composer')).toBeVisible()

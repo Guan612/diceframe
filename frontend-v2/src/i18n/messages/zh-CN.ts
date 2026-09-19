@@ -100,6 +100,7 @@ export const zhCN = {
   adventureNextNodes: '后续：{nodes}',
   adventureUnsortedNodes: '其他节点',
   adventureGoals: '目标与里程碑',
+  adventureCompleteNode: '完成节点',
   adventureNode_scene: '场景', adventureNode_objective: '目标',
   adventureNode_encounter: '遭遇', adventureNode_decision: '决策',
   adventureNode_milestone: '里程碑', adventureNode_reference: '参考',
