@@ -75,7 +75,11 @@ def test_helpers_do_not_runtime_import_game_instance() -> None:
 
 
 def test_helpers_import_game_state_contract_directly() -> None:
-    """需要 GameState 的 helper 必须从 game_state 契约模块导入，而不是绕道。"""
+    """helper 中所有 ``GameState`` 导入必须来自 ``src.engine.game_state`` 契约模块。
+
+    反向断言：任何 ``from <其它模块> import GameState``（包括 game_instance 的
+    re-export）都失败，防止未来绕开契约模块。
+    """
     for rel in HELPER_MODULES:
         path = ROOT / rel
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
@@ -83,11 +87,13 @@ def test_helpers_import_game_state_contract_directly() -> None:
         for node in ast.walk(tree):
             if id(node) in guarded or not isinstance(node, ast.ImportFrom):
                 continue
-            if node.module == "src.engine.game_state":
-                imported = {alias.name for alias in node.names}
-                assert "GameState" in imported, (
-                    f"{rel}: 应从 src.engine.game_state 导入 GameState"
-                )
+            imported = {alias.name for alias in node.names}
+            if "GameState" not in imported:
+                continue
+            assert node.module == "src.engine.game_state", (
+                f"{rel}: GameState 只能从 src.engine.game_state 导入"
+                f"（实际来自 {node.module or '相对导入'}）"
+            )
 
 
 def test_helpers_stay_inside_engine_domain_boundaries() -> None:
