@@ -65,7 +65,9 @@ def test_complete_node_activates_unconditional_successors() -> None:
     assert activated == ["bridge"]          # tunnel 的 gate 未满足
     assert progress["completed_nodes"] == ["gate"]
     assert progress["active_nodes"] == ["bridge"]
-    assert progress["history"][0] == {"kind": "node_completed", "id": "gate"}
+    # history[0] 是初始激活（new_progress 记录），完成事件在其后。
+    assert progress["history"][1] == {"kind": "node_completed", "id": "gate"}
+    assert progress["history"][2] == {"kind": "node_activated", "id": "bridge"}
 
 
 def test_gated_branch_activates_when_world_fact_satisfied() -> None:
