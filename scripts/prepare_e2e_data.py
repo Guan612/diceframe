@@ -31,6 +31,83 @@ E2E_ADVENTURE_ID = f"user:{E2E_ADVENTURE_DIRECTORY}"
 E2E_ADVENTURE_PUBLIC_NODE = "E2E Public Gate"
 E2E_ADVENTURE_SECRET_NODE = "E2E Secret Ritual"
 
+# FIX-06：模组库（ModulesView / ModuleDetailView）的浏览器验收需要一个真实的
+# data-only content-pack。它带自己的冒险 id（不与上面的 user 冒险重名，避免制造
+# 来源冲突），也不被任何存档绑定，因此详情页的三个受保护按钮都应为可用。
+E2E_MODULE_ID = "e2e-module"
+E2E_MODULE_NAME = "E2E Module"
+E2E_MODULE_ADVENTURE_DIRECTORY = "module_quest"
+E2E_MODULE_ADVENTURE_ID = f"plugin:{E2E_MODULE_ADVENTURE_DIRECTORY}"
+
+
+def _write_e2e_module(data_dir: Path) -> None:
+    """Install a real data-only content-pack for the module-library browser checks.
+
+    FIX-06 §8：模组页面（已安装 / 本地导入 / 在线 + 详情页受保护按钮）必须有真实
+    包可读，所以这里按 PluginHost 的包目录约定落一个 content-pack 包（不写任何
+    Lorebook / 卡库：catalog 投递不 autoimport）。
+    """
+
+    package = data_dir / "plugin-packages" / E2E_MODULE_ID
+    adventure_dir = package / "adventures" / E2E_MODULE_ADVENTURE_DIRECTORY
+    manifest = {
+        "schema_version": 1,
+        "id": E2E_MODULE_ID,
+        "name": E2E_MODULE_NAME,
+        "version": "1.0.0",
+        "plugin_type": "content-pack",
+        "content_profile": "adventure-module",
+        "content_delivery_mode": "catalog",
+        "contributes": {},
+        "adventure_packages": [f"adventures/{E2E_MODULE_ADVENTURE_DIRECTORY}"],
+        "config_schema": "config.schema.json",
+    }
+    files: dict[str, dict] = {
+        "plugin.json": manifest,
+        "config.schema.json": {"type": "object", "properties": {}},
+        f"adventures/{E2E_MODULE_ADVENTURE_DIRECTORY}/manifest.json": {
+            "schema_version": 1,
+            "adventure_id": E2E_MODULE_ADVENTURE_ID,
+            "version": "1.0.0",
+            "format": ADVENTURE_GRAPH_FORMAT_V2,
+            "world_policy": "portable",
+            "recommended_world_id": "default_fantasy",
+            "required_runtime": {"id": "core:dnd2024", "minimum_version": 1},
+            "default_locale": "zh-CN",
+            "supported_locales": ["zh-CN"],
+        },
+        f"adventures/{E2E_MODULE_ADVENTURE_DIRECTORY}/adventure.json": {
+            "schema_version": 1,
+            "kind": "adventure",
+            "id": E2E_MODULE_ADVENTURE_DIRECTORY,
+            "source_ref": "diceframe-e2e:module-quest",
+            "recommended_world_id": "default_fantasy",
+            "automation_level": "guided",
+            "chapters": [{"id": "module_chapter", "name": "E2E Module Chapter"}],
+            "nodes": [{
+                "id": "module_gate", "type": "scene", "chapter_id": "module_chapter",
+                "name": "E2E Module Gate", "transitions": [],
+            }],
+            "objectives": [],
+            "milestones": [],
+            "start_node_ids": ["module_gate"],
+        },
+        f"adventures/{E2E_MODULE_ADVENTURE_DIRECTORY}/locales/zh-CN/adventure.json": {
+            "locale_schema_version": 1,
+            "locale": "zh-CN",
+            "target": {"kind": "adventure", "id": E2E_MODULE_ADVENTURE_DIRECTORY},
+            "fields": {"tutorial": {"name": "E2E 模组冒险", "summary": "模组库浏览器验收。"}},
+        },
+    }
+    for relative, payload in files.items():
+        target = package / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+    if not adventure_dir.is_dir():  # pragma: no cover - 落盘失败必须显式失败
+        raise RuntimeError("failed to write the E2E module package")
+
 
 def _write_save(data_dir: Path, instance: GameInstance) -> Path:
     save_file = data_dir / "saves" / "#".join(instance.game_key) / "state.json"
@@ -250,6 +327,8 @@ def prepare_e2e_data(data_dir: Path) -> Path:
     if not dnd_instance.bind_ruleset_runtime(dnd_character["rule_binding"]):
         raise RuntimeError("failed to bind D&D 2024 runtime in E2E fixture")
     _write_save(data_dir, dnd_instance)
+    # FIX-06：模组库的浏览器验收需要真实 content-pack 包（§8 的产品面）。
+    _write_e2e_module(data_dir)
     return save_file
 
 

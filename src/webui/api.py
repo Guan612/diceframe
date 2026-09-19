@@ -429,6 +429,10 @@ class WebAPI:
             # FIX-01 §3.6：destructive module action 前刷新来源注册表。
             refresh_adventure_sources=self._sync_plugin_adventure_sources,
             default_runtime_requirement=default_adventure_runtime_requirement,
+            # FIX-06 §8：在线模组区块复用既有插件市场索引（含 installed 判定）。
+            list_marketplace_plugins=(
+                self._plugins.marketplace_plugins if self._plugins is not None else None
+            ),
         )
         self._adventure_runtime_dependencies = adventure_runtime.AdventureRuntimeDependencies(
             resolve_binding=lambda instance: self._adventure_resolver.resolve_binding(
@@ -815,6 +819,13 @@ class WebAPI:
 
     def list_modules(self) -> dict[str, Any]:
         return modules.list_modules(self._module_dependencies)
+
+    async def list_module_marketplace(self, keyword: str = "") -> dict[str, Any]:
+        """Online content-module catalogue for the modules view (FIX-06 §8)."""
+
+        return await modules.module_marketplace(
+            self._module_dependencies, keyword=keyword,
+        )
 
     def module_detail(self, module_id: str) -> dict[str, Any]:
         return modules.module_detail(self._module_dependencies, module_id)

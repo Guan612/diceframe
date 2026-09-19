@@ -21,13 +21,14 @@ lifecycle**。本模块只做三件事：
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.plugin_host.support import (
     content_delivery_mode,
     content_profile,
 )
+from src.version import version_below
 from src.webui.services.module_validation import (
     MODULE_PLUGIN_TYPE,
     ModulePackageValidation,
@@ -57,6 +58,9 @@ class ModuleDependencies:
     # 组合根声明的默认 runtime：模块声明了 ruleset_catalogs 但没写 requires 时，
     # 用它判断 catalog 契约归属（与 Adventure 绑定同一默认，不猜字段）。
     default_runtime_requirement: Callable[[], dict[str, Any]] | None = None
+    # FIX-06 §8：ModulesView 的"在线模组"区块复用既有插件市场索引（不新建市场）。
+    # 组合根注入 ``PluginHost.marketplace_plugins``（已带 installed / 版本信息）。
+    list_marketplace_plugins: Callable[[], Awaitable[dict[str, Any]]] | None = None
 
 
 def _installed_content_packs(plugin_host: Any) -> list[Any]:
@@ -131,13 +135,103 @@ def _refresh_adventure_sources(deps: ModuleDependencies) -> None:
         pass
 
 
+async def module_marketplace(
+    deps: ModuleDependencies, *, keyword: str = "",
+) -> dict[str, Any]:
+    """在线模组库（FIX-06 §8：ModulesView 的 Online / Marketplace 区块）。
+
+    复用既有插件市场索引（``PluginHost.marketplace_plugins``，不新建市场、不新建
+    索引），只保留 data-only ``content-pack``：模块库不是"另一个插件列表"，把
+    provider / tool 混进来会让用户以为它们能当模组装。
+
+    ``installed`` / ``installed_version`` 由宿主给出（服务端事实），
+    ``update_available`` 用既有 ``version_below`` 做展示级比较；市场不可达时返回
+    ``ok=False``，UI 显示离线提示而不是空列表（空列表会被读成"没有模组"）。
+    """
+
+    lister = getattr(deps, "list_marketplace_plugins", None)
+    if not callable(lister):
+        return {
+            "ok": False, "error_code": "MODULE_MARKETPLACE_UNAVAILABLE",
+            "error": "marketplace is not wired", "modules": [],
+        }
+    try:
+        listing = await lister()
+    except Exception as exc:  # noqa: BLE001 - 市场故障不能变成 500
+        return {
+            "ok": False, "error_code": "MODULE_MARKETPLACE_UNAVAILABLE",
+            "error": str(exc), "modules": [],
+        }
+    if not listing.get("ok"):
+        return {
+            "ok": False, "error_code": "MODULE_MARKETPLACE_UNAVAILABLE",
+            "error": str(listing.get("error") or ""), "modules": [],
+        }
+    needle = str(keyword or "").strip().lower()
+    modules: list[dict[str, Any]] = []
+    for item in listing.get("plugins") or []:
+        if str(item.get("plugin_type") or "") != MODULE_PLUGIN_TYPE:
+            continue
+        if needle and needle not in _market_search_text(item):
+            continue
+        installed_version = str(item.get("installed_version") or "")
+        latest = item.get("latest") if isinstance(item.get("latest"), dict) else {}
+        latest_version = str(latest.get("version") or item.get("version") or "")
+        modules.append({
+            "id": str(item.get("id") or ""),
+            "name": str(item.get("name") or ""),
+            "version": str(item.get("version") or ""),
+            "latest_version": latest_version,
+            "description": str(item.get("description") or ""),
+            "content_profile": str(item.get("content_profile") or ""),
+            "content_delivery_mode": str(item.get("content_delivery_mode") or ""),
+            "adventure_count": int(item.get("adventure_count") or 0),
+            "ruleset_targets": list(item.get("ruleset_targets") or []),
+            "languages": list(item.get("languages") or []),
+            "tags": list(item.get("tags") or []),
+            "trust_level": str(item.get("trust_level") or ""),
+            "distribution": str(item.get("distribution") or ""),
+            "repository_url": str(item.get("repository_url") or ""),
+            "release_url": str(item.get("release_url") or ""),
+            "stars": int(item.get("stars") or 0),
+            "installed": bool(item.get("installed")),
+            "installed_version": installed_version,
+            "update_available": bool(
+                installed_version and latest_version
+                # version_below(minimum, current)：已装版本是否**低于**市场最新版本。
+                and version_below(latest_version, installed_version)
+            ),
+            "installable": bool(item.get("installable", True)),
+            "verification_error": str(item.get("verification_error") or ""),
+            "needs_core_update": bool(item.get("needs_core_update")),
+            "min_app_version": str(item.get("min_app_version") or ""),
+        })
+    return {
+        "ok": True,
+        "modules": modules,
+        "total": len(modules),
+        "source": listing.get("source") or {},
+    }
+
+
+def _market_search_text(item: dict[str, Any]) -> str:
+    parts = [str(item.get("id") or ""), str(item.get("name") or "")]
+    parts.extend(str(tag) for tag in (item.get("tags") or []))
+    parts.extend(str(target) for target in (item.get("ruleset_targets") or []))
+    return " ".join(parts).lower()
+
+
 def module_detail(deps: ModuleDependencies, module_id: str) -> dict[str, Any]:
-    """单个模组详情：概览 + 内容分组计数 + 冒险清单（只读）。"""
+    """单个模组详情：概览 + 内容分组计数 + 冒险清单 + 使用存档/按钮 guard。"""
 
     runtime = getattr(deps.plugin_host, "plugins", {}).get(str(module_id or ""))
     if runtime is None or str(runtime.manifest.get("plugin_type") or "") != MODULE_PLUGIN_TYPE:
         return {"ok": False, "error_code": "MODULE_NOT_FOUND"}
-    _refresh_adventure_sources(deps)
+    # FIX-06 §8：详情页的"使用中的存档"与 update/disable/uninstall 按钮状态都来自
+    # 服务端 guard 结果（同一绑定存档判定，且顺带刷新来源注册表），前端不自行推断。
+    guard = module_action_guard(deps, module_id)
+    bound_games = list(guard.get("bound_games") or [])
+    actions = guard.get("actions") or {}
     plugin_id = str(runtime.manifest.get("id") or "")
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in deps.plugin_host.contributions.list():
@@ -148,23 +242,7 @@ def module_detail(deps: ModuleDependencies, module_id: str) -> dict[str, Any]:
             "title": item.title,
             "description": item.description,
         })
-    adventures: list[dict[str, Any]] = []
-    source = (
-        deps.adventure_registry.source_for("plugin", plugin_id)
-        if deps.adventure_registry is not None
-        else None
-    )
-    if source is not None:
-        try:
-            for bundle in source.loader.list(""):
-                adventures.append({
-                    "adventure_id": bundle.manifest.adventure_id,
-                    "version": bundle.manifest.version,
-                    "format": bundle.manifest.format,
-                    "directory_id": bundle.root.name,
-                })
-        except Exception:  # noqa: BLE001 - 坏包不拖垮详情页
-            adventures = []
+    adventures = _module_adventure_rows(deps, module_id)
     return {
         "ok": True,
         "module": {
@@ -177,6 +255,8 @@ def module_detail(deps: ModuleDependencies, module_id: str) -> dict[str, Any]:
             "content_counts": _contribution_counts(deps.plugin_host.contributions, plugin_id),
             "content": grouped,
             "adventures": adventures,
+            "bound_games": bound_games,
+            "actions": actions,
         },
     }
 
@@ -274,21 +354,27 @@ def module_compatibility(deps: ModuleDependencies, module_id: str) -> dict[str, 
 # 改 package bytes 的破坏性操作，必须与 update 同等受保护。
 PROTECTED_MODULE_ACTIONS = ("uninstall", "disable", "update", "overwrite", "stop")
 
+# FIX-06 §8：模块详情页会呈现给用户的受保护操作（``stop`` 是 ``disable`` 在
+# 插件控制路由里的内部别名，不作为独立按钮暴露）。
+MODULE_ACTIONS = ("update", "disable", "uninstall", "overwrite")
 
-def module_adventure_ids(deps: ModuleDependencies, module_id: str) -> set[str]:
-    """The adventure ids a module package declares.
 
-    FIX-01 §3.6：**不依赖"碰巧同步过 registry"**。来源优先级：
+def _module_adventure_rows(deps: ModuleDependencies, module_id: str) -> list[dict[str, Any]]:
+    """The adventure packages a module declares, as read-model rows.
 
-    1. runtime 自己声明的 declared-only 包目录（安装后即存在，server restart 后
-       ``discover()`` 重建，且与 enabled/disabled 状态无关）；
+    FIX-01 §3.6 / FIX-06 §8：**不依赖"碰巧同步过 registry"**（否则 server restart
+    之后详情页的 Adventures 段永远是空的）。来源优先级：
+
+    1. runtime 自己声明的 declared-only 包目录（安装后即存在，``discover()`` 重建，
+       且与 enabled/disabled 状态无关）；
     2. 退回到来源注册表（plugin 来源在禁用时会被同步移除，因此只作兜底）。
     """
 
     runtime = getattr(deps.plugin_host, "plugins", {}).get(str(module_id or ""))
     if runtime is None:
-        return set()
+        return []
     plugin_id = str(runtime.manifest.get("id") or "")
+    bundles: list[Any] | None = None
     root = getattr(runtime, "adventure_packages_root", None)
     directories = tuple(getattr(runtime, "adventure_package_directories", ()) or ())
     if root is not None and directories:
@@ -296,28 +382,48 @@ def module_adventure_ids(deps: ModuleDependencies, module_id: str) -> set[str]:
 
         try:
             loader = AdventureBundleLoader(root, allowed_directory_ids=directories)
-            return {
-                bundle.manifest.adventure_id for bundle in loader.list("")
-            }
-        except Exception:  # noqa: BLE001 - 坏包不拖垮保护检查
-            return set()
-    registry = deps.adventure_registry
-    if registry is None:
-        return set()
-    source = registry.source_for("plugin", plugin_id)
-    if source is None:
-        return set()
-    try:
-        return {bundle.manifest.adventure_id for bundle in source.loader.list("")}
-    except Exception:  # noqa: BLE001 - 坏包不拖垮保护检查
-        return set()
+            bundles = list(loader.list(""))
+        except Exception:  # noqa: BLE001 - 坏包不拖垮详情页
+            bundles = []
+    if bundles is None:
+        registry = deps.adventure_registry
+        source = (
+            registry.source_for("plugin", plugin_id) if registry is not None else None
+        )
+        if source is None:
+            return []
+        try:
+            bundles = list(source.loader.list(""))
+        except Exception:  # noqa: BLE001 - 坏包不拖垮详情页
+            return []
+    return [
+        {
+            "adventure_id": bundle.manifest.adventure_id,
+            "version": bundle.manifest.version,
+            "format": bundle.manifest.format,
+            "directory_id": bundle.root.name,
+        }
+        for bundle in bundles
+    ]
+
+
+def module_adventure_ids(deps: ModuleDependencies, module_id: str) -> set[str]:
+    """The adventure ids a module package declares (protection target)."""
+
+    return {
+        str(row["adventure_id"])
+        for row in _module_adventure_rows(deps, module_id)
+        if row["adventure_id"]
+    }
 
 
 def _active_bindings(deps: ModuleDependencies) -> list[dict[str, Any]]:
     """Bindings from in-memory instances (active / paused / ended)."""
 
     rows: list[dict[str, Any]] = []
-    for instance in (deps.list_instances or (lambda: []))():
+    # 可选依赖：缺失/未接线的读模型按"没有内存实例"处理，不抛（与 §3.6/§3.7 一致）。
+    lister = getattr(deps, "list_instances", None)
+    for instance in (lister or (lambda: []))():
         binding = getattr(instance, "adventure_binding", {}) or {}
         rows.append({
             "game_key": "|".join(str(part) for part in instance.game_key),
@@ -396,27 +502,66 @@ def module_bound_games(
     ]
 
 
-def assert_module_action_allowed(deps: ModuleDependencies, module_id: str, action: str) -> None:
-    """Guard for uninstall/disable/update/overwrite/stop（母方案 §124：默认 block）。
-
-    绑定存档存在时抛 :class:`ModuleInUse`；调用方（插件生命周期 API / 插件宿主）
-    把它转成结构化错误，UI 展示"哪些存档正在使用"。
+def _module_bound_games_for_guard(
+    deps: ModuleDependencies, module_id: str,
+) -> list[dict[str, Any]]:
+    """Bound saves blocking a protected action — the one guard computation.
 
     FIX-01 §3.6：guard 前先刷新 module/adventure 来源注册表，避免
     "server restart → registry 为空 → destructive action fail-open"。
+    FIX-06 §8：UI 的按钮状态与 enforce 路径共用本函数，两者不可能给出不同结论。
     """
 
-    if action not in PROTECTED_MODULE_ACTIONS:
-        return
     refresh = getattr(deps, "refresh_adventure_sources", None)
     if callable(refresh):
         try:
             refresh()
         except Exception:  # noqa: BLE001 - 刷新失败不得让 guard 变成 fail-open
             pass
-    bound = module_bound_games(deps, module_id)
+    return module_bound_games(deps, module_id)
+
+
+def assert_module_action_allowed(deps: ModuleDependencies, module_id: str, action: str) -> None:
+    """Guard for uninstall/disable/update/overwrite/stop（母方案 §124：默认 block）。
+
+    绑定存档存在时抛 :class:`ModuleInUse`；调用方（插件生命周期 API / 插件宿主）
+    把它转成结构化错误，UI 展示"哪些存档正在使用"。
+    """
+
+    if action not in PROTECTED_MODULE_ACTIONS:
+        return
+    bound = _module_bound_games_for_guard(deps, module_id)
     if bound:
         raise ModuleInUse(module_id, action, bound)
+
+
+def module_action_guard(deps: ModuleDependencies, module_id: str) -> dict[str, Any]:
+    """Per-action server verdict for the module detail buttons（FIX-06 §8）。
+
+    按钮状态必须来自 server guard 结果，而不是前端猜：这里用与
+    :func:`assert_module_action_allowed` 完全相同的绑定存档判定，一次性给出每个
+    受保护 action 的 ``allowed`` / ``reason`` / ``games``。用户点击时服务端仍会
+    再判一次（同一函数），所以这只是"提前显示结论"，不是放行。
+    """
+
+    runtime = getattr(deps.plugin_host, "plugins", {}).get(str(module_id or ""))
+    if runtime is None or str(runtime.manifest.get("plugin_type") or "") != MODULE_PLUGIN_TYPE:
+        return {"ok": False, "error_code": "MODULE_NOT_FOUND", "actions": {}}
+    bound = _module_bound_games_for_guard(deps, module_id)
+    actions: dict[str, dict[str, Any]] = {}
+    for action in MODULE_ACTIONS:
+        blocked = bool(bound)
+        actions[action] = {
+            "allowed": not blocked,
+            "reason": "MODULE_IN_USE" if blocked else "",
+            "games": list(bound) if blocked else [],
+        }
+    return {
+        "ok": True,
+        "module_id": str(runtime.manifest.get("id") or ""),
+        "actions": actions,
+        "bound_games": list(bound),
+    }
 
 
 class ModuleInUse(ValueError):
@@ -470,11 +615,13 @@ def module_usages(deps: ModuleDependencies, module_id: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "MODULE_ACTIONS",
     "ModuleDependencies",
     "ModuleInUse",
     "PROTECTED_MODULE_ACTIONS",
     "assert_module_action_allowed",
     "list_modules",
+    "module_action_guard",
     "module_adventures",
     "module_adventure_ids",
     "module_bound_games",
@@ -482,6 +629,7 @@ __all__ = [
     "module_content",
     "module_compatibility",
     "module_detail",
+    "module_marketplace",
     "module_usages",
     "parse_requires",
     "preview_module_install",
