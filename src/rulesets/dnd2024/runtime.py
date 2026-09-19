@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,12 @@ from src.rulesets.dnd2024.character.reconciliation import (
 )
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
+from src.rulesets.dnd2024.content.catalog import DndContentCatalog
+from src.rulesets.dnd2024.content.provider import (
+    DndContentCatalogProvider,
+    adventure_local_records,
+)
+from src.rulesets.dnd2024.content.rewards import reward_intents_from_outcome
 from src.rulesets.dnd2024.exploration import (
     EXPLORATION_INTENT_TYPES, Dnd2024ExplorationEngine,
 )
@@ -97,6 +104,8 @@ class Dnd2024Runtime:
             adventures,
             source_kind="user" if adventures_dir else "builtin",
         )
+        # FIX-03 §5.2：模组 catalog 来源由组合根注入（默认无模组）。
+        self._module_content_sources: Any = None
         self._director = Dnd2024Director(director_mode if director_mode in {"auto", "assist", "manual"} else "assist")
 
     def set_adventure_resolver(self, resolver: Any) -> None:
@@ -105,6 +114,108 @@ class Dnd2024Runtime:
         if resolver is None:
             return
         self._adventure_loader = resolver
+
+    def set_module_content_sources(self, provider: Any) -> None:
+        """Adopt the application's module catalog sources (FIX-03 §5.2).
+
+        组合根只提供"哪些模组声明了哪些 catalog 目录"这一事实；链路顺序
+        （adventure-local → owning module → 其它模组 → core）与解析语义由
+        runtime 自己决定，WebAPI 不拥有 gameplay catalog 真相。
+        """
+
+        self._module_content_sources = provider
+
+    def owning_module_id(self, instance: Any) -> str:
+        """The content-pack module that owns the instance's bound adventure."""
+
+        binding = getattr(instance, "adventure_binding", None)
+        if not isinstance(binding, dict):
+            return ""
+        if str(binding.get("source_kind") or "") != "plugin":
+            return ""
+        return str(binding.get("source_id") or "")
+
+    def _bound_adventure_or_none(self, instance: Any, locale: str) -> Any:
+        """The bound adventure, or None when it cannot be resolved.
+
+        内容目录只是"能解析出什么内容"的视图：绑定的冒险包缺失/变更时，游戏本身
+        由战斗/战役路径 fail closed（``load_adventure`` 抛错），但目录链不应该跟着
+        崩掉——模组内容仍然可解析（recovery / 诊断场景）。
+        """
+
+        try:
+            return self.load_adventure(instance, locale)
+        except Exception:  # noqa: BLE001 - 目录链对缺失冒险降级
+            return None
+
+    def content_catalog(self, instance: Any) -> DndContentCatalog:
+        """The runtime's ordered content catalog chain (§5.1).
+
+        adventure-local（绑定冒险里 catalog 形状的内容）→ owning module → 其它
+        模组 → core D&D content。组合根只注入模组来源。
+        """
+
+        locale = str(getattr(instance, "language", "") or "")
+        adventure = self._bound_adventure_or_none(instance, locale)
+        provider = DndContentCatalogProvider(
+            module_sources=self._module_content_sources,
+            core_sources=lambda _instance: self._core_content_sources(),
+        )
+        return provider.catalog_for(
+            instance,
+            owning_module_id=self.owning_module_id(instance),
+            adventure_label=(
+                f"adventure:{adventure.manifest.adventure_id}"
+                if adventure is not None else ""
+            ),
+            adventure_records=(
+                adventure_local_records(adventure.entities)
+                if adventure is not None else None
+            ),
+        )
+
+    def adventure_reward_intents(
+        self,
+        instance: Any,
+        outcome: Mapping[str, Any],
+        *,
+        recipient_uid: str = "",
+        locale: str = "",
+    ) -> list[dict[str, Any]]:
+        """FIX-03 §5.5：adventure outcome 的 item_reward → 权威奖励 intent.
+
+        只做"引用 → 结构化 intent"；是否发放、怎么发放仍由既有 proposal /
+        settlement 权威决定（本方法不写 inventory）。
+        """
+
+        return reward_intents_from_outcome(
+            self.content_catalog(instance),
+            dict(outcome or {}),
+            default_source=self.adventure_content_source(instance),
+            recipient_uid=str(recipient_uid or ""),
+        )
+
+    def adventure_content_source(self, instance: Any) -> str:
+        """Default source for v1 bare refs: the owning module, else the adventure."""
+
+        owning = self.owning_module_id(instance)
+        if owning:
+            return f"module:{owning}"
+        locale = str(getattr(instance, "language", "") or "")
+        adventure = self._bound_adventure_or_none(instance, locale)
+        if adventure is not None:
+            return f"adventure:{adventure.manifest.adventure_id}"
+        return ""
+
+    def _core_content_sources(self) -> list[tuple[str, dict[str, dict[str, Any]]]]:
+        """Core D&D content contributed by the ruleset bundle itself.
+
+        目前 bundle 只带 encounter_catalog（内联 statblock）与 combat/spell
+        catalog，没有 ``monster`` 记录；因此核心来源在 ContentRef 链上是空集，
+        但链路位置保留——模块引用 core ``item``/怪物时语义不变。
+        """
+
+        return []
 
     def load_adventure(
         self, instance: Any, locale: str = "",
@@ -244,11 +355,23 @@ class Dnd2024Runtime:
         if len(catalogs) > 1:
             raise ValueError("adventure package contains multiple encounter catalogs")
         catalog = catalogs[0] if catalogs else None
+        # FIX-03 §5.3：把运行时内容目录交给战斗引擎，模块 encounter_profile /
+        # ContentRef enemy 才能解析成 canonical 敌人实例。
+        content_catalog = self.content_catalog(instance)
+        content_source = (
+            f"adventure:{adventure.manifest.adventure_id}"
+            if adventure is not None
+            else ""
+        )
         if access is None:
             return Dnd2024CombatEngine(
                 self.load_bundle(locale), encounter_catalog=catalog,
+                content_catalog=content_catalog, content_source=content_source,
             )
-        return Dnd2024CombatEngine(self.load_bundle(locale), access, catalog)
+        return Dnd2024CombatEngine(
+            self.load_bundle(locale), access, catalog,
+            content_catalog=content_catalog, content_source=content_source,
+        )
 
     @staticmethod
     def _encounter_access(

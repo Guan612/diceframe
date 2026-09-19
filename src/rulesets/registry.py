@@ -127,3 +127,20 @@ class RulesetRuntimeRegistry:
                 setter(resolver)
                 attached += 1
         return attached
+
+    def set_module_content_sources(self, provider: Any) -> int:
+        """Inject module catalog sources into every runtime that accepts them.
+
+        FIX-03 §5.2：runtime 拥有 gameplay catalog 真相，组合根只提供模组来源。
+        返回接收该 provider 的 runtime 数。
+        """
+
+        if provider is None:
+            return 0
+        attached = 0
+        for runtime in self._runtimes.values():
+            setter = getattr(runtime, "set_module_content_sources", None)
+            if callable(setter):
+                setter(provider)
+                attached += 1
+        return attached

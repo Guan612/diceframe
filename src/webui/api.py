@@ -174,6 +174,9 @@ class WebAPI:
         self._adventure_loader = self._adventure_resolver
         # 让 runtime（D&D load_adventure）也走同一个 resolver，消除双解析路径。
         self._ruleset_registry.set_adventure_resolver(self._adventure_resolver)
+        # FIX-03 §5.2：把"模组 catalog 来源"注入 runtime；gameplay catalog 的
+        # 链路与解析语义留在 runtime，WebAPI 不拥有它。
+        self._ruleset_registry.set_module_content_sources(self.module_content_sources)
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._character_dependencies = characters.CharacterDependencies(
             games=characters.CharacterGameDependencies(
@@ -2188,7 +2191,12 @@ class WebAPI:
                         "module catalog load failed: %s: %s", label, exc,
                     )
                     continue
-                sources.append((source.label, source.records))
+                # catalog_from_sources / 运行时期望 {kind: {record_id: record}}；
+                # CatalogSource.records 是 (kind, id) 键——这里统一成嵌套形状。
+                nested: dict[str, dict[str, Any]] = {}
+                for (kind, record_id), record in source.records.items():
+                    nested.setdefault(str(kind), {})[str(record_id)] = record
+                sources.append((source.label, nested))
         self._dnd_module_catalogs = sources
 
     def module_catalog(self) -> Any:
@@ -2196,11 +2204,28 @@ class WebAPI:
 
         self._sync_plugin_adventure_sources()
         self._sync_module_catalogs()
-        from src.rulesets.dnd2024.content.catalog import DndContentCatalog
+        from src.rulesets.dnd2024.content.catalog import catalog_from_sources
 
-        return DndContentCatalog([
-            (label, records) for label, records in self._dnd_module_catalogs
-        ])
+        if not self._dnd_module_catalogs:
+            return catalog_from_sources([])
+        return catalog_from_sources(self._dnd_module_catalogs)
+
+    def module_content_sources(self, instance: Any = None) -> list[tuple[str, Any]]:
+        """FIX-03 §5.1：模组 catalog 来源链（owning module 优先，其余按 label）。
+
+        只提供"哪些模组声明了哪些 catalog"这一事实；链路语义由 runtime 决定。
+        """
+
+        self._sync_module_catalogs()
+        sources = list(self._dnd_module_catalogs)
+        owning = ""
+        binding = getattr(instance, "adventure_binding", None)
+        if isinstance(binding, dict) and str(binding.get("source_kind") or "") == "plugin":
+            owning = str(binding.get("source_id") or "")
+        if owning:
+            owner_label = f"module:{owning}"
+            sources.sort(key=lambda item: 0 if item[0] == owner_label else 1)
+        return sources
 
     def list_adventures(
         self, rule_id: str = "", world_id: str = "", language: str = "",
