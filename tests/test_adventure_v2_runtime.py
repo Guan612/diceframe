@@ -32,7 +32,7 @@ from src.adventures.graph_v2 import AdventureGraphV2Error, project_graph_v2, val
 from src.adventures.outcomes import OutcomeError
 from src.adventures.progress import ProgressError
 from src.engine.game_instance import GameInstance
-from src.engine.world.materialization import materialize_world_seed
+from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.world_state import apply_world_ops, world_facts, world_processes
 from src.webui.services import adventure_runtime
 

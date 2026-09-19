@@ -14,7 +14,7 @@ from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, 
 from src.engine.economy import resolve_auto_reward_policy
 from src.engine.game_instance import GameRegistry
 from src.engine import persistence
-from src.engine.world.materialization import materialize_world_seed
+from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader, AdventureResolver
@@ -2498,8 +2498,13 @@ class WebAPI:
     # ---- 内存 ----
 
     def list_memories(self, game_key: str, keyword: str = "",
-                      limit: int = 20, offset: int = 0) -> dict[str, Any]:
-        return self._memory_service.list(game_key, keyword, limit, offset)
+                      limit: int = 20, offset: int = 0, *,
+                      viewer_is_gm: bool = False) -> dict[str, Any]:
+        """列出记忆；默认按玩家安全面过滤（GM 私有记忆需显式 viewer_is_gm）。"""
+
+        return self._memory_service.list(
+            game_key, keyword, limit, offset, viewer_is_gm=bool(viewer_is_gm),
+        )
 
     async def update_memory(self, game_key: str, entry_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         return await self._memory_service.update(game_key, entry_id, updates)
