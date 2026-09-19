@@ -254,6 +254,14 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
                     f"node {node_id!r} references unknown chapter: {chapter_id!r}"
                 )
         node_visibility = _validate_visibility(raw.get("visibility", "public"), f"node {node_id}")
+        if (
+            node_visibility == "public"
+            and chapter_id is not None
+            and chapters[chapter_id]["visibility"] == "gm"
+        ):
+            raise AdventureGraphV2Error(
+                f"public node {node_id!r} references gm chapter: {chapter_id!r}"
+            )
         refs: dict[str, Any] = {}
         for ref_field in ("scene_ref", "encounter_ref"):
             value = raw.get(ref_field)
@@ -338,6 +346,10 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
                 raise AdventureGraphV2Error(
                     f"objective {objective_id!r} references unknown node: {node_id!r}"
                 )
+            if objective["visibility"] == "public" and nodes[node_id]["visibility"] == "gm":
+                raise AdventureGraphV2Error(
+                    f"public objective {objective_id!r} references gm node: {node_id!r}"
+                )
         objectives.append(objective)
     milestones: list[dict[str, Any]] = []
     seen_milestones: set[str] = set()
@@ -361,6 +373,10 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
             if node_id not in nodes:
                 raise AdventureGraphV2Error(
                     f"milestone {milestone_id!r} references unknown node: {node_id!r}"
+                )
+            if milestone["visibility"] == "public" and nodes[node_id]["visibility"] == "gm":
+                raise AdventureGraphV2Error(
+                    f"public milestone {milestone_id!r} references gm node: {node_id!r}"
                 )
         milestones.append(milestone)
 
@@ -457,10 +473,25 @@ def project_graph_v2(graph: dict[str, Any], *, viewer_is_gm: bool = False) -> di
       projection 层，不依赖 prompt 自觉（§191）。
     """
 
+    # A GM-only package has no player-readable subset.  Returning an empty
+    # shape (rather than filtering child records independently) prevents a
+    # public child reference from accidentally becoming a disclosure path.
+    if not viewer_is_gm and graph.get("visibility") == "gm":
+        return {
+            "id": graph.get("id"), "format": graph.get("format"),
+            "visibility": "gm", "viewer": "player", "available": False,
+            "chapters": [], "nodes": [], "objectives": [],
+            "milestones": [], "start_node_ids": [],
+        }
+
     nodes = graph.get("nodes", [])
+    visible_chapter_ids = {
+        chapter["id"] for chapter in graph.get("chapters", [])
+        if viewer_is_gm or chapter.get("visibility", "public") == "public"
+    }
     visible_ids = {
         node["id"] for node in nodes
-        if viewer_is_gm or node.get("visibility") == "public"
+        if viewer_is_gm or node.get("visibility", "public") == "public"
     }
 
     def _project_node(node: dict[str, Any]) -> dict[str, Any] | None:
@@ -469,13 +500,18 @@ def project_graph_v2(graph: dict[str, Any], *, viewer_is_gm: bool = False) -> di
         projected = dict(node)
         if not viewer_is_gm:
             projected["transitions"] = [
-                transition for transition in node.get("transitions", [])
+                {"to": str(transition.get("to") or "")}
+                for transition in node.get("transitions", [])
                 if str(transition.get("to") or "") in visible_ids
             ]
             # FIX-04 §6.1：outcome 声明可能包含 GM 秘密（world_op 的事实/进程、
             # 尚未发放的 item_reward）。玩家投影不携带 on_complete —— 由 GM/服务端
             # 在推进时执行，绝不通过只读投影泄漏。
             projected.pop("on_complete", None)
+            # A public node may have come from an older package which predates
+            # the validator.  Do not expose its dangling GM chapter identity.
+            if projected.get("chapter_id") not in visible_chapter_ids:
+                projected["chapter_id"] = None
         return projected
 
     projected_nodes = [
@@ -483,17 +519,26 @@ def project_graph_v2(graph: dict[str, Any], *, viewer_is_gm: bool = False) -> di
             _project_node(node) for node in nodes
         ) if projected is not None
     ]
+    def _project_node_refs(record: dict[str, Any]) -> dict[str, Any]:
+        projected = dict(record)
+        if not viewer_is_gm:
+            projected["node_ids"] = [
+                node_id for node_id in record.get("node_ids", [])
+                if node_id in visible_ids
+            ]
+        return projected
+
     projected_objectives = [
-        objective for objective in graph.get("objectives", [])
-        if viewer_is_gm or objective.get("visibility") == "public"
+        _project_node_refs(objective) for objective in graph.get("objectives", [])
+        if viewer_is_gm or objective.get("visibility", "public") == "public"
     ]
     projected_milestones = [
-        milestone for milestone in graph.get("milestones", [])
-        if viewer_is_gm or milestone.get("visibility") == "public"
+        _project_node_refs(milestone) for milestone in graph.get("milestones", [])
+        if viewer_is_gm or milestone.get("visibility", "public") == "public"
     ]
     projected_chapters = [
         chapter for chapter in graph.get("chapters", [])
-        if viewer_is_gm or chapter.get("visibility") == "public"
+        if viewer_is_gm or chapter.get("visibility", "public") == "public"
     ]
     start_node_ids = [
         node_id for node_id in graph.get("start_node_ids", [])

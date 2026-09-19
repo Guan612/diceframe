@@ -197,7 +197,7 @@ def _resolve_declared_paths(
 
 
 def _validate_declared_adventures(
-    plugin_id: str, manifest: Mapping[str, Any], directory: Path | None,
+    plugin_id: str, manifest: Mapping[str, Any], directory: Path | None, deps: Any,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Really load every declared Adventure bundle (graph/refs/runtime structure)."""
 
@@ -220,6 +220,12 @@ def _validate_declared_adventures(
         except Exception as exc:  # noqa: BLE001 - 任何装载失败都必须阻断安装
             blockers.append(f"adventure_package_invalid:{name}:{exc}")
             continue
+        runtime_id = str(bundle.manifest.required_runtime_id or "")
+        minimum = int(bundle.manifest.required_runtime_version or 1)
+        if not _runtime_available(deps, runtime_id, minimum):
+            blockers.append(
+                f"adventure_runtime_missing:{name}:{runtime_id}>={minimum}"
+            )
         summaries.append({
             "directory": name,
             "adventure_id": bundle.manifest.adventure_id,
@@ -370,7 +376,7 @@ def validate_module_package(
     )
 
     adventure_summaries, adventure_blockers = _validate_declared_adventures(
-        plugin_id, manifest, directory,
+        plugin_id, manifest, directory, deps,
     )
     adventures.extend(adventure_summaries)
     blockers.extend(adventure_blockers)

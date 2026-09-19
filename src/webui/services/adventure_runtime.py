@@ -202,6 +202,10 @@ def complete_adventure_node(
 
     before_progress = deepcopy(progress)
     before_world = deepcopy(getattr(instance, "world_state", None))
+    # ``item_reward`` is queued by the Economy authority.  It is still part of
+    # this aggregate transaction: a failed queue must not leave a pending
+    # proposal behind after the graph/world changes have been compensated.
+    before_economy = deepcopy(getattr(instance, "economy", None))
     activated: list[str] = []
     try:
         # ② 节点完成的后果先落世界（§6.4/§6.7）：gate 评估必须看到本次完成的
@@ -230,11 +234,15 @@ def complete_adventure_node(
         instance.adventure_progress = before_progress
         if before_world is not None:
             instance.world_state = before_world
+        if before_economy is not None:
+            instance.economy = before_economy
         raise
     except Exception:
         instance.adventure_progress = before_progress
         if before_world is not None:
             instance.world_state = before_world
+        if before_economy is not None:
+            instance.economy = before_economy
         raise
 
     return {

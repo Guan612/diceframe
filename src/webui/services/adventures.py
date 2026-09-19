@@ -703,10 +703,13 @@ def resolve_binding(
     rule_id: str,
     world_id: str,
     language: str,
+    source_kind: str = "",
+    source_id: str = "",
 ) -> dict[str, Any]:
     runtime = _runtime_for_rule(dependencies, rule_id, language)
     return resolve_binding_for_runtime(
         dependencies, adventure_id, runtime, world_id, language,
+        source_kind=source_kind, source_id=source_id,
     )
 
 
@@ -715,6 +718,7 @@ def resolve_binding_for_runtime(
     adventure_id: str,
     runtime: Any | None,
     world_id: str, language: str,
+    *, source_kind: str = "", source_id: str = "",
 ) -> dict[str, Any]:
     """Resolve the package for a NEW binding and return its source-aware identity.
 
@@ -726,7 +730,10 @@ def resolve_binding_for_runtime(
     if not wanted:
         return {}
     try:
-        resolution = _resolve_with_source(dependencies, wanted, language)
+        resolution = _resolve_with_source(
+            dependencies, wanted, language,
+            source_kind=source_kind, source_id=source_id,
+        )
     except ValueError as exc:
         raise ValueError(str(exc)) from exc
     status, reasons = _compatibility(resolution.bundle, runtime, world_id)

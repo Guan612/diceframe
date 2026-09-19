@@ -53,7 +53,7 @@ class GameLifecycleDependencies:
     parse_game_key: Callable[[str], GameKey]
     llm_configuration_error: Callable[[str], dict[str, Any] | None]
     load_rule_by_id: Callable[[str, str], RuleSystem | None]
-    resolve_adventure_binding: Callable[[str, Any | None, str, str], dict[str, Any]]
+    resolve_adventure_binding: Callable[..., dict[str, Any]]
     resolve_default_scene_image: Callable[[str, str], dict[str, str]]
     materialize_scene_image: Callable[[Any], dict[str, str]]
     validate_map_background: Callable[[Any], dict[str, str]]

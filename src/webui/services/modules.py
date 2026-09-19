@@ -430,6 +430,8 @@ def _active_bindings(deps: ModuleDependencies) -> list[dict[str, Any]]:
             "adventure_id": str(binding.get("adventure_id") or ""),
             "run_id": str(instance.run_id or ""),
             "content_digest": str(binding.get("content_digest") or ""),
+            "source_kind": str(binding.get("source_kind") or ""),
+            "source_id": str(binding.get("source_id") or ""),
             "state": str(getattr(getattr(instance, "state", ""), "value", "") or ""),
             "metadata_readable": True,
         })
@@ -459,6 +461,8 @@ def _persisted_bindings(deps: ModuleDependencies) -> list[dict[str, Any]]:
             "adventure_id": str(entry.get("adventure_id") or ""),
             "run_id": str(entry.get("run_id") or ""),
             "content_digest": str(entry.get("content_digest") or ""),
+            "source_kind": str(entry.get("source_kind") or ""),
+            "source_id": str(entry.get("source_id") or ""),
             "state": str(entry.get("state") or ""),
             "metadata_readable": bool(entry.get("metadata_readable", False)),
         })
@@ -477,6 +481,11 @@ def module_bound_rows(
     merged: dict[str, dict[str, Any]] = {}
     for row in (*_active_bindings(deps), *_persisted_bindings(deps)):
         if row["adventure_id"] not in adventure_ids:
+            continue
+        # Source-aware plugin bindings protect only their owning module.  A
+        # legacy id-only save remains conservatively protected by every module
+        # that declares that id because its origin cannot be proven.
+        if row.get("source_kind") == "plugin" and row.get("source_id") != module_id:
             continue
         key = row["game_key"]
         current = merged.get(key)

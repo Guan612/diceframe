@@ -91,6 +91,8 @@ async def create_game(
     scene_image: dict[str, Any] | None = None,
     map_background: dict[str, Any] | None = None,
     adventure_id: str = "",
+    adventure_source_kind: str = "",
+    adventure_source_id: str = "",
     play_mode: str = "",
     narrative_perspective: str = "auto",
     gm_style_override: dict[str, Any] | None = None,
@@ -175,6 +177,8 @@ async def create_game(
             runtime,
             world_id,
             resolved_language,
+            str(adventure_source_kind or ""),
+            str(adventure_source_id or ""),
         )
         if runtime and runtime.capabilities.character_builder == "professional":
             players = [

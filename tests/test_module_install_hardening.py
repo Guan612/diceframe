@@ -316,6 +316,31 @@ async def test_broken_declared_adventure_is_rejected_inside_the_transaction(env)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("runtime_id", "minimum"),
+    [("core:not-installed", 1), ("core:dnd2024", 999)],
+)
+async def test_adventure_manifest_runtime_is_an_install_gate_even_without_module_requires(
+    env, runtime_id: str, minimum: int,
+) -> None:
+    files = _module_files(requires=None)
+    manifest_path = "adventures/castle/manifest.json"
+    adventure_manifest = json.loads(files[manifest_path].decode("utf-8"))
+    adventure_manifest["required_runtime"] = {
+        "id": runtime_id, "minimum_version": minimum,
+    }
+    files[manifest_path] = json.dumps(adventure_manifest).encode("utf-8")
+    payload = _zip_payload(files)
+
+    preview = env.api.preview_module_import(payload)
+    expected = f"adventure_runtime_missing:castle:{runtime_id}>={minimum}"
+    assert expected in preview["blockers"]
+    with pytest.raises(ValueError, match="adventure_runtime_missing"):
+        await env.api.import_module(payload)
+    assert MODULE_ID not in env.host.plugins
+
+
+@pytest.mark.asyncio
 async def test_broken_declared_catalog_is_rejected_inside_the_transaction(env) -> None:
     payload = _zip_payload(_module_files(catalog=True, broken_catalog=True))
 

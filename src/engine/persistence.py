@@ -292,6 +292,8 @@ def _state_metadata(path: Path) -> dict[str, Any] | None:
     return {
         "adventure_id": str(binding.get("adventure_id") or ""),
         "content_digest": str(binding.get("content_digest") or ""),
+        "source_kind": str(binding.get("source_kind") or ""),
+        "source_id": str(binding.get("source_id") or ""),
         "run_id": str(data.get("run_id") or ""),
         "state": str(state or ""),
     }
@@ -332,7 +334,7 @@ def scan_save_metadata(registry: GameRegistry) -> list[dict[str, Any]]:
             **(
                 metadata
                 if metadata is not None
-                else {"adventure_id": "", "content_digest": "", "run_id": "", "state": ""}
+                else {"adventure_id": "", "content_digest": "", "source_kind": "", "source_id": "", "run_id": "", "state": ""}
             ),
         })
     return rows

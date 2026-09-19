@@ -9,13 +9,13 @@
  5. GM 进入 Play                                     → 服务端投影（owner 视角）
  6. shared player 进入                                → 同一投影（player 视角）
  7. player API 看不到 GM secret                       → 秘密节点 / 私有事实不可见
- 8. 推进 public node                                 → complete_adventure_node
+ 8. 推进 public node                                 → authenticated adventure.node.complete intent
  9. encounter 解析 module monster                     → combat preset 来自模组 catalog
 10. Combat Runtime 正常战斗                           → combat.start 事件批
 11. 完成 node                                        → 进度推进 + 后继开放
 12. item reward 走权威奖励路径                        → **待用户决策**（见文件末尾说明）
 13. 启动 hidden ritual process                        → node on_complete 的 world_op
-14. advance logical time                             → advance_world_time
+14. advance logical time                             → real RoundProcessor planning path
 15. process settlement                               → 进程 completed
 16. public world consequence                         → 后果节点的 world op 落地
 17. authoritative World Memory 写入                   → drain outbox → MemoryStore
@@ -45,6 +45,7 @@ import random
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from aiohttp import web
@@ -54,9 +55,7 @@ from src.adventures.graph_v2 import ADVENTURE_GRAPH_FORMAT_V2
 from src.commands.game_handler import GameHandler
 from src.engine import persistence
 from src.engine.game_instance import GameInstance, GameRegistry
-from src.engine.world.memory_projection import queue_world_memory
 from src.engine.world.read import fact_value, world_facts, world_processes
-from src.engine.world_events import advance_world_time
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.memory.delta import MemoryStore
@@ -67,7 +66,7 @@ from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.webui.api import WebAPI
 from src.webui.routes.game_lifecycle_routes import api_create_game
 from src.webui.routes.games import register_games as register_game_query_routes
-from src.webui.services import adventure_runtime, modules
+from src.webui.services import modules
 from src.webui.services.module_validation import ModulePackageError
 
 from webapi_harness import FakeLLMClient
@@ -394,6 +393,38 @@ async def _created_golden(golden) -> dict:
     return created
 
 
+async def _complete_node(golden, created: dict, node_id: str) -> dict:
+    """Complete a v2 node through the public authoritative intent seam."""
+
+    gm_uid = str(created["players"][0]["user_id"])
+    result = await golden.api.ruleset_submit_intent(
+        created["game_key"], gm_uid, True,
+        {"type": "adventure.node.complete", "node_id": node_id},
+    )
+    assert result["ok"] is True, result
+    return result["result"]["adventure_node"]
+
+
+async def _advance_time_through_round_processor(
+    golden, instance: GameInstance, minutes: int,
+) -> list[dict]:
+    """Use the real round-planning application path, not Adventure helpers."""
+
+    async def planned(*_args, **_kwargs):
+        return [], {
+            "available": True, "skipped": False, "total_tokens": 0,
+            "errors": [], "overreach": [], "world_requirements": [],
+            "economy_offers": [], "unpriced_purchase_intents": [],
+            "world_time_advance": {"minutes": minutes},
+        }
+
+    instance.state = instance.state.ACTIVE_JUDGMENT
+    instance.reset_round_checks()
+    with patch("src.commands.round_processor.plan_round_checks", planned):
+        await golden.api._handler.prepare_round_checks_ai(instance)
+    return list(instance.last_world_events)
+
+
 def _zip_module_files() -> bytes:
     import io
     import zipfile
@@ -511,9 +542,7 @@ async def test_golden_steps_8_to_11_encounter_uses_module_monsters(golden) -> No
     assert started["enemies"][f"{MONSTER_ID}_1"]["attacks"][0]["damage"] == "1d4+1"
 
     # 步骤 8/11：完成公开节点（objective 完成 + 秘密进程启动）。
-    result = adventure_runtime.complete_adventure_node(
-        golden.api._adventure_runtime_dependencies, instance, "gate",
-    )
+    result = await _complete_node(golden, created, "gate")
 
     assert result["activated_nodes"] == ["vault"]
     assert instance.adventure_progress["completed_nodes"] == ["gate"]
@@ -539,12 +568,8 @@ async def test_golden_step12_item_reward_goes_through_the_reward_authority(
     game_key = created["game_key"]
     instance = golden.instance(game_key)
     gm_uid = str(created["players"][0]["user_id"])
-    deps = golden.api._adventure_runtime_dependencies
-
-    adventure_runtime.complete_adventure_node(deps, instance, "gate")
-    result = adventure_runtime.complete_adventure_node(
-        deps, instance, "vault", recipient_uid=gm_uid,
-    )
+    await _complete_node(golden, created, "gate")
+    result = await _complete_node(golden, created, "vault")
 
     # ① 转换器把裸物品 ref 解析成模组 catalog 里的 intent（来源 = owning module）。
     assert [intent["name"] for intent in result["reward_intents"]] == ["Brass Key"]
@@ -583,32 +608,40 @@ async def test_golden_step12_item_reward_goes_through_the_reward_authority(
 
 
 @pytest.mark.asyncio
-async def test_golden_step12_item_reward_without_a_sink_fails_closed(
-    golden,
-) -> None:
-    """没有权威出口时必须整节点回滚（世界/进度/inventory 不留半格）。"""
+async def test_golden_node_save_failure_restores_world_progress_and_economy(golden) -> None:
+    """The public intent transaction cannot leave a queued reward half-committed."""
 
     created = await _created_golden(golden)
     instance = golden.instance(created["game_key"])
-    deps = replace(
-        golden.api._adventure_runtime_dependencies, queue_reward_intents=None,
+    await _complete_node(golden, created, "gate")
+    before = {
+        "world_state": json.loads(json.dumps(instance.world_state)),
+        "adventure_progress": json.loads(json.dumps(instance.adventure_progress)),
+        "economy": json.loads(json.dumps(instance.economy)),
+    }
+    original = golden.api._ruleset_gameplay_dependencies
+
+    async def save_failed(_instance):
+        raise RuntimeError("storage unavailable")
+
+    golden.api._ruleset_gameplay_dependencies = replace(
+        original, save_instance=save_failed,
     )
-    adventure_runtime.complete_adventure_node(deps, instance, "gate")
-    before_world = json.loads(json.dumps(instance.world_state))
-    before_progress = json.loads(json.dumps(instance.adventure_progress))
-
-    with pytest.raises(
-        adventure_runtime.AdventureRuntimeError, match="reward sink",
-    ):
-        adventure_runtime.complete_adventure_node(deps, instance, "vault")
-
-    assert instance.world_state == before_world
-    assert instance.adventure_progress == before_progress
-    for uid in instance.players:
-        sheet = instance.get_character_sheet(uid) or {}
-        assert ITEM_ID not in json.dumps(sheet, ensure_ascii=False)
+    try:
+        gm_uid = str(created["players"][0]["user_id"])
+        result = await golden.api.ruleset_submit_intent(
+            created["game_key"], gm_uid, True,
+            {"type": "adventure.node.complete", "node_id": "vault"},
+        )
+    finally:
+        golden.api._ruleset_gameplay_dependencies = original
+    assert result["code"] == "ADVENTURE_NODE_FAILED"
+    assert instance.world_state == before["world_state"]
+    assert instance.adventure_progress == before["adventure_progress"]
+    assert instance.economy == before["economy"]
 
 
+@pytest.mark.asyncio
 # ---- 13–17：进程结算 → 公开后果 → 权威记忆 ---------------------------------
 
 
@@ -617,25 +650,20 @@ async def test_golden_steps_13_to_17_process_consequence_and_world_memory(golden
     created = await _created_golden(golden)
     game_key = created["game_key"]
     instance = golden.instance(game_key)
-    deps = golden.api._adventure_runtime_dependencies
-
-    adventure_runtime.complete_adventure_node(deps, instance, "gate")
+    await _complete_node(golden, created, "gate")
 
     # 步骤 14/15：逻辑时间推进 → 秘密进程按 due_at 结算。
-    outcome = advance_world_time(instance, 24 * 60, source_round=instance.round_number)
-    assert [item["process_id"] for item in outcome["processes"]] == ["ritual"]
+    await _advance_time_through_round_processor(golden, instance, 24 * 60)
     assert world_processes(instance.world_state)["ritual"]["status"] == "completed"
 
     # 步骤 16：进程完成后 gate 才开放后果节点，公开后果由它自己的 world op 落地。
-    advanced = adventure_runtime.advance_adventure_world(deps, instance)
-    assert advanced["activated_nodes"] == ["aftermath"]
-    adventure_runtime.complete_adventure_node(deps, instance, "aftermath")
+    assert "aftermath" in instance.adventure_progress["active_nodes"]
+    await _complete_node(golden, created, "aftermath")
     assert fact_value(instance.world_state, PUBLIC_CONSEQUENCE_FACT) is True
     # 后果满足后秘密节点才对 GM 开放（玩家看不到它）。
     assert SECRET_NODE in instance.adventure_progress["active_nodes"]
 
     # 步骤 17：WorldEvent receipts → 确定性 memory 投影 → outbox → MemoryStore。
-    queue_world_memory(instance, outcome["events"], round_number=instance.round_number)
     assert await golden.api.drain_economy_outbox(game_key) is True
 
     gm_memories = golden.api.list_memories(game_key, viewer_is_gm=True)
@@ -657,11 +685,8 @@ async def test_golden_steps_18_to_21_survive_restart_with_sources(golden) -> Non
     created = await _created_golden(golden)
     game_key = created["game_key"]
     instance = golden.instance(game_key)
-    deps = golden.api._adventure_runtime_dependencies
-
-    adventure_runtime.complete_adventure_node(deps, instance, "gate")
-    advance_world_time(instance, 24 * 60, source_round=instance.round_number)
-    adventure_runtime.advance_adventure_world(deps, instance)
+    await _complete_node(golden, created, "gate")
+    await _advance_time_through_round_processor(golden, instance, 24 * 60)
 
     # 步骤 18：保存（真实 registry.save）。
     await persistence.save(golden.api._reg, instance)
@@ -699,8 +724,6 @@ async def test_golden_steps_22_to_23_rollback_restores_world_and_progress(golden
     created = await _created_golden(golden)
     game_key = created["game_key"]
     instance = golden.instance(game_key)
-    deps = golden.api._adventure_runtime_dependencies
-
     # 判定入口快照 = "本轮可能改过的东西"（世界真相 + Adventure 进度）。
     from src.engine.memory_outbox import pending_memory_reversals
     from src.engine.round_snapshots import capture_round_entity_snapshot
@@ -711,19 +734,16 @@ async def test_golden_steps_22_to_23_rollback_restores_world_and_progress(golden
     memories_before = golden.api.list_memories(game_key, viewer_is_gm=True)["total"]
 
     # 本轮结算：完成节点（世界 + 进度）+ 物品奖励 + 时间推进（进程结算 + 权威记忆）。
-    adventure_runtime.complete_adventure_node(deps, instance, "gate")
+    await _complete_node(golden, created, "gate")
     gm_uid = str(created["players"][0]["user_id"])
-    reward = adventure_runtime.complete_adventure_node(
-        deps, instance, "vault", recipient_uid=gm_uid,
-    )
+    reward = await _complete_node(golden, created, "vault")
     await golden.api.resolve_payment(
         game_key, reward["queued_rewards"][0]["proposal_id"], True, gm_uid,
     )
     assert "Brass Key" in json.dumps(
         instance.get_character_sheet(gm_uid) or {}, ensure_ascii=False,
     )
-    outcome = advance_world_time(instance, 24 * 60, source_round=instance.round_number)
-    queue_world_memory(instance, outcome["events"], round_number=instance.round_number)
+    await _advance_time_through_round_processor(golden, instance, 24 * 60)
     assert await golden.api.drain_economy_outbox(game_key) is True
     assert golden.api.list_memories(game_key, viewer_is_gm=True)["total"] > memories_before
 

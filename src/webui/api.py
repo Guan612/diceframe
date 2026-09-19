@@ -179,6 +179,14 @@ class WebAPI:
         # FIX-03 §5.2：把"模组 catalog 来源"注入 runtime；gameplay catalog 的
         # 链路与解析语义留在 runtime，WebAPI 不拥有它。
         self._ruleset_registry.set_module_content_sources(self.module_content_sources)
+        # Some embedders construct GameHandler before WebAPI and provide it a
+        # distinct registry.  Its RoundProcessor is still a production path,
+        # so inject the same application-owned sources there as well instead
+        # of letting it silently fall back to a private Adventure loader.
+        handler_registry = getattr(self._handler, "ruleset_registry", None)
+        if handler_registry is not None and handler_registry is not self._ruleset_registry:
+            handler_registry.set_adventure_resolver(self._adventure_resolver)
+            handler_registry.set_module_content_sources(self.module_content_sources)
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._character_dependencies = characters.CharacterDependencies(
             games=characters.CharacterGameDependencies(
@@ -451,6 +459,12 @@ class WebAPI:
             queue_reward_intents=self._queue_adventure_reward_intents,
             save_instance=self._reg.save,
         )
+        if self._handler is not None and hasattr(self._handler, "set_adventure_world_advance"):
+            self._handler.set_adventure_world_advance(
+                lambda instance: adventure_runtime.advance_adventure_world(
+                    self._adventure_runtime_dependencies, instance,
+                )
+            )
         self._world_dependencies = worlds.WorldDependencies(
             lorebook=self._lore,
             worlds_dir=self._worlds_dir,
@@ -538,14 +552,23 @@ class WebAPI:
                 parse_game_key=_parse_game_key,
                 load_rule_for_game=self._load_rule_for_game,
                 ruleset_registry=self._ruleset_registry,
-                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
+                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language, source_kind="", source_id="": adventures.resolve_binding_for_runtime(
                     self._adventure_dependencies,
                     adventure_id,
                     runtime,
                     world_id,
                     language,
+                    source_kind=source_kind,
+                    source_id=source_id,
                 ),
                 save_instance=self._reg.save,
+                complete_adventure_node=lambda instance, node_id, recipient_uid, actor_uid: adventure_runtime.complete_adventure_node(
+                    self._adventure_runtime_dependencies,
+                    instance,
+                    node_id,
+                    recipient_uid=recipient_uid,
+                    actor_uid=actor_uid,
+                ),
                 apply_memory_delta=(
                     self._mem.apply_delta if self._mem is not None else None
                 ),
@@ -734,12 +757,14 @@ class WebAPI:
                 parse_game_key=_parse_game_key,
                 llm_configuration_error=self._llm_configuration_error,
                 load_rule_by_id=self._load_rule_by_id,
-                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
+                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language, source_kind="", source_id="": adventures.resolve_binding_for_runtime(
                     self._adventure_dependencies,
                     adventure_id,
                     runtime,
                     world_id,
                     language,
+                    source_kind=source_kind,
+                    source_id=source_id,
                 ),
                 # FIX-04 §6.5：v2 冒险的创建事务步骤（进度 + 原子世界种子）。
                 initialize_adventure_run=lambda instance: adventure_runtime.initialize_adventure_run(
@@ -2456,6 +2481,8 @@ class WebAPI:
                            scene_image: dict[str, Any] | None = None,
                            map_background: dict[str, Any] | None = None,
                            adventure_id: str = "",
+                           adventure_source_kind: str = "",
+                           adventure_source_id: str = "",
                            play_mode: str = "",
                            narrative_perspective: str = "auto",
                            gm_style_override: dict[str, Any] | None = None,
@@ -2472,6 +2499,8 @@ class WebAPI:
             room_password=room_password, language=language,
             scene_image=scene_image, map_background=map_background,
             adventure_id=adventure_id,
+            adventure_source_kind=adventure_source_kind,
+            adventure_source_id=adventure_source_id,
             play_mode=play_mode,
             narrative_perspective=narrative_perspective,
             gm_style_override=gm_style_override,
