@@ -48,6 +48,8 @@ MAX_MILESTONES = 64
 MAX_TRANSITIONS_PER_NODE = 16
 MAX_REFS_PER_NODE = 16
 MAX_START_NODES = 16
+# FIX-04 §6.1：每个节点完成时的 outcome 声明数量上界（有界遍历）。
+MAX_OUTCOMES_PER_NODE = 16
 
 
 class AdventureGraphV2Error(ValueError):
@@ -73,6 +75,33 @@ def _validate_visibility(value: Any, label: str) -> str:
     if value not in VISIBILITIES:
         raise AdventureGraphV2Error(f"{label} visibility is invalid: {value!r}")
     return str(value)
+
+
+def _validate_node_outcomes(raw: Any, node_id: str) -> list[dict[str, Any]]:
+    """Validate one node's ``on_complete`` outcome declarations（FIX-04 §6.1）。
+
+    outcome 的**唯一归属点**是 ``node.on_complete[]``：不做 on_enter / on_leave /
+    transition effects / objective effects / milestone effects（避免 scope 爆炸与
+    多重语义）。类型仍是封闭词表（world_op / item_reward / progress_event）。
+    """
+
+    from src.adventures.outcomes import OutcomeError, validate_outcome
+
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise AdventureGraphV2Error(f"node {node_id} on_complete must be an array")
+    if len(raw) > MAX_OUTCOMES_PER_NODE:
+        raise AdventureGraphV2Error(
+            f"node {node_id} on_complete exceeds {MAX_OUTCOMES_PER_NODE} entries"
+        )
+    validated: list[dict[str, Any]] = []
+    for entry in raw:
+        try:
+            validated.append(validate_outcome(entry))
+        except OutcomeError as exc:
+            raise AdventureGraphV2Error(f"node {node_id} on_complete: {exc}") from exc
+    return validated
 
 
 def _validate_transition(raw: Any, label: str) -> dict[str, Any]:
@@ -205,6 +234,8 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
             "id", "type", "chapter_id", "visibility", "optional",
             "transitions", "scene_ref", "npc_refs", "encounter_ref",
             "name", "description",
+            # ADV2-04 / FIX-04 §6.1：node 完成后的 outcome 声明（唯一归属点）。
+            "on_complete",
         }
         node_extra = sorted(set(raw) - node_allowed)
         if node_extra:
@@ -254,6 +285,7 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
                 _validate_transition(transition, f"node {node_id}")
                 for transition in transitions
             ],
+            "on_complete": _validate_node_outcomes(raw.get("on_complete"), node_id),
             "scene_ref": refs.get("scene_ref"),
             "encounter_ref": refs.get("encounter_ref"),
             "npc_refs": list(npc_refs),
@@ -281,11 +313,17 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
                 )
 
     # objectives / milestones：结构化声明，可并行；引用节点必须存在。
+    # FIX-04 §6.3：objective / milestone id 重复必须拒绝（进度推进按 id 记录，
+    # 重复 id 会让"完成哪一个"变成歧义）。
     objectives: list[dict[str, Any]] = []
+    seen_objectives: set[str] = set()
     for raw in _bounded_list(adventure.get("objectives", []), "objectives", MAX_OBJECTIVES):
         if not isinstance(raw, dict):
             raise AdventureGraphV2Error("objective must be an object")
         objective_id = _required_id(raw.get("id"), "objective id")
+        if objective_id in seen_objectives:
+            raise AdventureGraphV2Error(f"duplicate objective id: {objective_id!r}")
+        seen_objectives.add(objective_id)
         objective = {
             "id": objective_id,
             "name": str(raw.get("name") or ""),
@@ -302,10 +340,14 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
                 )
         objectives.append(objective)
     milestones: list[dict[str, Any]] = []
+    seen_milestones: set[str] = set()
     for raw in _bounded_list(adventure.get("milestones", []), "milestones", MAX_MILESTONES):
         if not isinstance(raw, dict):
             raise AdventureGraphV2Error("milestone must be an object")
         milestone_id = _required_id(raw.get("id"), "milestone id")
+        if milestone_id in seen_milestones:
+            raise AdventureGraphV2Error(f"duplicate milestone id: {milestone_id!r}")
+        seen_milestones.add(milestone_id)
         milestone = {
             "id": milestone_id,
             "name": str(raw.get("name") or ""),
@@ -430,6 +472,10 @@ def project_graph_v2(graph: dict[str, Any], *, viewer_is_gm: bool = False) -> di
                 transition for transition in node.get("transitions", [])
                 if str(transition.get("to") or "") in visible_ids
             ]
+            # FIX-04 §6.1：outcome 声明可能包含 GM 秘密（world_op 的事实/进程、
+            # 尚未发放的 item_reward）。玩家投影不携带 on_complete —— 由 GM/服务端
+            # 在推进时执行，绝不通过只读投影泄漏。
+            projected.pop("on_complete", None)
         return projected
 
     projected_nodes = [

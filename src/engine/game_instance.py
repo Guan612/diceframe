@@ -124,6 +124,10 @@ class GameInstance:
     ruleset_runtime: dict[str, Any] = field(default_factory=dict)
     ruleset_state: dict[str, Any] = field(default_factory=dict)
     adventure_binding: dict[str, Any] = field(default_factory=dict)
+    # FIX-04 §6.2：Adventure v2 进度（active/completed nodes/objectives/milestones +
+    # history）的权威持久化位置。v1 的 campaign 进度仍在 ruleset_state，两者并存
+    # 互不迁移（母方案 §71/§122）。
+    adventure_progress: dict[str, Any] = field(default_factory=dict)
     # Explicitly separates standard free play from an adventure story flow.
     # Empty means legacy/in-memory construction; runtime derives from the
     # bound adventure until creation/migration writes an explicit mode.

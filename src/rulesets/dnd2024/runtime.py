@@ -13,6 +13,11 @@ from src.adventures import (
     LoadedAdventureBundle,
     binding_matches,
 )
+from src.adventures.graph_v2 import (
+    ADVENTURE_GRAPH_FORMAT_V2,
+    AdventureGraphV2Error,
+    validate_graph_v2,
+)
 from src.engine.legacy_game_projection import project_legacy_game_context
 from src.rulesets.dnd2024.adventure_migrations import (
     apply_unreleased_adventure_binding_migration,
@@ -47,6 +52,7 @@ from src.rulesets.dnd2024.play import (
     is_public_story_milestone,
     public_timeline_projection,
     resolve_story_encounter_access,
+    resolve_v2_encounter_access,
 )
 from src.rulesets.dnd2024.progression import (
     Dnd2024AdvancementEngine,
@@ -71,7 +77,7 @@ class Dnd2024Runtime:
         session_zero=True,
         tutorial_coach=True,
         narrative_turns=True,
-        adventure_formats=(ADVENTURE_GRAPH_FORMAT,),
+        adventure_formats=(ADVENTURE_GRAPH_FORMAT, ADVENTURE_GRAPH_FORMAT_V2),
     )
 
     def initialize_new_run(
@@ -216,6 +222,109 @@ class Dnd2024Runtime:
         """
 
         return []
+
+    def adventure_rules_evaluator(self, instance: Any) -> Any:
+        """FIX-04 §6.4：``rules.*`` gate 的 D&D adapter（证据不足 = 不放行）。
+
+        只读权威状态，不掷骰、不改状态；未知 outcome id 返回 False（不猜）。
+        """
+
+        def evaluator(gate_type: str, gate_id: str, expected: Any) -> bool:
+            try:
+                if gate_type == "rules.party_level":
+                    return self._party_level(instance) >= int(expected or 0)
+                if gate_type == "rules.item_possession":
+                    return self._party_has_item(instance, gate_id) is bool(expected)
+                if gate_type == "rules.outcome":
+                    return self._rules_outcome(instance, gate_id) == str(expected or "")
+            except Exception:  # noqa: BLE001 - 读取失败 = 证据不足 = 不满足
+                return False
+            return False
+
+        return evaluator
+
+    @staticmethod
+    def _party_level(instance: Any) -> int:
+        def level_of(sheet: Any) -> int:
+            sheet = sheet if isinstance(sheet, dict) else {}
+            canonical = sheet.get("ruleset_character")
+            canonical = canonical if isinstance(canonical, dict) else {}
+            build = canonical.get("build") if isinstance(canonical.get("build"), dict) else {}
+            levels = build.get("class_levels") or sheet.get("class_levels") or []
+            highest = max(
+                (
+                    int(row.get("level", 0) or 0)
+                    for row in levels
+                    if isinstance(row, dict)
+                ),
+                default=0,
+            )
+            try:
+                return max(highest, int(sheet.get("level", 0) or 0))
+            except (TypeError, ValueError):
+                return highest
+
+        return max(
+            (level_of(instance.get_character_sheet(uid)) for uid in instance.players),
+            default=0,
+        )
+
+    @staticmethod
+    def _party_has_item(instance: Any, item_id: str) -> bool:
+        wanted = str(item_id or "").strip().casefold()
+        if not wanted:
+            return False
+        for uid in instance.players:
+            sheet = instance.get_character_sheet(uid) or {}
+            rows: list[Any] = []
+            for key in ("inventory", "equipment", "key_items"):
+                value = sheet.get(key)
+                if isinstance(value, list):
+                    rows.extend(value)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                for key in ("id", "name", "item_id"):
+                    if str(row.get(key) or "").strip().casefold() == wanted:
+                        return True
+        return False
+
+    @staticmethod
+    def _rules_outcome(instance: Any, outcome_id: str) -> str:
+        """One canonical rules outcome id → its current status string."""
+
+        state = getattr(instance, "ruleset_state", None)
+        state = state if isinstance(state, dict) else {}
+        combat = state.get("combat") if isinstance(state.get("combat"), dict) else {}
+        if str(outcome_id or "") == "combat_ended":
+            status = str(combat.get("status") or "none")
+            if status == "ended":
+                return "ended"
+            if status == "active":
+                return "active"
+            return "pending"
+        outcomes = state.get("outcomes")
+        if isinstance(outcomes, dict):
+            return str(outcomes.get(str(outcome_id or "")) or "")
+        return ""
+
+    def adventure_reward_converter(self, instance: Any) -> Any:
+        """FIX-04 §6.7/§5.5：adventure item_reward → DNDMOD-03 reward intent。"""
+
+        from src.rulesets.dnd2024.content.rewards import reward_intent_from_ref
+
+        catalog = self.content_catalog(instance)
+        default_source = self.adventure_content_source(instance)
+
+        def converter(raw_ref: Any, source: str, recipient: str) -> dict[str, Any]:
+            return reward_intent_from_ref(
+                catalog,
+                raw_ref,
+                default_source=str(source or default_source),
+                recipient_uid=recipient,
+            )
+
+        return converter
 
     def load_adventure(
         self, instance: Any, locale: str = "",
@@ -373,8 +482,8 @@ class Dnd2024Runtime:
             content_catalog=content_catalog, content_source=content_source,
         )
 
-    @staticmethod
     def _encounter_access(
+        self,
         instance: Any, campaign: dict[str, Any], intent: dict[str, Any] | None = None,
     ) -> EncounterAccess:
         """Resolve the authoritative encounter mode for one call.
@@ -387,6 +496,22 @@ class Dnd2024Runtime:
 
         if str(getattr(instance, "play_mode", "") or "").casefold() == "free":
             return EncounterAccess.sandbox()
+        # FIX-04 §6.9：绑定的是 Adventure v2 → 遭遇由**v2 进度**（active 节点的
+        # encounter_ref）决定，不再走 v1 tutorial step；v1 路径原样保留。
+        v2 = self._v2_encounter_access(instance)
+        if v2 is not None:
+            if v2.mode == "story":
+                if v2.status == "pending" and not v2.encounter_preset_id:
+                    return EncounterAccess.unbound_story(
+                        adventure_id=v2.adventure_id,
+                        origin_step_id=v2.origin_step_id,
+                    )
+                return v2
+            if str((intent or {}).get("mode") or "") == "sandbox":
+                return EncounterAccess.sandbox()
+            if v2.unprepared:
+                return v2
+            return EncounterAccess.sandbox() if v2.status == "resolved" else v2
         story = resolve_story_encounter_access(instance, campaign)
         if story.mode == "story":
             # 剧情步骤声明了战斗，却没有可用的 canonical preset：这同样是
@@ -411,6 +536,25 @@ class Dnd2024Runtime:
                 origin_step_id=str(step.get("id") or ""),
             )
         return EncounterAccess.sandbox()
+
+    def _v2_encounter_access(self, instance: Any) -> EncounterAccess | None:
+        """§6.9：v2 绑定时的剧情遭遇访问权；非 v2 返回 ``None``（走 v1 路径）。"""
+
+        progress = getattr(instance, "adventure_progress", None)
+        if not isinstance(progress, dict) or not progress:
+            return None
+        try:
+            locale = str(getattr(instance, "language", "") or "")
+            bundle = self.load_adventure(instance, locale)
+        except Exception:  # noqa: BLE001 - 绑定不可解析时交给既有路径 fail closed
+            return None
+        if bundle is None or str(bundle.manifest.format) != ADVENTURE_GRAPH_FORMAT_V2:
+            return None
+        try:
+            adventure = validate_graph_v2(bundle.adventure)
+        except AdventureGraphV2Error:
+            return None
+        return resolve_v2_encounter_access(instance, adventure, progress)
 
     def _builder(self, draft: dict[str, Any]) -> Dnd2024CharacterBuilder:
         return Dnd2024CharacterBuilder(self.load_bundle(str(draft.get("locale") or "")))

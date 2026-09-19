@@ -62,6 +62,9 @@ class GameLifecycleDependencies:
     refresh_lorebook_index: Callable[[str], None]
     project_rule_id: Callable[[Any], str]
     clean_public_narration: Callable[[str], str]
+    # FIX-04 §6.5：v2 冒险的创建事务步骤（进度初始化 + 世界种子原子物化）。
+    # 在创建事务内调用；v1 / 未绑定冒险时是 no-op。
+    initialize_adventure_run: Callable[[Any], dict[str, Any]] | None = None
 
 
 class CreationPhase(str, Enum):

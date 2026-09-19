@@ -14,6 +14,7 @@ from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, 
 from src.engine.economy import resolve_auto_reward_policy
 from src.engine.game_instance import GameRegistry
 from src.engine import persistence
+from src.engine.world.materialization import materialize_world_seed
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader, AdventureResolver
@@ -29,6 +30,7 @@ from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
 from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, modules, scene_images, speech, system, tunnel, announcements, assistant, hub, legal, manual_rolls
 from src.webui.services import combat_extension as combat_extension_service
+from src.webui.services import adventure_runtime
 from src.webui.services import ruleset_characters
 from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
@@ -428,6 +430,20 @@ class WebAPI:
             refresh_adventure_sources=self._sync_plugin_adventure_sources,
             default_runtime_requirement=default_adventure_runtime_requirement,
         )
+        self._adventure_runtime_dependencies = adventure_runtime.AdventureRuntimeDependencies(
+            resolve_binding=lambda instance: self._adventure_resolver.resolve_binding(
+                getattr(instance, "adventure_binding", None) or {},
+                str(getattr(instance, "language", "") or ""),
+            ),
+            materialize_world_seed=materialize_world_seed,
+            rules_evaluator=lambda instance: self._adventure_runtime_adapter(
+                instance, "adventure_rules_evaluator",
+            ),
+            reward_converter=lambda instance: self._adventure_runtime_adapter(
+                instance, "adventure_reward_converter",
+            ),
+            save_instance=self._reg.save,
+        )
         self._world_dependencies = worlds.WorldDependencies(
             lorebook=self._lore,
             worlds_dir=self._worlds_dir,
@@ -717,6 +733,10 @@ class WebAPI:
                     runtime,
                     world_id,
                     language,
+                ),
+                # FIX-04 §6.5：v2 冒险的创建事务步骤（进度 + 原子世界种子）。
+                initialize_adventure_run=lambda instance: adventure_runtime.initialize_adventure_run(
+                    self._adventure_runtime_dependencies, instance,
                 ),
                 resolve_default_scene_image=self.resolve_default_scene_image,
                 materialize_scene_image=self.materialize_scene_image,
@@ -1268,6 +1288,26 @@ class WebAPI:
     def _load_runtime_for_game(self, inst):
         rule = self._load_rule_for_game(inst)
         return self._ruleset_registry.resolve(rule.template) if rule else None
+
+    def _adventure_runtime_adapter(self, instance: Any, hook: str) -> Any:
+        """Ask the instance's ruleset runtime for an adventure adapter (FIX-04).
+
+        ``rules.*`` gate 求值与 ``item_reward`` 转换都属于 ruleset 的职责
+        （D&D 实现见 Dnd2024Runtime）；其它 runtime 没有该能力时返回 None →
+        gate 证据不足 = 不放行 / reward 缺少转换器 = fail closed。
+        """
+
+        try:
+            runtime = self._load_runtime_for_game(instance)
+        except Exception:  # noqa: BLE001 - 适配器缺席不等于放行
+            return None
+        getter = getattr(runtime, hook, None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(instance)
+        except Exception:  # noqa: BLE001
+            return None
 
     def _project_game_rule_id(self, instance) -> str:
         return game_queries.projected_rule_id(

@@ -242,6 +242,19 @@ async def create_game(
             "error": "冒险包绑定无效，未留下半成品存档。",
         }
     instance.play_mode = normalized_play_mode
+    # FIX-04 §6.5/§6.6：v2 冒险在同一创建事务里初始化进度并原子物化世界种子；
+    # 失败即整体回滚（不留下 partial save / partial world）。
+    if callable(getattr(dependencies, "initialize_adventure_run", None)):
+        try:
+            dependencies.initialize_adventure_run(instance)
+        except Exception as exc:
+            transaction.rollback()
+            logger.exception("初始化冒险运行时失败，已回滚: %s", game_key)
+            return {
+                "ok": False,
+                "error_code": "ADVENTURE_RUNTIME_INIT_FAILED",
+                "error": f"冒险初始化失败，未留下半成品存档：{exc}",
+            }
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(selected_map_background)
     # 房间密码三态：字段缺失(None) 且 多人局 → 生成随机密码回显（安全默认，

@@ -19,12 +19,24 @@ from typing import Any
 from src.adventures.bundle import LoadedAdventureBundle
 from src.adventures.materialization import MAX_OPS_PER_BATCH, world_seed_ops
 from src.engine.world_state import (
-    apply_world_ops,
+    apply_ops_to_state,
     world_entities,
     world_facts,
     world_processes,
     world_relations,
 )
+
+
+def _source_round(instance: Any, explicit: int | None) -> int:
+    if explicit is not None:
+        try:
+            return int(explicit)
+        except (TypeError, ValueError):
+            return 0
+    try:
+        return int(getattr(instance, "round_number", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def materialize_world_seed(
@@ -78,16 +90,23 @@ def materialize_world_seed(
         else:
             pending.append(op)
 
+    # FIX-04 §6.6：**不要**逐批提交（"64 ops commit, 64 ops commit, 失败"会在
+    # 世界里留下半个种子）。先把所有批次叠加到同一份 detached draft 上校验，
+    # 全部通过后才对 instance 做**唯一一次**提交；任何一步失败都不会改动世界。
+    draft: dict[str, Any] | None = None
     for start in range(0, len(pending), MAX_OPS_PER_BATCH):
         batch = pending[start:start + MAX_OPS_PER_BATCH]
-        apply_world_ops(
-            instance, batch,
-            source_round=source_round,
+        draft, _summary = apply_ops_to_state(
+            draft if draft is not None else instance.world_state,
+            batch,
+            source_round=_source_round(instance, source_round),
         )
         created.extend(
             str(op.get("entity_id") or op.get("relation_id") or op.get("key") or op.get("process_id") or "")
             for op in batch
         )
+    if draft is not None:
+        instance.world_state = draft
 
     return {
         "adventure_id": str(bundle.manifest.adventure_id),
