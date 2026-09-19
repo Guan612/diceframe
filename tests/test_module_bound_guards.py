@@ -42,7 +42,8 @@ def _make_module(tmp_path: Path) -> tuple[PluginHost, AdventureSourceRegistry]:
         '{"type": "object", "properties": {}}', encoding="utf-8",
     )
     package = plugin_dir / "adventures" / "castle"
-    shutil.copytree(Path("templates/adventures/lanterns_of_greymoor"), package)
+    package.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(Path("templates/adventures/lanterns_of_greymoor"), package, dirs_exist_ok=True)
     manifest_path = package / "manifest.json"
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     payload["adventure_id"] = "plugin:castle-quest"
