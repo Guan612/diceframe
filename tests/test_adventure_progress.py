@@ -51,7 +51,11 @@ def test_new_progress_activates_start_nodes() -> None:
     progress = new_progress(graph)
     assert progress["active_nodes"] == ["gate", "tunnel"]
     assert progress["completed_nodes"] == []
-    assert progress["history"] == []
+    # 初始激活也有历史（诊断可追溯）。
+    assert progress["history"] == [
+        {"kind": "node_activated", "id": "gate"},
+        {"kind": "node_activated", "id": "tunnel"},
+    ]
 
 
 def test_complete_node_activates_unconditional_successors() -> None:

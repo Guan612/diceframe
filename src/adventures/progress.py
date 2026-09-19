@@ -38,12 +38,15 @@ class ProgressError(ValueError):
 def new_progress(graph: dict[str, Any]) -> dict[str, Any]:
     """Initial progress for one validated v2 graph."""
 
+    start_nodes = list(graph.get("start_node_ids") or [])
     return {
-        "active_nodes": list(graph.get("start_node_ids") or []),
+        "active_nodes": start_nodes,
         "completed_nodes": [],
         "completed_objectives": [],
         "completed_milestones": [],
-        "history": [],
+        "history": [
+            {"kind": "node_activated", "id": node_id} for node_id in start_nodes
+        ],
     }
 
 
