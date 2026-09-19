@@ -300,6 +300,42 @@ def test_unresolved_module_monster_fails_closed() -> None:
         )
 
 
+# ---- FIX-07 §10：裸 ContentRef 的默认来源由 runtime 决定 --------------------
+
+
+def test_bare_reward_ref_uses_the_runtime_default_source(tmp_path) -> None:
+    """裸 ``item:brass_key`` 必须能解析到模组 catalog（Golden E2E 步骤 12 回归）。
+
+    修复前 ``complete_adventure_node`` 用**绑定的来源身份**（``plugin:<module>``）
+    当默认来源，那既不是 ContentRef 的 source 词表，也盖掉了 runtime 自己的
+    owning-module 默认值 → 最自然的裸 ref 写法整体 fail closed。
+    """
+
+    api, lorebook = _install_module(tmp_path)
+    try:
+        runtime = _runtime_with_module(api)
+        instance = _instance(runtime, api)
+
+        intents = runtime.adventure_reward_intents(
+            instance, {"rewards": [{"ref": f"item:{ITEM_ID}"}]}, recipient_uid="gm",
+        )
+
+        assert [intent["name"] for intent in intents] == ["Brass Key"]
+        # 解析到的来源就是 owning module（runtime 的默认），不是绑定来源字符串。
+        assert intents[0]["ref"]["source"] == MODULE_LABEL
+    finally:
+        lorebook.close()
+
+
+def test_unresolved_module_monster_fails_closed() -> None:
+    with pytest.raises(ContentRefError, match="unresolved"):
+        expand_encounter_enemies(
+            _catalog(),
+            [{"ref": {"source": "module:other", "kind": "monster", "id": "ghost"}}],
+            default_source=MODULE_LABEL,
+        )
+
+
 # ---- §5.3 module encounter → combat ----------------------------------------
 
 

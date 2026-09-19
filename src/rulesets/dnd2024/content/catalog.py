@@ -134,7 +134,12 @@ class DndContentCatalog:
         return tuple(self._sources)
 
     def resolve(self, ref: ContentRef) -> dict[str, Any] | None:
-        """Direct source-aware lookup for one validated ref."""
+        """Direct source-aware lookup for one validated ref.
+
+        v1 裸 ``kind:id``（非 explicit）由调用方归属**它自己声明的默认来源**
+        （母方案 §9：跨来源引用必须显式，不猜、不静默替换）；因此这里只做
+        label 精确匹配，链序回溯留给显式声明来源的调用方自行决定。
+        """
 
         for source in self._sources:
             if source.label == ref.source:

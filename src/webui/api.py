@@ -1036,18 +1036,27 @@ class WebAPI:
             modules.assert_module_action_allowed(
                 self._module_dependencies, plugin_id, "disable",
             )
-        return await plugins.update_plugin_config(
+        result = await plugins.update_plugin_config(
             self._plugin_lifecycle_dependencies, plugin_id, changes,
         )
+        if result.get("ok"):
+            # FIX-07：启用/禁用会改变模块贡献的内容 → 立刻刷新来源与 catalog 链，
+            # 否则"启用模组后马上开局"会解析不到它的冒险（解析不得依赖
+            # "碰巧同步过 registry"，与 §3.6 同一原则）。
+            self.refresh_content_sources()
+        return result
 
     async def control_plugin(self, plugin_id: str, action: str) -> dict[str, Any]:
         if action == "stop":
             modules.assert_module_action_allowed(
                 self._module_dependencies, plugin_id, "disable",
             )
-        return await plugins.control_plugin(
+        result = await plugins.control_plugin(
             self._plugin_lifecycle_dependencies, plugin_id, action,
         )
+        if result.get("ok"):
+            self.refresh_content_sources()
+        return result
 
     async def install_plugin(
         self, payload: bytes, overwrite: bool = False, expected_plugin_type: str = "",
@@ -1057,8 +1066,7 @@ class WebAPI:
             expected_plugin_type=expected_plugin_type,
         )
         if result.get("ok"):
-            self._sync_plugin_adventure_sources()
-            self._sync_module_catalogs()
+            self.refresh_content_sources()
         return result
 
     async def list_plugin_marketplace(self) -> dict[str, Any]:
@@ -1074,8 +1082,7 @@ class WebAPI:
             expected_plugin_type=expected_plugin_type,
         )
         if result.get("ok"):
-            self._sync_plugin_adventure_sources()
-            self._sync_module_catalogs()
+            self.refresh_content_sources()
         return result
 
     async def import_module(self, payload: bytes, overwrite: bool = False) -> dict[str, Any]:
@@ -1106,9 +1113,12 @@ class WebAPI:
 
     async def uninstall_plugin(self, plugin_id: str, delete_data: bool = False) -> dict[str, Any]:
         modules.assert_module_action_allowed(self._module_dependencies, plugin_id, "uninstall")
-        return await plugins.uninstall_plugin(
+        result = await plugins.uninstall_plugin(
             self._plugin_lifecycle_dependencies, plugin_id, delete_data,
         )
+        if result.get("ok"):
+            self.refresh_content_sources()
+        return result
 
     def list_plugin_mirrors(self) -> dict[str, Any]:
         return plugins.list_plugin_mirrors(self._plugin_host_dependencies)
@@ -2193,6 +2203,17 @@ class WebAPI:
         )
 
     # ---- 世界模板 ----
+
+    def refresh_content_sources(self) -> None:
+        """Recompute plugin adventure sources + module catalogs from host state.
+
+        FIX-07：安装 / 启用 / 停用 / 卸载 / 启动都经过这一个刷新入口。解析与目录
+        读取都不得依赖"碰巧同步过 registry"（§3.6 同一原则）——否则"启用模组后
+        马上开局"或"重启后马上开局"会解析不到模组的冒险包。
+        """
+
+        self._sync_plugin_adventure_sources()
+        self._sync_module_catalogs()
 
     def _sync_plugin_adventure_sources(self) -> None:
         """MOD-03：把启用的 content-pack 模组声明的 adventure_packages 同步为

@@ -181,12 +181,13 @@ def complete_adventure_node(
         dependencies.reward_converter(instance)
         if callable(dependencies.reward_converter) else None
     )
-    default_source = str(getattr(resolution, "source_id", "") or "")
-    source_kind = str(getattr(resolution, "source_kind", "") or "")
-    content_source = (
-        f"{source_kind}:{default_source}" if source_kind and default_source
-        else source_kind or default_source
-    )
+    # 裸 ContentRef（``item:brass_key``）的默认来源**由 runtime 转换器决定**
+    # （DNDMOD-03 知道本实例的 catalog 来源身份：owning module / adventure
+    # local）。这里如果按**绑定的来源身份**（plugin/user/builtin）拼一个 source，
+    # 既不属于 ContentRef 的 source 词表（core/module/adventure/world/...），又
+    # 会盖掉 runtime 的正确默认值，让最自然的裸 ref 写法整体 fail closed。
+    # 传空串 = 把"默认归属哪个来源"交回 runtime；显式来源的 ref 不受影响。
+    content_source = ""
     # ① 准备 outcomes（纯声明层；未知类型/字段 fail closed）
     intents = outcomes_to_intents(
         node.get("on_complete"),

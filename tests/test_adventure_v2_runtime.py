@@ -21,6 +21,7 @@ commit（"64 ops commit, 64 ops commit, 失败"会留下半个世界），`on_co
 
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import deepcopy
 from pathlib import Path
@@ -275,6 +276,37 @@ def test_complete_node_applies_outcomes_and_activates_successors(tmp_path) -> No
     assert result["activated_nodes"] == ["vault"]
     assert world_facts(instance.world_state)["gate.open"]["value"] is True
     assert instance.adventure_progress["active_nodes"] == ["vault"]
+
+
+def test_rollback_restores_adventure_progress_with_the_world(tmp_path) -> None:
+    """FIX-07 §10 步骤 23：整轮回滚必须把进度和世界一起撤销。
+
+    回归背景（Golden E2E）：``rollback_last_round`` 只恢复 ``pre_world_state``，
+    进度留在被丢弃的分支上 → "世界退回去了、节点还是完成状态"。
+    """
+
+    from src.engine.round_snapshots import capture_round_entity_snapshot
+
+    resolver = _install(tmp_path, _graph())
+    instance = _instance(resolver)
+    deps = _deps(resolver)
+    adventure_runtime.initialize_adventure_run(deps, instance)
+
+    capture_round_entity_snapshot(instance)
+    world_before = deepcopy(instance.world_state)
+    progress_before = deepcopy(instance.adventure_progress)
+
+    adventure_runtime.complete_adventure_node(deps, instance, "gate")
+    assert instance.adventure_progress["completed_nodes"] == ["gate"]
+    asyncio.run(instance.finish_judgment("推进了一轮"))
+
+    rolled = asyncio.run(instance.rollback_last_round())
+
+    assert rolled is not None
+    assert instance.world_state == world_before
+    assert instance.adventure_progress == progress_before
+    assert instance.adventure_progress["completed_nodes"] == []
+    assert instance.adventure_progress["active_nodes"] == ["gate"]
 
 
 def test_objective_milestone_validation_still_applies_inside_runtime(tmp_path) -> None:
