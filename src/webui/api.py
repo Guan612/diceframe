@@ -16,7 +16,7 @@ from src.engine.game_instance import GameRegistry
 from src.engine import persistence
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
-from src.adventures import AdventureBundleLoader
+from src.adventures import AdventureBundleLoader, AdventureResolver
 from src.adventures.registry import AdventureSource, AdventureSourceRegistry
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
@@ -156,12 +156,12 @@ class WebAPI:
         self._builtin_adventures_dir = (
             Path(__file__).parent.parent.parent / "templates" / "adventures"
         ).resolve()
-        self._adventure_loader = AdventureBundleLoader(
-            adventures_dir or self._builtin_adventures_dir
-        )
-        # MOD-02：builtin/user 双来源统一注册表（plugin 来源随 MOD-03 注册）。
+        # FIX-02 §4.1：唯一的 AdventureResolver。builtin（runtime 数据目录里的
+        # 同步副本或发布目录）/ user（不含 builtin 标记的目录）/ plugin（模组声明）
+        # 三类来源由它统一解析；WebAPI 与 D&D Runtime 共用同一个实例
+        # （见下方 set_adventure_resolver 注入）。
         self._dnd_module_catalogs: list[tuple[str, Any]] = []
-        self._adventure_source_registry = AdventureSourceRegistry.from_directories(
+        self._adventure_resolver = AdventureResolver.from_directories(
             self._builtin_adventures_dir,
             (
                 adventures_dir
@@ -170,6 +170,10 @@ class WebAPI:
                 else None
             ),
         )
+        self._adventure_source_registry = self._adventure_resolver.registry
+        self._adventure_loader = self._adventure_resolver
+        # 让 runtime（D&D load_adventure）也走同一个 resolver，消除双解析路径。
+        self._ruleset_registry.set_adventure_resolver(self._adventure_resolver)
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._character_dependencies = characters.CharacterDependencies(
             games=characters.CharacterGameDependencies(
@@ -495,6 +499,7 @@ class WebAPI:
         self._adventure_dependencies = adventures.AdventureDependencies(
             adventure_loader=self._adventure_loader,
             adventure_registry=self._adventure_source_registry,
+            adventure_resolver=self._adventure_resolver,
             list_instances=self._reg.list_all,
             load_rule_by_id=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,

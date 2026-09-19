@@ -110,3 +110,20 @@ class RulesetRuntimeRegistry:
 
     def runtime_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._runtimes))
+
+    def set_adventure_resolver(self, resolver: Any) -> int:
+        """Inject the app's unique adventure resolver into every runtime (FIX-02 §4.1).
+
+        组合根（WebAPI）拥有唯一的 AdventureResolver；runtime 通过本入口拿到它，
+        不再自己 ``new AdventureBundleLoader``。返回接收该 resolver 的 runtime 数。
+        """
+
+        if resolver is None:
+            return 0
+        attached = 0
+        for runtime in self._runtimes.values():
+            setter = getattr(runtime, "set_adventure_resolver", None)
+            if callable(setter):
+                setter(resolver)
+                attached += 1
+        return attached

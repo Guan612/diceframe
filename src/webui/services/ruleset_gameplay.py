@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.webui.ruleset_draft_validation import validate_draft_shape
+from src.adventures import binding_matches
 from src.rulesets.automation import (
     advance_automatic_intents,
     append_public_timeline_entry,
@@ -199,7 +200,9 @@ async def _ensure_compatible_adventure_binding(
         )
     except ValueError as exc:
         return _error("INCOMPATIBLE_ADVENTURE", str(exc))
-    if binding == expected:
+    # FIX-02 §4.2：形状感知比较——旧存档的 5 字段绑定与重新解析出的来源感知
+    # 绑定视为同一包；只有包身份真的变了才进入迁移/失败路径。
+    if binding_matches(binding, expected):
         return None
     if not isinstance(runtime, AdventureBindingMigrationRuntime):
         return _error(

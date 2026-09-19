@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.adventures import AdventureBundleLoader
+from src.adventures import AdventureBundleLoader, AdventureResolver
 from src.adventures.graph_v2 import ADVENTURE_GRAPH_FORMAT_V2
 from src.engine.game_instance import GameInstance, GameState
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
@@ -136,8 +136,14 @@ def _write_e2e_adventure(data_dir: Path) -> dict:
         target.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8",
         )
-    bundle = AdventureBundleLoader(package.parent).resolve(E2E_ADVENTURE_ID, "zh-CN")
-    return bundle.binding("default_fantasy")
+    bundle_loader_dir = package.parent
+    resolver = AdventureResolver.single_directory(bundle_loader_dir, source_kind="user")
+    resolution = resolver.resolve_with_source(E2E_ADVENTURE_ID, "zh-CN")
+    if resolution.bundle.content_digest != AdventureBundleLoader(
+        bundle_loader_dir,
+    ).resolve(E2E_ADVENTURE_ID, "zh-CN").content_digest:
+        raise RuntimeError("E2E adventure digest is not stable")
+    return resolution.binding("default_fantasy")
 
 
 def prepare_e2e_data(data_dir: Path) -> Path:

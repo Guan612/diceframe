@@ -6,7 +6,12 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from src.adventures import ADVENTURE_GRAPH_FORMAT, AdventureBundleLoader, LoadedAdventureBundle
+from src.adventures import (
+    ADVENTURE_GRAPH_FORMAT,
+    AdventureResolver,
+    LoadedAdventureBundle,
+    binding_matches,
+)
 from src.engine.legacy_game_projection import project_legacy_game_context
 from src.rulesets.dnd2024.adventure_migrations import (
     apply_unreleased_adventure_binding_migration,
@@ -80,11 +85,26 @@ class Dnd2024Runtime:
         default = Path(__file__).resolve().parents[3] / "templates" / "rulesets"
         self._loader = RulesetBundleLoader(bundles_dir or default)
         self._bundle_cache: dict[str, LoadedRulesetBundle] = {}
-        adventures = adventures_dir or (
+        default_adventures = (
             Path(__file__).resolve().parents[3] / "templates" / "adventures"
         )
-        self._adventure_loader = AdventureBundleLoader(adventures)
+        adventures = adventures_dir or default_adventures
+        # FIX-02 §4.1：runtime 不再自己持有"另一个 loader"。默认建一个单目录
+        # resolver（standalone / 测试用；随应用发布的目录语义上是 builtin），
+        # 生产由组合根注入全局唯一 resolver（set_adventure_resolver），因此
+        # WebAPI 与 runtime 解析到同一个包。
+        self._adventure_loader = AdventureResolver.single_directory(
+            adventures,
+            source_kind="user" if adventures_dir else "builtin",
+        )
         self._director = Dnd2024Director(director_mode if director_mode in {"auto", "assist", "manual"} else "assist")
+
+    def set_adventure_resolver(self, resolver: Any) -> None:
+        """Adopt the application's unique AdventureResolver (composition injection)."""
+
+        if resolver is None:
+            return
+        self._adventure_loader = resolver
 
     def load_adventure(
         self, instance: Any, locale: str = "",
@@ -92,7 +112,10 @@ class Dnd2024Runtime:
         binding = getattr(instance, "adventure_binding", None)
         if not isinstance(binding, dict) or not str(binding.get("adventure_id") or ""):
             return None
-        bundle = self._adventure_loader.resolve(str(binding["adventure_id"]), locale)
+        # 来源身份存在时只在该来源内解析（不回退）；旧绑定按"当前唯一"解析，
+        # 重名冲突由 resolve_binding 抛 AdventureSourceConflict → 调用方 fail closed。
+        resolution = self._adventure_loader.resolve_binding(binding, locale)
+        bundle = resolution.bundle
         if (
             bundle.manifest.required_runtime_id != self.runtime_id
             or bundle.manifest.required_runtime_version > self.runtime_version
@@ -105,8 +128,8 @@ class Dnd2024Runtime:
             != bundle.manifest.recommended_world_id
         ):
             raise ValueError("bound adventure package is incompatible with the selected world")
-        expected = bundle.binding(str(getattr(instance, "world_id", "") or ""))
-        if binding != expected:
+        expected = resolution.binding(str(getattr(instance, "world_id", "") or ""))
+        if not binding_matches(binding, expected):
             raise ValueError("bound adventure package is missing or has changed")
         return bundle
 
