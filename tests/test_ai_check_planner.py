@@ -80,6 +80,26 @@ def test_planner_context_publishes_the_ruleset_dc_bands() -> None:
         assert "ruleset.dc_table" in prompt or "`dc_table`" in prompt
 
 
+def test_compound_action_prompts_stop_at_the_earliest_blocking_checkpoint() -> None:
+    planner_markers = {
+        "zh": "最早会阻塞后续动作",
+        "en": "earliest genuine uncertainty that blocks the later steps",
+        "ja": "後続の行動を止める最初の本当の不確実性",
+        "de": "früheste echte Unsicherheit, die spätere Schritte blockiert",
+    }
+    gm_markers = {
+        "zh": "不得自动完成后续依赖动作",
+        "en": "Do not automatically complete dependent later actions",
+        "ja": "依存する後続行動を自動で完了させたり",
+        "de": "Schließe abhängige spätere Aktionen nicht automatisch ab",
+    }
+    for locale, marker in planner_markers.items():
+        planner_prompt = (ROOT / f"prompts/check_planner_{locale}.md").read_text(encoding="utf-8")
+        gm_prompt = (ROOT / f"prompts/gm_system_{locale}.md").read_text(encoding="utf-8")
+        assert marker in planner_prompt
+        assert gm_markers[locale] in gm_prompt
+
+
 def test_d20_target_is_clamped_to_dc_cap() -> None:
     """后期失控 DC（25–30）必须被钳到规则显式硬上限。"""
     from src.engine.dice import d20_dc_cap
