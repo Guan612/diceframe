@@ -82,10 +82,13 @@ def test_backflow_and_parallel_edges_are_noop() -> None:
     complete_node(progress, graph, "gate")
     complete_node(progress, graph, "bridge")
     complete_node(progress, graph, "throne")
-    # throne → gate 回流：gate 已完成，重访为合法推进（回到 active）。
-    complete_node(progress, graph, "throne")
-    activated = complete_node(progress, graph, "gate")
-    assert activated == ["bridge"]  # bridge 已完成 → no-op；tunnel gate 仍不满足
+    # throne → gate 回流：gate 已在 completed，重激活为 no-op（不重复激活）。
+    assert progress["active_nodes"] == []
+    activations = [
+        entry["id"] for entry in progress["history"]
+        if entry["kind"] == "node_activated" and entry["id"] == "gate"
+    ]
+    assert activations == ["gate"]  # 只有初始激活一次
 
 
 def test_completing_inactive_node_fails_closed() -> None:
