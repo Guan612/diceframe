@@ -716,6 +716,7 @@ class LoreRetriever:
     ) -> list[dict[str, Any]]:
         keyword_ids = {str(row.get("id") or "") for row in keyword_hits}
         semantic_ids = {str(row.get("id") or "") for row in semantic_hits}
+        semantic_scores = {str(row.get("id") or ""): row.get("_semantic_score") for row in semantic_hits}
         final_ids = {str(row.get("id") or "") for row in final_hits}
         rows: list[dict[str, Any]] = []
         for entry in self._entries:
@@ -727,7 +728,9 @@ class LoreRetriever:
                 entry_id=entry_id,
                 book_id=str(entry.get("_lorebook_id") or entry.get("book_id") or ""),
                 candidate_sources=[source for source, present in (("keyword", entry_id in keyword_ids), ("semantic", entry_id in semantic_ids)) if present],
-                semantic_score=float(str(entry.get("_semantic_score"))) if entry.get("_semantic_score") is not None else None,
+                matched_keys=list(entry.get("keywords") or []) if entry_id in keyword_ids else [],
+                secondary_matches=list(entry.get("secondary_keys") or []) if entry_id in keyword_ids else [],
+                semantic_score=float(str(semantic_scores[entry_id])) if semantic_scores.get(entry_id) is not None else None,
                 visibility="visible" if visible else "hidden",
                 budget="included" if entry_id in final_ids else "omitted",
                 final_state="included" if entry_id in final_ids else "omitted",
