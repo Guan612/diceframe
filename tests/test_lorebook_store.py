@@ -636,3 +636,20 @@ class TestMigration:
         finally:
             store.close()
             path.unlink(missing_ok=True)
+
+    def test_world_projection_excludes_entries_from_independent_books(self):
+        store, path = _temp_store()
+        try:
+            store.create_world("w1", "World One")
+            store.add_entry({"id": "primary", "world_id": "w1", "name": "Primary", "content": "primary"})
+            store.create_lorebook({"id": "book:independent", "name": "Imported"})
+            store.add_entry({
+                "id": "independent", "book_id": "book:independent", "world_id": "w1",
+                "name": "Independent", "content": "must not enter world projection",
+            })
+
+            assert [entry["id"] for entry in store.list_entries("w1")] == ["primary"]
+            assert [entry["id"] for entry in store.list_book_entries("book:independent")] == ["independent"]
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)

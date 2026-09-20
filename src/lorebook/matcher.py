@@ -199,8 +199,12 @@ class KeywordMatcher:
                             break
             else:
                 winner = members[0][0]
-            for eid, _ in members[1:]:
-                removed.add(eid)
+            # ``members`` is sorted for winner selection, but the winner may
+            # be a prioritized entry that was not first in the original set.
+            # Remove by identity so the selected winner is always retained.
+            for eid, _ in members:
+                if eid != winner:
+                    removed.add(eid)
             logger.debug("分组竞争: group=%s winner=%s removed=%d",
                         group, self._entries.get(winner, {}).get("name", winner),
                         len(members) - 1)
@@ -255,10 +259,14 @@ class KeywordMatcher:
             if depth > 0 and bool(entry.get("non_recursable", False)):
                 continue
             visited.add(eid)
-            if bool(entry.get("prevent_further_recursion", False)) or bool(entry.get("non_recursable", False)):
+            # non_recursable only controls whether this entry may be reached
+            # through a recursive pass; a directly matched entry may still
+            # propagate its content.  Only prevent_further_recursion stops
+            # propagation after the entry has been activated.
+            if bool(entry.get("prevent_further_recursion", False)):
                 continue
             child_text = str(entry.get("content", "") or "")
-            if child_text and (depth == 0 or bool(entry.get("_lorebook_recursive_scanning", True))):
+            if child_text and bool(entry.get("_lorebook_recursive_scanning", True)):
                 child_ids = self._candidate_ids(child_text)
                 child_ids = self._apply_match_mode(child_ids, child_text)
                 for cid in child_ids - filtered_ids - visited:
@@ -330,24 +338,22 @@ class KeywordMatcher:
             sticky = int(entry.get("sticky", 0))
             cooldown = int(entry.get("cooldown", 0))
             delay = int(entry.get("delay", 0))
+            if sticky <= 0 and cooldown <= 0 and delay <= 0:
+                continue
 
-            if sticky > 0 and eid not in timed_state:
-                timed_state[eid] = {"status": "active", "remaining": sticky}
+            state = timed_state.setdefault(eid, {})
+            if sticky > 0 and state.get("sticky_remaining", 0) <= 0:
+                state["sticky_remaining"] = sticky
                 logger.debug("世界书 sticky 激活: %s (duration=%d)", entry.get("name", eid), sticky)
-            if cooldown > 0 and eid not in timed_state:
-                timed_state[eid] = {"status": "cooldown", "remaining": cooldown}
+            if cooldown > 0 and state.get("cooldown_remaining", 0) <= 0:
+                state["cooldown_remaining"] = cooldown
                 logger.debug("世界书 cooldown 开始: %s (duration=%d)", entry.get("name", eid), cooldown)
-            if delay > 0 and eid not in timed_state:
-                timed_state[eid] = {"status": "delayed", "remaining": delay}
+            if delay > 0 and state.get("delay_remaining", 0) <= 0:
+                state["delay_remaining"] = delay
                 logger.debug("世界书 delay 开始: %s (duration=%d)", entry.get("name", eid), delay)
-            if eid in timed_state and any(key in timed_state[eid] for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining")):
-                state = timed_state[eid]
-                if sticky > 0 and state.get("sticky_remaining", 0) <= 0:
-                    state["sticky_remaining"] = sticky
-                if cooldown > 0 and state.get("cooldown_remaining", 0) <= 0:
-                    state["cooldown_remaining"] = cooldown
-                if delay > 0 and state.get("delay_remaining", 0) <= 0:
-                    state["delay_remaining"] = delay
+            # Do not emit the legacy status/remaining shape.  Legacy input is
+            # still read by the compatibility predicates above, while all
+            # newly-mutated runtime state uses independent counters.
 
     def _sort_by_tier(self, entry_ids: set[str]) -> list[dict]:
         result = []

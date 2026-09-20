@@ -107,3 +107,56 @@ class TestGroupCompetition:
         r = m.match("测试")
         ids = [e["id"] for e in r]
         assert "e1" in ids and "e2" in ids
+
+    def test_prioritized_winner_is_retained_even_when_not_first(self):
+        m = _build_matcher([
+            {"id": "weighted", "keywords": ["怪物"], "group": "encounter",
+             "group_weight": 10},
+            {"id": "prioritized", "keywords": ["怪物"], "group": "encounter",
+             "group_weight": 1, "prioritize_inclusion": True},
+        ])
+        ids = {e["id"] for e in m.match("遇到了怪物")}
+        assert ids == {"prioritized"}
+
+
+def test_recursive_scanning_false_does_not_scan_first_match_content():
+    m = _build_matcher([
+        {"id": "seed", "keywords": ["door"], "content": "sigil",
+         "_lorebook_recursive_scanning": False},
+        {"id": "child", "keywords": ["sigil"], "content": "deep"},
+    ])
+    assert {e["id"] for e in m.match_with_recursive("door")} == {"seed"}
+
+
+def test_non_recursable_direct_match_can_still_propagate():
+    m = _build_matcher([
+        {"id": "seed", "keywords": ["door"], "content": "sigil",
+         "non_recursable": True},
+        {"id": "child", "keywords": ["sigil"], "content": "deep"},
+    ])
+    assert {e["id"] for e in m.match_with_recursive("door")} == {"seed", "child"}
+
+
+def test_prevent_further_recursion_stops_propagation():
+    m = _build_matcher([
+        {"id": "seed", "keywords": ["door"], "content": "sigil",
+         "prevent_further_recursion": True},
+        {"id": "child", "keywords": ["sigil"], "content": "deep"},
+    ])
+    assert {e["id"] for e in m.match_with_recursive("door")} == {"seed"}
+
+
+def test_timed_effects_share_entry_state_with_independent_counters():
+    m = _build_matcher([{
+        "id": "timed", "keywords": ["door"], "content": "",
+        "sticky": 3, "cooldown": 2, "delay": 1,
+    }])
+    timed_state = {}
+    m.match_with_recursive("door", timed_state=timed_state)
+    assert timed_state == {
+        "timed": {
+            "sticky_remaining": 3,
+            "cooldown_remaining": 2,
+            "delay_remaining": 1,
+        }
+    }

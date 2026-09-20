@@ -1,4 +1,5 @@
 from src.lorebook.importer import commit_lorebook_import, detect_lorebook_format, preview_lorebook_import
+from src.lorebook.resolver import resolve_active_books
 from src.lorebook.store import LorebookStore
 
 
@@ -43,5 +44,76 @@ def test_import_ids_are_book_scoped_and_recreating_book_does_not_delete_bindings
         store.create_lorebook({"id": "book:one", "name": "replacement"})
         assert store.list_bindings(scope_kind="world", scope_id="w")[0]["book_id"] == "book:one"
         assert store.list_book_entries("book:one")
+    finally:
+        store.close()
+
+
+def test_world_bound_independent_import_keeps_canonical_book_scope(tmp_path):
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        store.create_world("w", "World")
+        draft = preview_lorebook_import({
+            "spec": "lorebook_v3",
+            "data": {"lorebook": {"name": "Imported", "entries": [{"id": "e", "keys": ["x"], "content": "text"}]}},
+        })["book"]
+        commit_lorebook_import(
+            store, draft,
+            {"id": "binding:import:w", "scope_kind": "world", "scope_id": "w"},
+            book_id="book:import",
+        )
+
+        entry = store.list_book_entries("book:import")[0]
+        assert entry["world_id"] is None
+        assert store.list_entries("w") == []
+    finally:
+        store.close()
+
+
+def test_primary_world_book_import_keeps_legacy_world_copy(tmp_path):
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        store.create_world("w", "World")
+        draft = preview_lorebook_import({"name": "Legacy", "entries": [{"uid": 1, "key": ["x"], "content": "text"}]})["book"]
+        commit_lorebook_import(
+            store, draft,
+            {"id": "binding:primary:w", "scope_kind": "world", "scope_id": "w"},
+            book_id="world:w",
+        )
+
+        entry = store.list_book_entries("world:w")[0]
+        assert entry["world_id"] == "w"
+        assert store.list_entries("w")[0]["id"] == entry["id"]
+    finally:
+        store.close()
+
+
+def test_import_book_settings_populate_columns_and_resolver(tmp_path):
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        store.create_world("w", "World")
+        draft = preview_lorebook_import({
+            "spec": "lorebook_v3",
+            "data": {"lorebook": {
+                "name": "Configured", "scan_depth": 4, "token_budget": 321,
+                "recursive_scanning": True, "entries": [],
+            }},
+        })["book"]
+        commit_lorebook_import(
+            store, draft,
+            {"id": "binding:configured:w", "scope_kind": "world", "scope_id": "w"},
+            book_id="book:configured",
+        )
+
+        book = store.get_lorebook("book:configured")
+        assert book["scan_depth"] == 4
+        assert book["token_budget"] == 321
+        assert book["recursive_scanning"] is True
+        assert book["settings"] == draft.settings
+        refs = resolve_active_books(type("Instance", (), {"world_id": "w"})(), store=store)
+        configured = next(ref for ref in refs if ref.book_id == "book:configured")
+        assert (configured.scan_depth, configured.token_budget, configured.recursive_scanning) == (4, 321, True)
     finally:
         store.close()

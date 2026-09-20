@@ -48,7 +48,17 @@ def commit_lorebook_import(store: Any, draft: LorebookDraft, binding: dict[str, 
     if not book_id:
         fingerprint = hashlib.sha256(json.dumps({"source": draft.source, "name": draft.name, "entries": [entry.external_id for entry in draft.entries]}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         book_id = str(draft.source.get("id") or f"import:{draft.source.get('kind', 'external')}:{fingerprint}")
-    store.create_lorebook({"id": book_id, "name": draft.name, "description": draft.description, "language": draft.language, "settings": draft.settings, "source_kind": draft.source.get("kind", "import")})
+    store.create_lorebook({
+        "id": book_id,
+        "name": draft.name,
+        "description": draft.description,
+        "language": draft.language,
+        "settings": draft.settings,
+        "scan_depth": draft.settings.get("scan_depth", 0),
+        "token_budget": draft.settings.get("token_budget", 0),
+        "recursive_scanning": draft.settings.get("recursive_scanning", False),
+        "source_kind": draft.source.get("kind", "import"),
+    })
     if binding:
         store.bind_lorebook({"id": binding.get("id", f"binding:{book_id}"), "book_id": book_id, **{k: v for k, v in binding.items() if k != "id"}})
     for index, entry in enumerate(draft.entries):
@@ -63,7 +73,20 @@ def commit_lorebook_import(store: Any, draft: LorebookDraft, binding: dict[str, 
         if match_mode not in {"any", "all", "not_any", "not_all"}:
             match_mode = "any"
         scope_world = (binding or {}).get("scope_id") if (binding or {}).get("scope_kind") == "world" else None
-        world_id = scope_world if scope_world and (not hasattr(store, "get_world") or store.get_world(scope_world)) else None
+        primary_book_id = (
+            store.primary_world_book_id(scope_world)
+            if scope_world and hasattr(store, "primary_world_book_id")
+            else f"world:{scope_world}" if scope_world else None
+        )
+        # Only the legacy primary-world-book path carries the compatibility
+        # world_id. Independent books retain canonical book_id/binding only.
+        world_id = (
+            scope_world
+            if scope_world
+            and book_id == primary_book_id
+            and (not hasattr(store, "get_world") or store.get_world(scope_world))
+            else None
+        )
         payload = {"id": entry_id, "book_id": book_id, "world_id": world_id, "name": entry.name, "content": entry.content, "keywords": entry.keys, "secondary_keys": entry.secondary_keys, "enabled": entry.enabled, "is_constant": entry.constant, "match_mode": match_mode, "selective_logic": selective_logic, "use_regex": entry.use_regex, "case_sensitive": entry.case_sensitive, "match_whole_words": entry.match_whole_words, "scan_depth": entry.scan_depth, "priority": entry.priority, "order": entry.insertion_order, "probability": entry.probability, "groups": entry.groups, "group_weight": entry.group_weight, "sticky": entry.timed.get("sticky", 0), "cooldown": entry.timed.get("cooldown", 0), "delay": entry.timed.get("delay", 0), "prompt_slot": entry.prompt_slot, "prioritize_inclusion": entry.prioritize_inclusion, "group_scoring": entry.group_scoring, "vector_activation": entry.vector_activation, "non_recursable": entry.recursion_flags.get("non_recursable", False), "prevent_further_recursion": entry.recursion_flags.get("prevent_further_recursion", False), "delay_until_recursion": entry.recursion_flags.get("delay_until_recursion", False), "recursion_level": int(entry.recursion_flags.get("recursion_level", 0) or 0), "provenance": provenance, "extensions": entry.extensions}
         payload.update(diceframe_compat_fields(entry))
         if hasattr(store, "get_entry") and store.get_entry(entry_id) is not None:

@@ -724,6 +724,9 @@ class LoreRetriever:
             if not entry_id:
                 continue
             visible = viewer_is_gm or bool(self._visible_entries([entry], viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid))
+            if not viewer_is_gm and not visible:
+                # Player traces must not reveal hidden rows or even their count.
+                continue
             trace = ActivationTrace(
                 entry_id=entry_id,
                 book_id=str(entry.get("_lorebook_id") or entry.get("book_id") or ""),
