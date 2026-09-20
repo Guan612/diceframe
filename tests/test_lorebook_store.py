@@ -250,14 +250,14 @@ class TestMigration:
     def test_latest_schema_is_versioned_and_reopen_is_idempotent(self):
         store, path = _temp_store()
         try:
-            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 4
             store.create_world("w1", "测试")
             store.add_entry({"id": "e1", "world_id": "w1", "name": "x", "type": "spell"})
             store.close()
             reopened = LorebookStore(path)
             reopened.open()
             try:
-                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 4
                 assert reopened.get_entry("e1")["type"] == "spell"
             finally:
                 reopened.close()
@@ -387,7 +387,7 @@ class TestMigration:
             try:
                 assert store.get_world("w1")["language"] == "zh-CN"
                 assert store.get_entry("e1")["tier"] == "background"
-                assert store._execute("PRAGMA user_version").fetchone()[0] == 5
+                assert store._execute("PRAGMA user_version").fetchone()[0] == 4
                 indexes = {
                     row[1] for row in store._execute("PRAGMA index_list('lorebook_entries')")
                 }
@@ -457,7 +457,7 @@ class TestMigration:
             store = LorebookStore(path)
             store.open()
             try:
-                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 4
                 index_names = {row[1] for row in store._conn.execute("PRAGMA index_list(lorebook_entries)")}
                 assert {"idx_lorebook_world", "idx_lorebook_type", "idx_lorebook_tier", "idx_lorebook_source"} <= index_names
                 # 旧库已含 w1；不要 create_world（INSERT OR REPLACE 会级联删 e1）
@@ -496,7 +496,7 @@ class TestMigration:
         )
         from src.migrations import lorebook
         migrate = lorebook.migrate
-        assert migrate(conn) == 5
+        assert migrate(conn) == 4
         columns = {row[1] for row in conn.execute("PRAGMA table_info(lorebook_entries)")}
         assert set(lorebook._LOREBOOK_COLUMNS) <= columns
         sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='lorebook_entries'").fetchone()[0].upper()
@@ -527,8 +527,8 @@ class TestMigration:
         assert run_migrations(conn, ((1, lorebook._v1), (2, lorebook._v2))) == 2
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
-        assert lorebook.migrate(conn) == 5
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert lorebook.migrate(conn) == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         assert conn.execute(
             "SELECT content FROM lorebook_entries WHERE id='e1'"
         ).fetchone()[0] == "保留"
@@ -562,7 +562,7 @@ class TestMigration:
         )
         conn.commit()
 
-        assert lorebook.migrate(conn) == 5
+        assert lorebook.migrate(conn) == 4
         assert conn.execute(
             "SELECT tier, match_mode FROM lorebook_entries WHERE id='e1'"
         ).fetchone() == ("background", "any")
@@ -591,36 +591,3 @@ class TestMigration:
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lorebook_entries_new'"
         ).fetchone() is None
-
-    def test_v5_creates_primary_book_binding_and_preserves_legacy_facade(self):
-        store, path = _temp_store()
-        try:
-            store.create_world("w1", "World One")
-            store.add_entry({"id": "e1", "world_id": "w1", "name": "Entry", "content": "body"})
-            assert store.primary_world_book_id("w1") == "world:w1"
-            book = store.get_lorebook("world:w1")
-            assert book and book["source_kind"] == "world"
-            bindings = store.list_bindings(scope_kind="world", scope_id="w1")
-            assert [(b["book_id"], b["role"]) for b in bindings] == [("world:w1", "primary")]
-            assert store.list_entries("w1")[0]["book_id"] == "world:w1"
-            assert store.list_book_entries("world:w1")[0]["id"] == "e1"
-            assert store.search_book_entries("world:w1", "bod")[0]["id"] == "e1"
-            store.close()
-            store.open()
-            assert store.get_lorebook("world:w1")
-            assert len(store.list_bindings(scope_kind="world", scope_id="w1")) == 1
-        finally:
-            store.close()
-            path.unlink(missing_ok=True)
-
-    def test_v5_supports_independent_books_without_world_authority(self):
-        store, path = _temp_store()
-        try:
-            store.create_lorebook({"id": "book:import", "name": "Imported", "source_kind": "ccv3"})
-            store.bind_lorebook({"id": "binding:import:session", "book_id": "book:import", "scope_kind": "session", "scope_id": "s1"})
-            store.add_entry({"id": "e-import", "book_id": "book:import", "name": "Imported entry", "content": "text"})
-            assert store.list_book_entries("book:import")[0]["world_id"] is None
-            assert store.list_lorebooks(scope_kind="session", scope_id="s1")[0]["id"] == "book:import"
-        finally:
-            store.close()
-            path.unlink(missing_ok=True)

@@ -30,7 +30,6 @@ from src.engine.world_legality import actor_location_fact_key
 from src.engine.world_state import project_visible_state
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.memory.embedding import cosine_similarity
-from src.lorebook.resolver import resolve_active_books
 
 logger = logging.getLogger("trpg")
 
@@ -381,20 +380,6 @@ class LoreRetriever:
         """当前作用域下的 canonical 条目（只读用途，如语义候选与诊断）。"""
 
         return list(self._entries)
-
-    def resolve_active_books(self, instance: Any, *, viewer_is_gm: bool = True,
-                             viewer_uid: str = "", action_actor_uids: Sequence[str] | None = None) -> list[dict]:
-        """Return stable book refs for diagnostics and multi-book callers.
-
-        The existing ``ensure_world`` facade remains the default world-content path;
-        this additive API lets round/KP integrations opt into bindings without making
-        frontend code aware of storage details.
-        """
-        refs = resolve_active_books(
-            instance, "gm" if viewer_is_gm else ("character" if viewer_uid else "party"),
-            viewer_uid, list(action_actor_uids or []),
-        )
-        return [{"book_id": ref.book_id, "order": ref.order, "binding_id": ref.binding_id, "role": ref.role} for ref in refs]
 
     # ---- 检索主入口 ---------------------------------------------------------
 
