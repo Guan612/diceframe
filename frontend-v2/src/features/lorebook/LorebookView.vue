@@ -14,6 +14,7 @@ import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
 import LorebookSidebar from './LorebookSidebar.vue'
 import LoreImportDialog from './LoreImportDialog.vue'
+import LoreEntryAdvanced from './LoreEntryAdvanced.vue'
 import { useLorePerspective } from './useLorePerspective'
 import { normalizeVisibilityValues, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
 
@@ -31,9 +32,22 @@ interface LoreEdit extends LoreEntry {
   cooldown?: number
   delay?: number
   order?: number
-  probability?: number
+  probability: number
   group?: string
-  group_weight?: number
+  group_weight: number
+  secondary_keys: string[]
+  selective_logic: string
+  use_regex: boolean
+  case_sensitive: boolean
+  match_whole_words: boolean
+  scan_depth: number
+  priority: number
+  prompt_slot: string
+  groups: string[]
+  non_recursable: boolean
+  prevent_further_recursion: boolean
+  delay_until_recursion: boolean
+  recursion_level: number
 }
 
 interface LorebookImportPreview {
@@ -184,6 +198,10 @@ function openLore(entry?: LoreEntry) {
     match_mode: 'any', unreliable: false, sync_on_enter: false, is_constant: false,
     triggers_recursive: [], visible_to: [], connected_to: [], sticky: 0,
     cooldown: 0, delay: 0, order: 100, probability: 100, group: '', group_weight: 1,
+    secondary_keys: [], selective_logic: 'any', use_regex: false, case_sensitive: false,
+    match_whole_words: false, scan_depth: 0, priority: 0, prompt_slot: '', groups: [],
+    non_recursable: false, prevent_further_recursion: false, delay_until_recursion: false,
+    recursion_level: 0,
   }
   visibilityMode.value = visibilityModeOf(loreEdit.value.visible_to)
 }
@@ -558,6 +576,7 @@ async function confirmLoreImport() {
       <label>{{ t('keywords') }}<input :value="arrText(loreEdit.keywords)" @input="setArr('keywords', $event)" :placeholder="t('keywordsPlaceholder')"></label>
       <label>{{ t('content') }}<textarea rows="6" v-model="loreEdit.content"></textarea></label>
       <label>{{ t('keywordMatchMode') }}<select v-model="loreEdit.match_mode"><option value="any">{{ t('matchAny') }}</option><option value="all">{{ t('matchAll') }}</option><option value="not_any">{{ t('matchNotAny') }}</option><option value="not_all">{{ t('matchNotAll') }}</option></select></label>
+      <LoreEntryAdvanced v-model="loreEdit" />
       <div class="check-row"><label><input type="checkbox" v-model="loreEdit.unreliable">{{ t('unreliableMemory') }}</label><label><input type="checkbox" v-model="loreEdit.sync_on_enter">{{ t('syncOnEnter') }}</label><label><input type="checkbox" v-model="loreEdit.is_constant">{{ t('constant') }}</label></div>
       <label>{{ t('recursiveTrigger') }}<input :value="arrText(loreEdit.triggers_recursive)" @input="setArr('triggers_recursive', $event)" :placeholder="t('recursiveTriggerPlaceholder')"></label>
       <label>{{ t('loreVisibilityLabel') }}</label>
