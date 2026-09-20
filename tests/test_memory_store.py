@@ -25,7 +25,8 @@ class TestDeltaApplication:
         store = MemoryStore(tmp_path / "memory.db")
         store.open()
         try:
-            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 2
+            # WR-06：memory schema 3 增加世界记忆来源列（纯加列，旧行 NULL）。
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 3
             table = store._conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                 ("memory_economy_deliveries",),
@@ -100,7 +101,7 @@ class TestDeltaApplication:
                     "forget": [],
                 }, 1)
 
-            assert store.list_entries("atomic-game") == []
+            assert store.list_entries("atomic-game", viewer_is_gm=True) == []
         finally:
             store.close()
 
@@ -114,18 +115,18 @@ class TestPagination:
                 "update": [], "forget": [],
             }, 1)
             # total 计数正确（旧实现返回 limit 后的数量，会少算）
-            assert store.count_entries("game1") == 5
+            assert store.count_entries("game1", viewer_is_gm=True) == 5
             # keyword 过滤计数
-            assert store.count_entries("game1", "记忆2") == 1
-            assert store.count_entries("game1", "不存在") == 0
+            assert store.count_entries("game1", "记忆2", viewer_is_gm=True) == 1
+            assert store.count_entries("game1", "不存在", viewer_is_gm=True) == 0
             # offset 分页：两页不重叠
-            page1 = store.list_entries("game1", limit=2, offset=0)
-            page2 = store.list_entries("game1", limit=2, offset=2)
+            page1 = store.list_entries("game1", limit=2, offset=0, viewer_is_gm=True)
+            page2 = store.list_entries("game1", limit=2, offset=2, viewer_is_gm=True)
             assert len(page1) == 2
             assert len(page2) == 2
             assert {e["entity"] for e in page1}.isdisjoint({e["entity"] for e in page2})
             # recall 也支持 offset
-            assert len(store.recall("game1", ["记忆"], limit=2, offset=2)) <= 2
+            assert len(store.recall("game1", ["记忆"], limit=2, offset=2, viewer_is_gm=True)) <= 2
         finally:
             store.close()
             path.unlink(missing_ok=True)
@@ -145,8 +146,8 @@ class TestSessionIsolation:
             removed = await store.clear_game("game1")
 
             assert removed == 1
-            assert store.list_entries("game1") == []
-            assert len(store.list_entries("game2")) == 1
+            assert store.list_entries("game1", viewer_is_gm=True) == []
+            assert len(store.list_entries("game2", viewer_is_gm=True)) == 1
         finally:
             store.close()
             path.unlink(missing_ok=True)

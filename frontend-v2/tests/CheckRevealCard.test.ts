@@ -62,7 +62,7 @@ describe('CheckRevealCard', () => {
     })
     expect(wrapper.text()).toContain('掷骰中')
     await vi.advanceTimersByTimeAsync(720)
-    expect(wrapper.text()).toContain('d100=1 / 65%')
+    expect(wrapper.text()).toContain('d100=1 / 65')
     expect(wrapper.text()).toContain('大成功')
     vi.useRealTimers()
   })

@@ -15,6 +15,9 @@ ADVENTURE_GRAPH_FORMAT = "diceframe:adventure-graph-v1"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*$")
 _REF_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]*:[a-z0-9][a-z0-9_.-]*$")
 _PACKAGE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]*$")
+from src.adventures.graph_v2 import ADVENTURE_GRAPH_FORMAT_V2, validate_graph_v2
+from src.adventures.runtime_validation import adventure_validator_for
+
 _AUTOMATION_LEVELS = frozenset({"deterministic", "guided", "reference"})
 _ENCOUNTER_DIFFICULTIES = frozenset({"story", "standard", "challenging", "lethal"})
 _FORBIDDEN_KEYS = frozenset({
@@ -157,8 +160,39 @@ def _merge_locale(target: dict[str, Any], fields: dict[str, Any], kind: str) -> 
 class AdventureBundleLoader:
     """Load and validate installed adventure directories as one atomic unit."""
 
-    def __init__(self, adventures_dir: str | Path):
+    def __init__(
+        self,
+        adventures_dir: str | Path,
+        allowed_directory_ids: frozenset[str] | set[str] | tuple[str, ...] | None = None,
+        *,
+        include_builtin_directories: bool = True,
+    ):
         self.adventures_dir = Path(adventures_dir)
+        # MOD-03：declared-only 访问——plugin 来源只暴露 manifest 声明的包目录，
+        # 同目录下未声明的兄弟包不进入 list/resolve（母方案 §76）。
+        self.allowed_directory_ids = (
+            frozenset(allowed_directory_ids)
+            if allowed_directory_ids is not None
+            else None
+        )
+        # FIX-02：runtime 数据目录里同时存放"同步过来的内置包"（带
+        # ``.diceframe-builtin`` 标记）与"用户自建包"。用户来源必须排除前者，
+        # 否则同一个 adventure_id 会同时出现在 builtin 与 user 两个来源里，
+        # 变成假冲突（母方案 §31 的显式来源语义要求两个来源真正互斥）。
+        self.include_builtin_directories = bool(include_builtin_directories)
+
+    def _is_allowed(self, directory_id: str) -> bool:
+        return (
+            self.allowed_directory_ids is None
+            or str(directory_id) in self.allowed_directory_ids
+        )
+
+    def _is_visible(self, path: Path) -> bool:
+        if self.include_builtin_directories:
+            return True
+        from src.adventures.catalog import is_builtin_adventure_directory
+
+        return not is_builtin_adventure_directory(path)
 
     def list(self, locale: str = "") -> list[LoadedAdventureBundle]:
         if not self.adventures_dir.is_dir():
@@ -166,7 +200,10 @@ class AdventureBundleLoader:
         return [
             self.load(path.name, locale)
             for path in sorted(self.adventures_dir.iterdir())
-            if path.is_dir() and (path / "manifest.json").is_file()
+            if path.is_dir()
+            and (path / "manifest.json").is_file()
+            and self._is_allowed(path.name)
+            and self._is_visible(path)
         ]
 
     def resolve(self, adventure_id: str, locale: str = "") -> LoadedAdventureBundle:
@@ -183,6 +220,8 @@ class AdventureBundleLoader:
 
     def load(self, directory_id: str, locale: str = "") -> LoadedAdventureBundle:
         directory_id = _required_text(directory_id, "directory_id", _ID_RE)
+        if not self._is_allowed(directory_id):
+            raise AdventureBundleError(f"adventure package does not exist: {directory_id}")
         base = self.adventures_dir.resolve()
         root = (base / directory_id).resolve()
         if not root.is_relative_to(base) or not root.is_dir():
@@ -190,7 +229,22 @@ class AdventureBundleLoader:
         manifest = self._manifest(root)
         active_locale = self._locale(manifest, locale)
         entities, source_paths = self._entities(root)
-        self._validate_graph(entities)
+        if manifest.format == ADVENTURE_GRAPH_FORMAT_V2:
+            # ADV2-00：v2 图契约（多入口 / transitions / objectives / milestones）。
+            adventures = entities.get("adventure", {})
+            if len(adventures) != 1:
+                raise AdventureBundleError("adventure package must contain one adventure")
+            validate_graph_v2(next(iter(adventures.values())))
+        else:
+            self._validate_graph(entities)
+        # Runtime-specific mechanics validation（母方案 §8/§185/§186，MOD-01）：
+        # generic loader 只管结构；hp / armor_class / attack_bonus 等 D&D
+        # mechanics 由目标 runtime 注册的 validator 校验。未注册时 generic
+        # 结构仍可读，mechanics compatibility = unresolved，由安装/运行侧
+        # 按上下文决定是否阻断。
+        runtime_validator = adventure_validator_for(str(manifest.required_runtime_id or ""))
+        if runtime_validator is not None:
+            runtime_validator(entities)
         self._apply_locale(root, manifest.default_locale, entities)
         if active_locale != manifest.default_locale:
             self._apply_locale(root, active_locale, entities)
@@ -228,7 +282,7 @@ class AdventureBundleLoader:
         if world_policy not in {"fixed", "portable", "agnostic"}:
             raise AdventureBundleError("world_policy must be fixed, portable, or agnostic")
         format_id = _required_text(raw.get("format"), "format", _PACKAGE_ID_RE)
-        if format_id != ADVENTURE_GRAPH_FORMAT:
+        if format_id not in (ADVENTURE_GRAPH_FORMAT, ADVENTURE_GRAPH_FORMAT_V2):
             raise AdventureBundleError(f"unsupported adventure format: {format_id}")
         recommended_world_id = str(raw.get("recommended_world_id") or "").strip()
         if world_policy == "fixed" and not recommended_world_id:
@@ -356,17 +410,11 @@ class AdventureBundleLoader:
                         raise AdventureBundleError(f"encounter enemy must be an object: {preset_id}")
                     _required_text(enemy.get("id"), "encounter enemy id", _ID_RE)
                     _required_text(enemy.get("profile_id"), "encounter enemy profile_id", _ID_RE)
-                    _bounded_int(enemy.get("hp", 0), "encounter enemy hp", 1, 100000)
-                    _bounded_int(enemy.get("armor_class", 0), "encounter enemy armor_class", 1, 40)
-                    attacks = enemy.get("attacks")
-                    if not isinstance(attacks, list) or not attacks:
-                        raise AdventureBundleError(f"encounter enemy must contain attacks: {preset_id}")
-                    for attack in attacks:
-                        if not isinstance(attack, dict):
-                            raise AdventureBundleError(f"encounter attack must be an object: {preset_id}")
-                        _required_text(attack.get("id"), "encounter attack id", _ID_RE)
-                        _required_text(attack.get("damage"), "encounter attack damage")
-                        _bounded_int(attack.get("attack_bonus", 0), "encounter attack bonus", -20, 20)
+                    # MOD-01：hp / armor_class / attacks / damage / attack_bonus
+                    # 是 D&D mechanics —— 已迁到
+                    # src/rulesets/dnd2024/adventure_validation.py（经
+                    # runtime_validation 注册表按 required_runtime 分发），
+                    # generic loader 不再堆 D&D-specific if/else（母方案 §8）。
         if str(adventure.get("start_step_id") or "") not in steps:
             raise AdventureBundleError("adventure start_step_id is invalid")
 
