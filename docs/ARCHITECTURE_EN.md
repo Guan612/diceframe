@@ -3801,6 +3801,23 @@ External Lore → Adapter → Draft/Preview → Canonical Store
 → Binding Resolver → Activation/Keyword/Semantic → Visibility → Budget → Prompt Projection
 ```
 
+The current product import path is:
+
+```text
+LorebookView
+→ POST /api/lorebooks/import/preview
+→ user confirmation
+→ POST /api/lorebooks/import
+→ LorebookStore
+```
+
+The canonical `lorebook_bindings.scope_kind` values are only `global`, `world`,
+`game`, and `character`; the old `viewer` / `actor` names are not part of the new
+contract. The resolver merges all books bound to the active runtime context in binding
+order. Imported entries receive a book-scoped internal canonical ID; external `uid` /
+`id` values are provenance only and cannot overwrite entries in another book. Recreating
+a book ID does not use SQLite `REPLACE` cascading away existing bindings or entries.
+
 The v4 → v5 migration preserves worlds and entry IDs, and creates a deterministic
 `world:<id>` primary book for every world. `list_entries(world_id)` remains the
 compatibility façade for that primary book.
@@ -3914,6 +3931,12 @@ tier / order
 ```
 
 Semantic retrieval is only an optional enhancement. It does not replace those semantics.
+
+Lorebook v2 additionally implements secondary keys and ST-style selective logic,
+case-sensitive and whole-word matching, entry-level regex, recursive content scanning
+with depth and non-recursable guards, and multi-name group competition. These mechanics
+remain inside `KeywordMatcher`; the generic retriever only orchestrates loading and
+projection.
 
 ---
 
@@ -4046,6 +4069,12 @@ does not decide combat / checks / economy outcomes
 For player-view retrieval, `visible_to` filtering happens **before** semantic ranking so a GM-only entry cannot enter the player-safe candidate set just because its vector is similar.
 
 Existing sticky / cooldown / delay semantics in `lorebook_timed_state` remain controlled by KeywordMatcher. A pure semantic candidate does not secretly advance timers. Out-of-character Q&A uses a copy of timed state and therefore does not mutate the real timer state.
+
+At the `GameStateCodec` save/load boundary, legacy `status/remaining` timers are
+normalized into independent `sticky_remaining`, `cooldown_remaining`, and
+`delay_remaining` counters. Loading an old save does not require a database downgrade.
+`GameInstance.update_lorebook_timed_state()` accepts both shapes while later saves
+converge to the canonical representation.
 
 ---
 

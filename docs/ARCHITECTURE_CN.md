@@ -3831,6 +3831,22 @@ External Lore → Adapter → Draft/Preview → Canonical Store
 → Binding Resolver → Activation/Keyword/Semantic → Visibility → Budget → Prompt Projection
 ```
 
+当前导入产品链为：
+
+```text
+LorebookView
+→ POST /api/lorebooks/import/preview
+→ 用户确认
+→ POST /api/lorebooks/import
+→ LorebookStore
+```
+
+`lorebook_bindings.scope_kind` 的 canonical 范围只有 `global`、`world`、`game`、
+`character`；旧的 `viewer` / `actor` 名称不属于新 contract。Resolver 按 binding
+order 合并当前运行时上下文中的多本书。外部导入条目使用按 book 作用域生成的
+内部 canonical ID，外部 `uid` / `id` 只保存于 provenance，不会跨书覆盖条目。
+重复创建 book ID 不使用 SQLite `REPLACE` 级联删除既有 binding 或 entries。
+
 v4 → v5 migration 保留 worlds 与 entry ids，并为每个 world 创建 deterministic
 `world:<id>` primary book；`list_entries(world_id)` 是该 primary book 的兼容 façade。
 
@@ -3945,6 +3961,11 @@ tier / order
 ```
 
 语义检索只是可选增强，不替代这些语义。
+
+Lorebook v2 还实现 secondary keys 与 ST-style selective logic、大小写/整词控制、
+entry 级正则、带深度与 non-recursable guard 的内容递归扫描，以及多组名的 group
+competition。这些 mechanics 仍由 `KeywordMatcher` 持有，通用 retriever 只负责
+加载、编排和投影。
 
 ---
 
@@ -4077,6 +4098,11 @@ Pure semantic hit 只是：
 玩家视角检索在 semantic rank **之前**就先做 `visible_to` 过滤，防止 GM-only 条目因为向量相似而进入 player-safe candidate set。
 
 现有 `lorebook_timed_state` 的 sticky / cooldown / delay 仍由 KeywordMatcher 语义控制。Pure semantic candidate 不偷偷推进 timer；桌外问答使用计时状态副本，不改变真实 timer。
+
+`GameStateCodec` 在 save/load boundary 将旧的 `status/remaining` 计时器规范化为
+独立的 `sticky_remaining`、`cooldown_remaining`、`delay_remaining` 计数器；读取旧
+存档不要求数据库降级。`GameInstance.update_lorebook_timed_state()` 同时兼容两种
+形状，后续保存会收敛到 canonical representation。
 
 ---
 
