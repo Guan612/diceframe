@@ -11,7 +11,7 @@
 > - Commit：`962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release：`2.6.1`
 > - 当前 GameInstance persisted schema：`15`
-> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`4`
+> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`5`
 > - 文档核验日期：2026-09-18
 >
 > **明确不计入当前架构的内容**
@@ -3812,6 +3812,28 @@ LLMWorldTruth
 
 ## 33.1 World 与 Lorebook
 
+Lorebook 是 prompt knowledge/retrieval，不是当前事实 authority。当前事实由
+`WorldState` 持有，历史由 `Memory` 持有，规则解释与裁定由 Ruleset Runtime 持有。
+持久化 ownership 为：
+
+```text
+worlds                 世界 identity / compatibility
+lorebooks              canonical book settings
+lorebook_bindings      scope / role bindings
+lorebook_entries       book entries
+lorebook_embeddings    derived semantic cache
+```
+
+外部资料统一走：
+
+```text
+External Lore → Adapter → Draft/Preview → Canonical Store
+→ Binding Resolver → Activation/Keyword/Semantic → Visibility → Budget → Prompt Projection
+```
+
+v4 → v5 migration 保留 worlds 与 entry ids，并为每个 world 创建 deterministic
+`world:<id>` primary book；`list_entries(world_id)` 是该 primary book 的兼容 façade。
+
 World core 负责：
 
 - world identity；
@@ -3969,7 +3991,7 @@ Embedding failure **不得**让正常回合失败。非数字、空向量、`NaN
 lorebook_embeddings
 ```
 
-当前 Lorebook SQLite `user_version = 4`。缓存键：
+当前 Lorebook SQLite `user_version = 5`。缓存键：
 
 ```text
 (entry_id, language, embedding_profile)
