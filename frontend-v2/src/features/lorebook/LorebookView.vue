@@ -84,6 +84,7 @@ const entries = computed(() => data.value.entries || [])
 const languageWorlds = computed(() => filterByContentLanguage(worlds.value, worldLanguage.value))
 const currentWorld = computed(() => worlds.value.find(w => worldIdOf(w) === currentWorldId.value))
 const lorebookBooks = ref<LorebookListResponse['books']>([])
+const activeBookId = ref('')
 const activeLoreType = ref('all')
 const loreTypeOrder = ['npc', 'location', 'faction', 'item', 'event', 'puzzle', 'spell', 'class', 'other'] as const
 
@@ -186,7 +187,13 @@ async function loadLore() {
   if (!currentWorldId.value) { data.value = { entries: [] }; return }
   error.value = ''; data.value = { entries: [] }
   try {
-    data.value = await api<LorebookResponse>(`/lorebook/${encodeURIComponent(currentWorldId.value)}`)
+    const bookId = activeBookId.value || `world:${currentWorldId.value}`
+    if (bookId === `world:${currentWorldId.value}`) {
+      data.value = await api<LorebookResponse>(`/lorebook/${encodeURIComponent(currentWorldId.value)}`)
+    } else {
+      const result = await api<{ entries: LoreEntry[] }>(`/lorebooks/${encodeURIComponent(bookId)}/entries`)
+      data.value = { entries: result.entries || [] }
+    }
   } catch (e: unknown) { error.value = errorMessage(e) }
 }
 
@@ -307,7 +314,10 @@ async function saveLore() {
   if (!loreEdit.value) return
   normalizeVisibilityForSave()
   const entry: LoreEdit = { ...loreEdit.value, world_id: currentWorldId.value }
-  const path = entry.id ? `/lorebook/${encodeURIComponent(entry.id)}` : '/lorebook'
+  const bookId = activeBookId.value || `world:${currentWorldId.value}`
+  const path = bookId === `world:${currentWorldId.value}`
+    ? (entry.id ? `/lorebook/${encodeURIComponent(entry.id)}` : '/lorebook')
+    : (entry.id ? `/lorebooks/${encodeURIComponent(bookId)}/entries/${encodeURIComponent(entry.id)}` : `/lorebooks/${encodeURIComponent(bookId)}/entries`)
   try {
     await api<unknown>(path, { method: entry.id ? 'PUT' : 'POST', body: JSON.stringify(entry) })
     toast.success(entry.id ? t('updated') : t('created'))
@@ -323,7 +333,8 @@ async function deleteLore(entry: LoreEntry) {
   const ok = await confirm({ title: t('deleteLoreEntryTitle'), content: t('deleteLoreEntryContent', { name: entry.name || t('unnamedLoreEntry') }), positiveText: t('deleteLoreEntryAction'), type: 'error' })
   if (!ok) return
   try {
-    await api<unknown>(`/lorebook/${encodeURIComponent(entry.id)}`, { method: 'DELETE' })
+    const bookId = activeBookId.value || `world:${currentWorldId.value}`
+    await api<unknown>(bookId === `world:${currentWorldId.value}` ? `/lorebook/${encodeURIComponent(entry.id)}` : `/lorebooks/${encodeURIComponent(bookId)}/entries/${encodeURIComponent(entry.id)}`, { method: 'DELETE' })
     toast.success(t('deleted'))
     if (selectedEntryId.value === entry.id) selectedEntryId.value = ''
     await loadLore()
@@ -381,15 +392,13 @@ async function deleteWorld() {
 }
 
 function exportLore() {
-  const list = data.value.entries || []
-  const blob = new Blob([JSON.stringify(list, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `lorebook_${currentWorldId.value}.json`
-  a.click()
-  URL.revokeObjectURL(url)
-  toast.success(t('exported'))
+  const bookId = activeBookId.value || `world:${currentWorldId.value}`
+  api<{ ok: boolean; [key: string]: unknown }>(`/lorebooks/${encodeURIComponent(bookId)}/export`).then(result => {
+    const blob = new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = `lorebook_${bookId}.json`; a.click(); URL.revokeObjectURL(url)
+    toast.success(t('exported'))
+  }).catch(e => { error.value = errorMessage(e) })
 }
 
 async function importLore(e: Event) {
@@ -415,6 +424,7 @@ async function loadLorebooks() {
   try {
     const result = await api<LorebookListResponse>(`/lorebooks?world_id=${encodeURIComponent(currentWorldId.value)}`)
     lorebookBooks.value = (result.books || []).map(book => ({ ...book, primary: book.primary || book.id === `world:${currentWorldId.value}` }))
+    if (!activeBookId.value || !lorebookBooks.value.some(book => book.id === activeBookId.value)) activeBookId.value = `world:${currentWorldId.value}`
   } catch {
     const world = currentWorld.value
     lorebookBooks.value = world ? [{ id: currentWorldId.value, name: worldNameOf(world), primary: true, scope: 'world' }] : []
@@ -422,18 +432,16 @@ async function loadLorebooks() {
 }
 
 function selectLorebook(bookId: string) {
-  // World management still edits the world's primary projection; additional
-  // bound books are shown here without redirecting CRUD calls to the wrong scope.
-  if (bookId === `world:${currentWorldId.value}`) return
-  const book = lorebookBooks.value.find(item => item.id === bookId)
-  if (book?.primary) return
+  if (!lorebookBooks.value.some(item => item.id === bookId)) return
+  activeBookId.value = bookId
+  void loadLore()
 }
 
 async function confirmLoreImport() {
   if (!importPreview.value || !currentWorldId.value) return
   try {
     if (!pendingImportPayload.value || typeof pendingImportPayload.value !== 'object') throw new Error(t('importFailed'))
-    await api('/lorebooks/import', { method: 'POST', body: JSON.stringify({ payload: pendingImportPayload.value, book_id: `world:${currentWorldId.value}` }) })
+    await api('/lorebooks/import', { method: 'POST', body: JSON.stringify({ payload: pendingImportPayload.value, book_id: activeBookId.value || `world:${currentWorldId.value}`, binding: activeBookId.value && activeBookId.value !== `world:${currentWorldId.value}` ? undefined : { scope_kind: 'world', scope_id: currentWorldId.value, role: 'primary' } }) })
     importDialogOpen.value = false
     pendingImportPayload.value = undefined
     toast.success(t('importedLorebook'))

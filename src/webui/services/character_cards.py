@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.engine.character_utils import parse_tavern_card
+from src.engine.character_utils import parse_character_card_document, parse_tavern_card
+from src.lorebook.importer import commit_lorebook_import, draft_lorebook_import
 from src.webui.character_card_projection import card_signature, dedupe_cards
 
 logger = logging.getLogger("trpg")
@@ -269,6 +270,7 @@ def _import_tavern_as_npc(
     dependencies: CharacterCardDependencies,
     tavern: dict,
     world_id: str,
+    document: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """把酒馆卡导入为指定世界的 NPC 世界书条目，并拆入内嵌角色世界书。
 
@@ -312,34 +314,32 @@ def _import_tavern_as_npc(
         lorebook.update_entry(entry_id, npc_entry)
     else:
         lorebook.add_entry(npc_entry)
-    # 内嵌角色世界书 -> 同世界的 other 条目
-    book = tavern.get("character_book") or []
-    book_imported = 0
-    if isinstance(book, list):
-        for idx, item in enumerate(book):
-            if not isinstance(item, dict):
-                continue
-            book_id = f"{world_id}_tavern_{safe_name}_book_{idx}"
-            book_entry = {
-                "id": book_id,
-                "world_id": world_id,
-                "name": str(item.get("comment") or item.get("name") or f"{name} 世界书{idx}"),
-                "type": "other",
-                "keywords": [str(k).strip() for k in (item.get("keys") or []) if str(k).strip()],
-                "content": str(item.get("content") or ""),
-                "tier": "background",
-            }
-            if lorebook.get_entry(book_id):
-                lorebook.update_entry(book_id, book_entry)
-            else:
-                lorebook.add_entry(book_entry)
-            book_imported += 1
+    # Embedded character_book is a separate canonical book.  It must retain
+    # settings/entry controls through the same adapter/preview/commit path.
+    raw_data = (document or {}).get("data") if isinstance(document, dict) else None
+    book = raw_data.get("character_book") if isinstance(raw_data, dict) else None
+    if not isinstance(book, dict):
+        entries = tavern.get("character_book") or []
+        book = {"name": f"{name} Lorebook", "entries": entries}
+    embedded_payload = {"spec": "lorebook_v3", "data": {"lorebook": book}}
+    draft = draft_lorebook_import(embedded_payload)
+    embedded_book_id = f"character_card:{world_id}:{safe_name}"
+    draft.source["entry_id_mode"] = "external"
+    for index, entry in enumerate(draft.entries):
+        entry.external_id = f"{world_id}_tavern_{safe_name}_book_{index}"
+    commit_lorebook_import(
+        lorebook, draft,
+        {"id": f"binding:{embedded_book_id}:world", "scope_kind": "world", "scope_id": world_id, "role": "character_card"},
+        book_id=embedded_book_id,
+    )
+    book_imported = len(draft.entries)
     if dependencies.rebuild_lorebook_index is not None:
         dependencies.rebuild_lorebook_index(world_id)
     logger.info("酒馆卡已导入为 NPC: %s -> world=%s（含 %d 条世界书）", name, world_id, book_imported)
     result: dict[str, Any] = {"ok": True, "imported_as": "npc", "npc_name": name, "world_id": world_id, "lorebook_entries": book_imported}
     if _tavern_has_nsfw(tavern):
         result["nsfw_warning"] = True
+    result["lorebook_book_id"] = embedded_book_id
     return result
 
 
@@ -393,7 +393,9 @@ async def import_character_card(
 
     tmp_path = Path(tempfile.gettempdir()) / f"trpg_card_import_{int(time.time_ns())}_{safe_name}"
     tmp_path.write_bytes(raw_bytes)
+    document: dict[str, Any] | None = None
     try:
+        document = parse_character_card_document(tmp_path)
         tavern = parse_tavern_card(str(tmp_path))
     finally:
         try:
@@ -403,7 +405,7 @@ async def import_character_card(
     if "error" in tavern:
         return {"ok": False, "error": tavern["error"]}
     if target == "npc":
-        return _import_tavern_as_npc(dependencies, tavern, world_id)
+        return _import_tavern_as_npc(dependencies, tavern, world_id, document=document)
     card = _tavern_to_character_card(tavern, safe_name)
     cards = _read_cards(dependencies)
     cards.append(card)

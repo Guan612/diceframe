@@ -11,7 +11,7 @@
 > - Commit：`962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release：`2.6.1`
 > - 当前 GameInstance persisted schema：`15`
-> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`5`
+> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`6`
 > - 文档核验日期：2026-09-18
 >
 > **明确不计入当前架构的内容**
@@ -3838,6 +3838,8 @@ LorebookView
 → POST /api/lorebooks/import/preview
 → 用户确认
 → POST /api/lorebooks/import
+→ GET/POST /api/lorebooks/{book_id}/entries
+→ GET /api/lorebooks/{book_id}/export
 → LorebookStore
 ```
 
@@ -3847,7 +3849,7 @@ order 合并当前运行时上下文中的多本书。外部导入条目使用�
 内部 canonical ID，外部 `uid` / `id` 只保存于 provenance，不会跨书覆盖条目。
 重复创建 book ID 不使用 SQLite `REPLACE` 级联删除既有 binding 或 entries。
 
-v4 → v5 migration 保留 worlds 与 entry ids，并为每个 world 创建 deterministic
+v4 → v5 → v6 migration 保留 worlds 与 entry ids，并为每个 world 创建 deterministic
 `world:<id>` primary book；`list_entries(world_id)` 是该 primary book 的兼容 façade。
 
 World core 负责：
@@ -3967,6 +3969,13 @@ entry 级正则、带深度与 non-recursable guard 的内容递归扫描，以�
 competition。这些 mechanics 仍由 `KeywordMatcher` 持有，通用 retriever 只负责
 加载、编排和投影。
 
+运行时 resolver 会按 global/world/game/character binding 合并多本书，并把 book
+settings（scan depth、recursive scanning、token budget、vector default）附加到
+本轮候选。`off` 不产生语义候选，`hybrid` 与关键词并行，`vector_only` 仅由语义
+候选进入；所有候选仍须通过 visibility、timer、group 与 budget。每轮 dry-run
+ActivationTrace 保存在运行时实例并可由 `POST /api/lorebooks/activation-preview`
+查询；玩家视角对隐藏条目 fail-closed，不暴露其 id、名称或原因。
+
 ---
 
 ## 33.3 Embedding 与派生缓存
@@ -4012,7 +4021,7 @@ Embedding failure **不得**让正常回合失败。非数字、空向量、`NaN
 lorebook_embeddings
 ```
 
-当前 Lorebook SQLite `user_version = 5`。缓存键：
+当前 Lorebook SQLite `user_version = 6`。`vector_activation` 是 `off`、`hybrid`、`vector_only` 三态文本字段；v6 会把旧 v5 布尔值安全转换为 `off`/`hybrid`，并保留 `book_id` 与条目数据。缓存键：
 
 ```text
 (entry_id, language, embedding_profile)
@@ -5852,7 +5861,7 @@ D&D Class Feature Runtime v1
 Hybrid Lore Retrieval / Semantic Retrieval / Lore Prompt authority
 扫码配对
 Confirmed Event / World Memory 当前边界
-GameInstance schema 13 / 14 / 15 + Lorebook SQLite schema 4
+GameInstance schema 13 / 14 / 15 + Lorebook SQLite schema 6
 开发者维护与定位规则
 ```
 

@@ -13,9 +13,9 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
     for raw in raw_entries if isinstance(raw_entries, list) else []:
         row = raw if isinstance(raw, dict) else {}
         known_entry = {
-            "id", "name", "content", "keys", "secondary_keys", "enabled", "constant",
-            "selective", "selective_logic", "case_sensitive", "use_regex", "match_whole_words",
-            "scan_depth", "priority", "insertion_order", "order", "probability", "groups",
+            "id", "uid", "name", "comment", "content", "keys", "key", "secondary_keys", "keysecondary", "enabled", "constant",
+            "selective", "selective_logic", "selectiveLogic", "case_sensitive", "use_regex", "match_whole_words",
+            "scan_depth", "depth", "priority", "insertion_order", "order", "position", "probability", "groups",
             "group", "group_weight", "prioritize_inclusion", "group_scoring", "recursion_flags",
             "non_recursable", "prevent_further_recursion", "delay_until_recursion", "recursion_level",
             "sticky", "cooldown", "delay", "vector_activation", "prompt_slot", "extensions",
@@ -25,14 +25,14 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
         if unknown_entry:
             extensions.setdefault("_external_raw", {}).update(unknown_entry)
         entries.append(LoreEntryDraft(
-            name=str(row.get("name", "") or ""), content=str(row.get("content", "") or ""),
-            keys=_strings(row.get("keys", [])), secondary_keys=_strings(row.get("secondary_keys", [])),
+            name=str(row.get("name") or row.get("comment") or row.get("uid") or ""), content=str(row.get("content", "") or ""),
+            keys=_strings(row.get("keys", row.get("key", []))), secondary_keys=_strings(row.get("secondary_keys", row.get("keysecondary", []))),
             enabled=bool(row.get("enabled", True)), constant=bool(row.get("constant", False)),
-            selective_logic=str(row.get("selective_logic", "any") or "any"),
+            selective_logic=str(row.get("selective_logic", row.get("selectiveLogic", "any")) or "any"),
             case_sensitive=bool(row.get("case_sensitive", False)), use_regex=bool(row.get("use_regex", False)),
             match_whole_words=bool(row.get("match_whole_words", False)),
-            insertion_order=int(row.get("insertion_order", row.get("order", 100)) or 100), priority=int(row.get("priority", 0) or 0),
-            scan_depth=int(row.get("scan_depth", book.get("scan_depth", 0)) or 0), external_id=str(row.get("id", "") or ""),
+            insertion_order=int(row.get("insertion_order", row.get("order", row.get("position", 100))) or 100), priority=int(row.get("priority", 0) or 0),
+            scan_depth=int(row.get("scan_depth", row.get("depth", book.get("scan_depth", 0))) or 0), external_id=str(row.get("id", row.get("uid", "")) or ""),
             groups=_strings(row.get("groups", row.get("group", []))),
             group_weight=int(row.get("group_weight", 1) or 1),
             prioritize_inclusion=bool(row.get("prioritize_inclusion", False)),

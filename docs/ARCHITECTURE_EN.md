@@ -11,7 +11,7 @@
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
 > - Current GameInstance persisted schema: `15`
-> - Current Lorebook SQLite schema (`PRAGMA user_version`): `5`
+> - Current Lorebook SQLite schema (`PRAGMA user_version`): `6`
 > - Document verification date: 2026-09-18
 >
 > **Explicitly excluded from the current architecture**
@@ -3808,6 +3808,8 @@ LorebookView
 → POST /api/lorebooks/import/preview
 → user confirmation
 → POST /api/lorebooks/import
+→ GET/POST /api/lorebooks/{book_id}/entries
+→ GET /api/lorebooks/{book_id}/export
 → LorebookStore
 ```
 
@@ -3818,7 +3820,7 @@ order. Imported entries receive a book-scoped internal canonical ID; external `u
 `id` values are provenance only and cannot overwrite entries in another book. Recreating
 a book ID does not use SQLite `REPLACE` cascading away existing bindings or entries.
 
-The v4 → v5 migration preserves worlds and entry IDs, and creates a deterministic
+The v4 → v5 → v6 migrations preserve worlds and entry IDs, and create a deterministic
 `world:<id>` primary book for every world. `list_entries(world_id)` remains the
 compatibility façade for that primary book.
 
@@ -3938,6 +3940,14 @@ with depth and non-recursable guards, and multi-name group competition. These me
 remain inside `KeywordMatcher`; the generic retriever only orchestrates loading and
 projection.
 
+At runtime the resolver merges global/world/game/character bindings and attaches book
+settings (scan depth, recursive scanning, token budget, and the vector default) to each
+candidate. `off` produces no semantic candidates, `hybrid` runs alongside keywords, and
+`vector_only` admits semantic candidates only; every candidate still passes visibility,
+timer, group, and budget checks. A dry-run ActivationTrace is kept on the runtime
+instance and is queryable through `POST /api/lorebooks/activation-preview`; player
+views fail closed for hidden entries and do not disclose their id, name, or reason.
+
 ---
 
 ## 33.3 Embeddings and Derived Cache
@@ -3983,7 +3993,7 @@ Lorebook entry vectors are cached in `lorebook.db`:
 lorebook_embeddings
 ```
 
-Current Lorebook SQLite `user_version = 5`. Cache key:
+Current Lorebook SQLite `user_version = 6`. `vector_activation` is the three-state text field `off` / `hybrid` / `vector_only`; v6 safely converts the old v5 boolean values while preserving `book_id` and entry data. Cache key:
 
 ```text
 (entry_id, language, embedding_profile)
@@ -5808,7 +5818,7 @@ D&D Class Feature Runtime v1
 Hybrid Lore Retrieval / Semantic Retrieval / Lore Prompt authority
 QR pairing
 Current Confirmed Event / World Memory boundary
-GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 4
+GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 6
 Developer maintenance and code-location rules
 ```
 

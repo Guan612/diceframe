@@ -1797,6 +1797,57 @@ class WebAPI:
                 merged.append(book)
         return {"books": merged}
 
+    def list_lorebook_entries(self, book_id: str) -> dict[str, Any]:
+        book = self._lore.get_lorebook(book_id)
+        if not book:
+            return {"ok": False, "error": "Lorebook not found", "entries": []}
+        return {"ok": True, "book": book, "entries": self._lore.list_book_entries(book_id)}
+
+    def save_lorebook_entry(self, book_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(entry)
+        payload["book_id"] = book_id
+        payload.setdefault("id", f"{book_id}:entry:{time.time_ns()}")
+        if self._lore.get_entry(str(payload["id"])) is None:
+            self._lore.add_entry(payload)
+        else:
+            self._lore.update_entry(str(payload["id"]), payload)
+        return {"ok": True, "entry": self._lore.get_entry(str(payload["id"]))}
+
+    def delete_lorebook_entry(self, entry_id: str) -> dict[str, Any]:
+        self._lore.delete_entry(entry_id)
+        return {"ok": True, "entry_id": entry_id}
+
+    def export_lorebook(self, book_id: str) -> dict[str, Any]:
+        book = self._lore.get_lorebook(book_id)
+        if not book:
+            return {"ok": False, "error": "Lorebook not found"}
+        return {"ok": True, "format": "lorebook_v3", "spec": "lorebook_v3", "lorebook": {
+            "name": book.get("name", ""), "description": book.get("description", ""),
+            "scan_depth": book.get("scan_depth", 0), "token_budget": book.get("token_budget", 0),
+            "recursive_scanning": bool(book.get("recursive_scanning", False)),
+            "settings": book.get("settings", {}),
+            "entries": self._lore.list_book_entries(book_id),
+        }}
+
+    async def lorebook_activation_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Dry-run the same retriever used by rounds and return its safe trace."""
+        game_key = str(payload.get("game_key") or "")
+        instance = self._reg.get(_parse_game_key(game_key)) if game_key else None
+        retriever = getattr(self._handler, "lore_retriever", None)
+        if instance is None or retriever is None:
+            return {"ok": False, "error": "game_key must reference an active game"}
+        viewer = payload.get("viewer") if isinstance(payload.get("viewer"), dict) else {}
+        viewer_is_gm = bool(viewer.get("is_gm", True))
+        viewer_uid = str(viewer.get("uid") or "")
+        matches = await retriever.retrieve(
+            instance, str(payload.get("action_text") or ""),
+            viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid or None,
+            viewer_name=str(viewer.get("name") or ""), mutate_timers=False,
+            action_actor_uids=[viewer_uid] if viewer_uid and not viewer_is_gm else [],
+        )
+        trace = list(getattr(instance, "lorebook_activation_trace", []) or [])
+        return {"ok": True, "entries": matches if viewer_is_gm else [row for row in matches if row.get("id")], "trace": trace}
+
     def preview_lorebook_import(self, payload: dict[str, Any]) -> dict[str, Any]:
         from dataclasses import asdict
         from src.lorebook.importer import preview_lorebook_import

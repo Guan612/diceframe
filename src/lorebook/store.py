@@ -404,7 +404,11 @@ class LorebookStore:
     def list_entries(self, world_id: str, entry_type: str | None = None) -> list[dict]:
         with self._lock:
             book_id = self._ensure_primary_book_locked(world_id)
-            query = LorebookEntry.select().where(LorebookEntry.book_id == book_id)
+            # Compatibility projection: legacy world consumers see the primary
+            # book plus canonical books explicitly bound to this world.
+            query = LorebookEntry.select().where(
+                (LorebookEntry.book_id == book_id) | (LorebookEntry.world_id == world_id)
+            )
             if entry_type:
                 query = query.where(LorebookEntry.type == entry_type)
             rows = list(query.order_by(LorebookEntry.tier, LorebookEntry.name))
