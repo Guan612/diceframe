@@ -928,7 +928,14 @@ class RoundProcessor:
             self._ensure_matcher_for_world(instance.world_id, instance.language)
         # 统一走通用 LoreRetriever（锚点 + 关键词 + 可选语义）：正常回合是 GM 视角，
         # 沿用既有计时器语义（匹配到的 sticky/cooldown/delay 会写回实例）。
-        lorebook_matches = await self.lore_retriever.retrieve(instance, actions_text)
+        action_actor_uids = sorted({
+            str(action.get("user_id") or "")
+            for action in instance.action_queue
+            if str(action.get("user_id") or "") in instance.players
+        })
+        lorebook_matches = await self.lore_retriever.retrieve(
+            instance, actions_text, action_actor_uids=action_actor_uids,
+        )
 
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
         rule_appendix = rule_ctx.rule_appendix

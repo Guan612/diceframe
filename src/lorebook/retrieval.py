@@ -31,6 +31,9 @@ from src.engine.world_state import project_visible_state
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.memory.embedding import cosine_similarity
 from src.lorebook.resolver import resolve_active_books
+from src.lorebook.budget import apply_token_budget
+from src.lorebook.trace import ActivationTrace
+from src.lorebook.activation import evaluate_probability
 
 logger = logging.getLogger("trpg")
 
@@ -349,6 +352,8 @@ class LoreRetriever:
         self._entries: list[dict] = []
         self._world_id = ""
         self._language = DEFAULT_LANGUAGE
+        self.last_activation_trace: list[dict[str, Any]] = []
+        self._legacy_world_mode = False
 
     # ---- 世界作用域 ---------------------------------------------------------
 
@@ -369,6 +374,7 @@ class LoreRetriever:
         self._entries = list(entries)
         self._world_id, self._language = scope
         self._scope = scope
+        self._legacy_world_mode = True
 
     def ensure_lore_context(self, instance: Any, *, viewer_is_gm: bool = True,
                             viewer_uid: str = "", action_actor_uids: Sequence[str] | None = None) -> None:
@@ -380,6 +386,8 @@ class LoreRetriever:
         to that façade.
         """
         world_id = str(getattr(instance, "world_id", "") or "")
+        if self._legacy_world_mode and action_actor_uids is None and self._scope and self._scope[0] == world_id:
+            return
         instance_language = str(getattr(instance, "language", "") or "")
         # Explicit callers may use ensure_world(world, language) for locale
         # characterization; do not immediately overwrite that scope from a
@@ -400,15 +408,29 @@ class LoreRetriever:
             self.ensure_world(world_id, language)
             return
         book_ids = [ref.book_id for ref in refs]
-        scope = (world_id, f"{language}|books:{','.join(book_ids)}")
+        scope = (world_id, f"{language}|books:" + ",".join(
+            f"{ref.book_id}@{ref.updated_at}@{ref.order}"
+            for ref in refs
+        ))
         if scope == self._scope:
             return
         entries: list[dict] = []
-        for book_id in book_ids:
-            entries.extend(self._store.list_book_entries(book_id))
+        for ref in refs:
+            book_entries = self._store.list_book_entries(ref.book_id)
+            for entry in book_entries:
+                row = dict(entry)
+                row["_lorebook_id"] = ref.book_id
+                row["_lorebook_order"] = ref.order
+                row["_lorebook_token_budget"] = ref.token_budget
+                row["_lorebook_scan_depth"] = ref.scan_depth
+                row["_lorebook_recursive_scanning"] = ref.recursive_scanning
+                settings = ref.settings or {}
+                row["_lorebook_vector_activation"] = str(settings.get("vector_activation", "off") or "off")
+                entries.append(row)
         self._matcher.build(entries)
         self._entries = entries
         self._world_id, self._language, self._scope = world_id, language, scope
+        self._legacy_world_mode = False
 
     def invalidate_world(self, world_id: str) -> None:
         """世界内容或语言变化后强制下一次重建（与旧 matcher 失效语义一致）。"""
@@ -447,6 +469,7 @@ class LoreRetriever:
         viewer_uid: str | None = None,
         viewer_name: str = "",
         mutate_timers: bool = True,
+        action_actor_uids: Sequence[str] | None = None,
     ) -> list[dict]:
         """返回本轮应当进入上下文的 canonical 条目（已按视角过滤、按 id 去重）。
 
@@ -457,6 +480,7 @@ class LoreRetriever:
 
         self.ensure_lore_context(
             instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
+            action_actor_uids=action_actor_uids,
         )
         anchors = lore_query_anchors(
             instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
@@ -471,6 +495,7 @@ class LoreRetriever:
         keyword_hits = list(
             self._matcher.match_with_recursive(queries["lexical"], timed_state=timed_state)
         )
+        keyword_hits = [entry for entry in keyword_hits if self._vector_mode(entry) != "vector_only"]
         hits = self._visible_entries(
             keyword_hits,
             viewer_is_gm=viewer_is_gm,
@@ -489,6 +514,14 @@ class LoreRetriever:
             },
         )
         merged = self._merge_and_sort(hits, semantic_hits)
+        merged = self._apply_book_budgets(merged)
+        self.last_activation_trace = self._build_trace(
+            keyword_hits, semantic_hits, merged, viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+        )
+        try:
+            setattr(instance, "lorebook_activation_trace", list(self.last_activation_trace))
+        except Exception:
+            pass
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
@@ -603,7 +636,8 @@ class LoreRetriever:
         )
         candidates = [
             entry for entry in candidates
-            if not self._timer_blocked(str(entry.get("id") or ""), timed_state)
+            if self._vector_mode(entry) in {"hybrid", "vector_only"}
+            and not self._timer_blocked(str(entry.get("id") or ""), timed_state)
         ]
         if not candidates:
             return []
@@ -643,6 +677,64 @@ class LoreRetriever:
             hit["_semantic_score"] = round(float(score), 4)
             hits.append(hit)
         return hits
+
+    @staticmethod
+    def _vector_mode(entry: dict[str, Any]) -> str:
+        # World-template/legacy callers may not have a canonical vector field;
+        # retain the pre-v2 optional semantic enhancement for those projections.
+        if "vector_activation" not in entry:
+            return "hybrid"
+        mode = str(entry.get("vector_activation") or "").strip().lower()
+        if mode not in {"off", "hybrid", "vector_only"}:
+            mode = "off"
+        if mode == "off":
+            if "_lorebook_id" not in entry:
+                return "hybrid"
+            default = str(entry.get("_lorebook_vector_activation") or "off").strip().lower()
+            if default in {"hybrid", "vector_only"}:
+                return default
+        return mode
+
+    @staticmethod
+    def _apply_book_budgets(entries: list[dict]) -> list[dict]:
+        grouped: dict[str, list[dict]] = {}
+        for entry in entries:
+            grouped.setdefault(str(entry.get("_lorebook_id") or "__legacy__"), []).append(entry)
+        included: list[dict] = []
+        for rows in grouped.values():
+            budget = int(rows[0].get("_lorebook_token_budget", 0) or 0)
+            selected, _omitted = apply_token_budget(rows, budget or None)
+            for row in selected:
+                copy_row = dict(row)
+                copy_row["_budget_state"] = "included"
+                included.append(copy_row)
+        return LoreRetriever._merge_and_sort(included, [])
+
+    def _build_trace(
+        self, keyword_hits: Sequence[dict], semantic_hits: Sequence[dict], final_hits: Sequence[dict],
+        *, viewer_is_gm: bool, viewer_uid: str | None,
+    ) -> list[dict[str, Any]]:
+        keyword_ids = {str(row.get("id") or "") for row in keyword_hits}
+        semantic_ids = {str(row.get("id") or "") for row in semantic_hits}
+        final_ids = {str(row.get("id") or "") for row in final_hits}
+        rows: list[dict[str, Any]] = []
+        for entry in self._entries:
+            entry_id = str(entry.get("id") or "")
+            if not entry_id:
+                continue
+            visible = viewer_is_gm or bool(self._visible_entries([entry], viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid))
+            trace = ActivationTrace(
+                entry_id=entry_id,
+                book_id=str(entry.get("_lorebook_id") or entry.get("book_id") or ""),
+                candidate_sources=[source for source, present in (("keyword", entry_id in keyword_ids), ("semantic", entry_id in semantic_ids)) if present],
+                semantic_score=float(entry.get("_semantic_score")) if entry.get("_semantic_score") is not None else None,
+                visibility="visible" if visible else "hidden",
+                budget="included" if entry_id in final_ids else "omitted",
+                final_state="included" if entry_id in final_ids else "omitted",
+                reason_code="matched" if entry_id in final_ids else "not_matched",
+            )
+            rows.append(trace.to_dict(safe=not viewer_is_gm))
+        return rows
 
     async def _entry_vectors(
         self,

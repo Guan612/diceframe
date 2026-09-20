@@ -7,6 +7,9 @@ import logging
 import random
 import re
 from collections import deque
+from typing import Callable
+
+from src.lorebook.activation import evaluate_probability
 
 logger = logging.getLogger("trpg")
 
@@ -17,10 +20,11 @@ MIN_FUZZY_KEY_LEN = 2       # 最短模糊匹配关键词长度
 class KeywordMatcher:
     """关键词匹配器，支持精确匹配 + 模糊子串回退 + AND逻辑 + 常量条目。"""
 
-    def __init__(self):
+    def __init__(self, *, rng: Callable[[], float] | None = None):
         self._index: dict[str, set[str]] = {}
         self._entries: dict[str, dict] = {}
         self._fuzzy_keys: list[str] = []
+        self._rng = rng
 
     def build(self, entries: list[dict]) -> None:
         """从条目列表构建索引。每个条目的 keywords 字段为 JSON 数组。"""
@@ -146,7 +150,8 @@ class KeywordMatcher:
                 result.discard(eid)
                 continue
             prob = int(entry.get("probability", 100))
-            if prob < 100 and random.randint(1, 100) > prob:
+            accepted, _trace = evaluate_probability(entry, rng=self._rng or random.random)
+            if not accepted:
                 result.discard(eid)
                 logger.debug("概率过滤: %s (probability=%d) 未激活",
                             entry.get("name", eid), prob)
@@ -178,7 +183,22 @@ class KeywordMatcher:
                 int(self._entries.get(x[0], {}).get("order", 100) or 100),
                 x[0],
             ))
-            winner = members[0][0]
+            if any("prioritize_inclusion" in self._entries.get(eid, {}) for eid, _ in members):
+                prioritized = [item for item in members if bool(self._entries.get(item[0], {}).get("prioritize_inclusion", False))]
+                if prioritized:
+                    prioritized.sort(key=lambda x: (-int(self._entries.get(x[0], {}).get("priority", 0) or 0), int(self._entries.get(x[0], {}).get("order", 100) or 100), x[0]))
+                    winner = prioritized[0][0]
+                else:
+                    total = sum(max(1, weight) for _, weight in members)
+                    roll = (self._rng or random.random)() * total
+                    winner = members[-1][0]
+                    for eid, weight in members:
+                        roll -= max(1, weight)
+                        if roll < 0:
+                            winner = eid
+                            break
+            else:
+                winner = members[0][0]
             for eid, _ in members[1:]:
                 removed.add(eid)
             logger.debug("分组竞争: group=%s winner=%s removed=%d",
@@ -214,7 +234,10 @@ class KeywordMatcher:
         # 时间效应：cooldown/delay 活跃期间过滤掉对应条目的关键词
         filtered_ids = self._get_timed_blocked_ids(timed_state)
 
-        initial_ids.update(self._candidate_ids(text) - filtered_ids)
+        initial_ids.update(
+            eid for eid in (self._candidate_ids(text) - filtered_ids)
+            if not bool(self._entries.get(eid, {}).get("delay_until_recursion", False))
+        )
         initial_ids = self._apply_match_mode(initial_ids, text)
         if not initial_ids:
             initial_ids.update(self._fuzzy_match(text) - filtered_ids)
@@ -229,11 +252,13 @@ class KeywordMatcher:
             entry = self._entries.get(eid)
             if not entry or not bool(entry.get("enabled", True)):
                 continue
+            if depth > 0 and bool(entry.get("non_recursable", False)):
+                continue
             visited.add(eid)
             if bool(entry.get("prevent_further_recursion", False)) or bool(entry.get("non_recursable", False)):
                 continue
             child_text = str(entry.get("content", "") or "")
-            if child_text:
+            if child_text and (depth == 0 or bool(entry.get("_lorebook_recursive_scanning", True))):
                 child_ids = self._candidate_ids(child_text)
                 child_ids = self._apply_match_mode(child_ids, child_text)
                 for cid in child_ids - filtered_ids - visited:
@@ -265,6 +290,8 @@ class KeywordMatcher:
 
     @staticmethod
     def _eligible_recursive(entry: dict, depth: int) -> bool:
+        if bool(entry.get("non_recursable", False)):
+            return False
         configured = int(entry.get("scan_depth", 0) or 0)
         if configured > 0 and depth > configured:
             return False

@@ -175,7 +175,14 @@ class SwipeGenerator:
             self.ensure_matcher_for_world(instance.world_id, instance.language)
         # 与正常回合同一个 LoreRetriever：swipe 在 staged 克隆上重放同一轮，计时器
         # 语义与正常回合一致（匹配结果随后经 replace_persisted_state_from 写回）。
-        lorebook_matches = await self.lore_retriever.retrieve(instance, actions_text)
+        action_actor_uids = sorted({
+            str(action.get("user_id") or "")
+            for action in target_entry.get("actions", [])
+            if str(action.get("user_id") or "") in instance.players
+        })
+        lorebook_matches = await self.lore_retriever.retrieve(
+            instance, actions_text, action_actor_uids=action_actor_uids,
+        )
 
         rule_ctx = self.prompt.load_swipe_rule_context(instance, self.load_world_template)
         combat_model_s = rule_ctx.combat_model
