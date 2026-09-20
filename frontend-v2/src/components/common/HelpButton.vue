@@ -10,7 +10,7 @@ const show = ref(false)
 </script>
 
 <template>
-  <NButton size="small" secondary class="help-btn" :class="{ compact: props.compact }" :title="title" :aria-label="title" @click="show = true">
+  <NButton size="small" secondary class="help-btn" :class="{ compact: props.compact }" :title="title" :aria-label="buttonLabel ?? t('help')" @click="show = true">
     <template #icon>
       <NIcon :component="HelpCircleOutline" />
     </template>
