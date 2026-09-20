@@ -15,7 +15,7 @@ from typing import Any
 
 from peewee import SQL
 
-from src.lorebook.models import LorebookEntry, LorebookEmbedding, World
+from src.lorebook.models import Lorebook, LorebookBinding, LorebookEntry, LorebookEmbedding, World
 from src.lorebook.models import database as _models_database
 from src.migrations.lorebook import migrate as migrate_lorebook
 
@@ -136,6 +136,7 @@ class LorebookStore:
                 author=kwargs.get("author", ""),
                 version=kwargs.get("version", "1.0"),
             ).on_conflict_replace().execute()
+            self._ensure_primary_book_locked(world_id, name=name, language=kwargs.get("language", "zh-CN"))
             self._conn.commit()
 
     def get_world(self, world_id: str) -> dict | None:
@@ -158,16 +159,104 @@ class LorebookStore:
 
     def delete_world(self, world_id: str) -> None:
         with self._lock:
+            Lorebook.delete().where(Lorebook.id == self.primary_world_book_id(world_id)).execute()
             World.delete().where(World.id == world_id).execute()
             self._conn.commit()
+
+    # ---- canonical lorebook/book bindings ----
+
+    @staticmethod
+    def primary_world_book_id(world_id: str) -> str:
+        return f"world:{world_id}"
+
+    def _ensure_primary_book_locked(self, world_id: str, *, name: str | None = None,
+                                    language: str = "zh-CN") -> str:
+        book_id = self.primary_world_book_id(world_id)
+        world = self._conn.execute(
+            "SELECT name, description, language FROM worlds WHERE id = ?", (world_id,)
+        ).fetchone()
+        name = name or (str(world[0]) if world else world_id)
+        description = str(world[1]) if world else ""
+        language = str(world[2] or language) if world else language
+        self._conn.execute(
+            "INSERT OR IGNORE INTO lorebooks "
+            "(id, name, description, language, source_kind, source_id) VALUES (?, ?, ?, ?, 'world', ?)",
+            (book_id, name, description, language, world_id),
+        )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO lorebook_bindings "
+            "(id, book_id, scope_kind, scope_id, role) VALUES (?, ?, 'world', ?, 'primary')",
+            (f"binding:{book_id}:primary", book_id, world_id),
+        )
+        return book_id
+
+    def ensure_primary_world_book(self, world_id: str) -> str:
+        with self._lock:
+            book_id = self._ensure_primary_book_locked(world_id)
+            self._conn.commit()
+            return book_id
+
+    def create_lorebook(self, book: dict) -> None:
+        with self._lock:
+            Lorebook.insert(
+                id=book["id"], name=book.get("name", book["id"]),
+                description=book.get("description", ""), language=book.get("language", "zh-CN"),
+                enabled=int(book.get("enabled", True)), scan_depth=int(book.get("scan_depth", 0)),
+                token_budget=int(book.get("token_budget", 0)),
+                recursive_scanning=int(book.get("recursive_scanning", False)),
+                settings_json=json.dumps(book.get("settings", book.get("settings_json", {})), ensure_ascii=False)
+                if not isinstance(book.get("settings_json"), str) else book["settings_json"],
+                source_kind=book.get("source_kind", "native"), source_id=book.get("source_id", ""),
+                source_version=book.get("source_version", ""), source_digest=book.get("source_digest", ""),
+            ).on_conflict_replace().execute()
+            self._conn.commit()
+
+    def get_lorebook(self, book_id: str) -> dict | None:
+        with self._lock:
+            row = Lorebook.get_or_none(Lorebook.id == book_id)
+        return _book_to_dict(row) if row else None
+
+    def list_lorebooks(self, *, scope_kind: str | None = None, scope_id: str | None = None) -> list[dict]:
+        with self._lock:
+            query = Lorebook.select()
+            if scope_kind is not None or scope_id is not None:
+                query = query.join(LorebookBinding, on=(LorebookBinding.book_id == Lorebook.id))
+                if scope_kind is not None:
+                    query = query.where(LorebookBinding.scope_kind == scope_kind)
+                if scope_id is not None:
+                    query = query.where(LorebookBinding.scope_id == scope_id)
+                query = query.distinct()
+            rows = list(query.order_by(Lorebook.updated_at.desc()))
+        return [_book_to_dict(row) for row in rows]
+
+    def bind_lorebook(self, binding: dict) -> None:
+        with self._lock:
+            LorebookBinding.insert(
+                id=binding["id"], book_id=binding["book_id"], scope_kind=binding["scope_kind"],
+                scope_id=binding.get("scope_id", ""), role=binding.get("role", ""),
+                enabled=int(binding.get("enabled", True)), order=int(binding.get("order", 100)),
+            ).on_conflict_replace().execute()
+            self._conn.commit()
+
+    def list_bindings(self, *, scope_kind: str | None = None, scope_id: str | None = None) -> list[dict]:
+        with self._lock:
+            query = LorebookBinding.select()
+            if scope_kind is not None:
+                query = query.where(LorebookBinding.scope_kind == scope_kind)
+            if scope_id is not None:
+                query = query.where(LorebookBinding.scope_id == scope_id)
+            rows = list(query.order_by(LorebookBinding.order, LorebookBinding.id))
+        return [dict(row.__data__) for row in rows]
 
     # ---- 条目 CRUD ----
 
     def add_entry(self, entry: dict) -> None:
         with self._lock:
+            book_id = entry.get("book_id") or self._ensure_primary_book_locked(entry["world_id"])
             LorebookEntry.insert(
                 id=entry["id"],
-                world_id=entry["world_id"],
+                book_id=book_id,
+                world_id=entry.get("world_id"),
                 name=entry["name"],
                 type=entry.get("type", "other"),
                 keywords=json.dumps(entry.get("keywords", []), ensure_ascii=False),
@@ -189,6 +278,25 @@ class LorebookStore:
                 group_weight=int(entry.get("group_weight", 1)),
                 connected_to=json.dumps(entry.get("connected_to", []), ensure_ascii=False),
                 source_plugin=entry.get("source_plugin", ""),
+                enabled=int(entry.get("enabled", True)),
+                secondary_keys=json.dumps(entry.get("secondary_keys", []), ensure_ascii=False),
+                selective_logic=entry.get("selective_logic", "and"),
+                use_regex=int(entry.get("use_regex", False)),
+                case_sensitive=int(entry.get("case_sensitive", False)),
+                match_whole_words=int(entry.get("match_whole_words", False)),
+                scan_depth=int(entry.get("scan_depth", 0)), priority=int(entry.get("priority", 0)),
+                vector_activation=int(entry.get("vector_activation", False)),
+                non_recursable=int(entry.get("non_recursable", False)),
+                prevent_further_recursion=int(entry.get("prevent_further_recursion", False)),
+                delay_until_recursion=int(entry.get("delay_until_recursion", False)),
+                recursion_level=int(entry.get("recursion_level", 0)),
+                groups=json.dumps(entry.get("groups", []), ensure_ascii=False),
+                prioritize_inclusion=int(entry.get("prioritize_inclusion", False)),
+                group_scoring=entry.get("group_scoring", ""), prompt_slot=entry.get("prompt_slot", ""),
+                extensions_json=json.dumps(entry.get("extensions", entry.get("extensions_json", {})), ensure_ascii=False)
+                if not isinstance(entry.get("extensions_json"), str) else entry["extensions_json"],
+                provenance_json=json.dumps(entry.get("provenance", entry.get("provenance_json", {})), ensure_ascii=False)
+                if not isinstance(entry.get("provenance_json"), str) else entry["provenance_json"],
             ).on_conflict_replace().execute()
             self._conn.commit()
 
@@ -201,16 +309,25 @@ class LorebookStore:
         allowed = {"name", "type", "content", "unreliable",
                    "sync_on_enter", "tier", "keywords", "triggers_recursive", "visible_to",
                    "is_constant", "match_mode", "sticky", "cooldown", "delay", "order",
-                   "probability", "group", "group_weight", "connected_to"}
+                   "probability", "group", "group_weight", "connected_to", "enabled",
+                   "secondary_keys", "selective_logic", "use_regex", "case_sensitive",
+                   "match_whole_words", "scan_depth", "priority", "vector_activation",
+                   "non_recursable", "prevent_further_recursion", "delay_until_recursion",
+                   "recursion_level", "groups", "prioritize_inclusion", "group_scoring",
+                   "prompt_slot", "extensions_json", "provenance_json"}
         fields = {}
         for k, v in updates.items():
             if k not in allowed:
                 continue
-            if k in ("keywords", "triggers_recursive", "visible_to", "connected_to"):
+            if k in ("keywords", "triggers_recursive", "visible_to", "connected_to", "secondary_keys", "groups"):
                 v = json.dumps(v, ensure_ascii=False)
-            elif k in ("unreliable", "sync_on_enter", "is_constant",
+            elif k in ("extensions_json", "provenance_json") and not isinstance(v, str):
+                v = json.dumps(v, ensure_ascii=False)
+            elif k in ("unreliable", "sync_on_enter", "is_constant", "enabled", "use_regex",
+                       "case_sensitive", "match_whole_words", "vector_activation", "non_recursable",
+                       "prevent_further_recursion", "delay_until_recursion", "prioritize_inclusion",
                        "sticky", "cooldown", "delay", "order",
-                       "probability", "group_weight"):
+                       "probability", "group_weight", "scan_depth", "priority", "recursion_level"):
                 v = int(v)
             fields[k] = v
         if not fields:
@@ -275,7 +392,16 @@ class LorebookStore:
 
     def list_entries(self, world_id: str, entry_type: str | None = None) -> list[dict]:
         with self._lock:
-            query = LorebookEntry.select().where(LorebookEntry.world_id == world_id)
+            book_id = self._ensure_primary_book_locked(world_id)
+            query = LorebookEntry.select().where(LorebookEntry.book_id == book_id)
+            if entry_type:
+                query = query.where(LorebookEntry.type == entry_type)
+            rows = list(query.order_by(LorebookEntry.tier, LorebookEntry.name))
+        return [_entry_to_dict(e) for e in rows]
+
+    def list_book_entries(self, book_id: str, entry_type: str | None = None) -> list[dict]:
+        with self._lock:
+            query = LorebookEntry.select().where(LorebookEntry.book_id == book_id)
             if entry_type:
                 query = query.where(LorebookEntry.type == entry_type)
             rows = list(query.order_by(LorebookEntry.tier, LorebookEntry.name))
@@ -369,10 +495,11 @@ class LorebookStore:
         # 通配符语义不同，不要改用 like）。
         pattern = f"%{keyword}%"
         with self._lock:
+            book_id = self._ensure_primary_book_locked(world_id)
             rows = list(
                 LorebookEntry.select()
                 .where(
-                    (LorebookEntry.world_id == world_id)
+                    (LorebookEntry.book_id == book_id)
                     & (
                         LorebookEntry.name.ilike(pattern)
                         | LorebookEntry.content.ilike(pattern)
@@ -383,6 +510,17 @@ class LorebookStore:
             )
         return [_entry_to_dict(e) for e in rows]
 
+    def search_book_entries(self, book_id: str, keyword: str) -> list[dict]:
+        pattern = f"%{keyword}%"
+        with self._lock:
+            rows = list(LorebookEntry.select().where(
+                (LorebookEntry.book_id == book_id)
+                & (LorebookEntry.name.ilike(pattern)
+                   | LorebookEntry.content.ilike(pattern)
+                   | LorebookEntry.keywords.ilike(pattern))
+            ).order_by(LorebookEntry.tier, LorebookEntry.name))
+        return [_entry_to_dict(e) for e in rows]
+
 
 def _entry_to_dict(entry: LorebookEntry) -> dict:
     d = dict(entry.__data__)
@@ -390,5 +528,21 @@ def _entry_to_dict(entry: LorebookEntry) -> dict:
     d["triggers_recursive"] = json.loads(d.get("triggers_recursive", "[]"))
     d["visible_to"] = json.loads(d.get("visible_to", "[]"))
     d["connected_to"] = json.loads(d.get("connected_to", "[]"))
+    for key, default in (("secondary_keys", "[]"), ("groups", "[]"),
+                         ("extensions_json", "{}"), ("provenance_json", "{}")):
+        raw = d.get(key, default)
+        try:
+            d[key.removesuffix("_json") if key.endswith("_json") else key] = json.loads(raw or default)
+        except (TypeError, json.JSONDecodeError):
+            d[key.removesuffix("_json") if key.endswith("_json") else key] = [] if default == "[]" else {}
     d["source_plugin"] = d.get("source_plugin", "") or ""
+    return d
+
+
+def _book_to_dict(book: Lorebook) -> dict:
+    d = dict(book.__data__)
+    try:
+        d["settings"] = json.loads(d.get("settings_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        d["settings"] = {}
     return d
