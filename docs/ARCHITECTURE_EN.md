@@ -11,7 +11,7 @@
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
 > - Current GameInstance persisted schema: `15`
-> - Current Lorebook SQLite schema (`PRAGMA user_version`): `4`
+> - Current Lorebook SQLite schema (`PRAGMA user_version`): `5`
 > - Document verification date: 2026-09-18
 >
 > **Explicitly excluded from the current architecture**
@@ -3782,6 +3782,29 @@ LLMWorldTruth
 
 ## 33.1 World and Lorebook
 
+Lorebook is prompt knowledge/retrieval, not current-truth authority. Current truth is
+owned by `WorldState`, history by `Memory`, and rule interpretation/rulings by the
+Ruleset Runtime. Persistence ownership is:
+
+```text
+worlds                 world identity / compatibility
+lorebooks              canonical book settings
+lorebook_bindings      scope / role bindings
+lorebook_entries       book entries
+lorebook_embeddings    derived semantic cache
+```
+
+External material follows one path:
+
+```text
+External Lore → Adapter → Draft/Preview → Canonical Store
+→ Binding Resolver → Activation/Keyword/Semantic → Visibility → Budget → Prompt Projection
+```
+
+The v4 → v5 migration preserves worlds and entry IDs, and creates a deterministic
+`world:<id>` primary book for every world. `list_entries(world_id)` remains the
+compatibility façade for that primary book.
+
 World core owns:
 
 - world identity;
@@ -3937,7 +3960,7 @@ Lorebook entry vectors are cached in `lorebook.db`:
 lorebook_embeddings
 ```
 
-Current Lorebook SQLite `user_version = 4`. Cache key:
+Current Lorebook SQLite `user_version = 5`. Cache key:
 
 ```text
 (entry_id, language, embedding_profile)
