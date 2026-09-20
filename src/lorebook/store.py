@@ -252,7 +252,14 @@ class LorebookStore:
 
     def add_entry(self, entry: dict) -> None:
         with self._lock:
-            book_id = entry.get("book_id") or self._ensure_primary_book_locked(entry["world_id"])
+            requested_book_id = entry.get("book_id")
+            # Legacy world-copy callers clone a row verbatim, including the old
+            # ``world:<source>`` book id. A target world remains authoritative for
+            # that compatibility path; explicit standalone imports have no world_id
+            # and keep their canonical book id.
+            if entry.get("world_id") and requested_book_id and str(requested_book_id).startswith("world:") and requested_book_id != self.primary_world_book_id(entry["world_id"]):
+                requested_book_id = None
+            book_id = requested_book_id or self._ensure_primary_book_locked(entry["world_id"])
             LorebookEntry.insert(
                 id=entry["id"],
                 book_id=book_id,
