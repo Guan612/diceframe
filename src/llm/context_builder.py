@@ -487,10 +487,12 @@ _PLAYER_SAFE_LORE_RULE = {
 
 def lore_entry_projection(
     entry: object, *, vis_hint: str = "", include_id: bool = True,
+    include_prompt_slot: bool = True,
 ) -> str:
     """单个 Lore 条目进入 prompt 的统一投影（施工方案 §25）。
 
-    头部暴露 ``id`` / ``type`` / ``tier``（以及 ``unreliable`` 标记），正文保留
+    头部暴露 ``id`` / ``type`` / ``tier``（以及 ``unreliable`` 标记）；GM 路径
+    还会保留非空 ``prompt_slot`` 作为 ``slot=...`` 标记。正文保留
     ``name`` / ``content``；matcher 运行时元数据一律不出现。
 
     ``include_id=False`` 用于玩家安全路径：内部 canonical id 本身可能泄露幕后信息
@@ -508,6 +510,12 @@ def lore_entry_projection(
     tags.append(f"tier={str(entry.get('tier') or 'background').strip()}")
     if entry.get("unreliable"):
         tags.append("unreliable")
+    # prompt_slot is an import/storage field, but a non-empty value must have
+    # a stable GM-facing projection.  Keep it out of the player-safe path:
+    # slot names describe prompt assembly rather than player-visible lore.
+    prompt_slot = str(entry.get("prompt_slot") or "").strip()
+    if prompt_slot and include_prompt_slot:
+        tags.append(f"slot={prompt_slot}")
     head = "[" + "][".join(tags) + "]"
     name = str(entry.get("name") or "").strip()
     content = str(entry.get("content") or "").strip()
@@ -526,7 +534,7 @@ def project_player_safe_lore(
     lines: list[str] = []
     used = 0
     for entry in entries:
-        line = lore_entry_projection(entry, include_id=False)
+        line = lore_entry_projection(entry, include_id=False, include_prompt_slot=False)
         if not line:
             continue
         if budget_lorebook and used + len(line) > budget_lorebook:
