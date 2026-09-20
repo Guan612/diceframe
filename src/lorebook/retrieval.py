@@ -727,7 +727,7 @@ class LoreRetriever:
                 entry_id=entry_id,
                 book_id=str(entry.get("_lorebook_id") or entry.get("book_id") or ""),
                 candidate_sources=[source for source, present in (("keyword", entry_id in keyword_ids), ("semantic", entry_id in semantic_ids)) if present],
-                semantic_score=float(entry.get("_semantic_score")) if entry.get("_semantic_score") is not None else None,
+                semantic_score=float(str(entry.get("_semantic_score"))) if entry.get("_semantic_score") is not None else None,
                 visibility="visible" if visible else "hidden",
                 budget="included" if entry_id in final_ids else "omitted",
                 final_state="included" if entry_id in final_ids else "omitted",
