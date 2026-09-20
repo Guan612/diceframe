@@ -17,6 +17,7 @@ from src.engine import persistence
 from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
+from src.lorebook.exporter import export_lorebook_native, export_lorebook_v3
 from src.adventures import AdventureBundleLoader, AdventureResolver
 from src.adventures.registry import AdventureSource, AdventureSourceRegistry
 from src.memory.delta import MemoryStore
@@ -1874,13 +1875,9 @@ class WebAPI:
         book = self._lore.get_lorebook(book_id)
         if not book:
             return {"ok": False, "error": "Lorebook not found"}
-        return {"ok": True, "format": "lorebook_v3", "spec": "lorebook_v3", "lorebook": {
-            "name": book.get("name", ""), "description": book.get("description", ""),
-            "scan_depth": book.get("scan_depth", 0), "token_budget": book.get("token_budget", 0),
-            "recursive_scanning": bool(book.get("recursive_scanning", False)),
-            "settings": book.get("settings", {}),
-            "entries": self._lore.list_book_entries(book_id),
-        }}
+        v3 = export_lorebook_v3(self._lore, book_id)
+        return {"ok": True, "format": "lorebook_v3", **v3,
+                "native_backup": export_lorebook_native(self._lore, book_id)}
 
     async def lorebook_activation_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Dry-run the same retriever used by rounds and return its safe trace."""

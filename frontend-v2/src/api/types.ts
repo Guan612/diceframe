@@ -542,6 +542,27 @@ export interface LorePreviewResponse {
   summary?: LorePreviewSummary
 }
 
+export interface LoreActivationTraceRow {
+  entry_id: string
+  book_id?: string
+  candidate_sources?: string[]
+  matched_keys?: string[]
+  secondary_matches?: string[]
+  semantic_score?: number | null
+  visibility?: string
+  budget?: string
+  final_state?: string
+  reason_code?: string
+  [key: string]: unknown
+}
+
+export interface LoreActivationPreviewResponse {
+  ok?: boolean
+  error?: string
+  entries?: Array<Record<string, unknown>>
+  trace?: LoreActivationTraceRow[]
+}
+
 export interface GameSummary {
   game_key: string
   world_name?: string

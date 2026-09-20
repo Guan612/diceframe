@@ -88,7 +88,7 @@ const activeBookId = ref('')
 const activeLoreType = ref('all')
 const loreTypeOrder = ['npc', 'location', 'faction', 'item', 'event', 'puzzle', 'spell', 'class', 'other'] as const
 
-const { viewer, viewerFallback, characterViewerLocked, setViewer, preview, previewError, projectionOf, refreshPreview } = useLorePerspective(currentWorldId, game, players)
+const { viewer, effectiveViewer, viewerFallback, characterViewerLocked, setViewer, preview, previewError, projectionOf, refreshPreview, activationText, activation, activationLoading, activationError, refreshActivationPreview } = useLorePerspective(currentWorldId, game, players)
 const lockedReason = computed<'standalone' | 'peer' | ''>(() => {
   if (!characterViewerLocked.value) return ''
   return game.value && activePeerGameClient() ? 'peer' : 'standalone'
@@ -453,7 +453,7 @@ async function confirmLoreImport() {
 <template>
   <section class="view archive-page lorebook-page">
     <div class="lorebook-shell" :class="{ 'inspector-open': inspectorOpen }">
-      <LorebookSidebar :books="lorebookBooks" :active-id="`world:${currentWorldId}`" @select="selectLorebook" />
+      <LorebookSidebar :books="lorebookBooks" :active-id="activeBookId" @select="selectLorebook" />
       <main class="lorebook-workspace">
     <header class="view-title archive-hero">
       <div>
@@ -611,7 +611,7 @@ async function confirmLoreImport() {
       <LorePerspectiveInspector
         v-if="inspectorOpen"
         :players="players"
-        :viewer="viewer"
+        :viewer="effectiveViewer"
         :viewer-fallback="viewerFallback"
         :character-viewer-locked="characterViewerLocked"
         :locked-reason="lockedReason"
@@ -620,8 +620,14 @@ async function confirmLoreImport() {
         :selected-entry="selectedEntry"
         :selected-projection="selectedProjection"
         :filter="perspectiveFilter"
+        :action-text="activationText"
+        :activation="activation"
+        :activation-loading="activationLoading"
+        :activation-error="activationError"
         @select-viewer="setViewer"
         @select-filter="perspectiveFilter = $event"
+        @update:action-text="activationText = $event"
+        @refresh-activation="refreshActivationPreview"
         @close="closeInspector"
       />
     </div>

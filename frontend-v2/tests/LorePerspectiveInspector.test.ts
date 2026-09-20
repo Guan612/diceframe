@@ -30,6 +30,10 @@ function factory(overrides: Record<string, unknown> = {}) {
       selectedEntry: null,
       selectedProjection: null,
       filter: 'all',
+      actionText: '',
+      activation: null,
+      activationLoading: false,
+      activationError: '',
       ...overrides,
     },
   })
@@ -115,5 +119,27 @@ describe('LorePerspectiveInspector', () => {
     const wrapper = factory()
     await wrapper.find('.lore-inspector-close').trigger('click')
     expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('renders the activation trace and hides safe hidden rows for players', () => {
+    const trace = [
+      { entry_id: 'public', final_state: 'included', reason_code: 'matched' },
+      { entry_id: '', final_state: 'hidden' },
+    ]
+    const gm = factory({ activation: { ok: true, trace } })
+    expect(gm.find('.lore-activation-trace').text()).toContain('public')
+    expect(gm.find('.lore-activation-trace').text()).toContain('hidden')
+
+    const player = factory({ viewer: 'u1', activation: { ok: true, trace } })
+    expect(player.find('.lore-activation-trace').text()).toContain('public')
+    expect(player.find('.lore-activation-trace').text()).not.toContain('hidden')
+  })
+
+  it('emits the action input and activation refresh action', async () => {
+    const wrapper = factory()
+    await wrapper.find('.lore-activation-input').setValue('open the sealed door')
+    await wrapper.find('.lore-inspector-block button').trigger('click')
+    expect(wrapper.emitted('update:action-text')).toEqual([['open the sealed door']])
+    expect(wrapper.emitted('refresh-activation')).toHaveLength(1)
   })
 })

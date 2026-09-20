@@ -7,12 +7,13 @@ from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
 from src.lorebook.activation import migrate_timed_state
-from src.lorebook.exporter import export_lorebook_v3
+from src.lorebook.exporter import export_lorebook_native, export_lorebook_v3
 from src.lorebook.importer import preview_lorebook_import, commit_lorebook_import
 from src.lorebook.store import LorebookStore
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.retrieval import LoreRetriever
 from src.webui.routes.lorebooks import register_lorebooks
+from src.webui.api import WebAPI
 
 
 def test_golden_old_db_import_preview_bind_export_restart(tmp_path):
@@ -32,6 +33,8 @@ def test_golden_old_db_import_preview_bind_export_restart(tmp_path):
         assert migrate_timed_state({"e": {"status": "cooldown", "remaining": 2}})["e"]["cooldown_remaining"] == 2
     finally:
         store.close()
+
+
     store = LorebookStore(path); store.open()
     try:
         assert store.list_entries("w")
@@ -40,6 +43,45 @@ def test_golden_old_db_import_preview_bind_export_restart(tmp_path):
         store.close()
 
 
+def test_export_projections_preserve_settings_extensions_provenance_and_bindings(tmp_path):
+    store = LorebookStore(tmp_path / "export.db")
+    store.open()
+    try:
+        store.create_lorebook({
+            "id": "book:export", "name": "Configured", "description": "desc",
+            "scan_depth": 4, "token_budget": 321, "recursive_scanning": True,
+            "settings": {"scan_depth": 4, "token_budget": 321, "custom": "keep"},
+            "source_kind": "plugin", "source_id": "source-1",
+        })
+        store.bind_lorebook({"id": "binding:export", "book_id": "book:export", "scope_kind": "world", "scope_id": "w", "role": "secondary"})
+        store.add_entry({
+            "id": "entry:export", "book_id": "book:export", "name": "Secret", "content": "hidden",
+            "keywords": ["door"], "extensions": {"plugin": {"x": 1}},
+            "provenance": {"kind": "plugin", "id": "source-1"},
+        })
+
+        v3 = export_lorebook_v3(store, "book:export")
+        assert v3["spec"] == "lorebook_v3"
+        exported_book = v3["data"]["lorebook"]
+        assert exported_book["custom"] == "keep"
+        assert exported_book["scan_depth"] == 4
+        draft = preview_lorebook_import(v3)["book"]
+        assert draft.entries[0].extensions["plugin"] == {"x": 1}
+
+        native = export_lorebook_native(store, "book:export")
+        assert native["data"]["book"]["settings"]["custom"] == "keep"
+        assert native["data"]["bindings"][0]["id"] == "binding:export"
+        assert native["data"]["entries"][0]["provenance"] == {"kind": "plugin", "id": "source-1"}
+        assert native["data"]["entries"][0]["extensions"] == {"plugin": {"x": 1}}
+        assert native["data"]["provenance"]["entries"]["entry:export"] == {"kind": "plugin", "id": "source-1"}
+        api = WebAPI.__new__(WebAPI)
+        api._lore = store
+        response = api.export_lorebook("book:export")
+        assert response["spec"] == "lorebook_v3"
+        assert response["data"]["lorebook"]["entries"][0]["id"] == "entry:export"
+        assert response["native_backup"]["spec"] == "diceframe_lorebook_native"
+    finally:
+        store.close()
 @pytest.mark.asyncio
 async def test_golden_real_route_import_to_multi_book_retrieval(tmp_path):
     store = LorebookStore(tmp_path / "lore.db")
