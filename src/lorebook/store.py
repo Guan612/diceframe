@@ -211,6 +211,50 @@ class LorebookStore:
             ).on_conflict_ignore().execute()
             self._conn.commit()
 
+    def update_lorebook(self, book_id: str, updates: dict) -> bool:
+        """Update editable book metadata; unknown fields are ignored."""
+        allowed = {"name", "description", "language", "enabled", "scan_depth",
+                   "token_budget", "recursive_scanning", "settings_json",
+                   "source_version", "source_digest"}
+        fields = {key: value for key, value in updates.items() if key in allowed}
+        if "settings_json" in fields and not isinstance(fields["settings_json"], str):
+            fields["settings_json"] = json.dumps(fields["settings_json"], ensure_ascii=False)
+        for key in ("enabled", "recursive_scanning"):
+            if key in fields:
+                fields[key] = int(bool(fields[key]))
+        for key in ("scan_depth", "token_budget"):
+            if key in fields:
+                fields[key] = int(fields[key])
+        if not fields:
+            return self.get_lorebook(book_id) is not None
+        with self._lock:
+            changed = Lorebook.update(**fields, updated_at=SQL("datetime('now')")).where(
+                Lorebook.id == book_id).execute()
+            self._conn.commit()
+        return bool(changed)
+
+    def delete_lorebook(self, book_id: str) -> bool:
+        """Delete a non-primary book, its bindings/entries, and derived embeddings."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM lorebooks WHERE id = ?", (book_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            primary = self._conn.execute(
+                "SELECT 1 FROM lorebook_bindings WHERE book_id = ? "
+                "AND role = 'primary' AND scope_kind = 'world' LIMIT 1", (book_id,)
+            ).fetchone()
+            if primary is not None or str(book_id).startswith("world:"):
+                raise ValueError("primary world lorebook cannot be deleted")
+            entry_ids = [r[0] for r in self._conn.execute(
+                "SELECT id FROM lorebook_entries WHERE book_id = ?", (book_id,)
+            ).fetchall()]
+            self._conn.execute("DELETE FROM lorebooks WHERE id = ?", (book_id,))
+            self._delete_embeddings_locked(entry_ids)
+            self._conn.commit()
+            return True
+
     def get_lorebook(self, book_id: str) -> dict | None:
         with self._lock:
             row = Lorebook.get_or_none(Lorebook.id == book_id)
@@ -237,6 +281,43 @@ class LorebookStore:
                 enabled=int(binding.get("enabled", True)), order=int(binding.get("order", 100)),
             ).on_conflict_replace().execute()
             self._conn.commit()
+
+    def update_binding(self, binding_id: str, updates: dict) -> bool:
+        allowed = {"scope_kind", "scope_id", "role", "enabled", "order"}
+        fields = {key: value for key, value in updates.items() if key in allowed}
+        if "enabled" in fields:
+            fields["enabled"] = int(bool(fields["enabled"]))
+        if "order" in fields:
+            fields["order"] = int(fields["order"])
+        if not fields:
+            with self._lock:
+                return LorebookBinding.get_or_none(LorebookBinding.id == binding_id) is not None
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT book_id, role, scope_kind FROM lorebook_bindings WHERE id = ?",
+                (binding_id,),
+            ).fetchone()
+            if existing is None:
+                return False
+            if existing[1] == "primary" and any(key in fields for key in ("scope_kind", "scope_id", "role")):
+                raise ValueError("primary world binding cannot be changed")
+            changed = LorebookBinding.update(**fields, updated_at=SQL("datetime('now')")).where(
+                LorebookBinding.id == binding_id).execute()
+            self._conn.commit()
+        return bool(changed)
+
+    def delete_binding(self, binding_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT role, scope_kind FROM lorebook_bindings WHERE id = ?", (binding_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            if row[0] == "primary" and row[1] == "world":
+                raise ValueError("primary world binding cannot be deleted")
+            self._conn.execute("DELETE FROM lorebook_bindings WHERE id = ?", (binding_id,))
+            self._conn.commit()
+            return True
 
     def list_bindings(self, *, scope_kind: str | None = None, scope_id: str | None = None) -> list[dict]:
         with self._lock:

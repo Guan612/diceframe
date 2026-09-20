@@ -1797,6 +1797,59 @@ class WebAPI:
                 merged.append(book)
         return {"books": merged}
 
+    def create_lorebook(self, book: dict[str, Any]) -> dict[str, Any]:
+        book = dict(book)
+        if not str(book.get("id") or "").strip() or not str(book.get("name") or "").strip():
+            return {"ok": False, "error": "id and name are required"}
+        if self._lore.get_lorebook(book["id"]):
+            return {"ok": False, "error": "Lorebook already exists"}
+        self._lore.create_lorebook(book)
+        return {"ok": True, "book": self._lore.get_lorebook(book["id"])}
+
+    def update_lorebook(self, book_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found"}
+        self._lore.update_lorebook(book_id, updates)
+        return {"ok": True, "book": self._lore.get_lorebook(book_id)}
+
+    def delete_lorebook(self, book_id: str) -> dict[str, Any]:
+        try:
+            deleted = self._lore.delete_lorebook(book_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": deleted, **({} if deleted else {"error": "Lorebook not found"}), "book_id": book_id}
+
+    def list_lorebook_bindings(self, book_id: str) -> dict[str, Any]:
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found", "bindings": []}
+        return {"ok": True, "bindings": [b for b in self._lore.list_bindings() if b.get("book_id") == book_id]}
+
+    def create_lorebook_binding(self, book_id: str, binding: dict[str, Any]) -> dict[str, Any]:
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found"}
+        payload = dict(binding)
+        payload["book_id"] = book_id
+        if not str(payload.get("id") or "").strip():
+            return {"ok": False, "error": "id is required"}
+        self._lore.bind_lorebook(payload)
+        return {"ok": True, "binding": next((b for b in self._lore.list_bindings() if b["id"] == payload["id"]), None)}
+
+    def update_lorebook_binding(self, binding_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        try:
+            changed = self._lore.update_binding(binding_id, updates)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not changed:
+            return {"ok": False, "error": "Binding not found"}
+        return {"ok": True, "binding": next((b for b in self._lore.list_bindings() if b["id"] == binding_id), None)}
+
+    def delete_lorebook_binding(self, binding_id: str) -> dict[str, Any]:
+        try:
+            deleted = self._lore.delete_binding(binding_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": deleted, **({} if deleted else {"error": "Binding not found"}), "binding_id": binding_id}
+
     def list_lorebook_entries(self, book_id: str) -> dict[str, Any]:
         book = self._lore.get_lorebook(book_id)
         if not book:
