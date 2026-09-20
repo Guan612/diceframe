@@ -6,5 +6,11 @@
 unsupported 字段不会被静默执行；未知扩展会作为数据保留。SillyTavern 的 timed 效果会提示
 其 message-based 语义与 DiceFrame authoritative turn tick 的差异。
 
+Lorebook 页面左侧 Sidebar 可切换当前世界绑定的多本书；新增书、导入和编辑都会作用于
+当前选中的 book，而不是强制写入 primary world book。导出使用 `lorebook_v3` 原生结构，
+保留 book/entry 设置；后端也提供 `/api/lorebooks/{book_id}/entries` CRUD 与 export。
+
 普通编辑只需填写名称、内容、关键词和可见范围；匹配、递归、概率、分组和 token budget
-在高级设置中调整。玩家视角不会得到隐藏条目的名称、数量或诊断原因。
+在高级设置中调整。语义模式为 `off`、`hybrid`、`vector_only`，entry 覆盖 book 默认值。
+玩家视角不会得到隐藏条目的名称、数量或诊断原因；GM 可通过 activation preview 查看
+本轮 dry-run trace。
