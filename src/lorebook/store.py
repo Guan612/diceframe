@@ -292,7 +292,7 @@ class LorebookStore:
                 case_sensitive=int(entry.get("case_sensitive", False)),
                 match_whole_words=int(entry.get("match_whole_words", False)),
                 scan_depth=int(entry.get("scan_depth", 0)), priority=int(entry.get("priority", 0)),
-                vector_activation=int(entry.get("vector_activation", False)),
+                vector_activation=str(entry.get("vector_activation", "off") or "off"),
                 non_recursable=int(entry.get("non_recursable", False)),
                 prevent_further_recursion=int(entry.get("prevent_further_recursion", False)),
                 delay_until_recursion=int(entry.get("delay_until_recursion", False)),
@@ -330,8 +330,12 @@ class LorebookStore:
                 v = json.dumps(v, ensure_ascii=False)
             elif k in ("extensions_json", "provenance_json") and not isinstance(v, str):
                 v = json.dumps(v, ensure_ascii=False)
+            elif k == "vector_activation":
+                v = str(v or "off")
+                if v not in {"off", "hybrid", "vector_only"}:
+                    v = "off"
             elif k in ("unreliable", "sync_on_enter", "is_constant", "enabled", "use_regex",
-                       "case_sensitive", "match_whole_words", "vector_activation", "non_recursable",
+                       "case_sensitive", "match_whole_words", "non_recursable",
                        "prevent_further_recursion", "delay_until_recursion", "prioritize_inclusion",
                        "sticky", "cooldown", "delay", "order",
                        "probability", "group_weight", "scan_depth", "priority", "recursion_level"):

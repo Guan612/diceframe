@@ -250,17 +250,29 @@ class TestMigration:
     def test_latest_schema_is_versioned_and_reopen_is_idempotent(self):
         store, path = _temp_store()
         try:
-            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 6
             store.create_world("w1", "测试")
             store.add_entry({"id": "e1", "world_id": "w1", "name": "x", "type": "spell"})
             store.close()
             reopened = LorebookStore(path)
             reopened.open()
             try:
-                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 6
                 assert reopened.get_entry("e1")["type"] == "spell"
             finally:
                 reopened.close()
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
+    def test_vector_activation_modes_survive_v6_migration(self):
+        store, path = _temp_store()
+        try:
+            store.create_lorebook({"id": "book:vectors", "name": "Vectors"})
+            store.add_entry({"id": "off", "book_id": "book:vectors", "name": "Off", "vector_activation": "off"})
+            store.add_entry({"id": "hybrid", "book_id": "book:vectors", "name": "Hybrid", "vector_activation": "hybrid"})
+            store.add_entry({"id": "only", "book_id": "book:vectors", "name": "Only", "vector_activation": "vector_only"})
+            assert [store.get_entry(item)["vector_activation"] for item in ("off", "hybrid", "only")] == ["off", "hybrid", "vector_only"]
         finally:
             store.close()
             path.unlink(missing_ok=True)
@@ -387,7 +399,7 @@ class TestMigration:
             try:
                 assert store.get_world("w1")["language"] == "zh-CN"
                 assert store.get_entry("e1")["tier"] == "background"
-                assert store._execute("PRAGMA user_version").fetchone()[0] == 5
+                assert store._execute("PRAGMA user_version").fetchone()[0] == 6
                 indexes = {
                     row[1] for row in store._execute("PRAGMA index_list('lorebook_entries')")
                 }
@@ -457,7 +469,7 @@ class TestMigration:
             store = LorebookStore(path)
             store.open()
             try:
-                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 5
+                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 6
                 index_names = {row[1] for row in store._conn.execute("PRAGMA index_list(lorebook_entries)")}
                 assert {"idx_lorebook_world", "idx_lorebook_type", "idx_lorebook_tier", "idx_lorebook_source"} <= index_names
                 # 旧库已含 w1；不要 create_world（INSERT OR REPLACE 会级联删 e1）
@@ -496,7 +508,7 @@ class TestMigration:
         )
         from src.migrations import lorebook
         migrate = lorebook.migrate
-        assert migrate(conn) == 5
+        assert migrate(conn) == 6
         columns = {row[1] for row in conn.execute("PRAGMA table_info(lorebook_entries)")}
         assert set(lorebook._LOREBOOK_COLUMNS) <= columns
         sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='lorebook_entries'").fetchone()[0].upper()
@@ -527,8 +539,8 @@ class TestMigration:
         assert run_migrations(conn, ((1, lorebook._v1), (2, lorebook._v2))) == 2
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
-        assert lorebook.migrate(conn) == 5
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert lorebook.migrate(conn) == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         assert conn.execute(
             "SELECT content FROM lorebook_entries WHERE id='e1'"
         ).fetchone()[0] == "保留"
@@ -562,7 +574,7 @@ class TestMigration:
         )
         conn.commit()
 
-        assert lorebook.migrate(conn) == 5
+        assert lorebook.migrate(conn) == 6
         assert conn.execute(
             "SELECT tier, match_mode FROM lorebook_entries WHERE id='e1'"
         ).fetchone() == ("background", "any")

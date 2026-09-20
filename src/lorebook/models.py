@@ -114,7 +114,7 @@ class LorebookEntry(Model):
     match_whole_words = BooleanField(default=False)
     scan_depth = IntegerField(default=0)
     priority = IntegerField(default=0)
-    vector_activation = BooleanField(default=False)
+    vector_activation = CharField(default="off")
     non_recursable = BooleanField(default=False)
     prevent_further_recursion = BooleanField(default=False)
     delay_until_recursion = BooleanField(default=False)

@@ -12,14 +12,43 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
     entries: list[LoreEntryDraft] = []
     for raw in raw_entries if isinstance(raw_entries, list) else []:
         row = raw if isinstance(raw, dict) else {}
+        known_entry = {
+            "id", "name", "content", "keys", "secondary_keys", "enabled", "constant",
+            "selective", "selective_logic", "case_sensitive", "use_regex", "match_whole_words",
+            "scan_depth", "priority", "insertion_order", "order", "probability", "groups",
+            "group", "group_weight", "prioritize_inclusion", "group_scoring", "recursion_flags",
+            "non_recursable", "prevent_further_recursion", "delay_until_recursion", "recursion_level",
+            "sticky", "cooldown", "delay", "vector_activation", "prompt_slot", "extensions",
+        }
+        unknown_entry = {k: v for k, v in row.items() if k not in known_entry}
+        extensions = dict(row.get("extensions", {})) if isinstance(row.get("extensions"), dict) else {}
+        if unknown_entry:
+            extensions.setdefault("_external_raw", {}).update(unknown_entry)
         entries.append(LoreEntryDraft(
             name=str(row.get("name", "") or ""), content=str(row.get("content", "") or ""),
             keys=_strings(row.get("keys", [])), secondary_keys=_strings(row.get("secondary_keys", [])),
             enabled=bool(row.get("enabled", True)), constant=bool(row.get("constant", False)),
+            selective_logic=str(row.get("selective_logic", "any") or "any"),
             case_sensitive=bool(row.get("case_sensitive", False)), use_regex=bool(row.get("use_regex", False)),
-            insertion_order=int(row.get("insertion_order", 100) or 100), priority=int(row.get("priority", 0) or 0),
+            match_whole_words=bool(row.get("match_whole_words", False)),
+            insertion_order=int(row.get("insertion_order", row.get("order", 100)) or 100), priority=int(row.get("priority", 0) or 0),
             scan_depth=int(row.get("scan_depth", book.get("scan_depth", 0)) or 0), external_id=str(row.get("id", "") or ""),
-            extensions=dict(row.get("extensions", {})) if isinstance(row.get("extensions"), dict) else {},
+            groups=_strings(row.get("groups", row.get("group", []))),
+            group_weight=int(row.get("group_weight", 1) or 1),
+            prioritize_inclusion=bool(row.get("prioritize_inclusion", False)),
+            group_scoring=str(row.get("group_scoring", "") or ""),
+            recursion_flags={
+                key: value for key, value in {
+                    "non_recursable": bool(row.get("non_recursable", False)),
+                    "prevent_further_recursion": bool(row.get("prevent_further_recursion", False)),
+                    "delay_until_recursion": bool(row.get("delay_until_recursion", False)),
+                    "recursion_level": int(row.get("recursion_level", 0) or 0),
+                }.items() if value
+            },
+            timed={k: int(row[k]) for k in ("sticky", "cooldown", "delay") if isinstance(row.get(k), (int, float))},
+            vector_activation=str(row.get("vector_activation", "off") or "off"),
+            prompt_slot=str(row.get("prompt_slot", "") or ""),
+            extensions=extensions,
         ))
     known = {"name", "description", "scan_depth", "token_budget", "recursive_scanning", "entries", "extensions"}
     unknown = {k: v for k, v in book.items() if k not in known}

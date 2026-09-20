@@ -27,6 +27,16 @@ class LoreEntryDraft:
     timed: dict[str, int] = field(default_factory=dict)
     prompt_slot: str = ""
     external_id: str = ""
+    type: str = "other"
+    tier: str = "background"
+    unreliable: bool = False
+    sync_on_enter: bool = False
+    visible_to: list[str] = field(default_factory=list)
+    connected_to: list[str] = field(default_factory=list)
+    triggers_recursive: list[str] = field(default_factory=list)
+    prioritize_inclusion: bool = False
+    group_scoring: str = ""
+    vector_activation: str = "off"
     extensions: dict[str, Any] = field(default_factory=dict)
 
 

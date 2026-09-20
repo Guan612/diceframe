@@ -397,5 +397,38 @@ def _entry_v5_expression(column: str) -> str:
     return f'COALESCE("{column}", {defaults.get(column, "NULL")})'
 
 
+def _v6(conn: sqlite3.Connection) -> None:
+    """Represent vector activation as the canonical off/hybrid/vector_only mode."""
+
+    sql = _V5_ENTRIES_SQL.replace("lorebook_entries_new", "lorebook_entries_v6").replace(
+        "vector_activation INTEGER NOT NULL DEFAULT 0",
+        "vector_activation TEXT NOT NULL DEFAULT 'off'",
+    )
+    conn.execute(sql)
+    old_columns = table_columns(conn, "lorebook_entries")
+    shared = [column for column in _V5_ENTRY_COLUMNS if column in old_columns]
+    columns = ", ".join(f'"{column}"' for column in shared)
+    selected = ", ".join(
+        (
+            '"book_id"'
+            if column == "book_id" else
+            "CASE "
+            "WHEN lower(CAST(COALESCE(\"vector_activation\", 'off') AS TEXT)) "
+            "IN ('hybrid', 'vector_only') THEN lower(CAST(\"vector_activation\" AS TEXT)) "
+            "WHEN CAST(COALESCE(\"vector_activation\", 0) AS INTEGER) = 1 "
+            "THEN 'hybrid' ELSE 'off' END"
+            if column == "vector_activation" else _entry_v5_expression(column)
+        )
+        for column in shared
+    )
+    conn.execute(
+        f"INSERT INTO lorebook_entries_v6 ({columns}) SELECT {selected} FROM lorebook_entries"
+    )
+    conn.execute("DROP TABLE lorebook_entries")
+    conn.execute("ALTER TABLE lorebook_entries_v6 RENAME TO lorebook_entries")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_book ON lorebook_entries(book_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_binding_scope ON lorebook_bindings(scope_kind, scope_id)")
+
+
 def migrate(conn: sqlite3.Connection) -> int:
-    return run_migrations(conn, ((1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5)))
+    return run_migrations(conn, ((1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5), (6, _v6)))
