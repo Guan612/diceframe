@@ -861,36 +861,6 @@ def parse_tavern_card(file_path: str | Path) -> dict:
     return _extract_tavern_fields(data)
 
 
-def parse_character_card_document(file_path: str | Path) -> dict:
-    """Return the raw Character Card document metadata without dropping book settings.
-
-    Existing ``parse_tavern_card`` callers keep their compatibility projection; this
-    entry point is intentionally additive and is consumed by Lorebook adapters.
-    """
-    path = Path(file_path)
-    if not path.exists():
-        return {"error": "文件不存在"}
-    raw_data = path.read_bytes()
-    if raw_data[:8] == b'\x89PNG\r\n\x1a\n':
-        parsed = _parse_tavern_png(raw_data)
-        if not parsed:
-            return {"error": "PNG 中未找到角色卡数据"}
-        # PNG parser currently returns the compatibility projection; preserve it
-        # under the raw key so consumers can still import its character_book.
-        return {"spec": parsed.get("spec", "chara_card_v3"), "spec_version": parsed.get("spec_version", "3.0"), "data": parsed}
-    try:
-        data = json.loads(raw_data.decode("utf-8-sig"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return {"error": f"JSON 解析失败: {exc}"}
-    inner = data.get("data", data) if isinstance(data, dict) else {}
-    book = inner.get("character_book") if isinstance(inner, dict) else None
-    return {
-        "spec": data.get("spec", "chara_card_v3") if isinstance(data, dict) else "chara_card_v3",
-        "spec_version": data.get("spec_version", "3.0") if isinstance(data, dict) else "3.0",
-        "data": {**inner, "character_book": book} if isinstance(inner, dict) else {},
-    }
-
-
 def _parse_tavern_png(raw_data: bytes) -> dict | None:
     """从 PNG 文件的 tEXt chunk 中提取角色卡 JSON。"""
     try:
