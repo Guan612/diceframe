@@ -30,12 +30,7 @@ class KeywordMatcher:
         for entry in entries:
             eid = entry["id"]
             self._entries[eid] = entry
-            keywords = entry.get("keywords", [])
-            if isinstance(keywords, str):
-                try:
-                    keywords = json.loads(keywords)
-                except (json.JSONDecodeError, TypeError):
-                    keywords = [keywords]
+            keywords = self._keys(entry, "keywords") + self._keys(entry, "secondary_keys")
             for kw in keywords:
                 kw = kw.strip()
                 if kw:
@@ -48,21 +43,11 @@ class KeywordMatcher:
 
     def match(self, text: str) -> list[dict]:
         """匹配文本中出现的所有关键词。常量条目始终包含。"""
-        matched_ids: set[str] = set()
-        # 精确匹配 + 正则匹配
-        for keyword, eids in self._index.items():
-            if self._match_keyword(keyword, text):
-                matched_ids.update(eids)
-        # NOT 模式条目：无论关键词是否出现，都作为候选，稍后由 _apply_match_mode 过滤
-        for eid, entry in self._entries.items():
-            if entry.get("match_mode", "any") in ("not_any", "not_all"):
-                matched_ids.add(eid)
-        # 模糊回退
+        matched_ids = self._candidate_ids(text)
         if not matched_ids:
             matched_ids.update(self._fuzzy_match(text))
-        # 常量条目始终加入
+            matched_ids = {eid for eid in matched_ids if self._entry_matches(self._entries[eid], text)}
         matched_ids.update(self._get_constant_ids())
-        # 逻辑过滤（AND / NOT）—— 放在最后，确保过滤掉模糊匹配和常量中的矛盾条目
         matched_ids = self._apply_match_mode(matched_ids, text)
         # 概率过滤
         matched_ids = self._apply_probability(matched_ids)
@@ -71,14 +56,67 @@ class KeywordMatcher:
         return self._sort_by_tier(matched_ids)
 
     @staticmethod
-    def _match_keyword(keyword: str, text: str) -> bool:
-        """匹配关键词：支持普通文本和正则（/pattern/ 格式）。"""
-        if keyword.startswith("/") and keyword.endswith("/") and len(keyword) > 2:
+    def _keys(entry: dict, field: str) -> list[str]:
+        value = entry.get(field, [])
+        if isinstance(value, str):
             try:
-                return bool(re.search(keyword[1:-1], text))
+                value = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                value = [value]
+        return [str(item).strip() for item in value or [] if str(item).strip()] if isinstance(value, (list, tuple, set)) else []
+
+    @classmethod
+    def _match_keyword(cls, keyword: str, text: str, entry: dict | None = None) -> bool:
+        """Match a key with entry-level case, whole-word and regex settings."""
+        entry = entry or {}
+        case_sensitive = bool(entry.get("case_sensitive", False))
+        whole_word = bool(entry.get("match_whole_words", False))
+        use_regex = bool(entry.get("use_regex", False))
+        pattern = keyword
+        if pattern.startswith("/") and pattern.endswith("/") and len(pattern) > 2:
+            use_regex = True
+            pattern = pattern[1:-1]
+        flags = 0 if case_sensitive else re.IGNORECASE
+        if whole_word and not use_regex:
+            pattern = rf"(?<!\w){re.escape(pattern)}(?!\w)"
+            use_regex = True
+        if use_regex:
+            try:
+                return bool(re.search(pattern, text, flags))
             except re.error:
                 return False
-        return keyword in text
+        return pattern in text if case_sensitive else pattern.casefold() in text.casefold()
+
+    @classmethod
+    def _logic(cls, entry: dict) -> str:
+        mode = str(entry.get("match_mode", entry.get("selective_logic", "any")) or "any").lower()
+        return {"0": "any", "1": "all", "2": "not_all", "3": "not_any", "and": "all", "or": "any"}.get(mode, mode)
+
+    @classmethod
+    def _entry_matches(cls, entry: dict, text: str) -> bool:
+        primary = cls._keys(entry, "keywords")
+        secondary = cls._keys(entry, "secondary_keys")
+        mode = cls._logic(entry)
+        if not primary and not secondary:
+            return False
+        primary_hits = [cls._match_keyword(key, text, entry) for key in primary]
+        secondary_hits = [cls._match_keyword(key, text, entry) for key in secondary]
+        if mode == "all":
+            return all(primary_hits or [False]) and (all(secondary_hits) if secondary else True)
+        if mode == "not_any":
+            return not any(primary_hits + secondary_hits)
+        if mode == "not_all":
+            checks = primary_hits + secondary_hits
+            return not checks or not all(checks)
+        # ST-style selective keys: primary activation is required when secondary
+        # keys are configured; secondary keys are an additional any-match gate.
+        return any(primary_hits) and (any(secondary_hits) if secondary else True)
+
+    def _candidate_ids(self, text: str) -> set[str]:
+        return {
+            eid for eid, entry in self._entries.items()
+            if self._logic(entry) in ("not_any", "not_all") or self._entry_matches(entry, text)
+        }
 
     def _apply_match_mode(self, matched_ids: set[str], text: str) -> set[str]:
         """逻辑过滤：AND（所有关键词须出现）/ NOT（关键词不出现才激活）。"""
@@ -88,23 +126,14 @@ class KeywordMatcher:
             if not entry:
                 result.discard(eid)
                 continue
-            mode = entry.get("match_mode", "any")
+            mode = self._logic(entry)
             if mode == "any":
                 continue
-            keywords = entry.get("keywords", [])
-            if isinstance(keywords, str):
-                try:
-                    keywords = json.loads(keywords)
-                except (json.JSONDecodeError, TypeError):
-                    keywords = [keywords]
+            keywords = self._keys(entry, "keywords") + self._keys(entry, "secondary_keys")
             if not keywords:
                 result.discard(eid)
                 continue
-            if mode == "all" and not all(self._match_keyword(kw, text) for kw in keywords):
-                result.discard(eid)
-            elif mode == "not_any" and any(self._match_keyword(kw, text) for kw in keywords):
-                result.discard(eid)
-            elif mode == "not_all" and all(self._match_keyword(kw, text) for kw in keywords):
+            if not self._entry_matches(entry, text):
                 result.discard(eid)
         return result
 
@@ -125,18 +154,22 @@ class KeywordMatcher:
 
     def _apply_group_competition(self, matched_ids: set[str]) -> set[str]:
         """分组竞争：同 group 的条目仅保留 group_weight 最高的。"""
-        groups: dict[str, list[tuple[str, int]]] = {}
+        groups_by_name: dict[str, list[tuple[str, int]]] = {}
         for eid in matched_ids:
             entry = self._entries.get(eid)
             if not entry:
                 continue
-            group = entry.get("group", "")
-            if not group:
+            group_names = self._keys(entry, "groups")
+            group = str(entry.get("group", "") or "").strip()
+            if group:
+                group_names.append(group)
+            if not group_names or str(entry.get("group_scoring", "") or "").lower() in {"all", "allow_all"}:
                 continue
             weight = int(entry.get("group_weight", 1))
-            groups.setdefault(group, []).append((eid, weight))
+            for group_name in set(group_names):
+                groups_by_name.setdefault(group_name, []).append((eid, weight))
         removed: set[str] = set()
-        for group, members in groups.items():
+        for group, members in groups_by_name.items():
             if len(members) <= 1:
                 continue
             members.sort(key=lambda x: -x[1])
@@ -176,42 +209,43 @@ class KeywordMatcher:
         # 时间效应：cooldown/delay 活跃期间过滤掉对应条目的关键词
         filtered_ids = self._get_timed_blocked_ids(timed_state)
 
-        for keyword, eids in self._index.items():
-            if self._match_keyword(keyword, text):
-                allowed_eids = eids - filtered_ids
-                initial_ids.update(allowed_eids)
-        # NOT 模式条目预选
-        for eid, entry in self._entries.items():
-            if entry.get("match_mode", "any") in ("not_any", "not_all"):
-                if eid not in filtered_ids:
-                    initial_ids.add(eid)
+        initial_ids.update(self._candidate_ids(text) - filtered_ids)
         initial_ids = self._apply_match_mode(initial_ids, text)
         if not initial_ids:
             initial_ids.update(self._fuzzy_match(text) - filtered_ids)
         initial_ids.update(self._get_constant_ids())
 
         visited: set[str] = set()
-        queue: deque[str] = deque(initial_ids)
-        depth = 0
-        while queue and depth < MAX_RECURSIVE_DEPTH:
-            for _ in range(len(queue)):
-                eid = queue.popleft()
-                if eid in visited:
-                    continue
-                visited.add(eid)
-                entry = self._entries.get(eid)
-                if not entry:
-                    continue
-                triggers = entry.get("triggers_recursive", [])
-                if isinstance(triggers, str):
-                    try:
-                        triggers = json.loads(triggers)
-                    except (json.JSONDecodeError, TypeError):
-                        triggers = []
-                for tid in triggers:
-                    if tid not in visited and tid not in filtered_ids and self._entries.get(tid):
-                        queue.append(tid)
-            depth += 1
+        queue: deque[tuple[str, int]] = deque((eid, 0) for eid in initial_ids)
+        while queue:
+            eid, depth = queue.popleft()
+            if eid in visited or depth >= MAX_RECURSIVE_DEPTH:
+                continue
+            entry = self._entries.get(eid)
+            if not entry or not bool(entry.get("enabled", True)):
+                continue
+            visited.add(eid)
+            if bool(entry.get("prevent_further_recursion", False)) or bool(entry.get("non_recursable", False)):
+                continue
+            child_text = str(entry.get("content", "") or "")
+            if child_text:
+                child_ids = self._candidate_ids(child_text)
+                child_ids = self._apply_match_mode(child_ids, child_text)
+                for cid in child_ids - filtered_ids - visited:
+                    child = self._entries.get(cid)
+                    if child and self._eligible_recursive(child, depth + 1):
+                        queue.append((cid, depth + 1))
+            triggers = entry.get("triggers_recursive", [])
+            if isinstance(triggers, str):
+                try:
+                    triggers = json.loads(triggers)
+                except (json.JSONDecodeError, TypeError):
+                    triggers = []
+            for tid in triggers if isinstance(triggers, (list, tuple, set)) else []:
+                if tid not in visited and tid not in filtered_ids and self._entries.get(tid):
+                    child = self._entries[tid]
+                    if self._eligible_recursive(child, depth + 1):
+                        queue.append((tid, depth + 1))
 
         # 更新 timed_state：新匹配到的条目若含 sticky/cooldown/delay 则记录
         if timed_state is not None:
@@ -225,20 +259,35 @@ class KeywordMatcher:
         return self._sort_by_tier(visited)
 
     @staticmethod
+    def _eligible_recursive(entry: dict, depth: int) -> bool:
+        configured = int(entry.get("scan_depth", 0) or 0)
+        if configured > 0 and depth > configured:
+            return False
+        level = int(entry.get("recursion_level", 0) or 0)
+        return level <= 0 or depth >= level
+
+    @staticmethod
     def _get_sticky_active_ids(timed_state: dict[str, dict] | None) -> set[str]:
         """获取当前处于 active 状态的 sticky 条目。"""
         if not timed_state:
             return set()
-        return {eid for eid, state in timed_state.items()
-                if state.get("status") == "active" and state.get("remaining", 0) > 0}
+        return {
+            eid for eid, state in timed_state.items()
+            if (state.get("status") == "active" and state.get("remaining", 0) > 0)
+            or state.get("sticky_remaining", 0) > 0
+        }
 
     @staticmethod
     def _get_timed_blocked_ids(timed_state: dict[str, dict] | None) -> set[str]:
         """获取当前被 cooldown 或 delay 阻止的条目 ID。"""
         if not timed_state:
             return set()
-        return {eid for eid, state in timed_state.items()
-                if state.get("status") in ("cooldown", "delayed") and state.get("remaining", 0) > 0}
+        return {
+            eid for eid, state in timed_state.items()
+            if (state.get("status") in ("cooldown", "delayed") and state.get("remaining", 0) > 0)
+            or state.get("cooldown_remaining", 0) > 0
+            or state.get("delay_remaining", 0) > 0
+        }
 
     def _apply_time_effects(self, matched_ids: set[str], timed_state: dict[str, dict]) -> None:
         """匹配到条目后，检查其 sticky/cooldown/delay 并更新 timed_state。"""
@@ -259,6 +308,14 @@ class KeywordMatcher:
             if delay > 0 and eid not in timed_state:
                 timed_state[eid] = {"status": "delayed", "remaining": delay}
                 logger.debug("世界书 delay 开始: %s (duration=%d)", entry.get("name", eid), delay)
+            if eid in timed_state and any(key in timed_state[eid] for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining")):
+                state = timed_state[eid]
+                if sticky > 0 and state.get("sticky_remaining", 0) <= 0:
+                    state["sticky_remaining"] = sticky
+                if cooldown > 0 and state.get("cooldown_remaining", 0) <= 0:
+                    state["cooldown_remaining"] = cooldown
+                if delay > 0 and state.get("delay_remaining", 0) <= 0:
+                    state["delay_remaining"] = delay
 
     def _sort_by_tier(self, entry_ids: set[str]) -> list[dict]:
         result = []

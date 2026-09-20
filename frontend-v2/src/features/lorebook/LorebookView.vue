@@ -12,6 +12,8 @@ import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLangu
 import Modal from '@/components/ui/Modal.vue'
 import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
+import LorebookSidebar from './LorebookSidebar.vue'
+import LoreImportDialog from './LoreImportDialog.vue'
 import { useLorePerspective } from './useLorePerspective'
 import { normalizeVisibilityValues, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
 
@@ -34,6 +36,16 @@ interface LoreEdit extends LoreEntry {
   group_weight?: number
 }
 
+interface LorebookImportPreview {
+  format: string
+  counts: { entries: number; mapped: number; warnings: number; unsupported: number }
+  warnings: string[]
+}
+
+interface LorebookListResponse {
+  books: Array<{ id: string; name: string; primary?: boolean; scope?: string; enabled?: boolean }>
+}
+
 const toast = useToast()
 const { confirm } = useConfirm()
 const { locale, t } = useLocale()
@@ -48,12 +60,16 @@ const busy = ref(false)
 const loreEdit = ref<LoreEdit | null>(null)
 const generatePrompt = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
+const importPreview = ref<LorebookImportPreview>()
+const importDialogOpen = ref(false)
+const pendingImportPayload = ref<unknown>()
 const showNewWorld = ref(false)
 const players = ref<Player[]>([])
 const newWorld = ref({ name: '', description: '', language: locale.value })
 const entries = computed(() => data.value.entries || [])
 const languageWorlds = computed(() => filterByContentLanguage(worlds.value, worldLanguage.value))
 const currentWorld = computed(() => worlds.value.find(w => worldIdOf(w) === currentWorldId.value))
+const lorebookBooks = ref<LorebookListResponse['books']>([])
 const activeLoreType = ref('all')
 const loreTypeOrder = ['npc', 'location', 'faction', 'item', 'event', 'puzzle', 'spell', 'class', 'other'] as const
 
@@ -144,7 +160,7 @@ async function loadWorlds() {
   } catch (e: unknown) { error.value = errorMessage(e) }
 }
 
-watch(currentWorldId, () => { if (currentWorldId.value) loadLore() })
+watch(currentWorldId, () => { if (currentWorldId.value) { loadLore(); loadLorebooks() } })
 watch(worldLanguage, () => {
   if (languageWorlds.value.some(w => worldIdOf(w) === currentWorldId.value)) return
   currentWorldId.value = worldIdOf(languageWorlds.value[0])
@@ -364,30 +380,54 @@ async function importLore(e: Event) {
   try {
     const text = await file.text()
     const imported = JSON.parse(text) as unknown
-    if (!Array.isArray(imported)) throw new Error(t('jsonArrayRequired'))
-    // 一次批量请求：逐条 POST 会触发写操作频控，导致大世界书导入中途失败。
-    const entries = imported.filter((en): en is Record<string, unknown> => !!en && typeof en === 'object')
-    const r = await api<{ imported?: number; failed?: { index: number; error: string }[] }>(
-      `/lorebook/${encodeURIComponent(currentWorldId.value)}/import`,
-      { method: 'POST', body: JSON.stringify({ entries }) },
-    )
-    const importedCount = r.imported ?? 0
-    const failedCount = r.failed?.length ?? 0
-    if (failedCount && importedCount) toast.error(t('importedWithFailures', { imported: importedCount, failed: failedCount }))
-    else if (failedCount) toast.error(t('importFailed'))
-    else toast.success(t('importedEntries', { count: importedCount }))
-    await loadLore()
-    await loadWorlds()
-    await refreshPreview()
+    const payload = Array.isArray(imported)
+      ? { entries: imported.filter((en): en is Record<string, unknown> => !!en && typeof en === 'object') }
+      : imported
+    if (!payload || typeof payload !== 'object') throw new Error(t('jsonArrayRequired'))
+    pendingImportPayload.value = payload
+    importPreview.value = await api<LorebookImportPreview>('/lorebooks/import/preview', { method: 'POST', body: JSON.stringify(payload) })
+    importDialogOpen.value = true
   } catch (err: unknown) { error.value = `${t('importFailed')}: ${errorMessage(err)}` } finally {
     if (fileInput.value) fileInput.value.value = ''
   }
+}
+
+async function loadLorebooks() {
+  if (!currentWorldId.value) { lorebookBooks.value = []; return }
+  try {
+    const result = await api<LorebookListResponse>(`/lorebooks?world_id=${encodeURIComponent(currentWorldId.value)}`)
+    lorebookBooks.value = (result.books || []).map(book => ({ ...book, primary: book.primary || book.id === `world:${currentWorldId.value}` }))
+  } catch {
+    const world = currentWorld.value
+    lorebookBooks.value = world ? [{ id: currentWorldId.value, name: worldNameOf(world), primary: true, scope: 'world' }] : []
+  }
+}
+
+function selectLorebook(bookId: string) {
+  // World management still edits the world's primary projection; additional
+  // bound books are shown here without redirecting CRUD calls to the wrong scope.
+  if (bookId === `world:${currentWorldId.value}`) return
+  const book = lorebookBooks.value.find(item => item.id === bookId)
+  if (book?.primary) return
+}
+
+async function confirmLoreImport() {
+  if (!importPreview.value || !currentWorldId.value) return
+  try {
+    if (!pendingImportPayload.value || typeof pendingImportPayload.value !== 'object') throw new Error(t('importFailed'))
+    await api('/lorebooks/import', { method: 'POST', body: JSON.stringify({ payload: pendingImportPayload.value, book_id: `world:${currentWorldId.value}` }) })
+    importDialogOpen.value = false
+    pendingImportPayload.value = undefined
+    toast.success(t('importedLorebook'))
+    await loadLore(); await loadWorlds(); await refreshPreview()
+  } catch (err: unknown) { error.value = `${t('importFailed')}: ${errorMessage(err)}` }
 }
 </script>
 
 <template>
   <section class="view archive-page lorebook-page">
     <div class="lorebook-shell" :class="{ 'inspector-open': inspectorOpen }">
+      <LorebookSidebar :books="lorebookBooks" :active-id="`world:${currentWorldId}`" @select="selectLorebook" />
       <main class="lorebook-workspace">
     <header class="view-title archive-hero">
       <div>
@@ -558,5 +598,6 @@ async function importLore(e: Event) {
         @close="closeInspector"
       />
     </div>
+    <LoreImportDialog :open="importDialogOpen" :preview="importPreview" @close="importDialogOpen = false" @confirm="confirmLoreImport" />
   </section>
 </template>

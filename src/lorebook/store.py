@@ -208,7 +208,7 @@ class LorebookStore:
                 if not isinstance(book.get("settings_json"), str) else book["settings_json"],
                 source_kind=book.get("source_kind", "native"), source_id=book.get("source_id", ""),
                 source_version=book.get("source_version", ""), source_digest=book.get("source_digest", ""),
-            ).on_conflict_replace().execute()
+            ).on_conflict_ignore().execute()
             self._conn.commit()
 
     def get_lorebook(self, book_id: str) -> dict | None:

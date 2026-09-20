@@ -1392,13 +1392,25 @@ class GameInstance:
     # ---------- 序列化 --------------------------------------
 
     def update_lorebook_timed_state(self) -> None:
-        """每轮开始前更新世界书时间效应状态：remaining - 1，归零则移除。"""
-        expired = [eid for eid, state in self.lorebook_timed_state.items()
-                   if state["remaining"] <= 1]
-        for eid in expired:
-            del self.lorebook_timed_state[eid]
-        for state in self.lorebook_timed_state.values():
-            state["remaining"] -= 1
+        """Tick persisted Lorebook timers, supporting the pre-v2 shape."""
+        expired: list[str] = []
+        for entry_id, state in self.lorebook_timed_state.items():
+            if not isinstance(state, dict):
+                expired.append(entry_id)
+                continue
+            if any(key in state for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining")):
+                for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining"):
+                    state[key] = max(0, int(state.get(key, 0) or 0) - 1)
+                if not any(state.get(key, 0) > 0 for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining")):
+                    expired.append(entry_id)
+                continue
+            remaining = max(0, int(state.get("remaining", 0) or 0) - 1)
+            if remaining <= 0:
+                expired.append(entry_id)
+            else:
+                state["remaining"] = remaining
+        for entry_id in expired:
+            self.lorebook_timed_state.pop(entry_id, None)
 
     # ---------- 序列化 --------------------------------------
 

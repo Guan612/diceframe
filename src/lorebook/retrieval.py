@@ -370,6 +370,46 @@ class LoreRetriever:
         self._world_id, self._language = scope
         self._scope = scope
 
+    def ensure_lore_context(self, instance: Any, *, viewer_is_gm: bool = True,
+                            viewer_uid: str = "", action_actor_uids: Sequence[str] | None = None) -> None:
+        """Load all canonical books bound to the current runtime context.
+
+        The world-only ``ensure_world`` method remains the compatibility façade for
+        map/NPC projections. Narrative retrieval uses this resolver-backed path.
+        Stores from older callers that do not expose bindings automatically fall back
+        to that façade.
+        """
+        world_id = str(getattr(instance, "world_id", "") or "")
+        instance_language = str(getattr(instance, "language", "") or "")
+        # Explicit callers may use ensure_world(world, language) for locale
+        # characterization; do not immediately overwrite that scope from a
+        # lightweight test/runtime instance carrying a stale language field.
+        if (self._scope and self._scope[0] == world_id and "|books:" not in self._scope[1]
+                and self._scope[1] == self._language and instance_language
+                and instance_language != self._language):
+            return
+        language = instance_language or self._language or DEFAULT_LANGUAGE
+        if not world_id or self._store is None or not hasattr(self._store, "list_bindings"):
+            self.ensure_world(world_id, language)
+            return
+        refs = resolve_active_books(
+            instance, "gm" if viewer_is_gm else ("character" if viewer_uid else "party"),
+            viewer_uid, list(action_actor_uids or getattr(instance, "action_actor_uids", []) or []), store=self._store,
+        )
+        if not refs:
+            self.ensure_world(world_id, language)
+            return
+        book_ids = [ref.book_id for ref in refs]
+        scope = (world_id, f"{language}|books:{','.join(book_ids)}")
+        if scope == self._scope:
+            return
+        entries: list[dict] = []
+        for book_id in book_ids:
+            entries.extend(self._store.list_book_entries(book_id))
+        self._matcher.build(entries)
+        self._entries = entries
+        self._world_id, self._language, self._scope = world_id, language, scope
+
     def invalidate_world(self, world_id: str) -> None:
         """世界内容或语言变化后强制下一次重建（与旧 matcher 失效语义一致）。"""
 
@@ -392,7 +432,7 @@ class LoreRetriever:
         """
         refs = resolve_active_books(
             instance, "gm" if viewer_is_gm else ("character" if viewer_uid else "party"),
-            viewer_uid, list(action_actor_uids or []),
+            viewer_uid, list(action_actor_uids or []), store=self._store,
         )
         return [{"book_id": ref.book_id, "order": ref.order, "binding_id": ref.binding_id, "role": ref.role} for ref in refs]
 
@@ -415,6 +455,9 @@ class LoreRetriever:
         观察计时器但不改变它们。
         """
 
+        self.ensure_lore_context(
+            instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
+        )
         anchors = lore_query_anchors(
             instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
         )
@@ -702,4 +745,6 @@ class LoreRetriever:
         state = timed_state.get(entry_id)
         if not isinstance(state, dict):
             return False
-        return state.get("status") in ("cooldown", "delayed") and state.get("remaining", 0) > 0
+        return (
+            state.get("status") in ("cooldown", "delayed") and state.get("remaining", 0) > 0
+        ) or state.get("cooldown_remaining", 0) > 0 or state.get("delay_remaining", 0) > 0

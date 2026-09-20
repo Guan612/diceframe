@@ -4,6 +4,9 @@ from src.lorebook.activation import evaluate_probability, eligible_for_recursion
 from src.lorebook.budget import apply_token_budget
 from src.lorebook.resolver import resolve_active_books
 from src.lorebook.trace import ActivationTrace
+from src.lorebook.matcher import KeywordMatcher
+from src.lorebook.retrieval import LoreRetriever
+from src.engine.game_instance import GameInstance
 
 
 def test_probability_trace_is_injected_and_deterministic():
@@ -19,7 +22,7 @@ def test_budget_keeps_constant_and_stable_ids():
 def test_resolver_filters_private_books_for_party():
     class Store:
         def list_bindings(self):
-            return [{"id": "w", "book_id": "world:w", "scope_kind": "world", "scope_id": "w", "enabled": True}, {"id": "p", "book_id": "book:p", "scope_kind": "viewer", "scope_id": "u", "enabled": True}]
+            return [{"id": "w", "book_id": "world:w", "scope_kind": "world", "scope_id": "w", "enabled": True}, {"id": "p", "book_id": "book:p", "scope_kind": "character", "scope_id": "u", "enabled": True}]
     refs = resolve_active_books(SimpleNamespace(lorebook_store=Store(), world_id="w"), "party", "u")
     assert [ref.book_id for ref in refs] == ["world:w"]
 
@@ -27,3 +30,63 @@ def test_resolver_filters_private_books_for_party():
 def test_trace_hides_rejected_entry_for_safe_view():
     trace = ActivationTrace("secret", visibility="hidden", reason_code="visibility")
     assert trace.to_dict(safe=True) == {"entry_id": "", "book_id": "", "final_state": "hidden"}
+
+
+def test_retriever_loads_world_and_global_books(tmp_path):
+    from src.lorebook.store import LorebookStore
+
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        store.create_world("w", "World")
+        store.add_entry({"id": "world-entry", "world_id": "w", "name": "World clue", "keywords": ["clue"], "content": "world"})
+        store.create_lorebook({"id": "global-book", "name": "Global"})
+        store.bind_lorebook({"id": "global-binding", "book_id": "global-book", "scope_kind": "global", "scope_id": ""})
+        store.add_entry({"id": "global-entry", "book_id": "global-book", "name": "Global clue", "keywords": ["clue"], "content": "global"})
+        instance = SimpleNamespace(world_id="w", language="zh-CN", scene="", npcs={}, players={}, world_state={}, lorebook_timed_state={}, lorebook_store=store)
+        retriever = LoreRetriever(KeywordMatcher(), store=store)
+        import asyncio
+        hits = asyncio.run(retriever.retrieve(instance, "clue"))
+        assert {entry["id"] for entry in hits} == {"world-entry", "global-entry"}
+    finally:
+        store.close()
+
+
+def test_matcher_secondary_keys_and_word_case_controls():
+    matcher = KeywordMatcher()
+    matcher.build([
+        {"id": "secondary", "keywords": ["Wizard"], "secondary_keys": ["Tower"], "case_sensitive": True},
+        {"id": "whole", "keywords": ["cat"], "match_whole_words": True},
+        {"id": "regex", "keywords": [r"guard-\d+"], "use_regex": True},
+    ])
+
+    assert [row["id"] for row in matcher.match("Wizard at Tower") if row["id"] == "secondary"] == ["secondary"]
+    assert not any(row["id"] == "secondary" for row in matcher.match("Wizard at tower"))
+    assert not any(row["id"] == "whole" for row in matcher.match("catalog"))
+    assert any(row["id"] == "whole" for row in matcher.match("a cat"))
+    assert any(row["id"] == "regex" for row in matcher.match("guard-42"))
+
+
+def test_matcher_recursive_scan_uses_entry_content_and_depth():
+    matcher = KeywordMatcher()
+    matcher.build([
+        {"id": "seed", "keywords": ["door"], "content": "The door hides a sigil."},
+        {"id": "child", "keywords": ["sigil"], "content": "The sigil names an ancient vault."},
+        {"id": "grandchild", "keywords": ["vault"], "content": "deep"},
+        {"id": "blocked", "keywords": ["vault"], "content": "blocked", "prevent_further_recursion": True},
+    ])
+
+    ids = {row["id"] for row in matcher.match_with_recursive("door")}
+    assert {"seed", "child", "grandchild"}.issubset(ids)
+    assert "blocked" in ids
+
+
+def test_timed_state_is_migrated_at_game_save_load_boundary():
+    instance = GameInstance(game_key=("web", "timers", "gm"))
+    instance.lorebook_timed_state = {"entry": {"status": "cooldown", "remaining": 2}}
+    payload = instance.to_dict()
+    assert payload["lorebook_timed_state"]["entry"]["cooldown_remaining"] == 2
+    restored = GameInstance.from_dict(payload)
+    assert restored.lorebook_timed_state["entry"]["cooldown_remaining"] == 2
+    restored.update_lorebook_timed_state()
+    assert restored.lorebook_timed_state["entry"]["cooldown_remaining"] == 1

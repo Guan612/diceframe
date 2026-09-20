@@ -872,12 +872,10 @@ def parse_character_card_document(file_path: str | Path) -> dict:
         return {"error": "文件不存在"}
     raw_data = path.read_bytes()
     if raw_data[:8] == b'\x89PNG\r\n\x1a\n':
-        parsed = _parse_tavern_png(raw_data)
-        if not parsed:
+        data = _parse_tavern_png_document(raw_data)
+        if not data:
             return {"error": "PNG 中未找到角色卡数据"}
-        # PNG parser currently returns the compatibility projection; preserve it
-        # under the raw key so consumers can still import its character_book.
-        return {"spec": parsed.get("spec", "chara_card_v3"), "spec_version": parsed.get("spec_version", "3.0"), "data": parsed}
+        return {"spec": data.get("spec", "chara_card_v3"), "spec_version": data.get("spec_version", "3.0"), "data": data.get("data", data)}
     try:
         data = json.loads(raw_data.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -893,6 +891,12 @@ def parse_character_card_document(file_path: str | Path) -> dict:
 
 def _parse_tavern_png(raw_data: bytes) -> dict | None:
     """从 PNG 文件的 tEXt chunk 中提取角色卡 JSON。"""
+    data = _parse_tavern_png_document(raw_data)
+    return _extract_tavern_fields(data) if data else None
+
+
+def _parse_tavern_png_document(raw_data: bytes) -> dict | None:
+    """Extract the raw Character Card JSON from a PNG without projecting fields away."""
     try:
         # 跳过 8 字节 PNG 签名
         pos = 8
@@ -918,7 +922,7 @@ def _parse_tavern_png(raw_data: bytes) -> dict | None:
                 if keyword.lower() == "chara":
                     text = chunk_data[null_pos + 1:].decode("utf-8", errors="replace")
                     data = json.loads(text)
-                    return _extract_tavern_fields(data)
+                    return data if isinstance(data, dict) else None
             elif chunk_type == "IEND":
                 break
     except (IndexError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):

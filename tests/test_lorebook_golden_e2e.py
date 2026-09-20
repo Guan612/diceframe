@@ -1,9 +1,18 @@
 import sqlite3
+from dataclasses import asdict
+from types import SimpleNamespace
+
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+import pytest
 
 from src.lorebook.activation import migrate_timed_state
 from src.lorebook.exporter import export_lorebook_v3
 from src.lorebook.importer import preview_lorebook_import, commit_lorebook_import
 from src.lorebook.store import LorebookStore
+from src.lorebook.matcher import KeywordMatcher
+from src.lorebook.retrieval import LoreRetriever
+from src.webui.routes.lorebooks import register_lorebooks
 
 
 def test_golden_old_db_import_preview_bind_export_restart(tmp_path):
@@ -27,5 +36,47 @@ def test_golden_old_db_import_preview_bind_export_restart(tmp_path):
     try:
         assert store.list_entries("w")
         assert store.list_book_entries("book:st")
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_golden_real_route_import_to_multi_book_retrieval(tmp_path):
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    store.create_world("w", "World")
+
+    class Api:
+        def preview_lorebook_import(self, payload):
+            result = preview_lorebook_import(payload)
+            return result | {"book": asdict(result["book"])}
+
+        def commit_lorebook_import(self, payload, binding=None, book_id=None):
+            draft = preview_lorebook_import(payload)["book"]
+            imported = commit_lorebook_import(store, draft, binding, book_id=book_id)
+            return {"ok": True, "book_id": imported, "entries": len(draft.entries), "warnings": draft.warnings}
+
+    app = web.Application()
+    app["api"] = Api()
+    register_lorebooks(app)
+    try:
+        async with TestClient(TestServer(app)) as client:
+            preview_response = await client.post(
+                "/api/lorebooks/import/preview",
+                json={"name": "Primary", "entries": [{"uid": "st", "key": ["harbor"], "keysecondary": ["secret"], "content": "harbor secret"}]},
+            )
+            assert preview_response.status == 200
+            commit_response = await client.post(
+                "/api/lorebooks/import",
+                json={"payload": {"name": "Primary", "entries": [{"uid": "st", "key": ["harbor"], "keysecondary": ["secret"], "content": "harbor secret"}]}, "book_id": "world:w"},
+            )
+            assert commit_response.status == 200
+
+        store.create_lorebook({"id": "global-book", "name": "Global"})
+        store.bind_lorebook({"id": "binding:global", "book_id": "global-book", "scope_kind": "global", "scope_id": ""})
+        store.add_entry({"id": "global-clue", "book_id": "global-book", "name": "Global", "keywords": ["secret"], "content": "global"})
+        instance = SimpleNamespace(world_id="w", language="zh-CN", scene="", npcs={}, players={}, world_state={}, lorebook_timed_state={}, lorebook_store=store)
+        hits = await LoreRetriever(KeywordMatcher(), store=store).retrieve(instance, "harbor secret")
+        assert {entry["content"] for entry in hits} == {"harbor secret", "global"}
     finally:
         store.close()

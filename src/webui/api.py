@@ -1784,6 +1784,34 @@ class WebAPI:
     def import_entries(self, world_id: str, entries: list) -> dict[str, Any]:
         return worlds.import_entries(self._world_dependencies, world_id, entries)
 
+    def list_lorebooks(self, world_id: str = "") -> dict[str, Any]:
+        """List canonical books visible in a world-management scope."""
+        books = self._lore.list_lorebooks(scope_kind="world", scope_id=world_id) if world_id else []
+        global_books = self._lore.list_lorebooks(scope_kind="global", scope_id="")
+        seen: set[str] = set()
+        merged = []
+        for book in [*books, *global_books]:
+            book_id = str(book.get("id") or "")
+            if book_id and book_id not in seen:
+                seen.add(book_id)
+                merged.append(book)
+        return {"books": merged}
+
+    def preview_lorebook_import(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from dataclasses import asdict
+        from src.lorebook.importer import preview_lorebook_import
+
+        result = preview_lorebook_import(payload)
+        result["book"] = asdict(result["book"])
+        return result
+
+    def commit_lorebook_import(self, payload: dict[str, Any], binding: dict[str, Any] | None = None, book_id: str | None = None) -> dict[str, Any]:
+        from src.lorebook.importer import commit_lorebook_import, draft_lorebook_import
+
+        draft = draft_lorebook_import(payload)
+        imported_book_id = commit_lorebook_import(self._lore, draft, binding, book_id=book_id)
+        return {"ok": True, "book_id": imported_book_id, "entries": len(draft.entries), "warnings": draft.warnings}
+
     async def generate_lorebook_entries(self, world_id: str, prompt: str, language: str = "") -> dict[str, Any]:
         return await worlds.generate_lorebook_entries(
             self._world_dependencies, world_id, prompt, language,

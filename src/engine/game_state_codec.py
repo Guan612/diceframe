@@ -19,6 +19,35 @@ if TYPE_CHECKING:
     from src.engine.game_instance import GameInstance, GameState
 
 
+def _normalize_lorebook_timed_state(state: Any) -> dict[str, dict[str, int]]:
+    """Normalize legacy Lorebook timers at the engine persistence boundary.
+
+    Kept here rather than importing the lorebook domain into ``engine`` so the
+    core dependency direction remains one-way.
+    """
+    result: dict[str, dict[str, int]] = {}
+    for entry_id, raw in (state or {}).items() if isinstance(state, Mapping) else []:
+        if not isinstance(raw, Mapping):
+            continue
+        if any(key in raw for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining")):
+            result[str(entry_id)] = {
+                "sticky_remaining": max(0, int(raw.get("sticky_remaining", 0) or 0)),
+                "cooldown_remaining": max(0, int(raw.get("cooldown_remaining", 0) or 0)),
+                "delay_remaining": max(0, int(raw.get("delay_remaining", 0) or 0)),
+                "activated_tick": int(raw.get("activated_tick", 0) or 0),
+            }
+            continue
+        remaining = max(0, int(raw.get("remaining", 0) or 0))
+        status = str(raw.get("status", ""))
+        result[str(entry_id)] = {
+            "sticky_remaining": remaining if status == "active" else 0,
+            "cooldown_remaining": remaining if status == "cooldown" else 0,
+            "delay_remaining": remaining if status in ("delayed", "delay") else 0,
+            "activated_tick": int(raw.get("activated_tick", 0) or 0),
+        }
+    return result
+
+
 class GameStateCodec:
     """Encode and reconstruct the persisted ``GameInstance`` projection."""
 
@@ -86,7 +115,7 @@ class GameStateCodec:
             "room_password": instance.room_password,
             "room_token": instance.room_token,
             "pending_combat_results": instance.pending_combat_results,
-            "lorebook_timed_state": instance.lorebook_timed_state,
+            "lorebook_timed_state": _normalize_lorebook_timed_state(instance.lorebook_timed_state),
             "quick_actions": instance.quick_actions,
             "health_events": instance.health_events[-100:],
             "health_status": instance.health_status,
@@ -235,7 +264,7 @@ class GameStateCodec:
             room_password=data.get("room_password", ""),
             room_token=data.get("room_token", ""),
             pending_combat_results=data.get("pending_combat_results", []),
-            lorebook_timed_state=data.get("lorebook_timed_state", {}),
+            lorebook_timed_state=_normalize_lorebook_timed_state(data.get("lorebook_timed_state", {})),
             quick_actions=data.get("quick_actions", []),
             health_events=data.get("health_events", []),
             health_status=data.get("health_status", {}),

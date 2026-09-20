@@ -1,6 +1,8 @@
 """Preview-first import service for all Lorebook formats."""
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from src.lorebook.adapters import from_legacy_entries, from_lorebook_v3, from_sillytavern
@@ -28,7 +30,8 @@ def draft_lorebook_import(payload: dict[str, Any]) -> LorebookDraft:
     if fmt == "sillytavern":
         return from_sillytavern(payload)
     if fmt == "character_card_v3":
-        book = payload.get("character_book", {})
+        inner = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        book = inner.get("character_book", {}) if isinstance(inner, dict) else {}
         return from_lorebook_v3({"spec": "lorebook_v3", "data": {"lorebook": book}})
     return from_legacy_entries(payload)
 
@@ -41,10 +44,19 @@ def preview_lorebook_import(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def commit_lorebook_import(store: Any, draft: LorebookDraft, binding: dict[str, Any] | None = None, *, book_id: str | None = None) -> str:
-    book_id = book_id or str(draft.source.get("id") or f"import:{draft.name}")
+    if not book_id:
+        fingerprint = hashlib.sha256(json.dumps({"source": draft.source, "name": draft.name, "entries": [entry.external_id for entry in draft.entries]}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        book_id = str(draft.source.get("id") or f"import:{draft.source.get('kind', 'external')}:{fingerprint}")
     store.create_lorebook({"id": book_id, "name": draft.name, "description": draft.description, "language": draft.language, "settings": draft.settings, "source_kind": draft.source.get("kind", "import")})
     if binding:
         store.bind_lorebook({"id": binding.get("id", f"binding:{book_id}"), "book_id": book_id, **{k: v for k, v in binding.items() if k != "id"}})
     for index, entry in enumerate(draft.entries):
-        store.add_entry({"id": entry.external_id or f"{book_id}:entry:{index}", "book_id": book_id, "name": entry.name, "content": entry.content, "keywords": entry.keys, "secondary_keys": entry.secondary_keys, "enabled": entry.enabled, "is_constant": entry.constant, "match_mode": entry.selective_logic, "use_regex": entry.use_regex, "case_sensitive": entry.case_sensitive, "match_whole_words": entry.match_whole_words, "scan_depth": entry.scan_depth, "priority": entry.priority, "order": entry.insertion_order, "probability": entry.probability, "groups": entry.groups, "group_weight": entry.group_weight, "sticky": entry.timed.get("sticky", 0), "cooldown": entry.timed.get("cooldown", 0), "delay": entry.timed.get("delay", 0), "prompt_slot": entry.prompt_slot, "provenance": draft.source, "extensions": entry.extensions})
+        entry_key = entry.external_id or str(index)
+        entry_id = f"{book_id}:entry:{hashlib.sha256(entry_key.encode('utf-8')).hexdigest()[:16]}"
+        provenance = {**draft.source, "external_id": entry.external_id} if entry.external_id else dict(draft.source)
+        selective_logic = str(entry.selective_logic or "any").lower()
+        match_mode = {"and": "all", "or": "any", "0": "any", "1": "all", "2": "not_all", "3": "not_any"}.get(selective_logic, selective_logic)
+        if match_mode not in {"any", "all", "not_any", "not_all"}:
+            match_mode = "any"
+        store.add_entry({"id": entry_id, "book_id": book_id, "name": entry.name, "content": entry.content, "keywords": entry.keys, "secondary_keys": entry.secondary_keys, "enabled": entry.enabled, "is_constant": entry.constant, "match_mode": match_mode, "selective_logic": selective_logic, "use_regex": entry.use_regex, "case_sensitive": entry.case_sensitive, "match_whole_words": entry.match_whole_words, "scan_depth": entry.scan_depth, "priority": entry.priority, "order": entry.insertion_order, "probability": entry.probability, "groups": entry.groups, "group_weight": entry.group_weight, "sticky": entry.timed.get("sticky", 0), "cooldown": entry.timed.get("cooldown", 0), "delay": entry.timed.get("delay", 0), "prompt_slot": entry.prompt_slot, "provenance": provenance, "extensions": entry.extensions})
     return book_id
