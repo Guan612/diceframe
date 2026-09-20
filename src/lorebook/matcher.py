@@ -172,7 +172,12 @@ class KeywordMatcher:
         for group, members in groups_by_name.items():
             if len(members) <= 1:
                 continue
-            members.sort(key=lambda x: -x[1])
+            members.sort(key=lambda x: (
+                -x[1],
+                -int(self._entries.get(x[0], {}).get("priority", 0) or 0),
+                int(self._entries.get(x[0], {}).get("order", 100) or 100),
+                x[0],
+            ))
             winner = members[0][0]
             for eid, _ in members[1:]:
                 removed.add(eid)
