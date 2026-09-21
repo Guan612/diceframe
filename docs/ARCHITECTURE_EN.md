@@ -11,7 +11,7 @@
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
 > - Current GameInstance persisted schema: `15`
-> - Current Lorebook SQLite schema (`PRAGMA user_version`): `8`
+> - Current Lorebook SQLite schema (`PRAGMA user_version`): `9`
 > - Document verification date: 2026-09-18
 >
 > **Explicitly excluded from the current architecture**
@@ -3958,7 +3958,12 @@ warning and is never evaluated through a second runtime.
 
 At runtime the resolver merges global/world/game/character bindings and attaches book
 settings (scan depth, recursive scanning, token budget, and the vector default) to each
-candidate. `off` produces no semantic candidates, `hybrid` runs alongside keywords, and
+candidate. A Book's own `enabled` flag is a runtime decision, not a display label: a
+disabled Book contributes no candidates at all, and a change to its retrieval settings
+bumps `revision` so two same-second edits cannot be swallowed by the cache. Entry
+ownership follows the canonical invariant — entries of the primary world book
+`world:<id>` carry `world_id`, entries of an independent Book have NULL, and moving an
+entry between books re-derives that projection. `off` produces no semantic candidates, `hybrid` runs alongside keywords, and
 `vector_only` admits semantic candidates only; every candidate still passes visibility,
 timer, group, and budget checks. A dry-run ActivationTrace is kept on the runtime
 instance and is queryable through `POST /api/lorebooks/activation-preview`; player
@@ -4014,7 +4019,7 @@ Lorebook entry vectors are cached in `lorebook.db`:
 lorebook_embeddings
 ```
 
-Current Lorebook SQLite `user_version = 8`. `vector_activation` is the three-state text field `off` / `hybrid` / `vector_only`; v6 safely converts the old v5 boolean values while preserving `book_id` and entry data. v7 adds `lorebooks.revision`, a per-book mutation counter used to invalidate cached matcher fingerprints; v8 adds `lorebook_entries.selective`, the canonical flag deciding whether `secondary_keys` gates activation at all (default `1` keeps existing behaviour). Cache key:
+Current Lorebook SQLite `user_version = 9`. `vector_activation` is the three-state text field `off` / `hybrid` / `vector_only`; v6 safely converts the old v5 boolean values while preserving `book_id` and entry data. v7 adds `lorebooks.revision`, a monotonic counter bumped by entry and retrieval-setting mutations so cached matcher fingerprints are invalidated; v8 adds `lorebook_entries.selective`, the canonical flag deciding whether `secondary_keys` gates activation at all (default `1` keeps existing behaviour); v9 adds `lorebook_entries.regex_executable`, which an adapter clears when a JavaScript regex has no faithful Python equivalent so the matcher never executes it (default `1`). Cache key:
 
 ```text
 (entry_id, language, embedding_profile)
@@ -5839,7 +5844,7 @@ D&D Class Feature Runtime v1
 Hybrid Lore Retrieval / Semantic Retrieval / Lore Prompt authority
 QR pairing
 Current Confirmed Event / World Memory boundary
-GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 8
+GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 9
 Developer maintenance and code-location rules
 ```
 

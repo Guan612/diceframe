@@ -30,11 +30,24 @@ than something the matcher infers from the entry's source format.
 ## Regex compatibility
 
 SillyTavern and Character Card regexes are JavaScript; DiceFrame executes Python `re`. Only the
-safely-mappable subset runs. A pattern that is not valid in Python is preserved verbatim in the
-import, reported as an `unsupported regex` preview warning, and never executed — it simply never
-matches. Patterns that compile but diverge in semantics (JavaScript's `\d`/`\w`/`\s`/`\b` are
-ASCII-only while Python's are Unicode-aware) are reported as a `regex mismatch` warning and kept
-as-is. Adapters never rewrite, translate, or evaluate a pattern through a JavaScript runtime.
+safely-mappable subset runs. When an adapter reads JavaScript regexes it clears the canonical
+`regex_executable` flag on the entry if any of its patterns is not valid in Python or diverges in
+semantics (JavaScript's `\d`/`\w`/`\s`/`\b` are ASCII-only while Python's are Unicode-aware). The
+raw pattern is preserved verbatim as data and reported through import preview as an
+`unsupported regex` / `regex mismatch` warning, but the matcher never executes it — the key simply
+never matches. This is why the flag is stored: the adapter is the only layer that knows the payload
+is JavaScript, while the matcher must stay format-neutral and must not branch on the import source.
+Adapters never rewrite, translate, or evaluate a pattern through a JavaScript runtime, and
+DiceFrame-native entries (whose Python regexes are intentional) keep their flag set.
+
+## Where DiceFrame-only fields live
+
+`lorebook_v3` is a standards-oriented format, so DiceFrame-specific entry semantics
+(`type`, `tier`, `unreliable`, `sync_on_enter`, `visible_to`, `connected_to`,
+`triggers_recursive`, `match_mode`, `regex_executable`) are exported under
+`extensions.diceframe` rather than expanding the standard top-level with private keys. Reads are
+tolerant: an explicit standard top-level value wins, then `extensions.diceframe` is consulted, and
+files produced by the older exporter (which wrote `match_mode` at top level) keep being read.
 
 ## Character Card and Tavern entry points
 
