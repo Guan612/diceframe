@@ -54,12 +54,17 @@ def from_sillytavern(payload: dict[str, Any]) -> LorebookDraft:
         unmapped_fields |= unparsed
         extensions = {k: v for k, v in row.items() if k not in {"comment", "name", "content", "key", "keys", "keysecondary", "secondary_keys", "disable", "disabled", "constant", "selective", "selectiveLogic", "selective_logic", "useRegex", "use_regex", "order", "probability"}}
         # ST regexes are JavaScript; only the safely-mappable subset may run.
-        # Incompatible patterns are preserved verbatim and reported, never rewritten.
-        if bool(row.get("useRegex", row.get("use_regex", False))):
+        # Incompatible patterns are preserved verbatim and reported, never
+        # rewritten -- and never handed to Python ``re`` either, because that
+        # would silently apply different semantics.
+        use_regex = bool(row.get("useRegex", row.get("use_regex", False)))
+        regex_executable = True
+        if use_regex:
             for key in _strings(row.get("key", row.get("keys", []))):
                 reason = python_regex_incompatibility(key)
                 if reason:
                     regex_warnings.add(reason)
+                    regex_executable = False
         # The raw anchor is kept for round-tripping but is never executed.
         extensions.setdefault("_preserved_position", row.get("position", ""))
         entries.append(LoreEntryDraft(
@@ -73,7 +78,8 @@ def from_sillytavern(payload: dict[str, Any]) -> LorebookDraft:
             # ST ``selective`` decides whether keysecondary filters at all; the
             # keys themselves are preserved either way.
             selective=bool(row.get("selective", True)),
-            use_regex=bool(row.get("useRegex", row.get("use_regex", False))), case_sensitive=bool(row.get("caseSensitive", False)),
+            use_regex=use_regex, regex_executable=regex_executable,
+            case_sensitive=bool(row.get("caseSensitive", False)),
             match_whole_words=bool(row.get("matchWholeWords", False)), scan_depth=int(row.get("scanDepth", 0) or 0),
             insertion_order=int(row.get("order", 100) or 100), probability=int(row.get("probability", 100) or 100),
             groups=_strings(row.get("group", row.get("groups", []))), group_weight=int(row.get("groupWeight", 1) or 1),

@@ -23,6 +23,10 @@ class LoreEntryDraft:
     # must not filter, so the flag is canonical rather than source-specific.
     selective: bool = True
     use_regex: bool = False
+    # Whether ``keys`` may be executed as a regex at all. Adapters reading
+    # JavaScript patterns clear it when a pattern is not safely mappable, so the
+    # matcher never runs Python ``re`` with silently different semantics.
+    regex_executable: bool = True
     case_sensitive: bool = False
     match_whole_words: bool = False
     scan_depth: int = 0

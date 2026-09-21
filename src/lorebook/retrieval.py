@@ -425,7 +425,13 @@ class LoreRetriever:
             instance, "gm" if viewer_is_gm else ("character" if viewer_uid else "party"),
             viewer_uid, list(action_actor_uids or getattr(instance, "action_actor_uids", []) or []), store=self._store,
         )
-        if not refs:
+        # An empty result has two very different meanings. A store with no
+        # bindings at all is a legacy store where the world façade is the only
+        # content path. A store that *has* bindings but resolved none of them is a
+        # deliberate "nothing is active" (a disabled Book, or a scope this viewer
+        # cannot see) — falling back to the legacy world read there would put
+        # deliberately disabled content straight back into context.
+        if not refs and not self._store.list_bindings():
             self.ensure_world(world_id, language)
             return
         book_ids = [ref.book_id for ref in refs]

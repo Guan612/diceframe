@@ -466,8 +466,27 @@ def _v8(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "lorebook_entries", "selective", "INTEGER NOT NULL DEFAULT 1")
 
 
+def _v9(conn: sqlite3.Connection) -> None:
+    """Add the canonical "this entry's regex may be executed" flag.
+
+    SillyTavern / Character Card regexes are JavaScript while DiceFrame executes
+    Python ``re``. Only the safely-mappable subset may run: an incompatible
+    pattern has to be preserved as data but must never be executed, because
+    Python would silently apply different semantics (for example ``\\w`` is
+    Unicode-aware in Python and ASCII-only in JavaScript).
+
+    The decision is made by the adapter, which is the only layer that knows the
+    payload is JavaScript, and stored canonically so the matcher stays
+    format-neutral instead of branching on the import source. Defaults to 1 so
+    DiceFrame-native entries keep executing their own Python regexes.
+    """
+
+    ensure_column(conn, "lorebook_entries", "regex_executable", "INTEGER NOT NULL DEFAULT 1")
+
+
 MIGRATIONS: tuple[tuple[int, object], ...] = (
     (1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5), (6, _v6), (7, _v7), (8, _v8),
+    (9, _v9),
 )
 CURRENT_LOREBOOK_SCHEMA_VERSION = MIGRATIONS[-1][0]
 

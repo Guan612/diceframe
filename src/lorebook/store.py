@@ -26,6 +26,13 @@ from src.migrations.lorebook import migrate as migrate_lorebook
 
 logger = logging.getLogger("trpg")
 
+#: Book fields that change what retrieval actually produces. Mutating any of
+#: them must advance the Book's monotonic ``revision`` so the resolver/retriever
+#: cache cannot keep serving the previous annotation.
+_RUNTIME_BOOK_FIELDS = frozenset({
+    "enabled", "scan_depth", "token_budget", "recursive_scanning", "settings_json",
+})
+
 # 单次 IN(...) 查询的 entry 数量上限，避免撞 SQLite 的参数个数限制。
 _CACHE_CHUNK = 400
 
@@ -317,6 +324,12 @@ class LorebookStore:
         with self._lock:
             changed = Lorebook.update(**fields, updated_at=SQL("datetime('now')")).where(
                 Lorebook.id == book_id).execute()
+            # A Book's own retrieval settings change what the matcher produces just
+            # as much as its entries do, so they must move the monotonic revision
+            # too. ``updated_at`` alone is second-resolution and would let a
+            # same-second settings edit keep serving the previous annotation.
+            if changed and _RUNTIME_BOOK_FIELDS & set(fields):
+                self._bump_book_revision_locked(book_id)
             self._commit_locked()
         return bool(changed)
 
@@ -464,6 +477,7 @@ class LorebookStore:
                 selective_logic=entry.get("selective_logic", "and"),
                 selective=int(entry.get("selective", True)),
                 use_regex=int(entry.get("use_regex", False)),
+                regex_executable=int(entry.get("regex_executable", True)),
                 case_sensitive=int(entry.get("case_sensitive", False)),
                 match_whole_words=int(entry.get("match_whole_words", False)),
                 scan_depth=int(entry.get("scan_depth", 0)), priority=int(entry.get("priority", 0)),
@@ -496,6 +510,7 @@ class LorebookStore:
                    "is_constant", "match_mode", "sticky", "cooldown", "delay", "order",
                    "probability", "group", "group_weight", "connected_to", "enabled",
                    "secondary_keys", "selective_logic", "selective", "use_regex", "case_sensitive",
+                   "regex_executable",
                    "match_whole_words", "scan_depth", "priority", "vector_activation",
                    "non_recursable", "prevent_further_recursion", "delay_until_recursion",
                    "recursion_level", "groups", "prioritize_inclusion", "group_scoring",
@@ -513,7 +528,7 @@ class LorebookStore:
             elif k in ("unreliable", "sync_on_enter", "is_constant", "enabled", "use_regex",
                        "case_sensitive", "match_whole_words", "non_recursable",
                        "prevent_further_recursion", "delay_until_recursion", "prioritize_inclusion",
-                       "selective",
+                       "selective", "regex_executable",
                        "sticky", "cooldown", "delay", "order",
                        "probability", "group_weight", "scan_depth", "priority", "recursion_level"):
                 v = int(v)
@@ -577,13 +592,37 @@ class LorebookStore:
         self.update_entry(entry_id, updates)
         return True
 
+    @classmethod
+    def world_projection_for_book(cls, book_id: str) -> str | None:
+        """The legacy ``world_id`` projection a Book implies, or None.
+
+        Only the deterministic primary world book ``world:<world_id>`` carries the
+        compatibility projection; independent / global / game / character books
+        never do. Keeping this in sync on move matters for more than metadata:
+        ``delete_world_cascade`` still deletes by ``LorebookEntry.world_id``, so a
+        stale projection would let deleting a world remove an entry that had
+        already been moved into an independent Book.
+        """
+
+        text = str(book_id or "")
+        prefix = "world:"
+        if not text.startswith(prefix):
+            return None
+        world_id = text[len(prefix):]
+        if not world_id:
+            return None
+        return world_id if cls.primary_world_book_id(world_id) == text else None
+
     def move_entry(self, source_book_id: str, target_book_id: str, entry_id: str) -> bool:
         """Move an entry between books, keeping its canonical ``entry.id``.
 
         Ownership isolation still applies: the entry must live in
         ``source_book_id``. Both books get a revision bump so a cached matcher
-        fingerprint for either one is invalidated. Returns False when the entry
-        is not in the source book or the target book does not exist.
+        fingerprint for either one is invalidated. The ``world_id`` compatibility
+        projection is re-derived from the target Book so the canonical invariant
+        (primary world book <-> world_id, everything else NULL) never drifts.
+        Returns False when the entry is not in the source book or the target book
+        does not exist.
         """
 
         source_book_id = str(source_book_id or "")
@@ -607,7 +646,9 @@ class LorebookStore:
             if owned is None:
                 return False
             LorebookEntry.update(
-                book_id=target_book_id, updated_at=SQL("datetime('now')"),
+                book_id=target_book_id,
+                world_id=self.world_projection_for_book(target_book_id),
+                updated_at=SQL("datetime('now')"),
             ).where(LorebookEntry.id == entry_id).execute()
             self._bump_book_revision_locked(source_book_id)
             self._bump_book_revision_locked(target_book_id)

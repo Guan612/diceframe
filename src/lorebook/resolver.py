@@ -35,6 +35,11 @@ def resolve_active_books(instance: Any, viewer_kind: str = "gm", viewer_uid: str
             continue
         kind, scope = str(binding.get("scope_kind", "")), str(binding.get("scope_id", ""))
         book = books.get(str(binding.get("book_id") or ""), {})
+        # Disabling a Book is a runtime decision, not just a Sidebar label: a
+        # disabled Book must stop contributing candidates entirely. Missing Book
+        # rows stay tolerated (legacy bindings) and default to enabled.
+        if not book.get("enabled", True):
+            continue
         settings = book.get("settings") if isinstance(book.get("settings"), dict) else {}
         explicit_fuzzy = None
         for key in ("fuzzy_enabled", "fuzzy_matching"):

@@ -19,13 +19,6 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
     regex_warnings: set[str] = set()
     for raw in raw_entries if isinstance(raw_entries, list) else []:
         row = raw if isinstance(raw, dict) else {}
-        # lorebook_v3 regexes originate as JavaScript; only the safely-mappable
-        # subset runs, and incompatible patterns are preserved verbatim.
-        if bool(row.get("use_regex", False)):
-            for key in _strings(row.get("keys", row.get("key", []))):
-                reason = python_regex_incompatibility(key)
-                if reason:
-                    regex_warnings.add(reason)
         known_entry = {
             "id", "uid", "name", "comment", "content", "keys", "key", "secondary_keys", "keysecondary", "enabled", "constant",
             "selective", "selective_logic", "selectiveLogic", "case_sensitive", "use_regex", "match_whole_words",
@@ -39,6 +32,33 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
         extensions = dict(row.get("extensions", {})) if isinstance(row.get("extensions"), dict) else {}
         if unknown_entry:
             extensions.setdefault("_external_raw", {}).update(unknown_entry)
+        # DiceFrame-only fields travel inside ``extensions.diceframe`` so the
+        # standard top-level is never expanded with private keys. Tolerant read:
+        # an explicit standard top-level value still wins, and files written by
+        # the older DiceFrame exporter (which put ``match_mode`` at top level)
+        # keep being understood.
+        private = extensions.get("diceframe") if isinstance(extensions.get("diceframe"), dict) else {}
+
+        def _private(key: str, default: Any = None) -> Any:
+            top = row.get(key)
+            if top not in (None, ""):
+                return top
+            value = private.get(key, default)
+            return default if value is None else value
+
+        # A regex reaching this format originated as JavaScript; only the
+        # safely-mappable subset may be executed by Python. The declared flag from
+        # a previous export is honoured too, so a pattern already known to be
+        # unmappable can never silently become executable again.
+        use_regex = bool(row.get("use_regex", False))
+        detected_executable = True
+        if use_regex:
+            for key in _strings(row.get("keys", row.get("key", []))):
+                reason = python_regex_incompatibility(key)
+                if reason:
+                    regex_warnings.add(reason)
+                    detected_executable = False
+        regex_executable = detected_executable and bool(private.get("regex_executable", True))
         entries.append(LoreEntryDraft(
             name=str(row.get("name") or row.get("comment") or row.get("uid") or ""), content=str(row.get("content", "") or ""),
             keys=_strings(row.get("keys", row.get("key", []))), secondary_keys=_strings(row.get("secondary_keys", row.get("keysecondary", []))),
@@ -51,9 +71,10 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
             selective=bool(row.get("selective", True)),
             # Legacy DiceFrame primary matching stays its own concept and must
             # survive a lorebook_v3 round trip instead of resetting to ``any``.
-            match_mode=normalize_primary_match_mode(row.get("match_mode")),
+            match_mode=normalize_primary_match_mode(_private("match_mode")),
             probability=int(row.get("probability", 100) or 100),
-            case_sensitive=bool(row.get("case_sensitive", False)), use_regex=bool(row.get("use_regex", False)),
+            case_sensitive=bool(row.get("case_sensitive", False)), use_regex=use_regex,
+            regex_executable=regex_executable,
             match_whole_words=bool(row.get("match_whole_words", False)),
             insertion_order=int(row.get("insertion_order", row.get("order", row.get("position", 100))) or 100), priority=int(row.get("priority", 0) or 0),
             scan_depth=int(row.get("scan_depth", row.get("depth", book.get("scan_depth", 0))) or 0), external_id=str(row.get("id", row.get("uid", "")) or ""),
@@ -72,6 +93,16 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
             timed={k: int(row[k]) for k in ("sticky", "cooldown", "delay") if isinstance(row.get(k), (int, float))},
             vector_activation=_vector_activation(row),
             prompt_slot=str(row.get("prompt_slot", "") or ""),
+            # DiceFrame-only compatibility semantics: read tolerantly (standard
+            # top-level first, then ``extensions.diceframe``) so a lorebook_v3
+            # round trip never silently loses them.
+            type=str(_private("type", "other") or "other"),
+            tier=str(_private("tier", "background") or "background"),
+            unreliable=bool(_private("unreliable", False)),
+            sync_on_enter=bool(_private("sync_on_enter", False)),
+            visible_to=_strings(_private("visible_to", [])),
+            connected_to=_strings(_private("connected_to", [])),
+            triggers_recursive=_strings(_private("triggers_recursive", [])),
             extensions=extensions,
         ))
     # A previous DiceFrame export re-offers its preserved payload at book level;

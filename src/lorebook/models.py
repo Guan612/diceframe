@@ -117,6 +117,10 @@ class LorebookEntry(Model):
     # Whether ``secondary_keys`` actually gates activation (CCv3/ST ``selective``).
     selective = BooleanField(default=True)
     use_regex = BooleanField(default=False)
+    # Whether this entry's regex keys may actually be executed. Adapters that read
+    # JavaScript regexes clear it when a pattern is not safely mappable to Python,
+    # so the matcher never runs a pattern whose semantics would silently differ.
+    regex_executable = BooleanField(default=True)
     case_sensitive = BooleanField(default=False)
     match_whole_words = BooleanField(default=False)
     scan_depth = IntegerField(default=0)

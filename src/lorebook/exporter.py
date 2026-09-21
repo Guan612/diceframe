@@ -34,13 +34,21 @@ def export_lorebook_native(store: Any, book_id: str) -> dict[str, Any]:
     }}
 
 
+#: Entry fields that ``lorebook_v3`` has no standard slot for. The Adapter Guide
+#: requires DiceFrame-specific fields to live in explicit extensions instead of
+#: expanding the standard top-level with private keys.
+DICEFRAME_ONLY_ENTRY_FIELDS = (
+    "type", "tier", "unreliable", "sync_on_enter", "visible_to",
+    "connected_to", "triggers_recursive", "match_mode", "regex_executable",
+)
+
+
 def _v3_entry(row: dict[str, Any]) -> dict[str, Any]:
     """Project one canonical entry onto the portable ``lorebook_v3`` shape.
 
     施工单 §6：lorebook_v3 能表达的 runtime semantics 必须全部导出，否则
     ``canonical → export → reimport`` 会静默丢行为。DiceFrame-only 的东西
-    （raw unknown extensions、provenance）继续放在 ``extensions`` / ``provenance``，
-    不往标准字段里塞未知键。
+    全部收进 ``extensions.diceframe``，不往标准字段里塞自创键。
     """
 
     entry: dict[str, Any] = {
@@ -69,9 +77,25 @@ def _v3_entry(row: dict[str, Any]) -> dict[str, Any]:
         "prevent_further_recursion": bool(row.get("prevent_further_recursion", False)),
         "delay_until_recursion": bool(row.get("delay_until_recursion", False)),
         "recursion_level": int(row.get("recursion_level", 0) or 0),
-        "extensions": row.get("extensions", {}), "provenance": row.get("provenance", {}),
+        "provenance": row.get("provenance", {}),
     }
-    # Legacy DiceFrame primary matching is a different concept from ST selective
-    # logic; export it so a round trip does not silently reset it to ``any``.
-    entry["match_mode"] = row.get("match_mode", "any")
+    # DiceFrame-only semantics stay in an explicit extension bucket. Legacy
+    # ``match_mode`` is deliberately NOT written as a top-level standard field
+    # any more: it is DiceFrame private vocabulary, and the adapter still reads
+    # files produced by the older exporter that did put it there.
+    extensions = dict(row.get("extensions") or {})
+    diceframe = dict(extensions.get("diceframe") or {})
+    diceframe.update({
+        "type": row.get("type", "other"),
+        "tier": row.get("tier", "background"),
+        "unreliable": bool(row.get("unreliable", False)),
+        "sync_on_enter": bool(row.get("sync_on_enter", False)),
+        "visible_to": row.get("visible_to", []),
+        "connected_to": row.get("connected_to", []),
+        "triggers_recursive": row.get("triggers_recursive", []),
+        "match_mode": row.get("match_mode", "any"),
+        "regex_executable": bool(row.get("regex_executable", True)),
+    })
+    extensions["diceframe"] = diceframe
+    entry["extensions"] = extensions
     return entry

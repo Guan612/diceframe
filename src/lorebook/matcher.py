@@ -487,6 +487,13 @@ class KeywordMatcher:
         case_sensitive = bool(entry.get("case_sensitive", False))
         whole_word = bool(entry.get("match_whole_words", False))
         use_regex = bool(entry.get("use_regex", False))
+        # Only the safely-mappable regex subset may run. An entry whose adapter
+        # cleared this flag (JavaScript pattern with no faithful Python
+        # equivalent) keeps its raw key as data but must never be executed, so the
+        # key cannot match. The matcher stays format-neutral: it reads a canonical
+        # flag rather than branching on the import source.
+        if use_regex and not bool(entry.get("regex_executable", True)):
+            return False
         pattern = keyword
         if pattern.startswith("/") and pattern.endswith("/") and len(pattern) > 2:
             use_regex = True
