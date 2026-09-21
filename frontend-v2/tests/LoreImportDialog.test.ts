@@ -157,11 +157,33 @@ describe('LoreImportDialog character_book flow', () => {
     })
   })
 
-  it('blocks confirm when the embedded book is deselected', async () => {
+  it('has no fake opt-out: the embedded book is always part of this flow', async () => {
     const wrapper = mountDialog({ preview: CARD_PREVIEW })
-    await wrapper.get('.lore-import-dialog__character input[type=checkbox]').setValue(false)
-    const buttons = wrapper.findAll('.lore-import-dialog__buttons button')
-    expect((buttons[buttons.length - 1].element as HTMLButtonElement).disabled).toBe(true)
+    expect(wrapper.find('.lore-import-dialog__character input[type=checkbox]').exists()).toBe(false)
+    expect(await confirmDecision(wrapper)).toEqual({
+      bookId: null,
+      binding: { scope_kind: 'character', scope_id: 'alice' },
+    })
+  })
+
+  it('stays usable for a character card without an embedded book', async () => {
+    const wrapper = mountDialog({
+      preview: { ...CARD_PREVIEW, character: { name: 'Alice', entries: 0 } },
+    })
+    expect(wrapper.find('.lore-import-dialog__character').exists()).toBe(false)
+    expect(await confirmDecision(wrapper)).toEqual({
+      bookId: null,
+      binding: { scope_kind: 'character', scope_id: 'alice' },
+    })
+  })
+
+  it('works with a character card that carries no book identity at all', async () => {
+    const wrapper = mountDialog({ preview: { ...CARD_PREVIEW, character: null } })
+    expect(wrapper.find('.lore-import-dialog__character').exists()).toBe(false)
+    expect(await confirmDecision(wrapper)).toEqual({
+      bookId: null,
+      binding: { scope_kind: 'world', scope_id: 'w-golden' },
+    })
   })
 
   it('shows no character section for a plain lorebook import', () => {

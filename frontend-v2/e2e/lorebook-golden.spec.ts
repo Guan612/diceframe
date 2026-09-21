@@ -46,6 +46,41 @@ const IMPORT_FIXTURE = JSON.stringify({
   },
 })
 
+/**
+ * SillyTavern World Info fixture。第二个条目带一个只有 JavaScript 才合法的正则
+ * （`(?<name>…)` 命名分组），用来在真实浏览器链路上验收 §7：pattern 原样保留、
+ * 预览给出 unsupported warning，且不经过第二个 runtime 求值。
+ */
+const ST_FIXTURE = JSON.stringify({
+  name: 'Golden ST World',
+  entries: [
+    { uid: 1, key: ['灯塔'], content: '灯塔的灯油来自北方。' },
+    { uid: 2, key: ['灯塔'], keysecondary: ['风暴'], content: '风暴夜灯塔会熄灭。' },
+    { uid: 3, key: ['(?<name>harbor)'], content: 'JS-only 正则条目。', useRegex: true },
+  ],
+})
+
+/**
+ * Character Card v3 fixture，带内嵌 character_book。验收 §8：内嵌世界书经真实的
+ * `parse_character_card_document → lorebook_v3 adapter → canonical commit` 落库，
+ * 并在预览里明确显示这是谁的角色世界书。
+ */
+const CCV3_FIXTURE = JSON.stringify({
+  spec: 'chara_card_v3',
+  spec_version: '3.0',
+  data: {
+    name: 'Golden Keeper',
+    description: '灯塔守夜人',
+    personality: '沉默',
+    character_book: {
+      name: 'Keeper Lore',
+      entries: [
+        { id: 'keeper-1', name: '守夜人日志', keys: ['守夜人'], content: '日志记着灯塔的班次。' },
+      ],
+    },
+  },
+})
+
 test.describe('Lorebook Golden (real chain)', () => {
   test.skip(({ browserName }) => browserName !== 'chromium', 'Golden runs on the CI browser only')
 
@@ -190,6 +225,54 @@ test.describe('Lorebook Golden (real chain)', () => {
     await renamedRow.getByRole('button', { name: /^删除/ }).click()
     await page.getByRole('button', { name: '删除世界书', exact: true }).click()
     await expect(sidebar.locator('.lorebook-sidebar__row', { hasText: 'Golden Renamed Book' })).toHaveCount(0)
+
+    expect(failures, `backend 5xx during the golden run:\n${failures.join('\n')}`).toEqual([])
+  })
+
+  /**
+   * §13 browser fixture：SillyTavern 与 Character Card v3 两种外部格式，同样走
+   * 真实后端 detect → preview → commit，不 mock 任何 API。
+   */
+  test('SillyTavern and Character Card v3 fixtures import through the real chain', async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'desktop', 'Golden uses the desktop inspector layout')
+
+    const failures: string[] = []
+    page.on('response', response => {
+      const url = response.url()
+      if (url.includes('/api/') && response.status() >= 500) failures.push(`${response.status()} ${url}`)
+    })
+
+    await page.goto('/#/lorebook')
+    await expect(page.locator('.lorebook-page')).toBeVisible()
+    await page.locator('.lore-world-bar select').nth(1).selectOption(LORE_WORLD_ID)
+
+    // ---- SillyTavern World Info ------------------------------------------
+    await page.locator('input[type=file]').setInputFiles({
+      name: 'golden-st.json', mimeType: 'application/json', buffer: Buffer.from(ST_FIXTURE),
+    })
+    const stDialog = page.getByRole('dialog', { name: 'Import lorebook' })
+    // 格式由真实后端 detect，不是前端猜的。
+    await expect(stDialog).toContainText('sillytavern')
+    // §7：JS-only 正则必须被报告为 unsupported，而不是静默执行。
+    await expect(stDialog.locator('.lore-import-dialog__warnings')).toContainText('unsupported regex')
+    await stDialog.locator('.lore-import-dialog__binding input[value=none]').check()
+    await stDialog.getByRole('button', { name: 'Import', exact: true }).click()
+    await expect(stDialog).toBeHidden()
+    // 真实 SQLite：条目与它原样保留的正则 key 都落了库。
+    await expect(page.locator('.lore-row', { hasText: '灯塔' }).first()).toBeVisible()
+
+    // ---- Character Card v3（内嵌 character_book）-------------------------
+    await page.locator('input[type=file]').setInputFiles({
+      name: 'golden-ccv3.json', mimeType: 'application/json', buffer: Buffer.from(CCV3_FIXTURE),
+    })
+    const ccDialog = page.getByRole('dialog', { name: 'Import lorebook' })
+    await expect(ccDialog).toContainText('character_card_v3')
+    // 产品流必须明确告诉用户这是谁的内嵌角色世界书。
+    await expect(ccDialog.locator('.lore-import-dialog__character-summary')).toContainText('Golden Keeper')
+    await ccDialog.locator('.lore-import-dialog__binding input[value=none]').check()
+    await ccDialog.getByRole('button', { name: 'Import', exact: true }).click()
+    await expect(ccDialog).toBeHidden()
+    await expect(page.locator('.lore-row', { hasText: '守夜人日志' }).first()).toBeVisible()
 
     expect(failures, `backend 5xx during the golden run:\n${failures.join('\n')}`).toEqual([])
   })

@@ -17,7 +17,13 @@ export function fileToBase64(file: File): Promise<string> {
 
 export async function importTavernCard(
   file: File,
-  opts?: { target?: 'character_card' | 'npc'; worldId?: string },
+  opts?: {
+    target?: 'character_card' | 'npc'
+    worldId?: string
+    /** 卡内嵌世界书是否随卡一起落库；后端默认 true，显式传 false 才是真的不导。 */
+    includeCharacterBook?: boolean
+    characterUid?: string
+  },
 ): Promise<CharacterImportResponse> {
   const fileData = await fileToBase64(file)
   const r = await api<CharacterImportResponse>('/character-cards/import', {
@@ -27,6 +33,8 @@ export async function importTavernCard(
       file_data: fileData,
       target: opts?.target,
       world_id: opts?.worldId,
+      include_character_book: opts?.includeCharacterBook ?? true,
+      character_uid: opts?.characterUid,
     }),
   })
   if (!r.ok) throw new Error(r.error || i18n.global.t('importFailed'))

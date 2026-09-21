@@ -1,4 +1,8 @@
 <script setup lang="ts">
+// 条目编辑器的折叠区：除「名称/类型/内容/触发方式/触发词/可见性」之外的一切。
+// 所有字段都直接绑定后端 canonical payload key（order 即 insertion_order）。
+import { useLocale } from '@/composables/useLocale'
+
 export interface LoreEntryAdvancedModel {
   secondary_keys: string[]
   selective_logic: string
@@ -16,26 +20,48 @@ export interface LoreEntryAdvancedModel {
   sticky?: number
   cooldown?: number
   delay?: number
+  /** canonical 插入顺序：DB/接口字段名就是 order。 */
+  order?: number
+  /** 预算不足时优先纳入。 */
+  prioritize_inclusion?: boolean
   non_recursable: boolean
   prevent_further_recursion: boolean
   delay_until_recursion: boolean
   recursion_level: number
+  tier?: string
+  unreliable?: boolean
+  sync_on_enter?: boolean
+  is_constant?: boolean
+  connected_to?: string[]
+  triggers_recursive?: string[]
 }
 const props = defineProps<{ modelValue: LoreEntryAdvancedModel }>()
 const emit = defineEmits<{ 'update:modelValue':[value:LoreEntryAdvancedModel] }>()
+const { t } = useLocale()
 function update<K extends keyof LoreEntryAdvancedModel>(key:K, value:LoreEntryAdvancedModel[K]) { emit('update:modelValue', { ...props.modelValue, [key]: value }) }
-function updateList(key: 'secondary_keys' | 'groups', value: string) { update(key, value.split(',').map(item => item.trim()).filter(Boolean)) }
-function updateNumber<K extends 'scan_depth' | 'priority' | 'probability' | 'group_weight' | 'sticky' | 'cooldown' | 'delay' | 'recursion_level'>(key: K, event: Event) { update(key, Number((event.target as HTMLInputElement).value) as LoreEntryAdvancedModel[K]) }
+function updateList(key: 'secondary_keys' | 'groups' | 'connected_to' | 'triggers_recursive', value: string) { update(key, value.split(',').map(item => item.trim()).filter(Boolean)) }
+function updateNumber<K extends 'scan_depth' | 'priority' | 'probability' | 'group_weight' | 'sticky' | 'cooldown' | 'delay' | 'order' | 'recursion_level'>(key: K, event: Event) { update(key, Number((event.target as HTMLInputElement).value) as LoreEntryAdvancedModel[K]) }
+function updateCheckbox<K extends 'use_regex' | 'case_sensitive' | 'match_whole_words' | 'non_recursable' | 'prevent_further_recursion' | 'delay_until_recursion' | 'prioritize_inclusion' | 'unreliable' | 'sync_on_enter' | 'is_constant'>(key: K, event: Event) { update(key, (event.target as HTMLInputElement).checked as LoreEntryAdvancedModel[K]) }
 </script>
 
 <template>
   <details class="lore-entry-advanced">
-    <summary>Advanced matching and activation</summary>
+    <summary>{{ t('loreEntryAdvanced') }}</summary>
+    <label data-field="tier">{{ t('tier') }} <select :value="modelValue.tier || 'background'" @change="update('tier', ($event.target as HTMLSelectElement).value)"><option value="core">{{ t('core') }}</option><option value="background">{{ t('background') }}</option><option value="archived">{{ t('archived') }}</option></select></label>
+    <label data-field="order">{{ t('loreEntryInsertionOrder') }} <input type="number" :value="modelValue.order ?? 100" @input="updateNumber('order', $event)"></label>
+    <label data-field="prioritize_inclusion"><input type="checkbox" :checked="!!modelValue.prioritize_inclusion" @change="updateCheckbox('prioritize_inclusion', $event)"> {{ t('loreEntryPrioritizeInclusion') }}</label>
+    <label data-field="connected_to">{{ t('connectedEntries') }} <input type="text" :value="(modelValue.connected_to || []).join(', ')" :placeholder="t('connectedEntriesPlaceholder')" @input="updateList('connected_to', ($event.target as HTMLInputElement).value)"></label>
+    <label data-field="triggers_recursive">{{ t('recursiveTrigger') }} <input type="text" :value="(modelValue.triggers_recursive || []).join(', ')" :placeholder="t('recursiveTriggerPlaceholder')" @input="updateList('triggers_recursive', ($event.target as HTMLInputElement).value)"></label>
+    <div class="check-row">
+      <label data-field="unreliable"><input type="checkbox" :checked="!!modelValue.unreliable" @change="updateCheckbox('unreliable', $event)"> {{ t('unreliableMemory') }}</label>
+      <label data-field="sync_on_enter"><input type="checkbox" :checked="!!modelValue.sync_on_enter" @change="updateCheckbox('sync_on_enter', $event)"> {{ t('syncOnEnter') }}</label>
+      <label data-field="is_constant"><input type="checkbox" :checked="!!modelValue.is_constant" @change="updateCheckbox('is_constant', $event)"> {{ t('constant') }}</label>
+    </div>
     <label data-field="secondary_keys">Secondary keys (comma-separated) <input type="text" :value="(modelValue.secondary_keys || []).join(', ')" @input="updateList('secondary_keys', ($event.target as HTMLInputElement).value)"></label>
     <label data-field="selective_logic">Selective logic <select :value="modelValue.selective_logic" @change="update('selective_logic', ($event.target as HTMLSelectElement).value)"><option>any</option><option>all</option><option>not_any</option><option>not_all</option></select></label>
-    <label><input type="checkbox" :checked="modelValue.use_regex" @change="update('use_regex', ($event.target as HTMLInputElement).checked)"> Regex</label>
-    <label><input type="checkbox" :checked="modelValue.case_sensitive" @change="update('case_sensitive', ($event.target as HTMLInputElement).checked)"> Case-sensitive</label>
-    <label data-field="match_whole_words"><input type="checkbox" :checked="modelValue.match_whole_words" @change="update('match_whole_words', ($event.target as HTMLInputElement).checked)"> Match whole words</label>
+    <label data-field="use_regex"><input type="checkbox" :checked="modelValue.use_regex" @change="updateCheckbox('use_regex', $event)"> Regex</label>
+    <label data-field="case_sensitive"><input type="checkbox" :checked="modelValue.case_sensitive" @change="updateCheckbox('case_sensitive', $event)"> Case-sensitive</label>
+    <label data-field="match_whole_words"><input type="checkbox" :checked="modelValue.match_whole_words" @change="updateCheckbox('match_whole_words', $event)"> Match whole words</label>
     <label data-field="vector_activation">Vector activation <select :value="modelValue.vector_activation || 'off'" @change="update('vector_activation', ($event.target as HTMLSelectElement).value)"><option value="off">off</option><option value="hybrid">hybrid</option><option value="vector_only">vector only</option></select></label>
     <label data-field="scan_depth">Scan depth <input type="number" :value="modelValue.scan_depth" @input="updateNumber('scan_depth', $event)"></label>
     <label data-field="priority">Priority <input type="number" :value="modelValue.priority" @input="updateNumber('priority', $event)"></label>
@@ -46,9 +72,9 @@ function updateNumber<K extends 'scan_depth' | 'priority' | 'probability' | 'gro
     <label data-field="sticky">Sticky <input type="number" :value="modelValue.sticky ?? 0" @input="updateNumber('sticky', $event)"></label>
     <label data-field="cooldown">Cooldown <input type="number" :value="modelValue.cooldown ?? 0" @input="updateNumber('cooldown', $event)"></label>
     <label data-field="delay">Delay <input type="number" :value="modelValue.delay ?? 0" @input="updateNumber('delay', $event)"></label>
-    <label data-field="non_recursable"><input type="checkbox" :checked="modelValue.non_recursable" @change="update('non_recursable', ($event.target as HTMLInputElement).checked)"> Non-recursable</label>
-    <label data-field="prevent_further_recursion"><input type="checkbox" :checked="modelValue.prevent_further_recursion" @change="update('prevent_further_recursion', ($event.target as HTMLInputElement).checked)"> Prevent further recursion</label>
-    <label data-field="delay_until_recursion"><input type="checkbox" :checked="modelValue.delay_until_recursion" @change="update('delay_until_recursion', ($event.target as HTMLInputElement).checked)"> Delay until recursion</label>
+    <label data-field="non_recursable"><input type="checkbox" :checked="modelValue.non_recursable" @change="updateCheckbox('non_recursable', $event)"> Non-recursable</label>
+    <label data-field="prevent_further_recursion"><input type="checkbox" :checked="modelValue.prevent_further_recursion" @change="updateCheckbox('prevent_further_recursion', $event)"> Prevent further recursion</label>
+    <label data-field="delay_until_recursion"><input type="checkbox" :checked="modelValue.delay_until_recursion" @change="updateCheckbox('delay_until_recursion', $event)"> Delay until recursion</label>
     <label data-field="recursion_level">Recursion level <input type="number" :value="modelValue.recursion_level" @input="updateNumber('recursion_level', $event)"></label>
     <label data-field="prompt_slot">Prompt slot <input type="text" :value="modelValue.prompt_slot" @input="update('prompt_slot', ($event.target as HTMLInputElement).value)"></label>
   </details>

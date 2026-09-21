@@ -36,11 +36,13 @@ const target = ref<Target>('new')
 const existingBookId = ref('')
 const binding = ref<BindingChoice>('world')
 const characterUid = ref('')
-const includeCharacterBook = ref(true)
 
 const isCharacterCard = computed(() => props.preview?.format === 'character_card_v3')
 const characterName = computed(() => props.preview?.character?.name || '')
-const characterEntryCount = computed(() => props.preview?.character?.entries ?? props.preview?.counts.entries ?? 0)
+const characterEntryCount = computed(() => props.preview?.character?.entries ?? 0)
+// 这个流程的职责就是把卡里的世界书抽出来：没有内嵌世界书时整段都不该出现，
+// 更不该用一个「取消勾选」的假选项把 Import 按钮变灰。
+const hasCharacterBook = computed(() => isCharacterCard.value && characterEntryCount.value > 0)
 const characterSummary = computed(() =>
   characterName.value
     ? `角色 ${characterName.value} 包含世界书 ${characterEntryCount.value} 条`
@@ -66,15 +68,13 @@ const needsCharacterUid = computed(() => binding.value === 'character' && !chara
 const confirmDisabled = computed(() =>
   !props.preview
   || (target.value === 'existing' && !existingBookId.value)
-  || needsCharacterUid.value
-  || (isCharacterCard.value && !includeCharacterBook.value),
+  || needsCharacterUid.value,
 )
 
 function resetChoices() {
   // 每次打开（或换了一份 preview）都回到显式默认值，不继承上一次的选择。
   target.value = 'new'
   existingBookId.value = ''
-  includeCharacterBook.value = true
   if (isCharacterCard.value) {
     const matched = matchedCharacter.value
     binding.value = matched ? 'character' : 'world'
@@ -124,11 +124,8 @@ function decide(): LoreImportDecision {
       </p>
 
       <!-- Character Card：先说清「这张卡带了世界书」，再问绑到哪里 -->
-      <section v-if="isCharacterCard" class="lore-import-dialog__character">
+      <section v-if="hasCharacterBook" class="lore-import-dialog__character">
         <p class="lore-import-dialog__character-summary">{{ characterSummary }}</p>
-        <label>
-          <input v-model="includeCharacterBook" type="checkbox"> 一并导入
-        </label>
         <p v-if="!matchedCharacter" class="muted lore-import-dialog__imported-lore">
           当前游戏没有同名的角色，这批条目会被标记为 Imported character lore。
         </p>

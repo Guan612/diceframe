@@ -648,6 +648,16 @@ export interface PlayerCreateResponse {
   [key: string]: unknown
 }
 
+export interface CharacterImportLorebook {
+  book_id: string
+  name: string
+  entries: number
+  role?: string
+  label?: string
+  binding?: { scope_kind: string; scope_id: string; role?: string } | null
+  [key: string]: unknown
+}
+
 export interface CharacterImportResponse {
   ok?: boolean
   error?: string
@@ -656,6 +666,8 @@ export interface CharacterImportResponse {
   npc_name?: string
   world_id?: string
   lorebook_entries?: number
+  lorebook_book_id?: string
+  lorebook?: CharacterImportLorebook
   nsfw_warning?: boolean
 }
 
