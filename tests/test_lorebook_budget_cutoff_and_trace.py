@@ -178,26 +178,89 @@ def _recursive_chain(length: int) -> list[dict]:
     ]
 
 
+def _deep_chain(length: int) -> list[dict]:
+    """e0 -content k1-> e1 -content k2-> ... 一条 canonical/ST 递归链。"""
+
+    return [
+        {"id": f"e{i}", "keywords": [f"k{i}"], "content": f"k{i + 1}"}
+        for i in range(length)
+    ]
+
+
 def test_max_steps_cutoff_is_deterministic() -> None:
+    """``max_steps`` 只限制递归展开，且截断点可复现。"""
+
+    matcher = _build(_deep_chain(12))
+    first = [row["id"] for row in matcher.match_with_recursive(
+        "k0", timed_state={}, max_steps=3,
+    )]
+    assert matcher.last_cutoff == "max_steps"
+    second = [row["id"] for row in matcher.match_with_recursive(
+        "k0", timed_state={}, max_steps=3,
+    )]
+    assert first == second, "截断点必须可复现"
+    # depth 0 的 direct seed 不计入递归步数，因此 e0 一定在；递归从 e1 起算。
+    assert first[0] == "e0"
+    assert len(first) == 4, f"1 direct seed + 3 recursive steps, got {first}"
+
+
+def test_direct_seeds_are_never_truncated_by_the_recursion_work_cap() -> None:
+    """work cutoff 不得按 id 截断 direct/constant 候选（施工单 §3）。"""
+
     entries = [
         {"id": f"e{i:03d}", "keywords": ["clue"], "content": "body"} for i in range(50)
     ]
     matcher = _build(entries)
-    first = [row["id"] for row in matcher.match_with_recursive(
+    hits = [row["id"] for row in matcher.match_with_recursive(
         "clue", timed_state={}, max_steps=10,
     )]
-    assert matcher.last_cutoff == "max_steps"
-    assert len(first) == 10
-    second = [row["id"] for row in matcher.match_with_recursive(
-        "clue", timed_state={}, max_steps=10,
-    )]
-    assert first == second, "截断点必须可复现"
-    # frontier 按 id 排序遍历，因此保留的是字典序最前的那些。
-    assert sorted(first) == [f"e{i:03d}" for i in range(10)]
+    assert len(hits) == 50, "50 个 direct 候选必须全部进入 ranking，而不是被 max_steps 砍到 10"
+    assert matcher.last_cutoff == "", "没有递归展开就不该触发 work cutoff"
+
+
+def test_high_priority_late_id_direct_candidate_still_wins_under_a_tight_cap(tmp_path: Path) -> None:
+    """40 direct 候选、cap < 40、高 priority 条目 id 排最后 → 仍能胜出。
+
+    「胜出」的判据是端到端结果：高 priority 条目进入最终预算选择，而不是被
+    id 顺序的 work cutoff 提前挤掉。
+    """
+
+    entries = [
+        {"id": f"e{i:03d}", "keywords": ["clue"], "content": "x" * 60, "priority": 0}
+        for i in range(39)
+    ]
+    # id 字典序排在最后，但 priority 最高。
+    entries.append({"id": "zzz", "keywords": ["clue"], "content": "x" * 60, "priority": 900})
+    store = _store(tmp_path, entries)
+    try:
+        # 预算只装得下少数条目；若 direct 候选被 id 截断，zzz 根本进不了排序。
+        hits, _ = _retrieve(store, "clue", overall_budget=200)
+        ids = [row["id"] for row in hits]
+        assert "zzz" in ids, "高 priority 条目不能因为 id 靠后就被 cap 挤掉"
+    finally:
+        store.close()
+
+
+def test_constant_late_id_candidate_is_not_truncated_by_the_cap(tmp_path: Path) -> None:
+    """constant 条目 id 排在 cap 之后 → 不得提前被截掉。"""
+
+    entries = [
+        {"id": f"e{i:03d}", "keywords": ["clue"], "content": "x" * 60}
+        for i in range(40)
+    ]
+    entries.append({"id": "zzz", "keywords": [], "content": "x" * 60, "is_constant": True})
+    store = _store(tmp_path, entries)
+    try:
+        hits, _ = _retrieve(store, "clue", overall_budget=200)
+        assert "zzz" in {row["id"] for row in hits}, (
+            "constant 条目必须进入 activation/预算排序，不能被 work cutoff 截掉"
+        )
+    finally:
+        store.close()
 
 
 def test_max_activated_cutoff_stops_further_expansion() -> None:
-    matcher = _build(_recursive_chain(6))
+    matcher = _build(_deep_chain(6))
     hits = {row["id"] for row in matcher.match_with_recursive(
         "k0", timed_state={}, max_activated=2,
     )}
@@ -206,24 +269,96 @@ def test_max_activated_cutoff_stops_further_expansion() -> None:
 
 
 def test_default_limits_do_not_bite_normal_books() -> None:
-    matcher = _build(_recursive_chain(4))
+    matcher = _build(_deep_chain(4))
     hits = {row["id"] for row in matcher.match_with_recursive("k0", timed_state={})}
-    assert hits == {"e0", "e1", "e2"}, "默认深度 3，与既有行为一致"
+    assert hits == {"e0", "e1", "e2", "e3"}, "canonical 递归不再被固定 depth=3 截断"
     assert matcher.last_cutoff == ""
     assert MAX_RECURSION_STEPS > 0 and MAX_ACTIVATED_ENTRIES > 0
 
 
-def test_budget_derived_candidate_cap_reaches_the_matcher(tmp_path: Path) -> None:
-    """整体预算必须在递归阶段就收紧候选上限，而不是展开完再裁。"""
+def test_canonical_recursion_is_not_capped_at_depth_three() -> None:
+    """A → B → C → D → E：预算/scan_depth 允许时 E 必须可激活（施工单 §4）。"""
+
+    matcher = _build(_deep_chain(6))
+    hits = {row["id"] for row in matcher.match_with_recursive("k0", timed_state={})}
+    assert hits == {"e0", "e1", "e2", "e3", "e4", "e5"}, (
+        "canonical/ST 递归的边界来自 cycle guard / work cap / 各 per-entry gate，"
+        "而不是所有新书硬截 3 层"
+    )
+    assert matcher.last_cutoff == ""
+
+
+def test_cycle_guard_still_stops_canonical_recursion() -> None:
+    """cycle 必须停止：a ↔ b 互相引用时不得无限展开。"""
+
+    matcher = _build([
+        {"id": "a", "keywords": ["start"], "content": "to-b"},
+        {"id": "b", "keywords": ["to-b"], "content": "start to-a"},
+        {"id": "to-a", "keywords": ["to-a"], "content": "to-b"},
+    ])
+    hits = [row["id"] for row in matcher.match_with_recursive("start", timed_state={})]
+    assert len(hits) == len(set(hits)), "同一条目不得被重复激活"
+    assert set(hits) == {"a", "b", "to-a"}
+
+
+def test_scan_depth_still_bounds_canonical_recursion() -> None:
+    """去掉固定 depth 后，per-entry ``scan_depth`` 仍然是有效边界。"""
+
+    entries = _deep_chain(6)
+    # scan_depth 是「该条目被递归到达时」的门：e2 在链上位于 depth 2，
+    # 声明 scan_depth=1 表示它只允许在 depth <= 1 时被到达。
+    entries[2]["scan_depth"] = 1
+    matcher = _build(entries)
+    hits = {row["id"] for row in matcher.match_with_recursive("k0", timed_state={})}
+    assert {"e0", "e1"} <= hits
+    assert "e2" not in hits, "scan_depth=1 必须挡住 depth 2 的 e2"
+    assert "e3" not in hits, "e2 被挡住后链不再向下传播"
+
+
+def test_legacy_triggers_recursive_keeps_historical_depth_bound() -> None:
+    """legacy ``triggers_recursive`` 边保留历史 depth=3 行为（compatibility 层）。
+
+    历史语义是 ``while frontier and depth < 3``，即只求值 depth 0/1/2 三层，
+    因此链上第 4 个条目（l3）本来就不可达——这里钉住它没有被 §4 顺带放宽。
+    """
 
     entries = [
-        {"id": f"e{i:03d}", "keywords": ["clue"], "content": "x" * 500} for i in range(80)
+        {"id": f"l{i}", "keywords": [f"k{i}"], "content": "",
+         "triggers_recursive": [f"l{i + 1}"]}
+        for i in range(6)
+    ]
+    entries.append({"id": "l6", "keywords": ["k6"], "content": ""})
+    matcher = _build(entries)
+    hits = {row["id"] for row in matcher.match_with_recursive("k0", timed_state={})}
+    assert hits == {"l0", "l1", "l2"}, (
+        "legacy 显式边继续按历史 depth 收敛，不影响 canonical/ST 递归"
+    )
+
+
+def test_max_steps_still_bounds_canonical_recursion() -> None:
+    """max_steps 仍然生效（去掉固定 depth 后它是主要的 runaway 边界）。"""
+
+    matcher = _build(_deep_chain(50))
+    hits = [row["id"] for row in matcher.match_with_recursive(
+        "k0", timed_state={}, max_steps=4,
+    )]
+    assert matcher.last_cutoff == "max_steps"
+    assert len(hits) == 5, "1 direct seed + 4 recursive steps"
+
+
+def test_budget_derived_candidate_cap_reaches_the_matcher(tmp_path: Path) -> None:
+    """整体预算必须在**递归阶段**就收紧候选上限，而不是展开完再裁。"""
+
+    # 一条长递归链 + 每步一个高开销条目：预算只装得下极少数。
+    entries = [
+        {"id": f"e{i:03d}", "keywords": [f"k{i}"], "content": f"k{i + 1} " + "x" * 500}
+        for i in range(80)
     ]
     store = _store(tmp_path, entries)
     try:
         retriever = LoreRetriever(KeywordMatcher(), store=store)
         # 预算只装得下 1 条（500 字符/条），放宽 2 倍后仍远小于 80，但不低于下限 32。
-        asyncio.run(retriever.retrieve(_instance(store), "clue", overall_budget=600))
+        asyncio.run(retriever.retrieve(_instance(store), "k000", overall_budget=600))
         assert retriever._matcher.last_cutoff == "max_activated"
     finally:
         store.close()
