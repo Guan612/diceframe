@@ -28,7 +28,7 @@ const statusLabel = computed(() => ({
 })[status.value])
 const math = computed(() => {
   const check = props.check
-  if (typeof check.threshold === 'number') return `${check.dice || 'd100'}=${check.roll} / ${check.threshold}%`
+  if (typeof check.threshold === 'number') return `${check.dice || 'd100'}=${check.roll} / ${check.threshold}`
   const modifier = Number(check.modifier || 0)
   const modifierText = modifier ? ` ${modifier > 0 ? '+' : '-'} ${Math.abs(modifier)}` : ''
   const total = typeof check.total === 'number' ? ` = ${check.total}` : ''

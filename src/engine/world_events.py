@@ -39,6 +39,7 @@ from src.engine.world_state import (
     clock_to_minutes,
     ensure_world_state,
     world_clock,
+    world_processes,
     world_revision,
     world_scheduled_events,
 )
@@ -64,10 +65,13 @@ def advance_world_time(
     state = ensure_world_state(getattr(instance, "world_state", None))
     target = clock_to_minutes(world_clock(state)) + amount
     # 时钟推进同样是世界 ops：单批提交，失败则整次推进不生效。
-    draft, _ = apply_ops_to_state(
+    draft, advance_summary = apply_ops_to_state(
         state, [{"op": "advance_time", "minutes": amount}],
         source_round=round_number,
     )
+    # 聚合本次推进全部子事务的 WorldEvent receipts（推进 + 每个事件结算 + 每个
+    # 进程结算）；receipts 只随返回值交付，不写进 world_state。
+    receipts: list[dict[str, Any]] = list(advance_summary.get("events") or [])
     settled: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     for event in due_events(draft, target_minutes=target):
@@ -78,16 +82,17 @@ def advance_world_time(
         # 不再静默过滤非法 op（那会把「事件没执行任何东西」伪装成 applied）。
         nested = [dict(op) for op in (event.get("ops") or [])]
         try:
-            draft, _ = apply_ops_to_state(
+            draft, settle_summary = apply_ops_to_state(
                 draft,
                 [*nested, {
                     "op": "complete_event", "event_id": event_id, "status": "applied",
                 }],
                 source_round=round_number,
             )
+            receipts.extend(settle_summary.get("events") or [])
         except WorldStateError as exc:
             message = str(exc)[:160]
-            draft, _ = apply_ops_to_state(
+            draft, settle_summary = apply_ops_to_state(
                 draft,
                 [{
                     "op": "complete_event", "event_id": event_id,
@@ -95,12 +100,31 @@ def advance_world_time(
                 }],
                 source_round=round_number,
             )
+            receipts.extend(settle_summary.get("events") or [])
             failed.append({
                 "event_id": event_id, "label": label, "due_at": due_at,
                 "error": message,
             })
             continue
         settled.append({"event_id": event_id, "label": label, "due_at": due_at})
+    # Process 的到期结算同样只发生在权威时间推进里（母方案 §16/§80：无后台
+    # tick）。到期的 running 进程确定性转为 completed；事件先结算、进程后结算，
+    # 顺序固定。后果（fact / 通知 / 记忆）由上层从 WorldEvent / 进程状态读取，
+    # 进程本身不携带可执行 ops。
+    settled_processes: list[dict[str, Any]] = []
+    for process in due_processes(draft, target_minutes=target):
+        process_id = str(process["process_id"])
+        draft, process_summary = apply_ops_to_state(
+            draft,
+            [{"op": "complete_process", "process_id": process_id}],
+            source_round=round_number,
+        )
+        receipts.extend(process_summary.get("events") or [])
+        settled_processes.append({
+            "process_id": process_id,
+            "kind": str(process.get("kind") or ""),
+            "due_at": dict(process.get("due_at") or {}),
+        })
     instance.world_state = draft
     return {
         "clock": dict(draft["clock"]),
@@ -108,6 +132,8 @@ def advance_world_time(
         "revision": world_revision(draft),
         "applied": settled,
         "failed": failed,
+        "processes": settled_processes,
+        "events": receipts,
     }
 
 
@@ -131,6 +157,28 @@ def due_events(state: Any, *, target_minutes: int) -> list[dict[str, Any]]:
     return due
 
 
+def due_processes(state: Any, *, target_minutes: int) -> list[dict[str, Any]]:
+    """Running processes whose ``due_at`` has passed, in stable order."""
+
+    due: list[dict[str, Any]] = []
+    for process in world_processes(state).values():
+        if str(process.get("status") or "") != "running":
+            continue
+        raw_due = process.get("due_at")
+        if raw_due is None:
+            continue
+        try:
+            moment = clock_to_minutes(raw_due)
+        except WorldStateError:
+            continue
+        if moment <= target_minutes:
+            due.append(process)
+    due.sort(key=lambda process: (
+        clock_to_minutes(process.get("due_at")), str(process.get("process_id") or ""),
+    ))
+    return due
+
+
 def _validated_minutes(minutes: Any) -> int:
     if (
         isinstance(minutes, bool) or not isinstance(minutes, int)
@@ -142,4 +190,4 @@ def _validated_minutes(minutes: Any) -> int:
     return minutes
 
 
-__all__ = ["MAX_ADVANCE_MINUTES", "advance_world_time", "due_events"]
+__all__ = ["MAX_ADVANCE_MINUTES", "advance_world_time", "due_events", "due_processes"]

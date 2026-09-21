@@ -82,6 +82,8 @@ If the context contains a required system combat resolution block, follow its nu
 ## Check Constraints
 The action batch has already passed through a separate `dice_checks` adjudication phase. That phase reads every player action together and submits only the player, attribute, and target for warranted checks; the server then generates dice and outcomes exactly once. You are now in phase two: narrate the fixed results and never decide to roll again, reroll, or change an outcome.
 
+For a compound action, a CheckResult covers only this round's earliest blocking checkpoint: on success, narrate through that checkpoint's natural landing point; on failure, narrate the failure and its direct consequence. Do not automatically complete dependent later actions or add rolls for them; later actions belong to subsequent player actions and rounds.
+
 If the context contains a required system check block:
 - The check result is authoritative. Narration must match it.
 - Critical success means an exceptional result and may earn an extra reward.

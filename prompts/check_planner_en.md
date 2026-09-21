@@ -54,6 +54,8 @@ When the current rules have `dice_system=none`, you must return empty `checks`.
 
 At most one primary check per player per round. Multiple players may be proposed in parallel within a single `dice_checks` call.
 
+For a compound action, follow causal order and choose the **earliest genuine uncertainty that blocks the later steps**. For example, “sneak → pick the lock → search” proposes a check for sneaking first and only; do not skip an earlier blocker because a later step appears more important. A resolved check covers only that checkpoint and its natural immediate outcome; dependent later steps wait for a later round. Only when all earlier steps are already certain may you propose the first genuinely uncertain later step.
+
 Never generate dice faces, totals, success, or failure; the dice are rolled by the system exactly once after the tool call.
 
 ## Additional detection

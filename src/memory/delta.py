@@ -15,11 +15,41 @@ from functools import reduce
 from operator import or_
 from pathlib import Path
 
+from peewee import fn as peewee_fn
+
 from src.memory.models import MemoryEconomyDelivery, MemoryEntry
 from src.memory.models import database as _models_database
 from src.migrations.memory import migrate as migrate_memory
 
 logger = logging.getLogger("trpg")
+
+# World Memory 分类（母方案 §21）：authoritative_world 只能由确定性投影写入；
+# LLM 提取的 delta 一律 soft；升级前的旧行读取时按 legacy_soft 分类。
+# 未知 memory_kind 一律降级为 soft——降方向安全，绝不静默升 authority。
+MEMORY_KINDS = ("authoritative_world", "soft", "legacy_soft")
+MEMORY_VISIBILITIES = ("public", "gm")
+_DELTA_PROVENANCE_FIELDS = ("memory_kind", "source_kind", "source_id", "world_revision", "visibility")
+
+
+def _delta_provenance(delta: dict) -> dict:
+    """Validate the provenance a delta carries; degrade unknown values down."""
+
+    raw_kind = delta.get("memory_kind")
+    memory_kind = raw_kind if raw_kind in MEMORY_KINDS and raw_kind != "legacy_soft" else "soft"
+    visibility = delta.get("visibility")
+    if visibility not in MEMORY_VISIBILITIES:
+        visibility = None
+    world_revision = delta.get("world_revision")
+    if isinstance(world_revision, bool) or not isinstance(world_revision, int) or world_revision < 0:
+        world_revision = None
+    provenance = {
+        "memory_kind": memory_kind,
+        "source_kind": str(delta.get("source_kind") or "") or None,
+        "source_id": str(delta.get("source_id") or "") or None,
+        "world_revision": world_revision,
+        "visibility": visibility,
+    }
+    return provenance
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_entries (
@@ -45,6 +75,23 @@ PRAGMA journal_mode=WAL;
 """
 
 _ACTIVE = MemoryEntry.status == "active"
+
+
+def _viewer_filter(query, *, viewer_is_gm: bool):
+    """FIX-05 §7.4：记忆读取的 viewer policy（无处可漏）。
+
+    - GM：``public`` + ``gm``（含未声明可见性的 soft 记忆）；
+    - 玩家安全面：只保留**非 GM 私有**（``visibility`` 为 NULL 或 ``public``）。
+
+    未声明可见性按公开处理，与 ``src.engine.world.read.project_visible_state``
+    同一口径：只有显式标记 ``gm`` 的记录才是秘密。
+    """
+
+    if viewer_is_gm:
+        return query
+    return query.where(
+        (MemoryEntry.visibility.is_null(True)) | (MemoryEntry.visibility != "gm"),
+    )
 
 
 def _active_query(game_key: str):
@@ -145,7 +192,10 @@ class MemoryStore:
 
         async with self._lock:
             try:
-                new_ids = self._apply_delta_locked(gk, delta, round_number, now)
+                new_ids = self._apply_delta_locked(
+                    gk, delta, round_number, now,
+                    provenance=_delta_provenance(delta),
+                )
                 connection.commit()
             except Exception:
                 connection.rollback()
@@ -184,6 +234,7 @@ class MemoryStore:
                 before = self._snapshot_keys(gk, keys)
                 new_ids = self._apply_delta_locked(
                     gk, delta, int(round_number), now,
+                    provenance=_delta_provenance(delta),
                 )
                 after = self._snapshot_keys(gk, keys)
                 MemoryEconomyDelivery.insert(
@@ -275,17 +326,22 @@ class MemoryStore:
         delta: dict,
         round_number: int,
         now: str,
+        *,
+        provenance: dict | None = None,
     ) -> list[int]:
+        provenance = provenance or _delta_provenance(delta)
         new_ids: list[int] = []
         for item in delta.get("add", []):
             entry_id = self._insert_or_update(
                 gk, item, round_number, now, force_add=True,
+                provenance=provenance,
             )
             if entry_id:
                 new_ids.append(entry_id)
         for item in delta.get("update", []):
             entry_id = self._insert_or_update(
                 gk, item, round_number, now, force_add=False,
+                provenance=provenance,
             )
             if entry_id:
                 new_ids.append(entry_id)
@@ -364,7 +420,8 @@ class MemoryStore:
         ).execute()
 
     def _insert_or_update(self, gk: str, item: dict, round_num: int,
-                          now: str, force_add: bool) -> int | None:
+                          now: str, force_add: bool,
+                          provenance: dict | None = None) -> int | None:
         """插入或更新记忆，返回新条目的 id（如果是新插入的话）。"""
         if isinstance(item, str):
             text = item.strip()
@@ -413,6 +470,7 @@ class MemoryStore:
                 new_id = MemoryEntry.insert(
                     game_key=gk, entity=entity, relation=relation, value=value,
                     confidence=confidence, status=status, source_round=round_num,
+                    **(provenance or {}),
                 ).execute()
             else:
                 MemoryEntry.update(
@@ -423,13 +481,36 @@ class MemoryStore:
             new_id = MemoryEntry.insert(
                 game_key=gk, entity=entity, relation=relation, value=value,
                 confidence=confidence, status=status, source_round=round_num,
+                **(provenance or {}),
             ).execute()
         return new_id
 
     # ---- 召回 ----
 
-    def recall(self, game_key: str, keywords: list[str], limit: int = 10, offset: int = 0) -> list[dict]:
-        """根据关键词召回相关记忆。"""
+    def kind_summary(self, game_key: str) -> dict[str, int]:
+        """Read-only World Memory source summary（母方案 §103/§169，WR-10）。
+
+        按记忆分类聚合（authoritative_world / soft / legacy_soft / 未知），供
+        诊断视图回答"AI 的长期记忆里都是些什么来源"。未知值按 legacy_soft 归类。
+        """
+
+        if self._conn is None:
+            raise RuntimeError("memory store is not open")
+        rows = MemoryEntry.select(
+            MemoryEntry.memory_kind,
+            peewee_fn.COUNT(MemoryEntry.id).alias("total"),
+        ).where(
+            MemoryEntry.game_key == str(game_key),
+            _ACTIVE,
+        ).group_by(MemoryEntry.memory_kind)
+        summary = {"authoritative_world": 0, "soft": 0, "legacy_soft": 0}
+        for row in rows:
+            summary[memory_kind_of(row.memory_kind)] += int(row.total)
+        return summary
+
+    def recall(self, game_key: str, keywords: list[str], limit: int = 10,
+               offset: int = 0, *, viewer_is_gm: bool) -> list[dict]:
+        """根据关键词召回相关记忆（viewer policy 见 _viewer_filter）。"""
         gk = str(game_key)
         if not keywords:
             return []
@@ -438,8 +519,7 @@ class MemoryStore:
             (MemoryEntry.entity.ilike(f"%{kw}%") for kw in keywords),
         )
         rows = (
-            _active_query(gk)
-            .where(conditions)
+            _viewer_filter(_active_query(gk).where(conditions), viewer_is_gm=viewer_is_gm)
             .order_by(MemoryEntry.confidence.desc(), MemoryEntry.updated_at.desc())
             .limit(max(1, int(limit)))
             .offset(max(0, int(offset)))
@@ -447,7 +527,7 @@ class MemoryStore:
         return [dict(r.__data__) for r in rows]
 
     def search_active_by_terms(self, game_key: str, terms: list[str],
-                               limit: int = 1000) -> list[dict]:
+                               limit: int = 1000, *, viewer_is_gm: bool) -> list[dict]:
         """按词项对 entity/relation/value 做 LIKE 粗筛（recall 增强通道）。"""
         gk = str(game_key)
         if not terms:
@@ -461,39 +541,41 @@ class MemoryStore:
             for term in terms
         ))
         rows = (
-            _active_query(gk)
-            .where(conditions)
+            _viewer_filter(_active_query(gk).where(conditions), viewer_is_gm=viewer_is_gm)
             .order_by(MemoryEntry.updated_at.desc())
             .limit(max(1, int(limit)))
         )
         return [dict(r.__data__) for r in rows]
 
-    def list_entries(self, game_key: str, limit: int = 50, offset: int = 0) -> list[dict]:
+    def list_entries(self, game_key: str, limit: int = 50, offset: int = 0,
+                     *, viewer_is_gm: bool) -> list[dict]:
         """List active memories for management UIs without weakening recall semantics."""
         if not self._conn:
             return []
         rows = (
-            _active_query(game_key)
+            _viewer_filter(_active_query(game_key), viewer_is_gm=viewer_is_gm)
             .order_by(MemoryEntry.updated_at.desc())
             .limit(max(1, int(limit)))
             .offset(max(0, int(offset)))
         )
         return [dict(row.__data__) for row in rows]
 
-    def count_entries(self, game_key: str, keyword: str = "") -> int:
+    def count_entries(self, game_key: str, keyword: str = "", *,
+                      viewer_is_gm: bool) -> int:
         """统计活跃记忆总数（可按 entity 关键词过滤，与 recall 口径一致）。"""
         if not self._conn:
             return 0
-        query = _active_query(game_key)
+        query = _viewer_filter(_active_query(game_key), viewer_is_gm=viewer_is_gm)
         if keyword:
             query = query.where(MemoryEntry.entity.ilike(f"%{keyword}%"))
         return query.count()
 
-    def recall_by_text(self, game_key: str, text: str, limit: int = 10) -> list[dict]:
+    def recall_by_text(self, game_key: str, text: str, limit: int = 10, *,
+                       viewer_is_gm: bool) -> list[dict]:
         """根据文本内容召回匹配的记忆（检查 entity 是否出现在 text 中）。"""
         gk = str(game_key)
         rows = (
-            _active_query(gk)
+            _viewer_filter(_active_query(gk), viewer_is_gm=viewer_is_gm)
             .order_by(MemoryEntry.updated_at.desc())
             .limit(500)
         )
@@ -505,14 +587,16 @@ class MemoryStore:
     # ---- 向量召回 ----
 
     def recall_by_vector(self, game_key: str, query_embedding: list[float],
-                         limit: int = 10) -> list[dict]:
+                         limit: int = 10, *, viewer_is_gm: bool) -> list[dict]:
         """基于向量余弦相似度的记忆召回。"""
         from src.memory.embedding import cosine_similarity
 
         gk = str(game_key)
         rows = (
-            _active_query(gk)
-            .where(MemoryEntry.embedding.is_null(False))
+            _viewer_filter(
+                _active_query(gk).where(MemoryEntry.embedding.is_null(False)),
+                viewer_is_gm=viewer_is_gm,
+            )
             .order_by(MemoryEntry.updated_at.desc())
             .limit(500)
         )
@@ -621,3 +705,14 @@ class MemoryStore:
             .limit(limit)
         )
         return [dict(r.__data__) for r in rows]
+
+
+def memory_kind_of(stored: str | None) -> str:
+    """Read-side classification of one memory row's kind.
+
+    升级前的旧行（``memory_kind`` 为 NULL）按 ``legacy_soft`` 分类（母方案
+    §69：旧记忆保留为 legacy_soft，永不升级为 authority）；未知值同样降级，
+    绝不猜成 authoritative_world。
+    """
+
+    return stored if stored in MEMORY_KINDS else "legacy_soft"

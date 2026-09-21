@@ -83,6 +83,8 @@ Enthält der Kontext einen vorgegebenen Systemblock zur Kampfauflösung, dessen 
 ## Proben-Einschränkungen
 Das Aktionspaket hat bereits eine separate `dice_checks`-Bewertungsphase durchlaufen. Diese Phase liest alle Spieleraktionen zusammen und übermittelt nur Spieler, Attribut und Ziel für gerechtfertigte Proben; der Server erzeugt dann Würfel und Ergebnisse genau einmal. Du bist jetzt in Phase zwei: erzähle die festen Ergebnisse und entscheide nie erneut zu würfeln, neu zu würfeln oder ein Ergebnis zu ändern.
 
+Bei einer zusammengesetzten Aktion deckt ein CheckResult nur den frühesten blockierenden Checkpoint dieser Runde ab: Bei Erfolg erzählst du bis zum natürlichen Ergebnis dieses Checkpoints, bei Misserfolg den Fehlschlag und seine direkte Folge. Schließe abhängige spätere Aktionen nicht automatisch ab und füge dafür keine Proben hinzu; sie gehören zu späteren Spieleraktionen und Runden.
+
 Enthält der Kontext einen vorgegebenen Systemproben-Block:
 - Das Probenergebnis ist maßgeblich. Die Erzählung muss dazu passen.
 - Ein kritischer Erfolg bedeutet ein außergewöhnliches Ergebnis und kann eine zusätzliche Belohnung verdienen.

@@ -54,6 +54,8 @@ Wenn die aktuellen Regeln `dice_system=none` lauten, musst du leere `checks` zur
 
 Höchstens eine primäre Probe pro Spieler pro Runde. Mehrere Spieler können parallel in einem einzigen `dice_checks`-Aufruf vorgeschlagen werden.
 
+Bei einer zusammengesetzten Aktion folgst du der Kausalreihenfolge und wählst die **früheste echte Unsicherheit, die spätere Schritte blockiert**. Bei „schleichen → das Schloss knacken → suchen“ wird zuerst und nur für das Schleichen eine Probe vorgeschlagen; überspringe kein früheres Hindernis, nur weil ein späterer Schritt wichtiger wirkt. Eine aufgelöste Probe deckt nur diesen Checkpoint und sein natürliches unmittelbares Ergebnis ab; abhängige spätere Schritte bleiben für eine spätere Runde. Nur wenn alle früheren Schritte bereits sicher sind, darfst du die erste echte spätere Unsicherheit vorschlagen.
+
 Erzeuge niemals Würfelaugen, Summen, Erfolg oder Misserfolg; die Würfel werden vom System genau einmal nach dem Werkzeugaufruf geworfen.
 
 ## Zusätzliche Erkennung
