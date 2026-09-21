@@ -11,7 +11,7 @@
 > - Commit：`962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release：`2.6.1`
 > - 当前 GameInstance persisted schema：`15`
-> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`6`
+> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`8`
 > - 文档核验日期：2026-09-18
 >
 > **明确不计入当前架构的内容**
@@ -3975,6 +3975,13 @@ entry 级正则、带深度与 non-recursable guard 的内容递归扫描，以�
 competition。这些 mechanics 仍由 `KeywordMatcher` 持有，通用 retriever 只负责
 加载、编排和投影。
 
+这里有三个互不派生的概念，必须分别保存：legacy DiceFrame `match_mode` 管 primary
+匹配；canonical `selective`（CCv3/ST 的布尔）决定 `secondary_keys` 是否参与 gate；
+`selective_logic` 决定 secondary keys 如何组合。`selective=false` 保留 keys 作为
+数据但不做过滤。primary 不命中时 secondary 永不参与判定。ST/CCv3 的正则是
+JavaScript，而 DiceFrame 执行 Python `re`：只有安全子集执行，不兼容的 pattern
+原样保留并给出 preview warning，绝不经第二个 runtime 求值。
+
 运行时 resolver 会按 global/world/game/character binding 合并多本书，并把 book
 settings（scan depth、recursive scanning、token budget、vector default）附加到
 本轮候选。`off` 不产生语义候选，`hybrid` 与关键词并行，`vector_only` 仅由语义
@@ -4031,7 +4038,7 @@ Embedding failure **不得**让正常回合失败。非数字、空向量、`NaN
 lorebook_embeddings
 ```
 
-当前 Lorebook SQLite `user_version = 6`。`vector_activation` 是 `off`、`hybrid`、`vector_only` 三态文本字段；v6 会把旧 v5 布尔值安全转换为 `off`/`hybrid`，并保留 `book_id` 与条目数据。缓存键：
+当前 Lorebook SQLite `user_version = 8`。`vector_activation` 是 `off`、`hybrid`、`vector_only` 三态文本字段；v6 会把旧 v5 布尔值安全转换为 `off`/`hybrid`，并保留 `book_id` 与条目数据。v7 增加 `lorebooks.revision`（条目变更计数，用于失效 matcher 缓存），v8 增加 `lorebook_entries.selective`（`secondary_keys` 是否参与 gate，默认 `1` 保持既有行为）。缓存键：
 
 ```text
 (entry_id, language, embedding_profile)
@@ -5871,7 +5878,7 @@ D&D Class Feature Runtime v1
 Hybrid Lore Retrieval / Semantic Retrieval / Lore Prompt authority
 扫码配对
 Confirmed Event / World Memory 当前边界
-GameInstance schema 13 / 14 / 15 + Lorebook SQLite schema 6
+GameInstance schema 13 / 14 / 15 + Lorebook SQLite schema 8
 开发者维护与定位规则
 ```
 

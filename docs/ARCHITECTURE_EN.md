@@ -11,7 +11,7 @@
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
 > - Current GameInstance persisted schema: `15`
-> - Current Lorebook SQLite schema (`PRAGMA user_version`): `6`
+> - Current Lorebook SQLite schema (`PRAGMA user_version`): `8`
 > - Document verification date: 2026-09-18
 >
 > **Explicitly excluded from the current architecture**
@@ -3947,6 +3947,15 @@ with depth and non-recursable guards, and multi-name group competition. These me
 remain inside `KeywordMatcher`; the generic retriever only orchestrates loading and
 projection.
 
+Three concepts here are stored separately and never derived from each other: legacy
+DiceFrame `match_mode` governs primary matching; the canonical `selective` boolean decides
+whether `secondary_keys` gates activation at all; `selective_logic` decides how the
+secondary keys combine. `selective=false` keeps the keys as data without filtering, and a
+missed primary key means the secondary gate is never consulted. SillyTavern and Character
+Card regexes are JavaScript while DiceFrame executes Python `re`, so only the
+safely-mappable subset runs: an incompatible pattern is preserved verbatim with a preview
+warning and is never evaluated through a second runtime.
+
 At runtime the resolver merges global/world/game/character bindings and attaches book
 settings (scan depth, recursive scanning, token budget, and the vector default) to each
 candidate. `off` produces no semantic candidates, `hybrid` runs alongside keywords, and
@@ -4005,7 +4014,7 @@ Lorebook entry vectors are cached in `lorebook.db`:
 lorebook_embeddings
 ```
 
-Current Lorebook SQLite `user_version = 6`. `vector_activation` is the three-state text field `off` / `hybrid` / `vector_only`; v6 safely converts the old v5 boolean values while preserving `book_id` and entry data. Cache key:
+Current Lorebook SQLite `user_version = 8`. `vector_activation` is the three-state text field `off` / `hybrid` / `vector_only`; v6 safely converts the old v5 boolean values while preserving `book_id` and entry data. v7 adds `lorebooks.revision`, a per-book mutation counter used to invalidate cached matcher fingerprints; v8 adds `lorebook_entries.selective`, the canonical flag deciding whether `secondary_keys` gates activation at all (default `1` keeps existing behaviour). Cache key:
 
 ```text
 (entry_id, language, embedding_profile)
@@ -5830,7 +5839,7 @@ D&D Class Feature Runtime v1
 Hybrid Lore Retrieval / Semantic Retrieval / Lore Prompt authority
 QR pairing
 Current Confirmed Event / World Memory boundary
-GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 6
+GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 8
 Developer maintenance and code-location rules
 ```
 
