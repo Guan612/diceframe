@@ -669,6 +669,8 @@ async def test_normal_round_still_commits_timers() -> None:
 
     assert instance.lorebook_timed_state["sticky_lore"] == {
         "sticky_remaining": 3,
+        "pending_cooldown": 0,
+        "activated_tick": 0,
     }
 
 

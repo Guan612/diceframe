@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from src.engine.game_state_contracts import GamePersistedState
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.player_control import away_control_policy, normalize_away_control_policy
+from src.lorebook.activation import migrate_timed_state
 from src.migrations.instance import normalize_game_state_payload
 
 if TYPE_CHECKING:
@@ -22,30 +23,14 @@ if TYPE_CHECKING:
 def _normalize_lorebook_timed_state(state: Any) -> dict[str, dict[str, int]]:
     """Normalize legacy Lorebook timers at the engine persistence boundary.
 
-    Kept here rather than importing the lorebook domain into ``engine`` so the
-    core dependency direction remains one-way.
+    Delegates to the lorebook domain rather than re-deriving the shape here: a
+    second copy silently missed the ``sticky`` + ``cooldown`` repair and let a
+    corrupt timer shape survive save/reload. ``lorebook`` is a peer core domain
+    (see ``tests/architecture/test_dependencies.py``), and this imports one pure
+    function with no storage or IO behind it.
     """
-    result: dict[str, dict[str, int]] = {}
-    for entry_id, raw in (state or {}).items() if isinstance(state, Mapping) else []:
-        if not isinstance(raw, Mapping):
-            continue
-        if any(key in raw for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining")):
-            result[str(entry_id)] = {
-                "sticky_remaining": max(0, int(raw.get("sticky_remaining", 0) or 0)),
-                "cooldown_remaining": max(0, int(raw.get("cooldown_remaining", 0) or 0)),
-                "delay_remaining": max(0, int(raw.get("delay_remaining", 0) or 0)),
-                "activated_tick": int(raw.get("activated_tick", 0) or 0),
-            }
-            continue
-        remaining = max(0, int(raw.get("remaining", 0) or 0))
-        status = str(raw.get("status", ""))
-        result[str(entry_id)] = {
-            "sticky_remaining": remaining if status == "active" else 0,
-            "cooldown_remaining": remaining if status == "cooldown" else 0,
-            "delay_remaining": remaining if status in ("delayed", "delay") else 0,
-            "activated_tick": int(raw.get("activated_tick", 0) or 0),
-        }
-    return result
+
+    return migrate_timed_state(dict(state) if isinstance(state, Mapping) else None)
 
 
 class GameStateCodec:

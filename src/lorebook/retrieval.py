@@ -33,8 +33,10 @@ from src.memory.embedding import cosine_similarity
 from src.lorebook.resolver import resolve_active_books
 from src.lorebook.budget import apply_token_budget
 from src.lorebook.activation import (
+    CANONICAL_VECTOR_ACTIVATION,
     DEFAULT_VECTOR_ACTIVATION,
     evaluate_probability,
+    timed_gate_blocked,
 )
 from src.lorebook.trace import ActivationTrace
 
@@ -514,13 +516,15 @@ class LoreRetriever:
             viewer_uid=viewer_uid,
             viewer_name=viewer_name,
         )
-        # vector_only 条目只能被语义通道发现，不能被关键词通道激活。
+        # vector_only 条目只能被语义通道发现，不能被关键词通道（含 recursion
+        # 扫描）激活。delay 门用 DiceFrame 的 authoritative turn tick 判定。
         activated = self._matcher.match_with_recursive(
             queries["lexical"],
             timed_state=timed_state,
             is_visible=_visible,
             is_candidate=lambda entry: self._vector_mode(entry) != "vector_only",
             extra_candidates=semantic_ids,
+            current_tick=int(getattr(instance, "round_number", 0) or 0),
         )
         hits = []
         for entry in activated:
@@ -705,24 +709,34 @@ class LoreRetriever:
 
     @staticmethod
     def _vector_mode(entry: dict[str, Any]) -> str:
-        # World-template/legacy callers may not have a canonical vector field;
-        # retain the pre-v2 optional semantic enhancement for those projections.
-        if "vector_activation" not in entry:
-            return "hybrid"
-        mode = str(entry.get("vector_activation") or "").strip().lower()
-        if mode not in {"off", "hybrid", "vector_only"}:
-            mode = "hybrid"
-        if mode == "off":
-            if "_lorebook_id" not in entry:
-                return "hybrid"
-            # A canonical entry with vector_activation=off falls back to the
-            # book default, which itself defaults to hybrid so that migrated
-            # primary world lore keeps keyword + semantic retrieval.
-            default = str(entry.get("_lorebook_vector_activation") or DEFAULT_VECTOR_ACTIVATION).strip().lower()
-            if default in {"hybrid", "vector_only"}:
-                return default
-            return "hybrid"
-        return mode
+        """Resolve one entry's effective vector activation mode.
+
+        Contract::
+
+            off         = 不参与 semantic candidate discovery
+            hybrid      = keyword + semantic
+            vector_only = 只允许 semantic discovery，不允许 lexical discovery
+
+        ``off`` is an explicit author decision and is honoured literally — it is
+        **not** a synonym for inherit. Only a missing / empty field inherits the
+        book-level default (world-template and legacy projections carry no
+        canonical field and therefore keep the pre-v2 semantic enhancement).
+        Legacy v4 lore is migrated to an explicit ``hybrid`` by the v6 schema
+        migration instead of being reinterpreted on every retrieval.
+        """
+
+        raw = entry.get("vector_activation")
+        mode = str(raw if raw is not None else "").strip().lower()
+        if mode in CANONICAL_VECTOR_ACTIVATION:
+            return mode
+        return LoreRetriever._book_vector_default(entry)
+
+    @staticmethod
+    def _book_vector_default(entry: dict[str, Any]) -> str:
+        """Book-level inheritance target for entries with no explicit mode."""
+
+        default = str(entry.get("_lorebook_vector_activation") or "").strip().lower()
+        return default if default in CANONICAL_VECTOR_ACTIVATION else DEFAULT_VECTOR_ACTIVATION
 
     @staticmethod
     def _apply_book_budgets(entries: list[dict]) -> list[dict]:
@@ -781,7 +795,9 @@ class LoreRetriever:
                 final_state="included" if entry_id in final_ids else "omitted",
                 reason_code="matched" if entry_id in final_ids else "not_matched",
             )
-            rows.append(trace.to_dict(safe=not viewer_is_gm))
+            row = trace.to_dict(safe=not viewer_is_gm)
+            if row:
+                rows.append(row)
         return rows
 
     async def _entry_vectors(
@@ -878,13 +894,12 @@ class LoreRetriever:
 
     @staticmethod
     def _timer_blocked(entry_id: str, timed_state: dict[str, dict] | None) -> bool:
-        """被 cooldown / delay 挡住的条目不应仅因向量相似进入上下文（施工方案 §23）。"""
+        """被 cooldown 挡住的条目不应仅因向量相似进入上下文（施工方案 §23）。
+
+        判据与 matcher 的 eligibility gate 共用 :func:`timed_gate_blocked`，
+        这里只是语义通道的提前剪枝，不是第二套规则。
+        """
 
         if not entry_id or not timed_state:
             return False
-        state = timed_state.get(entry_id)
-        if not isinstance(state, dict):
-            return False
-        return (
-            state.get("status") in ("cooldown", "delayed") and state.get("remaining", 0) > 0
-        ) or state.get("cooldown_remaining", 0) > 0 or state.get("delay_remaining", 0) > 0
+        return timed_gate_blocked(timed_state.get(entry_id))

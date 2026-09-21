@@ -1,5 +1,6 @@
 from __future__ import annotations
 import random
+from collections.abc import Mapping
 from typing import Any, Callable
 
 # SillyTavern ``world_info_logic`` (public/scripts/world-info.js):
@@ -87,21 +88,38 @@ def next_recursion_buffer(entry: dict[str, Any]) -> str:
         return ""
     return str(entry.get("content", "") or "")
 
+TIMED_COUNTER_KEYS: tuple[str, ...] = (
+    "sticky_remaining", "cooldown_remaining", "delay_remaining", "pending_cooldown",
+)
+
+
 def migrate_timed_state(state: dict[str, Any] | None) -> dict[str, dict[str, int]]:
     """Convert legacy timers to the persisted independent-counter shape.
 
     The operation is idempotent so the codec can normalize both old saves and
     already-migrated saves at every load/save boundary.
+
+    It also repairs the pre-fix shape where a single activation armed
+    ``sticky_remaining`` and ``cooldown_remaining`` at the same time: the
+    cooldown is moved back to ``pending_cooldown`` so the sticky window is not
+    blocked by the entry's own cooldown. Without this, saves written by the
+    buggy runtime would keep their inverted lifecycle forever.
     """
     result: dict[str, dict[str, int]] = {}
     for entry_id, raw in (state or {}).items():
-        if not isinstance(raw, dict):
+        if not isinstance(raw, Mapping):
             continue
-        if any(key in raw for key in ("sticky_remaining", "cooldown_remaining", "delay_remaining")):
+        if any(key in raw for key in TIMED_COUNTER_KEYS):
+            sticky = max(0, int(raw.get("sticky_remaining", 0) or 0))
+            cooldown = max(0, int(raw.get("cooldown_remaining", 0) or 0))
+            pending = max(0, int(raw.get("pending_cooldown", 0) or 0))
+            if sticky > 0 and cooldown > 0:
+                pending, cooldown = max(pending, cooldown), 0
             result[str(entry_id)] = {
-                "sticky_remaining": max(0, int(raw.get("sticky_remaining", 0) or 0)),
-                "cooldown_remaining": max(0, int(raw.get("cooldown_remaining", 0) or 0)),
+                "sticky_remaining": sticky,
+                "cooldown_remaining": cooldown,
                 "delay_remaining": max(0, int(raw.get("delay_remaining", 0) or 0)),
+                "pending_cooldown": pending,
                 "activated_tick": int(raw.get("activated_tick", 0) or 0),
             }
             continue
@@ -111,6 +129,117 @@ def migrate_timed_state(state: dict[str, Any] | None) -> dict[str, dict[str, int
             "sticky_remaining": remaining if status == "active" else 0,
             "cooldown_remaining": remaining if status == "cooldown" else 0,
             "delay_remaining": remaining if status in ("delayed", "delay") else 0,
+            "pending_cooldown": 0,
             "activated_tick": int(raw.get("activated_tick", 0) or 0),
         }
     return result
+
+
+def arm_timed_activation(
+    state: dict[str, Any], *, sticky: int, cooldown: int, activated_tick: int = 0,
+) -> None:
+    """Record one activation's timers on ``state``.
+
+    Lifecycle (SillyTavern-compatible)::
+
+        inactive → activated → sticky_active → cooldown → inactive
+
+    ``cooldown`` is therefore only *armed* while the entry is sticky-active; it
+    starts counting down once the sticky window closes (see
+    :func:`advance_timed_state`). Re-triggering an entry whose sticky or
+    cooldown window is still running does **not** refresh either timer.
+    """
+
+    sticky = max(0, int(sticky or 0))
+    cooldown = max(0, int(cooldown or 0))
+    if sticky <= 0 and cooldown <= 0:
+        return
+    if max(0, int(state.get("sticky_remaining", 0) or 0)) > 0:
+        return
+    if max(0, int(state.get("cooldown_remaining", 0) or 0)) > 0:
+        return
+    if sticky > 0:
+        state["sticky_remaining"] = sticky
+        state["pending_cooldown"] = cooldown
+    else:
+        state["cooldown_remaining"] = cooldown
+        state["pending_cooldown"] = 0
+    state["activated_tick"] = int(activated_tick or 0)
+
+
+def advance_timed_state(state: dict[str, Any]) -> bool:
+    """Advance one authoritative turn tick for one entry; True when expired.
+
+    Sticky runs to zero first and only then is the pending cooldown armed, so an
+    entry can never be blocked by its own cooldown during its sticky window.
+    ``delay_remaining`` is drained for legacy saves only — canonical runtime
+    treats ``delay`` as a pre-activation gate against the turn tick and never
+    writes this counter (see :func:`delay_gate_blocked`).
+    """
+
+    sticky = max(0, int(state.get("sticky_remaining", 0) or 0))
+    cooldown = max(0, int(state.get("cooldown_remaining", 0) or 0))
+    delay = max(0, int(state.get("delay_remaining", 0) or 0))
+    pending = max(0, int(state.get("pending_cooldown", 0) or 0))
+
+    if sticky > 0:
+        sticky -= 1
+        if sticky == 0 and pending > 0:
+            cooldown, pending = pending, 0
+    elif cooldown > 0:
+        cooldown -= 1
+    if delay > 0:
+        delay -= 1
+
+    state["sticky_remaining"] = sticky
+    state["cooldown_remaining"] = cooldown
+    state["delay_remaining"] = delay
+    state["pending_cooldown"] = pending
+    return sticky <= 0 and cooldown <= 0 and delay <= 0 and pending <= 0
+
+
+def sticky_active(state: dict[str, Any] | None) -> bool:
+    """True while the entry is inside its sticky window."""
+
+    if not isinstance(state, dict):
+        return False
+    if str(state.get("status", "")) == "active" and int(state.get("remaining", 0) or 0) > 0:
+        return True
+    return max(0, int(state.get("sticky_remaining", 0) or 0)) > 0
+
+
+def timed_gate_blocked(state: dict[str, Any] | None) -> bool:
+    """The single cooldown / legacy-delay gate for one entry.
+
+    Shared by every candidate channel (keyword, fuzzy, semantic, recursion) so
+    the gate cannot be applied to initial seeds only. A sticky-active entry is
+    never blocked: its cooldown has not started yet.
+    """
+
+    if not isinstance(state, dict):
+        return False
+    if sticky_active(state):
+        return False
+    if str(state.get("status", "")) in ("cooldown", "delayed", "delay"):
+        if int(state.get("remaining", 0) or 0) > 0:
+            return True
+    return (
+        max(0, int(state.get("cooldown_remaining", 0) or 0)) > 0
+        or max(0, int(state.get("delay_remaining", 0) or 0)) > 0
+    )
+
+
+def delay_gate_blocked(entry: dict[str, Any], *, current_tick: int | None) -> bool:
+    """SillyTavern ``delay``: stay inert until the turn counter reaches it.
+
+    ``delay`` is a *pre-activation* gate on the authoritative turn tick, not a
+    post-activation countdown — an entry with ``delay=5`` must not fire before
+    turn 5, rather than firing immediately and then blocking itself for five
+    turns. ``current_tick=None`` means the caller has no tick authority (world /
+    NPC projections); the gate is then skipped instead of inventing a tick.
+    """
+
+    if current_tick is None:
+        return False
+    delay = max(0, int(entry.get("delay", 0) or 0))
+    return delay > 0 and int(current_tick) < delay

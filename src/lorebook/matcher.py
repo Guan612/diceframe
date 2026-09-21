@@ -5,7 +5,8 @@
     candidate scan
     → primary / secondary / regex / case / whole-word
     → enabled
-    → timed gate (cooldown / delay)
+    → candidate-channel gate (vector_only 不得被关键词/递归扫描发现)
+    → timed gate (cooldown / delay)，每个候选每次都过
     → visibility (fail closed, before recursion)
     → probability
     → inclusion-group competition
@@ -28,10 +29,14 @@ import re
 from typing import Any, Callable
 
 from src.lorebook.activation import (
+    arm_timed_activation,
+    delay_gate_blocked,
     evaluate_probability,
     matched_key_score,
     normalize_primary_match_mode,
     normalize_selective_logic,
+    sticky_active,
+    timed_gate_blocked,
 )
 
 logger = logging.getLogger("trpg")
@@ -76,7 +81,7 @@ class KeywordMatcher:
         """匹配文本中出现的所有关键词（无递归）。常量条目始终包含。"""
         return self._activate(
             text, timed_state=None, is_visible=is_visible,
-            is_candidate=None, extra_candidates=None,
+            is_candidate=None, extra_candidates=None, current_tick=None,
         )
 
     def match_with_recursive(
@@ -87,6 +92,7 @@ class KeywordMatcher:
         is_visible: Callable[[dict], bool] | None = None,
         is_candidate: Callable[[dict], bool] | None = None,
         extra_candidates: object = None,
+        current_tick: int | None = None,
     ) -> list[dict]:
         """统一 activation pipeline（含递归）。
 
@@ -94,12 +100,15 @@ class KeywordMatcher:
         参与递归、也不得写 timed state。``is_candidate`` 只限制本通道的候选发现
         （例如 vector_only 条目不能被关键词通道发现），不影响安全边界。
         ``extra_candidates`` 是其它候选来源（如 semantic 检索）发现的 entry id，
-        它们必须走同一套 eligibility。
+        它们必须走同一套 eligibility。``current_tick`` 是 DiceFrame 的
+        authoritative turn tick（``GameInstance.round_number``），用于 ``delay``
+        前置门；``None`` 表示调用方没有 tick authority，则跳过该门。
         """
 
         return self._activate(
             text, timed_state=timed_state, is_visible=is_visible,
             is_candidate=is_candidate, extra_candidates=extra_candidates,
+            current_tick=current_tick,
         )
 
     # ---- 统一 pipeline ------------------------------------------------------
@@ -112,6 +121,7 @@ class KeywordMatcher:
         is_visible: Callable[[dict], bool] | None,
         is_candidate: Callable[[dict], bool] | None,
         extra_candidates: object,
+        current_tick: int | None,
     ) -> list[dict]:
         visible = is_visible if is_visible is not None else (lambda entry: True)
         discover = is_candidate if is_candidate is not None else (lambda entry: True)
@@ -142,6 +152,11 @@ class KeywordMatcher:
         group_decided: dict[str, str] = {}
         # frontier: entry id -> 该条目被发现的文本（供 group scoring 使用）。
         frontier: dict[str, str] = {eid: text for eid in sorted(seeds)}
+        # scanned: 本轮通过「关键词扫描 activated content」发现的候选。它们属于
+        # keyword 通道，因此必须和 initial lexical seeds 一样接受 is_candidate
+        # 过滤（例如 vector_only 不得被关键词通道发现）。作者显式声明的
+        # triggers_recursive 是显式边，不算关键词发现，不受该过滤限制。
+        scanned: set[str] = set()
         depth = 0
 
         while frontier and depth < MAX_RECURSIVE_DEPTH:
@@ -151,30 +166,62 @@ class KeywordMatcher:
                 if entry is None or eid in evaluated:
                     continue
                 evaluated.add(eid)
-                if not self._eligibility_ok(entry, depth=depth, visible=visible):
+                if not self._eligibility_ok(
+                    entry, depth=depth, visible=visible,
+                    discover=discover if eid in scanned else None,
+                    timed_state=timed_state, current_tick=current_tick,
+                ):
                     continue
                 if not self._probability_ok(eid, entry, probability_cache):
                     continue
                 batch[eid] = frontier[eid]
             winners = self._group_winners(batch, group_decided)
             activated |= winners
-            frontier = {}
+            frontier, scanned = {}, set()
             for eid in sorted(winners):
-                frontier.update(self._children_of(eid, excluded=evaluated | activated))
+                children, child_scanned = self._children_of(eid, excluded=evaluated | activated)
+                frontier.update(children)
+                scanned |= child_scanned
             depth += 1
 
         # 只有真正 activated 的条目才允许写 timed activation state，且写入权保留给
-        # keyword authority：纯 semantic 命中只参与召回，不写 sticky/cooldown/delay。
+        # keyword authority：纯 semantic 命中只参与召回，不写 sticky/cooldown。
         if timed_state is not None:
-            self._apply_time_effects(activated & lexical_seeds, timed_state)
+            self._apply_time_effects(
+                activated & lexical_seeds, timed_state, current_tick=current_tick,
+            )
         return self._sort_by_tier(activated)
 
-    def _eligibility_ok(self, entry: dict, *, depth: int, visible: Callable[[dict], bool]) -> bool:
-        """enabled + visibility + timed/recursion eligibility，fail closed。"""
+    def _eligibility_ok(
+        self,
+        entry: dict,
+        *,
+        depth: int,
+        visible: Callable[[dict], bool],
+        discover: Callable[[dict], bool] | None = None,
+        timed_state: dict[str, dict] | None = None,
+        current_tick: int | None = None,
+    ) -> bool:
+        """enabled + visibility + timed/recursion eligibility，fail closed。
+
+        timed gate 属于**每一次** candidate eligibility，不是只对 initial seeds
+        执行一次——否则 recursion frontier 里的子条目可以绕过自己的 cooldown /
+        delay。``discover`` 非 None 时表示该候选来自关键词扫描通道，需要额外接受
+        通道过滤。
+        """
 
         if not bool(entry.get("enabled", True)):
             return False
         if not visible(entry):
+            return False
+        if discover is not None and not discover(entry):
+            return False
+        entry_id = str(entry.get("id") or "")
+        if timed_gate_blocked((timed_state or {}).get(entry_id)):
+            return False
+        if delay_gate_blocked(entry, current_tick=current_tick) and not sticky_active(
+            (timed_state or {}).get(entry_id)
+        ):
             return False
         recursive_pass = depth > 0
         if bool(entry.get("delay_until_recursion", False)) and not recursive_pass:
@@ -202,18 +249,24 @@ class KeywordMatcher:
                              entry.get("name", eid), entry.get("probability", 100))
         return cache[eid]
 
-    def _children_of(self, eid: str, *, excluded: set[str]) -> dict[str, str]:
-        """activated entry 的内容才允许进入 recursion buffer。"""
+    def _children_of(self, eid: str, *, excluded: set[str]) -> tuple[dict[str, str], set[str]]:
+        """activated entry 的内容才允许进入 recursion buffer。
+
+        返回 ``(children, scanned)``：``scanned`` 是其中通过关键词扫描 content 发现
+        的子集，调用方据此对它们施加 keyword 通道过滤。
+        """
 
         entry = self._entries.get(eid)
         if entry is None or bool(entry.get("prevent_further_recursion", False)):
-            return {}
+            return {}, set()
         children: dict[str, str] = {}
+        scanned: set[str] = set()
         child_text = str(entry.get("content", "") or "")
         if child_text and bool(entry.get("_lorebook_recursive_scanning", True)):
             for cid in sorted(self._candidate_ids(child_text)):
                 if cid not in excluded:
                     children[cid] = child_text
+                    scanned.add(cid)
         triggers = entry.get("triggers_recursive", [])
         if isinstance(triggers, str):
             try:
@@ -224,7 +277,8 @@ class KeywordMatcher:
             tid = str(tid)
             if tid not in excluded and tid in self._entries:
                 children[tid] = child_text
-        return children
+                scanned.discard(tid)
+        return children, scanned
 
     # ---- 关键词语义 ---------------------------------------------------------
 
@@ -468,46 +522,48 @@ class KeywordMatcher:
         """获取当前处于 active 状态的 sticky 条目。"""
         if not timed_state:
             return set()
-        return {
-            eid for eid, state in timed_state.items()
-            if (state.get("status") == "active" and state.get("remaining", 0) > 0)
-            or state.get("sticky_remaining", 0) > 0
-        }
+        return {eid for eid, state in timed_state.items() if sticky_active(state)}
 
     @staticmethod
     def _get_timed_blocked_ids(timed_state: dict[str, dict] | None) -> set[str]:
-        """获取当前被 cooldown 或 delay 阻止的条目 ID。"""
+        """获取当前被 cooldown（或 legacy delay 计数器）阻止的条目 ID。
+
+        与 :meth:`_eligibility_ok` 共用同一个 :func:`timed_gate_blocked` 判据，
+        避免 seed 入口和 eligibility 两处判断漂移。
+        """
         if not timed_state:
             return set()
-        return {
-            eid for eid, state in timed_state.items()
-            if (state.get("status") in ("cooldown", "delayed") and state.get("remaining", 0) > 0)
-            or state.get("cooldown_remaining", 0) > 0
-            or state.get("delay_remaining", 0) > 0
-        }
+        return {eid for eid, state in timed_state.items() if timed_gate_blocked(state)}
 
-    def _apply_time_effects(self, matched_ids: set[str], timed_state: dict[str, dict]) -> None:
-        """activated 条目才写 sticky/cooldown/delay（独立计数器）。"""
+    def _apply_time_effects(
+        self, matched_ids: set[str], timed_state: dict[str, dict],
+        *, current_tick: int | None = None,
+    ) -> None:
+        """activated 条目才写 sticky/cooldown。
+
+        ``delay`` 不在这里落计数器：它是对 authoritative turn tick 的前置门，
+        不是激活后的倒计时，所以不会变成与 sticky/cooldown 并列的第二套状态机。
+        """
         for eid in matched_ids:
             entry = self._entries.get(eid)
             if not entry:
                 continue
-            sticky = int(entry.get("sticky", 0))
-            cooldown = int(entry.get("cooldown", 0))
-            delay = int(entry.get("delay", 0))
-            if sticky <= 0 and cooldown <= 0 and delay <= 0:
+            sticky = max(0, int(entry.get("sticky", 0) or 0))
+            cooldown = max(0, int(entry.get("cooldown", 0) or 0))
+            if sticky <= 0 and cooldown <= 0:
                 continue
 
             state = timed_state.setdefault(eid, {})
-            if sticky > 0 and state.get("sticky_remaining", 0) <= 0:
-                state["sticky_remaining"] = sticky
-                logger.debug("世界书 sticky 激活: %s (duration=%d)", entry.get("name", eid), sticky)
-            if cooldown > 0 and state.get("cooldown_remaining", 0) <= 0:
-                state["cooldown_remaining"] = cooldown
-                logger.debug("世界书 cooldown 开始: %s (duration=%d)", entry.get("name", eid), cooldown)
-            if delay > 0 and state.get("delay_remaining", 0) <= 0:
-                state["delay_remaining"] = delay
-                logger.debug("世界书 delay 开始: %s (duration=%d)", entry.get("name", eid), delay)
+            before = (state.get("sticky_remaining", 0), state.get("cooldown_remaining", 0))
+            arm_timed_activation(
+                state, sticky=sticky, cooldown=cooldown,
+                activated_tick=int(current_tick or 0),
+            )
+            if before != (state.get("sticky_remaining", 0), state.get("cooldown_remaining", 0)):
+                logger.debug(
+                    "世界书 timed 激活: %s (sticky=%d, cooldown=%d, cooldown 在 sticky 结束后开始)",
+                    entry.get("name", eid), sticky, cooldown,
+                )
             # Do not emit the legacy status/remaining shape.  Legacy input is
             # still read by the compatibility predicates above, while all
             # newly-mutated runtime state uses independent counters.

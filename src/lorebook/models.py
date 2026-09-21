@@ -18,6 +18,8 @@ from peewee import (
     TextField,
 )
 
+from src.lorebook.activation import DEFAULT_VECTOR_ACTIVATION
+
 from src.db.peewee_bridge import SharedConnectionSqliteDatabase
 
 database = SharedConnectionSqliteDatabase()
@@ -114,7 +116,7 @@ class LorebookEntry(Model):
     match_whole_words = BooleanField(default=False)
     scan_depth = IntegerField(default=0)
     priority = IntegerField(default=0)
-    vector_activation = CharField(default="off")
+    vector_activation = CharField(default=DEFAULT_VECTOR_ACTIVATION)
     non_recursable = BooleanField(default=False)
     prevent_further_recursion = BooleanField(default=False)
     delay_until_recursion = BooleanField(default=False)

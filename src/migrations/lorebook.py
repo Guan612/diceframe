@@ -398,11 +398,23 @@ def _entry_v5_expression(column: str) -> str:
 
 
 def _v6(conn: sqlite3.Connection) -> None:
-    """Represent vector activation as the canonical off/hybrid/vector_only mode."""
+    """Represent vector activation as the canonical off/hybrid/vector_only mode.
+
+    The pre-v6 column was an INTEGER "vectorized" flag defaulting to 0, but
+    pre-v2 retrieval never consulted it: every entry got the optional semantic
+    enhancement. Mapping that legacy 0 to ``off`` would therefore silently strip
+    semantic retrieval from all migrated lore — which is why runtime used to
+    reinterpret ``off`` as ``hybrid`` on every lookup, making an explicit
+    author-set ``off`` unreachable.
+
+    Compatibility is decided **here, once**: legacy rows migrate to an explicit
+    ``hybrid``, and ``off`` then means off at runtime. Only a row that already
+    carried a canonical textual mode keeps that mode verbatim.
+    """
 
     sql = _V5_ENTRIES_SQL.replace("lorebook_entries_new", "lorebook_entries_v6").replace(
         "vector_activation INTEGER NOT NULL DEFAULT 0",
-        "vector_activation TEXT NOT NULL DEFAULT 'off'",
+        "vector_activation TEXT NOT NULL DEFAULT 'hybrid'",
     )
     conn.execute(sql)
     old_columns = table_columns(conn, "lorebook_entries")
@@ -413,10 +425,9 @@ def _v6(conn: sqlite3.Connection) -> None:
             '"book_id"'
             if column == "book_id" else
             "CASE "
-            "WHEN lower(CAST(COALESCE(\"vector_activation\", 'off') AS TEXT)) "
-            "IN ('hybrid', 'vector_only') THEN lower(CAST(\"vector_activation\" AS TEXT)) "
-            "WHEN CAST(COALESCE(\"vector_activation\", 0) AS INTEGER) = 1 "
-            "THEN 'hybrid' ELSE 'off' END"
+            "WHEN lower(CAST(COALESCE(\"vector_activation\", '') AS TEXT)) "
+            "IN ('off', 'hybrid', 'vector_only') THEN lower(CAST(\"vector_activation\" AS TEXT)) "
+            "ELSE 'hybrid' END"
             if column == "vector_activation" else _entry_v5_expression(column)
         )
         for column in shared

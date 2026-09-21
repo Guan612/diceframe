@@ -27,9 +27,16 @@ def test_resolver_filters_private_books_for_party():
     assert [ref.book_id for ref in refs] == ["world:w"]
 
 
-def test_trace_hides_rejected_entry_for_safe_view():
+def test_trace_emits_no_row_at_all_for_a_hidden_entry_in_safe_view():
+    """safe view 不得为 hidden 条目产出任何一行。
+
+    此前返回的是一个 redacted 占位行，但「每个 hidden 条目一行」本身就泄漏了
+    hidden 数量与其分类——visibility 契约禁止的程度和泄漏 id / name 相同。
+    """
+
     trace = ActivationTrace("secret", visibility="hidden", reason_code="visibility")
-    assert trace.to_dict(safe=True) == {"entry_id": "", "book_id": "", "final_state": "hidden"}
+    assert trace.to_dict(safe=True) == {}
+    assert trace.to_dict(safe=False)["entry_id"] == "secret"
 
 
 def test_retriever_loads_world_and_global_books(tmp_path):

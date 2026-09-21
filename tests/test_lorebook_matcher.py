@@ -148,7 +148,13 @@ def test_prevent_further_recursion_stops_propagation():
     assert {e["id"] for e in m.match_with_recursive("door")} == {"seed"}
 
 
-def test_timed_effects_share_entry_state_with_independent_counters():
+def test_timed_effects_arm_cooldown_behind_sticky_and_never_write_delay():
+    """一次激活只启动 sticky；cooldown 只被 arm，delay 完全不落计数器。
+
+    这个测试此前断言 sticky / cooldown / delay 在首次激活时同时被写入——那正是
+    缺陷本身：下一轮 cooldown_remaining > 0 会把本该继续生效的 sticky 条目挡掉。
+    """
+
     m = _build_matcher([{
         "id": "timed", "keywords": ["door"], "content": "",
         "sticky": 3, "cooldown": 2, "delay": 1,
@@ -158,7 +164,7 @@ def test_timed_effects_share_entry_state_with_independent_counters():
     assert timed_state == {
         "timed": {
             "sticky_remaining": 3,
-            "cooldown_remaining": 2,
-            "delay_remaining": 1,
+            "pending_cooldown": 2,
+            "activated_tick": 0,
         }
     }

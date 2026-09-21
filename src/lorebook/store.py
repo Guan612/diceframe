@@ -49,10 +49,17 @@ def normalize_scope_kind(value: Any) -> str:
 
 
 def normalize_vector_activation(value: Any) -> str:
-    """Normalize a vector activation mode; unknown values fail closed to ``off``."""
+    """Normalize a vector activation mode.
+
+    Unknown / missing values resolve to the canonical default (``hybrid``), the
+    same direction ``LoreRetriever._vector_mode`` inherits in. A malformed value
+    must not silently mean "semantic disabled": ``off`` is reserved for an
+    explicit author decision, and a write-path fallback that disagreed with the
+    read path is what let ``off`` become unreachable in the first place.
+    """
 
     mode = str(value or "").strip().lower()
-    return mode if mode in CANONICAL_VECTOR_ACTIVATION else "off"
+    return mode if mode in CANONICAL_VECTOR_ACTIVATION else DEFAULT_VECTOR_ACTIVATION
 
 
 SCHEMA = """

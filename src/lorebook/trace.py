@@ -23,7 +23,15 @@ class ActivationTrace:
     reason_code: str = ""
 
     def to_dict(self, *, safe: bool = False) -> dict[str, Any]:
-        data = asdict(self)
+        """Serialize one trace row; ``safe`` is the player-facing projection.
+
+        A hidden entry yields **no row at all** (empty dict) rather than a
+        redacted placeholder: emitting one row per hidden entry would leak the
+        hidden count and its classification, which the visibility contract
+        forbids just as much as leaking ids or names. Callers must drop empty
+        results (see ``LoreRetriever._build_trace``).
+        """
+
         if safe and self.visibility != "visible":
-            return {"entry_id": "", "book_id": "", "final_state": "hidden"}
-        return data
+            return {}
+        return asdict(self)

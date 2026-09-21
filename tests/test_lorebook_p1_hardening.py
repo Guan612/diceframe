@@ -509,7 +509,7 @@ def test_semantic_only_activation_does_not_write_timed_state(tmp_path) -> None:
 
 
 def test_keyword_channel_still_writes_timed_state(tmp_path) -> None:
-    """同一组条目走 keyword 通道时，sticky/cooldown/delay 照常写入。"""
+    """同一组条目走 keyword 通道时，sticky/cooldown 照常写入（delay 不落计数器）。"""
 
     entry = {"id": "kw", "name": "kw", "world_id": "w", "keywords": ["clue"],
              "content": "keyword body", "sticky": 3}
@@ -519,7 +519,7 @@ def test_keyword_channel_still_writes_timed_state(tmp_path) -> None:
         timed: dict = {}
         hits = asyncio.run(retriever.retrieve(_instance(store, timed), "clue"))
         assert [row["id"] for row in hits] == ["kw"]
-        assert timed == {"kw": {"sticky_remaining": 3}}
+        assert timed == {"kw": {"sticky_remaining": 3, "pending_cooldown": 0, "activated_tick": 0}}
     finally:
         store.close()
 
