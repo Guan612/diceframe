@@ -48,6 +48,7 @@ from src.engine.round_snapshots import (
     restore_players,
 )
 from src.engine.world_state import ensure_world_state, fresh_world_state
+from src.lorebook.activation import TIMED_COUNTER_KEYS, advance_timed_state
 from src.migrations.instance import CURRENT_INSTANCE_SCHEMA_VERSION
 
 if TYPE_CHECKING:
@@ -1392,13 +1393,28 @@ class GameInstance:
     # ---------- 序列化 --------------------------------------
 
     def update_lorebook_timed_state(self) -> None:
-        """每轮开始前更新世界书时间效应状态：remaining - 1，归零则移除。"""
-        expired = [eid for eid, state in self.lorebook_timed_state.items()
-                   if state["remaining"] <= 1]
-        for eid in expired:
-            del self.lorebook_timed_state[eid]
-        for state in self.lorebook_timed_state.values():
-            state["remaining"] -= 1
+        """Tick persisted Lorebook timers, supporting the pre-v2 shape.
+
+        The tick *timing* stays here (this is the authoritative turn boundary);
+        the lifecycle *semantics* live in :mod:`src.lorebook.activation` so
+        ``sticky → cooldown`` ordering is testable without a GameInstance.
+        """
+        expired: list[str] = []
+        for entry_id, state in self.lorebook_timed_state.items():
+            if not isinstance(state, dict):
+                expired.append(entry_id)
+                continue
+            if any(key in state for key in TIMED_COUNTER_KEYS):
+                if advance_timed_state(state):
+                    expired.append(entry_id)
+                continue
+            remaining = max(0, int(state.get("remaining", 0) or 0) - 1)
+            if remaining <= 0:
+                expired.append(entry_id)
+            else:
+                state["remaining"] = remaining
+        for entry_id in expired:
+            self.lorebook_timed_state.pop(entry_id, None)
 
     # ---------- 序列化 --------------------------------------
 

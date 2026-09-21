@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { LoreEntry, LorePreviewResponse, LoreProjection, Player } from '@/api/types'
+import type { LoreActivationPreviewResponse, LoreEntry, LorePreviewResponse, LoreProjection, Player } from '@/api/types'
 import { useLocale } from '@/composables/useLocale'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
 
@@ -14,12 +14,18 @@ defineProps<{
   selectedEntry: LoreEntry | null
   selectedProjection: LoreProjection | null
   filter: 'all' | 'visible' | 'hidden'
+  actionText: string
+  activation: LoreActivationPreviewResponse | null
+  activationLoading: boolean
+  activationError: string
 }>()
 
 const emit = defineEmits<{
   (e: 'select-viewer', viewer: string): void
   (e: 'select-filter', filter: 'all' | 'visible' | 'hidden'): void
   (e: 'close'): void
+  (e: 'update:action-text', value: string): void
+  (e: 'refresh-activation'): void
 }>()
 const { t } = useLocale()
 
@@ -34,6 +40,28 @@ function playerLabel(p: Player): string {
       <h2>{{ t('lorePerspectiveTitle') }}</h2>
       <button class="lore-inspector-close" @click="emit('close')" :aria-label="t('close')">×</button>
     </header>
+
+    <section class="lore-inspector-block">
+      <span class="lore-inspector-label">Activation Inspector</span>
+      <textarea
+        class="lore-activation-input"
+        :value="actionText"
+        rows="3"
+        placeholder="Describe the action to preview activation…"
+        @input="emit('update:action-text', ($event.target as HTMLTextAreaElement).value)"
+      />
+      <button type="button" :disabled="activationLoading" @click="emit('refresh-activation')">
+        {{ activationLoading ? 'Refreshing…' : 'Preview activation' }}
+      </button>
+      <p v-if="activationError" class="error-banner">{{ activationError }}</p>
+      <ul v-else-if="activation?.trace?.length" class="lore-activation-trace">
+        <li v-for="(row, index) in activation.trace.filter(item => viewer === 'gm' || Boolean(item.entry_id))" :key="`${row.entry_id || 'safe'}-${index}`">
+          <code>{{ row.entry_id || 'hidden' }}</code>
+          <span>{{ row.final_state || 'candidate' }} · {{ row.reason_code || '—' }}</span>
+        </li>
+      </ul>
+      <p v-else class="muted small">No activation trace returned.</p>
+    </section>
 
     <section class="lore-inspector-block">
       <span class="lore-inspector-label">{{ t('loreViewerLabel') }}</span>

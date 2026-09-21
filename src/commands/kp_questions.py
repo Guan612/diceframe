@@ -163,6 +163,7 @@ class KPQuestionResponder:
             viewer_uid=None if visibility == "party" else actor_uid,
             viewer_name="" if visibility == "party" else actor_name,
             mutate_timers=False,
+            action_actor_uids=[actor_uid] if visibility != "party" else [],
         )
         matches = (
             filter_public_lorebook_entries(matches)

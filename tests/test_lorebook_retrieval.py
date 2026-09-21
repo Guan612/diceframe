@@ -608,6 +608,13 @@ async def test_case_m_hidden_lore_reaches_gm_but_never_a_player_path() -> None:
     )
     assert party_hits == ["public"]
 
+    player_trace_ids = {row["entry_id"] for row in retriever.last_activation_trace if row.get("entry_id")}
+    assert player_trace_ids == {"public"}
+    assert len(retriever.last_activation_trace) == 1
+
+    await _ids(retriever, instance, "我在大厅里问真相是什么", viewer_is_gm=True)
+    assert {row["entry_id"] for row in retriever.last_activation_trace} >= {"secret", "secret2", "public"}
+
 
 @pytest.mark.asyncio
 async def test_private_location_fact_is_not_used_for_a_player_path() -> None:
@@ -661,7 +668,9 @@ async def test_normal_round_still_commits_timers() -> None:
     await retriever.retrieve(instance, "我去旧桥看看")
 
     assert instance.lorebook_timed_state["sticky_lore"] == {
-        "status": "active", "remaining": 3,
+        "sticky_remaining": 3,
+        "pending_cooldown": 0,
+        "activated_tick": 0,
     }
 
 

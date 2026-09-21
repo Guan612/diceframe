@@ -144,12 +144,14 @@ def test_import_tavern_as_npc_creates_npc_and_book_entries(tmp_path):
         assert "剑" in book1["keywords"]
         assert book1["content"] == "Himmel 的佩剑"
 
-        # 幂等：再导一次是更新而非新增，条目数不变（1 npc + 2 book = 3）
+        # 幂等：再导一次是更新而非新增；primary world projection 不混入
+        # 独立 character-card Book 的条目。
         tavern["description"] = "更新后的描述"
         _import_tavern_as_npc(dependencies, tavern, "w1")
         npc2 = store.get_entry("w1_tavern_Himmel")
         assert "更新后的描述" in npc2["content"]
-        assert len(store.list_entries("w1")) == 3
+        assert [entry["id"] for entry in store.list_entries("w1")] == ["w1_tavern_Himmel"]
+        assert len(store.list_book_entries("character_card:w1:Himmel")) == 2
     finally:
         store.close()
 

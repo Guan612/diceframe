@@ -354,3 +354,74 @@ body.light .lore-filter-options button.active:not(.primary):not(.danger):not(.su
     display: inline-flex;
   }
 }
+
+/* 条目搜索/筛选与批量操作：纯前端过滤，样式沿用类型 tab 的 token 语言 */
+.lorebook-page .lore-entry-toolbar {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.lorebook-page .lore-entry-toolbar__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.lorebook-page .lore-entry-search {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.lorebook-page .lore-entry-filter {
+  flex: 0 1 auto;
+  max-width: 180px;
+  font-size: 12px;
+}
+
+.lorebook-page .lore-entry-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-surface-1) 72%, transparent);
+}
+
+.lorebook-page .lore-entry-bulk button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.lorebook-page .lore-entry-bulk__select {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+
+/* 行内多选框不能抢走整行点击（整行点击是切换视角检视） */
+.lorebook-page .lore-row-select {
+  margin-right: 6px;
+  cursor: pointer;
+}
+
+.lorebook-page .lore-no-matches button {
+  margin-top: 8px;
+}
+
+.lorebook-page .lore-entry-advanced {
+  margin-top: 10px;
+  border-top: 1px solid var(--df-border-soft);
+  padding-top: 8px;
+}
+
+.lorebook-page .lore-entry-advanced summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--df-accent-strong);
+}

@@ -11,18 +11,63 @@ import logging
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+from contextlib import contextmanager
 
 from peewee import SQL
 
-from src.lorebook.models import LorebookEntry, LorebookEmbedding, World
+from src.lorebook.activation import (
+    CANONICAL_VECTOR_ACTIVATION,
+    DEFAULT_VECTOR_ACTIVATION,
+)
+from src.lorebook.models import Lorebook, LorebookBinding, LorebookEntry, LorebookEmbedding, World
 from src.lorebook.models import database as _models_database
 from src.migrations.lorebook import migrate as migrate_lorebook
 
 logger = logging.getLogger("trpg")
 
+#: Book fields that change what retrieval actually produces. Mutating any of
+#: them must advance the Book's monotonic ``revision`` so the resolver/retriever
+#: cache cannot keep serving the previous annotation.
+_RUNTIME_BOOK_FIELDS = frozenset({
+    "enabled", "scan_depth", "token_budget", "recursive_scanning", "settings_json",
+})
+
 # 单次 IN(...) 查询的 entry 数量上限，避免撞 SQLite 的参数个数限制。
 _CACHE_CHUNK = 400
+
+# Canonical binding scope vocabulary (docs/ARCHITECTURE §3823).
+# This is the single source of truth: every write path that accepts a
+# ``scope_kind`` must validate here at the store boundary, so import flows and
+# non-HTTP callers cannot bypass the REST routes' local check.
+CANONICAL_SCOPE_KINDS: frozenset[str] = frozenset({"global", "world", "game", "character"})
+
+
+def normalize_scope_kind(value: Any) -> str:
+    """Validate and normalize a binding scope kind, raising on non-canonical input."""
+
+    kind = str(value or "").strip().lower()
+    if kind not in CANONICAL_SCOPE_KINDS:
+        raise ValueError(
+            f"invalid scope_kind {value!r}: must be one of "
+            f"{sorted(CANONICAL_SCOPE_KINDS)}"
+        )
+    return kind
+
+
+def normalize_vector_activation(value: Any) -> str:
+    """Normalize a vector activation mode.
+
+    Unknown / missing values resolve to the canonical default (``hybrid``), the
+    same direction ``LoreRetriever._vector_mode`` inherits in. A malformed value
+    must not silently mean "semantic disabled": ``off`` is reserved for an
+    explicit author decision, and a write-path fallback that disagreed with the
+    read path is what let ``off`` become unreachable in the first place.
+    """
+
+    mode = str(value or "").strip().lower()
+    return mode if mode in CANONICAL_VECTOR_ACTIVATION else DEFAULT_VECTOR_ACTIVATION
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS worlds (
@@ -93,6 +138,41 @@ class LorebookStore:
         self.db_path = Path(db_path)
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
+        self._tx_depth = 0
+
+    def _commit_locked(self) -> None:
+        """Commit per-method, unless an explicit canonical transaction owns it."""
+
+        if self._tx_depth == 0:
+            self._conn.commit()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Explicit transaction seam for multi-write canonical paths (import).
+
+        Wrapping ``book + bindings + entries + provenance`` makes the whole
+        import commit atomic: any fatal failure rolls everything back instead of
+        leaving a half-imported book behind. Nested use is allowed and the
+        outermost transaction owns the commit. This is a seam, not an ORM
+        rewrite — per-method commits stay the default everywhere else.
+        """
+
+        if self._tx_depth:
+            self._tx_depth += 1
+            try:
+                yield
+            finally:
+                self._tx_depth -= 1
+            return
+        self._tx_depth = 1
+        try:
+            yield
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            self._tx_depth = 0
+        self._conn.commit()
 
     def open(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +216,8 @@ class LorebookStore:
                 author=kwargs.get("author", ""),
                 version=kwargs.get("version", "1.0"),
             ).on_conflict_replace().execute()
-            self._conn.commit()
+            self._ensure_primary_book_locked(world_id, name=name, language=kwargs.get("language", "zh-CN"))
+            self._commit_locked()
 
     def get_world(self, world_id: str) -> dict | None:
         with self._lock:
@@ -149,7 +230,7 @@ class LorebookStore:
             World.update(
                 language=language, updated_at=SQL("datetime('now')"),
             ).where(World.id == world_id).execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def list_worlds(self) -> list[dict]:
         with self._lock:
@@ -158,16 +239,218 @@ class LorebookStore:
 
     def delete_world(self, world_id: str) -> None:
         with self._lock:
+            Lorebook.delete().where(Lorebook.id == self.primary_world_book_id(world_id)).execute()
             World.delete().where(World.id == world_id).execute()
-            self._conn.commit()
+            self._commit_locked()
+
+    # ---- canonical lorebook/book bindings ----
+
+    @staticmethod
+    def primary_world_book_id(world_id: str) -> str:
+        return f"world:{world_id}"
+
+    def _ensure_primary_book_locked(self, world_id: str, *, name: str | None = None,
+                                    language: str = "zh-CN") -> str:
+        book_id = self.primary_world_book_id(world_id)
+        world = self._conn.execute(
+            "SELECT name, description, language FROM worlds WHERE id = ?", (world_id,)
+        ).fetchone()
+        name = name or (str(world[0]) if world else world_id)
+        description = str(world[1]) if world else ""
+        language = str(world[2] or language) if world else language
+        self._conn.execute(
+            "INSERT OR IGNORE INTO lorebooks "
+            "(id, name, description, language, source_kind, source_id) VALUES (?, ?, ?, ?, 'world', ?)",
+            (book_id, name, description, language, world_id),
+        )
+        self._conn.execute(
+            "INSERT OR IGNORE INTO lorebook_bindings "
+            "(id, book_id, scope_kind, scope_id, role) VALUES (?, ?, 'world', ?, 'primary')",
+            (f"binding:{book_id}:primary", book_id, world_id),
+        )
+        return book_id
+
+    def ensure_primary_world_book(self, world_id: str) -> str:
+        with self._lock:
+            book_id = self._ensure_primary_book_locked(world_id)
+            self._commit_locked()
+            return book_id
+
+    def _bump_book_revision_locked(self, book_id: str | None) -> None:
+        """Advance the owning Book's monotonic revision after an entry mutation.
+
+        Callers must already hold ``self._lock`` and stay inside the same
+        transaction, so an import rollback also rolls the bump back. Entries with
+        no owning Book (legacy rows) are ignored.
+        """
+
+        if not book_id:
+            return
+        Lorebook.update(revision=Lorebook.revision + 1).where(
+            Lorebook.id == str(book_id)
+        ).execute()
+
+    def create_lorebook(self, book: dict) -> None:
+        with self._lock:
+            Lorebook.insert(
+                id=book["id"], name=book.get("name", book["id"]),
+                description=book.get("description", ""), language=book.get("language", "zh-CN"),
+                enabled=int(book.get("enabled", True)), scan_depth=int(book.get("scan_depth", 0)),
+                token_budget=int(book.get("token_budget", 0)),
+                recursive_scanning=int(book.get("recursive_scanning", False)),
+                settings_json=json.dumps(book.get("settings", book.get("settings_json", {})), ensure_ascii=False)
+                if not isinstance(book.get("settings_json"), str) else book["settings_json"],
+                source_kind=book.get("source_kind", "native"), source_id=book.get("source_id", ""),
+                source_version=book.get("source_version", ""), source_digest=book.get("source_digest", ""),
+            ).on_conflict_ignore().execute()
+            self._commit_locked()
+
+    def update_lorebook(self, book_id: str, updates: dict) -> bool:
+        """Update editable book metadata; unknown fields are ignored."""
+        allowed = {"name", "description", "language", "enabled", "scan_depth",
+                   "token_budget", "recursive_scanning", "settings_json",
+                   "source_version", "source_digest"}
+        fields = {key: value for key, value in updates.items() if key in allowed}
+        if "settings_json" in fields and not isinstance(fields["settings_json"], str):
+            fields["settings_json"] = json.dumps(fields["settings_json"], ensure_ascii=False)
+        for key in ("enabled", "recursive_scanning"):
+            if key in fields:
+                fields[key] = int(bool(fields[key]))
+        for key in ("scan_depth", "token_budget"):
+            if key in fields:
+                fields[key] = int(fields[key])
+        if not fields:
+            return self.get_lorebook(book_id) is not None
+        with self._lock:
+            changed = Lorebook.update(**fields, updated_at=SQL("datetime('now')")).where(
+                Lorebook.id == book_id).execute()
+            # A Book's own retrieval settings change what the matcher produces just
+            # as much as its entries do, so they must move the monotonic revision
+            # too. ``updated_at`` alone is second-resolution and would let a
+            # same-second settings edit keep serving the previous annotation.
+            if changed and _RUNTIME_BOOK_FIELDS & set(fields):
+                self._bump_book_revision_locked(book_id)
+            self._commit_locked()
+        return bool(changed)
+
+    def delete_lorebook(self, book_id: str) -> bool:
+        """Delete a non-primary book, its bindings/entries, and derived embeddings."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM lorebooks WHERE id = ?", (book_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            primary = self._conn.execute(
+                "SELECT 1 FROM lorebook_bindings WHERE book_id = ? "
+                "AND role = 'primary' AND scope_kind = 'world' LIMIT 1", (book_id,)
+            ).fetchone()
+            if primary is not None or str(book_id).startswith("world:"):
+                raise ValueError("primary world lorebook cannot be deleted")
+            entry_ids = [r[0] for r in self._conn.execute(
+                "SELECT id FROM lorebook_entries WHERE book_id = ?", (book_id,)
+            ).fetchall()]
+            self._conn.execute("DELETE FROM lorebooks WHERE id = ?", (book_id,))
+            self._delete_embeddings_locked(entry_ids)
+            self._commit_locked()
+            return True
+
+    def get_lorebook(self, book_id: str) -> dict | None:
+        with self._lock:
+            row = Lorebook.get_or_none(Lorebook.id == book_id)
+        return _book_to_dict(row) if row else None
+
+    def list_lorebooks(self, *, scope_kind: str | None = None, scope_id: str | None = None) -> list[dict]:
+        with self._lock:
+            query = Lorebook.select()
+            if scope_kind is not None or scope_id is not None:
+                query = query.join(LorebookBinding, on=(LorebookBinding.book_id == Lorebook.id))
+                if scope_kind is not None:
+                    query = query.where(LorebookBinding.scope_kind == scope_kind)
+                if scope_id is not None:
+                    query = query.where(LorebookBinding.scope_id == scope_id)
+                query = query.distinct()
+            rows = list(query.order_by(Lorebook.updated_at.desc()))
+        return [_book_to_dict(row) for row in rows]
+
+    def bind_lorebook(self, binding: dict) -> None:
+        # Canonical boundary: reject non-canonical scopes here so import flows
+        # and service-layer callers cannot persist rogue bindings.
+        scope_kind = normalize_scope_kind(binding.get("scope_kind"))
+        with self._lock:
+            LorebookBinding.insert(
+                id=binding["id"], book_id=binding["book_id"], scope_kind=scope_kind,
+                scope_id=binding.get("scope_id", ""), role=binding.get("role", ""),
+                enabled=int(binding.get("enabled", True)), order=int(binding.get("order", 100)),
+            ).on_conflict_replace().execute()
+            self._commit_locked()
+
+    def update_binding(self, binding_id: str, updates: dict) -> bool:
+        allowed = {"scope_kind", "scope_id", "role", "enabled", "order"}
+        fields = {key: value for key, value in updates.items() if key in allowed}
+        # Canonical boundary: a scope change cannot introduce a non-canonical kind.
+        if "scope_kind" in fields:
+            fields["scope_kind"] = normalize_scope_kind(fields["scope_kind"])
+        if "enabled" in fields:
+            fields["enabled"] = int(bool(fields["enabled"]))
+        if "order" in fields:
+            fields["order"] = int(fields["order"])
+        if not fields:
+            with self._lock:
+                return LorebookBinding.get_or_none(LorebookBinding.id == binding_id) is not None
+        with self._lock:
+            existing = self._conn.execute(
+                "SELECT book_id, role, scope_kind FROM lorebook_bindings WHERE id = ?",
+                (binding_id,),
+            ).fetchone()
+            if existing is None:
+                return False
+            if existing[1] == "primary" and any(key in fields for key in ("scope_kind", "scope_id", "role")):
+                raise ValueError("primary world binding cannot be changed")
+            changed = LorebookBinding.update(**fields, updated_at=SQL("datetime('now')")).where(
+                LorebookBinding.id == binding_id).execute()
+            self._commit_locked()
+        return bool(changed)
+
+    def delete_binding(self, binding_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT role, scope_kind FROM lorebook_bindings WHERE id = ?", (binding_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            if row[0] == "primary" and row[1] == "world":
+                raise ValueError("primary world binding cannot be deleted")
+            self._conn.execute("DELETE FROM lorebook_bindings WHERE id = ?", (binding_id,))
+            self._commit_locked()
+            return True
+
+    def list_bindings(self, *, scope_kind: str | None = None, scope_id: str | None = None) -> list[dict]:
+        with self._lock:
+            query = LorebookBinding.select()
+            if scope_kind is not None:
+                query = query.where(LorebookBinding.scope_kind == scope_kind)
+            if scope_id is not None:
+                query = query.where(LorebookBinding.scope_id == scope_id)
+            rows = list(query.order_by(LorebookBinding.order, LorebookBinding.id))
+        return [dict(row.__data__) for row in rows]
 
     # ---- 条目 CRUD ----
 
     def add_entry(self, entry: dict) -> None:
         with self._lock:
+            requested_book_id = entry.get("book_id")
+            # Legacy world-copy callers clone a row verbatim, including the old
+            # ``world:<source>`` book id. A target world remains authoritative for
+            # that compatibility path; explicit standalone imports have no world_id
+            # and keep their canonical book id.
+            if entry.get("world_id") and requested_book_id and str(requested_book_id).startswith("world:") and requested_book_id != self.primary_world_book_id(entry["world_id"]):
+                requested_book_id = None
+            book_id = requested_book_id or self._ensure_primary_book_locked(entry["world_id"])
             LorebookEntry.insert(
                 id=entry["id"],
-                world_id=entry["world_id"],
+                book_id=book_id,
+                world_id=entry.get("world_id"),
                 name=entry["name"],
                 type=entry.get("type", "other"),
                 keywords=json.dumps(entry.get("keywords", []), ensure_ascii=False),
@@ -189,8 +472,32 @@ class LorebookStore:
                 group_weight=int(entry.get("group_weight", 1)),
                 connected_to=json.dumps(entry.get("connected_to", []), ensure_ascii=False),
                 source_plugin=entry.get("source_plugin", ""),
+                enabled=int(entry.get("enabled", True)),
+                secondary_keys=json.dumps(entry.get("secondary_keys", []), ensure_ascii=False),
+                selective_logic=entry.get("selective_logic", "and"),
+                selective=int(entry.get("selective", True)),
+                use_regex=int(entry.get("use_regex", False)),
+                regex_executable=int(entry.get("regex_executable", True)),
+                case_sensitive=int(entry.get("case_sensitive", False)),
+                match_whole_words=int(entry.get("match_whole_words", False)),
+                scan_depth=int(entry.get("scan_depth", 0)), priority=int(entry.get("priority", 0)),
+                vector_activation=normalize_vector_activation(
+                    entry.get("vector_activation", DEFAULT_VECTOR_ACTIVATION)
+                ),
+                non_recursable=int(entry.get("non_recursable", False)),
+                prevent_further_recursion=int(entry.get("prevent_further_recursion", False)),
+                delay_until_recursion=int(entry.get("delay_until_recursion", False)),
+                recursion_level=int(entry.get("recursion_level", 0)),
+                groups=json.dumps(entry.get("groups", []), ensure_ascii=False),
+                prioritize_inclusion=int(entry.get("prioritize_inclusion", False)),
+                group_scoring=entry.get("group_scoring", ""), prompt_slot=entry.get("prompt_slot", ""),
+                extensions_json=json.dumps(entry.get("extensions", entry.get("extensions_json", {})), ensure_ascii=False)
+                if not isinstance(entry.get("extensions_json"), str) else entry["extensions_json"],
+                provenance_json=json.dumps(entry.get("provenance", entry.get("provenance_json", {})), ensure_ascii=False)
+                if not isinstance(entry.get("provenance_json"), str) else entry["provenance_json"],
             ).on_conflict_replace().execute()
-            self._conn.commit()
+            self._bump_book_revision_locked(book_id)
+            self._commit_locked()
 
     def get_entry(self, entry_id: str) -> dict | None:
         with self._lock:
@@ -201,16 +508,29 @@ class LorebookStore:
         allowed = {"name", "type", "content", "unreliable",
                    "sync_on_enter", "tier", "keywords", "triggers_recursive", "visible_to",
                    "is_constant", "match_mode", "sticky", "cooldown", "delay", "order",
-                   "probability", "group", "group_weight", "connected_to"}
+                   "probability", "group", "group_weight", "connected_to", "enabled",
+                   "secondary_keys", "selective_logic", "selective", "use_regex", "case_sensitive",
+                   "regex_executable",
+                   "match_whole_words", "scan_depth", "priority", "vector_activation",
+                   "non_recursable", "prevent_further_recursion", "delay_until_recursion",
+                   "recursion_level", "groups", "prioritize_inclusion", "group_scoring",
+                   "prompt_slot", "extensions_json", "provenance_json"}
         fields = {}
         for k, v in updates.items():
             if k not in allowed:
                 continue
-            if k in ("keywords", "triggers_recursive", "visible_to", "connected_to"):
+            if k in ("keywords", "triggers_recursive", "visible_to", "connected_to", "secondary_keys", "groups"):
                 v = json.dumps(v, ensure_ascii=False)
-            elif k in ("unreliable", "sync_on_enter", "is_constant",
+            elif k in ("extensions_json", "provenance_json") and not isinstance(v, str):
+                v = json.dumps(v, ensure_ascii=False)
+            elif k == "vector_activation":
+                v = normalize_vector_activation(v)
+            elif k in ("unreliable", "sync_on_enter", "is_constant", "enabled", "use_regex",
+                       "case_sensitive", "match_whole_words", "non_recursable",
+                       "prevent_further_recursion", "delay_until_recursion", "prioritize_inclusion",
+                       "selective", "regex_executable",
                        "sticky", "cooldown", "delay", "order",
-                       "probability", "group_weight"):
+                       "probability", "group_weight", "scan_depth", "priority", "recursion_level"):
                 v = int(v)
             fields[k] = v
         if not fields:
@@ -219,14 +539,140 @@ class LorebookStore:
             LorebookEntry.update(
                 **fields, updated_at=SQL("datetime('now')"),
             ).where(LorebookEntry.id == entry_id).execute()
-            self._conn.commit()
+            self._bump_book_revision_locked(self._entry_book_id_locked(entry_id))
+            self._commit_locked()
+
+    def _entry_book_id_locked(self, entry_id: str) -> str | None:
+        """Owning book id for an entry (caller holds ``self._lock``)."""
+
+        row = self._conn.execute(
+            "SELECT book_id FROM lorebook_entries WHERE id = ?", (entry_id,)
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
 
     def delete_entry(self, entry_id: str) -> None:
         with self._lock:
+            book_id = self._entry_book_id_locked(entry_id)
             LorebookEntry.delete().where(LorebookEntry.id == entry_id).execute()
             # 派生缓存跟着条目走，避免删除后残留向量行。
             self._delete_embeddings_locked([entry_id])
-            self._conn.commit()
+            self._bump_book_revision_locked(book_id)
+            self._commit_locked()
+
+    # ---- Book 作用域条目访问（ownership isolation） --------------------------
+    # entry.id 仍是全局 canonical PK；这里只是把「URL 里的 book_id」与「entry 真正
+    # 归属的 book_id」绑定成同一个查询条件。归属不匹配一律 fail closed（返回
+    # None/False），绝不允许跨 Book 修改或删除。
+
+    def get_book_entry(self, book_id: str, entry_id: str) -> dict | None:
+        """Read an entry only when it really belongs to ``book_id``."""
+
+        with self._lock:
+            entry = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            )
+        return _entry_to_dict(entry) if entry else None
+
+    def update_book_entry(self, book_id: str, entry_id: str, updates: dict) -> bool:
+        """Update an entry scoped to ``book_id``.
+
+        Returns False when the entry does not exist inside that book, so the
+        caller can translate it into an explicit 404/409 ownership error.
+        """
+
+        with self._lock:
+            owned = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            )
+            if owned is None:
+                return False
+        # update_entry re-acquires the non-reentrant lock, so it must run outside.
+        self.update_entry(entry_id, updates)
+        return True
+
+    @classmethod
+    def world_projection_for_book(cls, book_id: str) -> str | None:
+        """The legacy ``world_id`` projection a Book implies, or None.
+
+        Only the deterministic primary world book ``world:<world_id>`` carries the
+        compatibility projection; independent / global / game / character books
+        never do. Keeping this in sync on move matters for more than metadata:
+        ``delete_world_cascade`` still deletes by ``LorebookEntry.world_id``, so a
+        stale projection would let deleting a world remove an entry that had
+        already been moved into an independent Book.
+        """
+
+        text = str(book_id or "")
+        prefix = "world:"
+        if not text.startswith(prefix):
+            return None
+        world_id = text[len(prefix):]
+        if not world_id:
+            return None
+        return world_id if cls.primary_world_book_id(world_id) == text else None
+
+    def move_entry(self, source_book_id: str, target_book_id: str, entry_id: str) -> bool:
+        """Move an entry between books, keeping its canonical ``entry.id``.
+
+        Ownership isolation still applies: the entry must live in
+        ``source_book_id``. Both books get a revision bump so a cached matcher
+        fingerprint for either one is invalidated. The ``world_id`` compatibility
+        projection is re-derived from the target Book so the canonical invariant
+        (primary world book <-> world_id, everything else NULL) never drifts.
+        Returns False when the entry is not in the source book or the target book
+        does not exist.
+        """
+
+        source_book_id = str(source_book_id or "")
+        target_book_id = str(target_book_id or "")
+        if not source_book_id or not target_book_id:
+            return False
+        if source_book_id == target_book_id:
+            # Nothing to move; still require that the entry is really owned here.
+            with self._lock:
+                return LorebookEntry.get_or_none(
+                    LorebookEntry.id == entry_id,
+                    LorebookEntry.book_id == source_book_id,
+                ) is not None
+        with self._lock:
+            if Lorebook.get_or_none(Lorebook.id == target_book_id) is None:
+                return False
+            owned = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == source_book_id,
+            )
+            if owned is None:
+                return False
+            LorebookEntry.update(
+                book_id=target_book_id,
+                world_id=self.world_projection_for_book(target_book_id),
+                updated_at=SQL("datetime('now')"),
+            ).where(LorebookEntry.id == entry_id).execute()
+            self._bump_book_revision_locked(source_book_id)
+            self._bump_book_revision_locked(target_book_id)
+            self._commit_locked()
+        return True
+
+    def delete_book_entry(self, book_id: str, entry_id: str) -> bool:
+        """Delete an entry scoped to ``book_id``; False when it is not in that book."""
+
+        with self._lock:
+            owned = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            )
+            if owned is None:
+                return False
+            LorebookEntry.delete().where(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            ).execute()
+            self._delete_embeddings_locked([entry_id])
+            self._bump_book_revision_locked(book_id)
+            self._commit_locked()
+        return True
 
     def delete_world_cascade(self, world_id: str) -> None:
         """删除世界及其所有条目。"""
@@ -238,7 +684,8 @@ class LorebookStore:
             LorebookEntry.delete().where(LorebookEntry.world_id == world_id).execute()
             self._delete_embeddings_locked(entry_ids)
             World.delete().where(World.id == world_id).execute()
-            self._conn.commit()
+            self._bump_book_revision_locked(self.primary_world_book_id(world_id))
+            self._commit_locked()
 
     def count_entries_by_plugin(self, plugin_id: str) -> int:
         with self._lock:
@@ -249,6 +696,12 @@ class LorebookStore:
     def delete_entries_by_plugin(self, plugin_id: str) -> int:
         """删除该插件来源的全部世界书条目，返回删除条数。"""
         with self._lock:
+            book_ids = [
+                str(row[0]) for row in self._conn.execute(
+                    "SELECT DISTINCT book_id FROM lorebook_entries WHERE source_plugin = ?",
+                    (plugin_id,),
+                )
+            ]
             entry_ids = [
                 str(row.id) for row in
                 LorebookEntry.select(LorebookEntry.id).where(
@@ -259,7 +712,9 @@ class LorebookStore:
                 LorebookEntry.source_plugin == plugin_id,
             ).execute()
             self._delete_embeddings_locked(entry_ids)
-            self._conn.commit()
+            for book_id in book_ids:
+                self._bump_book_revision_locked(book_id)
+            self._commit_locked()
         return rowcount
 
     def list_plugin_worlds(self, plugin_id: str) -> list[dict]:
@@ -275,7 +730,19 @@ class LorebookStore:
 
     def list_entries(self, world_id: str, entry_type: str | None = None) -> list[dict]:
         with self._lock:
-            query = LorebookEntry.select().where(LorebookEntry.world_id == world_id)
+            book_id = self._ensure_primary_book_locked(world_id)
+            # Compatibility projection is intentionally limited to the primary
+            # world book. Independent books may be bound to this world, but
+            # their canonical entries must only be read through list_book_entries.
+            query = LorebookEntry.select().where(LorebookEntry.book_id == book_id)
+            if entry_type:
+                query = query.where(LorebookEntry.type == entry_type)
+            rows = list(query.order_by(LorebookEntry.tier, LorebookEntry.name))
+        return [_entry_to_dict(e) for e in rows]
+
+    def list_book_entries(self, book_id: str, entry_type: str | None = None) -> list[dict]:
+        with self._lock:
+            query = LorebookEntry.select().where(LorebookEntry.book_id == book_id)
             if entry_type:
                 query = query.where(LorebookEntry.type == entry_type)
             rows = list(query.order_by(LorebookEntry.tier, LorebookEntry.name))
@@ -352,7 +819,7 @@ class LorebookStore:
         with self._lock:
             for row in payload:
                 LorebookEmbedding.insert(**row).on_conflict_replace().execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def _delete_embeddings_locked(self, entry_ids: list[str]) -> None:
         """删除若干 entry 的缓存行（调用方必须已持有 ``self._lock``）。"""
@@ -369,10 +836,11 @@ class LorebookStore:
         # 通配符语义不同，不要改用 like）。
         pattern = f"%{keyword}%"
         with self._lock:
+            book_id = self._ensure_primary_book_locked(world_id)
             rows = list(
                 LorebookEntry.select()
                 .where(
-                    (LorebookEntry.world_id == world_id)
+                    (LorebookEntry.book_id == book_id)
                     & (
                         LorebookEntry.name.ilike(pattern)
                         | LorebookEntry.content.ilike(pattern)
@@ -383,6 +851,17 @@ class LorebookStore:
             )
         return [_entry_to_dict(e) for e in rows]
 
+    def search_book_entries(self, book_id: str, keyword: str) -> list[dict]:
+        pattern = f"%{keyword}%"
+        with self._lock:
+            rows = list(LorebookEntry.select().where(
+                (LorebookEntry.book_id == book_id)
+                & (LorebookEntry.name.ilike(pattern)
+                   | LorebookEntry.content.ilike(pattern)
+                   | LorebookEntry.keywords.ilike(pattern))
+            ).order_by(LorebookEntry.tier, LorebookEntry.name))
+        return [_entry_to_dict(e) for e in rows]
+
 
 def _entry_to_dict(entry: LorebookEntry) -> dict:
     d = dict(entry.__data__)
@@ -390,5 +869,21 @@ def _entry_to_dict(entry: LorebookEntry) -> dict:
     d["triggers_recursive"] = json.loads(d.get("triggers_recursive", "[]"))
     d["visible_to"] = json.loads(d.get("visible_to", "[]"))
     d["connected_to"] = json.loads(d.get("connected_to", "[]"))
+    for key, default in (("secondary_keys", "[]"), ("groups", "[]"),
+                         ("extensions_json", "{}"), ("provenance_json", "{}")):
+        raw = d.get(key, default)
+        try:
+            d[key.removesuffix("_json") if key.endswith("_json") else key] = json.loads(raw or default)
+        except (TypeError, json.JSONDecodeError):
+            d[key.removesuffix("_json") if key.endswith("_json") else key] = [] if default == "[]" else {}
     d["source_plugin"] = d.get("source_plugin", "") or ""
+    return d
+
+
+def _book_to_dict(book: Lorebook) -> dict:
+    d = dict(book.__data__)
+    try:
+        d["settings"] = json.loads(d.get("settings_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        d["settings"] = {}
     return d

@@ -202,6 +202,48 @@ async def test_build_context_does_not_duplicate_system_prompt():
 
 
 @pytest.mark.asyncio
+async def test_build_context_projects_non_empty_prompt_slot():
+    context = await build_context(
+        DummyInstance(),
+        gm_prompt_filled="你是测试 GM。",
+        lorebook_entries=[{
+            "id": "slot_entry", "type": "other", "tier": "core",
+            "name": "插槽设定", "content": "必须进入 GM 设定。",
+            "prompt_slot": "after_system",
+        }],
+        player_message="继续。",
+        provider_name="deepseek",
+    )
+    assert "[id=slot_entry][type=other][tier=core][slot=after_system]" in context
+
+
+@pytest.mark.asyncio
+async def test_build_context_prompt_slot_entry_still_respects_lorebook_budget():
+    from src.llm.context_builder import lore_entry_projection
+
+    small = {
+        "id": "kept", "type": "other", "tier": "core",
+        "name": "短条目", "content": "保留。", "prompt_slot": "main",
+    }
+    dropped = {
+        "id": "dropped", "type": "other", "tier": "core",
+        "name": "长条目", "content": "不应进入。" * 100,
+        "prompt_slot": "main",
+    }
+    context = await build_context(
+        DummyInstance(),
+        gm_prompt_filled="你是测试 GM。",
+        lorebook_entries=[small, dropped],
+        player_message="继续。",
+        provider_name="deepseek",
+        lorebook_budget=len(lore_entry_projection(small)) + 1,
+    )
+    assert "[slot=main]" in context
+    assert "kept" in context
+    assert "dropped" not in context
+
+
+@pytest.mark.asyncio
 async def test_lore_projection_keeps_id_type_tier_unreliable_and_authority_rules():
     """§25 / §45：投影保留 id/type/tier/unreliable，并声明权威与自由度边界。"""
 
@@ -286,6 +328,32 @@ def test_review_player_safe_projection_keeps_contract_for_all_locales():
         assert "secret_id" not in rendered
         assert "[type=location][tier=background]" in rendered
         assert "旧石桥" in rendered
+
+
+def test_prompt_slot_is_projected_for_gm_but_not_player_safe_lore():
+    from src.llm.context_builder import lore_entry_projection, project_player_safe_lore
+
+    entry = {
+        "id": "secret_clue",
+        "type": "other",
+        "tier": "core",
+        "name": "暗号",
+        "content": "钟声响起时开门。",
+        "prompt_slot": "after_system",
+    }
+
+    assert "[slot=after_system]" in lore_entry_projection(entry)
+    safe = project_player_safe_lore([entry], language="zh-CN")
+    assert "[slot=after_system]" not in safe
+
+
+def test_empty_prompt_slot_keeps_projection_unchanged():
+    from src.llm.context_builder import lore_entry_projection
+
+    entry = {"id": "plain", "type": "location", "tier": "background", "name": "旧桥", "content": "已断裂。"}
+    assert lore_entry_projection(entry) == (
+        "[id=plain][type=location][tier=background]\n旧桥:\n已断裂。"
+    )
 
 
 def test_review_player_safe_projection_respects_budget():

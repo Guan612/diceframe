@@ -542,6 +542,27 @@ export interface LorePreviewResponse {
   summary?: LorePreviewSummary
 }
 
+export interface LoreActivationTraceRow {
+  entry_id: string
+  book_id?: string
+  candidate_sources?: string[]
+  matched_keys?: string[]
+  secondary_matches?: string[]
+  semantic_score?: number | null
+  visibility?: string
+  budget?: string
+  final_state?: string
+  reason_code?: string
+  [key: string]: unknown
+}
+
+export interface LoreActivationPreviewResponse {
+  ok?: boolean
+  error?: string
+  entries?: Array<Record<string, unknown>>
+  trace?: LoreActivationTraceRow[]
+}
+
 export interface GameSummary {
   game_key: string
   world_name?: string
@@ -627,6 +648,16 @@ export interface PlayerCreateResponse {
   [key: string]: unknown
 }
 
+export interface CharacterImportLorebook {
+  book_id: string
+  name: string
+  entries: number
+  role?: string
+  label?: string
+  binding?: { scope_kind: string; scope_id: string; role?: string } | null
+  [key: string]: unknown
+}
+
 export interface CharacterImportResponse {
   ok?: boolean
   error?: string
@@ -635,6 +666,8 @@ export interface CharacterImportResponse {
   npc_name?: string
   world_id?: string
   lorebook_entries?: number
+  lorebook_book_id?: string
+  lorebook?: CharacterImportLorebook
   nsfw_warning?: boolean
 }
 

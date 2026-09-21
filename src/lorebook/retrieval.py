@@ -30,6 +30,20 @@ from src.engine.world_legality import actor_location_fact_key
 from src.engine.world_state import project_visible_state
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.memory.embedding import cosine_similarity
+from src.lorebook.matcher import BUDGET_CANDIDATE_SLACK, MIN_BUDGET_CANDIDATES
+from src.lorebook.resolver import resolve_active_books
+from src.lorebook.budget import (
+    apply_token_budget,
+    estimate_entry_chars,
+    max_entries_within_budget,
+)
+from src.lorebook.activation import (
+    CANONICAL_VECTOR_ACTIVATION,
+    DEFAULT_VECTOR_ACTIVATION,
+    evaluate_probability,
+    timed_gate_blocked,
+)
+from src.lorebook.trace import ActivationTrace
 
 logger = logging.getLogger("trpg")
 
@@ -344,18 +358,31 @@ class LoreRetriever:
         self._embedding_client_provider = embedding_client_provider
         self._semantic_top_k = max(0, int(semantic_top_k))
         self._semantic_threshold = float(semantic_threshold)
-        self._scope: tuple[str, str] | None = None
+        self._scope: tuple[str, ...] | None = None
         self._entries: list[dict] = []
         self._world_id = ""
         self._language = DEFAULT_LANGUAGE
+        self.last_activation_trace: list[dict[str, Any]] = []
+        self._legacy_world_mode = False
 
     # ---- 世界作用域 ---------------------------------------------------------
 
     def ensure_world(self, world_id: str, language: str = "") -> None:
         """确保匹配器与语义候选都已加载当前世界的条目（按 world + language 缓存）。"""
 
-        scope = (str(world_id or ""), str(language or DEFAULT_LANGUAGE))
-        if not world_id or scope == self._scope or self._store is None:
+        if not world_id or self._store is None:
+            return
+        # The compatibility facade reads the primary world book, so its cache key
+        # must carry that book's revision too: canonical entry CRUD bumps it and
+        # the next retrieve has to see the new state.
+        revision = 0
+        if hasattr(self._store, "get_lorebook"):
+            book = self._store.get_lorebook(self._store.primary_world_book_id(str(world_id)))
+            revision = int((book or {}).get("revision", 0) or 0)
+        # scope[1] stays the bare language so the locale guard in
+        # ensure_lore_context keeps working; the revision rides as a third slot.
+        scope = (str(world_id or ""), str(language or DEFAULT_LANGUAGE), str(revision))
+        if scope == self._scope:
             return
         entries = self._store.list_entries(str(world_id))
         if self._load_world_template is not None:
@@ -366,8 +393,77 @@ class LoreRetriever:
             )
         self._matcher.build(entries)
         self._entries = list(entries)
-        self._world_id, self._language = scope
+        self._world_id, self._language = scope[0], scope[1]
         self._scope = scope
+        self._legacy_world_mode = True
+
+    def ensure_lore_context(self, instance: Any, *, viewer_is_gm: bool = True,
+                            viewer_uid: str = "", action_actor_uids: Sequence[str] | None = None) -> None:
+        """Load all canonical books bound to the current runtime context.
+
+        The world-only ``ensure_world`` method remains the compatibility façade for
+        map/NPC projections. Narrative retrieval uses this resolver-backed path.
+        Stores from older callers that do not expose bindings automatically fall back
+        to that façade.
+        """
+        world_id = str(getattr(instance, "world_id", "") or "")
+        if self._legacy_world_mode and action_actor_uids is None and self._scope and self._scope[0] == world_id:
+            return
+        instance_language = str(getattr(instance, "language", "") or "")
+        # Explicit callers may use ensure_world(world, language) for locale
+        # characterization; do not immediately overwrite that scope from a
+        # lightweight test/runtime instance carrying a stale language field.
+        if (self._scope and self._scope[0] == world_id and "|books:" not in self._scope[1]
+                and self._scope[1] == self._language and instance_language
+                and instance_language != self._language):
+            return
+        language = instance_language or self._language or DEFAULT_LANGUAGE
+        if not world_id or self._store is None or not hasattr(self._store, "list_bindings"):
+            self.ensure_world(world_id, language)
+            return
+        refs = resolve_active_books(
+            instance, "gm" if viewer_is_gm else ("character" if viewer_uid else "party"),
+            viewer_uid, list(action_actor_uids or getattr(instance, "action_actor_uids", []) or []), store=self._store,
+        )
+        # An empty result has two very different meanings. A store with no
+        # bindings at all is a legacy store where the world façade is the only
+        # content path. A store that *has* bindings but resolved none of them is a
+        # deliberate "nothing is active" (a disabled Book, or a scope this viewer
+        # cannot see) — falling back to the legacy world read there would put
+        # deliberately disabled content straight back into context.
+        if not refs and not self._store.list_bindings():
+            self.ensure_world(world_id, language)
+            return
+        book_ids = [ref.book_id for ref in refs]
+        # The fingerprint carries the Book's monotonic revision, which every
+        # entry mutation bumps. updated_at alone is second-precision and would
+        # keep a stale matcher across two edits inside the same second.
+        scope = (world_id, f"{language}|books:" + ",".join(
+            f"{ref.book_id}@{ref.updated_at}@{ref.revision}@{ref.order}"
+            for ref in refs
+        ))
+        if scope == self._scope:
+            return
+        entries: list[dict] = []
+        for ref in refs:
+            book_entries = self._store.list_book_entries(ref.book_id)
+            for entry in book_entries:
+                row = dict(entry)
+                row["_lorebook_id"] = ref.book_id
+                row["_lorebook_order"] = ref.order
+                row["_lorebook_token_budget"] = ref.token_budget
+                row["_lorebook_scan_depth"] = ref.scan_depth
+                row["_lorebook_recursive_scanning"] = ref.recursive_scanning
+                row["_lorebook_fuzzy_enabled"] = ref.fuzzy_enabled
+                settings = ref.settings or {}
+                row["_lorebook_vector_activation"] = str(
+                    settings.get("vector_activation", DEFAULT_VECTOR_ACTIVATION) or DEFAULT_VECTOR_ACTIVATION
+                )
+                entries.append(row)
+        self._matcher.build(entries)
+        self._entries = entries
+        self._world_id, self._language, self._scope = world_id, language, scope
+        self._legacy_world_mode = False
 
     def invalidate_world(self, world_id: str) -> None:
         """世界内容或语言变化后强制下一次重建（与旧 matcher 失效语义一致）。"""
@@ -381,6 +477,20 @@ class LoreRetriever:
 
         return list(self._entries)
 
+    def resolve_active_books(self, instance: Any, *, viewer_is_gm: bool = True,
+                             viewer_uid: str = "", action_actor_uids: Sequence[str] | None = None) -> list[dict]:
+        """Return stable book refs for diagnostics and multi-book callers.
+
+        The existing ``ensure_world`` facade remains the default world-content path;
+        this additive API lets round/KP integrations opt into bindings without making
+        frontend code aware of storage details.
+        """
+        refs = resolve_active_books(
+            instance, "gm" if viewer_is_gm else ("character" if viewer_uid else "party"),
+            viewer_uid, list(action_actor_uids or []), store=self._store,
+        )
+        return [{"book_id": ref.book_id, "order": ref.order, "binding_id": ref.binding_id, "role": ref.role} for ref in refs]
+
     # ---- 检索主入口 ---------------------------------------------------------
 
     async def retrieve(
@@ -392,14 +502,26 @@ class LoreRetriever:
         viewer_uid: str | None = None,
         viewer_name: str = "",
         mutate_timers: bool = True,
+        action_actor_uids: Sequence[str] | None = None,
+        overall_budget: int | None = None,
     ) -> list[dict]:
         """返回本轮应当进入上下文的 canonical 条目（已按视角过滤、按 id 去重）。
 
         ``mutate_timers=True``（正常回合 / swipe）沿用既有语义：匹配到的 sticky /
         cooldown / delay 会写回实例的计时状态。``False``（玩家问答）用副本匹配，
         观察计时器但不改变它们。
+
+        ``overall_budget`` 是整体 lore 预算（字符），由调用方从既有的 prompt /
+        context 预算派生（``llm.context_builder.lore_char_budget``）。预算先逐
+        book 裁剪、merge，再整体裁剪一次；它同时收紧 recursion 的候选上限，
+        避免大 Book 先无限展开、最后才裁。传 ``None`` 表示本次不设整体上限，
+        最终仍由 context_builder 兜底。
         """
 
+        self.ensure_lore_context(
+            instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
+            action_actor_uids=action_actor_uids,
+        )
         anchors = lore_query_anchors(
             instance, viewer_is_gm=viewer_is_gm, viewer_uid=str(viewer_uid or ""),
         )
@@ -409,38 +531,61 @@ class LoreRetriever:
         )
 
         timed_state = self._timed_state(instance, mutate_timers=mutate_timers)
-        # 关键词只吃 lexical query（无结构标签）；embedding 吃带标签的 semantic query。
-        keyword_hits = list(
-            self._matcher.match_with_recursive(queries["lexical"], timed_state=timed_state)
-        )
-        hits = self._visible_entries(
-            keyword_hits,
-            viewer_is_gm=viewer_is_gm,
-            viewer_uid=viewer_uid,
-            viewer_name=viewer_name,
-        )
 
-        semantic_hits = await self._semantic_hits(
+        def _visible(entry: dict) -> bool:
+            return bool(self._visible_entries(
+                [entry], viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+                viewer_name=viewer_name,
+            ))
+
+        # 语义候选先于激活发现：semantic / vector 只是候选发现通道，候选必须与
+        # lexical 候选一起汇入同一套 activation eligibility pipeline，因此
+        # probability / group / timed / visibility 语义在两条通道上完全一致。
+        semantic_ids, semantic_scores = await self._semantic_candidates(
             queries["semantic"],
             timed_state=timed_state,
             viewer_is_gm=viewer_is_gm,
             viewer_uid=viewer_uid,
             viewer_name=viewer_name,
-            already={
-                str(entry.get("id") or "") for entry in hits if entry.get("id")
-            },
         )
-        merged = self._merge_and_sort(hits, semantic_hits)
+        # vector_only 条目只能被语义通道发现，不能被关键词通道（含 recursion
+        # 扫描）激活。delay 门用 DiceFrame 的 authoritative turn tick 判定。
+        activated = self._matcher.match_with_recursive(
+            queries["lexical"],
+            timed_state=timed_state,
+            is_visible=_visible,
+            is_candidate=lambda entry: self._vector_mode(entry) != "vector_only",
+            extra_candidates=semantic_ids,
+            current_tick=int(getattr(instance, "round_number", 0) or 0),
+            max_activated=self._candidate_cap(overall_budget),
+        )
+        hits = []
+        for entry in activated:
+            row = dict(entry)
+            score = semantic_scores.get(str(row.get("id") or ""))
+            if score is not None:
+                row["_semantic_score"] = score
+            hits.append(row)
+
+        merged, budget_omitted = self._apply_budgets(hits, overall_budget)
+        self.last_activation_trace = self._build_trace(
+            hits, semantic_scores, merged,
+            lexical_query=queries["lexical"],
+            viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+            budget_omitted=budget_omitted,
+        )
+        try:
+            setattr(instance, "lorebook_activation_trace", list(self.last_activation_trace))
+        except Exception:
+            pass
 
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "Lore retrieval: world=%s language=%s scene=%s location=%s present_npcs=%s "
-                "keyword_hits=%s semantic_hits=%s final_hits=%s",
+                "semantic_candidates=%s final_hits=%s",
                 self._world_id, self._language, anchors["scene"], anchors["location"],
                 anchors["present_npcs"],
-                [entry.get("id") for entry in keyword_hits],
-                [entry.get("id") for entry in semantic_hits],
-                [entry.get("id") for entry in merged],
+                list(semantic_ids), [entry.get("id") for entry in merged],
             )
         return merged
 
@@ -519,7 +664,7 @@ class LoreRetriever:
             logger.debug("读取 embedding 客户端失败，跳过语义检索", exc_info=True)
             return None
 
-    async def _semantic_hits(
+    async def _semantic_candidates(
         self,
         query: str,
         *,
@@ -527,28 +672,35 @@ class LoreRetriever:
         viewer_is_gm: bool,
         viewer_uid: str | None,
         viewer_name: str,
-        already: set[str],
-    ) -> list[dict]:
-        """可选的语义召回：任何失败都只意味着"本轮没有语义增强"。"""
+    ) -> tuple[set[str], dict[str, float]]:
+        """语义候选发现：只负责"找出可能的条目"，不做 activation 决策。
+
+        返回 ``(candidate_ids, {id: score})``。这些候选随后与 lexical 候选一起
+        进入 :meth:`KeywordMatcher.match_with_recursive` 的统一 eligibility
+        pipeline（enabled / visibility / timed / probability / group / budget），
+        因此 semantic-only 条目不会绕过任何 activation 条件。
+        任何失败都只意味着"本轮没有语义增强"。
+        """
 
         if self._semantic_top_k <= 0 or not query or not self._entries or self._store is None:
-            return []
+            return set(), {}
         client = self._embedding_client()
         if client is None:
-            return []
+            return set(), {}
 
         candidates = self._visible_entries(
-            [entry for entry in self._entries if str(entry.get("id") or "") not in already],
+            list(self._entries),
             viewer_is_gm=viewer_is_gm,
             viewer_uid=viewer_uid,
             viewer_name=viewer_name,
         )
         candidates = [
             entry for entry in candidates
-            if not self._timer_blocked(str(entry.get("id") or ""), timed_state)
+            if self._vector_mode(entry) in {"hybrid", "vector_only"}
+            and not self._timer_blocked(str(entry.get("id") or ""), timed_state)
         ]
         if not candidates:
-            return []
+            return set(), {}
 
         # 共享 matcher / 世界作用域是 per-runtime 的，embedding 调用会让出事件循环；
         # 语言必须在第一个 await 之前快照，否则另一个世界的 ensure_world 会让本轮
@@ -559,14 +711,14 @@ class LoreRetriever:
             query_vector = normalize_vector(await client.embed(query))
         except Exception:
             logger.warning("Lore semantic query embedding 失败，跳过语义检索", exc_info=True)
-            return []
+            return set(), {}
         if query_vector is None:
             logger.warning("Lore semantic query embedding 不是合法向量，跳过语义检索")
-            return []
+            return set(), {}
 
         vectors = await self._entry_vectors(client, candidates, query_vector, language=language)
         if not vectors:
-            return []
+            return set(), {}
 
         scored: list[tuple[float, dict]] = []
         for entry in candidates:
@@ -578,13 +730,201 @@ class LoreRetriever:
                 scored.append((score, entry))
         scored.sort(key=lambda item: (-item[0], str(item[1].get("id") or "")))
 
-        hits: list[dict] = []
+        ids: set[str] = set()
+        scores: dict[str, float] = {}
         for score, entry in scored[: self._semantic_top_k]:
-            hit = dict(entry)
+            entry_id = str(entry.get("id") or "")
+            if not entry_id:
+                continue
+            ids.add(entry_id)
             # 诊断字段：只在语义命中上标注分数，不改变 matcher 既有字段语义。
-            hit["_semantic_score"] = round(float(score), 4)
-            hits.append(hit)
-        return hits
+            scores[entry_id] = round(float(score), 4)
+        return ids, scores
+
+    @staticmethod
+    def _vector_mode(entry: dict[str, Any]) -> str:
+        """Resolve one entry's effective vector activation mode.
+
+        Contract::
+
+            off         = 不参与 semantic candidate discovery
+            hybrid      = keyword + semantic
+            vector_only = 只允许 semantic discovery，不允许 lexical discovery
+
+        ``off`` is an explicit author decision and is honoured literally — it is
+        **not** a synonym for inherit. Only a missing / empty field inherits the
+        book-level default (world-template and legacy projections carry no
+        canonical field and therefore keep the pre-v2 semantic enhancement).
+        Legacy v4 lore is migrated to an explicit ``hybrid`` by the v6 schema
+        migration instead of being reinterpreted on every retrieval.
+        """
+
+        raw = entry.get("vector_activation")
+        mode = str(raw if raw is not None else "").strip().lower()
+        if mode in CANONICAL_VECTOR_ACTIVATION:
+            return mode
+        return LoreRetriever._book_vector_default(entry)
+
+    @staticmethod
+    def _book_vector_default(entry: dict[str, Any]) -> str:
+        """Book-level inheritance target for entries with no explicit mode."""
+
+        default = str(entry.get("_lorebook_vector_activation") or "").strip().lower()
+        return default if default in CANONICAL_VECTOR_ACTIVATION else DEFAULT_VECTOR_ACTIVATION
+
+    @staticmethod
+    def _apply_book_budgets(entries: list[dict]) -> tuple[list[dict], list[str]]:
+        grouped: dict[str, list[dict]] = {}
+        for entry in entries:
+            grouped.setdefault(str(entry.get("_lorebook_id") or "__legacy__"), []).append(entry)
+        included: list[dict] = []
+        omitted: list[str] = []
+        for rows in grouped.values():
+            budget = int(rows[0].get("_lorebook_token_budget", 0) or 0)
+            selected, dropped = apply_token_budget(rows, budget or None)
+            omitted.extend(dropped)
+            for row in selected:
+                copy_row = dict(row)
+                copy_row["_budget_state"] = "included"
+                included.append(copy_row)
+        return LoreRetriever._merge_and_sort(included, []), omitted
+
+    @classmethod
+    def _apply_budgets(
+        cls, entries: list[dict], overall_budget: int | None,
+    ) -> tuple[list[dict], list[str]]:
+        """per-book budget → merge → overall lore budget（Wave C 的两级预算）。
+
+        整体预算的数值由调用方从既有 context 预算派生；这里只负责裁剪，绝不自己
+        推导 provider context-window。单位是字符，与 context_builder 一致，因此
+        用字符估算器而不是 per-book 的 token 估算器。
+        """
+
+        merged, omitted = cls._apply_book_budgets(entries)
+        if overall_budget is None or overall_budget <= 0:
+            return merged, omitted
+        selected, dropped = apply_token_budget(
+            merged, overall_budget, estimate=estimate_entry_chars,
+        )
+        omitted.extend(dropped)
+        for row in selected:
+            row["_budget_state"] = "included"
+        if dropped:
+            logger.debug(
+                "整体 lore 预算裁剪: budget=%d chars kept=%d omitted=%d",
+                overall_budget, len(selected), len(dropped),
+            )
+        return cls._merge_and_sort(selected, []), omitted
+
+    def _candidate_cap(self, overall_budget: int | None) -> int | None:
+        """由整体预算推出 recursion 的候选上限（deterministic，宁松不紧）。
+
+        上界按「最便宜的条目能装多少个」算，再放宽 ``BUDGET_CANDIDATE_SLACK`` 倍，
+        因此只会掐住真正失控的展开，不会把预算本来装得下的条目挡在外面。
+        """
+
+        if overall_budget is None or overall_budget <= 0:
+            return None
+        fits = max_entries_within_budget(
+            list(self._entries), overall_budget, estimate=estimate_entry_chars,
+        )
+        if fits is None:
+            return None
+        return max(MIN_BUDGET_CANDIDATES, fits * BUDGET_CANDIDATE_SLACK)
+
+    def _build_trace(
+        self, activated: Sequence[dict], semantic_scores: dict[str, float], final_hits: Sequence[dict],
+        *, lexical_query: str, viewer_is_gm: bool, viewer_uid: str | None,
+        budget_omitted: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
+        """Build the ActivationTrace from the decisions the run actually made.
+
+        Every reason comes from an authority that actually ran: keyword matching
+        from ``keyword_decision``, and probability rolls / group competition /
+        timed gates / recursion parentage from the matcher's per-candidate
+        decision log (``KeywordMatcher.last_decisions``). Nothing here re-derives
+        a verdict the activation path did not compute, so the trace cannot claim
+        a rejection reason that never happened.
+
+        Player traces never reveal a hidden row or even its count.
+        """
+
+        semantic_ids = set(semantic_scores)
+        final_ids = {str(row.get("id") or "") for row in final_hits}
+        omitted_by_budget = {str(eid) for eid in budget_omitted}
+        activated_ids = {str(row.get("id") or "") for row in activated}
+        decisions = dict(getattr(self._matcher, "last_decisions", {}) or {})
+        rows: list[dict[str, Any]] = []
+        for entry in self._entries:
+            entry_id = str(entry.get("id") or "")
+            if not entry_id:
+                continue
+            visible = viewer_is_gm or bool(self._visible_entries([entry], viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid))
+            if not viewer_is_gm and not visible:
+                # Player traces must not reveal hidden rows or even their count.
+                continue
+            decision = self._matcher.keyword_decision(entry, lexical_query)
+            keyword_source = bool(decision["matched"]) and self._vector_mode(entry) != "vector_only"
+            semantic_source = entry_id in semantic_ids
+            score = semantic_scores.get(entry_id)
+            recorded = decisions.get(entry_id, {})
+            included = entry_id in final_ids
+            trace = ActivationTrace(
+                entry_id=entry_id,
+                book_id=str(entry.get("_lorebook_id") or entry.get("book_id") or ""),
+                candidate_sources=[
+                    source for source, present in (("keyword", keyword_source), ("semantic", semantic_source)) if present
+                ],
+                matched_keys=list(decision["matched_keys"]),
+                secondary_matches=list(decision["secondary_matches"]),
+                primary_result=decision["primary_ok"],
+                secondary_result=decision["secondary_ok"],
+                semantic_score=float(score) if score is not None else None,
+                recursion_parent=str(recorded.get("parent") or "") or None,
+                recursion_depth=int(recorded.get("depth", 0) or 0),
+                probability=recorded.get("probability"),
+                group=recorded.get("group"),
+                timed=recorded.get("timed"),
+                visibility="visible" if visible else "hidden",
+                budget="included" if included else "omitted",
+                final_state="included" if included else "omitted",
+                reason_code=self._reason_code(
+                    entry_id, recorded, included=included,
+                    activated=entry_id in activated_ids,
+                    omitted_by_budget=entry_id in omitted_by_budget,
+                    visible=visible,
+                ),
+            )
+            row = trace.to_dict(safe=not viewer_is_gm)
+            if row:
+                rows.append(row)
+        return rows
+
+    @staticmethod
+    def _reason_code(
+        entry_id: str, recorded: dict[str, Any], *, included: bool, activated: bool,
+        omitted_by_budget: bool, visible: bool,
+    ) -> str:
+        """Why this entry ended where it did — one code from the real decision.
+
+        Order matters: a budget omission is only reported for an entry that
+        actually won activation, so ``budget`` can never mask the gate that
+        really rejected it.
+        """
+
+        if not visible:
+            return "hidden"
+        if activated and omitted_by_budget:
+            return "budget"
+        if activated and not included:
+            return "budget"
+        recorded_reason = str(recorded.get("reason_code") or "")
+        if recorded_reason:
+            return recorded_reason
+        if not recorded:
+            # 从未成为候选：既没被关键词发现，也没被语义召回。
+            return "not_a_candidate"
+        return "matched" if included else "not_matched"
 
     async def _entry_vectors(
         self,
@@ -680,11 +1020,12 @@ class LoreRetriever:
 
     @staticmethod
     def _timer_blocked(entry_id: str, timed_state: dict[str, dict] | None) -> bool:
-        """被 cooldown / delay 挡住的条目不应仅因向量相似进入上下文（施工方案 §23）。"""
+        """被 cooldown 挡住的条目不应仅因向量相似进入上下文（施工方案 §23）。
+
+        判据与 matcher 的 eligibility gate 共用 :func:`timed_gate_blocked`，
+        这里只是语义通道的提前剪枝，不是第二套规则。
+        """
 
         if not entry_id or not timed_state:
             return False
-        state = timed_state.get(entry_id)
-        if not isinstance(state, dict):
-            return False
-        return state.get("status") in ("cooldown", "delayed") and state.get("remaining", 0) > 0
+        return timed_gate_blocked(timed_state.get(entry_id))
