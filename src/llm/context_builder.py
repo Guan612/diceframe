@@ -557,6 +557,21 @@ def _lore_rules_text(language: str, table: dict[str, str]) -> str:
     return localized_text(language, table)
 
 
+def lore_char_budget(provider_name: str = "", *, lorebook_budget: int = 0) -> int:
+    """How many characters the Lorebook section may occupy in one context.
+
+    This is *the* provider context-window authority for lore: the retrieval layer
+    derives its overall lore budget from this instead of standing up a second
+    context-window notion of its own. ``lorebook_budget`` is the world-level
+    configured ceiling and only ever narrows the share.
+    """
+
+    budget = int(_detect_max_chars(provider_name) * _BUDGET_LOREBOOK)
+    if lorebook_budget > 0:
+        budget = min(budget, lorebook_budget)
+    return budget
+
+
 async def build_context(
     instance: GameInstance,
     gm_prompt_filled: str,
@@ -597,9 +612,7 @@ async def build_context(
     # 按比例分配预算
     budget_system = int(max_total * _BUDGET_SYSTEM_PROMPT)
     budget_state = int(max_total * _BUDGET_GAME_STATE)
-    budget_lorebook = int(max_total * _BUDGET_LOREBOOK)
-    if lorebook_budget > 0:
-        budget_lorebook = min(budget_lorebook, lorebook_budget)
+    budget_lorebook = lore_char_budget(provider_name, lorebook_budget=lorebook_budget)
     budget_summary = int(max_total * _BUDGET_SUMMARY)
     budget_memory = int(max_total * _BUDGET_MEMORY)
     budget_confirmed = int(max_total * _BUDGET_CONFIRMED)
@@ -1013,9 +1026,7 @@ async def build_player_safe_context(
 
     budget_system = int(max_total * _BUDGET_SYSTEM_PROMPT)
     budget_state = int(max_total * 0.20)
-    budget_lorebook = int(max_total * _BUDGET_LOREBOOK)
-    if lorebook_budget > 0:
-        budget_lorebook = min(budget_lorebook, lorebook_budget)
+    budget_lorebook = lore_char_budget(provider_name, lorebook_budget=lorebook_budget)
     budget_summary = int(max_total * 0.12)
     budget_known = int(max_total * 0.10)
     budget_confirmed = int(max_total * _BUDGET_CONFIRMED)

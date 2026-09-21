@@ -76,6 +76,7 @@ from src.llm.world_prompt import (
     format_world_legality_block,
     format_world_state_block,
 )
+from src.llm.context_builder import lore_char_budget
 from src.llm.parser import sanitize_narration
 from src.lorebook.retrieval import LoreRetriever
 from src.imagegen import (
@@ -933,8 +934,12 @@ class RoundProcessor:
             for action in instance.action_queue
             if str(action.get("user_id") or "") in instance.players
         })
+        # 整体 lore 预算由既有 context 预算派生（唯一的 context-window authority），
+        # 在检索阶段就收口，避免把远超预算的条目一路带到 composer 再裁。
+        provider_name = self.llm_client.default if self.llm_client else ""
         lorebook_matches = await self.lore_retriever.retrieve(
             instance, actions_text, action_actor_uids=action_actor_uids,
+            overall_budget=lore_char_budget(provider_name),
         )
 
         rule_ctx = self._prompt.load_rule_context(instance, self._load_world_template)
@@ -991,7 +996,6 @@ class RoundProcessor:
         world_events_text = format_world_events_block(instance)
 
         gm_prompt = self._prompt.compose_gm_prompt(instance, rule_appendix, world_data=world_data)
-        provider_name = self.llm_client.default if self.llm_client else ""
         context = await self._prompt.build_user_context(
             instance, gm_prompt, lorebook_matches, actions_text,
             provider_name=provider_name, world_data=world_data,

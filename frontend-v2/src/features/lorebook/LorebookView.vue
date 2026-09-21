@@ -12,8 +12,9 @@ import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLangu
 import Modal from '@/components/ui/Modal.vue'
 import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
-import LorebookSidebar from './LorebookSidebar.vue'
-import LoreImportDialog from './LoreImportDialog.vue'
+import LorebookSidebar, { type LorebookCard } from './LorebookSidebar.vue'
+import LoreImportDialog, { type LoreImportDecision } from './LoreImportDialog.vue'
+import LoreBindingsDialog, { type LoreBinding } from './LoreBindingsDialog.vue'
 import LoreEntryAdvanced from './LoreEntryAdvanced.vue'
 import { useLorePerspective } from './useLorePerspective'
 import { normalizeVisibilityValues, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
@@ -54,6 +55,7 @@ interface LorebookImportPreview {
   format: string
   counts: { entries: number; mapped: number; warnings: number; unsupported: number }
   warnings: string[]
+  character?: { name: string; book_name?: string; entries: number } | null
 }
 
 interface LorebookListResponse {
@@ -422,7 +424,9 @@ async function importLore(e: Event) {
 async function loadLorebooks() {
   if (!currentWorldId.value) { lorebookBooks.value = []; return }
   try {
-    const result = await api<LorebookListResponse>(`/lorebooks?world_id=${encodeURIComponent(currentWorldId.value)}`)
+    const query = new URLSearchParams({ world_id: currentWorldId.value })
+    if (game.value) query.set('game_key', game.value)
+    const result = await api<LorebookListResponse>(`/lorebooks?${query.toString()}`)
     lorebookBooks.value = (result.books || []).map(book => ({ ...book, primary: book.primary || book.id === `world:${currentWorldId.value}` }))
     if (!activeBookId.value || !lorebookBooks.value.some(book => book.id === activeBookId.value)) activeBookId.value = `world:${currentWorldId.value}`
   } catch {
@@ -437,23 +441,150 @@ function selectLorebook(bookId: string) {
   void loadLore()
 }
 
-async function confirmLoreImport() {
+/** 导入目标与 binding 全部来自对话框里用户的显式选择，不再隐式塞主世界书。 */
+async function confirmLoreImport(decision: LoreImportDecision) {
   if (!importPreview.value || !currentWorldId.value) return
   try {
     if (!pendingImportPayload.value || typeof pendingImportPayload.value !== 'object') throw new Error(t('importFailed'))
-    await api('/lorebooks/import', { method: 'POST', body: JSON.stringify({ payload: pendingImportPayload.value, book_id: activeBookId.value || `world:${currentWorldId.value}`, binding: activeBookId.value && activeBookId.value !== `world:${currentWorldId.value}` ? undefined : { scope_kind: 'world', scope_id: currentWorldId.value, role: 'primary' } }) })
+    const body: Record<string, unknown> = { payload: pendingImportPayload.value }
+    if (decision.bookId) body.book_id = decision.bookId
+    if (decision.binding) {
+      body.binding = decision.bookId && decision.bookId === primaryBookId.value
+        ? { ...decision.binding, role: 'primary' }
+        : decision.binding
+    }
+    const result = await api<{ ok: boolean; book_id?: string }>('/lorebooks/import', { method: 'POST', body: JSON.stringify(body) })
     importDialogOpen.value = false
     pendingImportPayload.value = undefined
+    importPreview.value = undefined
     toast.success(t('importedLorebook'))
+    await loadLorebooks()
+    if (result?.book_id) selectLorebook(result.book_id)
     await loadLore(); await loadWorlds(); await refreshPreview()
   } catch (err: unknown) { error.value = `${t('importFailed')}: ${errorMessage(err)}` }
+}
+
+// ---- Book 管理（create / rename / delete / enable / bindings）---------------
+
+const primaryBookId = computed(() => (currentWorldId.value ? `world:${currentWorldId.value}` : ''))
+const bindingsDialogOpen = ref(false)
+const bindingsBook = ref<LorebookCard | null>(null)
+const bookBindings = ref<LoreBinding[]>([])
+
+/** 绑定目标用的角色名单：Lore 视角已经加载过 players，这里不再重复请求。 */
+const bindableCharacters = computed(() =>
+  players.value
+    .map(player => ({
+      uid: String(player.user_id || ''),
+      name: String(player.character_name || player.user_id || ''),
+    }))
+    .filter(item => item.uid),
+)
+
+async function createBook() {
+  if (!currentWorldId.value) return
+  const name = window.prompt('新世界书名称')
+  if (!name || !name.trim()) return
+  busy.value = true
+  try {
+    const id = `book:${Date.now().toString(36)}`
+    await api('/lorebooks', { method: 'POST', body: JSON.stringify({ id, name: name.trim() }) })
+    await loadLorebooks()
+    selectLorebook(id)
+    toast.success('已创建世界书')
+  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
+}
+
+async function renameBook(book: LorebookCard) {
+  const name = window.prompt('重命名世界书', book.name)
+  if (!name || !name.trim() || name.trim() === book.name) return
+  busy.value = true
+  try {
+    await api(`/lorebooks/${encodeURIComponent(book.id)}`, { method: 'PUT', body: JSON.stringify({ name: name.trim() }) })
+    await loadLorebooks()
+    toast.success('已重命名')
+  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
+}
+
+async function removeBook(book: LorebookCard) {
+  if (book.primary) return
+  const ok = await confirm({
+    title: '删除世界书',
+    content: `删除世界书「${book.name}」？其中的条目会一并删除。`,
+    positiveText: '删除世界书',
+    type: 'error',
+  })
+  if (!ok) return
+  busy.value = true
+  try {
+    await api(`/lorebooks/${encodeURIComponent(book.id)}`, { method: 'DELETE' })
+    if (activeBookId.value === book.id) activeBookId.value = primaryBookId.value
+    await loadLorebooks(); await loadLore()
+    toast.success('已删除')
+  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
+}
+
+async function toggleBookEnabled(book: LorebookCard) {
+  busy.value = true
+  try {
+    await api(`/lorebooks/${encodeURIComponent(book.id)}`, { method: 'PUT', body: JSON.stringify({ enabled: book.enabled === false }) })
+    await loadLorebooks()
+  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
+}
+
+async function openBindings(book: LorebookCard) {
+  bindingsBook.value = book
+  bindingsDialogOpen.value = true
+  await loadBindings(book.id)
+}
+
+async function loadBindings(bookId: string) {
+  try {
+    const result = await api<{ ok: boolean; bindings: LoreBinding[] }>(`/lorebooks/${encodeURIComponent(bookId)}/bindings`)
+    bookBindings.value = result.bindings || []
+  } catch (e: unknown) { error.value = errorMessage(e); bookBindings.value = [] }
+}
+
+async function addBinding(binding: { scope_kind: string; scope_id: string }) {
+  const book = bindingsBook.value
+  if (!book) return
+  busy.value = true
+  try {
+    await api(`/lorebooks/${encodeURIComponent(book.id)}/bindings`, {
+      method: 'POST',
+      body: JSON.stringify({ id: `bind:${book.id}:${binding.scope_kind}:${Date.now().toString(36)}`, ...binding }),
+    })
+    await loadBindings(book.id); await loadLorebooks()
+  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
+}
+
+async function removeBinding(bindingId: string) {
+  const book = bindingsBook.value
+  if (!book) return
+  busy.value = true
+  try {
+    await api(`/lorebook-bindings/${encodeURIComponent(bindingId)}`, { method: 'DELETE' })
+    await loadBindings(book.id); await loadLorebooks()
+  } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 </script>
 
 <template>
   <section class="view archive-page lorebook-page">
     <div class="lorebook-shell" :class="{ 'inspector-open': inspectorOpen }">
-      <LorebookSidebar :books="lorebookBooks" :active-id="activeBookId" @select="selectLorebook" />
+      <LorebookSidebar
+        :books="lorebookBooks"
+        :active-id="activeBookId"
+        :busy="busy"
+        @select="selectLorebook"
+        @create="createBook"
+        @rename="renameBook"
+        @remove="removeBook"
+        @toggle-enabled="toggleBookEnabled"
+        @bindings="openBindings"
+        @import="fileInput?.click()"
+        @export="exportLore"
+      />
       <main class="lorebook-workspace">
     <header class="view-title archive-hero">
       <div>
@@ -631,6 +762,30 @@ async function confirmLoreImport() {
         @close="closeInspector"
       />
     </div>
-    <LoreImportDialog :open="importDialogOpen" :preview="importPreview" @close="importDialogOpen = false" @confirm="confirmLoreImport" />
+    <LoreImportDialog
+      :open="importDialogOpen"
+      :preview="importPreview"
+      :books="lorebookBooks"
+      :characters="bindableCharacters"
+      :world-id="currentWorldId"
+      :world-name="worldNameOf(currentWorld)"
+      :game-key="game"
+      :primary-book-id="primaryBookId"
+      @close="importDialogOpen = false"
+      @confirm="confirmLoreImport"
+    />
+    <LoreBindingsDialog
+      :open="bindingsDialogOpen"
+      :book-name="bindingsBook?.name"
+      :bindings="bookBindings"
+      :world-id="currentWorldId"
+      :world-name="worldNameOf(currentWorld)"
+      :game-key="game"
+      :characters="bindableCharacters"
+      :busy="busy"
+      @close="bindingsDialogOpen = false"
+      @add="addBinding"
+      @remove="removeBinding"
+    />
   </section>
 </template>

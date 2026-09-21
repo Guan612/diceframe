@@ -1785,18 +1785,67 @@ class WebAPI:
     def import_entries(self, world_id: str, entries: list) -> dict[str, Any]:
         return worlds.import_entries(self._world_dependencies, world_id, entries)
 
-    def list_lorebooks(self, world_id: str = "") -> dict[str, Any]:
-        """List canonical books visible in a world-management scope."""
+    def list_lorebooks(self, world_id: str = "", game_key: str = "") -> dict[str, Any]:
+        """List canonical books visible in a world-management scope.
+
+        Each row carries the binding-derived ``scope`` / ``primary`` facts the
+        management UI has to show (name · Primary · scope · enabled). They are
+        derived from the canonical bindings rather than stored on the book, so a
+        book bound in several scopes reports the most specific one it has here.
+        """
+
+        bindings_by_book: dict[str, list[dict[str, Any]]] = {}
+        for binding in self._lore.list_bindings():
+            bindings_by_book.setdefault(str(binding.get("book_id") or ""), []).append(binding)
         books = self._lore.list_lorebooks(scope_kind="world", scope_id=world_id) if world_id else []
         global_books = self._lore.list_lorebooks(scope_kind="global", scope_id="")
+        game_books = self._game_scoped_lorebooks(game_key) if game_key else []
+        # 完全没有 binding 的 Book 也必须可见：否则「新建世界书」和「暂不绑定」导入
+        # 都会产出一本谁也管不到的隐形书，用户再也无法给它加绑定。
+        unbound = [
+            book for book in self._lore.list_lorebooks()
+            if not bindings_by_book.get(str(book.get("id") or ""))
+        ]
         seen: set[str] = set()
         merged = []
-        for book in [*books, *global_books]:
+        for book in [*books, *global_books, *game_books, *unbound]:
             book_id = str(book.get("id") or "")
-            if book_id and book_id not in seen:
-                seen.add(book_id)
-                merged.append(book)
+            if not book_id or book_id in seen:
+                continue
+            seen.add(book_id)
+            row = dict(book)
+            bindings = bindings_by_book.get(book_id, [])
+            row["bindings"] = bindings
+            row["scope"] = self._book_scope(bindings)
+            row["primary"] = any(str(b.get("role") or "") == "primary" for b in bindings)
+            merged.append(row)
         return {"books": merged}
+
+    def _game_scoped_lorebooks(self, game_key: str) -> list[dict[str, Any]]:
+        """Books bound to this game, or to one of its characters.
+
+        Without this the workspace's 当前游戏 / 角色 scope filters would be
+        decorative: such books exist in the canonical store but would never be
+        listed for management.
+        """
+
+        rows = list(self._lore.list_lorebooks(scope_kind="game", scope_id=game_key))
+        instance = self._reg.get(_parse_game_key(game_key)) if game_key else None
+        players = getattr(instance, "players", None) if instance is not None else None
+        for uid in sorted(players or {}):
+            rows.extend(self._lore.list_lorebooks(scope_kind="character", scope_id=str(uid)))
+        return rows
+
+    @staticmethod
+    def _book_scope(bindings: list[dict[str, Any]]) -> str:
+        """The scope label for a book: most specific binding wins, else unbound."""
+
+        order = ("character", "game", "world", "global")
+        kinds = {str(binding.get("scope_kind") or "") for binding in bindings}
+        for kind in order:
+            if kind in kinds:
+                return kind
+        return ""
 
     def create_lorebook(self, book: dict[str, Any]) -> dict[str, Any]:
         book = dict(book)

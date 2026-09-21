@@ -30,8 +30,13 @@ from src.engine.world_legality import actor_location_fact_key
 from src.engine.world_state import project_visible_state
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.memory.embedding import cosine_similarity
+from src.lorebook.matcher import BUDGET_CANDIDATE_SLACK, MIN_BUDGET_CANDIDATES
 from src.lorebook.resolver import resolve_active_books
-from src.lorebook.budget import apply_token_budget
+from src.lorebook.budget import (
+    apply_token_budget,
+    estimate_entry_chars,
+    max_entries_within_budget,
+)
 from src.lorebook.activation import (
     CANONICAL_VECTOR_ACTIVATION,
     DEFAULT_VECTOR_ACTIVATION,
@@ -478,12 +483,19 @@ class LoreRetriever:
         viewer_name: str = "",
         mutate_timers: bool = True,
         action_actor_uids: Sequence[str] | None = None,
+        overall_budget: int | None = None,
     ) -> list[dict]:
         """返回本轮应当进入上下文的 canonical 条目（已按视角过滤、按 id 去重）。
 
         ``mutate_timers=True``（正常回合 / swipe）沿用既有语义：匹配到的 sticky /
         cooldown / delay 会写回实例的计时状态。``False``（玩家问答）用副本匹配，
         观察计时器但不改变它们。
+
+        ``overall_budget`` 是整体 lore 预算（字符），由调用方从既有的 prompt /
+        context 预算派生（``llm.context_builder.lore_char_budget``）。预算先逐
+        book 裁剪、merge，再整体裁剪一次；它同时收紧 recursion 的候选上限，
+        避免大 Book 先无限展开、最后才裁。传 ``None`` 表示本次不设整体上限，
+        最终仍由 context_builder 兜底。
         """
 
         self.ensure_lore_context(
@@ -525,6 +537,7 @@ class LoreRetriever:
             is_candidate=lambda entry: self._vector_mode(entry) != "vector_only",
             extra_candidates=semantic_ids,
             current_tick=int(getattr(instance, "round_number", 0) or 0),
+            max_activated=self._candidate_cap(overall_budget),
         )
         hits = []
         for entry in activated:
@@ -534,11 +547,12 @@ class LoreRetriever:
                 row["_semantic_score"] = score
             hits.append(row)
 
-        merged = self._apply_book_budgets(hits)
+        merged, budget_omitted = self._apply_budgets(hits, overall_budget)
         self.last_activation_trace = self._build_trace(
             hits, semantic_scores, merged,
             lexical_query=queries["lexical"],
             viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+            budget_omitted=budget_omitted,
         )
         try:
             setattr(instance, "lorebook_activation_trace", list(self.last_activation_trace))
@@ -739,33 +753,87 @@ class LoreRetriever:
         return default if default in CANONICAL_VECTOR_ACTIVATION else DEFAULT_VECTOR_ACTIVATION
 
     @staticmethod
-    def _apply_book_budgets(entries: list[dict]) -> list[dict]:
+    def _apply_book_budgets(entries: list[dict]) -> tuple[list[dict], list[str]]:
         grouped: dict[str, list[dict]] = {}
         for entry in entries:
             grouped.setdefault(str(entry.get("_lorebook_id") or "__legacy__"), []).append(entry)
         included: list[dict] = []
+        omitted: list[str] = []
         for rows in grouped.values():
             budget = int(rows[0].get("_lorebook_token_budget", 0) or 0)
-            selected, _omitted = apply_token_budget(rows, budget or None)
+            selected, dropped = apply_token_budget(rows, budget or None)
+            omitted.extend(dropped)
             for row in selected:
                 copy_row = dict(row)
                 copy_row["_budget_state"] = "included"
                 included.append(copy_row)
-        return LoreRetriever._merge_and_sort(included, [])
+        return LoreRetriever._merge_and_sort(included, []), omitted
+
+    @classmethod
+    def _apply_budgets(
+        cls, entries: list[dict], overall_budget: int | None,
+    ) -> tuple[list[dict], list[str]]:
+        """per-book budget → merge → overall lore budget（Wave C 的两级预算）。
+
+        整体预算的数值由调用方从既有 context 预算派生；这里只负责裁剪，绝不自己
+        推导 provider context-window。单位是字符，与 context_builder 一致，因此
+        用字符估算器而不是 per-book 的 token 估算器。
+        """
+
+        merged, omitted = cls._apply_book_budgets(entries)
+        if overall_budget is None or overall_budget <= 0:
+            return merged, omitted
+        selected, dropped = apply_token_budget(
+            merged, overall_budget, estimate=estimate_entry_chars,
+        )
+        omitted.extend(dropped)
+        for row in selected:
+            row["_budget_state"] = "included"
+        if dropped:
+            logger.debug(
+                "整体 lore 预算裁剪: budget=%d chars kept=%d omitted=%d",
+                overall_budget, len(selected), len(dropped),
+            )
+        return cls._merge_and_sort(selected, []), omitted
+
+    def _candidate_cap(self, overall_budget: int | None) -> int | None:
+        """由整体预算推出 recursion 的候选上限（deterministic，宁松不紧）。
+
+        上界按「最便宜的条目能装多少个」算，再放宽 ``BUDGET_CANDIDATE_SLACK`` 倍，
+        因此只会掐住真正失控的展开，不会把预算本来装得下的条目挡在外面。
+        """
+
+        if overall_budget is None or overall_budget <= 0:
+            return None
+        fits = max_entries_within_budget(
+            list(self._entries), overall_budget, estimate=estimate_entry_chars,
+        )
+        if fits is None:
+            return None
+        return max(MIN_BUDGET_CANDIDATES, fits * BUDGET_CANDIDATE_SLACK)
 
     def _build_trace(
         self, activated: Sequence[dict], semantic_scores: dict[str, float], final_hits: Sequence[dict],
         *, lexical_query: str, viewer_is_gm: bool, viewer_uid: str | None,
+        budget_omitted: Sequence[str] = (),
     ) -> list[dict[str, Any]]:
         """Build the ActivationTrace from the decisions the run actually made.
 
-        Keyword reasons come from the matcher authority (``keyword_decision``),
-        so the trace can never claim a match the activation path did not compute.
+        Every reason comes from an authority that actually ran: keyword matching
+        from ``keyword_decision``, and probability rolls / group competition /
+        timed gates / recursion parentage from the matcher's per-candidate
+        decision log (``KeywordMatcher.last_decisions``). Nothing here re-derives
+        a verdict the activation path did not compute, so the trace cannot claim
+        a rejection reason that never happened.
+
         Player traces never reveal a hidden row or even its count.
         """
 
         semantic_ids = set(semantic_scores)
         final_ids = {str(row.get("id") or "") for row in final_hits}
+        omitted_by_budget = {str(eid) for eid in budget_omitted}
+        activated_ids = {str(row.get("id") or "") for row in activated}
+        decisions = dict(getattr(self._matcher, "last_decisions", {}) or {})
         rows: list[dict[str, Any]] = []
         for entry in self._entries:
             entry_id = str(entry.get("id") or "")
@@ -779,6 +847,8 @@ class LoreRetriever:
             keyword_source = bool(decision["matched"]) and self._vector_mode(entry) != "vector_only"
             semantic_source = entry_id in semantic_ids
             score = semantic_scores.get(entry_id)
+            recorded = decisions.get(entry_id, {})
+            included = entry_id in final_ids
             trace = ActivationTrace(
                 entry_id=entry_id,
                 book_id=str(entry.get("_lorebook_id") or entry.get("book_id") or ""),
@@ -790,15 +860,51 @@ class LoreRetriever:
                 primary_result=decision["primary_ok"],
                 secondary_result=decision["secondary_ok"],
                 semantic_score=float(score) if score is not None else None,
+                recursion_parent=str(recorded.get("parent") or "") or None,
+                recursion_depth=int(recorded.get("depth", 0) or 0),
+                probability=recorded.get("probability"),
+                group=recorded.get("group"),
+                timed=recorded.get("timed"),
                 visibility="visible" if visible else "hidden",
-                budget="included" if entry_id in final_ids else "omitted",
-                final_state="included" if entry_id in final_ids else "omitted",
-                reason_code="matched" if entry_id in final_ids else "not_matched",
+                budget="included" if included else "omitted",
+                final_state="included" if included else "omitted",
+                reason_code=self._reason_code(
+                    entry_id, recorded, included=included,
+                    activated=entry_id in activated_ids,
+                    omitted_by_budget=entry_id in omitted_by_budget,
+                    visible=visible,
+                ),
             )
             row = trace.to_dict(safe=not viewer_is_gm)
             if row:
                 rows.append(row)
         return rows
+
+    @staticmethod
+    def _reason_code(
+        entry_id: str, recorded: dict[str, Any], *, included: bool, activated: bool,
+        omitted_by_budget: bool, visible: bool,
+    ) -> str:
+        """Why this entry ended where it did — one code from the real decision.
+
+        Order matters: a budget omission is only reported for an entry that
+        actually won activation, so ``budget`` can never mask the gate that
+        really rejected it.
+        """
+
+        if not visible:
+            return "hidden"
+        if activated and omitted_by_budget:
+            return "budget"
+        if activated and not included:
+            return "budget"
+        recorded_reason = str(recorded.get("reason_code") or "")
+        if recorded_reason:
+            return recorded_reason
+        if not recorded:
+            # 从未成为候选：既没被关键词发现，也没被语义召回。
+            return "not_a_candidate"
+        return "matched" if included else "not_matched"
 
     async def _entry_vectors(
         self,

@@ -441,5 +441,19 @@ def _v6(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_binding_scope ON lorebook_bindings(scope_kind, scope_id)")
 
 
-def migrate(conn: sqlite3.Connection) -> int:
-    return run_migrations(conn, ((1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5), (6, _v6)))
+MIGRATIONS: tuple[tuple[int, object], ...] = (
+    (1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5), (6, _v6),
+)
+CURRENT_LOREBOOK_SCHEMA_VERSION = MIGRATIONS[-1][0]
+
+
+def migrate(conn: sqlite3.Connection, *, upto: int | None = None) -> int:
+    """Run the Lorebook schema migrations.
+
+    ``upto`` stops at a given version so tests and E2E fixtures can materialise
+    an authentic older database (and then let real startup migrate it) instead of
+    hand-writing a stale schema that drifts from the real one.
+    """
+
+    steps = MIGRATIONS if upto is None else tuple(step for step in MIGRATIONS if step[0] <= upto)
+    return run_migrations(conn, steps)

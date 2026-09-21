@@ -1,6 +1,14 @@
 import { expect, test } from './fixtures'
 
-test('Lorebook v2 golden: import, select, activate safely, and export', async ({ page }, testInfo) => {
+/**
+ * frontend mocked flow —— **不是** Golden。
+ *
+ * 这条用例把 `**\/api/**` 全部 mock 掉，因此它只能证明「UI 对自己捏的响应是忠诚的」：
+ * 它不经过 backend、SQLite、migration、resolver 或 matcher，任何后端回归都不会让它变红。
+ * 真实链路验收在 lorebook-golden.spec.ts（并且已进 test:e2e:smoke，会在 CI 里跑）。
+ */
+
+test('Lorebook mocked frontend flow: import, select, activate safely, and export', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== 'desktop', 'Lorebook golden uses the desktop inspector layout')
 
   const requests: Array<{ method: string; path: string; body?: unknown }> = []

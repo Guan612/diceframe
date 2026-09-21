@@ -44,6 +44,16 @@ logger = logging.getLogger("trpg")
 MAX_RECURSIVE_DEPTH = 3
 MIN_FUZZY_KEY_LEN = 2       # 最短模糊匹配关键词长度
 
+# Deterministic recursion work limits. ``MAX_RECURSIVE_DEPTH`` alone is not a
+# work bound: one pass over a large book can evaluate thousands of candidates
+# before any budget is applied. These caps make the work finite and
+# order-stable (the frontier is always walked in sorted id order), without
+# introducing a planner.
+MAX_RECURSION_STEPS = 2000      # 每次 activation 最多评估多少个候选
+MAX_ACTIVATED_ENTRIES = 400     # activated 集合上限，达到后不再展开 frontier
+MIN_BUDGET_CANDIDATES = 32      # 预算推导出的上限再低也不少于这个数
+BUDGET_CANDIDATE_SLACK = 2      # 预算上界的放宽倍数，只掐真正失控的展开
+
 # ``group_scoring`` 的确定性词汇：其余值一律按「默认竞争」处理。
 _GROUP_ALLOW_ALL = frozenset({"all", "allow_all"})
 _GROUP_SCORING_ON = frozenset({"score", "matched_keys", "matched", "use_group_scoring"})
@@ -57,6 +67,9 @@ class KeywordMatcher:
         self._entries: dict[str, dict] = {}
         self._fuzzy_keys: list[str] = []
         self._rng = rng
+        # 最近一次 activation 的逐条判定与工作量截断原因（ActivationTrace 用）。
+        self.last_decisions: dict[str, dict[str, Any]] = {}
+        self.last_cutoff: str = ""
 
     def build(self, entries: list[dict]) -> None:
         """从条目列表构建索引。每个条目的 keywords 字段为 JSON 数组。"""
@@ -93,6 +106,8 @@ class KeywordMatcher:
         is_candidate: Callable[[dict], bool] | None = None,
         extra_candidates: object = None,
         current_tick: int | None = None,
+        max_activated: int | None = None,
+        max_steps: int | None = None,
     ) -> list[dict]:
         """统一 activation pipeline（含递归）。
 
@@ -103,12 +118,17 @@ class KeywordMatcher:
         它们必须走同一套 eligibility。``current_tick`` 是 DiceFrame 的
         authoritative turn tick（``GameInstance.round_number``），用于 ``delay``
         前置门；``None`` 表示调用方没有 tick authority，则跳过该门。
+        ``max_activated`` / ``max_steps`` 是 deterministic 的递归工作量上限，
+        调用方可按 overall lore budget 收紧（见 ``budget.max_entries_within_budget``）。
+
+        每次调用都会把逐条候选的真实判定记录到 :attr:`last_decisions`，供
+        ActivationTrace 使用——trace 的原因必须来自实际执行的判定，不能事后重算。
         """
 
         return self._activate(
             text, timed_state=timed_state, is_visible=is_visible,
             is_candidate=is_candidate, extra_candidates=extra_candidates,
-            current_tick=current_tick,
+            current_tick=current_tick, max_activated=max_activated, max_steps=max_steps,
         )
 
     # ---- 统一 pipeline ------------------------------------------------------
@@ -122,29 +142,59 @@ class KeywordMatcher:
         is_candidate: Callable[[dict], bool] | None,
         extra_candidates: object,
         current_tick: int | None,
+        max_activated: int | None = None,
+        max_steps: int | None = None,
     ) -> list[dict]:
         visible = is_visible if is_visible is not None else (lambda entry: True)
         discover = is_candidate if is_candidate is not None else (lambda entry: True)
         blocked = self._get_timed_blocked_ids(timed_state)
         sticky = self._get_sticky_active_ids(timed_state)
+        step_limit = MAX_RECURSION_STEPS if max_steps is None else max(1, int(max_steps))
+        activated_limit = (
+            MAX_ACTIVATED_ENTRIES if max_activated is None else max(1, int(max_activated))
+        )
+        self.last_decisions = {}
+        self.last_cutoff = ""
 
         semantic_seeds = {str(cid) for cid in (extra_candidates or ())} & set(self._entries)
         # lexical_seeds 只记录 keyword 通道（含 sticky / constant）发现的条目，
         # 用于把 timed activation state 的写入权保留给 keyword authority。
+        # lexical_discovered 额外保留「被 timed gate 挡掉之前」发现的候选，这样
+        # trace 才能说出它们是因为 cooldown / delay 落选，而不是从未被发现。
         lexical_seeds: set[str] = set()
+        lexical_discovered: set[str] = set()
         if text and self._index:
-            lexical = {
+            exact = {
                 eid for eid in self._candidate_ids(text)
                 if discover(self._entries[eid])
-            } - blocked
+            }
+            lexical_discovered |= exact
+            lexical = exact - blocked
             if not lexical:
-                lexical = {
+                fuzzy = {
                     eid for eid in self._fuzzy_match(text)
                     if discover(self._entries[eid])
-                } - blocked
+                }
+                lexical_discovered |= fuzzy
+                lexical = fuzzy - blocked
             lexical_seeds |= lexical
-        lexical_seeds |= sticky | self._get_constant_ids()
+        constants = self._get_constant_ids()
+        lexical_seeds |= sticky | constants
+        lexical_discovered |= sticky | constants
         seeds = (semantic_seeds | lexical_seeds) - blocked
+
+        for eid in sorted((semantic_seeds | lexical_discovered) & blocked):
+            entry = self._entries.get(eid)
+            if entry is None:
+                continue
+            state = (timed_state or {}).get(eid)
+            self._record(
+                eid,
+                channel="semantic" if eid in semantic_seeds and eid not in lexical_discovered else "keyword",
+                outcome="rejected",
+                reason_code="delay" if self._legacy_delay_blocked(state) else "cooldown",
+                timed=self._timed_snapshot(eid, entry, timed_state, current_tick),
+            )
 
         activated: set[str] = set()
         evaluated: set[str] = set()
@@ -157,7 +207,16 @@ class KeywordMatcher:
         # 过滤（例如 vector_only 不得被关键词通道发现）。作者显式声明的
         # triggers_recursive 是显式边，不算关键词发现，不受该过滤限制。
         scanned: set[str] = set()
+        parents: dict[str, str] = {}
         depth = 0
+        steps = 0
+
+        for eid in seeds:
+            channel = "semantic" if eid in semantic_seeds and eid not in lexical_seeds else (
+                "constant" if eid in self._get_constant_ids() else
+                "sticky" if eid in sticky else "keyword"
+            )
+            self._record(eid, channel=channel, depth=0)
 
         while frontier and depth < MAX_RECURSIVE_DEPTH:
             batch: dict[str, str] = {}
@@ -165,24 +224,61 @@ class KeywordMatcher:
                 entry = self._entries.get(eid)
                 if entry is None or eid in evaluated:
                     continue
+                if steps >= step_limit:
+                    # deterministic max-work cutoff：frontier 按 id 排序遍历，
+                    # 因此截断点稳定可复现。
+                    self.last_cutoff = "max_steps"
+                    break
                 evaluated.add(eid)
-                if not self._eligibility_ok(
+                steps += 1
+                reason = self._eligibility_reason(
                     entry, depth=depth, visible=visible,
                     discover=discover if eid in scanned else None,
                     timed_state=timed_state, current_tick=current_tick,
-                ):
+                )
+                self._record(
+                    eid, depth=depth, parent=parents.get(eid, ""),
+                    timed=self._timed_snapshot(eid, entry, timed_state, current_tick),
+                )
+                if reason is not None:
+                    self._record(eid, outcome="rejected", reason_code=reason)
                     continue
                 if not self._probability_ok(eid, entry, probability_cache):
+                    self._record(eid, outcome="rejected", reason_code="probability_rejected")
                     continue
                 batch[eid] = frontier[eid]
             winners = self._group_winners(batch, group_decided)
+            for eid in batch:
+                if eid not in winners:
+                    self._record(eid, outcome="rejected", reason_code="group_lost")
             activated |= winners
+            for eid in winners:
+                self._record(
+                    eid, outcome="activated",
+                    reason_code="recursive" if self._decision_depth(eid) > 0 else (
+                        "semantic" if self._decision_channel(eid) == "semantic" else "keyword"
+                    ),
+                )
+            if len(activated) >= activated_limit:
+                # budget cutoff：再展开也不可能进入最终预算，别先无限展开后再裁。
+                self.last_cutoff = self.last_cutoff or "max_activated"
+                break
+            if self.last_cutoff == "max_steps":
+                break
             frontier, scanned = {}, set()
             for eid in sorted(winners):
                 children, child_scanned = self._children_of(eid, excluded=evaluated | activated)
+                for cid in children:
+                    parents.setdefault(cid, eid)
                 frontier.update(children)
                 scanned |= child_scanned
             depth += 1
+
+        if self.last_cutoff:
+            logger.warning(
+                "世界书递归触发 %s 上限（steps=%d, activated=%d）：本轮停止继续展开",
+                self.last_cutoff, steps, len(activated),
+            )
 
         # 只有真正 activated 的条目才允许写 timed activation state，且写入权保留给
         # keyword authority：纯 semantic 命中只参与召回，不写 sticky/cooldown。
@@ -192,7 +288,12 @@ class KeywordMatcher:
             )
         return self._sort_by_tier(activated)
 
-    def _eligibility_ok(
+    def _eligibility_ok(self, entry: dict, **kwargs) -> bool:
+        """布尔外观，保留给只关心「过没过」的调用方。"""
+
+        return self._eligibility_reason(entry, **kwargs) is None
+
+    def _eligibility_reason(
         self,
         entry: dict,
         *,
@@ -201,8 +302,11 @@ class KeywordMatcher:
         discover: Callable[[dict], bool] | None = None,
         timed_state: dict[str, dict] | None = None,
         current_tick: int | None = None,
-    ) -> bool:
+    ) -> str | None:
         """enabled + visibility + timed/recursion eligibility，fail closed。
+
+        返回 ``None`` 表示通过，否则返回具体被哪一道门拒绝——ActivationTrace 的
+        ``reason_code`` 直接用这个值，因此原因永远来自实际执行的判定。
 
         timed gate 属于**每一次** candidate eligibility，不是只对 initial seeds
         执行一次——否则 recursion frontier 里的子条目可以绕过自己的 cooldown /
@@ -211,39 +315,82 @@ class KeywordMatcher:
         """
 
         if not bool(entry.get("enabled", True)):
-            return False
+            return "disabled"
         if not visible(entry):
-            return False
+            return "hidden"
         if discover is not None and not discover(entry):
-            return False
+            return "vector_channel"
         entry_id = str(entry.get("id") or "")
-        if timed_gate_blocked((timed_state or {}).get(entry_id)):
-            return False
-        if delay_gate_blocked(entry, current_tick=current_tick) and not sticky_active(
-            (timed_state or {}).get(entry_id)
-        ):
-            return False
+        state = (timed_state or {}).get(entry_id)
+        if timed_gate_blocked(state):
+            return "delay" if self._legacy_delay_blocked(state) else "cooldown"
+        if delay_gate_blocked(entry, current_tick=current_tick) and not sticky_active(state):
+            return "delay"
         recursive_pass = depth > 0
         if bool(entry.get("delay_until_recursion", False)) and not recursive_pass:
-            return False
+            return "delay_until_recursion"
         if recursive_pass:
             # non_recursable 只限制"通过递归被到达"；直接命中的条目仍可传播。
             if bool(entry.get("non_recursable", False)):
-                return False
+                return "non_recursable"
             level = int(entry.get("recursion_level", 0) or 0)
             if level > 0 and depth < level:
-                return False
+                return "recursion_level"
             configured = int(entry.get("scan_depth", 0) or 0)
             if configured > 0 and depth > configured:
-                return False
-        return True
+                return "scan_depth"
+        return None
+
+    @staticmethod
+    def _legacy_delay_blocked(state: dict | None) -> bool:
+        if not isinstance(state, dict):
+            return False
+        if str(state.get("status", "")) in ("delayed", "delay"):
+            return int(state.get("remaining", 0) or 0) > 0
+        return max(0, int(state.get("delay_remaining", 0) or 0)) > 0
+
+    def _timed_snapshot(
+        self, eid: str, entry: dict, timed_state: dict[str, dict] | None,
+        current_tick: int | None,
+    ) -> dict[str, Any]:
+        state = (timed_state or {}).get(eid)
+        return {
+            "sticky_active": sticky_active(state),
+            "sticky_remaining": int((state or {}).get("sticky_remaining", 0) or 0),
+            "cooldown_blocked": timed_gate_blocked(state) and not self._legacy_delay_blocked(state),
+            "cooldown_remaining": int((state or {}).get("cooldown_remaining", 0) or 0),
+            "pending_cooldown": int((state or {}).get("pending_cooldown", 0) or 0),
+            "delay_blocked": delay_gate_blocked(entry, current_tick=current_tick)
+            or self._legacy_delay_blocked(state),
+            "delay": max(0, int(entry.get("delay", 0) or 0)),
+            "current_tick": current_tick,
+        }
+
+    # ---- 逐条候选判定记录（ActivationTrace 的唯一事实来源）-------------------
+
+    def _record(self, eid: str, **fields: Any) -> None:
+        row = self.last_decisions.setdefault(
+            eid, {"entry_id": eid, "channel": "", "depth": 0, "parent": "",
+                  "probability": None, "group": None, "timed": None,
+                  "outcome": "candidate", "reason_code": ""},
+        )
+        for key, value in fields.items():
+            if value is not None or key in ("probability", "group", "timed"):
+                row[key] = value
+
+    def _decision_depth(self, eid: str) -> int:
+        return int(self.last_decisions.get(eid, {}).get("depth", 0) or 0)
+
+    def _decision_channel(self, eid: str) -> str:
+        return str(self.last_decisions.get(eid, {}).get("channel", "") or "")
 
     def _probability_ok(self, eid: str, entry: dict, cache: dict[str, bool]) -> bool:
         """概率判定每轮每条目只 roll 一次；被拒者不递归、不写 timed state。"""
 
         if eid not in cache:
-            accepted, _trace = evaluate_probability(entry, rng=self._rng or random.random)
+            accepted, trace = evaluate_probability(entry, rng=self._rng or random.random)
             cache[eid] = bool(accepted)
+            self._record(eid, probability=trace)
             if not accepted:
                 logger.debug("概率过滤: %s (probability=%s) 未激活",
                              entry.get("name", eid), entry.get("probability", 100))
@@ -465,11 +612,21 @@ class KeywordMatcher:
                 groups.setdefault(name, []).append(eid)
 
         winners = set(batch)
+        for eid in batch:
+            names = self._group_names(self._entries.get(eid, {}))
+            if names:
+                self._record(eid, group={
+                    "names": list(names),
+                    "score": self._score_of(eid, batch[eid]),
+                    "prioritized": bool(self._entries.get(eid, {}).get("prioritize_inclusion", False)),
+                    "outcome": "uncontested",
+                })
         for name, members in groups.items():
             if len(members) <= 1 or any(self._group_allow_all(self._entries.get(m, {})) for m in members):
                 continue
             if name in decided:
                 winners -= {m for m in members if m != decided[name]}
+                self._record_group_outcome(name, members, decided[name])
                 continue
             pool = list(members)
             if any(self._group_scoring_on(self._entries.get(m, {})) for m in members):
@@ -492,10 +649,24 @@ class KeywordMatcher:
                 winner = self._weighted_pick(sorted(pool))
             decided[name] = winner
             winners -= {m for m in members if m != winner}
+            self._record_group_outcome(name, members, winner)
             logger.debug("分组竞争: group=%s winner=%s removed=%d",
                          name, self._entries.get(winner, {}).get("name", winner),
                          len(members) - 1)
         return winners
+
+    def _record_group_outcome(self, name: str, members: list[str], winner: str) -> None:
+        """把 group 竞争的 winner/loser 写进判定记录（trace 要区分 group_lost）。"""
+
+        for member in members:
+            row = self.last_decisions.get(member)
+            group = dict(row.get("group") or {}) if row else {}
+            group.update({
+                "contested_group": name,
+                "outcome": "winner" if member == winner else "lost",
+                "winner": winner,
+            })
+            self._record(member, group=group)
 
     def _weighted_pick(self, pool: list[str]) -> str:
         """group_weight weighted random，RNG 可注入以保证确定性。"""

@@ -7,7 +7,9 @@ from src.webui.routes._common import _get_api
 
 
 async def api_lorebooks(request: web.Request) -> web.Response:
-    return web.json_response(_get_api(request).list_lorebooks(request.query.get("world_id", "")))
+    return web.json_response(_get_api(request).list_lorebooks(
+        request.query.get("world_id", ""), request.query.get("game_key", ""),
+    ))
 
 
 def _result_response(result: dict) -> web.Response:

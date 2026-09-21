@@ -38,11 +38,34 @@ def draft_lorebook_import(payload: dict[str, Any]) -> LorebookDraft:
     return from_legacy_entries(payload)
 
 
+def character_card_identity(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """The card's own identity, when the payload is a Character Card with a book.
+
+    The product flow has to tell the user *whose* lore this is before asking where
+    to bind it, and a card carries no DiceFrame uid — so only the name is
+    reported here. Resolving that name onto a canonical character is the caller's
+    decision (it is the side that knows the current game's roster).
+    """
+
+    if detect_lorebook_format(payload) != "character_card_v3":
+        return None
+    inner = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(inner, dict):
+        return None
+    book = inner.get("character_book") if isinstance(inner.get("character_book"), dict) else {}
+    rows = book.get("entries") if isinstance(book.get("entries"), list) else []
+    return {
+        "name": str(inner.get("name") or inner.get("char_name") or "").strip(),
+        "book_name": str(book.get("name") or "").strip(),
+        "entries": len(rows),
+    }
+
+
 def preview_lorebook_import(payload: dict[str, Any]) -> dict[str, Any]:
     fmt = detect_lorebook_format(payload)
     draft = draft_lorebook_import(payload)
     unsupported = sum(1 for warning in draft.warnings if "unsupported" in warning.lower())
-    return {"format": fmt, "book": draft, "counts": {"entries": len(draft.entries), "mapped": len(draft.entries), "warnings": len(draft.warnings), "unsupported": unsupported}, "warnings": draft.warnings, "features": {"timed": any(bool(e.timed) for e in draft.entries), "recursive": any(bool(e.recursion_flags) for e in draft.entries)}}
+    return {"format": fmt, "book": draft, "counts": {"entries": len(draft.entries), "mapped": len(draft.entries), "warnings": len(draft.warnings), "unsupported": unsupported}, "warnings": draft.warnings, "features": {"timed": any(bool(e.timed) for e in draft.entries), "recursive": any(bool(e.recursion_flags) for e in draft.entries)}, "character": character_card_identity(payload)}
 
 
 def commit_lorebook_import(store: Any, draft: LorebookDraft, binding: dict[str, Any] | None = None, *, book_id: str | None = None) -> str:

@@ -125,10 +125,16 @@ def migrate_timed_state(state: dict[str, Any] | None) -> dict[str, dict[str, int
             continue
         remaining = max(0, int(raw.get("remaining", 0) or 0))
         status = str(raw.get("status", ""))
+        if status in ("delayed", "delay"):
+            # 施工包 C7：旧 delayed 记的是「还剩几轮」，新语义是「第 N 回合之前不
+            # 激活」，两者无法精确等价。安全迁成「无 active state」——条目之后由
+            # 自己的 ``delay`` 字段配合 authoritative tick 重新判定，而不是继续
+            # 倒计时一个语义已经变了的计数器。
+            continue
         result[str(entry_id)] = {
             "sticky_remaining": remaining if status == "active" else 0,
             "cooldown_remaining": remaining if status == "cooldown" else 0,
-            "delay_remaining": remaining if status in ("delayed", "delay") else 0,
+            "delay_remaining": 0,
             "pending_cooldown": 0,
             "activated_tick": int(raw.get("activated_tick", 0) or 0),
         }
