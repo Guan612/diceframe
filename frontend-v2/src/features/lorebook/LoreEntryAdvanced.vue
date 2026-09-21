@@ -2,6 +2,7 @@
 // 条目编辑器的折叠区：除「名称/类型/内容/触发方式/触发词/可见性」之外的一切。
 // 所有字段都直接绑定后端 canonical payload key（order 即 insertion_order）。
 import { useLocale } from '@/composables/useLocale'
+import { normalizeVectorActivation } from './entryFilters'
 
 export interface LoreEntryAdvancedModel {
   secondary_keys: string[]
@@ -10,6 +11,8 @@ export interface LoreEntryAdvancedModel {
   case_sensitive: boolean
   match_whole_words: boolean
   vector_activation?: string
+  /** legacy 主关键词逻辑（DiceFrame 旧字段），仅兼容旧配置，不是产品「触发方式」。 */
+  match_mode?: string
   scan_depth: number
   priority: number
   probability: number
@@ -55,14 +58,15 @@ function updateCheckbox<K extends 'use_regex' | 'case_sensitive' | 'match_whole_
     <div class="check-row">
       <label data-field="unreliable"><input type="checkbox" :checked="!!modelValue.unreliable" @change="updateCheckbox('unreliable', $event)"> {{ t('unreliableMemory') }}</label>
       <label data-field="sync_on_enter"><input type="checkbox" :checked="!!modelValue.sync_on_enter" @change="updateCheckbox('sync_on_enter', $event)"> {{ t('syncOnEnter') }}</label>
-      <label data-field="is_constant"><input type="checkbox" :checked="!!modelValue.is_constant" @change="updateCheckbox('is_constant', $event)"> {{ t('constant') }}</label>
+      <label data-field="is_constant"><input type="checkbox" :checked="!!modelValue.is_constant" @change="updateCheckbox('is_constant', $event)"> {{ t('loreActivationAlways') }}</label>
     </div>
+    <label data-field="match_mode">{{ t('loreActivationLegacy') }} <select :value="modelValue.match_mode || 'any'" @change="update('match_mode', ($event.target as HTMLSelectElement).value)"><option value="any">{{ t('matchAny') }}</option><option value="all">{{ t('matchAll') }}</option><option value="not_any">{{ t('matchNotAny') }}</option><option value="not_all">{{ t('matchNotAll') }}</option></select></label>
     <label data-field="secondary_keys">Secondary keys (comma-separated) <input type="text" :value="(modelValue.secondary_keys || []).join(', ')" @input="updateList('secondary_keys', ($event.target as HTMLInputElement).value)"></label>
     <label data-field="selective_logic">Selective logic <select :value="modelValue.selective_logic" @change="update('selective_logic', ($event.target as HTMLSelectElement).value)"><option>any</option><option>all</option><option>not_any</option><option>not_all</option></select></label>
     <label data-field="use_regex"><input type="checkbox" :checked="modelValue.use_regex" @change="updateCheckbox('use_regex', $event)"> Regex</label>
     <label data-field="case_sensitive"><input type="checkbox" :checked="modelValue.case_sensitive" @change="updateCheckbox('case_sensitive', $event)"> Case-sensitive</label>
     <label data-field="match_whole_words"><input type="checkbox" :checked="modelValue.match_whole_words" @change="updateCheckbox('match_whole_words', $event)"> Match whole words</label>
-    <label data-field="vector_activation">Vector activation <select :value="modelValue.vector_activation || 'off'" @change="update('vector_activation', ($event.target as HTMLSelectElement).value)"><option value="off">off</option><option value="hybrid">hybrid</option><option value="vector_only">vector only</option></select></label>
+    <label data-field="vector_activation">{{ t('loreVectorActivation') }} <select :value="normalizeVectorActivation(modelValue.vector_activation)" @change="update('vector_activation', ($event.target as HTMLSelectElement).value)"><option value="off">off</option><option value="hybrid">hybrid</option><option value="vector_only">vector only</option></select></label>
     <label data-field="scan_depth">Scan depth <input type="number" :value="modelValue.scan_depth" @input="updateNumber('scan_depth', $event)"></label>
     <label data-field="priority">Priority <input type="number" :value="modelValue.priority" @input="updateNumber('priority', $event)"></label>
     <label data-field="probability">Probability <input type="number" min="0" max="100" :value="modelValue.probability" @input="updateNumber('probability', $event)"></label>

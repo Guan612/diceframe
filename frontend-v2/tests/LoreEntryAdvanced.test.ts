@@ -54,12 +54,30 @@ describe('LoreEntryAdvanced', () => {
     expect(updates.some(value => value.prioritize_inclusion === true)).toBe(true)
   })
 
+  it('keeps the legacy primary-keyword logic here and never falls back to off for vectors', async () => {
+    // vector_activation 缺失时读成后端 canonical 默认 hybrid，而不是 off：
+    // 否则界面显示 off、库里存 hybrid，用户看到的和存下的就是两回事。
+    const legacyModel = { ...model, vector_activation: undefined, match_mode: undefined }
+    const wrapper = mountAdvanced(legacyModel as LoreEntryAdvancedModel)
+
+    const vector = wrapper.get('[data-field="vector_activation"] select')
+    expect((vector.element as HTMLSelectElement).value).toBe('hybrid')
+
+    const legacy = wrapper.get('[data-field="match_mode"]')
+    expect(legacy.text()).toContain('Legacy')
+    expect((legacy.get('select').element as HTMLSelectElement).value).toBe('any')
+
+    await legacy.get('select').setValue('not_all')
+    const updates = (wrapper.emitted('update:modelValue') || []).map(([value]) => value as LoreEntryAdvancedModel)
+    expect(updates.some(value => value.match_mode === 'not_all')).toBe(true)
+  })
+
   it('keeps every advanced field bound to a canonical payload key', () => {
     const wrapper = mountAdvanced()
     const fields = wrapper.findAll('[data-field]').map(node => node.attributes('data-field'))
     expect(fields).toEqual(expect.arrayContaining([
       'tier', 'order', 'prioritize_inclusion', 'connected_to', 'triggers_recursive',
-      'unreliable', 'sync_on_enter', 'is_constant', 'secondary_keys', 'selective_logic',
+      'unreliable', 'sync_on_enter', 'is_constant', 'match_mode', 'secondary_keys', 'selective_logic',
       'use_regex', 'case_sensitive', 'match_whole_words', 'vector_activation', 'scan_depth',
       'priority', 'probability', 'groups', 'group_weight', 'group_scoring', 'sticky',
       'cooldown', 'delay', 'non_recursable', 'prevent_further_recursion',

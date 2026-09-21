@@ -18,9 +18,10 @@ import LoreBindingsDialog, { type LoreBinding } from './LoreBindingsDialog.vue'
 import LoreEntryAdvanced from './LoreEntryAdvanced.vue'
 import { useLorePerspective } from './useLorePerspective'
 import {
-  DEFAULT_LORE_ENTRY_FILTERS, LORE_TYPE_ORDER, filterLoreEntries,
+  DEFAULT_LORE_ENTRY_FILTERS, LORE_TYPE_ORDER, applyLoreProductActivation, filterLoreEntries,
   isLoreEntryFilterActive, loreEntryActivationOptions, loreEntryEnabled, loreEntrySourceOptions,
-  normalizeLoreEntryType, type LoreEntryFilters,
+  loreProductActivation, normalizeLoreEntryType, normalizeVectorActivation,
+  type LoreEntryFilters, type LoreProductActivationMode,
 } from './entryFilters'
 import { normalizeVisibilityValues, sanitizeCharacterVisibility, visibilityModeOf, type LoreVisibilityMode } from './visibility'
 
@@ -28,6 +29,7 @@ interface LoreEdit extends LoreEntry {
   tier?: string
   content?: string
   match_mode?: string
+  vector_activation?: string
   unreliable?: boolean
   sync_on_enter?: boolean
   is_constant?: boolean
@@ -218,13 +220,40 @@ function openLore(entry?: LoreEntry) {
     triggers_recursive: [], visible_to: [], connected_to: [], sticky: 0,
     cooldown: 0, delay: 0, order: 100, probability: 100, group: '', group_weight: 1,
     secondary_keys: [], selective_logic: 'any', use_regex: false, case_sensitive: false,
-    match_whole_words: false, scan_depth: 0, priority: 0, prompt_slot: '', groups: [],
+    match_whole_words: false, scan_depth: 0, priority: 100, prompt_slot: 'world_background', groups: [],
+    // canonical 默认与后端 payload.setdefault 对齐：显式发值必须等于后端默认，否则 UI 与库里不一致。
+    vector_activation: 'hybrid',
     prioritize_inclusion: false,
     non_recursable: false, prevent_further_recursion: false, delay_until_recursion: false,
     recursion_level: 0,
   }
+  normalizeActivationModel(loreEdit.value)
   visibilityMode.value = visibilityModeOf(loreEdit.value.visible_to)
 }
+
+/**
+ * 编辑模型必须始终带具体值：vector_activation 缺失/非法时收敛到与后端同向的 hybrid，
+ * is_constant 收敛成 boolean。否则「UI 显示 off、后端存 hybrid」这类分歧只会在保存后才暴露。
+ */
+function normalizeActivationModel(edit: LoreEdit) {
+  edit.is_constant = !!edit.is_constant
+  edit.vector_activation = normalizeVectorActivation(edit.vector_activation)
+}
+
+/**
+ * 第一屏「触发方式」= is_constant + vector_activation 的组合，不是 legacy match_mode。
+ * 读写都走 entryFilters 的同一套映射，保证编辑器与列表筛选口径一致。
+ */
+const productActivation = computed<LoreProductActivationMode>({
+  get: () => loreEdit.value ? loreProductActivation(loreEdit.value) : 'keyword',
+  set: mode => {
+    const edit = loreEdit.value
+    if (!edit) return
+    const next = applyLoreProductActivation(edit, mode)
+    edit.is_constant = next.is_constant
+    edit.vector_activation = next.vector_activation
+  },
+})
 
 // 编辑表单的可见性三档：GM 秘密 / 全队公开 / 指定角色。
 // 切档直接改写 visible_to；「指定角色」保留点名条目、剥离公开标记，
@@ -293,9 +322,14 @@ function typeLabel(type: string | undefined) {
   const key = labels[String(type || '')]
   return key ? t(key) : String(type || t('loreEntry'))
 }
-/** canonical match_mode 的显示名复用编辑表单的四个档位文案。 */
-function activationModeLabel(mode: string) {
-  const labels: Record<string, MessageKey> = { any: 'matchAny', all: 'matchAll', not_any: 'matchNotAny', not_all: 'matchNotAll' }
+/** 产品触发方式（is_constant + vector_activation）的显示名：编辑器与列表筛选共用。 */
+function productActivationLabel(mode: string) {
+  const labels: Record<string, MessageKey> = {
+    keyword: 'loreActivationKeyword',
+    always: 'loreActivationAlways',
+    hybrid: 'loreActivationHybrid',
+    semantic: 'loreActivationSemantic',
+  }
   const key = labels[String(mode || '')]
   return key ? t(key) : String(mode || '')
 }
@@ -348,6 +382,8 @@ function setArr(field: keyof LoreEdit, e: Event) {
 async function saveLore() {
   if (!loreEdit.value) return
   normalizeVisibilityForSave()
+  // 发出去的就是 UI 上看到的：不会出现「界面 off、库里 hybrid」。
+  normalizeActivationModel(loreEdit.value)
   const entry: LoreEdit = { ...loreEdit.value, world_id: currentWorldId.value }
   const bookId = activeBookId.value || `world:${currentWorldId.value}`
   const path = bookId === `world:${currentWorldId.value}`
@@ -834,9 +870,9 @@ async function removeBinding(bindingId: string) {
           <option value="enabled">{{ t('enabled') }}</option>
           <option value="disabled">{{ t('disabled') }}</option>
         </select>
-        <select v-model="entryFilters.activation" class="lore-entry-filter lore-filter-activation" :aria-label="t('keywordMatchMode')">
+        <select v-model="entryFilters.activation" class="lore-entry-filter lore-filter-activation" :aria-label="t('loreActivationMode')">
           <option value="">{{ t('loreFilterAll') }}</option>
-          <option v-for="mode in activationOptions" :key="mode" :value="mode">{{ activationModeLabel(mode) }}</option>
+          <option v-for="mode in activationOptions" :key="mode" :value="mode">{{ productActivationLabel(mode) }}</option>
         </select>
         <select v-model="entryFilters.source" class="lore-entry-filter lore-filter-source" :aria-label="t('source')">
           <option value="all">{{ t('loreFilterAll') }}</option>
@@ -983,7 +1019,7 @@ async function removeBinding(bindingId: string) {
         <label>{{ t('name') }}<input v-model="loreEdit.name"></label>
         <label>{{ t('type') }}<select v-model="loreEdit.type"><option v-for="tp in loreTypeOrder" :key="tp" :value="tp">{{ typeLabel(tp) }}</option></select></label>
         <label>{{ t('content') }}<textarea rows="6" v-model="loreEdit.content"></textarea></label>
-        <label>{{ t('keywordMatchMode') }}<select v-model="loreEdit.match_mode"><option value="any">{{ t('matchAny') }}</option><option value="all">{{ t('matchAll') }}</option><option value="not_any">{{ t('matchNotAny') }}</option><option value="not_all">{{ t('matchNotAll') }}</option></select></label>
+        <label>{{ t('loreActivationMode') }}<select v-model="productActivation" class="lore-entry-trigger-mode"><option value="keyword">{{ t('loreActivationKeyword') }}</option><option value="always">{{ t('loreActivationAlways') }}</option><option value="hybrid">{{ t('loreActivationHybrid') }}</option><option value="semantic">{{ t('loreActivationSemantic') }}</option></select></label>
         <label>{{ t('keywords') }}<input :value="arrText(loreEdit.keywords)" @input="setArr('keywords', $event)" :placeholder="t('keywordsPlaceholder')"></label>
         <label>{{ t('loreVisibilityLabel') }}</label>
         <div class="lore-filter-options" role="radiogroup" :aria-label="t('loreVisibilityLabel')">

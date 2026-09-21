@@ -30,10 +30,11 @@ const books = {
   ],
 }
 const lorebook = {
+  // 触发方式按产品口径（is_constant + vector_activation）区分，legacy match_mode 不参与筛选。
   entries: [
-    { id: 'a', world_id: 'w1', name: '城门守卫', type: 'npc', content: '公开背景', keywords: ['城门'], visible_to: ['*'], enabled: 1, match_mode: 'any' },
-    { id: 'b', world_id: 'w1', name: '秘血教派', type: 'faction', content: '莱拉的私人线索', keywords: ['血'], visible_to: ['u1'], enabled: 0, match_mode: 'all' },
-    { id: 'c', world_id: 'w1', name: '幕后黑手', type: 'npc', content: 'GM 秘密', visible_to: [], match_mode: 'not_any' },
+    { id: 'a', world_id: 'w1', name: '城门守卫', type: 'npc', content: '公开背景', keywords: ['城门'], visible_to: ['*'], enabled: 1, match_mode: 'any', is_constant: false, vector_activation: 'off' },
+    { id: 'b', world_id: 'w1', name: '秘血教派', type: 'faction', content: '莱拉的私人线索', keywords: ['血'], visible_to: ['u1'], enabled: 0, match_mode: 'all', is_constant: false, vector_activation: 'hybrid' },
+    { id: 'c', world_id: 'w1', name: '幕后黑手', type: 'npc', content: 'GM 秘密', visible_to: [], match_mode: 'not_any', is_constant: true, vector_activation: 'off' },
   ],
 }
 
@@ -147,7 +148,7 @@ describe('LorebookView entry search, filters and bulk actions', () => {
     expect(wrapper.get('.lore-row').text()).toContain('城门守卫')
 
     await wrapper.get('.lore-entry-filter-reset').trigger('click')
-    await wrapper.get('.lore-filter-activation').setValue('not_any')
+    await wrapper.get('.lore-filter-activation').setValue('always')
     expect(wrapper.findAll('.lore-row')).toHaveLength(1)
     expect(wrapper.get('.lore-row').text()).toContain('幕后黑手')
 
