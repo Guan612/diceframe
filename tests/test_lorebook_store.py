@@ -629,10 +629,31 @@ class TestMigration:
         store, path = _temp_store()
         try:
             store.create_lorebook({"id": "book:import", "name": "Imported", "source_kind": "ccv3"})
-            store.bind_lorebook({"id": "binding:import:session", "book_id": "book:import", "scope_kind": "session", "scope_id": "s1"})
+            # Only the four canonical scopes are writable; a standalone book that
+            # carries no world authority binds globally, not to a session.
+            store.bind_lorebook({"id": "binding:import:global", "book_id": "book:import", "scope_kind": "global", "scope_id": ""})
             store.add_entry({"id": "e-import", "book_id": "book:import", "name": "Imported entry", "content": "text"})
             assert store.list_book_entries("book:import")[0]["world_id"] is None
-            assert store.list_lorebooks(scope_kind="session", scope_id="s1")[0]["id"] == "book:import"
+            assert store.list_lorebooks(scope_kind="global")[0]["id"] == "book:import"
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.parametrize("kind", ["session", "persona", "chat", "unknown", ""])
+    def test_non_canonical_scope_kind_is_rejected_at_store_boundary(self, kind):
+        """The store is the canonical boundary, so import flows cannot bypass it."""
+
+        store, path = _temp_store()
+        try:
+            store.create_lorebook({"id": "book:scoped", "name": "Scoped"})
+            with pytest.raises(ValueError):
+                store.bind_lorebook({"id": "binding:bad", "book_id": "book:scoped", "scope_kind": kind})
+            assert store.list_bindings() == []
+            # A scope update cannot smuggle in a non-canonical kind either.
+            store.bind_lorebook({"id": "binding:ok", "book_id": "book:scoped", "scope_kind": "global"})
+            with pytest.raises(ValueError):
+                store.update_binding("binding:ok", {"scope_kind": "session"})
+            assert store.list_bindings()[0]["scope_kind"] == "global"
         finally:
             store.close()
             path.unlink(missing_ok=True)

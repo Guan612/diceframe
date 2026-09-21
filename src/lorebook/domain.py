@@ -13,6 +13,10 @@ class LoreEntryDraft:
     secondary_keys: list[str] = field(default_factory=list)
     enabled: bool = True
     constant: bool = False
+    # Legacy DiceFrame primary matching (any/all/not_any/not_all). This is a
+    # DIFFERENT concept from the SillyTavern selective secondary logic below and
+    # must never be derived from it.
+    match_mode: str = "any"
     selective_logic: str = "any"
     use_regex: bool = False
     case_sensitive: bool = False
@@ -36,7 +40,10 @@ class LoreEntryDraft:
     triggers_recursive: list[str] = field(default_factory=list)
     prioritize_inclusion: bool = False
     group_scoring: str = ""
-    vector_activation: str = "off"
+    # Canonical default is hybrid: new canonical / ST / CCv3 entries keep the
+    # keyword + semantic enhancement behaviour. Only an external format that
+    # explicitly requests off / vector_only may narrow it.
+    vector_activation: str = "hybrid"
     extensions: dict[str, Any] = field(default_factory=dict)
 
 

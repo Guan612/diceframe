@@ -1858,17 +1858,32 @@ class WebAPI:
         return {"ok": True, "book": book, "entries": self._lore.list_book_entries(book_id)}
 
     def save_lorebook_entry(self, book_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+        book_id = str(book_id or "")
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found", "error_code": "book_not_found"}
         payload = dict(entry)
         payload["book_id"] = book_id
         payload.setdefault("id", f"{book_id}:entry:{time.time_ns()}")
-        if self._lore.get_entry(str(payload["id"])) is None:
-            self._lore.add_entry(payload)
-        else:
-            self._lore.update_entry(str(payload["id"]), payload)
-        return {"ok": True, "entry": self._lore.get_entry(str(payload["id"]))}
+        entry_id = str(payload["id"])
+        if self._lore.get_entry(entry_id) is not None:
+            # Ownership isolation: entry.id is a global canonical PK, but it may
+            # only be rewritten through the book that actually owns it.
+            if not self._lore.update_book_entry(book_id, entry_id, payload):
+                return {"ok": False, "error": "Entry belongs to another lorebook",
+                        "error_code": "entry_book_mismatch", "entry_id": entry_id}
+            return {"ok": True, "entry": self._lore.get_entry(entry_id)}
+        self._lore.add_entry(payload)
+        return {"ok": True, "entry": self._lore.get_entry(entry_id)}
 
-    def delete_lorebook_entry(self, entry_id: str) -> dict[str, Any]:
-        self._lore.delete_entry(entry_id)
+    def delete_lorebook_entry(self, book_id: str, entry_id: str) -> dict[str, Any]:
+        # Ownership isolation: a DELETE through book A must never remove an
+        # entry that lives in book B.
+        book_id = str(book_id or "")
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found", "error_code": "book_not_found"}
+        if not self._lore.delete_book_entry(book_id, str(entry_id or "")):
+            return {"ok": False, "error": "Entry not found in this lorebook",
+                    "error_code": "entry_not_found", "entry_id": entry_id}
         return {"ok": True, "entry_id": entry_id}
 
     def export_lorebook(self, book_id: str) -> dict[str, Any]:
@@ -1908,9 +1923,25 @@ class WebAPI:
 
     def commit_lorebook_import(self, payload: dict[str, Any], binding: dict[str, Any] | None = None, book_id: str | None = None) -> dict[str, Any]:
         from src.lorebook.importer import commit_lorebook_import, draft_lorebook_import
+        from src.lorebook.store import normalize_scope_kind
 
         draft = draft_lorebook_import(payload)
-        imported_book_id = commit_lorebook_import(self._lore, draft, binding, book_id=book_id)
+        # Validate the requested binding before any canonical write so a bad
+        # scope cannot leave a half-imported book behind.
+        if binding is not None:
+            if not isinstance(binding, dict):
+                return {"ok": False, "error": "binding must be an object"}
+            if "scope_kind" not in binding:
+                return {"ok": False, "error": "binding requires a canonical scope_kind"}
+            try:
+                normalize_scope_kind(binding.get("scope_kind"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        try:
+            imported_book_id = commit_lorebook_import(self._lore, draft, binding, book_id=book_id)
+        except ValueError as exc:
+            # The store boundary is the authority for scope validity.
+            return {"ok": False, "error": str(exc)}
         return {"ok": True, "book_id": imported_book_id, "entries": len(draft.entries), "warnings": draft.warnings}
 
     async def generate_lorebook_entries(self, world_id: str, prompt: str, language: str = "") -> dict[str, Any]:

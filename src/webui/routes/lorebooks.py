@@ -107,11 +107,26 @@ async def api_lorebook_entry_update(request: web.Request) -> web.Response:
     if not isinstance(body, dict):
         return web.json_response({"ok": False, "error": "entry must be an object"}, status=400)
     body["id"] = request.match_info["entry_id"]
-    return web.json_response(_get_api(request).save_lorebook_entry(request.match_info["book_id"], body))
+    result = _get_api(request).save_lorebook_entry(request.match_info["book_id"], body)
+    return web.json_response(result, status=200 if result.get("ok") else _entry_error_status(result))
 
 
 async def api_lorebook_entry_delete(request: web.Request) -> web.Response:
-    return web.json_response(_get_api(request).delete_lorebook_entry(request.match_info["entry_id"]))
+    # The URL book_id participates in the lookup: an entry owned by another
+    # book is never reachable through this route.
+    result = _get_api(request).delete_lorebook_entry(
+        request.match_info["book_id"], request.match_info["entry_id"],
+    )
+    return web.json_response(result, status=200 if result.get("ok") else _entry_error_status(result))
+
+
+def _entry_error_status(result: dict) -> int:
+    """Map entry ownership failures onto explicit HTTP semantics (404 / 409)."""
+
+    code = str(result.get("error_code") or "")
+    if code == "entry_book_mismatch":
+        return 409
+    return 404
 
 
 async def api_lorebook_export(request: web.Request) -> web.Response:

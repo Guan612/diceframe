@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.lorebook.activation import DEFAULT_VECTOR_ACTIVATION, normalize_selective_logic
 from src.lorebook.domain import LoreEntryDraft, LorebookDraft
 
 
@@ -28,7 +29,9 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
             name=str(row.get("name") or row.get("comment") or row.get("uid") or ""), content=str(row.get("content", "") or ""),
             keys=_strings(row.get("keys", row.get("key", []))), secondary_keys=_strings(row.get("secondary_keys", row.get("keysecondary", []))),
             enabled=bool(row.get("enabled", True)), constant=bool(row.get("constant", False)),
-            selective_logic=str(row.get("selective_logic", row.get("selectiveLogic", "any")) or "any"),
+            # lorebook_v3 carries the ST selective secondary logic; the primary
+            # key must still match first, so it is never folded into match_mode.
+            selective_logic=normalize_selective_logic(row.get("selective_logic", row.get("selectiveLogic"))),
             case_sensitive=bool(row.get("case_sensitive", False)), use_regex=bool(row.get("use_regex", False)),
             match_whole_words=bool(row.get("match_whole_words", False)),
             insertion_order=int(row.get("insertion_order", row.get("order", row.get("position", 100))) or 100), priority=int(row.get("priority", 0) or 0),
@@ -46,15 +49,32 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
                 }.items() if value
             },
             timed={k: int(row[k]) for k in ("sticky", "cooldown", "delay") if isinstance(row.get(k), (int, float))},
-            vector_activation=str(row.get("vector_activation", "off") or "off"),
+            vector_activation=_vector_activation(row),
             prompt_slot=str(row.get("prompt_slot", "") or ""),
             extensions=extensions,
         ))
-    known = {"name", "description", "scan_depth", "token_budget", "recursive_scanning", "entries", "extensions"}
+    # A previous DiceFrame export re-offers its preserved payload at book level;
+    # merge it back instead of nesting it one level deeper on every round trip.
+    preserved_book = book.get("preserved_extensions") if isinstance(book.get("preserved_extensions"), dict) else {}
+    known = {"name", "description", "scan_depth", "token_budget", "recursive_scanning", "entries", "extensions", "preserved_extensions"}
     unknown = {k: v for k, v in book.items() if k not in known}
+    raw = dict(preserved_book.get("raw") or {})
+    raw.update(unknown)
+    extensions = dict(preserved_book.get("extensions") or {})
+    extensions.update(book.get("extensions", {}) or {})
     warnings = [f"preserved unknown field: {k}" for k in sorted(unknown)]
     settings = {k: book[k] for k in ("scan_depth", "token_budget", "recursive_scanning") if k in book}
-    return LorebookDraft(name=str(book.get("name", "Lorebook v3") or "Lorebook v3"), description=str(book.get("description", "") or ""), settings=settings, entries=entries, source={"kind": "lorebook_v3"}, warnings=warnings, preserved_extensions={"raw": unknown, "extensions": book.get("extensions", {})})
+    return LorebookDraft(name=str(book.get("name", "Lorebook v3") or "Lorebook v3"), description=str(book.get("description", "") or ""), settings=settings, entries=entries, source={"kind": "lorebook_v3"}, warnings=warnings, preserved_extensions={"raw": raw, "extensions": extensions})
+
+
+def _vector_activation(row: dict[str, Any]) -> str:
+    """Canonical v3 entries default to hybrid; only an explicit request narrows it."""
+
+    raw = row.get("vector_activation")
+    if raw is None:
+        return DEFAULT_VECTOR_ACTIVATION
+    mode = str(raw or "").strip().lower()
+    return mode if mode in {"off", "hybrid", "vector_only"} else DEFAULT_VECTOR_ACTIVATION
 
 
 def _strings(value: Any) -> list[str]:

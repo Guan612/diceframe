@@ -5,8 +5,10 @@ from __future__ import annotations
 from src.lorebook.matcher import KeywordMatcher
 
 
-def _build_matcher(entries: list[dict]) -> KeywordMatcher:
-    m = KeywordMatcher()
+def _build_matcher(entries: list[dict], *, rng=None) -> KeywordMatcher:
+    # Weighted group picks must be deterministic, so tests inject the RNG
+    # instead of relying on the process-global random source.
+    m = KeywordMatcher(rng=rng)
     # 补充默认字段
     defaults = {
         "id": "", "name": "", "keywords": [], "content": "", "type": "other",
@@ -91,7 +93,7 @@ class TestGroupCompetition:
              "group_weight": 1},
             {"id": "e2", "name": "strong", "keywords": ["怪物"], "group": "encounter",
              "group_weight": 10},
-        ])
+        ], rng=lambda: 0.99)
         r = m.match("遇到了怪物")
         ids = [e["id"] for e in r]
         assert "e2" in ids

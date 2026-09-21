@@ -32,8 +32,11 @@ from src.knowledge.visibility import entry_visible_to_viewer
 from src.memory.embedding import cosine_similarity
 from src.lorebook.resolver import resolve_active_books
 from src.lorebook.budget import apply_token_budget
+from src.lorebook.activation import (
+    DEFAULT_VECTOR_ACTIVATION,
+    evaluate_probability,
+)
 from src.lorebook.trace import ActivationTrace
-from src.lorebook.activation import evaluate_probability
 
 logger = logging.getLogger("trpg")
 
@@ -426,7 +429,9 @@ class LoreRetriever:
                 row["_lorebook_recursive_scanning"] = ref.recursive_scanning
                 row["_lorebook_fuzzy_enabled"] = ref.fuzzy_enabled
                 settings = ref.settings or {}
-                row["_lorebook_vector_activation"] = str(settings.get("vector_activation", "off") or "off")
+                row["_lorebook_vector_activation"] = str(
+                    settings.get("vector_activation", DEFAULT_VECTOR_ACTIVATION) or DEFAULT_VECTOR_ACTIVATION
+                )
                 entries.append(row)
         self._matcher.build(entries)
         self._entries = entries
@@ -492,32 +497,44 @@ class LoreRetriever:
         )
 
         timed_state = self._timed_state(instance, mutate_timers=mutate_timers)
-        # 关键词只吃 lexical query（无结构标签）；embedding 吃带标签的 semantic query。
-        keyword_hits = list(
-            self._matcher.match_with_recursive(queries["lexical"], timed_state=timed_state)
-        )
-        keyword_hits = [entry for entry in keyword_hits if self._vector_mode(entry) != "vector_only"]
-        hits = self._visible_entries(
-            keyword_hits,
-            viewer_is_gm=viewer_is_gm,
-            viewer_uid=viewer_uid,
-            viewer_name=viewer_name,
-        )
 
-        semantic_hits = await self._semantic_hits(
+        def _visible(entry: dict) -> bool:
+            return bool(self._visible_entries(
+                [entry], viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+                viewer_name=viewer_name,
+            ))
+
+        # 语义候选先于激活发现：semantic / vector 只是候选发现通道，候选必须与
+        # lexical 候选一起汇入同一套 activation eligibility pipeline，因此
+        # probability / group / timed / visibility 语义在两条通道上完全一致。
+        semantic_ids, semantic_scores = await self._semantic_candidates(
             queries["semantic"],
             timed_state=timed_state,
             viewer_is_gm=viewer_is_gm,
             viewer_uid=viewer_uid,
             viewer_name=viewer_name,
-            already={
-                str(entry.get("id") or "") for entry in hits if entry.get("id")
-            },
         )
-        merged = self._merge_and_sort(hits, semantic_hits)
-        merged = self._apply_book_budgets(merged)
+        # vector_only 条目只能被语义通道发现，不能被关键词通道激活。
+        activated = self._matcher.match_with_recursive(
+            queries["lexical"],
+            timed_state=timed_state,
+            is_visible=_visible,
+            is_candidate=lambda entry: self._vector_mode(entry) != "vector_only",
+            extra_candidates=semantic_ids,
+        )
+        hits = []
+        for entry in activated:
+            row = dict(entry)
+            score = semantic_scores.get(str(row.get("id") or ""))
+            if score is not None:
+                row["_semantic_score"] = score
+            hits.append(row)
+
+        merged = self._apply_book_budgets(hits)
         self.last_activation_trace = self._build_trace(
-            keyword_hits, semantic_hits, merged, viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
+            hits, semantic_scores, merged,
+            lexical_query=queries["lexical"],
+            viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid,
         )
         try:
             setattr(instance, "lorebook_activation_trace", list(self.last_activation_trace))
@@ -527,12 +544,10 @@ class LoreRetriever:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "Lore retrieval: world=%s language=%s scene=%s location=%s present_npcs=%s "
-                "keyword_hits=%s semantic_hits=%s final_hits=%s",
+                "semantic_candidates=%s final_hits=%s",
                 self._world_id, self._language, anchors["scene"], anchors["location"],
                 anchors["present_npcs"],
-                [entry.get("id") for entry in keyword_hits],
-                [entry.get("id") for entry in semantic_hits],
-                [entry.get("id") for entry in merged],
+                list(semantic_ids), [entry.get("id") for entry in merged],
             )
         return merged
 
@@ -611,7 +626,7 @@ class LoreRetriever:
             logger.debug("读取 embedding 客户端失败，跳过语义检索", exc_info=True)
             return None
 
-    async def _semantic_hits(
+    async def _semantic_candidates(
         self,
         query: str,
         *,
@@ -619,18 +634,24 @@ class LoreRetriever:
         viewer_is_gm: bool,
         viewer_uid: str | None,
         viewer_name: str,
-        already: set[str],
-    ) -> list[dict]:
-        """可选的语义召回：任何失败都只意味着"本轮没有语义增强"。"""
+    ) -> tuple[set[str], dict[str, float]]:
+        """语义候选发现：只负责"找出可能的条目"，不做 activation 决策。
+
+        返回 ``(candidate_ids, {id: score})``。这些候选随后与 lexical 候选一起
+        进入 :meth:`KeywordMatcher.match_with_recursive` 的统一 eligibility
+        pipeline（enabled / visibility / timed / probability / group / budget），
+        因此 semantic-only 条目不会绕过任何 activation 条件。
+        任何失败都只意味着"本轮没有语义增强"。
+        """
 
         if self._semantic_top_k <= 0 or not query or not self._entries or self._store is None:
-            return []
+            return set(), {}
         client = self._embedding_client()
         if client is None:
-            return []
+            return set(), {}
 
         candidates = self._visible_entries(
-            [entry for entry in self._entries if str(entry.get("id") or "") not in already],
+            list(self._entries),
             viewer_is_gm=viewer_is_gm,
             viewer_uid=viewer_uid,
             viewer_name=viewer_name,
@@ -641,7 +662,7 @@ class LoreRetriever:
             and not self._timer_blocked(str(entry.get("id") or ""), timed_state)
         ]
         if not candidates:
-            return []
+            return set(), {}
 
         # 共享 matcher / 世界作用域是 per-runtime 的，embedding 调用会让出事件循环；
         # 语言必须在第一个 await 之前快照，否则另一个世界的 ensure_world 会让本轮
@@ -652,14 +673,14 @@ class LoreRetriever:
             query_vector = normalize_vector(await client.embed(query))
         except Exception:
             logger.warning("Lore semantic query embedding 失败，跳过语义检索", exc_info=True)
-            return []
+            return set(), {}
         if query_vector is None:
             logger.warning("Lore semantic query embedding 不是合法向量，跳过语义检索")
-            return []
+            return set(), {}
 
         vectors = await self._entry_vectors(client, candidates, query_vector, language=language)
         if not vectors:
-            return []
+            return set(), {}
 
         scored: list[tuple[float, dict]] = []
         for entry in candidates:
@@ -671,13 +692,16 @@ class LoreRetriever:
                 scored.append((score, entry))
         scored.sort(key=lambda item: (-item[0], str(item[1].get("id") or "")))
 
-        hits: list[dict] = []
+        ids: set[str] = set()
+        scores: dict[str, float] = {}
         for score, entry in scored[: self._semantic_top_k]:
-            hit = dict(entry)
+            entry_id = str(entry.get("id") or "")
+            if not entry_id:
+                continue
+            ids.add(entry_id)
             # 诊断字段：只在语义命中上标注分数，不改变 matcher 既有字段语义。
-            hit["_semantic_score"] = round(float(score), 4)
-            hits.append(hit)
-        return hits
+            scores[entry_id] = round(float(score), 4)
+        return ids, scores
 
     @staticmethod
     def _vector_mode(entry: dict[str, Any]) -> str:
@@ -687,13 +711,17 @@ class LoreRetriever:
             return "hybrid"
         mode = str(entry.get("vector_activation") or "").strip().lower()
         if mode not in {"off", "hybrid", "vector_only"}:
-            mode = "off"
+            mode = "hybrid"
         if mode == "off":
             if "_lorebook_id" not in entry:
                 return "hybrid"
-            default = str(entry.get("_lorebook_vector_activation") or "off").strip().lower()
+            # A canonical entry with vector_activation=off falls back to the
+            # book default, which itself defaults to hybrid so that migrated
+            # primary world lore keeps keyword + semantic retrieval.
+            default = str(entry.get("_lorebook_vector_activation") or DEFAULT_VECTOR_ACTIVATION).strip().lower()
             if default in {"hybrid", "vector_only"}:
                 return default
+            return "hybrid"
         return mode
 
     @staticmethod
@@ -712,12 +740,17 @@ class LoreRetriever:
         return LoreRetriever._merge_and_sort(included, [])
 
     def _build_trace(
-        self, keyword_hits: Sequence[dict], semantic_hits: Sequence[dict], final_hits: Sequence[dict],
-        *, viewer_is_gm: bool, viewer_uid: str | None,
+        self, activated: Sequence[dict], semantic_scores: dict[str, float], final_hits: Sequence[dict],
+        *, lexical_query: str, viewer_is_gm: bool, viewer_uid: str | None,
     ) -> list[dict[str, Any]]:
-        keyword_ids = {str(row.get("id") or "") for row in keyword_hits}
-        semantic_ids = {str(row.get("id") or "") for row in semantic_hits}
-        semantic_scores = {str(row.get("id") or ""): row.get("_semantic_score") for row in semantic_hits}
+        """Build the ActivationTrace from the decisions the run actually made.
+
+        Keyword reasons come from the matcher authority (``keyword_decision``),
+        so the trace can never claim a match the activation path did not compute.
+        Player traces never reveal a hidden row or even its count.
+        """
+
+        semantic_ids = set(semantic_scores)
         final_ids = {str(row.get("id") or "") for row in final_hits}
         rows: list[dict[str, Any]] = []
         for entry in self._entries:
@@ -728,13 +761,21 @@ class LoreRetriever:
             if not viewer_is_gm and not visible:
                 # Player traces must not reveal hidden rows or even their count.
                 continue
+            decision = self._matcher.keyword_decision(entry, lexical_query)
+            keyword_source = bool(decision["matched"]) and self._vector_mode(entry) != "vector_only"
+            semantic_source = entry_id in semantic_ids
+            score = semantic_scores.get(entry_id)
             trace = ActivationTrace(
                 entry_id=entry_id,
                 book_id=str(entry.get("_lorebook_id") or entry.get("book_id") or ""),
-                candidate_sources=[source for source, present in (("keyword", entry_id in keyword_ids), ("semantic", entry_id in semantic_ids)) if present],
-                matched_keys=list(entry.get("keywords") or []) if entry_id in keyword_ids else [],
-                secondary_matches=list(entry.get("secondary_keys") or []) if entry_id in keyword_ids else [],
-                semantic_score=float(str(semantic_scores[entry_id])) if semantic_scores.get(entry_id) is not None else None,
+                candidate_sources=[
+                    source for source, present in (("keyword", keyword_source), ("semantic", semantic_source)) if present
+                ],
+                matched_keys=list(decision["matched_keys"]),
+                secondary_matches=list(decision["secondary_matches"]),
+                primary_result=decision["primary_ok"],
+                secondary_result=decision["secondary_ok"],
+                semantic_score=float(score) if score is not None else None,
                 visibility="visible" if visible else "hidden",
                 budget="included" if entry_id in final_ids else "omitted",
                 final_state="included" if entry_id in final_ids else "omitted",

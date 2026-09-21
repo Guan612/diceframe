@@ -88,7 +88,7 @@ const activeBookId = ref('')
 const activeLoreType = ref('all')
 const loreTypeOrder = ['npc', 'location', 'faction', 'item', 'event', 'puzzle', 'spell', 'class', 'other'] as const
 
-const { viewer, effectiveViewer, viewerFallback, characterViewerLocked, setViewer, preview, previewError, projectionOf, refreshPreview, activationText, activation, activationLoading, activationError, refreshActivationPreview } = useLorePerspective(currentWorldId, game, players)
+const { effectiveViewer, viewerFallback, characterViewerLocked, setViewer, preview, previewError, projectionOf, refreshPreview, activationText, activation, activationLoading, activationError, refreshActivationPreview } = useLorePerspective(currentWorldId, game, players)
 const lockedReason = computed<'standalone' | 'peer' | ''>(() => {
   if (!characterViewerLocked.value) return ''
   return game.value && activePeerGameClient() ? 'peer' : 'standalone'

@@ -11,10 +11,15 @@ import logging
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+from contextlib import contextmanager
 
 from peewee import SQL
 
+from src.lorebook.activation import (
+    CANONICAL_VECTOR_ACTIVATION,
+    DEFAULT_VECTOR_ACTIVATION,
+)
 from src.lorebook.models import Lorebook, LorebookBinding, LorebookEntry, LorebookEmbedding, World
 from src.lorebook.models import database as _models_database
 from src.migrations.lorebook import migrate as migrate_lorebook
@@ -23,6 +28,32 @@ logger = logging.getLogger("trpg")
 
 # 单次 IN(...) 查询的 entry 数量上限，避免撞 SQLite 的参数个数限制。
 _CACHE_CHUNK = 400
+
+# Canonical binding scope vocabulary (docs/ARCHITECTURE §3823).
+# This is the single source of truth: every write path that accepts a
+# ``scope_kind`` must validate here at the store boundary, so import flows and
+# non-HTTP callers cannot bypass the REST routes' local check.
+CANONICAL_SCOPE_KINDS: frozenset[str] = frozenset({"global", "world", "game", "character"})
+
+
+def normalize_scope_kind(value: Any) -> str:
+    """Validate and normalize a binding scope kind, raising on non-canonical input."""
+
+    kind = str(value or "").strip().lower()
+    if kind not in CANONICAL_SCOPE_KINDS:
+        raise ValueError(
+            f"invalid scope_kind {value!r}: must be one of "
+            f"{sorted(CANONICAL_SCOPE_KINDS)}"
+        )
+    return kind
+
+
+def normalize_vector_activation(value: Any) -> str:
+    """Normalize a vector activation mode; unknown values fail closed to ``off``."""
+
+    mode = str(value or "").strip().lower()
+    return mode if mode in CANONICAL_VECTOR_ACTIVATION else "off"
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS worlds (
@@ -93,6 +124,41 @@ class LorebookStore:
         self.db_path = Path(db_path)
         self._conn: sqlite3.Connection | None = None
         self._lock = threading.Lock()
+        self._tx_depth = 0
+
+    def _commit_locked(self) -> None:
+        """Commit per-method, unless an explicit canonical transaction owns it."""
+
+        if self._tx_depth == 0:
+            self._conn.commit()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Explicit transaction seam for multi-write canonical paths (import).
+
+        Wrapping ``book + bindings + entries + provenance`` makes the whole
+        import commit atomic: any fatal failure rolls everything back instead of
+        leaving a half-imported book behind. Nested use is allowed and the
+        outermost transaction owns the commit. This is a seam, not an ORM
+        rewrite — per-method commits stay the default everywhere else.
+        """
+
+        if self._tx_depth:
+            self._tx_depth += 1
+            try:
+                yield
+            finally:
+                self._tx_depth -= 1
+            return
+        self._tx_depth = 1
+        try:
+            yield
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            self._tx_depth = 0
+        self._conn.commit()
 
     def open(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -137,7 +203,7 @@ class LorebookStore:
                 version=kwargs.get("version", "1.0"),
             ).on_conflict_replace().execute()
             self._ensure_primary_book_locked(world_id, name=name, language=kwargs.get("language", "zh-CN"))
-            self._conn.commit()
+            self._commit_locked()
 
     def get_world(self, world_id: str) -> dict | None:
         with self._lock:
@@ -150,7 +216,7 @@ class LorebookStore:
             World.update(
                 language=language, updated_at=SQL("datetime('now')"),
             ).where(World.id == world_id).execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def list_worlds(self) -> list[dict]:
         with self._lock:
@@ -161,7 +227,7 @@ class LorebookStore:
         with self._lock:
             Lorebook.delete().where(Lorebook.id == self.primary_world_book_id(world_id)).execute()
             World.delete().where(World.id == world_id).execute()
-            self._conn.commit()
+            self._commit_locked()
 
     # ---- canonical lorebook/book bindings ----
 
@@ -193,7 +259,7 @@ class LorebookStore:
     def ensure_primary_world_book(self, world_id: str) -> str:
         with self._lock:
             book_id = self._ensure_primary_book_locked(world_id)
-            self._conn.commit()
+            self._commit_locked()
             return book_id
 
     def create_lorebook(self, book: dict) -> None:
@@ -209,7 +275,7 @@ class LorebookStore:
                 source_kind=book.get("source_kind", "native"), source_id=book.get("source_id", ""),
                 source_version=book.get("source_version", ""), source_digest=book.get("source_digest", ""),
             ).on_conflict_ignore().execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def update_lorebook(self, book_id: str, updates: dict) -> bool:
         """Update editable book metadata; unknown fields are ignored."""
@@ -230,7 +296,7 @@ class LorebookStore:
         with self._lock:
             changed = Lorebook.update(**fields, updated_at=SQL("datetime('now')")).where(
                 Lorebook.id == book_id).execute()
-            self._conn.commit()
+            self._commit_locked()
         return bool(changed)
 
     def delete_lorebook(self, book_id: str) -> bool:
@@ -252,7 +318,7 @@ class LorebookStore:
             ).fetchall()]
             self._conn.execute("DELETE FROM lorebooks WHERE id = ?", (book_id,))
             self._delete_embeddings_locked(entry_ids)
-            self._conn.commit()
+            self._commit_locked()
             return True
 
     def get_lorebook(self, book_id: str) -> dict | None:
@@ -274,17 +340,23 @@ class LorebookStore:
         return [_book_to_dict(row) for row in rows]
 
     def bind_lorebook(self, binding: dict) -> None:
+        # Canonical boundary: reject non-canonical scopes here so import flows
+        # and service-layer callers cannot persist rogue bindings.
+        scope_kind = normalize_scope_kind(binding.get("scope_kind"))
         with self._lock:
             LorebookBinding.insert(
-                id=binding["id"], book_id=binding["book_id"], scope_kind=binding["scope_kind"],
+                id=binding["id"], book_id=binding["book_id"], scope_kind=scope_kind,
                 scope_id=binding.get("scope_id", ""), role=binding.get("role", ""),
                 enabled=int(binding.get("enabled", True)), order=int(binding.get("order", 100)),
             ).on_conflict_replace().execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def update_binding(self, binding_id: str, updates: dict) -> bool:
         allowed = {"scope_kind", "scope_id", "role", "enabled", "order"}
         fields = {key: value for key, value in updates.items() if key in allowed}
+        # Canonical boundary: a scope change cannot introduce a non-canonical kind.
+        if "scope_kind" in fields:
+            fields["scope_kind"] = normalize_scope_kind(fields["scope_kind"])
         if "enabled" in fields:
             fields["enabled"] = int(bool(fields["enabled"]))
         if "order" in fields:
@@ -303,7 +375,7 @@ class LorebookStore:
                 raise ValueError("primary world binding cannot be changed")
             changed = LorebookBinding.update(**fields, updated_at=SQL("datetime('now')")).where(
                 LorebookBinding.id == binding_id).execute()
-            self._conn.commit()
+            self._commit_locked()
         return bool(changed)
 
     def delete_binding(self, binding_id: str) -> bool:
@@ -316,7 +388,7 @@ class LorebookStore:
             if row[0] == "primary" and row[1] == "world":
                 raise ValueError("primary world binding cannot be deleted")
             self._conn.execute("DELETE FROM lorebook_bindings WHERE id = ?", (binding_id,))
-            self._conn.commit()
+            self._commit_locked()
             return True
 
     def list_bindings(self, *, scope_kind: str | None = None, scope_id: str | None = None) -> list[dict]:
@@ -373,7 +445,9 @@ class LorebookStore:
                 case_sensitive=int(entry.get("case_sensitive", False)),
                 match_whole_words=int(entry.get("match_whole_words", False)),
                 scan_depth=int(entry.get("scan_depth", 0)), priority=int(entry.get("priority", 0)),
-                vector_activation=str(entry.get("vector_activation", "off") or "off"),
+                vector_activation=normalize_vector_activation(
+                    entry.get("vector_activation", DEFAULT_VECTOR_ACTIVATION)
+                ),
                 non_recursable=int(entry.get("non_recursable", False)),
                 prevent_further_recursion=int(entry.get("prevent_further_recursion", False)),
                 delay_until_recursion=int(entry.get("delay_until_recursion", False)),
@@ -386,7 +460,7 @@ class LorebookStore:
                 provenance_json=json.dumps(entry.get("provenance", entry.get("provenance_json", {})), ensure_ascii=False)
                 if not isinstance(entry.get("provenance_json"), str) else entry["provenance_json"],
             ).on_conflict_replace().execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def get_entry(self, entry_id: str) -> dict | None:
         with self._lock:
@@ -412,9 +486,7 @@ class LorebookStore:
             elif k in ("extensions_json", "provenance_json") and not isinstance(v, str):
                 v = json.dumps(v, ensure_ascii=False)
             elif k == "vector_activation":
-                v = str(v or "off")
-                if v not in {"off", "hybrid", "vector_only"}:
-                    v = "off"
+                v = normalize_vector_activation(v)
             elif k in ("unreliable", "sync_on_enter", "is_constant", "enabled", "use_regex",
                        "case_sensitive", "match_whole_words", "non_recursable",
                        "prevent_further_recursion", "delay_until_recursion", "prioritize_inclusion",
@@ -428,14 +500,65 @@ class LorebookStore:
             LorebookEntry.update(
                 **fields, updated_at=SQL("datetime('now')"),
             ).where(LorebookEntry.id == entry_id).execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def delete_entry(self, entry_id: str) -> None:
         with self._lock:
             LorebookEntry.delete().where(LorebookEntry.id == entry_id).execute()
             # 派生缓存跟着条目走，避免删除后残留向量行。
             self._delete_embeddings_locked([entry_id])
-            self._conn.commit()
+            self._commit_locked()
+
+    # ---- Book 作用域条目访问（ownership isolation） --------------------------
+    # entry.id 仍是全局 canonical PK；这里只是把「URL 里的 book_id」与「entry 真正
+    # 归属的 book_id」绑定成同一个查询条件。归属不匹配一律 fail closed（返回
+    # None/False），绝不允许跨 Book 修改或删除。
+
+    def get_book_entry(self, book_id: str, entry_id: str) -> dict | None:
+        """Read an entry only when it really belongs to ``book_id``."""
+
+        with self._lock:
+            entry = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            )
+        return _entry_to_dict(entry) if entry else None
+
+    def update_book_entry(self, book_id: str, entry_id: str, updates: dict) -> bool:
+        """Update an entry scoped to ``book_id``.
+
+        Returns False when the entry does not exist inside that book, so the
+        caller can translate it into an explicit 404/409 ownership error.
+        """
+
+        with self._lock:
+            owned = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            )
+            if owned is None:
+                return False
+        # update_entry re-acquires the non-reentrant lock, so it must run outside.
+        self.update_entry(entry_id, updates)
+        return True
+
+    def delete_book_entry(self, book_id: str, entry_id: str) -> bool:
+        """Delete an entry scoped to ``book_id``; False when it is not in that book."""
+
+        with self._lock:
+            owned = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            )
+            if owned is None:
+                return False
+            LorebookEntry.delete().where(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == str(book_id or ""),
+            ).execute()
+            self._delete_embeddings_locked([entry_id])
+            self._commit_locked()
+        return True
 
     def delete_world_cascade(self, world_id: str) -> None:
         """删除世界及其所有条目。"""
@@ -447,7 +570,7 @@ class LorebookStore:
             LorebookEntry.delete().where(LorebookEntry.world_id == world_id).execute()
             self._delete_embeddings_locked(entry_ids)
             World.delete().where(World.id == world_id).execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def count_entries_by_plugin(self, plugin_id: str) -> int:
         with self._lock:
@@ -468,7 +591,7 @@ class LorebookStore:
                 LorebookEntry.source_plugin == plugin_id,
             ).execute()
             self._delete_embeddings_locked(entry_ids)
-            self._conn.commit()
+            self._commit_locked()
         return rowcount
 
     def list_plugin_worlds(self, plugin_id: str) -> list[dict]:
@@ -573,7 +696,7 @@ class LorebookStore:
         with self._lock:
             for row in payload:
                 LorebookEmbedding.insert(**row).on_conflict_replace().execute()
-            self._conn.commit()
+            self._commit_locked()
 
     def _delete_embeddings_locked(self, entry_ids: list[str]) -> None:
         """删除若干 entry 的缓存行（调用方必须已持有 ``self._lock``）。"""

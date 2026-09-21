@@ -29,7 +29,10 @@ def from_legacy_entries(payload: dict[str, Any] | list[dict[str, Any]]) -> Loreb
             name=str(row.get("name", "") or ""), content=str(row.get("content", "") or ""),
             keys=_strings(row.get("keywords", row.get("keys", []))),
             enabled=not bool(row.get("disabled", False)), constant=bool(row.get("is_constant", row.get("constant", False))),
-            selective_logic=str(row.get("match_mode", "any") or "any"),
+            # Legacy DiceFrame primary matching stays on match_mode; it is a
+            # different concept from the ST selective secondary logic and must
+            # not be smuggled through that field.
+            match_mode=str(row.get("match_mode", "any") or "any"),
             insertion_order=int(row.get("order", 100) or 100), probability=int(row.get("probability", 100) or 100),
             group_weight=int(row.get("group_weight", 1) or 1),
             type=str(row.get("type", "other") or "other"),
