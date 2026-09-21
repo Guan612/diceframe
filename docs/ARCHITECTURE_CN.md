@@ -3843,6 +3843,12 @@ LorebookView
 → LorebookStore
 ```
 
+Book 与 Binding 的生命周期也由同一产品链负责：`/api/lorebooks` 的 POST/PUT/DELETE
+和 `/api/lorebooks/{book_id}/bindings`、`/api/lorebook-bindings/{binding_id}` 提供
+显式 CRUD；导出统一使用 `lorebook_v3` serializer，
+并在 DiceFrame 备份场景附带 native backup。前端 Golden 覆盖导入预览/确认、Book
+切换、Activation Inspector、GM 与玩家安全视角以及导出请求契约。
+
 `lorebook_bindings.scope_kind` 的 canonical 范围只有 `global`、`world`、`game`、
 `character`；旧的 `viewer` / `actor` 名称不属于新 contract。Resolver 按 binding
 order 合并当前运行时上下文中的多本书。外部导入条目使用按 book 作用域生成的
@@ -3975,6 +3981,10 @@ settings（scan depth、recursive scanning、token budget、vector default）附
 候选进入；所有候选仍须通过 visibility、timer、group 与 budget。每轮 dry-run
 ActivationTrace 保存在运行时实例并可由 `POST /api/lorebooks/activation-preview`
 查询；玩家视角对隐藏条目 fail-closed，不暴露其 id、名称或原因。
+
+Legacy world projection 默认保留旧 fuzzy 行为；`lorebook_v3`、SillyTavern 与 native
+Book 默认关闭 fuzzy，只有 Book settings 明确启用时才打开。fuzzy fallback 仍受
+entry 的 secondary、大小写、整词和正则边界约束，不得绕过新 matcher contract。
 
 ---
 

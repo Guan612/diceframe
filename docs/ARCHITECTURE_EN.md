@@ -3813,6 +3813,13 @@ LorebookView
 → LorebookStore
 ```
 
+Book and Binding lifecycles are owned by the same product path: explicit CRUD is
+available through POST/PUT/DELETE `/api/lorebooks`, plus
+`/api/lorebooks/{book_id}/bindings` and `/api/lorebook-bindings/{binding_id}`. Export uses the
+canonical `lorebook_v3` serializer and includes a DiceFrame native backup when requested.
+The browser Golden covers import preview/confirmation, Book selection, Activation
+Inspector, GM/player-safe views, and the export request contract.
+
 The canonical `lorebook_bindings.scope_kind` values are only `global`, `world`,
 `game`, and `character`; the old `viewer` / `actor` names are not part of the new
 contract. The resolver merges all books bound to the active runtime context in binding
@@ -3947,6 +3954,11 @@ candidate. `off` produces no semantic candidates, `hybrid` runs alongside keywor
 timer, group, and budget checks. A dry-run ActivationTrace is kept on the runtime
 instance and is queryable through `POST /api/lorebooks/activation-preview`; player
 views fail closed for hidden entries and do not disclose their id, name, or reason.
+
+Legacy world projections retain the old fuzzy default; `lorebook_v3`, SillyTavern, and
+native Books default fuzzy matching off unless Book settings explicitly enable it. The
+fuzzy fallback still honors secondary-key, case, whole-word, and regex boundaries and
+cannot bypass the new matcher contract.
 
 ---
 
