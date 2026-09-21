@@ -122,6 +122,22 @@ async def api_lorebook_entry_delete(request: web.Request) -> web.Response:
     return web.json_response(result, status=200 if result.get("ok") else _entry_error_status(result))
 
 
+async def api_lorebook_entry_move(request: web.Request) -> web.Response:
+    body = await request.json()
+    if not isinstance(body, dict):
+        return web.json_response({"ok": False, "error": "request must be an object"}, status=400)
+    result = _get_api(request).move_lorebook_entry(
+        request.match_info["book_id"], request.match_info["entry_id"],
+        str(body.get("target_book_id") or ""),
+    )
+    if result.get("ok"):
+        return web.json_response(result)
+    code = str(result.get("error_code") or "")
+    if code == "target_book_not_found":
+        return web.json_response(result, status=404)
+    return web.json_response(result, status=_entry_error_status(result))
+
+
 def _entry_error_status(result: dict) -> int:
     """Map entry ownership failures onto explicit HTTP semantics (404 / 409)."""
 
@@ -157,6 +173,9 @@ def register_lorebooks(app: web.Application) -> None:
     app.router.add_get("/api/lorebooks/{book_id}/entries", api_lorebook_entries)
     app.router.add_post("/api/lorebooks/{book_id}/entries", api_lorebook_entry_save)
     app.router.add_put("/api/lorebooks/{book_id}/entries/{entry_id}", api_lorebook_entry_update)
+    app.router.add_post(
+        "/api/lorebooks/{book_id}/entries/{entry_id}/move", api_lorebook_entry_move,
+    )
     app.router.add_delete("/api/lorebooks/{book_id}/entries/{entry_id}", api_lorebook_entry_delete)
     app.router.add_get("/api/lorebooks/{book_id}/export", api_lorebook_export)
     app.router.add_post("/api/lorebooks/activation-preview", api_lorebook_activation_preview)

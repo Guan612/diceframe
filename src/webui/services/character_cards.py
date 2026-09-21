@@ -266,6 +266,73 @@ def _tavern_has_nsfw(tavern: dict) -> bool:
     return any(marker in haystack for marker in _NSFW_MARKERS)
 
 
+#: Embedded character lore is labelled so the product flow can present it as
+#: "Imported character lore" instead of an anonymous Book.
+CHARACTER_LORE_ROLE = "character_card"
+CHARACTER_LORE_LABEL = "Imported character lore"
+
+
+def commit_character_book(
+    lorebook: Any,
+    *,
+    name: str,
+    book: dict[str, Any] | None,
+    book_id: str,
+    entry_id_prefix: str,
+    world_id: str = "",
+    character_uid: str = "",
+) -> dict[str, Any]:
+    """Canonicalize an embedded ``character_book`` through the lorebook_v3 path.
+
+    Single authority for every Character Card / Tavern entry point: importing the
+    card body stays separate, and the embedded book always goes
+
+        lorebook_v3 adapter → canonical commit → binding
+
+    Binding precedence follows the work order: a canonical character uid wins,
+    otherwise the current world, otherwise the book is left unbound. The keys of
+    the book are never renamed, so settings and unknown extensions survive.
+    """
+
+    payload = {"spec": "lorebook_v3", "data": {"lorebook": dict(book or {})}}
+    draft = draft_lorebook_import(payload)
+    if not str(draft.name or "").strip() or draft.name == "Lorebook v3":
+        draft.name = f"{name} lore" if str(name or "").strip() else CHARACTER_LORE_LABEL
+    draft.source["entry_id_mode"] = "external"
+    # Preserve a real source entry id so provenance keeps the external identity;
+    # only entries that carry no id get a deterministic synthesized one. The
+    # canonical commit still guards against an external id colliding with an
+    # entry that already belongs to another book.
+    for index, entry in enumerate(draft.entries):
+        if not str(entry.external_id or "").strip():
+            entry.external_id = f"{entry_id_prefix}_{index}"
+
+    binding: dict[str, Any] | None = None
+    # A bogus world must not create a dangling binding: the card import itself
+    # already succeeded, so fall back to unbound rather than binding nowhere.
+    if str(world_id or "").strip() and hasattr(lorebook, "get_world") and not lorebook.get_world(str(world_id)):
+        world_id = ""
+    if str(character_uid or "").strip():
+        binding = {
+            "id": f"binding:{book_id}:character", "scope_kind": "character",
+            "scope_id": str(character_uid), "role": CHARACTER_LORE_ROLE,
+        }
+    elif str(world_id or "").strip():
+        binding = {
+            "id": f"binding:{book_id}:world", "scope_kind": "world",
+            "scope_id": str(world_id), "role": CHARACTER_LORE_ROLE,
+        }
+    commit_lorebook_import(lorebook, draft, binding, book_id=book_id)
+    return {
+        "book_id": book_id,
+        "name": draft.name,
+        "entries": len(draft.entries),
+        "role": CHARACTER_LORE_ROLE,
+        "label": CHARACTER_LORE_LABEL,
+        "binding": binding,
+    }
+
+
 def _import_tavern_as_npc(
     dependencies: CharacterCardDependencies,
     tavern: dict,
@@ -321,18 +388,12 @@ def _import_tavern_as_npc(
     if not isinstance(book, dict):
         entries = tavern.get("character_book") or []
         book = {"name": f"{name} Lorebook", "entries": entries}
-    embedded_payload = {"spec": "lorebook_v3", "data": {"lorebook": book}}
-    draft = draft_lorebook_import(embedded_payload)
     embedded_book_id = f"character_card:{world_id}:{safe_name}"
-    draft.source["entry_id_mode"] = "external"
-    for index, entry in enumerate(draft.entries):
-        entry.external_id = f"{world_id}_tavern_{safe_name}_book_{index}"
-    commit_lorebook_import(
-        lorebook, draft,
-        {"id": f"binding:{embedded_book_id}:world", "scope_kind": "world", "scope_id": world_id, "role": "character_card"},
-        book_id=embedded_book_id,
+    lore = commit_character_book(
+        lorebook, name=name, book=book, book_id=embedded_book_id,
+        entry_id_prefix=f"{world_id}_tavern_{safe_name}_book", world_id=world_id,
     )
-    book_imported = len(draft.entries)
+    book_imported = int(lore["entries"])
     if dependencies.rebuild_lorebook_index is not None:
         dependencies.rebuild_lorebook_index(world_id)
     logger.info("酒馆卡已导入为 NPC: %s -> world=%s（含 %d 条世界书）", name, world_id, book_imported)
@@ -340,6 +401,7 @@ def _import_tavern_as_npc(
     if _tavern_has_nsfw(tavern):
         result["nsfw_warning"] = True
     result["lorebook_book_id"] = embedded_book_id
+    result["lorebook"] = lore
     return result
 
 
@@ -365,6 +427,9 @@ async def import_character_card(
     file_name: str = "card.json",
     target: str = "character_card",
     world_id: str = "",
+    *,
+    include_character_book: bool = True,
+    character_uid: str = "",
 ) -> dict[str, Any]:
     if not file_data:
         return {"ok": False, "error": "未提供文件数据"}
@@ -411,9 +476,42 @@ async def import_character_card(
     cards.append(card)
     _write_cards(dependencies, cards)
     result: dict[str, Any] = {"ok": True, "card": card, "imported_as": "character_card", "format": "tavern"}
+    # A Character Card's embedded character_book is real lore, not a footnote:
+    # when the user keeps it checked it must reach the canonical store through
+    # the same adapter/preview/commit path as every other import. Unchecked means
+    # card only — a genuine choice, not a disabled button.
+    if include_character_book:
+        embedded = _embedded_character_book(document, tavern)
+        if embedded is not None:
+            lore = commit_character_book(
+                dependencies.lorebook, name=str(card.get("character_name") or ""),
+                book=embedded, book_id=f"character_card:{card['id']}",
+                entry_id_prefix=f"{card['id']}_book", world_id=world_id,
+                character_uid=character_uid,
+            )
+            result["lorebook"] = lore
+            result["lorebook_book_id"] = lore["book_id"]
+            result["lorebook_entries"] = lore["entries"]
+            if dependencies.rebuild_lorebook_index is not None and world_id:
+                dependencies.rebuild_lorebook_index(world_id)
     if _tavern_has_nsfw(tavern):
         result["nsfw_warning"] = True
     return result
+
+
+def _embedded_character_book(
+    document: dict[str, Any] | None, tavern: dict,
+) -> dict[str, Any] | None:
+    """The card's embedded ``character_book`` in its rawest available form."""
+
+    raw_data = (document or {}).get("data") if isinstance(document, dict) else None
+    book = raw_data.get("character_book") if isinstance(raw_data, dict) else None
+    if isinstance(book, dict):
+        return book
+    entries = tavern.get("character_book") or []
+    if not entries:
+        return None
+    return {"name": f"{str(tavern.get('name') or '').strip()} Lorebook", "entries": entries}
 
 
 def export_character_cards(

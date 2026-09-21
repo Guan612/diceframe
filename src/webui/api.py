@@ -17,6 +17,7 @@ from src.engine import persistence
 from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
+from src.lorebook.activation import DEFAULT_VECTOR_ACTIVATION
 from src.lorebook.exporter import export_lorebook_native, export_lorebook_v3
 from src.adventures import AdventureBundleLoader, AdventureResolver
 from src.adventures.registry import AdventureSource, AdventureSourceRegistry
@@ -37,6 +38,16 @@ from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
+
+#: Canonical defaults for a *newly created* entry. Legacy adapter drafts and the
+#: world-copy / NPC compatibility paths keep their own historical defaults; these
+#: apply only at the canonical create-entry boundary.
+CANONICAL_ENTRY_DEFAULTS: dict[str, Any] = {
+    "priority": 100,
+    "order": 100,
+    "prompt_slot": "world_background",
+    "vector_activation": DEFAULT_VECTOR_ACTIVATION,
+}
 
 
 def can_modify_character(session_uid: str, target_uid: str, gm_uid: str, owner: bool = False) -> bool:
@@ -1702,13 +1713,17 @@ class WebAPI:
         )
 
     async def import_character_card(self, file_data: str = "", file_name: str = "card.json",
-                                    target: str = "character_card", world_id: str = "") -> dict[str, Any]:
+                                    target: str = "character_card", world_id: str = "",
+                                    include_character_book: bool = True,
+                                    character_uid: str = "") -> dict[str, Any]:
         return await character_cards.import_character_card(
             self._character_card_dependencies,
             file_data,
             file_name,
             target,
             world_id,
+            include_character_book=include_character_book,
+            character_uid=character_uid,
         )
 
     def export_character_cards(self, card_ids: list[str]) -> dict[str, Any]:
@@ -1921,8 +1936,36 @@ class WebAPI:
                 return {"ok": False, "error": "Entry belongs to another lorebook",
                         "error_code": "entry_book_mismatch", "entry_id": entry_id}
             return {"ok": True, "entry": self._lore.get_entry(entry_id)}
+        # Canonical new-entry defaults apply on create only. An update must be
+        # able to clear a field without it silently snapping back to a default.
+        for key, value in CANONICAL_ENTRY_DEFAULTS.items():
+            payload.setdefault(key, value)
         self._lore.add_entry(payload)
         return {"ok": True, "entry": self._lore.get_entry(entry_id)}
+
+    def move_lorebook_entry(
+        self, book_id: str, entry_id: str, target_book_id: str,
+    ) -> dict[str, Any]:
+        """Move an entry to another book, keeping its canonical entry id."""
+
+        target_book_id = str(target_book_id or "")
+        if self._lore.get_lorebook(str(book_id or "")) is None:
+            return {"ok": False, "error": "Lorebook not found", "error_code": "book_not_found"}
+        if not target_book_id or self._lore.get_lorebook(target_book_id) is None:
+            return {"ok": False, "error": "Target lorebook not found",
+                    "error_code": "target_book_not_found"}
+        if not self._lore.move_entry(str(book_id), target_book_id, str(entry_id or "")):
+            # Distinguish "no such entry" from "that entry belongs to another
+            # book": the second is an ownership conflict, not a 404.
+            if self._lore.get_entry(str(entry_id or "")) is not None:
+                return {"ok": False, "error": "Entry belongs to another lorebook",
+                        "error_code": "entry_book_mismatch", "entry_id": str(entry_id)}
+            return {"ok": False, "error": "Entry not found in this lorebook",
+                    "error_code": "entry_not_found", "entry_id": str(entry_id)}
+        return {
+            "ok": True, "entry": self._lore.get_entry(str(entry_id)),
+            "entry_id": str(entry_id), "book_id": target_book_id,
+        }
 
     def delete_lorebook_entry(self, book_id: str, entry_id: str) -> dict[str, Any]:
         # Ownership isolation: a DELETE through book A must never remove an

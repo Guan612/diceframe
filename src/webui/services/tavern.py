@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.engine.character_utils import parse_tavern_card
+from src.webui.services.character_cards import commit_character_book
 
 logger = logging.getLogger("trpg")
 GameKey = tuple[str, ...]
@@ -66,23 +67,38 @@ async def import_tavern_card(dependencies: TavernImportDependencies, file_path: 
     }
 
     lorebook = dependencies.lorebook
+    world_id = ""
     if game_key and lorebook:
         inst = dependencies.get_instance(dependencies.parse_game_key(game_key))
         if inst and inst.world_id:
+            world_id = str(inst.world_id)
             entry_id = f"npc_tavern_{card['name'].replace(' ', '_')}"
             existing = lorebook.get_entry(entry_id)
             npc_info["id"] = entry_id
-            npc_info["world_id"] = inst.world_id
+            npc_info["world_id"] = world_id
             if existing:
                 lorebook.update_entry(entry_id, npc_info)
             else:
                 lorebook.add_entry(npc_info)
-            dependencies.rebuild_lorebook_index(inst.world_id)
-            logger.info("酒馆角色卡已导入: %s -> world=%s", card["name"], inst.world_id)
+            dependencies.rebuild_lorebook_index(world_id)
+            logger.info("酒馆角色卡已导入: %s -> world=%s", card["name"], world_id)
 
-    if card.get("character_book"):
-        book_entries = card["character_book"]
-        npc_info["lorebook_entries"] = len(book_entries)
+    # This route is a façade: the embedded character_book goes through the very
+    # same canonical commit as the Character Card product flow, instead of only
+    # being counted. `lorebook_entries` stays for existing callers.
+    embedded = card.get("character_book")
+    if embedded and lorebook:
+        safe_name = str(card["name"]).replace(" ", "_") or "card"
+        lore = commit_character_book(
+            lorebook, name=str(card["name"]), book={"entries": embedded},
+            book_id=f"character_card:{world_id or 'unbound'}:{safe_name}",
+            entry_id_prefix=f"tavern_{safe_name}_book", world_id=world_id,
+        )
+        npc_info["lorebook_entries"] = int(lore["entries"])
+        npc_info["lorebook_book_id"] = lore["book_id"]
+        npc_info["lorebook"] = lore
+    elif embedded:
+        npc_info["lorebook_entries"] = len(embedded)
 
     return {"ok": True, "card": card, "npc": npc_info}
 
