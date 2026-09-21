@@ -54,6 +54,9 @@ class Lorebook(Model):
     source_id = CharField(default="")
     source_version = CharField(default="")
     source_digest = CharField(default="")
+    # Bumped by every entry mutation so Retriever cache fingerprints never go
+    # stale (updated_at alone is second-precision).
+    revision = IntegerField(default=0)
     created_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
     updated_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
 
@@ -111,6 +114,8 @@ class LorebookEntry(Model):
     enabled = BooleanField(default=True)
     secondary_keys = TextField(default="[]")
     selective_logic = CharField(default="and")
+    # Whether ``secondary_keys`` actually gates activation (CCv3/ST ``selective``).
+    selective = BooleanField(default=True)
     use_regex = BooleanField(default=False)
     case_sensitive = BooleanField(default=False)
     match_whole_words = BooleanField(default=False)

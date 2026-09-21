@@ -1,5 +1,6 @@
 from __future__ import annotations
 import random
+import re
 from collections.abc import Mapping
 from typing import Any, Callable
 
@@ -50,6 +51,41 @@ def normalize_primary_match_mode(value: Any) -> str:
 
     mode = str(value if value is not None else "").strip().lower()
     return mode if mode in PRIMARY_MATCH_MODES else "any"
+
+
+# JS ``\d`` / ``\w`` / ``\s`` / ``\b`` are ASCII-only; Python's ``re`` is
+# Unicode-aware by default, so a pattern that compiles can still match
+# differently. This is advisory: the pattern is preserved, never rewritten.
+_JS_ASCII_CLASS = re.compile(r"\\[dwsbDWSB]")
+
+
+def python_regex_incompatibility(pattern: Any) -> str:
+    """Report why a SillyTavern (JavaScript) regex cannot run as Python ``re``.
+
+    SillyTavern regexes are JavaScript; DiceFrame executes Python ``re``. Only
+    the safely-mappable subset may run. This never rewrites or evaluates the
+    pattern — it returns a preview warning so the raw source can be preserved
+    verbatim and left unexecuted.
+
+    Returns ``""`` when the pattern is compatible.
+    """
+
+    text = str(pattern if pattern is not None else "")
+    if not text:
+        return ""
+    try:
+        re.compile(text)
+    except re.error as exc:
+        return (
+            f"unsupported regex: JavaScript pattern is not valid in Python "
+            f"({exc.msg}); preserved but not executed"
+        )
+    if _JS_ASCII_CLASS.search(text):
+        return (
+            "regex mismatch: JavaScript \\d/\\w/\\s/\\b are ASCII-only while "
+            "Python's are Unicode-aware; pattern preserved and may match differently"
+        )
+    return ""
 
 def evaluate_probability(entry: dict[str, Any], *, rng: Callable[[], float] = random.random) -> tuple[bool, dict[str, Any]]:
     configured = max(0, min(100, int(entry.get("probability", 100) or 0)))

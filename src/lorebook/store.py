@@ -269,6 +269,20 @@ class LorebookStore:
             self._commit_locked()
             return book_id
 
+    def _bump_book_revision_locked(self, book_id: str | None) -> None:
+        """Advance the owning Book's monotonic revision after an entry mutation.
+
+        Callers must already hold ``self._lock`` and stay inside the same
+        transaction, so an import rollback also rolls the bump back. Entries with
+        no owning Book (legacy rows) are ignored.
+        """
+
+        if not book_id:
+            return
+        Lorebook.update(revision=Lorebook.revision + 1).where(
+            Lorebook.id == str(book_id)
+        ).execute()
+
     def create_lorebook(self, book: dict) -> None:
         with self._lock:
             Lorebook.insert(
@@ -448,6 +462,7 @@ class LorebookStore:
                 enabled=int(entry.get("enabled", True)),
                 secondary_keys=json.dumps(entry.get("secondary_keys", []), ensure_ascii=False),
                 selective_logic=entry.get("selective_logic", "and"),
+                selective=int(entry.get("selective", True)),
                 use_regex=int(entry.get("use_regex", False)),
                 case_sensitive=int(entry.get("case_sensitive", False)),
                 match_whole_words=int(entry.get("match_whole_words", False)),
@@ -467,6 +482,7 @@ class LorebookStore:
                 provenance_json=json.dumps(entry.get("provenance", entry.get("provenance_json", {})), ensure_ascii=False)
                 if not isinstance(entry.get("provenance_json"), str) else entry["provenance_json"],
             ).on_conflict_replace().execute()
+            self._bump_book_revision_locked(book_id)
             self._commit_locked()
 
     def get_entry(self, entry_id: str) -> dict | None:
@@ -479,7 +495,7 @@ class LorebookStore:
                    "sync_on_enter", "tier", "keywords", "triggers_recursive", "visible_to",
                    "is_constant", "match_mode", "sticky", "cooldown", "delay", "order",
                    "probability", "group", "group_weight", "connected_to", "enabled",
-                   "secondary_keys", "selective_logic", "use_regex", "case_sensitive",
+                   "secondary_keys", "selective_logic", "selective", "use_regex", "case_sensitive",
                    "match_whole_words", "scan_depth", "priority", "vector_activation",
                    "non_recursable", "prevent_further_recursion", "delay_until_recursion",
                    "recursion_level", "groups", "prioritize_inclusion", "group_scoring",
@@ -497,6 +513,7 @@ class LorebookStore:
             elif k in ("unreliable", "sync_on_enter", "is_constant", "enabled", "use_regex",
                        "case_sensitive", "match_whole_words", "non_recursable",
                        "prevent_further_recursion", "delay_until_recursion", "prioritize_inclusion",
+                       "selective",
                        "sticky", "cooldown", "delay", "order",
                        "probability", "group_weight", "scan_depth", "priority", "recursion_level"):
                 v = int(v)
@@ -507,13 +524,24 @@ class LorebookStore:
             LorebookEntry.update(
                 **fields, updated_at=SQL("datetime('now')"),
             ).where(LorebookEntry.id == entry_id).execute()
+            self._bump_book_revision_locked(self._entry_book_id_locked(entry_id))
             self._commit_locked()
+
+    def _entry_book_id_locked(self, entry_id: str) -> str | None:
+        """Owning book id for an entry (caller holds ``self._lock``)."""
+
+        row = self._conn.execute(
+            "SELECT book_id FROM lorebook_entries WHERE id = ?", (entry_id,)
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
 
     def delete_entry(self, entry_id: str) -> None:
         with self._lock:
+            book_id = self._entry_book_id_locked(entry_id)
             LorebookEntry.delete().where(LorebookEntry.id == entry_id).execute()
             # 派生缓存跟着条目走，避免删除后残留向量行。
             self._delete_embeddings_locked([entry_id])
+            self._bump_book_revision_locked(book_id)
             self._commit_locked()
 
     # ---- Book 作用域条目访问（ownership isolation） --------------------------
@@ -549,6 +577,43 @@ class LorebookStore:
         self.update_entry(entry_id, updates)
         return True
 
+    def move_entry(self, source_book_id: str, target_book_id: str, entry_id: str) -> bool:
+        """Move an entry between books, keeping its canonical ``entry.id``.
+
+        Ownership isolation still applies: the entry must live in
+        ``source_book_id``. Both books get a revision bump so a cached matcher
+        fingerprint for either one is invalidated. Returns False when the entry
+        is not in the source book or the target book does not exist.
+        """
+
+        source_book_id = str(source_book_id or "")
+        target_book_id = str(target_book_id or "")
+        if not source_book_id or not target_book_id:
+            return False
+        if source_book_id == target_book_id:
+            # Nothing to move; still require that the entry is really owned here.
+            with self._lock:
+                return LorebookEntry.get_or_none(
+                    LorebookEntry.id == entry_id,
+                    LorebookEntry.book_id == source_book_id,
+                ) is not None
+        with self._lock:
+            if Lorebook.get_or_none(Lorebook.id == target_book_id) is None:
+                return False
+            owned = LorebookEntry.get_or_none(
+                LorebookEntry.id == entry_id,
+                LorebookEntry.book_id == source_book_id,
+            )
+            if owned is None:
+                return False
+            LorebookEntry.update(
+                book_id=target_book_id, updated_at=SQL("datetime('now')"),
+            ).where(LorebookEntry.id == entry_id).execute()
+            self._bump_book_revision_locked(source_book_id)
+            self._bump_book_revision_locked(target_book_id)
+            self._commit_locked()
+        return True
+
     def delete_book_entry(self, book_id: str, entry_id: str) -> bool:
         """Delete an entry scoped to ``book_id``; False when it is not in that book."""
 
@@ -564,6 +629,7 @@ class LorebookStore:
                 LorebookEntry.book_id == str(book_id or ""),
             ).execute()
             self._delete_embeddings_locked([entry_id])
+            self._bump_book_revision_locked(book_id)
             self._commit_locked()
         return True
 
@@ -577,6 +643,7 @@ class LorebookStore:
             LorebookEntry.delete().where(LorebookEntry.world_id == world_id).execute()
             self._delete_embeddings_locked(entry_ids)
             World.delete().where(World.id == world_id).execute()
+            self._bump_book_revision_locked(self.primary_world_book_id(world_id))
             self._commit_locked()
 
     def count_entries_by_plugin(self, plugin_id: str) -> int:
@@ -588,6 +655,12 @@ class LorebookStore:
     def delete_entries_by_plugin(self, plugin_id: str) -> int:
         """删除该插件来源的全部世界书条目，返回删除条数。"""
         with self._lock:
+            book_ids = [
+                str(row[0]) for row in self._conn.execute(
+                    "SELECT DISTINCT book_id FROM lorebook_entries WHERE source_plugin = ?",
+                    (plugin_id,),
+                )
+            ]
             entry_ids = [
                 str(row.id) for row in
                 LorebookEntry.select(LorebookEntry.id).where(
@@ -598,6 +671,8 @@ class LorebookStore:
                 LorebookEntry.source_plugin == plugin_id,
             ).execute()
             self._delete_embeddings_locked(entry_ids)
+            for book_id in book_ids:
+                self._bump_book_revision_locked(book_id)
             self._commit_locked()
         return rowcount
 

@@ -441,8 +441,33 @@ def _v6(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_lorebook_binding_scope ON lorebook_bindings(scope_kind, scope_id)")
 
 
+def _v7(conn: sqlite3.Connection) -> None:
+    """Add a monotonic Book revision so entry mutations invalidate matcher caches.
+
+    ``updated_at`` only carries second precision, so two entry edits inside the
+    same second would produce an identical Retriever cache fingerprint and keep
+    serving a stale matcher. This counter is bumped by every entry mutation
+    (add/update/delete/import) and is exact regardless of clock resolution.
+    """
+
+    ensure_column(conn, "lorebooks", "revision", "INTEGER NOT NULL DEFAULT 0")
+
+
+def _v8(conn: sqlite3.Connection) -> None:
+    """Add the canonical "secondary filter enabled" flag.
+
+    CCv3/ST carry ``selective`` as a *separate* concept from ``secondary_keys``:
+    ``selective=false`` keeps the secondary keys as data but must not gate
+    activation. Storing the flag on the canonical entry keeps the matcher
+    format-neutral instead of branching on the import source. Defaults to 1 so
+    existing rows (where secondary keys implied the gate) keep their behaviour.
+    """
+
+    ensure_column(conn, "lorebook_entries", "selective", "INTEGER NOT NULL DEFAULT 1")
+
+
 MIGRATIONS: tuple[tuple[int, object], ...] = (
-    (1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5), (6, _v6),
+    (1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5), (6, _v6), (7, _v7), (8, _v8),
 )
 CURRENT_LOREBOOK_SCHEMA_VERSION = MIGRATIONS[-1][0]
 

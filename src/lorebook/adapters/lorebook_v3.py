@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.lorebook.activation import DEFAULT_VECTOR_ACTIVATION, normalize_selective_logic
+from src.lorebook.activation import (
+    DEFAULT_VECTOR_ACTIVATION,
+    normalize_primary_match_mode,
+    normalize_selective_logic,
+    python_regex_incompatibility,
+)
 from src.lorebook.domain import LoreEntryDraft, LorebookDraft
 
 
@@ -11,8 +16,16 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
     book = root.get("lorebook", root) if isinstance(root, dict) else {}
     raw_entries = book.get("entries", []) if isinstance(book, dict) else []
     entries: list[LoreEntryDraft] = []
+    regex_warnings: set[str] = set()
     for raw in raw_entries if isinstance(raw_entries, list) else []:
         row = raw if isinstance(raw, dict) else {}
+        # lorebook_v3 regexes originate as JavaScript; only the safely-mappable
+        # subset runs, and incompatible patterns are preserved verbatim.
+        if bool(row.get("use_regex", False)):
+            for key in _strings(row.get("keys", row.get("key", []))):
+                reason = python_regex_incompatibility(key)
+                if reason:
+                    regex_warnings.add(reason)
         known_entry = {
             "id", "uid", "name", "comment", "content", "keys", "key", "secondary_keys", "keysecondary", "enabled", "constant",
             "selective", "selective_logic", "selectiveLogic", "case_sensitive", "use_regex", "match_whole_words",
@@ -20,6 +33,7 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
             "group", "group_weight", "prioritize_inclusion", "group_scoring", "recursion_flags",
             "non_recursable", "prevent_further_recursion", "delay_until_recursion", "recursion_level",
             "sticky", "cooldown", "delay", "vector_activation", "prompt_slot", "extensions",
+            "match_mode", "provenance",
         }
         unknown_entry = {k: v for k, v in row.items() if k not in known_entry}
         extensions = dict(row.get("extensions", {})) if isinstance(row.get("extensions"), dict) else {}
@@ -32,6 +46,13 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
             # lorebook_v3 carries the ST selective secondary logic; the primary
             # key must still match first, so it is never folded into match_mode.
             selective_logic=normalize_selective_logic(row.get("selective_logic", row.get("selectiveLogic"))),
+            # ``selective`` is a separate concept from ``secondary_keys``: the keys
+            # are preserved either way, the flag only decides whether they gate.
+            selective=bool(row.get("selective", True)),
+            # Legacy DiceFrame primary matching stays its own concept and must
+            # survive a lorebook_v3 round trip instead of resetting to ``any``.
+            match_mode=normalize_primary_match_mode(row.get("match_mode")),
+            probability=int(row.get("probability", 100) or 100),
             case_sensitive=bool(row.get("case_sensitive", False)), use_regex=bool(row.get("use_regex", False)),
             match_whole_words=bool(row.get("match_whole_words", False)),
             insertion_order=int(row.get("insertion_order", row.get("order", row.get("position", 100))) or 100), priority=int(row.get("priority", 0) or 0),
@@ -63,6 +84,7 @@ def from_lorebook_v3(payload: dict[str, Any]) -> LorebookDraft:
     extensions = dict(preserved_book.get("extensions") or {})
     extensions.update(book.get("extensions", {}) or {})
     warnings = [f"preserved unknown field: {k}" for k in sorted(unknown)]
+    warnings.extend(sorted(regex_warnings))
     settings = {k: book[k] for k in ("scan_depth", "token_budget", "recursive_scanning") if k in book}
     return LorebookDraft(name=str(book.get("name", "Lorebook v3") or "Lorebook v3"), description=str(book.get("description", "") or ""), settings=settings, entries=entries, source={"kind": "lorebook_v3"}, warnings=warnings, preserved_extensions={"raw": raw, "extensions": extensions})
 

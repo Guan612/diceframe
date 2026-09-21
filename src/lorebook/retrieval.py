@@ -358,7 +358,7 @@ class LoreRetriever:
         self._embedding_client_provider = embedding_client_provider
         self._semantic_top_k = max(0, int(semantic_top_k))
         self._semantic_threshold = float(semantic_threshold)
-        self._scope: tuple[str, str] | None = None
+        self._scope: tuple[str, ...] | None = None
         self._entries: list[dict] = []
         self._world_id = ""
         self._language = DEFAULT_LANGUAGE
@@ -370,8 +370,19 @@ class LoreRetriever:
     def ensure_world(self, world_id: str, language: str = "") -> None:
         """确保匹配器与语义候选都已加载当前世界的条目（按 world + language 缓存）。"""
 
-        scope = (str(world_id or ""), str(language or DEFAULT_LANGUAGE))
-        if not world_id or scope == self._scope or self._store is None:
+        if not world_id or self._store is None:
+            return
+        # The compatibility facade reads the primary world book, so its cache key
+        # must carry that book's revision too: canonical entry CRUD bumps it and
+        # the next retrieve has to see the new state.
+        revision = 0
+        if hasattr(self._store, "get_lorebook"):
+            book = self._store.get_lorebook(self._store.primary_world_book_id(str(world_id)))
+            revision = int((book or {}).get("revision", 0) or 0)
+        # scope[1] stays the bare language so the locale guard in
+        # ensure_lore_context keeps working; the revision rides as a third slot.
+        scope = (str(world_id or ""), str(language or DEFAULT_LANGUAGE), str(revision))
+        if scope == self._scope:
             return
         entries = self._store.list_entries(str(world_id))
         if self._load_world_template is not None:
@@ -382,7 +393,7 @@ class LoreRetriever:
             )
         self._matcher.build(entries)
         self._entries = list(entries)
-        self._world_id, self._language = scope
+        self._world_id, self._language = scope[0], scope[1]
         self._scope = scope
         self._legacy_world_mode = True
 
@@ -418,8 +429,11 @@ class LoreRetriever:
             self.ensure_world(world_id, language)
             return
         book_ids = [ref.book_id for ref in refs]
+        # The fingerprint carries the Book's monotonic revision, which every
+        # entry mutation bumps. updated_at alone is second-precision and would
+        # keep a stale matcher across two edits inside the same second.
         scope = (world_id, f"{language}|books:" + ",".join(
-            f"{ref.book_id}@{ref.updated_at}@{ref.order}"
+            f"{ref.book_id}@{ref.updated_at}@{ref.revision}@{ref.order}"
             for ref in refs
         ))
         if scope == self._scope:

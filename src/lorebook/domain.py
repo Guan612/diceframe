@@ -18,6 +18,10 @@ class LoreEntryDraft:
     # must never be derived from it.
     match_mode: str = "any"
     selective_logic: str = "any"
+    # Whether ``secondary_keys`` gates activation at all. CCv3/ST express this as
+    # the ``selective`` boolean; ``selective=False`` keeps the keys as data but
+    # must not filter, so the flag is canonical rather than source-specific.
+    selective: bool = True
     use_regex: bool = False
     case_sensitive: bool = False
     match_whole_words: bool = False

@@ -38,19 +38,20 @@ from src.lorebook.activation import (
     sticky_active,
     timed_gate_blocked,
 )
+from src.lorebook.budget import entry_sort_key
 
 logger = logging.getLogger("trpg")
 
 MAX_RECURSIVE_DEPTH = 3
 MIN_FUZZY_KEY_LEN = 2       # 最短模糊匹配关键词长度
 
-# Deterministic recursion work limits. ``MAX_RECURSIVE_DEPTH`` alone is not a
-# work bound: one pass over a large book can evaluate thousands of candidates
-# before any budget is applied. These caps make the work finite and
-# order-stable (the frontier is always walked in sorted id order), without
-# introducing a planner.
-MAX_RECURSION_STEPS = 2000      # 每次 activation 最多评估多少个候选
-MAX_ACTIVATED_ENTRIES = 400     # activated 集合上限，达到后不再展开 frontier
+# Deterministic recursion work limits. These bound **runaway recursion**, not the
+# initial candidate set: every direct / constant / semantic seed reaches the
+# activation and budget ranking, and only recursive expansion is capped. Walking
+# the frontier in ``entry_sort_key`` order keeps any cutoff from changing the
+# final ordering (a late id can no longer evict a high-priority entry).
+MAX_RECURSION_STEPS = 2000      # 递归展开最多评估多少个候选
+MAX_ACTIVATED_ENTRIES = 400     # 递归展开期间的 activated 上限
 MIN_BUDGET_CANDIDATES = 32      # 预算推导出的上限再低也不少于这个数
 BUDGET_CANDIDATE_SLACK = 2      # 预算上界的放宽倍数，只掐真正失控的展开
 
@@ -218,19 +219,44 @@ class KeywordMatcher:
             )
             self._record(eid, channel=channel, depth=0)
 
-        while frontier and depth < MAX_RECURSIVE_DEPTH:
+        # legacy ``triggers_recursive`` 边保留历史 depth 行为（compatibility 层）。
+        # canonical / ST 递归（扫描 activated content 发现）不再被固定
+        # ``MAX_RECURSIVE_DEPTH`` 截断，它的边界来自 cycle guard、max_steps /
+        # max_activated、book recursive_scanning、scan_depth、non_recursable、
+        # prevent_further_recursion 与 recursion_level。
+        legacy_edges: set[str] = set()
+
+        while frontier:
+            if depth >= MAX_RECURSIVE_DEPTH and legacy_edges:
+                frontier = {
+                    eid: text for eid, text in frontier.items() if eid not in legacy_edges
+                }
+                legacy_edges = set()
+                if not frontier:
+                    break
             batch: dict[str, str] = {}
-            for eid in sorted(frontier):
+            # frontier 一律按最终 inclusion 顺序（``entry_sort_key``：constant →
+            # direct match → priority → insertion order → recursive → semantic-only
+            # → id）求值。这样任何 cutoff 都只会砍掉「最终排序里本来也靠后」的
+            # 候选，不会因为 id 靠前就挤掉高 priority / constant 条目。
+            ordered = sorted(
+                frontier,
+                key=lambda eid: self._frontier_sort_key(
+                    eid, direct=eid in lexical_seeds, recursive=depth > 0,
+                ),
+            )
+            for eid in ordered:
                 entry = self._entries.get(eid)
                 if entry is None or eid in evaluated:
                     continue
-                if steps >= step_limit:
-                    # deterministic max-work cutoff：frontier 按 id 排序遍历，
-                    # 因此截断点稳定可复现。
-                    self.last_cutoff = "max_steps"
-                    break
+                if depth > 0:
+                    # work cutoff 只限制 runaway recursion：initial direct /
+                    # constant / semantic seeds 必须全部进入 activation 与预算排序。
+                    if steps >= step_limit:
+                        self.last_cutoff = "max_steps"
+                        break
+                    steps += 1
                 evaluated.add(eid)
-                steps += 1
                 reason = self._eligibility_reason(
                     entry, depth=depth, visible=visible,
                     discover=discover if eid in scanned else None,
@@ -259,19 +285,25 @@ class KeywordMatcher:
                         "semantic" if self._decision_channel(eid) == "semantic" else "keyword"
                     ),
                 )
-            if len(activated) >= activated_limit:
-                # budget cutoff：再展开也不可能进入最终预算，别先无限展开后再裁。
+            if depth > 0 and len(activated) >= activated_limit:
+                # 递归展开的 budget cutoff：再展开也不可能进入最终预算。
                 self.last_cutoff = self.last_cutoff or "max_activated"
                 break
             if self.last_cutoff == "max_steps":
                 break
             frontier, scanned = {}, set()
+            all_children: set[str] = set()
+            all_scanned: set[str] = set()
             for eid in sorted(winners):
                 children, child_scanned = self._children_of(eid, excluded=evaluated | activated)
                 for cid in children:
                     parents.setdefault(cid, eid)
                 frontier.update(children)
+                all_children |= set(children)
+                all_scanned |= child_scanned
                 scanned |= child_scanned
+            # 只有「没有任何 parent 通过 content 扫描到达」的子条目才算 legacy 边。
+            legacy_edges = all_children - all_scanned
             depth += 1
 
         if self.last_cutoff:
@@ -286,7 +318,16 @@ class KeywordMatcher:
             self._apply_time_effects(
                 activated & lexical_seeds, timed_state, current_tick=current_tick,
             )
-        return self._sort_by_tier(activated)
+        result = self._sort_by_tier(activated)
+        # 把「这个条目是怎么进来的」带给最终 sorter，让
+        # ``entry_sort_key`` 的 direct / recursive / semantic-only 三段真正生效，
+        # 而不是永远落在默认值上。
+        for row in result:
+            eid = str(row.get("id") or "")
+            row["_direct_match"] = eid in lexical_seeds
+            row["_recursive"] = self._decision_depth(eid) > 0
+            row["_semantic_only"] = eid in semantic_seeds and eid not in lexical_seeds
+        return result
 
     def _eligibility_ok(self, entry: dict, **kwargs) -> bool:
         """布尔外观，保留给只关心「过没过」的调用方。"""
@@ -517,7 +558,9 @@ class KeywordMatcher:
             primary_ok = any(primary_hits)
         secondary_ok: bool | None = None
         secondary_hits = [False] * len(secondary_keys)
-        if primary_ok and secondary_keys:
+        # ``selective`` 是 canonical 的「secondary filter 是否启用」开关，与
+        # ``secondary_keys`` 是两件事：false 时 keys 仍然保留为数据，但不参与 gate。
+        if primary_ok and secondary_keys and bool(entry.get("selective", True)):
             # ST Optional Filter: primary already matched, secondary is a filter.
             secondary_hits = [
                 cls._match_keyword(key, text, entry) or (fuzzy and cls._fuzzy_hit(key, entry, text))
@@ -745,9 +788,28 @@ class KeywordMatcher:
             if eid in self._entries:
                 result.append(dict(self._entries[eid]))
         tier_order = {"core": 0, "background": 1, "archived": 2}
+        # 末位用 canonical id 兜底：否则同 tier / 同 order 的条目会按 set 迭代顺序
+        # 输出，跨进程不可复现（施工单要求排序以 stable id 收尾）。
         result.sort(key=lambda e: (tier_order.get(e.get("tier", "background"), 1),
-                                    int(e.get("order", 100))))
+                                    int(e.get("order", 100)),
+                                    str(e.get("id", ""))))
         return result
+
+    def _frontier_sort_key(self, eid: str, *, direct: bool, recursive: bool) -> tuple:
+        """frontier 求值顺序 = 最终 inclusion 顺序（单一事实来源 ``entry_sort_key``）。
+
+        work cutoff 只被允许砍掉这个序列的尾部，因此「低 priority + id 靠前」不可能
+        提前占满 cap 而把「高 priority / constant + id 靠后」挤出最终排序。
+        """
+
+        entry = self._entries.get(eid)
+        if entry is None:
+            return (1, 1, 0, 100, 1 if recursive else 0, 1, str(eid))
+        return entry_sort_key(
+            {**entry, "_direct_match": direct},
+            recursive=recursive,
+            semantic_only=False,
+        )
 
     def reload(self, entries: list[dict]) -> None:
         """重新构建索引（世界书更新后调用）。"""

@@ -14,6 +14,7 @@ class BookRef:
     fuzzy_enabled: bool = False
     settings: dict[str, Any] | None = None
     updated_at: str = ""
+    revision: int = 0
 
 def resolve_active_books(instance: Any, viewer_kind: str = "gm", viewer_uid: str = "", action_actor_uids: list[str] | None = None, *, store: Any | None = None) -> list[BookRef]:
     store = store or getattr(instance, "lorebook_store", None) or getattr(instance, "lorebook", None)
@@ -53,6 +54,7 @@ def resolve_active_books(instance: Any, viewer_kind: str = "gm", viewer_uid: str
             fuzzy_enabled=fuzzy_enabled,
             settings=settings,
             updated_at=str(book.get("updated_at") or ""),
+            revision=int(book.get("revision", 0) or 0),
         )
         if kind == "global":
             refs.append(BookRef(str(binding["book_id"]), int(binding.get("order", 100)), str(binding.get("id", "")), str(binding.get("role", "")), **common))
