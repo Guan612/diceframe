@@ -11,6 +11,7 @@ class BookRef:
     scan_depth: int = 0
     token_budget: int = 0
     recursive_scanning: bool = False
+    fuzzy_enabled: bool = False
     settings: dict[str, Any] | None = None
     updated_at: str = ""
 
@@ -34,10 +35,22 @@ def resolve_active_books(instance: Any, viewer_kind: str = "gm", viewer_uid: str
         kind, scope = str(binding.get("scope_kind", "")), str(binding.get("scope_id", ""))
         book = books.get(str(binding.get("book_id") or ""), {})
         settings = book.get("settings") if isinstance(book.get("settings"), dict) else {}
+        explicit_fuzzy = None
+        for key in ("fuzzy_enabled", "fuzzy_matching"):
+            if key in settings:
+                explicit_fuzzy = bool(settings[key])
+                break
+        source_kind = str(book.get("source_kind") or "").strip().lower()
+        fuzzy_enabled = (
+            explicit_fuzzy
+            if explicit_fuzzy is not None
+            else source_kind in {"world", "legacy", "legacy_world"}
+        )
         common = dict(
             scan_depth=int(book.get("scan_depth", 0) or 0),
             token_budget=int(book.get("token_budget", 0) or 0),
             recursive_scanning=bool(book.get("recursive_scanning", False)),
+            fuzzy_enabled=fuzzy_enabled,
             settings=settings,
             updated_at=str(book.get("updated_at") or ""),
         )

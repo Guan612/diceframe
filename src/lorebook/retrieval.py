@@ -424,6 +424,7 @@ class LoreRetriever:
                 row["_lorebook_token_budget"] = ref.token_budget
                 row["_lorebook_scan_depth"] = ref.scan_depth
                 row["_lorebook_recursive_scanning"] = ref.recursive_scanning
+                row["_lorebook_fuzzy_enabled"] = ref.fuzzy_enabled
                 settings = ref.settings or {}
                 row["_lorebook_vector_activation"] = str(settings.get("vector_activation", "off") or "off")
                 entries.append(row)

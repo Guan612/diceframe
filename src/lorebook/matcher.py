@@ -50,7 +50,6 @@ class KeywordMatcher:
         matched_ids = self._candidate_ids(text)
         if not matched_ids:
             matched_ids.update(self._fuzzy_match(text))
-            matched_ids = {eid for eid in matched_ids if self._entry_matches(self._entries[eid], text)}
         matched_ids.update(self._get_constant_ids())
         matched_ids = self._apply_match_mode(matched_ids, text)
         # 概率过滤
@@ -214,14 +213,40 @@ class KeywordMatcher:
         return {eid for eid, entry in self._entries.items() if entry.get("is_constant")}
 
     def _fuzzy_match(self, text: str) -> set[str]:
+        def fuzzy_keyword_hit(keyword: str, entry: dict) -> bool:
+            # Fuzzy matching is only a fallback for plain keyword entries.  It
+            # must still honor entry-level case semantics; otherwise a fuzzy
+            # fallback could bypass a case-sensitive secondary-key gate.
+            if entry.get("use_regex") or entry.get("match_whole_words") or str(keyword).startswith("/"):
+                return False
+            if entry.get("case_sensitive", False):
+                return False
+            needle = keyword.casefold()
+            haystack = text.casefold()
+            return any(needle[i:i + 2] in haystack for i in range(len(needle) - 1))
+
         matched: set[str] = set()
-        sorted_keys = sorted(self._fuzzy_keys, key=len, reverse=True)
-        for kw in sorted_keys:
-            for i in range(len(kw) - 1):
-                sub = kw[i:i + 2]
-                if sub in text:
-                    matched.update(self._index.get(kw, set()))
-                    break
+        for eid, entry in self._entries.items():
+            if not bool(entry.get("_lorebook_fuzzy_enabled", True)):
+                continue
+            primary = self._keys(entry, "keywords")
+            secondary = self._keys(entry, "secondary_keys")
+            mode = self._logic(entry)
+            if not primary and not secondary:
+                continue
+            primary_hits = [self._match_keyword(key, text, entry) or fuzzy_keyword_hit(key, entry) for key in primary]
+            secondary_hits = [self._match_keyword(key, text, entry) or fuzzy_keyword_hit(key, entry) for key in secondary]
+            if mode == "all":
+                active = all(primary_hits or [False]) and (all(secondary_hits) if secondary else True)
+            elif mode == "not_any":
+                active = not any(primary_hits + secondary_hits)
+            elif mode == "not_all":
+                checks = primary_hits + secondary_hits
+                active = not checks or not all(checks)
+            else:
+                active = any(primary_hits) and (any(secondary_hits) if secondary else True)
+            if active:
+                matched.add(eid)
         return matched
 
     def match_with_recursive(self, text: str, timed_state: dict[str, dict] | None = None) -> list[dict]:

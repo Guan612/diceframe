@@ -90,3 +90,33 @@ def test_timed_state_is_migrated_at_game_save_load_boundary():
     assert restored.lorebook_timed_state["entry"]["cooldown_remaining"] == 2
     restored.update_lorebook_timed_state()
     assert restored.lorebook_timed_state["entry"]["cooldown_remaining"] == 1
+
+
+def test_fuzzy_matching_is_book_scoped_and_legacy_compatible():
+    matcher = KeywordMatcher()
+    matcher.build([
+        {"id": "legacy", "keywords": ["castle"], "_lorebook_fuzzy_enabled": True},
+        {"id": "v3", "keywords": ["castle"], "_lorebook_fuzzy_enabled": False},
+    ])
+
+    assert {row["id"] for row in matcher.match("castl")} == {"legacy"}
+
+
+def test_resolver_defaults_fuzzy_by_book_source_kind(tmp_path):
+    from types import SimpleNamespace
+
+    from src.lorebook.resolver import resolve_active_books
+    from src.lorebook.store import LorebookStore
+
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        store.create_world("w", "World")
+        store.create_lorebook({"id": "v3", "name": "V3", "source_kind": "lorebook_v3"})
+        store.bind_lorebook({"id": "b:v3", "book_id": "v3", "scope_kind": "world", "scope_id": "w"})
+        store.create_lorebook({"id": "native", "name": "Native", "source_kind": "native", "settings": {"fuzzy_enabled": True}})
+        store.bind_lorebook({"id": "b:native", "book_id": "native", "scope_kind": "world", "scope_id": "w"})
+        refs = resolve_active_books(SimpleNamespace(world_id="w"), store=store)
+        assert {ref.book_id: ref.fuzzy_enabled for ref in refs} == {"world:w": True, "v3": False, "native": True}
+    finally:
+        store.close()
