@@ -88,11 +88,12 @@ def test_migration_16_to_17_moves_legacy_timers(legacy, expected):
 
 
 def test_migration_16_to_17_is_idempotent():
-    migrated = migrate_game_state_payload({
+    migrated = _migrate_v16_to_v17({
         "instance_schema_version": 16,
         "lorebook_timed_state": {"e1": {"remaining": 3, "status": "active"}},
     })
-    assert migrate_game_state_payload(migrated) == migrated
+    current = migrate_game_state_payload(migrated)
+    assert migrate_game_state_payload(current) == current
     assert _migrate_v16_to_v17(deepcopy(migrated)) == migrated
 
 
@@ -174,7 +175,7 @@ def test_old_save_load_migrates_before_constructing_instance():
         "lorebook_timed_state": {"e1": {"remaining": 3, "status": "active"}},
     })
     assert restored.lorebook_timed_state == {"e1": _timer(sticky=3)}
-    assert restored.instance_schema_version == 17
+    assert restored.instance_schema_version == CURRENT_INSTANCE_SCHEMA_VERSION
 
 
 @pytest.mark.asyncio
