@@ -844,6 +844,9 @@ class GameInstance:
         ``round_recovery.rollback_last_round_locked``。
         """
         async with self._lock:
+            if self.log:
+                # Reject before history or snapshots can be changed.
+                economy_state.state(self)
             return round_recovery.rollback_last_round_locked(self)
 
     async def abort_round_processing(self) -> bool:
@@ -862,6 +865,8 @@ class GameInstance:
         ``_drop_stale_combat_caches``。
         """
         async with self._lock:
+            if self.state == GameState.ACTIVE_JUDGMENT:
+                economy_state.state(self)
             return round_recovery.abort_round_processing_locked(self)
 
     def _drop_stale_combat_caches(self, *, all_targets: bool = False) -> None:
@@ -1016,6 +1021,7 @@ class GameInstance:
     async def start_round(self) -> None:
         """开启新一轮行动阶段。"""
         async with self._lock:
+            economy_state.state(self)
             turn_state.start_round_locked(self)
 
     async def add_action(self, user_id: str, action_text: str,
@@ -1320,6 +1326,7 @@ class GameInstance:
         state_changes 为本轮玩家可见状态变动摘要，随 log entry 持久化供群机器人单独转发。
         """
         async with self._lock:
+            economy_state.state(self)
             round_recovery.finish_judgment_locked(
                 self,
                 gm_response,
@@ -1337,6 +1344,7 @@ class GameInstance:
     ) -> None:
         """为已有轮次添加 swipe（不推进回合）。"""
         async with self._lock:
+            economy_state.state(self)
             round_recovery.finish_judgment_with_swipe_locked(
                 self, gm_response, original_round, state_changes=state_changes,
             )

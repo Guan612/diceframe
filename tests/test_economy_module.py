@@ -7,6 +7,7 @@ import pytest
 
 from src.engine import economy
 from src.engine.game_instance import GameInstance, _snapshot_players, restore_players
+from src.engine.game_state import GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import economy_state
 from src.migrations.instance import (
@@ -205,6 +206,73 @@ def test_unknown_module_schema_round_trips_and_runtime_fails_without_mutation(ve
     with pytest.raises(ModuleStateError):
         rebind_imported_game_state_payload(before, game_key=("web", "import", "u"), run_id="new")
     assert restored.to_dict() == before
+
+
+def _unsupported_economy_instance(version):
+    instance = GameInstance(game_key=("web", "future-lifecycle", "u"), round_number=2)
+    instance.players = {"p": {"character_sheet": {"hp": 3, "max_hp": 10, "gold": 7}}}
+    instance.npcs = {"guard": {"hp": 4}}
+    instance.scene = "gate"
+    instance.state = GameState.ACTIVE_JUDGMENT
+    instance.action_queue = [{"user_id": "p", "text": "open gate"}]
+    instance.pending_actions = [{"user_id": "p", "text": "wait"}]
+    instance.ready_players = {"p"}
+    instance.round_start_snapshot = {"p": {"hp": 10, "gold": 20}}
+    instance.capture_round_entity_snapshot()
+    instance.combat_extension = {"schema_version": 1, "pending_summaries": ["guard hit"]}
+    instance.combat_extension_round_snapshots = {"2": {"schema_version": 1, "phase": "before"}}
+    instance.log = [{
+        "round": 1, "gm_response": "previous round", "swipes": [],
+        "round_start_snapshot": deepcopy(instance.round_start_snapshot),
+    }]
+    instance.last_checks = [{"id": "check"}]
+    instance.death_save_outcomes = {"2": {"p": {"outcome": "stable"}}}
+    instance.economy = _ledger(instance.run_id)
+    payload = instance.to_dict()
+    payload["modules"]["economy"]["schema_version"] = version
+    return GameInstance.from_dict(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [None, 0, 99])
+@pytest.mark.parametrize("operation, args", [
+    ("rollback_last_round", ()),
+    ("abort_round_processing", ()),
+    ("start_round", ()),
+    ("finish_judgment", ("new response",)),
+    ("finish_judgment_with_swipe", ("new branch", 1)),
+    ("reset", ()),
+    ("advance_round", ()),
+    ("try_advance", ()),
+])
+async def test_unknown_economy_lifecycle_rejection_preserves_entire_save(version, operation, args):
+    instance = _unsupported_economy_instance(version)
+    if operation in {"advance_round", "try_advance"}:
+        instance.state = GameState.ACTIVE_ACTION
+    before = deepcopy(instance.to_dict())
+    with pytest.raises(ModuleStateError, match="unsupported economy module schema"):
+        await getattr(instance, operation)(*args)
+    assert instance.to_dict() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [None, 0, 99])
+async def test_unknown_economy_empty_rollback_remains_a_noop(version):
+    instance = _unsupported_economy_instance(version)
+    instance.log.clear()
+    before = deepcopy(instance.to_dict())
+    assert await instance.rollback_last_round() is None
+    assert instance.to_dict() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [state for state in GameState if state != GameState.ACTIVE_JUDGMENT])
+async def test_unknown_economy_abort_outside_judgment_remains_a_noop(state):
+    instance = _unsupported_economy_instance(99)
+    instance.state = state
+    before = deepcopy(instance.to_dict())
+    assert await instance.abort_round_processing() is False
+    assert instance.to_dict() == before
 
 
 @pytest.mark.parametrize("version", [18, CURRENT_INSTANCE_SCHEMA_VERSION])
