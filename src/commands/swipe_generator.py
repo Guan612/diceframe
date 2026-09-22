@@ -26,6 +26,7 @@ from src.engine.game_instance import GameInstance, restore_players
 from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
 from src.imagegen.storyboards import normalize_scene_panels, storyboard_panel_metadata, storyboard_source_revision
+from src.llm.context_builder import lore_char_budget
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
 from src.lorebook.retrieval import LoreRetriever
 
@@ -175,7 +176,17 @@ class SwipeGenerator:
             self.ensure_matcher_for_world(instance.world_id, instance.language)
         # 与正常回合同一个 LoreRetriever：swipe 在 staged 克隆上重放同一轮，计时器
         # 语义与正常回合一致（匹配结果随后经 replace_persisted_state_from 写回）。
-        lorebook_matches = await self.lore_retriever.retrieve(instance, actions_text)
+        action_actor_uids = sorted({
+            str(action.get("user_id") or "")
+            for action in target_entry.get("actions", [])
+            if str(action.get("user_id") or "") in instance.players
+        })
+        lorebook_matches = await self.lore_retriever.retrieve(
+            instance, actions_text, action_actor_uids=action_actor_uids,
+            overall_budget=lore_char_budget(
+                self.llm_client.default if getattr(self, "llm_client", None) else ""
+            ),
+        )
 
         rule_ctx = self.prompt.load_swipe_rule_context(instance, self.load_world_template)
         combat_model_s = rule_ctx.combat_model

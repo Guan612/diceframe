@@ -18,6 +18,8 @@ from peewee import (
     TextField,
 )
 
+from src.lorebook.activation import DEFAULT_VECTOR_ACTIVATION
+
 from src.db.peewee_bridge import SharedConnectionSqliteDatabase
 
 database = SharedConnectionSqliteDatabase()
@@ -38,9 +40,51 @@ class World(Model):
         table_name = "worlds"
 
 
+class Lorebook(Model):
+    id = CharField(primary_key=True)
+    name = CharField()
+    description = TextField(default="")
+    language = CharField(default="zh-CN")
+    enabled = BooleanField(default=True)
+    scan_depth = IntegerField(default=0)
+    token_budget = IntegerField(default=0)
+    recursive_scanning = BooleanField(default=False)
+    settings_json = TextField(default="{}")
+    source_kind = CharField(default="native")
+    source_id = CharField(default="")
+    source_version = CharField(default="")
+    source_digest = CharField(default="")
+    # Bumped by every entry mutation so Retriever cache fingerprints never go
+    # stale (updated_at alone is second-precision).
+    revision = IntegerField(default=0)
+    created_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
+    updated_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
+
+    class Meta:
+        database = database
+        table_name = "lorebooks"
+
+
+class LorebookBinding(Model):
+    id = CharField(primary_key=True)
+    book_id = CharField()
+    scope_kind = CharField()
+    scope_id = CharField(default="")
+    role = CharField(default="")
+    enabled = BooleanField(default=True)
+    order = IntegerField(default=100, column_name="order")
+    created_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
+    updated_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
+
+    class Meta:
+        database = database
+        table_name = "lorebook_bindings"
+
+
 class LorebookEntry(Model):
     id = CharField(primary_key=True)
-    world_id = CharField()
+    book_id = CharField(null=True, default=None)
+    world_id = CharField(null=True, default=None)
     name = CharField()
     type = CharField(default="other")
     keywords = TextField(default="[]")
@@ -67,6 +111,31 @@ class LorebookEntry(Model):
     group_weight = IntegerField(default=1)
     connected_to = TextField(default="[]")
     source_plugin = CharField(default="")
+    enabled = BooleanField(default=True)
+    secondary_keys = TextField(default="[]")
+    selective_logic = CharField(default="and")
+    # Whether ``secondary_keys`` actually gates activation (CCv3/ST ``selective``).
+    selective = BooleanField(default=True)
+    use_regex = BooleanField(default=False)
+    # Whether this entry's regex keys may actually be executed. Adapters that read
+    # JavaScript regexes clear it when a pattern is not safely mappable to Python,
+    # so the matcher never runs a pattern whose semantics would silently differ.
+    regex_executable = BooleanField(default=True)
+    case_sensitive = BooleanField(default=False)
+    match_whole_words = BooleanField(default=False)
+    scan_depth = IntegerField(default=0)
+    priority = IntegerField(default=0)
+    vector_activation = CharField(default=DEFAULT_VECTOR_ACTIVATION)
+    non_recursable = BooleanField(default=False)
+    prevent_further_recursion = BooleanField(default=False)
+    delay_until_recursion = BooleanField(default=False)
+    recursion_level = IntegerField(default=0)
+    groups = TextField(default="[]")
+    prioritize_inclusion = BooleanField(default=False)
+    group_scoring = CharField(default="")
+    prompt_slot = CharField(default="")
+    extensions_json = TextField(default="{}")
+    provenance_json = TextField(default="{}")
     created_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
     updated_at = CharField(constraints=[SQL("DEFAULT (datetime('now'))")])
 

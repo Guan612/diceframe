@@ -5,8 +5,10 @@ from __future__ import annotations
 from src.lorebook.matcher import KeywordMatcher
 
 
-def _build_matcher(entries: list[dict]) -> KeywordMatcher:
-    m = KeywordMatcher()
+def _build_matcher(entries: list[dict], *, rng=None) -> KeywordMatcher:
+    # Weighted group picks must be deterministic, so tests inject the RNG
+    # instead of relying on the process-global random source.
+    m = KeywordMatcher(rng=rng)
     # 补充默认字段
     defaults = {
         "id": "", "name": "", "keywords": [], "content": "", "type": "other",
@@ -91,7 +93,7 @@ class TestGroupCompetition:
              "group_weight": 1},
             {"id": "e2", "name": "strong", "keywords": ["怪物"], "group": "encounter",
              "group_weight": 10},
-        ])
+        ], rng=lambda: 0.99)
         r = m.match("遇到了怪物")
         ids = [e["id"] for e in r]
         assert "e2" in ids
@@ -107,3 +109,62 @@ class TestGroupCompetition:
         r = m.match("测试")
         ids = [e["id"] for e in r]
         assert "e1" in ids and "e2" in ids
+
+    def test_prioritized_winner_is_retained_even_when_not_first(self):
+        m = _build_matcher([
+            {"id": "weighted", "keywords": ["怪物"], "group": "encounter",
+             "group_weight": 10},
+            {"id": "prioritized", "keywords": ["怪物"], "group": "encounter",
+             "group_weight": 1, "prioritize_inclusion": True},
+        ])
+        ids = {e["id"] for e in m.match("遇到了怪物")}
+        assert ids == {"prioritized"}
+
+
+def test_recursive_scanning_false_does_not_scan_first_match_content():
+    m = _build_matcher([
+        {"id": "seed", "keywords": ["door"], "content": "sigil",
+         "_lorebook_recursive_scanning": False},
+        {"id": "child", "keywords": ["sigil"], "content": "deep"},
+    ])
+    assert {e["id"] for e in m.match_with_recursive("door")} == {"seed"}
+
+
+def test_non_recursable_direct_match_can_still_propagate():
+    m = _build_matcher([
+        {"id": "seed", "keywords": ["door"], "content": "sigil",
+         "non_recursable": True},
+        {"id": "child", "keywords": ["sigil"], "content": "deep"},
+    ])
+    assert {e["id"] for e in m.match_with_recursive("door")} == {"seed", "child"}
+
+
+def test_prevent_further_recursion_stops_propagation():
+    m = _build_matcher([
+        {"id": "seed", "keywords": ["door"], "content": "sigil",
+         "prevent_further_recursion": True},
+        {"id": "child", "keywords": ["sigil"], "content": "deep"},
+    ])
+    assert {e["id"] for e in m.match_with_recursive("door")} == {"seed"}
+
+
+def test_timed_effects_arm_cooldown_behind_sticky_and_never_write_delay():
+    """一次激活只启动 sticky；cooldown 只被 arm，delay 完全不落计数器。
+
+    这个测试此前断言 sticky / cooldown / delay 在首次激活时同时被写入——那正是
+    缺陷本身：下一轮 cooldown_remaining > 0 会把本该继续生效的 sticky 条目挡掉。
+    """
+
+    m = _build_matcher([{
+        "id": "timed", "keywords": ["door"], "content": "",
+        "sticky": 3, "cooldown": 2, "delay": 1,
+    }])
+    timed_state = {}
+    m.match_with_recursive("door", timed_state=timed_state)
+    assert timed_state == {
+        "timed": {
+            "sticky_remaining": 3,
+            "pending_cooldown": 2,
+            "activated_tick": 0,
+        }
+    }

@@ -13,10 +13,24 @@ from typing import TYPE_CHECKING, Any
 from src.engine.game_state_contracts import GamePersistedState
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.player_control import away_control_policy, normalize_away_control_policy
+from src.lorebook.activation import migrate_timed_state
 from src.migrations.instance import normalize_game_state_payload
 
 if TYPE_CHECKING:
     from src.engine.game_instance import GameInstance, GameState
+
+
+def _normalize_lorebook_timed_state(state: Any) -> dict[str, dict[str, int]]:
+    """Normalize legacy Lorebook timers at the engine persistence boundary.
+
+    Delegates to the lorebook domain rather than re-deriving the shape here: a
+    second copy silently missed the ``sticky`` + ``cooldown`` repair and let a
+    corrupt timer shape survive save/reload. ``lorebook`` is a peer core domain
+    (see ``tests/architecture/test_dependencies.py``), and this imports one pure
+    function with no storage or IO behind it.
+    """
+
+    return migrate_timed_state(dict(state) if isinstance(state, Mapping) else None)
 
 
 class GameStateCodec:
@@ -86,7 +100,7 @@ class GameStateCodec:
             "room_password": instance.room_password,
             "room_token": instance.room_token,
             "pending_combat_results": instance.pending_combat_results,
-            "lorebook_timed_state": instance.lorebook_timed_state,
+            "lorebook_timed_state": _normalize_lorebook_timed_state(instance.lorebook_timed_state),
             "quick_actions": instance.quick_actions,
             "health_events": instance.health_events[-100:],
             "health_status": instance.health_status,
@@ -235,7 +249,7 @@ class GameStateCodec:
             room_password=data.get("room_password", ""),
             room_token=data.get("room_token", ""),
             pending_combat_results=data.get("pending_combat_results", []),
-            lorebook_timed_state=data.get("lorebook_timed_state", {}),
+            lorebook_timed_state=_normalize_lorebook_timed_state(data.get("lorebook_timed_state", {})),
             quick_actions=data.get("quick_actions", []),
             health_events=data.get("health_events", []),
             health_status=data.get("health_status", {}),

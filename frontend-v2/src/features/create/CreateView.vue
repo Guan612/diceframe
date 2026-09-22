@@ -452,19 +452,28 @@ function onPickerPick(c: CharacterCard) {
     toast.success(t('addedFromLibrary'))
   }
 }
+// 卡内角色世界书是否随卡一起导入；不勾就真的只导入卡（后端 include_character_book=false）。
+const importCardLore = ref(true)
 async function importCardFile(file: File) {
-  const r = await importTavernCard(file, { target: 'character_card' })
+  const r = await importTavernCard(file, { target: 'character_card', includeCharacterBook: importCardLore.value })
   const card = r.card
   if (!card) throw new Error(t('importFailed'))
   cards.value.push(card)
   const character = characterFromCard(card)
   characters.value.push(character)
+  if (r.lorebook) {
+    toast.success(t('importedCharacterWithLore', {
+      name: card.character_name,
+      book: r.lorebook.name || r.lorebook_book_id || '',
+      count: r.lorebook.entries ?? 0,
+    }))
+  }
   if (cardNeedsReview(card)) {
     editIdx.value = characters.value.length - 1
     if (usesProfessionalBuilder.value) showRulesetBuilder.value = true
     else showWizard.value = true
     toast.info(t('cardRuleConversionReview'))
-  } else {
+  } else if (!r.lorebook) {
     toast.success(t('importedCharacter', { name: card.character_name }))
   }
 }
@@ -802,6 +811,7 @@ async function create() {
         <section v-else-if="step === 3" class="create-step-card create-character-stage">
           <div class="create-character-actions">
             <button class="primary" @click="openWizard(null)">＋ {{ t('newCharacter') }}</button><button @click="showPicker = true">{{ t('pickFromLibrary') }}</button><button @click="dfInput?.click()">{{ t('importDiceframeCard') }}</button><button @click="fileInput?.click()">{{ t('importStCard') }}</button>
+            <label class="create-import-lore"><input v-model="importCardLore" type="checkbox" class="tavern-include-lore"> {{ t('tavernImportIncludeLore') }}</label>
             <input ref="dfInput" type="file" accept=".json,application/json" hidden @change="onImportDfCard"><input ref="fileInput" type="file" accept=".png,.json" hidden @change="onStImport">
           </div>
           <div class="create-character-grid">

@@ -294,10 +294,13 @@ const tavernImportOpen = ref(false)
 const tavernTarget = ref<'npc' | 'character_card'>('npc')
 const tavernWorlds = ref<WorldSummary[]>([])
 const tavernWorldId = ref('')
+// 角色卡内嵌世界书是真数据，不是说明脚注：不勾就真的不落库（后端 include_character_book）。
+const tavernIncludeLore = ref(true)
 
 async function openTavernImport() {
   tavernTarget.value = 'npc'
   tavernWorldId.value = ''
+  tavernIncludeLore.value = true
   tavernImportOpen.value = true
   try {
     const r = await api<WorldListResponse>('/worlds')
@@ -412,11 +415,18 @@ async function onImportTavern(e: Event) {
   if (!file) return
   const target = tavernTarget.value
   const worldId = target === 'npc' ? tavernWorldId.value : ''
+  const includeCharacterBook = target === 'npc' ? true : tavernIncludeLore.value
   busy.value = true
   try {
-    const r = await importTavernCard(file, { target, worldId })
+    const r = await importTavernCard(file, { target, worldId, includeCharacterBook })
     if (target === 'npc') {
       toast.success(t('importedTavernNpc', { name: r.npc_name || file.name, world: worldId, count: r.lorebook_entries || 0 }))
+    } else if (r.lorebook) {
+      toast.success(t('importedCharacterWithLore', {
+        name: r.card?.character_name || file.name,
+        book: r.lorebook.name || r.lorebook_book_id || '',
+        count: r.lorebook.entries ?? r.lorebook_entries ?? 0,
+      }))
     } else {
       toast.success(t('importedCharacter', { name: r.card?.character_name || file.name }))
     }
@@ -790,6 +800,13 @@ async function onWizardSubmit(c: CharacterSheet) {
           <option v-for="w in tavernWorlds" :key="w.id || w.world_id" :value="w.id || w.world_id">{{ w.name || w.world_name }}</option>
         </select>
         <p v-if="!tavernWorlds.length" class="muted">{{ t('tavernImportNoWorlds') }}</p>
+      </div>
+      <div v-else class="check-row lore-import-toggle">
+        <label>
+          <input v-model="tavernIncludeLore" type="checkbox" class="tavern-include-lore">
+          {{ t('tavernImportIncludeLore') }}
+        </label>
+        <p class="muted">{{ t('tavernImportIncludeLoreHint') }}</p>
       </div>
       <template #actions>
         <button @click="tavernImportOpen = false">{{ t('cancel') }}</button>

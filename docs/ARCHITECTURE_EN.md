@@ -11,7 +11,7 @@
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
 > - Current GameInstance persisted schema: `15`
-> - Current Lorebook SQLite schema (`PRAGMA user_version`): `4`
+> - Current Lorebook SQLite schema (`PRAGMA user_version`): `9`
 > - Document verification date: 2026-09-18
 >
 > **Explicitly excluded from the current architecture**
@@ -3782,6 +3782,55 @@ LLMWorldTruth
 
 ## 33.1 World and Lorebook
 
+Lorebook is prompt knowledge/retrieval, not current-truth authority. Current truth is
+owned by `WorldState`, history by `Memory`, and rule interpretation/rulings by the
+Ruleset Runtime. Persistence ownership is:
+
+```text
+worlds                 world identity / compatibility
+lorebooks              canonical book settings
+lorebook_bindings      scope / role bindings
+lorebook_entries       book entries
+lorebook_embeddings    derived semantic cache
+```
+
+External material follows one path:
+
+```text
+External Lore → Adapter → Draft/Preview → Canonical Store
+→ Binding Resolver → Activation/Keyword/Semantic → Visibility → Budget → Prompt Projection
+```
+
+The current product import path is:
+
+```text
+LorebookView
+→ POST /api/lorebooks/import/preview
+→ user confirmation
+→ POST /api/lorebooks/import
+→ GET/POST /api/lorebooks/{book_id}/entries
+→ GET /api/lorebooks/{book_id}/export
+→ LorebookStore
+```
+
+Book and Binding lifecycles are owned by the same product path: explicit CRUD is
+available through POST/PUT/DELETE `/api/lorebooks`, plus
+`/api/lorebooks/{book_id}/bindings` and `/api/lorebook-bindings/{binding_id}`. Export uses the
+canonical `lorebook_v3` serializer and includes a DiceFrame native backup when requested.
+The browser Golden covers import preview/confirmation, Book selection, Activation
+Inspector, GM/player-safe views, and the export request contract.
+
+The canonical `lorebook_bindings.scope_kind` values are only `global`, `world`,
+`game`, and `character`; the old `viewer` / `actor` names are not part of the new
+contract. The resolver merges all books bound to the active runtime context in binding
+order. Imported entries receive a book-scoped internal canonical ID; external `uid` /
+`id` values are provenance only and cannot overwrite entries in another book. Recreating
+a book ID does not use SQLite `REPLACE` cascading away existing bindings or entries.
+
+The v4 → v5 → v6 migrations preserve worlds and entry IDs, and create a deterministic
+`world:<id>` primary book for every world. `list_entries(world_id)` remains the
+compatibility façade for that primary book.
+
 World core owns:
 
 - world identity;
@@ -3892,6 +3941,39 @@ tier / order
 
 Semantic retrieval is only an optional enhancement. It does not replace those semantics.
 
+Lorebook v2 additionally implements secondary keys and ST-style selective logic,
+case-sensitive and whole-word matching, entry-level regex, recursive content scanning
+with depth and non-recursable guards, and multi-name group competition. These mechanics
+remain inside `KeywordMatcher`; the generic retriever only orchestrates loading and
+projection.
+
+Three concepts here are stored separately and never derived from each other: legacy
+DiceFrame `match_mode` governs primary matching; the canonical `selective` boolean decides
+whether `secondary_keys` gates activation at all; `selective_logic` decides how the
+secondary keys combine. `selective=false` keeps the keys as data without filtering, and a
+missed primary key means the secondary gate is never consulted. SillyTavern and Character
+Card regexes are JavaScript while DiceFrame executes Python `re`, so only the
+safely-mappable subset runs: an incompatible pattern is preserved verbatim with a preview
+warning and is never evaluated through a second runtime.
+
+At runtime the resolver merges global/world/game/character bindings and attaches book
+settings (scan depth, recursive scanning, token budget, and the vector default) to each
+candidate. A Book's own `enabled` flag is a runtime decision, not a display label: a
+disabled Book contributes no candidates at all, and a change to its retrieval settings
+bumps `revision` so two same-second edits cannot be swallowed by the cache. Entry
+ownership follows the canonical invariant — entries of the primary world book
+`world:<id>` carry `world_id`, entries of an independent Book have NULL, and moving an
+entry between books re-derives that projection. `off` produces no semantic candidates, `hybrid` runs alongside keywords, and
+`vector_only` admits semantic candidates only; every candidate still passes visibility,
+timer, group, and budget checks. A dry-run ActivationTrace is kept on the runtime
+instance and is queryable through `POST /api/lorebooks/activation-preview`; player
+views fail closed for hidden entries and do not disclose their id, name, or reason.
+
+Legacy world projections retain the old fuzzy default; `lorebook_v3`, SillyTavern, and
+native Books default fuzzy matching off unless Book settings explicitly enable it. The
+fuzzy fallback still honors secondary-key, case, whole-word, and regex boundaries and
+cannot bypass the new matcher contract.
+
 ---
 
 ## 33.3 Embeddings and Derived Cache
@@ -3937,7 +4019,7 @@ Lorebook entry vectors are cached in `lorebook.db`:
 lorebook_embeddings
 ```
 
-Current Lorebook SQLite `user_version = 4`. Cache key:
+Current Lorebook SQLite `user_version = 9`. `vector_activation` is the three-state text field `off` / `hybrid` / `vector_only`; v6 safely converts the old v5 boolean values while preserving `book_id` and entry data. v7 adds `lorebooks.revision`, a monotonic counter bumped by entry and retrieval-setting mutations so cached matcher fingerprints are invalidated; v8 adds `lorebook_entries.selective`, the canonical flag deciding whether `secondary_keys` gates activation at all (default `1` keeps existing behaviour); v9 adds `lorebook_entries.regex_executable`, which an adapter clears when a JavaScript regex has no faithful Python equivalent so the matcher never executes it (default `1`). Cache key:
 
 ```text
 (entry_id, language, embedding_profile)
@@ -4023,6 +4105,12 @@ does not decide combat / checks / economy outcomes
 For player-view retrieval, `visible_to` filtering happens **before** semantic ranking so a GM-only entry cannot enter the player-safe candidate set just because its vector is similar.
 
 Existing sticky / cooldown / delay semantics in `lorebook_timed_state` remain controlled by KeywordMatcher. A pure semantic candidate does not secretly advance timers. Out-of-character Q&A uses a copy of timed state and therefore does not mutate the real timer state.
+
+At the `GameStateCodec` save/load boundary, legacy `status/remaining` timers are
+normalized into independent `sticky_remaining`, `cooldown_remaining`, and
+`delay_remaining` counters. Loading an old save does not require a database downgrade.
+`GameInstance.update_lorebook_timed_state()` accepts both shapes while later saves
+converge to the canonical representation.
 
 ---
 
@@ -5756,7 +5844,7 @@ D&D Class Feature Runtime v1
 Hybrid Lore Retrieval / Semantic Retrieval / Lore Prompt authority
 QR pairing
 Current Confirmed Event / World Memory boundary
-GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 4
+GameInstance schemas 13 / 14 / 15 + Lorebook SQLite schema 9
 Developer maintenance and code-location rules
 ```
 

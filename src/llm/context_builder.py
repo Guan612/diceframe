@@ -487,10 +487,12 @@ _PLAYER_SAFE_LORE_RULE = {
 
 def lore_entry_projection(
     entry: object, *, vis_hint: str = "", include_id: bool = True,
+    include_prompt_slot: bool = True,
 ) -> str:
     """单个 Lore 条目进入 prompt 的统一投影（施工方案 §25）。
 
-    头部暴露 ``id`` / ``type`` / ``tier``（以及 ``unreliable`` 标记），正文保留
+    头部暴露 ``id`` / ``type`` / ``tier``（以及 ``unreliable`` 标记）；GM 路径
+    还会保留非空 ``prompt_slot`` 作为 ``slot=...`` 标记。正文保留
     ``name`` / ``content``；matcher 运行时元数据一律不出现。
 
     ``include_id=False`` 用于玩家安全路径：内部 canonical id 本身可能泄露幕后信息
@@ -508,6 +510,12 @@ def lore_entry_projection(
     tags.append(f"tier={str(entry.get('tier') or 'background').strip()}")
     if entry.get("unreliable"):
         tags.append("unreliable")
+    # prompt_slot is an import/storage field, but a non-empty value must have
+    # a stable GM-facing projection.  Keep it out of the player-safe path:
+    # slot names describe prompt assembly rather than player-visible lore.
+    prompt_slot = str(entry.get("prompt_slot") or "").strip()
+    if prompt_slot and include_prompt_slot:
+        tags.append(f"slot={prompt_slot}")
     head = "[" + "][".join(tags) + "]"
     name = str(entry.get("name") or "").strip()
     content = str(entry.get("content") or "").strip()
@@ -526,7 +534,7 @@ def project_player_safe_lore(
     lines: list[str] = []
     used = 0
     for entry in entries:
-        line = lore_entry_projection(entry, include_id=False)
+        line = lore_entry_projection(entry, include_id=False, include_prompt_slot=False)
         if not line:
             continue
         if budget_lorebook and used + len(line) > budget_lorebook:
@@ -547,6 +555,21 @@ def project_player_safe_lore(
 
 def _lore_rules_text(language: str, table: dict[str, str]) -> str:
     return localized_text(language, table)
+
+
+def lore_char_budget(provider_name: str = "", *, lorebook_budget: int = 0) -> int:
+    """How many characters the Lorebook section may occupy in one context.
+
+    This is *the* provider context-window authority for lore: the retrieval layer
+    derives its overall lore budget from this instead of standing up a second
+    context-window notion of its own. ``lorebook_budget`` is the world-level
+    configured ceiling and only ever narrows the share.
+    """
+
+    budget = int(_detect_max_chars(provider_name) * _BUDGET_LOREBOOK)
+    if lorebook_budget > 0:
+        budget = min(budget, lorebook_budget)
+    return budget
 
 
 async def build_context(
@@ -589,9 +612,7 @@ async def build_context(
     # 按比例分配预算
     budget_system = int(max_total * _BUDGET_SYSTEM_PROMPT)
     budget_state = int(max_total * _BUDGET_GAME_STATE)
-    budget_lorebook = int(max_total * _BUDGET_LOREBOOK)
-    if lorebook_budget > 0:
-        budget_lorebook = min(budget_lorebook, lorebook_budget)
+    budget_lorebook = lore_char_budget(provider_name, lorebook_budget=lorebook_budget)
     budget_summary = int(max_total * _BUDGET_SUMMARY)
     budget_memory = int(max_total * _BUDGET_MEMORY)
     budget_confirmed = int(max_total * _BUDGET_CONFIRMED)
@@ -1005,9 +1026,7 @@ async def build_player_safe_context(
 
     budget_system = int(max_total * _BUDGET_SYSTEM_PROMPT)
     budget_state = int(max_total * 0.20)
-    budget_lorebook = int(max_total * _BUDGET_LOREBOOK)
-    if lorebook_budget > 0:
-        budget_lorebook = min(budget_lorebook, lorebook_budget)
+    budget_lorebook = lore_char_budget(provider_name, lorebook_budget=lorebook_budget)
     budget_summary = int(max_total * 0.12)
     budget_known = int(max_total * 0.10)
     budget_confirmed = int(max_total * _BUDGET_CONFIRMED)

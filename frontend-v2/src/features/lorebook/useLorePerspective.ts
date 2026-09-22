@@ -1,6 +1,6 @@
 import { computed, ref, watch, type Ref } from 'vue'
 import { api, errorMessage } from '@/api/client'
-import type { LorePreviewResponse, LoreProjection, Player } from '@/api/types'
+import type { LoreActivationPreviewResponse, LorePreviewResponse, LoreProjection, Player } from '@/api/types'
 import { activePeerGameClient } from '@/peer/game/bridge'
 
 const GM_VIEWER = 'gm'
@@ -20,6 +20,10 @@ export function useLorePerspective(
   const preview = ref<LorePreviewResponse | null>(null)
   const loading = ref(false)
   const previewError = ref('')
+  const activationText = ref('')
+  const activation = ref<LoreActivationPreviewResponse | null>(null)
+  const activationLoading = ref(false)
+  const activationError = ref('')
   let requestSeq = 0
 
   // 角色视角需要游戏上下文派生角色名；无存档或 P2P 直连局不可用。
@@ -66,6 +70,34 @@ export function useLorePerspective(
     }
   }
 
+  async function refreshActivationPreview() {
+    activationError.value = ''
+    if (!gameKey.value) {
+      activation.value = null
+      activationError.value = 'Activation preview requires an active game.'
+      return
+    }
+    activationLoading.value = true
+    try {
+      const selected = effectiveViewer.value
+      const player = players.value.find(p => p.user_id === selected)
+      const viewerPayload = selected === GM_VIEWER
+        ? { is_gm: true }
+        : { is_gm: false, uid: selected === PARTY_VIEWER ? '' : selected, name: player?.character_name || '' }
+      const result = await api<LoreActivationPreviewResponse>('/lorebooks/activation-preview', {
+        method: 'POST',
+        body: JSON.stringify({ game_key: gameKey.value, action_text: activationText.value, viewer: viewerPayload }),
+      })
+      if (result.ok === false) throw new Error(result.error || 'Activation preview failed')
+      activation.value = result
+    } catch (e: unknown) {
+      activation.value = null
+      activationError.value = errorMessage(e)
+    } finally {
+      activationLoading.value = false
+    }
+  }
+
   function projectionOf(entryId: string | undefined): LoreProjection | null {
     if (!entryId) return null
     return preview.value?.projections?.[entryId] || null
@@ -74,5 +106,5 @@ export function useLorePerspective(
   watch(gameKey, restoreViewer, { immediate: true })
   watch([worldId, effectiveViewer], fetchPreview)
 
-  return { viewer, effectiveViewer, viewerFallback, characterViewerLocked, setViewer, preview, loading, previewError, projectionOf, refreshPreview: fetchPreview }
+  return { viewer, effectiveViewer, viewerFallback, characterViewerLocked, setViewer, preview, loading, previewError, projectionOf, refreshPreview: fetchPreview, activationText, activation, activationLoading, activationError, refreshActivationPreview }
 }

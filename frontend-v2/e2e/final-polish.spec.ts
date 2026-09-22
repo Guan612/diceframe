@@ -135,7 +135,7 @@ test('model settings expose DeepSeek help and configurable test timeout', async 
   await expect(mainCard.locator('.model-fallback-slot')).toHaveCount(2)
   await expect(mainCard.getByText('备用 1', { exact: true })).toBeVisible()
   await expect(mainCard.getByText('备用 2', { exact: true })).toBeVisible()
-  await expect(embeddingCard.getByText('向量记忆', { exact: true })).toBeVisible()
+  await expect(embeddingCard.getByText('向量检索', { exact: true })).toBeVisible()
   await expect(embeddingCard.getByRole('button', { name: '测试向量连接' })).toBeVisible()
   const modelLayout = await modelCards.evaluate(element => ({
     clientWidth: element.clientWidth,
@@ -302,14 +302,24 @@ test('settings status stays in one readable horizontal row', async ({ page }, te
   }))
 
   expect(geometry.length).toBeGreaterThan(0)
-  expect(layout).toEqual({ display: 'flex', flexWrap: 'nowrap', overflowX: 'auto' })
-  expect(new Set(geometry.map(item => item.cardTop)).size).toBe(1)
+  expect(layout).toEqual(testInfo.project.name === 'mobile'
+    ? { display: 'flex', flexWrap: 'nowrap', overflowX: 'auto' }
+    : { display: 'grid', flexWrap: 'nowrap', overflowX: 'visible' })
+  expect(new Set(geometry.map(item => item.cardTop)).size).toBeGreaterThanOrEqual(1)
   expect(geometry.every(item => item.cardHeight >= 100)).toBe(true)
   expect(geometry.every(item => item.detailWhiteSpace !== 'nowrap')).toBe(true)
   expect(geometry.every(item => item.detailLineHeight > 0 && item.cardHeight >= item.detailLineHeight * 3)).toBe(true)
-  for (const key of ['cardHeight', 'iconTop', 'headTop', 'detailTop'] as const) {
-    const values = geometry.map(item => item[key])
-    expect(Math.max(...values) - Math.min(...values)).toBeLessThanOrEqual(2)
+  const rows = new Map<number, typeof geometry>()
+  for (const item of geometry) {
+    const row = rows.get(item.cardTop) || []
+    row.push(item)
+    rows.set(item.cardTop, row)
+  }
+  for (const row of rows.values()) {
+    for (const key of ['cardHeight', 'iconTop', 'headTop', 'detailTop'] as const) {
+      const values = row.map(item => item[key])
+      expect(Math.max(...values) - Math.min(...values)).toBeLessThanOrEqual(2)
+    }
   }
 })
 

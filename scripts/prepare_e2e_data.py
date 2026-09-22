@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import secrets
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -35,6 +36,11 @@ E2E_ADVENTURE_SECRET_NODE = "E2E Secret Ritual"
 # FIX-06：模组库（ModulesView / ModuleDetailView）的浏览器验收需要一个真实的
 # data-only content-pack。它带自己的冒险 id（不与上面的 user 冒险重名，避免制造
 # 来源冲突），也不被任何存档绑定，因此详情页的三个受保护按钮都应为可用。
+# Lorebook Golden：真实 v4 老库迁移 + 真实检索链路的专用世界。
+E2E_LORE_WORLD_ID = "e2e_lore_golden"
+# Activation Inspector 走的是真实 retriever，需要一个绑定到该世界的存档。
+E2E_LORE_GAME_KEY = ("web", "e2e-lore-golden", "web_bot")
+
 E2E_MODULE_ID = "e2e-module"
 E2E_MODULE_NAME = "E2E Module"
 E2E_MODULE_ADVENTURE_DIRECTORY = "module_quest"
@@ -336,7 +342,94 @@ def prepare_e2e_data(data_dir: Path) -> Path:
     _write_save(data_dir, dnd_instance)
     # FIX-06：模组库的浏览器验收需要真实 content-pack 包（§8 的产品面）。
     _write_e2e_module(data_dir)
+    # Lorebook Golden 的真实链路验收需要一个**真的 v4 老库**：服务器启动时会跑
+    # 真实 migration，浏览器随后看到的就是迁移产物，而不是测试自己捏的 JSON。
+    _write_legacy_lorebook_db(data_dir)
+    lore_instance = GameInstance(
+        game_key=E2E_LORE_GAME_KEY,
+        world_id=E2E_LORE_WORLD_ID,
+        world_name="Golden Lore World",
+        group_name="Lorebook Golden",
+        state=GameState.ACTIVE_ACTION,
+        round_number=2,
+        solo_mode=False,
+        gm_uid="e2e-gm",
+        scene="旧城门前",
+        language="zh-CN",
+    )
+    lore_instance.players = _e2e_players()
+    _write_save(data_dir, lore_instance)
     return save_file
+
+
+def _write_legacy_lorebook_db(data_dir: Path) -> Path:
+    """Materialise an authentic pre-v6 (schema v4) lorebook.db.
+
+    The Golden browser run must exercise the real chain — old SQLite → real
+    migration → backend → resolver → matcher → browser — so the fixture stops at
+    the historical schema version and lets normal startup migrate it. Writing the
+    already-migrated shape here would test nothing about migration, and
+    hand-copying an old CREATE TABLE would drift from the real one, so the real
+    migration steps are replayed up to v4 instead.
+    """
+
+    from src.lorebook.store import SCHEMA
+    from src.migrations.lorebook import migrate
+
+    db_path = data_dir / "lorebook.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.unlink(missing_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript(SCHEMA)
+        migrate(conn, upto=4)
+        conn.execute(
+            "INSERT OR IGNORE INTO worlds (id, name, description, language) VALUES (?, ?, ?, ?)",
+            (E2E_LORE_WORLD_ID, "Golden Lore World", "Lorebook Golden E2E", "zh-CN"),
+        )
+        for entry in _legacy_lore_entries():
+            columns = ", ".join(f'"{key}"' for key in entry)
+            placeholders = ", ".join("?" for _ in entry)
+            conn.execute(
+                f"INSERT INTO lorebook_entries ({columns}) VALUES ({placeholders})",
+                tuple(entry.values()),
+            )
+        conn.commit()
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version != 4:
+            raise RuntimeError(f"legacy lorebook fixture must stay at schema v4, got {version}")
+    finally:
+        conn.close()
+    return db_path
+
+
+def _legacy_lore_entries() -> list[dict[str, object]]:
+    """Legacy rows covering the activation features the Golden run asserts.
+
+    ``visible_to`` uses the legacy JSON shape on purpose: the migration is what
+    turns these into canonical v6 rows.
+    """
+
+    return [
+        {
+            "id": "legacy-gate", "world_id": E2E_LORE_WORLD_ID, "name": "旧城门",
+            "type": "location", "keywords": json.dumps(["旧城门"], ensure_ascii=False),
+            "content": "旧城门的门闩上刻着一枚封印纹章。", "tier": "core",
+            "visible_to": json.dumps(["*"]), "order": 10,
+        },
+        {
+            "id": "legacy-sigil", "world_id": E2E_LORE_WORLD_ID, "name": "封印纹章",
+            "type": "item", "keywords": json.dumps(["封印纹章"], ensure_ascii=False),
+            "content": "纹章是打开地下档案室的钥匙。", "tier": "background",
+            "visible_to": json.dumps(["*"]), "order": 20,
+        },
+        {
+            "id": "legacy-secret", "world_id": E2E_LORE_WORLD_ID, "name": "GM 密档",
+            "type": "event", "keywords": json.dumps(["旧城门"], ensure_ascii=False),
+            "content": "守门人其实是伪装的内应。", "tier": "core",
+            "visible_to": json.dumps([]), "order": 30,
+        },
+    ]
 
 
 def main() -> int:

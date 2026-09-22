@@ -11,7 +11,7 @@
 > - Commit：`962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release：`2.6.1`
 > - 当前 GameInstance persisted schema：`15`
-> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`4`
+> - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`9`
 > - 文档核验日期：2026-09-18
 >
 > **明确不计入当前架构的内容**
@@ -3812,6 +3812,52 @@ LLMWorldTruth
 
 ## 33.1 World 与 Lorebook
 
+Lorebook 是 prompt knowledge/retrieval，不是当前事实 authority。当前事实由
+`WorldState` 持有，历史由 `Memory` 持有，规则解释与裁定由 Ruleset Runtime 持有。
+持久化 ownership 为：
+
+```text
+worlds                 世界 identity / compatibility
+lorebooks              canonical book settings
+lorebook_bindings      scope / role bindings
+lorebook_entries       book entries
+lorebook_embeddings    derived semantic cache
+```
+
+外部资料统一走：
+
+```text
+External Lore → Adapter → Draft/Preview → Canonical Store
+→ Binding Resolver → Activation/Keyword/Semantic → Visibility → Budget → Prompt Projection
+```
+
+当前导入产品链为：
+
+```text
+LorebookView
+→ POST /api/lorebooks/import/preview
+→ 用户确认
+→ POST /api/lorebooks/import
+→ GET/POST /api/lorebooks/{book_id}/entries
+→ GET /api/lorebooks/{book_id}/export
+→ LorebookStore
+```
+
+Book 与 Binding 的生命周期也由同一产品链负责：`/api/lorebooks` 的 POST/PUT/DELETE
+和 `/api/lorebooks/{book_id}/bindings`、`/api/lorebook-bindings/{binding_id}` 提供
+显式 CRUD；导出统一使用 `lorebook_v3` serializer，
+并在 DiceFrame 备份场景附带 native backup。前端 Golden 覆盖导入预览/确认、Book
+切换、Activation Inspector、GM 与玩家安全视角以及导出请求契约。
+
+`lorebook_bindings.scope_kind` 的 canonical 范围只有 `global`、`world`、`game`、
+`character`；旧的 `viewer` / `actor` 名称不属于新 contract。Resolver 按 binding
+order 合并当前运行时上下文中的多本书。外部导入条目使用按 book 作用域生成的
+内部 canonical ID，外部 `uid` / `id` 只保存于 provenance，不会跨书覆盖条目。
+重复创建 book ID 不使用 SQLite `REPLACE` 级联删除既有 binding 或 entries。
+
+v4 → v5 → v6 migration 保留 worlds 与 entry ids，并为每个 world 创建 deterministic
+`world:<id>` primary book；`list_entries(world_id)` 是该 primary book 的兼容 façade。
+
 World core 负责：
 
 - world identity；
@@ -3924,6 +3970,32 @@ tier / order
 
 语义检索只是可选增强，不替代这些语义。
 
+Lorebook v2 还实现 secondary keys 与 ST-style selective logic、大小写/整词控制、
+entry 级正则、带深度与 non-recursable guard 的内容递归扫描，以及多组名的 group
+competition。这些 mechanics 仍由 `KeywordMatcher` 持有，通用 retriever 只负责
+加载、编排和投影。
+
+这里有三个互不派生的概念，必须分别保存：legacy DiceFrame `match_mode` 管 primary
+匹配；canonical `selective`（CCv3/ST 的布尔）决定 `secondary_keys` 是否参与 gate；
+`selective_logic` 决定 secondary keys 如何组合。`selective=false` 保留 keys 作为
+数据但不做过滤。primary 不命中时 secondary 永不参与判定。ST/CCv3 的正则是
+JavaScript，而 DiceFrame 执行 Python `re`：只有安全子集执行，不兼容的 pattern
+原样保留并给出 preview warning，绝不经第二个 runtime 求值。
+
+运行时 resolver 会按 global/world/game/character binding 合并多本书，并把 book
+settings（scan depth、recursive scanning、token budget、vector default）附加到
+本轮候选。Book 自身的 `enabled` 是 runtime 决定而非展示标签：停用的 Book 直接
+不进入候选，其 retrieval setting 变更也会 bump `revision`，因此同一秒内的连续修改
+不会被缓存吃掉。条目归属遵循 canonical invariant：主世界书 `world:<id>` 的条目带
+`world_id`，独立 Book 的条目为 NULL，跨 Book 移动时同步重建该投影。`off` 不产生语义候选，`hybrid` 与关键词并行，`vector_only` 仅由语义
+候选进入；所有候选仍须通过 visibility、timer、group 与 budget。每轮 dry-run
+ActivationTrace 保存在运行时实例并可由 `POST /api/lorebooks/activation-preview`
+查询；玩家视角对隐藏条目 fail-closed，不暴露其 id、名称或原因。
+
+Legacy world projection 默认保留旧 fuzzy 行为；`lorebook_v3`、SillyTavern 与 native
+Book 默认关闭 fuzzy，只有 Book settings 明确启用时才打开。fuzzy fallback 仍受
+entry 的 secondary、大小写、整词和正则边界约束，不得绕过新 matcher contract。
+
 ---
 
 ## 33.3 Embedding 与派生缓存
@@ -3969,7 +4041,7 @@ Embedding failure **不得**让正常回合失败。非数字、空向量、`NaN
 lorebook_embeddings
 ```
 
-当前 Lorebook SQLite `user_version = 4`。缓存键：
+当前 Lorebook SQLite `user_version = 9`。`vector_activation` 是 `off`、`hybrid`、`vector_only` 三态文本字段；v6 会把旧 v5 布尔值安全转换为 `off`/`hybrid`，并保留 `book_id` 与条目数据。v7 增加 `lorebooks.revision`（条目与 retrieval setting 变更计数，用于失效 matcher 缓存），v8 增加 `lorebook_entries.selective`（`secondary_keys` 是否参与 gate，默认 `1` 保持既有行为），v9 增加 `lorebook_entries.regex_executable`（该条目的正则是否允许执行，默认 `1`；JS 正则无法安全映射到 Python 时由 adapter 置 `false`，Matcher 便永不执行）。缓存键：
 
 ```text
 (entry_id, language, embedding_profile)
@@ -4055,6 +4127,11 @@ Pure semantic hit 只是：
 玩家视角检索在 semantic rank **之前**就先做 `visible_to` 过滤，防止 GM-only 条目因为向量相似而进入 player-safe candidate set。
 
 现有 `lorebook_timed_state` 的 sticky / cooldown / delay 仍由 KeywordMatcher 语义控制。Pure semantic candidate 不偷偷推进 timer；桌外问答使用计时状态副本，不改变真实 timer。
+
+`GameStateCodec` 在 save/load boundary 将旧的 `status/remaining` 计时器规范化为
+独立的 `sticky_remaining`、`cooldown_remaining`、`delay_remaining` 计数器；读取旧
+存档不要求数据库降级。`GameInstance.update_lorebook_timed_state()` 同时兼容两种
+形状，后续保存会收敛到 canonical representation。
 
 ---
 
@@ -5804,7 +5881,7 @@ D&D Class Feature Runtime v1
 Hybrid Lore Retrieval / Semantic Retrieval / Lore Prompt authority
 扫码配对
 Confirmed Event / World Memory 当前边界
-GameInstance schema 13 / 14 / 15 + Lorebook SQLite schema 4
+GameInstance schema 13 / 14 / 15 + Lorebook SQLite schema 9
 开发者维护与定位规则
 ```
 

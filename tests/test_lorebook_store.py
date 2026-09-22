@@ -250,17 +250,29 @@ class TestMigration:
     def test_latest_schema_is_versioned_and_reopen_is_idempotent(self):
         store, path = _temp_store()
         try:
-            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 9
             store.create_world("w1", "测试")
             store.add_entry({"id": "e1", "world_id": "w1", "name": "x", "type": "spell"})
             store.close()
             reopened = LorebookStore(path)
             reopened.open()
             try:
-                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+                assert reopened._conn.execute("PRAGMA user_version").fetchone()[0] == 9
                 assert reopened.get_entry("e1")["type"] == "spell"
             finally:
                 reopened.close()
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
+    def test_vector_activation_modes_survive_v6_migration(self):
+        store, path = _temp_store()
+        try:
+            store.create_lorebook({"id": "book:vectors", "name": "Vectors"})
+            store.add_entry({"id": "off", "book_id": "book:vectors", "name": "Off", "vector_activation": "off"})
+            store.add_entry({"id": "hybrid", "book_id": "book:vectors", "name": "Hybrid", "vector_activation": "hybrid"})
+            store.add_entry({"id": "only", "book_id": "book:vectors", "name": "Only", "vector_activation": "vector_only"})
+            assert [store.get_entry(item)["vector_activation"] for item in ("off", "hybrid", "only")] == ["off", "hybrid", "vector_only"]
         finally:
             store.close()
             path.unlink(missing_ok=True)
@@ -387,7 +399,7 @@ class TestMigration:
             try:
                 assert store.get_world("w1")["language"] == "zh-CN"
                 assert store.get_entry("e1")["tier"] == "background"
-                assert store._execute("PRAGMA user_version").fetchone()[0] == 4
+                assert store._execute("PRAGMA user_version").fetchone()[0] == 9
                 indexes = {
                     row[1] for row in store._execute("PRAGMA index_list('lorebook_entries')")
                 }
@@ -457,7 +469,7 @@ class TestMigration:
             store = LorebookStore(path)
             store.open()
             try:
-                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 4
+                assert store._conn.execute("PRAGMA user_version").fetchone()[0] == 9
                 index_names = {row[1] for row in store._conn.execute("PRAGMA index_list(lorebook_entries)")}
                 assert {"idx_lorebook_world", "idx_lorebook_type", "idx_lorebook_tier", "idx_lorebook_source"} <= index_names
                 # 旧库已含 w1；不要 create_world（INSERT OR REPLACE 会级联删 e1）
@@ -496,7 +508,7 @@ class TestMigration:
         )
         from src.migrations import lorebook
         migrate = lorebook.migrate
-        assert migrate(conn) == 4
+        assert migrate(conn) == 9
         columns = {row[1] for row in conn.execute("PRAGMA table_info(lorebook_entries)")}
         assert set(lorebook._LOREBOOK_COLUMNS) <= columns
         sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='lorebook_entries'").fetchone()[0].upper()
@@ -527,8 +539,8 @@ class TestMigration:
         assert run_migrations(conn, ((1, lorebook._v1), (2, lorebook._v2))) == 2
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
 
-        assert lorebook.migrate(conn) == 4
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert lorebook.migrate(conn) == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
         assert conn.execute(
             "SELECT content FROM lorebook_entries WHERE id='e1'"
         ).fetchone()[0] == "保留"
@@ -562,7 +574,7 @@ class TestMigration:
         )
         conn.commit()
 
-        assert lorebook.migrate(conn) == 4
+        assert lorebook.migrate(conn) == 9
         assert conn.execute(
             "SELECT tier, match_mode FROM lorebook_entries WHERE id='e1'"
         ).fetchone() == ("background", "any")
@@ -591,3 +603,74 @@ class TestMigration:
         assert conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lorebook_entries_new'"
         ).fetchone() is None
+
+    def test_v5_creates_primary_book_binding_and_preserves_legacy_facade(self):
+        store, path = _temp_store()
+        try:
+            store.create_world("w1", "World One")
+            store.add_entry({"id": "e1", "world_id": "w1", "name": "Entry", "content": "body"})
+            assert store.primary_world_book_id("w1") == "world:w1"
+            book = store.get_lorebook("world:w1")
+            assert book and book["source_kind"] == "world"
+            bindings = store.list_bindings(scope_kind="world", scope_id="w1")
+            assert [(b["book_id"], b["role"]) for b in bindings] == [("world:w1", "primary")]
+            assert store.list_entries("w1")[0]["book_id"] == "world:w1"
+            assert store.list_book_entries("world:w1")[0]["id"] == "e1"
+            assert store.search_book_entries("world:w1", "bod")[0]["id"] == "e1"
+            store.close()
+            store.open()
+            assert store.get_lorebook("world:w1")
+            assert len(store.list_bindings(scope_kind="world", scope_id="w1")) == 1
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
+    def test_v5_supports_independent_books_without_world_authority(self):
+        store, path = _temp_store()
+        try:
+            store.create_lorebook({"id": "book:import", "name": "Imported", "source_kind": "ccv3"})
+            # Only the four canonical scopes are writable; a standalone book that
+            # carries no world authority binds globally, not to a session.
+            store.bind_lorebook({"id": "binding:import:global", "book_id": "book:import", "scope_kind": "global", "scope_id": ""})
+            store.add_entry({"id": "e-import", "book_id": "book:import", "name": "Imported entry", "content": "text"})
+            assert store.list_book_entries("book:import")[0]["world_id"] is None
+            assert store.list_lorebooks(scope_kind="global")[0]["id"] == "book:import"
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.parametrize("kind", ["session", "persona", "chat", "unknown", ""])
+    def test_non_canonical_scope_kind_is_rejected_at_store_boundary(self, kind):
+        """The store is the canonical boundary, so import flows cannot bypass it."""
+
+        store, path = _temp_store()
+        try:
+            store.create_lorebook({"id": "book:scoped", "name": "Scoped"})
+            with pytest.raises(ValueError):
+                store.bind_lorebook({"id": "binding:bad", "book_id": "book:scoped", "scope_kind": kind})
+            assert store.list_bindings() == []
+            # A scope update cannot smuggle in a non-canonical kind either.
+            store.bind_lorebook({"id": "binding:ok", "book_id": "book:scoped", "scope_kind": "global"})
+            with pytest.raises(ValueError):
+                store.update_binding("binding:ok", {"scope_kind": "session"})
+            assert store.list_bindings()[0]["scope_kind"] == "global"
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
+    def test_world_projection_excludes_entries_from_independent_books(self):
+        store, path = _temp_store()
+        try:
+            store.create_world("w1", "World One")
+            store.add_entry({"id": "primary", "world_id": "w1", "name": "Primary", "content": "primary"})
+            store.create_lorebook({"id": "book:independent", "name": "Imported"})
+            store.add_entry({
+                "id": "independent", "book_id": "book:independent", "world_id": "w1",
+                "name": "Independent", "content": "must not enter world projection",
+            })
+
+            assert [entry["id"] for entry in store.list_entries("w1")] == ["primary"]
+            assert [entry["id"] for entry in store.list_book_entries("book:independent")] == ["independent"]
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)

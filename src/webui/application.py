@@ -33,6 +33,7 @@ from src.webui.routes.generated_images import register_generated_images
 from src.webui.routes.generation import register_generation
 from src.webui.routes.hub import register_hub
 from src.webui.routes.legal import register_legal
+from src.webui.routes.lorebooks import register_lorebooks
 from src.webui.routes.maps import register_maps
 from src.webui.routes.memory import register_memory
 from src.webui.routes.modules import register_modules
@@ -143,6 +144,7 @@ def register_routes(
     register_asr(application)
     register_generated_images(application)
     register_worlds(application)
+    register_lorebooks(application)
     register_rules(application)
     register_adventures(application)
     register_modules(application)
