@@ -862,6 +862,7 @@ class GameInstance:
             if self.log:
                 # Reject before history or snapshots can be changed.
                 economy_state.state(self)
+                combat_extension_state.current(self)
             return round_recovery.rollback_last_round_locked(self)
 
     async def abort_round_processing(self) -> bool:
@@ -882,6 +883,7 @@ class GameInstance:
         async with self._lock:
             if self.state == GameState.ACTIVE_JUDGMENT:
                 economy_state.state(self)
+                combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
 
     def _drop_stale_combat_caches(self, *, all_targets: bool = False) -> None:
@@ -1394,6 +1396,9 @@ class GameInstance:
         实现是基线 reset() 的机械迁移（见 ``instance_lifecycle.reset_locked``）。
         """
         async with self._lock:
+            # Validate fallible slots before rotating the run or clearing state.
+            combat_extension_state.current(self)
+            lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
 
     # ---------- 序列化 --------------------------------------

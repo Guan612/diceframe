@@ -216,6 +216,98 @@ def test_unknown_outer_schema_roundtrips_and_rejects_all_access_without_mutation
     assert json.dumps(restored.modules[combat.MODULE_NAME], sort_keys=True) == encoded_slot
 
 
+def lifecycle_instance():
+    instance = make_instance()
+    populate(instance)
+    instance.round_number = 2
+    instance.state = GameState.ACTIVE_JUDGMENT
+    instance.seed_code = "keep-seed"
+    instance.players = {"p": {"character_sheet": {"hp": 3, "max_hp": 20, "gold": 7}}}
+    instance.npcs = {"guard": {"hp": 4}}
+    instance.scene = "gate"
+    instance.action_queue = [{"user_id": "p", "text": "attack"}]
+    instance.pending_actions = [{"user_id": "p", "text": "wait"}]
+    instance.ready_players = {"p"}
+    instance.round_start_snapshot = {"p": {"hp": 20, "gold": 10}}
+    instance.capture_round_entity_snapshot()
+    instance.log = [{
+        "round": 1, "gm_response": "previous round", "swipes": [],
+        "round_start_snapshot": deepcopy(instance.round_start_snapshot),
+    }]
+    instance.last_checks = [{"id": "check"}]
+    instance.death_save_outcomes = {"2": {"p": {"outcome": "stable"}}}
+    instance.economy["next_sequence"] = 7
+    instance.lorebook_timed_state = {"entry": {"sticky": 2}}
+    return instance
+
+
+def serialized_state(instance):
+    # to_dict exposes live module children; freeze the entire persisted aggregate.
+    return json.dumps(instance.to_dict(), sort_keys=True)
+
+
+def unsupported_lifecycle_instance(version, module="combat_extension"):
+    payload = lifecycle_instance().to_dict()
+    payload["modules"][module]["schema_version"] = version
+    return GameInstance.from_dict(json.loads(json.dumps(payload)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [99, None, "1"])
+@pytest.mark.parametrize("operation, args", [
+    ("rollback_last_round", ()),
+    ("abort_round_processing", ()),
+    ("finish_judgment", ("new response",)),
+    ("reset", (True,)),
+    ("reset", (False,)),
+])
+async def test_unknown_combat_lifecycle_rejection_preserves_entire_save(version, operation, args):
+    instance = unsupported_lifecycle_instance(version)
+    before = serialized_state(instance)
+    with pytest.raises(ModuleStateError, match="unsupported combat_extension module schema"):
+        await getattr(instance, operation)(*args)
+    assert serialized_state(instance) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [99, None, "1"])
+@pytest.mark.parametrize("keep_seed", [False, True])
+async def test_unknown_lorebook_reset_rejection_preserves_entire_save(version, keep_seed):
+    instance = unsupported_lifecycle_instance(version, "lorebook_runtime")
+    before = serialized_state(instance)
+    with pytest.raises(ModuleStateError, match="unsupported lorebook_runtime module schema"):
+        await instance.reset(keep_seed=keep_seed)
+    assert serialized_state(instance) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("version", [99, None, "1"])
+async def test_unknown_combat_empty_rollback_remains_a_noop(version):
+    instance = unsupported_lifecycle_instance(version)
+    instance.log.clear()
+    before = serialized_state(instance)
+    assert await instance.rollback_last_round() is None
+    assert serialized_state(instance) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [state for state in GameState if state != GameState.ACTIVE_JUDGMENT])
+async def test_unknown_combat_abort_outside_judgment_remains_a_noop(state):
+    instance = unsupported_lifecycle_instance(99)
+    instance.state = state
+    before = serialized_state(instance)
+    assert await instance.abort_round_processing() is False
+    assert serialized_state(instance) == before
+
+
+@pytest.mark.parametrize("snapshot", [None, [], {"schema_version": 99, "combat_extension": {}}])
+def test_unknown_combat_invalid_snapshot_restore_remains_a_noop(snapshot):
+    instance = unsupported_lifecycle_instance(99)
+    before = serialized_state(instance)
+    assert instance.restore_combat_extension_snapshot(snapshot) is False
+    assert serialized_state(instance) == before
+
+
 @pytest.mark.parametrize("json_roundtrip", [False, True])
 def test_roundtrip_projects_only_module_storage_and_clones_nested_data(json_roundtrip):
     instance = make_instance()
