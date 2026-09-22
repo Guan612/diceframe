@@ -48,12 +48,13 @@ def test_migration_moves_entire_ledger_verbatim_and_is_idempotent():
     original = deepcopy(source)
     migrated = migrate_game_state_payload(source)
     assert source == original
-    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION == 19
+    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
     assert "economy" not in migrated
     assert migrated["modules"]["economy"] == {"schema_version": 1, "state": original["economy"]}
     assert migrated["modules"]["other"] == original["modules"]["other"]
     assert migrate_game_state_payload(migrated) == migrated
     step = _migrate_v18_to_v19(deepcopy(source))
+    assert step["instance_schema_version"] == 19
     assert _migrate_v18_to_v19(deepcopy(step)) == step
 
 

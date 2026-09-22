@@ -5,10 +5,12 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULES = SRC / "engine" / "modules"
-MAX_TOP_LEVEL_FIELDS = 93
+MAX_TOP_LEVEL_FIELDS = 91
 
 CONTROL_WRITERS = {
     SRC / "engine" / "player_control.py",
@@ -16,6 +18,57 @@ CONTROL_WRITERS = {
     # This writes the creation response dict, not the instance's seat state.
     SRC / "webui" / "services" / "game_creation_phases.py",
 }
+
+
+# Direct property assignment ownership only: this does not police aliases,
+# subscript mutation, clear/pop, or generic setattr/aggregate replacement.
+COMBAT_WRITERS = {
+    SRC / "webui" / "services" / "combat_extension.py",
+    SRC / "engine" / "round_snapshots.py",
+    MODULES / "combat_extension_state.py",
+    SRC / "migrations" / "instance.py",
+    # Existing lifecycle owner replaces current and clears snapshots on reset.
+    SRC / "engine" / "instance_lifecycle.py",
+    # Existing rollback/abort owner clears current on invalid restoration.
+    SRC / "engine" / "round_recovery.py",
+    # Existing historical rewrite owner has the same fail-closed fallback.
+    SRC / "commands" / "swipe_generator.py",
+}
+
+
+def _combat_property_writes(path: Path, tree: ast.AST) -> list[int]:
+    if path in COMBAT_WRITERS:
+        return []
+    return [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.ctx, (ast.Store, ast.Del))
+        and node.attr in {"combat_extension", "combat_extension_round_snapshots"}
+    ]
+
+
+def test_only_combat_owners_assign_compatibility_properties() -> None:
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for line in _combat_property_writes(path, tree):
+            violations.append(f"{path.relative_to(ROOT)}:{line}: combat property write outside owner")
+    assert not violations, "\n".join(violations)
+
+
+@pytest.mark.parametrize("source", [
+    "other.combat_extension = {}",
+    "self.combat_extension_round_snapshots: dict = {}",
+    "other.combat_extension |= {}",
+    "other.combat_extension, (x, self.combat_extension_round_snapshots) = values",
+    "del other.combat_extension_round_snapshots",
+])
+def test_combat_guard_rejects_direct_writes_including_game_instance(source) -> None:
+    tree = ast.parse(source)
+    assert _combat_property_writes(SRC / "engine" / "game_instance.py", tree)
+    assert _combat_property_writes(SRC / "webui" / "routes" / "outsider.py", tree)
+    for owner in COMBAT_WRITERS:
+        assert not _combat_property_writes(owner, tree)
 
 
 def _runtime_nodes(node: ast.AST):

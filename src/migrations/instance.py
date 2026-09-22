@@ -23,7 +23,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 19
+CURRENT_INSTANCE_SCHEMA_VERSION = 20
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -392,6 +392,36 @@ def _migrate_v18_to_v19(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v19_to_v20(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move combat state into its module slot (R3), preserving existing slots.
+
+    The guide says:
+    "Both the live payload and the per-round snapshots are moved verbatim."
+    Departure: legacy snapshots retain the old codec's string-key and
+    dict-value filtering ONLY during this conversion. Current
+    v20 module contents stay opaque; existing slots, even unknown/empty ones,
+    win over stale legacy fields. Idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    current = payload.pop("combat_extension", None)
+    snapshots = payload.pop("combat_extension_round_snapshots", None)
+    if not isinstance(modules.get("combat_extension"), dict):
+        modules["combat_extension"] = {
+            "schema_version": 1,
+            "current": current if isinstance(current, dict) else {},
+            "round_snapshots": (
+                {str(key): dict(value) for key, value in snapshots.items() if isinstance(value, dict)}
+                if isinstance(snapshots, dict) else {}
+            ),
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 20
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -453,6 +483,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 18:
         payload = _migrate_v18_to_v19(payload)
         version = 19
+    if version == 19:
+        payload = _migrate_v19_to_v20(payload)
+        version = 20
     payload["instance_schema_version"] = version
     return payload
 
