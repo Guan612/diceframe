@@ -27,7 +27,6 @@ class GameStateCodec:
             "instance_schema_version": instance.instance_schema_version,
             "run_id": instance.run_id,
             "memory_namespace": instance.memory_namespace,
-            "economy": instance.economy,
             "game_key": list(instance.game_key),
             "world_id": instance.world_id,
             "rule_id": instance.rule_id,
@@ -134,7 +133,6 @@ class GameStateCodec:
             instance_schema_version=int(data.get("instance_schema_version", 11) or 11),
             run_id=str(data.get("run_id") or ""),
             memory_namespace=str(data.get("memory_namespace") or ""),
-            economy=data.get("economy") or {},
             world_id=data.get("world_id"),
             # Empty marks a pre-rule_id save. The WebUI service resolves it from
             # the world template on first read and persists the migrated value.

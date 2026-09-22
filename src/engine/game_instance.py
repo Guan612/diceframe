@@ -32,7 +32,7 @@ from src.engine.game_state_contracts import (
 )
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.module_state import ensure_module_states
-from src.engine.modules import lorebook_runtime, player_control_state
+from src.engine.modules import economy_state, lorebook_runtime, player_control_state
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.engine.player_control import (
     PlayerControlError,
@@ -121,7 +121,6 @@ class GameInstance:
     instance_schema_version: int = CURRENT_INSTANCE_SCHEMA_VERSION
     run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
     memory_namespace: str = ""
-    economy: dict[str, Any] = field(default_factory=dict)
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
     ruleset_runtime: dict[str, Any] = field(default_factory=dict)
@@ -323,35 +322,19 @@ class GameInstance:
         # 明确拒绝，绝不把用户数据猜成默认值。
         self.world_state = ensure_world_state(self.world_state)
         self.modules = ensure_module_states(self.modules)
+        economy_state.ensure_run_id(self)
         # 每个席位都带一个显式控制器（human / ai / unclaimed）：旧存档、内存构造
         # 与手工修改过的 players 都在这里补齐，读取方永远不必自己猜。唯一写入口
         # 仍是 src.engine.player_control.set_control。
         ensure_controls(self)
-        if not isinstance(self.economy, dict) or not self.economy:
-            self.economy = self._fresh_economy_state()
-        else:
-            self.economy.setdefault("schema_version", 2)
-            self.economy.setdefault("run_id", self.run_id)
-            self.economy.setdefault("next_sequence", 1)
-            self.economy.setdefault("proposals", [])
-            self.economy.setdefault("transactions", [])
-            self.economy.setdefault("idempotency_records", {})
-            self.economy.setdefault("effect_groups", [])
-            self.economy.setdefault("external_effects_outbox", [])
-            self.economy.setdefault("outcomes", [])
 
-    def _fresh_economy_state(self) -> dict[str, Any]:
-        return {
-            "schema_version": 2,
-            "run_id": self.run_id,
-            "next_sequence": 1,
-            "proposals": [],
-            "transactions": [],
-            "idempotency_records": {},
-            "effect_groups": [],
-            "external_effects_outbox": [],
-            "outcomes": [],
-        }
+    @property
+    def economy(self) -> dict[str, Any]:
+        return economy_state.state(self)
+
+    @economy.setter
+    def economy(self, value: Any) -> None:
+        economy_state.replace_state(self, value)
 
     @asynccontextmanager
     async def authoritative_write(self) -> AsyncIterator[bool]:
@@ -407,10 +390,12 @@ class GameInstance:
     def rotate_run_identity(self) -> tuple[str, str]:
         """Start an isolated run namespace and return ``(old, new)``."""
 
+        # Reject unsupported slots before changing either run identity.
+        economy_state.state(self)
         old = self.run_id
         self.run_id = f"run_{uuid4().hex}"
         self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
-        self.economy = self._fresh_economy_state()
+        self.economy = economy_state.fresh_economy_state(self.run_id)
         return old, self.run_id
 
     # ---------- 状态查询 ------------------------------------

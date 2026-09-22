@@ -109,7 +109,6 @@ class GamePersistedState(TypedDict, total=False):
     instance_schema_version: int
     run_id: str
     memory_namespace: str
-    economy: OpaqueState
     game_key: list[str]
     world_id: str | None
     rule_id: str

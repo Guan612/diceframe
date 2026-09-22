@@ -14,6 +14,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
 from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
+from src.engine.module_state import ModuleStateError
 from src.engine.modules.lorebook_runtime import fresh as fresh_lorebook_runtime, normalize_timers
 from src.engine.player_control import CONTROL_KEY, normalize_control
 from src.engine.player_control import normalize_away_control_policy
@@ -22,7 +23,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 18
+CURRENT_INSTANCE_SCHEMA_VERSION = 19
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -370,6 +371,27 @@ def _migrate_v17_to_v18(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v18_to_v19(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the economy ledger verbatim into ``modules.economy.state`` (R2).
+
+    The inner ledger schema and all records stay untouched. Existing slots,
+    including unknown schemas, take precedence; the step is idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    legacy = payload.pop("economy", None)
+    if not isinstance(modules.get("economy"), dict):
+        modules["economy"] = {
+            "schema_version": 1,
+            "state": legacy if isinstance(legacy, dict) else {},
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 19
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -428,6 +450,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 17:
         payload = _migrate_v17_to_v18(payload)
         version = 18
+    if version == 18:
+        payload = _migrate_v18_to_v19(payload)
+        version = 19
     payload["instance_schema_version"] = version
     return payload
 
@@ -449,7 +474,13 @@ def rebind_imported_game_state_payload(
     payload["game_key"] = list(game_key)
     payload["run_id"] = run_id
     payload["memory_namespace"] = f"{game_key!s}::run:{run_id}"
-    economy = payload.get("economy")
+    modules = payload.get("modules")
+    slot = modules.get("economy") if isinstance(modules, dict) else None
+    if isinstance(slot, dict) and slot.get("schema_version") != 1:
+        # Identity rebinding cannot safely interpret an unknown slot. Plain
+        # save/load still preserves it verbatim; importing as a new run rejects.
+        raise ModuleStateError(f"unsupported economy module schema: {slot.get('schema_version')!r}")
+    economy = slot.get("state") if isinstance(slot, dict) else None
     if isinstance(economy, dict):
         economy["run_id"] = run_id
         # External stores are not bundled with a save export. Pending
