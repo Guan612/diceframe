@@ -116,6 +116,7 @@ class GamePersistedState(TypedDict, total=False):
     ruleset_runtime: OpaqueState
     ruleset_state: OpaqueState
     adventure_binding: OpaqueState
+    adventure_progress: dict[str, Any]
     play_mode: str
     event_ledger: list[OpaqueState]
     scene_image: dict[str, str]
@@ -159,11 +160,12 @@ class GamePersistedState(TypedDict, total=False):
     max_players: int
     gm_uid: str
     player_access_open: bool
+    away_control_policy: str
     bot_bind_token: str
     room_password: str
     room_token: str
     pending_combat_results: list[OpaqueState]
-    lorebook_timed_state: dict[str, OpaqueState]
+    modules: dict[str, dict[str, Any]]
     quick_actions: list[str]
     health_events: list[OpaqueState]
     health_status: OpaqueState
