@@ -7,6 +7,38 @@ import {
 import type { MultiPeerConnectionSession } from '@/peer/session/MultiPeerConnectionSession'
 
 describe('peer host game bridge', () => {
+  it('L4 returns the bound actor detail fetched with delegated identity', async () => {
+    const current = { game_key: 'web|game|host', player_access_open: true, gm_style_override: { note: 'secret' } }
+    const projected = { game_key: 'web|game|host', gm_style_override: null, scene: 'player scene' }
+    const executor = vi.fn<PeerLocalApiExecutor>(async (path) => (
+      path === '/games/web%7Cgame%7Chost' ? current : projected
+    ))
+    const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined, {}, { peer_1: 'player_1' })
+    const result = await bridge.handle('peer_1', 'game.detail', {})
+    expect(executor.mock.calls.map(([path]) => path)).toEqual([
+      '/games/web%7Cgame%7Chost',
+      '/games/web%7Cgame%7Chost?user=player_1&share=1&delegate=1',
+    ])
+    expect(result).toEqual({ ...projected, has_room_password: false, peer_transport: true })
+  })
+
+  it('L4 returns only lobby fields for an unbound peer', async () => {
+    const lobby = {
+      game_key: 'web|game|host', player_access_open: true, player_count: 1, max_players: 6,
+      has_room_password: true, world_name: 'World', scene: 'Gate', rule_id: 'freeform',
+      solo_mode: false, multiplayer: { players: [] },
+    }
+    const executor = vi.fn<PeerLocalApiExecutor>(async () => ({
+      ...lobby, gm_style_override: { note: 'secret' }, economy_proposals: ['secret'],
+      plot_tracker: { secret: true }, future_private: 'hidden',
+    }))
+    const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined)
+    expect(await bridge.handle('peer_1', 'game.detail', {})).toEqual({
+      ...lobby, has_room_password: false, peer_transport: true,
+    })
+    expect(executor).toHaveBeenCalledTimes(1)
+  })
+
   it('resolves a roll for the bound actor and ignores forged target fields', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     const executor: PeerLocalApiExecutor = async (path, init) => {

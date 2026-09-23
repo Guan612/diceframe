@@ -29,6 +29,17 @@ const MUTATING_OPERATIONS = new Set<PeerGameOperation>([
 const MAX_REQUESTS_PER_MINUTE = 120
 const MAX_IN_FLIGHT_PER_PEER = 8
 
+const LOBBY_DETAIL_FIELDS = [
+  'game_key', 'player_access_open', 'player_count', 'max_players',
+  'has_room_password', 'world_name', 'scene', 'rule_id', 'solo_mode', 'multiplayer',
+] as const
+
+function lobbyDetail(current: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of LOBBY_DETAIL_FIELDS) if (key in current) out[key] = current[key]
+  return out
+}
+
 /**
  * 对端 payload 字段白名单：只放行各操作实际需要的字段，其余全部剥离。
  * 对端是其他玩家的浏览器，任意 JSON 直通本地 API 会造成越权注入
@@ -239,7 +250,8 @@ export class PeerHostGameBridge {
     )
 
     if (operation === 'game.detail') {
-      return { ...current, has_room_password: false, peer_transport: true }
+      const detail = actorId ? await read('') : lobbyDetail(current)
+      return { ...detail, has_room_password: false, peer_transport: true }
     }
     if (operation === 'game.characters') return read('/characters')
     if (operation === 'game.player_context') {
