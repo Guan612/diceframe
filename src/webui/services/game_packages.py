@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
+from src.engine.modules import media
+
 logger = logging.getLogger("trpg")
 
 GameKey = tuple[str, str, str]
@@ -91,16 +93,17 @@ class GamePackageService:
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             try:
                 state_data = json.loads(state_path.read_text(encoding="utf-8-sig"))
-                reference = state_data.get("scene_image")
+                container = media.payload_container(state_data)
+                reference = container.get("scene_image")
                 image_path = self._dependencies.resolve_scene_image_file(reference)
                 if image_path is not None and isinstance(reference, dict) and reference.get("kind") != "builtin":
                     archive.writestr("scene-image.asset", image_path.read_bytes())
-                    state_data["scene_image"] = {"kind": "save_asset", "path": "scene-image.asset"}
-                map_reference = state_data.get("map_background")
+                    container["scene_image"] = {"kind": "save_asset", "path": "scene-image.asset"}
+                map_reference = container.get("map_background")
                 map_image_path = self._dependencies.resolve_map_background_file(map_reference)
                 if map_image_path is not None:
                     archive.writestr("map-background.asset", map_image_path.read_bytes())
-                    state_data["map_background"] = {"kind": "save_asset", "path": "map-background.asset"}
+                    container["map_background"] = {"kind": "save_asset", "path": "map-background.asset"}
                 archive.writestr("state.json", json.dumps(state_data, ensure_ascii=False, indent=2))
                 chatlog = save_path.with_name("chatlog.jsonl")
                 if chatlog.exists():
