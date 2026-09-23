@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from src.commands.round_processor import RoundNotProcessed, RoundProcessingFailure
 from src.engine.action_gate import (
@@ -21,6 +21,7 @@ from src.engine.action_gate import (
     ROUND_PROCESSING,
     SOURCE_HUMAN,
     STRUCTURED_INTENT_REQUIRED,
+    StructuredIntentRequirement,
     GateRequest,
     evaluate,
 )
@@ -74,6 +75,13 @@ class RoundProcessingError(RuntimeError):
         self.rolled_back = rolled_back
 
 
+class AIPlayerActionFill(Protocol):
+    async def __call__(
+        self, instance: Any, /, *,
+        requires_structured_intent: StructuredIntentRequirement = False,
+    ) -> Any: ...
+
+
 @dataclass(frozen=True)
 class TurnDependencies:
     get_instance: Callable[[tuple[str, ...]], Any | None]
@@ -96,7 +104,7 @@ class TurnDependencies:
     resolve_reward: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
     # AI 托管席位补行动（src/commands/ai_player.py）：只在真人闸门满足之后、
     # 本轮推进之前调用一次。None 表示该运行时没有配置这条能力（行为不变）。
-    fill_ai_player_actions: Callable[[Any], Awaitable[Any]] | None = None
+    fill_ai_player_actions: AIPlayerActionFill | None = None
     # 权威战斗的即时接管（src/webui/services/ruleset_gameplay.py）：控制权变更
     # 之后立刻把该席位的确定性回合走完。None 表示该运行时没有这条能力。
     resume_authoritative_combat: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
@@ -294,8 +302,27 @@ async def _fill_ai_player_actions(
     # 进不去——没有活跃真人时 ``human_actions_ready()`` 恒为 False，正是要修的场景。
     if fill is None:
         return False
+    def requires_structured_intent() -> bool:
+        # Synchronous read-only admission query, evaluated before generation AND
+        # inside commit's authority/state locks. Do not capture combat/capabilities
+        # now: either may change while context/model generation is in flight.
+        rule = dependencies.load_rule_for_game(instance)
+        if rule is None:
+            # No rule is legacy narrative behavior only for an unbound instance.
+            return bool(instance.ruleset_runtime)
+        try:
+            runtime = dependencies.ruleset_registry.resolve(rule.template)
+        except ValueError:
+            return True  # Unknown/incompatible runtimes must not admit free text.
+        state = instance.ruleset_state
+        combat = state.get("combat") if isinstance(state, dict) else None
+        combat_active = isinstance(combat, dict) and combat.get("status") == "active"
+        return runtime.capabilities.authoritative_intents and (
+            not runtime.capabilities.narrative_turns or combat_active
+        )
+
     try:
-        records = await fill(instance)
+        records = await fill(instance, requires_structured_intent=requires_structured_intent)
     except Exception:
         logger.exception("AI 托管席位补行动失败，本轮继续: game=%s", game_key)
         return False
