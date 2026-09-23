@@ -66,6 +66,7 @@ from src.engine.economy import (
 from src.engine.economy import filter_unconfirmed_purchase_grants, has_pending_identical_purchase
 from src.engine import combat_narrative, progression
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
+from src.engine.module_state import ModuleStateError
 from src.engine.language import localized_text
 from src.engine.world_events import advance_world_time
 from src.engine.world.memory_projection import queue_world_memory
@@ -602,6 +603,7 @@ class RoundProcessor:
 
     async def _luck_timeout(self, game_key, check_id: str, timeout: int) -> None:
         """单条幸运检定的超时回调：到点按失败继续，若是最后一条则重新生成叙事。"""
+        unsupported_progression = False
         try:
             await asyncio.sleep(timeout)
             instance = self.registry.get(game_key)
@@ -627,11 +629,14 @@ class RoundProcessor:
                         "幸运超时后的推进失败，已回滚到行动阶段: game=%s rolled_back=%s",
                         game_key, exc.rolled_back,
                     )
+        except ModuleStateError:
+            unsupported_progression = True
+            logger.exception("幸运超时拒绝不支持的模块状态: %s check=%s", game_key, check_id)
         except Exception:
             logger.exception("幸运超时处理失败: %s check=%s", game_key, check_id)
         finally:
             inst = self.registry.get(game_key)
-            if inst is not None:
+            if inst is not None and not unsupported_progression:
                 inst._luck_timers.pop(check_id, None)
 
     async def _summarize_background(self, instance: GameInstance, gm_prompt: Any, round_number: int) -> None:

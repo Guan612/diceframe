@@ -899,6 +899,7 @@ class GameInstance:
         """
         async with self._lock:
             if self.state == GameState.ACTIVE_JUDGMENT:
+                progression.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)

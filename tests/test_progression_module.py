@@ -18,6 +18,8 @@ from src.engine import progression
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import progression_state
+from webapi_harness import web_api  # noqa: F401  # pytest fixture
+from tests.test_round_failure_recovery import _new_game
 from src.migrations.instance import (
     CURRENT_INSTANCE_SCHEMA_VERSION,
     _migrate_v20_to_v21,
@@ -227,6 +229,89 @@ async def test_aggregate_entry_preflight_protects_entire_snapshot(slot, operatio
             args = ("new narration",) if operation == "finish_judgment" else (("gm", "Look") if operation == "add_action" else ())
             await getattr(instance, operation)(*args)
     assert instance.to_dict() == before
+
+
+@pytest.mark.parametrize("slot", UNKNOWN_SLOTS)
+@pytest.mark.asyncio
+async def test_abort_unknown_progression_precedes_player_restore(slot):
+    instance = instance_with_state(slot)
+    instance.state = GameState.ACTIVE_JUDGMENT
+    before = frozen(instance)
+    with pytest.raises(ModuleStateError):
+        await instance.abort_round_processing()
+    assert frozen(instance) == before
+
+
+@pytest.mark.parametrize("slot", UNKNOWN_SLOTS)
+@pytest.mark.asyncio
+async def test_abort_outside_judgment_is_noop_for_unknown_progression(slot):
+    instance = instance_with_state(slot)
+    before = frozen(instance)
+    assert await instance.abort_round_processing() is False
+    assert frozen(instance) == before
+
+
+@pytest.mark.parametrize("slot", UNKNOWN_SLOTS)
+@pytest.mark.parametrize("entry", ["manual", "timeout", "force_decline"])
+@pytest.mark.asyncio
+async def test_saved_pending_luck_rejects_before_mutation(web_api, monkeypatch, slot, entry):
+    from src.webui.services import turns
+
+    drain = AsyncMock(side_effect=AssertionError("must not drain external effects"))
+    monkeypatch.setattr(turns, "_retry_external_economy_effects", drain)
+    api, _, registry, _, _ = web_api
+    key, instance, uid = await _new_game(api, registry)
+    sheet = instance.players[uid]["character_sheet"]
+    sheet["luck"] = 50
+    sheet.setdefault("resources", {})["luck"] = {"current": 50, "max": 50}
+    await instance.add_action(uid, "Look around")
+    await instance.try_advance()
+    instance.round_checks_prepared = True
+    instance.last_checks = [{
+        "check_id": "progression-luck", "actor_uid": uid, "dice": "d100",
+        "roll": 55, "threshold": 50, "verdict": "失败",
+        "luck_decision": "pending", "luck_spend_available": True,
+    }]
+    instance.modules["progression"] = deepcopy(slot)
+    await registry.save(instance)
+    instance = await registry.load(instance.game_key)
+    before = frozen(instance)
+    save_path = registry.save_package_state_path(instance.game_key)
+    disk_before = save_path.read_bytes()
+
+    if entry == "manual":
+        with pytest.raises(ModuleStateError):
+            await api.resolve_luck_and_continue(key, "progression-luck", uid, True)
+    elif entry == "timeout":
+        timer = Mock()
+        instance._luck_timers["progression-luck"] = timer
+        await api._handler._round_processor._luck_timeout(instance.game_key, "progression-luck", 0)
+        assert instance._luck_timers["progression-luck"] is timer
+        timer.cancel.assert_not_called()
+    else:
+        with pytest.raises(ModuleStateError):
+            await api.decline_pending_luck(key)
+
+    drain.assert_not_called()
+    assert frozen(instance) == before
+    assert save_path.read_bytes() == disk_before
+    assert frozen(await registry.load(instance.game_key)) == before
+
+
+@pytest.mark.parametrize("slot", UNKNOWN_SLOTS)
+@pytest.mark.asyncio
+async def test_luck_noops_keep_existing_result_for_unknown_progression(slot):
+    instance = instance_with_state(slot)
+    instance.state = GameState.ACTIVE_JUDGMENT
+    instance.round_checks_prepared = True
+    instance.last_checks = [{"check_id": "done", "actor_uid": "gm", "luck_decision": "declined"}]
+    before = frozen(instance)
+    assert (await instance.resolve_luck_decision("missing", "gm", False))["code"] == "CHECK_NOT_FOUND"
+    assert (await instance.resolve_luck_decision("done", "gm", False))["already_resolved"] is True
+    assert (await instance.system_decline_luck("missing"))["code"] == "CHECK_NOT_FOUND"
+    assert (await instance.system_decline_luck("done"))["code"] == "LUCK_ALREADY_RESOLVED"
+    assert await instance.decline_pending_luck() == []
+    assert frozen(instance) == before
 
 
 @pytest.mark.parametrize("slot", UNKNOWN_SLOTS)
