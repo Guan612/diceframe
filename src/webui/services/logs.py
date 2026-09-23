@@ -10,6 +10,12 @@ from src.llm.parser import sanitize_narration
 
 GameKey = tuple[str, ...]
 
+PUBLIC_LOG_FIELDS = frozenset({
+    "round", "actions", "player_actions", "gm_response", "state_changes",
+    "check_results", "swipes", "current_swipe", "timestamp",
+    "story_recaps", "scene_image",
+})
+
 
 class LogRegistry(Protocol):
     def get(self, game_key: GameKey) -> Any | None: ...
@@ -57,6 +63,10 @@ def get_log(
                     and str(action.get("text") or "").lstrip().startswith(("【GM指令】", "[GM Directive]"))
                 )
             ]
+        page_items = [
+            {key: value for key, value in entry.items() if key in PUBLIC_LOG_FIELDS}
+            for entry in page_items
+        ]
     return {
         "log": page_items,
         "total": total,
