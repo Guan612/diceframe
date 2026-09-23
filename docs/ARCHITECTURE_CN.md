@@ -1903,7 +1903,9 @@ R4-b b3 **决定：不加经济 gate**。`try_advance` 已在推进边界阻止�
 
 R4-b2 决定实施可选真人 run guard：`turns.submit_action(..., expected_run_id: str = "")`；省略与空字符串完全保留旧路径，WebAPI 原有 `**kwargs` 委托即可转发，route / client 暂不传。非空时的刻意新顺序是：游戏 / runtime → 成员 / 控制权 / 结构化意图 / 死亡 → run → authority 准入与 run 复核 → outbox retry → run 复核 → 经济 / 阶段 → 行动上限 / 恢复 / 入队。因此原先的前置权限与错误优先级保留，stale 优先于 retry、经济、阶段和行动上限；stale 响应为 `{"ok": false, "error_code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}`，HTTP 409，不投影成员、行动或经济数据。
 
-只有带非空 token 的提交持有现有、task-reentrant `authoritative_write`，覆盖 retry、恢复、入队、保存及后续推进；等待 authority 后同时核对 run 和 registry 对象 identity，防止旧对象在 reset/restart replacement 后仍保留相同 run_id。`start_round`、`resume`、`add_action` 的新增可选 `expected_run_id` 在各自状态锁内委托共享检查；`add_action` 保留 bool 契约，stale 返回 False。服务在 await 返回后复核，过期时不继续恢复、入队或保存。无 token 时不新增 authority 范围，也不向既有调用方传新关键字。
+只有带非空 token 的提交持有现有、task-reentrant `authoritative_write`，覆盖 retry、恢复、入队、保存及后续推进；等待 authority 后同时核对 run 和 registry 对象 identity，防止旧对象在 reset/restart replacement 后仍保留相同 run_id。`start_round`、`resume`、`add_action` 的新增可选 `expected_run_id` 在各自状态锁内委托共享检查；`add_action` 保留 bool 契约，stale 返回 False。服务在 await 返回后复核，过期时不继续恢复、入队或保存；推进 helper 在 AI 补行动、`try_advance`、检定准备及处理返回后也复核，禁止过期结果继续下一步或自动结算奖励，奖励循环每次结算前复核。注入 processor 抛错且 run 已变时，不对新 run 执行兜底回滚 / 保存。无 token 时不新增 authority 范围，也不向既有调用方传新关键字。
+
+生产 `GameHandler.process_round` → `RoundProcessor.process_round` 直接 await，沿用提交任务；AI 填充也是逐席位直接 await，aggregate commit 在同任务重入 authority。processor 获取 process → state 锁，不创建并等待一个需要重新获取 authority 的子任务；摘要、场景图与幸运计时任务只后台调度，不在持有 authority 时等待其完成。自定义适配器不得持有父任务 authority 又等待一个需要 authority 的子任务；task-reentrant 不代表子任务继承锁。
 
 保证范围是现有遵守 authority gate 的生产 reset/restart/rewrite：它们不能在带 token 的提交中途换 run。持锁时间包含 outbox、AI 和叙事等待，可能延后同局其他 authority writer。低层 `rotate_run_identity()` / `reset()` 本身并非统一 authority transaction；状态锁内的 guard 与 await 后复核能拒绝提交继续写入，但不能回滚任意注入 callback 内已经发生的外部投递或写入，也不承诺对绕过 authority 的任意并发 mutator 提供全局事务隔离。统一这些低层生命周期及所有 callback 的事务契约不在 b2 范围内；不把本次 run guard 宣称为全引擎原子事务。AI b1 与结构化意图 b4 策略未变。
 

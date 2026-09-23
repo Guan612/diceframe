@@ -348,6 +348,7 @@ async def _process_round(
     game_key: str,
     on_delta: NarrationDelta | None,
     on_reset: NarrationReset | None,
+    run_changed: Callable[[], bool] | None = None,
 ) -> tuple[str, Any]:
     if dependencies.process_round is None:
         raise RuntimeError("round processor is not available")
@@ -371,6 +372,8 @@ async def _process_round(
             rolled_back=exc.rolled_back,
         ) from exc
     except Exception as exc:
+        if run_changed is not None and run_changed():
+            raise RoundProcessingError(_gate_rejection(instance, "", RUN_CHANGED)) from exc
         # 兜底：process_round 依赖本身抛错（例如非 RoundProcessor 的实现）。
         logger.exception("回合处理失败: game=%s，尝试回滚到行动阶段", game_key)
         rolled_back = await _rollback_failed_round(
@@ -380,7 +383,9 @@ async def _process_round(
             _round_failure_result(instance, rolled_back=rolled_back),
             rolled_back=rolled_back,
         ) from exc
-    await _auto_settle_rewards(dependencies, instance, game_key)
+    if run_changed is not None and run_changed():
+        raise RoundProcessingError(_gate_rejection(instance, "", RUN_CHANGED))
+    await _auto_settle_rewards(dependencies, instance, game_key, run_changed=run_changed)
     return narration, response
 
 
@@ -499,6 +504,8 @@ async def _auto_settle_rewards(
     dependencies: TurnDependencies,
     instance: "GameInstance",
     game_key: str,
+    *,
+    run_changed: Callable[[], bool] | None = None,
 ) -> None:
     """Auto-settle qualifying narrative reward proposals after a round.
 
@@ -527,6 +534,8 @@ async def _auto_settle_rewards(
     economy = getattr(instance, "economy", {})
     proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
     for proposal in list(proposals):
+        if run_changed is not None and run_changed():
+            return
         if not is_auto_settleable_reward(instance, proposal, gold_cap=gold_cap):
             continue
         proposal_id = str(proposal.get("id") or "")
@@ -573,6 +582,7 @@ async def _advance_progression(
     on_delta: NarrationDelta | None = None,
     on_reset: NarrationReset | None = None,
     roll_payload: dict[str, Any] | None = None,
+    run_changed: Callable[[], bool] | None = None,
 ) -> TurnResult | None:
     """本局唯一的"让 AI 补行动并推进本轮"边界；未推进时返回 ``None``。
 
@@ -587,22 +597,32 @@ async def _advance_progression(
         dependencies, instance, game_key=game_key,
     )
 
-    if not await instance.try_advance():
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
+    advanced = await instance.try_advance()
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
+    if not advanced:
         if wrote_ai_actions:
             # 补了行动但本轮没有推进（例如还有待确认的经济提案）：必须现在落盘，
             # 否则会出现"控制权已保存、AI 行动却只在内存里"的状态。
             await dependencies.save_instance(instance)
         return None
     await _prepare_checks(dependencies, instance)
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
     if instance.pending_luck_checks():
         await dependencies.save_instance(instance)
         return _result(_pending_luck_payload(instance, roll=roll_payload))
     try:
         narration, _ = await _process_round(
             dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
+            run_changed=run_changed,
         )
     except RoundProcessingError as exc:
         return exc.result
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
     payload = _round_payload(
         instance,
         narration,
@@ -841,6 +861,7 @@ async def submit_action(
             dependencies, instance, game_key=game_key, viewer_uid=actor_uid,
             include_recap=True, on_delta=on_delta, on_reset=on_reset,
             roll_payload=roll_payload,
+            run_changed=run_changed if expected_run_id else None,
         )
         if run_changed():
             return _gate_rejection(instance, actor_uid, RUN_CHANGED)
