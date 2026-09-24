@@ -843,6 +843,8 @@ class GameInstance:
         the rollback assignment here preserves the aggregate write boundary
         while allowing ruleset orchestration to remain transaction-aware.
         """
+        if "last_activity" in snapshot:
+            session_stats.require_writable(self)
         if "round_number" in snapshot:
             progression.require_writable(self)
             restored_round = int(snapshot["round_number"])
@@ -922,6 +924,7 @@ class GameInstance:
             target = next((entry for entry in self.log if entry is target_entry), None)
             if target is None:
                 return False
+            session_stats.require_writable(self)
             recaps = target.get("story_recaps")
             if not isinstance(recaps, list):
                 recaps = []
@@ -1029,6 +1032,7 @@ class GameInstance:
         ]
 
     def record_llm_usage(self, tokens: int = 0, *, calls: int = 1) -> None:
+        session_stats.require_writable(self)
         session_stats.record_llm_usage(self, tokens, calls=calls)
 
     def record_combat_result(self, result: dict) -> None:
@@ -1097,6 +1101,7 @@ class GameInstance:
             if self.log:
                 # Reject before history or snapshots can be changed.
                 progression.require_writable(self)
+                session_stats.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.rollback_last_round_locked(self)
@@ -1119,6 +1124,7 @@ class GameInstance:
         async with self._lock:
             if self.state == GameState.ACTIVE_JUDGMENT:
                 progression.require_writable(self)
+                session_stats.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
@@ -1280,6 +1286,7 @@ class GameInstance:
             ):
                 return
             progression.require_writable(self)
+            session_stats.require_writable(self)
             economy_state.state(self)
             turn_state.start_round_locked(self)
 
@@ -1339,6 +1346,7 @@ class GameInstance:
         实现见 ``turn_state.add_action_locked``。
         """
         progression.require_writable(self)
+        session_stats.require_writable(self)
         return turn_state.add_action_locked(
             self, user_id, action_text,
             selected_attribute=selected_attribute,
@@ -1603,6 +1611,7 @@ class GameInstance:
         """
         async with self._lock:
             progression.require_writable(self)
+            session_stats.require_writable(self)
             economy_state.state(self)
             round_recovery.finish_judgment_locked(
                 self,
@@ -1621,6 +1630,7 @@ class GameInstance:
     ) -> None:
         """为已有轮次添加 swipe（不推进回合）。"""
         async with self._lock:
+            session_stats.require_writable(self)
             economy_state.state(self)
             round_recovery.finish_judgment_with_swipe_locked(
                 self, gm_response, original_round, state_changes=state_changes,
@@ -1636,6 +1646,7 @@ class GameInstance:
     async def activate(self) -> None:
         async with self._lock:
             progression.require_writable(self)
+            session_stats.require_writable(self)
             instance_lifecycle.activate_locked(self)
 
     async def pause(self) -> None:
@@ -1664,6 +1675,7 @@ class GameInstance:
         async with self._lock:
             # Validate fallible slots before rotating the run or clearing state.
             progression.require_writable(self)
+            session_stats.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)

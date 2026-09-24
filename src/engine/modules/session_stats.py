@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from src.engine.module_state import ModuleStateSpec, get_module_state, register_module_state
+from src.engine.module_state import (
+    ModuleStateError, ModuleStateSpec, get_module_state, register_module_state,
+)
 
 MODULE_NAME = "session_stats"
 SCHEMA_VERSION = 1
@@ -34,6 +36,18 @@ def ensure(raw: Any) -> dict[str, Any]:
         if not isinstance(raw.get(key), str):
             raw[key] = ""
     return raw
+
+
+def require_writable(instance: Any) -> None:
+    """Read-only transaction preflight; never repair or materialize a slot."""
+    modules = getattr(instance, "modules", None)
+    if not isinstance(modules, dict):
+        raise ModuleStateError("instance has no module state container")
+    slot = modules.get(MODULE_NAME)
+    if not isinstance(slot, dict):
+        return  # Missing/corrupt slots have the documented fresh default.
+    if slot.get("schema_version") != SCHEMA_VERSION:
+        raise ModuleStateError(f"unsupported session_stats module schema: {slot.get('schema_version')!r}")
 
 
 def total_llm_calls(instance: Any) -> int:

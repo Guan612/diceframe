@@ -49,6 +49,9 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     """
     if not instance.log:
         return None
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     last = instance.log.pop()
     from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
 
@@ -103,8 +106,6 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     instance.round_start_snapshot.clear()
     instance.round_entity_snapshot.clear()
     instance.state = GameState.ACTIVE_ACTION
-    from src.engine.modules import session_stats
-
     session_stats.touch(instance)
     return instance.round_number
 
@@ -120,6 +121,9 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     """
     if instance.state != GameState.ACTIVE_JUDGMENT:
         return False
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     restored = False
     if instance.round_start_snapshot:
         restore_players(instance, instance.round_start_snapshot)
@@ -143,8 +147,6 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     instance.round_start_snapshot.clear()
     instance.round_entity_snapshot.clear()
     instance.state = GameState.ACTIVE_ACTION
-    from src.engine.modules import session_stats
-
     session_stats.touch(instance)
     return True
 
@@ -164,6 +166,9 @@ def finish_judgment_locked(
     GameInstance wrapper 先校验推进与经济模块，再在同一段状态锁内依次
     调用本函数和 ``start_round_locked``，使日志提交与下一轮开启不可交错。
     """
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     pending_combat_summaries: list[str] = []
     raw_schema = (
         instance.combat_extension.get("schema_version")
@@ -223,8 +228,6 @@ def finish_judgment_locked(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     instance.combat_extension_round_snapshots.pop(str(instance.round_number), None)
-    from src.engine.modules import session_stats
-
     session_stats.record_llm_usage(instance, 0, calls=1)
     session_stats.touch(instance)
 
@@ -236,6 +239,9 @@ def finish_judgment_with_swipe_locked(
     state_changes: list[str] | None = None,
 ) -> None:
     """为已有轮次添加 swipe 的持锁 detail（不推进回合）。"""
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     for entry in instance.log:
         if entry.get("round") == original_round:
             swipes = entry.setdefault("swipes", [])
@@ -247,8 +253,6 @@ def finish_judgment_with_swipe_locked(
             if state_changes is not None:
                 entry["state_changes"] = list(state_changes)
             break
-    from src.engine.modules import session_stats
-
     session_stats.record_llm_usage(instance, 0, calls=1)
     session_stats.touch(instance)
 

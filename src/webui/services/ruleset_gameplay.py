@@ -463,6 +463,7 @@ async def submit_intent(
         if admission_error:
             return admission_error
         progression.require_writable(instance)
+        session_stats.require_writable(instance)
         binding_error = await _ensure_compatible_adventure_binding(
             dependencies, runtime, instance,
         )
@@ -578,6 +579,7 @@ async def resume_authoritative_combat(
                 "error_code": code, "error": "回合正在处理中，请稍后重试",
             }
         progression.require_writable(instance)
+        session_stats.require_writable(instance)
         binding_error = await _ensure_compatible_adventure_binding(
             dependencies, runtime, instance,
         )

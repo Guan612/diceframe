@@ -75,6 +75,7 @@ class ManualRollService:
         for old in inst.manual_roll_requests:
             if old.get("operation_id")==op:
                 return {"ok":True,"request":old,"idempotent":True}
+        session_stats.require_writable(inst)
         req={"id":f"mr_{uuid4().hex}","operation_id":op,"run_id":inst.run_id,"round_number":inst.round_number,"created_by":uid,"created_at":_now(),"label":str(body.get("label") or "")[:200],"formula":formula,"purpose":purpose,"target":target,"comparison":comparison,"include_in_ai_context":self._include_in_ai_context(purpose,body.get("include_in_ai_context")),"visibility":"private" if body.get("visibility")=="private" else "party","target_uids":targets,"target_names":{u:inst.players[u].get("character_name") or u for u in targets},"status":"pending","results":{}}
         inst.manual_roll_requests.append(req); session_stats.touch(inst); await self.d.save_instance(inst)
         return {"ok":True,"request":req}
@@ -86,6 +87,7 @@ class ManualRollService:
         target=str(body.get("target_uid") or uid)
         if target not in req.get("target_uids",[]) or (uid!=target and uid!=inst.gm_uid): return {"ok":False,"error":"无权投掷"}
         if target in req["results"]: return {"ok":True,"result":req["results"][target],"idempotent":True}
+        session_stats.require_writable(inst)
         result=roll(req["formula"]); value={"formula":result.formula,"rolls":result.rolls,"modifier":result.modifier,"total":result.total,"natural":result.natural,"rolled_by":uid,"rolled_at":_now()}
         if req.get("purpose") == "check" and req.get("target") is not None:
             value["target"] = int(req["target"])
@@ -109,4 +111,5 @@ class ManualRollService:
         if not inst or uid!=getattr(inst,"gm_uid",None): return {"ok":False,"error":"GM only"}
         req=next((r for r in inst.manual_roll_requests if r.get("id")==rid),None)
         if not req or req.get("run_id")!=body.get("run_id"): return {"ok":False,"error":"请求不存在或已过期"}
+        session_stats.require_writable(inst)
         req["status"]="cancelled"; req["cancel_reason"]=str(body.get("reason") or "")[:200]; session_stats.touch(inst); await self.d.save_instance(inst); return {"ok":True,"request":req}
