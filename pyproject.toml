@@ -25,7 +25,6 @@ follow_imports = "skip"
 check_untyped_defs = true
 files = [
     "scripts/architecture_fitness.py",
-    "src/engine/action_gate.py",
     "src/engine/contracts.py",
     "src/engine/currency/codec.py",
     "src/engine/currency/migration.py",
@@ -37,12 +36,6 @@ files = [
     "src/engine/game_state_contracts.py",
     "src/engine/legacy_game_projection.py",
     "src/engine/luck_resolver.py",
-    "src/engine/module_state.py",
-    "src/engine/modules/__init__.py",
-    "src/engine/modules/combat_extension_state.py",
-    "src/engine/modules/economy_state.py",
-    "src/engine/modules/lorebook_runtime.py",
-    "src/engine/modules/player_control_state.py",
     "src/engine/persistence.py",
     "src/migrations/instance.py",
     "src/lorebook/retrieval.py",

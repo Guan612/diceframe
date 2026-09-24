@@ -42,17 +42,6 @@ PROPOSAL_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
-def era_key(instance: Any) -> int:
-    """The settlement era for a new proposal, transaction or effect.
-
-    Today an era is exactly one narrative round (ADR-0003). This is the
-    single seam for Track R5's future progression model; persisted keys and
-    whole-round rollback semantics remain unchanged.
-    """
-
-    return int(getattr(instance, "round_number", 0) or 0)
-
-
 def proposal_transition_allowed(current_status: Any, next_status: str) -> bool:
     return next_status in PROPOSAL_TRANSITIONS.get(str(current_status or "pending"), frozenset())
 
@@ -91,11 +80,11 @@ def _record_outcome(
         ),
         "actor_uid": str(actor_uid),
         "visibility": str(proposal.get("visibility") or "private"),
-        "round": int(proposal.get("round", era_key(instance)) or 0),
+        "round": int(proposal.get("round", getattr(instance, "round_number", 0)) or 0),
         # Keep proposal origin round separate from the round in which this
         # decision was actually settled.  Rollback uses this field to remove
         # late-payment outcomes without invalidating the original offer.
-        "resolved_round": era_key(instance),
+        "resolved_round": int(getattr(instance, "round_number", 0) or 0),
         "resolved_at": str(proposal.get("resolved_at") or datetime.now(timezone.utc).isoformat()),
     }
     outcomes = instance.economy.setdefault("outcomes", [])
@@ -144,7 +133,7 @@ def queue_effect_group(
         "proposal_ids": [str(proposal.get("id") or "") for proposal in candidates],
         "effects": deepcopy(effects),
         "status": "pending",
-        "round": era_key(instance),
+        "round": int(getattr(instance, "round_number", 0) or 0),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     groups = instance.economy.setdefault("effect_groups", [])
@@ -643,7 +632,7 @@ def queue_proposal(
         "approvals": {},
         "visibility": visibility if visibility in {"private", "party"} else "private",
         "status": "pending",
-        "round": era_key(instance),
+        "round": int(getattr(instance, "round_number", 0) or 0),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     economy.setdefault("proposals", []).append(proposal)
@@ -1047,7 +1036,7 @@ def resolve_proposal(
         "actor_uid": actor_uid,
         "entries": entries,
         "status": "committed",
-        "round": era_key(instance),
+        "round": int(getattr(instance, "round_number", 0) or 0),
         "committed_at": now,
     }
     if reward_snapshots:

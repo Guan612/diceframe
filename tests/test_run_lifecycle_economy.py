@@ -288,12 +288,12 @@ def test_save_migration_assigns_stable_run_and_drops_legacy_pending_payments() -
 
     assert first == second
     assert first["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
-    assert first["modules"]["economy"]["state"]["external_effects_outbox"] == []
+    assert first["economy"]["external_effects_outbox"] == []
     assert first["run_id"].startswith("run_")
     assert first["memory_namespace"] == "('web', 'legacy', 'bot')"
     # schema 6+ drops legacy pending payments instead of guessing them
     # into the proposal model (attribution was not authoritative).
-    assert first["modules"]["economy"]["state"]["proposals"] == []
+    assert first["economy"]["proposals"] == []
 
 
 def test_narrative_reward_requires_gm_and_commits_once() -> None:

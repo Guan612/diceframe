@@ -29,8 +29,6 @@ def test_combat_extension_round_trips_through_save() -> None:
 
 def test_legacy_save_without_field_defaults_to_empty() -> None:
     payload = GameInstance(game_key=("web", "wuxia", "bot")).to_dict()
-    payload["instance_schema_version"] = 19
-    payload["modules"].pop("combat_extension")
     payload.pop("combat_extension", None)
     recovered = GameInstance.from_dict(payload)
     assert recovered.combat_extension == {}
@@ -38,7 +36,7 @@ def test_legacy_save_without_field_defaults_to_empty() -> None:
 
 def test_invalid_payload_shapes_fail_closed_to_empty() -> None:
     payload = GameInstance(game_key=("web", "wuxia", "bot")).to_dict()
-    payload["modules"]["combat_extension"]["current"] = "threshold"
+    payload["combat_extension"] = "threshold"
     recovered = GameInstance.from_dict(payload)
     assert recovered.combat_extension == {}
 

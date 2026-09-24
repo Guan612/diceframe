@@ -14,8 +14,6 @@ from uuid import NAMESPACE_URL, uuid5
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
 from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
-from src.engine.module_state import ModuleStateError
-from src.engine.modules.lorebook_runtime import fresh as fresh_lorebook_runtime, normalize_timers
 from src.engine.player_control import CONTROL_KEY, normalize_control
 from src.engine.player_control import normalize_away_control_policy
 from src.engine.world_state import fresh_world_state
@@ -23,7 +21,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 20
+CURRENT_INSTANCE_SCHEMA_VERSION = 16
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -328,100 +326,6 @@ def _migrate_v15_to_v16(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _migrate_v16_to_v17(payload: dict[str, Any]) -> dict[str, Any]:
-    """Move Lorebook runtime timers into a versioned module slot (Track R0).
-
-    Legacy single-counter and independent-counter timers share the domain's
-    normalizer. Existing slots, including unknown module schemas, are kept
-    verbatim; removing the old top-level key makes this step idempotent.
-    """
-
-    modules = payload.get("modules")
-    if not isinstance(modules, dict):
-        modules = {}
-    legacy = payload.pop("lorebook_timed_state", None)
-    if not isinstance(modules.get("lorebook_runtime"), dict):
-        slot = fresh_lorebook_runtime()
-        slot["timers"] = normalize_timers(legacy)
-        modules["lorebook_runtime"] = slot
-    payload["modules"] = modules
-    payload["instance_schema_version"] = 17
-    return payload
-
-
-def _migrate_v17_to_v18(payload: dict[str, Any]) -> dict[str, Any]:
-    """Move the room away policy into ``modules.player_control`` (Track R1).
-
-    Normalize the legacy setting with the v14-to-v15 rule: missing or invalid
-    values stay ``pause``, so no seat is silently handed to the AI. Existing
-    slots are kept verbatim, including unknown module schemas. Idempotent.
-    """
-
-    modules = payload.get("modules")
-    if not isinstance(modules, dict):
-        modules = {}
-    legacy = payload.pop("away_control_policy", None)
-    if not isinstance(modules.get("player_control"), dict):
-        modules["player_control"] = {
-            "schema_version": 1,
-            "away_control_policy": normalize_away_control_policy(legacy),
-        }
-    payload["modules"] = modules
-    payload["instance_schema_version"] = 18
-    return payload
-
-
-def _migrate_v18_to_v19(payload: dict[str, Any]) -> dict[str, Any]:
-    """Move the economy ledger verbatim into ``modules.economy.state`` (R2).
-
-    The inner ledger schema and all records stay untouched. Existing slots,
-    including unknown schemas, take precedence; the step is idempotent.
-    """
-
-    modules = payload.get("modules")
-    if not isinstance(modules, dict):
-        modules = {}
-    legacy = payload.pop("economy", None)
-    if not isinstance(modules.get("economy"), dict):
-        modules["economy"] = {
-            "schema_version": 1,
-            "state": legacy if isinstance(legacy, dict) else {},
-        }
-    payload["modules"] = modules
-    payload["instance_schema_version"] = 19
-    return payload
-
-
-def _migrate_v19_to_v20(payload: dict[str, Any]) -> dict[str, Any]:
-    """Move combat state into its module slot (R3), preserving existing slots.
-
-    The guide says:
-    "Both the live payload and the per-round snapshots are moved verbatim."
-    Departure: legacy snapshots retain the old codec's string-key and
-    dict-value filtering ONLY during this conversion. Current
-    v20 module contents stay opaque; existing slots, even unknown/empty ones,
-    win over stale legacy fields. Idempotent.
-    """
-
-    modules = payload.get("modules")
-    if not isinstance(modules, dict):
-        modules = {}
-    current = payload.pop("combat_extension", None)
-    snapshots = payload.pop("combat_extension_round_snapshots", None)
-    if not isinstance(modules.get("combat_extension"), dict):
-        modules["combat_extension"] = {
-            "schema_version": 1,
-            "current": current if isinstance(current, dict) else {},
-            "round_snapshots": (
-                {str(key): dict(value) for key, value in snapshots.items() if isinstance(value, dict)}
-                if isinstance(snapshots, dict) else {}
-            ),
-        }
-    payload["modules"] = modules
-    payload["instance_schema_version"] = 20
-    return payload
-
-
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -474,18 +378,6 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 15:
         payload = _migrate_v15_to_v16(payload)
         version = 16
-    if version == 16:
-        payload = _migrate_v16_to_v17(payload)
-        version = 17
-    if version == 17:
-        payload = _migrate_v17_to_v18(payload)
-        version = 18
-    if version == 18:
-        payload = _migrate_v18_to_v19(payload)
-        version = 19
-    if version == 19:
-        payload = _migrate_v19_to_v20(payload)
-        version = 20
     payload["instance_schema_version"] = version
     return payload
 
@@ -507,13 +399,7 @@ def rebind_imported_game_state_payload(
     payload["game_key"] = list(game_key)
     payload["run_id"] = run_id
     payload["memory_namespace"] = f"{game_key!s}::run:{run_id}"
-    modules = payload.get("modules")
-    slot = modules.get("economy") if isinstance(modules, dict) else None
-    if isinstance(slot, dict) and slot.get("schema_version") != 1:
-        # Identity rebinding cannot safely interpret an unknown slot. Plain
-        # save/load still preserves it verbatim; importing as a new run rejects.
-        raise ModuleStateError(f"unsupported economy module schema: {slot.get('schema_version')!r}")
-    economy = slot.get("state") if isinstance(slot, dict) else None
+    economy = payload.get("economy")
     if isinstance(economy, dict):
         economy["run_id"] = run_id
         # External stores are not bundled with a save export. Pending

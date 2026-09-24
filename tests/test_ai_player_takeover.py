@@ -171,8 +171,8 @@ class TakeoverFixture:
         self.llm = llm
         self.save = save
 
-        async def fill(target: GameInstance, **kwargs: Any) -> list[dict[str, Any]]:
-            return await fill_ai_player_actions(target, llm_client=llm, **kwargs)
+        async def fill(target: GameInstance) -> list[dict[str, Any]]:
+            return await fill_ai_player_actions(target, llm_client=llm)
 
         async def process_round(_instance: GameInstance, **_kwargs: Any) -> tuple[str, Any]:
             # 真实 RoundProcessor 在提交点落盘；替身必须保留这个契约，

@@ -109,13 +109,13 @@ class GamePersistedState(TypedDict, total=False):
     instance_schema_version: int
     run_id: str
     memory_namespace: str
+    economy: OpaqueState
     game_key: list[str]
     world_id: str | None
     rule_id: str
     ruleset_runtime: OpaqueState
     ruleset_state: OpaqueState
     adventure_binding: OpaqueState
-    adventure_progress: dict[str, Any]
     play_mode: str
     event_ledger: list[OpaqueState]
     scene_image: dict[str, str]
@@ -153,6 +153,8 @@ class GamePersistedState(TypedDict, total=False):
     language: str
     luck_timeout_seconds: int
     economy_reward_policy: OpaqueState
+    combat_extension: OpaqueState
+    combat_extension_round_snapshots: dict[str, OpaqueState]
     entry_point: str
     max_players: int
     gm_uid: str
@@ -161,7 +163,7 @@ class GamePersistedState(TypedDict, total=False):
     room_password: str
     room_token: str
     pending_combat_results: list[OpaqueState]
-    modules: dict[str, dict[str, Any]]
+    lorebook_timed_state: dict[str, OpaqueState]
     quick_actions: list[str]
     health_events: list[OpaqueState]
     health_status: OpaqueState
