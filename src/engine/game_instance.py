@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from src.engine import instance_lifecycle, round_recovery, round_snapshots, turn_state
-from src.engine.action_gate import AI_SEAT_COMMIT_POLICY, GateRequest, SOURCE_AI_SEAT, evaluate
+from src.engine.action_gate import (
+    AI_SEAT_COMMIT_POLICY, GateRequest, SOURCE_AI_SEAT, StructuredIntentRequirement, evaluate,
+)
 from src.engine.contracts import (
     ActionRecord,
     CheckResult,
@@ -1119,6 +1121,7 @@ class GameInstance:
         expected_round_number: int,
         expected_control_revision: int,
         action_metadata: dict | None = None,
+        requires_structured_intent: StructuredIntentRequirement = False,
     ) -> str:
         """Atomically re-confirm a hosted seat and commit its action.
 
@@ -1139,7 +1142,10 @@ class GameInstance:
         Returns ``""`` on commit, otherwise the reason the result was dropped:
         ``rejected`` / ``run_changed`` / ``round_changed`` / ``seat_removed`` /
         ``control_changed`` / ``phase_changed`` / ``human_gate_changed`` /
-        ``duplicate`` / ``action_rejected``.  Callers must treat a non-empty
+        ``duplicate`` / ``STRUCTURED_INTENT_REQUIRED`` / ``action_rejected``.
+        A supplied structured-intent predicate reads current admission state here,
+        synchronously under both locks, after the existing rejection checks.
+        Callers must treat a non-empty
         result as "write nothing"; the action never lands.
         """
         async with self.authoritative_write() as write_entered, self._lock:
@@ -1163,6 +1169,7 @@ class GameInstance:
                     expected_round_number=expected_round_number,
                     expected_control_revision=expected_control_revision,
                     action_source=source,
+                    requires_structured_intent=requires_structured_intent,
                 ),
                 AI_SEAT_COMMIT_POLICY,
             )

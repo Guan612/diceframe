@@ -33,6 +33,10 @@ SOURCE_HUMAN = "human"
 SOURCE_AI_SEAT = "ai_seat"
 SOURCE_INTENT = "intent"
 
+# A supplied predicate must synchronously read current state without mutation.
+# AI commits evaluate it under their existing authority/state locks, after awaits.
+StructuredIntentRequirement = bool | Callable[[], bool] | None
+
 
 @dataclass(frozen=True)
 class GateRequest:
@@ -43,7 +47,7 @@ class GateRequest:
     expected_round_number: int | None = None
     expected_control_revision: int | None = None
     # Runtime resolution stays with the caller, outside the engine.
-    requires_structured_intent: bool = False
+    requires_structured_intent: StructuredIntentRequirement = False
     # Lazy read only. In particular this must not retry the async outbox.
     economy_blocked: Callable[[], bool] | None = None
     action_source: str = ""
@@ -63,7 +67,9 @@ def check_human_control(instance: Any, req: GateRequest) -> str:
 
 
 def check_structured_intent(instance: Any, req: GateRequest) -> str:
-    return STRUCTURED_INTENT_REQUIRED if req.requires_structured_intent else ""
+    requirement = req.requires_structured_intent
+    required = requirement() if callable(requirement) else requirement
+    return STRUCTURED_INTENT_REQUIRED if required else ""
 
 
 def check_actor_deceased(instance: Any, req: GateRequest) -> str:
@@ -150,6 +156,7 @@ AI_SEAT_STALE_POLICY: tuple[Check, ...] = (
 AI_SEAT_COMMIT_POLICY: tuple[Check, ...] = (
     check_human_gate_open,
     check_not_duplicate_from_source,
+    check_structured_intent,
 )
 AI_SEAT_POLICY: tuple[Check, ...] = AI_SEAT_STALE_POLICY + AI_SEAT_COMMIT_POLICY
 STRUCTURED_INTENT_POLICY: tuple[Check, ...] = (check_seat_exists,)
