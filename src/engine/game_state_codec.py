@@ -12,10 +12,25 @@ from typing import TYPE_CHECKING, Any
 
 from src.engine.game_state_contracts import GamePersistedState
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.player_control import away_control_policy, normalize_away_control_policy
+from src.lorebook.activation import migrate_timed_state
 from src.migrations.instance import normalize_game_state_payload
 
 if TYPE_CHECKING:
     from src.engine.game_instance import GameInstance, GameState
+
+
+def _normalize_lorebook_timed_state(state: Any) -> dict[str, dict[str, int]]:
+    """Normalize legacy Lorebook timers at the engine persistence boundary.
+
+    Delegates to the lorebook domain rather than re-deriving the shape here: a
+    second copy silently missed the ``sticky`` + ``cooldown`` repair and let a
+    corrupt timer shape survive save/reload. ``lorebook`` is a peer core domain
+    (see ``tests/architecture/test_dependencies.py``), and this imports one pure
+    function with no storage or IO behind it.
+    """
+
+    return migrate_timed_state(dict(state) if isinstance(state, Mapping) else None)
 
 
 class GameStateCodec:
@@ -27,6 +42,7 @@ class GameStateCodec:
             "instance_schema_version": instance.instance_schema_version,
             "run_id": instance.run_id,
             "memory_namespace": instance.memory_namespace,
+            "economy": instance.economy,
             "game_key": list(instance.game_key),
             "world_id": instance.world_id,
             "rule_id": instance.rule_id,
@@ -71,15 +87,20 @@ class GameStateCodec:
             "language": normalize_language(instance.language),
             "luck_timeout_seconds": instance.luck_timeout_seconds,
             "economy_reward_policy": dict(instance.economy_reward_policy or {}),
+            "combat_extension": dict(instance.combat_extension or {}),
+            "combat_extension_round_snapshots": dict(
+                instance.combat_extension_round_snapshots or {}
+            ),
             "entry_point": instance.entry_point,
             "max_players": instance.max_players,
             "gm_uid": instance.gm_uid,
             "player_access_open": instance.player_access_open,
+            "away_control_policy": away_control_policy(instance),
             "bot_bind_token": instance.bot_bind_token,
             "room_password": instance.room_password,
             "room_token": instance.room_token,
             "pending_combat_results": instance.pending_combat_results,
-            "modules": instance.modules,
+            "lorebook_timed_state": _normalize_lorebook_timed_state(instance.lorebook_timed_state),
             "quick_actions": instance.quick_actions,
             "health_events": instance.health_events[-100:],
             "health_status": instance.health_status,
@@ -129,6 +150,7 @@ class GameStateCodec:
             instance_schema_version=int(data.get("instance_schema_version", 11) or 11),
             run_id=str(data.get("run_id") or ""),
             memory_namespace=str(data.get("memory_namespace") or ""),
+            economy=data.get("economy") or {},
             world_id=data.get("world_id"),
             # Empty marks a pre-rule_id save. The WebUI service resolves it from
             # the world template on first read and persists the migrated value.
@@ -200,15 +222,34 @@ class GameStateCodec:
                 if isinstance(data.get("economy_reward_policy"), dict)
                 else {}
             ),
+            combat_extension=(
+                data.get("combat_extension")
+                if isinstance(data.get("combat_extension"), dict)
+                else {}
+            ),
+            combat_extension_round_snapshots=(
+                {
+                    str(key): dict(value)
+                    for key, value in data.get(
+                        "combat_extension_round_snapshots", {}
+                    ).items()
+                    if isinstance(value, dict)
+                }
+                if isinstance(data.get("combat_extension_round_snapshots"), dict)
+                else {}
+            ),
             entry_point=data.get("entry_point", "web"),
             max_players=data.get("max_players", 6),
             gm_uid=data.get("gm_uid", ""),
             player_access_open=data.get("player_access_open", True),
+            away_control_policy=normalize_away_control_policy(
+                data.get("away_control_policy")
+            ),
             bot_bind_token=data.get("bot_bind_token", ""),
             room_password=data.get("room_password", ""),
             room_token=data.get("room_token", ""),
             pending_combat_results=data.get("pending_combat_results", []),
-            modules=data.get("modules") if isinstance(data.get("modules"), dict) else {},
+            lorebook_timed_state=_normalize_lorebook_timed_state(data.get("lorebook_timed_state", {})),
             quick_actions=data.get("quick_actions", []),
             health_events=data.get("health_events", []),
             health_status=data.get("health_status", {}),

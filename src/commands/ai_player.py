@@ -43,9 +43,6 @@ import logging
 import re
 from typing import Any
 
-from src.engine.action_gate import (
-    AI_SEAT_POLICY, GateRequest, SOURCE_AI_SEAT, StructuredIntentRequirement, evaluate,
-)
 from src.engine.game_instance import GameInstance, GameState
 from src.engine.language import DEFAULT_LANGUAGE, localized_text
 from src.engine.player_control import ai_controlled_players, get_control
@@ -253,7 +250,6 @@ async def fill_ai_player_actions(
     prompt_composer: Any = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
-    requires_structured_intent: StructuredIntentRequirement = False,
 ) -> list[dict[str, Any]]:
     """Let every AI-hosted seat declare one action for the current round.
 
@@ -280,7 +276,6 @@ async def fill_ai_player_actions(
             provider_name=provider_name,
             max_tokens=max_tokens,
             temperature=temperature,
-            requires_structured_intent=requires_structured_intent,
         ))
     return results
 
@@ -329,7 +324,6 @@ async def _fill_one(
     provider_name: str,
     max_tokens: int,
     temperature: float,
-    requires_structured_intent: StructuredIntentRequirement = False,
 ) -> dict[str, Any]:
     if not instance.is_alive(uid):
         # 死亡席位不能行动（add_action 也会拒绝），不必浪费一次模型调用。
@@ -345,21 +339,6 @@ async def _fill_one(
         return _outcome(uid, "duplicate", "already_declared")
     run_id = str(getattr(instance, "run_id", "") or "")
     control = get_control(instance, uid)
-
-    if requires_structured_intent:
-        # Preflight saves a model call; only the locked commit below authorizes
-        # the write. Pass the predicate through, never cache its current result.
-        code = evaluate(instance, GateRequest(
-            actor_uid=uid,
-            source=SOURCE_AI_SEAT,
-            expected_run_id=run_id,
-            expected_round_number=round_number,
-            expected_control_revision=int(control["revision"]),
-            action_source=AI_ACTION_SOURCE,
-            requires_structured_intent=requires_structured_intent,
-        ), AI_SEAT_POLICY)
-        if code:
-            return _skip(uid, code)
 
     system_prompt = build_ai_player_prompt(instance, uid)
     request = build_ai_player_request(instance, uid)
@@ -398,7 +377,6 @@ async def _fill_one(
         expected_round_number=round_number,
         expected_control_revision=int(control["revision"]),
         action_metadata=metadata,
-        requires_structured_intent=requires_structured_intent,
     )
     if not outcome:
         return _outcome(uid, "added", "", tokens=tokens)

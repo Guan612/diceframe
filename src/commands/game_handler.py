@@ -6,7 +6,6 @@ import logging
 from pathlib import Path
 from typing import Any, Literal
 
-from src.engine.action_gate import StructuredIntentRequirement
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.llm.client import LLMClient
 from src.lorebook.matcher import KeywordMatcher
@@ -277,16 +276,12 @@ class GameHandler:
         """由模型工具规划并结算本轮检定。"""
         return await self._round_processor.prepare_round_checks_ai(instance)
 
-    async def fill_ai_player_actions(
-        self, instance: GameInstance, *,
-        requires_structured_intent: StructuredIntentRequirement = False,
-    ) -> list[dict]:
+    async def fill_ai_player_actions(self, instance: GameInstance) -> list[dict]:
         """让 AI 托管席位在真人交齐后，走同一行动管线声明本轮行动。"""
         return await fill_ai_player_actions(
             instance,
             llm_client=self.llm_client,
             prompt_composer=self._prompt,
-            requires_structured_intent=requires_structured_intent,
         )
 
     async def _process_round_impl(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:

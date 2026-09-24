@@ -183,7 +183,7 @@ def test_a_save_written_before_the_setting_existed_becomes_pause() -> None:
     })
 
     assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
-    assert migrated["modules"]["player_control"]["away_control_policy"] == "pause"
+    assert migrated["away_control_policy"] == "pause"
 
 
 def test_a_corrupt_stored_policy_reads_as_pause() -> None:
@@ -195,7 +195,7 @@ def test_a_corrupt_stored_policy_reads_as_pause() -> None:
         "away_control_policy": "nonsense",
         "players": {},
     })
-    assert migrated["modules"]["player_control"]["away_control_policy"] == "pause"
+    assert migrated["away_control_policy"] == "pause"
 
 
 def test_away_policy_migration_is_idempotent() -> None:
@@ -206,8 +206,8 @@ def test_away_policy_migration_is_idempotent() -> None:
     })
     twice = migrate_game_state_payload(once)
 
-    assert once["modules"]["player_control"]["away_control_policy"] == "ai_takeover"
-    assert twice["modules"]["player_control"]["away_control_policy"] == "ai_takeover"
+    assert once["away_control_policy"] == "ai_takeover"
+    assert twice["away_control_policy"] == "ai_takeover"
 
 
 def test_away_policy_survives_save_and_load() -> None:

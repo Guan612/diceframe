@@ -9,22 +9,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from src.commands.round_processor import RoundNotProcessed, RoundProcessingFailure
-from src.engine.action_gate import (
-    ACTOR_DECEASED,
-    ECONOMY_DECISION_PENDING,
-    HUMAN_FREE_TEXT_POST_RETRY_POLICY,
-    HUMAN_FREE_TEXT_PRE_RETRY_POLICY,
-    PLAYER_NOT_IN_GAME,
-    ROUND_PROCESSING,
-    SOURCE_HUMAN,
-    STRUCTURED_INTENT_REQUIRED,
-    StructuredIntentRequirement,
-    GateRequest,
-    evaluate,
-)
 from src.engine.economy import (
     has_blocking_economy_decision,
     blocking_economy_proposals,
@@ -35,7 +22,7 @@ from src.engine.economy import (
 from src.engine.game_instance import GameState
 from src.engine.language import localized_text
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
-from src.engine.player_control import SUBMISSION_BLOCK_CODES
+from src.engine.player_control import submission_block
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
 
 if TYPE_CHECKING:
@@ -75,13 +62,6 @@ class RoundProcessingError(RuntimeError):
         self.rolled_back = rolled_back
 
 
-class AIPlayerActionFill(Protocol):
-    async def __call__(
-        self, instance: Any, /, *,
-        requires_structured_intent: StructuredIntentRequirement = False,
-    ) -> Any: ...
-
-
 @dataclass(frozen=True)
 class TurnDependencies:
     get_instance: Callable[[tuple[str, ...]], Any | None]
@@ -104,7 +84,7 @@ class TurnDependencies:
     resolve_reward: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
     # AI 托管席位补行动（src/commands/ai_player.py）：只在真人闸门满足之后、
     # 本轮推进之前调用一次。None 表示该运行时没有配置这条能力（行为不变）。
-    fill_ai_player_actions: AIPlayerActionFill | None = None
+    fill_ai_player_actions: Callable[[Any], Awaitable[Any]] | None = None
     # 权威战斗的即时接管（src/webui/services/ruleset_gameplay.py）：控制权变更
     # 之后立刻把该席位的确定性回合走完。None 表示该运行时没有这条能力。
     resume_authoritative_combat: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
@@ -175,34 +155,6 @@ def economy_decision_pending_payload(
         ),
         "economy_proposals": visible,
     }
-
-
-def _gate_rejection(instance: "GameInstance", actor_uid: str, code: str) -> TurnResult:
-    """Map admission codes to the existing response text and HTTP status."""
-    if code == PLAYER_NOT_IN_GAME:
-        # Preserve the existing error-only membership response contract.
-        return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
-    if code in SUBMISSION_BLOCK_CODES:
-        return _result({
-            "ok": False,
-            "error_code": code,
-            "error": _SUBMISSION_BLOCK_MESSAGES.get(code, "当前角色无法提交行动"),
-        }, 409)
-    if code == STRUCTURED_INTENT_REQUIRED:
-        return _result({
-            "ok": False,
-            "error_code": code,
-            "error": "当前处于权威战斗，请在专业战斗工具中选择合法动作",
-        }, 409)
-    if code == ACTOR_DECEASED:
-        return _result({"error": "角色已死亡，无法提交行动", "error_code": code}, 403)
-    if code == ECONOMY_DECISION_PENDING:
-        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
-    if code == ROUND_PROCESSING:
-        return _result({
-            "error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing", "error_code": code,
-        }, 409)
-    return _result({"ok": False, "error_code": code, "error": code}, 409)
 
 
 def _pending_luck_payload(
@@ -302,27 +254,8 @@ async def _fill_ai_player_actions(
     # 进不去——没有活跃真人时 ``human_actions_ready()`` 恒为 False，正是要修的场景。
     if fill is None:
         return False
-    def requires_structured_intent() -> bool:
-        # Synchronous read-only admission query, evaluated before generation AND
-        # inside commit's authority/state locks. Do not capture combat/capabilities
-        # now: either may change while context/model generation is in flight.
-        rule = dependencies.load_rule_for_game(instance)
-        if rule is None:
-            # No rule is legacy narrative behavior only for an unbound instance.
-            return bool(instance.ruleset_runtime)
-        try:
-            runtime = dependencies.ruleset_registry.resolve(rule.template)
-        except ValueError:
-            return True  # Unknown/incompatible runtimes must not admit free text.
-        state = instance.ruleset_state
-        combat = state.get("combat") if isinstance(state, dict) else None
-        combat_active = isinstance(combat, dict) and combat.get("status") == "active"
-        return runtime.capabilities.authoritative_intents and (
-            not runtime.capabilities.narrative_turns or combat_active
-        )
-
     try:
-        records = await fill(instance, requires_structured_intent=requires_structured_intent)
+        records = await fill(instance)
     except Exception:
         logger.exception("AI 托管席位补行动失败，本轮继续: game=%s", game_key)
         return False
@@ -685,8 +618,18 @@ async def submit_action(
     )
     if not instance:
         return _result({"error": "游戏不存在，请刷新页面重新开始"}, 404)
+    if actor_uid not in instance.players:
+        return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
+    # 控制权是权威的准入判定：AI 托管 / 未认领的席位不接受真人提交的行动。
+    # 这里只拒绝"真人代打"，不改变服务器 AI 自身是否行动（本 PR 不让 AI 自动出招）。
+    block = submission_block(instance, actor_uid)
+    if block:
+        return _result({
+            "ok": False,
+            "error_code": block,
+            "error": _SUBMISSION_BLOCK_MESSAGES.get(block, "当前角色无法提交行动"),
+        }, 409)
     rule = dependencies.load_rule_for_game(instance)
-    requires_structured = False
     if rule is not None:
         try:
             runtime = dependencies.ruleset_registry.resolve(rule.template)
@@ -699,30 +642,23 @@ async def submit_action(
         state = getattr(instance, "ruleset_state", {})
         combat = state.get("combat") if isinstance(state, dict) else None
         combat_active = isinstance(combat, dict) and combat.get("status") == "active"
-        requires_structured = runtime.capabilities.authoritative_intents and (
+        if runtime.capabilities.authoritative_intents and (
             not runtime.capabilities.narrative_turns or combat_active
-        )
-
-    def _economy_blocked() -> bool:
-        return has_blocking_economy_decision(
-            instance, auto_reward_gold_cap=_auto_reward_cap(dependencies, instance),
-        )
-
-    request = GateRequest(
-        actor_uid=actor_uid,
-        source=SOURCE_HUMAN,
-        requires_structured_intent=requires_structured,
-        economy_blocked=_economy_blocked,
-    )
-    code = evaluate(instance, request, HUMAN_FREE_TEXT_PRE_RETRY_POLICY)
-    if code:
-        return _gate_rejection(instance, actor_uid, code)
-    # Retry is async and may mutate the outbox. Keep it after the first four
-    # guards, outside the pure gate, and query economy only after it completes.
+        ):
+            return _result({
+                "ok": False,
+                "error_code": "STRUCTURED_INTENT_REQUIRED",
+                "error": "当前处于权威战斗，请在专业战斗工具中选择合法动作",
+            }, 409)
+    if instance.is_dead(actor_uid):
+        return _result({"error": "角色已死亡，无法提交行动"}, 403)
     await _retry_external_economy_effects(dependencies, instance)
-    code = evaluate(instance, request, HUMAN_FREE_TEXT_POST_RETRY_POLICY)
-    if code:
-        return _gate_rejection(instance, actor_uid, code)
+    if has_blocking_economy_decision(
+        instance, auto_reward_gold_cap=_auto_reward_cap(dependencies, instance),
+    ):
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
+    if instance.state == GameState.ACTIVE_JUDGMENT:
+        return _result({"error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing"}, 409)
 
     existing_action = next(
         (action for action in instance.action_queue if action.get("user_id") == actor_uid),

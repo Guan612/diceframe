@@ -31,6 +31,7 @@ from src.engine.game_state import GameState
 from src.engine.player_control import (
     ai_controlled_players,
     away_control_policy,
+    get_control,
     unclaimed_players,
 )
 from src.engine.round_snapshots import snapshot_players
@@ -183,19 +184,20 @@ def ai_player_action_stale_reason(
     still belongs to the seat it was produced for"; callers must invoke it
     inside the same boundary as the write it guards.
     """
-    from src.engine.action_gate import AI_SEAT_STALE_POLICY, GateRequest, SOURCE_AI_SEAT, evaluate
-
-    return evaluate(
-        instance,
-        GateRequest(
-            actor_uid=user_id,
-            source=SOURCE_AI_SEAT,
-            expected_run_id=expected_run_id,
-            expected_round_number=expected_round_number,
-            expected_control_revision=expected_control_revision,
-        ),
-        AI_SEAT_STALE_POLICY,
-    )
+    if str(getattr(instance, "run_id", "") or "") != expected_run_id:
+        return "run_changed"
+    if int(instance.round_number or 0) != expected_round_number:
+        return "round_changed"
+    if user_id not in instance.players:
+        return "seat_removed"
+    record = get_control(instance, user_id)
+    if record["mode"] != "ai":
+        return "control_changed"
+    if int(record["revision"]) != expected_control_revision:
+        return "control_changed"
+    if instance.state != GameState.ACTIVE_ACTION:
+        return "phase_changed"
+    return ""
 
 
 def has_pending_dice(instance: GameInstance, user_id: str | None = None) -> bool:
