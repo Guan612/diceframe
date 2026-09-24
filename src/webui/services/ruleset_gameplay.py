@@ -12,6 +12,7 @@ from typing import Any
 
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
+from src.engine.action_gate import GateRequest, SOURCE_INTENT, STRUCTURED_INTENT_POLICY, evaluate
 from src.rulesets.automation import (
     advance_automatic_intents,
     append_public_timeline_entry,
@@ -136,8 +137,13 @@ def _context(
     effective_requester = str(instance.gm_uid or "") if requester_is_gm else requester_id
     if not effective_requester:
         return instance, None, None, "", _error("GM_IDENTITY_MISSING", "本局缺少 GM 身份")
-    if not requester_is_gm and requester_id not in instance.players:
-        return instance, None, None, "", _error("PLAYER_NOT_IN_GAME", "当前玩家不在本局中")
+    code = evaluate(
+        instance,
+        GateRequest(actor_uid=requester_id, source=SOURCE_INTENT, requester_is_gm=requester_is_gm),
+        STRUCTURED_INTENT_POLICY,
+    )
+    if code:
+        return instance, None, None, "", _error(code, "当前玩家不在本局中")
     rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return instance, None, None, effective_requester, _error(

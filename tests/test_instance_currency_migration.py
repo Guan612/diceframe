@@ -53,9 +53,9 @@ def test_coc_save_amounts_scale_by_100_once():
     sheet = payload["players"]["p1"]["character_sheet"]
     assert sheet["currency"]["amount"] == 10_000
     assert sheet["gold"] == 10_000
-    assert payload["economy"]["proposals"][0]["amount"] == 2_500
-    assert payload["economy"]["outcomes"][0]["amount"] == 2_500
-    entries = payload["economy"]["transactions"][0]["entries"]
+    assert payload["modules"]["economy"]["state"]["proposals"][0]["amount"] == 2_500
+    assert payload["modules"]["economy"]["state"]["outcomes"][0]["amount"] == 2_500
+    entries = payload["modules"]["economy"]["state"]["transactions"][0]["entries"]
     assert entries[0] == {"account": "character:p1", "delta": -500, "before": 8_000, "after": 7_500}
     assert entries[1]["delta"] == 500
     assert payload["economy_reward_policy"]["auto_reward_cap"] == 5_000
@@ -79,7 +79,7 @@ def test_non_coc_rules_are_not_migrated():
             "economy_reward_policy": {"mode": "auto_small_cash", "auto_reward_cap": 50},
         })
         assert payload["players"]["p1"]["character_sheet"]["gold"] == 100
-        assert payload["economy"]["proposals"][0]["amount"] == 25
+        assert payload["modules"]["economy"]["state"]["proposals"][0]["amount"] == 25
         assert payload["economy_reward_policy"]["auto_reward_cap"] == 50
         assert payload["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
 
