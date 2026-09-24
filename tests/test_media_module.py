@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 
+from src.engine import persistence
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import media as module
@@ -82,7 +83,7 @@ def test_future_versions_preserved_and_runtime_access_rejected():
     assert instance.to_dict()["modules"]["media"] == before
 
 
-@pytest.mark.parametrize("modules", [None, [], {}, {"media": None}, {"media": []}])
+@pytest.mark.parametrize("modules", [None, [], {}, {"extension": {"schema_version": 99}}])
 def test_payload_container_falls_back_without_mutation(modules):
     payload = {"modules": modules, "scene_image": {"kind": "upload"}}
     before = deepcopy(payload)
@@ -90,10 +91,90 @@ def test_payload_container_falls_back_without_mutation(modules):
     assert payload == before
 
 
-def test_payload_container_prefers_even_empty_or_unknown_module_slot():
-    for slot in ({}, {"schema_version": 99}):
-        payload = {"modules": {"media": slot}, "scene_image": {"legacy": True}}
-        assert module.payload_container(payload) is slot
+def test_payload_container_accepts_legacy_without_modules():
+    payload = {"scene_image": {"legacy": True}}
+    assert module.payload_container(payload) is payload
+
+
+def test_payload_container_prefers_current_module_slot_without_repair():
+    slot = {"schema_version": module.SCHEMA_VERSION}
+    payload = {"modules": {"media": slot}, "scene_image": {"legacy": True}}
+    before = deepcopy(payload)
+    assert module.payload_container(payload) is slot
+    assert payload == before
+
+
+@pytest.mark.parametrize("slot", [{}, {"schema_version": 2}, {"schema_version": 99}, None, [], "invalid", 1])
+def test_payload_container_rejects_invalid_or_unknown_slot_without_mutation(slot):
+    payload = {"modules": {"media": slot}, "scene_image": {"legacy": True}}
+    before = deepcopy(payload)
+    with pytest.raises(ModuleStateError, match="media module"):
+        module.payload_container(payload)
+    assert payload == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("slot", [
+    {"schema_version": 99, "scene_image": {"future": "opaque"}, "map_background": {"future": "opaque"}},
+    {"schema_version": 2}, {}, None, [], "invalid",
+], ids=["future-opaque", "schema-2", "missing-schema", "null", "list", "string"])
+async def test_package_operations_reject_unsupported_media_before_any_asset_or_save_write(tmp_path, slot):
+    registry = GameRegistry(tmp_path / "saves")
+    instance = registry.get_or_create(("web", "unsupported-media", "bot"))
+    state = instance.to_dict()
+    state["modules"]["media"] = deepcopy(slot)
+    state["scene_image"] = {"legacy": True, "kind": "save_asset", "path": "scene-image.asset"}
+    state["map_background"] = {"legacy": True, "kind": "save_asset", "path": "map-background.asset"}
+    before = deepcopy(state)
+    state_path = registry.save_package_state_path(instance.game_key)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    def unexpected_asset_access(_value):
+        pytest.fail("unsupported media must not resolve or import any asset, including stale legacy references")
+
+    service = GamePackageService(GamePackageDependencies(
+        parse_game_key=lambda key: tuple(key.split("|")),
+        get_instance=registry.get,
+        state_path_for=registry.save_package_state_path,
+        import_save_zip=registry.import_save_zip,
+        resolve_scene_image_file=unexpected_asset_access,
+        resolve_map_background_file=unexpected_asset_access,
+        save_scene_image_upload=unexpected_asset_access,
+        save_map_background_upload=unexpected_asset_access,
+    ))
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("state.json", json.dumps(state))
+        archive.writestr("scene-image.asset", b"scene")
+        archive.writestr("map-background.asset", b"map")
+        archive.writestr("chatlog.jsonl", '{"role":"gm"}\n')
+    payload = buffer.getvalue()
+
+    def filesystem_snapshot():
+        return {path.relative_to(tmp_path): path.read_bytes() if path.is_file() else None
+                for path in tmp_path.rglob("*")}
+
+    original_files = filesystem_snapshot()
+    export = service.export_game_package("|".join(instance.game_key))
+    package_import = await service.import_game_package(payload)
+    direct_import = await persistence.import_save_zip(
+        registry, payload,
+        scene_image_importer=unexpected_asset_access,
+        map_background_importer=unexpected_asset_access,
+    )
+    for result in (export, package_import, direct_import):
+        assert result["ok"] is False
+        assert result["error_code"] == "UNSUPPORTED_MEDIA_SCHEMA"
+        assert result["status"] == 400
+        assert "media module" in result["error"]
+        assert "payload" not in result and "game_key" not in result
+    assert filesystem_snapshot() == original_files
+    assert state == before
+    assert json.loads(state_path.read_text(encoding="utf-8")) == before
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        assert json.loads(archive.read("state.json")) == before
+    assert registry.list_active() == [instance]
 
 
 @pytest.mark.asyncio

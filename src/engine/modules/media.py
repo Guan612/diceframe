@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.engine.module_state import ModuleStateSpec, get_module_state, register_module_state
+from src.engine.module_state import ModuleStateError, ModuleStateSpec, get_module_state, register_module_state
 
 MODULE_NAME = "media"
 SCHEMA_VERSION = 1
@@ -42,10 +42,21 @@ def replace_map_background(instance: Any, value: Any) -> None:
 
 
 def payload_container(payload: dict[str, Any]) -> dict[str, Any]:
-    """Locate references in either a module save or a legacy package payload."""
+    """Locate supported references without repairing or mutating raw package data.
+
+    Only an absent slot permits legacy fallback. Unlike live-state access,
+    package access must reject corrupt slots rather than repair them, so it
+    cannot discard opaque data or revive stale top-level references.
+    """
     modules = payload.get("modules")
-    slot = modules.get(MODULE_NAME) if isinstance(modules, dict) else None
-    return slot if isinstance(slot, dict) else payload
+    if not isinstance(modules, dict) or MODULE_NAME not in modules:
+        return payload
+    slot = modules[MODULE_NAME]
+    if not isinstance(slot, dict):
+        raise ModuleStateError("invalid media module slot: expected an object")
+    if slot.get("schema_version") != SCHEMA_VERSION:
+        raise ModuleStateError(f"unsupported media module schema: {slot.get('schema_version')!r}")
+    return slot
 
 
 SPEC = ModuleStateSpec(name=MODULE_NAME, schema_version=SCHEMA_VERSION, fresh=fresh, ensure=ensure)
