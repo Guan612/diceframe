@@ -170,6 +170,63 @@ def test_only_economy_owners_write_ledger_keys() -> None:
     assert not violations, "\n".join(violations)
 
 
+def _imports(path: Path, tree: ast.AST):
+    """Resolve ordinary, from-parent and relative imports, including local ones."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                yield node.lineno, alias.name
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level:
+                parts = list(path.relative_to(ROOT).with_suffix("").parts[:-1])
+                module = ".".join(parts[:len(parts) - node.level + 1] + ([module] if module else []))
+            for alias in node.names:
+                yield node.lineno, f"{module}.{alias.name}"
+
+
+def _under(name: str, prefix: str) -> bool:
+    return name == prefix or name.startswith(prefix + ".")
+
+
+def test_action_gate_does_not_import_transport_commands_or_rulesets() -> None:
+    path = SRC / "engine" / "action_gate.py"
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    violations = [
+        f"{path.relative_to(ROOT)}:{line}: forbidden import {name}"
+        for line, name in _imports(path, tree)
+        if any(_under(name, prefix) for prefix in ("src.webui", "src.commands", "src.rulesets"))
+    ]
+    assert not violations, "\n".join(violations)
+
+
+def test_engine_does_not_import_commands() -> None:
+    # Existing economy effect application imports this reward normalizer locally.
+    # Keep that exact debt visible; R4-a does not move economy/item application.
+    exceptions = {(SRC / "engine" / "economy.py", "src.commands.state_items.normalized_reward_entries")}
+    violations: list[str] = []
+    for path in sorted((SRC / "engine").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for line, name in _imports(path, tree):
+            if _under(name, "src.commands") and (path, name) not in exceptions:
+                violations.append(f"{path.relative_to(ROOT)}:{line}: engine imports {name}")
+    assert not violations, "\n".join(violations)
+
+
+@pytest.mark.parametrize("source, prefix", [
+    ("import src.commands.ai_player as ai", "src.commands"),
+    ("from src import commands", "src.commands"),
+    ("from ..commands import ai_player", "src.commands"),
+    ("def helper():\n    from src.commands.state_items import normalized_reward_entries", "src.commands"),
+    ("from src.webui.services import turns", "src.webui"),
+    ("from .. import rulesets", "src.rulesets"),
+    ("if TYPE_CHECKING:\n    import src.rulesets.contracts", "src.rulesets"),
+])
+def test_gate_dependency_guard_resolves_import_forms(source, prefix) -> None:
+    path = SRC / "engine" / "action_gate.py"
+    assert any(_under(name, prefix) for _, name in _imports(path, ast.parse(source)))
+
+
 def test_game_instance_top_level_field_count_does_not_grow() -> None:
     path = SRC / "engine" / "game_instance.py"
     tree = ast.parse(path.read_text(encoding="utf-8-sig"))

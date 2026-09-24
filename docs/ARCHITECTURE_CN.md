@@ -1872,6 +1872,33 @@ ruleset_gameplay.resume_authoritative_combat
 
 
 
+# 12E. 行动闸门
+
+真人自由文本、AI 席位提交和结构化意图的服务层准入共用 `src/engine/action_gate.py`。策略是检查函数的有序元组；顺序是契约，返回第一个非空拒绝码。共用检查实现不意味着三条路径的策略已经对齐，R4-a 保留以下差异：
+
+| 检查项 | 真人自由文本 `turns.submit_action` | AI 席位 `GameInstance.commit_ai_player_action` | 结构化意图 `ruleset_gameplay._context` |
+|---|---|---|---|
+| 席位存在 | `PLAYER_NOT_IN_GAME`，403 | `seat_removed` | 非 GM 为 `PLAYER_NOT_IN_GAME`；GM 绕过成员检查 |
+| 控制权 | `submission_block` → `PLAYER_AI_CONTROLLED` / `PLAYER_UNCLAIMED`，409 | 必须仍为 ai 且 revision 一致，否则 `control_changed` | gate 不查；具体规则运行时校验 actor 控制权 |
+| 结构化意图门 | 权威意图且不支持叙事回合或战斗 active → `STRUCTURED_INTENT_REQUIRED`，409 | 无，保留 R4-b b1 的待决差异 | 本身就是 intent 路径，由规则运行时校验 |
+| 死亡 | `is_dead` → `ACTOR_DECEASED`，403；入队仍有 deceased 兜底 | gate 不查；生成端跳过非存活席位，入队仍有 deceased 兜底 | 服务层不查；具体规则运行时按战斗 actor 状态校验 |
+| 经济阻塞 | 先 await outbox 重试，再查经济；`ECONOMY_DECISION_PENDING`，409 | gate 不查；推进处仍有经济 barrier（R4-b b3） | 无；权威 intent 的结算归规则运行时，不新增叙事 barrier |
+| 阶段 | gate 仅拒绝 `ACTIVE_JUDGMENT`，`ROUND_PROCESSING`，409；原有暂停恢复与入队阶段规则保留 | `ACTIVE_ACTION`，否则 `phase_changed` | 服务层无叙事阶段限制；战斗有独立回合 / version（R4-b b4） |
+| run 一致 | 无，保留 R4-b b2 的待决差异 | `run_changed` | 无通用 run 检查；保留现有 runtime / version 验证 |
+| 回合一致 | 无客户端 expected round 输入 | `round_changed` | 具体规则运行时的 `expected_version` 乐观并发 |
+| 真人闸门 | 不适用，真人正在提交自身行动 | 有活跃真人且未交齐 → `human_gate_changed`；全 AI 桌无需等待真人 | 不适用，按权威战斗 actor 顺序 |
+| 同源重复 | gate 外保留原有单人行动上限 / 多人修订上限 | `duplicate` | 具体规则运行时的 intent identity / `INTENT_ID_CONFLICT` |
+
+真人完整策略顺序为：成员 → 控制权 → 结构化意图 → 死亡 → 经济 → 判定中。`HUMAN_FREE_TEXT_PRE_RETRY_POLICY` 与 `HUMAN_FREE_TEXT_POST_RETRY_POLICY` 拼成 `HUMAN_FREE_TEXT_POLICY`；服务层只在前段通过后，在原位置 `await _retry_external_economy_effects`，再执行后段。重试可能投递外部记忆并写入回执，不能放进同步 bool 回调；gate 的 `economy_blocked` 仅作同步、只读、懒求值查询。重试期间不重复前段检查，异常仍按原路径传播。
+
+按 R4-a 的显式优先级例外，真人路径的规则加载 / runtime resolve 在成员和控制权检查之前；若两类拒绝同时成立，先返回 `RULESET_RUNTIME_UNAVAILABLE`。其他拒绝顺序、HTTP 状态、文案及 payload 字段保留；死亡和判定中响应新增 `error_code`。非成员仍返回原有 error-only 403（gate 内部码为 `PLAYER_NOT_IN_GAME`）：既有特征测试明确保护该响应无 `error_code`，因此没有照搬指南增加该字段。游戏不存在和策略之外的行动上限响应不变。
+
+AI 的 stale 策略依次检查 run → round → seat → control → phase，完整策略再接真人闸门和同源去重。`commit_ai_player_action` 继续在原有 `authoritative_write` 与 `_lock` 内先检查写入资格 / process lock，再同步评估完整策略并入队。为保留既有锁边界特征测试所用的 public facade，aggregate 先调用 `ai_player_action_stale_reason`（经 turn_state 委托 stale 策略），通过后执行 `AI_SEAT_COMMIT_POLICY` 的真人闸门 / 去重后段；两段拼成 `AI_SEAT_POLICY`，之间没有 await。gate 不获取锁、不写状态、不替代 aggregate authority。结构化意图仅替换成员检查，原有认证、GM effective identity、规则绑定与 runtime 校验顺序不变。
+
+R4-a 不改变 persisted 形状，实例 schema 保持 **20**，无需迁移。AST 守卫禁止 action gate 导入 webui / commands / rulesets，并禁止 engine 新增 commands 依赖；唯一既存例外是 `economy.py` 中导入 `commands.state_items.normalized_reward_entries` 的局部调用，待后续经济效果职责收口。
+
+---
+
 # 13. Check Planner 与服务端判定
 
 ## 13.1 Planner 的定位
