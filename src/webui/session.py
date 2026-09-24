@@ -43,7 +43,10 @@ class SessionManager:
             return token, self._sessions[token]["user_id"]
 
         token = token or uuid.uuid4().hex
-        user_id = f"web_{uuid.uuid4().hex[:8]}"
+        existing_user_ids = {session["user_id"] for session in self._sessions.values()}
+        user_id = f"web_{uuid.uuid4().hex}"
+        while user_id in existing_user_ids:
+            user_id = f"web_{uuid.uuid4().hex}"
         self._sessions[token] = {
             "user_id": user_id,
             "name": "",

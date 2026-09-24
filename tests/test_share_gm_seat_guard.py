@@ -188,6 +188,35 @@ async def test_regular_player_join_still_rebinds_session(share_env):
     assert env.sessions._sessions[env.token]["user_id"] == "p2"
 
 
+def test_new_sessions_have_distinct_full_length_user_ids(tmp_path):
+    manager = SessionManager(tmp_path)
+    first_token, first_uid = manager.get_or_create(None)
+    second_token, second_uid = manager.get_or_create(None)
+    assert first_token != second_token
+    assert first_uid != second_uid
+    for uid in (first_uid, second_uid):
+        assert uid.startswith("web_")
+        assert len(uid.removeprefix("web_")) == 32
+
+
+def test_new_session_retries_colliding_user_id(tmp_path, monkeypatch):
+    manager = SessionManager(tmp_path)
+    colliding = UUID("12345678" + "0" * 24)
+    fresh = UUID("87654321" + "0" * 24)
+    manager._sessions["existing-token"] = {
+        "user_id": f"web_{colliding.hex}", "name": "",
+    }
+    generated = iter([colliding, fresh])
+    monkeypatch.setattr("src.webui.session.uuid.uuid4", lambda: next(generated))
+
+    token, uid = manager.get_or_create("new-token")
+    assert (token, uid) == ("new-token", f"web_{fresh.hex}")
+    assert manager.get_or_create("existing-token") == (
+        "existing-token", f"web_{colliding.hex}",
+    )
+    assert SessionManager(tmp_path).get_or_create(token) == (token, uid)
+
+
 def test_f5_new_session_uid_is_independent_of_client_token(tmp_path, monkeypatch):
     manager = SessionManager(tmp_path)
     # Fix server randomness so this regression cannot fail by random collision.
@@ -196,7 +225,7 @@ def test_f5_new_session_uid_is_independent_of_client_token(tmp_path, monkeypatch
     token, uid = manager.get_or_create(supplied_token)
     assert token == supplied_token
     assert uid != "web_deadbeef"
-    assert uid == "web_12345678"
+    assert uid == "web_12345678" + "0" * 24
     assert manager.get_or_create(token) == (token, uid)
     assert SessionManager(tmp_path).get_or_create(token) == (token, uid)
 
@@ -207,7 +236,7 @@ def test_new_session_without_token_uses_separate_uid_randomness(tmp_path, monkey
     monkeypatch.setattr("src.webui.session.uuid.uuid4", lambda: next(generated))
     token, uid = manager.get_or_create(None)
     assert token == "deadbeef" + "0" * 24
-    assert uid == "web_12345678"
+    assert uid == "web_12345678" + "0" * 24
 
 
 def test_existing_session_keeps_legacy_uid(tmp_path, monkeypatch):
