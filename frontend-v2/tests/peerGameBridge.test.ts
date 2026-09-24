@@ -70,13 +70,36 @@ describe('peer host game bridge', () => {
     expect(executor.mock.calls).toEqual([['/games/web%7Cgame%7Chost', undefined]])
   })
 
-  it('returns empty characters for the unbound join flow without fetching the host roster', async () => {
-    const executor = vi.fn<PeerLocalApiExecutor>(async () => hostDetail)
+  it('projects only ruleset bootstrap fields to an unbound joiner, without host identities', async () => {
+    const characters = {
+      players: [privatePlayer], npcs: [{ character_name: 'NPC-secret' }],
+      rule_attrs: [{ key: 'str', name: '力量', min: 1, max: 20 }],
+      rule_attrs_total: 27, rule_classes: ['战士'], rule_special_stats: [],
+      rule_meta: { rule_id: 'dnd2024_srd' },
+      ruleset_runtime: { capabilities: { character_builder: 'professional' } },
+      user_id: 'gm-secret', cards: [{ character_name: 'Card-secret' }],
+      actions: [privateAction],
+    }
+    const executor = vi.fn<PeerLocalApiExecutor>(async (path) => (
+      path === '/games/web%7Cgame%7Chost' ? hostDetail : characters
+    ))
     const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined)
     const result = await bridge.handle('peer_1', 'game.characters', {})
-    expect(result).toEqual({ players: [], npcs: [] })
-    for (const value of privateValues) expect(JSON.stringify(result)).not.toContain(value)
-    expect(executor.mock.calls).toEqual([['/games/web%7Cgame%7Chost', undefined]])
+    expect(result).toEqual({
+      players: [], npcs: [],
+      rule_attrs: characters.rule_attrs, rule_attrs_total: characters.rule_attrs_total,
+      rule_classes: characters.rule_classes, rule_special_stats: characters.rule_special_stats,
+      rule_meta: characters.rule_meta, ruleset_runtime: characters.ruleset_runtime,
+    })
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('user_id')
+    for (const name of ['Character-secret', 'NPC-secret', 'Card-secret']) {
+      expect(serialized).not.toContain(name)
+    }
+    expect(executor.mock.calls).toEqual([
+      ['/games/web%7Cgame%7Chost', undefined],
+      ['/games/web%7Cgame%7Chost/characters?share=1', undefined],
+    ])
   })
 
   it.each(['roll.requests', 'game.log'] as const)(

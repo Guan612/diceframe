@@ -34,6 +34,11 @@ const LOBBY_DETAIL_FIELDS = [
   'has_room_password', 'world_name', 'scene', 'rule_id', 'solo_mode',
 ] as const
 
+const JOIN_CHARACTER_FIELDS = [
+  'rule_attrs', 'rule_attrs_total', 'rule_classes',
+  'rule_special_stats', 'rule_meta', 'ruleset_runtime',
+] as const
+
 const LOBBY_MULTIPLAYER_FIELDS = [
   'state', 'round_number', 'solo_mode', 'player_count', 'max_players',
   'ready_count', 'alive_count', 'active_count', 'away_count', 'ai_count',
@@ -273,8 +278,15 @@ export class PeerHostGameBridge {
       return { ok: true, preview: false, delegate: false, user_id: actorId }
     }
     if (!actorId) {
-      // JoinView loads characters before binding and supports empty lobby data.
-      if (operation === 'game.characters') return { players: [], npcs: [] }
+      // JoinView needs the public ruleset bootstrap before binding, never the host roster.
+      if (operation === 'game.characters') {
+        const source = await read('/characters')
+        const result: Record<string, unknown> = { players: [], npcs: [] }
+        for (const field of JOIN_CHARACTER_FIELDS) {
+          if (field in source) result[field] = source[field]
+        }
+        return result
+      }
       throw new Error('player_identity_required')
     }
     if (operation === 'game.characters') return read('/characters')
