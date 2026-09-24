@@ -31,12 +31,28 @@ const MAX_IN_FLIGHT_PER_PEER = 8
 
 const LOBBY_DETAIL_FIELDS = [
   'game_key', 'player_access_open', 'player_count', 'max_players',
-  'has_room_password', 'world_name', 'scene', 'rule_id', 'solo_mode', 'multiplayer',
+  'has_room_password', 'world_name', 'scene', 'rule_id', 'solo_mode',
 ] as const
+
+const LOBBY_MULTIPLAYER_FIELDS = [
+  'state', 'round_number', 'solo_mode', 'player_count', 'max_players',
+  'ready_count', 'alive_count', 'active_count', 'away_count', 'ai_count',
+  'unclaimed_count', 'can_accept_actions', 'can_advance', 'action_count',
+  'pending_action_count', 'player_access_open',
+] as const
+
+function lobbyMultiplayer(value: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out
+  const current = value as Record<string, unknown>
+  for (const key of LOBBY_MULTIPLAYER_FIELDS) if (key in current) out[key] = current[key]
+  return out
+}
 
 function lobbyDetail(current: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const key of LOBBY_DETAIL_FIELDS) if (key in current) out[key] = current[key]
+  if ('multiplayer' in current) out.multiplayer = lobbyMultiplayer(current.multiplayer)
   return out
 }
 
@@ -253,17 +269,21 @@ export class PeerHostGameBridge {
       const detail = actorId ? await read('') : lobbyDetail(current)
       return { ...detail, has_room_password: false, peer_transport: true }
     }
-    if (operation === 'game.characters') return read('/characters')
     if (operation === 'game.player_context') {
       return { ok: true, preview: false, delegate: false, user_id: actorId }
     }
+    if (!actorId) {
+      // JoinView loads characters before binding and supports empty lobby data.
+      if (operation === 'game.characters') return { players: [], npcs: [] }
+      throw new Error('player_identity_required')
+    }
+    if (operation === 'game.characters') return read('/characters')
     if (operation === 'roll.requests') return read('/roll-requests')
     if (operation === 'game.log') {
       const page = boundedInteger(payload.page, 1, 10_000, 1)
       const perPage = boundedInteger(payload.per_page, 1, 100, 50)
       return read(`/log?page=${page}&per_page=${perPage}`)
     }
-    if (!actorId) throw new Error('player_identity_required')
     if (operation === 'game.private_log') return read('/private-log')
     if (operation === 'game.table_talk') return read('/table-talk')
     if (operation === 'game.map') return read('/map')
