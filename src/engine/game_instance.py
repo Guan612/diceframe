@@ -31,6 +31,8 @@ from src.engine.game_state_contracts import (
     PlayerRollbackSnapshot,
 )
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.module_state import ensure_module_states
+from src.engine.modules import lorebook_runtime
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.engine.player_control import (
     DEFAULT_AWAY_CONTROL_POLICY,
@@ -185,6 +187,7 @@ class GameInstance:
     # key_facts 这类叙事摘要，也不属于 ruleset_state；唯一写入口是
     # ``src.engine.world_state.apply_world_ops``。
     world_state: dict[str, Any] = field(default_factory=fresh_world_state)
+    modules: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # 运行时跟踪：chatlog.jsonl 已持久化的 log 条数（不入存档，仅用于增量追加）
     last_saved_log_count: int = 0
@@ -270,9 +273,6 @@ class GameInstance:
     # 战斗结算缓存（供 WebUI 展示）
     pending_combat_results: list[dict] = field(default_factory=list)
 
-    # 世界书时间效应状态
-    lorebook_timed_state: dict[str, dict] = field(default_factory=dict)
-
     # WebUI 快捷行动建议
     quick_actions: list[str] = field(default_factory=list)
 
@@ -325,6 +325,7 @@ class GameInstance:
         # 世界真相容器：未设置/损坏 → 空世界；未知 schema 原样保留，由写入路径
         # 明确拒绝，绝不把用户数据猜成默认值。
         self.world_state = ensure_world_state(self.world_state)
+        self.modules = ensure_module_states(self.modules)
         # 每个席位都带一个显式控制器（human / ai / unclaimed）：旧存档、内存构造
         # 与手工修改过的 players 都在这里补齐，读取方永远不必自己猜。唯一写入口
         # 仍是 src.engine.player_control.set_control。
@@ -1391,6 +1392,14 @@ class GameInstance:
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
 
     # ---------- 序列化 --------------------------------------
+
+    @property
+    def lorebook_timed_state(self) -> dict[str, dict]:
+        return lorebook_runtime.timers(self)
+
+    @lorebook_timed_state.setter
+    def lorebook_timed_state(self, value: Any) -> None:
+        lorebook_runtime.replace_timers(self, value)
 
     def update_lorebook_timed_state(self) -> None:
         """Tick persisted Lorebook timers, supporting the pre-v2 shape.

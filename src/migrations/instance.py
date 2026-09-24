@@ -14,6 +14,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
 from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
+from src.engine.modules.lorebook_runtime import fresh as fresh_lorebook_runtime, normalize_timers
 from src.engine.player_control import CONTROL_KEY, normalize_control
 from src.engine.player_control import normalize_away_control_policy
 from src.engine.world_state import fresh_world_state
@@ -21,7 +22,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 16
+CURRENT_INSTANCE_SCHEMA_VERSION = 17
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -326,6 +327,27 @@ def _migrate_v15_to_v16(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v16_to_v17(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move Lorebook runtime timers into a versioned module slot (Track R0).
+
+    Legacy single-counter and independent-counter timers share the domain's
+    normalizer. Existing slots, including unknown module schemas, are kept
+    verbatim; removing the old top-level key makes this step idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    legacy = payload.pop("lorebook_timed_state", None)
+    if not isinstance(modules.get("lorebook_runtime"), dict):
+        slot = fresh_lorebook_runtime()
+        slot["timers"] = normalize_timers(legacy)
+        modules["lorebook_runtime"] = slot
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 17
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -378,6 +400,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 15:
         payload = _migrate_v15_to_v16(payload)
         version = 16
+    if version == 16:
+        payload = _migrate_v16_to_v17(payload)
+        version = 17
     payload["instance_schema_version"] = version
     return payload
 
