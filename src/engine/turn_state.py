@@ -300,7 +300,9 @@ def add_action_locked(
         action_entry["revision_count"] = 1
         instance.action_queue.append(action_entry)
     instance.ready_players.add(user_id)
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.touch(instance)
     return True
 
 
@@ -320,7 +322,9 @@ def start_round_locked(instance: GameInstance) -> None:
     if instance.pending_actions:
         instance.action_queue.extend(instance.pending_actions)
         instance.pending_actions.clear()
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.touch(instance)
     logger.info("Round %d 开始 - game_key=%s", instance.round_number, instance.game_key)
 
 
@@ -355,7 +359,9 @@ def apply_action_roll_locked(
     action["dice_value"] = int(value)
     action["dice_rolls"] = [int(item) for item in (rolls or [value])]
     instance.ready_players.add(user_id)
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.touch(instance)
     return True
 
 
@@ -373,7 +379,9 @@ def set_player_away_locked(instance: GameInstance, user_id: str, away: bool) -> 
         instance.ready_players.discard(user_id)
     else:
         instance.away_players.discard(user_id)
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.touch(instance)
     return True
 
 

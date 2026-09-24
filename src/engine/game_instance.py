@@ -48,6 +48,7 @@ from src.engine.modules import (
     progression_state,
     room_access,
     round_presentation,
+    session_stats,
     table_settings,
     world_reports,
 )
@@ -192,12 +193,6 @@ class GameInstance:
     # 运行时跟踪：chatlog.jsonl 已持久化的 log 条数（不入存档，仅用于增量追加）
     last_saved_log_count: int = 0
 
-    # 统计
-    total_llm_calls: int = 0
-    total_tokens: int = 0
-    started_at: str = ""
-    last_activity: str = ""
-
     # 谜题
     puzzle_manager: PuzzleManager | None = None
 
@@ -248,6 +243,38 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
+
+    @property
+    def total_llm_calls(self) -> int:
+        return session_stats.total_llm_calls(self)
+
+    @total_llm_calls.setter
+    def total_llm_calls(self, value: int) -> None:
+        session_stats.replace_total_llm_calls(self, value)
+
+    @property
+    def total_tokens(self) -> int:
+        return session_stats.total_tokens(self)
+
+    @total_tokens.setter
+    def total_tokens(self, value: int) -> None:
+        session_stats.replace_total_tokens(self, value)
+
+    @property
+    def started_at(self) -> str:
+        return session_stats.started_at(self)
+
+    @started_at.setter
+    def started_at(self, value: str) -> None:
+        session_stats.replace_started_at(self, value)
+
+    @property
+    def last_activity(self) -> str:
+        return session_stats.last_activity(self)
+
+    @last_activity.setter
+    def last_activity(self, value: str) -> None:
+        session_stats.replace_last_activity(self, value)
 
     @property
     def max_players(self) -> int:
@@ -1002,8 +1029,7 @@ class GameInstance:
         ]
 
     def record_llm_usage(self, tokens: int = 0, *, calls: int = 1) -> None:
-        self.total_tokens += max(0, int(tokens or 0))
-        self.total_llm_calls += max(0, int(calls or 0))
+        session_stats.record_llm_usage(self, tokens, calls=calls)
 
     def record_combat_result(self, result: dict) -> None:
         self.pending_combat_results.append(result)

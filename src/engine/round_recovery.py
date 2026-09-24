@@ -103,7 +103,9 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     instance.round_start_snapshot.clear()
     instance.round_entity_snapshot.clear()
     instance.state = GameState.ACTIVE_ACTION
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.touch(instance)
     return instance.round_number
 
 
@@ -141,7 +143,9 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     instance.round_start_snapshot.clear()
     instance.round_entity_snapshot.clear()
     instance.state = GameState.ACTIVE_ACTION
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.touch(instance)
     return True
 
 
@@ -219,8 +223,10 @@ def finish_judgment_locked(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     instance.combat_extension_round_snapshots.pop(str(instance.round_number), None)
-    instance.total_llm_calls += 1
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.record_llm_usage(instance, 0, calls=1)
+    session_stats.touch(instance)
 
 
 def finish_judgment_with_swipe_locked(
@@ -241,8 +247,10 @@ def finish_judgment_with_swipe_locked(
             if state_changes is not None:
                 entry["state_changes"] = list(state_changes)
             break
-    instance.total_llm_calls += 1
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    from src.engine.modules import session_stats
+
+    session_stats.record_llm_usage(instance, 0, calls=1)
+    session_stats.touch(instance)
 
 
 def switch_swipe(instance: GameInstance, round_num: int, swipe_idx: int) -> bool:

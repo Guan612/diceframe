@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 from src.engine.dice_rng import parse_dice_formula, roll
+from src.engine.modules import session_stats
 
 @dataclass(frozen=True)
 class ManualRollDependencies:
@@ -75,7 +76,7 @@ class ManualRollService:
             if old.get("operation_id")==op:
                 return {"ok":True,"request":old,"idempotent":True}
         req={"id":f"mr_{uuid4().hex}","operation_id":op,"run_id":inst.run_id,"round_number":inst.round_number,"created_by":uid,"created_at":_now(),"label":str(body.get("label") or "")[:200],"formula":formula,"purpose":purpose,"target":target,"comparison":comparison,"include_in_ai_context":self._include_in_ai_context(purpose,body.get("include_in_ai_context")),"visibility":"private" if body.get("visibility")=="private" else "party","target_uids":targets,"target_names":{u:inst.players[u].get("character_name") or u for u in targets},"status":"pending","results":{}}
-        inst.manual_roll_requests.append(req); inst.last_activity=_now(); await self.d.save_instance(inst)
+        inst.manual_roll_requests.append(req); session_stats.touch(inst); await self.d.save_instance(inst)
         return {"ok":True,"request":req}
     async def resolve(self,key,uid,rid,body):
         inst=self._inst(key)
@@ -102,10 +103,10 @@ class ManualRollService:
                 for target_uid, item in req["results"].items():
                     item["verdict"] = "winner" if target_uid in winners else "loss"
             req["status"]="resolved"
-        inst.last_activity=_now(); await self.d.save_instance(inst); return {"ok":True,"result":value,"request":req}
+        session_stats.touch(inst); await self.d.save_instance(inst); return {"ok":True,"result":value,"request":req}
     async def cancel(self,key,uid,rid,body):
         inst=self._inst(key)
         if not inst or uid!=getattr(inst,"gm_uid",None): return {"ok":False,"error":"GM only"}
         req=next((r for r in inst.manual_roll_requests if r.get("id")==rid),None)
         if not req or req.get("run_id")!=body.get("run_id"): return {"ok":False,"error":"请求不存在或已过期"}
-        req["status"]="cancelled"; req["cancel_reason"]=str(body.get("reason") or "")[:200]; inst.last_activity=_now(); await self.d.save_instance(inst); return {"ok":True,"request":req}
+        req["status"]="cancelled"; req["cancel_reason"]=str(body.get("reason") or "")[:200]; session_stats.touch(inst); await self.d.save_instance(inst); return {"ok":True,"request":req}

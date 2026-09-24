@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from src.engine.character_utils import apply_resource_delta, get_resource
 from src.engine.game_instance import GameInstance, GameState
 from src.engine import progression
+from src.engine.modules import session_stats
 
 logger = logging.getLogger("trpg")
 
@@ -84,7 +85,7 @@ async def resolve_luck_decision(
         _cancel_luck_timer(instance, str(target.get("check_id") or ""))
         if instance.last_check and str(instance.last_check.get("check_id") or "") == check_id:
             instance.sync_last_check(target)
-        instance.last_activity = datetime.now(timezone.utc).isoformat()
+        session_stats.touch(instance)
         return {"ok": True, "check_result": dict(target)}
 
 
@@ -112,7 +113,7 @@ async def decline_pending_luck(instance: GameInstance) -> list[dict]:
                 )
                 if replacement:
                     instance.sync_last_check(replacement)
-            instance.last_activity = now
+            session_stats.touch(instance, at=now)
         return declined
 
 
@@ -138,7 +139,7 @@ async def system_decline_luck(instance: GameInstance, check_id: str) -> dict:
         target["luck_resolved_at"] = datetime.now(timezone.utc).isoformat()
         if instance.last_check and str(instance.last_check.get("check_id") or "") == check_id:
             instance.sync_last_check(target)
-        instance.last_activity = target["luck_resolved_at"]
+        session_stats.touch(instance, at=target["luck_resolved_at"])
         declined_all = not any(
             c.get("luck_decision") == "pending"
             for c in instance.last_checks
