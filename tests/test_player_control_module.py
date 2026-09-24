@@ -44,7 +44,8 @@ def test_migration_moves_and_normalizes_room_policy(legacy, expected):
     assert migrated["players"] == original["players"]
     assert migrated["modules"]["lorebook_runtime"] == original["modules"]["lorebook_runtime"]
     assert migrate_game_state_payload(migrated) == migrated
-    assert _migrate_v17_to_v18(deepcopy(migrated)) == migrated
+    step = _migrate_v17_to_v18(deepcopy(payload))
+    assert _migrate_v17_to_v18(deepcopy(step)) == step
 
 
 @pytest.mark.parametrize("modules", [None, [], {}, {"player_control": "broken"}])

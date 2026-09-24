@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULES = SRC / "engine" / "modules"
-MAX_TOP_LEVEL_FIELDS = 94
+MAX_TOP_LEVEL_FIELDS = 93
 
 CONTROL_WRITERS = {
     SRC / "engine" / "player_control.py",
@@ -90,6 +90,30 @@ def test_only_player_control_owner_writes_seat_controls() -> None:
                     violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: seat control write outside owner")
                     break
                 target = target.value
+    assert not violations, "\n".join(violations)
+
+
+def test_only_economy_owners_write_ledger_keys() -> None:
+    writers = {
+        SRC / "engine" / "economy.py",
+        MODULES / "economy_state.py",
+        SRC / "migrations" / "instance.py",
+        # Known direct outbox writer; converge on an owner API after R2.
+        SRC / "engine" / "memory_outbox.py",
+    }
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path in writers:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Subscript) or not isinstance(node.ctx, (ast.Store, ast.Del)):
+                continue
+            value = node.value
+            while isinstance(value, ast.Subscript):
+                value = value.value
+            if isinstance(value, ast.Attribute) and value.attr == "economy":
+                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: economy key write outside owner")
     assert not violations, "\n".join(violations)
 
 
