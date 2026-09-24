@@ -16,6 +16,25 @@ PUBLIC_FIELDS = frozenset({
 })
 
 
+PUBLIC_ACTION_FIELDS = frozenset({"user_id", "text"})
+
+
+@pytest.fixture
+def internal_action():
+    return {
+        "user_id": "p1",
+        "text": "open the door",
+        "metadata": {"private": True},
+        "check_request": {"secret_dc": 18},
+        "combat_outcome": {"hidden": "value"},
+        "future_internal_field": {"secret": True},
+        "revision_count": 2,
+        "dice_pending": False,
+        "dice_system": "d20",
+        "dice_roll_source": "server",
+    }
+
+
 @pytest.fixture
 def log_context():
     entry = {
@@ -102,6 +121,59 @@ def test_public_log_projection_preserves_pagination(log_context, page, expected_
     assert len(result["log"]) == 1
     assert result["log"][0]["round"] == expected_round
     assert set(result["log"][0]) <= PUBLIC_FIELDS
+
+
+@pytest.mark.parametrize("field", ["actions", "player_actions"])
+def test_public_log_projects_nested_actions_without_mutating_source(
+    log_context, internal_action, field,
+):
+    dependencies, instance = log_context
+    instance.log[0][field] = [internal_action, "legacy action", None]
+    before = deepcopy(instance.log)
+
+    result = logs.get_log(dependencies, "web|room|bot", include_internal=False)
+
+    assert logs.PUBLIC_ACTION_FIELDS == PUBLIC_ACTION_FIELDS
+    assert result["log"][0][field] == [
+        {"user_id": "p1", "text": "open the door"}, "legacy action", None,
+    ]
+    assert instance.log == before
+    result["log"][0][field][0]["text"] = "changed response"
+    assert instance.log == before
+
+
+@pytest.mark.parametrize("field", ["actions", "player_actions"])
+def test_internal_log_retains_complete_nested_actions(log_context, internal_action, field):
+    dependencies, instance = log_context
+    instance.log[0][field] = [internal_action]
+    before = deepcopy(instance.log)
+
+    result = logs.get_log(dependencies, "web|room|bot", include_internal=True)
+
+    assert result["log"] == before
+    result["log"][0][field][0]["metadata"]["private"] = False
+    assert instance.log == before
+
+
+@pytest.mark.parametrize("field", ["actions", "player_actions"])
+@pytest.mark.parametrize("prefix", ["【GM指令】", "[GM Directive]"])
+def test_nested_action_projection_keeps_gm_directive_filter(log_context, field, prefix):
+    dependencies, instance = log_context
+    # In particular, player_actions must be projected even without actions.
+    instance.log[0].pop("actions")
+    instance.log[0][field] = [
+        {"user_id": "system", "text": f"  {prefix} hidden plan", "metadata": {"private": True}},
+        {"user_id": "system", "text": "Public announcement"},
+        {"user_id": "p1", "text": f"{prefix} quoted by player"},
+    ]
+    before = deepcopy(instance.log)
+
+    public = logs.get_log(dependencies, "web|room|bot")
+    internal = logs.get_log(dependencies, "web|room|bot", include_internal=True)
+
+    assert public["log"][0][field] == before[0][field][1:]
+    assert internal["log"] == before
+    assert instance.log == before
 
 
 def test_missing_game_log_is_unchanged(log_context):
