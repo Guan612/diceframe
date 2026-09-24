@@ -32,7 +32,12 @@ from src.engine.game_state_contracts import (
 )
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.module_state import ensure_module_states
-from src.engine.modules import economy_state, lorebook_runtime, player_control_state
+from src.engine.modules import (
+    combat_extension_state,
+    economy_state,
+    lorebook_runtime,
+    player_control_state,
+)
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.engine.player_control import (
     PlayerControlError,
@@ -292,14 +297,6 @@ class GameInstance:
     # "auto_reward_cap": int}。{} 表示未设置，结算时回退规则模板 economy_defaults
     # 与服务器全局配置；归属见 economy.resolve_auto_reward_policy。
     economy_reward_policy: dict = field(default_factory=dict)
-    # 通用战斗扩展状态（Issue 212）：{"schema_version": 1, "scheduler": {...}|None,
-    # "pools": {entity_id: {resource_id: {...}}}}。仅当规则模板显式声明 combat
-    # 能力时由 runtime 写入；{} 表示未启用。结构与校验归属 combat_scheduler /
-    # combat_resources，存档只做不透明透传。
-    combat_extension: dict = field(default_factory=dict)
-    # 通用战斗扩展按回合惰性保存的首个写入前快照。动作和调度推进都可能
-    # 独立于叙事判定发生，因此不能只依赖玩家 round_start_snapshot。
-    combat_extension_round_snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
     # 内部：每条 pending 幸运检定的超时定时器（check_id -> asyncio.Task），不序列化
     _luck_timers: dict = field(default_factory=dict, repr=False)
     # 内部：正在处理本轮的 task（仅判定期间有值，不序列化）。GM 明确要求强制推进
@@ -335,6 +332,24 @@ class GameInstance:
     @economy.setter
     def economy(self, value: Any) -> None:
         economy_state.replace_state(self, value)
+
+    @property
+    def combat_extension(self) -> dict[str, Any]:
+        """Live opaque combat state; an empty dict means disabled."""
+        return combat_extension_state.current(self)
+
+    @combat_extension.setter
+    def combat_extension(self, value: Any) -> None:
+        combat_extension_state.replace_current(self, value)
+
+    @property
+    def combat_extension_round_snapshots(self) -> dict[str, Any]:
+        """Live snapshots captured before each round's first combat write."""
+        return combat_extension_state.round_snapshots(self)
+
+    @combat_extension_round_snapshots.setter
+    def combat_extension_round_snapshots(self, value: Any) -> None:
+        combat_extension_state.replace_round_snapshots(self, value)
 
     @asynccontextmanager
     async def authoritative_write(self) -> AsyncIterator[bool]:
@@ -847,6 +862,7 @@ class GameInstance:
             if self.log:
                 # Reject before history or snapshots can be changed.
                 economy_state.state(self)
+                combat_extension_state.current(self)
             return round_recovery.rollback_last_round_locked(self)
 
     async def abort_round_processing(self) -> bool:
@@ -867,6 +883,7 @@ class GameInstance:
         async with self._lock:
             if self.state == GameState.ACTIVE_JUDGMENT:
                 economy_state.state(self)
+                combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
 
     def _drop_stale_combat_caches(self, *, all_targets: bool = False) -> None:
@@ -1379,6 +1396,9 @@ class GameInstance:
         实现是基线 reset() 的机械迁移（见 ``instance_lifecycle.reset_locked``）。
         """
         async with self._lock:
+            # Validate fallible slots before rotating the run or clearing state.
+            combat_extension_state.current(self)
+            lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
 
     # ---------- 序列化 --------------------------------------
