@@ -92,7 +92,7 @@ def test_timed_state_is_migrated_at_game_save_load_boundary():
     instance = GameInstance(game_key=("web", "timers", "gm"))
     instance.lorebook_timed_state = {"entry": {"status": "cooldown", "remaining": 2}}
     payload = instance.to_dict()
-    assert payload["lorebook_timed_state"]["entry"]["cooldown_remaining"] == 2
+    assert payload["modules"]["lorebook_runtime"]["timers"]["entry"]["cooldown_remaining"] == 2
     restored = GameInstance.from_dict(payload)
     assert restored.lorebook_timed_state["entry"]["cooldown_remaining"] == 2
     restored.update_lorebook_timed_state()

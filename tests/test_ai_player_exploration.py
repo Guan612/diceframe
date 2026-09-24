@@ -189,8 +189,8 @@ def make_dependencies(
     async def save_instance(_instance: GameInstance) -> None:
         return None
 
-    async def fill(target: GameInstance) -> list[dict[str, Any]]:
-        return await fill_ai_player_actions(target, llm_client=llm_client)
+    async def fill(target: GameInstance, **kwargs: Any) -> list[dict[str, Any]]:
+        return await fill_ai_player_actions(target, llm_client=llm_client, **kwargs)
 
     return TurnDependencies(
         get_instance=lambda _key: instance,

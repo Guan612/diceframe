@@ -10,7 +10,7 @@
 > - Branch: `main`
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
-> - Current GameInstance persisted schema: `15`
+> - Current GameInstance persisted schema: `20`
 > - Current Lorebook SQLite schema (`PRAGMA user_version`): `9`
 > - Document verification date: 2026-09-18
 >
@@ -1856,6 +1856,21 @@ no automatic intent is available
 ```
 
 Do not create a second AI combat loop.
+
+R4-b b1 closes a verified narrative-fill admission gap: with authoritative combat
+active, both mixed and all-AI tables could enqueue generated free text. The turns
+service now passes a synchronous, read-only capability query through GameHandler
+and the AI command to the action gate. It requires structured intents when the
+runtime supports authoritative intents and either disables narrative turns or has
+active combat. Generation preflight avoids unnecessary model calls; commit checks
+the current rule, runtime capabilities and combat status again under the existing
+authority/state locks, after stale, human and duplicate checks, with no await before
+enqueue. Unknown/incompatible runtimes and missing rules for bound instances fail
+closed. The engine has no ruleset-specific branch. Optional `False` / `None` inputs
+retain the direct-call contract; guarded callers must forward the live predicate.
+The instance schema remains 20. R4-b b3 adds no AI economy gate (the progression
+barrier already owns settlement); b4 stage alignment is deferred to R5. See the
+Chinese architecture document §12E for the ordered policy table and decisions.
 
 ---
 
