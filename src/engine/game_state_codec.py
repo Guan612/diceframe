@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any
 
 from src.engine.game_state_contracts import GamePersistedState
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
-from src.engine.player_control import away_control_policy, normalize_away_control_policy
 from src.migrations.instance import normalize_game_state_payload
 
 if TYPE_CHECKING:
@@ -81,7 +80,6 @@ class GameStateCodec:
             "max_players": instance.max_players,
             "gm_uid": instance.gm_uid,
             "player_access_open": instance.player_access_open,
-            "away_control_policy": away_control_policy(instance),
             "bot_bind_token": instance.bot_bind_token,
             "room_password": instance.room_password,
             "room_token": instance.room_token,
@@ -228,9 +226,6 @@ class GameStateCodec:
             max_players=data.get("max_players", 6),
             gm_uid=data.get("gm_uid", ""),
             player_access_open=data.get("player_access_open", True),
-            away_control_policy=normalize_away_control_policy(
-                data.get("away_control_policy")
-            ),
             bot_bind_token=data.get("bot_bind_token", ""),
             room_password=data.get("room_password", ""),
             room_token=data.get("room_token", ""),

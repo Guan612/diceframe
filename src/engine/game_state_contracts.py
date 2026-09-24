@@ -160,7 +160,6 @@ class GamePersistedState(TypedDict, total=False):
     max_players: int
     gm_uid: str
     player_access_open: bool
-    away_control_policy: str
     bot_bind_token: str
     room_password: str
     room_token: str

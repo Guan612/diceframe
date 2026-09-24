@@ -22,7 +22,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 17
+CURRENT_INSTANCE_SCHEMA_VERSION = 18
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -348,6 +348,28 @@ def _migrate_v16_to_v17(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v17_to_v18(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the room away policy into ``modules.player_control`` (Track R1).
+
+    Normalize the legacy setting with the v14-to-v15 rule: missing or invalid
+    values stay ``pause``, so no seat is silently handed to the AI. Existing
+    slots are kept verbatim, including unknown module schemas. Idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    legacy = payload.pop("away_control_policy", None)
+    if not isinstance(modules.get("player_control"), dict):
+        modules["player_control"] = {
+            "schema_version": 1,
+            "away_control_policy": normalize_away_control_policy(legacy),
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 18
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -403,6 +425,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 16:
         payload = _migrate_v16_to_v17(payload)
         version = 17
+    if version == 17:
+        payload = _migrate_v17_to_v18(payload)
+        version = 18
     payload["instance_schema_version"] = version
     return payload
 

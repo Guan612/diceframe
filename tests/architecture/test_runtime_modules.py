@@ -8,7 +8,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULES = SRC / "engine" / "modules"
-MAX_TOP_LEVEL_FIELDS = 95
+MAX_TOP_LEVEL_FIELDS = 94
+
+CONTROL_WRITERS = {
+    SRC / "engine" / "player_control.py",
+    SRC / "migrations" / "instance.py",
+    # This writes the creation response dict, not the instance's seat state.
+    SRC / "webui" / "services" / "game_creation_phases.py",
+}
 
 
 def _runtime_nodes(node: ast.AST):
@@ -61,6 +68,28 @@ def test_only_module_owners_write_module_slots() -> None:
                 value = value.value
             if isinstance(value, ast.Attribute) and value.attr == "modules":
                 violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: module slot write outside owner")
+    assert not violations, "\n".join(violations)
+
+
+def test_only_player_control_owner_writes_seat_controls() -> None:
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path in CONTROL_WRITERS:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Subscript) or not isinstance(node.ctx, (ast.Store, ast.Del)):
+                continue
+            target = node
+            while isinstance(target, ast.Subscript):
+                key = target.slice
+                if (
+                    isinstance(key, ast.Constant) and key.value == "control"
+                    or isinstance(key, ast.Name) and key.id == "CONTROL_KEY"
+                ):
+                    violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: seat control write outside owner")
+                    break
+                target = target.value
     assert not violations, "\n".join(violations)
 
 
