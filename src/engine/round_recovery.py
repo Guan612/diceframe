@@ -49,10 +49,11 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     """
     if not instance.log:
         return None
-    from src.engine.modules import checks, session_stats
+    from src.engine.modules import checks, round_safety, session_stats
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
+    round_safety.require_writable(instance)
     last = instance.log.pop()
     from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
 
@@ -103,9 +104,7 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     instance.reset_round_checks()
     # Explicit rollback starts a fresh attempt for that round; do not
     # let a discarded outcome affect the replay or a later round.
-    instance.death_save_outcomes.clear()
-    instance.round_start_snapshot.clear()
-    instance.round_entity_snapshot.clear()
+    round_safety.discard_round(instance)
     instance.state = GameState.ACTIVE_ACTION
     session_stats.touch(instance)
     return instance.round_number
@@ -122,10 +121,11 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     """
     if instance.state != GameState.ACTIVE_JUDGMENT:
         return False
-    from src.engine.modules import checks, session_stats
+    from src.engine.modules import checks, round_safety, session_stats
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
+    round_safety.require_writable(instance)
     restored = False
     if instance.round_start_snapshot:
         restore_players(instance, instance.round_start_snapshot)
@@ -145,9 +145,7 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     for check_id in list(instance._luck_timers):
         instance._cancel_luck_timer(check_id)
     instance.reset_round_checks()
-    instance.death_save_outcomes.clear()
-    instance.round_start_snapshot.clear()
-    instance.round_entity_snapshot.clear()
+    round_safety.discard_round(instance)
     instance.state = GameState.ACTIVE_ACTION
     session_stats.touch(instance)
     return True
@@ -168,10 +166,11 @@ def finish_judgment_locked(
     GameInstance wrapper 先校验推进与经济模块，再在同一段状态锁内依次
     调用本函数和 ``start_round_locked``，使日志提交与下一轮开启不可交错。
     """
-    from src.engine.modules import checks, session_stats
+    from src.engine.modules import checks, round_safety, session_stats
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
+    round_safety.require_writable(instance)
     pending_combat_summaries: list[str] = []
     raw_schema = (
         instance.combat_extension.get("schema_version")

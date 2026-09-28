@@ -55,9 +55,6 @@ class GameStateCodec:
             "language": normalize_language(instance.language),
             "gm_uid": instance.gm_uid,
             "modules": {**instance.modules, "health": health.persisted_state(instance)},
-            "round_start_snapshot": instance.round_start_snapshot,
-            "round_entity_snapshot": instance.round_entity_snapshot,
-            "death_save_outcomes": instance.death_save_outcomes,
         }
         if instance.ruleset_runtime:
             data["ruleset_runtime"] = instance.ruleset_runtime
@@ -77,12 +74,6 @@ class GameStateCodec:
         state_type: type[GameState],
     ) -> GameInstance:
         data = normalize_game_state_payload(data)
-        raw_death_save_outcomes = data.get("death_save_outcomes")
-        death_save_outcomes = (
-            raw_death_save_outcomes
-            if isinstance(raw_death_save_outcomes, dict)
-            else {}
-        )
         instance = instance_type(
             game_key=tuple(data["game_key"]),
             instance_schema_version=int(data.get("instance_schema_version", 11) or 11),
@@ -136,14 +127,6 @@ class GameStateCodec:
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
             gm_uid=data.get("gm_uid", ""),
             modules=data.get("modules") if isinstance(data.get("modules"), dict) else {},
-            round_start_snapshot=data.get("round_start_snapshot") or {},
-            # 旧存档没有这个键：默认空快照，回滚时退化为按目标核对战斗缓存。
-            round_entity_snapshot=(
-                data.get("round_entity_snapshot")
-                if isinstance(data.get("round_entity_snapshot"), dict)
-                else {}
-            ),
-            death_save_outcomes=death_save_outcomes,
             ready_players=set(data.get("ready_players", [])),
             away_players=set(data.get("away_players", [])),
         )

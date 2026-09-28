@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULES = SRC / "engine" / "modules"
-MAX_TOP_LEVEL_FIELDS = 51
+MAX_TOP_LEVEL_FIELDS = 48
 
 CONTROL_WRITERS = {
     SRC / "engine" / "player_control.py",
@@ -69,6 +69,26 @@ def test_combat_guard_rejects_direct_writes_including_game_instance(source) -> N
     assert _combat_property_writes(SRC / "webui" / "routes" / "outsider.py", tree)
     for owner in COMBAT_WRITERS:
         assert not _combat_property_writes(owner, tree)
+
+
+def test_only_round_safety_owners_assign_fields() -> None:
+    owners = {
+        SRC / "engine" / "game_instance.py",
+        MODULES / "round_safety.py",
+        SRC / "engine" / "game_state_codec.py",
+    }
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path in owners:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or not isinstance(node.ctx, (ast.Store, ast.Del)):
+                continue
+            if node.attr not in {"round_start_snapshot", "round_entity_snapshot", "death_save_outcomes"}:
+                continue
+            violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: round safety write outside owner")
+    assert not violations, "\n".join(violations)
 
 
 def test_only_checks_owners_assign_fields() -> None:

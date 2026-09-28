@@ -14,6 +14,7 @@ from src.engine.modules import (  # noqa: F401
     session_stats,
     checks,
     round_presentation,
+    round_safety,
     table_settings,
     world_reports,
 )

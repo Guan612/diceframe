@@ -135,8 +135,5 @@ class GamePersistedState(TypedDict, total=False):
     language: str
     gm_uid: str
     modules: dict[str, dict[str, Any]]
-    round_start_snapshot: PlayerRollbackSnapshot
-    round_entity_snapshot: OpaqueState
-    death_save_outcomes: dict[str, dict[str, OpaqueState]]
     puzzles: OpaqueState
     plot_tracker: OpaqueState

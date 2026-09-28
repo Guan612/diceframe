@@ -49,6 +49,7 @@ from src.engine.modules import (
     progression_state,
     room_access,
     round_presentation,
+    round_safety,
     session_stats,
     table_settings,
     world_reports,
@@ -203,17 +204,6 @@ class GameInstance:
     # 本轮规划发现的无价购买意图（payer/target/quantity）。只在回合内存中
     # 传递：供结算阶段的同轮 LOOT 拦截使用，从不持久化、不产生金额。
     round_unpriced_purchase_intents: list[dict] = field(default_factory=list)
-    # 进入判定阶段前的玩家状态；整轮撤回时用于退还本轮消耗的幸运。
-    round_start_snapshot: PlayerRollbackSnapshot = field(default_factory=dict)
-    # 进入判定阶段前的旧版战斗实体状态（npcs / combat_enemies / 战斗状态）。
-    # 旧版 hp_based 路径（CombatResolver）直接改写这些记录、且不经过
-    # combat_extension 的快照机制；判定失败回滚必须能把它们一起还原，
-    # 否则"没讲成的回合"会留下伤害。D&D2024 权威战斗另有
-    # combat_extension_round_snapshots。见 capture_round_entity_snapshot。
-    round_entity_snapshot: dict[str, Any] = field(default_factory=dict)
-    # Death-save outcomes are keyed by round and player UID so narrative/API
-    # retries reuse the same roll without leaking it into future rounds.
-    death_save_outcomes: dict[str, dict[str, dict]] = field(default_factory=dict)
 
     # 叙事语言
     language: str = DEFAULT_LANGUAGE  # "zh-CN" / "en"
@@ -238,6 +228,33 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
+
+    @property
+    def round_start_snapshot(self) -> PlayerRollbackSnapshot:
+        """进入判定前的玩家状态；整轮撤回时退还本轮消耗。"""
+        return round_safety.round_start_snapshot(self)
+
+    @round_start_snapshot.setter
+    def round_start_snapshot(self, value: PlayerRollbackSnapshot) -> None:
+        round_safety.capture_players(self, value)
+
+    @property
+    def round_entity_snapshot(self) -> dict[str, Any]:
+        """旧版战斗实体快照；与 combat_extension 的权威战斗快照互补。"""
+        return round_safety.round_entity_snapshot(self)
+
+    @round_entity_snapshot.setter
+    def round_entity_snapshot(self, value: dict[str, Any]) -> None:
+        round_safety.replace_entity_snapshot(self, value)
+
+    @property
+    def death_save_outcomes(self) -> dict[str, dict[str, dict]]:
+        """Per-round/player death saves reused by narrative and API retries."""
+        return round_safety.death_save_outcomes(self)
+
+    @death_save_outcomes.setter
+    def death_save_outcomes(self, value: dict[str, dict[str, dict]]) -> None:
+        round_safety.replace_death_save_outcomes(self, value)
 
     @property
     def last_check(self) -> CheckResult | None:
@@ -878,6 +895,10 @@ class GameInstance:
             "last_check", "last_checks", "round_checks_prepared", "manual_roll_requests",
         )):
             checks.require_writable(self)
+        if any(key in snapshot for key in (
+            "round_start_snapshot", "round_entity_snapshot", "death_save_outcomes",
+        )):
+            round_safety.require_writable(self)
         if "round_number" in snapshot:
             progression.require_writable(self)
             restored_round = int(snapshot["round_number"])
@@ -1134,6 +1155,7 @@ class GameInstance:
                 progression.require_writable(self)
                 session_stats.require_writable(self)
                 checks.require_writable(self)
+                round_safety.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.rollback_last_round_locked(self)
@@ -1158,6 +1180,7 @@ class GameInstance:
                 progression.require_writable(self)
                 session_stats.require_writable(self)
                 checks.require_writable(self)
+                round_safety.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
@@ -1321,6 +1344,7 @@ class GameInstance:
             progression.require_writable(self)
             session_stats.require_writable(self)
             checks.require_writable(self)
+            round_safety.require_writable(self)
             economy_state.state(self)
             turn_state.start_round_locked(self)
 
@@ -1599,6 +1623,7 @@ class GameInstance:
 
             progression.require_writable(self)
             checks.require_writable(self)
+            round_safety.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             return self._do_advance_locked()
@@ -1610,6 +1635,7 @@ class GameInstance:
 
             progression.require_writable(self)
             checks.require_writable(self)
+            round_safety.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             if self.state != GameState.ACTIVE_ACTION:
@@ -1622,6 +1648,7 @@ class GameInstance:
         """在锁内执行推进（调用方需持锁；实现见 turn_state）。"""
         progression.require_writable(self)
         checks.require_writable(self)
+        round_safety.require_writable(self)
         return turn_state.do_advance_locked(self)
 
     def capture_round_entity_snapshot(self) -> None:
@@ -1650,6 +1677,7 @@ class GameInstance:
             progression.require_writable(self)
             session_stats.require_writable(self)
             checks.require_writable(self)
+            round_safety.require_writable(self)
             economy_state.state(self)
             round_recovery.finish_judgment_locked(
                 self,
@@ -1715,6 +1743,7 @@ class GameInstance:
             progression.require_writable(self)
             session_stats.require_writable(self)
             checks.require_writable(self)
+            round_safety.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)

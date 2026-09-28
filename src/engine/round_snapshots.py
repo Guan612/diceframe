@@ -352,7 +352,10 @@ def capture_round_entity_snapshot(instance: GameInstance) -> None:
     与 ``round_start_snapshot``（玩家）和 ``combat_extension_round_snapshots``
     （D&D2024 权威战斗扩展）互补，三者合起来才是"本轮改过的东西"。
     """
-    instance.round_entity_snapshot = {
+    from src.engine.modules import round_safety
+
+    round_safety.require_writable(instance)
+    round_safety.replace_entity_snapshot(instance, {
         "npcs": copy.deepcopy(instance.npcs),
         "combat_enemies": copy.deepcopy(instance.combat_enemies),
         "combat_state": str(instance.combat_state or "none"),
@@ -364,7 +367,7 @@ def capture_round_entity_snapshot(instance: GameInstance) -> None:
         # （FIX-04 §6.7），所以"本轮改过的东西"必须包含它——否则回滚会把世界
         # 退回去、把进度留在被丢弃的分支上。
         "adventure_progress": copy.deepcopy(instance.adventure_progress),
-    }
+    })
 
 
 def restore_round_entity_snapshot(instance: GameInstance) -> bool:
