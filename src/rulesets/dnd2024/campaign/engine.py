@@ -611,6 +611,9 @@ class Dnd2024CampaignEngine:
         return events
 
     def apply_batch(self, instance: Any, batch: dict[str, Any]) -> dict[str, Any]:
+        from src.engine.modules import ruleset_runtime
+
+        ruleset_runtime.require_writable(instance)
         state = self.initialize_state(instance)
         snapshot = {
             "version": int(state.get("version", 0) or 0),

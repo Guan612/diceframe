@@ -29,6 +29,9 @@ def _level(character: dict[str, Any]) -> int:
 
 
 def _state(instance: Any) -> dict[str, Any]:
+    from src.engine.modules import ruleset_runtime
+
+    ruleset_runtime.require_writable(instance)
     ruleset_state = instance.ruleset_state
     if not isinstance(ruleset_state, dict):
         ruleset_state = {}
@@ -270,7 +273,9 @@ def snapshot(instance: Any) -> dict[str, Any]:
 
 def restore(instance: Any, saved: Any) -> None:
     """Restore a transaction snapshot without retaining mutable aliases."""
+    from src.engine.modules import ruleset_runtime
 
+    ruleset_runtime.require_writable(instance)
     ruleset_state = instance.ruleset_state
     if not isinstance(ruleset_state, dict):
         ruleset_state = {}

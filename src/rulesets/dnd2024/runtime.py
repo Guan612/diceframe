@@ -85,6 +85,9 @@ class Dnd2024Runtime:
     ) -> None:
         """Materialize a clean campaign projection for reset/restart."""
 
+        from src.engine.modules import ruleset_runtime
+
+        ruleset_runtime.require_writable(instance)
         instance.ruleset_state = {"state_schema_version": 1}
         self._campaign_engine(
             instance, str(getattr(instance, "language", "") or ""),

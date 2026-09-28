@@ -112,8 +112,8 @@ async def test_narrative_perspective_is_ruleset_neutral_and_persisted(tmp_path):
     inst = GameInstance(
         game_key=key,
         rule_id="dnd2024_srd",
-        ruleset_runtime={"id": "core:dnd2024"},
     )
+    inst.ruleset_runtime = {"id": "core:dnd2024"}
     registry.register(inst)
 
     result = await _game_controls(registry).set_narrative_perspective(
