@@ -345,7 +345,10 @@ class LorebookStore:
                 "SELECT 1 FROM lorebook_bindings WHERE book_id = ? "
                 "AND role = 'primary' AND scope_kind = 'world' LIMIT 1", (book_id,)
             ).fetchone()
-            if primary is not None or str(book_id).startswith("world:"):
+            # Primary is a relationship owned by the Binding row.  The
+            # ``world:<id>`` book id is only a compatibility projection and
+            # must not become a second authority for deletion semantics.
+            if primary is not None:
                 raise ValueError("primary world lorebook cannot be deleted")
             entry_ids = [r[0] for r in self._conn.execute(
                 "SELECT id FROM lorebook_entries WHERE book_id = ?", (book_id,)
