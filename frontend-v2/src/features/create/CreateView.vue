@@ -24,6 +24,14 @@ import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadSceneImage } from '@/api/sceneImages'
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
 import { isLlmConfigReady } from '@/utils/modelConfiguration'
+import { moduleApi, type ModuleSummary } from '@/api/modules'
+import {
+  cardControlAt,
+  cycleCardControl,
+  removeCardControl,
+  syncCardControls,
+  type CardControlMode,
+} from '@/features/create/cardControl'
 
 interface CreateCharacter extends CharacterSheet { character_name: string }
 type CreateMode = 'template' | 'custom' | 'ai'
@@ -75,6 +83,9 @@ const aiAutoRule = ref(false), aiGeneratedRule = ref<GeneratedRuleResponse | nul
 const loreChoice = ref('__builtin__')
 const adventures = ref<AdventureSummary[]>([])
 const adventureId = ref('')
+const modules = ref<ModuleSummary[]>([])
+const moduleId = ref('')
+const moduleAdventureIds = ref<string[]>([])
 const seed = ref(''), busy = ref(false), error = ref('')
 const settingsChecked = ref(false)
 const sceneImageFile = ref<File | null>(null)
@@ -106,6 +117,9 @@ const showAdventurePackages = computed(() => (
   && supportsAdventurePackages.value
 ))
 const selectedAdventure = computed(() => adventures.value.find(item => item.adventure_id === adventureId.value))
+const availableModuleAdventures = computed(() => moduleId.value
+  ? adventures.value.filter(item => moduleAdventureIds.value.includes(item.adventure_id))
+  : adventures.value)
 
 function selectPlayMode(value: PlayMode): void {
   playMode.value = value
@@ -176,6 +190,33 @@ function stepTitle(value: number): string { return t(stepTitleKeys[value - 1] ||
 function ensureCharacter(value: CharacterSheet): CreateCharacter {
   return { ...value, character_name: String(value.character_name || gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE)) }
 }
+
+// 每张角色卡由谁负责：控制方式在「角色」步骤直接选，确认页只做摘要。
+// 默认第一张是「玩家」、其余「等待认领」——与后端三态契约（human / ai / unclaimed）一致。
+const cardControl = ref<CardControlMode[]>(['human'])
+function controlLabel(mode: string): string {
+  if (mode === 'ai') return t('controlAi')
+  if (mode === 'unclaimed') return t('controlUnclaimed')
+  return t('controlHuman')
+}
+/** 角色步骤与确认页共用同一个答案，避免确认页显示与刚才选择不同的值。 */
+function controlOf(index: number): CardControlMode {
+  return cardControlAt(cardControl.value, index)
+}
+/** 单个循环按钮：点一下换下一个控制方式（玩家 → AI 托管 → 等待认领 → 玩家）。 */
+function cycleControl(index: number) {
+  cardControl.value = cycleCardControl(cardControl.value, index)
+}
+/** 按钮只显示当前状态，所以用 title / aria-label 说明「点它会切换」。 */
+function controlSwitchHint(index: number): string {
+  return t('controlSwitchHint', { mode: controlLabel(controlOf(index)) })
+}
+// 任何进入 characters[] 的路径（手动创建 / 角色卡选择器 / 导入 / 专业建卡）都会
+// 经过这里补齐控制方式，不会出现「导入的角色没有控制方式」。
+watch(() => characters.value.length, (length) => {
+  const next = syncCardControls(length, cardControl.value)
+  if (next.length !== cardControl.value.length || next.some((v, i) => v !== cardControl.value[i])) cardControl.value = next
+}, { immediate: true })
 
 function legacyCharacterFromCard(card: CharacterCard): CreateCharacter {
   return ensureCharacter({
@@ -269,6 +310,15 @@ watch(usesProfessionalBuilder, (enabled) => {
     characters.value = [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE), background: '', identity: {}, attributes: {}, skills: [] }]
   }
 })
+watch(moduleId, async (value) => {
+  moduleAdventureIds.value = []
+  adventureId.value = ''
+  if (!value) return
+  try {
+    const result = await moduleApi.detail(value)
+    moduleAdventureIds.value = result.module?.adventures.map(item => item.adventure_id) || []
+  } catch { /* the adventure selector remains empty until the module detail is available */ }
+})
 watch(sceneImageFile, (file) => {
   revokeSceneImageUrl(customSceneImageUrl.value)
   customSceneImageUrl.value = file ? URL.createObjectURL(file) : ''
@@ -342,6 +392,7 @@ onMounted(async () => {
     ? worldDefaultRule
     : (rules.value[0]?.rule_id || '')
   aiRule.value = rule.value
+  void moduleApi.list().then(result => { modules.value = result.modules || [] }).catch(() => {})
   characters.value = usesProfessionalBuilder.value
     ? []
     : [{ character_name: gameDefault(DEFAULT_ADVENTURER_ZH, 'Adventurer', DEFAULT_ADVENTURER_DE), background: '', identity: {}, attributes: {}, skills: [] }]
@@ -401,19 +452,28 @@ function onPickerPick(c: CharacterCard) {
     toast.success(t('addedFromLibrary'))
   }
 }
+// 卡内角色世界书是否随卡一起导入；不勾就真的只导入卡（后端 include_character_book=false）。
+const importCardLore = ref(true)
 async function importCardFile(file: File) {
-  const r = await importTavernCard(file, { target: 'character_card' })
+  const r = await importTavernCard(file, { target: 'character_card', includeCharacterBook: importCardLore.value })
   const card = r.card
   if (!card) throw new Error(t('importFailed'))
   cards.value.push(card)
   const character = characterFromCard(card)
   characters.value.push(character)
+  if (r.lorebook) {
+    toast.success(t('importedCharacterWithLore', {
+      name: card.character_name,
+      book: r.lorebook.name || r.lorebook_book_id || '',
+      count: r.lorebook.entries ?? 0,
+    }))
+  }
   if (cardNeedsReview(card)) {
     editIdx.value = characters.value.length - 1
     if (usesProfessionalBuilder.value) showRulesetBuilder.value = true
     else showWizard.value = true
     toast.info(t('cardRuleConversionReview'))
-  } else {
+  } else if (!r.lorebook) {
     toast.success(t('importedCharacter', { name: card.character_name }))
   }
 }
@@ -434,6 +494,9 @@ function onImportDfCard(e: Event) {
 function removeCharacter(idx: number) {
   if (characters.value.length <= 1) { toast.error(t('atLeastOneCharacter')); return }
   characters.value.splice(idx, 1)
+  // 控制方式与角色按 index 平行保存，必须一起删；否则后面的角色会继承被删角色的
+  // control（删掉 A(human) 之后 B 会变成 human，而它原本是 ai）。
+  cardControl.value = removeCardControl(cardControl.value, idx)
 }
 
 function canNext() {
@@ -483,7 +546,13 @@ async function create() {
   busy.value = true; error.value = ''
   try {
     requireApiConfiguration()
-    const players = characters.value.map(cloneCharacter)
+    const players = characters.value.map((c, i) => {
+      const card = cloneCharacter(c)
+      // 每张卡在「角色」步骤都有明确的控制方式，创建 payload 直接带上它；
+      // 服务端把它写成 players[uid].control.mode（human / ai / unclaimed），
+      // 前端不自己造 AI 状态，也不修改 control revision。
+      return { ...card, control: cardControlAt(cardControl.value, i) }
+    })
     const selectedSceneImage = sceneImageFile.value ? await uploadSceneImage(sceneImageFile.value) : undefined
     if (seed.value.trim()) {
       const r = await api<GameMutationResponse>('/games/create-from-seed', { method: 'POST', body: JSON.stringify({ seed_code: seed.value.trim(), solo: solo.value, players, language: gameLanguage.value, scene_image: selectedSceneImage, narrative_perspective: narrativePerspective.value }) })
@@ -495,7 +564,7 @@ async function create() {
     const selectedMapBackground = mapBackgroundFile.value
       ? await uploadMapBackground(mapBackgroundFile.value)
       : mapBackgroundSelection(mapBackgroundChoice.value)
-    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
+    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', adventure_source_kind: showAdventurePackages.value && playMode.value === 'adventure' && moduleId.value ? 'plugin' : '', adventure_source_id: showAdventurePackages.value && playMode.value === 'adventure' ? moduleId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value.trim() || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
     let worldId = ''
     if (mode.value === 'template') {
       worldId = world.value; payload.world_id = worldId
@@ -621,9 +690,13 @@ async function create() {
                     </button>
                   </div>
                   <div v-if="playMode === 'adventure'" class="create-adventure-select-row">
+                    <select v-if="modules.length" v-model="moduleId">
+                      <option value="">{{ t('navModules') }}</option>
+                      <option v-for="item in modules" :key="item.id" :value="item.id">{{ item.name }}</option>
+                    </select>
                     <select v-model="adventureId">
                       <option value="" disabled>{{ gameDefault('请选择冒险包', 'Choose an adventure package', 'Abenteuerpaket wählen') }}</option>
-                      <option v-for="item in adventures" :key="item.adventure_id" :value="item.adventure_id" :disabled="item.compatibility !== 'compatible'">
+                      <option v-for="item in availableModuleAdventures" :key="item.adventure_id" :value="item.adventure_id" :disabled="item.compatibility !== 'compatible'">
                         {{ item.name }} · {{ item.estimated_minutes }} {{ gameDefault('分钟', 'min', 'Min.') }}{{ item.compatibility !== 'compatible' ? gameDefault('（需匹配推荐世界）', ' (requires its recommended world)', ' (benötigt die empfohlene Welt)') : '' }}
                       </option>
                     </select>
@@ -738,13 +811,30 @@ async function create() {
         <section v-else-if="step === 3" class="create-step-card create-character-stage">
           <div class="create-character-actions">
             <button class="primary" @click="openWizard(null)">＋ {{ t('newCharacter') }}</button><button @click="showPicker = true">{{ t('pickFromLibrary') }}</button><button @click="dfInput?.click()">{{ t('importDiceframeCard') }}</button><button @click="fileInput?.click()">{{ t('importStCard') }}</button>
+            <label class="create-import-lore"><input v-model="importCardLore" type="checkbox" class="tavern-include-lore"> {{ t('tavernImportIncludeLore') }}</label>
             <input ref="dfInput" type="file" accept=".json,application/json" hidden @change="onImportDfCard"><input ref="fileInput" type="file" accept=".png,.json" hidden @change="onStImport">
           </div>
           <div class="create-character-grid">
             <article v-for="(c, i) in characters" :key="i" class="create-character-card">
               <PortraitImage :portrait="c.portrait" :rule-id="activeRule" :seed="c.character_name || String(i)" :name="c.character_name" :size="72" />
-              <div><h3>{{ c.character_name || t('unnamed') }}</h3><p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p><small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small></div>
-              <div class="actions"><button @click="openWizard(i)">{{ t('edit') }}</button><button class="danger" @click="removeCharacter(i)">{{ t('remove') }}</button></div>
+              <div>
+                <h3>{{ c.character_name || t('unnamed') }}</h3>
+                <p>{{ c.identity?.origin || c.race || '' }} · {{ c.identity?.archetype || c.class || '' }}</p>
+                <small>{{ c.skills?.length || 0 }} {{ t('skills') }}</small>
+              </div>
+              <div class="actions">
+                <!-- 控制方式是一个按钮而不是下拉：按钮显示当前状态，点一下切到下一个
+                     （玩家 → AI 托管 → 等待认领 → 玩家），与「编辑 / 删除」同一排。 -->
+                <button
+                  type="button"
+                  class="create-character-control-button"
+                  :title="controlSwitchHint(i)"
+                  :aria-label="controlSwitchHint(i)"
+                  @click="cycleControl(i)"
+                >{{ controlLabel(controlOf(i)) }}</button>
+                <button @click="openWizard(i)">{{ t('edit') }}</button>
+                <button class="danger" @click="removeCharacter(i)">{{ t('remove') }}</button>
+              </div>
             </article>
             <button class="create-character-empty" @click="openWizard(null)"><b>＋</b><span>{{ t('newCharacter') }}</span></button>
           </div>
@@ -762,6 +852,8 @@ async function create() {
             <article><span>{{ t('charactersCount') }}</span><strong>{{ characters.length }}</strong></article>
           </div>
           <div class="create-confirm-characters"><span v-for="(c, i) in characters" :key="i">{{ c.character_name }}</span></div>
+          <!-- 确认页不再逐张列出「名字 + 控制方式」：名字上面已经有胶囊，控制方式在
+               「角色」步骤的按钮上就是当前状态，重复一遍没有信息量。 -->
         </section>
 
         <p v-if="error" class="error-banner">{{ error }}</p>

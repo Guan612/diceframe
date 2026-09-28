@@ -17,15 +17,19 @@ from src.commands.economy_effects import (
     should_warn_unbacked_payment,
 )
 from src.engine.economy import filter_unconfirmed_purchase_grants
-from src.engine import combat_narrative
+from src.engine import combat_narrative, progression
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
+from src.engine.modules import session_stats
+from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
-from src.imagegen.storyboards import normalize_scene_panels
+from src.imagegen.storyboards import normalize_scene_panels, storyboard_panel_metadata, storyboard_source_revision
+from src.llm.context_builder import lore_char_budget
 from src.llm.parser import normalize_tag_protocol, sanitize_narration
+from src.lorebook.retrieval import LoreRetriever
 
 logger = logging.getLogger("trpg")
 
@@ -44,9 +48,11 @@ class SwipeGenerator:
         narrative_max_tokens: int,
         get_instance: Callable[[tuple], GameInstance | None] | None = None,
         save_instance: Callable[[GameInstance], Any] | None = None,
+        lore_retriever: Any | None = None,
     ):
         self.llm_client = llm_client
         self.matcher = matcher
+        self.lore_retriever = lore_retriever or LoreRetriever(matcher)
         self.prompt = prompt
         self.state_applier = state_applier
         self.load_world_template = load_world_template
@@ -73,6 +79,7 @@ class SwipeGenerator:
             if not rewrite_entered:
                 return None
             async with instance._process_lock:
+                session_stats.require_writable(instance)
                 expected_run_id = instance.run_id
                 before = type(instance).from_dict(deepcopy(instance.to_dict()))
                 before.log = deepcopy(instance.log)
@@ -121,12 +128,14 @@ class SwipeGenerator:
             return None, None
 
         swipes = target_entry.get("swipes", [])
-        if not swipes:
-            swipes = [target_entry.get("gm_response", "")]
-            target_entry["swipes"] = swipes
         if len(swipes) >= 5:
             logger.warning("Swipe 已达上限 (5), round=%d", round_num)
             return None, None
+        progression.require_writable(instance)
+        session_stats.require_writable(instance)
+        if not swipes:
+            swipes = [target_entry.get("gm_response", "")]
+            target_entry["swipes"] = swipes
 
         snapshot = target_entry.get("pre_state_snapshot", {})
         if snapshot:
@@ -145,13 +154,18 @@ class SwipeGenerator:
             if isinstance(current_combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(current_combat_snapshot):
                     instance.combat_extension = {}
-            instance.round_number = round_num
+            progression.rewind_for_replay(instance, round_num)
             reverse_round_economy(instance, round_num)
             restore_players(instance, reconcile_rollback_snapshot(instance, snapshot, round_num))
             combat_snapshot = target_entry.get("pre_combat_extension_snapshot")
             if isinstance(combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(combat_snapshot):
                     instance.combat_extension = {}
+            # 世界真相同属被丢弃的分支：swipe 切回目标轮时，本轮之后写入的
+            # world ops 一起撤销（ADR 0003 整轮语义）。
+            world_snapshot = target_entry.get("pre_world_state")
+            if isinstance(world_snapshot, dict) and world_snapshot:
+                instance.world_state = ensure_world_state(world_snapshot)
             instance.discard_combat_extension_snapshots_from(round_num)
             logger.info("Swipe: 已恢复 pre-state snapshot (round=%d)", round_num)
 
@@ -164,8 +178,19 @@ class SwipeGenerator:
         )
         if instance.world_id:
             self.ensure_matcher_for_world(instance.world_id, instance.language)
-        lorebook_matches = self.matcher.match_with_recursive(
-            actions_text, timed_state=instance.lorebook_timed_state)
+        # 与正常回合同一个 LoreRetriever：swipe 在 staged 克隆上重放同一轮，计时器
+        # 语义与正常回合一致（匹配结果随后经 replace_persisted_state_from 写回）。
+        action_actor_uids = sorted({
+            str(action.get("user_id") or "")
+            for action in target_entry.get("actions", [])
+            if str(action.get("user_id") or "") in instance.players
+        })
+        lorebook_matches = await self.lore_retriever.retrieve(
+            instance, actions_text, action_actor_uids=action_actor_uids,
+            overall_budget=lore_char_budget(
+                self.llm_client.default if getattr(self, "llm_client", None) else ""
+            ),
+        )
 
         rule_ctx = self.prompt.load_swipe_rule_context(instance, self.load_world_template)
         combat_model_s = rule_ctx.combat_model
@@ -256,7 +281,40 @@ class SwipeGenerator:
         scene_payload = None
         swipe_prompt = str(data.get("scene_image_prompt") or "").strip()
         swipe_panels = data.get("scene_panels")
-        normalized_panels, compressed_count = normalize_scene_panels(swipe_panels)
+        normalized_panels, compressed_count = normalize_scene_panels(
+            swipe_panels, merge_same_location=False,
+        )
+        # A swipe is a new public-story revision. Keep its storyboard draft
+        # beside the narration (never derive it later from an old image).
+        original_panels = deepcopy(target_entry.get("scene_panels") or [])
+        original_prompt = str(target_entry.get("scene_image_prompt") or "")
+        target_entry["scene_panels"] = normalized_panels
+        target_entry["scene_image_prompt"] = swipe_prompt[:300]
+        target_entry["scene_panel_meta"] = storyboard_panel_metadata(
+            normalized_panels,
+            narration=str(target_entry.get("gm_response") or ""),
+            actions=target_entry.get("actions") or [],
+            current_scene=str(getattr(instance, "scene", "") or ""),
+            source_revision=storyboard_source_revision(target_entry),
+        )
+        prompt_history = target_entry.setdefault("swipe_scene_image_prompts", [])
+        if not isinstance(prompt_history, list):
+            prompt_history = []
+            target_entry["swipe_scene_image_prompts"] = prompt_history
+        while len(prompt_history) < len(target_entry.get("swipes", [])) - 1:
+            prompt_history.append(original_prompt if not prompt_history else "")
+        prompt_history.append(swipe_prompt[:300])
+        swipe_panel_history = target_entry.setdefault("swipe_scene_panels", [])
+        if not isinstance(swipe_panel_history, list):
+            swipe_panel_history = []
+            target_entry["swipe_scene_panels"] = swipe_panel_history
+        # The first item corresponds to the original swipe; subsequent items
+        # follow the same order as the public ``swipes`` text list.
+        while len(swipe_panel_history) < len(target_entry.get("swipes", [])) - 1:
+            swipe_panel_history.append(deepcopy(original_panels) if not swipe_panel_history else [])
+        swipe_panel_history.append(deepcopy(normalized_panels))
+        if not normalized_panels:
+            target_entry.pop("scene_panel_meta", None)
         if swipe_prompt or normalized_panels:
             scene_payload = {
                 "prompt": swipe_prompt,

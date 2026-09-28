@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import io
+import json
 from types import SimpleNamespace
 
-from PIL import Image
 import pytest
 
 from src.imagegen.storyboards import (
+    StoryboardInferenceError,
     build_storyboard_prompt,
     infer_scene_panels,
     normalize_scene_panels,
-    overlay_storyboard_dividers,
     public_character_appearances,
     storyboard_layout,
 )
@@ -78,6 +77,18 @@ def test_single_panel_prompt_forbids_model_generated_splits() -> None:
     assert "gutters between panels" not in prompt
 
 
+def test_same_location_authoritative_panels_remain_separate_in_prompt() -> None:
+    prompt, metadata = build_storyboard_prompt([
+        {"participants": ["alice"], "location": "后院", "description": "打开门链"},
+        {"participants": ["alice"], "location": "后院", "description": "发现暗号"},
+    ])
+
+    assert metadata["layout"] == "two-panel"
+    assert len(metadata["panels"]) == 2
+    assert "Panel 1" in prompt and "Panel 2" in prompt
+    assert "software will not add or enforce any divider color or line" in prompt
+
+
 class _PanelLLM:
     def __init__(self, content: str):
         self.content = content
@@ -88,12 +99,23 @@ class _PanelLLM:
         return SimpleNamespace(content=self.content)
 
 
+class _SequencePanelLLM:
+    def __init__(self, *contents: str):
+        self.contents = list(contents)
+        self.calls = []
+
+    async def call(self, system_prompt, user_message, **kwargs):
+        self.calls.append((system_prompt, user_message, kwargs))
+        content = self.contents[min(len(self.calls) - 1, len(self.contents) - 1)]
+        return SimpleNamespace(content=content)
+
+
 @pytest.mark.asyncio
 async def test_ai_infers_distinct_public_locations_and_exact_player_ids() -> None:
     llm = _PanelLLM(
         '{"panels":['
-        '{"participants":["Alice"],"location":"废弃车站","description":"Alice站在雨夜月台"},'
-        '{"participants":["bob"],"location":"钟楼地下室","description":"Bob检查石室祭坛"}'
+        '{"participants":["Alice"],"location":"废弃车站","description":"Alice站在雨夜月台","evidence_ids":["n1"]},'
+        '{"participants":["bob"],"location":"钟楼地下室","description":"Bob检查石室祭坛","evidence_ids":["n2"]}'
         '],"compressed_count":0}'
     )
     panels, compressed = await infer_scene_panels(
@@ -115,7 +137,239 @@ async def test_ai_infers_distinct_public_locations_and_exact_player_ids() -> Non
     assert panels[0]["participants"] == ["alice"]
     assert panels[1]["participants"] == ["bob"]
     assert compressed == 0
+
+
+@pytest.mark.asyncio
+async def test_requested_panel_count_is_part_of_analysis_not_post_slice() -> None:
+    llm = _PanelLLM(
+        '{"panels":['
+        '{"participants":["alice"],"location":"废弃车站","description":"Alice观察月台","evidence_ids":["n1"]},'
+        '{"participants":["bob"],"location":"钟楼地下室","description":"Bob检查祭坛","evidence_ids":["n2"]},'
+        '{"participants":["alice"],"location":"废弃车站","description":"Alice发现脚印","evidence_ids":["n1"]}'
+        '],"compressed_count":0}'
+    )
+    panels, _ = await infer_scene_panels(
+        llm,
+        narration="Alice留在废弃车站；与此同时，Bob进入钟楼地下室。Alice发现脚印。",
+        actions=[],
+        current_scene="废弃车站",
+        players={"alice": {"character_name": "Alice"}, "bob": {"character_name": "Bob"}},
+        requested_panel_count=3,
+    )
+    assert len(panels) == 3
+    assert "exactly 3 panels" in llm.calls[0][0]
     assert "不可发送" not in llm.calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_requested_count_replans_existing_declared_panels() -> None:
+    llm = _SequencePanelLLM(
+        '{"panels":['
+        '{"participants":["alice"],"location":"后院","description":"审问","evidence_ids":["n1"]},'
+        '{"participants":["bob"],"location":"塔底","description":"搜索","evidence_ids":["n2"]},'
+        '{"participants":["alice"],"location":"前厅","description":"会合","evidence_ids":["n3"]}]}',
+        '{"panels":['
+        '{"participants":["alice"],"location":"后院","description":"审问开门","evidence_ids":["n1"]},'
+        '{"participants":["alice"],"location":"后院","description":"得到线索","evidence_ids":["n1"]},'
+        '{"participants":["bob"],"location":"塔底","description":"进入残骸","evidence_ids":["n2"]},'
+        '{"participants":["bob"],"location":"塔底","description":"发生滑倒","evidence_ids":["n2"]},'
+        '{"participants":["alice"],"location":"前厅","description":"前厅会合","evidence_ids":["n3"]},'
+        '{"participants":["alice"],"location":"前厅","description":"听见写字声","evidence_ids":["n3"]}]}',
+    )
+    panels, _ = await infer_scene_panels(
+        llm,
+        narration="Alice在后院审问并得到线索；Bob在塔底搜索并滑倒；Alice回到前厅会合。",
+        actions=[], current_scene="后院",
+        players={"alice": {"character_name": "Alice"}, "bob": {"character_name": "Bob"},
+                 "narrator": {"character_name": "Narrator"}},
+        declared_panels=[{"participants": ["alice"], "location": "后院", "description": "旧稿"}],
+        requested_panel_count=6,
+    )
+    assert len(llm.calls) == 2
+    assert len(panels) == 6
+
+
+@pytest.mark.asyncio
+async def test_requested_count_rejects_a_second_short_result() -> None:
+    three_panels = (
+        '{"panels":['
+        '{"participants":["alice"],"location":"后院","description":"审问","evidence_ids":["n1"]},'
+        '{"participants":["bob"],"location":"塔底","description":"搜索","evidence_ids":["n2"]},'
+        '{"participants":["alice"],"location":"前厅","description":"会合","evidence_ids":["n3"]}]}'
+    )
+    llm = _SequencePanelLLM(three_panels, three_panels)
+
+    with pytest.raises(StoryboardInferenceError, match="要求 6 格，实际 3 格"):
+        await infer_scene_panels(
+            llm,
+            narration="Alice在后院审问；Bob在塔底搜索；Alice回到前厅会合。",
+            actions=[], current_scene="后院",
+            players={"alice": {"character_name": "Alice"}, "bob": {"character_name": "Bob"}},
+            requested_panel_count=6,
+        )
+
+    assert len(llm.calls) == 2
+    assert '"requested_panel_count":6' in llm.calls[0][1]
+    assert "first pass produced 3 valid panels" in llm.calls[1][1]
+
+
+def test_six_panel_prompt_keeps_exact_count_without_forcing_a_grid() -> None:
+    panels = [
+        {"participants": [], "location": f"地点{i}", "description": "很长的画面描述" * 80}
+        for i in range(1, 7)
+    ]
+    prompt, metadata = build_storyboard_prompt(panels, max_chars=900)
+
+    assert metadata["layout"] == "six-panel"
+    assert "exactly 6 distinct panels" in prompt
+    assert "exactly 6 regions" in prompt
+    assert "3 x 2" not in prompt
+    assert len(prompt) <= 900
+    for index in range(1, 7):
+        assert f"Panel {index}" in prompt
+
+
+def test_three_panel_prompt_leaves_geometry_to_the_visual_model() -> None:
+    prompt, _ = build_storyboard_prompt([
+        {"participants": [], "location": "A", "description": "一"},
+        {"participants": [], "location": "B", "description": "二"},
+        {"participants": [], "location": "C", "description": "三"},
+    ])
+
+    assert "adaptive arrangement" in prompt
+    assert "freely choose the geometry" in prompt
+    assert "one row" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_ai_splits_merged_locations_when_each_has_public_evidence() -> None:
+    llm = _PanelLLM(
+        '{"panels":['
+        '{"participants":["观者"],"location":"砖墙暗道","description":"观者进入暗道","evidence_ids":["n1"]},'
+        '{"participants":["情緒","阿尔比娜"],"location":"站前窄巷","description":"两人在巷口会合","evidence_ids":["n2"]}'
+        ']}'
+    )
+    panels, _ = await infer_scene_panels(
+        llm,
+        narration="观者沿砖墙暗道向前。站前窄巷里，情緒与阿尔比娜已赶到巷口。",
+        actions=[],
+        current_scene="阿卡姆车站",
+        players={
+            "watcher": {"character_name": "观者"},
+            "emotion": {"character_name": "情緒"},
+            "albina": {"character_name": "阿尔比娜"},
+        },
+    )
+
+    assert [panel["location"] for panel in panels] == ["砖墙暗道", "站前窄巷"]
+    assert panels[0]["participants"] == ["watcher"]
+    assert panels[1]["participants"] == ["emotion", "albina"]
+
+
+@pytest.mark.asyncio
+async def test_ai_review_splits_independent_key_beats_at_same_location() -> None:
+    llm = _SequencePanelLLM(
+        '{"panels":[{"participants":["alice"],"location":"后院",'
+        '"description":"队伍在后院行动","evidence_ids":["n1"]}]}',
+        '{"panels":['
+        '{"participants":["alice"],"location":"后院","description":"打开门链","evidence_ids":["n1"]},'
+        '{"participants":["alice"],"location":"后院","description":"发现暗号","evidence_ids":["n2"]}'
+        ']}'
+    )
+    panels, _ = await infer_scene_panels(
+        llm,
+        narration="爱丽丝在后院打开门链。随后，她发现门上的暗号。",
+        actions=[],
+        current_scene="后院",
+        players={"alice": {"character_name": "爱丽丝"}, "bob": {"character_name": "鲍勃"}},
+    )
+
+    assert len(llm.calls) == 2
+    assert len(panels) == 2
+    assert [panel["description"] for panel in panels] == ["打开门链", "发现暗号"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_same_location_panels_remain_separate() -> None:
+    panels, compressed = await infer_scene_panels(
+        None,
+        narration="后院发生两次关键动作。",
+        actions=[],
+        current_scene="后院",
+        players={"alice": {"character_name": "Alice"}, "bob": {"character_name": "Bob"}},
+        declared_panels=[
+            {"participants": ["alice"], "location": "后院", "description": "打开门链"},
+            {"participants": ["bob"], "location": "后院", "description": "发现暗号"},
+        ],
+    )
+    assert compressed == 0
+    assert [panel["description"] for panel in panels] == ["打开门链", "发现暗号"]
+
+
+@pytest.mark.asyncio
+async def test_force_single_skips_automatic_storyboard_inference() -> None:
+    llm = _PanelLLM(
+        '{"panels":['
+        '{"participants":["alice"],"location":"后院","description":"打开门链","evidence_ids":["n1"]},'
+        '{"participants":["bob"],"location":"塔底","description":"检查残骸","evidence_ids":["n2"]}'
+        ']}'
+    )
+    panels, compressed = await infer_scene_panels(
+        llm,
+        narration="Alice 在后院打开门链。与此同时，Bob 在塔底检查残骸。",
+        actions=[],
+        current_scene="后院",
+        players={"alice": {"character_name": "Alice"}, "bob": {"character_name": "Bob"}},
+        force_single=True,
+    )
+
+    assert len(panels) == 1
+    assert compressed == 0
+    assert llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ai_rejects_unknown_evidence_or_participant() -> None:
+    llm = _PanelLLM(
+        '{"panels":[{"participants":["ghost"],"location":"不存在的地下室",'
+        '"description":"幻觉","evidence_ids":["missing"]}]}'
+    )
+    panels, compressed = await infer_scene_panels(
+        llm,
+        narration="Alice 和 Bob 都在车站大厅。",
+        actions=[],
+        current_scene="车站大厅",
+        players={"alice": {"character_name": "Alice"}, "bob": {"character_name": "Bob"}},
+    )
+
+    assert len(panels) == 1
+    assert panels[0]["location"] == "车站大厅"
+    assert compressed == 0
+
+
+@pytest.mark.asyncio
+async def test_ai_keeps_six_valid_key_beats_and_counts_overflow() -> None:
+    panels = [
+        {
+            "participants": ["alice"],
+            "location": f"房间{i}",
+            "description": f"关键动作{i}",
+            "evidence_ids": [f"n{i}"],
+        }
+        for i in range(1, 8)
+    ]
+    llm = _PanelLLM(json.dumps({"panels": panels, "compressed_count": 0}, ensure_ascii=False))
+    narration = "".join(f"房间{i}发生关键动作{i}。" for i in range(1, 8))
+    result, compressed = await infer_scene_panels(
+        llm,
+        narration=narration,
+        actions=[],
+        current_scene="房间1",
+        players={"alice": {"character_name": "Alice"}, "bob": {"character_name": "Bob"}},
+    )
+
+    assert len(result) == 6
+    assert compressed == 1
 
 
 @pytest.mark.asyncio
@@ -135,6 +389,49 @@ async def test_ai_uncertain_result_stays_single_scene() -> None:
     assert len(panels) == 1
     assert panels[0]["participants"] == ["alice", "bob"]
     assert compressed == 0
+
+
+@pytest.mark.asyncio
+async def test_single_scene_fallback_does_not_treat_unknown_people_as_the_whole_party() -> None:
+    panels, _ = await infer_scene_panels(
+        None,
+        narration="米勒太太独自在厨房整理旧簿子。",
+        actions=[],
+        current_scene="厨房",
+        players={
+            "alice": {"character_name": "爱丽丝"},
+            "bob": {"character_name": "鲍勃"},
+        },
+    )
+
+    assert panels[0]["participants"] == []
+
+
+@pytest.mark.asyncio
+async def test_ai_deterministic_fallback_splits_long_multilocation_narration() -> None:
+    llm = _SequencePanelLLM(
+        '{"panels":[{"participants":[],"location":"门口","description":"合并画面","evidence_ids":["n1"]}]}',
+        '{"panels":[{"participants":[],"location":"门口","description":"仍然合并","evidence_ids":["n1"]}]}',
+    )
+    panels, _ = await infer_scene_panels(
+        llm,
+        narration=(
+            '门口的老妇人交出簿子；与此同时，塔底的队伍钻入船肋；'
+            '随后，托马斯在残骸中滑倒；阿尔比娜回到寄宿屋前厅。'
+        ),
+        actions=[],
+        current_scene='寄宿屋',
+        players={
+            'emotion': {'character_name': '情緒'},
+            'sakura': {'character_name': '樱羽艾玛'},
+            'tsn': {'character_name': 'tsn'},
+            'thomas': {'character_name': '托马斯'},
+            'albina': {'character_name': '阿尔比娜'},
+        },
+    )
+    assert len(panels) >= 3
+    assert any('塔底' in panel['location'] for panel in panels)
+    assert any('前厅' in panel['location'] for panel in panels)
 
 
 @pytest.mark.asyncio
@@ -192,26 +489,15 @@ def test_public_character_appearance_is_scoped_and_prompt_is_panel_specific() ->
     assert first < second
     assert prompt.index("Panel 1") < first < prompt.index("Panel 2")
     assert prompt.count("黑色短发") == 1
+    assert "subjects 艾琳" in prompt
+    assert "subjects 布鲁" in prompt
+    assert "subjects alice" not in prompt
 
 
-def test_dividers_are_deterministic_and_contrast_adaptive() -> None:
-    source = io.BytesIO()
-    Image.new("RGB", (400, 200), "white").save(source, format="PNG")
-    result = Image.open(io.BytesIO(overlay_storyboard_dividers(source.getvalue(), 3)))
-    assert result.getpixel((266, 10)) == (28, 31, 35)
-    assert result.getpixel((100, 100)) == (255, 255, 255)
-    assert result.getpixel((300, 100)) == (28, 31, 35)
-    dark = io.BytesIO()
-    Image.new("RGB", (400, 200), (20, 20, 20)).save(dark, format="PNG")
-    dark_result = Image.open(io.BytesIO(overlay_storyboard_dividers(dark.getvalue(), 3)))
-    assert dark_result.getpixel((266, 10)) == (238, 240, 244)
+def test_empty_participants_do_not_expand_to_the_shared_party() -> None:
+    prompt, _ = build_storyboard_prompt([
+        {"participants": [], "location": "厨房", "description": "米勒太太说出线索"},
+    ], character_appearances={"alice": "艾琳 (appearance: 黑发)"})
 
-
-def test_six_panel_dividers_form_a_three_by_two_grid() -> None:
-    source = io.BytesIO()
-    Image.new("RGB", (600, 400), "white").save(source, format="PNG")
-    result = Image.open(io.BytesIO(overlay_storyboard_dividers(source.getvalue(), 6)))
-    assert result.getpixel((200, 40)) == (28, 31, 35)
-    assert result.getpixel((400, 40)) == (28, 31, 35)
-    assert result.getpixel((40, 200)) == (28, 31, 35)
-    assert result.getpixel((100, 100)) == (255, 255, 255)
+    assert "only people explicitly named in this panel description" in prompt
+    assert "艾琳" not in prompt

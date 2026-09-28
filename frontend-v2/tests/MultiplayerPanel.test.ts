@@ -59,3 +59,44 @@ describe('MultiplayerPanel party rest status', () => {
     expect(wrapper.find('[role="status"]').exists()).toBe(false)
   })
 })
+
+describe('MultiplayerPanel AI takeover feedback', () => {
+  const players = [
+    { user_id: 'hero-1', character_name: '阿刁' },
+    { user_id: 'hero-2', character_name: '调调' },
+  ]
+
+  function mountWith(hostingUid: string) {
+    return mount(MultiplayerPanel, {
+      global: { plugins: [i18n] },
+      props: {
+        players,
+        detail: {
+          game_key: 'web|room|bot',
+          solo_mode: false,
+          multiplayer: { submitted_actions: [{ user_id: 'hero-1', text: '我先走' }] },
+        },
+        isGm: true,
+        currentUserId: 'hero-1',
+        hostingUid,
+      },
+    })
+  }
+
+  it('shows the takeover hint for the seat being handed to the AI', () => {
+    i18n.global.locale.value = 'zh-CN'
+    const wrapper = mountWith('hero-2')
+
+    const row = wrapper.findAll('.player-list li')[1]
+    expect(row.text()).toContain('AI 正在接管…')
+    // 只有被接管的席位显示提示，其它席位保持原有的行动状态。
+    expect(wrapper.findAll('.player-list li')[0].text()).toContain('已行动')
+  })
+
+  it('shows no takeover hint while nothing is being handed over', () => {
+    i18n.global.locale.value = 'zh-CN'
+    const wrapper = mountWith('')
+
+    expect(wrapper.text()).not.toContain('AI 正在接管…')
+  })
+})

@@ -11,11 +11,16 @@ from collections.abc import Callable
 from typing import Any, Literal
 
 from src.engine.character_utils import calc_hp_from_rule, get_rule_attr_config, make_default_character, parse_tavern_card, roll_attributes
-from src.engine.economy import resolve_auto_reward_policy
+from src.engine.economy import queue_proposal, resolve_auto_reward_policy
 from src.engine.game_instance import GameRegistry
+from src.engine import persistence
+from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
 from src.lorebook.store import LorebookStore
-from src.adventures import AdventureBundleLoader
+from src.lorebook.activation import DEFAULT_VECTOR_ACTIVATION
+from src.lorebook.exporter import export_lorebook_native, export_lorebook_v3
+from src.adventures import AdventureBundleLoader, AdventureResolver
+from src.adventures.registry import AdventureSource, AdventureSourceRegistry
 from src.memory.delta import MemoryStore
 from src.rules.rule_system import RuleSystem
 from src.rules.loader import RuleBundleLoader
@@ -25,13 +30,24 @@ from src.rulesets.builtin import (
 )
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.engine.world_template import load_world_template
-from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, scene_images, speech, system, tunnel, announcements, assistant, hub, legal, manual_rolls
+from src.webui.services import adventures, asr, avatars, bot_access, bot_extensions, character_cards, characters, content, content_pack_maps, game_controls, game_lifecycle, game_master, game_media, game_packages, game_queries, generated_images, generation, knowledge, kp_questions, logs, map_backgrounds, maps, tavern, turns, worlds, rules, ruleset_advancement, ruleset_builder, ruleset_gameplay, ruleset_rest, plugins, modules, scene_images, speech, system, tunnel, announcements, assistant, hub, legal, manual_rolls
 from src.webui.services import combat_extension as combat_extension_service
+from src.webui.services import adventure_runtime
 from src.webui.services import ruleset_characters
 from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
 logger = logging.getLogger("trpg")
+
+#: Canonical defaults for a *newly created* entry. Legacy adapter drafts and the
+#: world-copy / NPC compatibility paths keep their own historical defaults; these
+#: apply only at the canonical create-entry boundary.
+CANONICAL_ENTRY_DEFAULTS: dict[str, Any] = {
+    "priority": 100,
+    "order": 100,
+    "prompt_slot": "world_background",
+    "vector_activation": DEFAULT_VECTOR_ACTIVATION,
+}
 
 
 def can_modify_character(session_uid: str, target_uid: str, gm_uid: str, owner: bool = False) -> bool:
@@ -154,9 +170,35 @@ class WebAPI:
         self._builtin_adventures_dir = (
             Path(__file__).parent.parent.parent / "templates" / "adventures"
         ).resolve()
-        self._adventure_loader = AdventureBundleLoader(
-            adventures_dir or self._builtin_adventures_dir
+        # FIX-02 §4.1：唯一的 AdventureResolver。builtin（runtime 数据目录里的
+        # 同步副本或发布目录）/ user（不含 builtin 标记的目录）/ plugin（模组声明）
+        # 三类来源由它统一解析；WebAPI 与 D&D Runtime 共用同一个实例
+        # （见下方 set_adventure_resolver 注入）。
+        self._dnd_module_catalogs: list[tuple[str, Any]] = []
+        self._adventure_resolver = AdventureResolver.from_directories(
+            self._builtin_adventures_dir,
+            (
+                adventures_dir
+                if adventures_dir is not None
+                and adventures_dir.resolve() != self._builtin_adventures_dir
+                else None
+            ),
         )
+        self._adventure_source_registry = self._adventure_resolver.registry
+        self._adventure_loader = self._adventure_resolver
+        # 让 runtime（D&D load_adventure）也走同一个 resolver，消除双解析路径。
+        self._ruleset_registry.set_adventure_resolver(self._adventure_resolver)
+        # FIX-03 §5.2：把"模组 catalog 来源"注入 runtime；gameplay catalog 的
+        # 链路与解析语义留在 runtime，WebAPI 不拥有它。
+        self._ruleset_registry.set_module_content_sources(self.module_content_sources)
+        # Some embedders construct GameHandler before WebAPI and provide it a
+        # distinct registry.  Its RoundProcessor is still a production path,
+        # so inject the same application-owned sources there as well instead
+        # of letting it silently fall back to a private Adventure loader.
+        handler_registry = getattr(self._handler, "ruleset_registry", None)
+        if handler_registry is not None and handler_registry is not self._ruleset_registry:
+            handler_registry.set_adventure_resolver(self._adventure_resolver)
+            handler_registry.set_module_content_sources(self.module_content_sources)
         self._character_cards_path = self._reg.save_dir.parent / "character_cards.json"
         self._character_dependencies = characters.CharacterDependencies(
             games=characters.CharacterGameDependencies(
@@ -344,6 +386,13 @@ class WebAPI:
                 get_instance=self._reg.get,
                 save_instance=self._reg.save,
                 load_rule=self._load_rule_for_game,
+                # 延迟到调用时解析：回合依赖在下面才创建，而且这里只做组合，
+                # 不把 WebAPI 自己变成 service locator。
+                resume_after_control_change=lambda game_key, seat_uid: (
+                    turns.resume_after_control_change(
+                        self._turn_dependencies, game_key, seat_uid=seat_uid,
+                    )
+                ),
             )
         )
         self._manual_rolls = manual_rolls.ManualRollService(manual_rolls.ManualRollDependencies(_parse_game_key, self._reg.get, self._reg.save, self._load_rule_for_game))
@@ -389,6 +438,45 @@ class WebAPI:
         self._plugin_host_dependencies = plugins.PluginHostDependencies(
             plugin_host=self._plugins,
         )
+        self._module_dependencies = modules.ModuleDependencies(
+            plugin_host=self._plugins,
+            adventure_registry=self._adventure_source_registry,
+            ruleset_registry=self._ruleset_registry,
+            list_instances=self._reg.list_all,
+            # FIX-01 §3.7：绑定存档保护必须覆盖所有持久化存档（paused / ended /
+            # 加载失败但元数据可读），不能只看内存 active GameInstance。
+            list_save_metadata=lambda: persistence.scan_save_metadata(self._reg),
+            # FIX-01 §3.6：destructive module action 前刷新来源注册表。
+            refresh_adventure_sources=self._sync_plugin_adventure_sources,
+            default_runtime_requirement=default_adventure_runtime_requirement,
+            # FIX-06 §8：在线模组区块复用既有插件市场索引（含 installed 判定）。
+            list_marketplace_plugins=(
+                self._plugins.marketplace_plugins if self._plugins is not None else None
+            ),
+        )
+        self._adventure_runtime_dependencies = adventure_runtime.AdventureRuntimeDependencies(
+            resolve_binding=lambda instance: self._adventure_resolver.resolve_binding(
+                getattr(instance, "adventure_binding", None) or {},
+                str(getattr(instance, "language", "") or ""),
+            ),
+            materialize_world_seed=materialize_world_seed,
+            rules_evaluator=lambda instance: self._adventure_runtime_adapter(
+                instance, "adventure_rules_evaluator",
+            ),
+            reward_converter=lambda instance: self._adventure_runtime_adapter(
+                instance, "adventure_reward_converter",
+            ),
+            # FIX-08 §10 步骤 12：item_reward 的权威出口（既有 reward proposal /
+            # GM 确认 / rollback 快照），adventure runtime 绝不直接写 inventory。
+            queue_reward_intents=self._queue_adventure_reward_intents,
+            save_instance=self._reg.save,
+        )
+        if self._handler is not None and hasattr(self._handler, "set_adventure_world_advance"):
+            self._handler.set_adventure_world_advance(
+                lambda instance: adventure_runtime.advance_adventure_world(
+                    self._adventure_runtime_dependencies, instance,
+                )
+            )
         self._world_dependencies = worlds.WorldDependencies(
             lorebook=self._lore,
             worlds_dir=self._worlds_dir,
@@ -462,6 +550,8 @@ class WebAPI:
         )
         self._adventure_dependencies = adventures.AdventureDependencies(
             adventure_loader=self._adventure_loader,
+            adventure_registry=self._adventure_source_registry,
+            adventure_resolver=self._adventure_resolver,
             list_instances=self._reg.list_all,
             load_rule_by_id=self._load_rule_by_id,
             ruleset_registry=self._ruleset_registry,
@@ -474,14 +564,23 @@ class WebAPI:
                 parse_game_key=_parse_game_key,
                 load_rule_for_game=self._load_rule_for_game,
                 ruleset_registry=self._ruleset_registry,
-                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
+                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language, source_kind="", source_id="": adventures.resolve_binding_for_runtime(
                     self._adventure_dependencies,
                     adventure_id,
                     runtime,
                     world_id,
                     language,
+                    source_kind=source_kind,
+                    source_id=source_id,
                 ),
                 save_instance=self._reg.save,
+                complete_adventure_node=lambda instance, node_id, recipient_uid, actor_uid: adventure_runtime.complete_adventure_node(
+                    self._adventure_runtime_dependencies,
+                    instance,
+                    node_id,
+                    recipient_uid=recipient_uid,
+                    actor_uid=actor_uid,
+                ),
                 apply_memory_delta=(
                     self._mem.apply_delta if self._mem is not None else None
                 ),
@@ -498,6 +597,14 @@ class WebAPI:
             ),
             prepare_round_checks=getattr(
                 self._handler, "prepare_round_checks", None,
+            ),
+            fill_ai_player_actions=getattr(
+                self._handler, "fill_ai_player_actions", None,
+            ),
+            resume_authoritative_combat=lambda game_key, seat_uid: (
+                ruleset_gameplay.resume_authoritative_combat(
+                    self._ruleset_gameplay_dependencies, game_key, seat_uid,
+                )
             ),
             resolve_pending_dice=self.resolve_pending_dice_for_game,
             roll_for_game=self.roll_for_game,
@@ -558,6 +665,9 @@ class WebAPI:
             rules_dir=self._rules_dir,
             ruleset_registry=self._ruleset_registry,
             plugin_host=plugin_host,
+            has_games_using_rule=lambda rule_id: any(
+                instance.rule_id == rule_id for instance in self._reg.list_all()
+            ),
         )
         self._ruleset_builder_dependencies = ruleset_builder.RulesetBuilderDependencies(
             load_rule=self._load_rule_by_id,
@@ -659,12 +769,18 @@ class WebAPI:
                 parse_game_key=_parse_game_key,
                 llm_configuration_error=self._llm_configuration_error,
                 load_rule_by_id=self._load_rule_by_id,
-                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language: adventures.resolve_binding_for_runtime(
+                resolve_adventure_binding=lambda adventure_id, runtime, world_id, language, source_kind="", source_id="": adventures.resolve_binding_for_runtime(
                     self._adventure_dependencies,
                     adventure_id,
                     runtime,
                     world_id,
                     language,
+                    source_kind=source_kind,
+                    source_id=source_id,
+                ),
+                # FIX-04 §6.5：v2 冒险的创建事务步骤（进度 + 原子世界种子）。
+                initialize_adventure_run=lambda instance: adventure_runtime.initialize_adventure_run(
+                    self._adventure_runtime_dependencies, instance,
                 ),
                 resolve_default_scene_image=self.resolve_default_scene_image,
                 materialize_scene_image=self.materialize_scene_image,
@@ -740,6 +856,76 @@ class WebAPI:
 
     def list_plugins(self) -> dict[str, Any]:
         return plugins.list_plugins(self._plugin_host_dependencies)
+
+    def list_modules(self) -> dict[str, Any]:
+        return modules.list_modules(self._module_dependencies)
+
+    async def list_module_marketplace(self, keyword: str = "") -> dict[str, Any]:
+        """Online content-module catalogue for the modules view (FIX-06 §8)."""
+
+        return await modules.module_marketplace(
+            self._module_dependencies, keyword=keyword,
+        )
+
+    def module_detail(self, module_id: str) -> dict[str, Any]:
+        return modules.module_detail(self._module_dependencies, module_id)
+
+    def module_adventures(self, module_id: str) -> dict[str, Any]:
+        return modules.module_adventures(self._module_dependencies, module_id)
+
+    def module_content(
+        self, module_id: str, kind: str, key: str, language: str = "",
+    ) -> dict[str, Any]:
+        return modules.module_content(
+            self._module_dependencies, module_id, kind, key, language=language,
+        )
+
+    def module_compatibility(self, module_id: str) -> dict[str, Any]:
+        return modules.module_compatibility(self._module_dependencies, module_id)
+
+    def module_usages(self, module_id: str) -> dict[str, Any]:
+        return modules.module_usages(self._module_dependencies, module_id)
+
+    def preview_module_import(self, payload: bytes) -> dict[str, Any]:
+        if self._plugins is None:
+            return {"ok": False, "error": "插件宿主未启用"}
+        # FIX-01 §3.3：预览与安装共用同一套深度校验（真实解压 + Adventure/catalog
+        # 真装载），所以"预览显示 blocker"与"直接 API 安装被拒"结论一致。
+        return self._plugins.validate_package(
+            payload,
+            lambda directory, manifest: modules.preview_module_install(
+                self._module_dependencies, manifest, directory=directory,
+            ),
+        )
+
+    def validate_module_package(
+        self, directory: Any, manifest: dict[str, Any],
+    ) -> None:
+        """Install-transaction hook: refuse the package when it has blockers."""
+
+        modules.validate_module_directory(
+            self._module_dependencies, directory, manifest,
+            require_content_pack=False,
+        )
+
+    def guard_module_mutation(self, plugin_id: str, action: str) -> None:
+        """Package-mutation hook shared by every install/uninstall path."""
+
+        modules.assert_module_action_allowed(
+            self._module_dependencies, plugin_id, action,
+        )
+
+    def attach_package_hooks(self, plugin_host: Any) -> None:
+        """Wire the FIX-01 install-transaction hooks onto the plugin host.
+
+        单一接线点：bootstrap 与测试共用，保证本地导入 / 市场安装 / 覆盖安装 /
+        后台自动更新 / 卸载都经过同一条校验与 bound-save guard。
+        """
+
+        plugin_host.set_package_hooks(
+            package_validator=self.validate_module_package,
+            content_module_guard=self.guard_module_mutation,
+        )
 
     async def get_official_announcement(self, language: str = "zh-CN") -> dict[str, Any]:
         return await self._announcements.fetch(language)
@@ -886,39 +1072,93 @@ class WebAPI:
         return plugins.read_plugin_docs(self._plugin_host_dependencies, plugin_id)
 
     async def update_plugin_config(self, plugin_id: str, changes: dict[str, Any]) -> dict[str, Any]:
-        return await plugins.update_plugin_config(
+        if changes.get("enabled") is False:
+            modules.assert_module_action_allowed(
+                self._module_dependencies, plugin_id, "disable",
+            )
+        result = await plugins.update_plugin_config(
             self._plugin_lifecycle_dependencies, plugin_id, changes,
         )
+        if result.get("ok"):
+            # FIX-07：启用/禁用会改变模块贡献的内容 → 立刻刷新来源与 catalog 链，
+            # 否则"启用模组后马上开局"会解析不到它的冒险（解析不得依赖
+            # "碰巧同步过 registry"，与 §3.6 同一原则）。
+            self.refresh_content_sources()
+        return result
 
     async def control_plugin(self, plugin_id: str, action: str) -> dict[str, Any]:
-        return await plugins.control_plugin(
+        if action == "stop":
+            modules.assert_module_action_allowed(
+                self._module_dependencies, plugin_id, "disable",
+            )
+        result = await plugins.control_plugin(
             self._plugin_lifecycle_dependencies, plugin_id, action,
         )
+        if result.get("ok"):
+            self.refresh_content_sources()
+        return result
 
-    async def install_plugin(self, payload: bytes, overwrite: bool = False) -> dict[str, Any]:
-        return await plugins.install_plugin(
+    async def install_plugin(
+        self, payload: bytes, overwrite: bool = False, expected_plugin_type: str = "",
+    ) -> dict[str, Any]:
+        result = await plugins.install_plugin(
             self._plugin_lifecycle_dependencies, payload, overwrite,
+            expected_plugin_type=expected_plugin_type,
         )
+        if result.get("ok"):
+            self.refresh_content_sources()
+        return result
 
     async def list_plugin_marketplace(self) -> dict[str, Any]:
         return await plugins.list_plugin_marketplace(
             self._plugin_host_dependencies,
         )
 
-    async def install_marketplace_plugin(self, plugin_id: str, overwrite: bool = False) -> dict[str, Any]:
-        return await plugins.install_marketplace_plugin(
+    async def install_marketplace_plugin(
+        self, plugin_id: str, overwrite: bool = False, expected_plugin_type: str = "",
+    ) -> dict[str, Any]:
+        result = await plugins.install_marketplace_plugin(
             self._plugin_lifecycle_dependencies, plugin_id, overwrite,
+            expected_plugin_type=expected_plugin_type,
+        )
+        if result.get("ok"):
+            self.refresh_content_sources()
+        return result
+
+    async def import_module(self, payload: bytes, overwrite: bool = False) -> dict[str, Any]:
+        """Install a local content-module package through the canonical host.
+
+        FIX-01 §3.1：模组安装面只接受 data-only content-pack——类型门在服务端
+        package inspection 之后强制（前端分类不可信）。
+        """
+
+        return await self.install_plugin(
+            payload, overwrite, expected_plugin_type=modules.MODULE_PLUGIN_TYPE,
+        )
+
+    async def install_marketplace_module(
+        self, module_id: str, overwrite: bool = False,
+    ) -> dict[str, Any]:
+        """Install a marketplace content module through the canonical host."""
+
+        return await self.install_marketplace_plugin(
+            module_id, overwrite, expected_plugin_type=modules.MODULE_PLUGIN_TYPE,
         )
 
     async def update_marketplace_plugin(self, plugin_id: str) -> dict[str, Any]:
+        modules.assert_module_action_allowed(self._module_dependencies, plugin_id, "update")
         return await plugins.update_marketplace_plugin(
             self._plugin_host_dependencies, plugin_id,
         )
 
     async def uninstall_plugin(self, plugin_id: str, delete_data: bool = False) -> dict[str, Any]:
-        return await plugins.uninstall_plugin(
+        modules.assert_module_action_allowed(self._module_dependencies, plugin_id, "uninstall")
+        result = await plugins.uninstall_plugin(
             self._plugin_lifecycle_dependencies, plugin_id, delete_data,
         )
+        if result.get("ok"):
+            self.refresh_content_sources()
+        return result
 
     def list_plugin_mirrors(self) -> dict[str, Any]:
         return plugins.list_plugin_mirrors(self._plugin_host_dependencies)
@@ -1110,6 +1350,78 @@ class WebAPI:
         rule = self._load_rule_for_game(inst)
         return self._ruleset_registry.resolve(rule.template) if rule else None
 
+    def _adventure_runtime_adapter(self, instance: Any, hook: str) -> Any:
+        """Ask the instance's ruleset runtime for an adventure adapter (FIX-04).
+
+        ``rules.*`` gate 求值与 ``item_reward`` 转换都属于 ruleset 的职责
+        （D&D 实现见 Dnd2024Runtime）；其它 runtime 没有该能力时返回 None →
+        gate 证据不足 = 不放行 / reward 缺少转换器 = fail closed。
+        """
+
+        try:
+            runtime = self._load_runtime_for_game(instance)
+        except Exception:  # noqa: BLE001 - 适配器缺席不等于放行
+            return None
+        getter = getattr(runtime, hook, None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(instance)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _queue_adventure_reward_intents(
+        self, instance: Any, intents: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """FIX-08 §10 步骤 12：adventure item_reward → 既有奖励提案权威。
+
+        Adventure 的 ``item_reward`` 只声明"该给什么"（reward intent）；发放必须走
+        既有 proposal/settlement 权威，**绝不直接写 inventory**：
+        ``kind="reward"`` 且 ``amount=0``（纯物品、无货币）、``approval_policy="gm"``
+        → 提案 pending，GM 用既有的支付确认路径结算，物品才由
+        ``characters.grant_reward`` 写入角色卡（带 before-image，整轮回滚可还原）。
+
+        幂等：``source_ref`` 由奖励内容 + 收件人确定（同一批奖励不会被排两次队），
+        重放/中止后同一身份会走 ``_existing_by_source`` 的既有语义。
+        """
+
+        named = [
+            {
+                "name": str(intent.get("name") or ""),
+                "category": str(intent.get("category") or ""),
+            }
+            for intent in intents or []
+            if str(intent.get("kind") or "") == "item_grant"
+            and str(intent.get("name") or "").strip()
+        ]
+        if not named:
+            return []
+        recipient_uid = str((intents or [{}])[0].get("recipient_uid") or "")
+        if not recipient_uid:
+            raise ValueError("adventure reward intent has no recipient")
+        refs = sorted({
+            f"{intent.get('ref', {}).get('source', '')}:{intent.get('ref', {}).get('id', '')}"
+            for intent in intents or []
+            if isinstance(intent.get("ref"), dict)
+        } | {reward["name"] for reward in named})
+        proposal = queue_proposal(
+            instance,
+            kind="reward",
+            amount=0,
+            recipient_uid=recipient_uid,
+            reason="冒险奖励",
+            source="adventure",
+            source_ref=f"adventure_reward:{recipient_uid}:{'|'.join(refs)}",
+            approval_policy="gm",
+            rewards=named,
+            visibility="party",
+        )
+        return [{
+            "proposal_id": str(proposal.get("id") or ""),
+            "status": str(proposal.get("status") or ""),
+            "kind": "reward",
+        }]
+
     def _project_game_rule_id(self, instance) -> str:
         return game_queries.projected_rule_id(
             self._game_query_dependencies,
@@ -1151,6 +1463,19 @@ class WebAPI:
             game_key,
             viewer_uid,
             viewer_is_gm,
+        )
+
+    def game_adventure_projection(
+        self, game_key: str, *, viewer_is_gm: bool,
+    ) -> dict[str, Any] | None:
+        """Read the bound adventure through the viewer-safe projection seam."""
+
+        instance = self.get_game_instance(game_key)
+        if instance is None:
+            return None
+        self._sync_plugin_adventure_sources()
+        return adventures.game_adventure_projection(
+            self._adventure_dependencies, instance, viewer_is_gm=viewer_is_gm,
         )
 
     def get_game_instance(self, game_key: str):
@@ -1228,6 +1553,12 @@ class WebAPI:
 
     async def set_player_away(self, game_key: str, user_id: str, away: bool) -> dict[str, Any]:
         return await self._game_controls.set_player_away(game_key, user_id, away)
+
+    async def set_player_control(self, game_key: str, user_id: str, mode: str) -> dict[str, Any]:
+        return await self._game_controls.set_player_control(game_key, user_id, mode)
+
+    async def set_away_control_policy(self, game_key: str, policy: str) -> dict[str, Any]:
+        return await self._game_controls.set_away_control_policy(game_key, policy)
 
     async def set_player_access(self, game_key: str, open_access: bool) -> dict[str, Any]:
         return await self._game_controls.set_player_access(game_key, open_access)
@@ -1382,13 +1713,17 @@ class WebAPI:
         )
 
     async def import_character_card(self, file_data: str = "", file_name: str = "card.json",
-                                    target: str = "character_card", world_id: str = "") -> dict[str, Any]:
+                                    target: str = "character_card", world_id: str = "",
+                                    include_character_book: bool = True,
+                                    character_uid: str = "") -> dict[str, Any]:
         return await character_cards.import_character_card(
             self._character_card_dependencies,
             file_data,
             file_name,
             target,
             world_id,
+            include_character_book=include_character_book,
+            character_uid=character_uid,
         )
 
     def export_character_cards(self, card_ids: list[str]) -> dict[str, Any]:
@@ -1465,6 +1800,242 @@ class WebAPI:
     def import_entries(self, world_id: str, entries: list) -> dict[str, Any]:
         return worlds.import_entries(self._world_dependencies, world_id, entries)
 
+    def list_lorebooks(self, world_id: str = "", game_key: str = "") -> dict[str, Any]:
+        """List canonical books visible in a world-management scope.
+
+        Each row carries the binding-derived ``scope`` / ``primary`` facts the
+        management UI has to show (name · Primary · scope · enabled). They are
+        derived from the canonical bindings rather than stored on the book, so a
+        book bound in several scopes reports the most specific one it has here.
+        """
+
+        bindings_by_book: dict[str, list[dict[str, Any]]] = {}
+        for binding in self._lore.list_bindings():
+            bindings_by_book.setdefault(str(binding.get("book_id") or ""), []).append(binding)
+        books = self._lore.list_lorebooks(scope_kind="world", scope_id=world_id) if world_id else []
+        global_books = self._lore.list_lorebooks(scope_kind="global", scope_id="")
+        game_books = self._game_scoped_lorebooks(game_key) if game_key else []
+        # 完全没有 binding 的 Book 也必须可见：否则「新建世界书」和「暂不绑定」导入
+        # 都会产出一本谁也管不到的隐形书，用户再也无法给它加绑定。
+        unbound = [
+            book for book in self._lore.list_lorebooks()
+            if not bindings_by_book.get(str(book.get("id") or ""))
+        ]
+        seen: set[str] = set()
+        merged = []
+        for book in [*books, *global_books, *game_books, *unbound]:
+            book_id = str(book.get("id") or "")
+            if not book_id or book_id in seen:
+                continue
+            seen.add(book_id)
+            row = dict(book)
+            bindings = bindings_by_book.get(book_id, [])
+            row["bindings"] = bindings
+            row["scope"] = self._book_scope(bindings)
+            row["primary"] = any(str(b.get("role") or "") == "primary" for b in bindings)
+            merged.append(row)
+        return {"books": merged}
+
+    def _game_scoped_lorebooks(self, game_key: str) -> list[dict[str, Any]]:
+        """Books bound to this game, or to one of its characters.
+
+        Without this the workspace's 当前游戏 / 角色 scope filters would be
+        decorative: such books exist in the canonical store but would never be
+        listed for management.
+        """
+
+        rows = list(self._lore.list_lorebooks(scope_kind="game", scope_id=game_key))
+        instance = self._reg.get(_parse_game_key(game_key)) if game_key else None
+        players = getattr(instance, "players", None) if instance is not None else None
+        for uid in sorted(players or {}):
+            rows.extend(self._lore.list_lorebooks(scope_kind="character", scope_id=str(uid)))
+        return rows
+
+    @staticmethod
+    def _book_scope(bindings: list[dict[str, Any]]) -> str:
+        """The scope label for a book: most specific binding wins, else unbound."""
+
+        order = ("character", "game", "world", "global")
+        kinds = {str(binding.get("scope_kind") or "") for binding in bindings}
+        for kind in order:
+            if kind in kinds:
+                return kind
+        return ""
+
+    def create_lorebook(self, book: dict[str, Any]) -> dict[str, Any]:
+        book = dict(book)
+        if not str(book.get("id") or "").strip() or not str(book.get("name") or "").strip():
+            return {"ok": False, "error": "id and name are required"}
+        if self._lore.get_lorebook(book["id"]):
+            return {"ok": False, "error": "Lorebook already exists"}
+        self._lore.create_lorebook(book)
+        return {"ok": True, "book": self._lore.get_lorebook(book["id"])}
+
+    def update_lorebook(self, book_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found"}
+        self._lore.update_lorebook(book_id, updates)
+        return {"ok": True, "book": self._lore.get_lorebook(book_id)}
+
+    def delete_lorebook(self, book_id: str) -> dict[str, Any]:
+        try:
+            deleted = self._lore.delete_lorebook(book_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": deleted, **({} if deleted else {"error": "Lorebook not found"}), "book_id": book_id}
+
+    def list_lorebook_bindings(self, book_id: str) -> dict[str, Any]:
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found", "bindings": []}
+        return {"ok": True, "bindings": [b for b in self._lore.list_bindings() if b.get("book_id") == book_id]}
+
+    def create_lorebook_binding(self, book_id: str, binding: dict[str, Any]) -> dict[str, Any]:
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found"}
+        payload = dict(binding)
+        payload["book_id"] = book_id
+        if not str(payload.get("id") or "").strip():
+            return {"ok": False, "error": "id is required"}
+        self._lore.bind_lorebook(payload)
+        return {"ok": True, "binding": next((b for b in self._lore.list_bindings() if b["id"] == payload["id"]), None)}
+
+    def update_lorebook_binding(self, binding_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        try:
+            changed = self._lore.update_binding(binding_id, updates)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not changed:
+            return {"ok": False, "error": "Binding not found"}
+        return {"ok": True, "binding": next((b for b in self._lore.list_bindings() if b["id"] == binding_id), None)}
+
+    def delete_lorebook_binding(self, binding_id: str) -> dict[str, Any]:
+        try:
+            deleted = self._lore.delete_binding(binding_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": deleted, **({} if deleted else {"error": "Binding not found"}), "binding_id": binding_id}
+
+    def list_lorebook_entries(self, book_id: str) -> dict[str, Any]:
+        book = self._lore.get_lorebook(book_id)
+        if not book:
+            return {"ok": False, "error": "Lorebook not found", "entries": []}
+        return {"ok": True, "book": book, "entries": self._lore.list_book_entries(book_id)}
+
+    def save_lorebook_entry(self, book_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+        book_id = str(book_id or "")
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found", "error_code": "book_not_found"}
+        payload = dict(entry)
+        payload["book_id"] = book_id
+        payload.setdefault("id", f"{book_id}:entry:{time.time_ns()}")
+        entry_id = str(payload["id"])
+        if self._lore.get_entry(entry_id) is not None:
+            # Ownership isolation: entry.id is a global canonical PK, but it may
+            # only be rewritten through the book that actually owns it.
+            if not self._lore.update_book_entry(book_id, entry_id, payload):
+                return {"ok": False, "error": "Entry belongs to another lorebook",
+                        "error_code": "entry_book_mismatch", "entry_id": entry_id}
+            return {"ok": True, "entry": self._lore.get_entry(entry_id)}
+        # Canonical new-entry defaults apply on create only. An update must be
+        # able to clear a field without it silently snapping back to a default.
+        for key, value in CANONICAL_ENTRY_DEFAULTS.items():
+            payload.setdefault(key, value)
+        self._lore.add_entry(payload)
+        return {"ok": True, "entry": self._lore.get_entry(entry_id)}
+
+    def move_lorebook_entry(
+        self, book_id: str, entry_id: str, target_book_id: str,
+    ) -> dict[str, Any]:
+        """Move an entry to another book, keeping its canonical entry id."""
+
+        target_book_id = str(target_book_id or "")
+        if self._lore.get_lorebook(str(book_id or "")) is None:
+            return {"ok": False, "error": "Lorebook not found", "error_code": "book_not_found"}
+        if not target_book_id or self._lore.get_lorebook(target_book_id) is None:
+            return {"ok": False, "error": "Target lorebook not found",
+                    "error_code": "target_book_not_found"}
+        if not self._lore.move_entry(str(book_id), target_book_id, str(entry_id or "")):
+            # Distinguish "no such entry" from "that entry belongs to another
+            # book": the second is an ownership conflict, not a 404.
+            if self._lore.get_entry(str(entry_id or "")) is not None:
+                return {"ok": False, "error": "Entry belongs to another lorebook",
+                        "error_code": "entry_book_mismatch", "entry_id": str(entry_id)}
+            return {"ok": False, "error": "Entry not found in this lorebook",
+                    "error_code": "entry_not_found", "entry_id": str(entry_id)}
+        return {
+            "ok": True, "entry": self._lore.get_entry(str(entry_id)),
+            "entry_id": str(entry_id), "book_id": target_book_id,
+        }
+
+    def delete_lorebook_entry(self, book_id: str, entry_id: str) -> dict[str, Any]:
+        # Ownership isolation: a DELETE through book A must never remove an
+        # entry that lives in book B.
+        book_id = str(book_id or "")
+        if self._lore.get_lorebook(book_id) is None:
+            return {"ok": False, "error": "Lorebook not found", "error_code": "book_not_found"}
+        if not self._lore.delete_book_entry(book_id, str(entry_id or "")):
+            return {"ok": False, "error": "Entry not found in this lorebook",
+                    "error_code": "entry_not_found", "entry_id": entry_id}
+        return {"ok": True, "entry_id": entry_id}
+
+    def export_lorebook(self, book_id: str) -> dict[str, Any]:
+        book = self._lore.get_lorebook(book_id)
+        if not book:
+            return {"ok": False, "error": "Lorebook not found"}
+        v3 = export_lorebook_v3(self._lore, book_id)
+        return {"ok": True, "format": "lorebook_v3", **v3,
+                "native_backup": export_lorebook_native(self._lore, book_id)}
+
+    async def lorebook_activation_preview(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Dry-run the same retriever used by rounds and return its safe trace."""
+        game_key = str(payload.get("game_key") or "")
+        instance = self._reg.get(_parse_game_key(game_key)) if game_key else None
+        retriever = getattr(self._handler, "lore_retriever", None)
+        if instance is None or retriever is None:
+            return {"ok": False, "error": "game_key must reference an active game"}
+        viewer = payload.get("viewer") if isinstance(payload.get("viewer"), dict) else {}
+        viewer_is_gm = bool(viewer.get("is_gm", True))
+        viewer_uid = str(viewer.get("uid") or "")
+        matches = await retriever.retrieve(
+            instance, str(payload.get("action_text") or ""),
+            viewer_is_gm=viewer_is_gm, viewer_uid=viewer_uid or None,
+            viewer_name=str(viewer.get("name") or ""), mutate_timers=False,
+            action_actor_uids=[viewer_uid] if viewer_uid and not viewer_is_gm else [],
+        )
+        trace = list(getattr(instance, "lorebook_activation_trace", []) or [])
+        return {"ok": True, "entries": matches if viewer_is_gm else [row for row in matches if row.get("id")], "trace": trace}
+
+    def preview_lorebook_import(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from dataclasses import asdict
+        from src.lorebook.importer import preview_lorebook_import
+
+        result = preview_lorebook_import(payload)
+        result["book"] = asdict(result["book"])
+        return result
+
+    def commit_lorebook_import(self, payload: dict[str, Any], binding: dict[str, Any] | None = None, book_id: str | None = None) -> dict[str, Any]:
+        from src.lorebook.importer import commit_lorebook_import, draft_lorebook_import
+        from src.lorebook.store import normalize_scope_kind
+
+        draft = draft_lorebook_import(payload)
+        # Validate the requested binding before any canonical write so a bad
+        # scope cannot leave a half-imported book behind.
+        if binding is not None:
+            if not isinstance(binding, dict):
+                return {"ok": False, "error": "binding must be an object"}
+            if "scope_kind" not in binding:
+                return {"ok": False, "error": "binding requires a canonical scope_kind"}
+            try:
+                normalize_scope_kind(binding.get("scope_kind"))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        try:
+            imported_book_id = commit_lorebook_import(self._lore, draft, binding, book_id=book_id)
+        except ValueError as exc:
+            # The store boundary is the authority for scope validity.
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "book_id": imported_book_id, "entries": len(draft.entries), "warnings": draft.warnings}
+
     async def generate_lorebook_entries(self, world_id: str, prompt: str, language: str = "") -> dict[str, Any]:
         return await worlds.generate_lorebook_entries(
             self._world_dependencies, world_id, prompt, language,
@@ -1496,8 +2067,10 @@ class WebAPI:
 
     # ---- 角色管理 ----
 
-    def list_characters(self, game_key: str) -> dict[str, Any]:
-        return characters.list_characters(self._character_dependencies, game_key)
+    def list_characters(self, game_key: str, *, viewer_is_gm: bool) -> dict[str, Any]:
+        return characters.list_characters(
+            self._character_dependencies, game_key, viewer_is_gm=viewer_is_gm,
+        )
 
     def character_schema(self, rule_id: str, language: str = "") -> dict[str, Any]:
         return characters.character_schema(
@@ -1739,15 +2312,28 @@ class WebAPI:
     def image_generation_status(self) -> dict[str, Any]:
         return self._generated_images.public_config()
 
+    async def optimize_image_prompt(self, **request: Any) -> dict[str, Any]:
+        return await self._generated_images.optimize_prompt(**request)
+
+    def storyboard_draft(self, game_key: str, user_id: str, round_number: int = 0) -> dict[str, Any]:
+        return self._generated_images.storyboard_draft(game_key, user_id, round_number)
+
+    async def analyze_storyboard(self, game_key: str, user_id: str, round_number: int = 0, panel_count: int | None = None) -> dict[str, Any]:
+        return await self._generated_images.analyze_storyboard(game_key, user_id, round_number, panel_count)
+
+    def preview_image_prompt(self, game_key: str, user_id: str, prompt: str, panels: Any = None) -> dict[str, Any]:
+        return self._generated_images.preview_prompt(game_key, user_id, prompt, panels)
+
     async def generate_generated_image(self, **request: Any) -> dict[str, Any]:
         return await self._generated_images.generate_image(**request)
 
     async def generate_current_round_image(
         self, game_key: str, user_id: str, prompt: str, round_number: int,
         panels: Any = None, use_avatar_references: bool = False,
+        panel_count: int | None = None,
     ) -> dict[str, Any]:
         return await self._generated_images.generate_current_round(
-            game_key, user_id, prompt, round_number, panels, use_avatar_references,
+            game_key, user_id, prompt, round_number, panels, use_avatar_references, panel_count,
         )
 
     def list_game_generated_images(
@@ -1952,9 +2538,105 @@ class WebAPI:
 
     # ---- 世界模板 ----
 
+    def refresh_content_sources(self) -> None:
+        """Recompute plugin adventure sources + module catalogs from host state.
+
+        FIX-07：安装 / 启用 / 停用 / 卸载 / 启动都经过这一个刷新入口。解析与目录
+        读取都不得依赖"碰巧同步过 registry"（§3.6 同一原则）——否则"启用模组后
+        马上开局"或"重启后马上开局"会解析不到模组的冒险包。
+        """
+
+        self._sync_plugin_adventure_sources()
+        self._sync_module_catalogs()
+
+    def _sync_plugin_adventure_sources(self) -> None:
+        """MOD-03：把启用的 content-pack 模组声明的 adventure_packages 同步为
+        registry 的 plugin 来源（declared-only loader）。
+
+        只读 plugin runtime 状态，幂等重建 plugin 来源集合；插件禁用/卸载后
+        其来源自动消失。
+        """
+
+        if self._adventure_source_registry is None or self._plugins is None:
+            return
+        sources = []
+        for runtime in self._plugins.plugins.values():
+            root = getattr(runtime, "adventure_packages_root", None)
+            if root is None or runtime.status == "disabled":
+                continue
+            sources.append(AdventureSource(
+                "plugin",
+                str(runtime.manifest.get("id") or ""),
+                AdventureBundleLoader(
+                    root,
+                    allowed_directory_ids=getattr(runtime, "adventure_package_directories", ()),
+                ),
+            ))
+        self._adventure_source_registry.sync_plugin_sources(sources)
+
+    def _sync_module_catalogs(self) -> None:
+        """DNDMOD-04：把启用的 content-pack 模组声明的 ruleset_catalogs 装载为
+        模块目录来源（DNDMOD-01 契约校验，fail closed；坏包让该模块目录缺席
+        并记日志，不拖垮其它模块）。"""
+
+        if self._plugins is None:
+            return
+        from src.rulesets.dnd2024.content.catalog import load_catalog_dir
+
+        sources: list[tuple[str, Any]] = []
+        for runtime in self._plugins.plugins.values():
+            root = getattr(runtime, "ruleset_catalogs_root", None)
+            if root is None or runtime.status == "disabled":
+                continue
+            label = f"module:{runtime.manifest.get('id') or ''}"
+            for directory in getattr(runtime, "ruleset_catalog_directories", ()):
+                try:
+                    source = load_catalog_dir(Path(root) / directory, source_label=label)
+                except Exception as exc:
+                    logger.warning(
+                        "module catalog load failed: %s: %s", label, exc,
+                    )
+                    continue
+                # catalog_from_sources / 运行时期望 {kind: {record_id: record}}；
+                # CatalogSource.records 是 (kind, id) 键——这里统一成嵌套形状。
+                nested: dict[str, dict[str, Any]] = {}
+                for (kind, record_id), record in source.records.items():
+                    nested.setdefault(str(kind), {})[str(record_id)] = record
+                sources.append((source.label, nested))
+        self._dnd_module_catalogs = sources
+
+    def module_catalog(self) -> Any:
+        """DNDMOD-04：合并的模块内容目录（每次调用前同步）。"""
+
+        self._sync_plugin_adventure_sources()
+        self._sync_module_catalogs()
+        from src.rulesets.dnd2024.content.catalog import catalog_from_sources
+
+        if not self._dnd_module_catalogs:
+            return catalog_from_sources([])
+        return catalog_from_sources(self._dnd_module_catalogs)
+
+    def module_content_sources(self, instance: Any = None) -> list[tuple[str, Any]]:
+        """FIX-03 §5.1：模组 catalog 来源链（owning module 优先，其余按 label）。
+
+        只提供"哪些模组声明了哪些 catalog"这一事实；链路语义由 runtime 决定。
+        """
+
+        self._sync_module_catalogs()
+        sources = list(self._dnd_module_catalogs)
+        owning = ""
+        binding = getattr(instance, "adventure_binding", None)
+        if isinstance(binding, dict) and str(binding.get("source_kind") or "") == "plugin":
+            owning = str(binding.get("source_id") or "")
+        if owning:
+            owner_label = f"module:{owning}"
+            sources.sort(key=lambda item: 0 if item[0] == owner_label else 1)
+        return sources
+
     def list_adventures(
         self, rule_id: str = "", world_id: str = "", language: str = "",
     ) -> dict[str, Any]:
+        self._sync_plugin_adventure_sources()
         return adventures.list_adventures(
             self._adventure_dependencies,
             rule_id,
@@ -1963,6 +2645,7 @@ class WebAPI:
         )
 
     def adventure_detail(self, adventure_id: str, language: str = "") -> dict[str, Any]:
+        self._sync_plugin_adventure_sources()
         return adventures.adventure_detail(
             self._adventure_dependencies,
             adventure_id,
@@ -2052,11 +2735,14 @@ class WebAPI:
                            scene_image: dict[str, Any] | None = None,
                            map_background: dict[str, Any] | None = None,
                            adventure_id: str = "",
+                           adventure_source_kind: str = "",
+                           adventure_source_id: str = "",
                            play_mode: str = "",
                            narrative_perspective: str = "auto",
                            gm_style_override: dict[str, Any] | None = None,
                            advancement_mode: str = "milestone",
-                           advancement_authority: str = "ai_gm") -> dict[str, Any]:
+                           advancement_authority: str = "ai_gm",
+                           unclaimed_control_default: str = "") -> dict[str, Any]:
         return await self._game_lifecycle.create_game(
             world_id=world_id, game_name=game_name, group_name=group_name,
             rule_id=rule_id, solo=solo, lorebook_world_id=lorebook_world_id,
@@ -2067,11 +2753,14 @@ class WebAPI:
             room_password=room_password, language=language,
             scene_image=scene_image, map_background=map_background,
             adventure_id=adventure_id,
+            adventure_source_kind=adventure_source_kind,
+            adventure_source_id=adventure_source_id,
             play_mode=play_mode,
             narrative_perspective=narrative_perspective,
             gm_style_override=gm_style_override,
             advancement_mode=advancement_mode,
             advancement_authority=advancement_authority,
+            unclaimed_control_default=unclaimed_control_default,
         )
 
     # ---- 重开引用码 ----
@@ -2179,8 +2868,13 @@ class WebAPI:
     # ---- 内存 ----
 
     def list_memories(self, game_key: str, keyword: str = "",
-                      limit: int = 20, offset: int = 0) -> dict[str, Any]:
-        return self._memory_service.list(game_key, keyword, limit, offset)
+                      limit: int = 20, offset: int = 0, *,
+                      viewer_is_gm: bool = False) -> dict[str, Any]:
+        """列出记忆；默认按玩家安全面过滤（GM 私有记忆需显式 viewer_is_gm）。"""
+
+        return self._memory_service.list(
+            game_key, keyword, limit, offset, viewer_is_gm=bool(viewer_is_gm),
+        )
 
     async def update_memory(self, game_key: str, entry_id: int, updates: dict[str, Any]) -> dict[str, Any]:
         return await self._memory_service.update(game_key, entry_id, updates)

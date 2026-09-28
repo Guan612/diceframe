@@ -8,10 +8,28 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from src.commands.round_processor import RoundNotProcessed, RoundProcessingFailure
+from src.engine import progression
+from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats
+from src.engine.action_gate import (
+    ACTOR_DECEASED,
+    ECONOMY_DECISION_PENDING,
+    HUMAN_FREE_TEXT_POST_RETRY_POLICY,
+    HUMAN_FREE_TEXT_PRE_RETRY_POLICY,
+    PLAYER_NOT_IN_GAME,
+    ROUND_PROCESSING,
+    RUN_CHANGED,
+    SOURCE_HUMAN,
+    STRUCTURED_INTENT_REQUIRED,
+    StructuredIntentRequirement,
+    GateRequest,
+    check_run_unchanged,
+    evaluate,
+)
 from src.engine.economy import (
     has_blocking_economy_decision,
     blocking_economy_proposals,
@@ -19,9 +37,11 @@ from src.engine.economy import (
     pending_effect_groups,
     pending_economy_proposals,
 )
+from src.engine.game_instance import GameState
 from src.engine.language import localized_text
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
-from src.engine.game_instance import GameState
+from src.engine.player_control import SUBMISSION_BLOCK_CODES
+from src.engine.visibility_rules import proposal_visible_to
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
 
 if TYPE_CHECKING:
@@ -29,6 +49,12 @@ if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
 
 logger = logging.getLogger("trpg")
+
+# 控制权拒绝真人提交时的对外文案；键与 player_control.SUBMISSION_BLOCK_CODES 一致。
+_SUBMISSION_BLOCK_MESSAGES = {
+    "PLAYER_AI_CONTROLLED": "该角色当前由 AI 托管，真人无法提交行动（可先接管该角色）",
+    "PLAYER_UNCLAIMED": "该角色尚未被认领，请先认领角色再提交行动",
+}
 
 
 NarrationDelta = Callable[[str], Awaitable[None]]
@@ -55,6 +81,13 @@ class RoundProcessingError(RuntimeError):
         self.rolled_back = rolled_back
 
 
+class AIPlayerActionFill(Protocol):
+    async def __call__(
+        self, instance: Any, /, *,
+        requires_structured_intent: StructuredIntentRequirement = False,
+    ) -> Any: ...
+
+
 @dataclass(frozen=True)
 class TurnDependencies:
     get_instance: Callable[[tuple[str, ...]], Any | None]
@@ -75,6 +108,12 @@ class TurnDependencies:
     # 策略按局解析：本局覆盖 → 规则模板默认 → 服务器全局配置。
     economy_auto_reward_settings: Callable[[Any], tuple[bool, int]] | None = None
     resolve_reward: Callable[[str, str, str], Awaitable[dict[str, Any]]] | None = None
+    # AI 托管席位补行动（src/commands/ai_player.py）：只在真人闸门满足之后、
+    # 本轮推进之前调用一次。None 表示该运行时没有配置这条能力（行为不变）。
+    fill_ai_player_actions: AIPlayerActionFill | None = None
+    # 权威战斗的即时接管（src/webui/services/ruleset_gameplay.py）：控制权变更
+    # 之后立刻把该席位的确定性回合走完。None 表示该运行时没有这条能力。
+    resume_authoritative_combat: Callable[[str, str], Awaitable[dict[str, Any]]] | None = None
 
 
 class TurnResult(TypedDict):
@@ -92,16 +131,9 @@ def _visible_economy_proposals(instance: "GameInstance", viewer_uid: str = "") -
     return [
         proposal
         for proposal in pending_economy_proposals(instance)
-        if (
-            not viewer_uid
-            or viewer_uid == instance.gm_uid
-            or proposal.get("visibility") == "party"
-            or viewer_uid == str(proposal.get("payer_uid") or proposal.get("uid") or "")
-            or viewer_uid in {
-                str(item.get("uid") or "")
-                for item in (proposal.get("contributors") or [])
-                if isinstance(item, dict)
-            }
+        if proposal_visible_to(
+            proposal, viewer_uid=viewer_uid,
+            viewer_is_gm=bool(viewer_uid) and viewer_uid == instance.gm_uid,
         )
     ]
 
@@ -116,18 +148,9 @@ def economy_decision_pending_payload(
     visible = [
         proposal
         for proposal in unresolved
-        if (
-            not viewer_uid
-            or viewer_uid == instance.gm_uid
-            or proposal.get("visibility") == "party"
-            or viewer_uid
-            == str(proposal.get("payer_uid") or proposal.get("uid") or "")
-            or viewer_uid
-            in {
-                str(item.get("uid") or "")
-                for item in (proposal.get("contributors") or [])
-                if isinstance(item, dict)
-            }
+        if proposal_visible_to(
+            proposal, viewer_uid=viewer_uid,
+            viewer_is_gm=bool(viewer_uid) and viewer_uid == instance.gm_uid,
         )
     ]
     return {
@@ -142,6 +165,38 @@ def economy_decision_pending_payload(
         ),
         "economy_proposals": visible,
     }
+
+
+def _gate_rejection(instance: "GameInstance", actor_uid: str, code: str) -> TurnResult:
+    """Map admission codes to the existing response text and HTTP status."""
+    if code == PLAYER_NOT_IN_GAME:
+        # Preserve the existing error-only membership response contract.
+        return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
+    if code in SUBMISSION_BLOCK_CODES:
+        return _result({
+            "ok": False,
+            "error_code": code,
+            "error": _SUBMISSION_BLOCK_MESSAGES.get(code, "当前角色无法提交行动"),
+        }, 409)
+    if code == STRUCTURED_INTENT_REQUIRED:
+        return _result({
+            "ok": False,
+            "error_code": code,
+            "error": "当前处于权威战斗，请在专业战斗工具中选择合法动作",
+        }, 409)
+    if code == ACTOR_DECEASED:
+        return _result({"error": "角色已死亡，无法提交行动", "error_code": code}, 403)
+    if code == ECONOMY_DECISION_PENDING:
+        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
+    if code == RUN_CHANGED:
+        return _result({
+            "ok": False, "error_code": "STALE_RUN", "error": "对局已重开，请刷新后重试",
+        }, 409)
+    if code == ROUND_PROCESSING:
+        return _result({
+            "error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing", "error_code": code,
+        }, 409)
+    return _result({"ok": False, "error_code": code, "error": code}, 409)
 
 
 def _pending_luck_payload(
@@ -220,6 +275,59 @@ async def _prepare_checks(
     return list((legacy_prepare(instance) if legacy_prepare else []) or [])
 
 
+async def _fill_ai_player_actions(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+    *,
+    game_key: str,
+) -> bool:
+    """让 AI 托管席位在真人交齐后补上本轮行动（失败不阻塞本轮）。
+
+    补行动本身是一个独立的命令层能力；这个服务只负责在唯一的推进入口调用
+    它一次。``ai_player`` 内部已按席位隔离失败并自行记录 ``AI_ACTION_SKIPPED``，
+    这里的兜底只防住实现缺陷，绝不让它把真人的这一轮卡住。
+
+    返回"这一遍是否真的写入了至少一条行动"，供调用方决定是否需要单独落盘：
+    补了行动但本轮没有推进时，那条行动不能只留在内存里。
+    """
+    fill = dependencies.fill_ai_player_actions
+    # 闸门只有一个所有者：``ai_player.fill_ai_player_actions`` 自己决定该不该行动
+    # （真人交齐，或"全 AI 桌没有真人可等"）。这里再拦一道旧闸门会让全 AI 桌永远
+    # 进不去——没有活跃真人时 ``human_actions_ready()`` 恒为 False，正是要修的场景。
+    if fill is None:
+        return False
+    def requires_structured_intent() -> bool:
+        # Synchronous read-only admission query, evaluated before generation AND
+        # inside commit's authority/state locks. Do not capture combat/capabilities
+        # now: either may change while context/model generation is in flight.
+        rule = dependencies.load_rule_for_game(instance)
+        if rule is None:
+            # No rule is legacy narrative behavior only for an unbound instance.
+            return bool(instance.ruleset_runtime)
+        try:
+            runtime = dependencies.ruleset_registry.resolve(rule.template)
+        except ValueError:
+            return True  # Unknown/incompatible runtimes must not admit free text.
+        state = instance.ruleset_state
+        combat = state.get("combat") if isinstance(state, dict) else None
+        combat_active = isinstance(combat, dict) and combat.get("status") == "active"
+        return runtime.capabilities.authoritative_intents and (
+            not runtime.capabilities.narrative_turns or combat_active
+        )
+
+    try:
+        records = await fill(instance, requires_structured_intent=requires_structured_intent)
+    except Exception:
+        logger.exception("AI 托管席位补行动失败，本轮继续: game=%s", game_key)
+        return False
+    if not isinstance(records, (list, tuple)):
+        return False
+    return any(
+        isinstance(record, dict) and str(record.get("status") or "") == "added"
+        for record in records
+    )
+
+
 async def _process_round(
     dependencies: TurnDependencies,
     instance: "GameInstance",
@@ -227,6 +335,7 @@ async def _process_round(
     game_key: str,
     on_delta: NarrationDelta | None,
     on_reset: NarrationReset | None,
+    run_changed: Callable[[], bool] | None = None,
 ) -> tuple[str, Any]:
     if dependencies.process_round is None:
         raise RuntimeError("round processor is not available")
@@ -250,6 +359,8 @@ async def _process_round(
             rolled_back=exc.rolled_back,
         ) from exc
     except Exception as exc:
+        if run_changed is not None and run_changed():
+            raise RoundProcessingError(_gate_rejection(instance, "", RUN_CHANGED)) from exc
         # 兜底：process_round 依赖本身抛错（例如非 RoundProcessor 的实现）。
         logger.exception("回合处理失败: game=%s，尝试回滚到行动阶段", game_key)
         rolled_back = await _rollback_failed_round(
@@ -259,7 +370,9 @@ async def _process_round(
             _round_failure_result(instance, rolled_back=rolled_back),
             rolled_back=rolled_back,
         ) from exc
-    await _auto_settle_rewards(dependencies, instance, game_key)
+    if run_changed is not None and run_changed():
+        raise RoundProcessingError(_gate_rejection(instance, "", RUN_CHANGED))
+    await _auto_settle_rewards(dependencies, instance, game_key, run_changed=run_changed)
     return narration, response
 
 
@@ -378,6 +491,8 @@ async def _auto_settle_rewards(
     dependencies: TurnDependencies,
     instance: "GameInstance",
     game_key: str,
+    *,
+    run_changed: Callable[[], bool] | None = None,
 ) -> None:
     """Auto-settle qualifying narrative reward proposals after a round.
 
@@ -406,6 +521,8 @@ async def _auto_settle_rewards(
     economy = getattr(instance, "economy", {})
     proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
     for proposal in list(proposals):
+        if run_changed is not None and run_changed():
+            return
         if not is_auto_settleable_reward(instance, proposal, gold_cap=gold_cap):
             continue
         proposal_id = str(proposal.get("id") or "")
@@ -442,6 +559,130 @@ def _auto_reward_cap(dependencies: TurnDependencies, instance: Any) -> int | Non
     return gold_cap if enabled and gold_cap >= 1 else None
 
 
+async def _advance_progression(
+    dependencies: TurnDependencies,
+    instance: "GameInstance",
+    *,
+    game_key: str,
+    viewer_uid: str = "",
+    include_recap: bool = False,
+    on_delta: NarrationDelta | None = None,
+    on_reset: NarrationReset | None = None,
+    roll_payload: dict[str, Any] | None = None,
+    run_changed: Callable[[], bool] | None = None,
+) -> TurnResult | None:
+    """本局唯一的"让 AI 补行动并推进本轮"边界；未推进时返回 ``None``。
+
+    普通玩家提交与控制权变更都走这里，因此 AI 席位的补行动、真人闸门、
+    检定准备与叙事生成只有一份实现。调用方只负责决定要不要调用，以及
+    "没有推进"时对外说什么。
+    """
+    # AI 托管席位的补行动只有一个注入点：真人闸门满足之后、本轮推进之前。
+    # 这里不做任何 AI 判断（闸门、顺序、幂等、竞争守卫都在 ai_player 里），
+    # 也不让它的失败挡住真人这一轮。
+    progression.require_writable(instance)
+    session_stats.require_writable(instance)
+    checks.require_writable(instance)
+    round_safety.require_writable(instance)
+    legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
+    wrote_ai_actions = await _fill_ai_player_actions(
+        dependencies, instance, game_key=game_key,
+    )
+
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
+    advanced = await instance.try_advance()
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
+    if not advanced:
+        if wrote_ai_actions:
+            # 补了行动但本轮没有推进（例如还有待确认的经济提案）：必须现在落盘，
+            # 否则会出现"控制权已保存、AI 行动却只在内存里"的状态。
+            await dependencies.save_instance(instance)
+        return None
+    await _prepare_checks(dependencies, instance)
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
+    if instance.pending_luck_checks():
+        await dependencies.save_instance(instance)
+        return _result(_pending_luck_payload(instance, roll=roll_payload))
+    try:
+        narration, _ = await _process_round(
+            dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
+            run_changed=run_changed,
+        )
+    except RoundProcessingError as exc:
+        return exc.result
+    if run_changed is not None and run_changed():
+        return _gate_rejection(instance, viewer_uid, RUN_CHANGED)
+    payload = _round_payload(
+        instance,
+        narration,
+        phase="done",
+        include_recap=include_recap,
+        viewer_uid=viewer_uid,
+    )
+    payload["advanced"] = True
+    if roll_payload:
+        payload["roll"] = roll_payload
+    return _result(payload)
+
+
+async def resume_after_control_change(
+    dependencies: TurnDependencies,
+    game_key: str,
+    *,
+    seat_uid: str = "",
+    on_delta: NarrationDelta | None = None,
+    on_reset: NarrationReset | None = None,
+) -> TurnResult:
+    """控制权写入成功后，立即唤醒现有的唯一推进边界。
+
+    这个 helper 只做三件事：确认控制权已经落盘、判断当前 phase 是否可推进、
+    然后调用既有 progression（AI 补行动的闸门属于 ``ai_player``，这里不再重复
+    判断）。它不生成 prompt、不产生 AI 行动、不规划检定、不写叙事、不碰战斗规则。
+
+    权威战斗由 ``resume_authoritative_combat``（同一注入能力）接管：控制权一变
+    就沿着既有的确定性自动阶梯走完该席位的回合；否则走自由文本回合的推进
+    边界。没有任何可推进条件时返回 ``resumed=False`` 与原因，**绝不伪造行动**，
+    也绝不为等人而空转。
+    """
+    instance = dependencies.get_instance(
+        dependencies.parse_game_key(game_key)
+    )
+    if not instance:
+        return _result({"ok": False, "resumed": False, "error": "游戏不存在"}, 404)
+
+    combat = dependencies.resume_authoritative_combat
+    if combat is not None:
+        combat_outcome = await combat(game_key, seat_uid)
+        if combat_outcome.get("handled"):
+            return _result(dict(combat_outcome))
+
+    if instance.state != GameState.ACTIVE_ACTION:
+        return _result({
+            "ok": True, "resumed": False, "reason": "phase_not_actionable",
+        })
+    # 只在"确实存在还没交行动的活跃真人"时才算闸门未开（AI 不抢跑，保持既有语义与
+    # 对外 reason）。没有活跃真人时（单人局把房主自己设为 AI 托管）没有真人可等，
+    # 必须继续往下走，否则"设为 AI 托管"之后永远不 resume。
+    if instance.active_human_players and not instance.human_actions_ready():
+        return _result({
+            "ok": True, "resumed": False, "reason": "human_gate_open",
+        })
+    advanced = await _advance_progression(
+        dependencies, instance, game_key=game_key, include_recap=True,
+        on_delta=on_delta, on_reset=on_reset,
+    )
+    if advanced is None:
+        return _result({
+            "ok": True, "resumed": False, "reason": "not_advanceable",
+        })
+    advanced["payload"]["resumed"] = True
+    return advanced
+
+
 async def submit_action(
     dependencies: TurnDependencies,
     game_key: str,
@@ -455,6 +696,7 @@ async def submit_action(
     selected_skill: str = "",
     target_text: str = "",
     source: str = "",
+    expected_run_id: str = "",
     on_delta: NarrationDelta | None = None,
     on_reset: NarrationReset | None = None,
 ) -> TurnResult:
@@ -464,9 +706,8 @@ async def submit_action(
     )
     if not instance:
         return _result({"error": "游戏不存在，请刷新页面重新开始"}, 404)
-    if actor_uid not in instance.players:
-        return _result({"error": "未加入本局，请先通过邀请链接加入"}, 403)
     rule = dependencies.load_rule_for_game(instance)
+    requires_structured = False
     if rule is not None:
         try:
             runtime = dependencies.ruleset_registry.resolve(rule.template)
@@ -479,130 +720,169 @@ async def submit_action(
         state = getattr(instance, "ruleset_state", {})
         combat = state.get("combat") if isinstance(state, dict) else None
         combat_active = isinstance(combat, dict) and combat.get("status") == "active"
-        if runtime.capabilities.authoritative_intents and (
+        requires_structured = runtime.capabilities.authoritative_intents and (
             not runtime.capabilities.narrative_turns or combat_active
-        ):
-            return _result({
-                "ok": False,
-                "error_code": "STRUCTURED_INTENT_REQUIRED",
-                "error": "当前处于权威战斗，请在专业战斗工具中选择合法动作",
-            }, 409)
-    if instance.is_dead(actor_uid):
-        return _result({"error": "角色已死亡，无法提交行动"}, 403)
-    await _retry_external_economy_effects(dependencies, instance)
-    if has_blocking_economy_decision(
-        instance, auto_reward_gold_cap=_auto_reward_cap(dependencies, instance),
-    ):
-        return _result(economy_decision_pending_payload(instance, actor_uid), 409)
-    if instance.state == GameState.ACTIVE_JUDGMENT:
-        return _result({"error": "本轮正在推进剧情，请等待下一轮开始", "phase": "processing"}, 409)
+        )
 
-    existing_action = next(
-        (action for action in instance.action_queue if action.get("user_id") == actor_uid),
-        None,
+    def _economy_blocked() -> bool:
+        return has_blocking_economy_decision(
+            instance, auto_reward_gold_cap=_auto_reward_cap(dependencies, instance),
+        )
+
+    request = GateRequest(
+        actor_uid=actor_uid,
+        source=SOURCE_HUMAN,
+        expected_run_id=expected_run_id or None,
+        requires_structured_intent=requires_structured,
+        economy_blocked=_economy_blocked,
     )
-    existing_pending_roll = bool(existing_action and existing_action.get("dice_pending"))
-    if instance.solo_mode:
-        action_count = sum(1 for action in instance.action_queue if action.get("user_id") == actor_uid)
-        if action_count >= MAX_ACTIONS_PER_TURN:
-            return _result({"error": f"本回合已达行动上限（{MAX_ACTIONS_PER_TURN} 条）"}, 400)
-    elif (
-        existing_action
-        and int(existing_action.get("revision_count", 1) or 1) >= 3
-        and not (confirm and existing_pending_roll)
-    ):
-        return _result({"error": "本轮行动已修改 3 次，请等待其他玩家或 GM 推进"}, 400)
-
-    if instance.state == GameState.PAUSED:
-        if instance.round_number <= 0:
-            await instance.start_round()
-        else:
-            await instance.resume()
-
-    roll_payload: dict[str, Any] | None = None
-    if confirm and existing_pending_roll:
-        resolved = await dependencies.resolve_pending_dice(
-            game_key, actor_uid, "player",
+    code = evaluate(instance, request, HUMAN_FREE_TEXT_PRE_RETRY_POLICY)
+    if code:
+        return _gate_rejection(instance, actor_uid, code)
+    def run_changed() -> bool:
+        # Replacement may leave the old object's run_id intact. Both identity
+        # fences matter; an omitted/empty token retains the legacy path.
+        return bool(expected_run_id) and (
+            bool(check_run_unchanged(instance, request))
+            or dependencies.get_instance(instance.game_key) is not instance
         )
-        if not resolved.get("ok"):
-            status = 409 if resolved.get("code") == "REWRITE_IN_PROGRESS" else 400
-            return _result(resolved, status)
-        roll_payload = resolved.get("roll")
-    elif confirm and d20 is None and server_roll:
-        roll_payload = dependencies.roll_for_game(game_key)
-        if not roll_payload.get("ok"):
-            return _result(roll_payload, 400)
-        d20 = roll_payload["value"]
 
-    if not (confirm and existing_pending_roll):
-        action_text = text
-        action_added = await instance.add_action(
-            actor_uid,
-            action_text,
-            selected_attribute,
-            selected_skill,
-            target_text,
-            source=source,
-        )
-        process_lock = getattr(instance, "_process_lock", None)
-        if (
-            not action_added
-            and process_lock is not None
-            and process_lock.locked()
-        ):
+    if run_changed():
+        return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+    # Only opted-in callers hold authority across retry, resume, enqueue and
+    # progression. Production reset/restart uses this same reentrant gate.
+    async with instance.authoritative_write() if expected_run_id else nullcontext(True) as entered:
+        if run_changed():
+            return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+        if not entered:
             return _result({
                 "ok": False,
                 "error_code": "REWRITE_IN_PROGRESS",
                 "error": "GM 正在重写历史回合，请等待完成后再提交行动",
             }, 409)
-        # Purchase requests are recorded together with the action. Persisting
-        # here keeps a request recoverable even when another player has not yet
-        # submitted an action and no narrative round has started.
-        if action_added:
-            try:
-                await dependencies.save_instance(instance)
-            except Exception:
-                logger.exception("保存行动/购买请求失败: game=%s", game_key)
+        progression.require_writable(instance)
+        session_stats.require_writable(instance)
+        checks.require_writable(instance)
+        round_safety.require_writable(instance)
+        legacy_combat.require_writable(instance)
+        ruleset_runtime.require_writable(instance)
+        # Retry stays after the pre-retry guards, outside the pure gate.
+        await _retry_external_economy_effects(dependencies, instance)
+        if run_changed():
+            return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+        code = evaluate(instance, request, HUMAN_FREE_TEXT_POST_RETRY_POLICY)
+        if code:
+            return _gate_rejection(instance, actor_uid, code)
 
-    if await instance.try_advance():
-        await _prepare_checks(dependencies, instance)
-        if instance.pending_luck_checks():
-            await dependencies.save_instance(instance)
-            return _result(_pending_luck_payload(instance, roll=roll_payload))
-        try:
-            narration, _ = await _process_round(
-                dependencies, instance, game_key=game_key, on_delta=on_delta, on_reset=on_reset,
-            )
-        except RoundProcessingError as exc:
-            return exc.result
-        payload = _round_payload(
-            instance,
-            narration,
-            phase="done",
-            include_recap=True,
-            viewer_uid=actor_uid,
+        existing_action = next(
+            (action for action in instance.action_queue if action.get("user_id") == actor_uid),
+            None,
         )
-        payload["advanced"] = True
+        existing_pending_roll = bool(existing_action and existing_action.get("dice_pending"))
+        if instance.solo_mode:
+            action_count = sum(1 for action in instance.action_queue if action.get("user_id") == actor_uid)
+            if action_count >= MAX_ACTIONS_PER_TURN:
+                return _result({"error": f"本回合已达行动上限（{MAX_ACTIONS_PER_TURN} 条）"}, 400)
+        elif (
+            existing_action
+            and int(existing_action.get("revision_count", 1) or 1) >= 3
+            and not (confirm and existing_pending_roll)
+        ):
+            return _result({"error": "本轮行动已修改 3 次，请等待其他玩家或 GM 推进"}, 400)
+
+        # Forward only nonempty tokens: existing callers and test adapters keep
+        # their original call shape. Aggregate checks run after its state lock.
+        run_options = {"expected_run_id": expected_run_id} if expected_run_id else {}
+        if instance.state == GameState.PAUSED:
+            if instance.round_number <= 0:
+                await instance.start_round(**run_options)
+            else:
+                await instance.resume(**run_options)
+            if run_changed():
+                return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+
+        roll_payload: dict[str, Any] | None = None
+        if confirm and existing_pending_roll:
+            resolved = await dependencies.resolve_pending_dice(
+                game_key, actor_uid, "player",
+            )
+            if run_changed():
+                return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+            if not resolved.get("ok"):
+                status = 409 if resolved.get("code") == "REWRITE_IN_PROGRESS" else 400
+                return _result(resolved, status)
+            roll_payload = resolved.get("roll")
+        elif confirm and d20 is None and server_roll:
+            roll_payload = dependencies.roll_for_game(game_key)
+            if not roll_payload.get("ok"):
+                return _result(roll_payload, 400)
+            d20 = roll_payload["value"]
+
+        if not (confirm and existing_pending_roll):
+            action_text = text
+            action_added = await instance.add_action(
+                actor_uid,
+                action_text,
+                selected_attribute,
+                selected_skill,
+                target_text,
+                source=source,
+                **run_options,
+            )
+            if run_changed():
+                return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+            process_lock = getattr(instance, "_process_lock", None)
+            if (
+                not action_added
+                and process_lock is not None
+                and process_lock.locked()
+            ):
+                return _result({
+                    "ok": False,
+                    "error_code": "REWRITE_IN_PROGRESS",
+                    "error": "GM 正在重写历史回合，请等待完成后再提交行动",
+                }, 409)
+            # Purchase requests are recorded together with the action. Persisting
+            # here keeps a request recoverable even when another player has not yet
+            # submitted an action and no narrative round has started.
+            if action_added:
+                try:
+                    await dependencies.save_instance(instance)
+                except Exception:
+                    logger.exception("保存行动/购买请求失败: game=%s", game_key)
+                if run_changed():
+                    return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+
+        # 真人提交之后与"控制权变更之后"共用同一个推进入口：AI 托管席位的补行动
+        # （真人闸门、顺序、幂等、竞争守卫都在 ai_player 里）、检定准备与叙事生成
+        # 只有一份实现，它的失败也不会挡住真人这一轮。
+        advanced = await _advance_progression(
+            dependencies, instance, game_key=game_key, viewer_uid=actor_uid,
+            include_recap=True, on_delta=on_delta, on_reset=on_reset,
+            roll_payload=roll_payload,
+            run_changed=run_changed if expected_run_id else None,
+        )
+        if run_changed():
+            return _gate_rejection(instance, actor_uid, RUN_CHANGED)
+        if advanced is not None:
+            return advanced
+
+        multiplayer = instance.multiplayer_status()
+        waiting_names = [
+            player.get("character_name") or player.get("user_id")
+            for player in multiplayer.get("waiting_players", [])
+        ]
+        waiting_text = "、".join(str(name) for name in waiting_names if name)
+        message = f"行动已公开，等待 {waiting_text} 行动" if waiting_text else "行动已公开，等待系统推进"
+        payload = {
+            "narration": message,
+            "advanced": False,
+            "phase": "done",
+            "multiplayer": multiplayer,
+        }
         if roll_payload:
             payload["roll"] = roll_payload
         return _result(payload)
-
-    multiplayer = instance.multiplayer_status()
-    waiting_names = [
-        player.get("character_name") or player.get("user_id")
-        for player in multiplayer.get("waiting_players", [])
-    ]
-    waiting_text = "、".join(str(name) for name in waiting_names if name)
-    message = f"行动已公开，等待 {waiting_text} 行动" if waiting_text else "行动已公开，等待系统推进"
-    payload = {
-        "narration": message,
-        "advanced": False,
-        "phase": "done",
-        "multiplayer": multiplayer,
-    }
-    if roll_payload:
-        payload["roll"] = roll_payload
-    return _result(payload)
 
 
 async def resolve_luck_and_continue(
@@ -673,6 +953,12 @@ async def advance_round(
         return _result({"error": "not found"}, 404)
     if actor_uid != instance.gm_uid:
         return _result({"ok": False, "error": "仅 GM 可推进"}, 403)
+    progression.require_writable(instance)
+    session_stats.require_writable(instance)
+    checks.require_writable(instance)
+    round_safety.require_writable(instance)
+    legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
     if force and _allow_preempt and instance.round_processing_in_flight():
         if await instance.cancel_round_processing():
             logger.warning("GM 强制推进：已中止在飞生成 - game_key=%s", game_key)

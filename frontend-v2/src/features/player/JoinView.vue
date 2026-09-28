@@ -9,6 +9,7 @@ import { attrDisplayName, suggestedAttributes, skillPointCost } from '@/utils/ru
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useConfirm } from '@/composables/useConfirm'
 import { characterCardNeedsConversion, characterCardRuleName } from '@/utils/characterCards'
+import { joinSkillsPayload } from '@/features/player/joinSkills'
 import { activePeerGameClient } from '@/peer/game/bridge'
 import { usePeerSessionStore } from '@/peer/store/peerSession'
 import { friendlyPeerDetail } from '@/features/peer/friendlyDetail'
@@ -16,7 +17,7 @@ import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import BrandLogo from '@/components/BrandLogo.vue'
 import RulesetExperienceHost from '@/features/rulesets/RulesetExperienceHost.vue'
 
-interface JoinSkill { name: string; value: string | number }
+interface JoinSkill { name: string; value: string | number; effect?: string }
 interface JoinForm {
   character_name: string
   race: string
@@ -44,6 +45,14 @@ const rulesetRuntime = ref<RulesetRuntimeMeta | null>(null)
 const professionalInitial = ref<CharacterSheet | undefined>()
 const professionalHostKey = ref(0)
 const form = ref<JoinForm>({ character_name: '', race: '', class: '', hp: '', background: '', attributes: {}, skills: [{ name: '', value: '' }] })
+// 效果说明默认折叠，避免技能多时铺开一排 textarea。
+const openSkillEffects = ref<Set<number>>(new Set())
+function toggleSkillEffect(i: number) {
+  const next = new Set(openSkillEffects.value)
+  if (next.has(i)) next.delete(i)
+  else next.add(i)
+  openSkillEffects.value = next
+}
 const error = ref(''), busy = ref(false)
 /** peer 会话恢复失败等场景的原始错误码转成人话；其它错误原样展示。 */
 const displayError = computed(() => friendlyPeerDetail(error.value, t))
@@ -94,7 +103,11 @@ function onLocaleChange(event: Event) {
 }
 
 function skillToForm(skill: string | CharacterSkill): JoinSkill {
-  return typeof skill === 'string' ? { name: skill, value: '' } : { name: skill.name, value: skill.value ?? '' }
+  if (typeof skill === 'string') return { name: skill, value: '' }
+  const row: JoinSkill = { name: skill.name, value: skill.value ?? '' }
+  const effect = String(skill.effect || '').trim()
+  if (effect) row.effect = effect
+  return row
 }
 
 onMounted(async () => {
@@ -269,9 +282,7 @@ async function create() {
     const payload = {
       ...form.value,
       hp: form.value.hp === '' ? undefined : Number(form.value.hp),
-      skills: form.value.skills
-        .filter(s => s.name.trim())
-        .map(s => ({ name: s.name.trim(), value: s.value === '' ? undefined : Number(s.value) })),
+      skills: joinSkillsPayload(form.value.skills),
       join_as_new: true,
     }
     const r = await api<PlayerCreateResponse>(`/games/${encodeURIComponent(gameKey.value)}/players`, { method: 'POST', body: JSON.stringify(payload) })
@@ -401,10 +412,28 @@ async function create() {
           <span v-if="skillPointTotal"> · {{ t('skillPointsSpent', { spent: skillSpent, total: skillPointTotal }) }}</span>
           <span v-if="maxSkillValue"> · {{ t('maxSingleSkill', { max: maxSkillValue }) }}</span>
         </p>
-        <div class="skill-row" v-for="(s, i) in form.skills" :key="i">
-          <input v-model="s.name" :placeholder="t('skillName')">
-          <input type="number" v-model="s.value" :placeholder="t('numericValue')">
-          <button @click="form.skills.splice(i, 1)" :title="t('deleteSkill')">×</button>
+        <div class="skill-entry" v-for="(s, i) in form.skills" :key="i">
+          <div class="skill-row">
+            <input v-model="s.name" :placeholder="t('skillName')">
+            <input type="number" v-model="s.value" :placeholder="t('numericValue')">
+            <button
+              type="button"
+              class="chip skill-effect-toggle"
+              :class="{ active: openSkillEffects.has(i) || Boolean(s.effect) }"
+              :aria-expanded="openSkillEffects.has(i)"
+              :title="t('skillEffect')"
+              @click="toggleSkillEffect(i)"
+            >{{ t('skillEffect') }}</button>
+            <button @click="form.skills.splice(i, 1)" :title="t('deleteSkill')">×</button>
+          </div>
+          <textarea
+            v-if="openSkillEffects.has(i)"
+            class="skill-effect-input"
+            rows="2"
+            maxlength="500"
+            v-model="s.effect"
+            :placeholder="t('skillEffectPlaceholder')"
+          />
         </div>
       </section>
 

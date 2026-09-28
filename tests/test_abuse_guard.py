@@ -134,3 +134,24 @@ def test_server_speech_is_counted_as_an_ai_request():
     })()
 
     assert _is_ai_request(request) is True
+
+
+def test_storyboard_analysis_is_counted_as_an_ai_request():
+    request = type("Request", (), {
+        "path": "/api/games/room/generated-images/storyboard/analyze",
+        "method": "POST",
+    })()
+
+    assert _is_ai_request(request) is True
+
+
+def test_image_generation_stays_out_of_the_ai_slot_pool():
+    """生图不占 AI 槽位：单次可长达 imagegen_timeout_seconds，
+    挤进只有 3 个槽位的池子会把玩家行动一起饿死。"""
+    for path in (
+        "/api/games/room/generated-images/current-round",
+        "/api/games/room/generated-images",
+    ):
+        request = type("Request", (), {"path": path, "method": "POST"})()
+
+        assert _is_ai_request(request) is False

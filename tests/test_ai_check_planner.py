@@ -80,6 +80,26 @@ def test_planner_context_publishes_the_ruleset_dc_bands() -> None:
         assert "ruleset.dc_table" in prompt or "`dc_table`" in prompt
 
 
+def test_compound_action_prompts_stop_at_the_earliest_blocking_checkpoint() -> None:
+    planner_markers = {
+        "zh": "最早会阻塞后续动作",
+        "en": "earliest genuine uncertainty that blocks the later steps",
+        "ja": "後続の行動を止める最初の本当の不確実性",
+        "de": "früheste echte Unsicherheit, die spätere Schritte blockiert",
+    }
+    gm_markers = {
+        "zh": "不得自动完成后续依赖动作",
+        "en": "Do not automatically complete dependent later actions",
+        "ja": "依存する後続行動を自動で完了させたり",
+        "de": "Schließe abhängige spätere Aktionen nicht automatisch ab",
+    }
+    for locale, marker in planner_markers.items():
+        planner_prompt = (ROOT / f"prompts/check_planner_{locale}.md").read_text(encoding="utf-8")
+        gm_prompt = (ROOT / f"prompts/gm_system_{locale}.md").read_text(encoding="utf-8")
+        assert marker in planner_prompt
+        assert gm_markers[locale] in gm_prompt
+
+
 def test_d20_target_is_clamped_to_dc_cap() -> None:
     """后期失控 DC（25–30）必须被钳到规则显式硬上限。"""
     from src.engine.dice import d20_dc_cap
@@ -299,6 +319,8 @@ async def test_plan_round_checks_uses_single_batched_tool_call() -> None:
         "total_tokens": 37,
         "errors": [],
         "overreach": [],
+        "world_requirements": [],
+        "world_time_advance": None,
         "economy_offers": [],
         "unpriced_purchase_intents": [],
     }
@@ -460,7 +482,7 @@ async def test_economy_offer_without_stated_price_is_safely_skipped() -> None:
     )
     # none / 缺 amount → 跳过且不报错；有 amount 却没有 price_source → 拒绝。
     assert metadata["economy_offers"] == []
-    assert metadata["errors"] == ["economy_actions[2] price_source='' 无效"]
+    assert metadata["errors"] == ["economy_actions[2] price_source='' 无效；已降级为 unpriced purchase intent"]
 
 
 @pytest.mark.asyncio
@@ -1156,3 +1178,220 @@ async def test_new_context_reaches_single_planner_call_without_changing_safety_n
     assert metadata["errors"] == []
     assert len(planned) == 1
     assert planned[0][1]["planner_source"] == "deterministic_safety_net"
+
+
+def make_currency_rule() -> RuleSystem:
+    """Currency V2 规则（美元/美分）：验证 amount 字符串 + unit 协议。"""
+
+    return RuleSystem({
+        "rule_id": "test_coc",
+        "name": "Test CoC",
+        "dice_system": "d20",
+        "currency": "美元",
+        "currency_system": {
+            "schema_version": 2,
+            "base_unit": "cent",
+            "display_unit": "dollar",
+            "units": [
+                {"id": "dollar", "name": "美元", "symbol": "$", "rate": 100},
+                {"id": "cent", "name": "美分", "rate": 1},
+            ],
+        },
+    })
+
+
+@pytest.mark.asyncio
+async def test_economy_offer_decimal_amount_with_canonical_unit() -> None:
+    """新协议：amount 是十进制字符串、unit 是 canonical unit id；服务端换算。"""
+
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "我买一瓶药水"}]
+    planned, metadata = await plan_round_checks(
+        instance, make_currency_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "p1", "type": "purchase", "target": "药水",
+                "amount": "0.25", "unit": "dollar", "price_source": "gm_narrated",
+            },
+            {
+                "player": "p1", "type": "purchase", "target": "火柴",
+                "amount": "25", "unit": "cent", "price_source": "player_stated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["errors"] == []
+    assert [offer["amount"] for offer in metadata["economy_offers"]] == [25, 25]
+
+
+@pytest.mark.asyncio
+async def test_economy_offer_unknown_unit_and_fractional_minor_rejected() -> None:
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "我买点东西"}]
+    planned, metadata = await plan_round_checks(
+        instance, make_currency_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "p1", "type": "purchase", "target": "药水",
+                "amount": "1", "unit": "euro", "price_source": "gm_narrated",
+            },
+            {
+                "player": "p1", "type": "purchase", "target": "纽扣",
+                "amount": "0.001", "unit": "dollar", "price_source": "gm_narrated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["economy_offers"] == []
+    assert any("euro" in error for error in metadata["errors"])
+    assert any("无法精确转换" in error or "0.001" in error for error in metadata["errors"])
+
+
+def test_planner_context_lists_currency_units() -> None:
+    import json as _json
+
+    from src.commands.check_planner import _planner_context
+
+    instance = make_instance()
+    payload = _json.loads(_planner_context(instance, make_currency_rule()))
+    units = payload["ruleset"]["currency_units"]
+    assert {unit["id"] for unit in units} == {"dollar", "cent"}
+    assert payload["ruleset"]["currency_display_unit"] == "dollar"
+
+
+# ===== 购买 fail-safe：价格不可结算时降级为 unpriced，绝不丢失购买意图 =====
+
+@pytest.mark.asyncio
+async def test_unknown_unit_downgrades_to_unpriced_intent() -> None:
+    """玩家说「元」而规则只有 dollar/cent：意图保留，价格不可结算。"""
+
+    instance = make_instance()
+    instance.action_queue = [{"user_id": "p1", "text": "买个2.5元的面包"}]
+    planned, metadata = await plan_round_checks(
+        instance, make_currency_rule(),
+        _client_returning({"checks": [], "economy_actions": [
+            {
+                "player": "p1", "type": "purchase", "target": "黑麦面包",
+                "amount": "2.5", "unit": "yuan", "quantity": 5,
+                "amount_scope": "total", "price_source": "player_stated",
+            },
+        ]}),
+    )
+    assert planned == []
+    assert metadata["economy_offers"] == []
+    assert metadata["errors"] and "已降级为 unpriced" in metadata["errors"][0]
+    assert metadata["unpriced_purchase_intents"] == [
+        {"payer_uid": "p1", "target": "黑麦面包", "quantity": 5},
+    ]
+
+
+def test_fractional_minor_amount_downgrades_to_unpriced() -> None:
+    """0.5 灵石无法 canonicalize：不报价，但拦截该商品的免费发放。"""
+
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(instance, [
+        {"player": "p1", "type": "purchase", "target": "灵砂",
+         "amount": "0.5", "unit": "unit", "price_source": "player_stated"},
+    ])
+    assert offers == []
+    assert unpriced == [{"payer_uid": "p1", "target": "灵砂", "quantity": 1}]
+    assert errors and "无法精确转换" in errors[0]
+
+
+def test_invalid_scope_price_source_and_overflow_downgrade_to_unpriced() -> None:
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(
+        instance,
+        [
+            {"player": "p1", "type": "purchase", "target": "绷带",
+             "amount": "1", "unit": "dollar", "amount_scope": "weird",
+             "price_source": "player_stated"},
+            {"player": "p1", "type": "purchase", "target": "吗啡",
+             "amount": "1", "unit": "dollar", "price_source": "model_guessed"},
+            {"player": "p1", "type": "purchase", "target": "左轮手枪",
+             "amount": "99999999", "unit": "cent", "price_source": "player_stated"},
+        ],
+        make_currency_rule(),
+    )
+    assert offers == []
+    assert {intent["target"] for intent in unpriced} == {"绷带", "吗啡", "左轮手枪"}
+    assert len(errors) == 3
+    assert all("已降级为 unpriced" in error for error in errors)
+
+
+def test_intent_invalid_fields_do_not_create_unpriced() -> None:
+    """player 不存在 / target 为空 / type 非法：意图不可靠，直接丢弃。"""
+
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(instance, [
+        {"player": "不存在", "type": "purchase", "target": "面包",
+         "amount": "1", "price_source": "player_stated"},
+        {"player": "p1", "type": "purchase", "target": "",
+         "amount": "1", "price_source": "player_stated"},
+        {"player": "p1", "type": "sale", "target": "面包"},
+    ], make_currency_rule())
+    assert offers == []
+    assert unpriced == []
+    assert len(errors) == 3
+
+
+def test_mixed_batch_keeps_valid_offer_and_downgrades_bad_price() -> None:
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(
+        instance,
+        [
+            {"player": "p1", "type": "purchase", "target": "火把",
+             "amount": "0.25", "unit": "dollar", "price_source": "player_stated"},
+            {"player": "p1", "type": "purchase", "target": "面包",
+             "amount": "2.5", "unit": "yuan", "price_source": "player_stated"},
+        ],
+        make_currency_rule(),
+    )
+    assert [offer["amount"] for offer in offers] == [25]
+    assert [intent["target"] for intent in unpriced] == ["面包"]
+    assert len(errors) == 1
+
+
+def test_unpriced_intent_blocks_same_round_loot_grant() -> None:
+    """端到端：unknown unit → unpriced intent → LOOT gate 拦截免费发放。"""
+
+    from src.commands.check_planner import normalize_economy_actions
+    from src.engine.economy import filter_unconfirmed_purchase_grants
+
+    instance = make_instance()
+    _, unpriced, _ = normalize_economy_actions(
+        instance,
+        [{"player": "p1", "type": "purchase", "target": "黑麦面包",
+          "amount": "2.5", "unit": "yuan", "price_source": "player_stated"}],
+        make_currency_rule(),
+    )
+    assert unpriced
+    data = {"state_update": {"loot": [
+        {"player": "p1", "item": "黑麦面包"},
+    ]}}
+    removed = filter_unconfirmed_purchase_grants(
+        instance, data, unpriced_purchase_intents=unpriced,
+    )
+    assert removed == 1
+    assert data["state_update"].get("loot") == []
+
+
+def test_price_source_none_keeps_unpriced_behavior() -> None:
+    from src.commands.check_planner import normalize_economy_actions
+
+    instance = make_instance()
+    offers, unpriced, errors = normalize_economy_actions(instance, [
+        {"player": "p1", "type": "purchase", "target": "面包",
+         "price_source": "none"},
+    ], make_currency_rule())
+    assert offers == []
+    assert unpriced == [{"payer_uid": "p1", "target": "面包", "quantity": 1}]
+    assert errors == []

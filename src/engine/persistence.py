@@ -20,6 +20,8 @@ from uuid import uuid4
 from src.engine import game_instance
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import record_health_event
+from src.engine.module_state import ModuleStateError
+from src.engine.modules import media
 from src.compat.saves import normalize_save_payload
 from src.compat.save_paths import save_path
 
@@ -168,7 +170,8 @@ async def load(registry: GameRegistry, game_key: tuple) -> GameInstance | None:
         )
     _restore_chatlog(registry, instance, sp)
     registry.register(instance)
-    logger.info("存档已加载: %s, round=%d", game_key, instance.round_number)
+    # Loading opaque future module data must not require runtime interpretation.
+    logger.info("存档已加载: %s", game_key)
     return instance
 
 
@@ -263,6 +266,83 @@ async def recover_all(registry: GameRegistry) -> list[GameInstance]:
     return recovered
 
 
+def _metadata_game_key(registry: GameRegistry, directory_name: str) -> str:
+    """Derive the public game key from a save directory name (legacy separators aware)."""
+
+    parts = directory_name.split(registry._KEY_SEPARATOR)
+    if len(parts) < 3:
+        for old_sep in ("|", ","):
+            parts = directory_name.split(old_sep)
+            if len(parts) >= 3:
+                break
+    return "|".join(str(part) for part in parts[:3])
+
+
+def _state_metadata(path: Path) -> dict[str, Any] | None:
+    """Read only the module-usage fields of one persisted state file."""
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    binding = data.get("adventure_binding")
+    binding = binding if isinstance(binding, dict) else {}
+    state = data.get("state")
+    if isinstance(state, dict):
+        state = state.get("value")
+    return {
+        "adventure_id": str(binding.get("adventure_id") or ""),
+        "content_digest": str(binding.get("content_digest") or ""),
+        "source_kind": str(binding.get("source_kind") or ""),
+        "source_id": str(binding.get("source_id") or ""),
+        "run_id": str(data.get("run_id") or ""),
+        "state": str(state or ""),
+    }
+
+
+def scan_save_metadata(registry: GameRegistry) -> list[dict[str, Any]]:
+    """Read-only metadata scan over every persisted save (FIX-01 §3.7).
+
+    Module usage protection must cover **all persisted saves**, not only the
+    in-memory instances recovered at startup: paused / ended saves and saves
+    that failed to load but whose metadata is still readable all count.
+
+    Never loads or mutates a save; a save whose state files are unreadable is
+    still reported (``metadata_readable: False``) so the caller can surface it
+    instead of silently treating it as unbound.
+    """
+
+    save_dir = registry.save_dir
+    if not save_dir.is_dir():
+        return []
+    rows: list[dict[str, Any]] = []
+    for entry in sorted(save_dir.iterdir(), key=lambda item: item.name):
+        if not entry.is_dir():
+            continue
+        state_path = entry / "state.json"
+        backup_path = entry / "state.backup.json"
+        if not state_path.is_file() and not backup_path.is_file():
+            continue
+        metadata: dict[str, Any] | None = None
+        for candidate in (state_path, backup_path):
+            if candidate.is_file():
+                metadata = _state_metadata(candidate)
+                if metadata is not None:
+                    break
+        rows.append({
+            "game_key": _metadata_game_key(registry, entry.name),
+            "metadata_readable": metadata is not None,
+            **(
+                metadata
+                if metadata is not None
+                else {"adventure_id": "", "content_digest": "", "source_kind": "", "source_id": "", "run_id": "", "state": ""}
+            ),
+        })
+    return rows
+
+
 async def import_save_zip(
     registry: GameRegistry,
     payload: bytes,
@@ -329,7 +409,11 @@ async def import_save_zip(
         logger.exception("导入存档解析失败")
         return {"ok": False, "error": f"存档包解析失败：{exc}"}
 
-    scene_reference = state_json.get("scene_image")
+    try:
+        container = media.payload_container(state_json)
+    except ModuleStateError as exc:
+        return {"ok": False, "error_code": "UNSUPPORTED_MEDIA_SCHEMA", "error": str(exc), "status": 400}
+    scene_reference = container.get("scene_image")
     if isinstance(scene_reference, dict) and scene_reference.get("kind") == "save_asset":
         if scene_reference.get("path") != "scene-image.asset" or not scene_image_data:
             return {"ok": False, "error": "存档包缺少冒险头图资产"}
@@ -338,9 +422,9 @@ async def import_save_zip(
         imported = scene_image_importer(scene_image_data)
         if not imported.get("ok") or not imported.get("scene_image"):
             return {"ok": False, "error": str(imported.get("error") or "冒险头图导入失败")}
-        state_json["scene_image"] = imported["scene_image"]
+        container["scene_image"] = imported["scene_image"]
 
-    map_reference = state_json.get("map_background")
+    map_reference = container.get("map_background")
     if isinstance(map_reference, dict) and map_reference.get("kind") == "save_asset":
         if map_reference.get("path") != "map-background.asset" or not map_background_data:
             return {"ok": False, "error": "存档包缺少地图背景资产"}
@@ -349,7 +433,7 @@ async def import_save_zip(
         imported = map_background_importer(map_background_data)
         if not imported.get("ok") or not imported.get("map_background"):
             return {"ok": False, "error": str(imported.get("error") or "地图背景导入失败")}
-        state_json["map_background"] = imported["map_background"]
+        container["map_background"] = imported["map_background"]
 
     # 生成唯一新 game_key：import_<毫秒时间戳>
     new_key = (platform, f"import_{int(time.time() * 1000)}", account_id)
@@ -368,9 +452,8 @@ async def import_save_zip(
     if chatlog_data:
         sp.with_name("chatlog.jsonl").write_bytes(chatlog_data)
     # 立即加载并注册进内存，否则 list_games（只遍历内存）看不到导入的对局
-    instance = await load(registry, new_key)
-    rounds = instance.round_number if instance else -1
-    logger.info("已导入存档为新对局: %s (round=%d)", sp.parent.name, rounds)
+    await load(registry, new_key)
+    logger.info("已导入存档为新对局: %s", sp.parent.name)
     return {"ok": True, "game_key": list(new_key)}
 
 

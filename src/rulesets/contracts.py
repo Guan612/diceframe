@@ -291,3 +291,61 @@ class PublicTimelineProjectionRuntime(Protocol):
     def public_timeline_projection(
         self, batch: dict[str, Any], locale: str,
     ) -> dict[str, str]: ...
+
+
+# 只描述"哪一类角色事实动过"，不描述动成了什么。Ruleset 收到提示后自行重读
+# 当前权威角色状态，因此 live state 始终是唯一 authority，projection 不会退化
+# 成第二份业务事实。第一版只有 equipment / inventory 会被实际发出。
+CHARACTER_MUTATION_DOMAINS: frozenset[str] = frozenset({
+    "equipment", "inventory", "resources",
+})
+
+
+@runtime_checkable
+class CharacterStateReconciliationRuntime(Protocol):
+    """Optional hook: re-derive ruleset-owned projections from live character state.
+
+    ``changed_domains`` is a hint drawn from :data:`CHARACTER_MUTATION_DOMAINS`,
+    never a payload.  It names the kind of live fact that moved and nothing
+    else; the runtime re-reads the authoritative character sheet itself.  That
+    keeps the generic layer free of rule knowledge and stops the projection
+    from becoming a second, separately maintained source of truth.
+
+    Implementations must be idempotent: reconciling twice without an
+    intervening live mutation must not rewrite canonical state, bump a
+    revision, or append an operation log entry.  Return ``None`` when the
+    projection was already current.
+    """
+
+    def reconcile_character_state(
+        self,
+        instance: Any,
+        user_id: str,
+        changed_domains: frozenset[str],
+    ) -> dict[str, Any] | None: ...
+
+
+@runtime_checkable
+class CharacterItemPreparationRuntime(Protocol):
+    """Optional hook: canonicalize owned item rows *before* a generic mutation.
+
+    Reconciliation runs after the mutation and can only describe the result.  A
+    generic equip, however, decides which slot to replace from the row it is
+    given; an old save whose rows carry no ruleset metadata therefore lands in
+    the wrong slot and evicts equipment that the later reconciliation cannot put
+    back.  This hook exists so the ruleset can establish canonical identity and
+    placement first, while the generic layer still knows nothing about any
+    specific rule.
+
+    ``item_names`` are the display names this mutation is about to equip; the
+    runtime re-reads the authoritative character sheet itself.  Implementations
+    must be safe to call with names that are absent, already canonical, or
+    unresolvable -- unresolvable rows are left exactly as they are.
+    """
+
+    def prepare_owned_items(
+        self,
+        instance: Any,
+        user_id: str,
+        item_names: frozenset[str],
+    ) -> None: ...

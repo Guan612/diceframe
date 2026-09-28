@@ -33,6 +33,7 @@ class ProviderImage:
 class ImageProvider(ABC):
     provider_id: str
     supports_reference_images: bool = False
+    prompt_char_limit: int = 12_000
 
     def __init__(
         self,
@@ -262,6 +263,7 @@ class OpenAICompatibleImageProvider(ImageProvider):
 
 class MiniMaxImageProvider(ImageProvider):
     provider_id = "minimax"
+    prompt_char_limit = 1_500
 
     async def generate(
         self, prompt: str, *, size: str, quality: str = "",
@@ -269,6 +271,8 @@ class MiniMaxImageProvider(ImageProvider):
     ) -> ProviderImage:
         if reference_images:
             raise ImageProviderError("当前 MiniMax 图像服务商不支持头像参考图，请关闭该选项后重试")
+        if len(prompt) > self.prompt_char_limit:
+            raise ImageProviderError("MiniMax 图像提示词不能超过 1500 个字符")
         try:
             width_text, height_text = str(size or "").strip().lower().split("x", 1)
             width, height = int(width_text), int(height_text)
@@ -287,7 +291,7 @@ class MiniMaxImageProvider(ImageProvider):
             headers["Authorization"] = f"Bearer {self.api_key}"
         payload = {
             "model": self.model,
-            "prompt": prompt[:1500],
+            "prompt": prompt,
             "n": 1,
             "width": width,
             "height": height,

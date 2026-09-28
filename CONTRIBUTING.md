@@ -69,6 +69,17 @@ python -m pytest -q -k economy
 
 新增 skip 前应说明外部条件，并优先使用明确的 pytest marker，不能用 skip 掩盖产品回归。
 
+前端依赖按 **npm 10** 锁定：CI、Docker 镜像和发布流程统一跑 Node 22（自带 npm 10.9.x），
+`package-lock.json` 就是这个版本生成的。npm 11 生成的 lockfile 会丢掉部分 optional 依赖条目，
+CI 的 `npm ci` 直接报 `Missing: ... from lock file` 而失败。所以改依赖时请用 npm 10 重新生成：
+
+```bash
+cd frontend-v2
+npx npm@10 install --package-lock-only
+```
+
+`engines` 只会在版本不符时给出 `EBADENGINE` 警告，不会拦住安装——看到它就说明 lockfile 会被写坏。
+
 前端改动至少运行：
 
 ```bash

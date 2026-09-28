@@ -26,6 +26,7 @@ from src.commands.tag_parser import (
 )
 from src.commands.tag_json import extract_narration_from_response
 from src.commands.tag_summary import summarize_tags
+from src.engine import progression
 from src.engine.character_utils import reset_character_for_restart
 from src.engine.economy import queue_effect_group
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
@@ -97,6 +98,9 @@ class GameLifecycle:
         *,
         preserve_players: bool,
     ) -> GameInstance:
+        from src.engine.modules import ruleset_runtime
+
+        ruleset_runtime.require_writable(source)
         candidate = await self.create_game(
             source.game_key,
             world_id=source.world_id,
@@ -108,6 +112,7 @@ class GameLifecycle:
             language=normalize_language(source.language),
             fresh_instance=True,
         )
+        ruleset_runtime.require_writable(candidate)
         candidate.configure_session(
             solo_mode=source.solo_mode,
             entry_point=source.entry_point,
@@ -117,20 +122,14 @@ class GameLifecycle:
             narrative_perspective=source.narrative_perspective,
             economy_reward_policy=dict(source.economy_reward_policy or {}),
         )
-        candidate.max_players = source.max_players
-        candidate.player_access_open = source.player_access_open
-        candidate.gm_style_override = copy.deepcopy(source.gm_style_override)
-        candidate.bot_bind_token = source.bot_bind_token
-        candidate.room_token = source.room_token
-        candidate.ruleset_runtime = copy.deepcopy(source.ruleset_runtime)
-        candidate.ruleset_state = (
-            {
-                "state_schema_version": int(
-                    source.ruleset_runtime.get("state_schema_version", 1) or 1
-                )
-            }
-            if source.ruleset_runtime else {}
-        )
+        from src.engine.modules import room_access, table_settings
+
+        room_access.replace_max_players(candidate, source.max_players)
+        room_access.replace_player_access_open(candidate, source.player_access_open)
+        table_settings.replace_gm_style_override(candidate, copy.deepcopy(source.gm_style_override))
+        room_access.replace_bot_bind_token(candidate, source.bot_bind_token)
+        room_access.replace_room_token(candidate, source.room_token)
+        ruleset_runtime.copy_binding_for_new_run(candidate, source)
         candidate.adventure_binding = copy.deepcopy(source.adventure_binding)
         if preserve_players:
             players = copy.deepcopy(source.players)
@@ -173,6 +172,12 @@ class GameLifecycle:
         persist: bool = True,
     ) -> str:
         """激活游戏，生成开场叙事，进入第一轮。"""
+        from src.engine.modules import checks, round_safety, session_stats
+
+        progression.require_writable(instance)
+        session_stats.require_writable(instance)
+        checks.require_writable(instance)
+        round_safety.require_writable(instance)
         await instance.activate()
         await instance.start_round()
         if publish:
@@ -412,6 +417,7 @@ class GameLifecycle:
 
     async def resume_game(self, instance: GameInstance) -> str:
         """从 PAUSED 状态恢复游戏，生成「上回说到」续接叙事。"""
+        progression.require_writable(instance)
         if instance.state != GameState.PAUSED:
             await instance.activate()
             return ""
@@ -509,6 +515,7 @@ class GameLifecycle:
         *,
         preserve_players: bool,
     ) -> GameInstance:
+        progression.require_writable(previous)
         candidate = await self._new_run_candidate(
             previous, preserve_players=preserve_players,
         )

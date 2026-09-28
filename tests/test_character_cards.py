@@ -144,12 +144,14 @@ def test_import_tavern_as_npc_creates_npc_and_book_entries(tmp_path):
         assert "剑" in book1["keywords"]
         assert book1["content"] == "Himmel 的佩剑"
 
-        # 幂等：再导一次是更新而非新增，条目数不变（1 npc + 2 book = 3）
+        # 幂等：再导一次是更新而非新增；primary world projection 不混入
+        # 独立 character-card Book 的条目。
         tavern["description"] = "更新后的描述"
         _import_tavern_as_npc(dependencies, tavern, "w1")
         npc2 = store.get_entry("w1_tavern_Himmel")
         assert "更新后的描述" in npc2["content"]
-        assert len(store.list_entries("w1")) == 3
+        assert [entry["id"] for entry in store.list_entries("w1")] == ["w1_tavern_Himmel"]
+        assert len(store.list_book_entries("character_card:w1:Himmel")) == 2
     finally:
         store.close()
 
@@ -212,3 +214,35 @@ def test_import_tavern_carries_play_directives_and_nsfw_warning(tmp_path):
         assert _tavern_has_nsfw(tavern) is False
     finally:
         store.close()
+
+
+def test_export_import_roundtrip_preserves_skill_effect(tmp_path):
+    """导出 → 导入后 skills[].effect 仍然存在。"""
+
+    import asyncio
+    import base64
+    import json
+    from src.webui.services.character_cards import export_character_cards, import_character_card
+
+    cards_path = tmp_path / "cards.json"
+    dependencies = CharacterCardDependencies(cards_path=cards_path)
+    card = {
+        "id": "df_effect",
+        "schema_version": 2,
+        "character_name": "Himmel",
+        "attributes": {},
+        "skills": [
+            {"name": "火焰球", "value": 80, "effect": "向目标发射火球。"},
+            {"name": "侦查", "value": 45},
+        ],
+    }
+    cards_path.write_text(json.dumps([card], ensure_ascii=False), encoding="utf-8")
+    exported = export_character_cards(dependencies, ["df_effect"])
+    file_data = base64.b64encode(exported["payload"]).decode()
+    imported = asyncio.run(
+        import_character_card(
+            dependencies, file_data=file_data, file_name="Himmel.json",
+        )
+    )
+    assert imported["ok"] is True
+    assert imported["card"]["skills"] == card["skills"]

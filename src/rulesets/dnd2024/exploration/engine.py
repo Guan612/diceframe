@@ -348,6 +348,9 @@ class Dnd2024ExplorationEngine:
     # ------------------------------------------------------------------
 
     def apply_batch(self, instance: Any, batch: dict[str, Any]) -> dict[str, Any]:
+        from src.engine.modules import ruleset_runtime
+
+        ruleset_runtime.require_writable(instance)
         snapshot = {
             "version": int(instance.ruleset_state.get("version", 0) or 0),
             "ruleset_state": deepcopy(instance.ruleset_state),

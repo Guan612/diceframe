@@ -9,6 +9,8 @@ from typing import Any, Callable
 from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.player_control import away_control_policy
+from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
 from src.llm.parser import sanitize_narration
 from src.rulesets.contracts import GameDetailProjectionRuntime
 from src.rulesets.registry import RulesetRuntimeRegistry
@@ -129,19 +131,9 @@ def game_detail(
         for proposal in (getattr(instance, "economy", {}).get("proposals", []) or [])
         if isinstance(proposal, dict)
         and proposal.get("status") == "pending"
-        and (
-            not viewer_uid
-            or viewer_uid == instance.gm_uid
-            or proposal.get("visibility") == "party"
-            or viewer_uid in {
-                str(proposal.get("payer_uid") or ""),
-                str(proposal.get("recipient_uid") or ""),
-            }
-            or viewer_uid in {
-                str(item.get("uid") or "")
-                for item in (proposal.get("contributors") or [])
-                if isinstance(item, dict)
-            }
+        and proposal_visible_to(
+            proposal, viewer_uid=viewer_uid,
+            viewer_is_gm=viewer_is_gm or (bool(viewer_uid) and viewer_uid == instance.gm_uid),
         )
     ]
     detail = {
@@ -169,6 +161,8 @@ def game_detail(
         "player_access_open": bool(
             getattr(instance, "player_access_open", True)
         ),
+        # 房间级暂离语义（pause 默认 / ai_takeover）：前端房间设置要显示当前值。
+        "away_control_policy": away_control_policy(instance),
         "has_room_password": bool(getattr(instance, "room_password", "")),
         "economy_reward_policy": dict(
             getattr(instance, "economy_reward_policy", {}) or {}
@@ -243,9 +237,9 @@ def _public_manual_rolls(instance: Any, viewer_uid: str) -> list[dict[str, Any]]
         if not isinstance(request, dict) or not isinstance(request.get("results"), dict):
             continue
         target_uids = [str(uid) for uid in request.get("target_uids") or [] if str(uid)]
-        created_by = str(request.get("created_by") or "")
-        visibility = str(request.get("visibility") or "party")
-        if visibility == "private" and viewer not in {gm_uid, created_by, *target_uids}:
+        if not manual_roll_visible_to(
+            request, viewer_uid=viewer, viewer_is_gm=bool(viewer) and viewer == gm_uid,
+        ):
             continue
         results = {
             str(uid): {

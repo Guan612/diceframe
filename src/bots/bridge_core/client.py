@@ -162,6 +162,18 @@ class DiceFrameClient:
     async def set_away(self, game_key: str, actor: str, user_id: str, away: bool) -> dict[str, Any]:
         return await self.set_player_away(game_key, actor, user_id, away=away)
 
+    async def set_player_control(
+        self, game_key: str, actor: str, user_id: str, *, mode: str,
+    ) -> dict[str, Any]:
+        """GM 托管控件：把席位交给服务器 AI（``ai``）或交回真人（``human``）。"""
+
+        return await self._request(
+            "POST",
+            f"/api/games/{quote(game_key, safe='')}/players/{quote(user_id, safe='')}/control",
+            actor=actor,
+            json={"mode": str(mode)},
+        )
+
     async def map(self, game_key: str, actor: str = "") -> dict[str, Any]:
         return await self._request("GET", f"/api/games/{quote(game_key, safe='')}/map", actor=actor)
 

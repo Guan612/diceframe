@@ -16,6 +16,7 @@ from src.webui.routes.game_route_common import (
 from src.webui.routes.game_query_routes import (
     api_games,
     api_detail,
+    api_game_adventure_projection,
     api_game_scene_image_file,
     api_game_scene_image_update,
     api_chars,
@@ -35,6 +36,8 @@ from src.webui.routes.game_control_routes import (
     api_set_luck_timeout,
     api_set_reward_policy,
     api_set_player_away,
+    api_set_player_control,
+    api_set_away_control_policy,
     api_set_player_access,
     api_set_room_password,
     api_private_log,
@@ -106,6 +109,7 @@ def register_games(app: web.Application) -> None:
     app.router.add_get("/api/games", api_games)
     app.router.add_post("/api/games/import", api_import_game)
     app.router.add_get("/api/games/{game_key}", api_detail)
+    app.router.add_get("/api/games/{game_key}/adventure", api_game_adventure_projection)
     app.router.add_get("/api/games/{game_key}/scene-image", api_game_scene_image_file)
     app.router.add_post(
         "/api/games/{game_key}/scene-image", api_game_scene_image_update
@@ -138,6 +142,12 @@ def register_games(app: web.Application) -> None:
     )
     app.router.add_post(
         "/api/games/{game_key}/players/{user_id}/away", api_set_player_away
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/players/{user_id}/control", api_set_player_control
+    )
+    app.router.add_post(
+        "/api/games/{game_key}/settings/away-control-policy", api_set_away_control_policy
     )
     app.router.add_post("/api/games/{game_key}/player-access", api_set_player_access)
     app.router.add_post("/api/games/create", api_create_game)

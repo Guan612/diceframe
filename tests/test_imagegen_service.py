@@ -80,6 +80,7 @@ def test_service_availability_and_config_validation(tmp_path):
         "provider": "openai-compatible",
         "model": "",
         "auto_scene": True,
+        "prompt_char_limit": 12000,
     }
     with pytest.raises(ImageGenerationError, match="尚未配置或启用"):
         asyncio.run(disabled.generate(ImageGenerationRequest(prompt="harbor")))
@@ -275,7 +276,30 @@ def test_generate_supports_all_purposes_and_normalizes_assets(
     )
     assert len(records) == 1
     assert records[0]["generation_id"] == result.generation_id
-    assert records[0]["context"] == {"round": 3}
+    assert records[0]["context"]["round"] == 3
+    assert records[0]["context"]["prompt_budget"]["adjusted"] is False
+
+
+def test_automatic_advanced_rules_extend_explicit_scene_prompt(tmp_path):
+    provider = _FakeProvider()
+    service = _service(
+        tmp_path,
+        provider,
+        imagegen_auto_rules="Keep public characters consistent; use a six-panel storyboard when supplied.",
+        imagegen_auto_prompt="Editorial fantasy concept art, restrained lighting.",
+        imagegen_auto_use_manual_prompt=False,
+    )
+
+    asyncio.run(service.generate(ImageGenerationRequest(
+        prompt="misty harbor at dusk",
+        purpose="scene",
+        context={"scene": "Fog Harbor"},
+    )))
+
+    generated_prompt = provider.calls[0][0]
+    assert "Keep public characters consistent" in generated_prompt
+    assert "Editorial fantasy concept art" in generated_prompt
+    assert "misty harbor at dusk" in generated_prompt
 
 
 def test_automatic_advanced_rules_extend_explicit_scene_prompt(tmp_path):
@@ -454,7 +478,7 @@ async def test_minimax_provider_surfaces_http_200_business_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_minimax_provider_limits_prompt_to_documented_length(monkeypatch):
+async def test_minimax_provider_rejects_prompt_over_documented_length(monkeypatch):
     provider = MiniMaxImageProvider(
         base_url="https://api.minimax.cn/v1",
         api_key="secret",
@@ -475,9 +499,105 @@ async def test_minimax_provider_limits_prompt_to_documented_length(monkeypatch):
         }
 
     monkeypatch.setattr(provider, "_post_json", fake_post)
-    await provider.generate("x" * 1501, size="1024x1024")
+    with pytest.raises(ImageProviderError, match="1500"):
+        await provider.generate("x" * 1501, size="1024x1024")
+    assert seen == {}
 
-    assert seen["prompt"] == "x" * 1500
+
+def test_default_reuses_manual_prompt_and_explicit_false_keeps_auto_prompt(tmp_path):
+    default_provider = _FakeProvider()
+    default_service = _service(
+        tmp_path / "default",
+        default_provider,
+        imagegen_manual_rules="manual rules",
+        imagegen_manual_prompt="manual template",
+        imagegen_auto_rules="auto rules",
+        imagegen_auto_prompt="auto template",
+    )
+    asyncio.run(default_service.generate(ImageGenerationRequest(
+        prompt="harbor", purpose="scene", context={},
+    )))
+    default_prompt = default_provider.calls[0][0]
+    assert "manual rules" in default_prompt
+    assert "manual template" in default_prompt
+    assert "auto rules" not in default_prompt
+
+    explicit_provider = _FakeProvider()
+    explicit_service = _service(
+        tmp_path / "explicit",
+        explicit_provider,
+        imagegen_auto_use_manual_prompt=False,
+        imagegen_manual_prompt="manual template",
+        imagegen_auto_prompt="auto template",
+    )
+    asyncio.run(explicit_service.generate(ImageGenerationRequest(
+        prompt="harbor", purpose="scene", context={},
+    )))
+    assert "auto template" in explicit_provider.calls[0][0]
+    assert "manual template" not in explicit_provider.calls[0][0]
+
+
+def test_minimax_budget_preserves_six_panels_and_purpose_suffix(tmp_path):
+    provider = _FakeProvider()
+    provider.prompt_char_limit = 1500
+    service = _service(
+        tmp_path,
+        provider,
+        imagegen_style_prefix="style " * 500,
+        imagegen_manual_rules="rules " * 500,
+        imagegen_manual_prompt="template " * 500,
+    )
+    context = {
+        "manual": True,
+        "storyboard": {
+            "panels": [
+                {
+                    "participants": [f"hero-{index}"],
+                    "location": f"location-{index}",
+                    "description": "detailed action " * 80,
+                }
+                for index in range(1, 7)
+            ],
+        },
+    }
+
+    asyncio.run(service.generate(ImageGenerationRequest(
+        prompt="long story " * 300,
+        purpose="scene",
+        context=context,
+    )))
+
+    generated_prompt = provider.calls[0][0]
+    assert len(generated_prompt) <= 1500
+    assert all(f"Panel {index}:" in generated_prompt for index in range(1, 7))
+    assert generated_prompt.endswith(
+        "Wide cinematic environment scene, no text, no interface elements."
+    )
+    assert context["prompt_budget"]["adjusted"] is True
+    assert context["prompt_budget"]["reduced_segments"][0] == "style_prefix"
+
+
+def test_storyboard_generation_does_not_draw_dividers_over_provider_image(tmp_path):
+    body = _png_bytes(size=(600, 400), color=(17, 29, 41))
+    provider = _FakeProvider(body=body)
+    service = _service(tmp_path, provider)
+
+    result = asyncio.run(service.generate(ImageGenerationRequest(
+        prompt="two locations",
+        purpose="scene",
+        context={
+            "storyboard": {
+                "panels": [
+                    {"participants": ["alice"], "location": "码头", "description": "雨夜"},
+                    {"participants": ["bob"], "location": "钟塔", "description": "钟声"},
+                ],
+            },
+        },
+    )))
+
+    with Image.open(service.assets.file(result.asset_id)) as stored:
+        extrema = stored.convert("RGB").getextrema()
+    assert all(high - low <= 4 for low, high in extrema)
 
 
 @pytest.mark.parametrize(

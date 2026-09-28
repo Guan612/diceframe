@@ -25,6 +25,8 @@ from .primitives import DICE_RE, CombatIntentError
 
 # 通用求值器骰节点的 NdM 形式（与 combat_formulas 的骰式白名单一致）。
 _NDM_RE = re.compile(r"^([1-9]\d{0,2})d([1-9]\d{0,3})$")
+# 固定伤害（徒手打击的 1 点基础伤害）：没有骰子，重击不翻倍。
+_FLAT_DAMAGE_RE = re.compile(r"^[1-9]\d{0,3}$")
 
 # 伤害/治疗节点只由骰子与常量构成，不需要角色属性表。
 _BLANK_CONTEXT = FormulaContext(
@@ -41,9 +43,16 @@ def _parse_ndm(formula: str) -> tuple[int, int]:
 
 
 def formula_node_from_dice_formula(formula: str) -> dict[str, Any]:
-    """把目录骰式 ``NdM`` / ``NdM+K`` 翻译成通用公式 AST。"""
+    """把目录骰式 ``NdM`` / ``NdM+K`` / 固定值翻译成通用公式 AST。
 
-    match = DICE_RE.fullmatch(str(formula or ""))
+    固定值（例如徒手打击的 ``1``）是常量节点，因此重击不会翻倍它——这与
+    D&D 2024「重击只翻倍伤害骰」的语义一致。
+    """
+
+    text = str(formula or "")
+    if _FLAT_DAMAGE_RE.fullmatch(text):
+        return {"op": "constant", "value": int(text)}
+    match = DICE_RE.fullmatch(text)
     if match is None:
         raise CombatIntentError(f"unsupported dice formula: {formula!r}")
     count = int(match.group(1))

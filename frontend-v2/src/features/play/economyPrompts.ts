@@ -1,4 +1,6 @@
 import type { PendingPayment } from '@/api/types'
+import type { CurrencySystem } from '@/utils/currency'
+import { parseCurrencyInput } from '@/utils/currency'
 
 /** Narrow client-side mirror of the server's fail-closed postpone policy. */
 export function isNonBlockingPersonalPurchase(proposal: PendingPayment): boolean {
@@ -54,11 +56,33 @@ export function buildRewardPolicySave(
   touched: boolean,
   mode: string,
   cap: string,
+  currencySystem?: CurrencySystem | null,
 ): { mode: string; auto_reward_cap: number | null } | null {
   if (!touched) return null
   const trimmed = String(cap || '').trim()
-  return {
-    mode,
-    auto_reward_cap: trimmed !== '' ? Number(trimmed) : null,
+  if (trimmed === '') return { mode, auto_reward_cap: null }
+  // 输入按展示单位理解（¥12.50 / "50 灵石" 均可），换算经统一 parser。
+  const leading = trimmed.match(/^\d+(?:\.\d+)?/)?.[0] || ''
+  const auto_reward_cap = leading ? parseCurrencyInput(leading, currencySystem) : null
+  if (auto_reward_cap === null) {
+    throw new Error('invalid auto_reward_cap amount')
   }
+  return { mode, auto_reward_cap }
+}
+
+/**
+ * The same dialog owns the room password. Opening it blanks the field so the GM
+ * can type a new password, which means an unconditional save would post an empty
+ * password and silently remove the existing one whenever the GM only changed
+ * some *other* setting (for example the away policy). The request is therefore
+ * only built when the password field was actually edited; leaving it untouched
+ * keeps the current password, and editing it to empty is still an explicit
+ * "remove the password".
+ */
+export function buildRoomPasswordSave(
+  touched: boolean,
+  password: string,
+): { password: string } | null {
+  if (!touched) return null
+  return { password: String(password ?? '') }
 }

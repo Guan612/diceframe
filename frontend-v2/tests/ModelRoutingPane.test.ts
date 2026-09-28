@@ -40,7 +40,14 @@ function setup(config: Partial<AppConfig>, supported = true) {
       supported, saving: false, embeddingTesting: false, embeddingResult: null,
       onSave: () => { void settings.saveModelRouting() },
     },
-    global: { plugins: [i18n], stubs: { HelpButton: true, TestResultCard: true } },
+    global: {
+      plugins: [i18n],
+      stubs: {
+        HelpButton: true,
+        TestResultCard: true,
+        teleport: true,
+      },
+    },
   })
   return { wrapper, store }
 }
@@ -115,5 +122,66 @@ it('keeps image generation basics visible and exposes advanced fields on demand'
   await flushPromises()
   expect(advancedSettings.element).toHaveProperty('open', true)
   expect(wrapper.text()).toContain('留空使用默认尺寸')
+  wrapper.unmount()
+})
+
+it('hides inactive automatic prompt fields while preserving their drafts', () => {
+  const { wrapper, store } = setup({
+    ai_providers: [],
+    imagegen_enabled: true,
+    imagegen_auto_use_manual_prompt: true,
+    imagegen_manual_rules: 'manual rules',
+    imagegen_manual_prompt: 'manual {scene}',
+    imagegen_auto_rules: 'saved automatic rules',
+    imagegen_auto_prompt: 'saved automatic {scene}',
+  })
+
+  expect(wrapper.text()).toContain('自动生成当前使用上方的手动规则和模板')
+  expect(wrapper.text()).not.toContain('自动提示词规则')
+  expect(wrapper.text()).not.toContain('自动提示词模板')
+  expect(store.config.imagegen_auto_rules).toBe('saved automatic rules')
+  expect(store.config.imagegen_auto_prompt).toBe('saved automatic {scene}')
+  expect(wrapper.get('textarea[placeholder*="写实奇幻插画"]').attributes('placeholder')).toContain('写实奇幻插画')
+  wrapper.unmount()
+})
+
+it('previews AI optimization and only updates the unsaved settings draft', async () => {
+  const { wrapper, store } = setup({
+    ai_providers: [],
+    imagegen_enabled: true,
+    imagegen_style_prefix: 'fantasy art',
+    imagegen_auto_use_manual_prompt: true,
+  })
+  mocks.api.mockImplementation(async (path: string) => {
+    if (path === '/image-prompts/optimize') {
+      return { ok: true, text: 'cinematic grounded fantasy art' }
+    }
+    return {}
+  })
+
+  await wrapper.get('.imagegen-style-field button').trigger('click')
+  await flushPromises()
+
+  expect(wrapper.text()).toContain('cinematic grounded fantasy art')
+  expect(store.config.imagegen_style_prefix).toBe('fantasy art')
+  const buttons = wrapper.findAll('.imagegen-optimizer-preview button')
+  await buttons[buttons.length - 1].trigger('click')
+  expect(store.config.imagegen_style_prefix).toBe('cinematic grounded fantasy art')
+  expect(mocks.api.mock.calls.some(([path]) => path === '/config')).toBe(false)
+  wrapper.unmount()
+})
+
+it('shows the MiniMax budget and warns when static configuration uses over half', () => {
+  const { wrapper } = setup({
+    ai_providers: [{ id: 'minimax', name: 'MiniMax', base_url: 'https://api.minimax.cn/v1', api_format: 'openai', models: ['image-01'] }],
+    imagegen_enabled: true,
+    imagegen_provider_ref: 'minimax',
+    imagegen_model: 'image-01',
+    imagegen_style_prefix: 'x'.repeat(800),
+    imagegen_auto_use_manual_prompt: true,
+  })
+
+  expect(wrapper.get('.imagegen-budget').text()).toContain('1500')
+  expect(wrapper.get('.imagegen-budget').classes()).toContain('warning')
   wrapper.unmount()
 })

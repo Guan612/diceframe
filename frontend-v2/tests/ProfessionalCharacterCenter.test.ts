@@ -228,4 +228,70 @@ describe('ProfessionalCharacterCenter', () => {
     expect(scrollRegion.find('footer').exists()).toBe(false)
     expect(footer.element.parentElement).toBe(root.element)
   })
+
+  it('renders the server-projected class features and class resources for a monk', async () => {
+    // 角色页只渲染服务端投影：能力名、武艺骰、攻击属性、资源 current/max
+    // 都来自 class_features / class_resources，前端不判断职业也不做任何计算。
+    const monkCharacter = {
+      ...character,
+      class_features: [
+        {
+          id: 'martial_arts', name: '武艺', summary: '徒手打击可使用力量或敏捷。',
+          minimum_level: 1,
+          values: { unarmed_damage_die: '1d6', unarmed_ability_choice: ['str', 'dex'] },
+        },
+        { id: 'monks_focus', name: '武僧专注', summary: '获得专注点。' },
+        { id: 'flurry_of_blows', name: '疾风连击', summary: '消耗 1 点专注进行两次徒手打击。' },
+        { id: 'patient_defense', name: '坚守防御', summary: '' },
+        { id: 'step_of_the_wind', name: '疾风步', summary: '' },
+      ],
+      class_resources: [
+        { id: 'focus_points', name: '专注点', current: 2, maximum: 2 },
+      ],
+    }
+    const wrapper = mount(ProfessionalCharacterCenter, {
+      props: {
+        character: monkCharacter,
+        target: 'card',
+        cardId: 'card-1',
+        ruleId: 'dnd2024_srd',
+        language: 'zh-CN',
+      },
+      global: { stubs: { PortraitPicker: true } },
+    })
+
+    expect(wrapper.get('.class-feature-section').text()).toContain('武艺')
+    expect(wrapper.get('.class-feature-section').text()).toContain('疾风连击')
+    expect(wrapper.get('.class-feature-section').text()).toContain('坚守防御')
+    expect(wrapper.get('.class-feature-section').text()).toContain('疾风步')
+    expect(wrapper.get('.class-feature-section').text()).toContain('武艺骰 1d6')
+    expect(wrapper.get('.class-feature-section').text()).toContain('攻击属性')
+    expect(wrapper.findAll('.class-feature-card')).toHaveLength(5)
+
+    await wrapper.get('.center-tabs button:nth-child(4)').trigger('click')
+    const panel = wrapper.get('.magic-panel')
+    expect(panel.text()).toContain('职业资源')
+    expect(panel.text()).toContain('专注点')
+    expect(wrapper.get('.class-resource-section').text()).toContain('2 / 2')
+  })
+
+  it('shows no class feature or class resource section without a server projection', async () => {
+    const wrapper = mount(ProfessionalCharacterCenter, {
+      props: {
+        character,
+        target: 'card',
+        cardId: 'card-1',
+        ruleId: 'dnd2024_srd',
+        language: 'zh-CN',
+      },
+      global: { stubs: { PortraitPicker: true } },
+    })
+
+    expect(wrapper.find('.class-feature-section').exists()).toBe(false)
+    await wrapper.get('.center-tabs button:nth-child(4)').trigger('click')
+    expect(wrapper.find('.class-resource-section').exists()).toBe(false)
+    // 只有服务端投影的生命骰卡片：不会伪造 0/0 的空职业资源卡。
+    expect(wrapper.findAll('.spell-slot-card')).toHaveLength(1)
+    expect(wrapper.get('.magic-panel').text()).not.toContain('专注点')
+  })
 })

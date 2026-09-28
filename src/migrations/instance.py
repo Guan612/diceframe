@@ -13,11 +13,24 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
+from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
+from src.engine.module_state import ModuleStateError
+from src.engine.modules.lorebook_runtime import fresh as fresh_lorebook_runtime, normalize_timers
+from src.engine.player_control import CONTROL_KEY, normalize_control
+from src.engine.player_control import normalize_away_control_policy
+from src.engine.world_state import fresh_world_state
 
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 11
+CURRENT_INSTANCE_SCHEMA_VERSION = 34
+
+# 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
+# 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
+# 才能保持同样的现实金额。这是唯一做 base_unit 语义迁移的内置规则；其它规则
+# （含从 CoC 复制的自定义规则）的 legacy 单位语义不变，数据不动。
+_BASE_UNIT_MIGRATION_RULES = {"freeform_coc"}
+_BASE_UNIT_MIGRATION_FACTOR = 100
 
 
 def _legacy_run_id(payload: Mapping[str, Any]) -> str:
@@ -214,6 +227,503 @@ def _migrate_v7_to_v8(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v11_to_v12(payload: dict[str, Any]) -> dict[str, Any]:
+    """Currency Model V2: scale canonical amounts for base-unit semantic changes.
+
+    Only the built-in ``freeform_coc`` rule changed base-unit semantics in this
+    release (1 amount = 1 美元 → 1 amount = 1 美分), so only saves bound to that
+    rule are scaled (×100), exactly once, gated by the schema version.  Saves
+    without a resolvable ``rule_id`` are left untouched: migration correctness
+    beats completeness and no amount is reinterpreted by guessing.  Legacy and
+    custom rules keep their rate=1 semantics, so their data never moves.
+    """
+    rule_id = str(payload.get("rule_id") or "").strip()
+    if rule_id in _BASE_UNIT_MIGRATION_RULES:
+        scale_game_state_payload_for_base_unit_change(
+            payload, _BASE_UNIT_MIGRATION_FACTOR,
+        )
+    payload["instance_schema_version"] = 12
+    return payload
+
+
+def _migrate_v12_to_v13(payload: dict[str, Any]) -> dict[str, Any]:
+    """World state core (Issue #284): every save gets an explicit world container.
+
+    Older saves have no world truth at all.  They are not guessed into facts:
+    the migration only materializes the empty container (day 1, 00:00, no facts,
+    no scheduled events) and a valid existing payload is left untouched, so the
+    step is idempotent.
+    """
+
+    raw = payload.get("world_state")
+    if not isinstance(raw, dict) or not raw:
+        payload["world_state"] = fresh_world_state()
+    payload["instance_schema_version"] = 13
+    return payload
+
+
+def _migrate_v13_to_v14(payload: dict[str, Any]) -> dict[str, Any]:
+    """Player control contract (AI teammate PR1): every seat names its controller.
+
+    Older saves cannot say whether a seat was AI-hosted — nothing was AI-hosted
+    before this contract existed — so the only answer that does not guess is
+    ``human``, which is exactly the pre-contract behaviour: an upgraded table
+    never suddenly finds a character taken over by the server.  A seat whose
+    stored record already normalizes to itself is left untouched, so the step is
+    idempotent.
+    """
+
+    players = payload.get("players")
+    if isinstance(players, dict):
+        for player in players.values():
+            if not isinstance(player, dict):
+                continue
+            stored = player.get(CONTROL_KEY)
+            record = normalize_control(stored)
+            if stored != record:
+                player[CONTROL_KEY] = record
+    payload["instance_schema_version"] = 14
+    return payload
+
+
+def _migrate_v14_to_v15(payload: dict[str, Any]) -> dict[str, Any]:
+    """Room away policy (AI teammate PR5): the table says what "away" means.
+
+    A save written before this setting existed had exactly one behaviour: going
+    away changed presence only and never handed the character to the AI.  So the
+    only answer that does not invent a controller is ``pause``, and an upgraded
+    table never finds a character silently taken over by the server.  A stored
+    value that already normalizes to itself is left untouched, so the step is
+    idempotent.
+    """
+
+    stored = payload.get("away_control_policy")
+    policy = normalize_away_control_policy(stored)
+    if stored != policy:
+        payload["away_control_policy"] = policy
+    payload["instance_schema_version"] = 15
+    return payload
+
+
+def _migrate_v15_to_v16(payload: dict[str, Any]) -> dict[str, Any]:
+    """WorldState v2 containers (World Runtime v2 WR-02).
+
+    v1 world payloads gain the empty ``entities`` / ``relations`` /
+    ``processes`` containers and move to world ``schema_version = 2``; facts,
+    clock, and scheduled events are preserved verbatim and nothing is guessed
+    into the new containers.  A payload that is already v2 (or carries an
+    unknown world schema, which the write path rejects) is left untouched, so
+    the step is idempotent.
+    """
+
+    raw = payload.get("world_state")
+    if not isinstance(raw, dict) or not raw:
+        payload["world_state"] = fresh_world_state()
+    elif raw.get("schema_version") == 1:
+        raw["schema_version"] = 2
+        for key in ("entities", "relations", "processes"):
+            if key not in raw:
+                raw[key] = {}
+    payload["instance_schema_version"] = 16
+    return payload
+
+
+def _migrate_v16_to_v17(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move Lorebook runtime timers into a versioned module slot (Track R0).
+
+    Legacy single-counter and independent-counter timers share the domain's
+    normalizer. Existing slots, including unknown module schemas, are kept
+    verbatim; removing the old top-level key makes this step idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    legacy = payload.pop("lorebook_timed_state", None)
+    if not isinstance(modules.get("lorebook_runtime"), dict):
+        slot = fresh_lorebook_runtime()
+        slot["timers"] = normalize_timers(legacy)
+        modules["lorebook_runtime"] = slot
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 17
+    return payload
+
+
+def _migrate_v17_to_v18(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the room away policy into ``modules.player_control`` (Track R1).
+
+    Normalize the legacy setting with the v14-to-v15 rule: missing or invalid
+    values stay ``pause``, so no seat is silently handed to the AI. Existing
+    slots are kept verbatim, including unknown module schemas. Idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    legacy = payload.pop("away_control_policy", None)
+    if not isinstance(modules.get("player_control"), dict):
+        modules["player_control"] = {
+            "schema_version": 1,
+            "away_control_policy": normalize_away_control_policy(legacy),
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 18
+    return payload
+
+
+def _migrate_v18_to_v19(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the economy ledger verbatim into ``modules.economy.state`` (R2).
+
+    The inner ledger schema and all records stay untouched. Existing slots,
+    including unknown schemas, take precedence; the step is idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    legacy = payload.pop("economy", None)
+    if not isinstance(modules.get("economy"), dict):
+        modules["economy"] = {
+            "schema_version": 1,
+            "state": legacy if isinstance(legacy, dict) else {},
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 19
+    return payload
+
+
+def _migrate_v19_to_v20(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move combat state into its module slot (R3), preserving existing slots.
+
+    The guide says:
+    "Both the live payload and the per-round snapshots are moved verbatim."
+    Departure: legacy snapshots retain the old codec's string-key and
+    dict-value filtering ONLY during this conversion. Current
+    v20 module contents stay opaque; existing slots, even unknown/empty ones,
+    win over stale legacy fields. Idempotent.
+    """
+
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    current = payload.pop("combat_extension", None)
+    snapshots = payload.pop("combat_extension_round_snapshots", None)
+    if not isinstance(modules.get("combat_extension"), dict):
+        modules["combat_extension"] = {
+            "schema_version": 1,
+            "current": current if isinstance(current, dict) else {},
+            "round_snapshots": (
+                {str(key): dict(value) for key, value in snapshots.items() if isinstance(value, dict)}
+                if isinstance(snapshots, dict) else {}
+            ),
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 20
+    return payload
+
+
+def _migrate_v20_to_v21(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the narrative round into progression (R5-b), once at this boundary.
+
+    Existing dict slots, even empty/unknown ones, win over the legacy counter.
+    Historical migrations and log/snapshot round keys retain their semantics.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    legacy = payload.pop("round_number", 0)
+    if not isinstance(modules.get("progression"), dict):
+        value = legacy if isinstance(legacy, int) and not isinstance(legacy, bool) and legacy >= 0 else 0
+        modules["progression"] = {"schema_version": 1, "mode": "narrative_round", "round": value}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 21
+    return payload
+
+
+def _migrate_v21_to_v22(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move private channels into their slot; existing slots take precedence."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    private_log = payload.pop("private_log", None)
+    table_talk = payload.pop("table_talk", None)
+    if not isinstance(modules.get("private_channels"), dict):
+        modules["private_channels"] = {
+            "schema_version": 1,
+            "private_log": private_log if isinstance(private_log, dict) else {},
+            "table_talk": table_talk if isinstance(table_talk, list) else [],
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 22
+    return payload
+
+
+def _migrate_v22_to_v23(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move media references into their slot without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    scene_image = payload.pop("scene_image", None)
+    map_background = payload.pop("map_background", None)
+    if not isinstance(modules.get("media"), dict):
+        modules["media"] = {
+            "schema_version": 1,
+            "scene_image": scene_image if isinstance(scene_image, dict) else {},
+            "map_background": map_background if isinstance(map_background, dict) else {},
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 23
+    return payload
+
+
+def _migrate_v23_to_v24(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move health state into its slot; leave event retention to serialization."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    health_events = payload.pop("health_events", None)
+    health_status = payload.pop("health_status", None)
+    if not isinstance(modules.get("health"), dict):
+        modules["health"] = {
+            "schema_version": 1,
+            "health_events": health_events if isinstance(health_events, list) else [],
+            "health_status": health_status if isinstance(health_status, dict) else {},
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 24
+    return payload
+
+
+def _migrate_v24_to_v25(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move narrative notes without interpreting the legacy game-time string."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    summary = payload.pop("summary", None)
+    key_facts = payload.pop("key_facts", None)
+    confirmed_items = payload.pop("confirmed_items", None)
+    game_time = payload.pop("game_time", None)
+    if not isinstance(modules.get("narrative_notes"), dict):
+        modules["narrative_notes"] = {
+            "schema_version": 1,
+            "summary": summary if isinstance(summary, dict) else {},
+            "key_facts": key_facts if isinstance(key_facts, list) else [],
+            "confirmed_items": confirmed_items if isinstance(confirmed_items, list) else [],
+            "game_time": game_time if isinstance(game_time, str) else "",
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 25
+    return payload
+
+
+def _migrate_v25_to_v26(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move round presentation into its slot without changing existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    gm_directives = payload.pop("gm_directives", None)
+    quick_actions = payload.pop("quick_actions", None)
+    last_state_update = payload.pop("last_state_update", None)
+    last_token_budget_bump = payload.pop("last_token_budget_bump", None)
+    pending_combat_results = payload.pop("pending_combat_results", None)
+    if not isinstance(modules.get("round_presentation"), dict):
+        modules["round_presentation"] = {
+            "schema_version": 1,
+            "gm_directives": gm_directives if isinstance(gm_directives, list) else [],
+            "quick_actions": quick_actions if isinstance(quick_actions, list) else [],
+            "last_state_update": last_state_update if isinstance(last_state_update, dict) else None,
+            "last_token_budget_bump": last_token_budget_bump if isinstance(last_token_budget_bump, dict) else None,
+            "pending_combat_results": pending_combat_results if isinstance(pending_combat_results, list) else [],
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 26
+    return payload
+
+
+def _migrate_v26_to_v27(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move world reports into their slot; existing slots take precedence."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    last_overreach = payload.pop("last_overreach", None)
+    last_world_legality = payload.pop("last_world_legality", None)
+    last_world_events = payload.pop("last_world_events", None)
+    if not isinstance(modules.get("world_reports"), dict):
+        modules["world_reports"] = {
+            "schema_version": 1,
+            "last_overreach": last_overreach if isinstance(last_overreach, list) else [],
+            "last_world_legality": last_world_legality if isinstance(last_world_legality, list) else [],
+            "last_world_events": last_world_events if isinstance(last_world_events, list) else [],
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 27
+    return payload
+
+
+def _migrate_v27_to_v28(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move table settings as-is; currency caps were already converted in v12."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    defaults: dict[str, Any] = {
+        "difficulty": "标准",
+        "narrative_perspective": "auto",
+        "gm_style_override": None,
+        "solo_mode": False,
+        "seed_code": "",
+        "entry_point": "web",
+        "luck_timeout_seconds": 60,
+        "economy_reward_policy": {},
+    }
+    values = {key: payload.pop(key, None) for key in defaults}
+    try:
+        timeout = int(values["luck_timeout_seconds"] or 0) if values["luck_timeout_seconds"] is not None else 60
+    except (TypeError, ValueError, OverflowError):
+        timeout = 60
+    if not isinstance(modules.get("table_settings"), dict):
+        modules["table_settings"] = {
+            "schema_version": 1,
+            "difficulty": values["difficulty"] if isinstance(values["difficulty"], str) else defaults["difficulty"],
+            "narrative_perspective": values["narrative_perspective"] if isinstance(values["narrative_perspective"], str) else defaults["narrative_perspective"],
+            "gm_style_override": values["gm_style_override"] if isinstance(values["gm_style_override"], dict) else None,
+            "solo_mode": values["solo_mode"] if isinstance(values["solo_mode"], bool) else False,
+            "seed_code": values["seed_code"] if isinstance(values["seed_code"], str) else defaults["seed_code"],
+            "entry_point": values["entry_point"] if isinstance(values["entry_point"], str) else defaults["entry_point"],
+            "luck_timeout_seconds": timeout,
+            "economy_reward_policy": values["economy_reward_policy"] if isinstance(values["economy_reward_policy"], dict) else {},
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 28
+    return payload
+
+
+def _migrate_v28_to_v29(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move room access values verbatim, defaulting only absent keys."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    defaults: dict[str, Any] = {
+        "max_players": 6,
+        "player_access_open": True,
+        "bot_bind_token": "",
+        "room_password": "",
+        "room_token": "",
+    }
+    values = {key: payload.pop(key, default) for key, default in defaults.items()}
+    if not isinstance(modules.get("room_access"), dict):
+        modules["room_access"] = {"schema_version": 1, **values}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 29
+    return payload
+
+
+def _migrate_v29_to_v30(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move session statistics into their slot without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    defaults: dict[str, Any] = {
+        "total_llm_calls": 0, "total_tokens": 0,
+        "started_at": "", "last_activity": "",
+    }
+    values = {key: payload.pop(key, default) for key, default in defaults.items()}
+    for key in ("total_llm_calls", "total_tokens"):
+        if type(values[key]) is not int or values[key] < 0:
+            values[key] = 0
+    for key in ("started_at", "last_activity"):
+        if not isinstance(values[key], str):
+            values[key] = ""
+    if not isinstance(modules.get("session_stats"), dict):
+        modules["session_stats"] = {"schema_version": 1, **values}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 30
+    return payload
+
+
+def _migrate_v30_to_v31(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move check records into their slot without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    defaults: dict[str, Any] = {
+        "last_check": None, "last_checks": [],
+        "round_checks_prepared": False, "manual_roll_requests": [],
+    }
+    values = {key: payload.pop(key, default) for key, default in defaults.items()}
+    if not isinstance(values["last_check"], dict):
+        values["last_check"] = None
+    for key in ("last_checks", "manual_roll_requests"):
+        if not isinstance(values[key], list):
+            values[key] = []
+    values["round_checks_prepared"] = bool(values["round_checks_prepared"])
+    if not isinstance(modules.get("checks"), dict):
+        modules["checks"] = {"schema_version": 1, **values}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 31
+    return payload
+
+
+def _migrate_v31_to_v32(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move round safety data into its slot without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    values = {}
+    for key in ("round_start_snapshot", "round_entity_snapshot", "death_save_outcomes"):
+        value = payload.pop(key, {})
+        values[key] = value if isinstance(value, dict) else {}
+    if not isinstance(modules.get("round_safety"), dict):
+        modules["round_safety"] = {"schema_version": 1, **values}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 32
+    return payload
+
+
+def _migrate_v32_to_v33(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the legacy combat projection without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    defaults: dict[str, Any] = {
+        "combat_active": False, "combat_enemies": [], "combat_state": "none",
+        "initiative_order": [], "initiative_current": 0,
+    }
+    values = {key: payload.pop(key, default) for key, default in defaults.items()}
+    values["combat_active"] = bool(values["combat_active"])
+    for key in ("combat_enemies", "initiative_order"):
+        if not isinstance(values[key], list):
+            values[key] = []
+    if not isinstance(values["combat_state"], str):
+        values["combat_state"] = "none"
+    if type(values["initiative_current"]) is not int:
+        values["initiative_current"] = 0
+    if not isinstance(modules.get("legacy_combat"), dict):
+        modules["legacy_combat"] = {"schema_version": 1, **values}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 33
+    return payload
+
+
+def _migrate_v33_to_v34(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move ruleset binding, state and ledger without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    binding = payload.pop("ruleset_runtime", {})
+    state = payload.pop("ruleset_state", {})
+    ledger = payload.pop("event_ledger", [])
+    if not isinstance(modules.get("ruleset_runtime"), dict):
+        modules["ruleset_runtime"] = {
+            "schema_version": 1,
+            "binding": binding if isinstance(binding, dict) else {},
+            "state": state if isinstance(state, dict) else {},
+            "event_ledger": ledger if isinstance(ledger, list) else [],
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 34
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -251,6 +761,75 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 10:
         payload = _migrate_v10_to_v11(payload)
         version = 11
+    if version == 11:
+        payload = _migrate_v11_to_v12(payload)
+        version = 12
+    if version == 12:
+        payload = _migrate_v12_to_v13(payload)
+        version = 13
+    if version == 13:
+        payload = _migrate_v13_to_v14(payload)
+        version = 14
+    if version == 14:
+        payload = _migrate_v14_to_v15(payload)
+        version = 15
+    if version == 15:
+        payload = _migrate_v15_to_v16(payload)
+        version = 16
+    if version == 16:
+        payload = _migrate_v16_to_v17(payload)
+        version = 17
+    if version == 17:
+        payload = _migrate_v17_to_v18(payload)
+        version = 18
+    if version == 18:
+        payload = _migrate_v18_to_v19(payload)
+        version = 19
+    if version == 19:
+        payload = _migrate_v19_to_v20(payload)
+        version = 20
+    if version == 20:
+        payload = _migrate_v20_to_v21(payload)
+        version = 21
+    if version == 21:
+        payload = _migrate_v21_to_v22(payload)
+        version = 22
+    if version == 22:
+        payload = _migrate_v22_to_v23(payload)
+        version = 23
+    if version == 23:
+        payload = _migrate_v23_to_v24(payload)
+        version = 24
+    if version == 24:
+        payload = _migrate_v24_to_v25(payload)
+        version = 25
+    if version == 25:
+        payload = _migrate_v25_to_v26(payload)
+        version = 26
+    if version == 26:
+        payload = _migrate_v26_to_v27(payload)
+        version = 27
+    if version == 27:
+        payload = _migrate_v27_to_v28(payload)
+        version = 28
+    if version == 28:
+        payload = _migrate_v28_to_v29(payload)
+        version = 29
+    if version == 29:
+        payload = _migrate_v29_to_v30(payload)
+        version = 30
+    if version == 30:
+        payload = _migrate_v30_to_v31(payload)
+        version = 31
+    if version == 31:
+        payload = _migrate_v31_to_v32(payload)
+        version = 32
+    if version == 32:
+        payload = _migrate_v32_to_v33(payload)
+        version = 33
+    if version == 33:
+        payload = _migrate_v33_to_v34(payload)
+        version = 34
     payload["instance_schema_version"] = version
     return payload
 
@@ -272,7 +851,13 @@ def rebind_imported_game_state_payload(
     payload["game_key"] = list(game_key)
     payload["run_id"] = run_id
     payload["memory_namespace"] = f"{game_key!s}::run:{run_id}"
-    economy = payload.get("economy")
+    modules = payload.get("modules")
+    slot = modules.get("economy") if isinstance(modules, dict) else None
+    if isinstance(slot, dict) and slot.get("schema_version") != 1:
+        # Identity rebinding cannot safely interpret an unknown slot. Plain
+        # save/load still preserves it verbatim; importing as a new run rejects.
+        raise ModuleStateError(f"unsupported economy module schema: {slot.get('schema_version')!r}")
+    economy = slot.get("state") if isinstance(slot, dict) else None
     if isinstance(economy, dict):
         economy["run_id"] = run_id
         # External stores are not bundled with a save export. Pending

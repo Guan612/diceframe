@@ -6,6 +6,12 @@ import json
 import logging
 from typing import Any
 
+from src.engine.player_control import (
+    DEFAULT_CONTROL_MODE,
+    PlayerControlError,
+    get_control,
+    set_control,
+)
 from src.rules.rule_system import RuleSystem
 from src.webui.services._common import _GAME_KEY_SEP
 from src.webui.game_lifecycle_context import (
@@ -153,6 +159,7 @@ async def create_players(
     *,
     exception_error: str,
     log_context: str,
+    unclaimed_control_default: str = "",
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """Create the party as one compensated phase and bind its first GM seat."""
 
@@ -186,5 +193,45 @@ async def create_players(
                 "ok": False,
                 "error": f"创建角色失败: {created.get('error', '未知错误')}",
             }
+        requested = _requested_control(character, unclaimed_control_default)
+        instance = dependencies.registry.get(transaction.game_key)
+        uid = str(created.get("user_id") or "")
+        if instance is None or uid not in getattr(instance, "players", {}):
+            transaction.rollback()
+            return [], {
+                "ok": False,
+                "error_code": "GAME_CREATE_FAILED",
+                "error": exception_error,
+            }
+        if requested != DEFAULT_CONTROL_MODE:
+            try:
+                # 开房时的控制方式同样走唯一写入口；任何未在权威契约里登记的模式
+                # 都在这里 fail closed，而不是把角色悄悄建成默认值。
+                set_control(instance, uid, requested)
+            except PlayerControlError as exc:
+                transaction.rollback()
+                return [], {
+                    "ok": False,
+                    "error_code": "INVALID_PLAYER_CONTROL",
+                    "error": str(exc),
+                }
+        # 每张卡都回填控制记录（含默认 human），前端不必再猜自己拿到的是什么。
+        created["control"] = get_control(instance, uid)
         created_players.append(created)
     return created_players, None
+
+
+def _requested_control(character: dict, unclaimed_control_default: str) -> str:
+    """Resolve one creation card's controller.
+
+    Precedence: an explicit per-card choice wins; otherwise the room-level
+    default for the cards the creator did not decide; otherwise the legacy
+    behaviour (``human``, i.e. every seat today's tables already get), so an old
+    client that sends no control information at all is unaffected.
+    """
+
+    explicit = str((character or {}).get("control") or "").strip()
+    if explicit:
+        return explicit
+    fallback = str(unclaimed_control_default or "").strip()
+    return fallback or DEFAULT_CONTROL_MODE

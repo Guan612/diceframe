@@ -1,4 +1,4 @@
-﻿"""GameInstance 状态机 —— 单个跑团游戏的全部运行时状态与生命周期。"""
+"""GameInstance 状态机 —— 单个跑团游戏的全部运行时状态与生命周期。"""
 
 from __future__ import annotations
 
@@ -9,11 +9,15 @@ from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
 
+from src.engine import instance_lifecycle, progression, round_recovery, round_snapshots, turn_state
+from src.engine.action_gate import (
+    AI_SEAT_COMMIT_POLICY, GateRequest, SOURCE_AI_SEAT, SOURCE_HUMAN,
+    StructuredIntentRequirement, check_run_unchanged, evaluate,
+)
 from src.engine.contracts import (
     ActionRecord,
     CheckResult,
@@ -23,17 +27,54 @@ from src.engine.contracts import (
     TableTalkExchange,
     TokenBudgetBump,
 )
-from src.engine.dice import parse_player_roll, roll as dice_roll, check_d20
-from src.engine.character_utils import apply_resource_delta, get_resource
+from src.engine.game_state import GameState
 from src.engine.game_state_codec import GameStateCodec
 from src.engine.game_state_contracts import (
     GameContextView,
     GamePersistedState,
     PlayerRollbackSnapshot,
 )
-from src.engine.health import record_health_event
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.module_state import ensure_module_states
+from src.engine.modules import (
+    checks,
+    combat_extension_state,
+    economy_state,
+    health,
+    legacy_combat,
+    lorebook_runtime,
+    media,
+    narrative_notes,
+    player_control_state,
+    private_channels,
+    progression_state,
+    room_access,
+    round_presentation,
+    round_safety,
+    ruleset_runtime,
+    session_stats,
+    table_settings,
+    world_reports,
+)
 from src.engine.narrative_perspective import validate_narrative_perspective
+from src.engine.player_control import (
+    PlayerControlError,
+    begin_away_hosting,
+    control_change_block,
+    control_mode,
+    end_away_hosting,
+    ensure_control,
+    ensure_controls,
+    normalize_away_control_policy,
+    set_control,
+)
+from src.engine.round_snapshots import (
+    snapshot_players as _snapshot_players,
+    restore_players,
+)
+from src.engine.world_state import ensure_world_state, fresh_world_state
+from src.lorebook.activation import TIMED_COUNTER_KEYS, advance_timed_state
+from src.migrations.instance import CURRENT_INSTANCE_SCHEMA_VERSION
 
 if TYPE_CHECKING:
     from src.engine.plot_tracker import PlotTracker
@@ -48,56 +89,47 @@ MAX_SAVE_UNPACKED_BYTES = 128 * 1024 * 1024
 
 
 # ---------- 游戏状态枚举 ------------------------------------
+# GameState 已抽到 src/engine/game_state.py（无依赖契约模块）；
+# 此处 re-export 保持 `from src.engine.game_instance import GameState` 兼容。
 
-class GameState(Enum):
-    """游戏生命周期状态。"""
-    CREATED = "created"                  # 已创建，等待开始
-    WAITING = "waiting"                  # 等待玩家加入
-    ACTIVE_ACTION = "active_action"      # 行动阶段：接受玩家声明
-    ACTIVE_JUDGMENT = "active_judgment"  # 判定阶段：LLM 处理中
-    PUZZLE = "puzzle"                    # 谜题阶段：等待玩家解谜
-    PAUSED = "paused"                    # 暂停（bot 重启后恢复为此状态）
-    ENDED = "ended"                      # 已结束
-
-
-def _snapshot_players(instance: GameInstance) -> PlayerRollbackSnapshot:
-    """快照所有玩家可回滚状态（含死亡玩家，便于 swipe 复活）。
-
-    覆盖运行时可变字段（HP/金币/SAN/LUCK/MANA/状态/背包/装备/法术）；
-    不含 identity/progression（race/class/level/xp/skills 不随 swipe 回滚）。
-    """
-    import copy
-    snap: PlayerRollbackSnapshot = {}
-    for uid in instance.players:
-        cs = instance.get_character_sheet(uid)
-        snap[uid] = {
-            "hp": cs.get("hp", 0),
-            "max_hp": cs.get("max_hp", 0),
-            "gold": cs.get("gold", 0),
-            "deceased": cs.get("deceased", False),
-            "death_round": cs.get("death_round"),
-        }
-        for opt in ("status", "sanity", "max_sanity", "luck", "max_luck",
-                    "mana", "currency", "resources", "spells_known"):
-            if opt in cs:
-                snap[uid][opt] = copy.deepcopy(cs[opt])
-        for lst in ("inventory", "equipment", "key_items"):
-            snap[uid][lst] = copy.deepcopy(cs.get(lst, []))
-    return snap
-
-
-def restore_players(instance: GameInstance, snapshot: PlayerRollbackSnapshot) -> None:
-    """从快照恢复玩家可回滚状态（含 deceased/death_round，便于 swipe 复活）。"""
-    for uid, snap in snapshot.items():
-        if uid not in instance.players:
-            continue
-        cs = instance.get_character_sheet(uid)
-        for key, value in snap.items():
-            cs[key] = value
-        instance.players[uid]["character_sheet"] = cs
+# 玩家快照实现已迁到 src/engine/round_snapshots.py；上面的 alias import 保持
+# `from src.engine.game_instance import _snapshot_players / restore_players`
+# 的既有调用方（round_processor / swipe_generator 等）不变。
 
 
 # ---------- GameInstance ------------------------------------
+
+# FIX-02 §4.2：adventure binding 的基础身份字段。来源身份（source_kind/source_id）
+# 是可选新增字段；engine 只按身份字段比较，不认识 adventure 域的具体语义。
+_ADVENTURE_BINDING_BASE_FIELDS = (
+    "adventure_id", "version", "format", "content_digest", "world_id",
+)
+
+
+def _same_adventure_binding(current: Any, candidate: Any) -> bool:
+    """Whether two bindings describe the same immutable package.
+
+    基础身份必须一致；来源身份只在**双方都声明**时比较——这样旧存档的
+    5 字段绑定可以与重启/重开后重新解析出的来源感知绑定视为同一绑定，
+    而"同一个 id 换成另一个来源"仍然被拒绝。
+    """
+
+    if not isinstance(current, dict) or not isinstance(candidate, dict):
+        return current == candidate
+    if current == candidate:
+        return True
+    for key in _ADVENTURE_BINDING_BASE_FIELDS:
+        if str(current.get(key) or "") != str(candidate.get(key) or ""):
+            return False
+    current_source = str(current.get("source_kind") or "")
+    candidate_source = str(candidate.get("source_kind") or "")
+    if not current_source or not candidate_source:
+        return True
+    return (
+        current_source == candidate_source
+        and str(current.get("source_id") or "") == str(candidate.get("source_id") or "")
+    )
+
 
 @dataclass
 class GameInstance:
@@ -109,22 +141,20 @@ class GameInstance:
     """
 
     game_key: tuple[str, str, str]      # (platform, target_id, account_id)
-    instance_schema_version: int = 11
+    instance_schema_version: int = CURRENT_INSTANCE_SCHEMA_VERSION
     run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
     memory_namespace: str = ""
-    economy: dict[str, Any] = field(default_factory=dict)
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
-    ruleset_runtime: dict[str, Any] = field(default_factory=dict)
-    ruleset_state: dict[str, Any] = field(default_factory=dict)
     adventure_binding: dict[str, Any] = field(default_factory=dict)
+    # FIX-04 §6.2：Adventure v2 进度（active/completed nodes/objectives/milestones +
+    # history）的权威持久化位置。v1 的 campaign 进度仍在 ruleset_state，两者并存
+    # 互不迁移（母方案 §71/§122）。
+    adventure_progress: dict[str, Any] = field(default_factory=dict)
     # Explicitly separates standard free play from an adventure story flow.
     # Empty means legacy/in-memory construction; runtime derives from the
     # bound adventure until creation/migration writes an explicit mode.
     play_mode: str = ""
-    event_ledger: list[dict[str, Any]] = field(default_factory=list)
-    scene_image: dict[str, str] = field(default_factory=dict)
-    map_background: dict[str, str] = field(default_factory=dict)
     world_name: str = ""
     group_name: str = ""
     state: GameState = GameState.CREATED
@@ -134,47 +164,28 @@ class GameInstance:
     npcs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # 回合
-    round_number: int = 0
     action_queue: list[ActionRecord] = field(default_factory=list)
     pending_actions: list[ActionRecord] = field(default_factory=list)
     ready_players: set[str] = field(default_factory=set)
     away_players: set[str] = field(default_factory=set)
 
-    # 战斗
-    combat_active: bool = False
-    combat_enemies: list[dict[str, Any]] = field(default_factory=list)
-    combat_state: str = "none"  # "none" / "active"
-    initiative_order: list[str] = field(default_factory=list)
-    initiative_current: int = 0
-
     # 玩家管理
-    max_players: int = 6
     gm_uid: str = ""  # 创建游戏的 GM 的 user_id
-    player_access_open: bool = True  # False 时所有玩家分享链接失效
-    bot_bind_token: str = ""  # 渠道 Bot 绑定本局的一次性管理凭证
-    room_password: str = ""  # 房间密码（空=开放）；玩家凭此进入游戏，替代后台 access_token
-    room_token: str = ""  # 玩家凭房间密码换取的会话凭证（random secrets，校验通过后颁发）
-    private_log: dict[str, list[dict[str, Any]]] = field(default_factory=dict)  # user_id → 私聊历史
-    # 公开桌边问答与回合日志分离；正常 GM 上下文不会读取此字段。
-    table_talk: list[TableTalkExchange] = field(default_factory=list)
 
     # 场景
     scene: str = ""
-    game_time: str = ""
 
-    # 日志与摘要
+    # 回合日志
     log: list[RoundLogEntry] = field(default_factory=list)
-    summary: dict = field(default_factory=dict)
-    key_facts: list = field(default_factory=list)
+
+    # 权威世界真相（Issue #284）：世界事实 / 逻辑时钟 / 定时事件容器。它不是
+    # key_facts 这类叙事摘要，也不属于 ruleset_state；唯一写入口是
+    # ``src.engine.world_state.apply_world_ops``。
+    world_state: dict[str, Any] = field(default_factory=fresh_world_state)
+    modules: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # 运行时跟踪：chatlog.jsonl 已持久化的 log 条数（不入存档，仅用于增量追加）
     last_saved_log_count: int = 0
-
-    # 统计
-    total_llm_calls: int = 0
-    total_tokens: int = 0
-    started_at: str = ""
-    last_activity: str = ""
 
     # 谜题
     puzzle_manager: PuzzleManager | None = None
@@ -182,73 +193,12 @@ class GameInstance:
     # 剧情追踪
     plot_tracker: PlotTracker | None = None
 
-    # 判定卡片：最近一次检定的结构化结果（前端渲染用）
-    last_check: CheckResult | None = None
-    last_checks: list[CheckResult] = field(default_factory=list)
-    manual_roll_requests: list[dict[str, Any]] = field(default_factory=list)
     # 本轮规划发现的无价购买意图（payer/target/quantity）。只在回合内存中
     # 传递：供结算阶段的同轮 LOOT 拦截使用，从不持久化、不产生金额。
     round_unpriced_purchase_intents: list[dict] = field(default_factory=list)
-    # 当前判定阶段是否已生成结构化检定；幸运选择必须发生在 LLM 叙事之前。
-    round_checks_prepared: bool = False
-    # 进入判定阶段前的玩家状态；整轮撤回时用于退还本轮消耗的幸运。
-    round_start_snapshot: PlayerRollbackSnapshot = field(default_factory=dict)
-    # 进入判定阶段前的旧版战斗实体状态（npcs / combat_enemies / 战斗状态）。
-    # 旧版 hp_based 路径（CombatResolver）直接改写这些记录、且不经过
-    # combat_extension 的快照机制；判定失败回滚必须能把它们一起还原，
-    # 否则"没讲成的回合"会留下伤害。D&D2024 权威战斗另有
-    # combat_extension_round_snapshots。见 capture_round_entity_snapshot。
-    round_entity_snapshot: dict[str, Any] = field(default_factory=dict)
-    # Death-save outcomes are keyed by round and player UID so narrative/API
-    # retries reuse the same roll without leaking it into future rounds.
-    death_save_outcomes: dict[str, dict[str, dict]] = field(default_factory=dict)
-
-    # GM 私密指令：只注入 GM 上下文，不作为玩家/系统行动公开记录
-    gm_directives: list[dict] = field(default_factory=list)
-
-    # 状态变化 recap：最近一回合的 state_update（前端渲染用）
-    last_state_update: dict | None = None
-
-    # 本轮裁判标注的越权声明（仅多人局且开关启用时注入 GM 上下文）
-    last_overreach: list = field(default_factory=list)
-
-    # 最近一回合因输出截断触发的 token 预算升档（给 GM 的低打扰提示）
-    last_token_budget_bump: TokenBudgetBump | None = None
-
-    # 单人模式
-    solo_mode: bool = False  # True=单人模式, 行动后自动推进
-
-    # 种子码
-    seed_code: str = ""
-
-    # 难度
-    difficulty: str = "标准"  # 轻松 / 标准 / 硬核
-
-    # 叙事视角（展示偏好，不参与规则判定）
-    narrative_perspective: str = "auto"  # auto / immersive / third_person
-
-    # 当前对局 GM 叙事风格覆盖：None=跟随世界 gm_style；dict=显式覆盖
-    # （全缺省 dict 也是合法的"恢复中性风格"，与 None 语义严格区分）。
-    gm_style_override: dict[str, str] | None = None
 
     # 叙事语言
     language: str = DEFAULT_LANGUAGE  # "zh-CN" / "en"
-
-    # 入口模式
-    entry_point: str = "web"  # "web" / "plugin"
-
-    # 战斗结算缓存（供 WebUI 展示）
-    pending_combat_results: list[dict] = field(default_factory=list)
-
-    # 世界书时间效应状态
-    lorebook_timed_state: dict[str, dict] = field(default_factory=dict)
-
-    # WebUI 快捷行动建议
-    quick_actions: list[str] = field(default_factory=list)
-
-    # 系统健康 / 降级事件
-    health_events: list[dict] = field(default_factory=list)
-    health_status: dict = field(default_factory=dict)
 
     # 内部：并发锁
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -260,20 +210,6 @@ class GameInstance:
     _authority_depth: int = field(default=0, repr=False)
     _rewrite_in_progress: bool = field(default=False, repr=False)
     _save_fail_count: int = field(default=0, repr=False)
-    # 幸运超时（秒）：每条 pending 幸运检定独立倒计时，到点按失败继续；0=禁用（异步局可设 0）
-    luck_timeout_seconds: int = 60
-    # 奖励自动结算策略（表级偏好，重开保留）：{"mode": "auto_small_cash"|"gm_confirm",
-    # "auto_reward_cap": int}。{} 表示未设置，结算时回退规则模板 economy_defaults
-    # 与服务器全局配置；归属见 economy.resolve_auto_reward_policy。
-    economy_reward_policy: dict = field(default_factory=dict)
-    # 通用战斗扩展状态（Issue 212）：{"schema_version": 1, "scheduler": {...}|None,
-    # "pools": {entity_id: {resource_id: {...}}}}。仅当规则模板显式声明 combat
-    # 能力时由 runtime 写入；{} 表示未启用。结构与校验归属 combat_scheduler /
-    # combat_resources，存档只做不透明透传。
-    combat_extension: dict = field(default_factory=dict)
-    # 通用战斗扩展按回合惰性保存的首个写入前快照。动作和调度推进都可能
-    # 独立于叙事判定发生，因此不能只依赖玩家 round_start_snapshot。
-    combat_extension_round_snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
     # 内部：每条 pending 幸运检定的超时定时器（check_id -> asyncio.Task），不序列化
     _luck_timers: dict = field(default_factory=dict, repr=False)
     # 内部：正在处理本轮的 task（仅判定期间有值，不序列化）。GM 明确要求强制推进
@@ -284,39 +220,470 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
-    # D1: 已确认事项（CONFIRMED 标签累积），注入 LLM 上下文防重复讨论
-    confirmed_items: list = field(default_factory=list)
+
+    @property
+    def ruleset_runtime(self) -> dict[str, Any]:
+        return ruleset_runtime.binding(self)
+
+    @ruleset_runtime.setter
+    def ruleset_runtime(self, value: dict[str, Any]) -> None:
+        ruleset_runtime.replace_binding(self, value)
+
+    @property
+    def ruleset_state(self) -> dict[str, Any]:
+        return ruleset_runtime.state(self)
+
+    @ruleset_state.setter
+    def ruleset_state(self, value: dict[str, Any]) -> None:
+        ruleset_runtime.replace_state(self, value)
+
+    @property
+    def event_ledger(self) -> list[dict[str, Any]]:
+        return ruleset_runtime.event_ledger(self)
+
+    @event_ledger.setter
+    def event_ledger(self, value: list[dict[str, Any]]) -> None:
+        ruleset_runtime.replace_event_ledger(self, value)
+
+    @property
+    def combat_active(self) -> bool:
+        return legacy_combat.combat_active(self)
+
+    @combat_active.setter
+    def combat_active(self, value: bool) -> None:
+        legacy_combat.replace_combat_active(self, value)
+
+    @property
+    def combat_enemies(self) -> list[dict[str, Any]]:
+        return legacy_combat.combat_enemies(self)
+
+    @combat_enemies.setter
+    def combat_enemies(self, value: list[dict[str, Any]]) -> None:
+        legacy_combat.replace_combat_enemies(self, value)
+
+    @property
+    def combat_state(self) -> str:
+        return legacy_combat.combat_state(self)
+
+    @combat_state.setter
+    def combat_state(self, value: str) -> None:
+        legacy_combat.replace_combat_state(self, value)
+
+    @property
+    def initiative_order(self) -> list[str]:
+        return legacy_combat.initiative_order(self)
+
+    @initiative_order.setter
+    def initiative_order(self, value: list[str]) -> None:
+        legacy_combat.replace_initiative_order(self, value)
+
+    @property
+    def initiative_current(self) -> int:
+        return legacy_combat.initiative_current(self)
+
+    @initiative_current.setter
+    def initiative_current(self, value: int) -> None:
+        legacy_combat.replace_initiative_current(self, value)
+
+    @property
+    def round_start_snapshot(self) -> PlayerRollbackSnapshot:
+        """进入判定前的玩家状态；整轮撤回时退还本轮消耗。"""
+        return round_safety.round_start_snapshot(self)
+
+    @round_start_snapshot.setter
+    def round_start_snapshot(self, value: PlayerRollbackSnapshot) -> None:
+        round_safety.capture_players(self, value)
+
+    @property
+    def round_entity_snapshot(self) -> dict[str, Any]:
+        """旧版战斗实体快照；与 combat_extension 的权威战斗快照互补。"""
+        return round_safety.round_entity_snapshot(self)
+
+    @round_entity_snapshot.setter
+    def round_entity_snapshot(self, value: dict[str, Any]) -> None:
+        round_safety.replace_entity_snapshot(self, value)
+
+    @property
+    def death_save_outcomes(self) -> dict[str, dict[str, dict]]:
+        """Per-round/player death saves reused by narrative and API retries."""
+        return round_safety.death_save_outcomes(self)
+
+    @death_save_outcomes.setter
+    def death_save_outcomes(self, value: dict[str, dict[str, dict]]) -> None:
+        round_safety.replace_death_save_outcomes(self, value)
+
+    @property
+    def last_check(self) -> CheckResult | None:
+        """最近一次结构化检定（前端判定卡片）。"""
+        return checks.last_check(self)
+
+    @last_check.setter
+    def last_check(self, value: CheckResult | None) -> None:
+        checks.replace_last_check(self, value)
+
+    @property
+    def last_checks(self) -> list[CheckResult]:
+        return checks.last_checks(self)
+
+    @last_checks.setter
+    def last_checks(self, value: list[CheckResult]) -> None:
+        checks.replace_last_checks(self, value)
+
+    @property
+    def round_checks_prepared(self) -> bool:
+        """检定已准备；幸运选择必须发生在 LLM 叙事之前。"""
+        return checks.round_checks_prepared(self)
+
+    @round_checks_prepared.setter
+    def round_checks_prepared(self, value: bool) -> None:
+        checks.replace_round_checks_prepared(self, value)
+
+    @property
+    def manual_roll_requests(self) -> list[dict[str, Any]]:
+        return checks.manual_roll_requests(self)
+
+    @manual_roll_requests.setter
+    def manual_roll_requests(self, value: list[dict[str, Any]]) -> None:
+        checks.replace_manual_roll_requests(self, value)
+
+    @property
+    def total_llm_calls(self) -> int:
+        return session_stats.total_llm_calls(self)
+
+    @total_llm_calls.setter
+    def total_llm_calls(self, value: int) -> None:
+        session_stats.replace_total_llm_calls(self, value)
+
+    @property
+    def total_tokens(self) -> int:
+        return session_stats.total_tokens(self)
+
+    @total_tokens.setter
+    def total_tokens(self, value: int) -> None:
+        session_stats.replace_total_tokens(self, value)
+
+    @property
+    def started_at(self) -> str:
+        return session_stats.started_at(self)
+
+    @started_at.setter
+    def started_at(self, value: str) -> None:
+        session_stats.replace_started_at(self, value)
+
+    @property
+    def last_activity(self) -> str:
+        return session_stats.last_activity(self)
+
+    @last_activity.setter
+    def last_activity(self, value: str) -> None:
+        session_stats.replace_last_activity(self, value)
+
+    @property
+    def max_players(self) -> int:
+        return room_access.max_players(self)
+
+    @max_players.setter
+    def max_players(self, value: int) -> None:
+        room_access.replace_max_players(self, value)
+
+    @property
+    def player_access_open(self) -> bool:
+        return room_access.player_access_open(self)
+
+    @player_access_open.setter
+    def player_access_open(self, value: bool) -> None:
+        room_access.replace_player_access_open(self, value)
+
+    @property
+    def bot_bind_token(self) -> str:
+        return room_access.bot_bind_token(self)
+
+    @bot_bind_token.setter
+    def bot_bind_token(self, value: str) -> None:
+        room_access.replace_bot_bind_token(self, value)
+
+    @property
+    def room_password(self) -> str:
+        return room_access.room_password(self)
+
+    @room_password.setter
+    def room_password(self, value: str) -> None:
+        room_access.replace_room_password(self, value)
+
+    @property
+    def room_token(self) -> str:
+        return room_access.room_token(self)
+
+    @room_token.setter
+    def room_token(self, value: str) -> None:
+        room_access.replace_room_token(self, value)
+
+    @property
+    def difficulty(self) -> str:
+        return table_settings.difficulty(self)
+
+    @difficulty.setter
+    def difficulty(self, value: str) -> None:
+        table_settings.replace_difficulty(self, value)
+
+    @property
+    def narrative_perspective(self) -> str:
+        return table_settings.narrative_perspective(self)
+
+    @narrative_perspective.setter
+    def narrative_perspective(self, value: str) -> None:
+        table_settings.replace_narrative_perspective(self, value)
+
+    @property
+    def gm_style_override(self) -> dict[str, str] | None:
+        return table_settings.gm_style_override(self)
+
+    @gm_style_override.setter
+    def gm_style_override(self, value: dict[str, str] | None) -> None:
+        table_settings.replace_gm_style_override(self, value)
+
+    @property
+    def solo_mode(self) -> bool:
+        return table_settings.solo_mode(self)
+
+    @solo_mode.setter
+    def solo_mode(self, value: bool) -> None:
+        table_settings.replace_solo_mode(self, value)
+
+    @property
+    def seed_code(self) -> str:
+        return table_settings.seed_code(self)
+
+    @seed_code.setter
+    def seed_code(self, value: str) -> None:
+        table_settings.replace_seed_code(self, value)
+
+    @property
+    def entry_point(self) -> str:
+        return table_settings.entry_point(self)
+
+    @entry_point.setter
+    def entry_point(self, value: str) -> None:
+        table_settings.replace_entry_point(self, value)
+
+    @property
+    def luck_timeout_seconds(self) -> int:
+        return table_settings.luck_timeout_seconds(self)
+
+    @luck_timeout_seconds.setter
+    def luck_timeout_seconds(self, value: int) -> None:
+        table_settings.replace_luck_timeout_seconds(self, value)
+
+    @property
+    def economy_reward_policy(self) -> dict:
+        return table_settings.economy_reward_policy(self)
+
+    @economy_reward_policy.setter
+    def economy_reward_policy(self, value: dict) -> None:
+        table_settings.replace_economy_reward_policy(self, value)
+
+    @property
+    def last_overreach(self) -> list:
+        # 本轮裁判标注的越权声明（仅多人局且开关启用时注入 GM 上下文）。
+        return world_reports.last_overreach(self)
+
+    @last_overreach.setter
+    def last_overreach(self, value: Any) -> None:
+        world_reports.replace_last_overreach(self, value)
+
+    @property
+    def last_world_legality(self) -> list:
+        # server 判定的行动合法性矛盾：player / code / location / current。
+        # 与替世界/他人声明事实的 overreach 分开，供可信裁定块与前端提示使用。
+        return world_reports.last_world_legality(self)
+
+    @last_world_legality.setter
+    def last_world_legality(self, value: Any) -> None:
+        world_reports.replace_last_world_legality(self, value)
+
+    @property
+    def last_world_events(self) -> list:
+        # 本轮确定性结算的定时事件：event_id / label / due_at / status / error。
+        return world_reports.last_world_events(self)
+
+    @last_world_events.setter
+    def last_world_events(self, value: Any) -> None:
+        world_reports.replace_last_world_events(self, value)
+
+    @property
+    def gm_directives(self) -> list[dict]:
+        # GM 私密指令：只注入 GM 上下文，不作为玩家/系统行动公开记录。
+        return round_presentation.gm_directives(self)
+
+    @gm_directives.setter
+    def gm_directives(self, value: Any) -> None:
+        round_presentation.replace_gm_directives(self, value)
+
+    @property
+    def quick_actions(self) -> list[str]:
+        # WebUI 快捷行动建议。
+        return round_presentation.quick_actions(self)
+
+    @quick_actions.setter
+    def quick_actions(self, value: Any) -> None:
+        round_presentation.replace_quick_actions(self, value)
+
+    @property
+    def last_state_update(self) -> dict | None:
+        # 最近一回合的 state_update（前端渲染用）。
+        return round_presentation.last_state_update(self)
+
+    @last_state_update.setter
+    def last_state_update(self, value: Any) -> None:
+        round_presentation.replace_last_state_update(self, value)
+
+    @property
+    def last_token_budget_bump(self) -> TokenBudgetBump | None:
+        # 最近一回合因输出截断触发的 token 预算升档（给 GM 的低打扰提示）。
+        return round_presentation.last_token_budget_bump(self)
+
+    @last_token_budget_bump.setter
+    def last_token_budget_bump(self, value: Any) -> None:
+        round_presentation.replace_last_token_budget_bump(self, value)
+
+    @property
+    def pending_combat_results(self) -> list[dict]:
+        # 战斗结算缓存（供 WebUI 展示）。
+        return round_presentation.pending_combat_results(self)
+
+    @pending_combat_results.setter
+    def pending_combat_results(self, value: Any) -> None:
+        round_presentation.replace_pending_combat_results(self, value)
+
+    @property
+    def summary(self) -> dict:
+        return narrative_notes.summary(self)
+
+    @summary.setter
+    def summary(self, value: Any) -> None:
+        narrative_notes.replace_summary(self, value)
+
+    @property
+    def key_facts(self) -> list:
+        return narrative_notes.key_facts(self)
+
+    @key_facts.setter
+    def key_facts(self, value: Any) -> None:
+        narrative_notes.replace_key_facts(self, value)
+
+    @property
+    def confirmed_items(self) -> list:
+        # CONFIRMED 标签累积，注入 LLM 上下文防重复讨论。
+        return narrative_notes.confirmed_items(self)
+
+    @confirmed_items.setter
+    def confirmed_items(self, value: Any) -> None:
+        narrative_notes.replace_confirmed_items(self, value)
+
+    @property
+    def game_time(self) -> str:
+        return narrative_notes.game_time(self)
+
+    @game_time.setter
+    def game_time(self, value: Any) -> None:
+        narrative_notes.replace_game_time(self, value)
+
+    @property
+    def health_events(self) -> list[dict]:
+        return health.health_events(self)
+
+    @health_events.setter
+    def health_events(self, value: Any) -> None:
+        health.replace_health_events(self, value)
+
+    @property
+    def health_status(self) -> dict:
+        return health.health_status(self)
+
+    @health_status.setter
+    def health_status(self, value: Any) -> None:
+        health.replace_health_status(self, value)
+
+    @property
+    def scene_image(self) -> dict[str, str]:
+        return media.scene_image(self)
+
+    @scene_image.setter
+    def scene_image(self, value: Any) -> None:
+        media.replace_scene_image(self, value)
+
+    @property
+    def map_background(self) -> dict[str, str]:
+        return media.map_background(self)
+
+    @map_background.setter
+    def map_background(self, value: Any) -> None:
+        media.replace_map_background(self, value)
+
+    @property
+    def private_log(self) -> dict[str, list[dict[str, Any]]]:
+        return private_channels.private_log(self)
+
+    @private_log.setter
+    def private_log(self, value: Any) -> None:
+        private_channels.replace_private_log(self, value)
+
+    @property
+    def table_talk(self) -> list[TableTalkExchange]:
+        return private_channels.table_talk(self)
+
+    @table_talk.setter
+    def table_talk(self, value: Any) -> None:
+        private_channels.replace_table_talk(self, value)
 
     def __post_init__(self) -> None:
         if not self.run_id:
             self.run_id = f"run_{uuid4().hex}"
         if not self.memory_namespace:
             self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
-        if not isinstance(self.economy, dict) or not self.economy:
-            self.economy = self._fresh_economy_state()
-        else:
-            self.economy.setdefault("schema_version", 2)
-            self.economy.setdefault("run_id", self.run_id)
-            self.economy.setdefault("next_sequence", 1)
-            self.economy.setdefault("proposals", [])
-            self.economy.setdefault("transactions", [])
-            self.economy.setdefault("idempotency_records", {})
-            self.economy.setdefault("effect_groups", [])
-            self.economy.setdefault("external_effects_outbox", [])
-            self.economy.setdefault("outcomes", [])
+        # 世界真相容器：未设置/损坏 → 空世界；未知 schema 原样保留，由写入路径
+        # 明确拒绝，绝不把用户数据猜成默认值。
+        self.world_state = ensure_world_state(self.world_state)
+        self.modules = ensure_module_states(self.modules)
+        economy_state.ensure_run_id(self)
+        # 每个席位都带一个显式控制器（human / ai / unclaimed）：旧存档、内存构造
+        # 与手工修改过的 players 都在这里补齐，读取方永远不必自己猜。唯一写入口
+        # 仍是 src.engine.player_control.set_control。
+        ensure_controls(self)
 
-    def _fresh_economy_state(self) -> dict[str, Any]:
-        return {
-            "schema_version": 2,
-            "run_id": self.run_id,
-            "next_sequence": 1,
-            "proposals": [],
-            "transactions": [],
-            "idempotency_records": {},
-            "effect_groups": [],
-            "external_effects_outbox": [],
-            "outcomes": [],
-        }
+    @property
+    def round_number(self) -> int:
+        return progression_state.round_value(self)
+
+    @round_number.setter
+    def round_number(self, value: int) -> None:
+        progression_state.set_round_value(self, value)
+
+    @property
+    def economy(self) -> dict[str, Any]:
+        return economy_state.state(self)
+
+    @economy.setter
+    def economy(self, value: Any) -> None:
+        economy_state.replace_state(self, value)
+
+    @property
+    def combat_extension(self) -> dict[str, Any]:
+        """Live opaque combat state; an empty dict means disabled."""
+        return combat_extension_state.current(self)
+
+    @combat_extension.setter
+    def combat_extension(self, value: Any) -> None:
+        combat_extension_state.replace_current(self, value)
+
+    @property
+    def combat_extension_round_snapshots(self) -> dict[str, Any]:
+        """Live snapshots captured before each round's first combat write."""
+        return combat_extension_state.round_snapshots(self)
+
+    @combat_extension_round_snapshots.setter
+    def combat_extension_round_snapshots(self, value: Any) -> None:
+        combat_extension_state.replace_round_snapshots(self, value)
 
     @asynccontextmanager
     async def authoritative_write(self) -> AsyncIterator[bool]:
@@ -372,10 +739,12 @@ class GameInstance:
     def rotate_run_identity(self) -> tuple[str, str]:
         """Start an isolated run namespace and return ``(old, new)``."""
 
+        # Reject unsupported slots before changing either run identity.
+        economy_state.state(self)
         old = self.run_id
         self.run_id = f"run_{uuid4().hex}"
         self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
-        self.economy = self._fresh_economy_state()
+        self.economy = economy_state.fresh_economy_state(self.run_id)
         return old, self.run_id
 
     # ---------- 状态查询 ------------------------------------
@@ -393,6 +762,19 @@ class GameInstance:
         """当前需要参与行动等待的存活玩家。暂离玩家仍在队伍中，但不阻塞回合。"""
         return self.alive_players.difference(self.away_players)
 
+    @property
+    def active_human_players(self) -> set[str]:
+        """当前需要等待行动的真人席位：存活、未暂离且控制模式为 ``human``。
+
+        AI 托管与未认领的席位由服务器或无人负责，不能阻塞多人的 ready
+        barrier；``active_alive_players`` 仍是"在场存活"的完整集合，供幸运
+        超时等只看人数的地方使用。
+        """
+        return {
+            uid for uid in self.active_alive_players
+            if control_mode(self, uid) == "human"
+        }
+
     def get_character_sheet(self, uid: str) -> dict:
         """获取指定玩家的角色卡，不存在时返回空 dict。"""
         return self.players.get(uid, {}).get("character_sheet", {})
@@ -409,6 +791,9 @@ class GameInstance:
 
     def put_player(self, uid: str, player: PlayerData) -> None:
         """Insert or replace one complete player record."""
+        # 席位写入即带控制器：新建角色、规则快照恢复等所有路径都经过这里，因此
+        # 内存中的名册与落盘后的名册不会出现"有的席位没有 control"的差别。
+        ensure_control(player)
         self.players[uid] = player
 
     def set_player_name(self, uid: str, character_name: str) -> bool:
@@ -499,26 +884,40 @@ class GameInstance:
             normalized["content_version"], normalized["state_schema_version"],
         )):
             return False
+        ruleset_runtime.require_writable(self)
         if self.ruleset_runtime and self.ruleset_runtime != normalized:
             return False
-        self.ruleset_runtime = normalized
-        if not self.ruleset_state:
-            self.ruleset_state = {
-                "state_schema_version": normalized["state_schema_version"],
-            }
+        ruleset_runtime.bind(self, normalized)
         return True
 
     def bind_adventure(self, binding: dict[str, Any] | None) -> bool:
-        """Bind one immutable adventure package, or explicitly select sandbox."""
+        """Bind one immutable adventure package, or explicitly select sandbox.
+
+        FIX-02 §4.2：绑定新增可选的来源身份 ``source_kind`` / ``source_id``，
+        让"同一个 adventure_id 存在于多个来源"时能明确解析。旧存档的 5 字段绑定
+        （无来源身份）继续合法，按"当前唯一"解析；两者必须成对出现，混合形状
+        一律拒绝（不猜）。读取旧绑定时不改写存档：来源身份只在**新绑定**里落盘。
+        """
 
         value = dict(binding or {})
         if value:
             required = {"adventure_id", "version", "format", "content_digest", "world_id"}
-            if set(value) != required or not all(str(value.get(key) or "") for key in required):
+            allowed = required | {"source_kind", "source_id"}
+            if not required.issubset(value) or set(value) - allowed:
+                return False
+            if not all(str(value.get(key) or "") for key in required):
+                return False
+            has_kind = "source_kind" in value
+            has_id = "source_id" in value
+            if has_kind != has_id:
+                return False
+            if has_kind and not str(value.get("source_kind") or "").strip():
                 return False
             if str(value["world_id"]) != str(self.world_id or ""):
                 return False
-        if self.adventure_binding and self.adventure_binding != value:
+        if self.adventure_binding and not _same_adventure_binding(
+            self.adventure_binding, value,
+        ):
             return False
         self.adventure_binding = value
         return True
@@ -532,6 +931,8 @@ class GameInstance:
         self.map_background = dict(selection or {})
 
     def replace_players(self, players: dict[str, PlayerData]) -> None:
+        for player in players.values():
+            ensure_control(player)
         self.players = players
 
     def restore_ruleset_transaction(self, snapshot: dict[str, Any]) -> None:
@@ -541,13 +942,24 @@ class GameInstance:
         the rollback assignment here preserves the aggregate write boundary
         while allowing ruleset orchestration to remain transaction-aware.
         """
-        self.ruleset_state = copy.deepcopy(snapshot["ruleset_state"])
-        self.event_ledger = copy.deepcopy(snapshot["event_ledger"])
+        if "last_activity" in snapshot:
+            session_stats.require_writable(self)
+        if any(key in snapshot for key in (
+            "last_check", "last_checks", "round_checks_prepared", "manual_roll_requests",
+        )):
+            checks.require_writable(self)
+        if any(key in snapshot for key in (
+            "round_start_snapshot", "round_entity_snapshot", "death_save_outcomes",
+        )):
+            round_safety.require_writable(self)
+        legacy_combat.require_writable(self)
+        ruleset_runtime.require_writable(self)
+        if "round_number" in snapshot:
+            progression.require_writable(self)
+            restored_round = int(snapshot["round_number"])
+        ruleset_runtime.restore_from_transaction(self, snapshot)
         self.players = copy.deepcopy(snapshot["players"])
-        self.combat_state = str(snapshot["combat_state"])
-        self.combat_active = bool(snapshot["combat_active"])
-        self.initiative_order = copy.deepcopy(snapshot["initiative_order"])
-        self.initiative_current = int(snapshot["initiative_current"])
+        legacy_combat.restore_from_transaction(self, snapshot)
         if "scene" in snapshot and snapshot["scene"] is not None:
             self.scene = str(snapshot["scene"])
         if "last_activity" in snapshot:
@@ -555,7 +967,7 @@ class GameInstance:
         if "log" in snapshot:
             self.log = copy.deepcopy(snapshot["log"])
         if "round_number" in snapshot:
-            self.round_number = int(snapshot["round_number"])
+            progression.restore_from_snapshot(self, restored_round)
 
     def set_player_access(self, open_access: bool) -> None:
         self.player_access_open = bool(open_access)
@@ -617,6 +1029,7 @@ class GameInstance:
             target = next((entry for entry in self.log if entry is target_entry), None)
             if target is None:
                 return False
+            session_stats.require_writable(self)
             recaps = target.get("story_recaps")
             if not isinstance(recaps, list):
                 recaps = []
@@ -667,17 +1080,19 @@ class GameInstance:
 
     def record_check(self, check: CheckResult) -> None:
         """记录结构化检定，并保持 last_check 与 last_checks 一致。"""
-        self.last_checks.append(check)
-        self.last_check = check
+        checks.record(self, check)
 
     def sync_last_check(self, check: CheckResult) -> None:
         """刷新最近检定快照，同时隔离可变的轮次检定记录。"""
-        self.last_check = dict(check)
+        checks.sync_last(self, check)
 
     def reset_round_checks(self, *, prepared: bool = False) -> None:
+        checks.require_writable(self)
         self.last_check = None
         self.last_checks.clear()
         self.last_overreach.clear()
+        self.last_world_legality.clear()
+        self.last_world_events.clear()
         self.round_unpriced_purchase_intents.clear()
         self.round_checks_prepared = prepared
 
@@ -691,12 +1106,11 @@ class GameInstance:
         self.mark_log_persisted()
 
     def complete_round_check_preparation(self) -> None:
-        if self.last_checks:
-            self.last_check = self.last_checks[-1]
-        self.round_checks_prepared = True
+        checks.mark_prepared(self)
 
     def begin_round_processing(self) -> None:
         """清理仅属于上一轮展示的短期状态。"""
+        progression.require_writable(self)
         self.last_token_budget_bump = None
         self.pending_combat_results.clear()
         self.update_lorebook_timed_state()
@@ -721,8 +1135,8 @@ class GameInstance:
         ]
 
     def record_llm_usage(self, tokens: int = 0, *, calls: int = 1) -> None:
-        self.total_tokens += max(0, int(tokens or 0))
-        self.total_llm_calls += max(0, int(calls or 0))
+        session_stats.require_writable(self)
+        session_stats.record_llm_usage(self, tokens, calls=calls)
 
     def record_combat_result(self, result: dict) -> None:
         self.pending_combat_results.append(result)
@@ -731,284 +1145,26 @@ class GameInstance:
         self,
         entity_fields: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
-        """Capture state and source fields before this round's combat writes.
-
-        The extension payload alone is insufficient because HP, declared
-        special stats, and consumable inventory live on character/NPC records.
-        Later actions may engage new entities, so their fields are merged into
-        the same pre-mutation snapshot when first touched.
-        """
-
-        try:
-            key = str(int(self.round_number or 0))
-        except (TypeError, ValueError):
-            key = "0"
-        if not isinstance(self.combat_extension_round_snapshots, dict):
-            self.combat_extension_round_snapshots = {}
-        snapshot = self.combat_extension_round_snapshots.get(key)
-        if not isinstance(snapshot, dict):
-            snapshot = None
-        elif "combat_extension" not in snapshot:
-            # Older in-memory snapshots stored the raw extension payload.
-            # Wrap it before adding source-field tracking so that a legacy
-            # branch remains restorable without exposing malformed containers.
-            snapshot = {
-                "schema_version": 1,
-                "combat_extension": copy.deepcopy(snapshot),
-                "entity_fields": {},
-            }
-            self.combat_extension_round_snapshots[key] = snapshot
-        elif (
-            isinstance(snapshot.get("schema_version"), bool)
-            or snapshot.get("schema_version") != 1
-            or not isinstance(snapshot.get("combat_extension"), dict)
-        ):
-            snapshot = None
-        if snapshot is None:
-            snapshot = {
-                "schema_version": 1,
-                "combat_extension": copy.deepcopy(
-                    self.combat_extension if isinstance(self.combat_extension, dict) else {}
-                ),
-                "entity_fields": {},
-            }
-            self.combat_extension_round_snapshots[key] = snapshot
-        snapshot = self.combat_extension_round_snapshots[key]
-        if isinstance(entity_fields, Mapping) and isinstance(snapshot, dict):
-            captured = snapshot.setdefault("entity_fields", {})
-            if not isinstance(captured, dict):
-                captured = {}
-                snapshot["entity_fields"] = captured
-            for entity_id, raw_fields in entity_fields.items():
-                if (
-                    not isinstance(entity_id, str)
-                    or not entity_id
-                    or not isinstance(raw_fields, (tuple, list, set, frozenset))
-                ):
-                    continue
-                fields = tuple(dict.fromkeys(
-                    field_name
-                    for field_name in raw_fields
-                    if isinstance(field_name, str) and field_name
-                ))
-                if not fields:
-                    continue
-                source: Mapping[str, Any] | None = None
-                if entity_id.startswith("player:"):
-                    uid = entity_id.removeprefix("player:")
-                    if uid in self.players:
-                        raw_sheet = self.get_character_sheet(uid)
-                        if isinstance(raw_sheet, Mapping):
-                            source = raw_sheet
-                elif entity_id.startswith("npc:"):
-                    npc = self.npcs.get(entity_id.removeprefix("npc:"))
-                    if isinstance(npc, Mapping):
-                        source = npc
-                if source is None:
-                    continue
-                entry = captured.get(entity_id)
-                if not isinstance(entry, dict):
-                    entry = {"values": {}, "missing": []}
-                    captured[entity_id] = entry
-                values = entry.get("values")
-                if not isinstance(values, dict):
-                    values = {}
-                    entry["values"] = values
-                missing = entry.get("missing")
-                if not isinstance(missing, list):
-                    missing = []
-                    entry["missing"] = missing
-                missing[:] = [
-                    field_name
-                    for field_name in missing
-                    if isinstance(field_name, str)
-                    and field_name
-                    and field_name not in values
-                ]
-                for field_name in fields:
-                    if field_name in values or field_name in missing:
-                        continue
-                    if field_name in source:
-                        values[field_name] = copy.deepcopy(source[field_name])
-                    else:
-                        missing.append(field_name)
-        # Save size stays bounded even in very long sessions. Finished-round
-        # logs carry their own copy, so only recent/current snapshots are needed.
-        if len(self.combat_extension_round_snapshots) > 100:
-            def _sort_key(value: str) -> tuple[int, str]:
-                try:
-                    return int(value), value
-                except (TypeError, ValueError):
-                    return -1, value
-            for old_key in sorted(self.combat_extension_round_snapshots, key=_sort_key)[:-100]:
-                self.combat_extension_round_snapshots.pop(old_key, None)
+        """Capture state and source fields before this round's combat writes."""
+        round_snapshots.capture_combat_extension_snapshot(self, entity_fields)
 
     def current_combat_extension_snapshot(self) -> dict[str, Any]:
         """Return the current combat state using this round's tracked fields."""
-
-        try:
-            key = str(int(self.round_number or 0))
-        except (TypeError, ValueError):
-            key = "0"
-        if not isinstance(self.combat_extension_round_snapshots, dict):
-            self.combat_extension_round_snapshots = {}
-        tracked = self.combat_extension_round_snapshots.get(key, {})
-        raw_fields = tracked.get("entity_fields") if isinstance(tracked, dict) else {}
-        entity_fields: dict[str, tuple[str, ...]] = {}
-        if isinstance(raw_fields, dict):
-            for entity_id, entry in raw_fields.items():
-                if not isinstance(entry, dict):
-                    continue
-                values = entry.get("values")
-                absent = entry.get("missing")
-                if (
-                    not isinstance(entity_id, str)
-                    or not entity_id
-                    or not isinstance(values, dict)
-                    or not isinstance(absent, list)
-                    or any(not isinstance(name, str) or not name for name in values)
-                    or any(not isinstance(name, str) or not name for name in absent)
-                    or len(set(absent)) != len(absent)
-                    or set(values).intersection(absent)
-                ):
-                    continue
-                entity_fields[entity_id] = tuple((*values.keys(), *absent))
-
-        extension_state = copy.deepcopy(
-            self.combat_extension if isinstance(self.combat_extension, dict) else {}
-        )
-        extension_state.pop("pending_summaries", None)
-        snapshot: dict[str, Any] = {
-            "schema_version": 1,
-            "combat_extension": extension_state,
-            "entity_fields": {},
-        }
-        for entity_id, fields in entity_fields.items():
-            source: Mapping[str, Any] | None = None
-            if entity_id.startswith("player:"):
-                uid = entity_id.removeprefix("player:")
-                if uid in self.players:
-                    raw_sheet = self.get_character_sheet(uid)
-                    if isinstance(raw_sheet, Mapping):
-                        source = raw_sheet
-            elif entity_id.startswith("npc:"):
-                npc = self.npcs.get(entity_id.removeprefix("npc:"))
-                if isinstance(npc, Mapping):
-                    source = npc
-            if source is None:
-                continue
-            values = {
-                field_name: copy.deepcopy(source[field_name])
-                for field_name in fields if field_name in source
-            }
-            snapshot["entity_fields"][entity_id] = {
-                "values": values,
-                "missing": [field_name for field_name in fields if field_name not in source],
-            }
-        return snapshot
+        return round_snapshots.current_combat_extension_snapshot(self)
 
     def restore_combat_extension_snapshot(self, snapshot: Any) -> bool:
         """Restore a snapshot produced by the combat-extension snapshot API."""
-
-        if not isinstance(snapshot, dict):
-            return False
-        if "combat_extension" not in snapshot:
-            # Compatibility with the short-lived raw-payload snapshot shape.
-            try:
-                restored_extension = copy.deepcopy(snapshot)
-            except (TypeError, ValueError, RecursionError):
-                return False
-            self.combat_extension = restored_extension
-            return True
-        version = snapshot.get("schema_version")
-        if (
-            isinstance(version, bool)
-            or not isinstance(version, int)
-            or version != 1
-            or not isinstance(snapshot.get("combat_extension"), dict)
-        ):
-            return False
-        entity_fields = snapshot.get("entity_fields")
-        if entity_fields is None:
-            entity_fields = {}
-        if not isinstance(entity_fields, dict):
-            return False
-        staged: list[tuple[dict[str, Any], dict[str, Any], list[str]]] = []
-        for entity_id, entry in entity_fields.items():
-            if not isinstance(entity_id, str) or not isinstance(entry, dict):
-                return False
-            target: dict[str, Any] | None = None
-            if entity_id.startswith("player:"):
-                uid = entity_id.removeprefix("player:")
-                if uid in self.players:
-                    raw_sheet = self.get_character_sheet(uid)
-                    if isinstance(raw_sheet, dict):
-                        target = raw_sheet
-            elif entity_id.startswith("npc:"):
-                npc = self.npcs.get(entity_id.removeprefix("npc:"))
-                if isinstance(npc, dict):
-                    target = npc
-            if target is None:
-                continue
-            values = entry.get("values")
-            absent = entry.get("missing")
-            if (
-                not isinstance(values, dict)
-                or not isinstance(absent, list)
-                or any(not isinstance(field_name, str) or not field_name for field_name in values)
-                or any(not isinstance(field_name, str) or not field_name for field_name in absent)
-                or len(set(absent)) != len(absent)
-                or set(values).intersection(absent)
-            ):
-                return False
-            if target is None:
-                continue
-            try:
-                copied_values = {
-                    field_name: copy.deepcopy(value)
-                    for field_name, value in values.items()
-                }
-            except (TypeError, ValueError, RecursionError):
-                return False
-            staged.append((target, copied_values, list(absent)))
-        try:
-            restored_extension = copy.deepcopy(snapshot["combat_extension"])
-        except (TypeError, ValueError, RecursionError):
-            return False
-        self.combat_extension = restored_extension
-        for target, values, absent in staged:
-            target.update(values)
-            for field_name in absent:
-                target.pop(field_name, None)
-        return True
+        return round_snapshots.restore_combat_extension_snapshot(self, snapshot)
 
     def discard_combat_extension_snapshots_from(self, round_number: int) -> None:
         """Drop live snapshots belonging to a discarded history branch."""
-
-        if not isinstance(self.combat_extension_round_snapshots, dict):
-            self.combat_extension_round_snapshots = {}
-            return
-        for key in list(self.combat_extension_round_snapshots):
-            try:
-                snapshot_round = int(key)
-            except (TypeError, ValueError):
-                # Malformed keys cannot be associated with the retained branch.
-                self.combat_extension_round_snapshots.pop(key, None)
-                continue
-            if snapshot_round >= round_number:
-                self.combat_extension_round_snapshots.pop(key, None)
+        round_snapshots.discard_combat_extension_snapshots_from(self, round_number)
 
     def begin_combat(self, initiative_order: list[str]) -> None:
-        self.initiative_order = list(initiative_order)
-        self.initiative_current = 0
-        self.combat_state = "active"
-        self.combat_active = True
+        legacy_combat.begin(self, initiative_order)
 
     def end_combat(self) -> None:
-        self.combat_state = "none"
-        self.combat_active = False
-        self.initiative_order.clear()
-        self.initiative_current = 0
+        legacy_combat.end(self)
 
     def record_save_success(self) -> None:
         self._save_fail_count = 0
@@ -1032,57 +1188,22 @@ class GameInstance:
             self.puzzle_manager = PuzzleManager()
 
     async def rollback_last_round(self) -> int | None:
-        """恢复到上一轮开始前；返回恢复后的轮次，没有日志时返回 None。"""
-        async with self._lock:
-            if not self.log:
-                return None
-            last = self.log.pop()
-            from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
+        """恢复到上一轮开始前；返回恢复后的轮次，没有日志时返回 None。
 
-            rolled_back_round = int(last.get("round", self.round_number) or self.round_number)
-            current_combat_snapshot = self.combat_extension_round_snapshots.get(
-                str(self.round_number),
-            )
-            if (
-                self.round_number >= rolled_back_round
-                and isinstance(current_combat_snapshot, dict)
-            ):
-                if not self.restore_combat_extension_snapshot(current_combat_snapshot):
-                    self.combat_extension = {}
-            reverse_round_economy(self, rolled_back_round)
-            missing = object()
-            combat_snapshot: Any = last.get("combat_extension_round_start", missing)
-            if combat_snapshot is missing:
-                combat_snapshot = self.combat_extension_round_snapshots.get(
-                    str(rolled_back_round), missing,
-                )
-            snapshot = last.get("round_start_snapshot") or last.get("pre_state_snapshot", {})
-            if isinstance(snapshot, dict) and snapshot:
-                restore_players(self, reconcile_rollback_snapshot(self, snapshot, rolled_back_round))
-            # Combat actions run during ACTIVE_ACTION, before the ordinary
-            # round snapshot is captured at judgment entry. Restore their
-            # earlier source-field snapshot last so HP/inventory are not
-            # overwritten by the later round_start_snapshot.
-            if combat_snapshot is not missing:
-                if not self.restore_combat_extension_snapshot(combat_snapshot):
-                    self.combat_extension = {}
-            self.discard_combat_extension_snapshots_from(rolled_back_round)
-            self.round_number = max(1, rolled_back_round)
-            self.action_queue.clear()
-            self.pending_actions.clear()
-            self.ready_players.clear()
-            # ``reverse_round_economy`` restores still-valid proposals whose
-            # settlement happened in the rolled-back round.  Do not clear the
-            # compatibility projection after that restoration.
-            self.reset_round_checks()
-            # Explicit rollback starts a fresh attempt for that round; do not
-            # let a discarded outcome affect the replay or a later round.
-            self.death_save_outcomes.clear()
-            self.round_start_snapshot.clear()
-            self.round_entity_snapshot.clear()
-            self.state = GameState.ACTIVE_ACTION
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return self.round_number
+        这是"回滚一个已经完成的历史回合"（historical rollback），与判定失败的
+        :meth:`abort_round_processing` 是两个不同 contract。实现见
+        ``round_recovery.rollback_last_round_locked``。
+        """
+        async with self._lock:
+            if self.log:
+                # Reject before history or snapshots can be changed.
+                progression.require_writable(self)
+                session_stats.require_writable(self)
+                checks.require_writable(self)
+                round_safety.require_writable(self)
+                economy_state.state(self)
+                combat_extension_state.current(self)
+            return round_recovery.rollback_last_round_locked(self)
 
     async def abort_round_processing(self) -> bool:
         """判定阶段处理失败：回退到行动阶段，保留行动队列等待重试。
@@ -1100,94 +1221,24 @@ class GameInstance:
         ``_drop_stale_combat_caches``。
         """
         async with self._lock:
-            if self.state != GameState.ACTIVE_JUDGMENT:
-                return False
-            restored = False
-            if self.round_start_snapshot:
-                restore_players(self, self.round_start_snapshot)
-                restored = True
-            combat_snapshot = self.combat_extension_round_snapshots.get(
-                str(self.round_number),
-            )
-            if isinstance(combat_snapshot, dict):
-                if not self.restore_combat_extension_snapshot(combat_snapshot):
-                    self.combat_extension = {}
-                restored = True
-            # 旧版战斗路径直接改写的实体（npcs/combat_enemies/战斗状态）。
-            entities_restored = self.restore_round_entity_snapshot()
-            restored = restored or entities_restored
-            if restored:
-                self._drop_stale_combat_caches(all_targets=entities_restored)
-            for check_id in list(self._luck_timers):
-                self._cancel_luck_timer(check_id)
-            self.reset_round_checks()
-            self.death_save_outcomes.clear()
-            self.round_start_snapshot.clear()
-            self.round_entity_snapshot.clear()
-            self.state = GameState.ACTIVE_ACTION
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
+            if self.state == GameState.ACTIVE_JUDGMENT:
+                progression.require_writable(self)
+                session_stats.require_writable(self)
+                checks.require_writable(self)
+                round_safety.require_writable(self)
+                legacy_combat.require_writable(self)
+                ruleset_runtime.require_writable(self)
+                economy_state.state(self)
+                combat_extension_state.current(self)
+            return round_recovery.abort_round_processing_locked(self)
 
     def _drop_stale_combat_caches(self, *, all_targets: bool = False) -> None:
-        """丢弃"状态已回滚、缓存却仍记录伤害"的战斗结算缓存。
-
-        实体快照与玩家快照已经把相关实体恢复到判定入口，缓存描述的却是另一个
-        状态；保留它会命中 ``CombatResolver`` 的缓存重放分支——既不重掷命中骰
-        也不重新扣血——于是结算记录（伤害 5）与实际 HP（恢复后的满血）互相矛盾。
-
-        ``all_targets=True``（实体快照已完整还原，含 npcs/combat_enemies）时一律
-        丢弃。旧存档没有实体快照（``all_targets=False``）时退化为按目标核对：
-        只有该目标"本轮结算后的最终血量"与当前血量不一致才丢弃，血量没有被回滚
-        的目标或目标已无法解析时保留缓存，避免重试重复扣血。
-        """
-        by_target: dict[str, list[tuple[dict[str, Any], Mapping[str, Any]]]] = {}
-        for action in self.action_queue:
-            outcome = action.get("combat_outcome") if isinstance(action, dict) else None
-            if isinstance(outcome, dict):
-                by_target.setdefault(str(outcome.get("target_ref") or ""), []).append(
-                    (action, outcome),
-                )
-        for target_ref, entries in by_target.items():
-            if not all_targets:
-                # resolve_combat 按 action_queue 顺序结算，故最后一条即最终态。
-                final_hp = entries[-1][1].get("target_hp_after")
-                current_hp = self._entity_hp(target_ref)
-                if current_hp is None or final_hp is None or current_hp == final_hp:
-                    # 无法核对，或血量仍是结算后的值：保留缓存，重放安全且必要。
-                    continue
-            for action, _outcome in entries:
-                action.pop("combat_outcome", None)
+        """丢弃"状态已回滚、缓存却仍记录伤害"的战斗结算缓存（逻辑见 round_snapshots）。"""
+        round_snapshots.drop_stale_combat_caches(self, all_targets=all_targets)
 
     def _entity_hp(self, target_ref: str) -> int | None:
-        """按战斗目标引用取当前血量；未知目标返回 None。
-
-        旧版 ``CombatResolver`` 用裸 uid 表示玩家目标，战斗扩展用
-        ``player:<uid>`` / ``npc:<id>`` / ``enemy:<index>``，两种都要认。
-        """
-        raw: Any = None
-        if target_ref in self.players:
-            raw = self.get_character_sheet(target_ref).get("hp")
-        elif target_ref.startswith("player:"):
-            uid = target_ref.removeprefix("player:")
-            if uid in self.players:
-                raw = self.get_character_sheet(uid).get("hp")
-        elif target_ref.startswith("npc:"):
-            npc = self.npcs.get(target_ref.removeprefix("npc:"))
-            if isinstance(npc, Mapping):
-                raw = npc.get("hp")
-        elif target_ref.startswith("enemy:"):
-            try:
-                enemy = self.combat_enemies[int(target_ref.removeprefix("enemy:"))]
-            except (ValueError, IndexError):
-                return None
-            if isinstance(enemy, Mapping):
-                raw = enemy.get("hp")
-        if raw is None:
-            return None
-        try:
-            return int(raw)
-        except (TypeError, ValueError):
-            return None
+        """按战斗目标引用取当前血量；未知目标返回 None（逻辑见 round_snapshots）。"""
+        return round_snapshots.entity_hp(self, target_ref)
 
     @asynccontextmanager
     async def track_round_processing(self) -> AsyncIterator[None]:
@@ -1313,182 +1364,206 @@ class GameInstance:
         luck_resolver._cancel_luck_timer(self, check_id)
 
     def all_alive_ready(self) -> bool:
-        """多人模式下，所有未暂离的存活角色都提交行动后才自动推进。"""
-        active = self.active_alive_players
-        if not active:
-            return False
-        return active.issubset(self.ready_players)
+        """多人模式下，所有未暂离的存活真人席位都提交行动后才自动推进（语义见 turn_state）。"""
+        return turn_state.all_alive_ready(self)
+
+    def human_actions_ready(self) -> bool:
+        """真人一侧是否已经交齐，可以轮到服务器 AI 补行动（语义见 turn_state）。"""
+        return turn_state.human_actions_ready(self)
 
     def multiplayer_status(self) -> dict:
-        """返回多人协调所需的轻量状态。"""
-        alive = self.alive_players
-        active = self.active_alive_players
-        ready = active.intersection(self.ready_players)
-        waiting = active.difference(self.ready_players)
-        away = alive.intersection(self.away_players)
-
-        def player_label(uid: str) -> str:
-            return self.players.get(uid, {}).get("character_name") or uid
-
-        return {
-            "state": self.state.value,
-            "round_number": self.round_number,
-            "solo_mode": self.solo_mode,
-            "player_count": len(self.players),
-            "max_players": self.max_players,
-            "ready_count": len(ready),
-            "alive_count": len(alive),
-            "active_count": len(active),
-            "away_count": len(away),
-            "ready_players": [
-                {"user_id": uid, "character_name": player_label(uid)}
-                for uid in sorted(ready)
-            ],
-            "waiting_players": [
-                {"user_id": uid, "character_name": player_label(uid)}
-                for uid in sorted(waiting)
-            ],
-            "away_players": [
-                {"user_id": uid, "character_name": player_label(uid)}
-                for uid in sorted(away)
-            ],
-            "can_accept_actions": self.can_accept_actions(),
-            "can_advance": self.can_accept_actions() and bool(self.action_queue),
-            "action_count": len(self.action_queue),
-            "submitted_actions": [
-                {
-                    "user_id": a.get("user_id", ""),
-                    "character_name": player_label(a.get("user_id", "")),
-                    "text": a.get("text", ""),
-                    "revision_count": int(a.get("revision_count", 1) or 1),
-                    "dice_pending": bool(a.get("dice_pending")),
-                    "dice_system": str(a.get("dice_system", "") or ""),
-                    "dice_roll_source": str(a.get("dice_roll_source", "") or ""),
-                    **({"check_request": a.get("check_request")} if a.get("check_request") else {}),
-                }
-                for a in self.action_queue
-                if a.get("user_id") in self.players
-            ],
-            "pending_action_count": len(self.pending_actions),
-            "gm_uid": self.gm_uid,
-            "player_access_open": self.player_access_open,
-        }
+        """返回多人协调所需的轻量状态（实现见 turn_state）。"""
+        return turn_state.multiplayer_status(self)
 
     # ---------- 回合推进 ------------------------------------
 
     def should_advance(self) -> bool:
         """任一满足即推进：所有存活玩家已就绪，或单人模式下任一玩家已行动。"""
-        if self.has_pending_dice():
-            return False
-        if self.solo_mode and self.action_queue:
-            return True
-        return self.all_alive_ready()
+        return turn_state.should_advance(self)
 
-    async def start_round(self) -> None:
-        """开启新一轮行动阶段。"""
+    async def start_round(self, *, expected_run_id: str = "") -> None:
+        """开启新一轮行动阶段；可选 run fence 在状态锁内检查。"""
         async with self._lock:
-            self.round_number += 1
-            current = str(self.round_number)
-            self.death_save_outcomes = {
-                current: self.death_save_outcomes.get(current, {})
-            }
-            self.state = GameState.ACTIVE_ACTION
-            self.round_checks_prepared = False
-            self.round_start_snapshot.clear()
-            self.round_entity_snapshot.clear()
-            self.action_queue.clear()
-            self.ready_players.clear()
-            if self.pending_actions:
-                self.action_queue.extend(self.pending_actions)
-                self.pending_actions.clear()
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            logger.info("Round %d 开始 - game_key=%s", self.round_number, self.game_key)
+            if expected_run_id and check_run_unchanged(
+                self, GateRequest(actor_uid="", source=SOURCE_HUMAN, expected_run_id=expected_run_id),
+            ):
+                return
+            progression.require_writable(self)
+            session_stats.require_writable(self)
+            checks.require_writable(self)
+            round_safety.require_writable(self)
+            economy_state.state(self)
+            turn_state.start_round_locked(self)
 
     async def add_action(self, user_id: str, action_text: str,
                          selected_attribute: str = "", selected_skill: str = "",
                          target_text: str = "", source: str = "",
                          dice_pending: bool = False, dice_system: str = "",
                          check_request: dict | None = None,
-                         count_revision: bool = True) -> bool:
+                         count_revision: bool = True,
+                         action_metadata: dict | None = None,
+                         defer_out_of_phase: bool = True,
+                         expected_run_id: str = "") -> bool:
         """玩家声明行动。判决阶段中的发言缓存到下一轮。
 
         selected_attribute/selected_skill/target_text 为前端可选提交的结构化
         归因字段（P1），供检定与 prompt 直接使用，避免靠文本启发式猜。
+
+        ``action_metadata`` 是调用方自带的机器可读标记（例如服务器 AI 行动的
+        ``source`` / ``control_revision`` / ``generated_for_round``），只用于去重
+        与调试，不参与任何裁定；``defer_out_of_phase=False`` 表示这条行动带有
+        轮次身份，判定阶段只能拒绝，不得缓存进下一轮。非空
+        ``expected_run_id`` 在两层锁内复核；不匹配返回 False，不修改队列。
         """
         async with self.authoritative_write() as write_entered, self._lock:
             if not write_entered or self._process_lock.locked():
                 return False
-            if user_id in self.players:
-                cs = self.get_character_sheet(user_id)
-                if cs.get("deceased"):
-                    return False  # 死亡玩家不能行动
-                self.away_players.discard(user_id)
-            action_entry: ActionRecord = {
-                "user_id": user_id, "text": action_text,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "selected_attribute": selected_attribute,
-                "selected_skill": selected_skill,
-                "target_text": target_text,
-                "source": source,
-            }
-            if dice_pending:
-                action_entry["dice_pending"] = True
-                action_entry["dice_system"] = dice_system or "d20"
-            if check_request:
-                action_entry["check_request"] = dict(check_request)
-            if not self.can_accept_actions():
-                self.pending_actions.append(action_entry)
+            if expected_run_id and check_run_unchanged(
+                self, GateRequest(actor_uid=user_id, source=SOURCE_HUMAN, expected_run_id=expected_run_id),
+            ):
                 return False
-            # 切换行动时替换同玩家的旧条目（solo 与多人一致）：
-            # 避免 solo 模式反复追加堆积多条行动、触发 3 条上限，
-            # 也让未掷骰的旧检定随替换作废，不再卡住掷骰。
-            existing_index = next(
-                (index for index, action in enumerate(self.action_queue)
-                 if action.get("user_id") == user_id),
-                None,
+            return self._add_action_locked(
+                user_id, action_text,
+                selected_attribute=selected_attribute,
+                selected_skill=selected_skill,
+                target_text=target_text,
+                source=source,
+                dice_pending=dice_pending,
+                dice_system=dice_system,
+                check_request=check_request,
+                count_revision=count_revision,
+                action_metadata=action_metadata,
+                defer_out_of_phase=defer_out_of_phase,
             )
-            if existing_index is not None:
-                existing = self.action_queue[existing_index]
-                old_roll = next(
-                    (line for line in str(existing.get("text", "")).splitlines()
-                     if line.startswith("(系统掷骰:") and line.endswith(")")),
-                    "",
-                )
-                if old_roll:
-                    clean_text = "\n".join(
-                        line for line in str(action_text).splitlines()
-                        if not (line.startswith("(系统掷骰:") and line.endswith(")"))
-                    ).rstrip()
-                    action_entry["text"] = f"{clean_text}\n{old_roll}"
-                    action_entry["dice_pending"] = False
-                    action_entry["dice_system"] = existing.get("dice_system", "")
-                    action_entry["dice_roll_source"] = existing.get("dice_roll_source", "")
-                    action_entry["dice_value"] = existing.get("dice_value")
-                    action_entry["dice_rolls"] = list(existing.get("dice_rolls") or [])
-                    action_entry["check_request"] = existing.get("check_request")
-                old_revision = int(existing.get("revision_count", 1) or 1)
-                action_entry["revision_count"] = old_revision + 1 if count_revision else old_revision
-                self.action_queue[existing_index] = action_entry
-            else:
-                action_entry["revision_count"] = 1
-                self.action_queue.append(action_entry)
-            self.ready_players.add(user_id)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
 
-    def has_pending_dice(self, user_id: str | None = None) -> bool:
-        return any(
-            action.get("dice_pending")
-            and (user_id is None or action.get("user_id") == user_id)
-            for action in self.action_queue
+    def _add_action_locked(self, user_id: str, action_text: str, *,
+                           selected_attribute: str = "", selected_skill: str = "",
+                           target_text: str = "", source: str = "",
+                           dice_pending: bool = False, dice_system: str = "",
+                           check_request: dict | None = None,
+                           count_revision: bool = True,
+                           action_metadata: dict | None = None,
+                           defer_out_of_phase: bool = True) -> bool:
+        """``add_action`` 的持锁实现（调用方必须已持有写权限与 ``_lock``）。
+
+        单独抽出来是为了让需要「先复核再写入」的调用方能在**同一个** boundary
+        内完成两件事：自己在锁内复核，再调用这里追加，而不是写两层加锁。
+        实现见 ``turn_state.add_action_locked``。
+        """
+        progression.require_writable(self)
+        session_stats.require_writable(self)
+        return turn_state.add_action_locked(
+            self, user_id, action_text,
+            selected_attribute=selected_attribute,
+            selected_skill=selected_skill,
+            target_text=target_text,
+            source=source,
+            dice_pending=dice_pending,
+            dice_system=dice_system,
+            check_request=check_request,
+            count_revision=count_revision,
+            action_metadata=action_metadata,
+            defer_out_of_phase=defer_out_of_phase,
         )
 
+    def has_action_from_source(self, user_id: str, round_number: int, source: str) -> bool:
+        """这一轮该席位是否已有一条来自 ``source`` 的行动（持锁与只读都安全）。"""
+        return turn_state.has_action_from_source(self, user_id, round_number, source)
+
+    async def commit_ai_player_action(
+        self,
+        user_id: str,
+        action_text: str,
+        *,
+        source: str,
+        expected_run_id: str,
+        expected_round_number: int,
+        expected_control_revision: int,
+        action_metadata: dict | None = None,
+        requires_structured_intent: StructuredIntentRequirement = False,
+    ) -> str:
+        """Atomically re-confirm a hosted seat and commit its action.
+
+        The LLM call deliberately happens *outside* every lock; the danger is that
+        the world moves between "the model answered" and "we write the answer".
+        So the re-confirmation and the write are one boundary: this method takes
+        the authoritative write permission and ``_lock`` once, re-checks every
+        identity the caller captured (run, round, seat, control mode, control
+        revision, phase), re-checks that the **human gate is still open**, that
+        this round has no action from ``source`` yet, and only then appends.
+
+        The human gate matters on its own: a hosted seat only ever acts *after*
+        the humans are done. If somebody claims another seat (or a player returns
+        from away) while this result was in flight, the table suddenly has an
+        active human who has not submitted yet, and an action written now would
+        break "AI acts after the humans" — so it is discarded instead.
+
+        Returns ``""`` on commit, otherwise the reason the result was dropped:
+        ``rejected`` / ``run_changed`` / ``round_changed`` / ``seat_removed`` /
+        ``control_changed`` / ``phase_changed`` / ``human_gate_changed`` /
+        ``duplicate`` / ``STRUCTURED_INTENT_REQUIRED`` / ``action_rejected``.
+        A supplied structured-intent predicate reads current admission state here,
+        synchronously under both locks, after the existing rejection checks.
+        Callers must treat a non-empty
+        result as "write nothing"; the action never lands.
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered or self._process_lock.locked():
+                # 判定/重写正在进行：这一轮不再接受带轮次身份的行动。
+                return "rejected"
+            stale = self.ai_player_action_stale_reason(
+                user_id,
+                expected_run_id=expected_run_id,
+                expected_round_number=expected_round_number,
+                expected_control_revision=expected_control_revision,
+            )
+            if stale:
+                return stale
+            code = evaluate(
+                self,
+                GateRequest(
+                    actor_uid=user_id,
+                    source=SOURCE_AI_SEAT,
+                    expected_run_id=expected_run_id,
+                    expected_round_number=expected_round_number,
+                    expected_control_revision=expected_control_revision,
+                    action_source=source,
+                    requires_structured_intent=requires_structured_intent,
+                ),
+                AI_SEAT_COMMIT_POLICY,
+            )
+            if code:
+                return code
+            added = self._add_action_locked(
+                user_id, action_text,
+                source=source,
+                action_metadata=action_metadata,
+                defer_out_of_phase=False,
+            )
+            return "" if added else "action_rejected"
+
+    def ai_player_action_stale_reason(
+        self,
+        user_id: str,
+        *,
+        expected_run_id: str,
+        expected_round_number: int,
+        expected_control_revision: int,
+    ) -> str:
+        """Why an in-flight hosted-seat result must be discarded, else ``""``（实现见 turn_state）。"""
+        return turn_state.ai_player_action_stale_reason(
+            self,
+            user_id,
+            expected_run_id=expected_run_id,
+            expected_round_number=expected_round_number,
+            expected_control_revision=expected_control_revision,
+        )
+
+    def has_pending_dice(self, user_id: str | None = None) -> bool:
+        return turn_state.has_pending_dice(self, user_id)
+
     def pending_dice_actions(self, user_id: str | None = None) -> list[dict]:
-        return [
-            action for action in self.action_queue
-            if action.get("dice_pending")
-            and (user_id is None or action.get("user_id") == user_id)
-        ]
+        return turn_state.pending_dice_actions(self, user_id)
 
     async def apply_action_roll(
         self,
@@ -1503,29 +1578,9 @@ class GameInstance:
         async with self.authoritative_write() as write_entered, self._lock:
             if not write_entered:
                 return False
-            action = next(
-                (
-                    item for item in self.action_queue
-                    if item.get("user_id") == user_id and item.get("dice_pending")
-                ),
-                None,
+            return turn_state.apply_action_roll_locked(
+                self, user_id, dice_system, value, rolls=rolls, source=source,
             )
-            if not action:
-                return False
-            clean_text = "\n".join(
-                line for line in str(action.get("text", "")).splitlines()
-                if not (line.startswith("(系统掷骰:") and line.endswith(")"))
-            ).rstrip()
-            system = dice_system or str(action.get("dice_system") or "d20")
-            action["text"] = f"{clean_text}\n(系统掷骰: {system}={int(value)})"
-            action["dice_pending"] = False
-            action["dice_system"] = system
-            action["dice_roll_source"] = source
-            action["dice_value"] = int(value)
-            action["dice_rolls"] = [int(item) for item in (rolls or [value])]
-            self.ready_players.add(user_id)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
 
     async def remove_player(self, user_id: str) -> bool:
         """移除玩家，清理关联状态。"""
@@ -1543,21 +1598,81 @@ class GameInstance:
     async def set_player_away(self, user_id: str, away: bool = True) -> bool:
         """标记玩家暂离/回来。暂离玩家仍在队伍中，但不阻塞多人回合。"""
         async with self._lock:
-            if user_id not in self.players or not self.is_alive(user_id):
-                return False
-            if away:
-                self.away_players.add(user_id)
-                self.ready_players.discard(user_id)
-            else:
-                self.away_players.discard(user_id)
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            return True
+            return self._set_player_away_locked(user_id, away)
+
+    def _set_player_away_locked(self, user_id: str, away: bool) -> bool:
+        """``set_player_away`` 的持锁实现（调用方必须已持有 ``_lock``；实现见 turn_state）。
+
+        单独抽出来是为了让「暂离」和它可能触发的控制权转换能在**同一个**
+        transaction 内完成：``self._lock`` 不可重入，所以调用方不能在持锁时再调
+        :meth:`set_player_away`。
+        """
+        return turn_state.set_player_away_locked(self, user_id, away)
+
+    async def apply_away_transition(self, user_id: str, away: bool, *, policy: str) -> str:
+        """暂离/回来：安全边界复核 + 在场状态 + 控制权转换，同一个 transaction。
+
+        "暂离"和"把角色交给 AI"必须是**一次**可观察的状态变更：如果先写
+        ``away_players`` 再另起一个事务去改控制权，中间就会存在
+        ``away=true`` + ``control=human`` 的窗口，而那个组合恰恰是「玩家已经离开、
+        但 AI 没有接手」——一个谁都不负责的席位。
+
+        ``policy`` 为 ``pause`` 时只改在场状态（旧语义，不做安全边界检查）；
+        ``ai_takeover`` 的托管与"回来"的归还都要求安全边界，否则返回
+        ``CONTROL_CHANGE_BUSY``。成功返回 ``""``。
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered:
+                return "CONTROL_CHANGE_BUSY"
+            handover = away and policy == "ai_takeover"
+            if handover or not away:
+                block = control_change_block(self)
+                if block:
+                    return block
+            if not self._set_player_away_locked(user_id, away):
+                return "UNKNOWN_PLAYER"
+            if handover:
+                begin_away_hosting(self, user_id)
+            elif not away:
+                # 只在席位确实是「临时托管」时归还；GM 永久交给 AI 的席位不会被抢回。
+                end_away_hosting(self, user_id)
+            return ""
+
+    async def apply_player_control_change(self, user_id: str, mode: str) -> str:
+        """GM 托管控件：安全边界复核 + 控制权变更，同一个 transaction。
+
+        返回 ``""`` 表示已切换；否则 ``CONTROL_CHANGE_BUSY`` / ``UNKNOWN_PLAYER``
+        / ``CONTROL_REJECTED``。复核与实际写入之间没有任何 ``await``，因此回合处理
+        一旦开始占用边界，控制权转换就不可能插进去。
+        """
+        async with self.authoritative_write() as write_entered, self._lock:
+            if not write_entered or self._process_lock.locked():
+                return "CONTROL_CHANGE_BUSY"
+            block = control_change_block(self)
+            if block:
+                return block
+            if user_id not in self.players:
+                return "UNKNOWN_PLAYER"
+            try:
+                set_control(self, user_id, mode)
+            except PlayerControlError:
+                logger.warning(
+                    "拒绝托管切换: game_key=%s uid=%s mode=%s",
+                    self.game_key, user_id, mode, exc_info=True,
+                )
+                return "CONTROL_REJECTED"
+            return ""
 
     async def advance_round(self) -> bool:
         """显式推进回合。未行动的存活玩家标记为已就绪。"""
         async with self._lock:
             from src.engine.economy import has_blocking_economy_decision
 
+            progression.require_writable(self)
+            checks.require_writable(self)
+            round_safety.require_writable(self)
+            legacy_combat.require_writable(self)
+            ruleset_runtime.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             return self._do_advance_locked()
@@ -1567,6 +1682,11 @@ class GameInstance:
         async with self._lock:
             from src.engine.economy import has_blocking_economy_decision
 
+            progression.require_writable(self)
+            checks.require_writable(self)
+            round_safety.require_writable(self)
+            legacy_combat.require_writable(self)
+            ruleset_runtime.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             if self.state != GameState.ACTIVE_ACTION:
@@ -1576,47 +1696,21 @@ class GameInstance:
             return self._do_advance_locked()
 
     def _do_advance_locked(self) -> bool:
-        """在锁内执行推进（调用方需持锁）。"""
-        if self.state != GameState.ACTIVE_ACTION:
-            return False
-        for uid in self.alive_players:
-            self.ready_players.add(uid)
-        self.state = GameState.ACTIVE_JUDGMENT
-        self.round_checks_prepared = False
-        self.round_start_snapshot = _snapshot_players(self)
-        self.capture_round_entity_snapshot()
-        logger.info("进入判定阶段 - game_key=%s, actions=%d",
-                     self.game_key, len(self.action_queue))
-        return True
+        """在锁内执行推进（调用方需持锁；实现见 turn_state）。"""
+        progression.require_writable(self)
+        checks.require_writable(self)
+        round_safety.require_writable(self)
+        legacy_combat.require_writable(self)
+        ruleset_runtime.require_writable(self)
+        return turn_state.do_advance_locked(self)
 
     def capture_round_entity_snapshot(self) -> None:
-        """判定入口快照旧版战斗实体与战斗状态。
-
-        覆盖 `CombatResolver` / `initiate_combat` 在判定阶段会直接改写的字段；
-        与 ``round_start_snapshot``（玩家）和 ``combat_extension_round_snapshots``
-        （D&D2024 权威战斗扩展）互补，三者合起来才是"本轮改过的东西"。
-        """
-        self.round_entity_snapshot = {
-            "npcs": copy.deepcopy(self.npcs),
-            "combat_enemies": copy.deepcopy(self.combat_enemies),
-            "combat_state": str(self.combat_state or "none"),
-            "combat_active": bool(self.combat_active),
-            "initiative_order": copy.deepcopy(list(self.initiative_order or [])),
-            "initiative_current": int(self.initiative_current or 0),
-        }
+        """判定入口快照旧版战斗实体与战斗状态（实现见 round_snapshots）。"""
+        round_snapshots.capture_round_entity_snapshot(self)
 
     def restore_round_entity_snapshot(self) -> bool:
-        """还原判定入口的旧版实体快照；没有快照时返回 False（不动状态）。"""
-        snapshot = self.round_entity_snapshot
-        if not isinstance(snapshot, dict) or not snapshot:
-            return False
-        self.npcs = copy.deepcopy(snapshot.get("npcs") or {})
-        self.combat_enemies = copy.deepcopy(snapshot.get("combat_enemies") or [])
-        self.combat_state = str(snapshot.get("combat_state") or "none")
-        self.combat_active = bool(snapshot.get("combat_active"))
-        self.initiative_order = copy.deepcopy(list(snapshot.get("initiative_order") or []))
-        self.initiative_current = int(snapshot.get("initiative_current") or 0)
-        return True
+        """还原判定入口的旧版实体快照；没有快照时返回 False（实现见 round_snapshots）。"""
+        return round_snapshots.restore_round_entity_snapshot(self)
 
     async def finish_judgment(
         self,
@@ -1630,59 +1724,22 @@ class GameInstance:
         pre_state_snapshot 应为 _apply_state_update 之前拍摄的快照，
         确保 swipe 重生成时恢复到本轮初始状态而非应用后状态。
         state_changes 为本轮玩家可见状态变动摘要，随 log entry 持久化供群机器人单独转发。
+        日志提交与下一轮开启共用状态锁，中间不释放锁或 await。
         """
-        import copy
         async with self._lock:
-            pending_combat_summaries: list[str] = []
-            raw_schema = (
-                self.combat_extension.get("schema_version")
-                if isinstance(self.combat_extension, dict)
-                else None
+            progression.require_writable(self)
+            session_stats.require_writable(self)
+            checks.require_writable(self)
+            round_safety.require_writable(self)
+            economy_state.state(self)
+            round_recovery.finish_judgment_locked(
+                self,
+                gm_response,
+                pre_state_snapshot=pre_state_snapshot,
+                state_changes=state_changes,
+                pre_combat_extension_snapshot=pre_combat_extension_snapshot,
             )
-            if isinstance(self.combat_extension, dict) and (
-                raw_schema is None
-                or (isinstance(raw_schema, int) and not isinstance(raw_schema, bool)
-                    and raw_schema == 1)
-            ):
-                raw_pending = self.combat_extension.pop("pending_summaries", [])
-                if isinstance(raw_pending, list):
-                    pending_combat_summaries = [
-                        str(item) for item in raw_pending if str(item).strip()
-                    ][-50:]
-            combined_state_changes = list(state_changes or [])
-            for item in pending_combat_summaries:
-                if item not in combined_state_changes:
-                    combined_state_changes.append(item)
-            self.log.append({
-                "round": self.round_number,
-                "actions": list(self.action_queue),
-                "gm_response": gm_response,
-                "state_changes": combined_state_changes,
-                "check_results": [dict(item) for item in self.last_checks],
-                "round_start_snapshot": (
-                    copy.deepcopy(self.round_start_snapshot)
-                    if self.round_start_snapshot else _snapshot_players(self)
-                ),
-                "combat_extension_round_start": copy.deepcopy(
-                    self.combat_extension_round_snapshots.get(
-                        str(self.round_number),
-                        self.combat_extension if isinstance(self.combat_extension, dict) else {},
-                    )
-                ),
-                "swipes": [],
-                "current_swipe": 0,
-                "pre_state_snapshot": pre_state_snapshot if pre_state_snapshot is not None else _snapshot_players(self),
-                "pre_combat_extension_snapshot": copy.deepcopy(
-                    pre_combat_extension_snapshot
-                    if pre_combat_extension_snapshot is not None
-                    else self.current_combat_extension_snapshot()
-                ),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-            self.combat_extension_round_snapshots.pop(str(self.round_number), None)
-            self.total_llm_calls += 1
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-        await self.start_round()
+            turn_state.start_round_locked(self)
 
     async def finish_judgment_with_swipe(
         self,
@@ -1692,136 +1749,101 @@ class GameInstance:
     ) -> None:
         """为已有轮次添加 swipe（不推进回合）。"""
         async with self._lock:
-            for entry in self.log:
-                if entry.get("round") == original_round:
-                    swipes = entry.setdefault("swipes", [])
-                    if not swipes:
-                        swipes.append(entry.get("gm_response", ""))
-                    swipes.append(gm_response)
-                    entry["current_swipe"] = len(swipes) - 1
-                    entry["gm_response"] = gm_response
-                    if state_changes is not None:
-                        entry["state_changes"] = list(state_changes)
-                    break
-            self.total_llm_calls += 1
-            self.last_activity = datetime.now(timezone.utc).isoformat()
+            session_stats.require_writable(self)
+            economy_state.state(self)
+            round_recovery.finish_judgment_with_swipe_locked(
+                self, gm_response, original_round, state_changes=state_changes,
+            )
 
     async def switch_swipe(self, round_num: int, swipe_idx: int) -> bool:
-        """切换指定轮次的 swipe 展示。"""
-        for entry in self.log:
-            if entry.get("round") == round_num:
-                swipes = entry.get("swipes", [])
-                if not swipes or swipe_idx >= len(swipes):
-                    return False
-                entry["current_swipe"] = swipe_idx
-                entry["gm_response"] = swipes[swipe_idx]
-                logger.info("Swipe 切换: round=%d → %d/%d", round_num, swipe_idx, len(swipes))
-                return True
-        return False
+        """切换指定轮次的 swipe 展示（实现见 round_recovery；并发语义与基线一致）。"""
+        return round_recovery.switch_swipe(self, round_num, swipe_idx)
 
     # ---------- 状态转换 ------------------------------------
+    # 持锁 mutation detail 见 src/engine/instance_lifecycle.py。
 
     async def activate(self) -> None:
         async with self._lock:
-            self.state = GameState.ACTIVE_ACTION
-            if not self.started_at:
-                self.started_at = datetime.now(timezone.utc).isoformat()
-            self.last_activity = datetime.now(timezone.utc).isoformat()
-            logger.info("游戏激活 - game_key=%s", self.game_key)
+            progression.require_writable(self)
+            session_stats.require_writable(self)
+            instance_lifecycle.activate_locked(self)
 
     async def pause(self) -> None:
         async with self._lock:
-            self.state = GameState.PAUSED
+            instance_lifecycle.pause_locked(self)
 
-    async def resume(self) -> None:
+    async def resume(self, *, expected_run_id: str = "") -> None:
         async with self._lock:
-            self.state = GameState.ACTIVE_ACTION
+            if expected_run_id and check_run_unchanged(
+                self, GateRequest(actor_uid="", source=SOURCE_HUMAN, expected_run_id=expected_run_id),
+            ):
+                return
+            progression.require_writable(self)
+            instance_lifecycle.resume_locked(self)
 
     async def end(self) -> None:
         async with self._lock:
-            self.state = GameState.ENDED
+            instance_lifecycle.end_locked(self)
 
     async def reset(self, keep_seed: bool = True) -> None:
+        """重开一局：保留配置身份，轮换 run identity 并清空运行时状态。
+
+        真实契约由 ``tests/test_game_instance_reset_characterization.py`` 冻结；
+        实现是基线 reset() 的机械迁移（见 ``instance_lifecycle.reset_locked``）。
+        """
         async with self._lock:
-            saved_seed = self.seed_code if keep_seed else ""
-            saved_world_id = self.world_id
-            saved_world_name = self.world_name
-            saved_group_name = self.group_name
-            saved_solo = self.solo_mode
-            saved_narrative_perspective = self.narrative_perspective
-            saved_gm_style_override = copy.deepcopy(self.gm_style_override)
-            saved_language = normalize_language(self.language)
-            saved_ruleset_runtime = copy.deepcopy(self.ruleset_runtime)
-            saved_adventure_binding = copy.deepcopy(self.adventure_binding)
-            self.rotate_run_identity()
-            self.players.clear()
-            self.npcs.clear()
-            self.round_number = 0
-            self.action_queue.clear()
-            self.pending_actions.clear()
-            self.ready_players.clear()
-            self.combat_active = False
-            self.combat_enemies.clear()
-            self.combat_state = "none"
-            self.initiative_order.clear()
-            self.initiative_current = 0
-            self.scene = ""
-            self.game_time = ""
-            self.log.clear()
-            self.summary.clear()
-            self.key_facts.clear()
-            self.total_llm_calls = 0
-            self.total_tokens = 0
-            self.started_at = ""
-            self.last_activity = ""
-            self.puzzle_manager = None
-            self.plot_tracker = None
-            self.pending_combat_results.clear()
-            self.combat_extension = {}
-            self.combat_extension_round_snapshots.clear()
-            self.lorebook_timed_state.clear()
-            self.health_events.clear()
-            self.health_status.clear()
-            self.quick_actions.clear()
-            self.confirmed_items.clear()
-            self.private_log.clear()
-            self.table_talk.clear()
-            self.last_check = None
-            self.last_checks.clear()
-            self.round_checks_prepared = False
-            self.round_start_snapshot.clear()
-            self.round_entity_snapshot.clear()
-            self.last_state_update = None
-            self.last_token_budget_bump = None
-            self.gm_directives.clear()
-            self.ruleset_runtime = saved_ruleset_runtime
-            self.ruleset_state = (
-                {"state_schema_version": int(saved_ruleset_runtime.get("state_schema_version", 1) or 1)}
-                if saved_ruleset_runtime else {}
-            )
-            self.adventure_binding = saved_adventure_binding
-            self.event_ledger.clear()
-            self.state = GameState.CREATED
-            self.world_id = saved_world_id
-            self.world_name = saved_world_name
-            self.group_name = saved_group_name
-            self.solo_mode = saved_solo
-            self.narrative_perspective = saved_narrative_perspective
-            self.gm_style_override = saved_gm_style_override
-            self.language = saved_language
-            self.seed_code = saved_seed
-            logger.info("游戏已重置 (seed=%s) - game_key=%s", self.seed_code, self.game_key)
+            # Validate fallible slots before rotating the run or clearing state.
+            progression.require_writable(self)
+            session_stats.require_writable(self)
+            checks.require_writable(self)
+            round_safety.require_writable(self)
+            legacy_combat.require_writable(self)
+            ruleset_runtime.require_writable(self)
+            combat_extension_state.current(self)
+            lorebook_runtime.timers(self)
+            instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
 
     # ---------- 序列化 --------------------------------------
 
+    @property
+    def away_control_policy(self) -> str:
+        return player_control_state.away_control_policy(self)
+
+    @away_control_policy.setter
+    def away_control_policy(self, value: Any) -> None:
+        player_control_state.set_away_control_policy_value(self, normalize_away_control_policy(value))
+
+    @property
+    def lorebook_timed_state(self) -> dict[str, dict]:
+        return lorebook_runtime.timers(self)
+
+    @lorebook_timed_state.setter
+    def lorebook_timed_state(self, value: Any) -> None:
+        lorebook_runtime.replace_timers(self, value)
+
     def update_lorebook_timed_state(self) -> None:
-        """每轮开始前更新世界书时间效应状态：remaining - 1，归零则移除。"""
-        expired = [eid for eid, state in self.lorebook_timed_state.items()
-                   if state["remaining"] <= 1]
-        for eid in expired:
-            del self.lorebook_timed_state[eid]
-        for state in self.lorebook_timed_state.values():
-            state["remaining"] -= 1
+        """Tick persisted Lorebook timers, supporting the pre-v2 shape.
+
+        The tick *timing* stays here (this is the authoritative turn boundary);
+        the lifecycle *semantics* live in :mod:`src.lorebook.activation` so
+        ``sticky → cooldown`` ordering is testable without a GameInstance.
+        """
+        expired: list[str] = []
+        for entry_id, state in self.lorebook_timed_state.items():
+            if not isinstance(state, dict):
+                expired.append(entry_id)
+                continue
+            if any(key in state for key in TIMED_COUNTER_KEYS):
+                if advance_timed_state(state):
+                    expired.append(entry_id)
+                continue
+            remaining = max(0, int(state.get("remaining", 0) or 0) - 1)
+            if remaining <= 0:
+                expired.append(entry_id)
+            else:
+                state["remaining"] = remaining
+        for entry_id in expired:
+            self.lorebook_timed_state.pop(entry_id, None)
 
     # ---------- 序列化 --------------------------------------
 

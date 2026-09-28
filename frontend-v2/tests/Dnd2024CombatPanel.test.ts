@@ -2,6 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { i18n } from '../src/i18n'
+
 const mocks = vi.hoisted(() => ({
   fetch: vi.fn(), submit: vi.fn(), decide: vi.fn(), plan: vi.fn(),
   locale: 'en',
@@ -13,8 +15,13 @@ vi.mock('../src/features/rulesets/dnd2024/api', () => ({
   resolveRulesetDecision: mocks.decide,
   planRulesetTemporaryEncounter: mocks.plan,
 }))
+// 面板自带的 copy 字典按 locale 取中/英；A1 新增的摘要与编辑弹窗文案走 i18n，
+// 所以 mock 必须同时提供 t，否则新版摘要渲染会直接抛错。
 vi.mock('../src/composables/useLocale', () => ({
-  useLocale: () => ({ locale: ref(mocks.locale) }),
+  useLocale: () => ({
+    locale: ref(mocks.locale),
+    t: (key: string) => i18n.global.t(key as never),
+  }),
 }))
 
 import Dnd2024CombatPanel from '../src/features/rulesets/dnd2024/combat/Dnd2024CombatPanel.vue'
@@ -97,6 +104,7 @@ describe('D&D 2024 combat panel', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     mocks.locale = 'en'
+    i18n.global.locale.value = 'en'
     mocks.fetch.mockReset().mockResolvedValue(response('none'))
     mocks.submit.mockReset().mockResolvedValue(response('active'))
     mocks.decide.mockReset().mockResolvedValue(response('active'))
@@ -612,7 +620,7 @@ describe('D&D 2024 combat panel', () => {
     wrapper.unmount()
   })
 
-  // ---- AI 临时遭遇草稿：勾选、编辑、数量展开、恢复原稿 ----
+  // ---- AI 临时遭遇草稿：默认摘要、按需编辑弹窗、保存后摘要更新 ----
 
   function aiEncounter() {
     return {
@@ -638,9 +646,25 @@ describe('D&D 2024 combat panel', () => {
     }
   }
 
-  async function mountWithDraft() {
-    mocks.plan.mockResolvedValue(aiEncounter())
+  // 重新生成返回一份完全不同的提案：用来证明旧草稿的脏字段不会残留。
+  function regeneratedEncounter() {
+    return {
+      ok: true,
+      encounter: {
+        title: 'Boar', description: 'A boar charges.',
+        enemies: [{
+          id: 'boar-1', name: 'Boar', hp: 13, armor_class: 12, speed: 40, position: 20,
+          attacks: [{ id: 'tusk', name: 'Tusk', attack_bonus: 3, damage: '1d6+1', range: 5, long_range: 5 }],
+        }],
+      },
+    }
+  }
+
+  // 编辑弹窗走 Teleport：测试里把它就地渲染，才能直接查询弹窗内容。
+  async function mountWithDraft(proposal: unknown = aiEncounter()) {
+    mocks.plan.mockResolvedValue(proposal)
     const wrapper = mount(Dnd2024CombatPanel, {
+      global: { stubs: { Teleport: true } },
       props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
     })
     await flushPromises()
@@ -649,19 +673,112 @@ describe('D&D 2024 combat panel', () => {
     return wrapper
   }
 
+  async function openEnemyEditor(wrapper: ReturnType<typeof mount>) {
+    await wrapper.get('.ai-encounter-preview .ai-encounter-edit').trigger('click')
+    await flushPromises()
+  }
+
+  async function expandDraftEnemy(wrapper: ReturnType<typeof mount>, index = 0) {
+    await wrapper.findAll('.ai-encounter-enemies .ai-draft-toggle')[index].trigger('click')
+  }
+
+  // actions 顺序固定为：恢复 AI 原稿 / 取消 / 保存修改。
+  async function saveEnemyEditor(wrapper: ReturnType<typeof mount>) {
+    await wrapper.get('.modal .dialog .actions .combat-primary').trigger('click')
+    await flushPromises()
+  }
+
   function draftInput(wrapper: ReturnType<typeof mount>, label: string, index = 0) {
     return wrapper.findAll(`.ai-encounter-enemies input[aria-label="${label}"]`)[index]
+  }
+
+  function summaryLines(wrapper: ReturnType<typeof mount>) {
+    return wrapper.findAll('.ai-encounter-summary li').map(item => item.text())
   }
 
   function submittedEnemies() {
     return mocks.submit.mock.calls[0][1].enemies as Array<Record<string, any>>
   }
 
+  it('shows an encounter summary instead of the full enemy editor by default', async () => {
+    const wrapper = await mountWithDraft()
+
+    expect(summaryLines(wrapper)).toEqual(['Wolf ×2', 'Dire Wolf ×1'])
+    // 默认没有几十个输入框：编辑器与弹窗都不存在，只有一个「编辑敌人」入口。
+    expect(wrapper.find('.ai-encounter-enemies').exists()).toBe(false)
+    expect(wrapper.find('.modal').exists()).toBe(false)
+    expect(wrapper.find('.ai-encounter-preview .ai-encounter-edit').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('opens the enemy editor only after 编辑敌人 and updates the summary after saving', async () => {
+    const wrapper = await mountWithDraft()
+    expect(wrapper.find('.ai-draft-fields').exists()).toBe(false)
+
+    await openEnemyEditor(wrapper)
+    expect(wrapper.get('.modal .dialog h2').text()).toBe(i18n.global.t('encounterEditorTitle'))
+    // 弹窗内部每个敌人默认折叠。
+    expect(wrapper.find('.ai-draft-fields').exists()).toBe(false)
+
+    await expandDraftEnemy(wrapper, 0)
+    await draftInput(wrapper, 'Name').setValue('Grey Wolf')
+    await draftInput(wrapper, 'Qty').setValue('3')
+    await draftInput(wrapper, 'HP').setValue('9')
+    // 保存前摘要不动：弹窗编辑的是工作副本。
+    expect(summaryLines(wrapper)).toEqual(['Wolf ×2', 'Dire Wolf ×1'])
+
+    await saveEnemyEditor(wrapper)
+    expect(wrapper.find('.modal').exists()).toBe(false)
+    expect(wrapper.find('.ai-encounter-enemies').exists()).toBe(false)
+    expect(summaryLines(wrapper)).toEqual(['Grey Wolf ×3', 'Wolf ×1', 'Dire Wolf ×1'])
+    wrapper.unmount()
+  })
+
+  it('discards unsaved editor changes when the GM cancels', async () => {
+    const wrapper = await mountWithDraft()
+    await openEnemyEditor(wrapper)
+    await expandDraftEnemy(wrapper, 0)
+    await draftInput(wrapper, 'Name').setValue('Grey Wolf')
+    await wrapper.get('.modal .dialog .actions button:nth-child(2)').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.modal').exists()).toBe(false)
+    expect(summaryLines(wrapper)).toEqual(['Wolf ×2', 'Dire Wolf ×1'])
+    await openEnemyEditor(wrapper)
+    await expandDraftEnemy(wrapper, 0)
+    expect((draftInput(wrapper, 'Name').element as HTMLInputElement).value).toBe('Wolf')
+    wrapper.unmount()
+  })
+
+  it('regenerates a fresh draft through planRulesetTemporaryEncounter and drops stale edits', async () => {
+    const wrapper = await mountWithDraft()
+    await openEnemyEditor(wrapper)
+    await expandDraftEnemy(wrapper, 0)
+    await draftInput(wrapper, 'Name').setValue('Stale Wolf')
+
+    mocks.plan.mockResolvedValueOnce(regeneratedEncounter())
+    await wrapper.get('.ai-encounter-preview .unprepared-actions button:nth-child(2)').trigger('click')
+    await flushPromises()
+
+    expect(mocks.plan).toHaveBeenCalledTimes(2)
+    // 重新生成后弹窗必须关掉，不能把上一个提案的脏字段留在编辑状态里。
+    expect(wrapper.find('.modal').exists()).toBe(false)
+    expect(summaryLines(wrapper)).toEqual(['Boar ×1'])
+    await openEnemyEditor(wrapper)
+    await expandDraftEnemy(wrapper, 0)
+    expect((draftInput(wrapper, 'Name').element as HTMLInputElement).value).toBe('Boar')
+    wrapper.unmount()
+  })
+
   it('sends only the selected enemies after the GM unticks one draft entry', async () => {
     const wrapper = await mountWithDraft()
+    await openEnemyEditor(wrapper)
     const checkboxes = wrapper.findAll('.ai-encounter-enemies input[type="checkbox"]')
     expect(checkboxes.length).toBe(3)
     await checkboxes[1].setValue(false)
+    await saveEnemyEditor(wrapper)
+    expect(summaryLines(wrapper)).toEqual(['Wolf ×1', 'Dire Wolf ×1'])
+
     await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
     await flushPromises()
 
@@ -673,11 +790,14 @@ describe('D&D 2024 combat panel', () => {
     wrapper.unmount()
   })
 
-  it('expands draft quantities into uniquely identified instances with the edited stats', async () => {
+  it('expands saved quantities into uniquely identified instances with the edited stats', async () => {
     const wrapper = await mountWithDraft()
+    await openEnemyEditor(wrapper)
+    await expandDraftEnemy(wrapper, 0)
     await draftInput(wrapper, 'Qty').setValue('3')
     await draftInput(wrapper, 'HP').setValue('9')
     await draftInput(wrapper, 'Armor Class').setValue('15')
+    await saveEnemyEditor(wrapper)
     await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
     await flushPromises()
 
@@ -693,12 +813,15 @@ describe('D&D 2024 combat panel', () => {
 
   it('submits the edited enemy and attack fields to combat.start', async () => {
     const wrapper = await mountWithDraft()
+    await openEnemyEditor(wrapper)
+    await expandDraftEnemy(wrapper, 0)
     await draftInput(wrapper, 'Name').setValue('Grey Wolf')
     await draftInput(wrapper, 'HP').setValue('9')
     await draftInput(wrapper, 'Attack bonus').setValue('6')
     await draftInput(wrapper, 'Damage formula').setValue('1d8+2')
     await draftInput(wrapper, 'Normal range').setValue('10')
     await draftInput(wrapper, 'Long range').setValue('20')
+    await saveEnemyEditor(wrapper)
     await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
     await flushPromises()
 
@@ -712,26 +835,287 @@ describe('D&D 2024 combat panel', () => {
 
   it('disables the start action when every draft enemy is unticked', async () => {
     const wrapper = await mountWithDraft()
+    await openEnemyEditor(wrapper)
     for (const checkbox of wrapper.findAll('.ai-encounter-enemies input[type="checkbox"]')) {
       await checkbox.setValue(false)
     }
+    await saveEnemyEditor(wrapper)
+
+    expect(summaryLines(wrapper)).toEqual([])
+    expect(wrapper.text()).toContain(i18n.global.t('encounterNoEnemiesSelected'))
     expect(wrapper.get('.ai-encounter-preview .combat-primary').attributes('disabled')).toBeDefined()
     expect(mocks.submit).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
-  it('restores the untouched AI proposal after edits', async () => {
+  it('restores the untouched AI proposal from the editor', async () => {
     const wrapper = await mountWithDraft()
+    await openEnemyEditor(wrapper)
+    await expandDraftEnemy(wrapper, 0)
     await draftInput(wrapper, 'Name').setValue('Grey Wolf')
     await draftInput(wrapper, 'HP').setValue('99')
-    await wrapper.get('.ai-encounter-preview .unprepared-actions button:first-child').trigger('click')
+    await wrapper.get('.modal .dialog .actions button:first-child').trigger('click')
 
     expect((draftInput(wrapper, 'Name').element as HTMLInputElement).value).toBe('Wolf')
     expect((draftInput(wrapper, 'HP').element as HTMLInputElement).value).toBe('11')
+    await saveEnemyEditor(wrapper)
+    expect(summaryLines(wrapper)).toEqual(['Wolf ×2', 'Dire Wolf ×1'])
+
     await wrapper.get('.ai-encounter-preview .combat-primary').trigger('click')
     await flushPromises()
     const [first] = submittedEnemies()
     expect(first).toMatchObject({ id: 'wolf-1', name: 'Wolf', hp: 11, armor_class: 13 })
+    wrapper.unmount()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Class feature capabilities (Monk v1)
+//
+// These tests mock the real server contract: available intents shaped like the
+// D&D runtime's `class_capability` entries plus the actor's projected
+// `class_resources`.  They never mock "is a monk" -- the panel has no such
+// concept, and the frontend must never invent a capability the server omitted.
+// ---------------------------------------------------------------------------
+
+interface CapabilityFixture {
+  id: string
+  label: string
+  costs: Array<Record<string, unknown>>
+  requiresTarget?: boolean
+}
+
+function capabilityCosts(includeFocus: boolean): Array<Record<string, unknown>> {
+  const costs: Array<Record<string, unknown>> = [
+    { kind: 'bonus_action', name: 'Bonus Action', amount: 1, current: 1, maximum: 1 },
+  ]
+  if (includeFocus) {
+    costs.push({
+      kind: 'resource', name: 'Focus Points', amount: 1, current: 2, maximum: 2,
+    })
+  }
+  return costs
+}
+
+const MONK_TARGET = {
+  actor_id: 'enemy:goblin-1', kind: 'enemy', name: 'Goblin',
+  hp: 7, max_hp: 7, position: 5,
+}
+
+function monkResponse(options: {
+  focus?: number | null
+  bonusActionAvailable?: boolean
+  capabilities?: CapabilityFixture[]
+} = {}) {
+  const result = response('active') as any
+  const focus = options.focus
+  if (options.bonusActionAvailable === false) {
+    result.gameplay.combat.economy.bonus_action = 0
+  }
+  result.gameplay.combat.actors[0].class_resources = focus === null || focus === undefined
+    ? []
+    : [{ id: 'focus_points', name: 'Focus Points', current: focus, maximum: 2 }]
+  result.available_actions = [
+    ...result.available_actions,
+    ...(options.capabilities || []).map(capability => ({
+      type: 'class_capability',
+      actor_id: 'player:gm',
+      expected_version: 1,
+      capability_id: capability.id,
+      label: capability.label,
+      costs: capability.costs,
+      requires_target: capability.requiresTarget !== false,
+      ...(capability.requiresTarget === false ? {} : { targets: [MONK_TARGET] }),
+    })),
+  ]
+  return result
+}
+
+function levelTwoCapabilities(): CapabilityFixture[] {
+  return [
+    { id: 'bonus_unarmed_strike', label: 'Bonus Unarmed Strike', costs: capabilityCosts(false) },
+    { id: 'flurry_of_blows', label: 'Flurry of Blows', costs: capabilityCosts(true) },
+    { id: 'patient_defense', label: 'Patient Defense', costs: capabilityCosts(false), requiresTarget: false },
+    { id: 'step_of_the_wind', label: 'Step of the Wind', costs: capabilityCosts(false), requiresTarget: false },
+  ]
+}
+
+async function mountMonk(payload: ReturnType<typeof monkResponse>) {
+  mocks.fetch.mockResolvedValueOnce(payload)
+  const wrapper = mount(Dnd2024CombatPanel, {
+    props: { gameKey: 'web|combat|bot', actorId: 'gm', isGm: true },
+  })
+  await flushPromises()
+  return wrapper
+}
+
+function capabilityButtons(wrapper: ReturnType<typeof mount>) {
+  return wrapper.findAll('.capability-card button')
+}
+
+describe('D&D 2024 combat panel class capabilities', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mocks.locale = 'en'
+    mocks.fetch.mockReset().mockResolvedValue(response('none'))
+    mocks.submit.mockReset().mockResolvedValue(response('active'))
+    mocks.decide.mockReset().mockResolvedValue(response('active'))
+    mocks.plan.mockReset().mockResolvedValue({ ok: false, error: 'unavailable' })
+  })
+
+  it('renders the server-provided capabilities with their costs and the projected Focus', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: 2, capabilities: levelTwoCapabilities(),
+    }))
+
+    const card = wrapper.get('.capability-card')
+    expect(card.text()).toContain('Class features')
+    expect(card.text()).toContain('Flurry of Blows')
+    expect(card.text()).toContain('Focus Points 1（2/2）')
+    expect(card.text()).toContain('Bonus Unarmed Strike')
+    expect(wrapper.get('.class-resource-strip').text()).toContain('Focus Points')
+    expect(wrapper.get('.class-resource-strip').text()).toContain('2 / 2')
+    expect(capabilityButtons(wrapper).map(button => button.text())).toHaveLength(4)
+    wrapper.unmount()
+  })
+
+  it('submits the canonical capability intent and refreshes Focus and the bonus action at once', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: 2, capabilities: levelTwoCapabilities(),
+    }))
+    const spent = monkResponse({ focus: 1, bonusActionAvailable: false, capabilities: [] })
+    mocks.submit.mockResolvedValueOnce(spent)
+
+    const flurry = capabilityButtons(wrapper)
+      .find(button => button.text().includes('Flurry of Blows'))!
+    await flurry.trigger('click')
+    await wrapper.get('.confirm-card .combat-primary').trigger('click')
+    await flushPromises()
+
+    expect(mocks.submit.mock.calls[0][1]).toMatchObject({
+      type: 'class_capability',
+      actor_id: 'player:gm',
+      capability_id: 'flurry_of_blows',
+      target_id: 'enemy:goblin-1',
+    })
+    // 服务端在同一份响应里返回新状态：专注点与附赠动作立即刷新，无需重新加载。
+    expect(wrapper.get('.class-resource-strip').text()).toContain('1 / 2')
+    expect(wrapper.text()).toContain('No class capability is available this turn.')
+    expect(capabilityButtons(wrapper)).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('never invents a capability the server did not return', async () => {
+    const wrapper = await mountMonk(monkResponse({ focus: 2, capabilities: [] }))
+
+    expect(capabilityButtons(wrapper)).toHaveLength(0)
+    // 资源仍然可见（服务端投影了 Focus），但按钮只可能来自服务端 capability。
+    expect(wrapper.get('.class-resource-strip').text()).toContain('2 / 2')
+    wrapper.unmount()
+  })
+
+  it('omits the target field for capabilities the server does not require a target for', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: 2,
+      capabilities: [{
+        id: 'step_of_the_wind', label: 'Step of the Wind',
+        costs: capabilityCosts(false), requiresTarget: false,
+      }],
+    }))
+
+    await capabilityButtons(wrapper)[0].trigger('click')
+    await wrapper.get('.confirm-card .combat-primary').trigger('click')
+    await flushPromises()
+
+    const payload = mocks.submit.mock.calls[0][1]
+    expect(payload).toMatchObject({ type: 'class_capability', capability_id: 'step_of_the_wind' })
+    expect(payload).not.toHaveProperty('target_id')
+    wrapper.unmount()
+  })
+
+  it('shows a level 1 monk capability without any Focus resource', async () => {
+    const wrapper = await mountMonk(monkResponse({
+      focus: null,
+      capabilities: [{ id: 'bonus_unarmed_strike', label: 'Bonus Unarmed Strike', costs: capabilityCosts(false) }],
+    }))
+
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(capabilityButtons(wrapper)).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('hides the whole card for a character without class resources or capabilities', async () => {
+    // 非武僧（也没有任何职业能力）：不出现空的 Bonus Action / 职业能力入口。
+    const wrapper = await mountMonk(response('active') as any)
+
+    expect(wrapper.find('.capability-card').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Class features')
+    wrapper.unmount()
+  })
+
+  it('still renders a legacy sheet whose actors carry no class-resource projection', async () => {
+    // 升级前的老角色卡（以及升级前的服务端）根本没有这两个投影字段：面板必须
+    // 照常渲染，只是不显示职业资源。
+    const payload = monkResponse({ focus: null, capabilities: [] })
+    for (const actor of payload.gameplay.combat.actors) {
+      delete (actor as any).class_resources
+      delete (actor as any).class_features
+    }
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.find('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(wrapper.find('.capability-card').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders a server-provided capability for a legacy sheet without resources', async () => {
+    // 能力来自服务端 available_actions，资源投影缺失时只影响资源条。
+    const payload = monkResponse({
+      focus: null,
+      capabilities: [{ id: 'bonus_unarmed_strike', label: 'Bonus Unarmed Strike', costs: capabilityCosts(false) }],
+    })
+    for (const actor of payload.gameplay.combat.actors) {
+      delete (actor as any).class_resources
+    }
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(capabilityButtons(wrapper)).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('still renders while an enemy actor holds the turn and projects no class resources', async () => {
+    // 敌人 actor 没有职业资源，服务端的 per-actor 投影对它们曾经发过 `{}`；
+    // 前端只能渲染数组，遇到别的形状必须退化为「没有职业资源」，绝不能让
+    // 一次渲染异常把整块战斗面板（以及整页）带下去（Browser smoke 的实际故障）。
+    const payload = monkResponse({ focus: null, capabilities: [] })
+    payload.gameplay.combat.current_actor_id = 'enemy:goblin-1'
+    payload.gameplay.combat.actors[1].class_resources = {}
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.find('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(wrapper.find('.capability-card').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('ignores a legacy class-resource map instead of rendering or crashing on it', async () => {
+    // 老存档可能保留另一种形状（id -> {current, maximum}）。它不是本 PR 的投影，
+    // 里面没有本地化名字，因此只允许被忽略，不允许被当成列表使用。
+    const payload = monkResponse({ focus: null, capabilities: [] })
+    ;(payload.gameplay.combat.actors[0] as any).class_resources = {
+      focus_points: { current: 2, maximum: 2 },
+    }
+
+    const wrapper = await mountMonk(payload)
+
+    expect(wrapper.find('.turn-banner').exists()).toBe(true)
+    expect(wrapper.find('.class-resource-strip').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('undefined')
     wrapper.unmount()
   })
 })

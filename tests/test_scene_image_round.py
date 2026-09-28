@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -240,6 +241,69 @@ async def test_scene_image_tag_triggers_and_scene_panels_are_attached_data():
     request = service.requests[0]
     assert request.prompt == "harbor at dusk"
     assert request.context["storyboard"]["panels"][0]["location"] == "码头"
+
+
+@pytest.mark.asyncio
+async def test_declared_scene_panels_remain_authoritative_when_auto_storyboard_disabled():
+    registry = _FakeRegistry()
+    registry.instance = _instance_with_log()
+    registry.instance.round_number = 4
+    service = _FakeImageGenerationService()
+    service.auto_storyboard = False
+    processor = _processor(registry, service)
+
+    task = processor._maybe_schedule_scene_image(
+        registry.instance,
+        {
+            "scene_image_prompt": "harbor at dusk",
+            "scene_panels": [
+                {"participants": "Alice", "location": "码头", "description": "雾中守望"},
+            ],
+        },
+    )
+    assert task is not None
+    await task
+    assert service.requests[0].context["storyboard"]["panels"] == [
+        {"participants": ["Alice"], "location": "码头", "description": "雾中守望"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_automatic_scene_image_recovers_multilocation_storyboard_from_single_model_result():
+    registry = _FakeRegistry()
+    registry.instance = _instance_with_log()
+    registry.instance.log[-1]["gm_response"] = (
+        "情緒在寄宿屋门链前逼问米勒太太；与此同时，"
+        "樱羽艾玛与tsn钻进塔底船肋；随后，托马斯在残骸中滑倒；"
+        "阿尔比娜退出后院，回到寄宿屋前厅。"
+    )
+    registry.instance.players = {
+        "emotion": {"character_name": "情緒"},
+        "sakura": {"character_name": "樱羽艾玛"},
+        "tsn": {"character_name": "tsn"},
+        "thomas": {"character_name": "托马斯"},
+        "albina": {"character_name": "阿尔比娜"},
+    }
+    service = _FakeImageGenerationService()
+    processor = _processor(registry, service)
+
+    class _SinglePanelLlm:
+        async def call(self, *_args, **_kwargs):
+            return SimpleNamespace(content=(
+                '{"panels":[{"participants":[],"location":"寄宿屋",'
+                '"description":"合并场景","evidence_ids":["n1"]}]}'
+            ))
+
+    processor.llm_client = _SinglePanelLlm()
+    task = processor.schedule_scene_image(registry.instance, "雨夜调查", 3)
+    assert task is not None
+    await task
+
+    panels = service.requests[0].context["storyboard"]["panels"]
+    assert len(panels) >= 3
+    assert any("塔底" in panel["location"] for panel in panels)
+    assert any("前厅" in panel["location"] for panel in panels)
+    assert registry.instance.log[-1]["scene_image"]["layout"] != "single"
 
 
 @pytest.mark.asyncio

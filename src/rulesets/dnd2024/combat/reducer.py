@@ -126,6 +126,28 @@ class CombatReducerMixin:
                 raise EventBatchError(f"combat resource is already spent: {resource}")
             combat["economy"][resource] = current - amount
             return
+        if event_type == "dnd2024.class_resource.spent":
+            # 职业资源永远写在既有的 canonical resources.class 结构里，
+            # 不新增第二套资源表，也不允许扣成负数。
+            kind, raw_id = _actor_kind(str(event["actor_id"]))
+            if kind not in {"player", "companion"}:
+                raise EventBatchError("only player/companion class resources are canonical")
+            character = (
+                snapshot["characters"][raw_id]
+                if kind == "player"
+                else self._companion_character(snapshot, raw_id)
+            )
+            resource_id = str(event["resource_id"])
+            class_state = character.setdefault("resources", {}).setdefault("class", {})
+            state = class_state.get(resource_id)
+            if not isinstance(state, dict):
+                raise EventBatchError(f"class resource is not initialized: {resource_id}")
+            current = int(state.get("current", 0) or 0)
+            amount = int(event.get("amount", 1) or 1)
+            if current < amount:
+                raise EventBatchError(f"class resource is already spent: {resource_id}")
+            state["current"] = current - amount
+            return
         if event_type == "dnd2024.attack.spent":
             economy = combat["economy"]
             if int(economy.get("attacks_remaining", 0) or 0) > 0:

@@ -11,6 +11,7 @@ from src.webui.access_password import (
     normalize_access_password,
     verify_access_password,
 )
+from src.webui.device_tokens import DEVICE_TOKENS_KEY
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 
 
@@ -57,6 +58,11 @@ class WebAccessControl:
         owner_authenticated = bool(
             access_password_configured and verify_access_password(bearer, token)
         )
+        if not owner_authenticated and bearer:
+            # 设备令牌与访问密码平级：扫码配对过的设备不需要知道主密码，
+            # 丢失时也能单独吊销而不牵连其它设备（见 device_tokens.py）。
+            devices = request.app.get(DEVICE_TOKENS_KEY)
+            owner_authenticated = bool(devices and devices.verify(bearer))
         request["owner_authenticated"] = owner_authenticated
         request[ACCESS_PASSWORD_CONFIGURED_KEY] = access_password_configured
         share_uid = self.share_player_user_id(request)
@@ -92,6 +98,11 @@ class WebAccessControl:
                     {"ok": False, "error": "本局玩家入口已关闭"},
                     status=403,
                 )
+            if not owner_authenticated and self.share_uid_is_gm_seat(request, share_uid):
+                return web.json_response(
+                    {"ok": False, "error_code": "GM_SEAT_REQUIRES_OWNER", "error": "GM 席位需要房主登录"},
+                    status=403,
+                )
             viewer_uid = request.get("user_id", "")
             request["viewer_user_id"] = viewer_uid
             request["user_id"] = share_uid
@@ -117,12 +128,21 @@ class WebAccessControl:
             return await handler(request)
         if request.method == "POST" and request.path == "/api/login":
             return await handler(request)
+        # 扫码兑换：手机此刻还没有任何凭据，必须匿名可达。安全性落在配对码
+        # 本身（一次性 + 短 TTL）与 abuse_guard 的 login 级限流上。
+        if request.method == "POST" and request.path == "/api/pairing/claim":
+            return await handler(request)
         if access_password_configured and request.path.startswith("/api/"):
             if not owner_authenticated:
                 if share_uid:
                     if self.player_access_is_closed(request):
                         return web.json_response(
                             {"ok": False, "error": "本局玩家入口已关闭"},
+                            status=403,
+                        )
+                    if self.share_uid_is_gm_seat(request, share_uid):
+                        return web.json_response(
+                            {"ok": False, "error_code": "GM_SEAT_REQUIRES_OWNER", "error": "GM 席位需要房主登录"},
                             status=403,
                         )
                     request["user_id"] = share_uid
@@ -235,6 +255,15 @@ class WebAccessControl:
             return None
         return subsystems.registry.get(api._parse_key(game_key))
 
+    def share_uid_is_gm_seat(self, request: web.Request, share_uid: str) -> bool:
+        """A non-owner share request may never act as the table's GM seat."""
+
+        if not share_uid:
+            return False
+        instance = self.request_game_instance(request)
+        gm_uid = str(getattr(instance, "gm_uid", "") or "") if instance is not None else ""
+        return bool(gm_uid) and share_uid == gm_uid
+
     @staticmethod
     def requires_room_token(
         share_uid: str,
@@ -270,6 +299,7 @@ class WebAccessControl:
         if len(parts) >= 4:
             tail = parts[3]
             if request.method == "GET" and tail in {
+                "adventure",
                 "characters",
                 "character-cards",
                 "log",

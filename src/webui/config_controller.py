@@ -32,7 +32,12 @@ from src.webui.config_update import (
     prepare_config_update,
     provider_runtime_changed,
 )
+from src.webui.access_password import (
+    is_valid_access_password,
+    normalize_access_password,
+)
 from src.webui.routes._common import _get_api, _require_confirmed_request
+from src.webui.routes.pairing import PAIRING_SERVICE_KEY
 from src.webui.runtime_config import ConfigStore
 
 
@@ -185,6 +190,18 @@ class ConfigController:
             )
         if access_password_changed:
             dependencies.delete_access_token_file()
+            was_open = not is_valid_access_password(
+                normalize_access_password(previous_state.get("access_token"))
+            )
+            pairing = request.app.get(PAIRING_SERVICE_KEY)
+            if was_open and pairing is not None:
+                # 免密期签发的设备令牌是「谁连得上谁就是 owner」，第一次设置
+                # 访问密码必须把它们一起收回，否则锁门这一步等于没做。
+                revoked = pairing.revoke_all()
+                if revoked:
+                    self.logger.warning(
+                        "设置访问密码：已吊销 %d 台免密期配对设备", revoked,
+                    )
 
         plugin_warning = ""
         plugin_changes = bot_plugin_changes(body, state)

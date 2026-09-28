@@ -4,7 +4,8 @@ export interface CharacterResource { current?: number; max?: number; min?: numbe
 
 export interface CharacterIdentity { [key: string]: string | number | undefined }
 
-export interface CharacterSkill { name: string; value?: number }
+/** `effect` is player-authored skill description: display / AI context only, never mechanics. */
+export interface CharacterSkill { name: string; value?: number; effect?: string }
 
 export interface CharacterItem { name?: string; type?: string; damage?: number; slot?: string; quality?: string; qty?: number; effect?: string; category?: string; note?: string; [key: string]: unknown }
 
@@ -57,6 +58,20 @@ export interface MapBackgroundOption {
   selection?: MapBackgroundSelection
 }
 
+export interface CurrencyUnit {
+  id: string
+  name: string
+  symbol?: string
+  rate: number
+}
+
+export interface CurrencySystem {
+  schema_version?: number
+  base_unit: string
+  display_unit?: string
+  units: CurrencyUnit[]
+}
+
 export interface CharacterSheet {
   character_name?: string
   race?: string
@@ -77,6 +92,34 @@ export interface CharacterSheet {
   inventory?: CharacterItem[]
   key_items?: CharacterItem[]
   portrait?: CharacterPortrait | null
+  /**
+   * Ruleset-projected class features of this character (display only). The
+   * server owns identity, availability and derived values; the frontend must
+   * never compute a class level, a die, or a resource maximum itself.
+   */
+  class_features?: CharacterClassFeature[]
+  /** Ruleset-projected class resources (current / maximum), server authority. */
+  class_resources?: CharacterClassResource[]
+  [key: string]: unknown
+}
+
+export interface CharacterClassFeature {
+  id: string
+  name: string
+  summary?: string
+  source_ref?: string
+  minimum_level?: number
+  values?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface CharacterClassResource {
+  id: string
+  name: string
+  current: number
+  maximum: number
+  source_ref?: string
+  recovery?: Record<string, unknown>
   [key: string]: unknown
 }
 
@@ -98,10 +141,19 @@ export interface CharacterCard extends CharacterSheet {
   ruleset_revision?: number
 }
 
+export interface PlayerControl {
+  mode: 'human' | 'ai' | 'unclaimed' | string
+  revision?: number
+  temporary?: boolean
+  resume_mode?: string | null
+}
+
 export interface Player {
   user_id: string
   character_name: string
   character_sheet?: CharacterSheet
+  /** 谁在玩这个角色：真人 / 服务器 AI / 尚未认领（AI 队友控制契约）。 */
+  control?: PlayerControl
   [key: string]: unknown
 }
 
@@ -269,6 +321,8 @@ export interface GameDetail {
   advancement?: LiveAdvancementStatus
   rest_session?: RestSessionStatus
   player_access_open?: boolean
+  /** 房间级暂离语义：pause（默认，暂离不交给 AI）/ ai_takeover。 */
+  away_control_policy?: 'pause' | 'ai_takeover' | string
   has_room_password?: boolean
   economy_reward_policy?: { mode?: string; auto_reward_cap?: number }
   combat_extension?: {
@@ -285,6 +339,13 @@ export interface GameDetail {
   pending_luck_decisions?: CheckResult[]
   round_check_results?: CheckResult[]
   manual_rolls?: ManualRollTimelineEntry[]
+  adventure_binding?: {
+    adventure_id?: string
+    version?: string
+    format?: string
+    content_digest?: string
+    [key: string]: unknown
+  }
   total_tokens?: number
   token_budget_bump?: TokenBudgetBump | null
   ruleset_runtime?: RulesetRuntimeMeta & {
@@ -336,6 +397,15 @@ export interface RoundSceneImage {
   revised_prompt?: string
   status?: 'ready' | 'failed' | string
   swipe_index?: number
+  layout?: string
+  panels?: ScenePanel[]
+  compressed_count?: number
+}
+
+export interface ScenePanel {
+  participants?: string[]
+  location: string
+  description: string
 }
 
 export type SceneGalleryItem = GeneratedImageRecord
@@ -472,6 +542,27 @@ export interface LorePreviewResponse {
   summary?: LorePreviewSummary
 }
 
+export interface LoreActivationTraceRow {
+  entry_id: string
+  book_id?: string
+  candidate_sources?: string[]
+  matched_keys?: string[]
+  secondary_matches?: string[]
+  semantic_score?: number | null
+  visibility?: string
+  budget?: string
+  final_state?: string
+  reason_code?: string
+  [key: string]: unknown
+}
+
+export interface LoreActivationPreviewResponse {
+  ok?: boolean
+  error?: string
+  entries?: Array<Record<string, unknown>>
+  trace?: LoreActivationTraceRow[]
+}
+
 export interface GameSummary {
   game_key: string
   world_name?: string
@@ -557,6 +648,16 @@ export interface PlayerCreateResponse {
   [key: string]: unknown
 }
 
+export interface CharacterImportLorebook {
+  book_id: string
+  name: string
+  entries: number
+  role?: string
+  label?: string
+  binding?: { scope_kind: string; scope_id: string; role?: string } | null
+  [key: string]: unknown
+}
+
 export interface CharacterImportResponse {
   ok?: boolean
   error?: string
@@ -565,6 +666,8 @@ export interface CharacterImportResponse {
   npc_name?: string
   world_id?: string
   lorebook_entries?: number
+  lorebook_book_id?: string
+  lorebook?: CharacterImportLorebook
   nsfw_warning?: boolean
 }
 
@@ -718,6 +821,7 @@ export interface RuleMeta {
   hp_formula?: string
   mechanics?: string
   currency?: string
+  currency_system?: CurrencySystem
   auto_hp?: boolean
   attribute_points?: number
   attributes?: RuleAttribute[]
@@ -974,6 +1078,17 @@ export interface RulesetCombatTarget {
   conditions?: Record<string, JsonObject>
   concentration?: JsonObject | null
   death_saves?: Record<string, number>
+  /** Server-projected class resources of this actor (id, localized name, current/max). */
+  class_resources?: CharacterClassResource[]
+}
+
+/** One user-visible price of a server-provided combat capability. */
+export interface RulesetCapabilityCost {
+  kind: string
+  name: string
+  amount: number
+  current: number
+  maximum: number
 }
 
 export interface RulesetCombatWeapon extends JsonObject {
@@ -1018,6 +1133,11 @@ export interface RulesetCombatAction extends JsonObject {
   requires?: string[]
   choice_ids?: string[]
   submitted?: Record<string, string>
+  /** Feature-provided combat capability (server decides whether it is available). */
+  capability_id?: string
+  feature_id?: string
+  costs?: RulesetCapabilityCost[]
+  requires_target?: boolean
 }
 
 export interface RulesetEncounterPreset extends JsonObject {
@@ -1541,6 +1661,7 @@ export interface RuleTemplate extends JsonObject {
   max_skills?: number
   skill_point_total?: number
   currency?: string
+  currency_system?: CurrencySystem
   hp_formula?: string
   gm_prompt_appendix?: string
   attributes?: RuleAttributeEdit[]
@@ -1568,6 +1689,12 @@ export interface RuleForm {
   max_skills: number
   skill_point_total: number
   currency: string
+  currency_has_minor: boolean
+  currency_major: string
+  currency_minor: string
+  currency_rate: number
+  currency_symbol: string
+  currency_simple_editable: boolean
   hp_formula: string
   gm_prompt_appendix: string
   attributes: RuleAttributeEdit[]
@@ -1958,12 +2085,13 @@ export interface AppConfig {
   imagegen_enabled?: boolean
   imagegen_auto_scene?: boolean
   imagegen_manual_scene?: boolean
+  imagegen_auto_storyboard?: boolean
   imagegen_auto_use_manual_prompt?: boolean
   imagegen_manual_rules?: string
   imagegen_manual_prompt?: string
   imagegen_auto_rules?: string
   imagegen_auto_prompt?: string
-  imagegen_provider?: 'openai-compatible'
+  imagegen_provider?: 'openai-compatible' | 'minimax'
   imagegen_model?: string
   imagegen_square_size?: string
   imagegen_landscape_size?: string
@@ -2188,4 +2316,31 @@ export interface ApplicationHealthResponse {
   version:string
   pid:number
   boot_id:string
+}
+
+export interface NetworkAddress {
+  host: string
+  url: string
+}
+export interface NetworkAddressesResponse {
+  ok: boolean
+  scheme: string
+  port: number
+  addresses: NetworkAddress[]
+}
+export interface PairingCodeResponse {
+  ok: boolean
+  code: string
+  expires_in: number
+  expires_at: number
+}
+export interface PairedDevice {
+  id: string
+  label: string
+  created_at: string
+  last_seen_at: string
+}
+export interface PairedDeviceListResponse {
+  ok: boolean
+  devices: PairedDevice[]
 }

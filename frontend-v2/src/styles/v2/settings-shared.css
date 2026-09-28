@@ -121,3 +121,4 @@
   border-color: var(--df-border-soft);
   background: color-mix(in srgb, var(--df-surface-2) 86%, transparent);
 }
+/* 手机扫码登录弹窗的外壳与邀请/接管链接弹窗共用一套，见 v2/qr-share.css。 */

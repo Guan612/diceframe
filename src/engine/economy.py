@@ -1,4 +1,10 @@
-"""Ruleset-neutral authoritative economy proposals and transactions."""
+"""Ruleset-neutral authoritative economy proposals and transactions.
+
+``amount`` / ``delta`` / ledger entries are canonical base-unit integers
+(see ``src.engine.currency``).  This engine never learns currency names,
+rule ids, or any real-world denomination; display conversion happens only
+at the CurrencyCodec / frontend boundary.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 from uuid import uuid4
 
+from src.engine import progression
 from src.engine.character_utils import apply_currency_delta
 from src.engine.memory_outbox import (
     MAX_EXTERNAL_EFFECT_DELIVERIES,
@@ -14,7 +21,10 @@ from src.engine.memory_outbox import (
     pending_memory_reversals,
 )
 
-MAX_ECONOMY_AMOUNT = 100_000
+# Technical limit in canonical base units.  With V2 currency systems the base
+# unit can be a minor denomination (e.g. CoC dollars → cents), so this cap must
+# stay far above any real-world display amount instead of shrinking 100×.
+MAX_ECONOMY_AMOUNT = 10_000_000
 # transfer/fee/all_contributors 已随 schema 8 退役：PAY/TEAM_PAY 标签契约
 # 在 schema 6 停用后，它们没有任何存活创建路径（见 migrations.instance）。
 ECONOMY_KINDS = {"payment", "purchase", "reward"}
@@ -31,6 +41,17 @@ PROPOSAL_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"committed", "declined", "cancelled", "rejected", "superseded"}),
     "committed": frozenset({"reversed", "pending"}),
 }
+
+
+def era_key(instance: Any) -> int:
+    """The settlement era for a new proposal, transaction or effect.
+
+    Today an era is exactly one narrative round (ADR-0003). This is the
+    single seam for Track R5's future progression model; persisted keys and
+    whole-round rollback semantics remain unchanged.
+    """
+
+    return progression.current_era(instance)
 
 
 def proposal_transition_allowed(current_status: Any, next_status: str) -> bool:
@@ -71,11 +92,11 @@ def _record_outcome(
         ),
         "actor_uid": str(actor_uid),
         "visibility": str(proposal.get("visibility") or "private"),
-        "round": int(proposal.get("round", getattr(instance, "round_number", 0)) or 0),
+        "round": int(proposal.get("round", era_key(instance)) or 0),
         # Keep proposal origin round separate from the round in which this
         # decision was actually settled.  Rollback uses this field to remove
         # late-payment outcomes without invalidating the original offer.
-        "resolved_round": int(getattr(instance, "round_number", 0) or 0),
+        "resolved_round": era_key(instance),
         "resolved_at": str(proposal.get("resolved_at") or datetime.now(timezone.utc).isoformat()),
     }
     outcomes = instance.economy.setdefault("outcomes", [])
@@ -124,7 +145,7 @@ def queue_effect_group(
         "proposal_ids": [str(proposal.get("id") or "") for proposal in candidates],
         "effects": deepcopy(effects),
         "status": "pending",
-        "round": int(getattr(instance, "round_number", 0) or 0),
+        "round": era_key(instance),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     groups = instance.economy.setdefault("effect_groups", [])
@@ -575,10 +596,23 @@ def queue_proposal(
     """Queue one idempotent proposal; no balance is changed here."""
 
     amount = int(amount)
-    if not 0 < amount <= MAX_ECONOMY_AMOUNT:
-        raise ValueError("economy amount is out of range")
+    kind = str(kind)
     if kind not in ECONOMY_KINDS:
         raise ValueError("unsupported economy proposal kind")
+    named_rewards = [
+        reward for reward in (rewards or [])
+        if isinstance(reward, dict) and str(reward.get("name") or "").strip()
+    ]
+    if kind == "reward":
+        # FIX-08 §10 步骤 12：``reward`` 允许 ``amount = 0`` —— "只给物品、不给
+        # 货币"的奖励本来就没有金额。但零金额提案必须真的带物品，否则它什么都不做
+        # （宁可拒绝，也不留一条永远无效果的空提案）。
+        if not 0 <= amount <= MAX_ECONOMY_AMOUNT:
+            raise ValueError("economy amount is out of range")
+        if amount == 0 and not named_rewards:
+            raise ValueError("a zero-amount reward proposal requires item rewards")
+    elif not 0 < amount <= MAX_ECONOMY_AMOUNT:
+        raise ValueError("economy amount is out of range")
     if approval_policy not in APPROVAL_POLICIES:
         raise ValueError("unsupported economy approval policy")
     if kind in PAYER_ECONOMY_KINDS and approval_policy != "payer":
@@ -610,7 +644,7 @@ def queue_proposal(
         "approvals": {},
         "visibility": visibility if visibility in {"private", "party"} else "private",
         "status": "pending",
-        "round": int(getattr(instance, "round_number", 0) or 0),
+        "round": era_key(instance),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     economy.setdefault("proposals", []).append(proposal)
@@ -713,12 +747,32 @@ def filter_unconfirmed_purchase_grants(
     entry by entry with the same authority; unequip ops grant nothing and
     pass through.  Other loot and rewards continue through the normal
     narrative pipeline.
+
+    Three authority layers: pending chargeable proposals always block (a
+    FREE_GRANT can never bypass a real offer); unpriced purchase intents
+    block unless the same round carries an explicit FREE_GRANT marker
+    (GM narrated the item as genuinely free/gifted/rewarded) for the same
+    player and item.  The marker channel ``state_update.free_grants`` is
+    ephemeral: consumed here, never persisted.
     """
 
     state_update = data.get("state_update")
     if not isinstance(state_update, dict):
         return 0
-    pending_items: dict[str, set[str]] = {}
+    # FREE_GRANT 是本轮 ephemeral 授权标记（GM 叙事明确免费/赠送/奖励时输出）：
+    # 无论是否发生拦截都立即消费，绝不持久化。
+    free_grant_items: dict[str, set[str]] = {}
+    for marker in state_update.pop("free_grants", None) or []:
+        if not isinstance(marker, dict):
+            continue
+        uid = str(marker.get("player") or "").strip()
+        name = str(marker.get("item") or "").strip().casefold()
+        if uid and name:
+            free_grant_items.setdefault(uid, set()).add(name)
+
+    # 第一层：待确认扣款提案（payment/purchase）。FREE_GRANT 无权绕过——
+    # 否则物品先免费发放、付款人之后仍可能确认扣款，形成双重状态错误。
+    pending_purchase_items: dict[str, set[str]] = {}
     for proposal in instance.economy.get("proposals", []):
         if not isinstance(proposal, dict) or proposal.get("status") != "pending":
             continue
@@ -731,23 +785,30 @@ def filter_unconfirmed_purchase_grants(
                 if isinstance(reward, dict) else str(reward).strip().casefold()
             )
             if uid and name:
-                pending_items.setdefault(uid, set()).add(name)
+                pending_purchase_items.setdefault(uid, set()).add(name)
+    # 第二层：无价购买意图（价格未知/无法 canonicalize）。默认拦截；
+    # 本轮 GM 明确免费（FREE_GRANT）才放行。unknown price != free。
+    unpriced_purchase_items: dict[str, set[str]] = {}
     for intent in unpriced_purchase_intents or []:
         if not isinstance(intent, dict):
             continue
         uid = str(intent.get("payer_uid") or "")
         name = str(intent.get("target") or "").strip().casefold()
         if uid and name:
-            pending_items.setdefault(uid, set()).add(name)
+            unpriced_purchase_items.setdefault(uid, set()).add(name)
+
+    def _matches(names: set[str], key: str) -> bool:
+        return any(name and (name in key or key in name) for name in names)
 
     def blocked(uid: str, item: str) -> bool:
         key = str(item or "").strip().casefold()
         if not uid or not key:
             return False
-        return any(
-            name and (name in key or key in name)
-            for name in pending_items.get(uid, set())
-        )
+        if _matches(pending_purchase_items.get(uid, set()), key):
+            return True
+        if _matches(unpriced_purchase_items.get(uid, set()), key):
+            return not _matches(free_grant_items.get(uid, set()), key)
+        return False
 
     removed = 0
     players = state_update.get("players")
@@ -804,6 +865,37 @@ def filter_unconfirmed_purchase_grants(
             kept.append(entry)
         state_update["loot"] = kept
     return removed
+
+
+def _grant_rewards_with_snapshot(
+    instance: Any,
+    recipient_uid: str,
+    rewards: list[dict[str, Any]],
+    grant_reward: Callable[[dict[str, Any], dict[str, Any]], None],
+    reward_snapshots: list[dict[str, Any]],
+) -> None:
+    """Grant one settlement's item rewards and record their absolute before-image.
+
+    FIX-08：付款/购买与纯物品奖励（``amount = 0``）共用这一条发放路径，所以
+    "整轮回滚能精确还原物品"对两者同样成立（ADR 0003：靠绝对 before-image，
+    不做选择性 diff）。
+    """
+
+    recipient = instance.get_character_sheet(recipient_uid)
+    reward_snapshots.append({
+        "recipient_uid": recipient_uid,
+        "before": {
+            key: deepcopy(recipient.get(key, []))
+            for key in ("inventory", "equipment", "key_items")
+        },
+    })
+    for reward in rewards:
+        grant_reward(recipient, reward)
+    instance.set_character_sheet(recipient_uid, recipient)
+    reward_snapshots[-1]["after"] = {
+        key: deepcopy(recipient.get(key, []))
+        for key in ("inventory", "equipment", "key_items")
+    }
 
 
 def resolve_proposal(
@@ -866,7 +958,9 @@ def resolve_proposal(
         }
 
     amount = int(proposal.get("amount", 0) or 0)
-    if not 0 < amount <= MAX_ECONOMY_AMOUNT:
+    # FIX-08：零金额只在 ``reward``（纯物品奖励）下合法；付款/购买永远需要正金额。
+    minimum = 0 if kind == "reward" else 1
+    if amount < minimum or amount > MAX_ECONOMY_AMOUNT:
         return {"ok": False, "code": "INVALID_AMOUNT", "error": "经济金额无效"}
     entries: list[dict[str, Any]] = []
     reward_snapshots: list[dict[str, Any]] = []
@@ -905,36 +999,39 @@ def resolve_proposal(
             "after": None,
         })
         if rewards and grant_reward:
-            recipient = instance.get_character_sheet(recipient_uid)
-            reward_snapshots.append({
-                "recipient_uid": recipient_uid,
-                "before": {
-                    key: deepcopy(recipient.get(key, []))
-                    for key in ("inventory", "equipment", "key_items")
-                },
-            })
-            for reward in rewards:
-                grant_reward(recipient, reward)
-            instance.set_character_sheet(recipient_uid, recipient)
-            reward_snapshots[-1]["after"] = {
-                key: deepcopy(recipient.get(key, []))
-                for key in ("inventory", "equipment", "key_items")
-            }
+            _grant_rewards_with_snapshot(
+                instance, recipient_uid, rewards, grant_reward, reward_snapshots,
+            )
     elif kind == "reward":
         if recipient_uid not in instance.players:
             return {"ok": False, "code": "RECIPIENT_NOT_FOUND", "error": "奖励角色不存在"}
+        rewards = list(proposal.get("rewards") or [])
+        if rewards and grant_reward is None:
+            # 有物品奖励却没有发放通道时绝不能提交：那会留下"提案已结算、物品没到
+            # 手"的半截状态。宁可 fail closed 让调用方补上通道。
+            return {
+                "ok": False, "code": "REWARD_UNSUPPORTED",
+                "error": "物品奖励缺少发放通道",
+            }
         recipient = instance.get_character_sheet(recipient_uid)
-        currency = recipient.get("currency") if isinstance(recipient.get("currency"), dict) else {}
-        before = int(currency.get("amount", recipient.get("gold", 0)) or 0)
-        after = apply_currency_delta(recipient, amount)
-        instance.set_character_sheet(recipient_uid, recipient)
-        entries.append({"account": f"character:{recipient_uid}", "delta": amount, "before": before, "after": after})
-        entries.append({
-            "account": "system:world",
-            "delta": -amount,
-            "before": None,
-            "after": None,
-        })
+        if amount:
+            currency = recipient.get("currency") if isinstance(recipient.get("currency"), dict) else {}
+            before = int(currency.get("amount", recipient.get("gold", 0)) or 0)
+            after = apply_currency_delta(recipient, amount)
+            instance.set_character_sheet(recipient_uid, recipient)
+            entries.append({"account": f"character:{recipient_uid}", "delta": amount, "before": before, "after": after})
+            entries.append({
+                "account": "system:world",
+                "delta": -amount,
+                "before": None,
+                "after": None,
+            })
+        if rewards:
+            # FIX-08 §10 步骤 12：纯物品奖励（amount = 0）也走同一条结算路径——
+            # 物品仍然只在这里写，并记录 before-image，整轮回滚照旧能精确还原。
+            _grant_rewards_with_snapshot(
+                instance, recipient_uid, rewards, grant_reward, reward_snapshots,
+            )
     else:
         return {"ok": False, "code": "UNSUPPORTED_KIND", "error": "不支持的经济提案类型"}
 
@@ -951,7 +1048,7 @@ def resolve_proposal(
         "actor_uid": actor_uid,
         "entries": entries,
         "status": "committed",
-        "round": int(getattr(instance, "round_number", 0) or 0),
+        "round": era_key(instance),
         "committed_at": now,
     }
     if reward_snapshots:

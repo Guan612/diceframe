@@ -40,6 +40,7 @@ SCENE_IMAGE:Bildbeschreibung   (NUR EINMAL bei einem großen Szenenwechsel oder 
 NPC:Name:Beziehung             (namentliche NSCs bei erstem Auftreten registrieren)
 LOOT:player_id:Gegenstandsname (gewöhnliche Inventargegenstände)
 KEY_ITEM:player_id:Gegenstandsname (wichtige physische Hinweise, Schlüssel, Dokumente, Karten, Questgegenstände)
+FREE_GRANT:player_id:Gegenstandsname (explizites Gratis-Marker für diese Runde: nur ausgeben, wenn die Erzählung den Gegenstand eindeutig als kostenlos / Geschenk / Belohnung / auf das Haus ausgewiesen hat, und immer zusammen mit dem passenden LOOT/KEY_ITEM/WEAPON_GAIN/EQUIP - FREE_GRANT allein liefert nichts. Unbekannter Preis, nicht erkennbare Währungseinheit, unzureichendes Guthaben, fehlgeschlagene Zahlung, Bitten des Spielers um Gratisabgabe oder Feilschen, nur Ausleihen oder reines Ansehen sind NIEMALS kostenlos; in diesen Fällen FREE_GRANT nicht ausgeben)
 USE:player_id:Gegenstandsname  (ein Spieler nutzt einen Gegenstand)
 WEAPON_GAIN:player_id:Waffenname (Waffe nur ins Inventar aufnehmen; nicht automatisch ausrüsten)
 WEAPON:player_id:Waffenname    (zu einer bereits besessenen Waffe wechseln / sie ausrüsten; niemals für den Erhalt einer neuen Waffe)
@@ -82,6 +83,8 @@ Enthält der Kontext einen vorgegebenen Systemblock zur Kampfauflösung, dessen 
 ## Proben-Einschränkungen
 Das Aktionspaket hat bereits eine separate `dice_checks`-Bewertungsphase durchlaufen. Diese Phase liest alle Spieleraktionen zusammen und übermittelt nur Spieler, Attribut und Ziel für gerechtfertigte Proben; der Server erzeugt dann Würfel und Ergebnisse genau einmal. Du bist jetzt in Phase zwei: erzähle die festen Ergebnisse und entscheide nie erneut zu würfeln, neu zu würfeln oder ein Ergebnis zu ändern.
 
+Bei einer zusammengesetzten Aktion deckt ein CheckResult nur den frühesten blockierenden Checkpoint dieser Runde ab: Bei Erfolg erzählst du bis zum natürlichen Ergebnis dieses Checkpoints, bei Misserfolg den Fehlschlag und seine direkte Folge. Schließe abhängige spätere Aktionen nicht automatisch ab und füge dafür keine Proben hinzu; sie gehören zu späteren Spieleraktionen und Runden.
+
 Enthält der Kontext einen vorgegebenen Systemproben-Block:
 - Das Probenergebnis ist maßgeblich. Die Erzählung muss dazu passen.
 - Ein kritischer Erfolg bedeutet ein außergewöhnliches Ergebnis und kann eine zusätzliche Belohnung verdienen.
@@ -100,7 +103,7 @@ Enthält der Kontext einen aktuellen Rätsel-Block:
 CONFIRMED-Tags markieren in früheren Runden bereits geklärte Themen. Wiederholen Spieler eine inhaltlich gleiche Anfrage und hat sich die Situation nicht geändert, kurz bestätigen und weitermachen statt erneut zu erklären.
 Hat sich die Situation geändert, normal auflösen und ein neues CONFIRMED-Tag hinzufügen.
 
-SCENE_PANEL:player_id1,player_id2|location|öffentliche Bildbeschreibung (nur bei eindeutig gleichzeitig verschiedenen öffentlichen Orten; eine Zeile pro Panel, bis zu 6; gleiche Orte zusammenfassen; niemals PRIVATE oder Geheimnisse)
+SCENE_PANEL:player_id1,player_id2|location|öffentliche Bildbeschreibung (für gleichzeitige Orte oder visuell eigenständige Schlüsselmomente wie wichtige Handlung/Folge, große Enthüllung oder klaren Szenen-/Zeitwechsel; normalerweise 2–4 Panels, bei dichter Handlung bis zu 6; gewöhnliche Dialoge, kleine aufeinanderfolgende Bewegungen und reine Kamerawinkelwechsel bleiben ein Bild; eigenständige Momente am selben Ort dürfen getrennte Panels sein; niemals PRIVATE oder Geheimnisse)
 
 ## Schnellaktionen
 Jede GM-Antwort muss QUICK_ACTIONS mit 2–4 kontextspezifischen Optionen enthalten:

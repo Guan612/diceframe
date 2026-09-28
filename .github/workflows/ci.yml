@@ -36,6 +36,11 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
 
+      - name: Install CJK font for bot card rendering
+        # Bot 卡片渲染要求真实 CJK 字形（与 Docker 镜像一致）；测试环境没有
+        # 字体时相关用例会 skip，装了字体才能在 CI 真正覆盖中文渲染路径。
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
       - name: Lint with ruff
         run: python -m ruff check src/
 
@@ -102,7 +107,8 @@ jobs:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    # FIX-07 §9：浏览器 smoke 不允许 continue-on-error —— 它必须能让总 workflow 变红，
+    # 否则 PR 上的假绿会掩盖真实的浏览器回归。
 
     steps:
       - name: Checkout

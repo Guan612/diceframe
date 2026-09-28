@@ -13,6 +13,9 @@ class PlayerData(TypedDict, total=False):
     user_id: str
     character_name: str
     character_sheet: dict[str, Any]
+    # 谁在玩这个角色（human / ai / unclaimed），见 src.engine.player_control。
+    # 它与 character_sheet 同级：控制器可以换，角色本身不换。
+    control: dict[str, Any]
 
 
 class ActionRecord(TypedDict, total=False):
@@ -31,6 +34,9 @@ class ActionRecord(TypedDict, total=False):
     check_request: dict[str, Any] | None
     combat_outcome: dict[str, Any]
     revision_count: int
+    # 调用方自带的机器可读标记（例如服务器 AI 行动的 source / control_revision /
+    # generated_for_round）。只用于去重与调试，绝不是规则权威。
+    metadata: dict[str, Any]
 
 
 class CheckRequest(TypedDict, total=False):
@@ -133,6 +139,7 @@ class RoundLogEntry(TypedDict, total=False):
     combat_extension_round_start: dict[str, Any]
     pre_state_snapshot: dict[str, Any]
     pre_combat_extension_snapshot: dict[str, Any]
+    pre_world_state: dict[str, Any]
     swipes: list[str]
     current_swipe: int
     timestamp: str

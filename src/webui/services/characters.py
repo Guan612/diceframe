@@ -18,10 +18,12 @@ from src.engine.character_utils import (
     make_default_character,
     normalize_character_sheet,
 )
+from src.compat.characters import MAX_SKILL_EFFECT_CHARS
 from src.content.worlds import localize_lorebook_entries
 from src.engine.language import localized_text
 from src.engine.health import record_health_event
 from src.engine.economy import (
+    MAX_ECONOMY_AMOUNT,
     complete_effect_group,
     queue_proposal,
     queue_purchase_offer,
@@ -36,6 +38,7 @@ from src.engine.memory_outbox import (
     queue_memory_delivery,
 )
 from src.engine.game_instance import GameInstance
+from src.engine.player_control import claim_seat, is_human_controlled
 from src.commands.economy_effects import pending_decision_notice
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime, PlayerJoinRuntime
@@ -209,8 +212,8 @@ async def create_payment_proposal(
         amount = int(amount)
     except (TypeError, ValueError):
         return {"ok": False, "error": "金额必须是整数"}
-    if not 0 < amount <= 100_000:
-        return {"ok": False, "error": "金额必须在 1 到 100000 之间"}
+    if not 0 < amount <= MAX_ECONOMY_AMOUNT:
+        return {"ok": False, "error": f"金额必须在 1 到 {MAX_ECONOMY_AMOUNT} 之间"}
     if payer_uid not in inst.players:
         return {"ok": False, "error": "付款角色不存在"}
     if recipient_uid not in inst.players:
@@ -296,7 +299,7 @@ _ATTR_NAME_ZH = {
 
 
 def _normalize_skills(skills: list, rule=None) -> list[dict]:
-    """规范化技能列表：字符串转为含数值的对象格式。"""
+    """规范化技能列表：字符串转为含数值的对象格式，并保留可选 effect 说明。"""
     base_values: dict[str, int] = rule.skill_base_values if rule else {}
     result: list[dict] = []
     for s in skills:
@@ -304,10 +307,14 @@ def _normalize_skills(skills: list, rule=None) -> list[dict]:
             result.append({"name": s, "value": base_values.get(s, 20)})
         elif isinstance(s, dict):
             name = s.get("name", "")
-            result.append({
+            row: dict = {
                 "name": name,
                 "value": s.get("value", base_values.get(name, 20)),
-            })
+            }
+            effect = str(s.get("effect") or "").strip()
+            if effect:
+                row["effect"] = effect[:MAX_SKILL_EFFECT_CHARS]
+            result.append(row)
     return result
 
 
@@ -470,6 +477,8 @@ def format_attribute_map(attributes: dict, rule_attrs: list[dict]) -> str:
 def list_characters(
     dependencies: CharacterDependencies,
     game_key: str,
+    *,
+    viewer_is_gm: bool,
 ) -> dict[str, Any]:
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
@@ -484,33 +493,34 @@ def list_characters(
         normalize_character_sheet(cs, rule)
         cs["attributes_display"] = format_attribute_map(cs.get("attributes", {}), rule_attrs)
     npcs_by_name: dict[str, dict[str, Any]] = {}
-    for nid, npc in inst.npcs.items():
-        name = npc.get("character_name") or npc.get("name") or nid
-        npcs_by_name[name] = {"npc_id": nid, **npc, "name": name}
-    if dependencies.assets.lorebook and inst.world_id:
-        entries = dependencies.assets.lorebook.list_entries(inst.world_id, "npc")
-        world_data = dependencies.assets.load_world_template(
-            inst.world_id,
-            str(getattr(inst, "language", "") or ""),
-        )
-        lore_status = localized_text(
-            getattr(inst, "language", ""),
-            {"en": "Lorebook", "zh-CN": "世界书", "ja": "ワールドブック", "de": "Lorebook"},
-        )
-        for entry in localize_lorebook_entries(entries, world_data):
-            name = entry.get("name", "")
-            if not name or name in npcs_by_name:
-                continue
-            npcs_by_name[name] = {
-                "npc_id": entry.get("id", name),
-                "name": name,
-                "character_name": name,
-                "tier": entry.get("tier", ""),
-                "status": lore_status,
-                "relation": entry.get("relation", ""),
-                "content": entry.get("content", ""),
-                "portrait": entry.get("portrait"),
-            }
+    if viewer_is_gm:
+        for nid, npc in inst.npcs.items():
+            name = npc.get("character_name") or npc.get("name") or nid
+            npcs_by_name[name] = {"npc_id": nid, **npc, "name": name}
+        if dependencies.assets.lorebook and inst.world_id:
+            entries = dependencies.assets.lorebook.list_entries(inst.world_id, "npc")
+            world_data = dependencies.assets.load_world_template(
+                inst.world_id,
+                str(getattr(inst, "language", "") or ""),
+            )
+            lore_status = localized_text(
+                getattr(inst, "language", ""),
+                {"en": "Lorebook", "zh-CN": "世界书", "ja": "ワールドブック", "de": "Lorebook"},
+            )
+            for entry in localize_lorebook_entries(entries, world_data):
+                name = entry.get("name", "")
+                if not name or name in npcs_by_name:
+                    continue
+                npcs_by_name[name] = {
+                    "npc_id": entry.get("id", name),
+                    "name": name,
+                    "character_name": name,
+                    "tier": entry.get("tier", ""),
+                    "status": lore_status,
+                    "relation": entry.get("relation", ""),
+                    "content": entry.get("content", ""),
+                    "portrait": entry.get("portrait"),
+                }
     npcs = list(npcs_by_name.values())
     rule_attrs_total = _get_rule_attrs_total(dependencies, inst)
     result: dict[str, Any] = {
@@ -1148,10 +1158,31 @@ async def create_player(
             )
 
 
+def _record_seat_claim(inst: GameInstance, uid: str) -> bool:
+    """把"重新加入一个已有席位"记录为一次控制权认领。
+
+    新席位由 ``put_player`` 直接生成为 ``human``；只有当前是 ``ai`` /
+    ``unclaimed`` 的已有席位才存在需要记录的转换，因此普通真人重连不会触发
+    ``CONTROL_NOT_CLAIMABLE``。转换走 :func:`claim_seat`，与其它控制权变更是
+    同一个写入口。
+
+    返回是否真的发生了转换：认领是持久化状态，必须立刻落盘，否则真人认领过的
+    席位会在重启后变回 AI；而普通重连什么都没改，不能因此在热路径上多写一次盘。
+    """
+
+    if is_human_controlled(inst, uid):
+        return False
+    claim_seat(inst, uid)
+    return True
+
+
 async def _create_player_authority(dependencies: CharacterDependencies, inst: GameInstance, character: dict,
                        force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
     requested_uid = str(character.get("user_id") or "").strip()
     if requested_uid and requested_uid in inst.players:
+        # 已有席位被重新加入：按控制权权威记录这次认领（已经是真人则是普通重连）。
+        if _record_seat_claim(inst, requested_uid):
+            await dependencies.games.save_instance(inst)
         return {
             "ok": True,
             "user_id": requested_uid,
@@ -1163,6 +1194,9 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         uid = "player_" + str(time.time_ns())[-12:]
     elif force_uid:
         if force_uid in inst.players:
+            # 同上：session 身份命中的是已有席位，而不是新建席位。
+            if _record_seat_claim(inst, force_uid):
+                await dependencies.games.save_instance(inst)
             return {"ok": True, "user_id": force_uid,
                     "character_name": inst.players[force_uid].get("character_name", force_uid),
                     "reused": True}
@@ -1279,6 +1313,7 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         "character_sheet": cs,
     }
     inst.put_player(uid, player)
+    # 新建席位由 put_player/ensure_control 直接生成为 human 控制，无需认领转换。
     if isinstance(runtime, PlayerJoinRuntime):
         try:
             runtime.on_player_join(inst, uid)

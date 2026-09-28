@@ -17,7 +17,9 @@ from src.webui.abuse_guard import ABUSE_GUARD_KEY, AbuseGuard, abuse_guard_middl
 from src.webui.connection_pool import ConnectionPool
 from src.webui.cors import cors_middleware, cors_response_prepare
 from src.webui.errors import error_code_middleware
+from src.webui.device_tokens import DEVICE_TOKENS_KEY, DeviceTokenStore
 from src.webui.login_audit import LOGIN_AUDIT_KEY, LoginAuditStore
+from src.webui.pairing import PairingService
 from src.webui.routes.adventures import register_adventures
 from src.webui.routes.announcements import register_announcements
 from src.webui.routes.asr import register_asr
@@ -31,9 +33,12 @@ from src.webui.routes.generated_images import register_generated_images
 from src.webui.routes.generation import register_generation
 from src.webui.routes.hub import register_hub
 from src.webui.routes.legal import register_legal
+from src.webui.routes.lorebooks import register_lorebooks
 from src.webui.routes.maps import register_maps
 from src.webui.routes.memory import register_memory
+from src.webui.routes.modules import register_modules
 from src.webui.routes.pages import add_response_security_headers, register_pages
+from src.webui.routes.pairing import PAIRING_SERVICE_KEY, register_pairing
 from src.webui.routes.plugins import register_plugins
 from src.webui.routes.rules import register_rules
 from src.webui.routes.scene_images import register_scene_images
@@ -91,6 +96,11 @@ def create_app(dependencies: ApplicationDependencies) -> web.Application:
     application["session_manager"] = SessionManager(dependencies.data_dir)
     application[ABUSE_GUARD_KEY] = AbuseGuard()
     application[LOGIN_AUDIT_KEY] = LoginAuditStore(dependencies.data_dir)
+    application[DEVICE_TOKENS_KEY] = DeviceTokenStore(dependencies.data_dir)
+    application[PAIRING_SERVICE_KEY] = PairingService(
+        application[DEVICE_TOKENS_KEY],
+        audit=application[LOGIN_AUDIT_KEY],
+    )
     application["connection_pool"] = ConnectionPool()
     application["sse_tickets"] = SseTicketStore()
     application["static_v2_dir"] = dependencies.static_v2_dir
@@ -118,6 +128,7 @@ def register_routes(
     """Register all HTTP routes by owning domain."""
     register_pages(application)
     register_auth(application)
+    register_pairing(application)
     register_games(application)
     register_bot(application)
     register_plugins(application)
@@ -133,8 +144,10 @@ def register_routes(
     register_asr(application)
     register_generated_images(application)
     register_worlds(application)
+    register_lorebooks(application)
     register_rules(application)
     register_adventures(application)
+    register_modules(application)
     register_character_cards(application)
     register_avatars(application)
     register_scene_images(application)

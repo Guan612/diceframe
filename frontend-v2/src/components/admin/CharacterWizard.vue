@@ -12,6 +12,8 @@ import {
   isAutoHpRule, calcAutoHp, setIdentityUpdate, suggestedAttributes, skillPointCost, localizedField,
   type IdentityField, type RuleAttr,
 } from '@/utils/ruleSchema'
+import type { CurrencySystem } from '@/utils/currency'
+import { currencyAmountToInputText, currencyEditableUnitLabel, currencyInputStep, parseCurrencyInput } from '@/utils/currency'
 
 interface CharacterSubmit extends CharacterSheet { character_name: string }
 
@@ -58,7 +60,11 @@ const diceHint = computed(() =>
 
 const skills = ref<CharacterSkill[]>([])
 const background = ref('')
+// canonical 金额内部保存；输入框按展示单位编辑（0.25），提交前经 parser 换算。
 const gold = ref(0)
+const goldInput = ref('0')
+const currencySystem = computed<CurrencySystem | null>(() => props.ruleMeta?.currency_system || null)
+const goldInvalid = computed(() => parseCurrencyInput(goldInput.value, currencySystem.value, { allowZero: true }) === null)
 const equipment = ref<CharacterItem[]>([])
 const inventory = ref<CharacterItem[]>([])
 const pool = computed(() => props.skillPool || [])
@@ -100,6 +106,7 @@ function resetFields() {
   skills.value = []
   background.value = ''
   gold.value = 0
+  goldInput.value = '0'
   equipment.value = []
   inventory.value = []
   step.value = 1
@@ -131,7 +138,19 @@ async function generateByAI() {
 }
 
 function skillToDraft(skill: string | CharacterSkill): CharacterSkill {
-  return typeof skill === 'string' ? { name: skill, value: 20 } : { name: skill.name || '', value: skill.value || 20 }
+  if (typeof skill === 'string') return { name: skill, value: 20 }
+  const row: CharacterSkill = { name: skill.name || '', value: skill.value || 20 }
+  const effect = String(skill.effect || '').trim()
+  if (effect) row.effect = effect
+  return row
+}
+
+/** 提交侧技能投影；effect 只做长度收口，不改机械字段。 */
+function skillToPayload(skill: CharacterSkill): CharacterSkill {
+  const row: CharacterSkill = { name: String(skill.name).trim(), value: Number(skill.value) || 0 }
+  const effect = String(skill.effect || '').trim().slice(0, 500)
+  if (effect) row.effect = effect
+  return row
 }
 
 function applyCharacter(c: CharacterSheet) {
@@ -155,7 +174,13 @@ function applyCharacter(c: CharacterSheet) {
   if (c.background) background.value = c.background
   if (c.currency?.amount !== undefined) gold.value = Number(c.currency.amount) || 0
   else if (c.gold !== undefined) gold.value = Number(c.gold) || 0
+  goldInput.value = currencyAmountToInputText(gold.value, currencySystem.value)
 }
+
+watch(goldInput, (text) => {
+  const parsed = parseCurrencyInput(text, currencySystem.value, { allowZero: true })
+  if (parsed !== null) gold.value = parsed
+})
 
 function canNext() {
   if (step.value === 1) return characterName.value.trim().length > 0
@@ -165,6 +190,10 @@ function next() { if (canNext() && step.value < 4) step.value = (step.value + 1)
 function prev() { if (step.value > 1) step.value = (step.value - 1) as 1 | 2 | 3 | 4 }
 
 function finish() {
+  const parsedGold = parseCurrencyInput(goldInput.value, currencySystem.value, { allowZero: true })
+  if (parsedGold === null) { toast.error(t('invalidAmount')); return }
+  gold.value = parsedGold
+
   const fields = identitySchema(props.ruleMeta)
   const updates: SheetUpdate = {}
   for (const f of fields) setIdentityUpdate(updates, f, identityValues.value[f.key] || '')
@@ -176,7 +205,7 @@ function finish() {
     portrait: portrait.value ? { ...portrait.value } : null,
     identity,
     attributes: { ...attrs.value },
-    skills: skills.value.filter(s => s.name?.trim()).map(s => ({ name: s.name.trim(), value: Number(s.value) || 0 })),
+    skills: skills.value.filter(s => s.name?.trim()).map(skillToPayload),
     equipment: equipment.value.filter(it => String(it.name || '').trim()).map(it => ({ name: String(it.name).trim(), type: it.type || 'weapon', damage: Number(it.damage) || 0, slot: it.slot || 'main_hand', quality: it.quality || 'common' })),
     inventory: inventory.value.filter(it => String(it.name || '').trim()).map(it => ({ name: String(it.name).trim(), qty: Number(it.qty) || 1, effect: it.effect || '' })),
     background: background.value,
@@ -240,7 +269,7 @@ function finish() {
       </p>
       <SkillEditor v-model="skills" :pool="pool" />
       <label>{{ t('backgroundStory') }}<textarea v-model="background" rows="4" :placeholder="t('backgroundPlaceholder')"></textarea></label>
-      <label>{{ currencyLabel(ruleMeta) }}<input type="number" v-model.number="gold" min="0"></label>
+      <label>{{ currencyEditableUnitLabel(currencySystem, currencyLabel(ruleMeta)) }}<input type="text" inputmode="decimal" v-model="goldInput" :step="currencyInputStep(currencySystem)" :class="{ invalid: goldInvalid }"></label>
     </div>
 
     <div v-else-if="step === 4" class="wizard-pane">

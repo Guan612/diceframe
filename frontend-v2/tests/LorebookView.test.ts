@@ -425,3 +425,198 @@ describe('LorebookView perspective inspector', () => {
     wrapper.unmount()
   })
 })
+
+// 「触发方式」= is_constant + vector_activation 的产品组合，不是 legacy match_mode。
+describe('LorebookView product trigger mode', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem('currentGame', 'g1')
+    i18n.global.locale.value = 'zh-CN'
+    mocks.api.mockReset()
+    mocks.api.mockImplementation(async (path: string) => {
+      const p = String(path)
+      if (p.includes('/preview')) return previewFor(p)
+      if (p.includes('/characters')) return characters
+      if (p.includes('/games')) return games
+      if (p.includes('/lorebook/')) return lorebook
+      if (p.includes('/worlds')) return worlds
+      throw new Error(`unexpected path ${p}`)
+    })
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  function bodyButton(text: string) {
+    const found = [...document.body.querySelectorAll('button')].find(b => b.textContent?.trim() === text)
+    expect(found, `button ${text}`).toBeTruthy()
+    return new DOMWrapper(found!)
+  }
+
+  function triggerSelect() {
+    const select = document.body.querySelector('.lore-entry-trigger-mode') as HTMLSelectElement | null
+    expect(select, 'trigger mode select').toBeTruthy()
+    return select!
+  }
+
+  function selectedLabel(select: HTMLSelectElement) {
+    return select.options[select.selectedIndex]?.textContent?.trim()
+  }
+
+  function vectorSelect() {
+    return document.body.querySelector('[data-field="vector_activation"] select') as HTMLSelectElement
+  }
+
+  function constantCheckbox() {
+    return document.body.querySelector('[data-field="is_constant"] input') as HTMLInputElement
+  }
+
+  /** 保存载荷按后端实际存下的内容断言：最后一次写到 /lorebook 的 body。 */
+  function lastSavedEntry(method: 'POST' | 'PUT') {
+    const calls = mocks.api.mock.calls.filter(call =>
+      String(call[0]).startsWith('/lorebook') && (call[1] as { method?: string })?.method === method,
+    )
+    expect(calls.length, `${method} /lorebook call`).toBeGreaterThan(0)
+    return JSON.parse(String((calls[calls.length - 1][1] as { body: string }).body)) as Record<string, unknown>
+  }
+
+  it('starts a new entry from the canonical activation defaults', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    await bodyButton('新增条目').trigger('click')
+    expect(selectedLabel(triggerSelect())).toBe('关键词 + 语义')
+    // legacy match_mode 已移出第一屏，只在高级区可读写
+    expect(document.body.querySelector('.lore-entry-simple [data-field="match_mode"]')).toBeNull()
+    expect(document.body.querySelector('.lore-entry-advanced [data-field="match_mode"]')).toBeTruthy()
+
+    await bodyButton('保存').trigger('click')
+    await flushPromises()
+
+    const saved = lastSavedEntry('POST')
+    expect(saved.priority).toBe(100)
+    expect(saved.order).toBe(100)
+    expect(saved.prompt_slot).toBe('world_background')
+    expect(saved.vector_activation).toBe('hybrid')
+    expect(saved.is_constant).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('writes the canonical pair for every product trigger mode', async () => {
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+    await bodyButton('新增条目').trigger('click')
+
+    const steps = [
+      { mode: 'keyword', label: '关键词', is_constant: false, vector_activation: 'off' },
+      // 「始终生效」保留模型当前的 vector_activation（此处上一步是 off）
+      { mode: 'always', label: '始终生效', is_constant: true, vector_activation: 'off' },
+      { mode: 'hybrid', label: '关键词 + 语义', is_constant: false, vector_activation: 'hybrid' },
+      { mode: 'semantic', label: '仅语义', is_constant: false, vector_activation: 'vector_only' },
+    ]
+    for (const step of steps) {
+      const select = triggerSelect()
+      await new DOMWrapper(select).setValue(step.mode)
+      await flushPromises()
+
+      expect(selectedLabel(triggerSelect())).toBe(step.label)
+      // 高级区镜像同一对 canonical 字段，UI 内部不能自相矛盾
+      expect(constantCheckbox().checked).toBe(step.is_constant)
+      expect(vectorSelect().value).toBe(step.vector_activation)
+
+      await bodyButton('保存').trigger('click')
+      await flushPromises()
+      const saved = lastSavedEntry('POST')
+      expect(saved.is_constant).toBe(step.is_constant)
+      expect(saved.vector_activation).toBe(step.vector_activation)
+    }
+    wrapper.unmount()
+  })
+
+  it('reads the product trigger mode back from a loaded entry', async () => {
+    const fixtures = {
+      entries: [
+        { id: 'k', world_id: 'w1', name: '关键词条目', is_constant: false, vector_activation: 'off' },
+        { id: 'a', world_id: 'w1', name: '常驻条目', is_constant: true, vector_activation: 'off' },
+        { id: 'h', world_id: 'w1', name: '混合条目', is_constant: false, vector_activation: 'hybrid' },
+        { id: 's', world_id: 'w1', name: '语义条目', is_constant: false, vector_activation: 'vector_only' },
+      ],
+    }
+    mocks.api.mockImplementation(async (path: string) => {
+      const p = String(path)
+      if (p.includes('/preview')) return previewFor(p)
+      if (p.includes('/characters')) return characters
+      if (p.includes('/games')) return games
+      if (p.includes('/lorebook/')) return fixtures
+      if (p.includes('/worlds')) return worlds
+      throw new Error(`unexpected path ${p}`)
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    const expected: Array<[string, string, string]> = [
+      ['关键词条目', 'keyword', '关键词'],
+      ['常驻条目', 'always', '始终生效'],
+      ['混合条目', 'hybrid', '关键词 + 语义'],
+      ['语义条目', 'semantic', '仅语义'],
+    ]
+    for (const [name, mode, label] of expected) {
+      const row = wrapper.findAll('.lore-row').find(item => item.text().includes(name))
+      expect(row, `row ${name}`).toBeTruthy()
+      await row!.find('.memory-row-actions button').trigger('click')
+      await flushPromises()
+      expect(triggerSelect().value).toBe(mode)
+      expect(selectedLabel(triggerSelect())).toBe(label)
+      await bodyButton('取消').trigger('click')
+      await flushPromises()
+    }
+    wrapper.unmount()
+  })
+
+  it('shows after reload exactly the activation values that were saved', async () => {
+    // 后端原样存回 payload（setdefault 只补缺失值），读路径不得把 off 改写回 hybrid。
+    let stored: Record<string, unknown> | undefined
+    mocks.api.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+      const p = String(path)
+      if (p === '/lorebook' && init?.method === 'POST') {
+        stored = JSON.parse(String(init.body)) as Record<string, unknown>
+        return { ok: true }
+      }
+      if (p.includes('/preview')) return previewFor(p)
+      if (p.includes('/characters')) return characters
+      if (p.includes('/games')) return games
+      if (p.includes('/lorebook/')) return { entries: stored ? [{ id: 'new', world_id: 'w1', ...stored }] : [] }
+      if (p.includes('/worlds')) return worlds
+      throw new Error(`unexpected path ${p}`)
+    })
+
+    const wrapper = mountView(true)
+    await flushPromises()
+    await flushPromises()
+
+    await bodyButton('新增条目').trigger('click')
+    await new DOMWrapper(triggerSelect()).setValue('keyword')
+    await flushPromises()
+    await bodyButton('保存').trigger('click')
+    await flushPromises()
+
+    expect(stored?.vector_activation).toBe('off')
+    expect(stored?.is_constant).toBe(false)
+
+    const row = wrapper.findAll('.lore-row').find(item => item.text().includes('未命名条目'))
+    expect(row, 'reloaded row').toBeTruthy()
+    await row!.find('.memory-row-actions button').trigger('click')
+    await flushPromises()
+
+    expect(triggerSelect().value).toBe('keyword')
+    expect(selectedLabel(triggerSelect())).toBe('关键词')
+    expect(vectorSelect().value).toBe('off')
+    expect(constantCheckbox().checked).toBe(false)
+    wrapper.unmount()
+  })
+})

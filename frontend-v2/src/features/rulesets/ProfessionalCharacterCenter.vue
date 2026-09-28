@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { api, errorMessage } from '@/api/client'
-import type { CharacterPortrait, CharacterSheet, JsonObject, RestSessionStatus } from '@/api/types'
+import type {
+  CharacterClassFeature,
+  CharacterClassResource,
+  CharacterPortrait,
+  CharacterSheet,
+  JsonObject,
+  RestSessionStatus,
+} from '@/api/types'
 import PortraitPicker from '@/components/admin/PortraitPicker.vue'
 import { resolveLiveCharacterRest } from '@/api/rulesets'
 
@@ -55,6 +62,31 @@ const hitDiceRows = computed(() => Object.entries(
   maximum: Number(classLevels.value[0]?.level || available || 0),
 })))
 const myRestStatus = computed(() => props.restSession?.participants?.find(row => row.user_id === props.userId)?.status || '')
+// 职业能力与职业资源完全来自服务端投影：前端不判断职业等级、不算武艺骰、
+// 不算资源上限，只渲染 name / current / maximum。
+const classFeatures = computed<CharacterClassFeature[]>(() => (
+  Array.isArray(props.character.class_features) ? props.character.class_features : []
+))
+const classResourceRows = computed(() => (
+  (Array.isArray(props.character.class_resources) ? props.character.class_resources : [])
+    .filter(row => Number(row.maximum) > 0)
+))
+function featureValueText(feature: CharacterClassFeature): string {
+  const values = (feature.values || {}) as Record<string, unknown>
+  const parts: string[] = []
+  const die = values.unarmed_damage_die
+  if (typeof die === 'string' && die) parts.push(`${text('武艺骰', 'Martial Arts die')} ${die}`)
+  const abilities = values.unarmed_ability_choice
+  if (Array.isArray(abilities) && abilities.length) {
+    parts.push(`${text('攻击属性', 'Attack ability')} ${abilities.map(item => abilityName(String(item))).join(' / ')}`)
+  }
+  return parts.join(' · ')
+}
+function resourcePercent(resource: CharacterClassResource): number {
+  const maximum = Number(resource.maximum || 0)
+  if (maximum <= 0) return 0
+  return Math.min(100, Math.max(0, Number(resource.current || 0) / maximum * 100))
+}
 
 const form = reactive<{
   character_name: string
@@ -246,6 +278,16 @@ async function completeRest(): Promise<void> {
           <small>{{ abilityName(String(key)) }}</small><strong>{{ score }}</strong><span>{{ modifier(score) }}</span>
         </article>
       </div>
+      <section v-if="classFeatures.length" class="class-feature-section">
+        <div class="section-heading">
+          <h3>{{ text('职业能力', 'Class features') }}</h3>
+          <span>{{ text('来自当前职业与等级', 'From your current class and level') }}</span>
+        </div>
+        <article v-for="feature in classFeatures" :key="feature.id" class="class-feature-card">
+          <header><strong>{{ feature.name }}</strong><small v-if="featureValueText(feature)">{{ featureValueText(feature) }}</small></header>
+          <p v-if="feature.summary">{{ feature.summary }}</p>
+        </article>
+      </section>
       </div>
 
       <form v-else-if="activeTab === 'profile'" class="center-panel profile-panel" @submit.prevent="save">
@@ -287,6 +329,16 @@ async function completeRest(): Promise<void> {
         <div><dt>{{ text('法术攻击', 'Spell attack') }}</dt><dd>+{{ derived.spell_attack_bonus || 0 }}</dd></div>
         <div><dt>{{ text('法术豁免 DC', 'Spell save DC') }}</dt><dd>{{ derived.spell_save_dc || '—' }}</dd></div>
       </dl>
+      <section v-if="classResourceRows.length" class="resource-section class-resource-section">
+        <div class="section-heading"><h3>{{ text('职业资源', 'Class resources') }}</h3><span>{{ text('当前 / 上限', 'Current / max') }}</span></div>
+        <div class="spell-slot-grid">
+          <article v-for="resource in classResourceRows" :key="resource.id" class="spell-slot-card">
+            <small>{{ resource.name }}</small>
+            <strong>{{ resource.current }} <span>/ {{ resource.maximum }}</span></strong>
+            <div class="slot-meter" aria-hidden="true"><i :style="{ width: `${resourcePercent(resource)}%` }"></i></div>
+          </article>
+        </div>
+      </section>
       <section class="resource-section">
         <div class="section-heading"><h3>{{ text('法术位', 'Spell slots') }}</h3><span>{{ text('当前 / 上限', 'Current / max') }}</span></div>
         <div v-if="spellSlotRows.length" class="spell-slot-grid">
@@ -362,7 +414,17 @@ async function completeRest(): Promise<void> {
 .profile-panel input, .profile-panel textarea { width: 100%; min-width: 0; box-sizing: border-box; }.profile-panel textarea { min-height: 74px; resize: vertical; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
 .read-only-panel dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0; }.read-only-panel dl div { padding: 12px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 10px; }.read-only-panel dt { color: var(--text-muted, #aeb9c7); }.read-only-panel dd { margin: 4px 0 0; font-weight: 700; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }.tag-list span { max-width: 100%; padding: 5px 9px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 999px; overflow-wrap: anywhere; }.tag-list i { color: var(--text-muted, #aeb9c7); }
-.magic-panel { gap: 12px; }.magic-panel h3 { margin: 4px 0 0; }.resource-section { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 12px; background: color-mix(in srgb, var(--card-bg, #151c27) 92%, #d8a94e 4%); }.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }.section-heading h3 { margin: 0; }.section-heading span { color: var(--text-muted, #aeb9c7); font-size: 12px; }.spell-slot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }.spell-slot-card { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 9px; background: rgb(10 15 23 / 28%); }.spell-slot-card small { color: var(--text-muted, #aeb9c7); }.spell-slot-card strong { font-size: 20px; }.spell-slot-card strong span { color: var(--text-muted, #aeb9c7); font-size: 14px; font-weight: 400; }.slot-meter { height: 4px; overflow: hidden; border-radius: 99px; background: rgb(255 255 255 / 12%); }.slot-meter i { display: block; height: 100%; border-radius: inherit; background: #d8a94e; }.empty-resource { margin: 0; color: var(--text-muted, #aeb9c7); }
+.magic-panel { gap: 12px; }.magic-panel h3 { margin: 4px 0 0; }
+.class-feature-section { display: grid; gap: 10px; }
+.class-feature-section .section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.class-feature-section .section-heading h3 { margin: 0; }
+.class-feature-section .section-heading span { color: var(--text-muted, #aeb9c7); font-size: 12px; }
+.class-feature-card { display: grid; gap: 5px; padding: 12px 14px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 12px; background: color-mix(in srgb, var(--card-bg, #151c27) 90%, #d8a94e 4%); }
+.class-feature-card header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.class-feature-card header small { color: #e4c274; }
+.class-feature-card p { margin: 0; color: var(--text-muted, #aeb9c7); line-height: 1.5; }
+.class-resource-section .spell-slot-card strong { color: #f3d89c; }
+.resource-section { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 12px; background: color-mix(in srgb, var(--card-bg, #151c27) 92%, #d8a94e 4%); }.section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }.section-heading h3 { margin: 0; }.section-heading span { color: var(--text-muted, #aeb9c7); font-size: 12px; }.spell-slot-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }.spell-slot-card { display: grid; gap: 6px; padding: 10px; border: 1px solid var(--border-color, #3d4a5f); border-radius: 9px; background: rgb(10 15 23 / 28%); }.spell-slot-card small { color: var(--text-muted, #aeb9c7); }.spell-slot-card strong { font-size: 20px; }.spell-slot-card strong span { color: var(--text-muted, #aeb9c7); font-size: 14px; font-weight: 400; }.slot-meter { height: 4px; overflow: hidden; border-radius: 99px; background: rgb(255 255 255 / 12%); }.slot-meter i { display: block; height: 100%; border-radius: inherit; background: #d8a94e; }.empty-resource { margin: 0; color: var(--text-muted, #aeb9c7); }
 .rest-center { display: grid; gap: 10px; margin-top: 8px; padding: 13px; border: 1px solid #80693f; border-radius: 12px; background: rgb(205 159 72 / 8%); }.rest-center h3, .rest-center p { margin: 0; }.rest-center p { color: var(--text-muted, #aeb9c7); }.rest-types { display: grid; grid-template-columns: repeat(2, minmax(0, 300px)); justify-content: start; gap: 8px; }.rest-type-option { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: start; gap: 8px; min-height: 52px; padding: 8px 10px; box-sizing: border-box; border: 1px solid var(--border-color, #3d4a5f); border-radius: 8px; cursor: pointer; transition: border-color .16s ease, background-color .16s ease; }.rest-type-option:hover { border-color: #9a8050; }.rest-type-option.selected { border-color: #d8a94e; background: rgb(216 169 78 / 12%); }.rest-type-option input[type="radio"] { flex: 0 0 16px; width: 16px; height: 16px; min-width: 16px; margin: 2px 0 0; accent-color: #d8a94e; cursor: pointer; }.rest-type-option span { display: grid; gap: 1px; min-width: 0; text-align: left; }.rest-type-option b { line-height: 1.35; }.rest-type-option small { color: var(--text-muted, #aeb9c7); line-height: 1.35; }.party-rest-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 9px 10px; border: 1px solid rgb(216 169 78 / 45%); border-radius: 8px; background: rgb(216 169 78 / 10%); }.party-rest-status strong { flex-basis: 100%; }.party-rest-status span { color: var(--text-muted, #aeb9c7); font-size: 12px; }.party-rest-status span.submitted { color: #e4c274; }.hit-dice-grid { display: flex; flex-wrap: wrap; gap: 9px; }.hit-dice-grid label { display: grid; gap: 5px; }.hit-dice-grid input { width: 92px; max-width: 100%; }.server-roll-note { font-size: 12px; }.rest-actions { display: block; padding-top: 4px; }.rest-submit { justify-self: end; }.rest-confirm { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 9px; min-width: 0; }.rest-confirm input { width: 18px; height: 18px; margin: 1px 0 0; }.rest-confirm span { line-height: 1.45; }
 .center-error { margin: 12px 0 0; padding: 10px; border-radius: 8px; background: rgb(190 62 62 / 16%); color: #ffb5b5; }.professional-character-center footer { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 10px; margin: 0; padding: 12px 2px 2px; border-top: 1px solid var(--border-color, #3d4a5f); background: var(--card-bg, #151c27); }
 @media (max-width: 720px) { .professional-character-center { width: 100%; gap: 9px; }.center-hero p { display: none; }.center-hero h2 { font-size: 22px; }.center-tabs { grid-template-columns: 1fr 1fr; }.center-scroll-region { padding-right: 3px; }.vital-grid { grid-template-columns: 1fr 1fr; }.ability-grid { grid-template-columns: repeat(3, 1fr); }.profile-grid, .read-only-panel dl { grid-template-columns: 1fr; }.profile-grid .profile-wide { grid-column: auto; }.rest-submit { width: 100%; }.professional-character-center footer button { min-height: 40px; } }

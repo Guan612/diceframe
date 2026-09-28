@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 
 IMAGE_PURPOSES = frozenset({"scene", "avatar", "item", "map", "freeform"})
 IMAGE_PROVIDER_IDS = frozenset({"openai-compatible", "minimax"})
+# 提示词模板变量是一份契约：配置校验、AI 优化和最终组合必须认同一套变量名，
+# 否则会出现「设置页存得下、生图时替换不掉」这类只在运行时才暴露的偏差。
+PROMPT_TEMPLATE_VARIABLES = frozenset({"scene", "narration", "actions", "panels"})
+PROMPT_TEMPLATE_VARIABLE_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def game_image_owner_id(game_key: Any) -> str:

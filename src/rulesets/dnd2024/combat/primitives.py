@@ -7,10 +7,16 @@ from typing import Any
 
 
 DICE_RE = re.compile(r"^(\d+)d(\d+)([+-]\d+)?$")
+# 徒手打击的 canonical 攻击引用：它是每个 player-like actor 的天然攻击能力，
+# 不是捆绑物品，因此没有 "item:" 前缀，也永远不写入 equipment.item_refs。
+UNARMED_STRIKE_REF = "unarmed_strike"
 INTENT_TYPES = frozenset({
     "encounter.ready", "encounter.unready", "combat.start", "combat.end", "combat.message",
     "attack", "cast_spell", "move", "dash", "dodge", "disengage", "end_turn",
     "death_save", "stabilize", "decision.resolve",
+    # 职业特性提供的战斗能力：Combat 只认 capability id、动作/资源成本与底层
+    # canonical action，"哪个职业在第几级授予它" 由 feature boundary 回答。
+    "class_capability",
 })
 
 

@@ -59,25 +59,15 @@ def format_skills(skills: list) -> list[dict]:
 
 
 def format_currency(currency: dict | int | float | None, rule: RuleSystem | None = None) -> str:
-    """Format generic currency data using a rule currency_system."""
-    system = rule.currency_system if rule else {
-        "base_unit": "unit",
-        "units": [{"id": "unit", "name": "金币", "rate": 1}],
-    }
+    """Format generic currency data through the unified CurrencyCodec."""
+    from src.engine.currency import format_currency_amount, legacy_currency_spec
+
+    if rule is not None:
+        spec = rule.currency_spec
+    else:
+        spec = legacy_currency_spec("金币")
     amount = currency.get("amount", 0) if isinstance(currency, dict) else int(currency or 0)
-    units = sorted(system.get("units", []), key=lambda u: int(u.get("rate", 1) or 1), reverse=True)
-    if not units:
-        return str(amount)
-    parts: list[str] = []
-    remaining = int(amount)
-    for unit in units:
-        rate = max(1, int(unit.get("rate", 1) or 1))
-        count, remaining = divmod(remaining, rate)
-        if count:
-            parts.append(f"{count} {unit.get('name', unit.get('id', ''))}".strip())
-    if not parts:
-        parts.append(f"0 {units[-1].get('name', units[-1].get('id', ''))}".strip())
-    return " ".join(parts)
+    return format_currency_amount(int(amount), spec)
 
 
 def get_resource(character_sheet: dict, key: str) -> dict | None:
@@ -871,8 +861,42 @@ def parse_tavern_card(file_path: str | Path) -> dict:
     return _extract_tavern_fields(data)
 
 
+def parse_character_card_document(file_path: str | Path) -> dict:
+    """Return the raw Character Card document metadata without dropping book settings.
+
+    Existing ``parse_tavern_card`` callers keep their compatibility projection; this
+    entry point is intentionally additive and is consumed by Lorebook adapters.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return {"error": "文件不存在"}
+    raw_data = path.read_bytes()
+    if raw_data[:8] == b'\x89PNG\r\n\x1a\n':
+        data = _parse_tavern_png_document(raw_data)
+        if not data:
+            return {"error": "PNG 中未找到角色卡数据"}
+        return {"spec": data.get("spec", "chara_card_v3"), "spec_version": data.get("spec_version", "3.0"), "data": data.get("data", data)}
+    try:
+        data = json.loads(raw_data.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return {"error": f"JSON 解析失败: {exc}"}
+    inner = data.get("data", data) if isinstance(data, dict) else {}
+    book = inner.get("character_book") if isinstance(inner, dict) else None
+    return {
+        "spec": data.get("spec", "chara_card_v3") if isinstance(data, dict) else "chara_card_v3",
+        "spec_version": data.get("spec_version", "3.0") if isinstance(data, dict) else "3.0",
+        "data": {**inner, "character_book": book} if isinstance(inner, dict) else {},
+    }
+
+
 def _parse_tavern_png(raw_data: bytes) -> dict | None:
     """从 PNG 文件的 tEXt chunk 中提取角色卡 JSON。"""
+    data = _parse_tavern_png_document(raw_data)
+    return _extract_tavern_fields(data) if data else None
+
+
+def _parse_tavern_png_document(raw_data: bytes) -> dict | None:
+    """Extract the raw Character Card JSON from a PNG without projecting fields away."""
     try:
         # 跳过 8 字节 PNG 签名
         pos = 8
@@ -898,7 +922,7 @@ def _parse_tavern_png(raw_data: bytes) -> dict | None:
                 if keyword.lower() == "chara":
                     text = chunk_data[null_pos + 1:].decode("utf-8", errors="replace")
                     data = json.loads(text)
-                    return _extract_tavern_fields(data)
+                    return data if isinstance(data, dict) else None
             elif chunk_type == "IEND":
                 break
     except (IndexError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):

@@ -7,9 +7,13 @@ from dataclasses import dataclass, field
 from random import SystemRandom
 from typing import Any
 
+from src.engine.player_control import is_ai_controlled
+from src.engine.modules import legacy_combat, ruleset_runtime
 from src.rulesets.bundle import LoadedRulesetBundle
 from src.rulesets.dnd2024.character.builder import ability_modifier
 from src.rulesets.dnd2024.combat.catalog import Dnd2024CombatCatalog
+from src.rulesets.dnd2024.content.encounter import expand_encounter_enemies
+from src.rulesets.dnd2024.features import Dnd2024ClassFeatureResolver
 from src.rulesets.dnd2024.play.contracts import EncounterAccess
 from src.rulesets.dnd2024.spells.catalog import Dnd2024SpellCatalog
 from src.rulesets.events import EventBatchError, apply_event_batch, stable_batch_id
@@ -17,6 +21,7 @@ from src.rulesets.events import EventBatchError, apply_event_batch, stable_batch
 
 from .primitives import (
     INTENT_TYPES,
+    UNARMED_STRIKE_REF,
     CombatIntentError,
     actor_kind as _actor_kind,
     companion_actor as _companion_actor,
@@ -37,12 +42,19 @@ class Dnd2024CombatEngine(
     bundle: LoadedRulesetBundle
     encounter_access: EncounterAccess = field(default_factory=EncounterAccess.blocked)
     encounter_catalog: dict[str, Any] | None = None
+    # FIX-03 §5.3：运行时内容目录（adventure-local → module → core）。命中模块
+    # encounter_profile / ContentRef enemy 时，敌人实例来自这里，而不是内联
+    # statblock；未注入时退化为纯内联（legacy 冒险包行为不变）。
+    content_catalog: Any | None = None
+    content_source: str = ""
     catalog: Dnd2024CombatCatalog = field(init=False)
     spells: Dnd2024SpellCatalog = field(init=False)
+    features: Dnd2024ClassFeatureResolver = field(init=False)
 
     def __post_init__(self) -> None:
         self.catalog = Dnd2024CombatCatalog.from_bundle(self.bundle)
         self.spells = Dnd2024SpellCatalog.from_bundle(self.bundle)
+        self.features = Dnd2024ClassFeatureResolver(self.bundle)
 
     def initialize_state(self, instance: Any) -> dict[str, Any]:
         state = instance.ruleset_state
@@ -140,7 +152,7 @@ class Dnd2024CombatEngine(
         if int(economy.get("action", 0) or 0) > 0 or int(
             economy.get("attacks_remaining", 0) or 0
         ) > 0:
-            weapons = self._available_weapons(actor)
+            weapons = self._available_attacks(actor)
             if weapons:
                 actions.append({
                     "type": "attack", "label": "Attack", "actor_id": current,
@@ -169,6 +181,19 @@ class Dnd2024CombatEngine(
                 "expected_version": version, "spells": spells,
                 "targets": self._all_targets(instance, combat),
             })
+        # 职业特性提供的战斗能力（v1: Monk 的附赠徒手打击 / 疾风连击 /
+        # 坚守防御 / 疾风步）。服务端只暴露当前真实可用的 capability，因此
+        # 不会出现空的「附赠动作」入口；按钮自带成本与目标要求。
+        for capability in self._available_class_capabilities(actor, economy):
+            entry = capability.to_dict()
+            entry.update({
+                "type": "class_capability",
+                "actor_id": current,
+                "expected_version": version,
+            })
+            if capability.requires_hostile_target:
+                entry["targets"] = self._hostile_targets(instance, combat, current)
+            actions.append(entry)
         if int(economy.get("movement", 0) or 0) > 0:
             actions.append({
                 "type": "move", "label": "Move", "actor_id": current,
@@ -185,11 +210,17 @@ class Dnd2024CombatEngine(
         return [*communication, *actions]
 
     def next_automatic_intent(self, instance: Any) -> dict[str, Any] | None:
-        """Choose one bounded server-owned enemy operation.
+        """Choose one bounded server-owned automatic operation.
 
         The method declares an intent only; validation, dice, events, and state
         mutation still pass through the same authoritative pipeline as player
         actions.
+
+        Enemy and companion actors are server-owned.  An AI-hosted player seat
+        (``player:<uid>`` whose control mode is ``ai`` at this moment) is served
+        by the same deterministic ladder, under the same GM/server automation
+        authority.  A ``human`` or ``unclaimed`` player seat still yields no
+        automatic intent here: the server never plays a human's character.
         """
 
         state = self.initialize_state(instance)
@@ -217,20 +248,26 @@ class Dnd2024CombatEngine(
                 "option": option,
             }
         actor_id = self._current_actor(combat)
-        if not actor_id.startswith(("enemy:", "companion:")):
+        actor_kind, actor_raw_id = _actor_kind(actor_id)
+        if actor_kind not in {"enemy", "companion", "player"}:
             return None
         base = {
             "intent_id": (
-                f"auto:{_actor_kind(actor_id)[0]}:{version}:{actor_id}"
+                f"auto:{actor_kind}:{version}:{actor_id}"
             ),
             "expected_version": version,
             "submitted_by": gm_uid,
             "actor_id": actor_id,
         }
-        if actor_id.startswith("companion:"):
+        if actor_kind == "companion":
             # AI 队友第一阶段：确定性优先级（治疗濒危 → 攻击 → 移动 → Dodge →
             # End Turn），由 GM/server automation authority 提交，走同一权威链。
-            return self._companion_automatic_intent(instance, combat, base)
+            return self._allied_automatic_intent(instance, combat, base)
+        if actor_kind == "player":
+            # AI 托管席位才由服务器代打；真人 / 未认领席位的回合仍然等着人来操作。
+            if not is_ai_controlled(instance, actor_raw_id):
+                return None
+            return self._ai_player_automatic_intent(instance, combat, base)
         actor = self._actor_view(instance, combat, actor_id)
         targets = [
             target for target in self._hostile_targets(instance, combat, actor_id)
@@ -294,13 +331,44 @@ class Dnd2024CombatEngine(
             "type": "end_turn",
         }
 
-    def _companion_automatic_intent(
+    def _ai_player_automatic_intent(
         self, instance: Any, combat: dict[str, Any], base: dict[str, Any],
     ) -> dict[str, Any]:
-        """AI 队友第一阶段确定性自动行动（不接 LLM，不做复杂战术）。
+        """AI 托管玩家席位的确定性战斗回合（不接 LLM，读自己的角色卡）。
+
+        与 companion 共用同一条 ``_allied_automatic_intent`` 阶梯；唯一真实差异是
+        0 HP 的处理：companion 不做死亡豁免，玩家角色必须做，否则战斗会卡在这个
+        席位上。候选意图先过一次真实校验，不合法就退回合法的 ``end_turn``，保证
+        托管席位的回合一定会结束。
+        """
+        actor = self._actor_view(instance, combat, base["actor_id"])
+        if actor["hp"] <= 0:
+            if "stable" in actor["conditions"]:
+                return {**base, "intent_id": f"{base['intent_id']}:end", "type": "end_turn"}
+            return {
+                **base,
+                "intent_id": f"{base['intent_id']}:death_save",
+                "type": "death_save",
+            }
+        candidate = self._allied_automatic_intent(instance, combat, base)
+        if candidate.get("type") == "end_turn":
+            return candidate
+        try:
+            self._validate(instance, candidate)
+        except CombatIntentError:
+            # 阶梯给出的候选在当前状态下不合法（例如只剩 bonus action 才能治疗）：
+            # 不抛出、不空转，退回合法 end_turn，让回合继续推进。
+            return {**base, "intent_id": f"{base['intent_id']}:end", "type": "end_turn"}
+        return candidate
+
+    def _allied_automatic_intent(
+        self, instance: Any, combat: dict[str, Any], base: dict[str, Any],
+    ) -> dict[str, Any]:
+        """AI 己方角色（companion 与 AI 托管 PC）第一阶段确定性自动行动。
 
         优先级：治疗濒危己方 → 攻击最近敌对目标 → 向目标移动 → Dodge →
-        End Turn。intent 仍走 validate/resolve/apply 同一权威链。
+        End Turn。只看这个 actor 自己的角色卡（装备/法术/HP/速度），intent 仍走
+        validate/resolve/apply 同一权威链。
         """
         actor_id = base["actor_id"]
         actor = self._actor_view(instance, combat, actor_id)
@@ -344,7 +412,7 @@ class Dnd2024CombatEngine(
                 target = targets[0]
                 distance = self._distance(combat, actor_id, str(target["actor_id"]))
                 weapons = [
-                    weapon for weapon in self._available_weapons(actor)
+                    weapon for weapon in self._available_attacks(actor)
                     if distance <= int(weapon.get("long_range") or weapon.get("range", 5) or 5)
                 ]
                 weapons.sort(key=lambda weapon: (
@@ -366,7 +434,7 @@ class Dnd2024CombatEngine(
                     desired_range = max(
                         (
                             int(weapon.get("range", 5) or 5)
-                            for weapon in self._available_weapons(actor)
+                            for weapon in self._available_attacks(actor)
                         ),
                         default=5,
                     )
@@ -494,6 +562,8 @@ class Dnd2024CombatEngine(
             })
         elif intent_type == "attack":
             events.extend(self._attack_events(instance, combat, intent, rng))
+        elif intent_type == "class_capability":
+            events.extend(self._class_capability_events(instance, combat, intent, rng))
         elif intent_type == "cast_spell":
             events.extend(self._spell_events(instance, combat, intent, rng))
         elif intent_type == "move":
@@ -625,6 +695,10 @@ class Dnd2024CombatEngine(
         return self.apply_batch(instance, batch)
 
     def apply_batch(self, instance: Any, batch: dict[str, Any]) -> dict[str, Any]:
+        # initialize_state may write ruleset defaults, even for a replayed
+        # batch, so reject an unsupported projection slot before it runs.
+        legacy_combat.require_writable(instance)
+        ruleset_runtime.require_writable(instance)
         state = self.initialize_state(instance)
         snapshot = {
             "version": int(state.get("version", 0) or 0),
@@ -648,12 +722,7 @@ class Dnd2024CombatEngine(
                 instance.set_character_sheet(uid, existing)
             instance.event_ledger = ledger
             combat = ruleset_state["combat"]
-            instance.combat_state = (
-                "active" if combat.get("status") == "active" else "none"
-            )
-            instance.combat_active = instance.combat_state == "active"
-            instance.initiative_order = list(combat.get("initiative") or [])
-            instance.initiative_current = int(combat.get("turn_index", 0) or 0)
+            legacy_combat.project_from_ruleset(instance, combat)
         return {
             "ok": True,
             "applied": not duplicate,
@@ -677,6 +746,10 @@ class Dnd2024CombatEngine(
                     "conditions": deepcopy(view["conditions"]),
                     "concentration": deepcopy(view.get("concentration")),
                     "death_saves": deepcopy(view.get("death_saves") or {}),
+                    # 职业资源投影永远是一张列表（player / companion 视图给出角色
+                    # 真实条目，enemy 视图没有职业资源，就是空列表）。这里绝不能
+                    # 退回 ``{}``：同一个字段出现两种形状会让客户端把对象当数组用。
+                    "class_resources": deepcopy(view.get("class_resources") or []),
                 })
         initiative = list(combat.get("initiative") or [])
         turn_index = int(combat.get("turn_index", 0) or 0)
@@ -746,7 +819,11 @@ class Dnd2024CombatEngine(
             raw_attack_labels if isinstance(raw_attack_labels, dict) else {}
         )
         result: list[dict[str, Any]] = []
-        for raw in catalog.get("presets") or []:
+        seen_preset_ids: set[str] = set()
+        for raw in [
+            *(catalog.get("presets") or []),
+            *self._module_presets(),
+        ]:
             if not isinstance(raw, dict):
                 continue
             preset = deepcopy(raw)
@@ -756,21 +833,82 @@ class Dnd2024CombatEngine(
             ):
                 continue
             preset_id = str(preset.get("id") or "")
+            if not preset_id or preset_id in seen_preset_ids:
+                continue
+            seen_preset_ids.add(preset_id)
             text = preset_labels.get(preset_id, {})
             text = text if isinstance(text, dict) else {}
-            preset["name"] = str(text.get("name") or preset_id or "Encounter")
-            preset["description"] = str(text.get("description") or "")
-            for enemy in preset.get("enemies") or []:
+            preset["name"] = str(
+                text.get("name") or preset.get("name") or preset_id or "Encounter"
+            )
+            preset["description"] = str(
+                text.get("description") or preset.get("description") or ""
+            )
+            preset["enemies"] = self._preset_enemies(preset)
+            for enemy in preset["enemies"]:
                 profile_id = str(enemy.pop("profile_id", "") or "")
                 enemy["name"] = str(
-                    profile_labels.get(profile_id) or profile_id or enemy["id"]
+                    profile_labels.get(profile_id) or enemy.get("name") or profile_id or enemy["id"]
                 )
                 for attack in enemy.get("attacks") or []:
                     attack_id = str(attack.get("id") or "")
                     attack["name"] = str(attack_labels.get(attack_id) or attack_id)
-            self._validate_enemies(preset.get("enemies"))
+            self._validate_enemies(preset["enemies"])
             result.append(preset)
         return result
+
+    def _preset_enemies(self, preset: dict[str, Any]) -> list[dict[str, Any]]:
+        """Enemy instances for one preset: module ContentRefs or inline statblocks.
+
+        FIX-03 §5.3：引用式敌人（``enemies[].ref``）经运行时内容目录解析为
+        canonical enemy 实例；内联 statblock（v1 冒险包）原样保留。解析失败
+        fail closed —— 绝不用别的怪物顶上。
+        """
+
+        enemies = preset.get("enemies")
+        if not isinstance(enemies, list):
+            return []
+        if not any(isinstance(entry, dict) and entry.get("ref") for entry in enemies):
+            return deepcopy(enemies)
+        catalog = self.content_catalog
+        if catalog is None:
+            raise CombatIntentError(
+                "module encounter requires the runtime content catalog"
+            )
+        refs = [entry for entry in enemies if isinstance(entry, dict)]
+        if len(refs) != len(enemies):
+            raise CombatIntentError("encounter enemy entry must be an object")
+        return expand_encounter_enemies(
+            catalog,
+            refs,
+            default_source=str(preset.get("source_ref") or self.content_source or ""),
+        )
+
+    def _module_presets(self) -> list[dict[str, Any]]:
+        """Encounter presets contributed by the runtime content catalog (§5.3)."""
+
+        catalog = self.content_catalog
+        if catalog is None:
+            return []
+        records = getattr(catalog, "records_for", None)
+        source: Any
+        if callable(records):
+            source = records("encounter_profile")
+        else:  # pragma: no cover - 目录实现始终提供 records_for
+            source = {}
+        presets: list[dict[str, Any]] = []
+        for record in (source or {}).values():
+            if not isinstance(record, dict):
+                continue
+            presets.append({
+                "id": str(record.get("encounter_id") or ""),
+                "name": str(record.get("name") or ""),
+                "description": str(record.get("description") or ""),
+                "difficulty": str(record.get("difficulty") or "standard"),
+                "source_ref": str(record.get("source_ref") or ""),
+                "enemies": deepcopy(record.get("enemies") or []),
+            })
+        return [preset for preset in presets if preset["id"]]
 
     def _preset(self, preset_id: str) -> dict[str, Any] | None:
         wanted = str(preset_id or "")

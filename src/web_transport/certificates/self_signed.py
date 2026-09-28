@@ -30,6 +30,7 @@ from src.web_transport.certificates.metadata import (
     metadata_from_certificate,
 )
 from src.web_transport.certificates.storage import CertificateStore
+from src.web_transport.local_addresses import local_ip_addresses
 
 logger = logging.getLogger("trpg.web_transport")
 
@@ -47,41 +48,11 @@ def _collect_san_entries() -> list[str]:
             entries.append(hostname)
     except OSError:
         pass
-    for address in _local_ip_addresses():
+    for address in local_ip_addresses():
         text = str(address)
         if text not in entries:
             entries.append(text)
     return entries
-
-
-def _local_ip_addresses() -> list[ipaddress.IPAddress]:
-    addresses: list[ipaddress.IPAddress] = []
-    # UDP connect 不会真正发包，只用于让系统选择默认路由的源地址。
-    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        probe.settimeout(0)
-        probe.connect(("8.8.8.8", 80))
-        candidate = probe.getsockname()[0]
-        _append_address(addresses, candidate)
-    except OSError:
-        pass
-    finally:
-        probe.close()
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None):
-            _append_address(addresses, info[4][0])
-    except (OSError, UnicodeError):
-        pass
-    return addresses
-
-
-def _append_address(addresses: list[ipaddress.IPAddress], raw: str) -> None:
-    try:
-        address = ipaddress.ip_address(raw)
-    except ValueError:
-        return
-    if not address.is_unspecified and not address.is_multicast:
-        addresses.append(address)
 
 
 class SelfSignedCertificateProvider:

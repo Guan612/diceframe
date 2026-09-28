@@ -7,6 +7,7 @@ export interface ImageGenerationStatus {
   provider: string
   model: string
   auto_scene: boolean
+  prompt_char_limit: number
 }
 
 export interface GenerateImageInput {
@@ -22,6 +23,12 @@ export interface GenerateImageResponse extends GeneratedImageRecord {
   ok?: boolean
   error?: string
   reference?: { kind: 'generated'; asset_id: string }
+  prompt_budget?: {
+    limit?: number
+    used?: number
+    adjusted?: boolean
+    reduced_segments?: string[]
+  }
 }
 
 export async function imageGenerationStatus(): Promise<ImageGenerationStatus> {
@@ -46,12 +53,24 @@ export async function generateImage(input: GenerateImageInput): Promise<Generate
   return result
 }
 
-export async function generateCurrentRoundImage(gameKey: string, input: { prompt: string; round?: number; panels?: unknown[]; useAvatarReferences?: boolean }): Promise<GenerateImageResponse> {
+export async function generateCurrentRoundImage(gameKey: string, input: { prompt: string; round?: number; panels?: unknown[]; panelCount?: number; useAvatarReferences?: boolean }): Promise<GenerateImageResponse> {
   const result = await api<GenerateImageResponse>(`/games/${encodeURIComponent(gameKey)}/generated-images/current-round`, {
-    method: 'POST', body: JSON.stringify({ prompt: input.prompt, round: input.round || 0, panels: input.panels || [], use_avatar_references: !!input.useAvatarReferences }),
+    method: 'POST', body: JSON.stringify({ prompt: input.prompt, round: input.round || 0, panels: input.panels || [], panel_count: input.panelCount, use_avatar_references: !!input.useAvatarReferences }),
   })
   if (!result.ok || !result.asset_id) throw new Error(result.error || 'image-generation-failed')
   return result
+}
+
+export async function fetchStoryboardDraft(gameKey: string, round = 0): Promise<{ ok?: boolean; round?: number; panels?: unknown[]; error?: string }> {
+  return api(`/games/${encodeURIComponent(gameKey)}/generated-images/storyboard?round=${round}`)
+}
+
+export async function analyzeStoryboard(gameKey: string, round = 0, panelCount?: number): Promise<{ ok?: boolean; round?: number; panels?: unknown[]; compressed_count?: number; requested_panel_count?: number | null; actual_panel_count?: number; error?: string }> {
+  return api(`/games/${encodeURIComponent(gameKey)}/generated-images/storyboard/analyze`, { method: 'POST', body: JSON.stringify({ round, panel_count: panelCount }) })
+}
+
+export async function previewImagePrompt(gameKey: string, input: { prompt: string; panels?: unknown[] }): Promise<{ ok?: boolean; prompt?: string; prompt_budget?: Record<string, unknown>; error?: string }> {
+  return api(`/games/${encodeURIComponent(gameKey)}/generated-images/prompt/preview`, { method: 'POST', body: JSON.stringify(input) })
 }
 
 function currentGameKey(): string {

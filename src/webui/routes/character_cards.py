@@ -82,6 +82,16 @@ async def api_character_card_delete(request: web.Request) -> web.Response:
     return web.json_response(_get_api(request).delete_character_card(request.match_info["card_id"]))
 
 
+def _as_bool(value: object, default: bool = True) -> bool:
+    """Accept a real boolean or the string forms a form-encoded upload sends."""
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 async def api_character_card_import(request: web.Request) -> web.Response:
     body = await request.json()
     result = await _get_api(request).import_character_card(
@@ -89,6 +99,8 @@ async def api_character_card_import(request: web.Request) -> web.Response:
         file_name=body.get("file_name", "card.json"),
         target=str(body.get("target") or "character_card"),
         world_id=str(body.get("world_id") or ""),
+        include_character_book=_as_bool(body.get("include_character_book"), True),
+        character_uid=str(body.get("character_uid") or ""),
     )
     return web.json_response(result, status=200 if result.get("ok") else 422)
 
