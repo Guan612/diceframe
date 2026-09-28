@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
 
-from src.engine import instance_lifecycle, round_recovery, round_snapshots, turn_state
+from src.engine import instance_lifecycle, progression, round_recovery, round_snapshots, turn_state
+from src.engine.action_gate import (
+    AI_SEAT_COMMIT_POLICY, GateRequest, SOURCE_AI_SEAT, SOURCE_HUMAN,
+    StructuredIntentRequirement, check_run_unchanged, evaluate,
+)
 from src.engine.contracts import (
     ActionRecord,
     CheckResult,
@@ -31,9 +35,16 @@ from src.engine.game_state_contracts import (
     PlayerRollbackSnapshot,
 )
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.module_state import ensure_module_states
+from src.engine.modules import (
+    combat_extension_state,
+    economy_state,
+    lorebook_runtime,
+    player_control_state,
+    progression_state,
+)
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.engine.player_control import (
-    DEFAULT_AWAY_CONTROL_POLICY,
     PlayerControlError,
     begin_away_hosting,
     control_change_block,
@@ -41,6 +52,7 @@ from src.engine.player_control import (
     end_away_hosting,
     ensure_control,
     ensure_controls,
+    normalize_away_control_policy,
     set_control,
 )
 from src.engine.round_snapshots import (
@@ -119,7 +131,6 @@ class GameInstance:
     instance_schema_version: int = CURRENT_INSTANCE_SCHEMA_VERSION
     run_id: str = field(default_factory=lambda: f"run_{uuid4().hex}")
     memory_namespace: str = ""
-    economy: dict[str, Any] = field(default_factory=dict)
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
     ruleset_runtime: dict[str, Any] = field(default_factory=dict)
@@ -145,7 +156,6 @@ class GameInstance:
     npcs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # 回合
-    round_number: int = 0
     action_queue: list[ActionRecord] = field(default_factory=list)
     pending_actions: list[ActionRecord] = field(default_factory=list)
     ready_players: set[str] = field(default_factory=set)
@@ -162,9 +172,6 @@ class GameInstance:
     max_players: int = 6
     gm_uid: str = ""  # 创建游戏的 GM 的 user_id
     player_access_open: bool = True  # False 时所有玩家分享链接失效
-    # 房间级「暂离语义」：pause（默认，暂离不把角色交给 AI）或 ai_takeover。
-    # 旧存档没有这个字段，migration 一律补 pause（旧版本的真实行为）。
-    away_control_policy: str = DEFAULT_AWAY_CONTROL_POLICY
     bot_bind_token: str = ""  # 渠道 Bot 绑定本局的一次性管理凭证
     room_password: str = ""  # 房间密码（空=开放）；玩家凭此进入游戏，替代后台 access_token
     room_token: str = ""  # 玩家凭房间密码换取的会话凭证（random secrets，校验通过后颁发）
@@ -185,6 +192,7 @@ class GameInstance:
     # key_facts 这类叙事摘要，也不属于 ruleset_state；唯一写入口是
     # ``src.engine.world_state.apply_world_ops``。
     world_state: dict[str, Any] = field(default_factory=fresh_world_state)
+    modules: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # 运行时跟踪：chatlog.jsonl 已持久化的 log 条数（不入存档，仅用于增量追加）
     last_saved_log_count: int = 0
@@ -270,9 +278,6 @@ class GameInstance:
     # 战斗结算缓存（供 WebUI 展示）
     pending_combat_results: list[dict] = field(default_factory=list)
 
-    # 世界书时间效应状态
-    lorebook_timed_state: dict[str, dict] = field(default_factory=dict)
-
     # WebUI 快捷行动建议
     quick_actions: list[str] = field(default_factory=list)
 
@@ -296,14 +301,6 @@ class GameInstance:
     # "auto_reward_cap": int}。{} 表示未设置，结算时回退规则模板 economy_defaults
     # 与服务器全局配置；归属见 economy.resolve_auto_reward_policy。
     economy_reward_policy: dict = field(default_factory=dict)
-    # 通用战斗扩展状态（Issue 212）：{"schema_version": 1, "scheduler": {...}|None,
-    # "pools": {entity_id: {resource_id: {...}}}}。仅当规则模板显式声明 combat
-    # 能力时由 runtime 写入；{} 表示未启用。结构与校验归属 combat_scheduler /
-    # combat_resources，存档只做不透明透传。
-    combat_extension: dict = field(default_factory=dict)
-    # 通用战斗扩展按回合惰性保存的首个写入前快照。动作和调度推进都可能
-    # 独立于叙事判定发生，因此不能只依赖玩家 round_start_snapshot。
-    combat_extension_round_snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
     # 内部：每条 pending 幸运检定的超时定时器（check_id -> asyncio.Task），不序列化
     _luck_timers: dict = field(default_factory=dict, repr=False)
     # 内部：正在处理本轮的 task（仅判定期间有值，不序列化）。GM 明确要求强制推进
@@ -325,35 +322,46 @@ class GameInstance:
         # 世界真相容器：未设置/损坏 → 空世界；未知 schema 原样保留，由写入路径
         # 明确拒绝，绝不把用户数据猜成默认值。
         self.world_state = ensure_world_state(self.world_state)
+        self.modules = ensure_module_states(self.modules)
+        economy_state.ensure_run_id(self)
         # 每个席位都带一个显式控制器（human / ai / unclaimed）：旧存档、内存构造
         # 与手工修改过的 players 都在这里补齐，读取方永远不必自己猜。唯一写入口
         # 仍是 src.engine.player_control.set_control。
         ensure_controls(self)
-        if not isinstance(self.economy, dict) or not self.economy:
-            self.economy = self._fresh_economy_state()
-        else:
-            self.economy.setdefault("schema_version", 2)
-            self.economy.setdefault("run_id", self.run_id)
-            self.economy.setdefault("next_sequence", 1)
-            self.economy.setdefault("proposals", [])
-            self.economy.setdefault("transactions", [])
-            self.economy.setdefault("idempotency_records", {})
-            self.economy.setdefault("effect_groups", [])
-            self.economy.setdefault("external_effects_outbox", [])
-            self.economy.setdefault("outcomes", [])
 
-    def _fresh_economy_state(self) -> dict[str, Any]:
-        return {
-            "schema_version": 2,
-            "run_id": self.run_id,
-            "next_sequence": 1,
-            "proposals": [],
-            "transactions": [],
-            "idempotency_records": {},
-            "effect_groups": [],
-            "external_effects_outbox": [],
-            "outcomes": [],
-        }
+    @property
+    def round_number(self) -> int:
+        return progression_state.round_value(self)
+
+    @round_number.setter
+    def round_number(self, value: int) -> None:
+        progression_state.set_round_value(self, value)
+
+    @property
+    def economy(self) -> dict[str, Any]:
+        return economy_state.state(self)
+
+    @economy.setter
+    def economy(self, value: Any) -> None:
+        economy_state.replace_state(self, value)
+
+    @property
+    def combat_extension(self) -> dict[str, Any]:
+        """Live opaque combat state; an empty dict means disabled."""
+        return combat_extension_state.current(self)
+
+    @combat_extension.setter
+    def combat_extension(self, value: Any) -> None:
+        combat_extension_state.replace_current(self, value)
+
+    @property
+    def combat_extension_round_snapshots(self) -> dict[str, Any]:
+        """Live snapshots captured before each round's first combat write."""
+        return combat_extension_state.round_snapshots(self)
+
+    @combat_extension_round_snapshots.setter
+    def combat_extension_round_snapshots(self, value: Any) -> None:
+        combat_extension_state.replace_round_snapshots(self, value)
 
     @asynccontextmanager
     async def authoritative_write(self) -> AsyncIterator[bool]:
@@ -409,10 +417,12 @@ class GameInstance:
     def rotate_run_identity(self) -> tuple[str, str]:
         """Start an isolated run namespace and return ``(old, new)``."""
 
+        # Reject unsupported slots before changing either run identity.
+        economy_state.state(self)
         old = self.run_id
         self.run_id = f"run_{uuid4().hex}"
         self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
-        self.economy = self._fresh_economy_state()
+        self.economy = economy_state.fresh_economy_state(self.run_id)
         return old, self.run_id
 
     # ---------- 状态查询 ------------------------------------
@@ -613,6 +623,9 @@ class GameInstance:
         the rollback assignment here preserves the aggregate write boundary
         while allowing ruleset orchestration to remain transaction-aware.
         """
+        if "round_number" in snapshot:
+            progression.require_writable(self)
+            restored_round = int(snapshot["round_number"])
         self.ruleset_state = copy.deepcopy(snapshot["ruleset_state"])
         self.event_ledger = copy.deepcopy(snapshot["event_ledger"])
         self.players = copy.deepcopy(snapshot["players"])
@@ -627,7 +640,7 @@ class GameInstance:
         if "log" in snapshot:
             self.log = copy.deepcopy(snapshot["log"])
         if "round_number" in snapshot:
-            self.round_number = int(snapshot["round_number"])
+            progression.restore_from_snapshot(self, restored_round)
 
     def set_player_access(self, open_access: bool) -> None:
         self.player_access_open = bool(open_access)
@@ -771,6 +784,7 @@ class GameInstance:
 
     def begin_round_processing(self) -> None:
         """清理仅属于上一轮展示的短期状态。"""
+        progression.require_writable(self)
         self.last_token_budget_bump = None
         self.pending_combat_results.clear()
         self.update_lorebook_timed_state()
@@ -861,6 +875,11 @@ class GameInstance:
         ``round_recovery.rollback_last_round_locked``。
         """
         async with self._lock:
+            if self.log:
+                # Reject before history or snapshots can be changed.
+                progression.require_writable(self)
+                economy_state.state(self)
+                combat_extension_state.current(self)
             return round_recovery.rollback_last_round_locked(self)
 
     async def abort_round_processing(self) -> bool:
@@ -879,6 +898,10 @@ class GameInstance:
         ``_drop_stale_combat_caches``。
         """
         async with self._lock:
+            if self.state == GameState.ACTIVE_JUDGMENT:
+                progression.require_writable(self)
+                economy_state.state(self)
+                combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
 
     def _drop_stale_combat_caches(self, *, all_targets: bool = False) -> None:
@@ -1030,9 +1053,15 @@ class GameInstance:
         """任一满足即推进：所有存活玩家已就绪，或单人模式下任一玩家已行动。"""
         return turn_state.should_advance(self)
 
-    async def start_round(self) -> None:
-        """开启新一轮行动阶段。"""
+    async def start_round(self, *, expected_run_id: str = "") -> None:
+        """开启新一轮行动阶段；可选 run fence 在状态锁内检查。"""
         async with self._lock:
+            if expected_run_id and check_run_unchanged(
+                self, GateRequest(actor_uid="", source=SOURCE_HUMAN, expected_run_id=expected_run_id),
+            ):
+                return
+            progression.require_writable(self)
+            economy_state.state(self)
             turn_state.start_round_locked(self)
 
     async def add_action(self, user_id: str, action_text: str,
@@ -1042,7 +1071,8 @@ class GameInstance:
                          check_request: dict | None = None,
                          count_revision: bool = True,
                          action_metadata: dict | None = None,
-                         defer_out_of_phase: bool = True) -> bool:
+                         defer_out_of_phase: bool = True,
+                         expected_run_id: str = "") -> bool:
         """玩家声明行动。判决阶段中的发言缓存到下一轮。
 
         selected_attribute/selected_skill/target_text 为前端可选提交的结构化
@@ -1051,10 +1081,15 @@ class GameInstance:
         ``action_metadata`` 是调用方自带的机器可读标记（例如服务器 AI 行动的
         ``source`` / ``control_revision`` / ``generated_for_round``），只用于去重
         与调试，不参与任何裁定；``defer_out_of_phase=False`` 表示这条行动带有
-        轮次身份，判定阶段只能拒绝，不得缓存进下一轮。
+        轮次身份，判定阶段只能拒绝，不得缓存进下一轮。非空
+        ``expected_run_id`` 在两层锁内复核；不匹配返回 False，不修改队列。
         """
         async with self.authoritative_write() as write_entered, self._lock:
             if not write_entered or self._process_lock.locked():
+                return False
+            if expected_run_id and check_run_unchanged(
+                self, GateRequest(actor_uid=user_id, source=SOURCE_HUMAN, expected_run_id=expected_run_id),
+            ):
                 return False
             return self._add_action_locked(
                 user_id, action_text,
@@ -1084,6 +1119,7 @@ class GameInstance:
         内完成两件事：自己在锁内复核，再调用这里追加，而不是写两层加锁。
         实现见 ``turn_state.add_action_locked``。
         """
+        progression.require_writable(self)
         return turn_state.add_action_locked(
             self, user_id, action_text,
             selected_attribute=selected_attribute,
@@ -1112,6 +1148,7 @@ class GameInstance:
         expected_round_number: int,
         expected_control_revision: int,
         action_metadata: dict | None = None,
+        requires_structured_intent: StructuredIntentRequirement = False,
     ) -> str:
         """Atomically re-confirm a hosted seat and commit its action.
 
@@ -1132,7 +1169,10 @@ class GameInstance:
         Returns ``""`` on commit, otherwise the reason the result was dropped:
         ``rejected`` / ``run_changed`` / ``round_changed`` / ``seat_removed`` /
         ``control_changed`` / ``phase_changed`` / ``human_gate_changed`` /
-        ``duplicate`` / ``action_rejected``.  Callers must treat a non-empty
+        ``duplicate`` / ``STRUCTURED_INTENT_REQUIRED`` / ``action_rejected``.
+        A supplied structured-intent predicate reads current admission state here,
+        synchronously under both locks, after the existing rejection checks.
+        Callers must treat a non-empty
         result as "write nothing"; the action never lands.
         """
         async with self.authoritative_write() as write_entered, self._lock:
@@ -1147,19 +1187,21 @@ class GameInstance:
             )
             if stale:
                 return stale
-            # 真人闸门也要在这个 boundary 内复核：模型调用期间别的席位可能被真人
-            # 接管、或暂离的真人回来了，此时桌面上多了一个还没提交的 active human，
-            # 现在写入就会违反"AI 只在真人全部行动之后才行动"。
-            # 没有活跃真人的桌子（全 AI 桌，例如单人局把房主自己设为 AI 托管）没有
-            # 真人可等：此时 human_actions_ready() 恒为 False，照旧判定会把刚生成好的
-            # 行动误丢（reason=human_gate_changed），整桌永远发不出内容。因此只有
-            # "确实存在未提交的活跃真人"才算闸门关闭。
-            if self.active_human_players and not self.human_actions_ready():
-                return "human_gate_changed"
-            # 去重与复核必须在同一个 boundary 内：否则两个并发的补行动请求会各自
-            # 读到"还没有 AI 行动"，然后各写一条。
-            if self.has_action_from_source(user_id, expected_round_number, source):
-                return "duplicate"
+            code = evaluate(
+                self,
+                GateRequest(
+                    actor_uid=user_id,
+                    source=SOURCE_AI_SEAT,
+                    expected_run_id=expected_run_id,
+                    expected_round_number=expected_round_number,
+                    expected_control_revision=expected_control_revision,
+                    action_source=source,
+                    requires_structured_intent=requires_structured_intent,
+                ),
+                AI_SEAT_COMMIT_POLICY,
+            )
+            if code:
+                return code
             added = self._add_action_locked(
                 user_id, action_text,
                 source=source,
@@ -1294,6 +1336,7 @@ class GameInstance:
         async with self._lock:
             from src.engine.economy import has_blocking_economy_decision
 
+            progression.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             return self._do_advance_locked()
@@ -1303,6 +1346,7 @@ class GameInstance:
         async with self._lock:
             from src.engine.economy import has_blocking_economy_decision
 
+            progression.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             if self.state != GameState.ACTIVE_ACTION:
@@ -1313,6 +1357,7 @@ class GameInstance:
 
     def _do_advance_locked(self) -> bool:
         """在锁内执行推进（调用方需持锁；实现见 turn_state）。"""
+        progression.require_writable(self)
         return turn_state.do_advance_locked(self)
 
     def capture_round_entity_snapshot(self) -> None:
@@ -1335,8 +1380,11 @@ class GameInstance:
         pre_state_snapshot 应为 _apply_state_update 之前拍摄的快照，
         确保 swipe 重生成时恢复到本轮初始状态而非应用后状态。
         state_changes 为本轮玩家可见状态变动摘要，随 log entry 持久化供群机器人单独转发。
+        日志提交与下一轮开启共用状态锁，中间不释放锁或 await。
         """
         async with self._lock:
+            progression.require_writable(self)
+            economy_state.state(self)
             round_recovery.finish_judgment_locked(
                 self,
                 gm_response,
@@ -1344,7 +1392,7 @@ class GameInstance:
                 state_changes=state_changes,
                 pre_combat_extension_snapshot=pre_combat_extension_snapshot,
             )
-        await self.start_round()
+            turn_state.start_round_locked(self)
 
     async def finish_judgment_with_swipe(
         self,
@@ -1354,6 +1402,7 @@ class GameInstance:
     ) -> None:
         """为已有轮次添加 swipe（不推进回合）。"""
         async with self._lock:
+            economy_state.state(self)
             round_recovery.finish_judgment_with_swipe_locked(
                 self, gm_response, original_round, state_changes=state_changes,
             )
@@ -1367,14 +1416,20 @@ class GameInstance:
 
     async def activate(self) -> None:
         async with self._lock:
+            progression.require_writable(self)
             instance_lifecycle.activate_locked(self)
 
     async def pause(self) -> None:
         async with self._lock:
             instance_lifecycle.pause_locked(self)
 
-    async def resume(self) -> None:
+    async def resume(self, *, expected_run_id: str = "") -> None:
         async with self._lock:
+            if expected_run_id and check_run_unchanged(
+                self, GateRequest(actor_uid="", source=SOURCE_HUMAN, expected_run_id=expected_run_id),
+            ):
+                return
+            progression.require_writable(self)
             instance_lifecycle.resume_locked(self)
 
     async def end(self) -> None:
@@ -1388,9 +1443,29 @@ class GameInstance:
         实现是基线 reset() 的机械迁移（见 ``instance_lifecycle.reset_locked``）。
         """
         async with self._lock:
+            # Validate fallible slots before rotating the run or clearing state.
+            progression.require_writable(self)
+            combat_extension_state.current(self)
+            lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
 
     # ---------- 序列化 --------------------------------------
+
+    @property
+    def away_control_policy(self) -> str:
+        return player_control_state.away_control_policy(self)
+
+    @away_control_policy.setter
+    def away_control_policy(self, value: Any) -> None:
+        player_control_state.set_away_control_policy_value(self, normalize_away_control_policy(value))
+
+    @property
+    def lorebook_timed_state(self) -> dict[str, dict]:
+        return lorebook_runtime.timers(self)
+
+    @lorebook_timed_state.setter
+    def lorebook_timed_state(self, value: Any) -> None:
+        lorebook_runtime.replace_timers(self, value)
 
     def update_lorebook_timed_state(self) -> None:
         """Tick persisted Lorebook timers, supporting the pre-v2 shape.

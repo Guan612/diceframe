@@ -19,7 +19,7 @@ import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
-from src.engine.game_state_codec import _normalize_lorebook_timed_state
+from src.engine.modules.lorebook_runtime import normalize_timers as _normalize_lorebook_timed_state
 from src.lorebook.activation import (
     advance_timed_state,
     delay_gate_blocked,

@@ -26,6 +26,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from src.engine import progression
 from src.engine.game_state import GameState
 from src.engine.round_snapshots import restore_players, snapshot_players
 from src.engine.world_state import ensure_world_state
@@ -88,7 +89,7 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     # 留在被丢弃的分支上"的半回滚。
     if isinstance(last.get("pre_adventure_progress"), dict):
         instance.adventure_progress = copy.deepcopy(last["pre_adventure_progress"])
-    instance.round_number = max(1, rolled_back_round)
+    progression.rewind_after_rollback(instance, rolled_back_round)
     instance.action_queue.clear()
     instance.pending_actions.clear()
     instance.ready_players.clear()
@@ -156,9 +157,8 @@ def finish_judgment_locked(
 ) -> None:
     """构造并写入本轮判定 log entry（``finish_judgment`` 的持锁部分）。
 
-    迁移自基线 ``main`` 的 ``finish_judgment`` 锁内函数体。锁外的
-    ``await start_round()`` 仍由 GameInstance wrapper 负责，保持既有
-    lock 生命周期。
+    GameInstance wrapper 先校验推进与经济模块，再在同一段状态锁内依次
+    调用本函数和 ``start_round_locked``，使日志提交与下一轮开启不可交错。
     """
     pending_combat_summaries: list[str] = []
     raw_schema = (

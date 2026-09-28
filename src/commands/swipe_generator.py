@@ -17,7 +17,7 @@ from src.commands.economy_effects import (
     should_warn_unbacked_payment,
 )
 from src.engine.economy import filter_unconfirmed_purchase_grants
-from src.engine import combat_narrative
+from src.engine import combat_narrative, progression
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
@@ -126,12 +126,13 @@ class SwipeGenerator:
             return None, None
 
         swipes = target_entry.get("swipes", [])
-        if not swipes:
-            swipes = [target_entry.get("gm_response", "")]
-            target_entry["swipes"] = swipes
         if len(swipes) >= 5:
             logger.warning("Swipe 已达上限 (5), round=%d", round_num)
             return None, None
+        progression.require_writable(instance)
+        if not swipes:
+            swipes = [target_entry.get("gm_response", "")]
+            target_entry["swipes"] = swipes
 
         snapshot = target_entry.get("pre_state_snapshot", {})
         if snapshot:
@@ -150,7 +151,7 @@ class SwipeGenerator:
             if isinstance(current_combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(current_combat_snapshot):
                     instance.combat_extension = {}
-            instance.round_number = round_num
+            progression.rewind_for_replay(instance, round_num)
             reverse_round_economy(instance, round_num)
             restore_players(instance, reconcile_rollback_snapshot(instance, snapshot, round_num))
             combat_snapshot = target_entry.get("pre_combat_extension_snapshot")

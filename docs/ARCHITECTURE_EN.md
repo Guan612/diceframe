@@ -10,7 +10,7 @@
 > - Branch: `main`
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
-> - Current GameInstance persisted schema: `15`
+> - Current GameInstance persisted schema: `21`
 > - Current Lorebook SQLite schema (`PRAGMA user_version`): `9`
 > - Document verification date: 2026-09-18
 >
@@ -1225,6 +1225,51 @@ Old GameInstance
 
 This means an old writer that had been waiting for the lock still points at the old object / old run when it resumes, allowing the stale fence to reject it.
 
+## 10.4 R5-c Progression Boundary Decisions
+
+**c2: implement.** `GameInstance.finish_judgment` validates progression writability
+and the economy module, then calls synchronous
+`round_recovery.finish_judgment_locked` and `turn_state.start_round_locked` in the
+same `_lock` section. There is no `await` between committing the log and opening
+the next round, and no call to public `start_round` that would reacquire the lock.
+Queued state-lock writers therefore observe the new log, next round number, and
+`ACTIVE_ACTION` together. Cancellation while waiting for the lock commits no log;
+a queued canceller after commit cannot leave the game with a committed log but
+still in judgment. This is atomicity under the state lock, not a rollback
+transaction for the entire LLM pipeline. Existing owners retain responsibility
+for log, snapshot, pending-action, check/timer, and SSE projection semantics.
+
+The baseline characterization queued `finish_judgment` in round 3, followed by a
+state-lock writer. That writer observed the new round-3 log with
+`ACTIVE_JUDGMENT` before round 4 opened. Regression coverage includes the real
+WebAPI → GameHandler → RoundProcessor pipeline, cancellation while waiting,
+queued writers, and unchanged state on refusal of unknown progression modes or
+schemas and economy/combat module schemas.
+
+Public `start_round(expected_run_id=...)` retains its run check under the lock;
+stale tokens return before module validation. `finish_judgment` retains its
+internal commit contract without a token, while existing pipeline fences still
+check run / registry identity. c2 adds no fence parameter and makes no guarantee
+against arbitrary direct writes that bypass authority or pipeline fences.
+
+The remaining decisions are recorded without new behavior:
+
+- **c3: retain.** Authoritative intents advance the public log timeline through
+  `progression.advance_for_public_timeline` to keep numbering continuous. This
+  does not traverse the narrative state machine or open an ordinary narrative round.
+- **c4: retain.** `GameState.PUZZLE` currently has no runtime entry path, but remains
+  a persisted enum value. Removing it would require migration without a benefit
+  in this change; a comment beside the enum explains why it remains.
+- **c5: preserve legacy/imported `game_time` values.** The field is not always empty:
+  construction, the codec, and imports can preserve nonempty text; reset clears it.
+  No display format or locale-to-logical-clock rule has been approved, so existing
+  text must not be derived over, deleted, or migrated on that assumption.
+  WorldState's day/minute clock continues to own time advancement independently;
+  the two existing context reads remain unchanged.
+- **c6: unchanged.** Lorebook delay gates retain the existing round tick. A second
+  progression mode and content-track clock adaptation need a separate design;
+  R6 is outside this change.
+
 ---
 
 # 11. Persistence Architecture
@@ -1856,6 +1901,52 @@ no automatic intent is available
 ```
 
 Do not create a second AI combat loop.
+
+R4-b b1 closes a verified narrative-fill admission gap: with authoritative combat
+active, both mixed and all-AI tables could enqueue generated free text. The turns
+service now passes a synchronous, read-only capability query through GameHandler
+and the AI command to the action gate. It requires structured intents when the
+runtime supports authoritative intents and either disables narrative turns or has
+active combat. Generation preflight avoids unnecessary model calls; commit checks
+the current rule, runtime capabilities and combat status again under the existing
+authority/state locks, after stale, human and duplicate checks, with no await before
+enqueue. Unknown/incompatible runtimes and missing rules for bound instances fail
+closed. The engine has no ruleset-specific branch. Optional `False` / `None` inputs
+retain the direct-call contract; guarded callers must forward the live predicate.
+R4-b b3 adds no AI economy gate (the progression barrier already owns settlement).
+R4-b b4 is implemented by R5-c1 below. See the Chinese architecture document §12E
+for the ordered policy table and decisions.
+
+R5-c1 decision: implement. On R5b `d1d64927`, the actual
+`RoundProcessor.process_round_impl` paused at a fake LLM await while a concurrent
+real D&D `combat.start` was accepted by the gameplay service. Both narrative
+submissions with and without a run token moved round 3 to 5 and produced two log
+entries numbered 4. The existing run/economy fences do not isolate these writes
+within the same run.
+
+`STRUCTURED_INTENT_POLICY` now checks membership, then `check_not_judging`.
+Only `ACTIVE_JUDGMENT` is newly rejected; GM bypass applies to membership only.
+No new control, death, economy or other phase restrictions are added.
+`submit_intent` evaluates live admission inside the actual state lock before
+binding migration or transaction writes. The lock remains held across binding
+save awaits, event reduction, public timeline projection and attached automatic
+intents, closing the lock-wait race. The special `adventure.node.complete` command
+uses the same admission check after its existing GM-only authorization. Rejection
+returns service `code=ROUND_PROCESSING`, mapped to HTTP 409 by the route, without
+state, log, resource, save or memory writes. Shared `_context` remains membership
+only, preserving available-actions and temporary encounter proposal behavior,
+including existing binding compatibility handling.
+
+Control-triggered `resume_authoritative_combat` checks the same judgment condition
+under the state lock before binding handling or automatic progression. It returns
+the existing resume shape with `error_code=ROUND_PROCESSING`, `handled=True` and
+`resumed=False`. A control change already saved remains successful; only its
+subsequent combat resume is refused. Runtime-internal intent mechanics and the
+narrative processor's own director automation are unchanged. R4's membership-only
+test expectation is explicitly replaced by c1 coverage, retaining missing-seat
+priority and GM bypass of membership only. R5-c1 retains instance schema 21 from
+R5b and does not change `game_time`. R5-c2 now commits judgment and opens the next
+round in one state-lock section; see §10.4 for that boundary and the c3–c6 decisions.
 
 ---
 

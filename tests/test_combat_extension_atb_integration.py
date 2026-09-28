@@ -266,4 +266,4 @@ def test_rule_without_combat_declaration_keeps_the_legacy_turn_flow() -> None:
         actor_uid="p1", viewer_is_gm=False,
     )
     assert result["code"] == "COMBAT_EXTENSION_NOT_CONFIGURED"
-    assert "combat_extension" not in instance.to_dict() or not instance.combat_extension
+    assert "combat_extension" not in instance.to_dict()["modules"] or not instance.combat_extension
