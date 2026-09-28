@@ -8,6 +8,7 @@ directly.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from src.content.worlds import WorldDraft
@@ -65,4 +66,28 @@ def from_legacy_world_template(
     return world, lorebook
 
 
-__all__ = ["from_legacy_world_template"]
+def from_generated_world_payload(
+    payload: dict[str, Any],
+) -> tuple[WorldDraft, LorebookDraft]:
+    """Split an AI-generated legacy-shaped payload without committing it.
+
+    The generator still exposes its historical response for API compatibility,
+    but callers that need canonical content can consume these drafts and decide
+    when/how to commit the World and Book atomically.
+    """
+
+    world, lorebook = from_legacy_world_template(payload)
+    world = replace(
+        world,
+        primary_lorebook_ref=f"ai:{world.world_id}",
+        source={"kind": "ai_generated", "world_id": world.world_id},
+    )
+    lorebook.source = {
+        "kind": "ai_generated",
+        "world_id": world.world_id,
+        "book_id": world.primary_lorebook_ref,
+    }
+    return world, lorebook
+
+
+__all__ = ["from_generated_world_payload", "from_legacy_world_template"]

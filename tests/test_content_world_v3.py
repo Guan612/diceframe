@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -115,3 +116,33 @@ def test_legacy_world_adapter_splits_world_and_lorebook_drafts():
     assert lorebook.language == "en"
     assert lorebook.entries[0].external_id == "npc"
     assert lorebook.source["kind"] == "legacy_world_template"
+
+
+class _WorldLLM:
+    async def call(self, **_kwargs):
+        return SimpleNamespace(content=json.dumps({
+            "world_name": "Generated Coast",
+            "description": "A stormy coast.",
+            "world_setting": "A stormy coast.",
+            "starter_scene": "At the harbor.",
+            "default_rule": "freeform_fantasy",
+            "starter_lorebook": [
+                {"id": "npc", "name": "Guide", "type": "npc", "content": "A guide", "visibility": "public"},
+            ],
+        }), total_tokens=0)
+
+
+@pytest.mark.asyncio
+async def test_ai_world_generation_exposes_split_draft_without_removing_legacy_fields(tmp_path: Path):
+    from src.generation.creator import generate_world
+
+    result = await generate_world(_WorldLLM(), "a stormy coast", worlds_dir=tmp_path)
+    assert result["ok"] is True
+    assert result["lorebook_count"] == 1
+    assert result["draft"]["world"]["world_schema_version"] == 3
+    assert result["draft"]["world"]["source"]["kind"] == "ai_generated"
+    assert "starter_lorebook" not in result["draft"]["world"]
+    assert result["draft"]["lorebook"]["source"]["kind"] == "ai_generated"
+    # Existing API clients still receive the summary shape and persisted v2
+    # template until the later commit cutover lands.
+    assert (tmp_path / f"{result['world_id']}.json").exists()
