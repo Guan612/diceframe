@@ -20,6 +20,8 @@ from uuid import uuid4
 from src.engine import game_instance
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import record_health_event
+from src.engine.module_state import ModuleStateError
+from src.engine.modules import media
 from src.compat.saves import normalize_save_payload
 from src.compat.save_paths import save_path
 
@@ -168,7 +170,8 @@ async def load(registry: GameRegistry, game_key: tuple) -> GameInstance | None:
         )
     _restore_chatlog(registry, instance, sp)
     registry.register(instance)
-    logger.info("存档已加载: %s, round=%d", game_key, instance.round_number)
+    # Loading opaque future module data must not require runtime interpretation.
+    logger.info("存档已加载: %s", game_key)
     return instance
 
 
@@ -406,7 +409,11 @@ async def import_save_zip(
         logger.exception("导入存档解析失败")
         return {"ok": False, "error": f"存档包解析失败：{exc}"}
 
-    scene_reference = state_json.get("scene_image")
+    try:
+        container = media.payload_container(state_json)
+    except ModuleStateError as exc:
+        return {"ok": False, "error_code": "UNSUPPORTED_MEDIA_SCHEMA", "error": str(exc), "status": 400}
+    scene_reference = container.get("scene_image")
     if isinstance(scene_reference, dict) and scene_reference.get("kind") == "save_asset":
         if scene_reference.get("path") != "scene-image.asset" or not scene_image_data:
             return {"ok": False, "error": "存档包缺少冒险头图资产"}
@@ -415,9 +422,9 @@ async def import_save_zip(
         imported = scene_image_importer(scene_image_data)
         if not imported.get("ok") or not imported.get("scene_image"):
             return {"ok": False, "error": str(imported.get("error") or "冒险头图导入失败")}
-        state_json["scene_image"] = imported["scene_image"]
+        container["scene_image"] = imported["scene_image"]
 
-    map_reference = state_json.get("map_background")
+    map_reference = container.get("map_background")
     if isinstance(map_reference, dict) and map_reference.get("kind") == "save_asset":
         if map_reference.get("path") != "map-background.asset" or not map_background_data:
             return {"ok": False, "error": "存档包缺少地图背景资产"}
@@ -426,7 +433,7 @@ async def import_save_zip(
         imported = map_background_importer(map_background_data)
         if not imported.get("ok") or not imported.get("map_background"):
             return {"ok": False, "error": str(imported.get("error") or "地图背景导入失败")}
-        state_json["map_background"] = imported["map_background"]
+        container["map_background"] = imported["map_background"]
 
     # 生成唯一新 game_key：import_<毫秒时间戳>
     new_key = (platform, f"import_{int(time.time() * 1000)}", account_id)
@@ -445,9 +452,8 @@ async def import_save_zip(
     if chatlog_data:
         sp.with_name("chatlog.jsonl").write_bytes(chatlog_data)
     # 立即加载并注册进内存，否则 list_games（只遍历内存）看不到导入的对局
-    instance = await load(registry, new_key)
-    rounds = instance.round_number if instance else -1
-    logger.info("已导入存档为新对局: %s (round=%d)", sp.parent.name, rounds)
+    await load(registry, new_key)
+    logger.info("已导入存档为新对局: %s", sp.parent.name)
     return {"ok": True, "game_key": list(new_key)}
 
 

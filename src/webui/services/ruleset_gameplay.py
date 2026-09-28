@@ -7,12 +7,16 @@ import random
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from typing import Any
 
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
-from src.engine.action_gate import GateRequest, SOURCE_INTENT, STRUCTURED_INTENT_POLICY, evaluate
+from src.engine import progression
+from src.engine.modules import session_stats
+from src.engine.action_gate import (
+    GateRequest, ROUND_PROCESSING, SOURCE_INTENT, STRUCTURED_INTENT_POLICY,
+    check_not_judging, check_seat_exists, evaluate,
+)
 from src.rulesets.automation import (
     advance_automatic_intents,
     append_public_timeline_entry,
@@ -48,6 +52,22 @@ class RulesetGameplayDependencies:
 
 def _error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message}
+
+
+def _intent_write_error(
+    instance: Any, requester_id: str, requester_is_gm: bool = False,
+) -> dict[str, Any] | None:
+    """Check live admission under the state lock, before any transaction writes."""
+    code = evaluate(
+        instance,
+        GateRequest(actor_uid=requester_id, source=SOURCE_INTENT, requester_is_gm=requester_is_gm),
+        STRUCTURED_INTENT_POLICY,
+    )
+    if not code:
+        return None
+    return _error(
+        code, "回合正在处理中，请稍后重试" if code == ROUND_PROCESSING else "当前玩家不在本局中",
+    )
 
 
 def _seat_actor_id(uid: str) -> str:
@@ -140,7 +160,9 @@ def _context(
     code = evaluate(
         instance,
         GateRequest(actor_uid=requester_id, source=SOURCE_INTENT, requester_is_gm=requester_is_gm),
-        STRUCTURED_INTENT_POLICY,
+        # Shared by queries too. Write admission runs under the state lock,
+        # after application-command authorization, to avoid a stale phase check.
+        (check_seat_exists,),
     )
     if code:
         return instance, None, None, "", _error(code, "当前玩家不在本局中")
@@ -384,6 +406,9 @@ async def submit_intent(
         if dependencies.complete_adventure_node is None:
             return _error("ADVENTURE_RUNTIME_UNAVAILABLE", "Adventure v2 runtime is unavailable")
         async with instance._lock:
+            admission_error = _intent_write_error(instance, requester_id, requester_is_gm)
+            if admission_error:
+                return admission_error
             binding_error = await _ensure_compatible_adventure_binding(
                 dependencies, runtime, instance,
             )
@@ -434,6 +459,11 @@ async def submit_intent(
     )
 
     async with instance._lock:
+        admission_error = _intent_write_error(instance, requester_id, requester_is_gm)
+        if admission_error:
+            return admission_error
+        progression.require_writable(instance)
+        session_stats.require_writable(instance)
         binding_error = await _ensure_compatible_adventure_binding(
             dependencies, runtime, instance,
         )
@@ -464,7 +494,7 @@ async def submit_intent(
             automatic_batches, automatic_results = _automatic_segment(
                 runtime, instance, rng,
             )
-            instance.last_activity = datetime.now(timezone.utc).isoformat()
+            session_stats.touch(instance)
             await dependencies.save_instance(instance)
         except (ValueError, KeyError, TypeError) as exc:
             instance.restore_ruleset_transaction(before)
@@ -540,6 +570,16 @@ async def resume_authoritative_combat(
         }
 
     async with instance._lock:
+        # Server-owned automation keeps its existing actor checks below; only
+        # narrative judgment is a new restriction, including after lock waits.
+        code = check_not_judging(instance, GateRequest(actor_uid=seat_uid, source=SOURCE_INTENT))
+        if code:
+            return {
+                "ok": False, "handled": True, "resumed": False,
+                "error_code": code, "error": "回合正在处理中，请稍后重试",
+            }
+        progression.require_writable(instance)
+        session_stats.require_writable(instance)
         binding_error = await _ensure_compatible_adventure_binding(
             dependencies, runtime, instance,
         )
@@ -570,7 +610,7 @@ async def resume_authoritative_combat(
             automatic_batches, automatic_results = _automatic_segment(
                 runtime, instance, rng,
             )
-            instance.last_activity = datetime.now(timezone.utc).isoformat()
+            session_stats.touch(instance)
             await dependencies.save_instance(instance)
         except (ValueError, KeyError, TypeError) as exc:
             instance.restore_ruleset_transaction(before)

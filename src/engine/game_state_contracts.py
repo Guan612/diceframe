@@ -11,11 +11,8 @@ from typing import Any, TypedDict
 
 from src.engine.contracts import (
     ActionRecord,
-    CheckResult,
     PlayerData,
     RoundLogEntry,
-    TableTalkExchange,
-    TokenBudgetBump,
 )
 
 
@@ -112,74 +109,23 @@ class GamePersistedState(TypedDict, total=False):
     game_key: list[str]
     world_id: str | None
     rule_id: str
-    ruleset_runtime: OpaqueState
-    ruleset_state: OpaqueState
     adventure_binding: OpaqueState
     adventure_progress: dict[str, Any]
     play_mode: str
-    event_ledger: list[OpaqueState]
-    scene_image: dict[str, str]
-    map_background: dict[str, str]
     world_name: str
     group_name: str
     state: str
     players: dict[str, PlayerData]
     npcs: dict[str, OpaqueState]
-    round_number: int
     action_queue: list[ActionRecord]
     pending_actions: list[ActionRecord]
     ready_players: list[str]
     away_players: list[str]
-    combat_active: bool
-    combat_enemies: list[OpaqueState]
-    combat_state: str
-    initiative_order: list[str]
-    initiative_current: int
     scene: str
-    game_time: str
     log: list[RoundLogEntry]
-    summary: OpaqueState
-    key_facts: list[Any]
     world_state: OpaqueState
-    total_llm_calls: int
-    total_tokens: int
-    started_at: str
-    last_activity: str
-    solo_mode: bool
-    seed_code: str
-    difficulty: str
-    narrative_perspective: str
-    gm_style_override: OpaqueState | None
     language: str
-    luck_timeout_seconds: int
-    economy_reward_policy: OpaqueState
-    entry_point: str
-    max_players: int
     gm_uid: str
-    player_access_open: bool
-    bot_bind_token: str
-    room_password: str
-    room_token: str
-    pending_combat_results: list[OpaqueState]
     modules: dict[str, dict[str, Any]]
-    quick_actions: list[str]
-    health_events: list[OpaqueState]
-    health_status: OpaqueState
-    last_check: CheckResult | None
-    last_checks: list[CheckResult]
-    manual_roll_requests: list[dict[str, Any]]
-    last_overreach: list[Any]
-    last_world_legality: list[Any]
-    last_world_events: list[Any]
-    round_checks_prepared: bool
-    round_start_snapshot: PlayerRollbackSnapshot
-    round_entity_snapshot: OpaqueState
-    death_save_outcomes: dict[str, dict[str, OpaqueState]]
-    last_state_update: OpaqueState | None
-    last_token_budget_bump: TokenBudgetBump | None
-    gm_directives: list[OpaqueState]
-    confirmed_items: list[Any]
-    private_log: dict[str, list[OpaqueState]]
-    table_talk: list[TableTalkExchange]
     puzzles: OpaqueState
     plot_tracker: OpaqueState

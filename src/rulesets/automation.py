@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
+from src.engine import progression
 from src.rulesets.contracts import (
     AutomaticIntentRuntime,
     NarrativeDirectorAutomationRuntime,
@@ -28,6 +29,7 @@ def append_public_timeline_entry(
     AI-hosted turn is as visible in the public story as a human one.
     """
 
+    progression.require_writable(instance)
     intent_type = str(batch.get("intent_type") or "")
     projection = runtime.public_timeline_projection(
         batch, str(getattr(instance, "language", "") or ""),
@@ -42,11 +44,7 @@ def append_public_timeline_entry(
         ),
         "",
     )
-    next_round = max(
-        int(getattr(instance, "round_number", 0) or 0) + 1,
-        max((int(item.get("round", 0) or 0) for item in instance.log), default=0) + 1,
-    )
-    instance.round_number = next_round
+    next_round = progression.advance_for_public_timeline(instance, instance.log)
     instance.append_log_entry({
         "round": next_round,
         "actions": [{
@@ -94,6 +92,8 @@ def advance_automatic_intents(
     reused from any entry point without inventing a second transaction model.
     """
 
+    if on_applied is not None:
+        progression.require_writable(instance)
     batches: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     for _ in range(limit):

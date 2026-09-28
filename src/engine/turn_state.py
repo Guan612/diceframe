@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from src.engine.contracts import ActionRecord
+from src.engine import progression
 from src.engine.game_state import GameState
 from src.engine.player_control import (
     ai_controlled_players,
@@ -240,6 +241,9 @@ def add_action_locked(
     单独抽出来是为了让需要「先复核再写入」的调用方能在**同一个** boundary
     内完成两件事：自己在锁内复核，再调用这里追加，而不是写两层加锁。
     """
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     if user_id in instance.players:
         cs = instance.get_character_sheet(user_id)
         if cs.get("deceased"):
@@ -299,27 +303,29 @@ def add_action_locked(
         action_entry["revision_count"] = 1
         instance.action_queue.append(action_entry)
     instance.ready_players.add(user_id)
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    session_stats.touch(instance)
     return True
 
 
 def start_round_locked(instance: GameInstance) -> None:
     """``start_round`` 的持锁实现（调用方必须已持有 ``_lock``）。"""
-    instance.round_number += 1
+    from src.engine.modules import checks, round_safety, session_stats
+
+    session_stats.require_writable(instance)
+    checks.require_writable(instance)
+    round_safety.require_writable(instance)
+    progression.open_next_round(instance)
     current = str(instance.round_number)
-    instance.death_save_outcomes = {
-        current: instance.death_save_outcomes.get(current, {})
-    }
+    round_safety.keep_death_saves_for(instance, current)
     instance.state = GameState.ACTIVE_ACTION
-    instance.round_checks_prepared = False
-    instance.round_start_snapshot.clear()
-    instance.round_entity_snapshot.clear()
+    checks.invalidate_prepared(instance)
+    round_safety.clear_snapshots(instance)
     instance.action_queue.clear()
     instance.ready_players.clear()
     if instance.pending_actions:
         instance.action_queue.extend(instance.pending_actions)
         instance.pending_actions.clear()
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    session_stats.touch(instance)
     logger.info("Round %d 开始 - game_key=%s", instance.round_number, instance.game_key)
 
 
@@ -342,6 +348,9 @@ def apply_action_roll_locked(
     )
     if not action:
         return False
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     clean_text = "\n".join(
         line for line in str(action.get("text", "")).splitlines()
         if not (line.startswith("(系统掷骰:") and line.endswith(")"))
@@ -354,7 +363,7 @@ def apply_action_roll_locked(
     action["dice_value"] = int(value)
     action["dice_rolls"] = [int(item) for item in (rolls or [value])]
     instance.ready_players.add(user_id)
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    session_stats.touch(instance)
     return True
 
 
@@ -367,12 +376,15 @@ def set_player_away_locked(instance: GameInstance, user_id: str, away: bool) -> 
     """
     if user_id not in instance.players or not instance.is_alive(user_id):
         return False
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     if away:
         instance.away_players.add(user_id)
         instance.ready_players.discard(user_id)
     else:
         instance.away_players.discard(user_id)
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    session_stats.touch(instance)
     return True
 
 
@@ -380,11 +392,17 @@ def do_advance_locked(instance: GameInstance) -> bool:
     """在锁内执行推进（调用方需持锁）。"""
     if instance.state != GameState.ACTIVE_ACTION:
         return False
+    from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime
+
+    checks.require_writable(instance)
+    round_safety.require_writable(instance)
+    legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
     for uid in instance.alive_players:
         instance.ready_players.add(uid)
     instance.state = GameState.ACTIVE_JUDGMENT
-    instance.round_checks_prepared = False
-    instance.round_start_snapshot = snapshot_players(instance)
+    checks.invalidate_prepared(instance)
+    round_safety.capture_players(instance, snapshot_players(instance))
     instance.capture_round_entity_snapshot()
     logger.info("进入判定阶段 - game_key=%s, actions=%d",
                 instance.game_key, len(instance.action_queue))

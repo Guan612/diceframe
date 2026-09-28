@@ -352,7 +352,12 @@ def capture_round_entity_snapshot(instance: GameInstance) -> None:
     与 ``round_start_snapshot``（玩家）和 ``combat_extension_round_snapshots``
     （D&D2024 权威战斗扩展）互补，三者合起来才是"本轮改过的东西"。
     """
-    instance.round_entity_snapshot = {
+    from src.engine.modules import legacy_combat, round_safety, ruleset_runtime
+
+    round_safety.require_writable(instance)
+    legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
+    round_safety.replace_entity_snapshot(instance, {
         "npcs": copy.deepcopy(instance.npcs),
         "combat_enemies": copy.deepcopy(instance.combat_enemies),
         "combat_state": str(instance.combat_state or "none"),
@@ -364,7 +369,7 @@ def capture_round_entity_snapshot(instance: GameInstance) -> None:
         # （FIX-04 §6.7），所以"本轮改过的东西"必须包含它——否则回滚会把世界
         # 退回去、把进度留在被丢弃的分支上。
         "adventure_progress": copy.deepcopy(instance.adventure_progress),
-    }
+    })
 
 
 def restore_round_entity_snapshot(instance: GameInstance) -> bool:
@@ -372,12 +377,12 @@ def restore_round_entity_snapshot(instance: GameInstance) -> bool:
     snapshot = instance.round_entity_snapshot
     if not isinstance(snapshot, dict) or not snapshot:
         return False
+    from src.engine.modules import legacy_combat, ruleset_runtime
+
+    legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
     instance.npcs = copy.deepcopy(snapshot.get("npcs") or {})
-    instance.combat_enemies = copy.deepcopy(snapshot.get("combat_enemies") or [])
-    instance.combat_state = str(snapshot.get("combat_state") or "none")
-    instance.combat_active = bool(snapshot.get("combat_active"))
-    instance.initiative_order = copy.deepcopy(list(snapshot.get("initiative_order") or []))
-    instance.initiative_current = int(snapshot.get("initiative_current") or 0)
+    legacy_combat.restore_from_entity_snapshot(instance, snapshot)
     # 世界真相按整轮语义回滚（ADR 0003）：本轮写入的 world ops 随本轮撤销。
     if "world_state" in snapshot:
         instance.world_state = ensure_world_state(snapshot.get("world_state"))

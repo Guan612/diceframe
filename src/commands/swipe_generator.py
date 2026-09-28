@@ -17,12 +17,13 @@ from src.commands.economy_effects import (
     should_warn_unbacked_payment,
 )
 from src.engine.economy import filter_unconfirmed_purchase_grants
-from src.engine import combat_narrative
+from src.engine import combat_narrative, progression
 from src.commands.protocol_repair import repair_malformed_protocol_response
 from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
+from src.engine.modules import session_stats
 from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
 from src.imagegen.storyboards import normalize_scene_panels, storyboard_panel_metadata, storyboard_source_revision
@@ -78,6 +79,7 @@ class SwipeGenerator:
             if not rewrite_entered:
                 return None
             async with instance._process_lock:
+                session_stats.require_writable(instance)
                 expected_run_id = instance.run_id
                 before = type(instance).from_dict(deepcopy(instance.to_dict()))
                 before.log = deepcopy(instance.log)
@@ -126,12 +128,14 @@ class SwipeGenerator:
             return None, None
 
         swipes = target_entry.get("swipes", [])
-        if not swipes:
-            swipes = [target_entry.get("gm_response", "")]
-            target_entry["swipes"] = swipes
         if len(swipes) >= 5:
             logger.warning("Swipe 已达上限 (5), round=%d", round_num)
             return None, None
+        progression.require_writable(instance)
+        session_stats.require_writable(instance)
+        if not swipes:
+            swipes = [target_entry.get("gm_response", "")]
+            target_entry["swipes"] = swipes
 
         snapshot = target_entry.get("pre_state_snapshot", {})
         if snapshot:
@@ -150,7 +154,7 @@ class SwipeGenerator:
             if isinstance(current_combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(current_combat_snapshot):
                     instance.combat_extension = {}
-            instance.round_number = round_num
+            progression.rewind_for_replay(instance, round_num)
             reverse_round_economy(instance, round_num)
             restore_players(instance, reconcile_rollback_snapshot(instance, snapshot, round_num))
             combat_snapshot = target_entry.get("pre_combat_extension_snapshot")

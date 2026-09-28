@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import copy
 import logging
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from src.engine import progression
 from src.engine.game_state import GameState
 from src.engine.language import normalize_language
 from src.engine.world_state import fresh_world_state
@@ -36,10 +36,12 @@ logger = logging.getLogger("trpg")
 
 def activate_locked(instance: GameInstance) -> None:
     """``activate`` 的持锁实现（调用方必须已持有 ``_lock``）。"""
+    from src.engine.modules import session_stats
+
+    session_stats.require_writable(instance)
     instance.state = GameState.ACTIVE_ACTION
-    if not instance.started_at:
-        instance.started_at = datetime.now(timezone.utc).isoformat()
-    instance.last_activity = datetime.now(timezone.utc).isoformat()
+    session_stats.mark_started(instance)
+    session_stats.touch(instance)
     logger.info("游戏激活 - game_key=%s", instance.game_key)
 
 
@@ -65,6 +67,13 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     集合与基线逐句一致。reset 的真实契约由
     ``tests/test_game_instance_reset_characterization.py`` 冻结。
     """
+    from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats
+
+    session_stats.require_writable(instance)
+    checks.require_writable(instance)
+    round_safety.require_writable(instance)
+    legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
     saved_seed = instance.seed_code if keep_seed else ""
     saved_world_id = instance.world_id
     saved_world_name = instance.world_name
@@ -78,15 +87,11 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     instance.rotate_run_identity()
     instance.players.clear()
     instance.npcs.clear()
-    instance.round_number = 0
+    progression.reset(instance)
     instance.action_queue.clear()
     instance.pending_actions.clear()
     instance.ready_players.clear()
-    instance.combat_active = False
-    instance.combat_enemies.clear()
-    instance.combat_state = "none"
-    instance.initiative_order.clear()
-    instance.initiative_current = 0
+    legacy_combat.reset(instance)
     instance.scene = ""
     instance.game_time = ""
     instance.log.clear()
@@ -94,10 +99,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     instance.key_facts.clear()
     # 世界真相属于这一轮 run：重置与重开都从空世界重新开始。
     instance.world_state = fresh_world_state()
-    instance.total_llm_calls = 0
-    instance.total_tokens = 0
-    instance.started_at = ""
-    instance.last_activity = ""
+    session_stats.reset(instance)
     instance.puzzle_manager = None
     instance.plot_tracker = None
     instance.pending_combat_results.clear()
@@ -110,21 +112,13 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     instance.confirmed_items.clear()
     instance.private_log.clear()
     instance.table_talk.clear()
-    instance.last_check = None
-    instance.last_checks.clear()
-    instance.round_checks_prepared = False
-    instance.round_start_snapshot.clear()
-    instance.round_entity_snapshot.clear()
+    checks.clear_round(instance)
+    round_safety.clear_snapshots(instance)
     instance.last_state_update = None
     instance.last_token_budget_bump = None
     instance.gm_directives.clear()
-    instance.ruleset_runtime = saved_ruleset_runtime
-    instance.ruleset_state = (
-        {"state_schema_version": int(saved_ruleset_runtime.get("state_schema_version", 1) or 1)}
-        if saved_ruleset_runtime else {}
-    )
+    ruleset_runtime.reset(instance, saved_ruleset_runtime)
     instance.adventure_binding = saved_adventure_binding
-    instance.event_ledger.clear()
     instance.state = GameState.CREATED
     instance.world_id = saved_world_id
     instance.world_name = saved_world_name

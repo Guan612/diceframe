@@ -23,10 +23,10 @@ class _FailingRuntime:
 def test_director_automation_rolls_back_partial_runtime_mutation():
     instance = GameInstance(
         game_key=("test", "automation-rollback", "bot"),
-        ruleset_state={"version": 1},
         players={"p": {"hp": 10}},
         scene="original scene",
     )
+    instance.ruleset_state = {"version": 1}
     before = deepcopy((instance.ruleset_state, instance.players, instance.scene))
     with pytest.raises(ValueError, match="failed after mutation"):
         apply_director_automation(_FailingRuntime(), instance, {"kind": "combat"}, object())
