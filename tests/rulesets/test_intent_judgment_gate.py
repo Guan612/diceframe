@@ -22,6 +22,14 @@ from tests.rulesets.test_dnd2024_m5_http import (
 from webapi_harness import web_api  # noqa: F401
 
 
+def _event_ledger(payload):
+    # Shape-aware: the ledger moves from the top level into modules["ruleset_runtime"].
+    runtime = (payload.get("modules") or {}).get("ruleset_runtime")
+    if isinstance(runtime, dict) and "event_ledger" in runtime:
+        return runtime["event_ledger"]
+    return payload["event_ledger"]
+
+
 def _game(registry):
     runtime = _EnabledRuntime()
     instance = GameInstance(
@@ -92,7 +100,7 @@ async def test_real_narration_and_concurrent_milestone(web_api, monkeypatch, gua
         assert instance.round_number == 4
         assert [entry["round"] for entry in instance.log] == [3]
         assert instance.ruleset_state["combat"]["status"] != "active"
-        assert instance.event_ledger == before["event_ledger"]
+        assert instance.event_ledger == _event_ledger(before)
         # Once narration completes, the same milestone is legal and gets its own
         # public round, rather than relabeling the in-flight narrative entry.
         accepted = await ruleset_gameplay.submit_intent(
