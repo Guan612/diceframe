@@ -68,7 +68,7 @@ from src.engine import combat_narrative, progression
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.module_state import ModuleStateError
 from src.engine.modules.media import replace_scene_image
-from src.engine.modules import checks, round_safety, session_stats, world_reports
+from src.engine.modules import checks, legacy_combat, round_safety, session_stats, world_reports
 from src.engine.language import localized_text
 from src.engine.world_events import advance_world_time
 from src.engine.world.memory_projection import queue_world_memory
@@ -528,6 +528,7 @@ class RoundProcessor:
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
+        legacy_combat.require_writable(instance)
         if has_blocking_economy_decision(instance):
             logger.info("等待经济提案结算，暂不生成叙事: %s", instance.game_key)
             raise RoundNotProcessed("economy_pending")
@@ -929,6 +930,7 @@ class RoundProcessor:
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
+        legacy_combat.require_writable(instance)
         expected_run_id = instance.run_id
         if not instance.round_checks_prepared:
             await self.prepare_round_checks_ai(instance)

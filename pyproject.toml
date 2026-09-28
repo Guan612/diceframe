@@ -51,6 +51,7 @@ files = [
     "src/engine/modules/session_stats.py",
     "src/engine/modules/checks.py",
     "src/engine/modules/round_safety.py",
+    "src/engine/modules/legacy_combat.py",
     "src/engine/modules/round_presentation.py",
     "src/engine/modules/world_reports.py",
     "src/engine/modules/table_settings.py",

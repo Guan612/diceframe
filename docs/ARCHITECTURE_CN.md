@@ -10,7 +10,8 @@
 > - 分支：`main`
 > - Commit：`962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release：`2.6.1`
-> - 当前 GameInstance persisted schema：`32`
+> - 当前 GameInstance persisted schema：`33`
+> - R8-d：`combat_active`、`combat_enemies`、`combat_state`、`initiative_order`、`initiative_current` 存于 `modules.legacy_combat`，32→33 迁移删除旧顶层键。它是兼容投影存储；D&D 2024 战斗权威仍在 `ruleset_state["combat"]`。模块只修复非法类型，不过滤合法列表内容。
 > - R8-c2：`round_start_snapshot`、`round_entity_snapshot`、`death_save_outcomes` 存于 `modules.round_safety`；旧属性代理保留，31→32 迁移删除旧顶层键。reset 只清两个快照，继续保留死亡豁免缓存。
 > - R8-c1：`last_check`、`last_checks`、`round_checks_prepared`、`manual_roll_requests` 存于 `modules.checks`；旧属性代理保留，30→31 迁移删除旧顶层键。reset 继续保留手动骰请求。
 > - R8-a：统计字段 `total_llm_calls`、`total_tokens`、`started_at`、`last_activity` 存于 `modules.session_stats`；旧属性代理保留，29→30 迁移删除旧顶层键。

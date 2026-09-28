@@ -41,6 +41,7 @@ from src.engine.modules import (
     combat_extension_state,
     economy_state,
     health,
+    legacy_combat,
     lorebook_runtime,
     media,
     narrative_notes,
@@ -170,13 +171,6 @@ class GameInstance:
     ready_players: set[str] = field(default_factory=set)
     away_players: set[str] = field(default_factory=set)
 
-    # 战斗
-    combat_active: bool = False
-    combat_enemies: list[dict[str, Any]] = field(default_factory=list)
-    combat_state: str = "none"  # "none" / "active"
-    initiative_order: list[str] = field(default_factory=list)
-    initiative_current: int = 0
-
     # 玩家管理
     gm_uid: str = ""  # 创建游戏的 GM 的 user_id
 
@@ -228,6 +222,46 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
+
+    @property
+    def combat_active(self) -> bool:
+        return legacy_combat.combat_active(self)
+
+    @combat_active.setter
+    def combat_active(self, value: bool) -> None:
+        legacy_combat.replace_combat_active(self, value)
+
+    @property
+    def combat_enemies(self) -> list[dict[str, Any]]:
+        return legacy_combat.combat_enemies(self)
+
+    @combat_enemies.setter
+    def combat_enemies(self, value: list[dict[str, Any]]) -> None:
+        legacy_combat.replace_combat_enemies(self, value)
+
+    @property
+    def combat_state(self) -> str:
+        return legacy_combat.combat_state(self)
+
+    @combat_state.setter
+    def combat_state(self, value: str) -> None:
+        legacy_combat.replace_combat_state(self, value)
+
+    @property
+    def initiative_order(self) -> list[str]:
+        return legacy_combat.initiative_order(self)
+
+    @initiative_order.setter
+    def initiative_order(self, value: list[str]) -> None:
+        legacy_combat.replace_initiative_order(self, value)
+
+    @property
+    def initiative_current(self) -> int:
+        return legacy_combat.initiative_current(self)
+
+    @initiative_current.setter
+    def initiative_current(self, value: int) -> None:
+        legacy_combat.replace_initiative_current(self, value)
 
     @property
     def round_start_snapshot(self) -> PlayerRollbackSnapshot:
@@ -899,16 +933,14 @@ class GameInstance:
             "round_start_snapshot", "round_entity_snapshot", "death_save_outcomes",
         )):
             round_safety.require_writable(self)
+        legacy_combat.require_writable(self)
         if "round_number" in snapshot:
             progression.require_writable(self)
             restored_round = int(snapshot["round_number"])
         self.ruleset_state = copy.deepcopy(snapshot["ruleset_state"])
         self.event_ledger = copy.deepcopy(snapshot["event_ledger"])
         self.players = copy.deepcopy(snapshot["players"])
-        self.combat_state = str(snapshot["combat_state"])
-        self.combat_active = bool(snapshot["combat_active"])
-        self.initiative_order = copy.deepcopy(snapshot["initiative_order"])
-        self.initiative_current = int(snapshot["initiative_current"])
+        legacy_combat.restore_from_transaction(self, snapshot)
         if "scene" in snapshot and snapshot["scene"] is not None:
             self.scene = str(snapshot["scene"])
         if "last_activity" in snapshot:
@@ -1110,16 +1142,10 @@ class GameInstance:
         round_snapshots.discard_combat_extension_snapshots_from(self, round_number)
 
     def begin_combat(self, initiative_order: list[str]) -> None:
-        self.initiative_order = list(initiative_order)
-        self.initiative_current = 0
-        self.combat_state = "active"
-        self.combat_active = True
+        legacy_combat.begin(self, initiative_order)
 
     def end_combat(self) -> None:
-        self.combat_state = "none"
-        self.combat_active = False
-        self.initiative_order.clear()
-        self.initiative_current = 0
+        legacy_combat.end(self)
 
     def record_save_success(self) -> None:
         self._save_fail_count = 0
@@ -1181,6 +1207,7 @@ class GameInstance:
                 session_stats.require_writable(self)
                 checks.require_writable(self)
                 round_safety.require_writable(self)
+                legacy_combat.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
@@ -1624,6 +1651,7 @@ class GameInstance:
             progression.require_writable(self)
             checks.require_writable(self)
             round_safety.require_writable(self)
+            legacy_combat.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             return self._do_advance_locked()
@@ -1636,6 +1664,7 @@ class GameInstance:
             progression.require_writable(self)
             checks.require_writable(self)
             round_safety.require_writable(self)
+            legacy_combat.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             if self.state != GameState.ACTIVE_ACTION:
@@ -1649,6 +1678,7 @@ class GameInstance:
         progression.require_writable(self)
         checks.require_writable(self)
         round_safety.require_writable(self)
+        legacy_combat.require_writable(self)
         return turn_state.do_advance_locked(self)
 
     def capture_round_entity_snapshot(self) -> None:
@@ -1744,6 +1774,7 @@ class GameInstance:
             session_stats.require_writable(self)
             checks.require_writable(self)
             round_safety.require_writable(self)
+            legacy_combat.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
