@@ -10,7 +10,8 @@
 > - Branch: `main`
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
-> - Current GameInstance persisted schema: `32`
+> - Current GameInstance persisted schema: `33`
+> - R8-d: `combat_active`, `combat_enemies`, `combat_state`, `initiative_order`, and `initiative_current` live in `modules.legacy_combat`; migration 32→33 removes the old top-level keys. This stores a compatibility projection; D&D 2024 combat authority remains in `ruleset_state["combat"]`. Only invalid types are repaired; valid list contents are not filtered.
 > - R8-c2: `round_start_snapshot`, `round_entity_snapshot`, and `death_save_outcomes` live in `modules.round_safety`; compatibility properties remain, and migration 31→32 removes the old top-level keys. Reset clears only the two snapshots and preserves death-save caches.
 > - R8-c1: `last_check`, `last_checks`, `round_checks_prepared`, and `manual_roll_requests` live in `modules.checks`; compatibility properties remain, and migration 30→31 removes the old top-level keys. Reset continues to preserve manual roll requests.
 > - R8-a: `total_llm_calls`, `total_tokens`, `started_at`, and `last_activity` live in `modules.session_stats`; compatibility properties remain, and migration 29→30 removes the old top-level keys.

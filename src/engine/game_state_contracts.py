@@ -124,11 +124,6 @@ class GamePersistedState(TypedDict, total=False):
     pending_actions: list[ActionRecord]
     ready_players: list[str]
     away_players: list[str]
-    combat_active: bool
-    combat_enemies: list[OpaqueState]
-    combat_state: str
-    initiative_order: list[str]
-    initiative_current: int
     scene: str
     log: list[RoundLogEntry]
     world_state: OpaqueState

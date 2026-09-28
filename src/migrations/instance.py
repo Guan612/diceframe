@@ -23,7 +23,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 32
+CURRENT_INSTANCE_SCHEMA_VERSION = 33
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -679,6 +679,31 @@ def _migrate_v31_to_v32(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v32_to_v33(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the legacy combat projection without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    defaults: dict[str, Any] = {
+        "combat_active": False, "combat_enemies": [], "combat_state": "none",
+        "initiative_order": [], "initiative_current": 0,
+    }
+    values = {key: payload.pop(key, default) for key, default in defaults.items()}
+    values["combat_active"] = bool(values["combat_active"])
+    for key in ("combat_enemies", "initiative_order"):
+        if not isinstance(values[key], list):
+            values[key] = []
+    if not isinstance(values["combat_state"], str):
+        values["combat_state"] = "none"
+    if type(values["initiative_current"]) is not int:
+        values["initiative_current"] = 0
+    if not isinstance(modules.get("legacy_combat"), dict):
+        modules["legacy_combat"] = {"schema_version": 1, **values}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 33
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -779,6 +804,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 31:
         payload = _migrate_v31_to_v32(payload)
         version = 32
+    if version == 32:
+        payload = _migrate_v32_to_v33(payload)
+        version = 33
     payload["instance_schema_version"] = version
     return payload
 

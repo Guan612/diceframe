@@ -392,10 +392,11 @@ def do_advance_locked(instance: GameInstance) -> bool:
     """在锁内执行推进（调用方需持锁）。"""
     if instance.state != GameState.ACTIVE_ACTION:
         return False
-    from src.engine.modules import checks, round_safety
+    from src.engine.modules import checks, legacy_combat, round_safety
 
     checks.require_writable(instance)
     round_safety.require_writable(instance)
+    legacy_combat.require_writable(instance)
     for uid in instance.alive_players:
         instance.ready_players.add(uid)
     instance.state = GameState.ACTIVE_JUDGMENT

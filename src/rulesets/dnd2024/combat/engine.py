@@ -8,6 +8,7 @@ from random import SystemRandom
 from typing import Any
 
 from src.engine.player_control import is_ai_controlled
+from src.engine.modules import legacy_combat
 from src.rulesets.bundle import LoadedRulesetBundle
 from src.rulesets.dnd2024.character.builder import ability_modifier
 from src.rulesets.dnd2024.combat.catalog import Dnd2024CombatCatalog
@@ -694,6 +695,9 @@ class Dnd2024CombatEngine(
         return self.apply_batch(instance, batch)
 
     def apply_batch(self, instance: Any, batch: dict[str, Any]) -> dict[str, Any]:
+        # initialize_state may write ruleset defaults, even for a replayed
+        # batch, so reject an unsupported projection slot before it runs.
+        legacy_combat.require_writable(instance)
         state = self.initialize_state(instance)
         snapshot = {
             "version": int(state.get("version", 0) or 0),
@@ -717,12 +721,7 @@ class Dnd2024CombatEngine(
                 instance.set_character_sheet(uid, existing)
             instance.event_ledger = ledger
             combat = ruleset_state["combat"]
-            instance.combat_state = (
-                "active" if combat.get("status") == "active" else "none"
-            )
-            instance.combat_active = instance.combat_state == "active"
-            instance.initiative_order = list(combat.get("initiative") or [])
-            instance.initiative_current = int(combat.get("turn_index", 0) or 0)
+            legacy_combat.project_from_ruleset(instance, combat)
         return {
             "ok": True,
             "applied": not duplicate,
