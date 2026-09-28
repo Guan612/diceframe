@@ -13,6 +13,7 @@ from src.engine.player_control import (
     set_control,
 )
 from src.rules.rule_system import RuleSystem
+from src.rulesets.contracts import RulesetRuntime, VersionedStateRuntime
 from src.webui.services._common import _GAME_KEY_SEP
 from src.webui.game_lifecycle_context import (
     CreationTransaction,
@@ -20,6 +21,33 @@ from src.webui.game_lifecycle_context import (
 )
 
 logger = logging.getLogger("trpg")
+
+
+def bind_ruleset_runtime(
+    transaction: CreationTransaction,
+    instance: Any,
+    runtime: RulesetRuntime | None,
+    rule: RuleSystem | None,
+    language: str,
+) -> dict[str, Any] | None:
+    """Bind versioned state before configuration; compensate on failure."""
+
+    if runtime is None or not runtime.capabilities.versioned_state:
+        return None
+    try:
+        if not isinstance(runtime, VersionedStateRuntime):
+            raise ValueError("规则运行时未提供版本化状态绑定")
+        if not instance.bind_ruleset_runtime(runtime.game_binding(rule, language)):
+            raise ValueError("规则运行时绑定无效或不兼容")
+    except Exception:
+        transaction.rollback()
+        logger.exception("创建游戏规则运行时绑定失败，已回滚: %s", transaction.game_key)
+        return {
+            "ok": False,
+            "error_code": "RULESET_BINDING_FAILED",
+            "error": "规则运行时绑定失败，未留下半成品存档。",
+        }
+    return None
 
 
 def materialize_world(
