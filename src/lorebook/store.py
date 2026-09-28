@@ -499,6 +499,24 @@ class LorebookStore:
             self._bump_book_revision_locked(book_id)
             self._commit_locked()
 
+    def add_book_entry(self, book_id: str, entry: dict) -> None:
+        """Add an entry through its canonical Book owner.
+
+        New content paths must name the owning Book explicitly.  The legacy
+        ``add_entry`` method remains as an adapter for world/template callers;
+        this boundary deliberately derives the compatibility ``world_id``
+        projection from the Book instead of accepting a second owner from the
+        payload.
+        """
+
+        book_id = str(book_id or "")
+        if not book_id or self.get_lorebook(book_id) is None:
+            raise ValueError("lorebook book does not exist")
+        payload = dict(entry)
+        payload["book_id"] = book_id
+        payload["world_id"] = self.world_projection_for_book(book_id)
+        self.add_entry(payload)
+
     def get_entry(self, entry_id: str) -> dict | None:
         with self._lock:
             entry = LorebookEntry.get_or_none(LorebookEntry.id == entry_id)

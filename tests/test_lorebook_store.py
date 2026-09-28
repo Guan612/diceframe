@@ -119,6 +119,26 @@ class TestEntryCRUD:
             store.close()
             path.unlink(missing_ok=True)
 
+    def test_add_book_entry_derives_legacy_world_projection_from_book(self):
+        store, path = _temp_store()
+        try:
+            store.create_world("w1", "World One")
+            store.create_lorebook({"id": "book:independent", "name": "Imported"})
+
+            store.add_book_entry(
+                "book:independent",
+                {"id": "e-independent", "world_id": "w1", "name": "Imported entry"},
+            )
+            independent = store.get_entry("e-independent")
+            assert independent and independent["book_id"] == "book:independent"
+            assert independent["world_id"] is None
+
+            with pytest.raises(ValueError, match="does not exist"):
+                store.add_book_entry("book:missing", {"id": "bad", "name": "Bad"})
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
     def test_update_entry_supports_reserved_word_columns(self):
         """回归：order / group 是 SQL 保留字，编辑条目必须能保存。
 
