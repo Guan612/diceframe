@@ -8,6 +8,7 @@ from src.engine.character_utils import apply_death_save
 from src.engine.dice import roll
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.engine.modules import round_safety
 
 logger = logging.getLogger("trpg")
 
@@ -16,9 +17,10 @@ def resolve_round_death_saves(instance: GameInstance, rule) -> str:
     """为每个昏迷角色掷一次死亡豁免并更新状态；规则未声明时返回空串。"""
     if rule is None or rule.death_mechanic["hp_zero"] != "downed_death_saves":
         return ""
+    round_safety.require_writable(instance)
     lines: list[str] = []
     round_key = str(instance.round_number)
-    round_cache = instance.death_save_outcomes.setdefault(round_key, {})
+    round_cache = round_safety.death_save_cache(instance, round_key)
     for uid, player in list(instance.players.items()):
         cs = instance.get_character_sheet(uid)
         cached = round_cache.get(uid)

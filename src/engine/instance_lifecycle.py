@@ -67,10 +67,11 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     集合与基线逐句一致。reset 的真实契约由
     ``tests/test_game_instance_reset_characterization.py`` 冻结。
     """
-    from src.engine.modules import checks, session_stats
+    from src.engine.modules import checks, round_safety, session_stats
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
+    round_safety.require_writable(instance)
     saved_seed = instance.seed_code if keep_seed else ""
     saved_world_id = instance.world_id
     saved_world_name = instance.world_name
@@ -114,8 +115,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     instance.private_log.clear()
     instance.table_talk.clear()
     checks.clear_round(instance)
-    instance.round_start_snapshot.clear()
-    instance.round_entity_snapshot.clear()
+    round_safety.clear_snapshots(instance)
     instance.last_state_update = None
     instance.last_token_budget_bump = None
     instance.gm_directives.clear()

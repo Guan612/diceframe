@@ -8,6 +8,14 @@ from src.migrations.instance import (
 )
 
 
+def _round_start_snapshot(payload: dict) -> dict:
+    """round_start_snapshot at its current home (top level before R8-c2)."""
+    safety = (payload.get("modules") or {}).get("round_safety")
+    if isinstance(safety, dict) and "round_start_snapshot" in safety:
+        return safety["round_start_snapshot"]
+    return payload["round_start_snapshot"]
+
+
 def _reward_policy(payload: dict) -> dict:
     """economy_reward_policy at its current home (top level before R7-g)."""
     settings = (payload.get("modules") or {}).get("table_settings")
@@ -67,7 +75,7 @@ def test_coc_save_amounts_scale_by_100_once():
     assert entries[0] == {"account": "character:p1", "delta": -500, "before": 8_000, "after": 7_500}
     assert entries[1]["delta"] == 500
     assert _reward_policy(payload)["auto_reward_cap"] == 5_000
-    assert payload["round_start_snapshot"]["p1"]["currency"]["amount"] == 6_000
+    assert _round_start_snapshot(payload)["p1"]["currency"]["amount"] == 6_000
     assert payload["log"][0]["round_start_snapshot"]["p1"]["gold"] == 8_000
     assert payload["log"][0]["pre_state_snapshot"]["p1"]["gold"] == 7_000
 
