@@ -52,6 +52,7 @@ files = [
     "src/engine/modules/checks.py",
     "src/engine/modules/round_safety.py",
     "src/engine/modules/legacy_combat.py",
+    "src/engine/modules/ruleset_runtime.py",
     "src/engine/modules/round_presentation.py",
     "src/engine/modules/world_reports.py",
     "src/engine/modules/table_settings.py",

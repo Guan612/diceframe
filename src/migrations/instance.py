@@ -23,7 +23,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 33
+CURRENT_INSTANCE_SCHEMA_VERSION = 34
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -704,6 +704,26 @@ def _migrate_v32_to_v33(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v33_to_v34(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move ruleset binding, state and ledger without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    binding = payload.pop("ruleset_runtime", {})
+    state = payload.pop("ruleset_state", {})
+    ledger = payload.pop("event_ledger", [])
+    if not isinstance(modules.get("ruleset_runtime"), dict):
+        modules["ruleset_runtime"] = {
+            "schema_version": 1,
+            "binding": binding if isinstance(binding, dict) else {},
+            "state": state if isinstance(state, dict) else {},
+            "event_ledger": ledger if isinstance(ledger, list) else [],
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 34
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -807,6 +827,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 32:
         payload = _migrate_v32_to_v33(payload)
         version = 33
+    if version == 33:
+        payload = _migrate_v33_to_v34(payload)
+        version = 34
     payload["instance_schema_version"] = version
     return payload
 

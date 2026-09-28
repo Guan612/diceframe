@@ -98,6 +98,9 @@ class GameLifecycle:
         *,
         preserve_players: bool,
     ) -> GameInstance:
+        from src.engine.modules import ruleset_runtime
+
+        ruleset_runtime.require_writable(source)
         candidate = await self.create_game(
             source.game_key,
             world_id=source.world_id,
@@ -109,6 +112,7 @@ class GameLifecycle:
             language=normalize_language(source.language),
             fresh_instance=True,
         )
+        ruleset_runtime.require_writable(candidate)
         candidate.configure_session(
             solo_mode=source.solo_mode,
             entry_point=source.entry_point,
@@ -125,15 +129,7 @@ class GameLifecycle:
         table_settings.replace_gm_style_override(candidate, copy.deepcopy(source.gm_style_override))
         room_access.replace_bot_bind_token(candidate, source.bot_bind_token)
         room_access.replace_room_token(candidate, source.room_token)
-        candidate.ruleset_runtime = copy.deepcopy(source.ruleset_runtime)
-        candidate.ruleset_state = (
-            {
-                "state_schema_version": int(
-                    source.ruleset_runtime.get("state_schema_version", 1) or 1
-                )
-            }
-            if source.ruleset_runtime else {}
-        )
+        ruleset_runtime.copy_binding_for_new_run(candidate, source)
         candidate.adventure_binding = copy.deepcopy(source.adventure_binding)
         if preserve_players:
             players = copy.deepcopy(source.players)

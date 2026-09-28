@@ -121,12 +121,13 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     """
     if instance.state != GameState.ACTIVE_JUDGMENT:
         return False
-    from src.engine.modules import checks, legacy_combat, round_safety, session_stats
+    from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
     round_safety.require_writable(instance)
     legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
     restored = False
     if instance.round_start_snapshot:
         restore_players(instance, instance.round_start_snapshot)
