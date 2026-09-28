@@ -86,6 +86,32 @@ class TestCreateAndGetWorld:
             store.close()
             path.unlink(missing_ok=True)
 
+    def test_delete_world_cascade_uses_primary_book_ownership(self):
+        store, path = _temp_store()
+        try:
+            store.create_world("w1", "测试")
+            store.create_lorebook({"id": "book:independent", "name": "Imported"})
+            store.add_entry({
+                "id": "primary", "book_id": "world:w1", "world_id": "w1",
+                "name": "主世界条目",
+            })
+            # Simulate a pre-cutover row whose compatibility projection was
+            # stale even though its canonical owner was already independent.
+            store.add_entry({
+                "id": "foreign", "book_id": "book:independent", "world_id": "w1",
+                "name": "独立条目",
+            })
+
+            store.delete_world_cascade("w1")
+            assert store.get_entry("primary") is None
+            foreign = store.get_entry("foreign")
+            assert foreign is not None
+            assert foreign["book_id"] == "book:independent"
+            assert foreign["world_id"] is None
+        finally:
+            store.close()
+            path.unlink(missing_ok=True)
+
 
 class TestEntryCRUD:
     def test_add_and_get_entry(self):

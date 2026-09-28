@@ -696,13 +696,28 @@ class LorebookStore:
         return True
 
     def delete_world_cascade(self, world_id: str) -> None:
-        """删除世界及其所有条目。"""
+        """Delete a world through its primary Book ownership boundary.
+
+        ``world_id`` on an entry is only a compatibility projection.  Delete
+        the entries owned by the primary ``world:<id>`` Book, and detach any
+        stale projection on another/unknown Book before removing the World so
+        SQLite's legacy foreign-key cascade cannot delete foreign content.
+        """
         with self._lock:
             entry_ids = [
                 str(row.id) for row in
-                LorebookEntry.select(LorebookEntry.id).where(LorebookEntry.world_id == world_id)
+                LorebookEntry.select(LorebookEntry.id).where(
+                    LorebookEntry.book_id == self.primary_world_book_id(world_id)
+                )
             ]
-            LorebookEntry.delete().where(LorebookEntry.world_id == world_id).execute()
+            self._conn.execute(
+                "UPDATE lorebook_entries SET world_id = NULL "
+                "WHERE world_id = ? AND (book_id IS NULL OR book_id != ?)",
+                (world_id, self.primary_world_book_id(world_id)),
+            )
+            LorebookEntry.delete().where(
+                LorebookEntry.book_id == self.primary_world_book_id(world_id)
+            ).execute()
             self._delete_embeddings_locked(entry_ids)
             World.delete().where(World.id == world_id).execute()
             self._bump_book_revision_locked(self.primary_world_book_id(world_id))
