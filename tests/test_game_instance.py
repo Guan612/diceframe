@@ -23,7 +23,11 @@ def test_round_entity_snapshot_round_trips_and_defaults_empty() -> None:
     assert restored.round_entity_snapshot["combat_state"] == "active"
 
     legacy = instance.to_dict()
+    # Drop the key from wherever it is stored (top level before R8-c2).
     legacy.pop("round_entity_snapshot", None)
+    safety = (legacy.get("modules") or {}).get("round_safety")
+    if isinstance(safety, dict):
+        safety.pop("round_entity_snapshot", None)
     assert GameInstance.from_dict(legacy).round_entity_snapshot == {}
 
 
