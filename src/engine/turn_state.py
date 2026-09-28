@@ -309,16 +309,17 @@ def add_action_locked(
 
 def start_round_locked(instance: GameInstance) -> None:
     """``start_round`` 的持锁实现（调用方必须已持有 ``_lock``）。"""
-    from src.engine.modules import session_stats
+    from src.engine.modules import checks, session_stats
 
     session_stats.require_writable(instance)
+    checks.require_writable(instance)
     progression.open_next_round(instance)
     current = str(instance.round_number)
     instance.death_save_outcomes = {
         current: instance.death_save_outcomes.get(current, {})
     }
     instance.state = GameState.ACTIVE_ACTION
-    instance.round_checks_prepared = False
+    checks.invalidate_prepared(instance)
     instance.round_start_snapshot.clear()
     instance.round_entity_snapshot.clear()
     instance.action_queue.clear()
@@ -393,10 +394,13 @@ def do_advance_locked(instance: GameInstance) -> bool:
     """在锁内执行推进（调用方需持锁）。"""
     if instance.state != GameState.ACTIVE_ACTION:
         return False
+    from src.engine.modules import checks
+
+    checks.require_writable(instance)
     for uid in instance.alive_players:
         instance.ready_players.add(uid)
     instance.state = GameState.ACTIVE_JUDGMENT
-    instance.round_checks_prepared = False
+    checks.invalidate_prepared(instance)
     instance.round_start_snapshot = snapshot_players(instance)
     instance.capture_round_entity_snapshot()
     logger.info("进入判定阶段 - game_key=%s, actions=%d",

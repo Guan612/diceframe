@@ -23,7 +23,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 30
+CURRENT_INSTANCE_SCHEMA_VERSION = 31
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -640,6 +640,29 @@ def _migrate_v29_to_v30(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v30_to_v31(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move check records into their slot without overwriting existing slots."""
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    defaults: dict[str, Any] = {
+        "last_check": None, "last_checks": [],
+        "round_checks_prepared": False, "manual_roll_requests": [],
+    }
+    values = {key: payload.pop(key, default) for key, default in defaults.items()}
+    if not isinstance(values["last_check"], dict):
+        values["last_check"] = None
+    for key in ("last_checks", "manual_roll_requests"):
+        if not isinstance(values[key], list):
+            values[key] = []
+    values["round_checks_prepared"] = bool(values["round_checks_prepared"])
+    if not isinstance(modules.get("checks"), dict):
+        modules["checks"] = {"schema_version": 1, **values}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 31
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -734,6 +757,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 29:
         payload = _migrate_v29_to_v30(payload)
         version = 30
+    if version == 30:
+        payload = _migrate_v30_to_v31(payload)
+        version = 31
     payload["instance_schema_version"] = version
     return payload
 

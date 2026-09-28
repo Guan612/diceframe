@@ -11,7 +11,6 @@ from typing import Any, TypedDict
 
 from src.engine.contracts import (
     ActionRecord,
-    CheckResult,
     PlayerData,
     RoundLogEntry,
 )
@@ -136,10 +135,6 @@ class GamePersistedState(TypedDict, total=False):
     language: str
     gm_uid: str
     modules: dict[str, dict[str, Any]]
-    last_check: CheckResult | None
-    last_checks: list[CheckResult]
-    manual_roll_requests: list[dict[str, Any]]
-    round_checks_prepared: bool
     round_start_snapshot: PlayerRollbackSnapshot
     round_entity_snapshot: OpaqueState
     death_save_outcomes: dict[str, dict[str, OpaqueState]]

@@ -12,6 +12,7 @@ from src.engine.modules import (  # noqa: F401
     progression_state,
     room_access,
     session_stats,
+    checks,
     round_presentation,
     table_settings,
     world_reports,

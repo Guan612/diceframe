@@ -68,7 +68,7 @@ from src.engine import combat_narrative, progression
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.module_state import ModuleStateError
 from src.engine.modules.media import replace_scene_image
-from src.engine.modules import session_stats, world_reports
+from src.engine.modules import checks, session_stats, world_reports
 from src.engine.language import localized_text
 from src.engine.world_events import advance_world_time
 from src.engine.world.memory_projection import queue_world_memory
@@ -327,6 +327,7 @@ class RoundProcessor:
     def prepare_round_checks(self, instance: GameInstance) -> list[dict]:
         """离线兼容路径：模型工具不可用时按旧规则意图结算检定。"""
         progression.require_writable(instance)
+        checks.require_writable(instance)
         if instance.round_checks_prepared:
             return list(instance.last_checks)
         if instance.state != GameState.ACTIVE_JUDGMENT:
@@ -355,6 +356,7 @@ class RoundProcessor:
         """阶段 1：由 GM 模型统一规划检定，再由服务端一次性掷骰结算。"""
         progression.require_writable(instance)
         session_stats.require_writable(instance)
+        checks.require_writable(instance)
         if instance.round_checks_prepared:
             return list(instance.last_checks)
         if instance.state != GameState.ACTIVE_JUDGMENT:
@@ -524,6 +526,7 @@ class RoundProcessor:
             raise RoundNotProcessed("not_judging")
         progression.require_writable(instance)
         session_stats.require_writable(instance)
+        checks.require_writable(instance)
         if has_blocking_economy_decision(instance):
             logger.info("等待经济提案结算，暂不生成叙事: %s", instance.game_key)
             raise RoundNotProcessed("economy_pending")
@@ -923,6 +926,7 @@ class RoundProcessor:
         """实际的判定处理逻辑。"""
         progression.require_writable(instance)
         session_stats.require_writable(instance)
+        checks.require_writable(instance)
         expected_run_id = instance.run_id
         if not instance.round_checks_prepared:
             await self.prepare_round_checks_ai(instance)
