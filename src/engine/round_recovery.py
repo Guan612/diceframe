@@ -49,9 +49,10 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     """
     if not instance.log:
         return None
-    from src.engine.modules import session_stats
+    from src.engine.modules import checks, session_stats
 
     session_stats.require_writable(instance)
+    checks.require_writable(instance)
     last = instance.log.pop()
     from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
 
@@ -121,9 +122,10 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     """
     if instance.state != GameState.ACTIVE_JUDGMENT:
         return False
-    from src.engine.modules import session_stats
+    from src.engine.modules import checks, session_stats
 
     session_stats.require_writable(instance)
+    checks.require_writable(instance)
     restored = False
     if instance.round_start_snapshot:
         restore_players(instance, instance.round_start_snapshot)
@@ -166,9 +168,10 @@ def finish_judgment_locked(
     GameInstance wrapper 先校验推进与经济模块，再在同一段状态锁内依次
     调用本函数和 ``start_round_locked``，使日志提交与下一轮开启不可交错。
     """
-    from src.engine.modules import session_stats
+    from src.engine.modules import checks, session_stats
 
     session_stats.require_writable(instance)
+    checks.require_writable(instance)
     pending_combat_summaries: list[str] = []
     raw_schema = (
         instance.combat_extension.get("schema_version")

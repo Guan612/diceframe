@@ -55,10 +55,6 @@ class GameStateCodec:
             "language": normalize_language(instance.language),
             "gm_uid": instance.gm_uid,
             "modules": {**instance.modules, "health": health.persisted_state(instance)},
-            "last_check": instance.last_check,
-            "last_checks": instance.last_checks,
-            "manual_roll_requests": instance.manual_roll_requests,
-            "round_checks_prepared": instance.round_checks_prepared,
             "round_start_snapshot": instance.round_start_snapshot,
             "round_entity_snapshot": instance.round_entity_snapshot,
             "death_save_outcomes": instance.death_save_outcomes,
@@ -140,10 +136,6 @@ class GameStateCodec:
             language=normalize_language(data.get("language", DEFAULT_LANGUAGE)),
             gm_uid=data.get("gm_uid", ""),
             modules=data.get("modules") if isinstance(data.get("modules"), dict) else {},
-            last_check=data.get("last_check"),
-            last_checks=data.get("last_checks") or [],
-            manual_roll_requests=data.get("manual_roll_requests") or [],
-            round_checks_prepared=bool(data.get("round_checks_prepared", False)),
             round_start_snapshot=data.get("round_start_snapshot") or {},
             # 旧存档没有这个键：默认空快照，回滚时退化为按目标核对战斗缓存。
             round_entity_snapshot=(

@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from src.engine.character_utils import apply_resource_delta, get_resource
 from src.engine.game_instance import GameInstance, GameState
 from src.engine import progression
-from src.engine.modules import session_stats
+from src.engine.modules import checks, session_stats
 
 logger = logging.getLogger("trpg")
 
@@ -56,6 +56,7 @@ async def resolve_luck_decision(
             return {"ok": False, "code": "LUCK_NOT_AVAILABLE", "error": "该检定不能消耗幸运"}
         progression.require_writable(instance)
         session_stats.require_writable(instance)
+        checks.require_writable(instance)
 
         if spend:
             if str(target.get("dice") or "").lower() != "d100" or str(target.get("verdict") or "") != "失败":
@@ -97,6 +98,7 @@ async def decline_pending_luck(instance: GameInstance) -> list[dict]:
         if any(check.get("luck_decision") == "pending" for check in instance.last_checks):
             progression.require_writable(instance)
             session_stats.require_writable(instance)
+            checks.require_writable(instance)
         now = datetime.now(timezone.utc).isoformat()
         for check in instance.last_checks:
             if check.get("luck_decision") != "pending":
@@ -136,6 +138,7 @@ async def system_decline_luck(instance: GameInstance, check_id: str) -> dict:
             return {"ok": False, "code": "LUCK_ALREADY_RESOLVED", "error": "该检定的幸运选择已经处理"}
         progression.require_writable(instance)
         session_stats.require_writable(instance)
+        checks.require_writable(instance)
         target["luck_decision"] = "declined"
         target["luck_spend_available"] = False
         target["luck_timeout"] = True

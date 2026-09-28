@@ -26,6 +26,14 @@ def live_state(instance):
     }
 
 
+def stored_manual_roll_requests(state):
+    # Shape-aware: the list lives at the top level until it moves into a module slot.
+    checks = state.get("modules", {}).get("checks")
+    if isinstance(checks, dict) and "manual_roll_requests" in checks:
+        return checks["manual_roll_requests"]
+    return state["manual_roll_requests"]
+
+
 def unsupported_instance():
     instance = _make_populated_instance()
     instance.modules["session_stats"] = {"schema_version": 99, "opaque": [1]}
@@ -127,7 +135,7 @@ async def test_manual_roll_rejection_preserves_requests_and_status(operation):
                 "run_id": instance.run_id, "target_uid": "u1", "reason": "cancel",
             })
     assert live_state(instance) == before
-    assert request == before["manual_roll_requests"][0]
+    assert request == stored_manual_roll_requests(before)[0]
     save.assert_not_called()
 
 

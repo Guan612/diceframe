@@ -37,6 +37,7 @@ from src.engine.game_state_contracts import (
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.module_state import ensure_module_states
 from src.engine.modules import (
+    checks,
     combat_extension_state,
     economy_state,
     health,
@@ -199,15 +200,9 @@ class GameInstance:
     # 剧情追踪
     plot_tracker: PlotTracker | None = None
 
-    # 判定卡片：最近一次检定的结构化结果（前端渲染用）
-    last_check: CheckResult | None = None
-    last_checks: list[CheckResult] = field(default_factory=list)
-    manual_roll_requests: list[dict[str, Any]] = field(default_factory=list)
     # 本轮规划发现的无价购买意图（payer/target/quantity）。只在回合内存中
     # 传递：供结算阶段的同轮 LOOT 拦截使用，从不持久化、不产生金额。
     round_unpriced_purchase_intents: list[dict] = field(default_factory=list)
-    # 当前判定阶段是否已生成结构化检定；幸运选择必须发生在 LLM 叙事之前。
-    round_checks_prepared: bool = False
     # 进入判定阶段前的玩家状态；整轮撤回时用于退还本轮消耗的幸运。
     round_start_snapshot: PlayerRollbackSnapshot = field(default_factory=dict)
     # 进入判定阶段前的旧版战斗实体状态（npcs / combat_enemies / 战斗状态）。
@@ -243,6 +238,40 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
+
+    @property
+    def last_check(self) -> CheckResult | None:
+        """最近一次结构化检定（前端判定卡片）。"""
+        return checks.last_check(self)
+
+    @last_check.setter
+    def last_check(self, value: CheckResult | None) -> None:
+        checks.replace_last_check(self, value)
+
+    @property
+    def last_checks(self) -> list[CheckResult]:
+        return checks.last_checks(self)
+
+    @last_checks.setter
+    def last_checks(self, value: list[CheckResult]) -> None:
+        checks.replace_last_checks(self, value)
+
+    @property
+    def round_checks_prepared(self) -> bool:
+        """检定已准备；幸运选择必须发生在 LLM 叙事之前。"""
+        return checks.round_checks_prepared(self)
+
+    @round_checks_prepared.setter
+    def round_checks_prepared(self, value: bool) -> None:
+        checks.replace_round_checks_prepared(self, value)
+
+    @property
+    def manual_roll_requests(self) -> list[dict[str, Any]]:
+        return checks.manual_roll_requests(self)
+
+    @manual_roll_requests.setter
+    def manual_roll_requests(self, value: list[dict[str, Any]]) -> None:
+        checks.replace_manual_roll_requests(self, value)
 
     @property
     def total_llm_calls(self) -> int:
@@ -845,6 +874,10 @@ class GameInstance:
         """
         if "last_activity" in snapshot:
             session_stats.require_writable(self)
+        if any(key in snapshot for key in (
+            "last_check", "last_checks", "round_checks_prepared", "manual_roll_requests",
+        )):
+            checks.require_writable(self)
         if "round_number" in snapshot:
             progression.require_writable(self)
             restored_round = int(snapshot["round_number"])
@@ -975,14 +1008,14 @@ class GameInstance:
 
     def record_check(self, check: CheckResult) -> None:
         """记录结构化检定，并保持 last_check 与 last_checks 一致。"""
-        self.last_checks.append(check)
-        self.last_check = check
+        checks.record(self, check)
 
     def sync_last_check(self, check: CheckResult) -> None:
         """刷新最近检定快照，同时隔离可变的轮次检定记录。"""
-        self.last_check = dict(check)
+        checks.sync_last(self, check)
 
     def reset_round_checks(self, *, prepared: bool = False) -> None:
+        checks.require_writable(self)
         self.last_check = None
         self.last_checks.clear()
         self.last_overreach.clear()
@@ -1001,9 +1034,7 @@ class GameInstance:
         self.mark_log_persisted()
 
     def complete_round_check_preparation(self) -> None:
-        if self.last_checks:
-            self.last_check = self.last_checks[-1]
-        self.round_checks_prepared = True
+        checks.mark_prepared(self)
 
     def begin_round_processing(self) -> None:
         """清理仅属于上一轮展示的短期状态。"""
@@ -1102,6 +1133,7 @@ class GameInstance:
                 # Reject before history or snapshots can be changed.
                 progression.require_writable(self)
                 session_stats.require_writable(self)
+                checks.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.rollback_last_round_locked(self)
@@ -1125,6 +1157,7 @@ class GameInstance:
             if self.state == GameState.ACTIVE_JUDGMENT:
                 progression.require_writable(self)
                 session_stats.require_writable(self)
+                checks.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
@@ -1287,6 +1320,7 @@ class GameInstance:
                 return
             progression.require_writable(self)
             session_stats.require_writable(self)
+            checks.require_writable(self)
             economy_state.state(self)
             turn_state.start_round_locked(self)
 
@@ -1564,6 +1598,7 @@ class GameInstance:
             from src.engine.economy import has_blocking_economy_decision
 
             progression.require_writable(self)
+            checks.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             return self._do_advance_locked()
@@ -1574,6 +1609,7 @@ class GameInstance:
             from src.engine.economy import has_blocking_economy_decision
 
             progression.require_writable(self)
+            checks.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             if self.state != GameState.ACTIVE_ACTION:
@@ -1585,6 +1621,7 @@ class GameInstance:
     def _do_advance_locked(self) -> bool:
         """在锁内执行推进（调用方需持锁；实现见 turn_state）。"""
         progression.require_writable(self)
+        checks.require_writable(self)
         return turn_state.do_advance_locked(self)
 
     def capture_round_entity_snapshot(self) -> None:
@@ -1612,6 +1649,7 @@ class GameInstance:
         async with self._lock:
             progression.require_writable(self)
             session_stats.require_writable(self)
+            checks.require_writable(self)
             economy_state.state(self)
             round_recovery.finish_judgment_locked(
                 self,
@@ -1676,6 +1714,7 @@ class GameInstance:
             # Validate fallible slots before rotating the run or clearing state.
             progression.require_writable(self)
             session_stats.require_writable(self)
+            checks.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)

@@ -10,7 +10,8 @@
 > - Branch: `main`
 > - Commit: `962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release: `2.6.1`
-> - Current GameInstance persisted schema: `30`
+> - Current GameInstance persisted schema: `31`
+> - R8-c1: `last_check`, `last_checks`, `round_checks_prepared`, and `manual_roll_requests` live in `modules.checks`; compatibility properties remain, and migration 30→31 removes the old top-level keys. Reset continues to preserve manual roll requests.
 > - R8-a: `total_llm_calls`, `total_tokens`, `started_at`, and `last_activity` live in `modules.session_stats`; compatibility properties remain, and migration 29→30 removes the old top-level keys.
 > - Current Lorebook SQLite schema (`PRAGMA user_version`): `9`
 > - Document verification date: 2026-09-18

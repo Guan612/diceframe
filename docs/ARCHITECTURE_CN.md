@@ -10,7 +10,8 @@
 > - 分支：`main`
 > - Commit：`962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release：`2.6.1`
-> - 当前 GameInstance persisted schema：`30`
+> - 当前 GameInstance persisted schema：`31`
+> - R8-c1：`last_check`、`last_checks`、`round_checks_prepared`、`manual_roll_requests` 存于 `modules.checks`；旧属性代理保留，30→31 迁移删除旧顶层键。reset 继续保留手动骰请求。
 > - R8-a：统计字段 `total_llm_calls`、`total_tokens`、`started_at`、`last_activity` 存于 `modules.session_stats`；旧属性代理保留，29→30 迁移删除旧顶层键。
 > - 当前 Lorebook SQLite schema（`PRAGMA user_version`）：`9`
 > - 文档核验日期：2026-09-18
