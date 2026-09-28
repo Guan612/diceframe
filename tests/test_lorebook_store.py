@@ -98,9 +98,14 @@ class TestCreateAndGetWorld:
             # Simulate a pre-cutover row whose compatibility projection was
             # stale even though its canonical owner was already independent.
             store.add_entry({
-                "id": "foreign", "book_id": "book:independent", "world_id": "w1",
+                "id": "foreign", "book_id": "book:independent",
                 "name": "独立条目",
             })
+            store._conn.execute(
+                "UPDATE lorebook_entries SET world_id = ? WHERE id = ?",
+                ("w1", "foreign"),
+            )
+            store._conn.commit()
 
             store.delete_world_cascade("w1")
             assert store.get_entry("primary") is None
@@ -150,6 +155,7 @@ class TestEntryCRUD:
         try:
             store.create_world("w1", "World One")
             store.create_lorebook({"id": "book:independent", "name": "Imported"})
+            store.create_lorebook({"id": "world:standalone", "name": "World-shaped only"})
 
             store.add_book_entry(
                 "book:independent",
@@ -158,6 +164,13 @@ class TestEntryCRUD:
             independent = store.get_entry("e-independent")
             assert independent and independent["book_id"] == "book:independent"
             assert independent["world_id"] is None
+
+            store.add_book_entry(
+                "world:standalone",
+                {"id": "e-world-shaped", "name": "Not primary without a binding"},
+            )
+            world_shaped = store.get_entry("e-world-shaped")
+            assert world_shaped and world_shaped["world_id"] is None
 
             with pytest.raises(ValueError, match="does not exist"):
                 store.add_book_entry("book:missing", {"id": "bad", "name": "Bad"})
@@ -656,6 +669,7 @@ class TestMigration:
             store.create_world("w1", "World One")
             store.add_entry({"id": "e1", "world_id": "w1", "name": "Entry", "content": "body"})
             assert store.primary_world_book_id("w1") == "world:w1"
+            assert store.bound_world_projection_for_book("world:w1") == "w1"
             book = store.get_lorebook("world:w1")
             assert book and book["source_kind"] == "world"
             bindings = store.list_bindings(scope_kind="world", scope_id="w1")

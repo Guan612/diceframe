@@ -450,10 +450,15 @@ class LorebookStore:
             if entry.get("world_id") and requested_book_id and str(requested_book_id).startswith("world:") and requested_book_id != self.primary_world_book_id(entry["world_id"]):
                 requested_book_id = None
             book_id = requested_book_id or self._ensure_primary_book_locked(entry["world_id"])
+            # ``world_id`` is a compatibility projection, never a second
+            # ownership input.  Derive it from the primary Binding so a
+            # standalone Book whose id merely starts with ``world:`` remains
+            # independent.
+            projected_world_id = self._bound_world_projection_for_book_locked(book_id)
             LorebookEntry.insert(
                 id=entry["id"],
                 book_id=book_id,
-                world_id=entry.get("world_id"),
+                world_id=projected_world_id,
                 name=entry["name"],
                 type=entry.get("type", "other"),
                 keywords=json.dumps(entry.get("keywords", []), ensure_ascii=False),
@@ -517,7 +522,7 @@ class LorebookStore:
             raise ValueError("lorebook book does not exist")
         payload = dict(entry)
         payload["book_id"] = book_id
-        payload["world_id"] = self.world_projection_for_book(book_id)
+        payload["world_id"] = self.bound_world_projection_for_book(book_id)
         self.add_entry(payload)
 
     def get_entry(self, entry_id: str) -> dict | None:
@@ -570,6 +575,23 @@ class LorebookStore:
             "SELECT book_id FROM lorebook_entries WHERE id = ?", (entry_id,)
         ).fetchone()
         return str(row[0]) if row and row[0] else None
+
+    def _bound_world_projection_for_book_locked(self, book_id: str) -> str | None:
+        """Return the world scope of a primary Binding (caller holds the lock)."""
+
+        row = self._conn.execute(
+            "SELECT scope_id FROM lorebook_bindings "
+            "WHERE book_id = ? AND role = 'primary' AND scope_kind = 'world' "
+            "LIMIT 1",
+            (str(book_id or ""),),
+        ).fetchone()
+        return str(row[0]) if row and row[0] else None
+
+    def bound_world_projection_for_book(self, book_id: str) -> str | None:
+        """Return the compatibility ``world_id`` owned by a Book binding."""
+
+        with self._lock:
+            return self._bound_world_projection_for_book_locked(book_id)
 
     def delete_entry(self, entry_id: str) -> None:
         with self._lock:
@@ -668,7 +690,7 @@ class LorebookStore:
                 return False
             LorebookEntry.update(
                 book_id=target_book_id,
-                world_id=self.world_projection_for_book(target_book_id),
+                world_id=self._bound_world_projection_for_book_locked(target_book_id),
                 updated_at=SQL("datetime('now')"),
             ).where(LorebookEntry.id == entry_id).execute()
             self._bump_book_revision_locked(source_book_id)
