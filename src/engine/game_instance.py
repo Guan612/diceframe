@@ -51,6 +51,7 @@ from src.engine.modules import (
     room_access,
     round_presentation,
     round_safety,
+    ruleset_runtime,
     session_stats,
     table_settings,
     world_reports,
@@ -145,8 +146,6 @@ class GameInstance:
     memory_namespace: str = ""
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
-    ruleset_runtime: dict[str, Any] = field(default_factory=dict)
-    ruleset_state: dict[str, Any] = field(default_factory=dict)
     adventure_binding: dict[str, Any] = field(default_factory=dict)
     # FIX-04 §6.2：Adventure v2 进度（active/completed nodes/objectives/milestones +
     # history）的权威持久化位置。v1 的 campaign 进度仍在 ruleset_state，两者并存
@@ -156,7 +155,6 @@ class GameInstance:
     # Empty means legacy/in-memory construction; runtime derives from the
     # bound adventure until creation/migration writes an explicit mode.
     play_mode: str = ""
-    event_ledger: list[dict[str, Any]] = field(default_factory=list)
     world_name: str = ""
     group_name: str = ""
     state: GameState = GameState.CREATED
@@ -222,6 +220,30 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
+
+    @property
+    def ruleset_runtime(self) -> dict[str, Any]:
+        return ruleset_runtime.binding(self)
+
+    @ruleset_runtime.setter
+    def ruleset_runtime(self, value: dict[str, Any]) -> None:
+        ruleset_runtime.replace_binding(self, value)
+
+    @property
+    def ruleset_state(self) -> dict[str, Any]:
+        return ruleset_runtime.state(self)
+
+    @ruleset_state.setter
+    def ruleset_state(self, value: dict[str, Any]) -> None:
+        ruleset_runtime.replace_state(self, value)
+
+    @property
+    def event_ledger(self) -> list[dict[str, Any]]:
+        return ruleset_runtime.event_ledger(self)
+
+    @event_ledger.setter
+    def event_ledger(self, value: list[dict[str, Any]]) -> None:
+        ruleset_runtime.replace_event_ledger(self, value)
 
     @property
     def combat_active(self) -> bool:
@@ -862,13 +884,10 @@ class GameInstance:
             normalized["content_version"], normalized["state_schema_version"],
         )):
             return False
+        ruleset_runtime.require_writable(self)
         if self.ruleset_runtime and self.ruleset_runtime != normalized:
             return False
-        self.ruleset_runtime = normalized
-        if not self.ruleset_state:
-            self.ruleset_state = {
-                "state_schema_version": normalized["state_schema_version"],
-            }
+        ruleset_runtime.bind(self, normalized)
         return True
 
     def bind_adventure(self, binding: dict[str, Any] | None) -> bool:
@@ -934,11 +953,11 @@ class GameInstance:
         )):
             round_safety.require_writable(self)
         legacy_combat.require_writable(self)
+        ruleset_runtime.require_writable(self)
         if "round_number" in snapshot:
             progression.require_writable(self)
             restored_round = int(snapshot["round_number"])
-        self.ruleset_state = copy.deepcopy(snapshot["ruleset_state"])
-        self.event_ledger = copy.deepcopy(snapshot["event_ledger"])
+        ruleset_runtime.restore_from_transaction(self, snapshot)
         self.players = copy.deepcopy(snapshot["players"])
         legacy_combat.restore_from_transaction(self, snapshot)
         if "scene" in snapshot and snapshot["scene"] is not None:
@@ -1208,6 +1227,7 @@ class GameInstance:
                 checks.require_writable(self)
                 round_safety.require_writable(self)
                 legacy_combat.require_writable(self)
+                ruleset_runtime.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.abort_round_processing_locked(self)
@@ -1652,6 +1672,7 @@ class GameInstance:
             checks.require_writable(self)
             round_safety.require_writable(self)
             legacy_combat.require_writable(self)
+            ruleset_runtime.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             return self._do_advance_locked()
@@ -1665,6 +1686,7 @@ class GameInstance:
             checks.require_writable(self)
             round_safety.require_writable(self)
             legacy_combat.require_writable(self)
+            ruleset_runtime.require_writable(self)
             if has_blocking_economy_decision(self):
                 return False
             if self.state != GameState.ACTIVE_ACTION:
@@ -1679,6 +1701,7 @@ class GameInstance:
         checks.require_writable(self)
         round_safety.require_writable(self)
         legacy_combat.require_writable(self)
+        ruleset_runtime.require_writable(self)
         return turn_state.do_advance_locked(self)
 
     def capture_round_entity_snapshot(self) -> None:
@@ -1775,6 +1798,7 @@ class GameInstance:
             checks.require_writable(self)
             round_safety.require_writable(self)
             legacy_combat.require_writable(self)
+            ruleset_runtime.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)

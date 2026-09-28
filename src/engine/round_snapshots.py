@@ -352,10 +352,11 @@ def capture_round_entity_snapshot(instance: GameInstance) -> None:
     与 ``round_start_snapshot``（玩家）和 ``combat_extension_round_snapshots``
     （D&D2024 权威战斗扩展）互补，三者合起来才是"本轮改过的东西"。
     """
-    from src.engine.modules import legacy_combat, round_safety
+    from src.engine.modules import legacy_combat, round_safety, ruleset_runtime
 
     round_safety.require_writable(instance)
     legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
     round_safety.replace_entity_snapshot(instance, {
         "npcs": copy.deepcopy(instance.npcs),
         "combat_enemies": copy.deepcopy(instance.combat_enemies),
@@ -376,9 +377,10 @@ def restore_round_entity_snapshot(instance: GameInstance) -> bool:
     snapshot = instance.round_entity_snapshot
     if not isinstance(snapshot, dict) or not snapshot:
         return False
-    from src.engine.modules import legacy_combat
+    from src.engine.modules import legacy_combat, ruleset_runtime
 
     legacy_combat.require_writable(instance)
+    ruleset_runtime.require_writable(instance)
     instance.npcs = copy.deepcopy(snapshot.get("npcs") or {})
     legacy_combat.restore_from_entity_snapshot(instance, snapshot)
     # 世界真相按整轮语义回滚（ADR 0003）：本轮写入的 world ops 随本轮撤销。

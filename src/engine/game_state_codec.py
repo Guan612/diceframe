@@ -23,7 +23,7 @@ class GameStateCodec:
 
     @staticmethod
     def encode(instance: GameInstance) -> GamePersistedState:
-        from src.engine.modules import health
+        from src.engine.modules import health, ruleset_runtime
 
         data: GamePersistedState = {
             "instance_schema_version": instance.instance_schema_version,
@@ -49,12 +49,12 @@ class GameStateCodec:
             "world_state": instance.world_state,
             "language": normalize_language(instance.language),
             "gm_uid": instance.gm_uid,
-            "modules": {**instance.modules, "health": health.persisted_state(instance)},
+            "modules": {
+                **instance.modules,
+                "health": health.persisted_state(instance),
+                "ruleset_runtime": ruleset_runtime.persisted_state(instance),
+            },
         }
-        if instance.ruleset_runtime:
-            data["ruleset_runtime"] = instance.ruleset_runtime
-            data["ruleset_state"] = instance.ruleset_state
-            data["event_ledger"] = instance.event_ledger
         if instance.puzzle_manager and hasattr(instance.puzzle_manager, "to_active_dict"):
             data["puzzles"] = instance.puzzle_manager.to_active_dict()
         if instance.plot_tracker and hasattr(instance.plot_tracker, "to_dict"):
@@ -78,8 +78,6 @@ class GameStateCodec:
             # Empty marks a pre-rule_id save. The WebUI service resolves it from
             # the world template on first read and persists the migrated value.
             rule_id=data.get("rule_id", ""),
-            ruleset_runtime=data.get("ruleset_runtime") or {},
-            ruleset_state=data.get("ruleset_state") or {},
             adventure_binding=data.get("adventure_binding") or {},
             # FIX-04 §6.2/§6.3：旧存档没有这个键 → 空进度（不猜进度，不迁移 v1
             # campaign 状态）；非 dict 的脏值同样降级为空进度。
@@ -98,7 +96,6 @@ class GameStateCodec:
                     else "free"
                 )
             ),
-            event_ledger=data.get("event_ledger") or [],
             world_name=data.get("world_name", ""),
             group_name=data.get("group_name", ""),
             state=state_type(data["state"]),

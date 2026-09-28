@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from datetime import datetime, timezone
 
+from src.engine.modules import ruleset_runtime
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.webui.ruleset_rest_projection import public_rest_session, saved_rest_session
 
@@ -67,6 +68,7 @@ def _failure(code: str, message: str, **extra: Any) -> dict[str, Any]:
 
 
 def _set_rest_session(instance: Any, session: dict[str, Any]) -> None:
+    ruleset_runtime.require_writable(instance)
     state = getattr(instance, "ruleset_state", None)
     if not isinstance(state, dict):
         state = {}
@@ -360,6 +362,7 @@ async def _resolve_live_party_authority(
         }
         if user_id not in required:
             return _failure("REST_NOT_AVAILABLE", "当前角色不在本次队伍休息范围内")
+        ruleset_runtime.require_writable(instance)
         session["required_uids"] = sorted(required)
         participants = session.setdefault("participants", {})
         if not isinstance(participants, dict):
