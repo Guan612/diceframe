@@ -82,7 +82,7 @@ async def test_creation_policy_survives_save_before_and_after_character_join(pro
 
 
 @pytest.mark.parametrize("from_seed", [False, True], ids=["normal", "seed"])
-@pytest.mark.parametrize("failure", ["rejected", "exception", "missing-contract"])
+@pytest.mark.parametrize("failure", ["rejected", "exception", "missing-contract", "wrong-runtime-id"])
 @pytest.mark.asyncio
 async def test_binding_failure_rolls_back_creation_before_configuration_or_join(professional_game, monkeypatch, from_seed, failure):
     api, registry, character, worlds_dir = professional_game
@@ -96,6 +96,12 @@ async def test_binding_failure_rolls_back_creation_before_configuration_or_join(
     monkeypatch.setattr(api, "create_player", join)
     if failure == "missing-contract":
         monkeypatch.delattr(Dnd2024Runtime, "game_binding")
+    elif failure == "wrong-runtime-id":
+        real_binding = Dnd2024Runtime.game_binding
+        monkeypatch.setattr(
+            Dnd2024Runtime, "game_binding",
+            lambda self, rule, locale: {**real_binding(self, rule, locale), "runtime_id": "test:wrong"},
+        )
     elif failure == "exception":
         monkeypatch.setattr(Dnd2024Runtime, "game_binding", Mock(side_effect=ValueError("binding unavailable")))
     else:
@@ -142,7 +148,11 @@ def test_creation_binding_uses_generic_contract_and_preserves_matching_state():
     instance = GameInstance(game_key=("web", "other", "bot"))
     rule = object()
     binding = {"rule_id": "other-rule", "runtime_id": "test:other", "runtime_version": 4, "content_version": "v2", "state_schema_version": 3}
-    runtime = SimpleNamespace(capabilities=RulesetCapabilities(versioned_state=True), game_binding=Mock(return_value=binding))
+    runtime = SimpleNamespace(
+        runtime_id="test:other",
+        capabilities=RulesetCapabilities(versioned_state=True),
+        game_binding=Mock(return_value=binding),
+    )
     assert game_creation_phases.bind_ruleset_runtime(transaction, instance, runtime, rule, "en") is None
     runtime.game_binding.assert_called_once_with(rule, "en")
     instance.ruleset_state["custom_state"] = {"value": 7}
@@ -152,3 +162,20 @@ def test_creation_binding_uses_generic_contract_and_preserves_matching_state():
     assert not instance.bind_ruleset_runtime({**binding, "runtime_version": 5})
     assert instance.to_dict() == before
     transaction.rollback.assert_not_called()
+
+
+def test_creation_binding_rejects_binding_for_a_different_runtime():
+    transaction = Mock()
+    instance = GameInstance(game_key=("web", "other", "bot"))
+    before = deepcopy(instance.to_dict())
+    binding = {"rule_id": "other-rule", "runtime_id": "test:wrong", "runtime_version": 4, "content_version": "v2", "state_schema_version": 3}
+    runtime = SimpleNamespace(
+        runtime_id="test:expected",
+        capabilities=RulesetCapabilities(versioned_state=True),
+        game_binding=Mock(return_value=binding),
+    )
+    result = game_creation_phases.bind_ruleset_runtime(transaction, instance, runtime, object(), "en")
+    assert result is not None
+    assert result["error_code"] == "RULESET_BINDING_FAILED"
+    transaction.rollback.assert_called_once_with()
+    assert instance.to_dict() == before

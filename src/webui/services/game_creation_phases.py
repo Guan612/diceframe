@@ -37,7 +37,12 @@ def bind_ruleset_runtime(
     try:
         if not isinstance(runtime, VersionedStateRuntime):
             raise ValueError("规则运行时未提供版本化状态绑定")
-        if not instance.bind_ruleset_runtime(runtime.game_binding(rule, language)):
+        binding = runtime.game_binding(rule, language)
+        # The instance only validates the binding's shape, so prove it names
+        # the runtime that was actually resolved for this rule.
+        if str(binding.get("runtime_id") or "") != runtime.runtime_id:
+            raise ValueError("规则运行时绑定身份不一致")
+        if not instance.bind_ruleset_runtime(binding):
             raise ValueError("规则运行时绑定无效或不兼容")
     except Exception:
         transaction.rollback()
