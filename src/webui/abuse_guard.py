@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import re
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -20,6 +21,12 @@ WRITE_PER_IP_LIMIT = 60
 WRITE_PER_IP_WINDOW_SECONDS = 60
 WRITE_GLOBAL_LIMIT = 600
 WRITE_GLOBAL_WINDOW_SECONDS = 60
+# 建卡器的 choices/validate/derive/finalize 是无状态计算（POST 只为携带草稿），
+# 单独计额：引导建卡每改一步都会请求，不能挤占同 IP 其它玩家的写额度。
+BUILDER_PER_IP_LIMIT = 300
+BUILDER_PER_IP_WINDOW_SECONDS = 60
+BUILDER_GLOBAL_LIMIT = 3000
+BUILDER_GLOBAL_WINDOW_SECONDS = 60
 AI_CONCURRENCY_LIMIT = 3
 AI_SLOT_WAIT_SECONDS = 2.0
 MAX_TRACKED_BUCKETS = 2000
@@ -27,6 +34,7 @@ MAX_TRACKED_BUCKETS = 2000
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # 凭据兑换端点与登录共用限流桶：两者都能用于暴力猜测 owner 访问权。
 _LOGIN_PATHS = frozenset({"/api/login", "/api/pairing/claim"})
+_BUILDER_PATH = re.compile(r"^/api/rules/[^/]+/builder/(?:choices|validate|derive|finalize)$")
 _AI_EXACT_PATHS = frozenset({
     "/api/generate-world",
     "/api/generate-rule",
@@ -133,6 +141,10 @@ class AbuseGuard:
         write_per_ip_window: int = WRITE_PER_IP_WINDOW_SECONDS,
         write_global_limit: int = WRITE_GLOBAL_LIMIT,
         write_global_window: int = WRITE_GLOBAL_WINDOW_SECONDS,
+        builder_per_ip_limit: int = BUILDER_PER_IP_LIMIT,
+        builder_per_ip_window: int = BUILDER_PER_IP_WINDOW_SECONDS,
+        builder_global_limit: int = BUILDER_GLOBAL_LIMIT,
+        builder_global_window: int = BUILDER_GLOBAL_WINDOW_SECONDS,
         ai_concurrency: int = AI_CONCURRENCY_LIMIT,
         ai_wait_seconds: float = AI_SLOT_WAIT_SECONDS,
         limiter: SlidingWindowLimiter | None = None,
@@ -145,6 +157,10 @@ class AbuseGuard:
         self.write_per_ip_window = write_per_ip_window
         self.write_global_limit = write_global_limit
         self.write_global_window = write_global_window
+        self.builder_per_ip_limit = builder_per_ip_limit
+        self.builder_per_ip_window = builder_per_ip_window
+        self.builder_global_limit = builder_global_limit
+        self.builder_global_window = builder_global_window
         self.ai_wait_seconds = ai_wait_seconds
         self._limiter = limiter or SlidingWindowLimiter()
         self._ai_slots = asyncio.Semaphore(max(1, ai_concurrency))
@@ -165,6 +181,18 @@ class AbuseGuard:
                 "login-global",
                 self.login_global_limit,
                 self.login_global_window,
+            )
+            if denied:
+                return _rate_limited_response(denied)
+        elif request.method == "POST" and _BUILDER_PATH.match(request.path):
+            denied = self._check_pair(
+                "builder-ip",
+                ip,
+                self.builder_per_ip_limit,
+                self.builder_per_ip_window,
+                "builder-global",
+                self.builder_global_limit,
+                self.builder_global_window,
             )
             if denied:
                 return _rate_limited_response(denied)
