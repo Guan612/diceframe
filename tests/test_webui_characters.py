@@ -15,6 +15,7 @@ from src.llm.client import LLMResponse
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
 from src.webui.api import WebAPI, can_modify_character
+from src.webui.services import character_cards
 from src.webui.session import SessionManager
 
 from webapi_harness import FakeLLMClient, web_api, write_world
@@ -345,6 +346,19 @@ def test_character_cards_with_same_identity_can_bind_to_different_rules(web_api)
     assert {card["rule_id"] for card in result["cards"]} == {
         "freeform_fantasy", "freeform_coc",
     }
+
+
+def test_character_cards_saved_within_one_clock_tick_get_distinct_ids(web_api, monkeypatch):
+    api, _lorebook, _registry, _fake_llm, _worlds_dir = web_api
+    # Coarse clocks (Windows) can return the same time_ns() for back-to-back saves.
+    monkeypatch.setattr(character_cards.time, "time_ns", lambda: 1_700_000_000_000_000_000)
+
+    api.save_character_card({"character_name": "甲", "rule_id": "freeform_fantasy"})
+    api.save_character_card({"character_name": "乙", "rule_id": "freeform_fantasy"})
+
+    result = api.list_character_cards()
+    assert result["total"] == 2
+    assert len({card["id"] for card in result["cards"]}) == 2
 
 
 def test_legacy_character_card_remains_readable_as_unbound(web_api):
