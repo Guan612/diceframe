@@ -112,6 +112,18 @@ class RulesetRuntime(Protocol):
 
 
 @runtime_checkable
+class VersionedStateRuntime(Protocol):
+    """Required when capabilities.versioned_state is true.
+
+    Return the character rule_binding shape: rule_id, runtime_id,
+    runtime_version, content_version, and state_schema_version. New games bind
+    this identity before any ruleset state is written.
+    """
+
+    def game_binding(self, rule: Any, locale: str) -> dict[str, Any]: ...
+
+
+@runtime_checkable
 class AuthoritativeIntentHooks(Protocol):
     """Runtime-owned request and projection hooks for authoritative intents."""
 

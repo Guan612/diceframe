@@ -42,6 +42,28 @@ def require_writable(instance: Any) -> None:
         raise ModuleStateError(f"unsupported ruleset_runtime module schema: {slot.get('schema_version')!r}")
 
 
+class RulesetBindingError(ValueError):
+    code = "RULESET_BINDING_MISMATCH"
+
+    def __init__(self) -> None:
+        super().__init__("存档未绑定当前权威规则运行时")
+
+
+def bound_runtime_id(instance: Any) -> str:
+    """Read the binding without repairing or materializing module state."""
+    modules = getattr(instance, "modules", None)
+    slot = modules.get(MODULE_NAME) if isinstance(modules, dict) else None
+    raw = slot.get("binding") if isinstance(slot, dict) else None
+    runtime_id = raw.get("id") if isinstance(raw, dict) else None
+    return runtime_id if isinstance(runtime_id, str) else ""
+
+
+def require_binding(instance: Any, runtime_id: str) -> None:
+    """Reject writes whose runtime does not own the saved binding."""
+    if not runtime_id or bound_runtime_id(instance) != runtime_id:
+        raise RulesetBindingError()
+
+
 def binding(instance: Any) -> dict[str, Any]:
     return get_module_state(instance, MODULE_NAME)["binding"]
 

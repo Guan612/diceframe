@@ -614,6 +614,7 @@ class Dnd2024CampaignEngine:
         from src.engine.modules import ruleset_runtime
 
         ruleset_runtime.require_writable(instance)
+        ruleset_runtime.require_binding(instance, self.bundle.manifest.runtime_id)
         state = self.initialize_state(instance)
         snapshot = {
             "version": int(state.get("version", 0) or 0),

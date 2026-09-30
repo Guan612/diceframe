@@ -210,7 +210,7 @@ async def test_reset_preserves_binding_deepcopy_and_clears_ledger_after_state_re
 
 
 @pytest.mark.parametrize("engine_name", ["campaign", "combat", "exploration"])
-def test_unbound_dnd_batches_keep_live_state_and_ledger_but_do_not_persist(engine_name):
+def test_unbound_dnd_batches_reject_without_changing_live_or_saved_state(engine_name):
     from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 
     runtime, instance = Dnd2024Runtime(), new_instance()
@@ -224,10 +224,11 @@ def test_unbound_dnd_batches_keep_live_state_and_ledger_but_do_not_persist(engin
         "batch_id": "batch_unbound", "intent_id": "unbound", "expected_version": 0,
         "result_version": 1, "events": [{"type": "intent.submitted"}],
     }
-    assert engine.apply_batch(instance, batch)["applied"] is True
-    assert instance.ruleset_runtime == {}
-    assert instance.event_ledger == [batch]
     before = deepcopy(instance.modules[module.MODULE_NAME])
+    with pytest.raises(module.RulesetBindingError, match="存档未绑定当前权威规则运行时"):
+        engine.apply_batch(instance, batch)
+    assert instance.ruleset_runtime == {}
+    assert instance.event_ledger == []
     restored = GameInstance.from_dict(instance.to_dict())
     assert restored.modules[module.MODULE_NAME] == module.fresh()
     assert instance.modules[module.MODULE_NAME] == before
