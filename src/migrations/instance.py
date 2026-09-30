@@ -591,7 +591,7 @@ def _migrate_v27_to_v28(payload: dict[str, Any]) -> dict[str, Any]:
             "entry_point": values["entry_point"] if isinstance(values["entry_point"], str) else defaults["entry_point"],
             "luck_timeout_seconds": timeout,
             "economy_reward_policy": values["economy_reward_policy"] if isinstance(values["economy_reward_policy"], dict) else {},
-            "dice_reveal_mode": "auto",
+            "dice_reveal_mode": "click",
         }
     payload["modules"] = modules
     payload["instance_schema_version"] = 28

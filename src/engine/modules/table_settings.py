@@ -21,7 +21,7 @@ def fresh() -> dict[str, Any]:
         "entry_point": "web",
         "luck_timeout_seconds": 60,
         "economy_reward_policy": {},
-        "dice_reveal_mode": "auto",
+        "dice_reveal_mode": "click",
     }
 
 
@@ -46,10 +46,10 @@ def ensure(raw: Any) -> dict[str, Any]:
         raw["luck_timeout_seconds"] = int(raw.get("luck_timeout_seconds", 60) or 0)
     except (TypeError, ValueError, OverflowError):
         raw["luck_timeout_seconds"] = 60
-    # 骰子揭示方式是纯表现偏好：auto=结果即出（现状），click=行动者/GM 点击
-    # 共享揭示。旧存档缺键回退 auto，未知值不猜、回退 auto。
+    # 骰子揭示方式是纯表现偏好：click=行动者/GM 点击共享揭示（默认），
+    # auto=结果即出。缺键或未知值不猜，回退默认 click。
     if raw.get("dice_reveal_mode") not in {"auto", "click"}:
-        raw["dice_reveal_mode"] = "auto"
+        raw["dice_reveal_mode"] = "click"
     return raw
 
 

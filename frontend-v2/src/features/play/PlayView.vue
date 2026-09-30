@@ -66,7 +66,7 @@ const { confirm } = useConfirm()
 const { locale, setLocale, t } = useLocale()
 const help = ref(false), ruleMeta = ref<RuleMeta>({}), preview = ref(false), delegate = ref(false), cards = ref<CharacterCard[]>([]), showCards = ref(false), health = ref<HealthResponse>({ events: [] })
 const showKpQuestion = ref(false)
-const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref(''), diceRevealModeInput = ref('auto')
+const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false), showRoomPassword = ref(false), roomPasswordInput = ref(''), luckTimeoutInput = ref(''), diceRevealModeInput = ref('click')
 const diceRevealModeTouched = ref(false)
 // 邀请/接管二维码弹窗：title 非空即展示，关闭时置空。链接由弹窗自己按选中的
 // 可达地址算（见 InviteQrModal），这里只交代给谁开、开哪一局。
@@ -569,7 +569,7 @@ function onRoomPassword() {
   roomPasswordInput.value = ''
   passwordTouched.value = false
   luckTimeoutInput.value = ''
-  diceRevealModeInput.value = game.diceRevealMode.value === 'click' ? 'click' : 'auto'
+  diceRevealModeInput.value = game.diceRevealMode.value === 'auto' ? 'auto' : 'click'
   diceRevealModeTouched.value = false
   awayPolicyInput.value = game.detail.value?.away_control_policy === 'ai_takeover' ? 'ai_takeover' : 'pause'
   awayPolicyTouched.value = false
@@ -603,7 +603,7 @@ async function setRoomPassword() {
     if (diceRevealModeTouched.value) {
       const drR = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/settings/dice-reveal-mode`, { method: 'POST', body: JSON.stringify({ mode: diceRevealModeInput.value }) })
       if (drR.error || drR.ok === false) throw new Error(drR.error || t('settingFailed'))
-      game.diceRevealMode.value = diceRevealModeInput.value === 'click' ? 'click' : 'auto'
+      game.diceRevealMode.value = diceRevealModeInput.value === 'auto' ? 'auto' : 'click'
       toast.success(t('diceRevealModeSaved'))
     }
     // 奖励策略仅在 GM 实际改动过时提交；显式选“跟随默认”仍会清除覆盖。

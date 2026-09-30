@@ -32,7 +32,7 @@ export function useGame(){
   const detail = ref<GameDetail|null>(null), players = ref<Player[]>([]), log = ref<LogEntry[]>([]), liveNarration = ref('')
   const rulesetStateSignal = ref(0)
   const privateMessages = ref<PrivateMessage[]>([]), tableTalk = ref<TableTalkExchange[]>([]), map = ref<MapData>({locations:[]}), lore = ref<LoreKeywords>({}), loreEntries = ref<LoreEntry[]>([]), loading=ref(false), error=ref('')
-  const checkReveals = ref<Record<string, CheckRevealRecord>>({}), diceRevealMode = ref<'auto'|'click'>('auto')
+  const checkReveals = ref<Record<string, CheckRevealRecord>>({}), diceRevealMode = ref<'auto'|'click'>('click')
   let source:EventSource|null=null
   let unsubscribePeerEvents:(()=>void)|null=null
   let pollTimer:number|undefined
@@ -90,7 +90,7 @@ export function useGame(){
     players.value = []
     log.value = []
     checkReveals.value = {}
-    diceRevealMode.value = 'auto'
+    diceRevealMode.value = 'click'
     privateMessages.value = []
     tableTalk.value = []
     revokeMapBackgroundAsset(map.value)
@@ -134,7 +134,7 @@ export function useGame(){
       setIfChanged('log', log, l.log||[])
       // 展示层附加信息：揭示标记与揭示方式（自动/点击）。
       checkReveals.value = l.check_reveals || {}
-      diceRevealMode.value = l.dice_reveal_mode === 'click' ? 'click' : 'auto'
+      diceRevealMode.value = l.dice_reveal_mode === 'auto' ? 'auto' : 'click'
       setIfChanged('privateMessages', privateMessages, p.messages||p.private_log||[])
       setIfChanged('tableTalk', tableTalk, tt.exchanges||[])
       const nextMap = m || { locations: [] }

@@ -109,7 +109,7 @@ def test_gm_log_retains_complete_entries_without_mutating_source(log_context):
     assert result["total"] == 2 and result["page"] == 1 and result["total_pages"] == 1
     # 展示层附加信息随日志返回（无揭示记录、默认自动模式）。
     assert result["check_reveals"] == {}
-    assert result["dice_reveal_mode"] == "auto"
+    assert result["dice_reveal_mode"] == "click"
     result["log"][0]["pre_world_state"]["facts"].clear()
     assert instance.log == before
 

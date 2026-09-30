@@ -139,9 +139,9 @@ def test_log_response_carries_reveals_and_mode() -> None:
 
 def test_configure_session_validates_and_persists_mode() -> None:
     inst = _instance()
-    assert inst.dice_reveal_mode == "auto"
-    inst.configure_session(dice_reveal_mode="click")
     assert inst.dice_reveal_mode == "click"
+    inst.configure_session(dice_reveal_mode="auto")
+    assert inst.dice_reveal_mode == "auto"
     with pytest.raises(ValueError):
         inst.configure_session(dice_reveal_mode="ritual")
-    assert inst.dice_reveal_mode == "click"
+    assert inst.dice_reveal_mode == "auto"

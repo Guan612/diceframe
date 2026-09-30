@@ -17,9 +17,30 @@ const emit = defineEmits<{ luck: [check: CheckResult, spend: boolean]; reveal: [
 const { t } = useLocale()
 // 点击揭示模式下：服务端结果已权威落盘，这里只做共享揭示的表现遮罩。
 // 不遮蔽数据本身（时间线公开结果），未揭示也不阻塞任何流程。
-const pendingClickReveal = computed(() => props.clickMode && !props.reveal)
+// 超时没人揭示时只在本地翻开：不请求服务端、不记录揭示者，各客户端各自计时。
+const AUTO_REVEAL_SECONDS = 10
+const autoRevealed = ref(false)
+const autoRevealLeft = ref(AUTO_REVEAL_SECONDS)
+const pendingClickReveal = computed(() => props.clickMode && !props.reveal && !autoRevealed.value)
 const revealed = ref(!props.animate && !pendingClickReveal.value)
 let revealTimer: number | undefined
+let autoRevealTicker: number | undefined
+
+function stopAutoReveal() {
+  if (autoRevealTicker !== undefined) window.clearInterval(autoRevealTicker)
+  autoRevealTicker = undefined
+}
+
+function startAutoReveal() {
+  if (autoRevealTicker !== undefined || !pendingClickReveal.value) return
+  autoRevealLeft.value = AUTO_REVEAL_SECONDS
+  autoRevealTicker = window.setInterval(() => {
+    autoRevealLeft.value -= 1
+    if (autoRevealLeft.value > 0) return
+    stopAutoReveal()
+    autoRevealed.value = true
+  }, 1000)
+}
 
 function startRevealTimer() {
   const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
@@ -27,7 +48,8 @@ function startRevealTimer() {
 }
 
 watch(pendingClickReveal, (pending) => {
-  if (pending) { revealed.value = false; return }
+  if (pending) { revealed.value = false; startAutoReveal(); return }
+  stopAutoReveal()
   if (props.animate && !revealTimer) startRevealTimer()
   else revealed.value = true
 })
@@ -72,11 +94,13 @@ const plannerSources = computed(() => {
 })
 
 onMounted(() => {
-  if (!props.animate || pendingClickReveal.value) return
+  if (pendingClickReveal.value) { startAutoReveal(); return }
+  if (!props.animate) return
   startRevealTimer()
 })
 onUnmounted(() => {
   if (revealTimer !== undefined) window.clearTimeout(revealTimer)
+  stopAutoReveal()
 })
 </script>
 
@@ -111,8 +135,10 @@ onUnmounted(() => {
     <div v-if="pendingClickReveal" class="check-reveal-actions">
       <button v-if="canReveal" class="dice-tag dice-tag-button" type="button" :disabled="busy" @click="emit('reveal', check)">{{ t('checkRevealAction') }}</button>
       <span v-else class="dice-tag">{{ t('checkRevealWaiting') }}</span>
+      <span class="dice-tag check-reveal-countdown">{{ t('checkRevealAutoIn', { seconds: autoRevealLeft }) }}</span>
     </div>
     <span v-else-if="clickMode && reveal" class="dice-tag check-revealed-by">{{ t('checkRevealBy', { name: revealerName || reveal.by || '' }) }}</span>
+    <span v-else-if="clickMode && autoRevealed" class="dice-tag check-revealed-by">{{ t('checkRevealAuto') }}</span>
     <div v-if="revealed && check.luck_decision === 'pending'" class="luck-decision-actions">
       <template v-if="canDecideLuck">
         <button class="dice-tag dice-tag-button" type="button" :disabled="busy" @click="emit('luck', check, true)">{{ t('spendLuckForSuccess', { cost: check.luck_cost || 0 }) }}</button>

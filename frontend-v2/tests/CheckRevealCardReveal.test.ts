@@ -1,10 +1,11 @@
 import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CheckRevealCard from '../src/components/play/CheckRevealCard.vue'
 import { i18n } from '../src/i18n'
 
 describe('CheckRevealCard click-to-reveal presentation', () => {
   beforeEach(() => { i18n.global.locale.value = 'zh-CN' })
+  afterEach(() => { vi.useRealTimers() })
 
   it('masks the result and offers the shared reveal button in click mode', async () => {
     const wrapper = mount(CheckRevealCard, {
@@ -73,5 +74,48 @@ describe('CheckRevealCard click-to-reveal presentation', () => {
     expect(wrapper.text()).toContain('成功')
     expect(wrapper.text()).not.toContain('待揭示')
     expect(wrapper.find('button').exists()).toBe(false)
+  })
+
+  it('counts down and reveals locally when nobody reveals in time', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(CheckRevealCard, {
+      global: { plugins: [i18n] },
+      props: {
+        check: { check_id: 'c9', actor_name: '米拉', label: '检定', dice: 'd20', roll: 12, total: 17, dc: 15, verdict: '成功' },
+        clickMode: true,
+        reveal: null,
+        canReveal: false,
+      },
+    })
+    expect(wrapper.text()).toContain('10 秒后自动揭示')
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(wrapper.text()).toContain('6 秒后自动揭示')
+    expect(wrapper.text()).not.toContain('17')
+    await vi.advanceTimersByTimeAsync(6000)
+    // 本地翻开：不请求服务端，所以不发 reveal 事件，也不显示揭示者。
+    expect(wrapper.text()).toContain('已自动揭示')
+    expect(wrapper.text()).toContain('17')
+    expect(wrapper.text()).not.toContain('秒后自动揭示')
+    expect(wrapper.emitted('reveal')).toBeUndefined()
+  })
+
+  it('a real reveal before the timeout wins over the countdown', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(CheckRevealCard, {
+      global: { plugins: [i18n] },
+      props: {
+        check: { check_id: 'c10', actor_name: '米拉', label: '检定', dice: 'd20', roll: 3, verdict: '失败' },
+        clickMode: true,
+        reveal: null,
+        canReveal: true,
+        revealerName: '房主',
+      },
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    await wrapper.setProps({ reveal: { by: 'gm', at: '2026-09-30T00:00:00Z' } })
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(wrapper.text()).toContain('由 房主 揭示')
+    expect(wrapper.text()).not.toContain('已自动揭示')
+    expect(wrapper.text()).not.toContain('秒后自动揭示')
   })
 })
