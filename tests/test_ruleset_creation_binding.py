@@ -179,3 +179,60 @@ def test_creation_binding_rejects_binding_for_a_different_runtime():
     assert result["error_code"] == "RULESET_BINDING_FAILED"
     transaction.rollback.assert_called_once_with()
     assert instance.to_dict() == before
+
+
+async def _legacy_unbound_game(api, registry, character):
+    """A pre-#447 D&D save: created, but its versioned runtime was never bound."""
+    result = await api.create_game("template_world", rule_id="dnd2024_srd", players=[character])
+    assert result["ok"], result
+    instance = registry.get(api._parse_key(result["game_key"]))
+    instance.ruleset_runtime.clear()
+    assert not instance.ruleset_runtime
+    return result["game_key"], instance
+
+
+@pytest.mark.asyncio
+async def test_character_join_cannot_bind_a_legacy_unbound_game(professional_game):
+    api, registry, character, _worlds_dir = professional_game
+    game_key, instance = await _legacy_unbound_game(api, registry, character)
+    before = deepcopy(instance.to_dict())
+
+    rejected = await api.create_player(game_key, character, assign_new_id=True)
+
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == "RULESET_BINDING_MISSING"
+    assert not instance.ruleset_runtime
+    assert instance.to_dict() == before
+
+
+@pytest.mark.asyncio
+async def test_card_adoption_cannot_bind_a_legacy_unbound_game(professional_game):
+    api, registry, character, _worlds_dir = professional_game
+    created = await api.create_game("template_world", rule_id="dnd2024_srd", players=[character])
+    assert created["ok"], created
+    game_key = created["game_key"]
+    joined = await api.create_player(game_key, character, assign_new_id=True)
+    assert joined["ok"], joined
+    user_id = joined["user_id"]
+    instance = registry.get(api._parse_key(game_key))
+    instance.ruleset_runtime.clear()
+    card = api.save_character_card(character)["card"]
+    before = deepcopy(instance.to_dict())
+
+    rejected = await api.adopt_ruleset_character_card(game_key, user_id, card["id"])
+
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == "RULESET_BINDING_MISSING"
+    assert not instance.ruleset_runtime
+    assert instance.to_dict() == before
+
+
+def test_binding_match_is_read_only():
+    instance = GameInstance(game_key=("web", "legacy", "bot"))
+    binding = {"rule_id": "r", "runtime_id": "test:x", "runtime_version": 1, "content_version": "v1", "state_schema_version": 1}
+    assert not instance.ruleset_binding_matches(binding)
+    assert not instance.ruleset_runtime
+    assert instance.bind_ruleset_runtime(binding)
+    assert instance.ruleset_binding_matches(binding)
+    assert not instance.ruleset_binding_matches({**binding, "runtime_version": 2})
+    assert not instance.ruleset_binding_matches({**binding, "runtime_id": ""})
