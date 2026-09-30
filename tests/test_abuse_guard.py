@@ -23,6 +23,7 @@ def _app(guard: AbuseGuard) -> web.Application:
     app.router.add_post("/api/login", _ok)
     app.router.add_post("/api/games/room/action", _ok)
     app.router.add_get("/api/games/room", _ok)
+    app.router.add_post("/api/rules/{rule_id}/builder/{action}", _ok)
     return app
 
 
@@ -65,6 +66,30 @@ async def test_only_api_writes_use_the_general_request_limit():
         assert (await client.post("/api/games/room/action")).status == 200
         assert (await client.post("/api/games/room/action")).status == 429
         assert (await client.get("/api/games/room")).status == 200
+
+
+@pytest.mark.asyncio
+async def test_stateless_builder_calls_have_their_own_budget():
+    guard = AbuseGuard(
+        write_per_ip_limit=2,
+        write_global_limit=100,
+        builder_per_ip_limit=3,
+        builder_global_limit=100,
+        ai_concurrency=10,
+    )
+    app = _app(guard)
+
+    async with TestClient(TestServer(app)) as client:
+        for action in ("choices", "validate", "derive"):
+            assert (await client.post(f"/api/rules/dnd2024_srd/builder/{action}")).status == 200
+        # 建卡计算不占写额度：之后普通写请求仍有完整额度。
+        assert (await client.post("/api/games/room/action")).status == 200
+        assert (await client.post("/api/games/room/action")).status == 200
+        assert (await client.post("/api/games/room/action")).status == 429
+        # 建卡自身仍然限流，不能无限消耗计算资源。
+        assert (await client.post("/api/rules/dnd2024_srd/builder/finalize")).status == 429
+        # 其它 rules 写接口不属于建卡计算，照常走写额度。
+        assert (await client.post("/api/rules/dnd2024_srd/builder/other")).status == 429
 
 
 @pytest.mark.asyncio

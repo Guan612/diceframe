@@ -47,6 +47,14 @@ def _wait_until_ready(process: subprocess.Popen, log_file: Path) -> None:
     raise RuntimeError(f"DiceFrame did not become ready:\n{log_file.read_text(encoding='utf-8', errors='replace')}")
 
 
+def _keep_server_log(log_file: Path) -> None:
+    # The data dir is temporary; CI sets this so a failing run keeps the log.
+    target = os.getenv("DICEFRAME_E2E_SERVER_LOG")
+    if target and log_file.is_file():
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(log_file, target)
+
+
 def main() -> int:
     if _port_is_open():
         print(f"Port {PORT} is already in use; stop the existing DiceFrame server before E2E.", file=sys.stderr)
@@ -98,6 +106,7 @@ def main() -> int:
                     except subprocess.TimeoutExpired:
                         server.kill()
                         server.wait(timeout=5)
+                _keep_server_log(log_file)
 
 
 if __name__ == "__main__":
