@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 import os
 import shutil
 import socket
@@ -16,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.e2e_fake_hub import running_fake_hub
 from scripts.prepare_e2e_data import prepare_e2e_data
 
 
@@ -58,11 +60,16 @@ def main() -> int:
     if built.returncode:
         return built.returncode
 
-    with tempfile.TemporaryDirectory(prefix="diceframe-e2e-") as temp_name:
+    # Manual opt-out preserves DICEFRAME_HUB_URL (or the production default).
+    hub_context = nullcontext() if os.getenv("DICEFRAME_E2E_REAL_HUB") == "1" else running_fake_hub()
+    with hub_context as hub, tempfile.TemporaryDirectory(prefix="diceframe-e2e-") as temp_name:
         data_dir = Path(temp_name) / "data"
         prepare_e2e_data(data_dir)
         log_file = Path(temp_name) / "server.log"
         env = os.environ.copy()
+        if hub is not None:
+            env["DICEFRAME_HUB_URL"] = hub.base_url
+            print(f"E2E Hub: {hub.base_url} (local fake)", flush=True)
         env["TRPG_DATA_DIR"] = str(data_dir)
         env["DICEFRAME_E2E_DATA_DIR"] = str(data_dir)
         env["TRPG_WEB_PORT"] = str(PORT)
