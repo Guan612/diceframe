@@ -357,63 +357,74 @@ async def create_game(
             }
     transaction.advance(CreationPhase.INSTANCE_CONFIGURED)
 
-    lorebook_binding_id = game_creation_phases.copy_lorebook_entries(
-        dependencies,
-        source_world_id=lorebook_world_id if book_bindings is None else "",
-        world_id=world_id,
-        world_name=resolved_world_name,
-        language=resolved_language,
-        game_key=game_key,
-        canonical=book_bindings is not None,
-    )
-    if lorebook_binding_id:
-        transaction.track_binding(lorebook_binding_id)
-        source_book_id = (
-            dependencies.lorebook.primary_world_book_id(lorebook_world_id)
-            if dependencies.lorebook is not None
-            and hasattr(dependencies.lorebook, "primary_world_book_id")
-            else f"world:{lorebook_world_id}"
+    try:
+        lorebook_binding_id = game_creation_phases.copy_lorebook_entries(
+            dependencies,
+            source_world_id=lorebook_world_id if book_bindings is None else "",
+            world_id=world_id,
+            world_name=resolved_world_name,
+            language=resolved_language,
+            game_key=game_key,
+            canonical=book_bindings is not None,
         )
-        content_binding.add_book_ref(instance, {
-            "source_kind": "world",
-            "source_id": lorebook_world_id,
-            "kind": "lorebook",
-            "id": source_book_id,
-            "digest": "",
-        })
-    if normalized_book_bindings:
-        store = dependencies.lorebook
-        if store is None or not hasattr(store, "bind_lorebook"):
-            transaction.rollback()
-            return {"ok": False, "error_code": "BOOK_BINDING_UNAVAILABLE", "error": "canonical lorebook store is unavailable"}
-        game_scope = _GAME_KEY_SEP.join(str(part) for part in game_key)
-        for item in normalized_book_bindings:
-            ref = item["ref"]
-            book_id = (
-                store.primary_world_book_id(ref.source_id)
-                if ref.source_kind == "world" and hasattr(store, "primary_world_book_id")
-                else ref.id
+        if lorebook_binding_id:
+            transaction.track_binding(lorebook_binding_id)
+            source_book_id = (
+                dependencies.lorebook.primary_world_book_id(lorebook_world_id)
+                if dependencies.lorebook is not None
+                and hasattr(dependencies.lorebook, "primary_world_book_id")
+                else f"world:{lorebook_world_id}"
             )
-            if not store.get_lorebook(book_id):
-                transaction.rollback()
-                return {"ok": False, "error_code": "BOOK_NOT_FOUND", "error": book_id}
-            binding_id = f"binding:game:{game_scope}:lorebook:{book_id}"
-            store.bind_lorebook({
-                "id": binding_id,
-                "book_id": book_id,
-                "scope_kind": "game",
-                "scope_id": game_scope,
-                "role": item["role"],
-                "order": item["order"],
-            })
-            transaction.track_binding(binding_id)
             content_binding.add_book_ref(instance, {
-                "source_kind": ref.source_kind,
-                "source_id": ref.source_id,
+                "source_kind": "world",
+                "source_id": lorebook_world_id,
                 "kind": "lorebook",
-                "id": book_id,
-                "digest": ref.digest,
+                "id": source_book_id,
+                "digest": "",
             })
+        if normalized_book_bindings:
+            store = dependencies.lorebook
+            if store is None or not hasattr(store, "bind_lorebook"):
+                transaction.rollback()
+                return {"ok": False, "error_code": "BOOK_BINDING_UNAVAILABLE", "error": "canonical lorebook store is unavailable"}
+            game_scope = _GAME_KEY_SEP.join(str(part) for part in game_key)
+            for item in normalized_book_bindings:
+                ref = item["ref"]
+                book_id = (
+                    store.primary_world_book_id(ref.source_id)
+                    if ref.source_kind == "world" and hasattr(store, "primary_world_book_id")
+                    else ref.id
+                )
+                if not store.get_lorebook(book_id):
+                    transaction.rollback()
+                    return {"ok": False, "error_code": "BOOK_NOT_FOUND", "error": book_id}
+                binding_id = f"binding:game:{game_scope}:lorebook:{book_id}"
+                store.bind_lorebook({
+                    "id": binding_id,
+                    "book_id": book_id,
+                    "scope_kind": "game",
+                    "scope_id": game_scope,
+                    "role": item["role"],
+                    "order": item["order"],
+                })
+                transaction.track_binding(binding_id)
+                content_binding.add_book_ref(instance, {
+                    "source_kind": ref.source_kind,
+                    "source_id": ref.source_id,
+                    "kind": "lorebook",
+                    "id": book_id,
+                    "digest": ref.digest,
+                })
+    except Exception:
+        # Book bindings live outside the save directory; any failure here must
+        # still compensate them (tracked bindings) and the registered instance.
+        transaction.rollback()
+        logger.exception("创建游戏内容绑定失败，已回滚: %s", game_key)
+        return {
+            "ok": False,
+            "error_code": "BOOK_BINDING_FAILED",
+            "error": "世界书绑定失败，未留下半成品存档。",
+        }
     created_players, player_error = await game_creation_phases.create_players(
         dependencies,
         transaction,
