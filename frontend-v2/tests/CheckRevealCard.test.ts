@@ -71,6 +71,23 @@ describe('CheckRevealCard', () => {
     expect(chips[1].text()).toContain('采用')
   })
 
+  it('marks no die as taken when the server roll matches none of the faces', () => {
+    const wrapper = mount(CheckRevealCard, {
+      global: { plugins: [i18n] },
+      props: {
+        check: {
+          check_id: 'c6', actor_name: '米拉', label: '攻击检定', dice: 'd20',
+          roll: 12, rolls: [17, 6], modifier: 3, total: 15, dc: 14,
+          advantage_mode: 'advantage', verdict: '成功',
+        },
+      },
+    })
+    const chips = wrapper.findAll('.check-die-chip')
+    expect(chips).toHaveLength(2)
+    expect(chips.some((chip) => chip.classes().includes('taken'))).toBe(false)
+    expect(wrapper.find('.check-dice-chips').text()).not.toContain('采用')
+  })
+
   it('keeps the plain faces line for single-die results', () => {
     const wrapper = mount(CheckRevealCard, {
       global: { plugins: [i18n] },

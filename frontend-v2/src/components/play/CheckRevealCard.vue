@@ -49,8 +49,9 @@ const diceChips = computed<{ value: number; taken: boolean }[]>(() => {
   const rolls = (props.check.rolls?.length ? props.check.rolls : [props.check.roll])
     .filter((value): value is number => typeof value === 'number')
   if (rolls.length < 2) return []
+  // 找不到权威 roll 时不标记任何一枚，避免把异常数据展示成确定的裁定。
   const takenIndex = rolls.findIndex((value) => value === props.check.roll)
-  return rolls.map((value, index) => ({ value, taken: index === (takenIndex >= 0 ? takenIndex : 0) }))
+  return rolls.map((value, index) => ({ value, taken: index === takenIndex }))
 })
 const modeBadge = computed(() => {
   const mode = String(props.check.advantage_mode || '')
