@@ -157,6 +157,11 @@ async def create_from_seed(
             "error": "重开失败，未留下半成品存档，请重试。",
         }
     transaction.advance(CreationPhase.INSTANCE_REGISTERED)
+    binding_error = game_creation_phases.bind_ruleset_runtime(
+        transaction, instance, runtime, selected_rule, resolved_language,
+    )
+    if binding_error is not None:
+        return binding_error
     instance.configure_session(
         solo_mode=solo,
         narrative_perspective=normalized_narrative_perspective,

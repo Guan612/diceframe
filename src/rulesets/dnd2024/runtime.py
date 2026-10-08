@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -25,6 +26,7 @@ from src.rulesets.dnd2024.adventure_migrations import (
 from src.rulesets.bundle import LoadedRulesetBundle, RulesetBundleLoader
 from src.rulesets.contracts import RulesetCapabilities
 import src.rulesets.dnd2024.advancement_access as advancement_access
+from src.rulesets.dnd2024.binding import rule_binding
 from src.rulesets.dnd2024.character.builder import Dnd2024CharacterBuilder
 from src.rulesets.dnd2024.character.reconciliation import (
     Dnd2024CharacterStateReconciler,
@@ -62,6 +64,9 @@ from src.rulesets.dnd2024.progression import (
 from src.rulesets.dnd2024.resting import Dnd2024RestEngine
 from src.rulesets.dnd2024.spells import Dnd2024SpellSelection, SpellCatalogError
 from src.rulesets.dnd2024 import adventure_validation  # noqa: F401  (MOD-01: 注册 adventure mechanics validator)
+
+
+logger = logging.getLogger(__name__)
 
 
 class Dnd2024Runtime:
@@ -591,6 +596,10 @@ class Dnd2024Runtime:
             return character
         return Dnd2024RestEngine(bundle).sync_resources(character)
 
+    def game_binding(self, rule: Any, locale: str) -> dict[str, Any]:
+        del rule
+        return rule_binding(self.load_bundle(locale))
+
     def describe_experience(self, rule: Any, locale: str) -> dict[str, Any]:
         del rule
         bundle = self.load_bundle(locale)
@@ -975,7 +984,14 @@ class Dnd2024Runtime:
                 str(item) for item in request.get("ready_player_ids") or [] if str(item)
             }
             gm_uid = str(getattr(instance, "gm_uid", "") or "")
-            required_ids = [str(uid) for uid in instance.players if str(uid) != gm_uid]
+            # 与普通回合 human_actions_ready 同一设计：AI 托管、未认领、暂离
+            # 或已倒下的席位不参与人工 ready barrier，避免一个不会点按钮的
+            # AI 座位把整桌遭遇卡成永久 pending。
+            human_seats = instance.active_human_players
+            required_ids = [
+                str(uid) for uid in instance.players
+                if str(uid) != gm_uid and str(uid) in human_seats
+            ]
             projected_request["readiness"] = {
                 "ready_player_ids": sorted(ready_ids),
                 "required_player_ids": required_ids,
@@ -1098,6 +1114,13 @@ class Dnd2024Runtime:
         """Persist an advisory request that wakes the authoritative combat tool."""
 
         if str(signal or "").strip().casefold() not in {"start", "begin"}:
+            return False
+        from src.engine.modules import ruleset_runtime
+
+        try:
+            ruleset_runtime.require_binding(instance, self.runtime_id)
+        except ruleset_runtime.RulesetBindingError as exc:
+            logger.warning("%s: %s (game_key=%s)", exc.code, exc, instance.game_key)
             return False
         state = self._combat_engine(
             instance, locale=str(getattr(instance, "language", "") or ""),

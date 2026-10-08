@@ -885,19 +885,36 @@ class GameInstance:
                     raise ValueError("奖励策略无效（mode 或 auto_reward_cap 不合法）")
                 self.economy_reward_policy = normalized
 
-    def bind_ruleset_runtime(self, binding: dict[str, Any]) -> bool:
-        """Bind versioned ruleset state once; reject mixed-runtime characters."""
-
+    @staticmethod
+    def _normalized_ruleset_binding(binding: dict[str, Any]) -> dict[str, Any] | None:
         normalized = {
             "id": str(binding.get("runtime_id") or ""),
             "version": int(binding.get("runtime_version", 0) or 0),
             "content_version": str(binding.get("content_version") or ""),
             "state_schema_version": int(binding.get("state_schema_version", 0) or 0),
         }
-        if not all((
-            normalized["id"], normalized["version"],
-            normalized["content_version"], normalized["state_schema_version"],
-        )):
+        if not all(normalized.values()):
+            return None
+        return normalized
+
+    def ruleset_binding_matches(self, binding: dict[str, Any]) -> bool:
+        """True when this game is already bound to exactly ``binding``.
+
+        Read-only: characters joining or being adopted must match the game's
+        binding; they never establish it (only game creation does).
+        """
+
+        normalized = self._normalized_ruleset_binding(binding)
+        return bool(normalized and self.ruleset_runtime and self.ruleset_runtime == normalized)
+
+    def bind_ruleset_runtime(self, binding: dict[str, Any]) -> bool:
+        """Bind versioned ruleset state once; reject mixed-runtime characters.
+
+        Only the game creation phase (and test fixtures) establish a binding.
+        """
+
+        normalized = self._normalized_ruleset_binding(binding)
+        if normalized is None:
             return False
         ruleset_runtime.require_writable(self)
         if self.ruleset_runtime and self.ruleset_runtime != normalized:

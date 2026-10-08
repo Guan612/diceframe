@@ -445,7 +445,13 @@ async def _adopt_character_card_authority(
         return _failure("INVALID_RULESET_CHARACTER", str(exc))
     canonical = normalized.get("ruleset_character")
     binding = canonical.get("rule_binding") if isinstance(canonical, dict) else None
-    if not isinstance(binding, dict) or not instance.bind_ruleset_runtime(binding):
+    # 绑定由游戏在创建时决定；采用角色卡只能匹配，不能反向建立绑定。
+    if not instance.ruleset_runtime:
+        return _failure(
+            "RULESET_BINDING_MISSING",
+            "这个存档没有绑定专业规则版本（旧版存档），无法采用专业角色卡，请新建一局游戏。",
+        )
+    if not isinstance(binding, dict) or not instance.ruleset_binding_matches(binding):
         return _failure("INCOMPATIBLE_RULESET_CHARACTER", "角色卡与当前存档规则版本不兼容")
     if isinstance(card.get("portrait"), dict):
         normalized["portrait"] = deepcopy(card["portrait"])

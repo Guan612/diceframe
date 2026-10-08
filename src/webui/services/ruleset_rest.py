@@ -259,6 +259,10 @@ async def _resolve_live_authority(
         "revision": revision + 1,
     })
     updated["ruleset_operation_log"] = operation_log[-32:]
+    try:
+        ruleset_runtime.require_binding(instance, runtime.runtime_id)
+    except ruleset_runtime.RulesetBindingError as exc:
+        return _failure(exc.code, str(exc))
     before_player = deepcopy(instance.players[user_id])
     instance.set_character_sheet(user_id, updated)
     try:
@@ -363,6 +367,10 @@ async def _resolve_live_party_authority(
         if user_id not in required:
             return _failure("REST_NOT_AVAILABLE", "当前角色不在本次队伍休息范围内")
         ruleset_runtime.require_writable(instance)
+        try:
+            ruleset_runtime.require_binding(instance, runtime.runtime_id)
+        except ruleset_runtime.RulesetBindingError as exc:
+            return _failure(exc.code, str(exc))
         session["required_uids"] = sorted(required)
         participants = session.setdefault("participants", {})
         if not isinstance(participants, dict):

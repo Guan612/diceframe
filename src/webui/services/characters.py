@@ -1232,7 +1232,14 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
                 }
             canonical = character.get("ruleset_character")
             binding = canonical.get("rule_binding") if isinstance(canonical, dict) else None
-            if not isinstance(binding, dict) or not inst.bind_ruleset_runtime(binding):
+            # 绑定由游戏在创建时决定；加入的角色只能匹配，不能反向建立绑定。
+            if not inst.ruleset_runtime:
+                return {
+                    "ok": False,
+                    "error_code": "RULESET_BINDING_MISSING",
+                    "error": "这个存档没有绑定专业规则版本（旧版存档），无法加入专业角色，请新建一局游戏。",
+                }
+            if not isinstance(binding, dict) or not inst.ruleset_binding_matches(binding):
                 return {
                     "ok": False,
                     "error_code": "INCOMPATIBLE_RULESET_CHARACTER",

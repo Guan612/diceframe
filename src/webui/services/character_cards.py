@@ -9,6 +9,7 @@ import json
 import logging
 import tempfile
 import time
+import uuid
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -55,11 +56,17 @@ def _write_cards(
     tmp_path.replace(path)
 
 
+def _new_card_id(prefix: str) -> str:
+    # time_ns() alone collides on coarse clocks (Windows), so two quick saves
+    # could share an id and the second would overwrite the first.
+    return f"{prefix}_{time.time_ns()}_{uuid.uuid4().hex[:8]}"
+
+
 def _to_character_card(character: dict, source: str = "") -> dict[str, Any]:
     cs = character.get("character_sheet", {}) if isinstance(character.get("character_sheet"), dict) else character
     name = character.get("character_name") or cs.get("character_name") or "冒险者"
     card: dict[str, Any] = {
-        "id": character.get("card_id") or character.get("id") or cs.get("card_id") or cs.get("id") or f"card_{int(time.time_ns())}",
+        "id": character.get("card_id") or character.get("id") or cs.get("card_id") or cs.get("id") or _new_card_id("card"),
         "schema_version": 2,
         "character_name": name,
         "race": cs.get("race", character.get("race", "人类")),
@@ -233,7 +240,7 @@ def _tavern_to_character_card(tavern: dict, file_name: str = "") -> dict[str, An
     if tavern.get("character_book"):
         source += f"（含 {len(tavern['character_book'])} 条角色世界书）"
     return {
-        "id": f"st_{int(time.time_ns())}",
+        "id": _new_card_id("st"),
         "schema_version": 2,
         "character_name": tavern.get("name") or "未命名",
         "race": "人类",
