@@ -74,12 +74,12 @@ def test_module_has_no_adventure_writer() -> None:
     assert not hasattr(content_binding, "adventure_refs")
 
 
-# ---- v34 -> v35 save migration ---------------------------------------------
+# ---- v35 -> v36 save migration ---------------------------------------------
 
 from src.engine.game_instance import GameInstance  # noqa: E402
 from src.migrations.instance import (  # noqa: E402
     CURRENT_INSTANCE_SCHEMA_VERSION,
-    _migrate_v34_to_v35,
+    _migrate_v35_to_v36,
     migrate_game_state_payload,
 )
 
@@ -104,20 +104,20 @@ def test_migration_never_overwrites_an_existing_slot() -> None:
             "kind": "world", "id": "ashen", "digest": "sha256:x"}, "book_refs": [{"id": "b"}]}
     future = {"schema_version": 7, "anything": True}
     for existing in (slot, future):
-        payload = {"instance_schema_version": 34, "world_id": "ashen", "modules": {"content_binding": deepcopy(existing)}}
-        assert _migrate_v34_to_v35(payload)["modules"]["content_binding"] == existing
+        payload = {"instance_schema_version": 35, "world_id": "ashen", "modules": {"content_binding": deepcopy(existing)}}
+        assert _migrate_v35_to_v36(payload)["modules"]["content_binding"] == existing
 
 
 @pytest.mark.parametrize("modules", [None, [], "corrupt"])
 def test_migration_tolerates_non_dict_modules(modules) -> None:
-    migrated = _migrate_v34_to_v35({"instance_schema_version": 34, "world_id": "ashen", "modules": modules})
+    migrated = _migrate_v35_to_v36({"instance_schema_version": 35, "world_id": "ashen", "modules": modules})
     assert migrated["modules"]["content_binding"]["world_ref"]["id"] == "ashen"
-    assert migrated["instance_schema_version"] == 35
+    assert migrated["instance_schema_version"] == 36
 
 
 @pytest.mark.parametrize("world_id", ["", None, "bad id with spaces/and:colons"])
 def test_migration_leaves_world_ref_empty_without_a_valid_world_id(world_id) -> None:
-    migrated = _migrate_v34_to_v35({"instance_schema_version": 34, "world_id": world_id, "modules": {}})
+    migrated = _migrate_v35_to_v36({"instance_schema_version": 35, "world_id": world_id, "modules": {}})
     assert migrated["modules"]["content_binding"] == {"schema_version": 1, "world_ref": {}, "book_refs": []}
 
 
