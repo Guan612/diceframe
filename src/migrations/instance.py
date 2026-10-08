@@ -24,7 +24,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 35
+CURRENT_INSTANCE_SCHEMA_VERSION = 36
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -592,6 +592,7 @@ def _migrate_v27_to_v28(payload: dict[str, Any]) -> dict[str, Any]:
             "entry_point": values["entry_point"] if isinstance(values["entry_point"], str) else defaults["entry_point"],
             "luck_timeout_seconds": timeout,
             "economy_reward_policy": values["economy_reward_policy"] if isinstance(values["economy_reward_policy"], dict) else {},
+            "dice_reveal_mode": "click",
         }
     payload["modules"] = modules
     payload["instance_schema_version"] = 28
@@ -726,6 +727,22 @@ def _migrate_v33_to_v34(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _migrate_v34_to_v35(payload: dict[str, Any]) -> dict[str, Any]:
+    """Materialize the check_reveals presentation slot; no data to move.
+
+    The reveal markers are a new presentation-only capability, so old saves
+    simply get an empty slot. Existing slots are never overwritten.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    if not isinstance(modules.get("check_reveals"), dict):
+        modules["check_reveals"] = {"schema_version": 1, "records": {}}
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 35
+    return payload
+
+
+def _migrate_v35_to_v36(payload: dict[str, Any]) -> dict[str, Any]:
     """Materialize content_binding from world_id without overwriting a slot.
 
     Only the World ref is derivable from a save.  Book bindings stay empty:
@@ -752,8 +769,9 @@ def _migrate_v34_to_v35(payload: dict[str, Any]) -> dict[str, Any]:
             "book_refs": [],
         }
     payload["modules"] = modules
-    payload["instance_schema_version"] = 35
+    payload["instance_schema_version"] = 36
     return payload
+
 
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
@@ -864,6 +882,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 34:
         payload = _migrate_v34_to_v35(payload)
         version = 35
+    if version == 35:
+        payload = _migrate_v35_to_v36(payload)
+        version = 36
     payload["instance_schema_version"] = version
     return payload
 
