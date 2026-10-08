@@ -93,6 +93,21 @@ def _import_receipts(dependencies: PluginContentDependencies) -> ImportReceiptSt
     return ImportReceiptStore(root) if root else None
 
 
+# Bookkeeping columns that change without anyone editing the entry content.
+_ENTRY_FINGERPRINT_IGNORED = frozenset({
+    "id", "world_id", "book_id", "source_plugin", "created_at", "updated_at",
+})
+
+
+def _entry_fingerprint(entry: dict[str, Any] | None) -> str:
+    """Digest of an entry's user-editable content, as the canonical store returns it."""
+    if not entry:
+        return ""
+    content = {k: v for k, v in entry.items() if k not in _ENTRY_FINGERPRINT_IGNORED}
+    text = json.dumps(content, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _record_import_receipt(
     dependencies: PluginContentDependencies,
     plugin_id: str,
@@ -104,6 +119,10 @@ def _record_import_receipt(
     receipts = _import_receipts(dependencies)
     if receipts is None or not str(object_id or ""):
         return
+    fingerprint = ""
+    lorebook = dependencies.store.lorebook
+    if object_type == "lorebook_entry" and lorebook is not None:
+        fingerprint = _entry_fingerprint(lorebook.get_entry(str(object_id)))
     runtime = getattr(dependencies.plugin_host, "plugins", {}).get(str(plugin_id or ""))
     manifest = getattr(runtime, "manifest", {}) if runtime is not None else {}
     try:
@@ -114,6 +133,7 @@ def _record_import_receipt(
             object_type=object_type,
             object_id=str(object_id),
             updated=updated,
+            fingerprint=fingerprint,
         )
     except OSError:
         logger.warning("记录插件导入 receipt 失败: %s", plugin_id, exc_info=True)
@@ -190,7 +210,10 @@ def cleanup_plugin_lorebook(
     保留用户自建内容。插件创建的世界：无对局在用且删完插件条目后世界已空才删，
     否则（仍有用户内容）保留。
     """
-    result: dict[str, Any] = {"ok": True, "removed": 0, "cards_removed": 0, "worlds_removed": 0, "worlds_kept": []}
+    result: dict[str, Any] = {
+        "ok": True, "removed": 0, "cards_removed": 0, "worlds_removed": 0, "worlds_kept": [],
+        "entries_kept": [],
+    }
     receipts: ImportReceiptStore | None = None
     receipt = None
     lorebook = dependencies.store.lorebook
@@ -217,7 +240,16 @@ def cleanup_plugin_lorebook(
                 entry = lorebook.get_entry(entry_id)
                 if entry is None or str(entry.get("source_plugin") or "") != str(plugin_id):
                     continue
-                if lorebook.delete_entry(entry_id):
+                # A user edit after import detaches the entry from the package:
+                # it now holds user content, so uninstall keeps it.
+                imported = receipt.fingerprint("lorebook_entry", entry_id)
+                if imported and imported != _entry_fingerprint(entry):
+                    receipt.detach("lorebook_entry", entry_id)
+                    result["entries_kept"].append(entry_id)
+                    continue
+                # LorebookStore.delete_entry() returns None; count what is really gone.
+                lorebook.delete_entry(entry_id)
+                if lorebook.get_entry(entry_id) is None:
                     result["removed"] += 1
         # 2. 插件创建的世界：无对局引用且删完条目后已空才删
         for wid in plugin_worlds:
