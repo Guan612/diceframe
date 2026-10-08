@@ -12,7 +12,9 @@ from copy import deepcopy
 from typing import Any
 
 from src.content_modules.refs import ContentRefError, parse_content_ref
-from src.engine.module_state import ModuleStateSpec, get_module_state, register_module_state
+from src.engine.module_state import (
+    ModuleStateError, ModuleStateSpec, get_module_state, register_module_state,
+)
 
 MODULE_NAME = "content_binding"
 SCHEMA_VERSION = 1
@@ -38,6 +40,18 @@ def ensure(raw: Any) -> dict[str, Any]:
     return raw
 
 
+def require_writable(instance: Any) -> None:
+    """Read-only transaction preflight; never repair or materialize a slot."""
+    modules = getattr(instance, "modules", None)
+    if not isinstance(modules, dict):
+        raise ModuleStateError("instance has no module state container")
+    slot = modules.get(MODULE_NAME)
+    if not isinstance(slot, dict):
+        return  # Missing/corrupt slots have the documented fresh default.
+    if slot.get("schema_version") != SCHEMA_VERSION:
+        raise ModuleStateError(f"unsupported content_binding module schema: {slot.get('schema_version')!r}")
+
+
 def _state(instance: Any) -> dict[str, Any]:
     return get_module_state(instance, MODULE_NAME)
 
@@ -47,6 +61,7 @@ def world_ref(instance: Any) -> dict[str, Any]:
 
 
 def set_world_ref(instance: Any, ref: dict[str, Any]) -> None:
+    require_writable(instance)
     parsed = parse_content_ref(ref, default_source="world:unknown")
     if parsed.kind != "world":
         raise ContentRefError("content binding world_ref must have kind 'world'")
@@ -58,6 +73,7 @@ def book_refs(instance: Any) -> list[dict[str, Any]]:
 
 
 def add_book_ref(instance: Any, ref: dict[str, Any]) -> None:
+    require_writable(instance)
     parsed = parse_content_ref(ref, default_source="world:unknown")
     if parsed.kind != "lorebook":
         raise ContentRefError("content binding book_refs must have kind 'lorebook'")
@@ -73,6 +89,7 @@ def adventure_refs(instance: Any) -> list[dict[str, Any]]:
 
 
 def add_adventure_ref(instance: Any, ref: dict[str, Any]) -> None:
+    require_writable(instance)
     parsed = parse_content_ref(ref, default_source="adventure:unknown")
     if parsed.kind != "adventure":
         raise ContentRefError("content binding adventure_refs must have kind 'adventure'")
@@ -101,6 +118,7 @@ __all__ = [
     "adventure_refs",
     "ensure",
     "fresh",
+    "require_writable",
     "set_world_ref",
     "world_ref",
 ]
