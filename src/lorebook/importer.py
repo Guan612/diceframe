@@ -10,11 +10,8 @@ from src.lorebook.adapters.legacy import diceframe_compat_fields
 from src.lorebook.activation import normalize_primary_match_mode, normalize_selective_logic
 from src.lorebook.domain import LorebookDraft
 from src.content_modules.refs import (
-    CONTENT_KIND_REGISTRY,
     ContentDraft,
-    ContentRefError,
     build_commit_plan,
-    canonical_id as content_canonical_id,
     collect_content_refs,
 )
 from src.engine.world.contracts import SOURCE_REF_KINDS
@@ -70,30 +67,40 @@ def character_card_identity(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def lorebook_import_identity(draft: LorebookDraft) -> tuple[str, str]:
+    """Portable ``(source_kind, source_id)`` of an imported Book.
+
+    Shared by the preview draft and the commit, so a re-import of the same
+    source is recognised as the existing Book.  Format names such as
+    ``sillytavern`` are adapters, not source kinds, so they map to ``device``.
+    A source without an id is identified by a content fingerprint.
+    """
+
+    from src.engine.world.contracts import canonical_id as world_canonical_id
+
+    source_kind = str(draft.source.get("source_kind") or draft.source.get("kind") or "device").strip().lower()
+    if source_kind not in SOURCE_REF_KINDS:
+        source_kind = "device"
+    raw_source_id = str(draft.source.get("source_id") or draft.source.get("id") or "").strip()
+    if not raw_source_id:
+        fingerprint = hashlib.sha256(json.dumps({"source": draft.source, "name": draft.name, "entries": [entry.external_id for entry in draft.entries]}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        return source_kind, f"import-{fingerprint}"
+    try:
+        return source_kind, world_canonical_id(raw_source_id)
+    except ValueError:
+        return source_kind, f"import-{hashlib.sha256(raw_source_id.encode('utf-8')).hexdigest()[:12]}"
+
+
 def lorebook_content_draft(payload: dict[str, Any]) -> ContentDraft:
     """Adapt any supported Lorebook input into the shared import contract."""
 
     fmt = detect_lorebook_format(payload)
     draft = draft_lorebook_import(payload)
-    raw_kind = str(draft.source.get("kind") or "device").strip().lower()
-    source_kind = raw_kind if raw_kind in SOURCE_REF_KINDS else "device"
-    raw_source_id = str(
-        draft.source.get("source_id") or draft.source.get("id") or fmt
-    ).strip()
-    # External labels frequently contain spaces/Unicode.  They remain in
-    # provenance, while the portable identity uses a deterministic safe id.
-    try:
-        from src.engine.world.contracts import canonical_id as world_canonical_id
-
-        source_id = world_canonical_id(raw_source_id)
-    except ValueError:
-        source_id = f"{fmt}-{hashlib.sha256(raw_source_id.encode('utf-8')).hexdigest()[:12]}"
-    external_raw = str(draft.source.get("external_id") or draft.name or fmt).strip()
-    try:
-        CONTENT_KIND_REGISTRY.validate("lorebook")
-        external_id = content_canonical_id(external_raw, field="external id")
-    except (ValueError, ContentRefError):
-        external_id = f"book-{hashlib.sha256(external_raw.encode('utf-8')).hexdigest()[:16]}"
+    source_kind, source_id = lorebook_import_identity(draft)
+    raw_source_id = str(draft.source.get("source_id") or draft.source.get("id") or "").strip()
+    # One import source is one Book, so the Book's external id is its source
+    # id; external labels and the display name stay in provenance.
+    external_id = source_id
     source_ref = f"{source_kind}:{source_id}"
     payload_rows = {
         "name": draft.name,
@@ -116,7 +123,7 @@ def lorebook_content_draft(payload: dict[str, Any]) -> ContentDraft:
         external_id=external_id,
         payload=payload_rows,
         references=refs,
-        provenance={"format": fmt, "raw_source_id": raw_source_id},
+        provenance={"format": fmt, "raw_source_id": raw_source_id, "name": draft.name},
         digest=f"sha256:{digest}",
     )
 
@@ -142,18 +149,7 @@ def commit_lorebook_import(store: Any, draft: LorebookDraft, binding: dict[str, 
     if not book_id:
         fingerprint = hashlib.sha256(json.dumps({"source": draft.source, "name": draft.name, "entries": [entry.external_id for entry in draft.entries]}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         book_id = str(draft.source.get("id") or f"import:{draft.source.get('kind', 'external')}:{fingerprint}")
-    # Keep external provenance in the canonical Book fields.  Format names
-    # such as ``sillytavern`` are adapters, not source kinds, so they become a
-    # first-class device source instead of inventing a new source vocabulary.
-    source_kind = str(draft.source.get("source_kind") or draft.source.get("kind") or "device").strip().lower()
-    if source_kind not in SOURCE_REF_KINDS:
-        source_kind = "device"
-    source_id = str(draft.source.get("source_id") or draft.source.get("id") or "import").strip()
-    try:
-        from src.engine.world.contracts import canonical_id as world_canonical_id
-        source_id = world_canonical_id(source_id)
-    except ValueError:
-        source_id = f"import-{hashlib.sha256(source_id.encode('utf-8')).hexdigest()[:12]}"
+    source_kind, source_id = lorebook_import_identity(draft)
     # The canonical Book owns the raw unknown extensions so that
     # import -> DB -> export lorebook_v3 -> reimport can round-trip them.
     # Empty buckets carry nothing and stay out of settings.
