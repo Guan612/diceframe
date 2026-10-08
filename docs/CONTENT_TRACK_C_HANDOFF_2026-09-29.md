@@ -27,7 +27,7 @@ The implementation is split across the commits on this branch; do not squash awa
 3. **Canonical lifecycle inputs are additive for now.** `world_ref` and `book_bindings` are supported, while legacy inputs such as `lorebook_world_id`, `source_world_id`, `blank_lorebook`, and `create_lorebook` remain for old clients/tests.
 4. **G needs a second pass.** Commit-time revalidation, complete cross-content export/import closure, and a user-facing three-way conflict policy/UI are not finished. External module adapters remain on hold until their contracts are agreed.
 5. **F UI cleanup is partial.** Canonical-first create/lorebook flows are wired, but broader UI consistency, localized release-note presentation, and the remaining module UX work are outside this handoff.
-6. **Known pre-existing persistence bug remains separate.** Unbound-ruleset D&D games can write state that is lost on reload. This branch intentionally does not choose between fail-closed, auto-bind, or direct-persistence semantics.
+6. **Unbound-ruleset persistence is resolved upstream by #447 (fail-closed), not by this branch.** Versioned rulesets are now bound at game creation (`game_creation_phases.bind_ruleset_runtime`, called right after `INSTANCE_REGISTERED` in both normal and seed creation); a joining character no longer binds the game. A game without a matching binding rejects ruleset writes (`RULESET_BINDING_MISMATCH` / `RULESET_BINDING_MISSING`) instead of auto-binding or persisting unbound state, so legacy unbound saves stay readable but cannot take new ruleset state. Track C must keep that order: ruleset binding first, then `content_binding`.
 
 ## Verification completed
 
@@ -41,8 +41,8 @@ The frontend install used the available Node/npm runtime, which reports an engin
 
 ## Suggested continuation order
 
-1. Rebase onto current upstream `main` and resolve any conflicts without changing the canonical contract shapes casually.
-2. Inventory every remaining legacy world/book read and migrate one owner at a time; keep the compatibility allowlist shrink-only.
+1. ~~Rebase onto current upstream `main`~~ — done on 2026-09-30 (onto `297da1f0`, after #447); the stack is now #453–#460.
+2. Inventory every remaining legacy world/book read and migrate one owner at a time; keep the compatibility allowlist (`tests/architecture/test_fitness_functions.py`) shrink-only. Still to remove: the paths in items 1–3 above.
 3. Add commit-time import-plan revalidation and complete reference-closure tests for G.
 4. Finish the F UI cleanup and update architecture/engineering notes with the final removal gates.
 5. Re-run the backend and serialized frontend suites before splitting or merging follow-up PRs.
