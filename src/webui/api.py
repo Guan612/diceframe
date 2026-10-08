@@ -211,6 +211,7 @@ class WebAPI:
                 generated_image_file=lambda asset_id: self.generated_image_file(
                     asset_id,
                 ),
+                content_projection=getattr(handler, "content_projection", None),
             ),
             save_character_card=lambda character: character_cards.save_character_card(
                 self._character_card_dependencies, character,
@@ -483,6 +484,7 @@ class WebAPI:
                 else None
             ),
             list_instances=self._reg.list_all,
+            content_projection=getattr(self._handler, "content_projection", None),
         )
         self._plugin_content_dependencies = plugins.PluginContentDependencies(
             plugin_host=self._plugins,
@@ -632,6 +634,7 @@ class WebAPI:
             load_world_template=self._load_world_template,
             map_background_file=self.map_background_file,
             generated_image_file=self.generated_image_file,
+            content_projection=getattr(handler, "content_projection", None),
         )
         self._assistant_dependencies = assistant.AssistantDependencies(
             list_plugins=self.list_plugins,
