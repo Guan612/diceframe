@@ -18,6 +18,10 @@ def _safe_component(value: Any) -> str:
     return "".join(char if char.isalnum() or char in "._-" else "_" for char in text)[:120] or "unknown"
 
 
+def _record_key(item: dict[str, str]) -> tuple[str, str]:
+    return (str(item.get("type") or ""), str(item.get("id") or ""))
+
+
 @dataclass
 class ImportReceipt:
     source_kind: str
@@ -34,11 +38,37 @@ class ImportReceipt:
         object_id: str,
         *,
         updated: bool = False,
+        fingerprint: str = "",
     ) -> None:
+        """Record one package-written object.
+
+        ``fingerprint`` is the content the package last wrote.  A re-import
+        refreshes it everywhere the object is listed, so uninstall compares
+        the live object against what the package itself left behind.
+        """
+        key = (str(object_type), str(object_id))
         target = self.updated_objects if updated else self.created_objects
-        record = {"type": str(object_type), "id": str(object_id)}
-        if record not in target:
+        record = next((item for item in target if _record_key(item) == key), None)
+        if record is None:
+            record = {"type": key[0], "id": key[1]}
             target.append(record)
+        if fingerprint:
+            for listed in (*self.created_objects, *self.updated_objects):
+                if _record_key(listed) == key:
+                    listed["fingerprint"] = str(fingerprint)
+
+    def fingerprint(self, object_type: str, object_id: str) -> str:
+        key = (str(object_type), str(object_id))
+        for item in self.created_objects:
+            if _record_key(item) == key:
+                return str(item.get("fingerprint") or "")
+        return ""
+
+    def detach(self, object_type: str, object_id: str) -> None:
+        """Mark an object as user-owned: uninstall must keep it."""
+        record = {"type": str(object_type), "id": str(object_id)}
+        if record not in self.user_detached_objects:
+            self.user_detached_objects.append(record)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +132,7 @@ class ImportReceiptStore:
         object_type: str,
         object_id: str,
         updated: bool = False,
+        fingerprint: str = "",
     ) -> None:
         receipt = self.load(source_id) or ImportReceipt(
             source_kind="module",
@@ -109,7 +140,7 @@ class ImportReceiptStore:
             source_version=str(source_version or ""),
             source_digest=str(source_digest or ""),
         )
-        receipt.add(object_type, object_id, updated=updated)
+        receipt.add(object_type, object_id, updated=updated, fingerprint=fingerprint)
         self.save(receipt)
 
     def discard(self, source_id: str) -> None:

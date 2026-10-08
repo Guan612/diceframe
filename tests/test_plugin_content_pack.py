@@ -2091,3 +2091,85 @@ def test_manifest_future_and_non_numeric_versions_fail_closed(tmp_path, field, v
     assert details[0]["status"] == "failed"
 
 
+
+
+def _real_store_receipt_setup(tmp_path):
+    """Content pack + real sqlite LorebookStore, imported through the receipt path."""
+    from src.lorebook.store import LorebookStore
+    from src.webui.services.plugins import import_all_plugin_content
+
+    plugins = tmp_path / "plugins"
+    write_plugin(plugins, "packs", plugin_type="content-pack", entrypoint=False,
+                 manifest_extra={"docs": "README.md", "contributes": {
+                     "npcs": ["npc/*.json"],
+                     "classes": ["classes/*.json"],
+                 }})
+    (plugins / "packs" / "npc").mkdir()
+    (plugins / "packs" / "classes").mkdir()
+    (plugins / "packs" / "npc" / "mentor.json").write_text(json.dumps({
+        "id": "mentor", "name": "Mentor", "description": "old mentor"}), encoding="utf-8")
+    (plugins / "packs" / "classes" / "scout.json").write_text(json.dumps({
+        "id": "scout", "name": "Scout", "description": "old scout"}), encoding="utf-8")
+    data_dir = tmp_path / "data"
+    (data_dir / "packs").mkdir(parents=True)
+    (data_dir / "packs" / "config.json").write_text(json.dumps({"enabled": True}), encoding="utf-8")
+    host = PluginHost(plugins, data_dir)
+    host.discover()
+    store = LorebookStore(tmp_path / "lorebook.db")
+    store.open()
+    store.create_world("w1", "W")
+
+    class _Api:
+        _plugins = host
+        _lore = store
+        _reg = None
+
+        def save_entry(self, entry):
+            store.add_entry(entry)
+            return {"ok": True}
+
+    api = _Api()
+    deps = _plugin_content_dependencies(api)
+
+    def import_all():
+        result = import_all_plugin_content(deps, "packs", "w1")
+        assert result["ok"] is True
+        return result
+
+    import_all()
+    plugin_ids = sorted(e["id"] for e in store.list_entries("w1") if e.get("source_plugin") == "packs")
+    assert len(plugin_ids) == 2
+    return store, deps, import_all, plugin_ids
+
+
+def test_receipt_cleanup_counts_removals_against_real_store(tmp_path):
+    from src.webui.services.plugins import cleanup_plugin_lorebook
+
+    store, deps, import_all, plugin_ids = _real_store_receipt_setup(tmp_path)
+    # A package re-import rewrites its own entries; that is not a user edit.
+    import_all()
+    store.add_entry({"id": "user_note", "world_id": "w1", "name": "Note"})
+
+    result = cleanup_plugin_lorebook(deps, "packs")
+
+    assert result["removed"] == 2
+    assert result["entries_kept"] == []
+    assert all(store.get_entry(entry_id) is None for entry_id in plugin_ids)
+    assert store.get_entry("user_note") is not None
+    store.close()
+
+
+def test_receipt_cleanup_keeps_plugin_entry_the_user_edited(tmp_path):
+    from src.webui.services.plugins import cleanup_plugin_lorebook
+
+    store, deps, _import_all, plugin_ids = _real_store_receipt_setup(tmp_path)
+    edited, untouched = plugin_ids
+    store.update_entry(edited, {"content": "my own notes"})
+
+    result = cleanup_plugin_lorebook(deps, "packs")
+
+    assert result["removed"] == 1
+    assert result["entries_kept"] == [edited]
+    assert store.get_entry(edited)["content"] == "my own notes"
+    assert store.get_entry(untouched) is None
+    store.close()
