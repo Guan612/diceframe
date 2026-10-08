@@ -1,6 +1,8 @@
 """Built-in module state slots. Importing this package registers them."""
 
 from src.engine.modules import (  # noqa: F401
+    check_reveals,
+    checks,
     content_binding,
     combat_extension_state,
     economy_state,
@@ -14,7 +16,6 @@ from src.engine.modules import (  # noqa: F401
     progression_state,
     room_access,
     session_stats,
-    checks,
     round_presentation,
     round_safety,
     ruleset_runtime,
