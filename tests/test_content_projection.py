@@ -119,3 +119,44 @@ def test_content_projection_for_character_filters_entries_and_foreign_character_
         assert service.for_character(instance, "") == []
     finally:
         store.close()
+
+
+def test_map_locations_never_include_actor_character_books(tmp_path) -> None:
+    """The map goes to every seat unfiltered; character Books must stay out."""
+    from src.webui.services import maps as map_service
+
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        store.create_world("w1", "World")
+        store.create_lorebook({"id": "book-bob", "name": "Bob"})
+        store.bind_lorebook({
+            "id": "binding:book-bob", "book_id": "book-bob",
+            "scope_kind": "character", "scope_id": "bob",
+            "role": "secondary", "order": 110,
+        })
+        store.add_book_entry("world:w1", {"id": "town", "name": "Town", "type": "location"})
+        store.add_book_entry("book-bob", {"id": "bob-hideout", "name": "Hideout", "type": "location"})
+        from src.engine.game_instance import GameInstance
+
+        instance = GameInstance(game_key=("t", "map", "bot"), world_id="w1")
+        # Bob is acting this round; the resolver reads this attribute.
+        instance.action_actor_uids = ["bob"]  # type: ignore[attr-defined]
+        dependencies = map_service.MapDependencies(
+            get_instance=lambda _key: instance,
+            parse_game_key=lambda key: (key,),
+            list_lore_entries=store.list_entries,
+            list_map_assets=lambda _world_id: {"maps": [], "locations": [], "icons": [], "scenes": []},
+            validate_background_selection=lambda _value: {"kind": "auto"},
+            save_instance=None,  # type: ignore[arg-type]
+            load_world_template=lambda _world_id: None,
+            map_background_file=lambda _asset_id: None,
+            generated_image_file=lambda _asset_id: None,
+            content_projection=ContentProjectionService(store),
+        )
+        result = map_service.get_map_locations(dependencies, "game-1")
+        ids = {location["id"] for location in result["locations"]}
+        assert "town" in ids
+        assert "bob-hideout" not in ids
+    finally:
+        store.close()
