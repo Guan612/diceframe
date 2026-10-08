@@ -7,6 +7,8 @@ import time
 from typing import Any
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
+from src.engine.module_state import ModuleStateError
+from src.engine.modules import content_binding
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.migrations import migrate_instance
 from src.rulesets.contracts import LiveAdvancementPolicyRuntime
@@ -133,6 +135,19 @@ async def create_from_seed(
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
 
+    # Read the original save's source-aware World ref before registering the
+    # new instance, so an unreadable slot cannot leave a half-created save.
+    try:
+        inherited_world_ref = content_binding.world_ref(target_inst) or {
+            "source_kind": "world",
+            "source_id": world_id,
+            "kind": "world",
+            "id": world_id,
+            "digest": "",
+        }
+    except ModuleStateError as exc:
+        return {"ok": False, "error_code": "INVALID_WORLD_REF", "error": str(exc)}
+
     unique_id = f"{world_id}_{time.time_ns()}"
     game_key = ("web", unique_id, "web_bot")
     transaction = CreationTransaction(dependencies, game_key, world_id)
@@ -180,6 +195,14 @@ async def create_from_seed(
             "error_code": "INVALID_ADVENTURE_BINDING",
             "error": "原存档的冒险绑定无效，未留下半成品存档。",
         }
+    content_error = game_creation_phases.bind_content_refs(
+        transaction,
+        instance,
+        inherited_world_ref,
+        target_adventure_binding,
+    )
+    if content_error is not None:
+        return content_error
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(dict(getattr(target_inst, "map_background", {}) or {}))
     transaction.advance(CreationPhase.INSTANCE_CONFIGURED)

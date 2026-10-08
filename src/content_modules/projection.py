@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Protocol, runtime_checkable
 
+from src.knowledge.visibility import entry_visible_to_viewer
 from src.lorebook.resolver import resolve_active_books
 
 
@@ -106,11 +107,15 @@ class ContentProjectionService:
 
         if not instance or not self.store:
             return []
+        actors = (
+            action_actor_uids if action_actor_uids is not None
+            else getattr(instance, "action_actor_uids", []) or []
+        )
         refs = resolve_active_books(
             instance,
             viewer_kind,
             viewer_uid,
-            list(action_actor_uids or getattr(instance, "action_actor_uids", []) or []),
+            list(actors),
             store=self.store,
         ) if hasattr(self.store, "list_bindings") else []
         if not refs:
@@ -127,16 +132,34 @@ class ContentProjectionService:
         return result
 
     def for_character(
-        self, instance: Any, viewer_uid: str, *, entry_type: str | None = None,
+        self,
+        instance: Any,
+        viewer_uid: str,
+        *,
+        viewer_name: str = "",
+        entry_type: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Project content visible to one character seat."""
+        """Project content visible to one character seat.
 
-        return self.for_game(
-            instance,
-            viewer_kind="character",
-            viewer_uid=str(viewer_uid or ""),
-            entry_type=entry_type,
-        )
+        Only this seat's character-scoped Books are resolved (never the other
+        current actors'), and every entry must pass the shared visibility
+        predicate, so GM-private and other-character entries stay hidden.
+        """
+
+        uid = str(viewer_uid or "")
+        if not uid:
+            return []
+        return [
+            entry
+            for entry in self.for_game(
+                instance,
+                viewer_kind="character",
+                viewer_uid=uid,
+                action_actor_uids=[],
+                entry_type=entry_type,
+            )
+            if entry_visible_to_viewer(entry, "character", uid, viewer_name)
+        ]
 
 
 __all__ = ["ContentProjection", "ContentProjectionService"]

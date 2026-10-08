@@ -11,7 +11,7 @@ from typing import Any
 
 from src.engine.game_instance import GameState
 from src.engine.modules import content_binding
-from src.content_modules.refs import ContentRefError, parse_content_ref
+from src.content_modules.refs import ContentRef, ContentRefError, parse_content_ref
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.content.gm_style import normalize_gm_style_override
@@ -120,6 +120,7 @@ async def create_game(
         return {"ok": False, "error": "系统未就绪"}
     if config_error := dependencies.llm_configuration_error(language):
         return config_error
+    parsed_world_ref: ContentRef | None = None
     if world_ref is not None:
         try:
             parsed_world_ref = parse_content_ref(
@@ -294,13 +295,6 @@ async def create_game(
     )
     if binding_error is not None:
         return binding_error
-    content_binding.set_world_ref(instance, {
-        "source_kind": "world",
-        "source_id": world_id,
-        "kind": "world",
-        "id": world_id,
-        "digest": "",
-    })
     instance.set_difficulty(difficulty)
     if not instance.bind_adventure(adventure_binding):
         transaction.rollback()
@@ -309,22 +303,20 @@ async def create_game(
             "error_code": "INVALID_ADVENTURE_BINDING",
             "error": "冒险包绑定无效，未留下半成品存档。",
         }
-    if adventure_binding:
-        try:
-            content_binding.add_adventure_ref(instance, {
-                "source_kind": str(adventure_binding.get("source_kind") or "adventure"),
-                "source_id": str(adventure_binding.get("source_id") or adventure_binding.get("adventure_id") or ""),
-                "kind": "adventure",
-                "id": str(adventure_binding.get("adventure_id") or ""),
-                "digest": str(adventure_binding.get("content_digest") or ""),
-            })
-        except ContentRefError:
-            transaction.rollback()
-            return {
-                "ok": False,
-                "error_code": "INVALID_ADVENTURE_BINDING",
-                "error": "冒险包来源引用无效，未留下半成品存档。",
-            }
+    content_error = game_creation_phases.bind_content_refs(
+        transaction,
+        instance,
+        parsed_world_ref.to_portable_dict() if parsed_world_ref is not None else {
+            "source_kind": "world",
+            "source_id": world_id,
+            "kind": "world",
+            "id": world_id,
+            "digest": "",
+        },
+        adventure_binding,
+    )
+    if content_error is not None:
+        return content_error
     instance.play_mode = normalized_play_mode
     # FIX-04 §6.5/§6.6：v2 冒险在同一创建事务里初始化进度并原子物化世界种子；
     # 失败即整体回滚（不留下 partial save / partial world）。

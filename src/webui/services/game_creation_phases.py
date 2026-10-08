@@ -6,6 +6,8 @@ import json
 import logging
 from typing import Any
 
+from src.content_modules.refs import ContentRefError
+from src.engine.modules import content_binding
 from src.engine.player_control import (
     DEFAULT_CONTROL_MODE,
     PlayerControlError,
@@ -52,6 +54,42 @@ def bind_ruleset_runtime(
             "error_code": "RULESET_BINDING_FAILED",
             "error": "规则运行时绑定失败，未留下半成品存档。",
         }
+    return None
+
+
+def bind_content_refs(
+    transaction: CreationTransaction,
+    instance: Any,
+    world_ref: dict[str, Any],
+    adventure_binding: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Persist the source-aware World/Adventure refs; compensate on failure.
+
+    Shared by normal and seed creation so both persist the same binding
+    semantics.  ``world_ref`` keeps the caller's source identity and digest.
+    """
+
+    try:
+        content_binding.set_world_ref(instance, world_ref)
+    except ContentRefError as exc:
+        transaction.rollback()
+        return {"ok": False, "error_code": "INVALID_WORLD_REF", "error": str(exc)}
+    if adventure_binding:
+        try:
+            content_binding.add_adventure_ref(instance, {
+                "source_kind": str(adventure_binding.get("source_kind") or "adventure"),
+                "source_id": str(adventure_binding.get("source_id") or adventure_binding.get("adventure_id") or ""),
+                "kind": "adventure",
+                "id": str(adventure_binding.get("adventure_id") or ""),
+                "digest": str(adventure_binding.get("content_digest") or ""),
+            })
+        except ContentRefError:
+            transaction.rollback()
+            return {
+                "ok": False,
+                "error_code": "INVALID_ADVENTURE_BINDING",
+                "error": "冒险包来源引用无效，未留下半成品存档。",
+            }
     return None
 
 
