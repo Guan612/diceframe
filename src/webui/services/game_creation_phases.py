@@ -61,12 +61,12 @@ def bind_content_refs(
     transaction: CreationTransaction,
     instance: Any,
     world_ref: dict[str, Any],
-    adventure_binding: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Persist the source-aware World/Adventure refs; compensate on failure.
+    """Persist the source-aware World ref; compensate on failure.
 
     Shared by normal and seed creation so both persist the same binding
     semantics.  ``world_ref`` keeps the caller's source identity and digest.
+    Adventure identity is owned by ``GameInstance.adventure_binding`` alone.
     """
 
     try:
@@ -74,22 +74,6 @@ def bind_content_refs(
     except ContentRefError as exc:
         transaction.rollback()
         return {"ok": False, "error_code": "INVALID_WORLD_REF", "error": str(exc)}
-    if adventure_binding:
-        try:
-            content_binding.add_adventure_ref(instance, {
-                "source_kind": str(adventure_binding.get("source_kind") or "adventure"),
-                "source_id": str(adventure_binding.get("source_id") or adventure_binding.get("adventure_id") or ""),
-                "kind": "adventure",
-                "id": str(adventure_binding.get("adventure_id") or ""),
-                "digest": str(adventure_binding.get("content_digest") or ""),
-            })
-        except ContentRefError:
-            transaction.rollback()
-            return {
-                "ok": False,
-                "error_code": "INVALID_ADVENTURE_BINDING",
-                "error": "冒险包来源引用无效，未留下半成品存档。",
-            }
     return None
 
 
