@@ -13,6 +13,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_binding_migration
+from src.content_modules.refs import ContentRefError, parse_content_ref
 from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
 from src.engine.module_state import ModuleStateError
 from src.engine.modules.lorebook_runtime import fresh as fresh_lorebook_runtime, normalize_timers
@@ -23,7 +24,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 34
+CURRENT_INSTANCE_SCHEMA_VERSION = 35
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -724,6 +725,36 @@ def _migrate_v33_to_v34(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v34_to_v35(payload: dict[str, Any]) -> dict[str, Any]:
+    """Materialize content_binding from world_id without overwriting a slot.
+
+    Only the World ref is derivable from a save.  Book bindings stay empty:
+    the Lorebook database binding rows are their authority, and Adventure
+    identity stays in ``adventure_binding``.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    if not isinstance(modules.get("content_binding"), dict):
+        world_id = str(payload.get("world_id") or "")
+        world_ref: dict[str, Any] = {}
+        if world_id:
+            try:
+                world_ref = parse_content_ref({
+                    "source_kind": "world", "source_id": world_id,
+                    "kind": "world", "id": world_id, "digest": "",
+                }, default_source=f"world:{world_id}").to_portable_dict()
+            except ContentRefError:
+                world_ref = {}
+        modules["content_binding"] = {
+            "schema_version": 1,
+            "world_ref": world_ref,
+            "book_refs": [],
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 35
+    return payload
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -830,6 +861,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 33:
         payload = _migrate_v33_to_v34(payload)
         version = 34
+    if version == 34:
+        payload = _migrate_v34_to_v35(payload)
+        version = 35
     payload["instance_schema_version"] = version
     return payload
 

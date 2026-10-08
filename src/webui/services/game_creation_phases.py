@@ -6,6 +6,8 @@ import json
 import logging
 from typing import Any
 
+from src.content_modules.refs import ContentRefError
+from src.engine.modules import content_binding
 from src.engine.player_control import (
     DEFAULT_CONTROL_MODE,
     PlayerControlError,
@@ -52,6 +54,26 @@ def bind_ruleset_runtime(
             "error_code": "RULESET_BINDING_FAILED",
             "error": "规则运行时绑定失败，未留下半成品存档。",
         }
+    return None
+
+
+def bind_content_refs(
+    transaction: CreationTransaction,
+    instance: Any,
+    world_ref: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Persist the source-aware World ref; compensate on failure.
+
+    Shared by normal and seed creation so both persist the same binding
+    semantics.  ``world_ref`` keeps the caller's source identity and digest.
+    Adventure identity is owned by ``GameInstance.adventure_binding`` alone.
+    """
+
+    try:
+        content_binding.set_world_ref(instance, world_ref)
+    except ContentRefError as exc:
+        transaction.rollback()
+        return {"ok": False, "error_code": "INVALID_WORLD_REF", "error": str(exc)}
     return None
 
 
@@ -156,15 +178,37 @@ def copy_lorebook_entries(
     world_id: str,
     world_name: str,
     language: str,
-) -> None:
-    """Copy a requested external lorebook into the new world's namespace."""
+    game_key: tuple[str, ...] | None = None,
+    canonical: bool = False,
+) -> str | None:
+    """Bind a requested external Book to the new game; legacy stores still copy."""
 
     lorebook = dependencies.lorebook
     if not source_world_id or source_world_id == world_id or lorebook is None:
-        return
+        return None
+    bind_lorebook = getattr(lorebook, "bind_lorebook", None)
+    if callable(bind_lorebook) and game_key and canonical:
+        source_book_id = (
+            lorebook.primary_world_book_id(source_world_id)
+            if hasattr(lorebook, "primary_world_book_id")
+            else f"world:{source_world_id}"
+        )
+        if not lorebook.get_lorebook(source_book_id):
+            return None
+        scope_id = _GAME_KEY_SEP.join(str(part) for part in game_key)
+        binding_id = f"binding:game:{scope_id}:lorebook:{source_book_id}"
+        bind_lorebook({
+            "id": binding_id,
+            "book_id": source_book_id,
+            "scope_kind": "game",
+            "scope_id": scope_id,
+            "role": "runtime",
+            "order": 110,
+        })
+        return binding_id
     entries = lorebook.list_entries(source_world_id)
     if not entries:
-        return
+        return None
     if not lorebook.get_world(world_id):
         source_world = lorebook.get_world(source_world_id) or {}
         lorebook.create_world(
@@ -182,6 +226,7 @@ def copy_lorebook_entries(
             continue
         lorebook.add_entry(copied)
     dependencies.refresh_lorebook_index(world_id)
+    return None
 
 
 async def create_players(

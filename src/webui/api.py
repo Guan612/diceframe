@@ -2580,7 +2580,9 @@ class WebAPI:
                            gm_style_override: dict[str, Any] | None = None,
                            advancement_mode: str = "milestone",
                            advancement_authority: str = "ai_gm",
-                           unclaimed_control_default: str = "") -> dict[str, Any]:
+                           unclaimed_control_default: str = "",
+                           world_ref: dict[str, Any] | None = None,
+                           book_bindings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         return await self._game_lifecycle.create_game(
             world_id=world_id, game_name=game_name, group_name=group_name,
             rule_id=rule_id, solo=solo, lorebook_world_id=lorebook_world_id,
@@ -2599,6 +2601,8 @@ class WebAPI:
             advancement_mode=advancement_mode,
             advancement_authority=advancement_authority,
             unclaimed_control_default=unclaimed_control_default,
+            world_ref=world_ref,
+            book_bindings=book_bindings,
         )
 
     # ---- 重开引用码 ----
