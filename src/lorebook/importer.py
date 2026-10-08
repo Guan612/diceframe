@@ -9,6 +9,12 @@ from src.lorebook.adapters import from_legacy_entries, from_lorebook_v3, from_si
 from src.lorebook.adapters.legacy import diceframe_compat_fields
 from src.lorebook.activation import normalize_primary_match_mode, normalize_selective_logic
 from src.lorebook.domain import LorebookDraft
+from src.content_modules.refs import (
+    ContentDraft,
+    build_commit_plan,
+    collect_content_refs,
+)
+from src.engine.world.contracts import SOURCE_REF_KINDS
 
 
 def detect_lorebook_format(payload: dict[str, Any]) -> str:
@@ -61,17 +67,89 @@ def character_card_identity(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def preview_lorebook_import(payload: dict[str, Any]) -> dict[str, Any]:
+def lorebook_import_identity(draft: LorebookDraft) -> tuple[str, str]:
+    """Portable ``(source_kind, source_id)`` of an imported Book.
+
+    Shared by the preview draft and the commit, so a re-import of the same
+    source is recognised as the existing Book.  Format names such as
+    ``sillytavern`` are adapters, not source kinds, so they map to ``device``.
+    A source without an id is identified by a content fingerprint.
+    """
+
+    from src.engine.world.contracts import canonical_id as world_canonical_id
+
+    source_kind = str(draft.source.get("source_kind") or draft.source.get("kind") or "device").strip().lower()
+    if source_kind not in SOURCE_REF_KINDS:
+        source_kind = "device"
+    raw_source_id = str(draft.source.get("source_id") or draft.source.get("id") or "").strip()
+    if not raw_source_id:
+        fingerprint = hashlib.sha256(json.dumps({"source": draft.source, "name": draft.name, "entries": [entry.external_id for entry in draft.entries]}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        return source_kind, f"import-{fingerprint}"
+    try:
+        return source_kind, world_canonical_id(raw_source_id)
+    except ValueError:
+        return source_kind, f"import-{hashlib.sha256(raw_source_id.encode('utf-8')).hexdigest()[:12]}"
+
+
+def lorebook_content_draft(payload: dict[str, Any]) -> ContentDraft:
+    """Adapt any supported Lorebook input into the shared import contract."""
+
     fmt = detect_lorebook_format(payload)
     draft = draft_lorebook_import(payload)
+    source_kind, source_id = lorebook_import_identity(draft)
+    raw_source_id = str(draft.source.get("source_id") or draft.source.get("id") or "").strip()
+    # One import source is one Book, so the Book's external id is its source
+    # id; external labels and the display name stay in provenance.
+    external_id = source_id
+    source_ref = f"{source_kind}:{source_id}"
+    payload_rows = {
+        "name": draft.name,
+        "description": draft.description,
+        "language": draft.language,
+        "settings": dict(draft.settings),
+        "entries": [
+            {"external_id": entry.external_id, "name": entry.name, "type": entry.type}
+            for entry in draft.entries
+        ],
+    }
+    refs = collect_content_refs(payload, default_source=source_ref)
+    digest = hashlib.sha256(
+        json.dumps(payload_rows, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return ContentDraft(
+        kind="lorebook",
+        source_kind=source_kind,
+        source_id=source_id,
+        external_id=external_id,
+        payload=payload_rows,
+        references=refs,
+        provenance={"format": fmt, "raw_source_id": raw_source_id, "name": draft.name},
+        digest=f"sha256:{digest}",
+    )
+
+
+def preview_lorebook_import(
+    payload: dict[str, Any],
+    *,
+    existing_refs: list[Any] | None = None,
+    duplicate_policy: str = "update",
+) -> dict[str, Any]:
+    fmt = detect_lorebook_format(payload)
+    draft = draft_lorebook_import(payload)
+    content_draft = lorebook_content_draft(payload)
+    plan = build_commit_plan(
+        [content_draft], existing=existing_refs or [],
+        duplicate_policy=duplicate_policy,  # type: ignore[arg-type]
+    )
     unsupported = sum(1 for warning in draft.warnings if "unsupported" in warning.lower())
-    return {"format": fmt, "book": draft, "counts": {"entries": len(draft.entries), "mapped": len(draft.entries), "warnings": len(draft.warnings), "unsupported": unsupported}, "warnings": draft.warnings, "features": {"timed": any(bool(e.timed) for e in draft.entries), "recursive": any(bool(e.recursion_flags) for e in draft.entries)}, "character": character_card_identity(payload)}
+    return {"format": fmt, "book": draft, "counts": {"entries": len(draft.entries), "mapped": len(draft.entries), "warnings": len(draft.warnings), "unsupported": unsupported}, "warnings": draft.warnings, "features": {"timed": any(bool(e.timed) for e in draft.entries), "recursive": any(bool(e.recursion_flags) for e in draft.entries)}, "character": character_card_identity(payload), "content_draft": content_draft, "commit_plan": plan}
 
 
 def commit_lorebook_import(store: Any, draft: LorebookDraft, binding: dict[str, Any] | None = None, *, book_id: str | None = None) -> str:
     if not book_id:
         fingerprint = hashlib.sha256(json.dumps({"source": draft.source, "name": draft.name, "entries": [entry.external_id for entry in draft.entries]}, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
         book_id = str(draft.source.get("id") or f"import:{draft.source.get('kind', 'external')}:{fingerprint}")
+    source_kind, source_id = lorebook_import_identity(draft)
     # The canonical Book owns the raw unknown extensions so that
     # import -> DB -> export lorebook_v3 -> reimport can round-trip them.
     # Empty buckets carry nothing and stay out of settings.
@@ -90,7 +168,8 @@ def commit_lorebook_import(store: Any, draft: LorebookDraft, binding: dict[str, 
             "scan_depth": draft.settings.get("scan_depth", 0),
             "token_budget": draft.settings.get("token_budget", 0),
             "recursive_scanning": draft.settings.get("recursive_scanning", False),
-            "source_kind": draft.source.get("kind", "import"),
+            "source_kind": source_kind,
+            "source_id": source_id,
         })
         if binding:
             store.bind_lorebook({"id": binding.get("id", f"binding:{book_id}"), "book_id": book_id, **{k: v for k, v in binding.items() if k != "id"}})
