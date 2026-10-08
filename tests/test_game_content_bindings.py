@@ -87,3 +87,39 @@ async def test_seed_restart_of_a_legacy_save_binds_the_plain_world_ref(web_api):
         "source_kind": "world", "source_id": "template_world",
         "kind": "world", "id": "template_world", "digest": "",
     }
+
+
+@pytest.mark.asyncio
+async def test_book_binding_failure_rolls_back_instance_and_earlier_bindings(web_api, monkeypatch):
+    api, lorebook, registry, _llm, _worlds_dir = web_api
+    lorebook.ensure_primary_world_book("template_world")
+    lorebook.create_lorebook({"id": "extra-book", "name": "Extra"})
+    real_bind = lorebook.bind_lorebook
+    calls = []
+
+    def flaky_bind(binding):
+        calls.append(binding["id"])
+        if len(calls) == 2:
+            raise RuntimeError("disk full")
+        return real_bind(binding)
+
+    monkeypatch.setattr(lorebook, "bind_lorebook", flaky_bind)
+    before = {tuple(inst.game_key) for inst in registry.list_all()}
+    result = await api.create_game(
+        "canonical_target",
+        create_lorebook=True,
+        source_world_id="template_world",
+        book_bindings=[
+            {"ref": {"source_kind": "world", "source_id": "template_world",
+                     "kind": "lorebook", "id": "world:template_world", "digest": ""}},
+            {"ref": {"source_kind": "gm", "source_id": "extra",
+                     "kind": "lorebook", "id": "extra-book", "digest": ""}},
+        ],
+        players=[{"character_name": "艾琳", "attributes": {"str": 10}}],
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "BOOK_BINDING_FAILED"
+    assert len(calls) == 2
+    assert {tuple(inst.game_key) for inst in registry.list_all()} == before
+    assert lorebook.list_bindings(scope_kind="game") == []
