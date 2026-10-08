@@ -3,6 +3,7 @@
 from src.engine.modules import (  # noqa: F401
     check_reveals,
     checks,
+    content_binding,
     combat_extension_state,
     economy_state,
     health,
