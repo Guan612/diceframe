@@ -199,7 +199,6 @@ async def create_from_seed(
         transaction,
         instance,
         inherited_world_ref,
-        target_adventure_binding,
     )
     if content_error is not None:
         return content_error

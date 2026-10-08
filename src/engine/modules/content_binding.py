@@ -1,9 +1,10 @@
 """Canonical content references bound to one game run.
 
-The binding slot is deliberately opaque to the generic game aggregate: World,
-Book and Adventure remain content-layer identities while the game only keeps
-the source-aware refs selected for this run.  The Lorebook database remains the
-authority for the actual Book binding rows.
+The binding slot is deliberately opaque to the generic game aggregate: World
+and Book remain content-layer identities while the game only keeps the
+source-aware refs selected for this run.  The Lorebook database remains the
+authority for the actual Book binding rows, and ``GameInstance.adventure_binding``
+is the single authority for Adventure identity (this slot never mirrors it).
 """
 
 from __future__ import annotations
@@ -25,7 +26,6 @@ def fresh() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "world_ref": {},
         "book_refs": [],
-        "adventure_refs": [],
     }
 
 
@@ -36,7 +36,9 @@ def ensure(raw: Any) -> dict[str, Any]:
         return raw
     raw.setdefault("world_ref", {})
     raw.setdefault("book_refs", [])
-    raw.setdefault("adventure_refs", [])
+    # Adventure identity lives in GameInstance.adventure_binding; drop the
+    # duplicate key that unreleased builds of this slot wrote.
+    raw.pop("adventure_refs", None)
     return raw
 
 
@@ -84,22 +86,6 @@ def add_book_ref(instance: Any, ref: dict[str, Any]) -> None:
         refs.append(value)
 
 
-def adventure_refs(instance: Any) -> list[dict[str, Any]]:
-    return deepcopy(list(_state(instance).get("adventure_refs") or []))
-
-
-def add_adventure_ref(instance: Any, ref: dict[str, Any]) -> None:
-    require_writable(instance)
-    parsed = parse_content_ref(ref, default_source="adventure:unknown")
-    if parsed.kind != "adventure":
-        raise ContentRefError("content binding adventure_refs must have kind 'adventure'")
-    value = parsed.to_portable_dict()
-    state = _state(instance)
-    refs = state.setdefault("adventure_refs", [])
-    if value not in refs:
-        refs.append(value)
-
-
 SPEC = ModuleStateSpec(
     name=MODULE_NAME,
     schema_version=SCHEMA_VERSION,
@@ -112,10 +98,8 @@ register_module_state(SPEC)
 __all__ = [
     "MODULE_NAME",
     "SCHEMA_VERSION",
-    "add_adventure_ref",
     "add_book_ref",
     "book_refs",
-    "adventure_refs",
     "ensure",
     "fresh",
     "require_writable",

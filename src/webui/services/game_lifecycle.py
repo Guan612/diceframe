@@ -313,7 +313,6 @@ async def create_game(
             "id": world_id,
             "digest": "",
         },
-        adventure_binding,
     )
     if content_error is not None:
         return content_error
