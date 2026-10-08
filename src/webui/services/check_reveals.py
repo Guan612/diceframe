@@ -45,21 +45,28 @@ class CheckRevealService:
         self.d = deps
 
     async def reveal(self, game_key: str, check_id: str, uid: str) -> dict[str, Any]:
-        inst = self.d.get_instance(self.d.parse_game_key(game_key))
+        key = self.d.parse_game_key(game_key)
+        inst = self.d.get_instance(key)
         if not inst:
             return {"ok": False, "error": "游戏不存在", "status": 404}
         uid = str(uid or "")
         if not uid:
             return {"ok": False, "error": "未登录", "status": 403}
         check_id = str(check_id or "")
-        check = _find_check(inst, check_id)
-        if check is None:
-            return {"ok": False, "error": "检定不存在", "status": 404}
-        if uid != str(inst.gm_uid) and uid != str(check.get("actor_uid") or ""):
-            return {"ok": False, "error": "只有行动者或 GM 可以揭示", "status": 403}
-        existing = check_reveals.reveal_record(inst, check_id)
-        already = existing is not None
-        if not already:
-            existing = check_reveals.mark_revealed(inst, check_id, uid)
-            await self.d.save_instance(inst)
+        async with inst.authoritative_write() as entered:
+            if not entered:
+                return {"ok": False, "error_code": "REWRITE_IN_PROGRESS", "error": "GM 正在重写历史回合，请等待完成后重试", "status": 409}
+            if self.d.get_instance(key) is not inst:
+                return {"ok": False, "error_code": "STALE_RUN", "error": "对局已重开，请刷新后重试", "status": 409}
+            assert inst is not None
+            check = _find_check(inst, check_id)
+            if check is None:
+                return {"ok": False, "error": "检定不存在", "status": 404}
+            if uid != str(inst.gm_uid) and uid != str(check.get("actor_uid") or ""):
+                return {"ok": False, "error": "只有行动者或 GM 可以揭示", "status": 403}
+            existing = check_reveals.reveal_record(inst, check_id)
+            already = existing is not None
+            if not already:
+                existing = check_reveals.mark_revealed(inst, check_id, uid)
+                await self.d.save_instance(inst)
         return {"ok": True, "check_id": check_id, "reveal": existing, "already": already}

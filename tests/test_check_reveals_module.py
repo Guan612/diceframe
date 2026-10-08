@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -114,6 +115,58 @@ async def test_third_party_and_unknown_checks_are_refused() -> None:
     assert missing["ok"] is False
     assert missing["status"] == 404
 
+
+
+@pytest.mark.asyncio
+async def test_reveal_is_rejected_during_historical_rewrite() -> None:
+    inst = _instance()
+    inst.last_checks = [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}]
+    svc, registry = _service(inst)
+    async with inst.historical_rewrite():
+        # A different task cannot enter the rewrite owner's reentrant gate.
+        result = await asyncio.create_task(svc.reveal("test|reveal|web", "chk-1", "ally"))
+    assert result["ok"] is False
+    assert result["status"] == 409
+    assert result["error_code"] == "REWRITE_IN_PROGRESS"
+    assert module.reveal_record(inst, "chk-1") is None
+    assert not hasattr(registry, "saved")
+
+
+@pytest.mark.asyncio
+async def test_queued_reveal_does_not_write_a_replaced_instance() -> None:
+    inst = _instance()
+    inst.last_checks = [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}]
+    svc, registry = _service(inst)
+    replacement = _instance()
+    replacement.last_checks = deepcopy(inst.last_checks)
+    async with inst.authoritative_write():
+        pending = asyncio.create_task(svc.reveal("test|reveal|web", "chk-1", "ally"))
+        await asyncio.sleep(0)
+        assert not pending.done()  # queued behind the current writer
+        registry.inst = replacement
+    result = await pending
+    assert result["ok"] is False
+    assert result["status"] == 409
+    assert result["error_code"] == "STALE_RUN"
+    assert module.reveal_record(inst, "chk-1") is None
+    assert module.reveal_record(replacement, "chk-1") is None
+    assert not hasattr(registry, "saved")
+
+
+@pytest.mark.asyncio
+async def test_queued_reveal_proceeds_on_the_same_instance() -> None:
+    inst = _instance()
+    inst.last_checks = [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}]
+    svc, registry = _service(inst)
+    async with inst.authoritative_write():
+        pending = asyncio.create_task(svc.reveal("test|reveal|web", "chk-1", "gm"))
+        await asyncio.sleep(0)
+        assert not pending.done()
+    result = await pending
+    assert result["ok"] is True
+    assert result["already"] is False
+    assert module.reveal_record(inst, "chk-1")["by"] == "gm"
+    assert registry.saved is inst
 
 def test_log_response_carries_reveals_and_mode() -> None:
     inst = _instance()
