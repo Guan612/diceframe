@@ -552,7 +552,7 @@ def import_plugin_content(
     entry = _content_to_lore_entry(
         resource, kind, target_world_id, book_id=target_book_id,
     )
-    if lorebook.get_entry(entry["id"]) and not overwrite:
+    if lorebook is not None and lorebook.get_entry(entry["id"]) and not overwrite:
         entry["id"] = f"{entry['id']}_{int(time.time() * 1000)}"
     result = (
         _save_plugin_book_entry(dependencies, target_book_id, entry)
@@ -612,6 +612,8 @@ def import_all_plugin_content(
                         continue
                     lorebook = dependencies.store.lorebook
                     if not target_book_id and (not lorebook or not lorebook.get_world(target_world_id)):
+                        return {"ok": False, "error": "目标世界书不存在"}
+                    if lorebook is None:
                         return {"ok": False, "error": "目标世界书不存在"}
                     entry = _content_to_lore_entry(
                         resource, kind, target_world_id, book_id=target_book_id,
