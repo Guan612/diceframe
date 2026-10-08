@@ -45,8 +45,10 @@ def get_map_locations(
         return {"locations": [], "current_scene": "", "current_location_id": ""}
 
     if dependencies.content_projection is not None:
+        # The map is shown to every seat and is not filtered per viewer, so it
+        # must not pull in the current actors' character-scoped Books.
         entries = dependencies.content_projection.for_game(
-            instance, viewer_kind="gm", entry_type="location",
+            instance, viewer_kind="gm", action_actor_uids=[], entry_type="location",
         )
     else:
         entries = dependencies.list_lore_entries(instance.world_id, "location")
