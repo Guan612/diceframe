@@ -180,3 +180,39 @@ def test_image_generation_stays_out_of_the_ai_slot_pool():
         request = type("Request", (), {"path": path, "method": "POST"})()
 
         assert _is_ai_request(request) is False
+
+
+@pytest.mark.asyncio
+async def test_room_password_attempts_have_a_strict_per_game_and_per_ip_budget():
+    guard = AbuseGuard(
+        write_per_ip_limit=100,
+        write_global_limit=100,
+        login_per_ip_limit=100,
+        room_password_per_ip_game_limit=2,
+        room_password_per_ip_limit=3,
+        ai_concurrency=10,
+    )
+    app = _app(guard)
+    app.router.add_post("/api/games/{game_key}/verify-room-password", _ok)
+
+    async with TestClient(TestServer(app)) as client:
+        first = "/api/games/web%7Ca%7Cweb/verify-room-password"
+        second = "/api/games/web%7Cb%7Cweb/verify-room-password"
+        assert (await client.post(first)).status == 200
+        assert (await client.post(first)).status == 200
+        blocked = await client.post(first)
+        assert blocked.status == 429
+        assert int(blocked.headers["Retry-After"]) > 0
+        # Another table still has its own budget, until the per-IP total runs out.
+        assert (await client.post(second)).status == 200
+        assert (await client.post(second)).status == 429
+        # Room password guesses never eat the owner login or general write budget.
+        assert (await client.post("/api/login")).status == 200
+        assert (await client.post("/api/games/room/action")).status == 200
+
+
+def test_room_password_budget_is_stricter_than_general_writes():
+    from src.webui import abuse_guard
+
+    assert abuse_guard.ROOM_PASSWORD_PER_IP_GAME_LIMIT <= abuse_guard.LOGIN_PER_IP_LIMIT
+    assert abuse_guard.ROOM_PASSWORD_PER_IP_LIMIT < abuse_guard.WRITE_PER_IP_LIMIT

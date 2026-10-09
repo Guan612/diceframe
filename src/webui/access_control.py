@@ -89,7 +89,7 @@ class WebAccessControl:
             instance = self.request_game_instance(request)
             if (
                 instance
-                and instance.room_password
+                and getattr(instance, "has_room_password", False)
                 and not self.request_room_token_ok(instance, request)
             ):
                 return web.json_response(
@@ -382,10 +382,7 @@ class WebAccessControl:
     @staticmethod
     def request_room_token_ok(instance, request: web.Request) -> bool:
         token = str(request.query.get("room_token") or "")
-        return bool(instance.room_token) and hmac.compare_digest(
-            instance.room_token,
-            token,
-        )
+        return room_access.verify_room_token(instance, token)
 
     @staticmethod
     def share_endpoint_kind(request: web.Request) -> str:

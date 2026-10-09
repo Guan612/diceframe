@@ -11,6 +11,7 @@ import pytest
 from src.commands.game_handler import GameHandler
 from src.engine.game_instance import GameRegistry
 from src.engine.health import record_health_event
+from src.engine.modules import room_access
 from src.llm.client import LLMResponse
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
@@ -1815,27 +1816,28 @@ async def test_create_game_room_password_tristate(web_api):
     assert r["ok"] is True
     assert r.get("generated_password"), "多人局未声明应生成随机密码"
     inst = registry.get(api._parse_key(r["game_key"]))
-    assert inst.room_password == r["generated_password"]
+    assert room_access.verify_room_password(inst, r["generated_password"])
+    assert r["generated_password"] not in json.dumps(inst.to_dict(), ensure_ascii=False)
 
     # 2) 显式空串 → 开放房，不回显
     r2 = await api.create_game("template_world", "开放房", players=list(players), solo=False, room_password="")
     assert r2["ok"] is True
     assert r2.get("generated_password") is None
     inst2 = registry.get(api._parse_key(r2["game_key"]))
-    assert inst2.room_password == ""
+    assert inst2.has_room_password is False
 
     # 3) 单人局未声明 → 不生成（solo 自玩无需密码）
     r3 = await api.create_game("template_world", "单人局", players=list(players), solo=True, room_password=None)
     assert r3["ok"] is True
     assert r3.get("generated_password") is None
     inst3 = registry.get(api._parse_key(r3["game_key"]))
-    assert inst3.room_password == ""
+    assert inst3.has_room_password is False
 
     # 4) 太短 → 拒绝
     keys_before_rejection = {instance.game_key for instance in registry.list_all()}
-    r4 = await api.create_game("template_world", "弱密码", players=list(players), solo=False, room_password="ab")
+    r4 = await api.create_game("template_world", "弱密码", players=list(players), solo=False, room_password="abcde")
     assert r4.get("ok") is False
-    assert "至少 4 位" in r4.get("error", "")
+    assert "至少 6 位" in r4.get("error", "")
     assert {instance.game_key for instance in registry.list_all()} == keys_before_rejection
 
 

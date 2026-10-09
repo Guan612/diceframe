@@ -23,6 +23,12 @@ WRITE_GLOBAL_LIMIT = 600
 WRITE_GLOBAL_WINDOW_SECONDS = 60
 # 建卡器的 choices/validate/derive/finalize 是无状态计算（POST 只为携带草稿），
 # 单独计额：引导建卡每改一步都会请求，不能挤占同 IP 其它玩家的写额度。
+# 房间密码猜测：同一 IP 对同一局与对全部局分别计额，比通用写入额度严得多。
+# 与 owner 登录分桶，玩家输错房间密码不会挤占同 IP 的房主登录额度。
+ROOM_PASSWORD_PER_IP_GAME_LIMIT = 10
+ROOM_PASSWORD_PER_IP_GAME_WINDOW_SECONDS = 10 * 60
+ROOM_PASSWORD_PER_IP_LIMIT = 30
+ROOM_PASSWORD_PER_IP_WINDOW_SECONDS = 10 * 60
 BUILDER_PER_IP_LIMIT = 300
 BUILDER_PER_IP_WINDOW_SECONDS = 60
 BUILDER_GLOBAL_LIMIT = 3000
@@ -34,6 +40,7 @@ MAX_TRACKED_BUCKETS = 2000
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 # 凭据兑换端点与登录共用限流桶：两者都能用于暴力猜测 owner 访问权。
 _LOGIN_PATHS = frozenset({"/api/login", "/api/pairing/claim"})
+_ROOM_PASSWORD_PATH = re.compile(r"^/api/games/([^/]+)/verify-room-password/?$")
 _BUILDER_PATH = re.compile(r"^/api/rules/[^/]+/builder/(?:choices|validate|derive|finalize)$")
 _AI_EXACT_PATHS = frozenset({
     "/api/generate-world",
@@ -141,6 +148,10 @@ class AbuseGuard:
         write_per_ip_window: int = WRITE_PER_IP_WINDOW_SECONDS,
         write_global_limit: int = WRITE_GLOBAL_LIMIT,
         write_global_window: int = WRITE_GLOBAL_WINDOW_SECONDS,
+        room_password_per_ip_game_limit: int = ROOM_PASSWORD_PER_IP_GAME_LIMIT,
+        room_password_per_ip_game_window: int = ROOM_PASSWORD_PER_IP_GAME_WINDOW_SECONDS,
+        room_password_per_ip_limit: int = ROOM_PASSWORD_PER_IP_LIMIT,
+        room_password_per_ip_window: int = ROOM_PASSWORD_PER_IP_WINDOW_SECONDS,
         builder_per_ip_limit: int = BUILDER_PER_IP_LIMIT,
         builder_per_ip_window: int = BUILDER_PER_IP_WINDOW_SECONDS,
         builder_global_limit: int = BUILDER_GLOBAL_LIMIT,
@@ -157,6 +168,10 @@ class AbuseGuard:
         self.write_per_ip_window = write_per_ip_window
         self.write_global_limit = write_global_limit
         self.write_global_window = write_global_window
+        self.room_password_per_ip_game_limit = room_password_per_ip_game_limit
+        self.room_password_per_ip_game_window = room_password_per_ip_game_window
+        self.room_password_per_ip_limit = room_password_per_ip_limit
+        self.room_password_per_ip_window = room_password_per_ip_window
         self.builder_per_ip_limit = builder_per_ip_limit
         self.builder_per_ip_window = builder_per_ip_window
         self.builder_global_limit = builder_global_limit
@@ -182,6 +197,10 @@ class AbuseGuard:
                 self.login_global_limit,
                 self.login_global_window,
             )
+            if denied:
+                return _rate_limited_response(denied)
+        elif request.method == "POST" and (room_match := _ROOM_PASSWORD_PATH.match(request.path)):
+            denied = self._check_room_password(ip, room_match.group(1))
             if denied:
                 return _rate_limited_response(denied)
         elif request.method == "POST" and _BUILDER_PATH.match(request.path):
@@ -220,6 +239,25 @@ class AbuseGuard:
             return await handler(request)
         finally:
             self._ai_slots.release()
+
+    def _check_room_password(self, ip: str, game: str) -> int:
+        # Per IP and game first, so one table's attempts are capped tightly;
+        # the per-IP total stops spraying guesses across many tables.
+        per_game = self._limiter.check(
+            "room-password-ip-game",
+            f"{ip}|{game[:256]}",
+            self.room_password_per_ip_game_limit,
+            self.room_password_per_ip_game_window,
+        )
+        if not per_game.allowed:
+            return per_game.retry_after
+        per_ip = self._limiter.check(
+            "room-password-ip",
+            ip,
+            self.room_password_per_ip_limit,
+            self.room_password_per_ip_window,
+        )
+        return 0 if per_ip.allowed else per_ip.retry_after
 
     def _check_pair(
         self,

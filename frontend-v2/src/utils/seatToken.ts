@@ -82,6 +82,18 @@ export function storeRoomToken(gameKey: string, token: unknown): void {
   }
 }
 
+/** Fired on the join page when the room token it held stopped working. */
+export const ROOM_TOKEN_REJECTED_EVENT = 'trpg:room-token-rejected'
+
+export function clearRoomToken(gameKey: string): void {
+  if (!gameKey) return
+  try {
+    localStorage.removeItem(roomTokenKey(gameKey))
+  } catch {
+    // Nothing stored to clear.
+  }
+}
+
 /** Game key of an API path such as `/games/<key>/...`, decoded; '' otherwise. */
 export function gameKeyOfApiPath(path: string): string {
   const match = /^\/games\/([^/?#]+)/u.exec(path)

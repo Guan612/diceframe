@@ -167,7 +167,7 @@ def _make_game(
     instance.set_player_access(open_access)
     if room_password:
         instance.set_room_password(room_password)
-        instance.set_room_token(ROOM_TOKEN)
+        room_access.issue_room_token(instance, token=ROOM_TOKEN)
     play_env.registry.register(instance)
     return "|".join(instance.game_key), instance
 

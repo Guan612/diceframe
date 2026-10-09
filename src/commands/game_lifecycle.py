@@ -116,7 +116,6 @@ class GameLifecycle:
         candidate.configure_session(
             solo_mode=source.solo_mode,
             entry_point=source.entry_point,
-            room_password=source.room_password,
             gm_uid=source.gm_uid,
             luck_timeout_seconds=source.luck_timeout_seconds,
             narrative_perspective=source.narrative_perspective,
@@ -128,7 +127,7 @@ class GameLifecycle:
         room_access.replace_player_access_open(candidate, source.player_access_open)
         table_settings.replace_gm_style_override(candidate, copy.deepcopy(source.gm_style_override))
         room_access.replace_bot_bind_token(candidate, source.bot_bind_token)
-        room_access.replace_room_token(candidate, source.room_token)
+        room_access.copy_room_password(candidate, source)
         ruleset_runtime.copy_binding_for_new_run(candidate, source)
         candidate.adventure_binding = copy.deepcopy(source.adventure_binding)
         if preserve_players:

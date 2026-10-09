@@ -4731,6 +4731,14 @@ player API
 
 而不是每个 endpoint 都直接接受后台 access token。
 
+存储与有效期（`room_access` slot schema 3）：
+
+- 房间密码只存加盐 PBKDF2 哈希（与 owner 访问密码同一格式）；GM 只能设置、替换或取消，不能回看。新密码至少 6 位，旧的较短密码哈希继续有效；
+- 每次密码验证成功各自签发一个 room token，只存 SHA-256 摘要与过期时间（默认 30 天，`TRPG_ROOM_TOKEN_TTL_DAYS`，上限 365）。修改或取消密码会吊销全部 room token；
+- 移除玩家**不**轮换 room token：那会把其他所有玩家一起踢出。被移除的玩家失去席位（席位凭证被吊销）；room token 只把守大厅，若要连大厅也拒之门外，GM 修改房间密码即可；
+- 密码尝试有独立的「IP+游戏」与「IP」限流桶；
+- 导出/导入永不携带密码哈希、room token、席位凭证与 bot 绑定令牌；带密码的存档导入后玩家入口为关闭状态，GM 设置新密码并重新开放即可。
+
 ---
 
 ## 38.4 SSE Ticket

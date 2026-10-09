@@ -7,7 +7,7 @@ import {
   isStandaloneFrontend,
   redirectToBackendLogin,
 } from '@/api/connection'
-import { SEAT_TOKEN_HEADER, clearSeatToken, gameKeyOfApiPath, readRoomToken, readSeatToken } from '@/utils/seatToken'
+import { ROOM_TOKEN_REJECTED_EVENT, SEAT_TOKEN_HEADER, clearRoomToken, clearSeatToken, gameKeyOfApiPath, readRoomToken, readSeatToken } from '@/utils/seatToken'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
@@ -109,6 +109,26 @@ function handleRejectedSeatToken(path: string, status: number, code?: string): v
   if (!location.hash.startsWith('#/join')) location.hash = `/join?${params.toString()}`
 }
 
+/**
+ * The room token this browser held was refused: it expired, or the GM changed
+ * the room password. Forget it and send the player to the join page, which
+ * asks for the room password again.
+ */
+function handleRejectedRoomToken(path: string, status: number, data: unknown): void {
+  if (status !== 403 || hasAccessToken() || !isPlayerShareLocation()) return
+  const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  if (payload.needs_room_password !== true) return
+  const gk = gameKeyOfApiPath(path)
+  if (!gk) return
+  clearRoomToken(gk)
+  if (location.hash.startsWith('#/join')) {
+    window.dispatchEvent(new CustomEvent(ROOM_TOKEN_REJECTED_EVENT, { detail: { gameKey: gk } }))
+    return
+  }
+  const params = new URLSearchParams({ game: gk, share: '1', notice: 'room' })
+  location.hash = `/join?${params.toString()}`
+}
+
 function applyConfirmHeader(headers: Headers, init: RequestInit): void {
   if (init.method && init.method !== 'GET') headers.set('X-TRPG-Confirm', 'true')
 }
@@ -181,6 +201,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   }
   if (!response.ok) {
     handleRejectedSeatToken(path, response.status, errorCodeOf(data))
+    handleRejectedRoomToken(path, response.status, data)
     throw new ApiError(data.error || `HTTP ${response.status}`, response.status, errorCodeOf(data), retryAfterOf(data))
   }
   return data

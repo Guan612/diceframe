@@ -24,6 +24,7 @@ import { ruleSceneUrl } from '@/composables/useBackgroundImages'
 import { resolveSceneImageUrl, revokeSceneImageUrl, sceneImageStyle, uploadSceneImage } from '@/api/sceneImages'
 import { mapBackgroundSelection, uploadMapBackground } from '@/api/mapBackgrounds'
 import { isLlmConfigReady } from '@/utils/modelConfiguration'
+import { ROOM_PASSWORD_MIN_LENGTH, isRoomPasswordTooShort } from '@/utils/roomPassword'
 import { moduleApi, type ModuleSummary } from '@/api/modules'
 import {
   cardControlAt,
@@ -546,6 +547,9 @@ async function create() {
   busy.value = true; error.value = ''
   try {
     requireApiConfiguration()
+    if (!seed.value.trim() && !openRoom.value && isRoomPasswordTooShort(roomPassword.value.trim())) {
+      throw new Error(t('roomPasswordTooShort', { min: ROOM_PASSWORD_MIN_LENGTH }))
+    }
     const players = characters.value.map((c, i) => {
       const card = cloneCharacter(c)
       // 每张卡在「角色」步骤都有明确的控制方式，创建 payload 直接带上它；

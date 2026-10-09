@@ -41,6 +41,7 @@ ERROR_CODE_MAP: dict[str, str] = {
     "房间密码错误": "room_password_wrong",
     "当前游戏需要密码": "room_password_required",
     "需要房间密码": "room_password_required",
+    "房间密码至少 6 位": "room_password_too_short",
     "游戏名过长（上限 40 字）": "game_name_too_long",
     "世界描述过长（上限 2000 字）": "world_description_too_long",
     "行动文本过长（上限 500 字）": "action_text_too_long",

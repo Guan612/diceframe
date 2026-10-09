@@ -94,8 +94,9 @@ class GamePackageService:
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
             try:
                 state_data = json.loads(state_path.read_text(encoding="utf-8-sig"))
-                # Seat share credentials stay on this host; never export them.
-                room_access.scrub_seat_credentials(state_data)
+                # Access credentials stay on this host; never export them
+                # (room password hash, room/seat tokens, bot bind token).
+                room_access.scrub_access_credentials(state_data)
                 container = media.payload_container(state_data)
                 reference = container.get("scene_image")
                 image_path = self._dependencies.resolve_scene_image_file(reference)

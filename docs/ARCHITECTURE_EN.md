@@ -4692,6 +4692,14 @@ player API
 
 instead of allowing every endpoint to accept the administrative access token directly.
 
+Storage and lifetime (`room_access` slot schema 3):
+
+- the room password is stored only as a salted PBKDF2 hash (same format as the owner access password); the GM can set, replace or clear it but never read it back. New passwords need at least 6 characters; hashes of older, shorter passwords keep working;
+- each successful password entry mints its own room token; only its SHA-256 digest and an expiry are stored (default 30 days, `TRPG_ROOM_TOKEN_TTL_DAYS`, max 365). Changing or clearing the password revokes every room token;
+- removing a player does **not** rotate room tokens: that would log every other player out. A removed player loses the seat (its seat credential is revoked); the room token only gates the lobby, and the GM changes the password to shut a former player out of the lobby too;
+- password attempts have their own per-IP-and-game and per-IP rate-limit budget;
+- exports and imports never carry the password hash, room tokens, seat credentials or the bot bind token; a password-protected save arrives with its player entrance closed until the GM sets a new password and reopens it.
+
 ---
 
 ## 38.4 SSE Ticket

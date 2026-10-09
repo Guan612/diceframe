@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, errorMessage, retryOnRateLimit } from '@/api/client'
 import type { CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CharacterSkill, GameDetail, PlayerCreateResponse, RuleAttribute, RuleMeta, RulesetRuntimeMeta } from '@/api/types'
 import { rememberCurrentGame } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
-import { SEAT_TOKEN_HEADER, readRoomToken, readSeatToken, storeRoomToken, storeSeatToken } from '@/utils/seatToken'
+import { ROOM_TOKEN_REJECTED_EVENT, SEAT_TOKEN_HEADER, readRoomToken, readSeatToken, storeRoomToken, storeSeatToken } from '@/utils/seatToken'
 import { attrDisplayName, suggestedAttributes, skillPointCost } from '@/utils/ruleSchema'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useConfirm } from '@/composables/useConfirm'
@@ -130,6 +130,20 @@ function consumeSeatLink(): boolean {
   return true
 }
 
+/** Whether this visit came from a takeover link (its seat token was just stored). */
+let pendingSeatLink = false
+
+/** The room token was refused mid-join (expired / password changed): ask again. */
+function onRoomTokenRejected(event: Event) {
+  const rejected = (event as CustomEvent<{ gameKey?: string }>).detail?.gameKey
+  if (rejected !== gameKey.value) return
+  roomPasswordInput.value = ''
+  error.value = t('roomAccessExpired')
+  needRoomPassword.value = true
+}
+window.addEventListener(ROOM_TOKEN_REJECTED_EVENT, onRoomTokenRejected)
+onBeforeUnmount(() => window.removeEventListener(ROOM_TOKEN_REJECTED_EVENT, onRoomTokenRejected))
+
 onMounted(async () => {
   const seatLink = consumeSeatLink()
   // P2P 直连局：刷新后先恢复 peer 会话（不落服务器 /games 接口）。
@@ -156,30 +170,24 @@ onMounted(async () => {
       return
     }
   }
-  const stored = localStorage.getItem('trpg_play_user_' + gameKey.value)
+  pendingSeatLink = seatLink
   try {
     const d = await api<GameDetail>(`/games/${encodeURIComponent(gameKey.value)}`)
     detail.value = d
-    if (stored && !seatLink) {
-      // 校验本地身份是否仍是成员：被踢后缓存过期，不能再盲跳游玩界面。
-      if (isStoredPlayerMember(d, stored)) {
-        rememberCurrentGame(gameKey.value)
-        router.replace({ name: 'play', query: { game: gameKey.value, user: stored, share: '1' } })
-        return
-      }
-      // 被踢/身份过期：清掉本地缓存，走正常重新加入（尊重房间密码等门槛）。
-      localStorage.removeItem('trpg_play_user_' + gameKey.value)
-    }
-    if (seatLink) resumeUser.value = 'seat'
-    else if (legacyLinkUser.value) error.value = t('seatLinkExpired')
-    else if (route.query.notice === 'seat') error.value = t('seatTokenMissing')
+    // Behind a room password nothing else is decided until this browser holds
+    // a room token: a returning member would only be bounced back from the
+    // play page, and a newcomer cannot load the join data without one.
     if (d.has_room_password && !readRoomToken(gameKey.value)) {
+      // The client sends a player here with notice=room when the token it
+      // held was rejected (expired, or the GM changed the password).
+      if (route.query.notice === 'room') error.value = t('roomAccessExpired')
       needRoomPassword.value = true
       return
     }
-    await afterGate()
+    await continueJoin(d)
   } catch (e: unknown) {
     // 详情获取失败：若本地有身份，按旧行为放行进游玩，避免成员被临时故障锁住。
+    const stored = localStorage.getItem('trpg_play_user_' + gameKey.value)
     if (stored) {
       rememberCurrentGame(gameKey.value)
       router.replace({ name: 'play', query: { game: gameKey.value, user: stored, share: '1' } })
@@ -188,6 +196,25 @@ onMounted(async () => {
     error.value = errorMessage(e)
   }
 })
+
+async function continueJoin(d: Partial<GameDetail>) {
+  const seatLink = pendingSeatLink
+  const stored = localStorage.getItem('trpg_play_user_' + gameKey.value)
+  if (stored && !seatLink) {
+    // 校验本地身份是否仍是成员：被踢后缓存过期，不能再盲跳游玩界面。
+    if (isStoredPlayerMember(d, stored)) {
+      rememberCurrentGame(gameKey.value)
+      router.replace({ name: 'play', query: { game: gameKey.value, user: stored, share: '1' } })
+      return
+    }
+    // 被踢/身份过期：清掉本地缓存，走正常重新加入（尊重房间密码等门槛）。
+    localStorage.removeItem('trpg_play_user_' + gameKey.value)
+  }
+  if (seatLink) resumeUser.value = 'seat'
+  else if (legacyLinkUser.value) error.value = t('seatLinkExpired')
+  else if (route.query.notice === 'seat') error.value = t('seatTokenMissing')
+  await afterGate()
+}
 
 async function afterGate() {
   if (resumeUser.value) { await resumeSeat(); return }
@@ -283,14 +310,15 @@ async function verifyRoomPassword() {
     const r = await api<{ room_token: string }>(`/games/${encodeURIComponent(gameKey.value)}/verify-room-password`, { method: 'POST', body: JSON.stringify({ password: roomPasswordInput.value }) })
     storeRoomToken(gameKey.value, r.room_token)
     needRoomPassword.value = false
-    // Behind a room password the lobby hides the scene until the room token
-    // is held; fetch it again now that it is.
+    // Behind a room password the lobby hides the scene (and the seat list a
+    // returning player is matched against) until the room token is held;
+    // fetch it again now that it is.
     try {
       detail.value = await api<GameDetail>(`/games/${encodeURIComponent(gameKey.value)}`)
     } catch {
       // Keep the lobby we have; the scene is only decoration here.
     }
-    await afterGate()
+    await continueJoin(detail.value)
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 

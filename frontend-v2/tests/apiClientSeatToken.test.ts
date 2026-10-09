@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, api, retryOnRateLimit } from '@/api/client'
 import { accessTokenStorageKey } from '@/api/connection'
-import { readRoomToken, readSeatToken, seatTokenKey, storeRoomToken, storeSeatToken } from '@/utils/seatToken'
+import { ROOM_TOKEN_REJECTED_EVENT, readRoomToken, readSeatToken, seatTokenKey, storeRoomToken, storeSeatToken } from '@/utils/seatToken'
 
 const GAME = 'web|room|bot'
 
@@ -83,6 +83,60 @@ describe('API client seat token', () => {
     expect(localStorage.getItem('trpg_play_user_' + GAME)).toBeNull()
     expect(location.hash).toContain('#/join?')
     expect(location.hash).toContain('notice=seat')
+  })
+
+  it('forgets a refused room token and sends the player back to the password prompt', async () => {
+    storeSeatToken(GAME, 'tok-p1')
+    storeRoomToken(GAME, 'rt-expired')
+    localStorage.setItem('trpg_play_user_' + GAME, 'p1')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ ok: false, error: '需要房间密码', needs_room_password: true }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } },
+    )))
+
+    await expect(api(`/games/${encodeURIComponent(GAME)}/players`)).rejects.toMatchObject({ status: 403 })
+    expect(readRoomToken(GAME)).toBe('')
+    // Only the room token goes; the seat and the identity stay.
+    expect(readSeatToken(GAME)).toBe('tok-p1')
+    expect(localStorage.getItem('trpg_play_user_' + GAME)).toBe('p1')
+    expect(location.hash).toContain('#/join?')
+    expect(location.hash).toContain('notice=room')
+  })
+
+  it('on the join page a refused room token re-opens the prompt in place', async () => {
+    location.hash = `#/join?game=${encodeURIComponent(GAME)}&share=1`
+    storeRoomToken(GAME, 'rt-expired')
+    const seen: string[] = []
+    const listener = (event: Event) => seen.push(String((event as CustomEvent).detail?.gameKey))
+    window.addEventListener(ROOM_TOKEN_REJECTED_EVENT, listener)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ ok: false, needs_room_password: true }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } },
+    )))
+
+    await expect(api(`/games/${encodeURIComponent(GAME)}/characters`)).rejects.toMatchObject({ status: 403 })
+    window.removeEventListener(ROOM_TOKEN_REJECTED_EVENT, listener)
+    expect(readRoomToken(GAME)).toBe('')
+    expect(seen).toEqual([GAME])
+    expect(location.hash).not.toContain('notice=room')
+  })
+
+  it('other 403s and owner requests keep the room token', async () => {
+    storeRoomToken(GAME, 'rt-ok')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ ok: false, error: '本局玩家入口已关闭' }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } },
+    )))
+    await expect(api(`/games/${encodeURIComponent(GAME)}/players`)).rejects.toMatchObject({ status: 403 })
+    expect(readRoomToken(GAME)).toBe('rt-ok')
+
+    localStorage.setItem(accessTokenStorageKey(), 'owner-pass')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ ok: false, needs_room_password: true }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } },
+    )))
+    await expect(api(`/games/${encodeURIComponent(GAME)}/players`)).rejects.toMatchObject({ status: 403 })
+    expect(readRoomToken(GAME)).toBe('rt-ok')
   })
 
   it('a missing token alone does not clear identity (claim flow handles it)', async () => {

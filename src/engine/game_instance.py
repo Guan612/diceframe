@@ -403,20 +403,9 @@ class GameInstance:
         room_access.replace_bot_bind_token(self, value)
 
     @property
-    def room_password(self) -> str:
-        return room_access.room_password(self)
-
-    @room_password.setter
-    def room_password(self, value: str) -> None:
-        room_access.replace_room_password(self, value)
-
-    @property
-    def room_token(self) -> str:
-        return room_access.room_token(self)
-
-    @room_token.setter
-    def room_token(self, value: str) -> None:
-        room_access.replace_room_token(self, value)
+    def has_room_password(self) -> bool:
+        """Only presence is exposed; the password itself is stored hashed."""
+        return room_access.has_room_password(self)
 
     @property
     def difficulty(self) -> str:
@@ -858,7 +847,7 @@ class GameInstance:
         if entry_point is not None:
             self.entry_point = entry_point
         if room_password is not None:
-            self.room_password = room_password
+            room_access.set_room_password(self, room_password)
         if gm_uid is not None:
             self.gm_uid = gm_uid
         if luck_timeout_seconds is not None:
@@ -1008,14 +997,11 @@ class GameInstance:
         self.bot_bind_token = token
 
     def set_room_password(self, password: str) -> None:
-        """设置房间密码；非空时要求至少 4 位。空串表示取消密码（开放房）。"""
-        if password and len(password) < 4:
-            raise ValueError("房间密码至少 4 位")
-        self.room_password = password
-        self.room_token = ""
+        """设置房间密码（仅存哈希）；新密码至少 6 位。空串表示取消密码（开放房）。
 
-    def set_room_token(self, token: str) -> None:
-        self.room_token = token
+        任何改动都会吊销已发放的房间令牌，玩家需用新密码重新进入。
+        """
+        room_access.set_room_password(self, password)
 
     def set_scene(self, scene: str) -> None:
         self.scene = scene

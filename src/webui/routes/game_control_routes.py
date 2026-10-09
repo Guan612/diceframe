@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-import secrets
 
 from aiohttp import web
 
 from src.webui.routes._common import (
     _get_api,
 )
+from src.engine.module_state import ModuleStateError
+from src.webui.services import room_password as room_password_svc
 from src.webui.services._common import is_game_gm
 from src.webui.viewer import viewer_for
 
@@ -334,18 +335,15 @@ async def api_table_talk(request: web.Request) -> web.Response:
 async def api_verify_room_password(request: web.Request) -> web.Response:
     gk = request.match_info["game_key"]
     body = await request.json() if request.content_length else {}
-    password = str(body.get("password", "") or "")
+    password = str(body.get("password", "") or "") if isinstance(body, dict) else ""
     api = _get_api(request)
     inst = api.get_game_instance(gk)
     if not inst:
         return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
-    if not inst.room_password:
-        return web.json_response(
-            {"ok": False, "error": "该游戏未设置房间密码"}, status=400
+    try:
+        result, status = await room_password_svc.verify_and_issue_room_token(
+            inst, password, api.save_game_instance,
         )
-    if not secrets.compare_digest(inst.room_password, password):
-        return web.json_response({"ok": False, "error": "房间密码错误"}, status=403)
-    if not inst.room_token:
-        inst.set_room_token(secrets.token_urlsafe(24))
-        await api.save_game_instance(inst)
-    return web.json_response({"ok": True, "room_token": inst.room_token})
+    except ModuleStateError as exc:
+        return web.json_response({"ok": False, "error": str(exc)}, status=409)
+    return web.json_response(result, status=status, headers={"Cache-Control": "no-store"})

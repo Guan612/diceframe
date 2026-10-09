@@ -52,6 +52,7 @@ import { currencyLabel } from '@/utils/ruleSchema'
 import { currencyAmountToInputText, currencyEditableUnitLabel } from '@/utils/currency'
 import type { CurrencySystem } from '@/utils/currency'
 import { buildRewardPolicySave, buildRoomPasswordSave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
+import { ROOM_PASSWORD_MIN_LENGTH, isRoomPasswordTooShort } from '@/utils/roomPassword'
 
 defineOptions({ name: 'PlayView' })
 
@@ -590,6 +591,12 @@ async function setRoomPassword() {
     // 只有 GM 真的编辑过密码输入框才提交：否则「只改暂离设置」也会 POST 一个空
     // 密码，把房间里已有的密码静默删掉。明确清空输入框仍是一次显式移除密码。
     const passwordSave = buildRoomPasswordSave(passwordTouched.value, roomPasswordInput.value)
+    if (passwordSave && isRoomPasswordTooShort(passwordSave.password)) {
+      // Checked before anything is saved, so a rejected password never leaves
+      // the other settings in this dialog half-applied.
+      toast.error(t('roomPasswordTooShort', { min: ROOM_PASSWORD_MIN_LENGTH }))
+      return
+    }
     if (passwordSave) {
       const r = await api<{ ok?: boolean; error?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/room-password`, { method: 'POST', body: JSON.stringify(passwordSave) })
       if (r.error || r.ok === false) throw new Error(r.error || t('settingFailed'))
