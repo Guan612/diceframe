@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, PlayForwardOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
-import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
+import { api, apiBlob, hasAccessToken, isNotFoundError, retryOnRateLimit } from '@/api/client'
 import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, GmStyle, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
@@ -984,10 +984,10 @@ async function ensureSeatToken(): Promise<boolean> {
   if (!route.query.user && !route.query.share) return true
   if (readSeatToken(gk)) return true
   try {
-    const r = await api<{ seat_token: string }>(
+    const r = await retryOnRateLimit(() => api<{ seat_token: string }>(
       `/games/${encodeURIComponent(gk)}/seat-token/claim`,
       { method: 'POST', body: '{}' },
-    )
+    ))
     storeSeatToken(gk, r.seat_token)
     return true
   } catch {
@@ -1045,7 +1045,7 @@ async function loadPlayContext() {
   if (!(await ensureSeatToken())) return
   if (!route.query.user) {
     try {
-      await api(`/games/${encodeURIComponent(game.currentGame.value)}/claim-gm`, { method: 'POST', body: '{}' })
+      await retryOnRateLimit(() => api(`/games/${encodeURIComponent(game.currentGame.value)}/claim-gm`, { method: 'POST', body: '{}' }))
     } catch (e: unknown) {
       if (!isNotFoundError(e)) game.error.value = errorMessage(e)
     }

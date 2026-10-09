@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '@/api/client'
+import { ApiError, api, retryOnRateLimit } from '@/api/client'
 import { accessTokenStorageKey } from '@/api/connection'
 import { readSeatToken, seatTokenKey, storeSeatToken } from '@/utils/seatToken'
 
@@ -157,5 +157,29 @@ describe('seat token is scoped to its backend (standalone frontend)', () => {
 
     expect(String(fetchMock.mock.calls[0][0])).toContain('https://table.example.com')
     expect(sentHeaders(fetchMock).get('X-Seat-Token')).toBe('tok-table')
+  })
+})
+
+describe('retryOnRateLimit', () => {
+  afterEach(() => { vi.useRealTimers() })
+
+  it('retries once after the advertised wait on a short 429', async () => {
+    vi.useFakeTimers()
+    const request = vi.fn()
+      .mockRejectedValueOnce(new ApiError('busy', 429, undefined, 2))
+      .mockResolvedValueOnce({ ok: true })
+    const pending = retryOnRateLimit(request)
+    await vi.advanceTimersByTimeAsync(2000)
+    await expect(pending).resolves.toEqual({ ok: true })
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry other errors or long waits', async () => {
+    const forbidden = vi.fn().mockRejectedValue(new ApiError('no', 403))
+    await expect(retryOnRateLimit(forbidden)).rejects.toMatchObject({ status: 403 })
+    expect(forbidden).toHaveBeenCalledTimes(1)
+    const long = vi.fn().mockRejectedValue(new ApiError('busy', 429, undefined, 60))
+    await expect(retryOnRateLimit(long)).rejects.toMatchObject({ status: 429 })
+    expect(long).toHaveBeenCalledTimes(1)
   })
 })

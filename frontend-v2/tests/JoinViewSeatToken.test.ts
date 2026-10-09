@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({ api: vi.fn() }))
 vi.mock('../src/api/client', () => ({
   api: mocks.api,
   errorMessage: (error: unknown) => String((error as Error)?.message || error),
+  retryOnRateLimit: <T>(request: () => Promise<T>) => request(),
 }))
 vi.mock('../src/composables/useConfirm', () => ({
   useConfirm: () => ({ confirm: vi.fn().mockResolvedValue(true) }),
