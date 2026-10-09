@@ -16,12 +16,14 @@ def card_signature(card: dict[str, Any]) -> tuple[str, str, str, str, str]:
 
 
 def dedupe_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
-    order: list[tuple[str, str, str, str, str]] = []
+    """Keep one card per character; plugin content never merges with a
+    table-saved card of the same character (it keeps its provenance)."""
+    seen: dict[tuple[str, ...], dict[str, Any]] = {}
+    order: list[tuple[str, ...]] = []
     for card in cards:
         if not isinstance(card, dict):
             continue
-        signature = card_signature(card)
+        signature: tuple[str, ...] = card_signature(card)
         if not signature[0]:
             signature = (
                 str(card.get("id") or f"anon_{len(order)}"),
@@ -30,6 +32,7 @@ def dedupe_cards(cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "",
                 "",
             )
+        signature = (*signature, str(card.get("source_plugin") or "").strip())
         if signature not in seen:
             order.append(signature)
         seen[signature] = card

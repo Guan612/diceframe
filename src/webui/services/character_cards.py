@@ -176,10 +176,39 @@ def list_shareable_character_cards(
     return {"cards": cards, "total": len(cards)}
 
 
+# Provenance only the plugin import path may set; a card carrying them is
+# shown at every table, so a game save must never forge them.
+PLUGIN_CARD_MARKERS = ("source_plugin", "plugin_content_id", "raw_sillytavern")
+# Identity a game save must not dictate: it would let a sheet overwrite an
+# existing library card by id.
+_CARD_IDENTITY_KEYS = ("id", "card_id")
+
+
+def _strip_untrusted_card_fields(character: dict) -> dict:
+    cleaned = copy.deepcopy(character)
+    sheets = [cleaned]
+    if isinstance(cleaned.get("character_sheet"), dict):
+        sheets.append(cleaned["character_sheet"])
+    for target in sheets:
+        for key in (*PLUGIN_CARD_MARKERS, *_CARD_IDENTITY_KEYS):
+            target.pop(key, None)
+    return cleaned
+
+
 def save_character_card(
     dependencies: CharacterCardDependencies,
     character: dict,
+    *,
+    from_game: bool = False,
 ) -> dict[str, Any]:
+    """Save a card into the library.
+
+    ``from_game``: the auto-save of a table character (join, sheet edit).
+    Such a save never carries plugin provenance or a card id and never
+    replaces a plugin card; it is kept as a separate card instead.
+    """
+    if from_game:
+        character = _strip_untrusted_card_fields(character)
     source = str(character.get("source") or "角色卡库")
     # Game creation passes a player wrapper with mechanics nested under
     # ``character_sheet``. Convert that wrapper to the reusable card shape
@@ -195,15 +224,25 @@ def save_character_card(
             "error": str(exc),
         }
     card = _to_character_card(candidate, source=source)
+    if from_game:
+        card = _strip_untrusted_card_fields(card)
+        card["id"] = _new_card_id("card")
     cards = _read_cards(dependencies)
     sig = card_signature(card)
+
+    def replaceable(existing: dict[str, Any]) -> bool:
+        return not (from_game and is_shareable_card(existing))
+
     for existing in cards:
+        if not replaceable(existing):
+            continue
         if existing.get("id") == card["id"] or card_signature(existing) == sig:
             card["id"] = existing.get("id") or card["id"]
             break
     cards = [
         c for c in cards
-        if c.get("id") != card["id"] and card_signature(c) != sig
+        if not replaceable(c)
+        or (c.get("id") != card["id"] and card_signature(c) != sig)
     ]
     cards.append(card)
     cards = dedupe_cards(cards)

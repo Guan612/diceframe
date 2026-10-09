@@ -11,13 +11,23 @@ from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 def sees_full_card_library(request: web.Request) -> bool:
     """The server-wide card library belongs to the owner.
 
-    Without an access password there is no authentication boundary, so the
-    library stays as it was there.
+    - The owner sees it all.
+    - Bot and plugin API tokens act for a seated actor at one table, so they
+      are table participants: plugin cards only (explicit decision; the
+      library is server-wide, not part of any one game).
+    - Without an access password there is no authentication boundary, so the
+      library stays as it was there.
+    - Fail closed: if it is unknown whether a password is configured, the
+      caller is treated as a table participant.
     """
-    return bool(
-        request.get("owner_authenticated", False)
-        or not request.get(ACCESS_PASSWORD_CONFIGURED_KEY, False)
-    )
+    if request.get("owner_authenticated", False):
+        return True
+    if request.get("bot_authenticated", False):
+        return False
+    configured = request.get(ACCESS_PASSWORD_CONFIGURED_KEY)
+    if configured is None:
+        return False
+    return not configured
 
 
 async def api_character_cards(request: web.Request) -> web.Response:

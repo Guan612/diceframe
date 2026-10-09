@@ -145,3 +145,117 @@ async def test_seated_player_and_owner_keep_scene(share_env):
         seated = await (await client.get(f"/api/games/{env.key}?share=1", headers=seat)).json()
         owner = await (await client.get(f"/api/games/{env.key}", headers=_owner())).json()
     assert seated["scene"] == owner["scene"] == "The harbor at midnight"
+
+
+# ---- review of #468: plugin provenance cannot be forged from a table ---------
+
+
+def _seat_put(env, uid="p1"):
+    return {"X-Seat-Token": room_access.issue_seat_token(env.instance, uid), **CONFIRM}
+
+
+def _library(env):
+    return env.api.list_character_cards()["cards"]
+
+
+@pytest.mark.asyncio
+async def test_spoofed_plugin_marker_does_not_make_a_card_shareable(cards_env):
+    env = cards_env
+    async with TestClient(TestServer(env.app)) as client:
+        put = await client.put(
+            f"/api/games/{env.key}/character/p1?share=1&room_token={ROOM_TOKEN}",
+            headers=_seat_put(env),
+            json={"character_name": "Forged Hero", "source_plugin": "starter-pack",
+                  "plugin_content_id": "x", "attributes": {"str": 13}},
+        )
+        assert put.status == 200, await put.json()
+        listed = await (await client.get(_cards_url(env), headers=_seat_put(env, "p2"))).json()
+    forged = [c for c in _library(env) if c.get("character_name") == "Forged Hero"]
+    assert forged and all(not c.get("source_plugin") for c in forged)
+    assert "Forged Hero" not in _names(listed)
+
+
+@pytest.mark.asyncio
+async def test_table_save_cannot_overwrite_a_plugin_card(cards_env):
+    env = cards_env
+    plugin_before = next(c for c in _library(env) if c.get("character_name") == "Plugin Hero")
+    async with TestClient(TestServer(env.app)) as client:
+        put = await client.put(
+            f"/api/games/{env.key}/character/p1?share=1&room_token={ROOM_TOKEN}",
+            headers=_seat_put(env),
+            # Same identity as the plugin card, plus its id and markers.
+            json={**{k: plugin_before[k] for k in ("character_name", "race", "class", "background")},
+                  "id": plugin_before["id"], "card_id": plugin_before["id"],
+                  "source_plugin": "starter-pack", "attributes": {"str": 3}},
+        )
+        assert put.status == 200
+    plugin_after = next(c for c in _library(env) if c.get("id") == plugin_before["id"])
+    assert plugin_after["attributes"] == plugin_before["attributes"]
+    assert plugin_after["source_plugin"] == "starter-pack"
+    copies = [c for c in _library(env) if c.get("character_name") == "Plugin Hero"]
+    assert len(copies) == 2  # the table's version is a separate, non-plugin card
+    assert sum(1 for c in copies if c.get("source_plugin")) == 1
+
+
+@pytest.mark.asyncio
+async def test_plugin_card_survives_a_player_adopting_it(cards_env):
+    """The classic in-play adoption sends the whole card as the PUT body."""
+    env = cards_env
+    plugin_card = next(c for c in _library(env) if c.get("character_name") == "Plugin Hero")
+    async with TestClient(TestServer(env.app)) as client:
+        put = await client.put(
+            f"/api/games/{env.key}/character/p1?share=1&room_token={ROOM_TOKEN}",
+            headers=_seat_put(env), json=plugin_card,
+        )
+        assert put.status == 200
+    survivor = next(c for c in _library(env) if c.get("id") == plugin_card["id"])
+    assert survivor["source_plugin"] == "starter-pack"
+    for key in ("character_name", "race", "class", "background", "attributes", "skills"):
+        assert survivor.get(key) == plugin_card.get(key), key
+    assert env.instance.players["p1"]["character_name"] == "Plugin Hero"
+    assert "source_plugin" not in env.instance.players["p1"]["character_sheet"]
+
+
+@pytest.mark.asyncio
+async def test_character_put_drops_unknown_keys(cards_env):
+    env = cards_env
+    async with TestClient(TestServer(env.app)) as client:
+        put = await client.put(
+            f"/api/games/{env.key}/character/p1?share=1&room_token={ROOM_TOKEN}",
+            headers=_seat_put(env),
+            json={"attributes": {"str": 14}, "evil_key": 1, "source": "forged",
+                  "card_id": "x", "deceased": True, "rule_binding": {"runtime_id": "x"}},
+        )
+        assert put.status == 200
+    sheet = env.instance.players["p1"]["character_sheet"]
+    assert sheet["attributes"] == {"str": 14}
+    for key in ("evil_key", "source", "card_id", "rule_binding"):
+        assert key not in sheet
+    assert sheet.get("deceased") is not True
+
+
+# ---- bot / plugin tokens are table participants; unknown means restricted -----
+
+
+@pytest.mark.asyncio
+async def test_bot_token_sees_only_plugin_cards(cards_env, monkeypatch):
+    import web_server
+
+    env = cards_env
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    async with TestClient(TestServer(env.app)) as client:
+        response = await client.get(
+            f"/api/games/{env.key}/character-cards",
+            headers={"X-Bot-Token": "bot-secret", "X-Bot-Actor": "p1"},
+        )
+        body = await response.json()
+    assert response.status == 200, body
+    assert _names(body) == {"Plugin Hero"}
+
+
+def test_card_library_check_fails_closed_when_password_state_is_unknown():
+    from src.webui.routes.character_cards import sees_full_card_library
+
+    assert sees_full_card_library({}) is False
+    assert sees_full_card_library({"owner_authenticated": True}) is True
+    assert sees_full_card_library({"bot_authenticated": True}) is False
