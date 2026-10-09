@@ -2469,7 +2469,9 @@ export const zhCN = {
   inviteScanHint: '让玩家用 DiceFrame App 扫码，或把下面的链接发给他们。',
   inviteQrHint: '扫码即可加入本局并创建角色。',
   controlLink: '接管链接',
-  controlLinkQrHint: '扫码后该玩家可在手机上直接恢复这个角色。',
+  controlLinkQrHint: '扫码后该玩家可在手机上直接恢复这个角色。重新生成会让这个席位之前的链接失效。',
+  seatLinkExpired: '这个链接已失效：玩家链接改为按席位凭证识别，请向 GM 重新获取接管链接。',
+  seatTokenMissing: '这个设备还没有本席位的凭证，请向 GM 获取接管链接后重新打开。',
   pairingTitle: '手机扫码登录',
   pairingHelp: '用 DiceFrame App 扫一下就能连上这台服务器，不用手输 IP 和密码。',
   pairingAddressLabel: '手机要连的地址',
@@ -2500,6 +2502,10 @@ export const zhCN = {
   encounterSaveChanges: '保存修改',
 
   apiErrors: {
+    SEAT_TOKEN_REQUIRED: '需要席位凭证，请使用 GM 发出的链接重新加入',
+    SEAT_TOKEN_INVALID: '席位凭证无效或已失效，请向 GM 重新获取链接',
+    SEAT_TOKEN_EXISTS: '该席位已有凭证，请使用 GM 发出的链接',
+    SEAT_NOT_BOUND: '当前设备没有绑定本局席位',
     hub_connection_unavailable: '暂时无法连接 DiceFrame Hub，请检查网络后重试',
     game_not_found: '游戏不存在',
     player_not_in_game: '未加入本局，请通过邀请链接加入',

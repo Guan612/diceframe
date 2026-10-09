@@ -7,6 +7,7 @@ import {
   isStandaloneFrontend,
   redirectToBackendLogin,
 } from '@/api/connection'
+import { SEAT_TOKEN_HEADER, clearSeatToken, gameKeyOfApiPath, readSeatToken } from '@/utils/seatToken'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
@@ -33,8 +34,14 @@ function isPlayerShareLocation(): boolean {
 function shareQuery(): string {
   const q = new URLSearchParams(location.hash.split('?')[1] || '')
   const out = new URLSearchParams()
-  for (const key of ['game','user','name','share','delegate']) if (q.has(key)) out.set(key, q.get(key)!)
   const gk = q.get('game')
+  // A share-link player is identified by its seat token (header), not by the
+  // public uid; only the owner (preview / P2P delegation) still names a seat.
+  const sendUser = hasAccessToken() || !(gk && readSeatToken(gk))
+  for (const key of ['game','user','name','share','delegate']) {
+    if (key === 'user' && !sendUser) continue
+    if (q.has(key)) out.set(key, q.get(key)!)
+  }
   if (gk) {
     const rt = localStorage.getItem('trpg_play_room_' + gk)
     if (rt) out.set('room_token', rt)
@@ -53,6 +60,32 @@ export function authHeaders(initHeaders?: HeadersInit, contentType = true): Head
   const token = localStorage.getItem(accessTokenStorageKey())
   if (token) headers.set('Authorization', `Bearer ${token}`)
   return headers
+}
+
+/**
+ * Share-link players prove their seat with the per-seat token for the game the
+ * request targets. The owner never sends one implicitly: its own requests act
+ * as GM (or name a previewed seat explicitly).
+ */
+export function applySeatTokenHeader(headers: Headers, path: string): void {
+  if (headers.has(SEAT_TOKEN_HEADER) || hasAccessToken()) return
+  const token = readSeatToken(gameKeyOfApiPath(path))
+  if (token) headers.set(SEAT_TOKEN_HEADER, token)
+}
+
+/**
+ * The seat token this browser held was revoked or replaced (e.g. the GM
+ * re-issued the seat's link). Forget it and the cached identity, and send the
+ * player to the join page, which explains that a new GM link is needed.
+ */
+function handleRejectedSeatToken(path: string, status: number, code?: string): void {
+  if (status !== 401 || code !== 'SEAT_TOKEN_INVALID' || hasAccessToken()) return
+  const gk = gameKeyOfApiPath(path)
+  if (!gk) return
+  clearSeatToken(gk)
+  localStorage.removeItem('trpg_play_user_' + gk)
+  const params = new URLSearchParams({ game: gk, share: '1', notice: 'seat' })
+  if (!location.hash.startsWith('#/join')) location.hash = `/join?${params.toString()}`
 }
 
 function applyConfirmHeader(headers: Headers, init: RequestInit): void {
@@ -113,6 +146,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   if (peer.handled) return peer.value
   const isRawBody = init.body instanceof FormData || init.body instanceof Blob
   const headers = authHeaders(init.headers, !isRawBody)
+  applySeatTokenHeader(headers, path)
   applyConfirmHeader(headers, init)
   const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   const data = await response.json().catch(() => ({}))
@@ -124,7 +158,10 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
       : rateLimitMessage(data)
     throw new ApiError(message, 429, errorCodeOf(data), retryAfterOf(data))
   }
-  if (!response.ok) throw new ApiError(data.error || `HTTP ${response.status}`, response.status, errorCodeOf(data), retryAfterOf(data))
+  if (!response.ok) {
+    handleRejectedSeatToken(path, response.status, errorCodeOf(data))
+    throw new ApiError(data.error || `HTTP ${response.status}`, response.status, errorCodeOf(data), retryAfterOf(data))
+  }
   return data
 }
 
@@ -136,6 +173,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
     throw new ApiError(i18n.global.t('peerBinaryUnavailable'), 501, 'peer_binary_unavailable')
   }
   const headers = authHeaders(init.headers, false)
+  applySeatTokenHeader(headers, path)
   applyConfirmHeader(headers, init)
   const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   await handleUnauthorized(response)

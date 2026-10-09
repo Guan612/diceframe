@@ -2464,7 +2464,9 @@ export const de = {
   inviteScanHint: 'Lass die Spielenden das mit der DiceFrame-App scannen oder schick ihnen den Link unten.',
   inviteQrHint: 'Scannen tritt dieser Runde bei und legt einen Charakter an.',
   controlLink: 'Steuerungslink',
-  controlLinkQrHint: 'Nach dem Scannen kann diese Person den Charakter auf dem Handy weiterspielen.',
+  controlLinkQrHint: 'Nach dem Scannen kann diese Person den Charakter auf dem Handy weiterspielen. Ein neuer Link macht den bisherigen Link dieses Platzes ungültig.',
+  seatLinkExpired: 'Dieser Link funktioniert nicht mehr: Spielerlinks nutzen jetzt einen Platz-Schlüssel. Bitte die SL um einen neuen Steuerungslink.',
+  seatTokenMissing: 'Dieses Gerät hat noch keinen Schlüssel für seinen Platz. Bitte die SL um einen Steuerungslink und öffne ihn hier.',
   pairingTitle: 'Per QR-Code anmelden',
   pairingHelp: 'Einmal mit der DiceFrame-App scannen und das Handy ist mit diesem Server verbunden — ohne IP-Adresse oder Passwort einzutippen.',
   pairingAddressLabel: 'Adresse für das Handy',
@@ -2495,6 +2497,10 @@ export const de = {
   encounterSaveChanges: 'Änderungen speichern',
 
   apiErrors: {
+    SEAT_TOKEN_REQUIRED: 'Ein Platz-Schlüssel ist nötig. Tritt über den Link deiner SL erneut bei.',
+    SEAT_TOKEN_INVALID: 'Der Platz-Schlüssel ist ungültig oder wurde ersetzt. Bitte die SL um einen neuen Link.',
+    SEAT_TOKEN_EXISTS: 'Dieser Platz hat bereits einen Schlüssel. Nutze den Link deiner SL.',
+    SEAT_NOT_BOUND: 'Dieses Gerät ist keinem Platz in diesem Spiel zugeordnet.',
     hub_connection_unavailable: 'DiceFrame Hub war nicht erreichbar. Prüfe dein Netzwerk und versuche es erneut.',
     game_not_found: 'Spiel nicht gefunden',
     player_not_in_game: 'Nicht Teil dieses Spiels — über den Einladungslink beitreten',

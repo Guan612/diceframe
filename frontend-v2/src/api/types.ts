@@ -645,6 +645,8 @@ export interface PlayerCreateResponse {
   ok?: boolean
   error?: string
   user_id: string
+  /** Plaintext seat credential, returned once when a new seat is created. */
+  seat_token?: string
   [key: string]: unknown
 }
 
