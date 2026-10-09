@@ -216,10 +216,16 @@ def _rewrite_plaintext_credentials(
         return
     try:
         upgraded = GameInstance.from_dict(normalize_save_payload(raw)).to_dict()
-    except Exception:
+    except Exception as exc:
         # An unreadable backup must not keep plaintext either: fall back to
-        # the state that was just written.
-        logger.warning("备份存档无法升级，改用当前存档覆盖: %s", backup, exc_info=True)
+        # the state that was just loaded. Name the game, never the content
+        # (no traceback: exception text could quote stored values).
+        logger.warning(
+            "备份存档无法解析或升级，已用当前存档覆盖以清除可能的明文房间凭据: game=%s file=%s (%s)",
+            "|".join(str(part) for part in instance.game_key),
+            backup,
+            type(exc).__name__,
+        )
         upgraded = instance.to_dict()
     try:
         _write_state(backup, upgraded)

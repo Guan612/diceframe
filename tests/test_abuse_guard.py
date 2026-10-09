@@ -327,3 +327,122 @@ def test_room_password_defaults_keep_the_wait_short():
 
     assert abuse_guard.ROOM_PASSWORD_BURST == 5
     assert abuse_guard.ROOM_PASSWORD_REFILL_SECONDS <= 60
+
+
+# ---- a slow body never holds the per-IP+game lock ----------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_slow_body_cannot_block_other_attempts_for_the_same_game():
+    clock = _Clock()
+    guard = _room_guard(clock, room_password_body_timeout=0.5, room_password_lock_timeout=0.5)
+
+    async def verify(request: web.Request) -> web.Response:
+        body = await request.json()
+        if body.get("password") == "right":
+            return web.json_response({"ok": True})
+        response = web.json_response({"ok": False}, status=403)
+        mark_room_password_rejected(response)
+        return response
+
+    app = _app(guard)
+    app.router.add_post("/api/games/{game_key}/verify-room-password", verify)
+    url = _verify_url("web|a|web")
+    async with TestClient(TestServer(app)) as client:
+        reader, writer = await asyncio.open_connection(client.host, client.port)
+        # Promise 1000 bytes, send one, and keep the connection open.
+        writer.write(
+            f"POST {url} HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+            "Content-Length: 1000\r\n\r\n{".encode()
+        )
+        await writer.drain()
+        await asyncio.sleep(0.05)
+        correct = await asyncio.wait_for(client.post(url, json={"password": "right"}), timeout=3)
+        assert correct.status == 200
+        # The stalled request times out without touching any bucket.
+        status_line = await asyncio.wait_for(reader.readline(), timeout=3)
+        assert b" 408 " in status_line
+        writer.close()
+        statuses = [(await client.post(url, json={"password": "nope"})).status for _ in range(6)]
+    assert statuses == [403] * 5 + [429]
+    assert guard._room_password_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_the_lock_is_bounded_and_bookkeeping_stays_correct():
+    clock = _Clock()
+    guard = _room_guard(clock, room_password_lock_timeout=0.2)
+    release = asyncio.Event()
+
+    async def verify(request: web.Request) -> web.Response:
+        await release.wait()  # e.g. a verifier stuck on a slow disk
+        return web.json_response({"ok": True})
+
+    app = _app(guard)
+    app.router.add_post("/api/games/{game_key}/verify-room-password", verify)
+    url = _verify_url("web|a|web")
+    async with TestClient(TestServer(app)) as client:
+        first = asyncio.ensure_future(client.post(url, json={}))
+        await asyncio.sleep(0.05)
+        waited = await asyncio.wait_for(client.post(url, json={}), timeout=3)
+        assert waited.status == 429 and int(waited.headers["Retry-After"]) >= 1
+        release.set()
+        assert (await first).status == 200
+    assert guard._room_password_locks == {}
+
+
+# ---- IPv6: a /64 is one client -------------------------------------------------
+
+
+def test_ipv6_addresses_are_keyed_by_their_slash_64():
+    from src.webui.abuse_guard import client_identity
+
+    assert client_identity("2001:db8:1:2::1") == client_identity("2001:db8:1:2:ffff:ffff:ffff:ffff")
+    assert client_identity("2001:db8:1:2::1") != client_identity("2001:db8:1:3::1")
+    assert client_identity("203.0.113.7") == "203.0.113.7"
+    assert client_identity("203.0.113.7") != client_identity("203.0.113.8")
+    assert client_identity("::ffff:203.0.113.7") == "203.0.113.7"  # IPv4-mapped
+    assert client_identity(None) == "unknown"
+    assert client_identity("not-an-ip") == "not-an-ip"
+
+
+@pytest.mark.asyncio
+async def test_rotating_addresses_inside_one_slash_64_shares_every_bucket():
+    from unittest.mock import Mock
+
+    from aiohttp.test_utils import make_mocked_request
+
+    clock = _Clock()
+    guard = _room_guard(clock, login_per_ip_limit=2, login_global_limit=1000)
+
+    def request(path: str, address: str, match_info: dict | None = None):
+        transport = Mock()
+        transport.get_extra_info.side_effect = lambda name, default=None: (
+            (address, 1234, 0, 0) if name == "peername" else default
+        )
+        return make_mocked_request("POST", path, transport=transport, match_info=match_info or {})
+
+    async def wrong(_request):
+        response = web.json_response({"ok": False}, status=403)
+        mark_room_password_rejected(response)
+        return response
+
+    async def ok(_request):
+        return web.json_response({"ok": True})
+
+    statuses = []
+    for i in range(6):
+        response = await guard.handle(
+            request("/api/games/web%7Ca%7Cweb/verify-room-password", f"2001:db8::{i + 1}", {"game_key": "web|a|web"}),
+            wrong,
+        )
+        statuses.append(response.status)
+    assert statuses == [403] * 5 + [429]
+    logins = [(await guard.handle(request("/api/login", f"2001:db8::{i + 100}"), ok)).status for i in range(3)]
+    assert logins == [200, 200, 429]
+    # Another /64 is another client.
+    other = await guard.handle(
+        request("/api/games/web%7Ca%7Cweb/verify-room-password", "2001:db8:0:1::1", {"game_key": "web|a|web"}),
+        wrong,
+    )
+    assert other.status == 403

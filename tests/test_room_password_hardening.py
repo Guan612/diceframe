@@ -722,3 +722,27 @@ async def test_wrong_room_passwords_through_the_real_stack_are_rate_limited(play
             for _ in range(6)
         ]
     assert statuses == [403] * 5 + [429]
+
+
+@pytest.mark.asyncio
+async def test_overwriting_an_unreadable_backup_is_logged_without_credentials(tmp_path, caplog) -> None:
+    import logging
+
+    from src.engine.game_instance import GameRegistry
+
+    registry = GameRegistry(tmp_path / "saves")
+    current = _instance(PASSWORD)
+    state_path = registry._save_path(current.game_key)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps(current.to_dict()), encoding="utf-8")
+    backup_path = state_path.with_name("state.backup.json")
+    backup_path.write_text('{"room_password": "' + PASSWORD + '", broken', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="trpg"):
+        assert await registry.load(current.game_key) is not None
+    assert PASSWORD not in backup_path.read_text(encoding="utf-8")
+    warnings = [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING]
+    assert any("web|room-pw|bot" in message and "state.backup.json" in message for message in warnings), warnings
+    assert all(PASSWORD not in message for message in warnings)
+    stored_hash = current.modules["room_access"]["room_password_hash"]
+    assert all(stored_hash not in message for message in warnings)

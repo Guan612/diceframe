@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import math
 import re
 import time
@@ -33,11 +34,17 @@ WRITE_GLOBAL_WINDOW_SECONDS = 60
 # - 只按单局计，不设跨局的 IP 总上限：同一 IP 在某一局的失败绝不影响它在
 #   其它局的尝试，每一局被猜测的速度都单独受限。
 # 共用出口 IP（隧道/代理/NAT）后面的正常玩家与捣乱者共享同一个桶，只能保证
-# 「等待有上限、不被锁死」，无法在同一 IP 内区分人。身份按 request.remote
+# 「等待有上限、不被锁死」，无法在同一 IP 内区分人：捣乱者可以和正常玩家抢
+# 每一个回补的令牌。按会话再分一层桶是可能的后续改进。IPv6 按 /64 计（见
+# client_identity）。身份按 request.remote
 # （直连对端地址）计；不信任 X-Forwarded-For，因为本项目没有「可信反向代理」配置。
 # 与 owner 登录、通用写入分桶，互不挤占。
 ROOM_PASSWORD_BURST = 5
 ROOM_PASSWORD_REFILL_SECONDS = 30
+# The body is read before taking the per-IP+game lock, and the lock wait is
+# bounded, so a client that stalls its upload cannot hold the lock.
+ROOM_PASSWORD_BODY_TIMEOUT_SECONDS = 10.0
+ROOM_PASSWORD_LOCK_TIMEOUT_SECONDS = 10.0
 # 建卡器的 choices/validate/derive/finalize 是无状态计算（POST 只为携带草稿），
 # 单独计额：引导建卡每改一步都会请求，不能挤占同 IP 其它玩家的写额度。
 BUILDER_PER_IP_LIMIT = 300
@@ -80,6 +87,28 @@ _AI_GAME_SUFFIXES = (
     # 单次可长达 imagegen_timeout_seconds，占满槽位会把玩家行动一起饿死。
     "/storyboard/analyze",
 )
+
+
+def client_identity(remote: str | None) -> str:
+    """The rate-limit identity of a peer address.
+
+    IPv6 clients usually control a whole /64 and can rotate addresses inside
+    it, so every bucket keys IPv6 by its /64 prefix; IPv4 stays per address
+    (IPv4-mapped IPv6 counts as the IPv4 address). Unparseable values are
+    used as they are.
+    """
+    raw = str(remote or "").strip()
+    if not raw:
+        return "unknown"
+    try:
+        address = ipaddress.ip_address(raw.split("%", 1)[0])
+    except ValueError:
+        return raw[:128]
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return str(address.ipv4_mapped)
+        return str(ipaddress.IPv6Network(f"{address}/64", strict=False))
+    return str(address)
 
 
 @dataclass(frozen=True)
@@ -164,6 +193,8 @@ class AbuseGuard:
         write_global_window: int = WRITE_GLOBAL_WINDOW_SECONDS,
         room_password_burst: int = ROOM_PASSWORD_BURST,
         room_password_refill_seconds: float = ROOM_PASSWORD_REFILL_SECONDS,
+        room_password_body_timeout: float = ROOM_PASSWORD_BODY_TIMEOUT_SECONDS,
+        room_password_lock_timeout: float = ROOM_PASSWORD_LOCK_TIMEOUT_SECONDS,
         builder_per_ip_limit: int = BUILDER_PER_IP_LIMIT,
         builder_per_ip_window: int = BUILDER_PER_IP_WINDOW_SECONDS,
         builder_global_limit: int = BUILDER_GLOBAL_LIMIT,
@@ -182,6 +213,8 @@ class AbuseGuard:
         self.write_global_window = write_global_window
         self.room_password_burst = max(1, room_password_burst)
         self.room_password_refill_seconds = max(1.0, float(room_password_refill_seconds))
+        self.room_password_body_timeout = room_password_body_timeout
+        self.room_password_lock_timeout = room_password_lock_timeout
         # (ip, game) -> (tokens, last refill time); bounded like the limiter.
         self._room_password_buckets: dict[tuple[str, str], tuple[float, float]] = {}
         # (ip, game) -> (lock, requests using it); dropped when the last one leaves.
@@ -199,7 +232,7 @@ class AbuseGuard:
         request: web.Request,
         handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
     ) -> web.StreamResponse:
-        ip = (request.remote or "unknown")[:128]
+        ip = client_identity(request.remote)
 
         if request.method == "POST" and request.path in _LOGIN_PATHS:
             denied = self._check_pair(
@@ -271,12 +304,27 @@ class AbuseGuard:
         failure is recorded. Correct passwords never take a token, so a
         table joining at once from one address is only serialised, not refused.
         """
+        # Read the whole body before queueing for the lock (the handler's
+        # request.json() reuses it): a stalled upload must time out on its
+        # own, never while holding the lock. No bucket is touched here.
+        try:
+            await asyncio.wait_for(request.read(), timeout=self.room_password_body_timeout)
+        except TimeoutError:
+            return web.json_response(
+                {"ok": False, "error": "请求体读取超时"}, status=408, headers={"Cache-Control": "no-store"},
+            )
         lock, users = self._room_password_locks.get(key, (None, 0))
         if lock is None:
             lock = asyncio.Lock()
         self._room_password_locks[key] = (lock, users + 1)
         try:
-            async with lock:
+            try:
+                # Lock.acquire() never holds the lock after being cancelled,
+                # so a timeout here cannot leak it.
+                await asyncio.wait_for(lock.acquire(), timeout=self.room_password_lock_timeout)
+            except TimeoutError:
+                return _rate_limited_response(math.ceil(self.room_password_lock_timeout))
+            try:
                 wait = self._room_password_wait(key)
                 if wait:
                     return _rate_limited_response(wait)
@@ -284,6 +332,8 @@ class AbuseGuard:
                 if is_room_password_rejected(response):
                     self._consume_room_password_token(key)
                 return response
+            finally:
+                lock.release()
         finally:
             lock, users = self._room_password_locks[key]
             if users <= 1:
