@@ -26,6 +26,7 @@ from src.rulesets.contracts import (
     AdventureBindingMigrationRuntime,
     AuthoritativeIntentHooks,
     AutomaticIntentRuntime,
+    IntentResultProjectionRuntime,
     TemporaryEncounterPlannerRuntime,
 )
 from src.rulesets.registry import RulesetRuntimeRegistry
@@ -210,8 +211,21 @@ def _response(
         "available_actions": actions,
     }
     if result is not None:
-        payload["result"] = result
+        payload["result"] = _viewer_result(
+            runtime, instance, result, requester_id, requester_is_gm,
+        )
     return payload
+
+
+def _viewer_result(
+    runtime: Any, instance: Any, result: dict[str, Any],
+    viewer_id: str, viewer_is_gm: bool,
+) -> dict[str, Any]:
+    """Let the ruleset decide what a viewer may see of a raw intent payload."""
+
+    if isinstance(runtime, IntentResultProjectionRuntime):
+        return runtime.project_intent_result(instance, result, viewer_id, viewer_is_gm)
+    return result
 
 
 async def _ensure_compatible_adventure_binding(
@@ -628,11 +642,18 @@ async def resume_authoritative_combat(
         await _project_batch_memory(
             dependencies, runtime, instance, automatic_batches,
         )
+    # Seat-control callers are not necessarily the GM: project as that seat.
     return {
         "ok": True,
         "handled": True,
         "resumed": True,
-        "automatic_event_batches": automatic_batches,
-        "automatic_results": automatic_results,
+        **_viewer_result(
+            runtime, instance,
+            {
+                "automatic_event_batches": automatic_batches,
+                "automatic_results": automatic_results,
+            },
+            seat_uid, False,
+        ),
     }
 
