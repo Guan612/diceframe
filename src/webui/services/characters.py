@@ -1150,6 +1150,7 @@ async def _delete_character_authority(
 async def create_player(
     dependencies: CharacterDependencies, game_key: str, character: dict,
     force_uid: str = "", assign_new_id: bool = False,
+    *, seat_token_uid: str = "", require_seat_proof: bool = False,
 ) -> dict[str, Any]:
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
@@ -1172,6 +1173,7 @@ async def create_player(
         async with state_lock:
             return await _create_player_authority(
                 dependencies, inst, character, force_uid, assign_new_id,
+                seat_token_uid=seat_token_uid, require_seat_proof=require_seat_proof,
             )
 
 
@@ -1193,9 +1195,35 @@ def _record_seat_claim(inst: GameInstance, uid: str) -> bool:
     return True
 
 
+def _seat_proof_missing(inst: GameInstance, uid: str, seat_token_uid: str, *, named: bool) -> bool:
+    """Re-joining an existing seat needs that seat's token.
+
+    Naming another seat's uid is never proof.  A session already bound to a
+    seat may rejoin it only while the seat has no credential yet (the
+    pre-token migration); once a credential exists only the token speaks.
+    """
+    if seat_token_uid == uid:
+        return False
+    return named or room_access.has_seat_token(inst, uid)
+
+
+_SEAT_PROOF_REQUIRED = {
+    "ok": False,
+    "error_code": "SEAT_TOKEN_REQUIRED",
+    "error": "加入已有席位需要该席位的链接",
+}
+
+
 async def _create_player_authority(dependencies: CharacterDependencies, inst: GameInstance, character: dict,
-                       force_uid: str = "", assign_new_id: bool = False) -> dict[str, Any]:
+                       force_uid: str = "", assign_new_id: bool = False,
+                       *, seat_token_uid: str = "", require_seat_proof: bool = False) -> dict[str, Any]:
     requested_uid = str(character.get("user_id") or "").strip()
+    if (
+        require_seat_proof
+        and requested_uid in inst.players
+        and _seat_proof_missing(inst, requested_uid, seat_token_uid, named=True)
+    ):
+        return dict(_SEAT_PROOF_REQUIRED)
     if requested_uid and requested_uid in inst.players:
         # 已有席位被重新加入：按控制权权威记录这次认领（已经是真人则是普通重连）。
         if _record_seat_claim(inst, requested_uid):
@@ -1210,6 +1238,12 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
     if assign_new_id:
         uid = "player_" + str(time.time_ns())[-12:]
     elif force_uid:
+        if (
+            require_seat_proof
+            and force_uid in inst.players
+            and _seat_proof_missing(inst, force_uid, seat_token_uid, named=False)
+        ):
+            return dict(_SEAT_PROOF_REQUIRED)
         if force_uid in inst.players:
             # 同上：session 身份命中的是已有席位，而不是新建席位。
             if _record_seat_claim(inst, force_uid):

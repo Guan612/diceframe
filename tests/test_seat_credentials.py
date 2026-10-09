@@ -36,7 +36,11 @@ V1_SLOT = {
 
 
 def _instance() -> GameInstance:
-    return GameInstance(game_key=("web", "seat", "bot"), gm_uid="gm")
+    instance = GameInstance(game_key=("web", "seat", "bot"), gm_uid="gm")
+    instance.players = {
+        uid: {"character_name": uid, "character_sheet": {}} for uid in ("p1", "p2")
+    }
+    return instance
 
 
 # ---- v36 -> v37 migration ------------------------------------------------
@@ -143,11 +147,13 @@ def test_codec_round_trip_keeps_digest_and_still_verifies() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reset_keeps_credentials() -> None:
+async def test_reset_empties_seats_so_their_credentials_stop_verifying() -> None:
     instance = _instance()
     token = module.issue_seat_token(instance, "p1")
     await instance.reset()
-    assert module.verify_seat_token(instance, token) == "p1"
+    assert instance.players == {}
+    # A credential never outlives its seat.
+    assert module.verify_seat_token(instance, token) is None
 
 
 def _lifecycle(candidate: GameInstance) -> GameLifecycle:
@@ -240,3 +246,53 @@ async def test_game_detail_never_exposes_credentials(web_api) -> None:
         detail = json.dumps(api.game_detail(created["game_key"], viewer, is_gm), ensure_ascii=False, default=str)
         assert "seat_credentials" not in detail
         assert digest not in detail
+
+
+def test_credential_of_a_removed_seat_does_not_verify() -> None:
+    instance = _instance()
+    token = module.issue_seat_token(instance, "p1")
+    del instance.players["p1"]
+    assert module.verify_seat_token(instance, token) is None
+
+
+@pytest.mark.asyncio
+async def test_remove_player_revokes_its_credential() -> None:
+    instance = _instance()
+    token = module.issue_seat_token(instance, "p1")
+    assert await instance.remove_player("p1") is True
+    assert not module.has_seat_token(instance, "p1")
+    instance.players["p1"] = {"character_name": "back", "character_sheet": {}}
+    assert module.verify_seat_token(instance, token) is None
+
+
+@pytest.mark.asyncio
+async def test_new_run_copies_credentials_only_for_kept_seats() -> None:
+    source = _instance()
+    kept = module.issue_seat_token(source, "p1")
+    gone = module.issue_seat_token(source, "p2")
+    candidate = GameInstance(game_key=source.game_key)
+    candidate.players = {"p1": dict(source.players["p1"])}
+    module.copy_seat_credentials(candidate, source)
+    assert set(candidate.modules["room_access"]["seat_credentials"]) == {"p1"}
+    assert module.verify_seat_token(candidate, kept) == "p1"
+    assert module.verify_seat_token(candidate, gone) is None
+
+
+@pytest.mark.asyncio
+async def test_game_creation_never_mints_a_token_for_the_gm_seat(web_api) -> None:
+    api, _lorebook, registry, _llm, _worlds_dir = web_api
+    result = await api.create_game(
+        "template_world",
+        players=[
+            {"character_name": "GM seat", "attributes": {"str": 10}},
+            {"character_name": "Party", "attributes": {"str": 11}},
+        ],
+    )
+    assert result["ok"] is True
+    instance = registry.get(api._parse_key(result["game_key"]))
+    gm_uid = instance.gm_uid
+    assert result["players"][0]["user_id"] == gm_uid
+    assert "seat_token" not in result["players"][0]
+    assert not module.has_seat_token(instance, gm_uid)
+    other = result["players"][1]
+    assert module.verify_seat_token(instance, other["seat_token"]) == other["user_id"]

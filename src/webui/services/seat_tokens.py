@@ -32,8 +32,15 @@ class SeatTokenService:
     def __init__(self, deps: SeatTokenDependencies):
         self.d = deps
 
-    async def issue_for_gm(self, game_key: str, uid: str, *, requester_uid: str, owner: bool) -> dict[str, Any]:
-        """Issue (or rotate) a seat's token for the GM's takeover link."""
+    async def issue_for_gm(
+        self, game_key: str, uid: str, *, requester_uid: str, owner: bool, rotate: bool = False,
+    ) -> dict[str, Any]:
+        """Issue a seat's token for the GM's takeover link.
+
+        A seat that already holds a credential is only re-issued with
+        ``rotate`` (it logs the seat's current devices out), so a plain click
+        never silently cuts a player off.
+        """
         key = self.d.parse_game_key(game_key)
         inst = self.d.get_instance(key)
         if not inst:
@@ -51,6 +58,8 @@ class SeatTokenService:
                 return {"ok": False, "error": "席位不存在", "status": 404}
             if uid == gm_uid:
                 return {"ok": False, "error_code": "GM_SEAT_REQUIRES_OWNER", "error": "GM 席位不能通过分享链接接管", "status": 400}
+            if room_access.has_seat_token(inst, uid) and not rotate:
+                return {"ok": False, "error_code": "SEAT_TOKEN_EXISTS", "error": "该席位已有链接；重新生成会让当前设备下线", "status": 409}
             token = room_access.issue_seat_token(inst, uid)
             await self.d.save_instance(inst)
         return {"ok": True, "user_id": uid, "seat_token": token}

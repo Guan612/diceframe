@@ -7,7 +7,7 @@ import logging
 from typing import Any
 
 from src.content_modules.refs import ContentRefError
-from src.engine.modules import content_binding
+from src.engine.modules import content_binding, room_access
 from src.engine.player_control import (
     DEFAULT_CONTROL_MODE,
     PlayerControlError,
@@ -293,6 +293,11 @@ async def create_players(
                     "error_code": "INVALID_PLAYER_CONTROL",
                     "error": str(exc),
                 }
+        if index == 0:
+            # The first created seat becomes the GM seat (configure_session);
+            # the GM seat never holds a share credential.
+            room_access.revoke_seat_token(instance, uid)
+            created.pop("seat_token", None)
         # 每张卡都回填控制记录（含默认 human），前端不必再猜自己拿到的是什么。
         created["control"] = get_control(instance, uid)
         created_players.append(created)

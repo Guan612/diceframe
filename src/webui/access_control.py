@@ -79,8 +79,9 @@ class WebAccessControl:
         if denied is not None:
             return denied
 
+        share_active = bool(share_uid or request.get("share_anonymous"))
         if self.requires_room_token(
-            share_uid,
+            share_active,
             owner_authenticated,
             request.path,
         ):
@@ -146,7 +147,7 @@ class WebAccessControl:
             return await handler(request)
         if access_password_configured and request.path.startswith("/api/"):
             if not owner_authenticated:
-                if share_uid:
+                if share_active:
                     if self.player_access_is_closed(request):
                         return web.json_response(
                             {"ok": False, "error": "本局玩家入口已关闭"},
@@ -319,11 +320,28 @@ class WebAccessControl:
         if token_uid:
             return token_uid, None
         if kind == "lobby":
+            # A session bound to a seat speaks for it only until that seat has
+            # a credential; after that only the token does (rotation must cut a
+            # device off).  Such a session is then just an anonymous visitor.
+            if self.session_seat_has_credential(request, session_uid):
+                request["share_anonymous"] = True
+                return "", None
             return session_uid, None
         return "", web.json_response(
             {"ok": False, "error_code": "SEAT_TOKEN_REQUIRED", "error": "需要席位凭证，请使用 GM 发出的链接重新加入"},
             status=401,
         )
+
+    def session_seat_has_credential(self, request: web.Request, session_uid: str) -> bool:
+        if not session_uid:
+            return False
+        instance = self.request_game_instance(request)
+        if instance is None or session_uid not in (getattr(instance, "players", {}) or {}):
+            return False
+        try:
+            return room_access.has_seat_token(instance, session_uid)
+        except Exception:
+            return True  # Unreadable credential state: fail closed.
 
     def share_uid_is_gm_seat(self, request: web.Request, share_uid: str) -> bool:
         """A non-owner share request may never act as the table's GM seat."""
@@ -336,11 +354,11 @@ class WebAccessControl:
 
     @staticmethod
     def requires_room_token(
-        share_uid: str,
+        share_active: bool,
         owner_authenticated: bool,
         path: str,
     ) -> bool:
-        if owner_authenticated or not share_uid:
+        if owner_authenticated or not share_active:
             return False
         parts = [part for part in path.split("/") if part]
         if len(parts) < 4 or parts[3] == "verify-room-password":
