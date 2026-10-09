@@ -79,6 +79,8 @@ from src.webui.routes.game_character_routes import (
     api_char_delete,
     api_npc_portrait_update,
     api_player_create,
+    api_seat_token_claim,
+    api_seat_token_issue,
 )
 from src.webui.routes.game_package_routes import (
     _SavePackageTooLarge,
@@ -229,6 +231,10 @@ def register_games(app: web.Application) -> None:
         "PUT", "/api/games/{game_key}/npc/{npc_id}/portrait", api_npc_portrait_update
     )
     app.router.add_post("/api/games/{game_key}/players", api_player_create)
+    app.router.add_post(
+        "/api/games/{game_key}/players/{uid}/seat-token", api_seat_token_issue
+    )
+    app.router.add_post("/api/games/{game_key}/seat-token/claim", api_seat_token_claim)
     app.router.add_post(
         "/api/games/{game_key}/verify-room-password", api_verify_room_password
     )

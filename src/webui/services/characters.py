@@ -38,6 +38,7 @@ from src.engine.memory_outbox import (
     queue_memory_delivery,
 )
 from src.engine.game_instance import GameInstance
+from src.engine.modules import room_access
 from src.engine.player_control import claim_seat, is_human_controlled
 from src.content_modules.projection import ContentProjectionService
 from src.commands.economy_effects import pending_decision_notice
@@ -1221,6 +1222,9 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         uid = requested_uid
     else:
         uid = "player_" + str(time.time_ns())[-12:]
+    # A new seat is issued its token in the same write, so the slot must be
+    # writable before anything changes.
+    room_access.require_writable(inst)
     max_players = max(1, int(getattr(inst, "max_players", 6) or 6))
     if uid not in inst.players and len(inst.players) >= max_players:
         return {
@@ -1345,6 +1349,9 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
             # combat actor if the optional live-state hook rejects the join.
             inst.players.pop(uid, None)
             raise
+    # The new seat's share credential; the plaintext leaves only in this
+    # response.  A GM-created seat's token lets the GM hand out its link.
+    seat_token = room_access.issue_seat_token(inst, uid)
     dependencies.save_character_card({
         **player,
         "rule_id": rule_id,
@@ -1354,4 +1361,4 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         "language": getattr(inst, "language", ""),
     })
     await dependencies.games.save_instance(inst)
-    return {"ok": True, "user_id": uid, "character_name": player["character_name"]}
+    return {"ok": True, "user_id": uid, "character_name": player["character_name"], "seat_token": seat_token}

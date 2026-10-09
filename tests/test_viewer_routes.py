@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aiohttp.test_utils import TestClient, TestServer
+from src.engine.modules import room_access
 import pytest
 
 from src.webui.session import SessionManager, session_middleware
@@ -82,9 +83,11 @@ async def test_existing_owner_and_shared_player_read_projections(viewer_env, pla
         "/table-talk": play_env.api.table_talk(key),
         "/adventure": play_env.api.game_adventure_projection(key, viewer_is_gm=owner),
     }
+    # A share-link player proves its seat with the seat's token, not ?user=.
+    player_headers = {} if owner else {"X-Seat-Token": room_access.issue_seat_token(instance, "p1")}
     async with TestClient(TestServer(app)) as client:
         for path, payload in expected.items():
-            response = await client.get(f"/api/games/{key}{path}{suffix}", headers=headers if owner else {})
+            response = await client.get(f"/api/games/{key}{path}{suffix}", headers=headers if owner else player_headers)
             assert response.status == 200
             assert await response.json() == payload
 

@@ -11,9 +11,17 @@ from src.webui.access_password import (
     normalize_access_password,
     verify_access_password,
 )
+from src.engine.modules import room_access
 from src.webui.device_tokens import DEVICE_TOKENS_KEY
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 
+
+SEAT_TOKEN_HEADER = "X-Seat-Token"
+
+# Share endpoints a visitor needs before holding a seat (join flow).  Every
+# other share endpoint acts as a seat and requires that seat's token.
+_LOBBY_GET_TAILS = frozenset({"characters", "character-cards"})
+_LOBBY_POST_TAILS = frozenset({"players"})
 
 _BOT_PUBLIC_ENDPOINTS = frozenset(
     {
@@ -65,7 +73,11 @@ class WebAccessControl:
             owner_authenticated = bool(devices and devices.verify(bearer))
         request["owner_authenticated"] = owner_authenticated
         request[ACCESS_PASSWORD_CONFIGURED_KEY] = access_password_configured
-        share_uid = self.share_player_user_id(request)
+        share_uid, denied = self.resolve_share_identity(
+            request, owner_authenticated, access_password_configured,
+        )
+        if denied is not None:
+            return denied
 
         if self.requires_room_token(
             share_uid,
@@ -92,7 +104,7 @@ class WebAccessControl:
         ):
             return await handler(request)
 
-        if share_uid and request.query.get("user"):
+        if share_uid and (request.query.get("user") or request.get("seat_token_uid")):
             if not owner_authenticated and self.player_access_is_closed(request):
                 return web.json_response(
                     {"ok": False, "error": "本局玩家入口已关闭"},
@@ -255,6 +267,64 @@ class WebAccessControl:
             return None
         return subsystems.registry.get(api._parse_key(game_key))
 
+    def resolve_share_identity(
+        self,
+        request: web.Request,
+        owner_authenticated: bool,
+        access_password_configured: bool,
+    ) -> tuple[str, web.Response | None]:
+        """Resolve which seat a player-share request acts as.
+
+        With an access password configured, a non-owner request is a seat
+        only through that seat's token (``X-Seat-Token``); the public uid in
+        ``?user=`` is never proof of identity.  Lobby endpoints of the join
+        flow still work for a visitor without a seat, as the session's own
+        uid.  The owner (P2P host delegation, preview) keeps ``?user=``.
+        Without an access password there is no authentication boundary, so
+        the legacy ``?user=`` identity remains as a fallback there.
+        """
+
+        # Keep the cookie session's own uid: routes that rebind or claim a
+        # session must not confuse it with the seat a token acts as.
+        request["session_user_id"] = str(request.get("user_id", "") or "")
+        kind = self.share_endpoint_kind(request)
+        seat_token = str(request.headers.get(SEAT_TOKEN_HEADER) or "").strip()
+        share_mode = bool(
+            seat_token
+            or request.query.get("user")
+            or request.query.get("share", "") in {"1", "true", "yes"}
+        )
+        if not kind or not share_mode:
+            return "", None
+        session_uid = str(request.get("user_id", "") or "")
+        token_uid = ""
+        if seat_token:
+            instance = self.request_game_instance(request)
+            token_uid = (
+                room_access.verify_seat_token(instance, seat_token) or ""
+                if instance is not None else ""
+            )
+            if not token_uid and not owner_authenticated and access_password_configured:
+                return "", web.json_response(
+                    {"ok": False, "error_code": "SEAT_TOKEN_INVALID", "error": "席位凭证无效或已失效，请向 GM 重新获取链接"},
+                    status=401,
+                )
+        query_uid = str(request.query.get("user") or "").strip()
+        if token_uid:
+            request["seat_token_uid"] = token_uid
+        if owner_authenticated:
+            return query_uid or token_uid or session_uid, None
+        if not access_password_configured:
+            return token_uid or query_uid or session_uid, None
+        if token_uid:
+            return token_uid, None
+        if kind == "lobby":
+            return session_uid, None
+        return "", web.json_response(
+            {"ok": False, "error_code": "SEAT_TOKEN_REQUIRED", "error": "需要席位凭证，请使用 GM 发出的链接重新加入"},
+            status=401,
+        )
+
     def share_uid_is_gm_seat(self, request: web.Request, share_uid: str) -> bool:
         """A non-owner share request may never act as the table's GM seat."""
 
@@ -286,67 +356,83 @@ class WebAccessControl:
         )
 
     @staticmethod
-    def share_player_user_id(request: web.Request) -> str:
-        uid = str(request.query.get("user") or "").strip()
-        share_mode = request.query.get("share", "") in {"1", "true", "yes"}
-        if not uid and not share_mode:
-            return ""
+    def share_endpoint_kind(request: web.Request) -> str:
+        """Classify a game endpoint reachable from a player share link.
+
+        ``"lobby"``: needed by a visitor before holding a seat (game detail,
+        join-time character data, creating/rejoining a seat, claiming a seat
+        token for an already bound session).  ``"seat"``: acts as a seat.
+        ``""``: not reachable from a share link.
+        """
+
         parts = [part for part in request.path.split("/") if part]
         if len(parts) < 3 or parts[0] != "api" or parts[1] != "games":
             return ""
         if len(parts) == 3 and request.method == "GET":
-            return uid or request.get("user_id", "")
-        if len(parts) >= 4:
-            tail = parts[3]
-            if request.method == "GET" and tail in {
-                "adventure",
-                "characters",
-                "character-cards",
-                "log",
-                "private-log",
-                "table-talk",
-                "multiplayer",
-                "sse",
-                "map",
-                "player-context",
-                "available-actions",
-                "avatars",
-                "scene-image",
-                "map-background-asset",
-                "generated-images",
-                "roll-requests",
-            }:
-                return uid or request.get("user_id", "")
-            if request.method == "POST" and tail in {
-                "players",
-                "action",
-                "kp-question",
-                "intents",
-                "decisions",
-                "sse-ticket",
-                "avatars",
-                "scene-image",
-                "generated-images",
-                "character",
-                "roll-requests",
-            }:
-                return uid or request.get("user_id", "")
-            if (
-                request.method == "POST"
-                and tail == "payments"
-                and len(parts) == 5
-                and bool(parts[4])
-            ):
-                return uid or request.get("user_id", "")
-            if (
-                request.method == "POST"
-                and tail == "checks"
-                and len(parts) >= 6
-                and parts[5] == "luck"
-            ):
-                return uid or request.get("user_id", "")
-            if request.method in {"PUT", "PATCH"} and tail == "character":
-                return uid or request.get("user_id", "")
+            return "lobby"
+        if len(parts) < 4:
+            return ""
+        tail = parts[3]
+        if request.method == "GET" and tail in _LOBBY_GET_TAILS and len(parts) == 4:
+            return "lobby"
+        if request.method == "POST" and tail in _LOBBY_POST_TAILS and len(parts) == 4:
+            return "lobby"
+        if (
+            request.method == "POST"
+            and tail == "seat-token"
+            and len(parts) == 5
+            and parts[4] == "claim"
+        ):
+            return "lobby"
+        if request.method == "GET" and tail in {
+            "adventure",
+            "characters",
+            "character-cards",
+            "log",
+            "private-log",
+            "table-talk",
+            "multiplayer",
+            "sse",
+            "map",
+            "player-context",
+            "available-actions",
+            "avatars",
+            "scene-image",
+            "map-background-asset",
+            "generated-images",
+            "roll-requests",
+        }:
+            return "seat"
+        if request.method == "POST" and tail in {
+            "players",
+            "action",
+            "kp-question",
+            "intents",
+            "decisions",
+            "sse-ticket",
+            "avatars",
+            "scene-image",
+            "generated-images",
+            "character",
+            "roll-requests",
+        }:
+            return "seat"
+        if (
+            request.method == "POST"
+            and tail == "payments"
+            and len(parts) == 5
+            and bool(parts[4])
+        ):
+            return "seat"
+        if (
+            request.method == "POST"
+            and tail == "checks"
+            and len(parts) >= 6
+            and parts[5] in {"luck", "reveal"}
+        ):
+            return "seat"
+        if request.method in {"PUT", "PATCH"} and tail == "character":
+            return "seat"
         return ""
 
     def player_access_is_closed(self, request: web.Request) -> bool:
