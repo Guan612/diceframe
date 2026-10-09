@@ -11,6 +11,7 @@
 import { currentBackendUrl } from '@/api/connection'
 
 export const SEAT_TOKEN_HEADER = 'X-Seat-Token'
+export const ROOM_TOKEN_HEADER = 'X-Room-Token'
 
 const STORAGE_PREFIX = 'trpg_seat_token_'
 

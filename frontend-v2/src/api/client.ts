@@ -7,7 +7,7 @@ import {
   isStandaloneFrontend,
   redirectToBackendLogin,
 } from '@/api/connection'
-import { ROOM_TOKEN_REJECTED_EVENT, SEAT_TOKEN_HEADER, clearRoomToken, clearSeatToken, gameKeyOfApiPath, readRoomToken, readSeatToken } from '@/utils/seatToken'
+import { ROOM_TOKEN_HEADER, ROOM_TOKEN_REJECTED_EVENT, SEAT_TOKEN_HEADER, clearRoomToken, clearSeatToken, gameKeyOfApiPath, readRoomToken, readSeatToken } from '@/utils/seatToken'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
@@ -58,10 +58,6 @@ function shareQuery(): string {
   for (const key of ['game','user','name','share','delegate']) {
     if (key === 'user' && !sendUser) continue
     if (q.has(key)) out.set(key, q.get(key)!)
-  }
-  if (gk) {
-    const rt = readRoomToken(gk)
-    if (rt) out.set('room_token', rt)
   }
   return out.toString()
 }
@@ -129,6 +125,17 @@ function handleRejectedRoomToken(path: string, status: number, data: unknown): v
   location.hash = `/join?${params.toString()}`
 }
 
+/**
+ * The room token from passing a room password travels in a header, never in
+ * the URL, so it cannot end up in access logs. Only the game it was issued
+ * for receives it.
+ */
+export function applyRoomTokenHeader(headers: Headers, path: string): void {
+  if (headers.has(ROOM_TOKEN_HEADER)) return
+  const token = readRoomToken(gameKeyOfApiPath(path))
+  if (token) headers.set(ROOM_TOKEN_HEADER, token)
+}
+
 function applyConfirmHeader(headers: Headers, init: RequestInit): void {
   if (init.method && init.method !== 'GET') headers.set('X-TRPG-Confirm', 'true')
 }
@@ -188,6 +195,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   const isRawBody = init.body instanceof FormData || init.body instanceof Blob
   const headers = authHeaders(init.headers, !isRawBody)
   applySeatTokenHeader(headers, path)
+  applyRoomTokenHeader(headers, path)
   applyConfirmHeader(headers, init)
   const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   const data = await response.json().catch(() => ({}))
@@ -216,6 +224,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
   }
   const headers = authHeaders(init.headers, false)
   applySeatTokenHeader(headers, path)
+  applyRoomTokenHeader(headers, path)
   applyConfirmHeader(headers, init)
   const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   await handleUnauthorized(response)

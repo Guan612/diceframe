@@ -400,7 +400,7 @@ async function create() {
       </div>
       <label class="sheet-field">{{ t('roomPassword') }}<input type="password" v-model="roomPasswordInput" @keyup.enter="verifyRoomPassword" :placeholder="t('roomPassword')"></label>
       <p v-if="error" class="error-banner">{{ displayError }}</p>
-      <button class="primary submit" :disabled="busy || !roomPasswordInput.trim()" @click="verifyRoomPassword">{{ busy ? t('validating') : t('verifyAndContinue') }}</button>
+      <button class="primary submit" :disabled="busy || !roomPasswordInput" @click="verifyRoomPassword">{{ busy ? t('validating') : t('verifyAndContinue') }}</button>
     </section>
 
     <section v-else-if="resumeUser" class="join-form resume-block">

@@ -20,6 +20,7 @@ logger = logging.getLogger("trpg")
 
 ROOM_TOKEN_TTL_ENV = "TRPG_ROOM_TOKEN_TTL_DAYS"
 MAX_ROOM_TOKEN_TTL_DAYS = 365
+ROOM_PASSWORD_CHANGED = "房间密码已更改，请重新输入"
 
 
 def room_token_ttl_seconds(environ: Mapping[str, str] | None = None) -> int:
@@ -45,14 +46,23 @@ async def verify_and_issue_room_token(
     environ: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Return ``(response body, HTTP status)`` for a room password attempt."""
-    if not room_access.has_room_password(instance):
+    stored = room_access.room_password_hash(instance)
+    if not stored:
         return {"ok": False, "error": "该游戏未设置房间密码"}, 400
-    # PBKDF2 is deliberately slow; keep it off the event loop.
-    matched = await asyncio.to_thread(room_access.verify_room_password, instance, password)
+    # PBKDF2 is deliberately slow; keep it off the event loop. The thread
+    # only sees the hash read here, never the live instance.
+    matched = await asyncio.to_thread(room_access.verify_room_password_hash, password, stored)
     if not matched:
         return {"ok": False, "error": "房间密码错误"}, 403
-    token, expires_at = room_access.issue_room_token(
-        instance, ttl_seconds=room_token_ttl_seconds(environ),
-    )
+    # The GM may have replaced or removed the password while the hash ran: a
+    # token must never be issued under a password that is no longer current.
+    if room_access.room_password_hash(instance) != stored:
+        return {"ok": False, "error": ROOM_PASSWORD_CHANGED}, 409
+    try:
+        token, expires_at = room_access.issue_room_token(
+            instance, ttl_seconds=room_token_ttl_seconds(environ),
+        )
+    except ValueError:
+        return {"ok": False, "error": ROOM_PASSWORD_CHANGED}, 409
     await save(instance)
     return {"ok": True, "room_token": token, "expires_at": expires_at}, 200

@@ -4697,7 +4697,12 @@ Storage and lifetime (`room_access` slot schema 3):
 - the room password is stored only as a salted PBKDF2 hash (same format as the owner access password); the GM can set, replace or clear it but never read it back. New passwords need at least 6 characters; hashes of older, shorter passwords keep working;
 - each successful password entry mints its own room token; only its SHA-256 digest and an expiry are stored (default 30 days, `TRPG_ROOM_TOKEN_TTL_DAYS`, max 365). Changing or clearing the password revokes every room token;
 - removing a player does **not** rotate room tokens: that would log every other player out. A removed player loses the seat (its seat credential is revoked); the room token only gates the lobby, and the GM changes the password to shut a former player out of the lobby too;
-- password attempts have their own per-IP-and-game and per-IP rate-limit budget;
+- passwords are never trimmed (create, change or join); a whitespace-only password is refused;
+- the room token travels only in the `X-Room-Token` header, never in a URL (SSE authenticates with its one-time ticket). Access logs additionally redact `room_token`, `ticket`, `seat` and `seat_token` query values;
+- only **failed** password attempts count against rate limits. Per IP and (canonical) game, the first few failures are free, after which each attempt must wait an exponentially growing delay capped at 60 s — a slow-down, not a lockout, so players sharing an IP (tunnel, proxy, NAT) are never locked out by one bad actor. A hard cap on failures per IP across games stops spraying. The IP is the direct peer address: `X-Forwarded-For` is not trusted, as there is no trusted-proxy configuration;
+- a token is only issued if the password hash is unchanged after the (off-loop) check, so a password change during verification never yields a token;
+- loading a save with plaintext room credentials (schema < 38) rewrites `state.json` and `state.backup.json` immediately with hashes;
+- staged commits (`replace_persisted_state_from`) never overwrite the live `room_access` slot;
 - exports and imports never carry the password hash, room tokens, seat credentials or the bot bind token; a password-protected save arrives with its player entrance closed until the GM sets a new password and reopens it.
 
 ---

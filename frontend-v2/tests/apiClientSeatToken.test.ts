@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, api, retryOnRateLimit } from '@/api/client'
+import { ApiError, api, gameEventSource, retryOnRateLimit } from '@/api/client'
 import { accessTokenStorageKey } from '@/api/connection'
 import { ROOM_TOKEN_REJECTED_EVENT, readRoomToken, readSeatToken, seatTokenKey, storeRoomToken, storeSeatToken } from '@/utils/seatToken'
 
@@ -213,6 +213,7 @@ describe('seat token is scoped to its backend (standalone frontend)', () => {
 
     expect(String(fetchMock.mock.calls[0][0])).toContain('https://evil.example.com')
     expect(sentUrl(fetchMock).searchParams.has('room_token')).toBe(false)
+    expect(sentHeaders(fetchMock).has('X-Room-Token')).toBe(false)
     expect(readRoomToken(GAME)).toBe('')
   })
 
@@ -224,7 +225,36 @@ describe('seat token is scoped to its backend (standalone frontend)', () => {
 
     await api(`/games/${encodeURIComponent(GAME)}`)
 
-    expect(sentUrl(fetchMock).searchParams.get('room_token')).toBe('room-table')
+    // In a header, never in the URL (URLs end up in access logs).
+    expect(sentHeaders(fetchMock).get('X-Room-Token')).toBe('room-table')
+    expect(sentUrl(fetchMock).searchParams.has('room_token')).toBe(false)
+  })
+
+  it('never puts the room token into the SSE URL', async () => {
+    storeRoomToken(GAME, 'room-secret')
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ ticket: 'tk' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    const opened: string[] = []
+    vi.stubGlobal('EventSource', class { constructor(url: string) { opened.push(url) } })
+
+    await gameEventSource(GAME)
+
+    expect(sentHeaders(fetchMock).get('X-Room-Token')).toBe('room-secret')
+    expect(opened).toHaveLength(1)
+    expect(opened[0]).not.toContain('room-secret')
+    expect(opened[0]).toContain('ticket=tk')
+  })
+
+  it('sends the room token only to the game it belongs to', async () => {
+    storeRoomToken(GAME, 'room-secret')
+    const fetchMock = okFetch()
+
+    await api('/games/web%7Cother%7Cbot/players')
+
+    expect(sentHeaders(fetchMock).has('X-Room-Token')).toBe(false)
   })
 
   it('still sends the token to the server that issued it', async () => {

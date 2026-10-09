@@ -190,7 +190,7 @@ def _make_sse_auth_app() -> web.Application:
     app["sse_tickets"] = SseTicketStore()
     instance = SimpleNamespace(
         modules={}, gm_uid="gm", players={"player-1": {}},
-        room_password="", room_token="", player_access_open=True,
+        has_room_password=False, player_access_open=True,
     )
     app["seat_token"] = room_access.issue_seat_token(instance, "player-1")
     app["api"] = SimpleNamespace(_parse_key=lambda key: tuple(key.split("|")))

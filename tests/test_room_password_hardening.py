@@ -39,6 +39,8 @@ from test_game_query_routes_http import (
     play_env,  # noqa: F401
 )
 
+pytest_plugins = ["tests.webapi_harness"]
+
 PASSWORD = "correct horse"
 V2_SLOT = {
     "schema_version": 2,
@@ -405,21 +407,21 @@ async def test_player_join_flow_with_password_change_and_expiry(play_env, monkey
         )).json()
         assert second["room_token"] != token
         for held in (token, second["room_token"]):
-            ok = await client.get(_player_url(f"{detail_url}/adventure", room_token=held), headers=seat)
+            ok = await client.get(_player_url(f"{detail_url}/adventure"), headers={**seat, "X-Room-Token": held})
             assert ok.status == 200, await ok.json()
 
         # Expired token -> the same "needs room password" answer as no token.
         far_future = datetime.now(timezone.utc) + timedelta(days=31)
         real_now = room_access._now
         monkeypatch.setattr(room_access, "_now", lambda now: now or far_future)
-        expired = await client.get(_player_url(f"{detail_url}/adventure", room_token=token), headers=seat)
+        expired = await client.get(_player_url(f"{detail_url}/adventure"), headers={**seat, "X-Room-Token": token})
         assert expired.status == 403
         assert (await expired.json())["needs_room_password"] is True
         monkeypatch.setattr(room_access, "_now", real_now)
 
         # The GM changing the password revokes every room token.
         instance.set_room_password("brand-new-pass")
-        revoked = await client.get(_player_url(f"{detail_url}/adventure", room_token=token), headers=seat)
+        revoked = await client.get(_player_url(f"{detail_url}/adventure"), headers={**seat, "X-Room-Token": token})
         assert revoked.status == 403
         assert (await (await client.post(
             _player_url(verify_url), headers=seat, json={"password": PASSWORD},
@@ -450,3 +452,222 @@ async def test_gm_password_route_enforces_new_length_and_never_echoes(play_env) 
     assert short.status == 400 and "至少 6 位" in short_body["error"]
     assert ok.status == 200 and ok_body == {"ok": True, "has_room_password": True}
     assert room_access.verify_room_password(instance, "abcdef")
+
+
+# ---- review fixes: password change during verification -----------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_to", ["brand-new-pass", ""])
+async def test_password_change_during_verification_issues_no_token(monkeypatch, changed_to) -> None:
+    instance = _instance(PASSWORD)
+    real_verify = password_hashing.verify_password_hash
+
+    def gm_changes_password_mid_check(candidate, stored):
+        # The GM replaces (or removes) the password while PBKDF2 runs.
+        instance.set_room_password(changed_to)
+        return real_verify(candidate, stored)
+
+    monkeypatch.setattr(password_hashing, "verify_password_hash", gm_changes_password_mid_check)
+    monkeypatch.setattr(room_access, "verify_password_hash", gm_changes_password_mid_check, raising=False)
+    save = AsyncMock()
+    result, status = await room_password_svc.verify_and_issue_room_token(instance, PASSWORD, save)
+    assert status == 409, result
+    assert result["ok"] is False and "room_token" not in result
+    assert instance.modules["room_access"]["room_tokens"] == []
+    save.assert_not_awaited()
+
+
+# ---- review fixes: the upgrade leaves no plaintext on disk -------------------
+
+
+def _write_v37_save(directory, *, password: str, token: str) -> dict:
+    instance = _instance()
+    data = instance.to_dict()
+    data["instance_schema_version"] = 37
+    data["modules"]["room_access"] = {**V2_SLOT, "room_password": password, "room_token": token, "seat_credentials": {}}
+    directory.mkdir(parents=True, exist_ok=True)
+    return data
+
+
+@pytest.mark.asyncio
+async def test_loading_a_v37_save_rewrites_state_and_backup_without_plaintext(tmp_path) -> None:
+    from src.engine.game_instance import GameRegistry
+
+    registry = GameRegistry(tmp_path / "saves")
+    game_key = ("web", "room-pw", "bot")
+    state_path = registry._save_path(game_key)
+    current = _write_v37_save(state_path.parent, password=PASSWORD, token="legacy-room-token")
+    older = _write_v37_save(state_path.parent, password="older-secret", token="older-room-token")
+    state_path.write_text(json.dumps(current), encoding="utf-8")
+    state_path.with_name("state.backup.json").write_text(json.dumps(older), encoding="utf-8")
+
+    loaded = await registry.load(game_key)
+    assert loaded is not None
+    on_disk = state_path.read_text(encoding="utf-8")
+    backup = state_path.with_name("state.backup.json").read_text(encoding="utf-8")
+    for secret in (PASSWORD, "legacy-room-token"):
+        assert secret not in on_disk
+    for secret in ("older-secret", "older-room-token"):
+        assert secret not in backup
+    assert json.loads(on_disk)["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
+    # The backup is upgraded in place (still the older state), not replaced.
+    backup_instance = GameInstance.from_dict(json.loads(backup))
+    assert room_access.verify_room_password(backup_instance, "older-secret")
+
+    # The legacy token's expiry was fixed once at the upgrade, not per load.
+    first_expiry = json.loads(on_disk)["modules"]["room_access"]["room_tokens"][0]["expires_at"]
+    reloaded = await GameRegistry(tmp_path / "saves").load(game_key)
+    assert reloaded is not None
+    assert reloaded.modules["room_access"]["room_tokens"][0]["expires_at"] == first_expiry
+    assert room_access.verify_room_password(reloaded, PASSWORD)
+    assert room_access.verify_room_token(reloaded, "legacy-room-token")
+
+
+@pytest.mark.asyncio
+async def test_loading_a_current_save_does_not_rewrite_it(tmp_path) -> None:
+    from src.engine.game_instance import GameRegistry
+
+    registry = GameRegistry(tmp_path / "saves")
+    instance = _instance(PASSWORD)
+    state_path = registry._save_path(instance.game_key)
+    state_path.parent.mkdir(parents=True)
+    text = json.dumps(instance.to_dict())
+    state_path.write_text(text, encoding="utf-8")
+    assert await registry.load(instance.game_key) is not None
+    assert state_path.read_text(encoding="utf-8") == text
+    assert not state_path.with_name("state.backup.json").exists()
+
+
+# ---- review fixes: room tokens stay out of URLs and logs ---------------------
+
+
+@pytest.mark.asyncio
+async def test_room_token_is_accepted_only_as_a_header(play_env) -> None:
+    game_key, instance = _make_game(play_env, "header-only", bind_adventure=False)
+    instance.set_room_password(PASSWORD)
+    token, _ = room_access.issue_room_token(instance)
+    app = _make_app(play_env)
+    seat = _seat(instance)
+    url = f"/api/games/{game_key}/adventure"
+    async with TestClient(TestServer(app)) as client:
+        in_query = await client.get(_player_url(url, room_token=token), headers=seat)
+        in_header = await client.get(_player_url(url), headers={**seat, "X-Room-Token": token})
+    assert in_query.status == 403
+    assert in_header.status == 200
+
+
+def test_access_log_redacts_credentials_in_the_request_line() -> None:
+    import logging
+
+    from src.runtime_logging import install_access_log_redaction
+
+    logger = logging.getLogger("aiohttp.access")
+    install_access_log_redaction(logger)
+    install_access_log_redaction(logger)  # idempotent
+    records: list[logging.LogRecord] = []
+
+    class Collect(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = Collect()
+    logger.addHandler(handler)
+    old_level = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        logger.info(
+            '1.2.3.4 [t] "GET /api/games/a/sse?share=1&room_token=SECRET1&ticket=SECRET2'
+            '&seat=SECRET3&seat_token=SECRET4&user=p1 HTTP/1.1" 200 5 "-" "ua"'
+        )
+        logger.info('%s "%s" %s', "1.2.3.4", "GET /x?room_token=SECRET5 HTTP/1.1", 200)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(old_level)
+    rendered = " ".join(record.getMessage() for record in records)
+    for secret in ("SECRET1", "SECRET2", "SECRET3", "SECRET4", "SECRET5"):
+        assert secret not in rendered
+    assert "user=p1" in rendered and "room_token=[redacted]" in rendered
+    assert sum(isinstance(f, type(logger.filters[0])) for f in logger.filters) == 1
+
+
+def test_cors_allows_the_room_token_header() -> None:
+    from src.webui import cors
+
+    response = web.Response()
+    cors._apply_allowed_cors_headers(response, "https://table.example")
+    allowed = {part.strip() for part in response.headers["Access-Control-Allow-Headers"].split(",")}
+    assert "X-Room-Token" in allowed
+
+
+# ---- review fixes: staged commits never roll back room access ----------------
+
+
+def test_committing_a_staged_aggregate_keeps_the_live_room_access() -> None:
+    live = _instance("old-password")
+    live.run_id = "run-1"
+    old_token, _ = room_access.issue_room_token(live)
+    staged = GameInstance.from_dict(deepcopy(live.to_dict()))  # e.g. before an LLM call
+    staged.scene = "staged scene"
+    # Meanwhile the GM changes the password and a player gets a seat link.
+    live.set_room_password("new-password")
+    seat_token = room_access.issue_seat_token(live, "p1")
+
+    live.replace_persisted_state_from(staged)
+
+    assert live.scene == "staged scene"  # the staged domain change is committed
+    assert room_access.verify_room_password(live, "new-password")
+    assert not room_access.verify_room_password(live, "old-password")
+    assert not room_access.verify_room_token(live, old_token)
+    assert room_access.verify_seat_token(live, seat_token) == "p1"
+
+
+# ---- review fixes: one trimming rule (none) ------------------------------------
+
+
+def test_passwords_are_never_trimmed_and_blank_ones_are_refused() -> None:
+    instance = _instance("  spaced pass  ")
+    assert room_access.verify_room_password(instance, "  spaced pass  ")
+    assert not room_access.verify_room_password(instance, "spaced pass")
+    with pytest.raises(ValueError, match="空白"):
+        instance.set_room_password("        ")
+    assert room_access.verify_room_password(instance, "  spaced pass  ")
+
+
+@pytest.mark.asyncio
+async def test_create_and_verify_use_the_same_untrimmed_password(web_api) -> None:
+    api, _lorebook, registry, _llm, _worlds_dir = web_api
+    players = [{
+        "character_name": "A", "class": "战士",
+        "attributes": {"str": 14, "dex": 10, "con": 12, "int": 10, "wis": 10, "cha": 10},
+    }]
+    created = await api.create_game(
+        "template_world", "trim-check", players=list(players), solo=False, room_password=" lead-and-trail ",
+    )
+    assert created["ok"] is True, created
+    instance = registry.get(api._parse_key(created["game_key"]))
+    assert room_access.verify_room_password(instance, " lead-and-trail ")
+    assert not room_access.verify_room_password(instance, "lead-and-trail")
+    blank = await api.create_game(
+        "template_world", "blank-check", players=list(players), solo=False, room_password="       ",
+    )
+    assert blank["ok"] is False and "空白" in blank["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("password, closed", [(PASSWORD, True), ("", False)])
+async def test_import_tells_the_gm_when_it_closed_the_player_entrance(tmp_path, password, closed) -> None:
+    from src.engine import persistence
+    from src.engine.game_instance import GameRegistry
+
+    source = _instance(password)
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("state.json", json.dumps(source.to_dict()))
+    registry = GameRegistry(tmp_path / "saves")
+    result = await persistence.import_save_zip(registry, buffer.getvalue())
+    assert result["ok"] is True, result
+    assert result["player_access_closed"] is closed
+    imported = registry.get(tuple(result["game_key"]))
+    assert imported.has_room_password is False
+    assert imported.player_access_open is (not closed)

@@ -221,4 +221,22 @@ describe('JoinView seat token', () => {
     expect(wrapper.text()).toContain(String(i18n.global.t('roomAccessExpired')))
     wrapper.unmount()
   })
+
+  it('sends the room password exactly as typed (never trimmed)', async () => {
+    const sent: string[] = []
+    mocks.api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === `/games/${encodeURIComponent(GAME)}`) return { game_key: GAME, world_name: 'World', has_room_password: true }
+      if (path.endsWith('/verify-room-password') && init?.method === 'POST') {
+        sent.push(JSON.parse(String(init.body)).password)
+        throw new Error('wrong')
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const router = makeRouter()
+    const wrapper = await mountAt(router, { game: GAME, share: '1' })
+    await wrapper.get('.room-gate input[type="password"]').setValue('  spaced pass  ')
+    await wrapper.get('.room-gate button.submit').trigger('click')
+    await flushPromises()
+    expect(sent).toEqual(['  spaced pass  '])
+  })
 })

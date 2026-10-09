@@ -1897,10 +1897,15 @@ class GameInstance:
             # 生成期间的合法结算回写不得清空它（否则同轮 LOOT 拦截会失效）。
             "round_unpriced_purchase_intents",
         }
+        # Room access (password hash, room tokens, seat credentials) is never
+        # part of a staged change and is committed on its own; a staged copy
+        # taken earlier must not roll back a password change or a new seat link.
+        live_room_access = room_access.capture_slot(self)
         for name, value in source.__dict__.items():
             if name.startswith("_") or name in runtime_only:
                 continue
             setattr(self, name, copy.deepcopy(value))
+        room_access.restore_slot(self, live_room_access)
 
     def to_llm_view(self) -> GameContextView:
         """LLM 决策所需的精简状态视图。

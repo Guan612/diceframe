@@ -52,7 +52,7 @@ import { currencyLabel } from '@/utils/ruleSchema'
 import { currencyAmountToInputText, currencyEditableUnitLabel } from '@/utils/currency'
 import type { CurrencySystem } from '@/utils/currency'
 import { buildRewardPolicySave, buildRoomPasswordSave, isEconomyProposalActionable, isNonBlockingPersonalPurchase, nextEconomyProposal } from '@/features/play/economyPrompts'
-import { ROOM_PASSWORD_MIN_LENGTH, isRoomPasswordTooShort } from '@/utils/roomPassword'
+import { roomPasswordProblem, roomPasswordProblemMessage } from '@/utils/roomPassword'
 
 defineOptions({ name: 'PlayView' })
 
@@ -560,7 +560,19 @@ async function onAdvancementControl(payload: Record<string, string | number>) {
     toast.error(errorMessage(cause))
   }
 }
-function onAccess() { command('player-access', { open: game.detail.value?.player_access_open === false }) }
+async function onAccess() {
+  const opening = game.detail.value?.player_access_open === false
+  // Reopening a room without a password (e.g. right after an import dropped
+  // it) lets anyone holding the link in: make that an explicit choice.
+  if (opening && !game.detail.value?.has_room_password && !game.detail.value?.solo_mode) {
+    const ok = await confirm({
+      title: t('openWithoutPasswordTitle'), content: t('openWithoutPasswordContent'),
+      positiveText: t('openWithoutPasswordConfirm'), negativeText: t('cancel'), type: 'warning',
+    })
+    if (!ok) return
+  }
+  command('player-access', { open: opening })
+}
 
 // 房间级暂离语义：只有 GM 真正改过才提交，避免「保存密码」时把它一并覆盖掉。
 const awayPolicyInput = ref<'pause' | 'ai_takeover'>('pause')
@@ -591,10 +603,12 @@ async function setRoomPassword() {
     // 只有 GM 真的编辑过密码输入框才提交：否则「只改暂离设置」也会 POST 一个空
     // 密码，把房间里已有的密码静默删掉。明确清空输入框仍是一次显式移除密码。
     const passwordSave = buildRoomPasswordSave(passwordTouched.value, roomPasswordInput.value)
-    if (passwordSave && isRoomPasswordTooShort(passwordSave.password)) {
+    const passwordProblem = passwordSave ? roomPasswordProblem(passwordSave.password) : null
+    if (passwordProblem) {
       // Checked before anything is saved, so a rejected password never leaves
       // the other settings in this dialog half-applied.
-      toast.error(t('roomPasswordTooShort', { min: ROOM_PASSWORD_MIN_LENGTH }))
+      const [key, params] = roomPasswordProblemMessage(passwordProblem)
+      toast.error(t(key, params))
       return
     }
     if (passwordSave) {

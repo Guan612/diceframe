@@ -35,6 +35,7 @@ ROOM_TOKEN_BYTES = 24
 # the old 4-character rule keep working.
 NEW_ROOM_PASSWORD_MIN_LENGTH = 6
 ROOM_PASSWORD_TOO_SHORT = f"房间密码至少 {NEW_ROOM_PASSWORD_MIN_LENGTH} 位"
+ROOM_PASSWORD_BLANK = "房间密码不能只包含空白字符"
 DEFAULT_ROOM_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
 # Every successful password entry mints its own token; keep only the newest.
 MAX_ROOM_TOKENS = 64
@@ -117,8 +118,17 @@ def has_room_password(instance: Any) -> bool:
 
 
 def validate_new_room_password(password: str) -> None:
-    """Length rule for a password being set now (``""`` means no password)."""
-    if password and len(password) < NEW_ROOM_PASSWORD_MIN_LENGTH:
+    """Rules for a password being set now (``""`` means no password).
+
+    Passwords are never trimmed, on set or on verify: what the GM typed is
+    exactly what players must type. A whitespace-only password is refused
+    rather than silently trimmed to nothing.
+    """
+    if not password:
+        return
+    if not password.strip():
+        raise ValueError(ROOM_PASSWORD_BLANK)
+    if len(password) < NEW_ROOM_PASSWORD_MIN_LENGTH:
         raise ValueError(ROOM_PASSWORD_TOO_SHORT)
 
 
@@ -132,16 +142,26 @@ def set_room_password(instance: Any, password: str) -> None:
     state["room_tokens"] = []
 
 
-def verify_room_password(instance: Any, candidate: str) -> bool:
-    """Constant-time check of ``candidate`` against the stored hash.
+def room_password_hash(instance: Any) -> Any:
+    """The stored hash, for a check that must later confirm it is unchanged."""
+    return get_module_state(instance, MODULE_NAME)["room_password_hash"]
 
-    The candidate is compared exactly as typed; a stored value that is not a
+
+def verify_room_password_hash(candidate: str, stored: Any) -> bool:
+    """Constant-time check of ``candidate`` against a stored hash value.
+
+    Pure (touches no instance), so it can run off the event loop. The
+    candidate is compared exactly as typed; a stored value that is not a
     well-formed hash never matches.
     """
-    stored = get_module_state(instance, MODULE_NAME)["room_password_hash"]
     if not stored or not isinstance(candidate, str) or not candidate:
         return False
     return verify_password_hash(candidate, stored)
+
+
+def verify_room_password(instance: Any, candidate: str) -> bool:
+    """Constant-time check of ``candidate`` against the instance's password."""
+    return verify_room_password_hash(candidate, room_password_hash(instance))
 
 
 # ---- room tokens -------------------------------------------------------------
@@ -224,6 +244,33 @@ def copy_room_password(target: Any, source: Any) -> None:
     target_state = get_module_state(target, MODULE_NAME)
     target_state["room_password_hash"] = source_state["room_password_hash"]
     target_state["room_tokens"] = copy.deepcopy(_live_room_tokens(source_state["room_tokens"], _now(None)))
+
+
+# ---- staged commits ------------------------------------------------------------
+
+_ABSENT = object()
+
+
+def capture_slot(instance: Any) -> Any:
+    """The live slot object (or a marker for "absent"), for ``restore_slot``."""
+    modules = getattr(instance, "modules", None)
+    return modules.get(MODULE_NAME, _ABSENT) if isinstance(modules, dict) else _ABSENT
+
+
+def restore_slot(instance: Any, captured: Any) -> None:
+    """Put back a slot captured before a staged aggregate replaced ``modules``.
+
+    Room access (password hash, room tokens, seat credentials) is committed on
+    its own, never through a staged copy, so a copy taken before a password
+    change or a new seat link must not roll either back.
+    """
+    modules = getattr(instance, "modules", None)
+    if not isinstance(modules, dict):
+        return
+    if captured is _ABSENT:
+        modules.pop(MODULE_NAME, None)
+    else:
+        modules[MODULE_NAME] = captured
 
 
 # ---- seat credentials --------------------------------------------------------
@@ -309,6 +356,21 @@ def copy_seat_credentials(target: Any, source: Any) -> None:
 
 
 # ---- export / import ---------------------------------------------------------
+
+
+def payload_has_plaintext_credentials(payload: Any) -> bool:
+    """Whether a raw save still holds a plaintext room password or room token.
+
+    True for saves written before room_access slot v3 (top-level fields of
+    pre-slot saves, or the v1/v2 slot fields), which the loader then rewrites.
+    """
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("room_password") or payload.get("room_token"):
+        return True
+    modules = payload.get("modules")
+    slot = modules.get(MODULE_NAME) if isinstance(modules, dict) else None
+    return isinstance(slot, dict) and bool(slot.get("room_password") or slot.get("room_token"))
 
 _SCRUBBED_SLOT_VALUES: dict[str, Any] = {
     "bot_bind_token": "",

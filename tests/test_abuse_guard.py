@@ -182,37 +182,117 @@ def test_image_generation_stays_out_of_the_ai_slot_pool():
         assert _is_ai_request(request) is False
 
 
-@pytest.mark.asyncio
-async def test_room_password_attempts_have_a_strict_per_game_and_per_ip_budget():
-    guard = AbuseGuard(
-        write_per_ip_limit=100,
-        write_global_limit=100,
-        login_per_ip_limit=100,
-        room_password_per_ip_game_limit=2,
-        room_password_per_ip_limit=3,
-        ai_concurrency=10,
-    )
-    app = _app(guard)
-    app.router.add_post("/api/games/{game_key}/verify-room-password", _ok)
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
 
+    def __call__(self) -> float:
+        return self.now
+
+
+def _room_app(guard: AbuseGuard, outcomes: dict[str, int]) -> web.Application:
+    """verify-room-password stub: the status per game key is set by the test."""
+
+    async def verify(request: web.Request) -> web.Response:
+        status = outcomes.get(request.match_info["game_key"], 403)
+        return web.json_response({"ok": status == 200}, status=status)
+
+    app = _app(guard)
+    app.router.add_post("/api/games/{game_key}/verify-room-password", verify)
+    return app
+
+
+def _room_guard(clock: _Clock, **overrides) -> AbuseGuard:
+    options = dict(
+        write_per_ip_limit=1000, write_global_limit=1000, login_per_ip_limit=1000,
+        room_password_free_failures=3, room_password_backoff_base=2,
+        room_password_backoff_cap=30, room_password_per_ip_failure_limit=100,
+        ai_concurrency=10, limiter=SlidingWindowLimiter(clock=clock),
+    )
+    options.update(overrides)
+    return AbuseGuard(**options)
+
+
+def _verify_url(game: str) -> str:
+    from urllib.parse import quote
+
+    return f"/api/games/{quote(game, safe='')}/verify-room-password"
+
+
+@pytest.mark.asyncio
+async def test_successful_room_password_entries_are_never_limited():
+    clock = _Clock()
+    app = _room_app(_room_guard(clock), {"web|a|web": 200})
     async with TestClient(TestServer(app)) as client:
-        first = "/api/games/web%7Ca%7Cweb/verify-room-password"
-        second = "/api/games/web%7Cb%7Cweb/verify-room-password"
-        assert (await client.post(first)).status == 200
-        assert (await client.post(first)).status == 200
-        blocked = await client.post(first)
-        assert blocked.status == 429
-        assert int(blocked.headers["Retry-After"]) > 0
-        # Another table still has its own budget, until the per-IP total runs out.
-        assert (await client.post(second)).status == 200
-        assert (await client.post(second)).status == 429
-        # Room password guesses never eat the owner login or general write budget.
+        for _ in range(20):
+            assert (await client.post(_verify_url("web|a|web"))).status == 200
+
+
+@pytest.mark.asyncio
+async def test_failed_room_password_entries_slow_down_instead_of_locking_out():
+    clock = _Clock()
+    app = _room_app(_room_guard(clock), {"web|a|web": 403})
+    async with TestClient(TestServer(app)) as client:
+        for _ in range(3):  # free failures
+            assert (await client.post(_verify_url("web|a|web"))).status == 403
+        # Fourth failure arrived; the next attempt must wait a short, growing delay.
+        assert (await client.post(_verify_url("web|a|web"))).status == 403
+        waited = await client.post(_verify_url("web|a|web"))
+        assert waited.status == 429
+        retry_after = int(waited.headers["Retry-After"])
+        assert 1 <= retry_after <= 30
+        # Not a lockout: once the delay passed, an attempt goes through again.
+        clock.now += retry_after
+        assert (await client.post(_verify_url("web|a|web"))).status == 403
+        # Delays are capped, so nobody on the IP waits more than the cap.
+        for _ in range(10):
+            clock.now += 30
+            assert (await client.post(_verify_url("web|a|web"))).status == 403
+        capped = await client.post(_verify_url("web|a|web"))
+        assert capped.status == 429 and int(capped.headers["Retry-After"]) <= 30
+
+
+@pytest.mark.asyncio
+async def test_a_correct_password_is_accepted_while_failures_back_off_elsewhere():
+    clock = _Clock()
+    app = _room_app(_room_guard(clock), {"web|a|web": 403, "web|b|web": 200})
+    async with TestClient(TestServer(app)) as client:
+        for _ in range(4):
+            await client.post(_verify_url("web|a|web"))
+        assert (await client.post(_verify_url("web|a|web"))).status == 429
+        # Another table, and logins/writes, are unaffected.
+        assert (await client.post(_verify_url("web|b|web"))).status == 200
         assert (await client.post("/api/login")).status == 200
         assert (await client.post("/api/games/room/action")).status == 200
 
 
-def test_room_password_budget_is_stricter_than_general_writes():
+@pytest.mark.asyncio
+async def test_room_password_backoff_uses_the_canonical_game_key():
+    clock = _Clock()
+    # "solo" and "solo||" name the same game.
+    app = _room_app(_room_guard(clock), {"solo": 403, "solo||": 403})
+    async with TestClient(TestServer(app)) as client:
+        for game in ("solo", "solo||", "solo", "solo||"):
+            assert (await client.post(_verify_url(game))).status == 403
+        assert (await client.post(_verify_url("solo"))).status == 429
+        assert (await client.post(_verify_url("solo||"))).status == 429
+
+
+@pytest.mark.asyncio
+async def test_failed_room_passwords_have_a_hard_per_ip_total():
+    clock = _Clock()
+    guard = _room_guard(clock, room_password_free_failures=100, room_password_per_ip_failure_limit=3)
+    app = _room_app(guard, {})
+    async with TestClient(TestServer(app)) as client:
+        for game in ("web|a|web", "web|b|web", "web|c|web"):
+            assert (await client.post(_verify_url(game))).status == 403
+        blocked = await client.post(_verify_url("web|d|web"))
+        assert blocked.status == 429
+
+
+def test_room_password_defaults_slow_down_quickly_and_cap_the_wait():
     from src.webui import abuse_guard
 
-    assert abuse_guard.ROOM_PASSWORD_PER_IP_GAME_LIMIT <= abuse_guard.LOGIN_PER_IP_LIMIT
-    assert abuse_guard.ROOM_PASSWORD_PER_IP_LIMIT < abuse_guard.WRITE_PER_IP_LIMIT
+    assert abuse_guard.ROOM_PASSWORD_FREE_FAILURES <= abuse_guard.LOGIN_PER_IP_LIMIT
+    assert abuse_guard.ROOM_PASSWORD_BACKOFF_CAP_SECONDS <= 60
+    assert abuse_guard.ROOM_PASSWORD_PER_IP_FAILURE_LIMIT < abuse_guard.WRITE_PER_IP_LIMIT
