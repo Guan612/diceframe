@@ -77,7 +77,10 @@ async def test_existing_owner_and_shared_player_read_projections(viewer_env, pla
     suffix = "" if owner else "?user=p1&share=1"
     uid = instance.gm_uid if owner else "p1"
     expected = {
-        "": play_env.api.game_detail(key, uid, viewer_is_gm=owner),
+        "": {
+            **play_env.api.game_detail(key, uid, viewer_is_gm=owner),
+            "viewer": {"kind": "gm" if owner else "seat", "uid": uid},
+        },
         "/log": play_env.api.get_log(key, 1, 50, owner),
         "/private-log": (play_env.api.private_log(key) if owner else play_env.api.private_log_for_user(key, uid)),
         "/table-talk": play_env.api.table_talk(key),

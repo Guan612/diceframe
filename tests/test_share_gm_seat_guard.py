@@ -571,6 +571,9 @@ async def test_rotated_out_cookie_neither_leaks_nor_reclaims_the_seat(share_env)
         assert rotated.status == 200
         set_control(env.instance, "p1", "ai")
 
+    # A fresh client, so the requests below carry only the rotated-out cookie
+    # (the owner's request above put its own session in the jar).
+    async with TestClient(TestServer(env.app)) as client:
         detail = await client.get(
             f"/api/games/{env.key}?share=1&room_token={ROOM_TOKEN}", headers=_cookie(env.token),
         )
@@ -581,11 +584,14 @@ async def test_rotated_out_cookie_neither_leaks_nor_reclaims_the_seat(share_env)
         rejoin_body = await rejoin.json()
 
     assert detail.status == 200
-    assert detail_body["economy_proposals"] == []
+    # A visitor gets the lobby only: no proposals, no uids at all.
+    assert "economy_proposals" not in detail_body
+    assert detail_body["viewer"] == {"kind": "outsider"}
     assert rejoin_body.get("user_id") != "p1"
     assert get_control(env.instance, "p1")["mode"] == "ai"
-    # GM rotation unbinds every session that was bound to the seat.
-    assert env.sessions._sessions[env.token]["user_id"] != "p1"
+    # GM rotation revokes, in this game, every session bound to the seat.
+    assert env.key in env.sessions.revoked_games(env.token)
+    assert env.sessions.count_bound("p1", env.key) == 0
 
 
 @pytest.mark.asyncio
@@ -613,7 +619,9 @@ async def test_bound_cookie_of_a_credentialed_seat_is_only_a_visitor(share_env):
             f"/api/games/{env.key}/characters?share=1", headers=_cookie(env.token),
         )
     assert detail.status == 200
-    assert detail_body["economy_proposals"] == []
+    # A visitor gets the lobby only: no proposals, no uids at all.
+    assert "economy_proposals" not in detail_body
+    assert detail_body["viewer"] == {"kind": "outsider"}
     assert rejoin_body.get("user_id") != "p1"
     assert get_control(env.instance, "p1")["mode"] == "ai"
     assert characters.status == 200

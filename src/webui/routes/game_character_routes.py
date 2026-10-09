@@ -234,6 +234,11 @@ async def api_char_delete(request: web.Request) -> web.Response:
     ):
         return web.json_response({"error": "无权删除他人角色"}, status=403)
     result = await api.delete_character(gk, uid)
+    if result.get("ok"):
+        # A removed seat's devices must not keep speaking for it here.
+        mgr = request.app.get("session_manager")
+        if mgr is not None:
+            mgr.revoke_game_binding(uid, gk)
     status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
     return web.json_response(result, status=status)
 
@@ -298,20 +303,24 @@ async def api_seat_token_issue(request: web.Request) -> web.Response:
     if denied is not None:
         return denied
     body = await request.json() if request.can_read_body else {}
+    body = body if isinstance(body, dict) else {}
+    gk = request.match_info["game_key"]
     uid = request.match_info["uid"]
+    mgr = request.app.get("session_manager")
     result = await _get_api(request).issue_seat_token(
-        request.match_info["game_key"],
+        gk,
         uid,
         requester_uid=str(request.get("user_id", "") or ""),
         owner=bool(request.get("owner_authenticated", False)),
-        rotate=bool(isinstance(body, dict) and body.get("rotate")),
+        rotate=bool(body.get("rotate")),
+        bound_sessions=mgr.count_bound(uid, gk) if mgr is not None else 0,
+        check_token=str(body.get("check") or ""),
     )
     status = int(result.pop("status", 200))
-    if result.get("ok"):
-        # The old credential is gone; so is every session still bound to it.
-        mgr = request.app.get("session_manager")
-        if mgr is not None:
-            mgr.unbind_user(uid)
+    if result.get("ok") and not result.get("reused") and mgr is not None:
+        # The old credential is gone; in this game so is every session that
+        # was still bound to the seat.
+        mgr.revoke_game_binding(uid, gk)
     return web.json_response(result, status=status)
 
 

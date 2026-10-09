@@ -286,8 +286,14 @@ class WebAccessControl:
         """
 
         # Keep the cookie session's own uid: routes that rebind or claim a
-        # session must not confuse it with the seat a token acts as.
-        request["session_user_id"] = str(request.get("user_id", "") or "")
+        # session must not confuse it with the seat a token acts as. A
+        # binding revoked for this game (rotation, removal, reset) no longer
+        # speaks for anyone here.
+        session_uid = str(request.get("user_id", "") or "")
+        if session_uid and self.bot_request_game_key(request) in request.get("session_revoked_games", ()):
+            session_uid = ""
+            request["user_id"] = ""
+        request["session_user_id"] = session_uid
         kind = self.share_endpoint_kind(request)
         seat_token = str(request.headers.get(SEAT_TOKEN_HEADER) or "").strip()
         share_mode = bool(
@@ -297,7 +303,6 @@ class WebAccessControl:
         )
         if not kind or not share_mode:
             return "", None
-        session_uid = str(request.get("user_id", "") or "")
         token_uid = ""
         if seat_token:
             instance = self.request_game_instance(request)
@@ -323,7 +328,7 @@ class WebAccessControl:
             # A session bound to a seat speaks for it only until that seat has
             # a credential; after that only the token does (rotation must cut a
             # device off).  Such a session is then just an anonymous visitor.
-            if self.session_seat_has_credential(request, session_uid):
+            if not session_uid or self.session_seat_has_credential(request, session_uid):
                 request["share_anonymous"] = True
                 return "", None
             return session_uid, None

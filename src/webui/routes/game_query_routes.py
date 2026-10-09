@@ -9,6 +9,7 @@ from aiohttp import web
 from src.webui.routes._common import (
     _get_api,
 )
+from src.webui.services.game_queries import lobby_detail
 from src.webui.viewer import viewer_for
 
 logger = logging.getLogger("trpg")
@@ -25,11 +26,14 @@ async def api_detail(request: web.Request) -> web.Response:
     instance = api.get_game_instance(game_key)
     viewer = viewer_for(request, instance)
     d = api.game_detail(game_key, viewer.uid, viewer_is_gm=viewer.is_gm)
-    return (
-        web.json_response(d)
-        if d
-        else web.json_response({"error": "not found"}, status=404)
-    )
+    if not d:
+        return web.json_response({"error": "not found"}, status=404)
+    if not viewer.is_member:
+        # Visitors (no seat, revoked binding, or no valid seat token) get the
+        # lobby only: no uids, GM identity, plot, recap, luck or economy data.
+        return web.json_response(lobby_detail(d))
+    d["viewer"] = {"kind": viewer.kind, "uid": viewer.uid}
+    return web.json_response(d)
 
 
 async def api_game_adventure_projection(request: web.Request) -> web.Response:

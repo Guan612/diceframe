@@ -117,6 +117,33 @@ def _combat_extension_projection(
     )
 
 
+# What a visitor who holds no seat may see before joining: enough to render
+# the join page, nothing about who sits at the table or how the story goes.
+LOBBY_DETAIL_FIELDS = (
+    "game_key", "player_access_open", "player_count", "max_players",
+    "has_room_password", "world_name", "scene", "rule_id", "solo_mode",
+)
+LOBBY_MULTIPLAYER_FIELDS = (
+    "state", "round_number", "solo_mode", "player_count", "max_players",
+    "ready_count", "alive_count", "active_count", "away_count", "ai_count",
+    "unclaimed_count", "can_accept_actions", "can_advance", "action_count",
+    "pending_action_count", "player_access_open",
+)
+
+
+def lobby_detail(detail: dict[str, Any]) -> dict[str, Any]:
+    """Project a full detail down to the visitor lobby view (no identities)."""
+
+    lobby = {key: detail[key] for key in LOBBY_DETAIL_FIELDS if key in detail}
+    multiplayer = detail.get("multiplayer")
+    if isinstance(multiplayer, dict):
+        lobby["multiplayer"] = {
+            key: multiplayer[key] for key in LOBBY_MULTIPLAYER_FIELDS if key in multiplayer
+        }
+    lobby["viewer"] = {"kind": "outsider"}
+    return lobby
+
+
 def game_detail(
     dependencies: GameQueryDependencies,
     game_key: str,

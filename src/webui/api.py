@@ -1513,8 +1513,14 @@ class WebAPI:
     async def reveal_check(self, game_key: str, check_id: str, user_id: str):
         return await self._check_reveals.reveal(game_key, check_id, user_id)
 
-    async def issue_seat_token(self, game_key: str, uid: str, *, requester_uid: str, owner: bool, rotate: bool = False) -> dict:
-        return await self._seat_tokens.issue_for_gm(game_key, uid, requester_uid=requester_uid, owner=owner, rotate=rotate)
+    async def issue_seat_token(
+        self, game_key: str, uid: str, *, requester_uid: str, owner: bool, rotate: bool = False,
+        bound_sessions: int = 0, check_token: str = "",
+    ) -> dict:
+        return await self._seat_tokens.issue_for_gm(
+            game_key, uid, requester_uid=requester_uid, owner=owner, rotate=rotate,
+            bound_sessions=bound_sessions, check_token=check_token,
+        )
 
     async def claim_seat_token(self, game_key: str, *, session_uid: str) -> dict:
         return await self._seat_tokens.claim(game_key, session_uid=session_uid)

@@ -63,33 +63,48 @@ class SessionManager:
     def get_name(self, token: str) -> str:
         return self._sessions.get(token, {}).get("name", "")
 
-    def unbind_user(self, user_id: str) -> int:
-        """Detach every session bound to ``user_id`` (each gets a fresh uid).
+    def revoke_game_binding(self, user_id: str, game_key: str) -> int:
+        """Stop sessions bound to ``user_id`` from speaking for it in one game.
 
-        Used when a seat's credential is rotated: devices that held the old
-        link must not keep acting as the seat through their cookie.
+        Bindings are one uid per session, shared by every game. A seat's
+        credential being rotated, or the seat being removed, must cut those
+        sessions off in *that* game only: the session keeps its uid (and any
+        seat it holds elsewhere) and is just an anonymous visitor here.
         """
-        if not user_id:
+        if not user_id or not game_key:
             return 0
-        existing = {session["user_id"] for session in self._sessions.values()}
         changed = 0
         for session in self._sessions.values():
             if session.get("user_id") != user_id:
                 continue
-            fresh = f"web_{uuid.uuid4().hex[:8]}"
-            while fresh in existing:
-                fresh = f"web_{uuid.uuid4().hex[:8]}"
-            existing.add(fresh)
-            session["user_id"] = fresh
-            changed += 1
+            revoked = session.setdefault("revoked_games", [])
+            if game_key not in revoked:
+                revoked.append(game_key)
+                changed += 1
         if changed:
             self._save()
         return changed
+
+    def count_bound(self, user_id: str, game_key: str) -> int:
+        """How many sessions still speak for ``user_id`` in ``game_key``."""
+        if not user_id:
+            return 0
+        return sum(
+            1 for session in self._sessions.values()
+            if session.get("user_id") == user_id
+            and game_key not in (session.get("revoked_games") or [])
+        )
+
+    def revoked_games(self, token: str) -> frozenset[str]:
+        return frozenset(self._sessions.get(token, {}).get("revoked_games") or [])
 
     def rebind(self, token: str, user_id: str) -> None:
         """把当前 session token 绑定到指定 user_id（换设备恢复身份用）。"""
         if token in self._sessions:
             self._sessions[token]["user_id"] = user_id
+            # A new binding is a new identity: earlier per-game revocations
+            # were about the old one.
+            self._sessions[token].pop("revoked_games", None)
             self._save()
 
 
@@ -104,6 +119,7 @@ async def session_middleware(request: web.Request, handler) -> web.StreamRespons
     new_token, user_id = mgr.get_or_create(token)
     request["user_id"] = user_id
     request["session_token"] = new_token
+    request["session_revoked_games"] = mgr.revoked_games(new_token)
 
     response = await handler(request)
     if new_token != token:
