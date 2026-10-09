@@ -415,6 +415,22 @@ async def test_share_link_player_can_resolve_own_luck_decision(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_share_link_player_can_reveal_own_check(monkeypatch):
+    """点击揭示骰子是玩家端点：分享链接不应被 owner 密码门拦截。"""
+    monkeypatch.setitem(web_server.STATE, "access_token", hash_access_password("owner-secret"))
+    app = _make_sse_auth_app()
+    app.router.add_post("/api/games/{game_key}/checks/{check_id}/reveal", _identity)
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/games/web%7Croom%7Cbot/checks/check-1/reveal?user=player-1&share=1"
+        )
+        body = await response.json()
+
+    assert response.status == 200
+    assert body["user_id"] == "player-1"
+
+
+@pytest.mark.asyncio
 async def test_share_link_player_can_upload_and_read_game_avatar(monkeypatch):
     """玩家头像走游戏作用域端点，不应被 owner 密码门拦截。"""
     monkeypatch.setitem(web_server.STATE, "access_token", hash_access_password("owner-secret"))

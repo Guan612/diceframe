@@ -248,6 +248,17 @@ describe('peer host game bridge', () => {
     const luckBody = JSON.parse(String(calls[3].init?.body))
     expect(luckBody).toEqual({ spend: true })
 
+    // 揭示骰子：对端伪造的 user_id 被剥离，宿主按绑定角色代发，请求体为空。
+    await bridge.handle('p_abcdefghijk', 'check.reveal', {
+      check_id: 'check-1',
+      user_id: 'someone-else',
+    })
+    const revealCall = calls[calls.length - 1]
+    expect(revealCall.path).toBe(
+      '/games/web%7Cgame%7Chost/checks/check-1/reveal?user=player_123&share=1&delegate=1',
+    )
+    expect(JSON.parse(String(revealCall.init?.body))).toEqual({})
+
     // 职业特性能力 intent：只放行 capability id 与目标，伪造的成本字段被剥离，
     // 与 Web 端一样仍由服务端 capability 声明决定实际消耗。
     await bridge.handle('p_abcdefghijk', 'ruleset.intent', {
