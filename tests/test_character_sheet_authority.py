@@ -240,3 +240,40 @@ def test_level_up_allocation_respects_rule_maximum_and_keeps_omitted_attributes(
     assert level_up_allocation(sheet, {"str": 18}, rule_attrs) == {"str": 18, "dex": 12}
     assert level_up_allocation(sheet, {"str": True}, rule_attrs) is None
     assert level_up_allocation(sheet, {"str": 18, "dex": 14}, rule_attrs) is None
+
+
+# ---- review of #470: a level-up spend must not heal, revive or reset max HP ----
+# The test rule's formula is ``20 + str``.
+
+
+@pytest.mark.asyncio
+async def test_spending_a_point_does_not_revive_a_downed_character(table):
+    sheet = _sheet(table)
+    sheet.update(hp=0, max_hp=30, level_up_points=2)
+    status, body = await _put(table, {"attributes": {"str": 11}}, headers=_seat(table))
+    assert status == 200, body
+    sheet = _sheet(table)
+    assert sheet["attributes"] == {"str": 11}
+    assert sheet["hp"] == 0
+    assert sheet["max_hp"] == 31
+
+
+@pytest.mark.asyncio
+async def test_player_spend_applies_only_the_formula_delta_to_gm_max_hp(table):
+    sheet = _sheet(table)
+    sheet.update(hp=40, max_hp=50, level_up_points=2)  # GM-adjusted max HP
+    status, body = await _put(table, {"attributes": {"str": 12}}, headers=_seat(table))
+    assert status == 200, body
+    sheet = _sheet(table)
+    assert (sheet["hp"], sheet["max_hp"]) == (42, 52)
+
+
+@pytest.mark.asyncio
+async def test_gm_attribute_edit_does_not_revive_a_downed_character(table):
+    _sheet(table).update(hp=0, max_hp=30)
+    status, body = await _put(
+        table, {"attributes": {"str": 14}},
+        headers={**_owner(), **CONFIRM}, url=_url(table, query=""),
+    )
+    assert status == 200, body
+    assert _sheet(table)["hp"] == 0

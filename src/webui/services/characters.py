@@ -17,6 +17,7 @@ from src.engine.character_utils import (
     initial_special_stat_value,
     make_default_character,
     normalize_character_sheet,
+    set_hp,
 )
 from src.compat.characters import MAX_SKILL_EFFECT_CHARS
 from src.content.worlds import localize_lorebook_entries
@@ -783,23 +784,40 @@ async def _update_character_authority(
     # 属性变化后可按规则补算 HP；若用户明确手填 HP，则尊重手填值。
     new_attrs = updates.get("attributes")
     if isinstance(new_attrs, dict) and not explicit_hp_update:
-        try:
-            base_hp = (
-                rule.calculate_hp(new_attrs, cs.get("class", ""))
+        def formula_hp(attributes: dict) -> int:
+            return int(
+                rule.calculate_hp(attributes, cs.get("class", ""))
                 if rule
                 else calc_hp_from_rule(
-                    new_attrs,
+                    attributes,
                     rules_dir=dependencies.rules.rules_dir,
                     language=getattr(inst, "language", ""),
                 )
             )
-            lv_bonus = max(0, (cs.get("level", 1) - 1) * 5)
-            new_hp = base_hp + lv_bonus
-            curr_hp_ratio = cs.get("hp", 1) / max(1, cs.get("max_hp", 1))
-            cs["max_hp"] = new_hp
-            cs["hp"] = max(1, round(new_hp * curr_hp_ratio))
-            logger.info("HP 重算: con=%s HP=%d->%d",
-                new_attrs.get("con", "?"), cs.get("max_hp", 0), new_hp)
+
+        try:
+            current_hp = int(cs.get("hp", 0) or 0)
+            if gm_authority:
+                # GM editor: rebuild max HP from the rule formula and keep the
+                # HP ratio.  A downed character (HP <= 0) stays down.
+                lv_bonus = max(0, (cs.get("level", 1) - 1) * 5)
+                new_max = formula_hp(new_attrs) + lv_bonus
+                ratio = current_hp / max(1, int(cs.get("max_hp", 1) or 1))
+                new_current = max(1, round(new_max * ratio)) if current_hp > 0 else 0
+            else:
+                # Player level-up spend: apply only the formula delta the
+                # attribute change causes, so a GM-adjusted max HP survives
+                # and nothing is healed by rounding.  A downed character
+                # (HP <= 0) stays down.
+                old_formula = (
+                    formula_hp(old_attrs) if isinstance(old_attrs, dict) and old_attrs else None
+                )
+                delta = formula_hp(new_attrs) - old_formula if old_formula is not None else 0
+                new_max = max(0, int(cs.get("max_hp", 0) or 0) + delta)
+                new_current = max(1, current_hp + delta) if current_hp > 0 else 0
+            set_hp(cs, new_current, new_max)
+            logger.info("HP 重算: con=%s max_hp=%d hp=%d",
+                new_attrs.get("con", "?"), new_max, cs.get("hp", 0))
         except Exception as exc:
             logger.warning("属性变化后 HP 重算失败: %s", exc)
     normalize_character_sheet(cs, rule)
