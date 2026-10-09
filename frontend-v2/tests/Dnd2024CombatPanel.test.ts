@@ -595,6 +595,25 @@ describe('D&D 2024 combat panel', () => {
     wrapper.unmount()
   })
 
+  it('shows a seated player the exact current and maximum HP of a wounded enemy', async () => {
+    const wounded = response('active') as any
+    wounded.available_actions = []
+    wounded.gameplay.combat.actors[1] = { ...wounded.gameplay.combat.actors[1], hp: 3, max_hp: 7 }
+    mocks.fetch.mockResolvedValueOnce(wounded)
+    const wrapper = mount(Dnd2024CombatPanel, {
+      props: { gameKey: 'web|combat|bot', actorId: 'player-two', isGm: false },
+    })
+    await flushPromises()
+
+    const card = wrapper.findAll('.actor-card.enemy').find(item => item.text().includes('Goblin'))!
+    expect(card.text()).toContain('HP 3/7')
+    const bar = card.get('.hp-track')
+    expect(bar.attributes('aria-valuenow')).toBe('3')
+    expect(bar.attributes('aria-valuemax')).toBe('7')
+    expect(bar.get('i').attributes('style')).toContain(`width: ${3 / 7 * 100}%`)
+    wrapper.unmount()
+  })
+
   it('focuses explicit confirmation and returns to the campaign after combat ends', async () => {
     const ending = response('active')
     ;(ending.available_actions as unknown as Array<Record<string, unknown>>).push({
