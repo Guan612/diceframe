@@ -19,6 +19,7 @@ const MUTATING_OPERATIONS = new Set<PeerGameOperation>([
   'ruleset.intent',
   'ruleset.decision',
   'luck.resolve',
+  'check.reveal',
   'payment.resolve',
   'character.update',
   'character.profile',
@@ -101,6 +102,7 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
     'response', 'comment', 'choice_id', 'enabled',
   ],
   'luck.resolve': ['check_id', 'spend'],
+  'check.reveal': ['check_id'],
   'payment.resolve': ['payment_id', 'accepted'],
   'character.update': [
     'character_name', 'race', 'class', 'background', 'hp',
@@ -318,6 +320,10 @@ export class PeerHostGameBridge {
         spend: Boolean(payload.spend),
       })
     }
+    if (operation === 'check.reveal') {
+      const checkId = requiredIdentifier(payload.check_id, 'check_id')
+      return write(`/checks/${encodeURIComponent(checkId)}/reveal`, {})
+    }
     if (operation === 'payment.resolve') {
       const paymentId = requiredIdentifier(payload.payment_id, 'payment_id')
       return write(`/payments/${encodeURIComponent(paymentId)}`, {
@@ -427,6 +433,7 @@ export class PeerRemoteGameClient {
     else if (method === 'POST' && parsed.tail === '/intents') operation = 'ruleset.intent'
     else {
       const luck = /^\/checks\/([^/]+)\/luck$/u.exec(parsed.tail)
+      const reveal = /^\/checks\/([^/]+)\/reveal$/u.exec(parsed.tail)
       const payment = /^\/payments\/([^/]+)$/u.exec(parsed.tail)
       const away = /^\/players\/([^/]+)\/away$/u.exec(parsed.tail)
       const character = /^\/character\/([^/]+)$/u.exec(parsed.tail)
@@ -438,6 +445,9 @@ export class PeerRemoteGameClient {
       if (method === 'POST' && luck) {
         operation = 'luck.resolve'
         payload = { ...body, check_id: decodeURIComponent(luck[1]) }
+      } else if (method === 'POST' && reveal) {
+        operation = 'check.reveal'
+        payload = { check_id: decodeURIComponent(reveal[1]) }
       } else if (method === 'POST' && payment) {
         operation = 'payment.resolve'
         payload = { ...body, payment_id: decodeURIComponent(payment[1]) }
