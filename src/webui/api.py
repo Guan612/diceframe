@@ -1727,6 +1727,9 @@ class WebAPI:
     def list_character_cards(self) -> dict[str, Any]:
         return character_cards.list_character_cards(self._character_card_dependencies)
 
+    def list_shareable_character_cards(self) -> dict[str, Any]:
+        return character_cards.list_shareable_character_cards(self._character_card_dependencies)
+
     def save_character_card(self, character: dict) -> dict[str, Any]:
         return character_cards.save_character_card(
             self._character_card_dependencies, character,

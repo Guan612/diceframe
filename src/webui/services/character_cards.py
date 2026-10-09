@@ -157,6 +157,25 @@ def list_character_cards(
     return {"cards": visible_cards, "total": len(visible_cards)}
 
 
+def is_shareable_card(card: dict[str, Any]) -> bool:
+    """A card anyone at a table may see: content shipped by an installed plugin.
+
+    The library cannot tell a card the owner curated from a character saved
+    automatically when someone joined some game (neither records a game, a
+    session or an author), so every other card is owner-only.
+    """
+    return bool(str(card.get("source_plugin") or "").strip())
+
+
+def list_shareable_character_cards(
+    dependencies: CharacterCardDependencies,
+) -> dict[str, Any]:
+    """The library as a non-owner at a table may see it (plugin cards only)."""
+    listed = list_character_cards(dependencies)
+    cards = [card for card in listed["cards"] if is_shareable_card(card)]
+    return {"cards": cards, "total": len(cards)}
+
+
 def save_character_card(
     dependencies: CharacterCardDependencies,
     character: dict,

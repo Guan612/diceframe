@@ -9,7 +9,8 @@ from aiohttp import web
 from src.webui.routes._common import (
     _get_api,
 )
-from src.webui.services.game_queries import join_characters, lobby_detail
+from src.webui.access_control import WebAccessControl
+from src.webui.services.game_queries import LOBBY_NARRATIVE_FIELDS, join_characters, lobby_detail
 from src.webui.viewer import viewer_for
 
 logger = logging.getLogger("trpg")
@@ -31,7 +32,15 @@ async def api_detail(request: web.Request) -> web.Response:
     if not viewer.is_member:
         # Visitors (no seat, revoked binding, or no valid seat token) get the
         # lobby only: no uids, GM identity, plot, recap, luck or economy data.
-        return web.json_response(lobby_detail(d))
+        lobby = lobby_detail(d)
+        if (
+            getattr(instance, "room_password", "")
+            and not WebAccessControl.request_room_token_ok(instance, request)
+        ):
+            # Story text stays behind the room password.
+            for key in LOBBY_NARRATIVE_FIELDS:
+                lobby.pop(key, None)
+        return web.json_response(lobby)
     d["viewer"] = {"kind": viewer.kind, "uid": viewer.uid}
     return web.json_response(d)
 

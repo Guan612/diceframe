@@ -5,6 +5,19 @@ from __future__ import annotations
 from aiohttp import web
 
 from src.webui.routes._common import _get_api, _require_confirmed_request
+from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
+
+
+def sees_full_card_library(request: web.Request) -> bool:
+    """The server-wide card library belongs to the owner.
+
+    Without an access password there is no authentication boundary, so the
+    library stays as it was there.
+    """
+    return bool(
+        request.get("owner_authenticated", False)
+        or not request.get(ACCESS_PASSWORD_CONFIGURED_KEY, False)
+    )
 
 
 async def api_character_cards(request: web.Request) -> web.Response:
@@ -15,7 +28,11 @@ async def api_game_character_cards(request: web.Request) -> web.Response:
     api = _get_api(request)
     if not api.game_detail(request.match_info["game_key"]):
         return web.json_response({"error": "游戏不存在"}, status=404)
-    return web.json_response(api.list_character_cards())
+    if sees_full_card_library(request):
+        return web.json_response(api.list_character_cards())
+    # Players and visitors only get cards meant for any table (plugin
+    # content); characters saved from other games stay with the owner.
+    return web.json_response(api.list_shareable_character_cards())
 
 
 async def api_character_card_save(request: web.Request) -> web.Response:

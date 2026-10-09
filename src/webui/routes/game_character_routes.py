@@ -7,6 +7,7 @@ import logging
 from aiohttp import web
 
 from src.webui.api import can_modify_character
+from src.webui.routes.character_cards import sees_full_card_library
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 from src.webui.services._common import canonical_game_key
 from src.webui.routes._common import (
@@ -88,9 +89,20 @@ async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response
             {"ok": False, "error": "无权修改他人角色卡"}, status=403
         )
     body = await request.json()
-    result = await api.adopt_ruleset_character_card(
-        gk, uid, str(body.get("card_id") or ""),
-    )
+    card_id = str(body.get("card_id") or "")
+    if not sees_full_card_library(request):
+        shareable = {
+            str(card.get("card_id") or card.get("id") or "")
+            for card in api.list_shareable_character_cards()["cards"]
+        }
+        if card_id not in shareable:
+            # Same visibility as the list: a non-owner cannot adopt (and so
+            # read) a card it is not allowed to see.
+            return web.json_response(
+                {"ok": False, "error_code": "CARD_NOT_AVAILABLE", "error": "这张角色卡不可用"},
+                status=404,
+            )
+    result = await api.adopt_ruleset_character_card(gk, uid, card_id)
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")
