@@ -59,6 +59,10 @@ function lobbyDetail(current: Record<string, unknown>): Record<string, unknown> 
   const out: Record<string, unknown> = {}
   for (const key of LOBBY_DETAIL_FIELDS) if (key in current) out[key] = current[key]
   if ('multiplayer' in current) out.multiplayer = lobbyMultiplayer(current.multiplayer)
+  // The host cannot tell whether an unbound guest knows the room password, so
+  // story text stays hidden from it whenever the room has one (same rule as
+  // the server's visitor lobby view).
+  if (current.has_room_password) delete out.scene
   // Same shape as the server's visitor lobby view (game_queries.lobby_detail).
   out.viewer = { kind: 'outsider' }
   return out

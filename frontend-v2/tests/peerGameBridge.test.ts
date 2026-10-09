@@ -57,13 +57,31 @@ describe('peer host game bridge', () => {
     expect(result).toEqual({ ...projected, has_room_password: false, peer_transport: true })
   })
 
+  it('shows the scene to unbound peers of a room without a password', async () => {
+    const executor = vi.fn<PeerLocalApiExecutor>(async () => ({ ...hostDetail, has_room_password: false }))
+    const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined)
+    const result = await bridge.handle('peer_1', 'game.detail', {}) as Record<string, unknown>
+    expect(result.scene).toBe('Gate')
+  })
+
+  it('never hands a guest the host card library', async () => {
+    const requestGame = vi.fn()
+    const session = { requestGame } as unknown as MultiPeerConnectionSession
+    const client = new PeerRemoteGameClient(session, 'h_abcdefghijk', 'web|game|host')
+    const result = await client.tryApi<{ cards: unknown[] }>('/games/web%7Cgame%7Chost/character-cards')
+    expect(result).toEqual({ handled: true, value: { cards: [] } })
+    expect(requestGame).not.toHaveBeenCalled()
+  })
+
   it('L4 returns only lobby fields for an unbound peer', async () => {
     const executor = vi.fn<PeerLocalApiExecutor>(async () => hostDetail)
     const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined)
     const result = await bridge.handle('peer_1', 'game.detail', {})
+    // The host room has a password and cannot know whether this guest passed
+    // it, so the scene text is withheld (same rule as the server lobby).
     expect(result).toEqual({
       game_key: 'web|game|host', player_access_open: true, player_count: 5, max_players: 6,
-      has_room_password: false, world_name: 'World', scene: 'Gate', rule_id: 'freeform',
+      has_room_password: false, world_name: 'World', rule_id: 'freeform',
       solo_mode: false, multiplayer: lobbyMultiplayer, peer_transport: true,
       viewer: { kind: 'outsider' },
     })

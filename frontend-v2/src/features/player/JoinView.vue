@@ -283,6 +283,13 @@ async function verifyRoomPassword() {
     const r = await api<{ room_token: string }>(`/games/${encodeURIComponent(gameKey.value)}/verify-room-password`, { method: 'POST', body: JSON.stringify({ password: roomPasswordInput.value }) })
     localStorage.setItem('trpg_play_room_' + gameKey.value, r.room_token)
     needRoomPassword.value = false
+    // Behind a room password the lobby hides the scene until the room token
+    // is held; fetch it again now that it is.
+    try {
+      detail.value = await api<GameDetail>(`/games/${encodeURIComponent(gameKey.value)}`)
+    } catch {
+      // Keep the lobby we have; the scene is only decoration here.
+    }
     await afterGate()
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
