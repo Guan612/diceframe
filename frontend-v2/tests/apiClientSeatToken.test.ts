@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, api, retryOnRateLimit } from '@/api/client'
 import { accessTokenStorageKey } from '@/api/connection'
-import { readSeatToken, seatTokenKey, storeSeatToken } from '@/utils/seatToken'
+import { readRoomToken, readSeatToken, seatTokenKey, storeRoomToken, storeSeatToken } from '@/utils/seatToken'
 
 const GAME = 'web|room|bot'
 
@@ -145,6 +145,32 @@ describe('seat token is scoped to its backend (standalone frontend)', () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain('https://evil.example.com')
     expect(sentHeaders(fetchMock).has('X-Seat-Token')).toBe(false)
     expect(readSeatToken(GAME)).toBe('')
+  })
+
+  it('does not send a room token from one server to another server named in a link', async () => {
+    vi.stubGlobal('__DF_STANDALONE__', true)
+    localStorage.setItem('trpg_backend_url', 'https://table.example.com')
+    location.hash = `#/play?game=${encodeURIComponent(GAME)}&user=p1&share=1`
+    storeRoomToken(GAME, 'room-table')
+    const fetchMock = okFetch()
+
+    location.hash = `#/play?game=${encodeURIComponent(GAME)}&user=p1&share=1&server=${encodeURIComponent('https://evil.example.com')}`
+    await api(`/games/${encodeURIComponent(GAME)}`)
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('https://evil.example.com')
+    expect(sentUrl(fetchMock).searchParams.has('room_token')).toBe(false)
+    expect(readRoomToken(GAME)).toBe('')
+  })
+
+  it('still sends the room token to the server that issued it', async () => {
+    vi.stubGlobal('__DF_STANDALONE__', true)
+    location.hash = `#/play?game=${encodeURIComponent(GAME)}&user=p1&share=1&server=${encodeURIComponent('https://table.example.com')}`
+    storeRoomToken(GAME, 'room-table')
+    const fetchMock = okFetch()
+
+    await api(`/games/${encodeURIComponent(GAME)}`)
+
+    expect(sentUrl(fetchMock).searchParams.get('room_token')).toBe('room-table')
   })
 
   it('still sends the token to the server that issued it', async () => {

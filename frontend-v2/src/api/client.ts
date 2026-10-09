@@ -7,7 +7,7 @@ import {
   isStandaloneFrontend,
   redirectToBackendLogin,
 } from '@/api/connection'
-import { SEAT_TOKEN_HEADER, clearSeatToken, gameKeyOfApiPath, readSeatToken } from '@/utils/seatToken'
+import { SEAT_TOKEN_HEADER, clearSeatToken, gameKeyOfApiPath, readRoomToken, readSeatToken } from '@/utils/seatToken'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
@@ -60,7 +60,7 @@ function shareQuery(): string {
     if (q.has(key)) out.set(key, q.get(key)!)
   }
   if (gk) {
-    const rt = localStorage.getItem('trpg_play_room_' + gk)
+    const rt = readRoomToken(gk)
     if (rt) out.set('room_token', rt)
   }
   return out.toString()

@@ -53,6 +53,35 @@ export function clearSeatToken(gameKey: string): void {
   }
 }
 
+/**
+ * The room token from passing a room password, stored the same way: per game
+ * *and* per backend, so a link naming another server never receives it.
+ */
+export function roomTokenKey(gameKey: string): string {
+  const backend = currentBackendUrl()
+  const base = `trpg_play_room_${gameKey}`
+  return backend ? `${base}@${encodeURIComponent(backend)}` : base
+}
+
+export function readRoomToken(gameKey: string): string {
+  if (!gameKey) return ''
+  try {
+    return localStorage.getItem(roomTokenKey(gameKey)) || ''
+  } catch {
+    return ''
+  }
+}
+
+export function storeRoomToken(gameKey: string, token: unknown): void {
+  const value = typeof token === 'string' ? token.trim() : ''
+  if (!gameKey || !value) return
+  try {
+    localStorage.setItem(roomTokenKey(gameKey), value)
+  } catch {
+    // Blocked storage: the player re-enters the password next time.
+  }
+}
+
 /** Game key of an API path such as `/games/<key>/...`, decoded; '' otherwise. */
 export function gameKeyOfApiPath(path: string): string {
   const match = /^\/games\/([^/?#]+)/u.exec(path)
