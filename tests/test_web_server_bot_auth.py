@@ -445,7 +445,8 @@ async def test_share_link_player_can_reveal_own_check(monkeypatch):
     app.router.add_post("/api/games/{game_key}/checks/{check_id}/reveal", _identity)
     async with TestClient(TestServer(app)) as client:
         response = await client.post(
-            "/api/games/web%7Croom%7Cbot/checks/check-1/reveal?user=player-1&share=1"
+            "/api/games/web%7Croom%7Cbot/checks/check-1/reveal?share=1",
+            headers=_seat(app),
         )
         body = await response.json()
 
