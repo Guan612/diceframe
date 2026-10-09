@@ -304,8 +304,15 @@ export interface PendingPayment {
   [key: string]: unknown
 }
 
+/** Who a game detail was projected for; visitors only ever get the lobby view. */
+export interface DetailViewer {
+  kind: 'gm' | 'seat' | 'outsider'
+  uid?: string
+}
+
 export interface GameDetail {
   game_key: string
+  viewer?: DetailViewer
   world_name?: string
   world_id?: string
   rule_id?: string

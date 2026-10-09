@@ -65,6 +65,7 @@ describe('peer host game bridge', () => {
       game_key: 'web|game|host', player_access_open: true, player_count: 5, max_players: 6,
       has_room_password: false, world_name: 'World', scene: 'Gate', rule_id: 'freeform',
       solo_mode: false, multiplayer: lobbyMultiplayer, peer_transport: true,
+      viewer: { kind: 'outsider' },
     })
     for (const value of privateValues) expect(JSON.stringify(result)).not.toContain(value)
     expect(executor.mock.calls).toEqual([['/games/web%7Cgame%7Chost', undefined]])
