@@ -34,12 +34,19 @@ class SeatTokenService:
 
     async def issue_for_gm(
         self, game_key: str, uid: str, *, requester_uid: str, owner: bool, rotate: bool = False,
+        bound_sessions: int = 0, check_token: str = "",
     ) -> dict[str, Any]:
         """Issue a seat's token for the GM's takeover link.
 
         A seat that already holds a credential is only re-issued with
         ``rotate`` (it logs the seat's current devices out), so a plain click
-        never silently cuts a player off.
+        never silently cuts a player off.  The same holds for a seat without a
+        credential that devices are still bound to (pre-token players): the
+        first link logs them out too, so it also needs ``rotate``.
+
+        ``check_token``: the link the GM already holds. If it is still the
+        seat's credential it is returned unchanged (nothing rotates); a stale
+        one falls through to the normal rules.
         """
         key = self.d.parse_game_key(game_key)
         inst = self.d.get_instance(key)
@@ -58,8 +65,16 @@ class SeatTokenService:
                 return {"ok": False, "error": "席位不存在", "status": 404}
             if uid == gm_uid:
                 return {"ok": False, "error_code": "GM_SEAT_REQUIRES_OWNER", "error": "GM 席位不能通过分享链接接管", "status": 400}
-            if room_access.has_seat_token(inst, uid) and not rotate:
-                return {"ok": False, "error_code": "SEAT_TOKEN_EXISTS", "error": "该席位已有链接；重新生成会让当前设备下线", "status": 409}
+            if check_token and room_access.verify_seat_token(inst, check_token) == uid:
+                return {"ok": True, "user_id": uid, "seat_token": check_token, "reused": True}
+            has_link = room_access.has_seat_token(inst, uid)
+            if (has_link or bound_sessions > 0) and not rotate:
+                return {
+                    "ok": False, "error_code": "SEAT_TOKEN_EXISTS",
+                    "error": "该席位正在被设备使用；重新生成链接会让这些设备下线",
+                    "has_link": has_link, "bound_sessions": int(bound_sessions),
+                    "status": 409,
+                }
             token = room_access.issue_seat_token(inst, uid)
             await self.d.save_instance(inst)
         return {"ok": True, "user_id": uid, "seat_token": token}

@@ -59,6 +59,8 @@ function lobbyDetail(current: Record<string, unknown>): Record<string, unknown> 
   const out: Record<string, unknown> = {}
   for (const key of LOBBY_DETAIL_FIELDS) if (key in current) out[key] = current[key]
   if ('multiplayer' in current) out.multiplayer = lobbyMultiplayer(current.multiplayer)
+  // Same shape as the server's visitor lobby view (game_queries.lobby_detail).
+  out.viewer = { kind: 'outsider' }
   return out
 }
 

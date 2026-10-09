@@ -154,6 +154,17 @@ def revoke_seat_token(instance: Any, uid: str) -> bool:
     return credentials.pop(str(uid or ""), None) is not None
 
 
+def prune_seat_credentials(instance: Any) -> list[str]:
+    """Drop credentials of seats that no longer exist; return their uids."""
+    require_writable(instance)
+    seats = set(getattr(instance, "players", None) or {})
+    credentials = get_module_state(instance, MODULE_NAME)["seat_credentials"]
+    departed = [uid for uid in credentials if uid not in seats]
+    for uid in departed:
+        credentials.pop(uid, None)
+    return departed
+
+
 def has_seat_token(instance: Any, uid: str) -> bool:
     return str(uid or "") in get_module_state(instance, MODULE_NAME)["seat_credentials"]
 

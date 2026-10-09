@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, errorMessage } from '@/api/client'
+import { api, errorMessage, retryOnRateLimit } from '@/api/client'
 import type { CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CharacterSkill, GameDetail, PlayerCreateResponse, RuleAttribute, RuleMeta, RulesetRuntimeMeta } from '@/api/types'
 import { rememberCurrentGame } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
@@ -196,14 +196,23 @@ async function afterGate() {
 
 /** Rejoin the seat a takeover link's token belongs to (this device's session is rebound). */
 async function resumeSeat() {
+  const seatToken = readSeatToken(gameKey.value)
+  if (!seatToken) {
+    // Without the seat's token this would silently become a brand-new seat.
+    error.value = t('seatTokenMissing')
+    resumeUser.value = ''
+    await loadGameData()
+    return
+  }
   busy.value = true; error.value = ''
   try {
-    const r = await api<PlayerCreateResponse>(`/games/${encodeURIComponent(gameKey.value)}/players`, {
+    // Rejoining an existing seat is idempotent, so a transient rate limit is retried once.
+    const r = await retryOnRateLimit(() => api<PlayerCreateResponse>(`/games/${encodeURIComponent(gameKey.value)}/players`, {
       method: 'POST',
       // Sent explicitly so it also applies when the GM opens the link while logged in.
-      headers: { [SEAT_TOKEN_HEADER]: readSeatToken(gameKey.value) },
+      headers: { [SEAT_TOKEN_HEADER]: seatToken },
       body: JSON.stringify({ join_as_new: false }),
-    })
+    }))
     if (r.error) throw new Error(r.error)
     localStorage.setItem('trpg_play_user_' + gameKey.value, r.user_id)
     storeSeatToken(gameKey.value, r.seat_token)

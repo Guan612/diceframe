@@ -24,6 +24,7 @@ vi.mock('../src/api/client', () => ({
   apiBlob: vi.fn(),
   hasAccessToken: () => false,
   isNotFoundError: (error: unknown) => Boolean((error as { status?: number })?.status === 404),
+  retryOnRateLimit: <T>(request: () => Promise<T>) => request(),
 }))
 vi.mock('../src/api/rulesets', () => ({
   fetchRulesetAvailableActions: mocks.fetchRulesetAvailableActions,
@@ -195,10 +196,11 @@ describe('PlayView takeover link', () => {
     document.body.innerHTML = ''
   })
 
-  it('issues once and reuses the link on the next click instead of rotating', async () => {
+  it('re-validates the cached link and reuses it while it is still current', async () => {
     api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
       if (path === issuePath) {
-        expect(JSON.parse(String(init?.body))).toEqual({ rotate: false })
+        const body = JSON.parse(String(init?.body))
+        if (body.check === 'tok-1') return { ok: true, user_id: 'p2', seat_token: 'tok-1', reused: true }
         return { ok: true, user_id: 'p2', seat_token: 'tok-1' }
       }
       return {}
@@ -212,8 +214,35 @@ describe('PlayView takeover link', () => {
     const second = await openTakeover(wrapper)
 
     expect(second.props('seatToken')).toBe('tok-1')
-    expect(issueCalls()).toHaveLength(1)
+    expect(issueCalls().map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { rotate: false },
+      { rotate: false, check: 'tok-1' },
+    ])
     expect(mocks.confirm).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('offers a confirmed reissue when the cached link went stale elsewhere', async () => {
+    let current = 'tok-1'
+    api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path !== issuePath) return {}
+      const body = JSON.parse(String(init?.body))
+      if (body.rotate) { current = 'tok-new'; return { ok: true, user_id: 'p2', seat_token: current } }
+      if (body.check === current) return { ok: true, user_id: 'p2', seat_token: current, reused: true }
+      if (body.check) throw Object.assign(new Error('in use'), { status: 409, code: 'SEAT_TOKEN_EXISTS' })
+      return { ok: true, user_id: 'p2', seat_token: current }
+    })
+    const { wrapper } = await mountPlayView({ game: GAME_KEY })
+    await openTakeover(wrapper)
+    wrapper.findComponent({ name: 'InviteQrModal' }).vm.$emit('close')
+    await flushPromises()
+
+    current = 'tok-other-device'  // another GM device reissued the link
+    mocks.confirm.mockResolvedValueOnce(true)
+    const reopened = await openTakeover(wrapper)
+
+    expect(mocks.confirm).toHaveBeenCalledOnce()
+    expect(reopened.props('seatToken')).toBe('tok-new')
     wrapper.unmount()
   })
 

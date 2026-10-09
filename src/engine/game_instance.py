@@ -1837,7 +1837,12 @@ class GameInstance:
             ruleset_runtime.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
+            from src.engine.modules import room_access
+
+            room_access.require_writable(self)
             instance_lifecycle.reset_locked(self, keep_seed=keep_seed)
+            # Reset empties the seats; their share credentials go with them.
+            room_access.prune_seat_credentials(self)
 
     # ---------- 序列化 --------------------------------------
 

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, PlayForwardOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
-import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
+import { api, apiBlob, hasAccessToken, isNotFoundError, retryOnRateLimit } from '@/api/client'
 import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, GmStyle, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
@@ -782,10 +782,10 @@ async function setControl(uid: string, mode: 'ai' | 'human') {
 // 不会因为多点一次就把玩家踢下线。
 const takeoverTokens = new Map<string, string>()
 
-async function issueTakeoverToken(uid: string, rotate: boolean): Promise<string> {
+async function issueTakeoverToken(uid: string, rotate: boolean, check = ''): Promise<string> {
   const r = await api<{ seat_token: string }>(
     `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/seat-token`,
-    { method: 'POST', body: JSON.stringify({ rotate }) },
+    { method: 'POST', body: JSON.stringify(check ? { rotate, check } : { rotate }) },
   )
   return r.seat_token
 }
@@ -798,32 +798,36 @@ async function issueTakeoverToken(uid: string, rotate: boolean): Promise<string>
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
   const cacheKey = `${game.currentGame.value}\u0000${uid}`
-  let token = takeoverTokens.get(cacheKey) || ''
-  if (!token) {
-    try {
-      token = await issueTakeoverToken(uid, false)
-    } catch (e: unknown) {
-      if ((e as { code?: string })?.code !== 'SEAT_TOKEN_EXISTS') {
-        toast.error(errorMessage(e))
-        return
-      }
-      const ok = await confirm({
-        title: t('seatLinkReissueTitle'),
-        content: t('seatLinkReissueContent'),
-        positiveText: t('seatLinkReissueConfirm'),
-        negativeText: t('cancel'),
-        type: 'warning',
-      })
-      if (!ok) return
-      try {
-        token = await issueTakeoverToken(uid, true)
-      } catch (rotateError: unknown) {
-        toast.error(errorMessage(rotateError))
-        return
-      }
+  // The cached link is re-validated on every open: another GM device may have
+  // reissued it since. A current one comes back unchanged; a stale one is
+  // treated like any seat in use and only reissued after confirmation.
+  const cached = takeoverTokens.get(cacheKey) || ''
+  let token = ''
+  try {
+    token = await issueTakeoverToken(uid, false, cached)
+  } catch (e: unknown) {
+    if ((e as { code?: string })?.code !== 'SEAT_TOKEN_EXISTS') {
+      toast.error(errorMessage(e))
+      return
     }
-    takeoverTokens.set(cacheKey, token)
+    takeoverTokens.delete(cacheKey)
+    if (cached) toast.warning(t('seatLinkStale'))
+    const ok = await confirm({
+      title: t('seatLinkReissueTitle'),
+      content: t('seatLinkReissueContent'),
+      positiveText: t('seatLinkReissueConfirm'),
+      negativeText: t('cancel'),
+      type: 'warning',
+    })
+    if (!ok) return
+    try {
+      token = await issueTakeoverToken(uid, true)
+    } catch (rotateError: unknown) {
+      toast.error(errorMessage(rotateError))
+      return
+    }
   }
+  takeoverTokens.set(cacheKey, token)
   inviteSeatToken.value = token
   inviteHint.value = t('controlLinkQrHint')
   inviteTitle.value = t('controlLink')
@@ -980,10 +984,10 @@ async function ensureSeatToken(): Promise<boolean> {
   if (!route.query.user && !route.query.share) return true
   if (readSeatToken(gk)) return true
   try {
-    const r = await api<{ seat_token: string }>(
+    const r = await retryOnRateLimit(() => api<{ seat_token: string }>(
       `/games/${encodeURIComponent(gk)}/seat-token/claim`,
       { method: 'POST', body: '{}' },
-    )
+    ))
     storeSeatToken(gk, r.seat_token)
     return true
   } catch {
@@ -1041,7 +1045,7 @@ async function loadPlayContext() {
   if (!(await ensureSeatToken())) return
   if (!route.query.user) {
     try {
-      await api(`/games/${encodeURIComponent(game.currentGame.value)}/claim-gm`, { method: 'POST', body: '{}' })
+      await retryOnRateLimit(() => api(`/games/${encodeURIComponent(game.currentGame.value)}/claim-gm`, { method: 'POST', body: '{}' }))
     } catch (e: unknown) {
       if (!isNotFoundError(e)) game.error.value = errorMessage(e)
     }

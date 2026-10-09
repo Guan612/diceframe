@@ -13,6 +13,23 @@ export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
 }
 
+/**
+ * Retry an idempotent "enter the game" write once when the server reports a
+ * short rate limit (429 with Retry-After). Players at one table often share a
+ * public IP; a transient write budget should not strand them on the join page
+ * or demote the GM view. Never use this for writes that must not repeat.
+ */
+export async function retryOnRateLimit<T>(request: () => Promise<T>, maxWaitSeconds = 10): Promise<T> {
+  try {
+    return await request()
+  } catch (error: unknown) {
+    const wait = error instanceof ApiError && error.status === 429 ? Number(error.retryAfter || 0) : 0
+    if (!wait || wait > maxWaitSeconds) throw error
+    await new Promise(resolve => setTimeout(resolve, wait * 1000))
+    return await request()
+  }
+}
+
 export function isNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404
 }

@@ -14,6 +14,7 @@ from src.webui.routes._common import (
 
 logger = logging.getLogger("trpg")
 from src.webui.routes.game_route_common import _gm_only_inst
+from src.webui.services._common import canonical_game_key
 
 
 async def api_create_game(request: web.Request) -> web.Response:
@@ -70,10 +71,23 @@ async def api_reset_game(request: web.Request) -> web.Response:
     if denied is not None:
         return denied
     gk = request.match_info["game_key"]
-    _, denied = _gm_only_inst(request, gk)
+    inst, denied = _gm_only_inst(request, gk)
     if denied is not None:
         return denied
-    result = await _get_api(request).reset_game(gk)
+    before = set(getattr(inst, "players", {}) or {})
+    # The GM identity survives a reset; only the departed seats' devices go.
+    before.discard(str(getattr(inst, "gm_uid", "") or ""))
+    api = _get_api(request)
+    result = await api.reset_game(gk)
+    if result.get("ok"):
+        # Reset starts a run without the old seats: their devices are just
+        # visitors in this game from now on.
+        current = api.get_game_instance(gk)
+        remaining = set(getattr(current, "players", {}) or {}) if current is not None else set()
+        mgr = request.app.get("session_manager")
+        if mgr is not None:
+            for uid in sorted(before - remaining):
+                mgr.revoke_game_binding(uid, canonical_game_key(gk))
     return web.json_response(result)
 
 
