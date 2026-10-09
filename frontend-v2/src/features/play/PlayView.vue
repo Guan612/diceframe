@@ -778,22 +778,53 @@ async function setControl(uid: string, mode: 'ai' | 'human') {
   } catch (e: unknown) { toast.error(errorMessage(e)) } finally { hostingUid.value = '' }
 }
 
+// 本次会话里 GM 已拿到的接管凭证（只在内存里）：再次打开同一席位的链接直接复用，
+// 不会因为多点一次就把玩家踢下线。
+const takeoverTokens = new Map<string, string>()
+
+async function issueTakeoverToken(uid: string, rotate: boolean): Promise<string> {
+  const r = await api<{ seat_token: string }>(
+    `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/seat-token`,
+    { method: 'POST', body: JSON.stringify({ rotate }) },
+  )
+  return r.seat_token
+}
+
 /**
- * 单个玩家的接管链接：同样走二维码弹窗。链接带的是该席位新签发的凭证，
- * 不是公开 uid；重新生成会让该席位的旧链接立即失效。
+ * 单个玩家的接管链接：同样走二维码弹窗。链接带的是该席位的凭证，不是公开 uid。
+ * 席位还没有凭证时直接签发；已有凭证（链接在别的设备上）时，重新生成会让那台
+ * 设备下线，所以必须由 GM 明确确认。
  */
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
-  try {
-    const r = await api<{ seat_token: string }>(
-      `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/seat-token`,
-      { method: 'POST', body: '{}' },
-    )
-    inviteSeatToken.value = r.seat_token
-  } catch (e: unknown) {
-    toast.error(errorMessage(e))
-    return
+  const cacheKey = `${game.currentGame.value}\u0000${uid}`
+  let token = takeoverTokens.get(cacheKey) || ''
+  if (!token) {
+    try {
+      token = await issueTakeoverToken(uid, false)
+    } catch (e: unknown) {
+      if ((e as { code?: string })?.code !== 'SEAT_TOKEN_EXISTS') {
+        toast.error(errorMessage(e))
+        return
+      }
+      const ok = await confirm({
+        title: t('seatLinkReissueTitle'),
+        content: t('seatLinkReissueContent'),
+        positiveText: t('seatLinkReissueConfirm'),
+        negativeText: t('cancel'),
+        type: 'warning',
+      })
+      if (!ok) return
+      try {
+        token = await issueTakeoverToken(uid, true)
+      } catch (rotateError: unknown) {
+        toast.error(errorMessage(rotateError))
+        return
+      }
+    }
+    takeoverTokens.set(cacheKey, token)
   }
+  inviteSeatToken.value = token
   inviteHint.value = t('controlLinkQrHint')
   inviteTitle.value = t('controlLink')
 }

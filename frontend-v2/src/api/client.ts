@@ -69,6 +69,10 @@ export function authHeaders(initHeaders?: HeadersInit, contentType = true): Head
  */
 export function applySeatTokenHeader(headers: Headers, path: string): void {
   if (headers.has(SEAT_TOKEN_HEADER) || hasAccessToken()) return
+  // Only a player's own share page speaks for a seat. The GM's page and P2P
+  // host delegation (which names the bridged seat itself) never attach one,
+  // even on a host without an access password.
+  if (!isPlayerShareLocation() || /[?&]delegate=(?:1|true|yes)(?:&|$)/u.test(path)) return
   const token = readSeatToken(gameKeyOfApiPath(path))
   if (token) headers.set(SEAT_TOKEN_HEADER, token)
 }

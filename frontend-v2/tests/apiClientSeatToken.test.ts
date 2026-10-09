@@ -96,4 +96,66 @@ describe('API client seat token', () => {
     expect(localStorage.getItem('trpg_play_user_' + GAME)).toBe('p1')
     expect(location.hash).toContain('#/play?')
   })
+
+  it('never attaches a seat token outside a player share page (GM page, no password)', async () => {
+    location.hash = `#/play?game=${encodeURIComponent(GAME)}`
+    storeSeatToken(GAME, 'tok-p1')
+    const fetchMock = okFetch()
+
+    await api(`/games/${encodeURIComponent(GAME)}/players/p2/seat-token`, { method: 'POST', body: '{}' })
+
+    expect(sentHeaders(fetchMock).has('X-Seat-Token')).toBe(false)
+  })
+
+  it('never attaches a seat token to a delegated (P2P host) request', async () => {
+    storeSeatToken(GAME, 'tok-p1')
+    const fetchMock = okFetch()
+
+    await api(`/games/${encodeURIComponent(GAME)}/action?user=player_9&share=1&delegate=1`, { method: 'POST', body: '{}' })
+
+    expect(sentHeaders(fetchMock).has('X-Seat-Token')).toBe(false)
+  })
+
+  it('sends the confirm header on seat-token writes', async () => {
+    const fetchMock = okFetch()
+
+    await api(`/games/${encodeURIComponent(GAME)}/seat-token/claim`, { method: 'POST', body: '{}' })
+
+    expect(sentHeaders(fetchMock).get('X-TRPG-Confirm')).toBe('true')
+  })
+})
+
+describe('seat token is scoped to its backend (standalone frontend)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+    location.hash = ''
+  })
+
+  it('does not send a token issued by one server to another server named in a link', async () => {
+    vi.stubGlobal('__DF_STANDALONE__', true)
+    localStorage.setItem('trpg_backend_url', 'https://table.example.com')
+    location.hash = `#/play?game=${encodeURIComponent(GAME)}&user=p1&share=1`
+    storeSeatToken(GAME, 'tok-table')
+
+    const fetchMock = okFetch()
+    location.hash = `#/play?game=${encodeURIComponent(GAME)}&user=p1&share=1&server=${encodeURIComponent('https://evil.example.com')}`
+    await api(`/games/${encodeURIComponent(GAME)}/private-log`)
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('https://evil.example.com')
+    expect(sentHeaders(fetchMock).has('X-Seat-Token')).toBe(false)
+    expect(readSeatToken(GAME)).toBe('')
+  })
+
+  it('still sends the token to the server that issued it', async () => {
+    vi.stubGlobal('__DF_STANDALONE__', true)
+    location.hash = `#/play?game=${encodeURIComponent(GAME)}&user=p1&share=1&server=${encodeURIComponent('https://table.example.com')}`
+    storeSeatToken(GAME, 'tok-table')
+    const fetchMock = okFetch()
+
+    await api(`/games/${encodeURIComponent(GAME)}/private-log`)
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('https://table.example.com')
+    expect(sentHeaders(fetchMock).get('X-Seat-Token')).toBe('tok-table')
+  })
 })

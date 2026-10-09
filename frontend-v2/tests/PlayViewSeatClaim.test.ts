@@ -11,6 +11,7 @@ const GAME_KEY = 'web|combat|bot'
 const mocks = vi.hoisted(() => ({
   api: vi.fn(),
   fetchRulesetAvailableActions: vi.fn(),
+  confirm: vi.fn(),
   resolveGameSceneImageUrl: vi.fn(),
 }))
 
@@ -38,7 +39,7 @@ vi.mock('../src/composables/useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn(), warning: vi.fn() }),
 }))
 vi.mock('../src/composables/useConfirm', () => ({
-  useConfirm: () => ({ confirm: vi.fn().mockResolvedValue(false) }),
+  useConfirm: () => ({ confirm: mocks.confirm }),
 }))
 vi.mock('../src/stores/useSettingsStore', () => ({
   useSettingsStore: () => ({
@@ -160,6 +161,82 @@ describe('PlayView seat token migration', () => {
     expect(router.currentRoute.value.query).toMatchObject({ game: GAME_KEY, notice: 'seat' })
     expect(localStorage.getItem('trpg_play_user_' + GAME_KEY)).toBeNull()
     expect(readSeatToken(GAME_KEY)).toBe('')
+    wrapper.unmount()
+  })
+})
+
+describe('PlayView takeover link', () => {
+  const issuePath = `/games/${encodeURIComponent(GAME_KEY)}/players/p2/seat-token`
+  const api = mocks.api as unknown as Mock
+
+  function issueCalls() {
+    return api.mock.calls.filter(([path]) => path === issuePath)
+  }
+
+  async function openTakeover(wrapper: Awaited<ReturnType<typeof mountPlayView>>['wrapper']) {
+    wrapper.findComponent({ name: 'MultiplayerPanel' }).vm.$emit('copy-link', 'p2')
+    await flushPromises()
+    return wrapper.findComponent({ name: 'InviteQrModal' })
+  }
+
+  beforeEach(() => {
+    i18n.global.locale.value = 'zh-CN'
+    gameState.detail.value = { ...memberDetail, solo_mode: false, gm_uid: 'gm' } as GameDetail
+    gameState.isGm.value = true
+    gameState.userId.value = ''
+    gameState.currentGame.value = GAME_KEY
+    mocks.confirm.mockReset().mockResolvedValue(false)
+    mocks.fetchRulesetAvailableActions.mockReset().mockResolvedValue({})
+    mocks.resolveGameSceneImageUrl.mockReset().mockResolvedValue('')
+  })
+
+  afterEach(() => {
+    localStorage.clear()
+    document.body.innerHTML = ''
+  })
+
+  it('issues once and reuses the link on the next click instead of rotating', async () => {
+    api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === issuePath) {
+        expect(JSON.parse(String(init?.body))).toEqual({ rotate: false })
+        return { ok: true, user_id: 'p2', seat_token: 'tok-1' }
+      }
+      return {}
+    })
+    const { wrapper } = await mountPlayView({ game: GAME_KEY })
+
+    const first = await openTakeover(wrapper)
+    expect(first.props('seatToken')).toBe('tok-1')
+    wrapper.findComponent({ name: 'InviteQrModal' }).vm.$emit('close')
+    await flushPromises()
+    const second = await openTakeover(wrapper)
+
+    expect(second.props('seatToken')).toBe('tok-1')
+    expect(issueCalls()).toHaveLength(1)
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('rotates an existing seat link only after the GM confirms', async () => {
+    api.mockReset().mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === issuePath) {
+        const rotate = JSON.parse(String(init?.body)).rotate
+        if (!rotate) throw Object.assign(new Error('exists'), { status: 409, code: 'SEAT_TOKEN_EXISTS' })
+        return { ok: true, user_id: 'p2', seat_token: 'tok-rotated' }
+      }
+      return {}
+    })
+    const { wrapper } = await mountPlayView({ game: GAME_KEY })
+
+    mocks.confirm.mockResolvedValueOnce(false)
+    const declined = await openTakeover(wrapper)
+    expect(declined.exists()).toBe(false)
+    expect(issueCalls().map(([, init]) => JSON.parse(String(init?.body)).rotate)).toEqual([false])
+
+    mocks.confirm.mockResolvedValueOnce(true)
+    const confirmed = await openTakeover(wrapper)
+    expect(confirmed.props('seatToken')).toBe('tok-rotated')
+    expect(issueCalls().map(([, init]) => JSON.parse(String(init?.body)).rotate)).toEqual([false, false, true])
     wrapper.unmount()
   })
 })

@@ -233,7 +233,11 @@ export class PeerHostGameBridge {
       const actorId = typeof result.user_id === 'string' ? result.user_id : ''
       if (!actorId) throw new Error(String(result.error || 'player_creation_failed'))
       this.bindActor(peerId, actorId)
-      return result
+      // The seat's share credential stays on the host: a guest acts only
+      // through this bridge, never with its own HTTP identity.
+      const guestResult = { ...result }
+      delete guestResult.seat_token
+      return guestResult
     }
     if (operation === 'player.rebind') {
       // 邀请中指定的已有角色，或该 peer 此前创建并已持久化的角色，才允许恢复。

@@ -60,7 +60,9 @@ export async function seatTakeoverPath(
   uid: string,
 ): Promise<string> {
   const url = `/api/games/${encodeURIComponent(gameKey)}/players/${encodeURIComponent(uid)}/seat-token`
-  const init = { headers: { Authorization: `Bearer ${accessToken()}`, 'X-TRPG-Confirm': 'true' }, data: {} }
+  // The desktop and mobile projects take over the same fixture seat, so the
+  // second issue is an explicit rotation.
+  const init = { headers: { Authorization: `Bearer ${accessToken()}`, 'X-TRPG-Confirm': 'true' }, data: { rotate: true } }
   let response = await request.post(url, init)
   // The whole smoke suite writes from one IP and can hit the per-IP write
   // budget; wait out the advertised window like a real client would.

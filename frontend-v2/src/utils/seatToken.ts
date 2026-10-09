@@ -8,12 +8,21 @@
  * already bound to its seat — and is stored per game in this browser.
  */
 
+import { currentBackendUrl } from '@/api/connection'
+
 export const SEAT_TOKEN_HEADER = 'X-Seat-Token'
 
 const STORAGE_PREFIX = 'trpg_seat_token_'
 
+/**
+ * Scoped by the backend the requests go to (like the owner access token), so a
+ * crafted link pointing the frontend at another server can never pick up a
+ * token issued by this one.
+ */
 export function seatTokenKey(gameKey: string): string {
-  return STORAGE_PREFIX + gameKey
+  const backend = currentBackendUrl()
+  const base = STORAGE_PREFIX + gameKey
+  return backend ? `${base}@${encodeURIComponent(backend)}` : base
 }
 
 export function readSeatToken(gameKey: string): string {
