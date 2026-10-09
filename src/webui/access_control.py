@@ -342,7 +342,7 @@ class WebAccessControl:
                 request.method == "POST"
                 and tail == "checks"
                 and len(parts) >= 6
-                and parts[5] == "luck"
+                and parts[5] in {"luck", "reveal"}
             ):
                 return uid or request.get("user_id", "")
             if request.method in {"PUT", "PATCH"} and tail == "character":
