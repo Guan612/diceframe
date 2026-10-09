@@ -2470,6 +2470,11 @@ export const en = {
   inviteQrHint: 'Scanning joins this game and creates a character.',
   controlLink: 'Control link',
   controlLinkQrHint: 'Scanning lets that player resume this character on their phone.',
+  seatLinkReissueTitle: 'Reissue the control link?',
+  seatLinkReissueContent: 'This seat already has a link in use. Reissuing logs out the device using the old link; it must rejoin with the new one.',
+  seatLinkReissueConfirm: 'Reissue (logs out the old device)',
+  seatLinkExpired: 'This link no longer works: player links now use a per-seat credential. Ask the GM for a new control link.',
+  seatTokenMissing: 'This device has no credential for its seat yet. Ask the GM for a control link and open it here.',
   pairingTitle: 'Sign in by QR code',
   pairingHelp: 'Scan once with the DiceFrame app to connect to this server — no typing IP addresses or passwords.',
   pairingAddressLabel: 'Address the phone should use',
@@ -2500,6 +2505,10 @@ export const en = {
   encounterSaveChanges: 'Save changes',
 
   apiErrors: {
+    SEAT_TOKEN_REQUIRED: 'A seat credential is required. Rejoin with the link from your GM.',
+    SEAT_TOKEN_INVALID: 'This seat credential is invalid or was replaced. Ask your GM for a new link.',
+    SEAT_TOKEN_EXISTS: 'This seat already has a credential. Use the link from your GM.',
+    SEAT_NOT_BOUND: 'This device is not bound to a seat in this game.',
     hub_connection_unavailable: 'Could not reach DiceFrame Hub. Check your network and try again.',
     game_not_found: 'Game not found',
     player_not_in_game: 'Not part of this game — join via the invite link',

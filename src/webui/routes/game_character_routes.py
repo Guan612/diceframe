@@ -7,6 +7,7 @@ import logging
 from aiohttp import web
 
 from src.webui.api import can_modify_character
+from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 from src.webui.routes._common import (
     _get_api,
     _require_confirmed_request,
@@ -259,20 +260,69 @@ async def api_player_create(request: web.Request) -> web.Response:
     inst = api.get_game_instance(gk)
     if not inst:
         return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
-    session_uid = request.get("user_id", "")
+    owner = bool(request.get("owner_authenticated", False))
+    acting_uid = request.get("user_id", "")
+    session_uid = str(request.get("session_user_id", acting_uid) or "")
+    seat_token_uid = str(request.get("seat_token_uid", "") or "")
     requested_uid = str(body.get("user_id") or "").strip()
     join_as_new = bool(body.get("join_as_new")) and not requested_uid
-    force_uid = "" if join_as_new else session_uid
+    force_uid = "" if join_as_new else acting_uid
+    # Rejoining an existing seat needs that seat's token (owner and bot
+    # excepted); checked inside the seat-creation lock, not here.
     result = await api.create_player(
-        gk, body, force_uid=force_uid, assign_new_id=join_as_new
+        gk, body, force_uid=force_uid, assign_new_id=join_as_new,
+        seat_token_uid=seat_token_uid,
+        require_seat_proof=bool(
+            request.get(ACCESS_PASSWORD_CONFIGURED_KEY, False)
+            and not owner
+            and not request.get("bot_authenticated", False)
+        ),
     )
-    # 换设备恢复：普通玩家可按链接恢复身份；GM 点击玩家操作链接时不能改绑成玩家。
+    if result.get("error_code") == "SEAT_TOKEN_REQUIRED":
+        return web.json_response(result, status=403)
+    # 换设备恢复：持有席位凭证的会话改绑到该席位；GM 会话不能改绑成玩家。
     if _should_rebind_player_session(
-        session_uid, inst.gm_uid, requested_uid, result, join_as_new
+        session_uid, inst.gm_uid, requested_uid or seat_token_uid, result, join_as_new
     ):
         mgr = request.app.get("session_manager")
         token = request.get("session_token")
         if mgr and token:
             mgr.rebind(token, result.get("user_id", ""))
     status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
+    return web.json_response(result, status=status)
+
+
+async def api_seat_token_issue(request: web.Request) -> web.Response:
+    """GM/owner: issue a seat's takeover token; rotating one needs ``rotate``."""
+    denied = _require_confirmed_request(request)
+    if denied is not None:
+        return denied
+    body = await request.json() if request.can_read_body else {}
+    uid = request.match_info["uid"]
+    result = await _get_api(request).issue_seat_token(
+        request.match_info["game_key"],
+        uid,
+        requester_uid=str(request.get("user_id", "") or ""),
+        owner=bool(request.get("owner_authenticated", False)),
+        rotate=bool(isinstance(body, dict) and body.get("rotate")),
+    )
+    status = int(result.pop("status", 200))
+    if result.get("ok"):
+        # The old credential is gone; so is every session still bound to it.
+        mgr = request.app.get("session_manager")
+        if mgr is not None:
+            mgr.unbind_user(uid)
+    return web.json_response(result, status=status)
+
+
+async def api_seat_token_claim(request: web.Request) -> web.Response:
+    """A session already bound to a seat gets that seat's first token."""
+    denied = _require_confirmed_request(request)
+    if denied is not None:
+        return denied
+    result = await _get_api(request).claim_seat_token(
+        request.match_info["game_key"],
+        session_uid=str(request.get("session_user_id", request.get("user_id", "")) or ""),
+    )
+    status = int(result.pop("status", 200))
     return web.json_response(result, status=status)

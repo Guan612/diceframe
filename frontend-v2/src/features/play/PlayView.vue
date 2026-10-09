@@ -7,6 +7,8 @@ import { api, apiBlob, hasAccessToken, isNotFoundError } from '@/api/client'
 import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, GmStyle, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
+import { readSeatToken, storeSeatToken } from '@/utils/seatToken'
+import { activePeerGameClient } from '@/peer/game/bridge'
 import { useGame } from '@/composables/useGame'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
@@ -70,7 +72,7 @@ const worldCandidates = ref<WorldCandidate[]>([]), showWorldSwitch = ref(false),
 const diceRevealModeTouched = ref(false)
 // 邀请/接管二维码弹窗：title 非空即展示，关闭时置空。链接由弹窗自己按选中的
 // 可达地址算（见 InviteQrModal），这里只交代给谁开、开哪一局。
-const inviteTitle = ref(''), inviteHint = ref(''), inviteUser = ref('')
+const inviteTitle = ref(''), inviteHint = ref(''), inviteSeatToken = ref('')
 const rewardPolicyMode = ref(''), rewardPolicyCap = ref(''), rewardPolicyTouched = ref(false)
 const sidebarCollapsed = ref(localStorage.getItem('play_sidebar_collapsed') === '1')
 const mobilePanel = ref<'sidebar' | 'controls' | ''>('')
@@ -640,7 +642,7 @@ async function ensureSettingsLoaded() {
 /** 出示加入二维码（含可复制原文）；玩家掏手机扫一下就进，不用转发链接 */
 async function invite() {
   await ensureSettingsLoaded()
-  inviteUser.value = ''
+  inviteSeatToken.value = ''
   inviteHint.value = t('inviteQrHint')
   inviteTitle.value = t('inviteLink')
 }
@@ -776,10 +778,53 @@ async function setControl(uid: string, mode: 'ai' | 'human') {
   } catch (e: unknown) { toast.error(errorMessage(e)) } finally { hostingUid.value = '' }
 }
 
-/** 单个玩家的接管链接：同样走二维码弹窗，链接里带 user 参数 */
+// 本次会话里 GM 已拿到的接管凭证（只在内存里）：再次打开同一席位的链接直接复用，
+// 不会因为多点一次就把玩家踢下线。
+const takeoverTokens = new Map<string, string>()
+
+async function issueTakeoverToken(uid: string, rotate: boolean): Promise<string> {
+  const r = await api<{ seat_token: string }>(
+    `/games/${encodeURIComponent(game.currentGame.value)}/players/${encodeURIComponent(uid)}/seat-token`,
+    { method: 'POST', body: JSON.stringify({ rotate }) },
+  )
+  return r.seat_token
+}
+
+/**
+ * 单个玩家的接管链接：同样走二维码弹窗。链接带的是该席位的凭证，不是公开 uid。
+ * 席位还没有凭证时直接签发；已有凭证（链接在别的设备上）时，重新生成会让那台
+ * 设备下线，所以必须由 GM 明确确认。
+ */
 async function copyLink(uid: string) {
   await ensureSettingsLoaded()
-  inviteUser.value = uid
+  const cacheKey = `${game.currentGame.value}\u0000${uid}`
+  let token = takeoverTokens.get(cacheKey) || ''
+  if (!token) {
+    try {
+      token = await issueTakeoverToken(uid, false)
+    } catch (e: unknown) {
+      if ((e as { code?: string })?.code !== 'SEAT_TOKEN_EXISTS') {
+        toast.error(errorMessage(e))
+        return
+      }
+      const ok = await confirm({
+        title: t('seatLinkReissueTitle'),
+        content: t('seatLinkReissueContent'),
+        positiveText: t('seatLinkReissueConfirm'),
+        negativeText: t('cancel'),
+        type: 'warning',
+      })
+      if (!ok) return
+      try {
+        token = await issueTakeoverToken(uid, true)
+      } catch (rotateError: unknown) {
+        toast.error(errorMessage(rotateError))
+        return
+      }
+    }
+    takeoverTokens.set(cacheKey, token)
+  }
+  inviteSeatToken.value = token
   inviteHint.value = t('controlLinkQrHint')
   inviteTitle.value = t('controlLink')
 }
@@ -923,6 +968,31 @@ function syncPlayRoute() {
   }
 }
 
+/**
+ * A share-link player acts through its seat token. A player who joined before
+ * seat tokens existed still has a session bound to the seat: claim that seat's
+ * first token once. If the seat already has a credential elsewhere (or this
+ * session is not bound), only a GM link can bring this device back in.
+ */
+async function ensureSeatToken(): Promise<boolean> {
+  const gk = game.currentGame.value
+  if (!gk || hasAccessToken() || activePeerGameClient()) return true
+  if (!route.query.user && !route.query.share) return true
+  if (readSeatToken(gk)) return true
+  try {
+    const r = await api<{ seat_token: string }>(
+      `/games/${encodeURIComponent(gk)}/seat-token/claim`,
+      { method: 'POST', body: '{}' },
+    )
+    storeSeatToken(gk, r.seat_token)
+    return true
+  } catch {
+    localStorage.removeItem('trpg_play_user_' + gk)
+    router.replace({ name: 'join', query: { game: gk, share: '1', notice: 'seat' } })
+    return false
+  }
+}
+
 async function loadPlayContext() {
   if (!game.currentGame.value) return
   syncPlayRoute()
@@ -968,6 +1038,7 @@ async function loadPlayContext() {
       // 校验请求本身失败（网络抖动/后端重启）：保持旧行为留在本页，下次刷新重试。
     }
   }
+  if (!(await ensureSeatToken())) return
   if (!route.query.user) {
     try {
       await api(`/games/${encodeURIComponent(game.currentGame.value)}/claim-gm`, { method: 'POST', body: '{}' })
@@ -1552,7 +1623,7 @@ onBeforeUnmount(() => {
     <InviteQrModal
       v-if="inviteTitle"
       :game-key="game.currentGame.value"
-      :user="inviteUser || undefined"
+      :seat-token="inviteSeatToken || undefined"
       :title="inviteTitle"
       :hint="inviteHint"
       @close="inviteTitle = ''"

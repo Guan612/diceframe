@@ -137,12 +137,14 @@ def verify_seat_token(instance: Any, token: str) -> str | None:
         return None
     digest = _token_digest(token)
     matched: str | None = None
+    seats = getattr(instance, "players", None) or {}
     credentials = get_module_state(instance, MODULE_NAME)["seat_credentials"]
     for uid, record in credentials.items():
         stored = record.get("hash") if isinstance(record, dict) else None
         if isinstance(stored, str) and hmac.compare_digest(stored, digest):
             matched = str(uid)
-    return matched
+    # A credential never outlives its seat.
+    return matched if matched is not None and matched in seats else None
 
 
 def revoke_seat_token(instance: Any, uid: str) -> bool:
@@ -157,11 +159,14 @@ def has_seat_token(instance: Any, uid: str) -> bool:
 
 
 def copy_seat_credentials(target: Any, source: Any) -> None:
-    """Carry seat credentials into a new run that keeps the same seats."""
+    """Carry seat credentials into a new run, only for the seats it kept."""
     require_writable(target)
-    get_module_state(target, MODULE_NAME)["seat_credentials"] = copy.deepcopy(
-        get_module_state(source, MODULE_NAME)["seat_credentials"]
-    )
+    kept = set(getattr(target, "players", None) or {})
+    get_module_state(target, MODULE_NAME)["seat_credentials"] = {
+        uid: copy.deepcopy(record)
+        for uid, record in get_module_state(source, MODULE_NAME)["seat_credentials"].items()
+        if uid in kept
+    }
 
 
 def scrub_seat_credentials(payload: Any) -> None:

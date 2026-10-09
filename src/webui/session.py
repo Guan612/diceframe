@@ -63,6 +63,29 @@ class SessionManager:
     def get_name(self, token: str) -> str:
         return self._sessions.get(token, {}).get("name", "")
 
+    def unbind_user(self, user_id: str) -> int:
+        """Detach every session bound to ``user_id`` (each gets a fresh uid).
+
+        Used when a seat's credential is rotated: devices that held the old
+        link must not keep acting as the seat through their cookie.
+        """
+        if not user_id:
+            return 0
+        existing = {session["user_id"] for session in self._sessions.values()}
+        changed = 0
+        for session in self._sessions.values():
+            if session.get("user_id") != user_id:
+                continue
+            fresh = f"web_{uuid.uuid4().hex[:8]}"
+            while fresh in existing:
+                fresh = f"web_{uuid.uuid4().hex[:8]}"
+            existing.add(fresh)
+            session["user_id"] = fresh
+            changed += 1
+        if changed:
+            self._save()
+        return changed
+
     def rebind(self, token: str, user_id: str) -> None:
         """把当前 session token 绑定到指定 user_id（换设备恢复身份用）。"""
         if token in self._sessions:

@@ -2468,6 +2468,11 @@ export const ja = {
   inviteQrHint: '読み取るとこのセッションに参加してキャラクターを作成できます。',
   controlLink: '操作リンク',
   controlLinkQrHint: '読み取ると、そのプレイヤーはスマホでこのキャラクターを再開できます。',
+  seatLinkReissueTitle: '操作リンクを再発行しますか？',
+  seatLinkReissueContent: 'この席にはすでに使用中のリンクがあります。再発行すると古いリンクを使っている端末はすぐにログアウトされ、新しいリンクで入り直す必要があります。',
+  seatLinkReissueConfirm: '再発行（旧端末はログアウト）',
+  seatLinkExpired: 'このリンクは無効です。プレイヤーリンクは席ごとの認証情報で識別されるようになりました。GM に操作リンクを再発行してもらってください。',
+  seatTokenMissing: 'この端末にはまだこの席の認証情報がありません。GM から操作リンクを受け取って開き直してください。',
   pairingTitle: 'QR コードでログイン',
   pairingHelp: 'DiceFrame アプリで一度読み取るだけでこのサーバーに接続できます。IP やパスワードの入力は不要です。',
   pairingAddressLabel: 'スマホが接続するアドレス',
@@ -2498,6 +2503,10 @@ export const ja = {
   encounterSaveChanges: '変更を保存',
 
   apiErrors: {
+    SEAT_TOKEN_REQUIRED: '席の認証情報が必要です。GM のリンクから参加し直してください',
+    SEAT_TOKEN_INVALID: '席の認証情報が無効か、更新されています。GM に新しいリンクをもらってください',
+    SEAT_TOKEN_EXISTS: 'この席にはすでに認証情報があります。GM のリンクを使ってください',
+    SEAT_NOT_BOUND: 'この端末はこの卓の席に紐づいていません',
     hub_connection_unavailable: 'DiceFrame Hub に接続できません。ネットワークを確認して再試行してください。',
     game_not_found: 'ゲームが見つかりません',
     player_not_in_game: 'この卓に参加していません。招待リンクから参加してください',

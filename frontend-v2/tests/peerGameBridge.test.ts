@@ -147,6 +147,24 @@ describe('peer host game bridge', () => {
     expect(JSON.parse(String(calls[1].init?.body))).toEqual({ run_id: 'run_1', target_uid: 'player_1' })
   })
 
+  it('keeps the new seat credential on the host when a guest creates a character', async () => {
+    const executor: PeerLocalApiExecutor = async (path) => {
+      if (path === '/games/web%7Cgame%7Chost') {
+        return { game_key: 'web|game|host', player_access_open: true, player_count: 1, max_players: 6 }
+      }
+      if (path === '/games/web%7Cgame%7Chost/players') {
+        return { ok: true, user_id: 'player_9', seat_token: 'host-only-token' }
+      }
+      return { ok: true }
+    }
+    const bridge = new PeerHostGameBridge('web|game|host', executor, () => undefined)
+
+    const result = await bridge.handle('p_abcdefghijk', 'player.create', { character_name: 'Guest' })
+
+    expect(result).toMatchObject({ ok: true, user_id: 'player_9' })
+    expect(JSON.stringify(result)).not.toContain('host-only-token')
+  })
+
   it('maps allowlisted operations to a delegated player identity', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     const executor: PeerLocalApiExecutor = async (path, init) => {
