@@ -120,4 +120,29 @@ describe('JoinView seat token', () => {
 
     expect(wrapper.text()).toContain(String(i18n.global.t('seatTokenMissing')))
   })
+
+  it('never rejoins without a seat token (e.g. storage blocked), so no new seat is created', async () => {
+    apiByPath({ user_id: 'p-new' })
+    // A browser that refuses to persist the seat token (private mode, quota).
+    const values = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        if (key.startsWith('trpg_seat_token_')) throw new Error('blocked')
+        values.set(key, String(value))
+      },
+      removeItem: (key: string) => { values.delete(key) },
+      clear: () => values.clear(),
+      key: () => null,
+      length: 0,
+    })
+    const router = makeRouter()
+
+    const wrapper = await mountAt(router, { game: GAME, share: '1', seat: 'tok-lost' })
+    vi.unstubAllGlobals()
+
+    expect(playersCalls()).toHaveLength(0)
+    expect(wrapper.text()).toContain(String(i18n.global.t('seatTokenMissing')))
+    expect(router.currentRoute.value.name).toBe('join')
+  })
 })

@@ -196,13 +196,21 @@ async function afterGate() {
 
 /** Rejoin the seat a takeover link's token belongs to (this device's session is rebound). */
 async function resumeSeat() {
+  const seatToken = readSeatToken(gameKey.value)
+  if (!seatToken) {
+    // Without the seat's token this would silently become a brand-new seat.
+    error.value = t('seatTokenMissing')
+    resumeUser.value = ''
+    await loadGameData()
+    return
+  }
   busy.value = true; error.value = ''
   try {
     // Rejoining an existing seat is idempotent, so a transient rate limit is retried once.
     const r = await retryOnRateLimit(() => api<PlayerCreateResponse>(`/games/${encodeURIComponent(gameKey.value)}/players`, {
       method: 'POST',
       // Sent explicitly so it also applies when the GM opens the link while logged in.
-      headers: { [SEAT_TOKEN_HEADER]: readSeatToken(gameKey.value) },
+      headers: { [SEAT_TOKEN_HEADER]: seatToken },
       body: JSON.stringify({ join_as_new: false }),
     }))
     if (r.error) throw new Error(r.error)
