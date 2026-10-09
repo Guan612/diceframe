@@ -20,14 +20,13 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.webui.routes.games import register_games
-from src.webui.services import ruleset_gameplay
 
 from test_dnd2024_m5_http import (
     _EnabledRuntime, _M5Api, _character, _enemy, _ready_story_encounter,
 )
 
 _GAME = "/api/games/web%7Cpreset-gm%7Cweb_bot"
-_STAT_BLOCK_FIELDS = {"attacks", "abilities", "saving_throws"}
+FORBIDDEN_STAT_BLOCK_KEYS = frozenset({"attacks", "abilities", "saving_throws", "attack_bonus"})
 _SEAT = {"X-Test-User": "p1"}
 _GM = {"X-Test-User": "gm"}
 # What access_control sets when the host's P2P bridge relays a guest request
@@ -35,17 +34,29 @@ _GM = {"X-Test-User": "gm"}
 _P2P_GUEST = {"X-Test-User": "p1", "X-Test-Owner": "1", "X-Test-Preview": "1"}
 
 
-def _stat_block_paths(value: Any, path: str = "$") -> list[str]:
+def forbidden_key_paths(value: Any, path: str = "$") -> list[str]:
+    """Every path in a payload where a GM-only monster stat-block key appears.
+
+    Walks the whole payload, at any depth, by key name -- not by the shape of
+    an enemy record -- so a stat block smuggled in under a new field is still
+    caught.  ``modifier`` is deliberately not forbidden: resolved checks show it.
+    """
+
     found: list[str] = []
     if isinstance(value, dict):
-        if _STAT_BLOCK_FIELDS & set(value):
-            found.append(path)
         for key, item in value.items():
-            found.extend(_stat_block_paths(item, f"{path}.{key}"))
+            if key in FORBIDDEN_STAT_BLOCK_KEYS:
+                found.append(f"{path}.{key}")
+            found.extend(forbidden_key_paths(item, f"{path}.{key}"))
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            found.extend(_stat_block_paths(item, f"{path}[{index}]"))
+            found.extend(forbidden_key_paths(item, f"{path}[{index}]"))
     return found
+
+
+def assert_no_stat_blocks(payload: Any, label: str) -> None:
+    leaks = forbidden_key_paths(payload)
+    assert leaks == [], f"{label} leaks GM-only stat-block keys: {leaks}"
 
 
 def _app(registry: GameRegistry, runtime: _EnabledRuntime) -> web.Application:
@@ -109,11 +120,11 @@ async def test_players_get_no_presets_but_gm_keeps_them_before_combat(tmp_path) 
 
     gm_presets = bodies["gm"]["gameplay"]["encounter_presets"]
     assert any(preset["id"] == encounter["encounter_preset_id"] for preset in gm_presets)
-    assert _stat_block_paths(gm_presets), "GM keeps the full stat blocks"
+    assert forbidden_key_paths(gm_presets), "GM keeps the full stat blocks"
     for name in ("seat", "p2p"):
         gameplay = bodies[name]["gameplay"]
         assert "encounter_presets" not in gameplay, name
-        assert _stat_block_paths(bodies[name]) == [], name
+        assert_no_stat_blocks(bodies[name], name)
         # The story still names the encounter for the party, without numbers.
         preview = gameplay["encounter_preview"]
         assert preview["id"] == encounter["encounter_preset_id"]
@@ -134,9 +145,9 @@ async def test_live_combat_gives_players_only_the_actor_roster(tmp_path) -> None
         p2p = await (await client.get(f"{_GAME}/available-actions", headers=_P2P_GUEST)).json()
         gm = await (await client.get(f"{_GAME}/available-actions", headers=_GM)).json()
 
-    for body in (seat, p2p):
+    for label, body in (("seat", seat), ("p2p", p2p)):
         assert "encounter_presets" not in body["gameplay"]
-        assert _stat_block_paths(body) == []
+        assert_no_stat_blocks(body, label)
         enemy = next(
             actor for actor in body["gameplay"]["combat"]["actors"]
             if actor["kind"] == "enemy"
@@ -173,11 +184,11 @@ async def test_intent_responses_carry_no_stat_blocks_for_players(tmp_path) -> No
 
     assert started.status == 200
     # The GM's own response keeps the authoritative stat blocks.
-    assert _stat_block_paths(started_body["result"]["combat"])
+    assert forbidden_key_paths(started_body["result"]["combat"])
     assert "encounter_presets" in started_body["gameplay"]
     for name, body in messages.items():
         assert body["result"]["applied"] is True, name
-        assert _stat_block_paths(body) == [], name
+        assert_no_stat_blocks(body, name)
         assert "encounter_presets" not in body["gameplay"], name
         enemies = body["result"]["combat"]["enemies"]
         assert enemies and all(enemy["max_hp"] > 0 for enemy in enemies.values())
@@ -200,7 +211,47 @@ def test_resume_payload_is_projected_for_a_seat() -> None:
     projected = runtime.project_intent_result(
         GameInstance(game_key=("web", "x", "y"), gm_uid="gm"), raw, "p1", False,
     )
-    assert _stat_block_paths(projected) == []
+    assert_no_stat_blocks(projected, "resume payload")
     assert projected["automatic_results"][0]["combat"]["enemies"]["ogre"]["hp"] == 40
-    assert _stat_block_paths(raw), "projection must not mutate the authoritative payload"
-    assert ruleset_gameplay is not None
+    assert forbidden_key_paths(raw), "projection must not mutate the authoritative payload"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("viewer", ["seat", "p2p"])
+async def test_player_intent_response_with_enemy_automation_has_no_stat_blocks(
+    tmp_path, monkeypatch, viewer,
+) -> None:
+    """A player's end_turn hands the turn to the enemy: the server-run enemy
+    turn comes back in that player's own /intents response."""
+
+    import src.webui.services.ruleset_gameplay as gameplay_service
+
+    # Seed 3 rolls initiative p1 -> goblin -> gm for this encounter.
+    monkeypatch.setattr(gameplay_service.random, "SystemRandom", lambda: random.Random(3))
+    registry = GameRegistry(tmp_path / "saves")
+    instance, runtime, encounter = _pending_encounter(registry)
+    headers = _SEAT if viewer == "seat" else _P2P_GUEST
+
+    async with TestClient(TestServer(_app(registry, runtime))) as client:
+        started = await client.post(f"{_GAME}/intents", headers=_GM, json={
+            "intent_id": "auto-start", "type": "combat.start",
+            "expected_version": encounter["expected_version"],
+            "encounter_preset_id": encounter["encounter_preset_id"],
+            "encounter_instance_id": encounter["encounter_instance_id"],
+        })
+        assert started.status == 200
+        initiative = instance.ruleset_state["combat"]["initiative"]
+        assert initiative[:2] == ["player:p1", "enemy:goblin-minion-1"], initiative
+        ended = await client.post(f"{_GAME}/intents", headers=headers, json={
+            "intent_id": f"auto-end-{viewer}", "type": "end_turn",
+            "expected_version": int(instance.ruleset_state["version"]),
+        })
+        body = await ended.json()
+
+    assert ended.status == 200, body
+    result = body["result"]
+    assert result["automatic_event_batches"], "the enemy turn must have run"
+    assert result["automatic_results"]
+    assert_no_stat_blocks(body, viewer)
+    # The authoritative enemy record behind it still has its stat block.
+    assert forbidden_key_paths(instance.ruleset_state["combat"]["enemies"])

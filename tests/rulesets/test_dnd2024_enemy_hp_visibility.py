@@ -17,6 +17,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from src.engine.game_instance import GameInstance, GameRegistry
 
+from test_dnd2024_encounter_preset_visibility import assert_no_stat_blocks
 from test_dnd2024_m5_http import (
     _EnabledRuntime, _app, _character, _enemy, _ready_story_encounter,
 )
@@ -79,6 +80,8 @@ async def test_seated_player_and_gm_see_exact_enemy_hp(tmp_path) -> None:
         assert (enemy["hp"], enemy["max_hp"]) == (3, max_hp)
         # The roster is a presentation view, not the GM stat block.
         assert not _STAT_BLOCK_FIELDS & set(enemy)
+    # The whole seated-player payload is free of GM-only stat-block keys.
+    assert_no_stat_blocks(seat_body, "seat")
     # Players and the GM read one projection of enemy HP, not two.
     seat_enemy = next(
         actor for actor in seat_body["gameplay"]["combat"]["actors"]
