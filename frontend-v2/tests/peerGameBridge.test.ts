@@ -395,6 +395,34 @@ describe('peer host game bridge', () => {
     expect(changed).toHaveBeenCalledTimes(2)
   })
 
+  it('relays only profile fields and level-up attributes for a guest sheet update', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    const executor: PeerLocalApiExecutor = async (path, init) => {
+      calls.push({ path, init })
+      if (path === '/games/web%7Cgame%7Chost') {
+        return { game_key: 'web|game|host', player_access_open: true }
+      }
+      return { ok: true }
+    }
+    const bridge = new PeerHostGameBridge(
+      'web|game|host', executor, vi.fn(), {}, { p_abcdefghijk: 'player_bound' },
+    )
+
+    await bridge.handle('p_abcdefghijk', 'character.update', {
+      character_name: '旅人', background: '新背景', attributes: { str: 12 },
+      hp: 999, max_hp: 999, class: '法师', skills: [{ name: '侦查', value: 99 }],
+      gold: 99999, level: 20, inventory: [{ name: '万能药' }],
+    })
+
+    expect(calls[1].path).toBe(
+      '/games/web%7Cgame%7Chost/character/player_bound?user=player_bound&share=1&delegate=1',
+    )
+    expect(calls[1].init?.method).toBe('PUT')
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({
+      character_name: '旅人', background: '新背景', attributes: { str: 12 },
+    })
+  })
+
   it('allows only player-side Session 0 and tutorial intent fields', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     const executor: PeerLocalApiExecutor = async (path, init) => {

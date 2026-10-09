@@ -9,7 +9,8 @@ from aiohttp import web
 from src.webui.api import can_modify_character
 from src.webui.routes.character_cards import sees_full_card_library
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
-from src.webui.services._common import canonical_game_key
+from src.webui.services._common import canonical_game_key, is_game_gm
+from src.webui.character_sheet_authority import FIELD_REQUIRES_GM
 from src.webui.routes._common import (
     _get_api,
     _require_confirmed_request,
@@ -39,9 +40,30 @@ async def api_char_update(request: web.Request) -> web.Response:
         owner=bool(request.get("owner_authenticated", False)),
     ):
         return web.json_response({"error": "无权修改他人角色卡"}, status=403)
-    result = await api.update_character(gk, uid, body)
-    status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
+    result = await api.update_character(
+        gk, uid, body if isinstance(body, dict) else {},
+        gm_authority=_has_sheet_authority(request, inst),
+    )
+    code = result.get("error_code")
+    status = 409 if code == "REWRITE_IN_PROGRESS" else 403 if code == FIELD_REQUIRES_GM else 200
     return web.json_response(result, status=status)
+
+
+def _has_sheet_authority(request: web.Request, inst) -> bool:
+    """May this request change sheet mechanics (HP, gold, attributes...)?
+
+    Only the table's GM, or the owner acting as itself.  A seated player
+    (seat token / share link), a bot acting for a player seat and a P2P guest
+    the host relays with ``delegate=1`` (owner-authenticated, but speaking
+    for the guest's seat) are player-side callers.
+    """
+    if request.get("player_delegate", False):
+        return False
+    return is_game_gm(
+        inst,
+        str(request.get("user_id", "") or ""),
+        bool(request.get("owner_authenticated", False)),
+    )
 
 
 async def api_ruleset_character_profile_update(request: web.Request) -> web.Response:

@@ -17,6 +17,7 @@ from src.engine.character_utils import (
     initial_special_stat_value,
     make_default_character,
     normalize_character_sheet,
+    set_hp,
 )
 from src.compat.characters import MAX_SKILL_EFFECT_CHARS
 from src.content.worlds import localize_lorebook_entries
@@ -45,6 +46,11 @@ from src.commands.economy_effects import pending_decision_notice
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime, PlayerJoinRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
+from src.webui.character_sheet_authority import (
+    EDITABLE_SHEET_FIELDS,
+    field_requires_gm_failure,
+    player_field_violations,
+)
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -637,7 +643,15 @@ async def update_character(
     game_key: str,
     user_id: str,
     updates: dict,
+    *,
+    gm_authority: bool = False,
 ) -> dict[str, Any]:
+    """Patch a classic character sheet.
+
+    ``gm_authority`` is the caller's right to change mechanics (the table GM
+    or the owner acting as itself).  Without it only profile fields and a
+    level-up point allocation are accepted (see ``character_sheet_authority``).
+    """
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
@@ -652,17 +666,26 @@ async def update_character(
         if dependencies.games.get_instance(inst.game_key) is not inst:
             return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
         return await _update_character_authority(
-            dependencies, inst, user_id, updates,
+            dependencies, inst, user_id, updates, gm_authority=gm_authority,
         )
 
 
-# What the edit forms (GM character editor, the card adoption in play and
-# the P2P ``character.update`` allow-list) actually send.
-EDITABLE_SHEET_FIELDS = frozenset({
-    "character_name", "race", "class", "background", "identity", "portrait",
-    "attributes", "skills", "equipment", "inventory", "key_items",
-    "hp", "max_hp", "resources", "gold", "currency", "level", "xp", "progression",
-})
+async def adopt_library_card(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    user_id: str,
+    card: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace a classic character from a server-owned library card.
+
+    The card comes from the library, not from the request, so it is applied
+    with full sheet authority.  A rules-aware game answers
+    ``RULESET_CHARACTER_OPERATION_REQUIRED`` and the caller uses the ruleset
+    adoption instead.
+    """
+    return await update_character(
+        dependencies, game_key, user_id, deepcopy(card), gm_authority=True,
+    )
 
 
 def _special_stat_fields(dependencies: CharacterDependencies, inst: GameInstance) -> set[str]:
@@ -681,6 +704,8 @@ async def _update_character_authority(
     instance: GameInstance,
     user_id: str,
     updates: dict,
+    *,
+    gm_authority: bool = False,
 ) -> dict[str, Any]:
     inst = instance
     if not inst or user_id not in inst.players:
@@ -700,6 +725,13 @@ async def _update_character_authority(
         key: value for key, value in dict(updates).items()
         if key in EDITABLE_SHEET_FIELDS or key in _special_stat_fields(dependencies, inst)
     }
+    if not gm_authority:
+        denied = player_field_violations(
+            inst.get_character_sheet(user_id), updates,
+            rule_attrs=_get_rule_attrs_for_game(dependencies, inst),
+        )
+        if denied:
+            return field_requires_gm_failure(denied)
     character_name = str(updates.pop("character_name", "")).strip()
     if character_name:
         inst.set_player_name(user_id, character_name)
@@ -752,23 +784,40 @@ async def _update_character_authority(
     # 属性变化后可按规则补算 HP；若用户明确手填 HP，则尊重手填值。
     new_attrs = updates.get("attributes")
     if isinstance(new_attrs, dict) and not explicit_hp_update:
-        try:
-            base_hp = (
-                rule.calculate_hp(new_attrs, cs.get("class", ""))
+        def formula_hp(attributes: dict) -> int:
+            return int(
+                rule.calculate_hp(attributes, cs.get("class", ""))
                 if rule
                 else calc_hp_from_rule(
-                    new_attrs,
+                    attributes,
                     rules_dir=dependencies.rules.rules_dir,
                     language=getattr(inst, "language", ""),
                 )
             )
-            lv_bonus = max(0, (cs.get("level", 1) - 1) * 5)
-            new_hp = base_hp + lv_bonus
-            curr_hp_ratio = cs.get("hp", 1) / max(1, cs.get("max_hp", 1))
-            cs["max_hp"] = new_hp
-            cs["hp"] = max(1, round(new_hp * curr_hp_ratio))
-            logger.info("HP 重算: con=%s HP=%d->%d",
-                new_attrs.get("con", "?"), cs.get("max_hp", 0), new_hp)
+
+        try:
+            current_hp = int(cs.get("hp", 0) or 0)
+            if gm_authority:
+                # GM editor: rebuild max HP from the rule formula and keep the
+                # HP ratio.  A downed character (HP <= 0) stays down.
+                lv_bonus = max(0, (cs.get("level", 1) - 1) * 5)
+                new_max = formula_hp(new_attrs) + lv_bonus
+                ratio = current_hp / max(1, int(cs.get("max_hp", 1) or 1))
+                new_current = max(1, round(new_max * ratio)) if current_hp > 0 else 0
+            else:
+                # Player level-up spend: apply only the formula delta the
+                # attribute change causes, so a GM-adjusted max HP survives
+                # and nothing is healed by rounding.  A downed character
+                # (HP <= 0) stays down.
+                old_formula = (
+                    formula_hp(old_attrs) if isinstance(old_attrs, dict) and old_attrs else None
+                )
+                delta = formula_hp(new_attrs) - old_formula if old_formula is not None else 0
+                new_max = max(0, int(cs.get("max_hp", 0) or 0) + delta)
+                new_current = max(1, current_hp + delta) if current_hp > 0 else 0
+            set_hp(cs, new_current, new_max)
+            logger.info("HP 重算: con=%s max_hp=%d hp=%d",
+                new_attrs.get("con", "?"), new_max, cs.get("hp", 0))
         except Exception as exc:
             logger.warning("属性变化后 HP 重算失败: %s", exc)
     normalize_character_sheet(cs, rule)
