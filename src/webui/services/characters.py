@@ -45,6 +45,11 @@ from src.commands.economy_effects import pending_decision_notice
 from src.commands.state_items import grant_classified_item
 from src.rulesets.contracts import GameDetailProjectionRuntime, PlayerJoinRuntime
 from src.webui.character_contracts import MAX_BIO_CHARS
+from src.webui.character_sheet_authority import (
+    EDITABLE_SHEET_FIELDS,
+    field_requires_gm_failure,
+    player_field_violations,
+)
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -637,7 +642,15 @@ async def update_character(
     game_key: str,
     user_id: str,
     updates: dict,
+    *,
+    gm_authority: bool = False,
 ) -> dict[str, Any]:
+    """Patch a classic character sheet.
+
+    ``gm_authority`` is the caller's right to change mechanics (the table GM
+    or the owner acting as itself).  Without it only profile fields and a
+    level-up point allocation are accepted (see ``character_sheet_authority``).
+    """
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
@@ -652,17 +665,26 @@ async def update_character(
         if dependencies.games.get_instance(inst.game_key) is not inst:
             return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
         return await _update_character_authority(
-            dependencies, inst, user_id, updates,
+            dependencies, inst, user_id, updates, gm_authority=gm_authority,
         )
 
 
-# What the edit forms (GM character editor, the card adoption in play and
-# the P2P ``character.update`` allow-list) actually send.
-EDITABLE_SHEET_FIELDS = frozenset({
-    "character_name", "race", "class", "background", "identity", "portrait",
-    "attributes", "skills", "equipment", "inventory", "key_items",
-    "hp", "max_hp", "resources", "gold", "currency", "level", "xp", "progression",
-})
+async def adopt_library_card(
+    dependencies: CharacterDependencies,
+    game_key: str,
+    user_id: str,
+    card: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace a classic character from a server-owned library card.
+
+    The card comes from the library, not from the request, so it is applied
+    with full sheet authority.  A rules-aware game answers
+    ``RULESET_CHARACTER_OPERATION_REQUIRED`` and the caller uses the ruleset
+    adoption instead.
+    """
+    return await update_character(
+        dependencies, game_key, user_id, deepcopy(card), gm_authority=True,
+    )
 
 
 def _special_stat_fields(dependencies: CharacterDependencies, inst: GameInstance) -> set[str]:
@@ -681,6 +703,8 @@ async def _update_character_authority(
     instance: GameInstance,
     user_id: str,
     updates: dict,
+    *,
+    gm_authority: bool = False,
 ) -> dict[str, Any]:
     inst = instance
     if not inst or user_id not in inst.players:
@@ -700,6 +724,13 @@ async def _update_character_authority(
         key: value for key, value in dict(updates).items()
         if key in EDITABLE_SHEET_FIELDS or key in _special_stat_fields(dependencies, inst)
     }
+    if not gm_authority:
+        denied = player_field_violations(
+            inst.get_character_sheet(user_id), updates,
+            rule_attrs=_get_rule_attrs_for_game(dependencies, inst),
+        )
+        if denied:
+            return field_requires_gm_failure(denied)
     character_name = str(updates.pop("character_name", "")).strip()
     if character_name:
         inst.set_player_name(user_id, character_name)

@@ -2506,6 +2506,7 @@ export const zhCN = {
   encounterSaveChanges: '保存修改',
 
   apiErrors: {
+    FIELD_REQUIRES_GM: '这些角色卡字段（HP、等级、金币、属性、物品等）只能由 GM 修改。',
     SEAT_TOKEN_REQUIRED: '需要席位凭证，请使用 GM 发出的链接重新加入',
     SEAT_TOKEN_INVALID: '席位凭证无效或已失效，请向 GM 重新获取链接',
     SEAT_TOKEN_EXISTS: '该席位已有凭证，请使用 GM 发出的链接',

@@ -110,9 +110,10 @@ const OPERATION_FIELD_WHITELIST: Record<PeerGameOperation, readonly string[]> = 
   'luck.resolve': ['check_id', 'spend'],
   'check.reveal': ['check_id'],
   'payment.resolve': ['payment_id', 'accepted'],
+  // Guests edit only their profile and spend level-up points (attributes);
+  // HP / class / skills and other mechanics are GM authority on the server.
   'character.update': [
-    'character_name', 'race', 'class', 'background', 'hp',
-    'attributes', 'skills', 'identity', 'portrait',
+    'character_name', 'race', 'background', 'identity', 'portrait', 'attributes',
   ],
   'character.profile': ['character_name', 'portrait', 'profile'],
   'character.rest': [

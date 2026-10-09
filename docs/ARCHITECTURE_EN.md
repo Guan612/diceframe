@@ -3099,6 +3099,13 @@ Profile edits cannot directly overwrite:
 
 Mechanical changes must be revalidated from canonical choices/history.
 
+The generic sheet write for classic (non rules-aware) rules, `PUT /api/games/{game}/character/{uid}`, separates authority the same way (`src/webui/character_sheet_authority.py`):
+
+- the table GM, or the owner acting as itself, may change every editable field;
+- a seated player, a bot acting for a player seat, and a P2P guest relayed by the host with `delegate=1` may only change profile fields (name, race, background, identity, portrait) and spend engine-granted `level_up_points` on attributes (increase only);
+- HP, level, XP, gold/currency, resources, progression, attributes, skills, class, equipment/inventory/key items and rule special stats (sanity, luck...) are engine / GM authority; a player-side request that changes any of them is rejected as a whole with `403 FIELD_REQUIRES_GM` (listing `fields`), never partially applied;
+- adopting a card goes through `POST .../adopt-card`: the server loads the card from the library by `card_id`; the request body carries no mechanical values.
+
 ---
 
 ## 25.4 Class Feature Runtime v1
