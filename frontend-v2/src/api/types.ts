@@ -1164,6 +1164,13 @@ export interface RulesetEncounterPreset extends JsonObject {
   enemies: JsonObject[]
 }
 
+export interface RulesetEncounterPreview extends JsonObject {
+  id: string
+  name?: string
+  description?: string
+  difficulty?: string
+}
+
 export interface RulesetTemporaryEncounterAttack extends JsonObject {
   id?: string
   name?: string
@@ -1370,7 +1377,10 @@ export interface RulesetGameplayView {
       encounter_instance_id: string
     } | null
   }
-  encounter_presets: RulesetEncounterPreset[]
+  /** GM-only：完整预设目录（含怪物数据块）。非 GM 视图中服务端不下发该字段。 */
+  encounter_presets?: RulesetEncounterPreset[]
+  /** 当前剧情指向的遭遇摘要（仅名称/描述/难度，无数值），所有入座视角可见。 */
+  encounter_preview?: RulesetEncounterPreview | null
   /** 服务端权威遭遇访问状态，前端据此区分剧情绑定 / 尚未准备 / 自由遭遇。 */
   encounter_access?: {
     mode: 'blocked' | 'story' | 'sandbox' | string

@@ -1941,9 +1941,12 @@ class WebAPI:
             self._character_dependencies, game_key, user_id,
         )
 
-    async def update_character(self, game_key: str, user_id: str, updates: dict) -> dict[str, Any]:
+    async def update_character(
+        self, game_key: str, user_id: str, updates: dict, *, gm_authority: bool = False,
+    ) -> dict[str, Any]:
         return await characters.update_character(
             self._character_dependencies, game_key, user_id, updates,
+            gm_authority=gm_authority,
         )
 
     async def update_ruleset_character_profile(
@@ -1956,6 +1959,20 @@ class WebAPI:
     async def adopt_ruleset_character_card(
         self, game_key: str, user_id: str, card_id: str,
     ) -> dict[str, Any]:
+        """Adopt a library card by id; classic games apply it server-side."""
+        card = next(
+            (
+                item for item in self.list_character_cards()["cards"]
+                if card_id and card_id in {str(item.get("id") or ""), str(item.get("card_id") or "")}
+            ),
+            None,
+        )
+        if card is not None:
+            result = await characters.adopt_library_card(
+                self._character_dependencies, game_key, user_id, card,
+            )
+            if result.get("error_code") != "RULESET_CHARACTER_OPERATION_REQUIRED":
+                return result
         return await ruleset_characters.adopt_character_card(
             self._ruleset_character_dependencies, game_key, user_id, card_id,
         )

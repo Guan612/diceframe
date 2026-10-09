@@ -2513,6 +2513,7 @@ export const en = {
   encounterSaveChanges: 'Save changes',
 
   apiErrors: {
+    FIELD_REQUIRES_GM: 'Only the GM can change these character fields (HP, level, gold, attributes, items…).',
     SEAT_TOKEN_REQUIRED: 'A seat credential is required. Rejoin with the link from your GM.',
     SEAT_TOKEN_INVALID: 'This seat credential is invalid or was replaced. Ask your GM for a new link.',
     SEAT_TOKEN_EXISTS: 'This seat already has a credential. Use the link from your GM.',

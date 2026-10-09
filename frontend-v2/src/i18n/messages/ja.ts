@@ -2511,6 +2511,7 @@ export const ja = {
   encounterSaveChanges: '変更を保存',
 
   apiErrors: {
+    FIELD_REQUIRES_GM: 'これらのキャラクター項目（HP・レベル・所持金・能力値・アイテムなど）は GM だけが変更できます。',
     SEAT_TOKEN_REQUIRED: '席の認証情報が必要です。GM のリンクから参加し直してください',
     SEAT_TOKEN_INVALID: '席の認証情報が無効か、更新されています。GM に新しいリンクをもらってください',
     SEAT_TOKEN_EXISTS: 'この席にはすでに認証情報があります。GM のリンクを使ってください',

@@ -736,14 +736,12 @@ async function selectCard(card: CharacterCard) {
     return
   }
   try {
-    if (hasRulesAwareCharacters.value) {
-      await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}/adopt-card`, {
-        method: 'POST',
-        body: JSON.stringify({ card_id: String(card.card_id || card.id || '') }),
-      })
-    } else {
-      await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}`, { method: 'PUT', body: JSON.stringify(card) })
-    }
+    // The server reads the card from the library by id (classic and rules-aware
+    // alike); a player cannot push its own HP / gold / attributes as a "card".
+    await api(`/games/${encodeURIComponent(game.currentGame.value)}/character/${encodeURIComponent(actorId.value)}/adopt-card`, {
+      method: 'POST',
+      body: JSON.stringify({ card_id: String(card.card_id || card.id || '') }),
+    })
     showCards.value = false
     await game.refresh()
   } catch (e: unknown) { toast.error(errorMessage(e)) }

@@ -2508,6 +2508,7 @@ export const de = {
   encounterSaveChanges: 'Änderungen speichern',
 
   apiErrors: {
+    FIELD_REQUIRES_GM: 'Diese Charakterwerte (TP, Stufe, Gold, Attribute, Gegenstände …) kann nur die SL ändern.',
     SEAT_TOKEN_REQUIRED: 'Ein Platz-Schlüssel ist nötig. Tritt über den Link deiner SL erneut bei.',
     SEAT_TOKEN_INVALID: 'Der Platz-Schlüssel ist ungültig oder wurde ersetzt. Bitte die SL um einen neuen Link.',
     SEAT_TOKEN_EXISTS: 'Dieser Platz hat bereits einen Schlüssel. Nutze den Link deiner SL.',

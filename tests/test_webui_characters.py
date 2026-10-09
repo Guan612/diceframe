@@ -237,7 +237,7 @@ async def test_coc_hp_has_rule_suggestion_but_can_be_manually_edited(web_api):
     assert cs["hp"] == 9
     assert cs["max_hp"] == 9
 
-    result = await api.update_character(created["game_key"], uid, {"hp": 99, "max_hp": 99})
+    result = await api.update_character(created["game_key"], uid, {"hp": 99, "max_hp": 99}, gm_authority=True)
 
     assert result["ok"] is True
     cs = inst.get_character_sheet(uid)
@@ -528,7 +528,7 @@ async def test_character_wizard_update_changes_display_name_and_sheet(web_api):
         "class": "游侠",
         "attributes": {"str": 12},
         "portrait": {"kind": "builtin", "id": "freeform_fantasy:3"},
-    })
+    }, gm_authority=True)
 
     inst = registry.get(api._parse_key(created["game_key"]))
     assert updated["ok"] is True
@@ -607,7 +607,7 @@ async def test_update_character_allows_values_outside_template_suggestion(web_ap
         "attributes": {"str": 999},
         "hp": 77,
         "max_hp": 88,
-    })
+    }, gm_authority=True)
     assert result["ok"] is True
     inst2 = registry.get(api._parse_key(created["game_key"]))
     sheet = inst2.players[uid]["character_sheet"]
@@ -768,7 +768,7 @@ async def test_character_skill_effect_round_trip(web_api):
             {"name": "火焰球", "value": 80, "effect": effect},
             {"name": "侦查", "value": 45},
         ],
-    })
+    }, gm_authority=True)
     assert saved["ok"] is True
     inst = registry.get(api._parse_key(created["game_key"]))
     assert inst.players[uid]["character_sheet"]["skills"] == [
@@ -777,7 +777,7 @@ async def test_character_skill_effect_round_trip(web_api):
     ]
 
     # 之后编辑其它字段（不提技能）也不能让 effect 消失或被清空。
-    again = await api.update_character(created["game_key"], uid, {"level": 2})
+    again = await api.update_character(created["game_key"], uid, {"level": 2}, gm_authority=True)
     assert again["ok"] is True
     skills = inst.players[uid]["character_sheet"]["skills"]
     assert skills[0]["effect"] == effect

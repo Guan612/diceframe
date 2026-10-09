@@ -3135,6 +3135,13 @@ flowchart LR
 
 机械变化需要基于 canonical choices/history 重新验证。
 
+经典（非 rules-aware）规则的通用角色卡写入口 `PUT /api/games/{game}/character/{uid}` 同样区分权威（`src/webui/character_sheet_authority.py`）：
+
+- 本局 GM 或以自身身份操作的 owner：可改全部可编辑字段；
+- 席位玩家、代表玩家席位的 Bot、经主机 `delegate=1` 转发的 P2P 访客：只可改资料字段（名字、种族、背景、identity、头像），以及在引擎授予的 `level_up_points` 内只增不减地分配属性；
+- HP、等级、XP、金币/货币、resources、progression、属性、技能、职业、装备/物品/关键物品与规则特殊数值（理智、幸运等）属于引擎 / GM 权威，玩家侧请求改动时整体拒绝：`403 FIELD_REQUIRES_GM`（附 `fields`），不做部分写入；
+- 采用角色卡走 `POST .../adopt-card`，服务端按 `card_id` 从角色卡库读取并应用，请求体不携带机械数值。
+
 ---
 
 ## 25.4 Class Feature Runtime v1

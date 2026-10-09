@@ -189,6 +189,19 @@ class GameDetailProjectionRuntime(Protocol):
 
 
 @runtime_checkable
+class IntentResultProjectionRuntime(Protocol):
+    """Optional viewer projection of an authoritative intent/automation payload.
+
+    Raw ``apply_event_batch`` results may carry GM-only state (for example full
+    stat blocks); the runtime decides what a non-GM viewer may receive.
+    """
+
+    def project_intent_result(
+        self, instance: Any, result: dict[str, Any], viewer_id: str, viewer_is_gm: bool,
+    ) -> dict[str, Any]: ...
+
+
+@runtime_checkable
 class PlayerJoinRuntime(Protocol):
     """Optional hook for rulesets that must enroll a new player in live state."""
 
