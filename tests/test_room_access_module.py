@@ -30,7 +30,7 @@ def test_upgrade_moves_values_without_mutating_input():
     result = migrate_game_state_payload(payload)
     assert payload == before
     assert result["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
-    assert result["modules"][module.MODULE_NAME] == {"schema_version": 1, **VALUES}
+    assert result["modules"][module.MODULE_NAME] == {"schema_version": 2, **VALUES, "seat_credentials": {}}
     assert all(key not in result for key in VALUES)
     assert result["gm_uid"] == "gm"
 
@@ -50,7 +50,7 @@ def test_existing_slot_wins_even_when_empty_or_unknown(slot):
 
 
 def test_missing_values_use_old_codec_defaults():
-    defaults = {
+    v1_defaults = {
         "schema_version": 1,
         "max_players": 6,
         "player_access_open": True,
@@ -58,10 +58,11 @@ def test_missing_values_use_old_codec_defaults():
         "room_password": "",
         "room_token": "",
     }
+    defaults = {**v1_defaults, "schema_version": 2, "seat_credentials": {}}
     assert module.fresh() == defaults
-    assert _migrate_v28_to_v29({})["modules"][module.MODULE_NAME] == defaults
+    assert _migrate_v28_to_v29({})["modules"][module.MODULE_NAME] == v1_defaults
     assert module.ensure(None) == defaults
-    raw = {"schema_version": 1}
+    raw = {"schema_version": 2}
     assert module.ensure(raw) is raw
     assert raw == defaults
 
@@ -71,7 +72,9 @@ def test_partial_slots_and_legacy_payloads_default_only_the_missing_key(missing_
     values = {key: value for key, value in VALUES.items() if key != missing_key}
     expected = {"schema_version": 1, **VALUES, missing_key: module.fresh()[missing_key]}
     assert _migrate_v28_to_v29(dict(values))["modules"][module.MODULE_NAME] == expected
-    assert module.ensure({"schema_version": 1, **values}) == expected
+    assert module.ensure({"schema_version": 2, **values}) == {
+        **expected, "schema_version": 2, "seat_credentials": {},
+    }
 
 
 @pytest.mark.parametrize("value", [None, False, 0, "", "unconventional", [], {"opaque": [1]}])
@@ -84,8 +87,8 @@ def test_present_values_are_preserved_by_migration_ensure_and_codec(value):
         **values,
     }
     migrated = migrate_game_state_payload(payload)
-    assert migrated["modules"][module.MODULE_NAME] == {"schema_version": 1, **values}
-    raw = {"schema_version": 1, **values}
+    assert migrated["modules"][module.MODULE_NAME] == {"schema_version": 2, **values, "seat_credentials": {}}
+    raw = {"schema_version": 2, **values}
     assert module.ensure(raw) is raw
     for key in VALUES:
         assert raw[key] is values[key]
@@ -134,7 +137,7 @@ def test_codec_roundtrip_preserves_all_room_settings():
         setattr(instance, key, value)
     payload = instance.to_dict()
     assert all(key not in payload for key in VALUES)
-    assert payload["modules"][module.MODULE_NAME] == {"schema_version": 1, **VALUES}
+    assert payload["modules"][module.MODULE_NAME] == {"schema_version": 2, **VALUES, "seat_credentials": {}}
     assert payload["gm_uid"] == "gm"
     restored = GameInstance.from_dict(payload)
     for key, value in VALUES.items():
