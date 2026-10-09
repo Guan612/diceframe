@@ -581,11 +581,15 @@ def test_access_log_redacts_credentials_in_the_request_line() -> None:
             '&seat=SECRET3&seat_token=SECRET4&user=p1 HTTP/1.1" 200 5 "-" "ua"'
         )
         logger.info('%s "%s" %s', "1.2.3.4", "GET /x?room_token=SECRET5 HTTP/1.1", 200)
+        # aiohttp also passes the request line as structured "extra" data.
+        logger.info("line", extra={"first_request_line": "GET /x?ticket=SECRET6&share=1 HTTP/1.1"})
     finally:
         logger.removeHandler(handler)
         logger.setLevel(old_level)
-    rendered = " ".join(record.getMessage() for record in records)
-    for secret in ("SECRET1", "SECRET2", "SECRET3", "SECRET4", "SECRET5"):
+    rendered = " ".join(
+        record.getMessage() + str(getattr(record, "first_request_line", "")) for record in records
+    )
+    for secret in ("SECRET1", "SECRET2", "SECRET3", "SECRET4", "SECRET5", "SECRET6"):
         assert secret not in rendered
     assert "user=p1" in rendered and "room_token=[redacted]" in rendered
     assert sum(isinstance(f, type(logger.filters[0])) for f in logger.filters) == 1
@@ -671,3 +675,50 @@ async def test_import_tells_the_gm_when_it_closed_the_player_entrance(tmp_path, 
     imported = registry.get(tuple(result["game_key"]))
     assert imported.has_room_password is False
     assert imported.player_access_open is (not closed)
+
+
+@pytest.mark.asyncio
+async def test_a_plaintext_backup_is_upgraded_even_when_the_state_is_current(tmp_path) -> None:
+    from src.engine.game_instance import GameRegistry
+
+    registry = GameRegistry(tmp_path / "saves")
+    current = _instance(PASSWORD)
+    state_path = registry._save_path(current.game_key)
+    older = _write_v37_save(state_path.parent, password="older-secret", token="older-room-token")
+    state_text = json.dumps(current.to_dict())
+    state_path.write_text(state_text, encoding="utf-8")
+    backup_path = state_path.with_name("state.backup.json")
+    backup_path.write_text(json.dumps(older), encoding="utf-8")
+
+    assert await registry.load(current.game_key) is not None
+    backup = backup_path.read_text(encoding="utf-8")
+    assert "older-secret" not in backup and "older-room-token" not in backup
+    assert room_access.verify_room_password(GameInstance.from_dict(json.loads(backup)), "older-secret")
+    assert state_path.read_text(encoding="utf-8") == state_text  # the current state is left alone
+
+
+@pytest.mark.asyncio
+async def test_wrong_room_passwords_through_the_real_stack_are_rate_limited(play_env) -> None:
+    import web_server
+    from aiohttp import web as aio_web
+
+    from src.webui.abuse_guard import ABUSE_GUARD_KEY, AbuseGuard, abuse_guard_middleware
+
+    game_key, instance = _make_game(play_env, "limited", bind_adventure=False)
+    instance.set_room_password(PASSWORD)
+    app = aio_web.Application(middlewares=[abuse_guard_middleware, web_server.auth_middleware])
+    app[ABUSE_GUARD_KEY] = AbuseGuard()
+    app["api"] = play_env.api
+    app["subsystems"] = SimpleNamespace(registry=play_env.registry)
+    register_games(app)
+    seat = _seat(instance)
+    url = _player_url(f"/api/games/{game_key}/verify-room-password")
+    async with TestClient(TestServer(app)) as client:
+        # Correct entries never count.
+        for _ in range(8):
+            assert (await client.post(url, headers=seat, json={"password": PASSWORD})).status == 200
+        statuses = [
+            (await client.post(url, headers=seat, json={"password": "wrong-guess"})).status
+            for _ in range(6)
+        ]
+    assert statuses == [403] * 5 + [429]

@@ -11,6 +11,7 @@ from src.webui.abuse_guard import (
     _is_ai_request,
     abuse_guard_middleware,
 )
+from src.webui.services.room_password import mark_room_password_rejected
 
 
 async def _ok(request: web.Request) -> web.Response:
@@ -190,12 +191,26 @@ class _Clock:
         return self.now
 
 
-def _room_app(guard: AbuseGuard, outcomes: dict[str, int]) -> web.Application:
-    """verify-room-password stub: the status per game key is set by the test."""
+def _room_app(guard: AbuseGuard, outcomes: dict[str, str], calls: list[str] | None = None) -> web.Application:
+    """verify-room-password stub.
+
+    ``outcomes[game]`` is "ok", "wrong" (403 marked as a wrong password) or
+    "forbidden" (a 403 for another reason). Each call yields to the loop so
+    parallel requests really overlap inside the handler.
+    """
 
     async def verify(request: web.Request) -> web.Response:
-        status = outcomes.get(request.match_info["game_key"], 403)
-        return web.json_response({"ok": status == 200}, status=status)
+        game = request.match_info["game_key"]
+        if calls is not None:
+            calls.append(game)
+        await asyncio.sleep(0.01)
+        outcome = outcomes.get(game, "wrong")
+        if outcome == "ok":
+            return web.json_response({"ok": True})
+        response = web.json_response({"ok": False}, status=403)
+        if outcome == "wrong":
+            mark_room_password_rejected(response)
+        return response
 
     app = _app(guard)
     app.router.add_post("/api/games/{game_key}/verify-room-password", verify)
@@ -204,9 +219,8 @@ def _room_app(guard: AbuseGuard, outcomes: dict[str, int]) -> web.Application:
 
 def _room_guard(clock: _Clock, **overrides) -> AbuseGuard:
     options = dict(
-        write_per_ip_limit=1000, write_global_limit=1000, login_per_ip_limit=1000,
-        room_password_free_failures=3, room_password_backoff_base=2,
-        room_password_backoff_cap=30, room_password_per_ip_failure_limit=100,
+        write_per_ip_limit=10_000, write_global_limit=10_000, login_per_ip_limit=10_000,
+        room_password_burst=5, room_password_refill_seconds=30,
         ai_concurrency=10, limiter=SlidingWindowLimiter(clock=clock),
     )
     options.update(overrides)
@@ -220,79 +234,96 @@ def _verify_url(game: str) -> str:
 
 
 @pytest.mark.asyncio
+async def test_exactly_the_free_failures_pass_before_slowing_down():
+    clock = _Clock()
+    app = _room_app(_room_guard(clock), {})
+    async with TestClient(TestServer(app)) as client:
+        statuses = [(await client.post(_verify_url("web|a|web"))).status for _ in range(6)]
+    assert statuses == [403] * 5 + [429]
+
+
+@pytest.mark.asyncio
+async def test_parallel_wrong_guesses_cannot_bypass_the_limit():
+    clock = _Clock()
+    calls: list[str] = []
+    guard = _room_guard(clock)
+    app = _room_app(guard, {}, calls)
+    async with TestClient(TestServer(app)) as client:
+        responses = await asyncio.gather(*(client.post(_verify_url("web|a|web")) for _ in range(300)))
+        statuses = [response.status for response in responses]
+    assert len(calls) == 5  # only the burst reaches the verifier
+    assert statuses.count(403) == 5 and statuses.count(429) == 295
+    assert guard._room_password_locks == {}  # no per-key state left behind
+
+
+@pytest.mark.asyncio
 async def test_successful_room_password_entries_are_never_limited():
     clock = _Clock()
-    app = _room_app(_room_guard(clock), {"web|a|web": 200})
+    app = _room_app(_room_guard(clock), {"web|a|web": "ok"})
     async with TestClient(TestServer(app)) as client:
-        for _ in range(20):
-            assert (await client.post(_verify_url("web|a|web"))).status == 200
+        statuses = await asyncio.gather(*(client.post(_verify_url("web|a|web")) for _ in range(50)))
+    assert {response.status for response in statuses} == {200}
 
 
 @pytest.mark.asyncio
-async def test_failed_room_password_entries_slow_down_instead_of_locking_out():
+async def test_only_wrong_password_rejections_count():
     clock = _Clock()
-    app = _room_app(_room_guard(clock), {"web|a|web": 403})
+    app = _room_app(_room_guard(clock), {"web|a|web": "forbidden"})
     async with TestClient(TestServer(app)) as client:
-        for _ in range(3):  # free failures
-            assert (await client.post(_verify_url("web|a|web"))).status == 403
-        # Fourth failure arrived; the next attempt must wait a short, growing delay.
-        assert (await client.post(_verify_url("web|a|web"))).status == 403
-        waited = await client.post(_verify_url("web|a|web"))
-        assert waited.status == 429
-        retry_after = int(waited.headers["Retry-After"])
-        assert 1 <= retry_after <= 30
-        # Not a lockout: once the delay passed, an attempt goes through again.
-        clock.now += retry_after
-        assert (await client.post(_verify_url("web|a|web"))).status == 403
-        # Delays are capped, so nobody on the IP waits more than the cap.
-        for _ in range(10):
-            clock.now += 30
-            assert (await client.post(_verify_url("web|a|web"))).status == 403
-        capped = await client.post(_verify_url("web|a|web"))
-        assert capped.status == 429 and int(capped.headers["Retry-After"]) <= 30
+        statuses = [(await client.post(_verify_url("web|a|web"))).status for _ in range(20)]
+    assert statuses == [403] * 20
 
 
 @pytest.mark.asyncio
-async def test_a_correct_password_is_accepted_while_failures_back_off_elsewhere():
+async def test_the_wait_is_short_and_rejected_attempts_do_not_extend_it():
     clock = _Clock()
-    app = _room_app(_room_guard(clock), {"web|a|web": 403, "web|b|web": 200})
+    app = _room_app(_room_guard(clock), {})
     async with TestClient(TestServer(app)) as client:
-        for _ in range(4):
+        for _ in range(5):
             await client.post(_verify_url("web|a|web"))
+        # A griefer hammering the endpoint only collects 429s ...
+        for _ in range(100):
+            waited = await client.post(_verify_url("web|a|web"))
+            assert waited.status == 429
+            assert int(waited.headers["Retry-After"]) <= 30
+        # ... and does not push the next free slot further away.
+        clock.now += 30
+        assert (await client.post(_verify_url("web|a|web"))).status == 403
         assert (await client.post(_verify_url("web|a|web"))).status == 429
-        # Another table, and logins/writes, are unaffected.
+        # Each refill period yields exactly one more attempt, never a lockout.
+        clock.now += 30
+        assert (await client.post(_verify_url("web|a|web"))).status == 403
+
+
+@pytest.mark.asyncio
+async def test_failures_on_one_game_never_slow_down_another_game():
+    clock = _Clock()
+    app = _room_app(_room_guard(clock), {"web|b|web": "ok"})
+    async with TestClient(TestServer(app)) as client:
+        await asyncio.gather(*(client.post(_verify_url("web|a|web")) for _ in range(300)))
+        for game in (f"web|spray{i}|web" for i in range(50)):
+            await client.post(_verify_url(game))
+        assert (await client.post(_verify_url("web|a|web"))).status == 429
+        # Another table, logins and ordinary writes from the same IP are unaffected.
         assert (await client.post(_verify_url("web|b|web"))).status == 200
+        assert (await client.post(_verify_url("web|c|web"))).status == 403
         assert (await client.post("/api/login")).status == 200
         assert (await client.post("/api/games/room/action")).status == 200
 
 
 @pytest.mark.asyncio
-async def test_room_password_backoff_uses_the_canonical_game_key():
+async def test_room_password_limit_uses_the_canonical_game_key():
     clock = _Clock()
-    # "solo" and "solo||" name the same game.
-    app = _room_app(_room_guard(clock), {"solo": 403, "solo||": 403})
+    app = _room_app(_room_guard(clock), {})
     async with TestClient(TestServer(app)) as client:
-        for game in ("solo", "solo||", "solo", "solo||"):
+        # "solo" and "solo||" name the same game.
+        for game in ("solo", "solo||", "solo", "solo||", "solo"):
             assert (await client.post(_verify_url(game))).status == 403
-        assert (await client.post(_verify_url("solo"))).status == 429
         assert (await client.post(_verify_url("solo||"))).status == 429
 
 
-@pytest.mark.asyncio
-async def test_failed_room_passwords_have_a_hard_per_ip_total():
-    clock = _Clock()
-    guard = _room_guard(clock, room_password_free_failures=100, room_password_per_ip_failure_limit=3)
-    app = _room_app(guard, {})
-    async with TestClient(TestServer(app)) as client:
-        for game in ("web|a|web", "web|b|web", "web|c|web"):
-            assert (await client.post(_verify_url(game))).status == 403
-        blocked = await client.post(_verify_url("web|d|web"))
-        assert blocked.status == 429
-
-
-def test_room_password_defaults_slow_down_quickly_and_cap_the_wait():
+def test_room_password_defaults_keep_the_wait_short():
     from src.webui import abuse_guard
 
-    assert abuse_guard.ROOM_PASSWORD_FREE_FAILURES <= abuse_guard.LOGIN_PER_IP_LIMIT
-    assert abuse_guard.ROOM_PASSWORD_BACKOFF_CAP_SECONDS <= 60
-    assert abuse_guard.ROOM_PASSWORD_PER_IP_FAILURE_LIMIT < abuse_guard.WRITE_PER_IP_LIMIT
+    assert abuse_guard.ROOM_PASSWORD_BURST == 5
+    assert abuse_guard.ROOM_PASSWORD_REFILL_SECONDS <= 60

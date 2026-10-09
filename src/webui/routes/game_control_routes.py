@@ -346,4 +346,7 @@ async def api_verify_room_password(request: web.Request) -> web.Response:
         )
     except ModuleStateError as exc:
         return web.json_response({"ok": False, "error": str(exc)}, status=409)
-    return web.json_response(result, status=status, headers={"Cache-Control": "no-store"})
+    response = web.json_response(result, status=status, headers={"Cache-Control": "no-store"})
+    if status == 403 and result.get("error") == room_password_svc.ROOM_PASSWORD_WRONG:
+        room_password_svc.mark_room_password_rejected(response)
+    return response

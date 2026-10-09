@@ -21,6 +21,21 @@ logger = logging.getLogger("trpg")
 ROOM_TOKEN_TTL_ENV = "TRPG_ROOM_TOKEN_TTL_DAYS"
 MAX_ROOM_TOKEN_TTL_DAYS = 365
 ROOM_PASSWORD_CHANGED = "房间密码已更改，请重新输入"
+ROOM_PASSWORD_WRONG = "房间密码错误"
+# Set on the response of a wrong-password attempt: the only outcome the
+# abuse guard counts against the room password rate limit.
+_REJECTED_MARK = "diceframe_room_password_rejected"
+
+
+def mark_room_password_rejected(response: Any) -> None:
+    response[_REJECTED_MARK] = True
+
+
+def is_room_password_rejected(response: Any) -> bool:
+    try:
+        return bool(response.get(_REJECTED_MARK))
+    except AttributeError:
+        return False
 
 
 def room_token_ttl_seconds(environ: Mapping[str, str] | None = None) -> int:
@@ -53,7 +68,7 @@ async def verify_and_issue_room_token(
     # only sees the hash read here, never the live instance.
     matched = await asyncio.to_thread(room_access.verify_room_password_hash, password, stored)
     if not matched:
-        return {"ok": False, "error": "房间密码错误"}, 403
+        return {"ok": False, "error": ROOM_PASSWORD_WRONG}, 403
     # The GM may have replaced or removed the password while the hash ran: a
     # token must never be issued under a password that is no longer current.
     if room_access.room_password_hash(instance) != stored:

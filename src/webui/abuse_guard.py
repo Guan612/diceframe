@@ -13,6 +13,7 @@ from typing import Awaitable, Callable
 from aiohttp import web
 
 from src.webui.services._common import canonical_game_key
+from src.webui.services.room_password import is_room_password_rejected
 
 
 LOGIN_PER_IP_LIMIT = 10
@@ -23,18 +24,20 @@ WRITE_PER_IP_LIMIT = 60
 WRITE_PER_IP_WINDOW_SECONDS = 60
 WRITE_GLOBAL_LIMIT = 600
 WRITE_GLOBAL_WINDOW_SECONDS = 60
-# 房间密码猜测：只计「失败」的尝试（输对的玩家从不被限）。同一 IP+同一局
-# 前几次失败不受影响，之后每次尝试之间需等待指数增长、有上限的间隔——是
-# 减速而不是封锁，共用出口 IP（隧道/代理/NAT）后面的正常玩家最多等一个上限
-# 间隔，不会被同 IP 的捣乱者把整局锁死。同一 IP 的失败总数另有硬上限，
-# 防止对多局撒网。与 owner 登录、通用写入分桶，互不挤占。
-# 身份按 request.remote（直连对端地址）计；不信任 X-Forwarded-For，因为本项目
-# 没有「可信反向代理」配置——反代后面所有玩家共用代理 IP，正是减速设计要兜住的情况。
-ROOM_PASSWORD_FREE_FAILURES = 5
-ROOM_PASSWORD_BACKOFF_BASE_SECONDS = 2
-ROOM_PASSWORD_BACKOFF_CAP_SECONDS = 60
-ROOM_PASSWORD_FAILURE_WINDOW_SECONDS = 10 * 60
-ROOM_PASSWORD_PER_IP_FAILURE_LIMIT = 50
+# 房间密码猜测：每个「IP + 规范化后的游戏」一个令牌桶。容量 5（前 5 次错误
+# 不受影响），之后每 30 秒回补 1 次机会——是减速而不是封锁：
+# - 每次尝试在进入处理器之前就先扣一个令牌（并发请求也会被计入），只有处理器
+#   明确标记「密码错误」才算消耗，其它结果（成功、别的错误）原样退还；
+# - 等待时间只由令牌缺口决定，被 429 拒掉的请求不扣令牌，也就不会把下一次机会
+#   往后推；任何人最多等一个回补周期（30 秒），不存在长时间锁死；
+# - 只按单局计，不设跨局的 IP 总上限：同一 IP 在某一局的失败绝不影响它在
+#   其它局的尝试，每一局被猜测的速度都单独受限。
+# 共用出口 IP（隧道/代理/NAT）后面的正常玩家与捣乱者共享同一个桶，只能保证
+# 「等待有上限、不被锁死」，无法在同一 IP 内区分人。身份按 request.remote
+# （直连对端地址）计；不信任 X-Forwarded-For，因为本项目没有「可信反向代理」配置。
+# 与 owner 登录、通用写入分桶，互不挤占。
+ROOM_PASSWORD_BURST = 5
+ROOM_PASSWORD_REFILL_SECONDS = 30
 # 建卡器的 choices/validate/derive/finalize 是无状态计算（POST 只为携带草稿），
 # 单独计额：引导建卡每改一步都会请求，不能挤占同 IP 其它玩家的写额度。
 BUILDER_PER_IP_LIMIT = 300
@@ -119,26 +122,6 @@ class SlidingWindowLimiter:
     def now(self) -> float:
         return self._clock()
 
-    def recent(self, scope: str, identity: str, window_seconds: int) -> list[float]:
-        """Timestamps recorded in the window, without recording a new one."""
-        key = (scope, identity)
-        bucket = self._buckets.get(key)
-        if not bucket:
-            return []
-        cutoff = self._clock() - window_seconds
-        while bucket and bucket[0] <= cutoff:
-            bucket.popleft()
-        return list(bucket)
-
-    def record(self, scope: str, identity: str, window_seconds: int) -> None:
-        """Record one event (e.g. a failed attempt) without checking a limit."""
-        now = self._clock()
-        self._cleanup(now, max(window_seconds, LOGIN_PER_IP_WINDOW_SECONDS))
-        key = (scope, identity)
-        self._buckets.setdefault(key, deque()).append(now)
-        self._last_seen[key] = now
-        self._evict_if_needed(key)
-
     @property
     def bucket_count(self) -> int:
         return len(self._buckets)
@@ -179,11 +162,8 @@ class AbuseGuard:
         write_per_ip_window: int = WRITE_PER_IP_WINDOW_SECONDS,
         write_global_limit: int = WRITE_GLOBAL_LIMIT,
         write_global_window: int = WRITE_GLOBAL_WINDOW_SECONDS,
-        room_password_free_failures: int = ROOM_PASSWORD_FREE_FAILURES,
-        room_password_backoff_base: float = ROOM_PASSWORD_BACKOFF_BASE_SECONDS,
-        room_password_backoff_cap: float = ROOM_PASSWORD_BACKOFF_CAP_SECONDS,
-        room_password_failure_window: int = ROOM_PASSWORD_FAILURE_WINDOW_SECONDS,
-        room_password_per_ip_failure_limit: int = ROOM_PASSWORD_PER_IP_FAILURE_LIMIT,
+        room_password_burst: int = ROOM_PASSWORD_BURST,
+        room_password_refill_seconds: float = ROOM_PASSWORD_REFILL_SECONDS,
         builder_per_ip_limit: int = BUILDER_PER_IP_LIMIT,
         builder_per_ip_window: int = BUILDER_PER_IP_WINDOW_SECONDS,
         builder_global_limit: int = BUILDER_GLOBAL_LIMIT,
@@ -200,11 +180,12 @@ class AbuseGuard:
         self.write_per_ip_window = write_per_ip_window
         self.write_global_limit = write_global_limit
         self.write_global_window = write_global_window
-        self.room_password_free_failures = max(0, room_password_free_failures)
-        self.room_password_backoff_base = room_password_backoff_base
-        self.room_password_backoff_cap = room_password_backoff_cap
-        self.room_password_failure_window = room_password_failure_window
-        self.room_password_per_ip_failure_limit = room_password_per_ip_failure_limit
+        self.room_password_burst = max(1, room_password_burst)
+        self.room_password_refill_seconds = max(1.0, float(room_password_refill_seconds))
+        # (ip, game) -> (tokens, last refill time); bounded like the limiter.
+        self._room_password_buckets: dict[tuple[str, str], tuple[float, float]] = {}
+        # (ip, game) -> (lock, requests using it); dropped when the last one leaves.
+        self._room_password_locks: dict[tuple[str, str], tuple[asyncio.Lock, int]] = {}
         self.builder_per_ip_limit = builder_per_ip_limit
         self.builder_per_ip_window = builder_per_ip_window
         self.builder_global_limit = builder_global_limit
@@ -233,14 +214,8 @@ class AbuseGuard:
             if denied:
                 return _rate_limited_response(denied)
         elif request.method == "POST" and (room_match := _ROOM_PASSWORD_PATH.match(request.path)):
-            game = canonical_game_key(request.match_info.get("game_key") or room_match.group(1))[:256]
-            denied = self._room_password_wait(ip, game)
-            if denied:
-                return _rate_limited_response(denied)
-            response = await handler(request)
-            if response.status == 403:  # wrong password: only failures count
-                self._record_room_password_failure(ip, game)
-            return response
+            key = (ip, canonical_game_key(request.match_info.get("game_key") or room_match.group(1))[:256])
+            return await self._guard_room_password(key, request, handler)
         elif request.method == "POST" and _BUILDER_PATH.match(request.path):
             denied = self._check_pair(
                 "builder-ip",
@@ -278,27 +253,77 @@ class AbuseGuard:
         finally:
             self._ai_slots.release()
 
-    def _room_password_wait(self, ip: str, game: str) -> int:
-        """Seconds this IP must still wait before another room password attempt."""
-        window = self.room_password_failure_window
-        now = self._limiter.now()
-        per_ip = self._limiter.recent("room-password-fail-ip", ip, window)
-        if len(per_ip) >= self.room_password_per_ip_failure_limit:
-            return max(1, math.ceil(window - (now - per_ip[0])))
-        failures = self._limiter.recent("room-password-fail-ip-game", f"{ip}|{game}", window)
-        # The first ``free`` failures cost nothing; each later one doubles the
-        # spacing required before the next attempt, up to the cap.
-        excess = len(failures) - self.room_password_free_failures - 1
-        if excess < 0:
-            return 0
-        delay = min(self.room_password_backoff_cap, self.room_password_backoff_base * (2 ** min(excess, 30)))
-        remaining = failures[-1] + delay - now
-        return max(1, math.ceil(remaining)) if remaining > 0 else 0
+    def _room_password_tokens(self, key: tuple[str, str], now: float) -> float:
+        tokens, updated = self._room_password_buckets.get(key, (float(self.room_password_burst), now))
+        refilled = (now - updated) / self.room_password_refill_seconds
+        return min(float(self.room_password_burst), tokens + max(0.0, refilled))
 
-    def _record_room_password_failure(self, ip: str, game: str) -> None:
-        window = self.room_password_failure_window
-        self._limiter.record("room-password-fail-ip", ip, window)
-        self._limiter.record("room-password-fail-ip-game", f"{ip}|{game}", window)
+    async def _guard_room_password(
+        self,
+        key: tuple[str, str],
+        request: web.Request,
+        handler: Callable[[web.Request], Awaitable[web.StreamResponse]],
+    ) -> web.StreamResponse:
+        """Run attempts for one IP + game one at a time.
+
+        Checking the bucket and recording the outcome happen under the same
+        lock, so parallel requests cannot all pass the check before any
+        failure is recorded. Correct passwords never take a token, so a
+        table joining at once from one address is only serialised, not refused.
+        """
+        lock, users = self._room_password_locks.get(key, (None, 0))
+        if lock is None:
+            lock = asyncio.Lock()
+        self._room_password_locks[key] = (lock, users + 1)
+        try:
+            async with lock:
+                wait = self._room_password_wait(key)
+                if wait:
+                    return _rate_limited_response(wait)
+                response = await handler(request)
+                if is_room_password_rejected(response):
+                    self._consume_room_password_token(key)
+                return response
+        finally:
+            lock, users = self._room_password_locks[key]
+            if users <= 1:
+                self._room_password_locks.pop(key, None)
+            else:
+                self._room_password_locks[key] = (lock, users - 1)
+
+    def _room_password_wait(self, key: tuple[str, str]) -> int:
+        """Seconds until the next attempt is allowed, from the token deficit only.
+
+        Refused (429) attempts take nothing, so they never push the next slot back.
+        """
+        tokens = self._room_password_tokens(key, self._limiter.now())
+        if tokens >= 1:
+            return 0
+        return max(1, math.ceil((1 - tokens) * self.room_password_refill_seconds))
+
+    def _consume_room_password_token(self, key: tuple[str, str]) -> None:
+        now = self._limiter.now()
+        tokens = self._room_password_tokens(key, now)
+        self._room_password_buckets[key] = (max(0.0, tokens - 1), now)
+        self._evict_room_password_buckets(key)
+
+    def _evict_room_password_buckets(self, current: tuple[str, str]) -> None:
+        if len(self._room_password_buckets) <= MAX_TRACKED_BUCKETS:
+            return
+        # Full buckets carry no state; drop them first, then the least recent.
+        now = self._limiter.now()
+        for key in [k for k in self._room_password_buckets if k != current]:
+            if self._room_password_tokens(key, now) >= self.room_password_burst:
+                self._room_password_buckets.pop(key, None)
+        while len(self._room_password_buckets) > MAX_TRACKED_BUCKETS:
+            victim = min(
+                (k for k in self._room_password_buckets if k != current),
+                key=lambda k: self._room_password_buckets[k][1],
+                default=None,
+            )
+            if victim is None:
+                break
+            self._room_password_buckets.pop(victim, None)
 
     def _check_pair(
         self,

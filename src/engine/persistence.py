@@ -170,8 +170,11 @@ async def load(registry: GameRegistry, game_key: tuple) -> GameInstance | None:
             repair_hint="建议检查 data/saves 目录权限、磁盘空间和 state.json 格式。",
         )
     _restore_chatlog(registry, instance, sp)
-    if room_access.payload_has_plaintext_credentials(data):
-        _rewrite_plaintext_credentials(sp.with_name("state.json"), instance)
+    _rewrite_plaintext_credentials(
+        sp.with_name("state.json"),
+        instance,
+        state_has_plaintext=room_access.payload_has_plaintext_credentials(data),
+    )
     registry.register(instance)
     # Loading opaque future module data must not require runtime interpretation.
     logger.info("存档已加载: %s", game_key)
@@ -184,19 +187,24 @@ def _write_state(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _rewrite_plaintext_credentials(state_path: Path, instance: GameInstance) -> None:
-    """Persist the upgraded (hashed) room credentials right after loading.
+def _rewrite_plaintext_credentials(
+    state_path: Path, instance: GameInstance, *, state_has_plaintext: bool,
+) -> None:
+    """Persist upgraded (hashed) room credentials right after loading.
 
     The schema upgrade only happens in memory; without this an idle game would
     keep its plaintext room password and token on disk indefinitely, and the
-    upgraded token's expiry would be recomputed on every load. The backup is
-    upgraded in place too (it stays the older state), never left in plaintext.
+    upgraded token's expiry would be recomputed on every load. The state file
+    and the backup are checked independently (a current state can sit next to
+    an older plaintext backup); the backup is upgraded in place and stays the
+    older state.
     """
-    try:
-        _write_state(state_path, instance.to_dict())
-    except OSError:
-        logger.exception("升级房间凭据后写回存档失败: %s", state_path)
-        return
+    if state_has_plaintext:
+        try:
+            _write_state(state_path, instance.to_dict())
+        except OSError:
+            logger.exception("升级房间凭据后写回存档失败: %s", state_path)
+            return
     backup = state_path.with_name("state.backup.json")
     if not backup.exists():
         return

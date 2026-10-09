@@ -71,12 +71,22 @@ class _AccessLogRedaction(logging.Filter):
         try:
             message = record.getMessage()
         except Exception:  # pragma: no cover - malformed record, leave as is
-            return True
-        redacted = _URL_SECRET_PARAMS.sub(lambda match: f"{match.group(1)}=[redacted]", message)
-        if redacted != message:
-            record.msg = redacted
-            record.args = None
+            message = None
+        if message is not None:
+            redacted = _redact_url_secrets(message)
+            if redacted != message:
+                record.msg = redacted
+                record.args = None
+        # aiohttp also attaches the raw request line as structured "extra" data,
+        # which JSON or custom formatters may print.
+        line = getattr(record, "first_request_line", None)
+        if isinstance(line, str):
+            record.first_request_line = _redact_url_secrets(line)
         return True
+
+
+def _redact_url_secrets(text: str) -> str:
+    return _URL_SECRET_PARAMS.sub(lambda match: f"{match.group(1)}=[redacted]", text)
 
 
 def install_access_log_redaction(logger: logging.Logger | None = None) -> None:
