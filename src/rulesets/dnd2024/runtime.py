@@ -34,6 +34,7 @@ from src.rulesets.dnd2024.character.reconciliation import (
 )
 from src.rulesets.dnd2024.campaign import CAMPAIGN_INTENT_TYPES, Dnd2024CampaignEngine
 from src.rulesets.dnd2024.combat import Dnd2024CombatEngine
+import src.rulesets.dnd2024.combat.visibility as combat_visibility
 from src.rulesets.dnd2024.content.catalog import DndContentCatalog
 from src.rulesets.dnd2024.content.provider import (
     DndContentCatalogProvider,
@@ -394,6 +395,16 @@ class Dnd2024Runtime:
         """Contribute D&D-only detail fields through the generic read boundary."""
 
         return {"advancement": advancement_access.project(instance)}
+
+    def project_intent_result(
+        self, instance: Any, result: dict[str, Any], viewer_id: str, viewer_is_gm: bool,
+    ) -> dict[str, Any]:
+        """Strip monster stat blocks from intent/automation payloads for non-GMs."""
+
+        del instance, viewer_id
+        if viewer_is_gm:
+            return result
+        return combat_visibility.public_intent_result(result)
 
     def configure_live_advancement(
         self, instance: Any, mode: str, authority: str,
@@ -1014,6 +1025,18 @@ class Dnd2024Runtime:
             view["encounter_request"] = None
         view["recent_combat_events"] = self._recent_combat_events(instance)
         view["campaign"] = campaign
+        tutorial = campaign.get("tutorial") if isinstance(campaign, dict) else None
+        step = tutorial.get("current_step") if isinstance(tutorial, dict) else None
+        view["encounter_preview"] = combat_visibility.encounter_preview(
+            view.get("encounter_presets") or [],
+            [
+                str(step.get("encounter_preset_id") or "") if isinstance(step, dict) else "",
+                str(request.get("encounter_preset_id") or "") if isinstance(request, dict) else "",
+            ],
+        )
+        if not viewer_is_gm:
+            # The preset catalog carries full monster stat blocks: GM tooling only.
+            view.pop("encounter_presets", None)
         director = self.director_proposal(instance, campaign)
         # Gameplay clients need the recommendation, not the Director's
         # bounded copy of every player action. Full context stays LLM-only.
