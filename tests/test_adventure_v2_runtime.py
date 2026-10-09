@@ -197,11 +197,19 @@ def test_adventure_progress_persists_through_save_and_reload(tmp_path) -> None:
     assert restored.adventure_progress["active_nodes"] == ["vault"]
 
 
+def _progress_home(payload: dict) -> tuple[dict, str]:
+    """Where adventure progress lives in a save (top level before R9-a)."""
+    slot = (payload.get("modules") or {}).get("adventure_runtime")
+    if isinstance(slot, dict) and "progress" in slot:
+        return slot, "progress"
+    return payload, "adventure_progress"
+
+
 def test_legacy_save_without_progress_loads_as_empty(tmp_path) -> None:
     resolver = _install(tmp_path, _graph())
     payload = _instance(resolver).to_dict()
-    payload.pop("adventure_progress")
-    payload["adventure_progress"] = "corrupt"
+    container, key = _progress_home(payload)
+    container[key] = "corrupt"
 
     restored = GameInstance.from_dict(payload)
 
