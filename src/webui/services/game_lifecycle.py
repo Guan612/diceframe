@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 from src.engine.game_instance import GameState
-from src.engine.modules import content_binding
+from src.engine.modules import content_binding, room_access
 from src.content_modules.refs import ContentRef, ContentRefError, parse_content_ref
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
@@ -212,8 +212,10 @@ async def create_game(
         room_password = ""
     else:
         room_password = str(room_password)
-        if len(room_password) < 4:
-            return {"ok": False, "error": "房间密码至少 4 位"}
+        try:
+            room_access.validate_new_room_password(room_password)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
 
     # Professional sheets are validated as a complete batch before any game,
     # player, card, or save mutation. create_player repeats normalization at the

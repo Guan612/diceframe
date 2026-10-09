@@ -34,7 +34,7 @@ async def api_detail(request: web.Request) -> web.Response:
         # lobby only: no uids, GM identity, plot, recap, luck or economy data.
         lobby = lobby_detail(d)
         if (
-            getattr(instance, "room_password", "")
+            getattr(instance, "has_room_password", False)
             and not WebAccessControl.request_room_token_ok(instance, request)
         ):
             # Story text stays behind the room password.

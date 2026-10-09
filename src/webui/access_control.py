@@ -18,6 +18,9 @@ from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 
 
 SEAT_TOKEN_HEADER = "X-Seat-Token"
+# Room tokens are only accepted as a header: a URL query would land them in
+# access logs. (SSE needs no room token; it authenticates with a ticket.)
+ROOM_TOKEN_HEADER = "X-Room-Token"
 
 # Share endpoints a visitor needs before holding a seat (join flow).  Every
 # other share endpoint acts as a seat and requires that seat's token.
@@ -89,7 +92,7 @@ class WebAccessControl:
             instance = self.request_game_instance(request)
             if (
                 instance
-                and instance.room_password
+                and getattr(instance, "has_room_password", False)
                 and not self.request_room_token_ok(instance, request)
             ):
                 return web.json_response(
@@ -381,11 +384,8 @@ class WebAccessControl:
 
     @staticmethod
     def request_room_token_ok(instance, request: web.Request) -> bool:
-        token = str(request.query.get("room_token") or "")
-        return bool(instance.room_token) and hmac.compare_digest(
-            instance.room_token,
-            token,
-        )
+        token = str(request.headers.get(ROOM_TOKEN_HEADER) or "").strip()
+        return room_access.verify_room_token(instance, token)
 
     @staticmethod
     def share_endpoint_kind(request: web.Request) -> str:

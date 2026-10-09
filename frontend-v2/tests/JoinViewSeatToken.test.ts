@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { i18n } from '../src/i18n'
-import { readSeatToken } from '../src/utils/seatToken'
+import { ROOM_TOKEN_REJECTED_EVENT, readRoomToken, readSeatToken, storeRoomToken } from '../src/utils/seatToken'
 
 const GAME = 'web|room|bot'
 
@@ -171,5 +171,72 @@ describe('JoinView seat token', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('Harbor at midnight')
+  })
+
+  it('asks a returning member for the room password first, then enters play', async () => {
+    localStorage.setItem('trpg_play_user_' + GAME, 'p1')
+    let verified = false
+    mocks.api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === `/games/${encodeURIComponent(GAME)}`) {
+        return { game_key: GAME, world_name: 'World', has_room_password: true, viewer: { kind: 'seat', uid: 'p1' } }
+      }
+      if (path.endsWith('/verify-room-password') && init?.method === 'POST') {
+        verified = true
+        return { room_token: 'rt-new', expires_at: '2099-01-01T00:00:00+00:00' }
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const router = makeRouter()
+    const wrapper = await mountAt(router, { game: GAME, share: '1', notice: 'room' })
+
+    expect(router.currentRoute.value.name).toBe('join')
+    expect(wrapper.find('.room-gate').exists()).toBe(true)
+    expect(wrapper.text()).toContain(String(i18n.global.t('roomAccessExpired')))
+
+    await wrapper.get('.room-gate input[type="password"]').setValue('secret')
+    await wrapper.get('.room-gate button.submit').trigger('click')
+    await flushPromises()
+
+    expect(verified).toBe(true)
+    expect(readRoomToken(GAME)).toBe('rt-new')
+    expect(router.currentRoute.value.name).toBe('play')
+    expect(router.currentRoute.value.query).toMatchObject({ game: GAME, user: 'p1', share: '1' })
+    expect(localStorage.getItem('trpg_play_user_' + GAME)).toBe('p1')
+  })
+
+  it('re-opens the password prompt when the held room token is refused mid-join', async () => {
+    storeRoomToken(GAME, 'rt-stale')
+    apiByPath()
+    const router = makeRouter()
+    const wrapper = await mountAt(router, { game: GAME, share: '1' })
+    expect(wrapper.find('.room-gate').exists()).toBe(false)
+
+    window.dispatchEvent(new CustomEvent(ROOM_TOKEN_REJECTED_EVENT, { detail: { gameKey: 'web|other|bot' } }))
+    await flushPromises()
+    expect(wrapper.find('.room-gate').exists()).toBe(false)
+
+    window.dispatchEvent(new CustomEvent(ROOM_TOKEN_REJECTED_EVENT, { detail: { gameKey: GAME } }))
+    await flushPromises()
+    expect(wrapper.find('.room-gate').exists()).toBe(true)
+    expect(wrapper.text()).toContain(String(i18n.global.t('roomAccessExpired')))
+    wrapper.unmount()
+  })
+
+  it('sends the room password exactly as typed (never trimmed)', async () => {
+    const sent: string[] = []
+    mocks.api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === `/games/${encodeURIComponent(GAME)}`) return { game_key: GAME, world_name: 'World', has_room_password: true }
+      if (path.endsWith('/verify-room-password') && init?.method === 'POST') {
+        sent.push(JSON.parse(String(init.body)).password)
+        throw new Error('wrong')
+      }
+      throw new Error(`unexpected ${path}`)
+    })
+    const router = makeRouter()
+    const wrapper = await mountAt(router, { game: GAME, share: '1' })
+    await wrapper.get('.room-gate input[type="password"]').setValue('  spaced pass  ')
+    await wrapper.get('.room-gate button.submit').trigger('click')
+    await flushPromises()
+    expect(sent).toEqual(['  spaced pass  '])
   })
 })

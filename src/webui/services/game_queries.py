@@ -209,7 +209,7 @@ def game_detail(
         ),
         # 房间级暂离语义（pause 默认 / ai_takeover）：前端房间设置要显示当前值。
         "away_control_policy": away_control_policy(instance),
-        "has_room_password": bool(getattr(instance, "room_password", "")),
+        "has_room_password": bool(getattr(instance, "has_room_password", False)),
         "economy_reward_policy": dict(
             getattr(instance, "economy_reward_policy", {}) or {}
         ),

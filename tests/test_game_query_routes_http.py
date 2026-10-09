@@ -45,6 +45,8 @@ ADVENTURE_ID = "user:regression_quest"
 DIRECTORY_ID = "regression-quest"
 ROOM_PASSWORD = "room-password"
 ROOM_TOKEN = "room-token-ok"
+# Room tokens travel in a header, never in the URL (access logs).
+ROOM_HEADER = {"X-Room-Token": ROOM_TOKEN}
 
 
 def _install_v2_adventure(adventures_dir: Path) -> None:
@@ -167,7 +169,7 @@ def _make_game(
     instance.set_player_access(open_access)
     if room_password:
         instance.set_room_password(room_password)
-        instance.set_room_token(ROOM_TOKEN)
+        room_access.issue_room_token(instance, token=ROOM_TOKEN)
     play_env.registry.register(instance)
     return "|".join(instance.game_key), instance
 
@@ -308,12 +310,12 @@ async def test_room_password_game_requires_matching_room_token(play_env) -> None
 
     async with TestClient(TestServer(app)) as client:
         wrong = await client.get(
-            _player_url(f"/api/games/{game_key}/adventure", room_token="wrong"),
-            headers=seat,
+            _player_url(f"/api/games/{game_key}/adventure"),
+            headers={**seat, "X-Room-Token": "wrong"},
         )
         correct = await client.get(
-            _player_url(f"/api/games/{game_key}/adventure", room_token=ROOM_TOKEN),
-            headers=seat,
+            _player_url(f"/api/games/{game_key}/adventure"),
+            headers={**seat, **ROOM_HEADER},
         )
         owner = await client.get(
             f"/api/games/{game_key}/adventure", headers=_owner(),

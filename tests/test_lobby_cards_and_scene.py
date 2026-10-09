@@ -10,6 +10,7 @@ import pytest_asyncio
 from src.engine.modules import room_access
 from src.webui.routes.character_cards import register_character_cards as register_character_cards
 from test_game_query_routes_http import (
+    ROOM_HEADER,
     ROOM_TOKEN,
     _make_game,
     _owner,
@@ -42,17 +43,15 @@ async def cards_env(share_env, play_env):
     return env
 
 
-def _cards_url(env, *, room_token=True):
-    return f"/api/games/{env.key}/character-cards?share=1" + (
-        f"&room_token={ROOM_TOKEN}" if room_token else ""
-    )
+def _cards_url(env):
+    return f"/api/games/{env.key}/character-cards?share=1"
 
 
 @pytest.mark.asyncio
 async def test_visitor_sees_only_plugin_cards(cards_env):
     env = cards_env
     stranger, _ = env.sessions.get_or_create(None)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(_cards_url(env), headers=_cookie(stranger))
         body = await response.json()
     assert response.status == 200
@@ -63,7 +62,7 @@ async def test_visitor_sees_only_plugin_cards(cards_env):
 async def test_seated_player_cannot_read_cards_from_another_game(cards_env):
     env = cards_env
     seat = {"X-Seat-Token": room_access.issue_seat_token(env.instance, "p1")}
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(_cards_url(env), headers=seat)
         body = await response.json()
     assert response.status == 200
@@ -74,7 +73,7 @@ async def test_seated_player_cannot_read_cards_from_another_game(cards_env):
 @pytest.mark.asyncio
 async def test_owner_keeps_the_full_card_library(cards_env):
     env = cards_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(f"/api/games/{env.key}/character-cards", headers=_owner())
         body = await response.json()
     assert {"Plugin Hero", "Other Game Hero"} <= _names(body)
@@ -88,9 +87,9 @@ async def test_seated_player_cannot_adopt_a_card_it_cannot_list(cards_env):
         if card.get("character_name") == "Other Game Hero"
     )
     seat = {"X-Seat-Token": room_access.issue_seat_token(env.instance, "p1"), **CONFIRM}
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
-            f"/api/games/{env.key}/character/p1/adopt-card?share=1&room_token={ROOM_TOKEN}",
+            f"/api/games/{env.key}/character/p1/adopt-card?share=1",
             headers=seat, json={"card_id": hidden["id"]},
         )
         body = await response.json()
@@ -107,15 +106,15 @@ async def test_password_room_lobby_hides_scene_without_room_token(share_env):
     env = share_env
     env.instance.scene = "The harbor at midnight"
     stranger, _ = env.sessions.get_or_create(None)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         hidden = await (await client.get(
-            f"/api/games/{env.key}?share=1", headers=_cookie(stranger),
+            f"/api/games/{env.key}?share=1", headers={**_cookie(stranger), "X-Room-Token": ""},
         )).json()
         wrong = await (await client.get(
-            f"/api/games/{env.key}?share=1&room_token=wrong", headers=_cookie(stranger),
+            f"/api/games/{env.key}?share=1", headers={**_cookie(stranger), "X-Room-Token": "wrong"},
         )).json()
         shown = await (await client.get(
-            f"/api/games/{env.key}?share=1&room_token={ROOM_TOKEN}", headers=_cookie(stranger),
+            f"/api/games/{env.key}?share=1", headers=_cookie(stranger),
         )).json()
     assert "scene" not in hidden and "scene" not in wrong
     assert hidden["has_room_password"] is True
@@ -128,7 +127,7 @@ async def test_open_room_lobby_shows_scene(share_env, play_env):
     open_key, open_game = _make_game(play_env, "open-room-scene", bind_adventure=False)
     open_game.scene = "Market square"
     stranger, _ = env.sessions.get_or_create(None)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         body = await (await client.get(
             f"/api/games/{open_key}?share=1", headers=_cookie(stranger),
         )).json()
@@ -141,7 +140,7 @@ async def test_seated_player_and_owner_keep_scene(share_env):
     env = share_env
     env.instance.scene = "The harbor at midnight"
     seat = {"X-Seat-Token": room_access.issue_seat_token(env.instance, "p1")}
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         seated = await (await client.get(f"/api/games/{env.key}?share=1", headers=seat)).json()
         owner = await (await client.get(f"/api/games/{env.key}", headers=_owner())).json()
     assert seated["scene"] == owner["scene"] == "The harbor at midnight"
@@ -161,9 +160,9 @@ def _library(env):
 @pytest.mark.asyncio
 async def test_spoofed_plugin_marker_does_not_make_a_card_shareable(cards_env):
     env = cards_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         put = await client.put(
-            f"/api/games/{env.key}/character/p1?share=1&room_token={ROOM_TOKEN}",
+            f"/api/games/{env.key}/character/p1?share=1",
             headers=_seat_put(env),
             json={"character_name": "Forged Hero", "source_plugin": "starter-pack",
                   "plugin_content_id": "x", "background": "forged"},
@@ -179,7 +178,7 @@ async def test_spoofed_plugin_marker_does_not_make_a_card_shareable(cards_env):
 async def test_table_save_cannot_overwrite_a_plugin_card(cards_env):
     env = cards_env
     plugin_before = next(c for c in _library(env) if c.get("character_name") == "Plugin Hero")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         # The GM editor (owner) may set attributes; the save is still a table save.
         put = await client.put(
             f"/api/games/{env.key}/character/p1",
@@ -203,9 +202,9 @@ async def test_plugin_card_survives_a_player_adopting_it(cards_env):
     """A classic-ruleset player adopts a library card by id; the server applies it."""
     env = cards_env
     plugin_card = next(c for c in _library(env) if c.get("character_name") == "Plugin Hero")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         adopted = await client.post(
-            f"/api/games/{env.key}/character/p1/adopt-card?share=1&room_token={ROOM_TOKEN}",
+            f"/api/games/{env.key}/character/p1/adopt-card?share=1",
             headers=_seat_put(env), json={"card_id": plugin_card["id"]},
         )
         assert adopted.status == 200, await adopted.json()
@@ -222,7 +221,7 @@ async def test_plugin_card_survives_a_player_adopting_it(cards_env):
 @pytest.mark.asyncio
 async def test_character_put_drops_unknown_keys(cards_env):
     env = cards_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         put = await client.put(
             f"/api/games/{env.key}/character/p1",
             headers={**_owner(), **CONFIRM},
@@ -246,7 +245,7 @@ async def test_bot_token_sees_only_plugin_cards(cards_env, monkeypatch):
 
     env = cards_env
     monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             f"/api/games/{env.key}/character-cards",
             headers={"X-Bot-Token": "bot-secret", "X-Bot-Actor": "p1"},

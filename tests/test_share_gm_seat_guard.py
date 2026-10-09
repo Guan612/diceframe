@@ -15,6 +15,7 @@ from src.engine.modules import room_access
 from src.webui.session import SessionManager, session_middleware
 from test_game_query_routes_http import (
     ROOM_PASSWORD,
+    ROOM_HEADER,
     ROOM_TOKEN,
     _make_app,
     _make_game,
@@ -59,7 +60,7 @@ CONFIRM = {"X-TRPG-Confirm": "true"}
 
 
 def _share_url(env, path, uid=None):
-    url = f"/api/games/{env.key}/{path}?share=1&room_token={ROOM_TOKEN}"
+    url = f"/api/games/{env.key}/{path}?share=1"
     return url if uid is None else f"{url}&user={uid}"
 
 
@@ -85,7 +86,7 @@ def _assert_gm_denied(response, body):
 @pytest.mark.asyncio
 async def test_f2_share_query_cannot_read_gm_private_log(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             _share_url(env, "private-log", env.instance.gm_uid),
             headers=_cookie(env.token),
@@ -98,7 +99,7 @@ async def test_f2_share_query_cannot_read_gm_private_log(share_env):
 @pytest.mark.asyncio
 async def test_f2_share_cookie_cannot_read_gm_private_log(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             _share_url(env, "private-log"), headers=_cookie(env.gm_token),
         )
@@ -111,7 +112,7 @@ async def test_f2_seat_token_for_gm_seat_is_still_rejected(share_env):
     """Even a credential stored for the GM seat cannot act as GM via a share link."""
     env = share_env
     headers = {**_cookie(env.token), **_seat(env, env.instance.gm_uid)}
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(_share_url(env, "private-log"), headers=headers)
         body = await response.json()
     _assert_gm_denied(response, body)
@@ -120,9 +121,9 @@ async def test_f2_seat_token_for_gm_seat_is_still_rejected(share_env):
 @pytest.mark.asyncio
 async def test_f2_gm_session_cannot_read_lobby_detail_as_gm(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
-            f"/api/games/{env.key}?share=1&room_token={ROOM_TOKEN}",
+            f"/api/games/{env.key}?share=1",
             headers=_cookie(env.gm_token),
         )
         body = await response.json()
@@ -136,7 +137,7 @@ async def test_share_gm_cannot_change_player_control(share_env, identity_path):
     before = deepcopy(env.instance.players)
     uid = env.instance.gm_uid if identity_path == "query" else None
     token = env.token if identity_path == "query" else env.gm_token
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, "players/p2/control", uid),
             headers=_cookie(token), json={"mode": "ai"},
@@ -152,7 +153,7 @@ async def test_owner_gm_share_keeps_private_log_access(share_env, identity_path)
     env = share_env
     uid = env.instance.gm_uid if identity_path == "query" else None
     expected = env.api.private_log(env.key)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             _share_url(env, "private-log", uid),
             headers={**_owner(), **_cookie(env.gm_token)},
@@ -167,7 +168,7 @@ async def test_owner_gm_share_keeps_private_log_access(share_env, identity_path)
 async def test_owner_player_view_keeps_private_log_isolation(share_env, delegate):
     env = share_env
     url = _share_url(env, "private-log", "p1") + ("&delegate=1" if delegate else "")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             url, headers={**_owner(), **_cookie(env.gm_token)},
         )
@@ -180,7 +181,7 @@ async def test_owner_player_view_keeps_private_log_isolation(share_env, delegate
 @pytest.mark.asyncio
 async def test_regular_player_share_keeps_private_log_access(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             _share_url(env, "private-log"),
             headers={**_cookie(env.token), **_seat(env, "p1")},
@@ -196,7 +197,7 @@ async def test_player_share_without_seat_token_is_rejected(share_env, identity_p
     """Neither the public uid nor a bound cookie alone acts as a seat."""
     env = share_env
     uid = "p1" if identity_path == "query" else None
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             _share_url(env, "private-log", uid), headers=_cookie(env.token),
         )
@@ -208,7 +209,7 @@ async def test_player_share_without_seat_token_is_rejected(share_env, identity_p
 async def test_seat_token_beats_a_forged_user_param(share_env):
     """A holds A's token and names B in ?user=: the request still acts as A."""
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             _share_url(env, "private-log", "p2"),
             headers={**_cookie(env.token), **_seat(env, "p1")},
@@ -229,7 +230,7 @@ async def test_invalid_seat_tokens_are_rejected(share_env, play_env, token):
     elif token == "other-game":
         _key, other = _make_game(play_env, "share-guard-other", bind_adventure=False)
         token = room_access.issue_seat_token(other, "p1")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.get(
             _share_url(env, "private-log", "p1"),
             headers={**_cookie(env.token), "X-Seat-Token": token},
@@ -245,7 +246,7 @@ async def test_reissued_seat_token_invalidates_the_old_one(share_env):
     env = share_env
     old = room_access.issue_seat_token(env.instance, "p1")
     new = room_access.issue_seat_token(env.instance, "p1")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         stale = await client.get(_share_url(env, "private-log"), headers={"X-Seat-Token": old})
         fresh = await client.get(_share_url(env, "private-log"), headers={"X-Seat-Token": new})
         stale_status, fresh_status = stale.status, fresh.status
@@ -258,7 +259,7 @@ async def test_f4_join_gm_seat_does_not_rebind_session(share_env, owner):
     env = share_env
     original_uid = env.sessions._sessions[env.token]["user_id"]
     headers = {**_cookie(env.token), **(_owner() if owner else {})}
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, "players"), headers=headers,
             json={"user_id": env.instance.gm_uid},
@@ -282,7 +283,7 @@ async def test_f4_join_gm_seat_does_not_rebind_session(share_env, owner):
 @pytest.mark.asyncio
 async def test_rejoin_with_seat_token_rebinds_session(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, "players"),
             headers={**_cookie(env.token), **_seat(env, "p2")},
@@ -305,7 +306,7 @@ async def test_f4_rejoin_other_seat_without_token_is_refused(share_env):
 
     set_control(env.instance, "p2", "ai")
     before_control = get_control(env.instance, "p2")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, "players"), headers=_cookie(env.token),
             json={"user_id": "p2"},
@@ -321,7 +322,7 @@ async def test_f4_rejoin_other_seat_without_token_is_refused(share_env):
 async def test_new_seat_returns_its_token_once(share_env):
     env = share_env
     fresh_token, _ = env.sessions.get_or_create(None)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, "players"), headers=_cookie(fresh_token),
             json={"character_name": "Third", "join_as_new": True},
@@ -406,7 +407,7 @@ def test_existing_session_keeps_legacy_uid(tmp_path, monkeypatch):
 async def test_share_player_cannot_edit_another_seats_character(share_env):
     env = share_env
     before = deepcopy(env.instance.players["p2"])
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.put(
             _share_url(env, "character/p2", "p2"),
             headers={**_cookie(env.token), **_seat(env, "p1")},
@@ -422,7 +423,7 @@ async def test_share_player_cannot_edit_another_seats_character(share_env):
 @pytest.mark.asyncio
 async def test_owner_issues_a_takeover_token_for_a_seat_without_one(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, "players/p2/seat-token"), headers={**_owner(), **CONFIRM},
         )
@@ -437,7 +438,7 @@ async def test_rotating_an_existing_seat_link_must_be_explicit(share_env):
     """A plain click never silently logs a seat's device out."""
     env = share_env
     old = room_access.issue_seat_token(env.instance, "p2")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         plain = await client.post(
             _share_url(env, "players/p2/seat-token"), headers={**_owner(), **CONFIRM},
         )
@@ -462,7 +463,7 @@ async def test_rotating_an_existing_seat_link_must_be_explicit(share_env):
 async def test_seat_token_writes_need_the_confirm_header(share_env, path):
     env = share_env
     headers = _owner() if path.startswith("players") else _cookie(env.token)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(_share_url(env, path), headers=headers)
         body = await response.json()
     assert response.status == 403, body
@@ -473,7 +474,7 @@ async def test_seat_token_writes_need_the_confirm_header(share_env, path):
 @pytest.mark.asyncio
 async def test_seat_player_cannot_issue_another_seats_token(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, "players/p2/seat-token"),
             headers={**_cookie(env.token), **_seat(env, "p1"), **CONFIRM},
@@ -487,7 +488,7 @@ async def test_seat_player_cannot_issue_another_seats_token(share_env):
 @pytest.mark.asyncio
 async def test_gm_seat_never_gets_a_share_token(share_env):
     env = share_env
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _share_url(env, f"players/{env.instance.gm_uid}/seat-token"),
             headers={**_owner(), **CONFIRM},
@@ -503,7 +504,7 @@ async def test_bound_session_claims_its_seat_token_once(share_env):
     """Players who joined before seat tokens migrate on their next page open."""
     env = share_env
     headers = {**_cookie(env.token), **CONFIRM}
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         first = await client.post(_share_url(env, "seat-token/claim"), headers=headers)
         first_body = await first.json()
         again = await client.post(_share_url(env, "seat-token/claim"), headers=headers)
@@ -521,7 +522,7 @@ async def test_bound_session_claims_its_seat_token_once(share_env):
 async def test_unbound_or_gm_session_cannot_claim(share_env):
     env = share_env
     stranger, _ = env.sessions.get_or_create(None)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         unbound = await client.post(
             _share_url(env, "seat-token/claim"), headers={**_cookie(stranger), **CONFIRM},
         )
@@ -553,13 +554,13 @@ async def test_rotated_out_cookie_neither_leaks_nor_reclaims_the_seat(share_env)
 
     env = share_env
     _private_proposal_for_p1(env)
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         claimed = await client.post(
             _share_url(env, "seat-token/claim"), headers={**_cookie(env.token), **CONFIRM},
         )
         assert claimed.status == 200
         own_detail = await (await client.get(
-            f"/api/games/{env.key}?share=1&room_token={ROOM_TOKEN}",
+            f"/api/games/{env.key}?share=1",
             headers={"X-Seat-Token": (await claimed.json())["seat_token"]},
         )).json()
         assert [p["id"] for p in own_detail["economy_proposals"]] == ["prop-p1"]
@@ -573,9 +574,9 @@ async def test_rotated_out_cookie_neither_leaks_nor_reclaims_the_seat(share_env)
 
     # A fresh client, so the requests below carry only the rotated-out cookie
     # (the owner's request above put its own session in the jar).
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         detail = await client.get(
-            f"/api/games/{env.key}?share=1&room_token={ROOM_TOKEN}", headers=_cookie(env.token),
+            f"/api/games/{env.key}?share=1", headers=_cookie(env.token),
         )
         detail_body = await detail.json()
         rejoin = await client.post(
@@ -603,9 +604,9 @@ async def test_bound_cookie_of_a_credentialed_seat_is_only_a_visitor(share_env):
     _private_proposal_for_p1(env)
     room_access.issue_seat_token(env.instance, "p1")  # e.g. a GM link held by another device
     set_control(env.instance, "p1", "ai")
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         detail = await client.get(
-            f"/api/games/{env.key}?share=1&room_token={ROOM_TOKEN}", headers=_cookie(env.token),
+            f"/api/games/{env.key}?share=1", headers=_cookie(env.token),
         )
         detail_body = await detail.json()
         rejoin = await client.post(
@@ -617,7 +618,8 @@ async def test_bound_cookie_of_a_credentialed_seat_is_only_a_visitor(share_env):
         )
         characters_body = await characters.json()
         no_room_token = await client.get(
-            f"/api/games/{env.key}/characters?share=1", headers=_cookie(env.token),
+            f"/api/games/{env.key}/characters?share=1",
+            headers={**_cookie(env.token), "X-Room-Token": ""},
         )
     assert detail.status == 200
     # A visitor gets the lobby only: no proposals, no uids at all.

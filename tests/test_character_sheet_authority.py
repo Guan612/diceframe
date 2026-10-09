@@ -20,7 +20,7 @@ from src.webui.character_sheet_authority import (
 )
 from test_game_query_routes_http import (
     GM_UID,
-    ROOM_TOKEN,
+    ROOM_HEADER,
     _owner,
     _owner_password,  # noqa: F401
     play_env,  # noqa: F401
@@ -57,7 +57,7 @@ def table(share_env):
     return env
 
 
-def _url(env, uid="p1", query=f"share=1&room_token={ROOM_TOKEN}"):
+def _url(env, uid="p1", query="share=1"):
     return f"/api/games/{env.key}/character/{uid}" + (f"?{query}" if query else "")
 
 
@@ -70,7 +70,7 @@ def _sheet(env, uid="p1"):
 
 
 async def _put(env, json, *, headers, url=None):
-    async with TestClient(TestServer(env.app)) as client:
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         response = await client.put(url or _url(env), headers=headers, json=json)
         return response.status, await response.json()
 
@@ -213,7 +213,7 @@ async def test_player_adopts_a_library_card_by_id_only(table):
         c for c in table.api.list_character_cards()["cards"]
         if c.get("character_name") == "Plugin Hero"
     )
-    async with TestClient(TestServer(table.app)) as client:
+    async with TestClient(TestServer(table.app), headers=ROOM_HEADER) as client:
         response = await client.post(
             _url(table).replace("/character/p1?", "/character/p1/adopt-card?"),
             headers=_seat(table),

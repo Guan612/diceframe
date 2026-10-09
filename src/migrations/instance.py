@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import hashlib
 import logging
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -16,15 +18,17 @@ from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_bin
 from src.content_modules.refs import ContentRefError, parse_content_ref
 from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
 from src.engine.module_state import ModuleStateError
+from src.engine.modules import room_access
 from src.engine.modules.lorebook_runtime import fresh as fresh_lorebook_runtime, normalize_timers
 from src.engine.player_control import CONTROL_KEY, normalize_control
 from src.engine.player_control import normalize_away_control_policy
 from src.engine.world_state import fresh_world_state
+from src.password_hashing import hash_password
 
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 37
+CURRENT_INSTANCE_SCHEMA_VERSION = 38
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -801,6 +805,69 @@ def _migrate_v36_to_v37(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+# A v2 room_access slot whose password is truthy but not a string could never
+# be entered (comparing it raised). It stays locked: present, never matching.
+_UNVERIFIABLE_ROOM_PASSWORD_HASH = "!unverifiable-legacy-room-password"
+# Plaintext room tokens issued before v38 had no expiry; they get the default
+# room token lifetime counted from the upgrade.
+_LEGACY_ROOM_TOKEN_TTL = timedelta(days=30)
+
+
+def _migrate_v37_to_v38(payload: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade room_access to v3: hash the room password and room token.
+
+    The plaintext password becomes a PBKDF2 hash, so the same password keeps
+    working; the old shared room token becomes one hashed token record that
+    expires after the default lifetime, so players already inside stay in.
+    A slot of any other schema is never touched.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    slot = modules.get("room_access")
+    if isinstance(slot, dict):
+        if slot.get("schema_version") == 2:
+            upgraded = {
+                key: value for key, value in slot.items()
+                if key not in {"room_password", "room_token"}
+            }
+            password = slot.get("room_password")
+            if isinstance(password, str) and password:
+                password_hash = hash_password(password)
+            elif password:
+                password_hash = _UNVERIFIABLE_ROOM_PASSWORD_HASH
+            else:
+                password_hash = ""
+            tokens: list[dict[str, Any]] = []
+            token = slot.get("room_token")
+            if password_hash and isinstance(token, str) and token:
+                issued = datetime.now(timezone.utc)
+                tokens.append({
+                    "hash": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+                    "issued_at": issued.isoformat(),
+                    "expires_at": (issued + _LEGACY_ROOM_TOKEN_TTL).isoformat(),
+                })
+            upgraded.update({
+                "schema_version": 3,
+                "room_password_hash": password_hash,
+                "room_tokens": tokens,
+            })
+            modules["room_access"] = upgraded
+    else:
+        modules["room_access"] = {
+            "schema_version": 3,
+            "max_players": 6,
+            "player_access_open": True,
+            "bot_bind_token": "",
+            "room_password_hash": "",
+            "room_tokens": [],
+            "seat_credentials": {},
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 38
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -916,6 +983,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 36:
         payload = _migrate_v36_to_v37(payload)
         version = 37
+    if version == 37:
+        payload = _migrate_v37_to_v38(payload)
+        version = 38
     payload["instance_schema_version"] = version
     return payload
 
@@ -938,11 +1008,10 @@ def rebind_imported_game_state_payload(
     payload["run_id"] = run_id
     payload["memory_namespace"] = f"{game_key!s}::run:{run_id}"
     modules = payload.get("modules")
-    access = modules.get("room_access") if isinstance(modules, dict) else None
-    if isinstance(access, dict) and "seat_credentials" in access:
-        # Fail closed: an imported game never trusts credentials minted
-        # elsewhere; its seats get fresh ones from this host.
-        access["seat_credentials"] = {}
+    # Fail closed: an imported game never trusts credentials minted
+    # elsewhere (room password, room/seat tokens, bot binding). A save that
+    # was password protected arrives with its player entrance closed.
+    room_access.scrub_access_credentials(payload)
     slot = modules.get("economy") if isinstance(modules, dict) else None
     if isinstance(slot, dict) and slot.get("schema_version") != 1:
         # Identity rebinding cannot safely interpret an unknown slot. Plain

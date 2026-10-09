@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 
 from src.engine.game_instance import GameInstance, GameState
+from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
 
 
@@ -83,8 +84,8 @@ def _make_populated_instance() -> GameInstance:
     instance.player_access_open = False
     instance.away_control_policy = "ai_takeover"
     instance.bot_bind_token = "bind-token"
-    instance.room_password = "secret"
-    instance.room_token = "room-token"
+    instance.set_room_password("secret-pass")
+    room_access.issue_room_token(instance, token="room-token")
     instance.private_log = {"u1": [{"role": "gm", "text": "hi"}]}
     instance.table_talk = [{"speaker": "u1", "text": "tt"}]
     instance.scene = "老桥"
@@ -193,8 +194,6 @@ EXPECTED_IMPLICIT_PRESERVED = {
     "player_access_open": False,
     "away_control_policy": "ai_takeover",
     "bot_bind_token": "bind-token",
-    "room_password": "secret",
-    "room_token": "room-token",
     "difficulty": "硬核",
     "entry_point": "plugin",
     "luck_timeout_seconds": 90,
@@ -298,6 +297,19 @@ async def test_reset_does_not_touch_implicit_preserve_fields() -> None:
         assert actual == expected, (
             f"基线 reset() 不触碰 {field}；extraction 不得改变这一行为"
         )
+
+
+@pytest.mark.asyncio
+async def test_reset_keeps_the_room_password_and_room_tokens() -> None:
+    instance = _make_populated_instance()
+    await instance.reset(keep_seed=True)
+
+    assert instance.has_room_password is True
+    assert room_access.verify_room_password(instance, "secret-pass")
+    assert room_access.verify_room_token(instance, "room-token")
+    # Only hashes are kept; no plaintext attribute rides along.
+    assert "secret-pass" not in str(instance.to_dict())
+    assert not hasattr(instance, "room_password") and not hasattr(instance, "room_token")
 
 
 @pytest.mark.asyncio

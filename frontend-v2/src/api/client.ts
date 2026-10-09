@@ -7,7 +7,7 @@ import {
   isStandaloneFrontend,
   redirectToBackendLogin,
 } from '@/api/connection'
-import { SEAT_TOKEN_HEADER, clearSeatToken, gameKeyOfApiPath, readRoomToken, readSeatToken } from '@/utils/seatToken'
+import { ROOM_TOKEN_HEADER, ROOM_TOKEN_REJECTED_EVENT, SEAT_TOKEN_HEADER, clearRoomToken, clearSeatToken, gameKeyOfApiPath, readRoomToken, readSeatToken } from '@/utils/seatToken'
 
 export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string, public retryAfter?: number) { super(message) }
@@ -59,10 +59,6 @@ function shareQuery(): string {
     if (key === 'user' && !sendUser) continue
     if (q.has(key)) out.set(key, q.get(key)!)
   }
-  if (gk) {
-    const rt = readRoomToken(gk)
-    if (rt) out.set('room_token', rt)
-  }
   return out.toString()
 }
 
@@ -107,6 +103,37 @@ function handleRejectedSeatToken(path: string, status: number, code?: string): v
   localStorage.removeItem('trpg_play_user_' + gk)
   const params = new URLSearchParams({ game: gk, share: '1', notice: 'seat' })
   if (!location.hash.startsWith('#/join')) location.hash = `/join?${params.toString()}`
+}
+
+/**
+ * The room token this browser held was refused: it expired, or the GM changed
+ * the room password. Forget it and send the player to the join page, which
+ * asks for the room password again.
+ */
+function handleRejectedRoomToken(path: string, status: number, data: unknown): void {
+  if (status !== 403 || hasAccessToken() || !isPlayerShareLocation()) return
+  const payload = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+  if (payload.needs_room_password !== true) return
+  const gk = gameKeyOfApiPath(path)
+  if (!gk) return
+  clearRoomToken(gk)
+  if (location.hash.startsWith('#/join')) {
+    window.dispatchEvent(new CustomEvent(ROOM_TOKEN_REJECTED_EVENT, { detail: { gameKey: gk } }))
+    return
+  }
+  const params = new URLSearchParams({ game: gk, share: '1', notice: 'room' })
+  location.hash = `/join?${params.toString()}`
+}
+
+/**
+ * The room token from passing a room password travels in a header, never in
+ * the URL, so it cannot end up in access logs. Only the game it was issued
+ * for receives it.
+ */
+export function applyRoomTokenHeader(headers: Headers, path: string): void {
+  if (headers.has(ROOM_TOKEN_HEADER)) return
+  const token = readRoomToken(gameKeyOfApiPath(path))
+  if (token) headers.set(ROOM_TOKEN_HEADER, token)
 }
 
 function applyConfirmHeader(headers: Headers, init: RequestInit): void {
@@ -168,6 +195,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   const isRawBody = init.body instanceof FormData || init.body instanceof Blob
   const headers = authHeaders(init.headers, !isRawBody)
   applySeatTokenHeader(headers, path)
+  applyRoomTokenHeader(headers, path)
   applyConfirmHeader(headers, init)
   const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   const data = await response.json().catch(() => ({}))
@@ -181,6 +209,7 @@ export async function api<T = unknown>(path: string, init: RequestInit = {}): Pr
   }
   if (!response.ok) {
     handleRejectedSeatToken(path, response.status, errorCodeOf(data))
+    handleRejectedRoomToken(path, response.status, data)
     throw new ApiError(data.error || `HTTP ${response.status}`, response.status, errorCodeOf(data), retryAfterOf(data))
   }
   return data
@@ -195,6 +224,7 @@ export async function apiBlob(path: string, init: RequestInit = {}): Promise<Res
   }
   const headers = authHeaders(init.headers, false)
   applySeatTokenHeader(headers, path)
+  applyRoomTokenHeader(headers, path)
   applyConfirmHeader(headers, init)
   const response = await fetchWithConnectionRecovery(apiUrl(path), { ...init, headers, credentials: 'include' })
   await handleUnauthorized(response)

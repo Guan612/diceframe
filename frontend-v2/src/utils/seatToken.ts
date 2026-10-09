@@ -11,6 +11,7 @@
 import { currentBackendUrl } from '@/api/connection'
 
 export const SEAT_TOKEN_HEADER = 'X-Seat-Token'
+export const ROOM_TOKEN_HEADER = 'X-Room-Token'
 
 const STORAGE_PREFIX = 'trpg_seat_token_'
 
@@ -79,6 +80,18 @@ export function storeRoomToken(gameKey: string, token: unknown): void {
     localStorage.setItem(roomTokenKey(gameKey), value)
   } catch {
     // Blocked storage: the player re-enters the password next time.
+  }
+}
+
+/** Fired on the join page when the room token it held stopped working. */
+export const ROOM_TOKEN_REJECTED_EVENT = 'trpg:room-token-rejected'
+
+export function clearRoomToken(gameKey: string): void {
+  if (!gameKey) return
+  try {
+    localStorage.removeItem(roomTokenKey(gameKey))
+  } catch {
+    // Nothing stored to clear.
   }
 }
 

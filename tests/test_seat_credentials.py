@@ -46,13 +46,27 @@ def _instance() -> GameInstance:
 # ---- v36 -> v37 migration ------------------------------------------------
 
 
+V2_FRESH = {
+    "schema_version": 2,
+    "max_players": 6,
+    "player_access_open": True,
+    "bot_bind_token": "",
+    "room_password": "",
+    "room_token": "",
+    "seat_credentials": {},
+}
+
+
 def test_v36_save_gets_empty_credentials_without_mutating_input() -> None:
     original = {"instance_schema_version": 36, "modules": {"room_access": deepcopy(V1_SLOT)}}
     before = deepcopy(original)
+    step = _migrate_v36_to_v37(deepcopy(original))
+    assert step["instance_schema_version"] == 37
+    assert step["modules"]["room_access"] == {**V1_SLOT, "schema_version": 2, "seat_credentials": {}}
     migrated = migrate_game_state_payload(original)
     assert original == before
-    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION == 37
-    assert migrated["modules"]["room_access"] == {**V1_SLOT, "schema_version": 2, "seat_credentials": {}}
+    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION
+    assert migrated["modules"]["room_access"]["seat_credentials"] == {}
     assert migrate_game_state_payload(migrated) == migrated
 
 
@@ -69,7 +83,7 @@ def test_migration_never_touches_a_v2_or_future_slot(slot) -> None:
 def test_migration_tolerates_missing_or_non_dict_modules(modules) -> None:
     migrated = _migrate_v36_to_v37({"instance_schema_version": 36, "modules": modules})
     slot = migrated["modules"]["room_access"]
-    assert slot == module.fresh()
+    assert slot == V2_FRESH
     assert migrated["instance_schema_version"] == 37
 
 
