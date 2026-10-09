@@ -18,6 +18,8 @@ from src.webui.map_domain.presentation import apply_map_presentation, public_map
 from src.webui.map_domain.selection import select_map_definition, select_plugin_map
 from src.webui.map_presets import builtin_map_preset
 from src.content_modules.projection import ContentProjectionService
+from src.engine.participant_view import Viewer
+from src.knowledge.visibility import entry_visible_to_viewer
 
 @dataclass(frozen=True)
 class MapDependencies:
@@ -36,25 +38,26 @@ class MapDependencies:
 def get_map_locations(
     dependencies: MapDependencies,
     game_key: str,
+    *,
+    viewer: Viewer,
 ) -> dict[str, Any]:
-    """Return the compatible location list plus read-only map presentation data."""
+    """Return the location list plus read-only map presentation data.
+
+    Lorebook locations are projected for ``viewer``: the GM sees every
+    location of the game's World/Game Books, a seat only the locations its
+    character may see, anyone else only public locations.
+    """
     instance = dependencies.get_instance(
         dependencies.parse_game_key(game_key)
     )
     if not instance or not instance.world_id:
         return {"locations": [], "current_scene": "", "current_location_id": ""}
 
-    if dependencies.content_projection is not None:
-        # The map is shown to every seat and is not filtered per viewer, so it
-        # must not pull in the current actors' character-scoped Books.
-        entries = dependencies.content_projection.for_game(
-            instance, viewer_kind="gm", action_actor_uids=[], entry_type="location",
-        )
-    else:
-        entries = dependencies.list_lore_entries(instance.world_id, "location")
-    locations = lore_locations(entries)
+    locations = lore_locations(_location_entries(dependencies, instance, viewer))
     assets = _content_map_assets(dependencies, instance.world_id)
     merge_contributed_locations(locations, assets.get("locations", []))
+    if not viewer.is_gm:
+        _prune_hidden_connections(locations)
 
     selection = _saved_background_selection(dependencies, instance)
     definitions = assets.get("maps", [])
@@ -135,7 +138,10 @@ async def update_map_background(
     return {
         "ok": True,
         "map_background": normalized,
-        "map": get_map_locations(dependencies, game_key),
+        # Only the GM changes the background, so the echoed map is the GM view.
+        "map": get_map_locations(
+            dependencies, game_key, viewer=Viewer("gm", str(instance.gm_uid or "")),
+        ),
     }
 
 
@@ -161,6 +167,48 @@ def map_background_asset(
     if selection.get("kind") == "generated":
         return dependencies.generated_image_file(asset_id)
     return dependencies.map_background_file(asset_id)
+
+
+def _location_entries(
+    dependencies: MapDependencies,
+    instance: Any,
+    viewer: Viewer,
+) -> list[dict[str, Any]]:
+    projection = dependencies.content_projection
+    if projection is not None:
+        # action_actor_uids=[]: the GM map is not shaped by who acts this round.
+        return projection.for_viewer(
+            instance, viewer, entry_type="location", action_actor_uids=[],
+        )
+    entries = dependencies.list_lore_entries(instance.world_id, "location")
+    if viewer.is_gm:
+        return entries
+    # Compatibility store without Book bindings: the shared predicate still
+    # decides; the seat's character name is only a secondary match token.
+    kind = "character" if viewer.is_seat and viewer.uid else "party"
+    seat = (getattr(instance, "players", {}) or {}).get(viewer.uid) or {}
+    name = str(seat.get("character_name") or "") if isinstance(seat, dict) else ""
+    return [
+        entry for entry in entries
+        if entry_visible_to_viewer(entry, kind, viewer.uid, name)
+    ]
+
+
+def _prune_hidden_connections(locations: list[dict[str, Any]]) -> None:
+    """Drop edges to locations this viewer cannot see (they would name them)."""
+
+    known = {
+        str(token)
+        for location in locations
+        for token in (location.get("id"), location.get("name"))
+        if token
+    }
+    for location in locations:
+        edges = location.get("connected_to")
+        if isinstance(edges, list):
+            location["connected_to"] = [edge for edge in edges if str(edge) in known]
+        else:
+            location["connected_to"] = []
 
 
 def _append_current_scene(locations: list[dict[str, Any]], current_scene: str) -> str:

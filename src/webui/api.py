@@ -16,6 +16,7 @@ from src.engine.game_instance import GameRegistry
 from src.engine import persistence
 from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
+from src.engine.participant_view import Viewer
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader, AdventureResolver
 from src.adventures.registry import AdventureSource, AdventureSourceRegistry
@@ -2773,8 +2774,8 @@ class WebAPI:
 
     # ----
 
-    def get_map_locations(self, game_key: str) -> dict[str, Any]:
-        return maps.get_map_locations(self._map_dependencies, game_key)
+    def get_map_locations(self, game_key: str, *, viewer: Viewer) -> dict[str, Any]:
+        return maps.get_map_locations(self._map_dependencies, game_key, viewer=viewer)
 
     def map_background_asset(self, game_key: str, asset_id: str) -> Path | None:
         return maps.map_background_asset(

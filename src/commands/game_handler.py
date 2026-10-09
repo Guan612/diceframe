@@ -152,6 +152,7 @@ class GameHandler:
             self._ensure_matcher_for_world,
             max_tokens=min(768, max(128, brief_max_tokens)),
             lore_retriever=self.lore_retriever,
+            content_projection=self.content_projection,
         )
         self.narrative_max_tokens = narrative_max_tokens
         self.summary_max_tokens = summary_max_tokens
