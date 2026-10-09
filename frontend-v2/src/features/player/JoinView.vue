@@ -5,7 +5,7 @@ import { api, errorMessage, retryOnRateLimit } from '@/api/client'
 import type { CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CharacterSkill, GameDetail, PlayerCreateResponse, RuleAttribute, RuleMeta, RulesetRuntimeMeta } from '@/api/types'
 import { rememberCurrentGame } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
-import { SEAT_TOKEN_HEADER, readSeatToken, storeSeatToken } from '@/utils/seatToken'
+import { SEAT_TOKEN_HEADER, readRoomToken, readSeatToken, storeRoomToken, storeSeatToken } from '@/utils/seatToken'
 import { attrDisplayName, suggestedAttributes, skillPointCost } from '@/utils/ruleSchema'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import { useConfirm } from '@/composables/useConfirm'
@@ -173,7 +173,7 @@ onMounted(async () => {
     if (seatLink) resumeUser.value = 'seat'
     else if (legacyLinkUser.value) error.value = t('seatLinkExpired')
     else if (route.query.notice === 'seat') error.value = t('seatTokenMissing')
-    if (d.has_room_password && !localStorage.getItem('trpg_play_room_' + gameKey.value)) {
+    if (d.has_room_password && !readRoomToken(gameKey.value)) {
       needRoomPassword.value = true
       return
     }
@@ -281,8 +281,15 @@ async function verifyRoomPassword() {
   busy.value = true; error.value = ''
   try {
     const r = await api<{ room_token: string }>(`/games/${encodeURIComponent(gameKey.value)}/verify-room-password`, { method: 'POST', body: JSON.stringify({ password: roomPasswordInput.value }) })
-    localStorage.setItem('trpg_play_room_' + gameKey.value, r.room_token)
+    storeRoomToken(gameKey.value, r.room_token)
     needRoomPassword.value = false
+    // Behind a room password the lobby hides the scene until the room token
+    // is held; fetch it again now that it is.
+    try {
+      detail.value = await api<GameDetail>(`/games/${encodeURIComponent(gameKey.value)}`)
+    } catch {
+      // Keep the lobby we have; the scene is only decoration here.
+    }
     await afterGate()
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }

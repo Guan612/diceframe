@@ -213,8 +213,9 @@ class WebAPI:
                 ),
                 content_projection=getattr(handler, "content_projection", None),
             ),
+            # Table characters auto-saved into the library: never plugin cards.
             save_character_card=lambda character: character_cards.save_character_card(
-                self._character_card_dependencies, character,
+                self._character_card_dependencies, character, from_game=True,
             ),
             apply_economy_effects=(
                 handler.commit_deferred_economy_effects
@@ -1726,6 +1727,9 @@ class WebAPI:
 
     def list_character_cards(self) -> dict[str, Any]:
         return character_cards.list_character_cards(self._character_card_dependencies)
+
+    def list_shareable_character_cards(self) -> dict[str, Any]:
+        return character_cards.list_shareable_character_cards(self._character_card_dependencies)
 
     def save_character_card(self, character: dict) -> dict[str, Any]:
         return character_cards.save_character_card(

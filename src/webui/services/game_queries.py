@@ -123,6 +123,9 @@ LOBBY_DETAIL_FIELDS = (
     "game_key", "player_access_open", "player_count", "max_players",
     "has_room_password", "world_name", "scene", "rule_id", "solo_mode",
 )
+# Lobby fields that carry story text: behind a room password they are only for
+# visitors who already passed it (hold a valid room_token).
+LOBBY_NARRATIVE_FIELDS = ("scene",)
 LOBBY_MULTIPLAYER_FIELDS = (
     "state", "round_number", "solo_mode", "player_count", "max_players",
     "ready_count", "alive_count", "active_count", "away_count", "ai_count",

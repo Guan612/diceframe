@@ -145,4 +145,31 @@ describe('JoinView seat token', () => {
     expect(wrapper.text()).toContain(String(i18n.global.t('seatTokenMissing')))
     expect(router.currentRoute.value.name).toBe('join')
   })
+
+  it('shows the scene once the room password is verified', async () => {
+    let verified = false
+    mocks.api.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === `/games/${encodeURIComponent(GAME)}`) {
+        return verified
+          ? { game_key: GAME, world_name: 'World', has_room_password: true, scene: 'Harbor at midnight' }
+          : { game_key: GAME, world_name: 'World', has_room_password: true }
+      }
+      if (path.endsWith('/verify-room-password') && init?.method === 'POST') {
+        verified = true
+        return { room_token: 'rt' }
+      }
+      if (path.endsWith('/characters')) return { rule_attrs: [], rule_meta: {} }
+      if (path.endsWith('/character-cards')) return { cards: [] }
+      throw new Error(`unexpected ${path}`)
+    })
+    const router = makeRouter()
+    const wrapper = await mountAt(router, { game: GAME, share: '1' })
+    expect(wrapper.text()).not.toContain('Harbor at midnight')
+
+    await wrapper.get('.room-gate input[type="password"]').setValue('secret')
+    await wrapper.get('.room-gate button.submit').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Harbor at midnight')
+  })
 })

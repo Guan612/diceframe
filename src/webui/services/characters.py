@@ -656,6 +656,26 @@ async def update_character(
         )
 
 
+# What the edit forms (GM character editor, the card adoption in play and
+# the P2P ``character.update`` allow-list) actually send.
+EDITABLE_SHEET_FIELDS = frozenset({
+    "character_name", "race", "class", "background", "identity", "portrait",
+    "attributes", "skills", "equipment", "inventory", "key_items",
+    "hp", "max_hp", "resources", "gold", "currency", "level", "xp", "progression",
+})
+
+
+def _special_stat_fields(dependencies: CharacterDependencies, inst: GameInstance) -> set[str]:
+    """Rule-defined special stats (sanity, luck...) and their maxima."""
+    rule = dependencies.rules.load_rule_for_game(inst)
+    fields: set[str] = set()
+    for stat in getattr(rule, "special_stats", None) or []:
+        key = str(stat.get("key") or "") if isinstance(stat, dict) else ""
+        if key:
+            fields.update({key, f"max_{key}"})
+    return fields
+
+
 async def _update_character_authority(
     dependencies: CharacterDependencies,
     instance: GameInstance,
@@ -674,7 +694,12 @@ async def _update_character_authority(
                 "error_code": "RULESET_CHARACTER_OPERATION_REQUIRED",
                 "error": "专业规则角色不能使用旧版通用编辑接口",
             }
-    updates = dict(updates)
+    # Only player-editable sheet fields; anything else (card metadata, plugin
+    # provenance, server-owned state) is dropped instead of mass-assigned.
+    updates = {
+        key: value for key, value in dict(updates).items()
+        if key in EDITABLE_SHEET_FIELDS or key in _special_stat_fields(dependencies, inst)
+    }
     character_name = str(updates.pop("character_name", "")).strip()
     if character_name:
         inst.set_player_name(user_id, character_name)

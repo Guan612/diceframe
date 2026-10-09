@@ -168,6 +168,9 @@ class WebAccessControl:
         return await handler(request)
 
     async def _handle_bot_request(self, request, handler, bot_header: str):
+        request[ACCESS_PASSWORD_CONFIGURED_KEY] = is_valid_access_password(
+            normalize_access_password(self.state.get("access_token"))
+        )
         configured_bot_token = str(self.state.get("bot_token") or "")
         global_authenticated = bool(
             configured_bot_token
