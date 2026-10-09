@@ -24,7 +24,7 @@ from src.engine.world_state import fresh_world_state
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 36
+CURRENT_INSTANCE_SCHEMA_VERSION = 37
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -773,6 +773,34 @@ def _migrate_v35_to_v36(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v36_to_v37(payload: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade room_access to v2 with empty per-seat share credentials.
+
+    Old saves get no credentials (none are invented); existing values are
+    kept verbatim and a slot of any other schema is never touched.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    slot = modules.get("room_access")
+    if isinstance(slot, dict):
+        if slot.get("schema_version") == 1:
+            modules["room_access"] = {**slot, "schema_version": 2, "seat_credentials": {}}
+    else:
+        modules["room_access"] = {
+            "schema_version": 2,
+            "max_players": 6,
+            "player_access_open": True,
+            "bot_bind_token": "",
+            "room_password": "",
+            "room_token": "",
+            "seat_credentials": {},
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 37
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -885,6 +913,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 35:
         payload = _migrate_v35_to_v36(payload)
         version = 36
+    if version == 36:
+        payload = _migrate_v36_to_v37(payload)
+        version = 37
     payload["instance_schema_version"] = version
     return payload
 
@@ -907,6 +938,11 @@ def rebind_imported_game_state_payload(
     payload["run_id"] = run_id
     payload["memory_namespace"] = f"{game_key!s}::run:{run_id}"
     modules = payload.get("modules")
+    access = modules.get("room_access") if isinstance(modules, dict) else None
+    if isinstance(access, dict) and "seat_credentials" in access:
+        # Fail closed: an imported game never trusts credentials minted
+        # elsewhere; its seats get fresh ones from this host.
+        access["seat_credentials"] = {}
     slot = modules.get("economy") if isinstance(modules, dict) else None
     if isinstance(slot, dict) and slot.get("schema_version") != 1:
         # Identity rebinding cannot safely interpret an unknown slot. Plain

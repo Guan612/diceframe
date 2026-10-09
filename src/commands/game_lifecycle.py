@@ -138,6 +138,8 @@ class GameLifecycle:
                     pdata.get("character_sheet", {})
                 )
             candidate.replace_players(players)
+            # Same seats, same share links: carry their credentials over.
+            room_access.copy_seat_credentials(candidate, source)
         self._initialize_ruleset_run(
             candidate,
             preserve_characters=preserve_players,
