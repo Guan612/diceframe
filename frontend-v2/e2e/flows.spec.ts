@@ -21,7 +21,8 @@ test('gm and player render the same game through shared play components', async 
   const playerPage = await playerContext.newPage()
   await playerPage.setViewportSize({ width: 390, height: 844 })
   await playerPage.goto(await seatTakeoverPath(request, game.game_key, player.user_id))
-  await expect(playerPage).toHaveURL(/#\/play\?/)
+  // The rejoin may first wait out a short server rate limit (retried once).
+  await expect(playerPage).toHaveURL(/#\/play\?/, { timeout: 20_000 })
 
   await expect(gmPage.getByTestId('timeline')).toBeVisible()
   await expect(playerPage.getByTestId('timeline')).toBeVisible()

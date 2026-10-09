@@ -32,7 +32,8 @@ test('owner and shared player both read the bound adventure projection', async (
   })
   // A share player proves its seat with the seat token from a GM takeover link.
   await playerPage.goto(await seatTakeoverPath(request, ADVENTURE_GAME, player.user_id))
-  await expect(playerPage).toHaveURL(/#\/play\?/)
+  // The rejoin may first wait out a short server rate limit (retried once).
+  await expect(playerPage).toHaveURL(/#\/play\?/, { timeout: 20_000 })
 
   const gmPanel = gmPage.getByTestId('game-adventure-panel')
   const playerPanel = playerPage.getByTestId('game-adventure-panel')
