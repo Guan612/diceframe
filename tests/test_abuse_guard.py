@@ -397,8 +397,12 @@ async def test_waiting_for_the_lock_is_bounded_and_bookkeeping_stays_correct():
 def test_ipv6_addresses_are_keyed_by_their_slash_64():
     from src.webui.abuse_guard import client_identity
 
-    assert client_identity("2001:db8:1:2::1") == client_identity("2001:db8:1:2:ffff:ffff:ffff:ffff")
-    assert client_identity("2001:db8:1:2::1") != client_identity("2001:db8:1:3::1")
+    assert client_identity("2606:4700:1:2::1") == client_identity("2606:4700:1:2:ffff:ffff:ffff:ffff")
+    assert client_identity("2606:4700:1:2::1") != client_identity("2606:4700:1:3::1")
+    # A table on the host's own LAN (ULA, link-local, loopback) is not merged.
+    assert client_identity("fd00::12") != client_identity("fd00::34")
+    assert client_identity("fe80::1%eth0") != client_identity("fe80::2%eth0")
+    assert client_identity("::1") == "::1"
     assert client_identity("203.0.113.7") == "203.0.113.7"
     assert client_identity("203.0.113.7") != client_identity("203.0.113.8")
     assert client_identity("::ffff:203.0.113.7") == "203.0.113.7"  # IPv4-mapped
@@ -433,16 +437,16 @@ async def test_rotating_addresses_inside_one_slash_64_shares_every_bucket():
     statuses = []
     for i in range(6):
         response = await guard.handle(
-            request("/api/games/web%7Ca%7Cweb/verify-room-password", f"2001:db8::{i + 1}", {"game_key": "web|a|web"}),
+            request("/api/games/web%7Ca%7Cweb/verify-room-password", f"2606:4700::{i + 1}", {"game_key": "web|a|web"}),
             wrong,
         )
         statuses.append(response.status)
     assert statuses == [403] * 5 + [429]
-    logins = [(await guard.handle(request("/api/login", f"2001:db8::{i + 100}"), ok)).status for i in range(3)]
+    logins = [(await guard.handle(request("/api/login", f"2606:4700::{i + 100}"), ok)).status for i in range(3)]
     assert logins == [200, 200, 429]
     # Another /64 is another client.
     other = await guard.handle(
-        request("/api/games/web%7Ca%7Cweb/verify-room-password", "2001:db8:0:1::1", {"game_key": "web|a|web"}),
+        request("/api/games/web%7Ca%7Cweb/verify-room-password", "2606:4700:0:1::1", {"game_key": "web|a|web"}),
         wrong,
     )
     assert other.status == 403

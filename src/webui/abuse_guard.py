@@ -92,10 +92,11 @@ _AI_GAME_SUFFIXES = (
 def client_identity(remote: str | None) -> str:
     """The rate-limit identity of a peer address.
 
-    IPv6 clients usually control a whole /64 and can rotate addresses inside
-    it, so every bucket keys IPv6 by its /64 prefix; IPv4 stays per address
-    (IPv4-mapped IPv6 counts as the IPv4 address). Unparseable values are
-    used as they are.
+    Global IPv6 clients usually control a whole /64 and can rotate addresses
+    inside it, so every bucket keys global IPv6 by its /64 prefix. Private,
+    link-local and loopback IPv6 (a table on the host's own LAN) stay per
+    address, like IPv4 (IPv4-mapped IPv6 counts as the IPv4 address).
+    Unparseable values are used as they are.
     """
     raw = str(remote or "").strip()
     if not raw:
@@ -107,6 +108,8 @@ def client_identity(remote: str | None) -> str:
     if isinstance(address, ipaddress.IPv6Address):
         if address.ipv4_mapped is not None:
             return str(address.ipv4_mapped)
+        if not address.is_global:
+            return str(address)
         return str(ipaddress.IPv6Network(f"{address}/64", strict=False))
     return str(address)
 
@@ -279,7 +282,7 @@ class AbuseGuard:
 
         try:
             await asyncio.wait_for(self._ai_slots.acquire(), timeout=self.ai_wait_seconds)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             return _rate_limited_response(max(1, math.ceil(self.ai_wait_seconds)))
         try:
             return await handler(request)
@@ -309,7 +312,7 @@ class AbuseGuard:
         # own, never while holding the lock. No bucket is touched here.
         try:
             await asyncio.wait_for(request.read(), timeout=self.room_password_body_timeout)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             return web.json_response(
                 {"ok": False, "error": "请求体读取超时"}, status=408, headers={"Cache-Control": "no-store"},
             )
@@ -322,7 +325,7 @@ class AbuseGuard:
                 # Lock.acquire() never holds the lock after being cancelled,
                 # so a timeout here cannot leak it.
                 await asyncio.wait_for(lock.acquire(), timeout=self.room_password_lock_timeout)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 return _rate_limited_response(math.ceil(self.room_password_lock_timeout))
             try:
                 wait = self._room_password_wait(key)
