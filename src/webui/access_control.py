@@ -13,6 +13,7 @@ from src.webui.access_password import (
 )
 from src.engine.modules import room_access
 from src.webui.device_tokens import DEVICE_TOKENS_KEY
+from src.webui.services._common import canonical_game_key
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 
 
@@ -290,7 +291,12 @@ class WebAccessControl:
         # binding revoked for this game (rotation, removal, reset) no longer
         # speaks for anyone here.
         session_uid = str(request.get("user_id", "") or "")
-        if session_uid and self.bot_request_game_key(request) in request.get("session_revoked_games", ()):
+        request_game = self.bot_request_game_key(request)
+        if (
+            session_uid
+            and request_game
+            and canonical_game_key(request_game) in request.get("session_revoked_games", ())
+        ):
             session_uid = ""
             request["user_id"] = ""
         request["session_user_id"] = session_uid

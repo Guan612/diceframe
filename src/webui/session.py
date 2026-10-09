@@ -86,26 +86,60 @@ class SessionManager:
         return changed
 
     def count_bound(self, user_id: str, game_key: str) -> int:
-        """How many sessions still speak for ``user_id`` in ``game_key``."""
+        """How many sessions still speak for ``user_id`` in ``game_key``.
+
+        A session counts for a game it has entered with that uid. Sessions
+        from before games were recorded have no ``games`` list and are
+        counted conservatively (they may be bound here).
+        """
         if not user_id:
             return 0
-        return sum(
-            1 for session in self._sessions.values()
-            if session.get("user_id") == user_id
-            and game_key not in (session.get("revoked_games") or [])
-        )
+        count = 0
+        for session in self._sessions.values():
+            if session.get("user_id") != user_id:
+                continue
+            if game_key in (session.get("revoked_games") or []):
+                continue
+            games = session.get("games")
+            if isinstance(games, list) and game_key not in games:
+                continue
+            count += 1
+        return count
+
+    def note_game(self, token: str, game_key: str) -> None:
+        """Record that this session holds its uid's seat in ``game_key``."""
+        session = self._sessions.get(token)
+        if session is None or not game_key:
+            return
+        games = session.setdefault("games", [])
+        if game_key not in games:
+            games.append(game_key)
+            self._save()
 
     def revoked_games(self, token: str) -> frozenset[str]:
         return frozenset(self._sessions.get(token, {}).get("revoked_games") or [])
 
-    def rebind(self, token: str, user_id: str) -> None:
+    def rebind(self, token: str, user_id: str, game_key: str = "") -> None:
         """把当前 session token 绑定到指定 user_id（换设备恢复身份用）。"""
-        if token in self._sessions:
-            self._sessions[token]["user_id"] = user_id
-            # A new binding is a new identity: earlier per-game revocations
-            # were about the old one.
-            self._sessions[token].pop("revoked_games", None)
-            self._save()
+        session = self._sessions.get(token)
+        if session is None:
+            return
+        if session.get("user_id") != user_id:
+            # A new identity: revocations and game records were about the old one.
+            session["user_id"] = user_id
+            session.pop("revoked_games", None)
+            session.pop("games", None)
+        elif game_key:
+            # Re-entering one game (with that seat's token) lifts only that
+            # game's revocation; other games stay revoked.
+            revoked = session.get("revoked_games") or []
+            if game_key in revoked:
+                revoked.remove(game_key)
+        if game_key:
+            games = session.setdefault("games", [])
+            if game_key not in games:
+                games.append(game_key)
+        self._save()
 
 
 @web.middleware

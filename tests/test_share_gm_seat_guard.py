@@ -615,6 +615,7 @@ async def test_bound_cookie_of_a_credentialed_seat_is_only_a_visitor(share_env):
         characters = await client.get(
             _share_url(env, "characters"), headers=_cookie(env.token),
         )
+        characters_body = await characters.json()
         no_room_token = await client.get(
             f"/api/games/{env.key}/characters?share=1", headers=_cookie(env.token),
         )
@@ -625,6 +626,9 @@ async def test_bound_cookie_of_a_credentialed_seat_is_only_a_visitor(share_env):
     assert rejoin_body.get("user_id") != "p1"
     assert get_control(env.instance, "p1")["mode"] == "ai"
     assert characters.status == 200
+    # Only the join bootstrap: no roster, no uids, no sheets.
+    assert characters_body["players"] == [] and characters_body["npcs"] == []
+    assert "p1" not in str(characters_body) and env.instance.gm_uid not in str(characters_body)
     # An anonymous visitor still has to pass the room password.
     assert no_room_token.status == 403
 

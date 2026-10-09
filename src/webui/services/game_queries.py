@@ -131,6 +131,22 @@ LOBBY_MULTIPLAYER_FIELDS = (
 )
 
 
+# The public ruleset bootstrap a visitor needs to build a character (mirrors
+# the P2P bridge's JOIN_CHARACTER_FIELDS). No roster, sheets or NPCs.
+JOIN_CHARACTER_FIELDS = (
+    "rule_attrs", "rule_attrs_total", "rule_classes",
+    "rule_special_stats", "rule_meta", "ruleset_runtime",
+)
+
+
+def join_characters(characters: dict[str, Any]) -> dict[str, Any]:
+    projected: dict[str, Any] = {"players": [], "npcs": []}
+    for key in JOIN_CHARACTER_FIELDS:
+        if key in characters:
+            projected[key] = characters[key]
+    return projected
+
+
 def lobby_detail(detail: dict[str, Any]) -> dict[str, Any]:
     """Project a full detail down to the visitor lobby view (no identities)."""
 

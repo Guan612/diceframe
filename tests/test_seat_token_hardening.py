@@ -228,3 +228,128 @@ def test_server_lobby_fields_match_the_pinned_contract():
 
     assert game_queries.LOBBY_DETAIL_FIELDS == LOBBY_DETAIL_FIELDS
     assert game_queries.LOBBY_MULTIPLAYER_FIELDS == LOBBY_MULTIPLAYER_FIELDS
+
+
+# ---- review of #467 ---------------------------------------------------------
+
+
+def test_game_keys_with_extra_parts_are_refused_and_canonical():
+    from src.webui.services._common import _INVALID_GAME_KEY, _parse_game_key, canonical_game_key
+
+    assert _parse_game_key("web|g|web") == ("web", "g", "web")
+    assert _parse_game_key("web|g|web|anything") == _INVALID_GAME_KEY
+    assert canonical_game_key("web|g|web") == "web|g|web"
+    assert canonical_game_key("web|g|web|anything") != "web|g|web"
+
+
+@pytest.mark.asyncio
+async def test_alias_key_cannot_recreate_a_deleted_seat(share_env):
+    """Deleted p2 cannot come back through an aliased game key."""
+    env = share_env
+    p2_session, _ = env.sessions.get_or_create(None)
+    env.sessions.rebind(p2_session, "p2", env.key)
+    alias = f"{env.key}|alias"
+    async with TestClient(TestServer(env.app)) as client:
+        deleted = await client.delete(
+            f"/api/games/{env.key}/character/p2",
+            headers={**_owner(), **CONFIRM, **_cookie(env.gm_token)},
+        )
+        assert deleted.status == 200, await deleted.json()
+    async with TestClient(TestServer(env.app)) as client:
+        rejoin = await client.post(
+            f"/api/games/{alias}/players?share=1&room_token={ROOM_TOKEN}",
+            headers={**_cookie(p2_session), **CONFIRM}, json={},
+        )
+        rejoin_body = await rejoin.json()
+    assert "p2" not in env.instance.players
+    assert rejoin_body.get("user_id") != "p2"
+    assert "seat_token" not in rejoin_body or rejoin_body.get("user_id") != "p2"
+
+
+@pytest.mark.asyncio
+async def test_reset_keeps_the_gm_session_and_gm_identity(share_env, monkeypatch):
+    env = share_env
+    gm_uid = env.instance.gm_uid
+
+    async def reset_in_place(game_key):
+        await env.instance.reset()
+        return {"ok": True}
+
+    monkeypatch.setattr(env.api, "reset_game", reset_in_place)
+    gm = {**_owner(), **CONFIRM, **_cookie(env.gm_token)}
+    async with TestClient(TestServer(env.app)) as client:
+        reset = await client.post(f"/api/games/{env.key}/reset", headers=gm)
+        assert reset.status == 200
+        recreated = await client.post(
+            f"/api/games/{env.key}/players", headers=gm, json={"character_name": "GM again"},
+        )
+        body = await recreated.json()
+    assert env.key not in env.sessions.revoked_games(env.gm_token)
+    assert body["user_id"] == gm_uid
+    assert "seat_token" not in body
+    assert not room_access.has_seat_token(env.instance, gm_uid)
+
+
+@pytest.mark.asyncio
+async def test_deleting_the_gm_character_keeps_the_gm_session(share_env):
+    env = share_env
+    gm_uid = env.instance.gm_uid
+    gm = {**_owner(), **CONFIRM, **_cookie(env.gm_token)}
+    async with TestClient(TestServer(env.app)) as client:
+        deleted = await client.delete(f"/api/games/{env.key}/character/{gm_uid}", headers=gm)
+        assert deleted.status == 200, await deleted.json()
+        recreated = await client.post(
+            f"/api/games/{env.key}/players", headers=gm, json={"character_name": "GM again"},
+        )
+        body = await recreated.json()
+    assert env.key not in env.sessions.revoked_games(env.gm_token)
+    assert body["user_id"] == gm_uid
+    assert "seat_token" not in body
+
+
+@pytest.mark.asyncio
+async def test_visitor_characters_is_the_join_bootstrap_only(share_env):
+    env = share_env
+    env.instance.npcs = {"npc-1": {"character_name": "Hidden NPC"}}
+    stranger, _ = env.sessions.get_or_create(None)
+    async with TestClient(TestServer(env.app)) as client:
+        response = await client.get(_share_url(env, "characters"), headers=_cookie(stranger))
+        body = await response.json()
+    assert response.status == 200
+    assert body["players"] == [] and body["npcs"] == []
+    assert set(body) <= {"players", "npcs", "rule_attrs", "rule_attrs_total", "rule_classes",
+                         "rule_special_stats", "rule_meta", "ruleset_runtime"}
+    rendered = str(body)
+    for secret in ("p1", "p2", env.instance.gm_uid, "Hidden NPC"):
+        assert secret not in rendered
+
+
+def test_rebind_lifts_only_the_game_being_entered(share_env):
+    env = share_env
+    env.sessions.revoke_game_binding("p1", "web|a|web")
+    env.sessions.revoke_game_binding("p1", "web|b|web")
+    env.sessions.rebind(env.token, "p1", "web|a|web")
+    assert env.sessions.revoked_games(env.token) == frozenset({"web|b|web"})
+
+
+def test_count_bound_is_scoped_to_the_game(share_env):
+    env = share_env
+    elsewhere, _ = env.sessions.get_or_create(None)
+    env.sessions.rebind(elsewhere, "p1", "web|other|web")
+    # env.token predates game records (counted conservatively); `elsewhere`
+    # entered only another game and must not be counted here.
+    assert env.sessions.count_bound("p1", env.key) == 1
+    assert env.sessions.count_bound("p1", "web|other|web") == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["", "   "])
+async def test_empty_seat_token_header_is_treated_as_absent(share_env, header):
+    env = share_env
+    async with TestClient(TestServer(env.app)) as client:
+        response = await client.get(
+            _share_url(env, "private-log"), headers={"X-Seat-Token": header},
+        )
+        body = await response.json()
+    assert response.status == 401
+    assert body["error_code"] == "SEAT_TOKEN_REQUIRED"

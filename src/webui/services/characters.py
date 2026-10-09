@@ -1385,7 +1385,8 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
             raise
     # The new seat's share credential; the plaintext leaves only in this
     # response.  A GM-created seat's token lets the GM hand out its link.
-    seat_token = room_access.issue_seat_token(inst, uid)
+    # The GM seat itself never holds one (e.g. the GM recreating its character).
+    seat_token = "" if uid == str(inst.gm_uid or "") else room_access.issue_seat_token(inst, uid)
     dependencies.save_character_card({
         **player,
         "rule_id": rule_id,
@@ -1395,4 +1396,7 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
         "language": getattr(inst, "language", ""),
     })
     await dependencies.games.save_instance(inst)
-    return {"ok": True, "user_id": uid, "character_name": player["character_name"], "seat_token": seat_token}
+    created: dict[str, Any] = {"ok": True, "user_id": uid, "character_name": player["character_name"]}
+    if seat_token:
+        created["seat_token"] = seat_token
+    return created

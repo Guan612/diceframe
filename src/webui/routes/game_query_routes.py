@@ -9,7 +9,7 @@ from aiohttp import web
 from src.webui.routes._common import (
     _get_api,
 )
-from src.webui.services.game_queries import lobby_detail
+from src.webui.services.game_queries import join_characters, lobby_detail
 from src.webui.viewer import viewer_for
 
 logger = logging.getLogger("trpg")
@@ -96,7 +96,11 @@ async def api_chars(request: web.Request) -> web.Response:
     api = _get_api(request)
     game_key = request.match_info["game_key"]
     viewer = viewer_for(request, api.get_game_instance(game_key))
-    return web.json_response(api.list_characters(game_key, viewer_is_gm=viewer.is_gm))
+    characters = api.list_characters(game_key, viewer_is_gm=viewer.is_gm)
+    if not viewer.is_member:
+        # A visitor joining needs the public ruleset bootstrap, never the roster.
+        return web.json_response(join_characters(characters))
+    return web.json_response(characters)
 
 
 async def api_log(request: web.Request) -> web.Response:

@@ -8,6 +8,7 @@ from aiohttp import web
 
 from src.webui.api import can_modify_character
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
+from src.webui.services._common import canonical_game_key
 from src.webui.routes._common import (
     _get_api,
     _require_confirmed_request,
@@ -234,11 +235,12 @@ async def api_char_delete(request: web.Request) -> web.Response:
     ):
         return web.json_response({"error": "无权删除他人角色"}, status=403)
     result = await api.delete_character(gk, uid)
-    if result.get("ok"):
-        # A removed seat's devices must not keep speaking for it here.
+    if result.get("ok") and uid != str(inst.gm_uid or ""):
+        # A removed seat's devices must not keep speaking for it here. The GM
+        # identity outlives its character, so the GM's own session is kept.
         mgr = request.app.get("session_manager")
         if mgr is not None:
-            mgr.revoke_game_binding(uid, gk)
+            mgr.revoke_game_binding(uid, canonical_game_key(gk))
     status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
     return web.json_response(result, status=status)
 
@@ -286,13 +288,15 @@ async def api_player_create(request: web.Request) -> web.Response:
     if result.get("error_code") == "SEAT_TOKEN_REQUIRED":
         return web.json_response(result, status=403)
     # 换设备恢复：持有席位凭证的会话改绑到该席位；GM 会话不能改绑成玩家。
+    mgr = request.app.get("session_manager")
+    token = request.get("session_token")
     if _should_rebind_player_session(
         session_uid, inst.gm_uid, requested_uid or seat_token_uid, result, join_as_new
     ):
-        mgr = request.app.get("session_manager")
-        token = request.get("session_token")
         if mgr and token:
-            mgr.rebind(token, result.get("user_id", ""))
+            mgr.rebind(token, result.get("user_id", ""), canonical_game_key(gk))
+    elif mgr and token and result.get("ok") and result.get("user_id") == session_uid:
+        mgr.note_game(token, canonical_game_key(gk))
     status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
     return web.json_response(result, status=status)
 
@@ -304,7 +308,7 @@ async def api_seat_token_issue(request: web.Request) -> web.Response:
         return denied
     body = await request.json() if request.can_read_body else {}
     body = body if isinstance(body, dict) else {}
-    gk = request.match_info["game_key"]
+    gk = canonical_game_key(request.match_info["game_key"])
     uid = request.match_info["uid"]
     mgr = request.app.get("session_manager")
     result = await _get_api(request).issue_seat_token(
