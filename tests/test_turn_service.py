@@ -7,6 +7,7 @@ import pytest
 
 from src.commands.round_processor import RoundNotProcessed
 from src.engine.game_instance import GameState
+from src.engine.modules import economy_state
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.services.turns import (
     TurnDependencies,
@@ -28,10 +29,6 @@ class FakeInstance:
         self.round_number = 1
         self.action_queue: list[dict] = []
         self.run_id = "run-test"
-        self.economy = {
-            "proposals": [],
-            "effect_groups": [],
-        }
         self.last_check = None
         self.last_checks: list[dict] = []
         self.quick_actions = ["观察"]
@@ -49,6 +46,10 @@ class FakeInstance:
         self.flip_state_on_advance = False
         self.added: list[tuple[str, str, dict]] = []
         self.aborts = 0
+
+    @property
+    def economy(self) -> dict:
+        return economy_state.state(self)
 
     def is_dead(self, uid: str) -> bool:
         return uid in self.dead

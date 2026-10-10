@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from src.commands.round_processor import RoundNotProcessed, RoundProcessingFailure
 from src.engine import progression
-from src.engine.modules import adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats
+from src.engine.modules import adventure_runtime_state, checks, economy_state, legacy_combat, round_safety, ruleset_runtime, session_stats
 from src.engine.action_gate import (
     ACTOR_DECEASED,
     ECONOMY_DECISION_PENDING,
@@ -518,7 +518,7 @@ async def _auto_settle_rewards(
         return
     if not enabled or gold_cap < 1:
         return
-    economy = getattr(instance, "economy", {})
+    economy = economy_state.state(instance)
     proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
     for proposal in list(proposals):
         if run_changed is not None and run_changed():

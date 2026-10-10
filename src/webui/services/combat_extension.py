@@ -47,7 +47,7 @@ def _raw_extension_payload(instance: GameInstance) -> Mapping[str, Any]:
     readable because the absent version is the original shape.
     """
 
-    raw = getattr(instance, "combat_extension", None)
+    raw = combat_extension_state.current(instance)
     if not isinstance(raw, Mapping):
         return {}
     version = raw.get("schema_version")
@@ -61,7 +61,7 @@ def _raw_extension_payload(instance: GameInstance) -> Mapping[str, Any]:
 
 
 def _extension_schema_supported(instance: GameInstance) -> bool:
-    raw = getattr(instance, "combat_extension", None)
+    raw = combat_extension_state.current(instance)
     if not isinstance(raw, Mapping):
         return True
     version = raw.get("schema_version")

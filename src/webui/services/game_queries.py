@@ -9,7 +9,7 @@ from typing import Any, Callable
 from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
-from src.engine.modules import checks, ruleset_runtime
+from src.engine.modules import checks, economy_state, ruleset_runtime
 from src.engine.player_control import away_control_policy
 from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
 from src.llm.parser import sanitize_narration
@@ -175,7 +175,7 @@ def game_detail(
         return None
     economy_proposals = [
         dict(proposal)
-        for proposal in (getattr(instance, "economy", {}).get("proposals", []) or [])
+        for proposal in (economy_state.state(instance).get("proposals", []) or [])
         if isinstance(proposal, dict)
         and proposal.get("status") == "pending"
         and proposal_visible_to(
@@ -280,7 +280,7 @@ def _public_manual_rolls(instance: Any, viewer_uid: str) -> list[dict[str, Any]]
     viewer = str(viewer_uid or "")
     gm_uid = str(getattr(instance, "gm_uid", "") or "")
     projected: list[dict[str, Any]] = []
-    for request in getattr(instance, "manual_roll_requests", []) or []:
+    for request in checks.manual_roll_requests(instance):
         if not isinstance(request, dict) or not isinstance(request.get("results"), dict):
             continue
         target_uids = [str(uid) for uid in request.get("target_uids") or [] if str(uid)]

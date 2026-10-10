@@ -279,7 +279,7 @@ def cancel_proposals_for_player(
 
 
 def pending_proposals(instance: Any) -> list[dict[str, Any]]:
-    economy = getattr(instance, "economy", {})
+    economy = economy_state.state(instance)
     proposals = economy.get("proposals") if isinstance(economy, dict) else []
     return [
         item for item in (proposals or [])
@@ -479,7 +479,7 @@ def blocking_economy_proposals(
 def pending_effect_groups(instance: Any) -> list[dict[str, Any]]:
     """Return unresolved effect groups owned by the current run."""
 
-    economy = getattr(instance, "economy", {})
+    economy = economy_state.state(instance)
     groups = economy.get("effect_groups") if isinstance(economy, dict) else []
     return [
         item for item in (groups or [])
@@ -503,7 +503,7 @@ def economy_fingerprint(instance: Any) -> dict[str, str]:
 
     return {
         str(item.get("id") or ""): str(item.get("status") or "")
-        for item in getattr(instance, "economy", {}).get("proposals", [])
+        for item in economy_state.state(instance).get("proposals", [])
         if isinstance(item, dict)
     }
 
