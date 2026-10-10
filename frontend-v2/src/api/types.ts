@@ -154,6 +154,8 @@ export interface Player {
   character_sheet?: CharacterSheet
   /** 谁在玩这个角色：真人 / 服务器 AI / 尚未认领（AI 队友控制契约）。 */
   control?: PlayerControl
+  /** 席位已行动过：之后只有 GM 能为它套用角色卡或删除它。 */
+  has_acted?: boolean
   [key: string]: unknown
 }
 

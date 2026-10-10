@@ -71,7 +71,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     """
     from src.engine.modules import (
         adventure_runtime_state, checks, legacy_combat, narrative_notes, round_safety, ruleset_runtime,
-        session_stats,
+        seat_activity, session_stats,
     )
     from src.engine.modules import combat_extension_state
 
@@ -82,6 +82,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     ruleset_runtime.require_writable(instance)
     adventure_runtime_state.require_writable(instance)
     narrative_notes.require_writable(instance)
+    seat_activity.require_writable(instance)
     saved_seed = instance.seed_code if keep_seed else ""
     saved_world_id = instance.world_id
     saved_world_name = instance.world_name
@@ -94,6 +95,8 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     saved_adventure_binding = copy.deepcopy(instance.adventure_binding)
     instance.rotate_run_identity()
     instance.players.clear()
+    # 例外（同 adventure_progress）：席位"已行动"标记属于这一轮 run，随名册与日志一起清空。
+    seat_activity.reset(instance)
     instance.npcs.clear()
     progression.reset(instance)
     instance.action_queue.clear()
