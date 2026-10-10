@@ -52,8 +52,8 @@ World documents are not supported yet.
 - **Registration at pairing.** Send `install_id` with `POST /api/pairing/claim`, next to `code` and `label`. A malformed id gets 400 `INSTALL_ID_INVALID`, and the pairing code is not consumed.
 - **First-use binding.** A device paired without an install id is bound on first use, to the `source.id` of its first declared request.
 - **One install id, one paired device.**
-  - At claim time, an id held by another pairing gets 409 `INSTALL_ID_IN_USE`, and the code is not consumed.
-  - A first-use binding of a taken id gets 403 `INSTALL_ID_IN_USE`.
+  - **Re-pairing takes over.** A valid pairing code is the owner's authorisation. If the claimed `install_id` is held by an older pairing, that is the same app install pairing again (for example after its token was lost). The older device is **revoked** and the new pairing takes the binding: the claim returns 200 with `replaced_device_id`, and the server logs the takeover. The old token stops working (401).
+  - **A push never takes over.** A first-use binding (through a content request, without pairing) of an id that another paired device holds gets 403 `INSTALL_ID_IN_USE`.
 - **Clearing a binding.**
   - The owner can clear a binding with `DELETE /api/devices/{device_id}/install-id`; the device binds again on its next push.
   - Revoking a device discards its binding.
@@ -103,6 +103,7 @@ Request:
     - `TRACKED_BY_OTHER_SOURCE` / `DETACHED_FROM_OTHER_SOURCE`: another source's provenance, whatever its link;
     - `RULESET_CARD`: a rules-aware server card.
   - An `update` on a free hinted object adopts it: from then on it follows this install. A `duplicate` of a hinted object leaves that object untouched.
+  - **Hinted books report their bindings.** For a lorebook matched by hint, `existing.bindings` lists where the server book is bound (`[{scope_kind, scope_id}]`, e.g. `game` or `character` scopes; `[]` when unbound). An `update` mirrors the push into that book, so it changes what those games and characters see; warn the user before sending it.
 
 Response (200):
 
