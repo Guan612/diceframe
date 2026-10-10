@@ -10,7 +10,8 @@
 > - 分支：`main`
 > - Commit：`962fda45a68caa24bac38fd2313d92d66fa59a7a`
 > - Release：`2.6.1`
-> - 当前 GameInstance persisted schema：`39`
+> - 当前 GameInstance persisted schema：`40`
+> - R9-b：`scene` 通过属性代理存于 `modules.narrative_notes.scene`，该槽升到 v2；39→40 迁移删除旧顶层键，值原样保留。reset 照旧清空；写 scene 的事务（开局、回合处理、swipe、规则批次与 Director 自动化、ruleset 事务回滚、reset）先做 `narrative_notes.require_writable` 预检。列表、详情、大厅（含密码遮挡）、SSE、recap 与 LLM 视图的 `scene` 不变。
 > - R9-a：`adventure_progress` 与 `play_mode` 通过同对象代理存于 `modules.adventure_runtime` 的 `progress`、`play_mode`；38→39 迁移删除旧顶层键。Adventure 身份仍只在顶层 `adventure_binding`。读档时空或未知的 play_mode 仍按绑定推导；原地 reset 保留两者，新 run 候选不复制（行为不变）。
 > - R8-e：`ruleset_runtime`、`ruleset_state`、`event_ledger` 通过同对象代理存于 `modules.ruleset_runtime` 的 `binding`、`state`、`event_ledger`；33→34 迁移删除旧顶层键。reset 保留 binding、重建 state、清 ledger；编码继续丢弃无 binding 的 state/ledger，但不修改内存。创建普通或种子游戏时，`versioned_state` runtime 通过 `VersionedStateRuntime.game_binding` 在成长策略配置及角色加入前绑定；绑定失败回滚创建。休息、成长及规则事件批次拒绝无绑定或 runtime id 不匹配的写入；叙事战斗信号在此情况下返回 False 并记录警告。旧未绑定存档不自动绑定，schema 与存档形状不变。
 > - R8-d：`combat_active`、`combat_enemies`、`combat_state`、`initiative_order`、`initiative_current` 存于 `modules.legacy_combat`，32→33 迁移删除旧顶层键。它是兼容投影存储；D&D 2024 战斗权威仍在 `ruleset_state["combat"]`。模块只修复非法类型，不过滤合法列表内容。

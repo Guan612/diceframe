@@ -165,9 +165,6 @@ class GameInstance:
     # 玩家管理
     gm_uid: str = ""  # 创建游戏的 GM 的 user_id
 
-    # 场景
-    scene: str = ""
-
     # 回合日志
     log: list[RoundLogEntry] = field(default_factory=list)
 
@@ -589,6 +586,15 @@ class GameInstance:
         narrative_notes.replace_confirmed_items(self, value)
 
     @property
+    def scene(self) -> str:
+        """Free-text current scene label; stored in ``modules.narrative_notes``."""
+        return narrative_notes.scene(self)
+
+    @scene.setter
+    def scene(self, value: Any) -> None:
+        narrative_notes.replace_scene(self, value)
+
+    @property
     def game_time(self) -> str:
         return narrative_notes.game_time(self)
 
@@ -976,6 +982,8 @@ class GameInstance:
         """
         if "last_activity" in snapshot:
             session_stats.require_writable(self)
+        if "scene" in snapshot:
+            narrative_notes.require_writable(self)
         if any(key in snapshot for key in (
             "last_check", "last_checks", "round_checks_prepared", "manual_roll_requests",
         )):
@@ -1015,7 +1023,7 @@ class GameInstance:
         room_access.set_room_password(self, password)
 
     def set_scene(self, scene: str) -> None:
-        self.scene = scene
+        narrative_notes.replace_scene(self, scene)
 
     def set_world(self, world_id: str, world_name: str) -> None:
         self.world_id = world_id
@@ -1838,6 +1846,7 @@ class GameInstance:
             round_safety.require_writable(self)
             legacy_combat.require_writable(self)
             ruleset_runtime.require_writable(self)
+            narrative_notes.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             from src.engine.modules import room_access

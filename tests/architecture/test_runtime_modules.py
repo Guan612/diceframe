@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULES = SRC / "engine" / "modules"
-MAX_TOP_LEVEL_FIELDS = 38
+MAX_TOP_LEVEL_FIELDS = 37
 
 CONTROL_WRITERS = {
     SRC / "engine" / "player_control.py",
@@ -157,6 +157,27 @@ def test_only_adventure_runtime_owners_assign_fields() -> None:
                 and node.args[1].value in fields
             ):
                 violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: adventure runtime setattr outside owner")
+    assert not violations, "\n".join(violations)
+
+
+def test_only_narrative_notes_owners_assign_scene() -> None:
+    owners = {
+        SRC / "engine" / "game_instance.py",
+        MODULES / "narrative_notes.py",
+        SRC / "engine" / "game_state_codec.py",
+    }
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path in owners:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                and node.attr == "scene"
+            ):
+                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: scene write outside owner")
     assert not violations, "\n".join(violations)
 
 

@@ -141,6 +141,11 @@ def apply_director_automation(
     initial_intents = initial if isinstance(initial, list) else [initial]
     if not initial_intents:
         return []
+    from src.engine.modules import narrative_notes
+
+    # The snapshot below includes the scene; reject an unsupported notes slot
+    # before any batch runs so the rollback never has to touch it.
+    narrative_notes.require_writable(instance)
     before = {
         "ruleset_state": deepcopy(instance.ruleset_state),
         "event_ledger": deepcopy(instance.event_ledger),

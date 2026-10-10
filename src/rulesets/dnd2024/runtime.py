@@ -925,6 +925,11 @@ class Dnd2024Runtime:
     def apply_event_batch(
         self, instance: Any, batch: dict[str, Any],
     ) -> dict[str, Any]:
+        from src.engine.modules import narrative_notes
+
+        # Campaign steps write the scene after the batch commits; reject an
+        # unsupported notes slot before any ruleset state changes.
+        narrative_notes.require_writable(instance)
         locale = str(getattr(instance, "language", "") or "")
         bundle = self.load_bundle(locale)
         before_characters = {

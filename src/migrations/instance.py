@@ -28,7 +28,7 @@ from src.password_hashing import hash_password
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 39
+CURRENT_INSTANCE_SCHEMA_VERSION = 40
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -896,6 +896,35 @@ def _migrate_v38_to_v39(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v39_to_v40(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move the scene label into narrative_notes, upgrading that slot to v2.
+
+    The scene is kept verbatim (the top-level field was never type-checked).
+    A v1 slot gains it; a missing slot is created; any other slot schema is
+    left untouched.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    scene = payload.pop("scene", "")
+    slot = modules.get("narrative_notes")
+    if isinstance(slot, dict):
+        if slot.get("schema_version") == 1:
+            modules["narrative_notes"] = {**slot, "schema_version": 2, "scene": scene}
+    else:
+        modules["narrative_notes"] = {
+            "schema_version": 2,
+            "summary": {},
+            "key_facts": [],
+            "confirmed_items": [],
+            "game_time": "",
+            "scene": scene,
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 40
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -1017,6 +1046,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 38:
         payload = _migrate_v38_to_v39(payload)
         version = 39
+    if version == 39:
+        payload = _migrate_v39_to_v40(payload)
+        version = 40
     payload["instance_schema_version"] = version
     return payload
 
