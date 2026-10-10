@@ -8,10 +8,11 @@ from typing import Any
 from src.content_modules.plan import Decision, DeclaredSource
 from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource, check_book_limits
 from src.engine.world.contracts import canonical_id
-from src.lorebook.importer import draft_lorebook_import
 from src.lorebook.import_plan import (
+    PreparedLorebook,
     execute_lorebook_plan,
     plan_lorebook_import,
+    prepare_lorebook_import,
     portable_lorebook_document,
 )
 
@@ -64,7 +65,7 @@ class LorebookSyncImporter:
         # item commits in its own transaction; no library-level lock needed.
         return nullcontext()
 
-    def plan(self, source: SyncSource, item: SyncItem) -> KindPlan:
+    def prepare(self, source: SyncSource, item: SyncItem) -> PreparedLorebook:
         if item.canonical_hint:
             raise SyncItemError(CANONICAL_HINT_UNSUPPORTED, "lorebooks are matched by identity only")
         document = item.document
@@ -73,9 +74,14 @@ class LorebookSyncImporter:
         ):
             raise SyncItemError(FORMAT_UNSUPPORTED, "a lorebook item must be a lorebook_v3 document")
         declared = DeclaredSource(source.kind, source.id, canonical_id(item.client_ref, field="client_ref"))
+        prepared = prepare_lorebook_import(document, declared=declared)
         # Limits apply to what the adapter actually parsed, before planning.
-        check_book_limits(draft_lorebook_import(document).entries, client_ref=item.client_ref)
-        plan = plan_lorebook_import(self.store, document, declared=declared)
+        check_book_limits(prepared.draft.entries, client_ref=item.client_ref)
+        return prepared
+
+    def plan(self, source: SyncSource, item: SyncItem, prepared: PreparedLorebook) -> KindPlan:
+        declared = DeclaredSource(source.kind, source.id, item.client_ref)
+        plan = plan_lorebook_import(self.store, item.document, declared=declared, prepared=prepared)
         store = self.store
 
         def execute(resolved: Any) -> list[dict[str, Any]]:

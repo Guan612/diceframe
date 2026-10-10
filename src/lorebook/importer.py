@@ -110,12 +110,20 @@ def lorebook_draft_digest(draft: LorebookDraft) -> str:
 
 
 def lorebook_content_draft(
-    payload: dict[str, Any], *, declared: DeclaredSource | None = None,
+    payload: dict[str, Any],
+    *,
+    declared: DeclaredSource | None = None,
+    draft: LorebookDraft | None = None,
 ) -> ContentDraft:
-    """Adapt any supported Lorebook input into the shared import contract."""
+    """Adapt any supported Lorebook input into the shared import contract.
+
+    ``draft`` is the adapter's parse of ``payload`` when the caller already
+    has it, so a large document is not parsed again.
+    """
 
     fmt = detect_lorebook_format(payload)
-    draft = draft_lorebook_import(payload)
+    if draft is None:
+        draft = draft_lorebook_import(payload)
     source_kind, source_id = lorebook_import_identity(draft)
     raw_source_id = str(draft.source.get("source_id") or draft.source.get("id") or "").strip()
     # One import source is one Book, so the Book's external id is its source
