@@ -602,6 +602,20 @@ class CardSyncExporter:
 
     def __init__(self, dependencies: CardImportDependencies) -> None:
         self.dependencies = dependencies
+        self._status_snapshot: dict[str, dict[str, Any]] | None = None
+
+    def status(self, canonical_id: str) -> dict[str, Any] | None:
+        # An exporter lives for one request: read (and parse) the library once
+        # and answer every status row of that request from the snapshot.
+        if self._status_snapshot is None:
+            with self.dependencies.lock():
+                self._status_snapshot = {
+                    str(row.get("id") or ""): row for row in self.dependencies.read_cards()
+                }
+        card = self._status_snapshot.get(canonical_id)
+        if card is None:
+            return None
+        return {"state_token": _state_token(card), "provenance": card_provenance(card)}
 
     def export(self, canonical_id: str) -> dict[str, Any] | None:
         with self.dependencies.lock():
