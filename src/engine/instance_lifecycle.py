@@ -13,6 +13,8 @@
   保留/清空/轮换行为以基线代码为唯一真值，禁止按字段清单重新实现。
   未被基线 reset() 触碰的字段（play_mode / scene_image / death_save_outcomes
   等"隐式保留"字段）在本 PR 中保持原样；疑似 bug 记录 follow-up，不顺手修。
+  例外：``adventure_progress`` 已有意改为随 ``world_state`` 一起清空（两者同属
+  一轮 run，见 reset_locked 内注释）。
 - 不 runtime import ``src.engine.game_instance``（仅 ``TYPE_CHECKING`` 类型引用），
   依赖方向保持 ``game_instance → instance_lifecycle``。
 """
@@ -68,7 +70,8 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     ``tests/test_game_instance_reset_characterization.py`` 冻结。
     """
     from src.engine.modules import (
-        checks, legacy_combat, narrative_notes, round_safety, ruleset_runtime, session_stats,
+        adventure_runtime_state, checks, legacy_combat, narrative_notes, round_safety, ruleset_runtime,
+        session_stats,
     )
 
     session_stats.require_writable(instance)
@@ -76,6 +79,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     round_safety.require_writable(instance)
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     narrative_notes.require_writable(instance)
     saved_seed = instance.seed_code if keep_seed else ""
     saved_world_id = instance.world_id
@@ -102,6 +106,11 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     instance.key_facts.clear()
     # 世界真相属于这一轮 run：重置与重开都从空世界重新开始。
     instance.world_state = fresh_world_state()
+    # Adventure v2 进度与世界状态同属这一轮 run（完成节点的后果写在 world_state
+    # 里）：只清世界却保留进度会出现"节点已完成、世界没变"的矛盾。原地 reset
+    # 不能解析冒险包，因此清空为"未初始化"（节点推进 fail closed）；生产的
+    # reset/restart 走新 run 候选并由 initialize_adventure_run 重新初始化。
+    adventure_runtime_state.replace_progress(instance, {})
     session_stats.reset(instance)
     instance.puzzle_manager = None
     instance.plot_tracker = None

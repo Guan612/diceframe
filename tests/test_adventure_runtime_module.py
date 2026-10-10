@@ -202,37 +202,75 @@ def test_owner_writes_reject_unknown_schema_before_mutation():
 
 
 @pytest.mark.asyncio
-async def test_in_place_reset_keeps_progress_and_play_mode():
+async def test_in_place_reset_clears_progress_and_keeps_play_mode():
     instance = _make_populated_instance()
     instance.adventure_progress = deepcopy(PROGRESS)
-    progress = instance.adventure_progress
     await instance.reset()
     assert instance.play_mode == "adventure"
-    assert instance.adventure_progress is progress
-    assert instance.adventure_progress == PROGRESS
+    assert instance.adventure_progress == {}
+    assert instance.modules[module.MODULE_NAME]["progress"] == {}
 
 
 @pytest.mark.asyncio
-async def test_new_run_candidate_does_not_carry_progress_or_play_mode(tmp_path):
-    """Current behaviour, kept verbatim: a reset/restart run starts empty."""
+@pytest.mark.parametrize("initialize", [False, True])
+async def test_new_run_candidate_keeps_play_mode_and_reinitializes_progress(initialize):
     from types import SimpleNamespace
 
     from src.commands.game_lifecycle import GameLifecycle
 
     source = _make_populated_instance()
     source.adventure_progress = deepcopy(PROGRESS)
+    fresh_progress = {"active_nodes": ["gate"], "completed_nodes": []}
 
     async def create_game(game_key, **kwargs):
         return GameInstance(game_key=game_key)
 
+    def initialize_run(candidate):
+        module.replace_progress(candidate, deepcopy(fresh_progress))
+
     lifecycle = object.__new__(GameLifecycle)
     lifecycle.create_game = create_game
     lifecycle.prompt = SimpleNamespace(ruleset_registry=None)
+    lifecycle._initialize_adventure_run = initialize_run if initialize else None
     candidate = await lifecycle._new_run_candidate(source, preserve_players=True)
     assert candidate.adventure_binding == source.adventure_binding
-    assert candidate.adventure_progress == {}
-    assert candidate.play_mode == ""
+    assert candidate.play_mode == source.play_mode == "adventure"
+    assert candidate.adventure_progress == (fresh_progress if initialize else {})
+    assert candidate.adventure_progress is not source.adventure_progress
     assert source.adventure_progress == PROGRESS
+
+
+@pytest.mark.parametrize("side", ["source", "candidate"])
+@pytest.mark.asyncio
+async def test_new_run_candidate_preflights_both_slots(side):
+    from types import SimpleNamespace
+
+    from src.commands.game_lifecycle import GameLifecycle
+
+    source = _make_populated_instance()
+    created = []
+
+    async def create_game(game_key, **kwargs):
+        candidate = GameInstance(game_key=game_key)
+        if side == "candidate":
+            candidate.modules[module.MODULE_NAME]["schema_version"] = 99
+        created.append(candidate)
+        return candidate
+
+    if side == "source":
+        source.modules[module.MODULE_NAME]["schema_version"] = 99
+    lifecycle = object.__new__(GameLifecycle)
+    lifecycle.create_game = create_game
+    lifecycle.prompt = SimpleNamespace(ruleset_registry=None)
+    lifecycle._initialize_adventure_run = None
+    before = deepcopy(source.to_dict())
+    with pytest.raises(ModuleStateError, match="unsupported adventure_runtime module schema"):
+        await lifecycle._new_run_candidate(source, preserve_players=True)
+    assert source.to_dict() == before
+    if side == "source":
+        assert created == []  # rejected before any candidate is built
+    else:
+        assert created[0].modules[module.MODULE_NAME] == {"schema_version": 99, "progress": {}, "play_mode": ""}
 
 
 # ---- API contract ------------------------------------------------------------------

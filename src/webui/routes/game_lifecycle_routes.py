@@ -66,6 +66,29 @@ async def api_create_game(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+_LIFECYCLE_ERROR_STATUS = {
+    "GAME_NOT_FOUND": 404,
+    "WORLD_NOT_FOUND": 404,
+    "INVALID_WORLD_ID": 400,
+    "INVALID_WORLD_REF": 422,
+    "ADVENTURE_WORLD_LOCKED": 409,
+    "ADVENTURE_RUNTIME_INIT_FAILED": 422,
+    "RULESET_RUNTIME_INIT_FAILED": 422,
+    "REWRITE_IN_PROGRESS": 409,
+    "STALE_RUN": 409,
+    "ROUND_PROCESSING": 409,
+    "WORLD_LOAD_FAILED": 500,
+}
+
+
+def _lifecycle_status(result: dict) -> int:
+    """HTTP status for a coded lifecycle failure; uncoded legacy failures stay 200."""
+
+    if result.get("ok", True):
+        return 200
+    return _LIFECYCLE_ERROR_STATUS.get(str(result.get("error_code") or ""), 200)
+
+
 async def api_reset_game(request: web.Request) -> web.Response:
     denied = _require_confirmed_request(request)
     if denied is not None:
@@ -88,7 +111,7 @@ async def api_reset_game(request: web.Request) -> web.Response:
         if mgr is not None:
             for uid in sorted(before - remaining):
                 mgr.revoke_game_binding(uid, canonical_game_key(gk))
-    return web.json_response(result)
+    return web.json_response(result, status=_lifecycle_status(result))
 
 
 async def api_restart_game(request: web.Request) -> web.Response:
@@ -100,7 +123,7 @@ async def api_restart_game(request: web.Request) -> web.Response:
     if denied is not None:
         return denied
     result = await _get_api(request).restart_game(gk)
-    return web.json_response(result)
+    return web.json_response(result, status=_lifecycle_status(result))
 
 
 async def api_switch_world(request: web.Request) -> web.Response:
@@ -113,7 +136,7 @@ async def api_switch_world(request: web.Request) -> web.Response:
         return denied
     body = await request.json()
     result = await _get_api(request).switch_world(gk, body.get("world_id", ""))
-    return web.json_response(result)
+    return web.json_response(result, status=_lifecycle_status(result))
 
 
 async def api_create_from_seed(request: web.Request) -> web.Response:

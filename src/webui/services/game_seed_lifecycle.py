@@ -8,7 +8,7 @@ from typing import Any
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.module_state import ModuleStateError
-from src.engine.modules import content_binding
+from src.engine.modules import adventure_runtime_state, content_binding
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.migrations import migrate_instance
 from src.rulesets.contracts import LiveAdvancementPolicyRuntime
@@ -147,6 +147,10 @@ async def create_from_seed(
         }
     except ModuleStateError as exc:
         return {"ok": False, "error_code": "INVALID_WORLD_REF", "error": str(exc)}
+    # Same for the original save's play mode: an unsupported adventure_runtime
+    # slot is rejected before anything is registered.
+    adventure_runtime_state.require_writable(target_inst)
+    source_play_mode = str(adventure_runtime_state.play_mode(target_inst) or "")
 
     unique_id = f"{world_id}_{time.time_ns()}"
     game_key = ("web", unique_id, "web_bot")
@@ -202,6 +206,23 @@ async def create_from_seed(
     )
     if content_error is not None:
         return content_error
+    # A seed restart is the same kind of game: keep its play mode (old saves
+    # without one derive it from the binding, as the save migration does) and
+    # run the same Adventure v2 initialization step as normal creation.
+    adventure_runtime_state.replace_play_mode(instance, source_play_mode or (
+        "adventure" if target_adventure_binding.get("adventure_id") else "free"
+    ))
+    if callable(getattr(dependencies, "initialize_adventure_run", None)):
+        try:
+            dependencies.initialize_adventure_run(instance)
+        except Exception as exc:
+            transaction.rollback()
+            logger.exception("按引用码初始化冒险运行时失败，已回滚: %s", game_key)
+            return {
+                "ok": False,
+                "error_code": "ADVENTURE_RUNTIME_INIT_FAILED",
+                "error": f"冒险初始化失败，未留下半成品存档：{exc}",
+            }
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(dict(getattr(target_inst, "map_background", {}) or {}))
     transaction.advance(CreationPhase.INSTANCE_CONFIGURED)

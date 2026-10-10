@@ -11,7 +11,7 @@ from typing import Any, Literal
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
 from src.engine.visibility_rules import manual_roll_visible_to
-from src.knowledge.visibility import PUBLIC_VISIBILITY_MARKERS, visibility_values
+from src.knowledge.visibility import entry_visible_to_viewer
 from src.llm.parser import sanitize_narration
 from src.llm.world_prompt import format_world_state_block
 
@@ -930,31 +930,18 @@ def filter_player_visible_lorebook_entries(
     Facts already discovered publicly remain available through the public log,
     summary, and confirmed-facts sections without exposing the underlying lore.
     """
-    allowed = {str(actor_uid).strip().casefold()}
-    if actor_name:
-        allowed.add(str(actor_name).strip().casefold())
-    public = {marker.casefold() for marker in PUBLIC_VISIBILITY_MARKERS}
-    result: list[dict] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        visible = {item.casefold() for item in visibility_values(entry.get("visible_to"))}
-        if visible & (allowed | public):
-            result.append(deepcopy(entry))
-    return result
+    uid = str(actor_uid or "").strip()
+    if not uid:
+        return filter_public_lorebook_entries(entries)
+    return [
+        deepcopy(entry) for entry in entries
+        if entry_visible_to_viewer(entry, "character", uid, str(actor_name or ""))
+    ]
 
 
 def filter_public_lorebook_entries(entries: list[dict]) -> list[dict]:
     """Select only lore explicitly marked as visible to the whole table."""
-    public = {marker.casefold() for marker in PUBLIC_VISIBILITY_MARKERS}
-    result: list[dict] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        visible = {item.casefold() for item in visibility_values(entry.get("visible_to"))}
-        if visible & public:
-            result.append(deepcopy(entry))
-    return result
+    return [deepcopy(entry) for entry in entries if entry_visible_to_viewer(entry, "party")]
 
 
 def _player_safe_state(

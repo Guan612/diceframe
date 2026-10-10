@@ -13,6 +13,7 @@ from src.engine.game_instance import GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import adventure_runtime_state
 from tests.test_game_instance_reset_characterization import _make_populated_instance
+from test_golden_e2e_54pr import golden  # noqa: F401  (fixture re-export)
 
 MATCH = "unsupported adventure_runtime module schema"
 
@@ -221,3 +222,20 @@ def test_node_completion_and_world_advance_reject_before_mutation(tmp_path, oper
         else:
             adventure_runtime.advance_adventure_world(deps, instance)
     assert live_state(instance) == before
+
+
+@pytest.mark.asyncio
+async def test_seed_creation_rejects_unsupported_source_slot_before_registering(golden):
+    from test_golden_e2e_54pr import _created_golden, _dnd_characters
+
+    created = await _created_golden(golden)
+    source = golden.instance(created["game_key"])
+    make_unsupported(source)
+    games_before = [game["game_key"] for game in golden.api.list_games()["games"]]
+    before = deepcopy(source.to_dict())
+    with pytest.raises(ModuleStateError, match=MATCH):
+        await golden.api.create_from_seed(
+            source.seed_code, players=_dnd_characters(1), gm_uid="seed_gm", language="zh-CN",
+        )
+    assert [game["game_key"] for game in golden.api.list_games()["games"]] == games_before
+    assert source.to_dict() == before

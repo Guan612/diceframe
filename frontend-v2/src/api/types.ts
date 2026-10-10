@@ -482,6 +482,8 @@ export interface MapDefinition {
 export interface MapData {
   schema_version?: number
   map_mode?: 'graph' | string
+  /** Server-side empty-view hint; see services/maps.py. */
+  visibility_hint?: '' | 'no_visible_locations' | 'players_see_no_locations'
   locations: MapLocation[]
   current_scene?: string
   current_location_id?: string

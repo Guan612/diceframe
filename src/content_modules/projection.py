@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any, Protocol, runtime_checkable
 
+from src.engine.participant_view import Viewer
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.lorebook.resolver import resolve_active_books
 
@@ -119,9 +120,16 @@ class ContentProjectionService:
             store=self.store,
         ) if hasattr(self.store, "list_bindings") else []
         if not refs:
-            return self.for_world_authoring(
-                str(getattr(instance, "world_id", "") or ""), entry_type=entry_type,
-            ) if not hasattr(self.store, "list_bindings") else []
+            # Same rule as LoreRetriever.ensure_lore_context: a store with no
+            # bindings at all is a legacy store whose only content path is the
+            # world facade; a store that has bindings but resolved none for
+            # this context means "nothing is active" (e.g. a disabled Book).
+            # Viewer filtering stays with the callers (for_character/for_party).
+            if not hasattr(self.store, "list_bindings") or not self.store.list_bindings():
+                return self.for_world_authoring(
+                    str(getattr(instance, "world_id", "") or ""), entry_type=entry_type,
+                )
+            return []
         result: list[dict[str, Any]] = []
         for ref in refs:
             for entry in self.for_book(ref.book_id, entry_type=entry_type):
@@ -160,6 +168,60 @@ class ContentProjectionService:
             )
             if entry_visible_to_viewer(entry, "character", uid, viewer_name)
         ]
+
+    def for_party(
+        self, instance: Any, *, entry_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Project only what the whole table may see.
+
+        No character-scoped Book is resolved and every entry must carry an
+        explicit public marker; this is the view for a party-wide audience
+        and for anyone who is not (yet) a seat of the game.
+        """
+
+        return [
+            entry
+            for entry in self.for_game(
+                instance,
+                viewer_kind="party",
+                action_actor_uids=[],
+                entry_type=entry_type,
+            )
+            if entry_visible_to_viewer(entry, "party")
+        ]
+
+    def for_viewer(
+        self,
+        instance: Any,
+        viewer: Viewer,
+        *,
+        entry_type: str | None = None,
+        action_actor_uids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Project content for one resolved participant (Track R6-b).
+
+        ``gm`` gets the full runtime view (``for_game``); a ``seat`` gets its
+        character view, matched by uid and its character name as a secondary
+        token; any other viewer gets the party view.  ``action_actor_uids``
+        only shapes the GM view.
+        """
+
+        if viewer.is_gm:
+            return self.for_game(
+                instance,
+                viewer_kind="gm",
+                viewer_uid=viewer.uid,
+                action_actor_uids=action_actor_uids,
+                entry_type=entry_type,
+            )
+        if viewer.is_seat and viewer.uid:
+            players = getattr(instance, "players", {}) or {}
+            seat = players.get(viewer.uid) if isinstance(players, dict) else None
+            name = str((seat or {}).get("character_name") or "") if isinstance(seat, dict) else ""
+            return self.for_character(
+                instance, viewer.uid, viewer_name=name, entry_type=entry_type,
+            )
+        return self.for_party(instance, entry_type=entry_type)
 
 
 __all__ = ["ContentProjection", "ContentProjectionService"]

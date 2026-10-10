@@ -38,6 +38,18 @@ from src.rulesets.contracts import RunLifecycleRuntime
 logger = logging.getLogger("trpg")
 
 
+class RunInitializationError(RuntimeError):
+    """Initializing the new-run candidate failed (adventure or ruleset step).
+
+    Raised before the registry swap, so the previous run is still current and
+    untouched.  ``code`` is the stable application error code to report.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class GameLifecycle:
     """负责游戏生命周期操作，避免 GameHandler 承担所有流程细节。"""
 
@@ -65,6 +77,17 @@ class GameLifecycle:
         self.brief_max_tokens = brief_max_tokens
         self.memory_store = memory_store
         self._run_transition_locks: dict[tuple[str, ...], asyncio.Lock] = {}
+        # Optional application seam (Adventure v2 progress + world seed). It is
+        # injected by the composition root because adventure resolution lives
+        # above this command layer; ``None`` keeps v1 / unbound behaviour.
+        self._initialize_adventure_run: Callable[[GameInstance], Any] | None = None
+
+    def set_adventure_run_initializer(
+        self, callback: Callable[[GameInstance], Any] | None,
+    ) -> None:
+        """Attach the same Adventure v2 run initializer that game creation uses."""
+
+        self._initialize_adventure_run = callback
 
     async def _clear_session_memory(self, instance: GameInstance) -> None:
         """Compatibility hook; run namespaces now provide memory isolation.
@@ -98,9 +121,17 @@ class GameLifecycle:
         *,
         preserve_players: bool,
     ) -> GameInstance:
-        from src.engine.modules import ruleset_runtime
+        from src.engine.modules import adventure_runtime_state, content_binding, ruleset_runtime
 
         ruleset_runtime.require_writable(source)
+        adventure_runtime_state.require_writable(source)
+        content_binding.require_writable(source)
+        # Read only after the slot preflight above.
+        source_play_mode = adventure_runtime_state.play_mode(source)
+        # Read the source run's content identity before creating anything, so
+        # an unreadable slot cannot leave a half-built candidate.
+        source_world_ref = content_binding.world_ref(source)
+        source_book_refs = content_binding.book_refs(source)
         candidate = await self.create_game(
             source.game_key,
             world_id=source.world_id,
@@ -113,6 +144,7 @@ class GameLifecycle:
             fresh_instance=True,
         )
         ruleset_runtime.require_writable(candidate)
+        adventure_runtime_state.require_writable(candidate)
         candidate.configure_session(
             solo_mode=source.solo_mode,
             entry_point=source.entry_point,
@@ -130,6 +162,15 @@ class GameLifecycle:
         room_access.copy_room_password(candidate, source)
         ruleset_runtime.copy_binding_for_new_run(candidate, source)
         candidate.adventure_binding = copy.deepcopy(source.adventure_binding)
+        # A new run of the same game keeps its identity: play mode and the
+        # source-aware World/Book refs selected at creation.  Lorebook binding
+        # rows are game-scoped (same game_key), so the refs stay valid.
+        adventure_runtime_state.replace_play_mode(candidate, source_play_mode)
+        content_binding.require_writable(candidate)
+        if source_world_ref:
+            content_binding.set_world_ref(candidate, source_world_ref)
+        for ref in source_book_refs:
+            content_binding.add_book_ref(candidate, ref)
         if preserve_players:
             players = copy.deepcopy(source.players)
             for pdata in players.values():
@@ -139,10 +180,26 @@ class GameLifecycle:
             candidate.replace_players(players)
             # Same seats, same share links: carry their credentials over.
             room_access.copy_seat_credentials(candidate, source)
-        self._initialize_ruleset_run(
-            candidate,
-            preserve_characters=preserve_players,
-        )
+        # Same step as game creation: v2 progress + atomic world seed on the
+        # unpublished candidate.  It runs before the ruleset projection so an
+        # unresolvable adventure is reported as such.  Any failure here aborts
+        # before the registry swap: the previous run stays current, untouched.
+        if self._initialize_adventure_run is not None:
+            try:
+                self._initialize_adventure_run(candidate)
+            except Exception as exc:
+                raise RunInitializationError(
+                    "ADVENTURE_RUNTIME_INIT_FAILED", str(exc),
+                ) from exc
+        try:
+            self._initialize_ruleset_run(
+                candidate,
+                preserve_characters=preserve_players,
+            )
+        except Exception as exc:
+            raise RunInitializationError(
+                "RULESET_RUNTIME_INIT_FAILED", str(exc),
+            ) from exc
         return candidate
 
     def _initialize_ruleset_run(
@@ -390,6 +447,9 @@ class GameLifecycle:
         if deferred_effects:
             deferred_effects["allowed_player_uids"] = None
             queue_effect_group(instance, queued_proposals, deferred_effects)
+        # A freshly created run has no tracker yet (it is lazily built for the
+        # first round); create it now so the opening plot_update is not lost.
+        instance.ensure_round_managers()
         if start_data.get("plot_update") and instance.plot_tracker:
             try:
                 instance.plot_tracker.apply_update(start_data["plot_update"], 0)
@@ -548,8 +608,9 @@ class GameLifecycle:
 
     async def _start_reset_instance(self, instance: GameInstance) -> str:
         """Resume the gameplay stack already bound to this save."""
-        from src.engine.modules import narrative_notes
+        from src.engine.modules import adventure_runtime_state, narrative_notes
 
+        adventure_runtime_state.require_writable(instance)
         narrative_notes.require_writable(instance)
         runtime_id = str((instance.ruleset_runtime or {}).get("id") or "")
         if not runtime_id or runtime_id == "core:legacy":

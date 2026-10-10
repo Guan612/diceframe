@@ -55,6 +55,12 @@ def _error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "code": code, "error": message}
 
 
+def _gate_error(code: str, message: str) -> dict[str, Any]:
+    # Authority-gate rejections also carry ``error_code``, the field the
+    # frontend localizes (``apiErrors.<code>``), like the other gated writers.
+    return {**_error(code, message), "error_code": code}
+
+
 def _intent_write_error(
     instance: Any, requester_id: str, requester_is_gm: bool = False,
 ) -> dict[str, Any] | None:
@@ -430,7 +436,16 @@ async def submit_intent(
             return _error("INVALID_ADVENTURE_NODE", "node_id is required")
         if dependencies.complete_adventure_node is None:
             return _error("ADVENTURE_RUNTIME_UNAVAILABLE", "Adventure v2 runtime is unavailable")
-        async with instance._lock:
+        # Node completion mutates world_state / adventure_progress / economy:
+        # it is a live authoritative write, so it must not interleave with a
+        # historical rewrite nor land on a run that was replaced meanwhile.
+        async with instance.authoritative_write() as write_entered, instance._lock:
+            if not write_entered:
+                return _gate_error(
+                    "REWRITE_IN_PROGRESS", "GM 正在重写历史回合，请等待完成后重试",
+                )
+            if dependencies.get_instance(instance.game_key) is not instance:
+                return _gate_error("STALE_RUN", "对局已重开，请刷新后重试")
             admission_error = _intent_write_error(instance, requester_id, requester_is_gm)
             if admission_error:
                 return admission_error

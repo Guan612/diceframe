@@ -8,6 +8,9 @@ from src.content_modules.projection import ContentProjection
 from src.content_modules.projection import ContentProjectionService
 from src.lorebook.store import LorebookStore
 from src.webui.services.lorebooks import LorebookRowProjection
+from src.engine.participant_view import Viewer
+
+GM_VIEWER = Viewer("gm", "gm")
 
 
 def test_lorebook_row_projection_is_a_content_projection() -> None:
@@ -154,7 +157,7 @@ def test_map_locations_never_include_actor_character_books(tmp_path) -> None:
             generated_image_file=lambda _asset_id: None,
             content_projection=ContentProjectionService(store),
         )
-        result = map_service.get_map_locations(dependencies, "game-1")
+        result = map_service.get_map_locations(dependencies, "game-1", viewer=GM_VIEWER)
         ids = {location["id"] for location in result["locations"]}
         assert "town" in ids
         assert "bob-hideout" not in ids
