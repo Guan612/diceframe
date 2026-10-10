@@ -487,6 +487,8 @@ Frontend / Bot / Plugin Client
 
 This is one of the most important current **hard architecture boundaries**.
 
+`tests/architecture/test_game_instance_facades.py` records module-state facade debt: after R7–R9 moved fields into `src/engine/modules`, `GameInstance` still keeps a compatibility property for each one, and every `src/` caller that reads or writes `instance.<field>` is counted per file + property in a shrink-only baseline. The facade set is detected from the AST (properties whose body references `src.engine.modules`), and its size may only shrink too; when callers move to the module API, the same PR lowers or removes the matching baseline entries.
+
 ---
 
 ## 2.3 Authority Model: Who May Decide What
