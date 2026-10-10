@@ -57,7 +57,7 @@ class Dnd2024CombatEngine(
         self.features = Dnd2024ClassFeatureResolver(self.bundle)
 
     def initialize_state(self, instance: Any) -> dict[str, Any]:
-        state = instance.ruleset_state
+        state = ruleset_runtime.state(instance)
         if not isinstance(state, dict):
             raise CombatIntentError("ruleset_state must be an object")
         state.setdefault("state_schema_version", 1)

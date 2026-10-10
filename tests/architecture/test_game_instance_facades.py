@@ -11,7 +11,9 @@ property once nothing outside the aggregate uses it.
 A facade is any GameInstance property whose body references a module imported
 from ``src.engine.modules``, so new facades are covered automatically.
 Attribute access on a name bound by an import (``table_settings.solo_mode``)
-is a module call, not facade usage, and is ignored.
+is a module call, not facade usage, and is ignored; so is a method call such
+as ``api.manual_roll_requests(...)``, because facades are properties.
+``getattr/setattr/hasattr(x, "<facade>", ...)`` with a constant name counts.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GAME_INSTANCE = "src/engine/game_instance.py"
 MODULES_PACKAGE = "src.engine.modules"
 MODULES_DIR = "src/engine/modules/"
+REFLECTIVE_ACCESSORS = frozenset({"getattr", "setattr", "hasattr"})
 
 # Module-backed properties currently on GameInstance. Do not raise.
 MAX_MODULE_FACADES = 59
@@ -33,9 +36,10 @@ MAX_MODULE_FACADES = 59
 # Keys are source file + property name, so edits inside a caller do not make
 # the baseline brittle. Do not add entries or raise counts.
 FACADE_USAGE: dict[tuple[str, str], int] = {
-    ("src/bots/bridge_core/service.py", "private_log"): 1,
+    ("src/commands/ai_player.py", "max_players"): 1,
     ("src/commands/ai_player.py", "round_number"): 1,
-    ("src/commands/check_planner.py", "combat_enemies"): 2,
+    ("src/commands/ai_player.py", "total_tokens"): 1,
+    ("src/commands/check_planner.py", "combat_enemies"): 3,
     ("src/commands/check_planner.py", "difficulty"): 2,
     ("src/commands/check_planner.py", "round_number"): 5,
     ("src/commands/check_planner.py", "scene"): 1,
@@ -58,26 +62,36 @@ FACADE_USAGE: dict[tuple[str, str], int] = {
     ("src/commands/game_lifecycle.py", "seed_code"): 1,
     ("src/commands/game_lifecycle.py", "solo_mode"): 1,
     ("src/commands/game_lifecycle.py", "total_tokens"): 1,
+    ("src/commands/kp_questions.py", "total_tokens"): 1,
     ("src/commands/madness_tracker.py", "round_number"): 4,
     ("src/commands/npc_state_applier.py", "difficulty"): 1,
     ("src/commands/npc_state_applier.py", "round_number"): 1,
     ("src/commands/player_state_applier.py", "round_number"): 7,
     ("src/commands/prompt_composer.py", "difficulty"): 1,
-    ("src/commands/protocol_repair.py", "total_tokens"): 1,
+    ("src/commands/prompt_composer.py", "gm_style_override"): 1,
+    ("src/commands/protocol_repair.py", "total_tokens"): 3,
     ("src/commands/resource_triggers.py", "round_number"): 1,
     ("src/commands/round_actions.py", "gm_directives"): 1,
     ("src/commands/round_actions.py", "round_number"): 1,
     ("src/commands/round_effects.py", "combat_state"): 1,
+    ("src/commands/round_effects.py", "difficulty"): 1,
     ("src/commands/round_effects.py", "round_number"): 7,
     ("src/commands/round_helpers.py", "entry_point"): 1,
+    ("src/commands/round_helpers.py", "scene"): 1,
     ("src/commands/round_llm.py", "round_number"): 16,
+    ("src/commands/round_processor.py", "adventure_progress"): 1,
     ("src/commands/round_processor.py", "combat_enemies"): 1,
-    ("src/commands/round_processor.py", "combat_state"): 2,
+    ("src/commands/round_processor.py", "combat_state"): 3,
+    ("src/commands/round_processor.py", "last_overreach"): 1,
+    ("src/commands/round_processor.py", "luck_timeout_seconds"): 1,
     ("src/commands/round_processor.py", "round_number"): 12,
+    ("src/commands/round_processor.py", "scene"): 5,
     ("src/commands/round_processor.py", "scene_image"): 1,
     ("src/commands/round_processor.py", "total_tokens"): 1,
     ("src/commands/state_update_applier.py", "round_number"): 4,
+    ("src/commands/story_recap.py", "total_tokens"): 1,
     ("src/commands/swipe_generator.py", "round_number"): 2,
+    ("src/commands/swipe_generator.py", "scene"): 1,
     ("src/engine/action_gate.py", "round_number"): 1,
     ("src/engine/checks.py", "combat_enemies"): 3,
     ("src/engine/checks.py", "combat_state"): 1,
@@ -92,6 +106,9 @@ FACADE_USAGE: dict[tuple[str, str], int] = {
     ("src/engine/game_context_projector.py", "round_number"): 1,
     ("src/engine/game_context_projector.py", "scene"): 1,
     ("src/engine/game_context_projector.py", "solo_mode"): 1,
+    ("src/engine/health.py", "health_events"): 4,
+    ("src/engine/health.py", "health_status"): 3,
+    ("src/engine/health.py", "round_number"): 1,
     ("src/engine/instance_lifecycle.py", "confirmed_items"): 1,
     ("src/engine/instance_lifecycle.py", "game_time"): 1,
     ("src/engine/instance_lifecycle.py", "gm_directives"): 1,
@@ -110,8 +127,10 @@ FACADE_USAGE: dict[tuple[str, str], int] = {
     ("src/engine/instance_lifecycle.py", "solo_mode"): 2,
     ("src/engine/instance_lifecycle.py", "summary"): 1,
     ("src/engine/instance_lifecycle.py", "table_talk"): 1,
+    ("src/engine/narrative_perspective.py", "narrative_perspective"): 1,
+    ("src/engine/narrative_perspective.py", "solo_mode"): 1,
     ("src/engine/plot_tracker.py", "round_number"): 2,
-    ("src/engine/progression.py", "round_number"): 10,
+    ("src/engine/progression.py", "round_number"): 12,
     ("src/engine/round_recovery.py", "adventure_progress"): 1,
     ("src/engine/round_recovery.py", "round_entity_snapshot"): 2,
     ("src/engine/round_recovery.py", "round_number"): 9,
@@ -128,6 +147,8 @@ FACADE_USAGE: dict[tuple[str, str], int] = {
     ("src/engine/turn_state.py", "player_access_open"): 1,
     ("src/engine/turn_state.py", "round_number"): 3,
     ("src/engine/turn_state.py", "solo_mode"): 2,
+    ("src/engine/world/inspector.py", "last_world_events"): 1,
+    ("src/engine/world_state.py", "round_number"): 1,
     ("src/llm/client.py", "total_tokens"): 1,
     ("src/llm/context_builder.py", "combat_state"): 1,
     ("src/llm/context_builder.py", "confirmed_items"): 7,
@@ -138,6 +159,11 @@ FACADE_USAGE: dict[tuple[str, str], int] = {
     ("src/llm/context_builder.py", "round_number"): 1,
     ("src/llm/context_builder.py", "scene"): 1,
     ("src/llm/context_builder.py", "summary"): 2,
+    ("src/llm/world_prompt.py", "last_world_events"): 1,
+    ("src/llm/world_prompt.py", "last_world_legality"): 1,
+    ("src/lorebook/retrieval.py", "lorebook_timed_state"): 1,
+    ("src/lorebook/retrieval.py", "round_number"): 1,
+    ("src/lorebook/retrieval.py", "scene"): 1,
     ("src/memory/summarizer.py", "round_number"): 3,
     ("src/memory/summarizer.py", "summary"): 4,
     ("src/plugin_host/host.py", "started_at"): 3,
@@ -145,26 +171,42 @@ FACADE_USAGE: dict[tuple[str, str], int] = {
     ("src/rulesets/automation.py", "combat_state"): 1,
     ("src/rulesets/automation.py", "initiative_current"): 1,
     ("src/rulesets/automation.py", "initiative_order"): 1,
-    ("src/rulesets/dnd2024/campaign/engine.py", "ruleset_state"): 1,
-    ("src/rulesets/dnd2024/combat/engine.py", "ruleset_state"): 1,
+    ("src/rulesets/automation.py", "scene"): 1,
+    ("src/rulesets/dnd2024/advancement_access.py", "round_number"): 4,
+    ("src/rulesets/dnd2024/campaign/engine.py", "solo_mode"): 4,
+    ("src/rulesets/dnd2024/director/context.py", "scene"): 1,
+    ("src/rulesets/dnd2024/director/planner.py", "scene"): 2,
+    ("src/rulesets/dnd2024/director/planner.py", "total_tokens"): 2,
+    ("src/rulesets/dnd2024/director/temporary_encounter.py", "scene"): 1,
+    ("src/rulesets/dnd2024/director/temporary_encounter.py", "total_tokens"): 1,
     ("src/rulesets/dnd2024/features/models.py", "summary"): 1,
     ("src/rulesets/dnd2024/features/resolver.py", "summary"): 1,
-    ("src/rulesets/dnd2024/runtime.py", "ruleset_state"): 2,
-    ("src/webui/api.py", "economy_reward_policy"): 1,
+    ("src/rulesets/dnd2024/runtime.py", "adventure_progress"): 1,
+    ("src/rulesets/dnd2024/runtime.py", "play_mode"): 1,
+    ("src/rulesets/dnd2024/runtime.py", "round_number"): 1,
+    ("src/webui/access_control.py", "has_room_password"): 1,
+    ("src/webui/access_control.py", "player_access_open"): 1,
+    ("src/webui/api.py", "economy_reward_policy"): 2,
     ("src/webui/routes/game_character_routes.py", "solo_mode"): 1,
     ("src/webui/routes/game_control_routes.py", "dice_reveal_mode"): 1,
     ("src/webui/routes/game_control_routes.py", "luck_timeout_seconds"): 1,
-    ("src/webui/routes/game_control_routes.py", "private_log"): 1,
-    ("src/webui/routes/game_control_routes.py", "table_talk"): 1,
+    ("src/webui/routes/game_control_routes.py", "solo_mode"): 1,
+    ("src/webui/routes/game_query_routes.py", "has_room_password"): 1,
     ("src/webui/routes/game_query_routes.py", "scene_image"): 1,
-    ("src/webui/routes/manual_roll_routes.py", "manual_roll_requests"): 1,
     ("src/webui/routes/sse.py", "last_activity"): 1,
     ("src/webui/routes/sse.py", "private_log"): 2,
+    ("src/webui/routes/sse.py", "quick_actions"): 1,
     ("src/webui/routes/sse.py", "round_number"): 9,
     ("src/webui/routes/sse.py", "scene"): 1,
     ("src/webui/routes/sse.py", "scene_image"): 1,
-    ("src/webui/services/bot_access.py", "bot_bind_token"): 1,
+    ("src/webui/services/adventure_materialization.py", "round_number"): 1,
+    ("src/webui/services/adventure_runtime.py", "adventure_progress"): 2,
+    ("src/webui/services/adventures.py", "adventure_progress"): 1,
+    ("src/webui/services/bot_access.py", "bot_bind_token"): 3,
+    ("src/webui/services/bot_access.py", "player_access_open"): 1,
+    ("src/webui/services/characters.py", "max_players"): 1,
     ("src/webui/services/characters.py", "round_number"): 2,
+    ("src/webui/services/characters.py", "solo_mode"): 1,
     ("src/webui/services/combat_extension.py", "round_number"): 1,
     ("src/webui/services/game_controls.py", "gm_style_override"): 1,
     ("src/webui/services/game_controls.py", "narrative_perspective"): 1,
@@ -175,34 +217,52 @@ FACADE_USAGE: dict[tuple[str, str], int] = {
     ("src/webui/services/game_master.py", "round_number"): 2,
     ("src/webui/services/game_queries.py", "combat_active"): 1,
     ("src/webui/services/game_queries.py", "difficulty"): 1,
+    ("src/webui/services/game_queries.py", "economy_reward_policy"): 1,
+    ("src/webui/services/game_queries.py", "gm_style_override"): 1,
+    ("src/webui/services/game_queries.py", "has_room_password"): 1,
+    ("src/webui/services/game_queries.py", "key_facts"): 1,
     ("src/webui/services/game_queries.py", "last_activity"): 2,
-    ("src/webui/services/game_queries.py", "max_players"): 1,
+    ("src/webui/services/game_queries.py", "last_token_budget_bump"): 1,
+    ("src/webui/services/game_queries.py", "map_background"): 2,
+    ("src/webui/services/game_queries.py", "max_players"): 2,
+    ("src/webui/services/game_queries.py", "narrative_perspective"): 2,
+    ("src/webui/services/game_queries.py", "play_mode"): 1,
+    ("src/webui/services/game_queries.py", "player_access_open"): 1,
     ("src/webui/services/game_queries.py", "private_log"): 1,
+    ("src/webui/services/game_queries.py", "quick_actions"): 1,
     ("src/webui/services/game_queries.py", "round_number"): 3,
     ("src/webui/services/game_queries.py", "scene"): 3,
+    ("src/webui/services/game_queries.py", "scene_image"): 2,
     ("src/webui/services/game_queries.py", "seed_code"): 2,
     ("src/webui/services/game_queries.py", "solo_mode"): 2,
     ("src/webui/services/game_queries.py", "started_at"): 2,
+    ("src/webui/services/game_queries.py", "summary"): 1,
     ("src/webui/services/game_queries.py", "table_talk"): 1,
     ("src/webui/services/game_queries.py", "total_llm_calls"): 2,
     ("src/webui/services/game_queries.py", "total_tokens"): 2,
     ("src/webui/services/game_seed_lifecycle.py", "difficulty"): 1,
+    ("src/webui/services/game_seed_lifecycle.py", "map_background"): 1,
+    ("src/webui/services/game_seed_lifecycle.py", "narrative_perspective"): 1,
     ("src/webui/services/game_seed_lifecycle.py", "round_number"): 1,
+    ("src/webui/services/game_seed_lifecycle.py", "scene_image"): 1,
     ("src/webui/services/game_seed_lifecycle.py", "seed_code"): 1,
+    ("src/webui/services/generated_images.py", "round_number"): 2,
+    ("src/webui/services/generated_images.py", "scene"): 4,
     ("src/webui/services/generated_images.py", "scene_image"): 1,
     ("src/webui/services/kp_questions.py", "round_number"): 2,
     ("src/webui/services/logs.py", "round_number"): 1,
     ("src/webui/services/logs.py", "total_llm_calls"): 1,
     ("src/webui/services/logs.py", "total_tokens"): 1,
-    ("src/webui/services/manual_rolls.py", "manual_roll_requests"): 4,
     ("src/webui/services/manual_rolls.py", "round_number"): 1,
+    ("src/webui/services/maps.py", "map_background"): 2,
     ("src/webui/services/maps.py", "scene"): 1,
+    ("src/webui/services/ruleset_gameplay.py", "adventure_progress"): 1,
     ("src/webui/services/ruleset_gameplay.py", "combat_active"): 2,
     ("src/webui/services/ruleset_gameplay.py", "combat_state"): 2,
     ("src/webui/services/ruleset_gameplay.py", "initiative_current"): 2,
     ("src/webui/services/ruleset_gameplay.py", "initiative_order"): 2,
     ("src/webui/services/ruleset_gameplay.py", "last_activity"): 2,
-    ("src/webui/services/ruleset_gameplay.py", "round_number"): 2,
+    ("src/webui/services/ruleset_gameplay.py", "round_number"): 3,
     ("src/webui/services/ruleset_rest.py", "combat_active"): 1,
     ("src/webui/services/ruleset_rest.py", "combat_state"): 1,
     ("src/webui/services/turns.py", "last_state_update"): 1,
@@ -256,13 +316,35 @@ def scan_facade_usage(root: Path, facades: frozenset[str]) -> Counter[tuple[str,
             continue
         tree = _parse(path)
         imported = _import_bound_names(tree)
+        # Facades are properties, so ``x.name(...)`` is some other object's method.
+        called = {id(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)}
         for node in ast.walk(tree):
+            name = _reflective_facade_name(node, facades)
+            if name is not None:
+                observed[(relative, name)] += 1
+                continue
             if not isinstance(node, ast.Attribute) or node.attr not in facades:
+                continue
+            if id(node) in called:
                 continue
             if isinstance(node.value, ast.Name) and node.value.id in imported:
                 continue
             observed[(relative, node.attr)] += 1
     return observed
+
+
+def _reflective_facade_name(node: ast.AST, facades: frozenset[str]) -> str | None:
+    """Return the facade named by ``getattr/setattr/hasattr(x, "<facade>", ...)``."""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in REFLECTIVE_ACCESSORS
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value in facades
+    ):
+        return None
+    return str(node.args[1].value)
 
 
 def assert_facade_usage_matches(
@@ -330,3 +412,28 @@ def test_removed_facade_caller_requires_baseline_update() -> None:
     observed.pop(key)
     with pytest.raises(AssertionError, match="lower FACADE_USAGE"):
         assert_facade_usage_matches(observed, FACADE_USAGE)
+
+
+def test_reflective_facade_access_is_counted(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "webui" / "services" / "new_service.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "def read(instance):\n"
+        "    setattr(instance, 'economy', {})\n"
+        "    return getattr(instance, 'economy', {})\n",
+        encoding="utf-8",
+    )
+    assert scan_facade_usage(tmp_path, frozenset({"economy"})) == Counter(
+        {("src/webui/services/new_service.py", "economy"): 2}
+    )
+
+
+def test_method_call_with_facade_name_is_not_facade_usage(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "webui" / "routes" / "new_route.py"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "def route(api, game_id):\n"
+        "    return api.manual_roll_requests(game_id)\n",
+        encoding="utf-8",
+    )
+    assert not scan_facade_usage(tmp_path, frozenset({"manual_roll_requests"}))

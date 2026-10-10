@@ -3,6 +3,7 @@
 import logging
 
 import pytest
+from src.engine.modules import checks, economy_state
 from src.llm.context_builder import (
     _INVENTORY_STATE_LIMIT,
     _KEY_ITEMS_STATE_LIMIT,
@@ -176,6 +177,17 @@ class DummyInstance:
     key_facts = []
     confirmed_items = []
     log = []
+
+    def __init__(self):
+        self.modules = {}
+
+    @property
+    def economy(self):
+        return economy_state.state(self)
+
+    @economy.setter
+    def economy(self, value):
+        economy_state.replace_state(self, value)
 
     def to_llm_view(self):
         return {
@@ -515,7 +527,8 @@ def _manual_roll_instance(requests):
     instance.difficulty = "normal"
     instance.combat_state = {}
     instance.private_log = {}
-    instance.manual_roll_requests = list(requests)
+    instance.modules = {}
+    checks.replace_manual_roll_requests(instance, list(requests))
     return instance
 
 

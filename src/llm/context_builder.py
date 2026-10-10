@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
+from src.engine.modules import checks, economy_state
 from src.engine.visibility_rules import manual_roll_visible_to
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.llm.parser import sanitize_narration
@@ -381,7 +382,7 @@ def format_manual_roll_context(
         return ""
     language = normalize_language(getattr(instance, "language", "zh-CN"))
     records: list[str] = []
-    for req in getattr(instance, "manual_roll_requests", None) or []:
+    for req in checks.manual_roll_requests(instance):
         if not isinstance(req, dict):
             continue
         if req.get("status") != "resolved" or str(req.get("run_id") or "") != run_id:
@@ -710,7 +711,7 @@ async def build_context(
         parts.append(f"{heading}\n{confirmed_text}")
         sec_idx["confirmed"] = len(parts) - 1
 
-    economy = getattr(instance, "economy", {})
+    economy = economy_state.state(instance)
     outcomes = economy.get("outcomes", []) if isinstance(economy, dict) else []
     proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
     pending_personal_purchase = any(

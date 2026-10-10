@@ -306,7 +306,7 @@ class RoundProcessor:
         self._advance_adventure_world = callback
 
     def _ruleset_runtime(self, instance: GameInstance) -> Any | None:
-        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+        binding = dict(ruleset_runtime.binding(instance) or {})
         runtime_id = str(binding.get("id") or "")
         ruleset_registry = getattr(self._prompt, "ruleset_registry", None)
         if ruleset_registry is None or not runtime_id:
@@ -1201,7 +1201,7 @@ class RoundProcessor:
         state_msgs.extend(system_changes)
         request = (
             ruleset_runtime.state(instance).get("encounter_request")
-            if isinstance(getattr(instance, "ruleset_state", None), dict)
+            if isinstance(ruleset_runtime.state(instance), dict)
             else None
         )
         if combat_requested and isinstance(request, dict) and request.get("status") == "pending":
