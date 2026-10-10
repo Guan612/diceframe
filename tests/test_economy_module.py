@@ -10,6 +10,7 @@ from src.engine.game_instance import GameInstance, _snapshot_players, restore_pl
 from src.engine.game_state import GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import economy_state
+from src.engine.modules import combat_extension_state
 from src.migrations.instance import (
     CURRENT_INSTANCE_SCHEMA_VERSION,
     _migrate_v18_to_v19,
@@ -221,8 +222,8 @@ def _unsupported_economy_instance(version):
     instance.ready_players = {"p"}
     instance.round_start_snapshot = {"p": {"hp": 10, "gold": 20}}
     instance.capture_round_entity_snapshot()
-    instance.combat_extension = {"schema_version": 1, "pending_summaries": ["guard hit"]}
-    instance.combat_extension_round_snapshots = {"2": {"schema_version": 1, "phase": "before"}}
+    combat_extension_state.replace_current(instance, {"schema_version": 1, "pending_summaries": ["guard hit"]})
+    combat_extension_state.replace_round_snapshots(instance, {"2": {"schema_version": 1, "phase": "before"}})
     instance.log = [{
         "round": 1, "gm_response": "previous round", "swipes": [],
         "round_start_snapshot": deepcopy(instance.round_start_snapshot),

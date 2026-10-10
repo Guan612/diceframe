@@ -21,6 +21,7 @@ from src.engine.game_instance import GameInstance, GameState
 from src.engine.modules import economy_state
 from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
+from src.engine.modules import combat_extension_state
 
 
 def _make_populated_instance() -> GameInstance:
@@ -137,8 +138,8 @@ def _make_populated_instance() -> GameInstance:
     instance.health_status = {"degraded": True}
     instance.luck_timeout_seconds = 90
     instance.economy_reward_policy = {"mode": "auto_small_cash", "auto_reward_cap": 10}
-    instance.combat_extension = {"schema_version": 1, "pools": {"p1": {}}}
-    instance.combat_extension_round_snapshots = {"4": {"schema_version": 1}}
+    combat_extension_state.replace_current(instance, {"schema_version": 1, "pools": {"p1": {}}})
+    combat_extension_state.replace_round_snapshots(instance, {"4": {"schema_version": 1}})
     instance.pending_luck_after_recovery = True
     instance.confirmed_items = ["sword"]
     return instance
@@ -174,7 +175,6 @@ EXPECTED_CLEARED = {
     "summary": {},
     "key_facts": [],
     "pending_combat_results": [],
-    "combat_extension_round_snapshots": {},
     "lorebook_timed_state": {},
     "health_events": [],
     "health_status": {},
@@ -261,7 +261,8 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.last_activity == ""
     assert instance.puzzle_manager is None
     assert instance.plot_tracker is None
-    assert instance.combat_extension == {}
+    assert combat_extension_state.current(instance) == {}
+    assert combat_extension_state.round_snapshots(instance) == {}
     assert instance.last_check is None
     assert instance.last_checks == []
     assert instance.round_checks_prepared is False

@@ -6,7 +6,7 @@
 
 - 客户端只提交 ``{"intent_id", "action_id", "target_ids", "actor_id"?}``；
 - 全部数值由服务端公式求值，客户端提供的伤害/资源/行动条值一律忽略；
-- 状态存于 ``instance.combat_extension``（调度器 + 实体资源池），角色卡
+- 状态存于 ``combat_extension_state.current(instance)``（调度器 + 实体资源池），角色卡
   承载的字段（HP、内力等 special_stat）在结算后写回角色卡保持单一权威；
 - 权限：玩家只能驱动 ``player:<自己uid>`` 实体；GM 可驱动任意实体。
 """
