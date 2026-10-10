@@ -152,6 +152,7 @@ class GameHandler:
             self._ensure_matcher_for_world,
             max_tokens=min(768, max(128, brief_max_tokens)),
             lore_retriever=self.lore_retriever,
+            content_projection=self.content_projection,
         )
         self.narrative_max_tokens = narrative_max_tokens
         self.summary_max_tokens = summary_max_tokens
@@ -225,6 +226,11 @@ class GameHandler:
         """Connect optional Adventure v2 gate reevaluation to round settlement."""
 
         self._round_processor.set_adventure_world_advance(callback)
+
+    def set_adventure_run_initializer(self, callback) -> None:
+        """Connect Adventure v2 run initialization to reset/restart candidates."""
+
+        self._lifecycle.set_adventure_run_initializer(callback)
 
     async def _init_world_from_template(self, world_id: str, template: dict) -> None:
         """兼容旧内部调用；实际逻辑已拆到 GameFactory。"""
