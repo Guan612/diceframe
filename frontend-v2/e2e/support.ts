@@ -78,3 +78,8 @@ export async function seatTakeoverPath(
   const params = new URLSearchParams({ game: gameKey, share: '1', seat })
   return `/#/join?${params.toString()}`
 }
+
+// Opening the play page POSTs claim-gm through retryOnRateLimit, which waits
+// out a 429 of up to 10s once. The smoke suite writes from one IP and can hit
+// the per-IP write budget, so the first readiness check must outlast that wait.
+export const PLAY_READY_TIMEOUT = 20_000
