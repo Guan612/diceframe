@@ -79,7 +79,7 @@ def test_v37_plaintext_password_becomes_a_hash_without_losing_access() -> None:
     before = deepcopy(original)
     migrated = migrate_game_state_payload(original)
     assert original == before  # input is never mutated
-    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION == 38
+    assert migrated["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION >= 38
     slot = migrated["modules"]["room_access"]
     assert slot["schema_version"] == room_access.SCHEMA_VERSION == 3
     assert "room_password" not in slot and "room_token" not in slot

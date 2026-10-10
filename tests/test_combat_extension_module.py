@@ -312,6 +312,9 @@ def test_unknown_combat_invalid_snapshot_restore_remains_a_noop(snapshot):
 def test_roundtrip_projects_only_module_storage_and_clones_nested_data(json_roundtrip):
     instance = make_instance()
     populate(instance)
+    # A loaded save always carries an explicit play mode; set it so the
+    # whole-module comparison below is not about play-mode derivation.
+    instance.play_mode = "free"
     payload = instance.to_dict()
     assert all(name not in payload for name, _ in ATTRS)
     # The module projection is live, not a detached snapshot (unlike the old
