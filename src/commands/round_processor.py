@@ -68,7 +68,9 @@ from src.engine import combat_narrative, progression
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.module_state import ModuleStateError
 from src.engine.modules.media import replace_scene_image
-from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats, world_reports
+from src.engine.modules import (
+    adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats, world_reports,
+)
 from src.engine.language import localized_text
 from src.engine.world_events import advance_world_time
 from src.engine.world.memory_projection import queue_world_memory
@@ -475,7 +477,7 @@ class RoundProcessor:
                     # before-images makes a retry perform the same settlement
                     # exactly once rather than advancing only half the state.
                     instance.world_state = before_world
-                    instance.adventure_progress = before_progress
+                    adventure_runtime_state.replace_progress(instance, before_progress)
                     logger.warning("世界时间推进被拒绝: %s", exc)
                 else:
                     world_reports.replace_last_world_events(instance, [
@@ -530,6 +532,7 @@ class RoundProcessor:
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
+        adventure_runtime_state.require_writable(instance)
         legacy_combat.require_writable(instance)
         ruleset_runtime.require_writable(instance)
         if has_blocking_economy_decision(instance):
@@ -933,6 +936,7 @@ class RoundProcessor:
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
+        adventure_runtime_state.require_writable(instance)
         legacy_combat.require_writable(instance)
         ruleset_runtime.require_writable(instance)
         expected_run_id = instance.run_id

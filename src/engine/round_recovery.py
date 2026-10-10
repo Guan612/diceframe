@@ -49,11 +49,12 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     """
     if not instance.log:
         return None
-    from src.engine.modules import checks, round_safety, session_stats
+    from src.engine.modules import adventure_runtime_state, checks, round_safety, session_stats
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
     round_safety.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     last = instance.log.pop()
     from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
 
@@ -93,7 +94,7 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     # （FIX-04 §6.7），整轮回滚必须一起撤销，否则会出现"世界退回去了、进度还
     # 留在被丢弃的分支上"的半回滚。
     if isinstance(last.get("pre_adventure_progress"), dict):
-        instance.adventure_progress = copy.deepcopy(last["pre_adventure_progress"])
+        adventure_runtime_state.replace_progress(instance, copy.deepcopy(last["pre_adventure_progress"]))
     progression.rewind_after_rollback(instance, rolled_back_round)
     instance.action_queue.clear()
     instance.pending_actions.clear()
@@ -121,11 +122,14 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     """
     if instance.state != GameState.ACTIVE_JUDGMENT:
         return False
-    from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats
+    from src.engine.modules import (
+        adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats,
+    )
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
     round_safety.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
     restored = False
@@ -168,11 +172,12 @@ def finish_judgment_locked(
     GameInstance wrapper 先校验推进与经济模块，再在同一段状态锁内依次
     调用本函数和 ``start_round_locked``，使日志提交与下一轮开启不可交错。
     """
-    from src.engine.modules import checks, round_safety, session_stats
+    from src.engine.modules import adventure_runtime_state, checks, round_safety, session_stats
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
     round_safety.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     pending_combat_summaries: list[str] = []
     raw_schema = (
         instance.combat_extension.get("schema_version")

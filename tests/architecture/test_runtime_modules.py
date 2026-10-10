@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULES = SRC / "engine" / "modules"
-MAX_TOP_LEVEL_FIELDS = 40
+MAX_TOP_LEVEL_FIELDS = 38
 
 CONTROL_WRITERS = {
     SRC / "engine" / "player_control.py",
@@ -129,6 +129,34 @@ def test_only_round_safety_owners_assign_fields() -> None:
             if node.attr not in {"round_start_snapshot", "round_entity_snapshot", "death_save_outcomes"}:
                 continue
             violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: round safety write outside owner")
+    assert not violations, "\n".join(violations)
+
+
+def test_only_adventure_runtime_owners_assign_fields() -> None:
+    owners = {
+        SRC / "engine" / "game_instance.py",
+        MODULES / "adventure_runtime_state.py",
+        SRC / "engine" / "game_state_codec.py",
+    }
+    fields = {"adventure_progress", "play_mode"}
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path in owners:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                if node.attr in fields:
+                    violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: adventure runtime write outside owner")
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "setattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value in fields
+            ):
+                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: adventure runtime setattr outside owner")
     assert not violations, "\n".join(violations)
 
 

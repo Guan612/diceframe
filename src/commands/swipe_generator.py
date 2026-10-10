@@ -23,7 +23,7 @@ from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
-from src.engine.modules import session_stats
+from src.engine.modules import adventure_runtime_state, session_stats
 from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
 from src.imagegen.storyboards import normalize_scene_panels, storyboard_panel_metadata, storyboard_source_revision
@@ -80,6 +80,7 @@ class SwipeGenerator:
                 return None
             async with instance._process_lock:
                 session_stats.require_writable(instance)
+                adventure_runtime_state.require_writable(instance)
                 expected_run_id = instance.run_id
                 before = type(instance).from_dict(deepcopy(instance.to_dict()))
                 before.log = deepcopy(instance.log)

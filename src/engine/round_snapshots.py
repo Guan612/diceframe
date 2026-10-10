@@ -352,9 +352,10 @@ def capture_round_entity_snapshot(instance: GameInstance) -> None:
     与 ``round_start_snapshot``（玩家）和 ``combat_extension_round_snapshots``
     （D&D2024 权威战斗扩展）互补，三者合起来才是"本轮改过的东西"。
     """
-    from src.engine.modules import legacy_combat, round_safety, ruleset_runtime
+    from src.engine.modules import adventure_runtime_state, legacy_combat, round_safety, ruleset_runtime
 
     round_safety.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
     round_safety.replace_entity_snapshot(instance, {
@@ -377,8 +378,9 @@ def restore_round_entity_snapshot(instance: GameInstance) -> bool:
     snapshot = instance.round_entity_snapshot
     if not isinstance(snapshot, dict) or not snapshot:
         return False
-    from src.engine.modules import legacy_combat, ruleset_runtime
+    from src.engine.modules import adventure_runtime_state, legacy_combat, ruleset_runtime
 
+    adventure_runtime_state.require_writable(instance)
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
     instance.npcs = copy.deepcopy(snapshot.get("npcs") or {})
@@ -388,7 +390,9 @@ def restore_round_entity_snapshot(instance: GameInstance) -> bool:
         instance.world_state = ensure_world_state(snapshot.get("world_state"))
     # Adventure 进度与世界真相同一事务（FIX-04 §6.7），必须一起回到判定入口。
     if "adventure_progress" in snapshot:
-        instance.adventure_progress = copy.deepcopy(snapshot.get("adventure_progress") or {})
+        adventure_runtime_state.replace_progress(
+            instance, copy.deepcopy(snapshot.get("adventure_progress") or {}),
+        )
     return True
 
 

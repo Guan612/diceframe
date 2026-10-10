@@ -28,7 +28,7 @@ from src.password_hashing import hash_password
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 38
+CURRENT_INSTANCE_SCHEMA_VERSION = 39
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -868,6 +868,34 @@ def _migrate_v37_to_v38(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _migrate_v38_to_v39(payload: dict[str, Any]) -> dict[str, Any]:
+    """Move Adventure progress and play mode into the adventure_runtime slot.
+
+    Progress that is not a dict becomes empty (never guessed). The play mode
+    keeps a known value verbatim and is otherwise derived from the Adventure
+    binding, the same rule the decoder applied to the top-level key. An
+    existing slot is never overwritten.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    progress = payload.pop("adventure_progress", {})
+    play_mode = payload.pop("play_mode", "")
+    if not isinstance(modules.get("adventure_runtime"), dict):
+        text = str(play_mode or "")
+        if text.casefold() not in {"free", "adventure"}:
+            binding = payload.get("adventure_binding")
+            text = "adventure" if isinstance(binding, dict) and binding.get("adventure_id") else "free"
+        modules["adventure_runtime"] = {
+            "schema_version": 1,
+            "progress": progress if isinstance(progress, dict) else {},
+            "play_mode": text,
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 39
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -986,6 +1014,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 37:
         payload = _migrate_v37_to_v38(payload)
         version = 38
+    if version == 38:
+        payload = _migrate_v38_to_v39(payload)
+        version = 39
     payload["instance_schema_version"] = version
     return payload
 
