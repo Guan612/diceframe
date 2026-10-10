@@ -461,7 +461,7 @@ async def submit_intent(
                 return binding_error
             before = {
                 "world_state": deepcopy(getattr(instance, "world_state", None)),
-                "adventure_progress": deepcopy(getattr(instance, "adventure_progress", None)),
+                "adventure_progress": deepcopy(adventure_runtime_state.progress(instance)),
                 "economy": deepcopy(economy_state.state(instance)),
             }
             try:
@@ -519,7 +519,7 @@ async def submit_intent(
             "combat_active": legacy_combat.combat_active(instance),
             "initiative_order": deepcopy(legacy_combat.initiative_order(instance)),
             "initiative_current": legacy_combat.initiative_current(instance),
-            "last_activity": instance.last_activity,
+            "last_activity": session_stats.last_activity(instance),
             "log": deepcopy(instance.log),
             "round_number": progression_state.round_value(instance),
         }
@@ -657,7 +657,7 @@ async def resume_authoritative_combat(
             "combat_active": legacy_combat.combat_active(instance),
             "initiative_order": deepcopy(legacy_combat.initiative_order(instance)),
             "initiative_current": legacy_combat.initiative_current(instance),
-            "last_activity": instance.last_activity,
+            "last_activity": session_stats.last_activity(instance),
             "log": deepcopy(instance.log),
             "round_number": progression_state.round_value(instance),
         }

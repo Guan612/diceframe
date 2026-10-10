@@ -57,6 +57,7 @@ from src.migrations.instance import (
     CURRENT_INSTANCE_SCHEMA_VERSION,
     migrate_game_state_payload,
 )
+from src.engine.modules import player_control_state
 
 pytest_plugins = ["tests.webapi_harness"]
 
@@ -159,7 +160,7 @@ async def test_creation_fails_closed_on_an_unknown_control_mode(web_api) -> None
 def test_away_policy_defaults_to_pause() -> None:
     instance = GameInstance(game_key="g")
 
-    assert instance.away_control_policy == DEFAULT_AWAY_CONTROL_POLICY == "pause"
+    assert player_control_state.away_control_policy(instance) == DEFAULT_AWAY_CONTROL_POLICY == "pause"
     assert away_control_policy(instance) == "pause"
 
 
