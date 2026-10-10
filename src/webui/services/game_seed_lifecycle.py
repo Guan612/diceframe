@@ -202,6 +202,24 @@ async def create_from_seed(
     )
     if content_error is not None:
         return content_error
+    # A seed restart is the same kind of game: keep its play mode (old saves
+    # without one derive it from the binding, as the save migration does) and
+    # run the same Adventure v2 initialization step as normal creation.
+    source_play_mode = str(getattr(target_inst, "play_mode", "") or "")
+    instance.play_mode = source_play_mode or (
+        "adventure" if target_adventure_binding.get("adventure_id") else "free"
+    )
+    if callable(getattr(dependencies, "initialize_adventure_run", None)):
+        try:
+            dependencies.initialize_adventure_run(instance)
+        except Exception as exc:
+            transaction.rollback()
+            logger.exception("按引用码初始化冒险运行时失败，已回滚: %s", game_key)
+            return {
+                "ok": False,
+                "error_code": "ADVENTURE_RUNTIME_INIT_FAILED",
+                "error": f"冒险初始化失败，未留下半成品存档：{exc}",
+            }
     instance.set_scene_image(selected_scene_image)
     instance.set_map_background(dict(getattr(target_inst, "map_background", {}) or {}))
     transaction.advance(CreationPhase.INSTANCE_CONFIGURED)

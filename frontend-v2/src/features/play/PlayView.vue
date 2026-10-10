@@ -703,10 +703,10 @@ async function openWorldSwitch() {
 
 async function switchWorld(worldId: string) {
   try {
-    const r = await api<{ ok?: boolean; error?: string; world_name?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/switch-world`, { method: 'POST', body: JSON.stringify({ world_id: worldId }) })
+    const r = await api<{ ok?: boolean; error?: string; world_display_name?: string }>(`/games/${encodeURIComponent(game.currentGame.value)}/switch-world`, { method: 'POST', body: JSON.stringify({ world_id: worldId }) })
     if (r.error || r.ok === false) throw new Error(r.error || t('switchFailed'))
     showWorldSwitch.value = false
-    toast.success(t('switchedWorld', { name: r.world_name || worldId }))
+    toast.success(t('switchedWorld', { name: r.world_display_name || worldId }))
     await loadPlayContext()
   } catch (e: unknown) { toast.error(errorMessage(e)) }
 }

@@ -9,6 +9,7 @@ import shutil
 import time
 from typing import Any
 
+from src.commands.game_lifecycle import RunInitializationError
 from src.engine.game_instance import GameState
 from src.engine.modules import content_binding, room_access
 from src.content_modules.refs import ContentRef, ContentRefError, parse_content_ref
@@ -484,6 +485,15 @@ async def create_game(
     }
 
 
+def _run_init_failure(exc: RunInitializationError) -> dict[str, Any]:
+    label = "冒险" if exc.code == "ADVENTURE_RUNTIME_INIT_FAILED" else "规则运行时"
+    return {
+        "ok": False,
+        "error_code": exc.code,
+        "error": f"{label}初始化失败，原对局保持不变：{exc}",
+    }
+
+
 async def reset_game(
     dependencies: GameLifecycleDependencies, game_key: str
 ) -> dict[str, Any]:
@@ -492,7 +502,12 @@ async def reset_game(
         return {"ok": False, "error": "游戏不存在"}
     if not dependencies.handler:
         return {"ok": False, "error": "系统未就绪"}
-    inst = await dependencies.handler.reset_game(inst)
+    try:
+        inst = await dependencies.handler.reset_game(inst)
+    except RunInitializationError as exc:
+        # Raised before the registry swap: the previous run stays current.
+        logger.warning("新 run 初始化失败，已保留原对局: %s", exc, exc_info=True)
+        return _run_init_failure(exc)
     return {
         "ok": True,
         "narration": dependencies.clean_public_narration(
@@ -516,7 +531,12 @@ async def restart_game(
             "ok": False,
             "error": "当前游戏没有角色，无法重开；请先创建角色或重新开局",
         }
-    inst = await dependencies.handler.restart_game(inst)
+    try:
+        inst = await dependencies.handler.restart_game(inst)
+    except RunInitializationError as exc:
+        # Raised before the registry swap: the previous run stays current.
+        logger.warning("新 run 初始化失败，已保留原对局: %s", exc, exc_info=True)
+        return _run_init_failure(exc)
     return {
         "ok": True,
         "narration": dependencies.clean_public_narration(
