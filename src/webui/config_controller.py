@@ -40,7 +40,7 @@ from src.webui.routes._common import _get_api, _require_confirmed_request
 from src.webui.routes.pairing import PAIRING_SERVICE_KEY
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 from src.webui.runtime_config import ConfigStore
-from src.webui.server_identity import server_instance_id
+from src.webui.server_identity import SERVER_IDENTITY_UNAVAILABLE, server_instance_id
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,10 @@ class ConfigController:
             instance_id = server_instance_id(request.app)
             if instance_id:
                 public["server_instance_id"] = instance_id
+            else:
+                # Explicit, so a sync client can tell "unavailable" from an
+                # older server that never sent the field.
+                public["server_identity_error"] = SERVER_IDENTITY_UNAVAILABLE
         return web.json_response(public)
 
     async def post(self, request: web.Request) -> web.Response:
