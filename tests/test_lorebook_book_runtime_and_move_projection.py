@@ -28,6 +28,7 @@ from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.resolver import resolve_active_books
 from src.lorebook.retrieval import LoreRetriever
 from src.lorebook.store import LorebookStore
+from src.engine.modules import lorebook_runtime, progression_state
 
 WORLD = "w1"
 
@@ -46,7 +47,7 @@ def _store(tmp_path: Path) -> LorebookStore:
 def _instance(store: LorebookStore):
     return SimpleNamespace(
         world_id=WORLD, language="zh-CN", scene="", npcs={}, players={},
-        world_state={}, round_number=1, lorebook_timed_state={},
+        world_state={}, round_number=1, modules={"lorebook_runtime": {**lorebook_runtime.fresh(), "timers": {}}, "progression": {**progression_state.fresh(), "round": 1}},
         lorebook_store=store, game_id="", game_key="", action_actor_uids=[],
     )
 

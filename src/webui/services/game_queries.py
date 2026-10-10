@@ -10,6 +10,7 @@ from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.modules import checks, economy_state, progression_state, ruleset_runtime
+from src.engine.modules import adventure_runtime_state, round_presentation
 from src.engine.player_control import away_control_policy
 from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
 from src.llm.parser import sanitize_narration
@@ -215,7 +216,7 @@ def game_detail(
             getattr(instance, "economy_reward_policy", {}) or {}
         ),
         "combat_extension": _combat_extension_projection(instance, dependencies, viewer_uid),
-        "quick_actions": getattr(instance, "quick_actions", []),
+        "quick_actions": round_presentation.quick_actions(instance),
         "economy_proposals": economy_proposals,
         "pending_luck_decisions": instance.pending_luck_checks(),
         "round_check_results": (
@@ -244,11 +245,11 @@ def game_detail(
             instance.plot_tracker.to_dict() if instance.plot_tracker else None
         ),
         "recap": _public_recap(instance),
-        "token_budget_bump": getattr(instance, "last_token_budget_bump", None),
+        "token_budget_bump": round_presentation.last_token_budget_bump(instance),
         "adventure_binding": dict(
             getattr(instance, "adventure_binding", {}) or {}
         ),
-        "play_mode": str(getattr(instance, "play_mode", "free") or "free"),
+        "play_mode": str(adventure_runtime_state.play_mode(instance) or "free"),
         "manual_rolls": _public_manual_rolls(instance, viewer_uid),
     }
     if ruleset_runtime.binding(instance):

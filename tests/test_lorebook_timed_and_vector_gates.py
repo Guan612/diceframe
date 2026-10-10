@@ -29,6 +29,7 @@ from src.lorebook.activation import (
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.retrieval import LoreRetriever
 from src.lorebook.store import LorebookStore, normalize_vector_activation
+from src.engine.modules import lorebook_runtime, progression_state
 
 # ---- 测试替身 ---------------------------------------------------------------
 
@@ -62,7 +63,7 @@ def _instance(store: LorebookStore, timed_state: dict | None = None, *, round_nu
     return SimpleNamespace(
         world_id="w", language="zh-CN", scene="", npcs={}, players={},
         world_state={}, round_number=round_number,
-        lorebook_timed_state=timed_state if timed_state is not None else {},
+        modules={"lorebook_runtime": {**lorebook_runtime.fresh(), "timers": timed_state if timed_state is not None else {}}, "progression": {**progression_state.fresh(), "round": round_number}},
         lorebook_store=store, action_actor_uids=[],
     )
 
