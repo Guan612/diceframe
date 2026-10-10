@@ -5,8 +5,11 @@ routed through ``CONTENT_KIND_REGISTRY`` to the importer that owns its
 portable schema; the importer plans it (one or more plan items, e.g. a card
 and its embedded book) and later executes the confirmed decisions.
 
-Commit holds every involved importer's lock while it re-plans, compares the
-``plan_digest``, validates every decision and only then writes, item by item.
+Each item is first *prepared* without any lock (adapter parse and limit
+checks, which are the expensive part for a large document). Commit then holds
+every involved importer's lock while it plans the prepared items against the
+current state, compares the ``plan_digest``, validates every decision and only
+then writes, item by item.
 
 This module knows no concrete kind. Importers and exporters are injected.
 """
@@ -88,7 +91,13 @@ class KindPlan:
 class KindImporter(Protocol):
     def lock(self) -> AbstractContextManager[Any]: ...
 
-    def plan(self, source: SyncSource, item: SyncItem) -> KindPlan: ...
+    def prepare(self, source: SyncSource, item: SyncItem) -> Any:
+        """Parse and check one item without touching server state (no lock)."""
+        ...
+
+    def plan(self, source: SyncSource, item: SyncItem, prepared: Any) -> KindPlan:
+        """Plan a prepared item against the current state (under the lock)."""
+        ...
 
 
 class KindExporter(Protocol):
@@ -134,18 +143,35 @@ def _importer(importers: Mapping[str, KindImporter], item: SyncItem) -> KindImpo
     return importer
 
 
-def _plan_all(
+_Prepared = tuple[SyncItem, KindImporter, Any]
+
+
+def _prepare_all(
     importers: Mapping[str, KindImporter], source: SyncSource, items: Iterable[SyncItem],
-) -> list[KindPlan]:
-    plans: list[KindPlan] = []
-    seen: set[str] = set()
+) -> list[_Prepared]:
+    """Parse and check every item before any lock is taken."""
+
+    prepared: list[_Prepared] = []
     for item in items:
         try:
             canonical_id(item.client_ref, field="client_ref")
         except ValueError as exc:
             raise SyncItemError(CLIENT_REF_INVALID, str(exc), client_ref=str(item.client_ref)) from exc
+        importer = _importer(importers, item)
         try:
-            plan = _importer(importers, item).plan(source, item)
+            prepared.append((item, importer, importer.prepare(source, item)))
+        except SyncItemError as exc:
+            exc.client_ref = exc.client_ref or item.client_ref
+            raise
+    return prepared
+
+
+def _plan_all(source: SyncSource, prepared: list[_Prepared]) -> list[KindPlan]:
+    plans: list[KindPlan] = []
+    seen: set[str] = set()
+    for item, importer, parsed in prepared:
+        try:
+            plan = importer.plan(source, item, parsed)
         except SyncItemError as exc:
             exc.client_ref = exc.client_ref or item.client_ref
             raise
@@ -179,18 +205,19 @@ def _view(plans: list[KindPlan]) -> dict[str, Any]:
     }
 
 
-def _locks(importers: Mapping[str, KindImporter], items: list[SyncItem]) -> list[KindImporter]:
+def _locks(prepared: list[_Prepared]) -> list[KindImporter]:
     involved: dict[str, KindImporter] = {}
-    for item in items:
-        involved[_schema(item.kind)] = _importer(importers, item)
+    for item, importer, _parsed in prepared:
+        involved[_schema(item.kind)] = importer
     return [involved[key] for key in sorted(involved)]
 
 
 def preview(importers: Mapping[str, KindImporter], source: SyncSource, items: list[SyncItem]) -> dict[str, Any]:
+    prepared = _prepare_all(importers, source, items)
     with ExitStack() as stack:
-        for importer in _locks(importers, items):
+        for importer in _locks(prepared):
             stack.enter_context(importer.lock())
-        return _view(_plan_all(importers, source, items))
+        return _view(_plan_all(source, prepared))
 
 
 def commit(
@@ -203,10 +230,11 @@ def commit(
 ) -> dict[str, Any]:
     """Re-plan, refuse a stale plan, validate every decision, then write."""
 
+    prepared = _prepare_all(importers, source, items)
     with ExitStack() as stack:
-        for importer in _locks(importers, items):
+        for importer in _locks(prepared):
             stack.enter_context(importer.lock())
-        plans = _plan_all(importers, source, items)
+        plans = _plan_all(source, prepared)
         view = _view(plans)
         if confirmed_digest != view["plan_digest"]:
             return {

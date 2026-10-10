@@ -11,6 +11,7 @@ import pytest
 from src.commands.game_handler import GameHandler
 from src.engine.game_instance import GameRegistry
 from src.engine.health import record_health_event
+from src.engine.modules import economy_state
 from src.engine.modules import room_access
 from src.llm.client import LLMResponse
 from src.lorebook.matcher import KeywordMatcher
@@ -610,7 +611,7 @@ async def test_opening_conditional_reward_queues_gm_proposal(web_api, monkeypatc
     instance = registry.get(api._parse_key(result["game_key"]))
     assert instance is not None
     pending = [
-        item for item in instance.economy["proposals"]
+        item for item in economy_state.state(instance)["proposals"]
         if item["status"] == "pending"
     ]
     assert len(pending) == 1

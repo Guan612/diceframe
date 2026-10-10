@@ -171,12 +171,33 @@ def _hint_lock_reason(store: Any, book: dict[str, Any], declared: DeclaredSource
     return LOCKED_TRACKED_BY_OTHER_SOURCE
 
 
+@dataclass(frozen=True)
+class PreparedLorebook:
+    """One parsed Lorebook push: everything that needs no server state."""
+
+    draft: LorebookDraft
+    content_draft: ContentDraft
+
+
+def prepare_lorebook_import(
+    payload: dict[str, Any], *, declared: DeclaredSource | None = None,
+) -> PreparedLorebook:
+    """Parse ``payload`` once (adapter + shared draft); no store access."""
+
+    draft = draft_lorebook_import(payload)
+    return PreparedLorebook(
+        draft=draft,
+        content_draft=lorebook_content_draft(payload, declared=declared, draft=draft),
+    )
+
+
 def plan_lorebook_import(
     store: Any,
     payload: dict[str, Any],
     *,
     declared: DeclaredSource | None = None,
     hint: str = "",
+    prepared: PreparedLorebook | None = None,
 ) -> LorebookImportPlan:
     """What a commit of ``payload`` would do against the current store.
 
@@ -185,8 +206,9 @@ def plan_lorebook_import(
     overrides an identity match.
     """
 
-    draft = draft_lorebook_import(payload)
-    content_draft = lorebook_content_draft(payload, declared=declared)
+    if prepared is None:
+        prepared = prepare_lorebook_import(payload, declared=declared)
+    draft, content_draft = prepared.draft, prepared.content_draft
     matches = tracked_books(store, content_draft, declared)
     book = matches[0] if matches else None
     matched_by = "identity" if book is not None else ""
@@ -358,7 +380,9 @@ __all__ = [
     "LorebookImportPlan",
     "book_state_digest",
     "execute_lorebook_plan",
+    "PreparedLorebook",
     "plan_lorebook_import",
+    "prepare_lorebook_import",
     "portable_lorebook_document",
     "tracked_book",
     "tracked_books",

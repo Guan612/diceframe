@@ -47,12 +47,13 @@ from src.content_modules.plan import (
 )
 from src.content_modules.refs import ContentDraft
 from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource, check_book_limits
-from src.lorebook.importer import draft_lorebook_import
 from src.engine.world.contracts import canonical_id
 from src.lorebook.import_plan import (
     LorebookImportPlan,
+    PreparedLorebook,
     execute_lorebook_plan,
     plan_lorebook_import,
+    prepare_lorebook_import,
     portable_lorebook_document,
 )
 from src.lorebook.sync import lorebook_result
@@ -214,13 +215,20 @@ def _parse_request(body: dict[str, Any]) -> tuple[DeclaredSource, dict[str, Any]
     return declared, document, str(hint or "")
 
 
-def _book_plan(
+@dataclass(frozen=True)
+class PreparedBook:
+    document: dict[str, Any]
+    declared: DeclaredSource
+    prepared: PreparedLorebook
+
+
+def _prepare_book(
     dependencies: CardImportDependencies,
     declared: DeclaredSource,
     character_book: dict[str, Any] | None,
     name: str,
     warnings: list[dict[str, str]],
-) -> LorebookImportPlan | None:
+) -> PreparedBook | None:
     if character_book is None:
         return None
     if dependencies.lorebook is None:
@@ -233,10 +241,48 @@ def _book_plan(
     book = dict(character_book)
     if not str(book.get("name") or "").strip():
         book["name"] = f"{name} lore" if name else "Imported character lore"
-    return plan_lorebook_import(
-        dependencies.lorebook,
-        {"spec": "lorebook_v3", "data": {"lorebook": book}},
-        declared=DeclaredSource(declared.source_kind, declared.source_id, external_id),
+    document = {"spec": "lorebook_v3", "data": {"lorebook": book}}
+    book_declared = DeclaredSource(declared.source_kind, declared.source_id, external_id)
+    return PreparedBook(document, book_declared, prepare_lorebook_import(document, declared=book_declared))
+
+
+@dataclass(frozen=True)
+class PreparedCard:
+    """One parsed card push: everything that needs no library state."""
+
+    declared: DeclaredSource
+    hint: str
+    card: dict[str, Any]
+    draft: ContentDraft
+    rules_aware: bool
+    book: PreparedBook | None
+    warnings: tuple[dict[str, str], ...]
+
+
+def prepare_card_import(dependencies: CardImportDependencies, body: dict[str, Any]) -> PreparedCard:
+    """Parse and normalise a push (card and embedded book); no lock needed."""
+
+    declared, document, hint = _parse_request(body)
+    try:
+        parsed = read_card_v3(document)
+    except CardV3FormatError as exc:
+        raise _ImportRequestError(exc.code, str(exc)) from exc
+    warnings: list[dict[str, str]] = []
+    card = _portable_card(dependencies, parsed.body, warnings)
+    draft = ContentDraft(
+        kind=CARD_KIND,
+        source_kind=declared.source_kind,
+        source_id=declared.source_id,
+        external_id=declared.external_id,
+        payload=card,
+        provenance={"format": "chara_card_v3"},
+        digest=content_digest(card),
+    )
+    name = str(card.get("character_name") or "")
+    book = _prepare_book(dependencies, declared, parsed.character_book, name, warnings)
+    return PreparedCard(
+        declared=declared, hint=hint, card=card, draft=draft,
+        rules_aware=_is_rules_aware(dependencies, card), book=book, warnings=tuple(warnings),
     )
 
 
@@ -256,30 +302,28 @@ def _match(
     return None, ""
 
 
-def plan_card_import(dependencies: CardImportDependencies, body: dict[str, Any]) -> CardImportPlan:
+def plan_card_import(
+    dependencies: CardImportDependencies,
+    body: dict[str, Any],
+    *,
+    prepared: PreparedCard | None = None,
+) -> CardImportPlan:
     """What a commit of this push would do. Callers hold the library lock."""
 
-    declared, document, hint = _parse_request(body)
-    try:
-        parsed = read_card_v3(document)
-    except CardV3FormatError as exc:
-        raise _ImportRequestError(exc.code, str(exc)) from exc
-    warnings: list[dict[str, str]] = []
-    card = _portable_card(dependencies, parsed.body, warnings)
-    draft = ContentDraft(
-        kind=CARD_KIND,
-        source_kind=declared.source_kind,
-        source_id=declared.source_id,
-        external_id=declared.external_id,
-        payload=card,
-        provenance={"format": "chara_card_v3"},
-        digest=content_digest(card),
-    )
+    if prepared is None:
+        prepared = prepare_card_import(dependencies, body)
+    declared, hint, card, draft = prepared.declared, prepared.hint, prepared.card, prepared.draft
+    warnings = list(prepared.warnings)
     client_ref = draft.ref.canonical()
-    name = str(card.get("character_name") or "")
-    book = _book_plan(dependencies, declared, parsed.character_book, name, warnings)
+    book = (
+        plan_lorebook_import(
+            dependencies.lorebook, prepared.book.document,
+            declared=prepared.book.declared, prepared=prepared.book.prepared,
+        )
+        if prepared.book is not None else None
+    )
 
-    if _is_rules_aware(dependencies, card):
+    if prepared.rules_aware:
         item = PlanItem(
             client_ref=client_ref, kind=CARD_KIND, draft_digest=draft.digest,
             action="unsupported", reason=RULESET_CARD_UNSUPPORTED,
@@ -505,19 +549,9 @@ class CardSyncImporter:
     def lock(self) -> AbstractContextManager[Any]:
         return self.dependencies.lock()
 
-    def plan(self, source: SyncSource, item: SyncItem) -> KindPlan:
+    def prepare(self, source: SyncSource, item: SyncItem) -> PreparedCard:
         if item.format not in ("", CARD_FORMAT):
             raise SyncItemError("FORMAT_UNSUPPORTED", "a card item must be a chara_card_v3 document")
-        try:
-            embedded = read_card_v3(item.document).character_book
-        except CardV3FormatError as exc:
-            raise SyncItemError(exc.code, str(exc)) from exc
-        if embedded is not None:
-            # Same parse the book plan uses: limits count what is imported.
-            check_book_limits(
-                draft_lorebook_import({"spec": "lorebook_v3", "data": {"lorebook": embedded}}).entries,
-                client_ref=f"{item.client_ref}.book",
-            )
         body = {
             "source": {"kind": source.kind, "id": source.id},
             "external_id": item.client_ref,
@@ -525,9 +559,16 @@ class CardSyncImporter:
             "canonical_hint": item.canonical_hint or None,
         }
         try:
-            plan = plan_card_import(self.dependencies, body)
+            prepared = prepare_card_import(self.dependencies, body)
         except _ImportRequestError as exc:
             raise SyncItemError(exc.code, str(exc)) from exc
+        if prepared.book is not None:
+            # The same parse the book plan uses: limits count what is imported.
+            check_book_limits(prepared.book.prepared.draft.entries, client_ref=f"{item.client_ref}.book")
+        return prepared
+
+    def plan(self, source: SyncSource, item: SyncItem, prepared: PreparedCard) -> KindPlan:
+        plan = plan_card_import(self.dependencies, {}, prepared=prepared)
         book_ref = f"{item.client_ref}.book"
         entries = [(item.client_ref, plan.item)]
         if plan.book is not None:

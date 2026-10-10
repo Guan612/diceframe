@@ -58,14 +58,6 @@ async def api_pairing_claim(request: web.Request) -> web.Response:
             status=400,
             headers={"Cache-Control": "no-store"},
         )
-    if install_id and request.app[DEVICE_TOKENS_KEY].install_id_holder(str(install_id)):
-        # Also before the code is consumed: one install id, one paired device.
-        return web.json_response(
-            {"ok": False, "error_code": "INSTALL_ID_IN_USE",
-             "error": "this install is bound to another paired device; revoke it or clear its binding first"},
-            status=409,
-            headers={"Cache-Control": "no-store"},
-        )
     service = request.app[PAIRING_SERVICE_KEY]
     payload, status = service.claim(
         str(body.get("code") or ""),

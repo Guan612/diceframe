@@ -9,6 +9,7 @@ from src.engine.character_utils import reset_character_for_restart
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import health_payload, mark_health_event, record_health_event
 from src.commands.progression_resolver import ProgressionResolver
+from src.engine.modules import economy_state
 
 
 def test_round_entity_snapshot_round_trips_and_defaults_empty() -> None:
@@ -857,18 +858,18 @@ class TestGameRegistry:
         assert imported.run_id != "run_exported"
         assert imported.memory_namespace != "source-memory"
         assert imported.memory_namespace.endswith(imported.run_id)
-        assert imported.economy["run_id"] == imported.run_id
+        assert economy_state.state(imported)["run_id"] == imported.run_id
         assert all(
             item["run_id"] == imported.run_id
             for key in (
                 "proposals", "transactions", "effect_groups",
                 "external_effects_outbox", "outcomes",
             )
-            for item in imported.economy[key]
+            for item in economy_state.state(imported)[key]
         )
-        assert "purchase_quotes" not in imported.economy
+        assert "purchase_quotes" not in economy_state.state(imported)
         assert [
-            item["id"] for item in imported.economy["external_effects_outbox"]
+            item["id"] for item in economy_state.state(imported)["external_effects_outbox"]
         ] == ["memory:pending"]
         # state.json 内 game_key 已改写为新值，避免 register 串到原对局
         saved = _json.loads(reg._save_path(new_key).read_text(encoding="utf-8"))
