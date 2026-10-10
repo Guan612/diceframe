@@ -15,6 +15,7 @@ from src.compat.callbacks import load_world_template as load_world_template_comp
 from src.content.gm_style import render_gm_style_section
 from src.engine.game_instance import GameInstance
 from src.engine.language import DEFAULT_LANGUAGE, gm_language_instruction, localized_text
+from src.engine.modules import ruleset_runtime
 from src.engine.narrative_perspective import narrative_perspective_instruction
 from src.llm.context_builder import (
     build_context,
@@ -61,7 +62,7 @@ class PromptComposer:
         self.auto_storyboard = bool(enabled)
 
     def _runtime(self, instance: GameInstance):
-        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+        binding = dict(ruleset_runtime.binding(instance) or {})
         runtime_id = str(binding.get("id") or "")
         if self.ruleset_registry is None or not runtime_id:
             return None

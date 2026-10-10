@@ -304,7 +304,7 @@ class Dnd2024Runtime:
     def _rules_outcome(instance: Any, outcome_id: str) -> str:
         """One canonical rules outcome id → its current status string."""
 
-        state = getattr(instance, "ruleset_state", None)
+        state = ruleset_runtime.state(instance)
         state = state if isinstance(state, dict) else {}
         raw_combat = state.get("combat")
         combat: dict[str, Any] = raw_combat if isinstance(raw_combat, dict) else {}
@@ -797,7 +797,7 @@ class Dnd2024Runtime:
     @staticmethod
     def validate_rest_context(instance: Any, actor_id: str, rest: str) -> None:
         del actor_id, rest
-        state = getattr(instance, "ruleset_state", {})
+        state = ruleset_runtime.state(instance)
         combat = state.get("combat") if isinstance(state, dict) else None
         if isinstance(combat, dict) and combat.get("active"):
             raise ValueError("战斗进行中不能休息；请先在“权威战斗”中结束战斗")
@@ -992,7 +992,7 @@ class Dnd2024Runtime:
         access = self._encounter_access(instance, campaign)
         combat_engine = self._combat_engine(instance, access, locale)
         view = combat_engine.gameplay_view(instance)
-        request = instance.ruleset_state.get("encounter_request")
+        request = ruleset_runtime.state(instance).get("encounter_request")
         if isinstance(request, dict):
             projected_request = deepcopy(request)
             ready_ids = {
@@ -1051,7 +1051,7 @@ class Dnd2024Runtime:
     def _recent_combat_events(instance: Any) -> list[dict[str, Any]]:
         """Project a bounded, presentation-safe public combat event feed."""
 
-        ledger = list(getattr(instance, "event_ledger", []) or [])
+        ledger = list(ruleset_runtime.event_ledger(instance) or [])
         start_index = 0
         for index in range(len(ledger) - 1, -1, -1):
             if str((ledger[index] or {}).get("intent_type") or "") == "combat.start":
@@ -1073,8 +1073,8 @@ class Dnd2024Runtime:
             "spell_ref", "resource", "roll", "successes", "failures", "stable", "dead", "hp",
         }
         combat = (
-            instance.ruleset_state.get("combat")
-            if isinstance(getattr(instance, "ruleset_state", None), dict) else {}
+            ruleset_runtime.state(instance).get("combat")
+            if isinstance(ruleset_runtime.state(instance), dict) else {}
         )
         enemies = combat.get("enemies") if isinstance(combat, dict) else {}
         enemies = enemies if isinstance(enemies, dict) else {}
@@ -1244,7 +1244,7 @@ class Dnd2024Runtime:
             campaign = self._campaign_engine(
                 instance, str(getattr(instance, "language", "") or ""),
             ).gameplay_view(instance)
-        state = getattr(instance, "ruleset_state", {})
+        state = ruleset_runtime.state(instance)
         persisted_campaign = state.get("campaign") if isinstance(state, dict) else None
         automation = campaign.get("automation") if isinstance(campaign, dict) else None
         if not isinstance(automation, dict) and isinstance(persisted_campaign, dict):
