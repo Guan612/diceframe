@@ -524,7 +524,14 @@ def test_only_economy_owners_write_ledger_keys() -> None:
             value = node.value
             while isinstance(value, ast.Subscript):
                 value = value.value
-            if isinstance(value, ast.Attribute) and value.attr == "economy":
+            # Facade receiver (``x.economy[...]``) or module API
+            # (``economy_state.state(x)[...]``) — both reach the live ledger.
+            if isinstance(value, ast.Call):
+                value = value.func
+            if isinstance(value, ast.Attribute) and (
+                value.attr == "economy"
+                or (value.attr == "state" and isinstance(value.value, ast.Name) and value.value.id == "economy_state")
+            ):
                 violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: economy key write outside owner")
     assert not violations, "\n".join(violations)
 
