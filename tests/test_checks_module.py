@@ -201,9 +201,10 @@ def test_legacy_null_lists_keep_codec_defaults():
     assert instance.round_checks_prepared is True
 
 
-def test_manual_roll_append_supports_attribute_based_test_doubles():
-    instance = SimpleNamespace(modules={}, manual_roll_requests=[])
+def test_manual_roll_append_writes_module_slot_on_non_aggregate_doubles():
+    instance = SimpleNamespace(modules={})
     request = {"id": "manual"}
     module.add_manual_roll_request(instance, request)
-    assert instance.manual_roll_requests[-1] is request
-    assert instance.modules == {}
+    assert module.manual_roll_requests(instance)[-1] is request
+    assert instance.modules[module.MODULE_NAME]["manual_roll_requests"] == [request]
+    assert not hasattr(instance, "manual_roll_requests")
