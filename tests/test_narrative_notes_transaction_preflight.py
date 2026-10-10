@@ -12,6 +12,7 @@ from src.engine.game_instance import GameRegistry
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import narrative_notes
 from tests.test_game_instance_reset_characterization import _make_populated_instance
+from webapi_harness import web_api  # noqa: F401
 
 MATCH = "unsupported narrative_notes module schema"
 
@@ -163,4 +164,17 @@ def test_dnd_event_batch_rejects_before_ruleset_state_changes():
     before = deepcopy(live_state(instance))
     with pytest.raises(ModuleStateError, match=MATCH):
         runtime.apply_event_batch(instance, {"intent_type": "dnd2024.campaign.choose"})
+    assert live_state(instance) == before
+
+
+@pytest.mark.asyncio
+async def test_legacy_state_update_shim_rejects_before_any_write(web_api):
+    api, _lorebook, _registry, _llm, _worlds = web_api
+    instance = unsupported_instance()
+    instance.players["u1"]["character_sheet"]["hp"] = 10
+    before = deepcopy(live_state(instance))
+    with pytest.raises(ModuleStateError, match=MATCH):
+        api._handler._apply_state_update(instance, {
+            "players": {"u1": {"hp": 1}}, "scene_change": "elsewhere",
+        })
     assert live_state(instance) == before

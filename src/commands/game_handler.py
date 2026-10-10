@@ -35,6 +35,7 @@ from src.commands.state_recap import (
 from src.commands.story_recap import StoryRecapGenerator
 from src.commands.swipe_generator import SwipeGenerator
 from src.engine.language import DEFAULT_LANGUAGE
+from src.engine.modules import narrative_notes
 from src.lorebook.retrieval import LoreRetriever
 from src.content_modules.projection import ContentProjectionService
 from src.rulesets.builtin import build_default_ruleset_registry
@@ -320,6 +321,9 @@ class GameHandler:
 
     def _apply_state_update(self, instance: GameInstance, update: dict) -> None:
         """兼容旧内部调用；实际逻辑已拆到 StateUpdateApplier。"""
+        # The applier can write the scene after other state; reject an
+        # unsupported notes slot before any of it changes.
+        narrative_notes.require_writable(instance)
         self._state_applier.apply_state_update(instance, update)
 
     def load_item_categories(self, instance: GameInstance) -> dict[str, list[str]]:

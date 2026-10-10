@@ -178,6 +178,15 @@ def test_only_narrative_notes_owners_assign_scene() -> None:
                 and node.attr == "scene"
             ):
                 violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: scene write outside owner")
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "setattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "scene"
+            ):
+                violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: scene setattr outside owner")
     assert not violations, "\n".join(violations)
 
 
