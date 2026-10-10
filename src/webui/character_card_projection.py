@@ -16,7 +16,7 @@ CARD_PROVENANCE_LINKS = frozenset({"tracked", "detached"})
 
 _PROVENANCE_TEXT_FIELDS = (
     "source_version", "source_digest", "imported_state_digest", "imported_at",
-    "pushed_by_device",
+    "pushed_by_device", "book_id",
 )
 
 
@@ -70,6 +70,12 @@ def has_card_provenance(card: dict[str, Any]) -> bool:
 def is_tracked_card(card: dict[str, Any]) -> bool:
     provenance = card_provenance(card)
     return provenance is not None and provenance["link"] == "tracked"
+
+
+def is_plugin_card(card: dict[str, Any]) -> bool:
+    """Content shipped by an installed plugin (it owns the card)."""
+
+    return bool(str(card.get("source_plugin") or "").strip())
 
 
 def card_signature(card: dict[str, Any]) -> tuple[str, str, str, str, str]:
