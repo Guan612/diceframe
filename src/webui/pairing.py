@@ -121,7 +121,7 @@ class PairingService:
             "expires_at": code.expires_at,
         }
 
-    def claim(self, code: str, ip: str, label: str = "") -> tuple[dict, int]:
+    def claim(self, code: str, ip: str, label: str = "", install_id: str = "") -> tuple[dict, int]:
         granted = self._store.consume(code)
         self._record(ip, granted)
         if not granted:
@@ -133,7 +133,7 @@ class PairingService:
                 },
                 401,
             )
-        token, device = self._devices.issue(label)
+        token, device = self._devices.issue(label, install_id)
         return (
             {
                 "ok": True,
@@ -141,6 +141,7 @@ class PairingService:
                 "device_token": token,
                 "device_id": device["id"],
                 "label": device["label"],
+                "install_id": device.get("install_id", ""),
             },
             200,
         )

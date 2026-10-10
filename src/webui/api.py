@@ -35,6 +35,8 @@ from src.webui.services import combat_extension as combat_extension_service
 from src.webui.services import adventure_runtime
 from src.webui.services import ruleset_characters
 from src.webui.services import character_card_import
+from src.webui.services import content_sync
+from src.lorebook.sync import LorebookSyncExporter, LorebookSyncImporter
 from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
@@ -1786,6 +1788,42 @@ class WebAPI:
             new_card_id=character_cards.new_card_id,
             is_ruleset_card=deps.is_ruleset_card,
             lorebook=deps.lorebook,
+        )
+
+    def _content_sync_dependencies(self) -> content_sync.ContentSyncDependencies:
+        def importers(pushed_by_device: str) -> dict[str, Any]:
+            found: dict[str, Any] = {
+                "character-card": character_card_import.CardSyncImporter(
+                    self._card_import_dependencies(), pushed_by_device=pushed_by_device,
+                ),
+            }
+            if self._lore is not None:
+                found["lorebook-v3"] = LorebookSyncImporter(self._lore)
+            return found
+
+        def exporters() -> dict[str, Any]:
+            found: dict[str, Any] = {
+                "character-card": character_card_import.CardSyncExporter(self._card_import_dependencies()),
+            }
+            if self._lore is not None:
+                found["lorebook-v3"] = LorebookSyncExporter(self._lore)
+            return found
+
+        return content_sync.ContentSyncDependencies(importers=importers, exporters=exporters)
+
+    def preview_content_import(self, body: dict[str, Any], *, pushed_by_device: str = "") -> dict[str, Any]:
+        return content_sync.preview_import(
+            self._content_sync_dependencies(), body, pushed_by_device=pushed_by_device,
+        )
+
+    def commit_content_import(self, body: dict[str, Any], *, pushed_by_device: str = "") -> dict[str, Any]:
+        return content_sync.commit_import(
+            self._content_sync_dependencies(), body, pushed_by_device=pushed_by_device,
+        )
+
+    def export_content(self, body: dict[str, Any], *, server_instance_id: str) -> dict[str, Any]:
+        return content_sync.export_content(
+            self._content_sync_dependencies(), body, server_instance_id=server_instance_id,
         )
 
     def preview_character_card_import(self, body: dict[str, Any]) -> dict[str, Any]:
