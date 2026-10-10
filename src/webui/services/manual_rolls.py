@@ -27,7 +27,7 @@ class ManualRollService:
     def list(self, key, uid):
         inst=self._inst(key)
         if not inst: return None
-        return [r for r in inst.manual_roll_requests if self._visible(r, uid, inst.gm_uid)]
+        return [r for r in checks.manual_roll_requests(inst) if self._visible(r, uid, inst.gm_uid)]
 
     @staticmethod
     def _purpose(value: object) -> str:
@@ -73,7 +73,7 @@ class ManualRollService:
                 return {"ok": False, "error": "目标值必须在 1 到 10000 之间"}
         op=str(body.get("operation_id") or "").strip()
         if not op or len(op)>128: return {"ok":False,"error":"operation_id 无效"}
-        for old in inst.manual_roll_requests:
+        for old in checks.manual_roll_requests(inst):
             if old.get("operation_id")==op:
                 return {"ok":True,"request":old,"idempotent":True}
         session_stats.require_writable(inst)
@@ -84,7 +84,7 @@ class ManualRollService:
     async def resolve(self,key,uid,rid,body):
         inst=self._inst(key)
         if not inst: return {"ok":False,"error":"游戏不存在"}
-        req=next((r for r in inst.manual_roll_requests if r.get("id")==rid),None)
+        req=next((r for r in checks.manual_roll_requests(inst) if r.get("id")==rid),None)
         if not req or req.get("run_id")!=body.get("run_id"): return {"ok":False,"error":"请求不存在或已过期"}
         target=str(body.get("target_uid") or uid)
         if target not in req.get("target_uids",[]) or (uid!=target and uid!=inst.gm_uid): return {"ok":False,"error":"无权投掷"}
@@ -112,7 +112,7 @@ class ManualRollService:
     async def cancel(self,key,uid,rid,body):
         inst=self._inst(key)
         if not inst or uid!=getattr(inst,"gm_uid",None): return {"ok":False,"error":"GM only"}
-        req=next((r for r in inst.manual_roll_requests if r.get("id")==rid),None)
+        req=next((r for r in checks.manual_roll_requests(inst) if r.get("id")==rid),None)
         if not req or req.get("run_id")!=body.get("run_id"): return {"ok":False,"error":"请求不存在或已过期"}
         session_stats.require_writable(inst)
         checks.require_writable(inst)

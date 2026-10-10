@@ -280,7 +280,7 @@ def _public_manual_rolls(instance: Any, viewer_uid: str) -> list[dict[str, Any]]
     viewer = str(viewer_uid or "")
     gm_uid = str(getattr(instance, "gm_uid", "") or "")
     projected: list[dict[str, Any]] = []
-    for request in getattr(instance, "manual_roll_requests", []) or []:
+    for request in checks.manual_roll_requests(instance):
         if not isinstance(request, dict) or not isinstance(request.get("results"), dict):
             continue
         target_uids = [str(uid) for uid in request.get("target_uids") or [] if str(uid)]
