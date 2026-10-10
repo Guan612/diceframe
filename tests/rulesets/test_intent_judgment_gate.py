@@ -310,3 +310,51 @@ async def test_http_conflict_and_queries_during_judgment(web_api):
     assert instance.to_dict() == before
     complete.assert_not_called()
     save.assert_not_awaited()
+
+
+# ---- adventure.node.complete goes through authoritative_write ---------------
+
+
+@pytest.mark.asyncio
+async def test_node_complete_is_rejected_during_historical_rewrite(web_api) -> None:
+    _api, _lorebook, registry, _llm, _worlds = web_api
+    instance, _runtime, gameplay, _body = _game(registry)
+    complete, save = Mock(), AsyncMock()
+    deps = replace(gameplay._gameplay_dependencies, complete_adventure_node=complete, save_instance=save)
+    before = instance.to_dict()
+
+    async with instance.historical_rewrite() as acquired:
+        assert acquired is True
+        # A different request task, as in production (the gate is task-reentrant).
+        result = await asyncio.create_task(ruleset_gameplay.submit_intent(
+            deps, "|".join(instance.game_key), "gm", True,
+            {"type": "adventure.node.complete", "node_id": "node"},
+        ))
+
+    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert instance.to_dict() == before
+    complete.assert_not_called()
+    save.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_node_complete_waiting_on_replaced_run_is_rejected(web_api) -> None:
+    _api, _lorebook, registry, _llm, _worlds = web_api
+    instance, _runtime, gameplay, _body = _game(registry)
+    complete, save = Mock(), AsyncMock()
+    deps = replace(gameplay._gameplay_dependencies, complete_adventure_node=complete, save_instance=save)
+
+    async with instance.authoritative_write():
+        submission = asyncio.create_task(ruleset_gameplay.submit_intent(
+            deps, "|".join(instance.game_key), "gm", True,
+            {"type": "adventure.node.complete", "node_id": "node"},
+        ))
+        await asyncio.sleep(0)
+        # A run transition replaces the registry entry while the writer waits.
+        replacement, *_ = _game(registry)
+        assert registry.get(instance.game_key) is replacement
+    result = await asyncio.wait_for(submission, 5)
+
+    assert result["code"] == "STALE_RUN"
+    complete.assert_not_called()
+    save.assert_not_awaited()

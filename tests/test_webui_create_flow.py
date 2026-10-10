@@ -1635,10 +1635,12 @@ async def test_switch_world_accepts_lorebook_only_world(web_api):
 
     assert result["ok"] is True
     assert result["world_id"] == "custom_book_only"
-    assert result["world_name"] == "只在世界书库里的世界"
+    assert result["world_display_name"] == "只在世界书库里的世界"
     inst = registry.get(api._parse_key(created["game_key"]))
     assert inst.world_id == "custom_book_only"
-    assert inst.world_name == "只在世界书库里的世界"
+    # world_name is the game title; switching the world book keeps it.
+    assert inst.world_name == "模板世界"
+    assert result["world_name"] == "模板世界"
 
 
 def test_can_modify_character_allows_owner():

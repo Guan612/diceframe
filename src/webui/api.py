@@ -474,6 +474,14 @@ class WebAPI:
                     self._adventure_runtime_dependencies, instance,
                 )
             )
+        if self._handler is not None and hasattr(self._handler, "set_adventure_run_initializer"):
+            # Reset/restart build a new run of the same game: initialize v2
+            # progress + world seed exactly like the creation transaction.
+            self._handler.set_adventure_run_initializer(
+                lambda instance: adventure_runtime.initialize_adventure_run(
+                    self._adventure_runtime_dependencies, instance,
+                )
+            )
         self._world_dependencies = worlds.WorldDependencies(
             lorebook=self._lore,
             worlds_dir=self._worlds_dir,

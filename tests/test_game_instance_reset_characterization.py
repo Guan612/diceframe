@@ -100,6 +100,9 @@ def _make_populated_instance() -> GameInstance:
         "facts": {"actor:u1.location": {"value": "bridge"}},
         "scheduled_events": [],
     }
+    instance.adventure_progress = {
+        "active_nodes": ["vault"], "completed_nodes": ["gate"], "history": [],
+    }
     instance.last_saved_log_count = 3
     instance.total_llm_calls = 11
     instance.total_tokens = 2222
@@ -248,6 +251,9 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.scene == ""
     assert instance.game_time == ""
     assert instance.world_state == fresh_world_state()
+    # Progress and world truth belong to the same run: never keep "node
+    # completed" after the world that recorded its consequences is wiped.
+    assert instance.adventure_progress == {}
     assert instance.total_llm_calls == 0
     assert instance.total_tokens == 0
     assert instance.started_at == ""
