@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -310,3 +312,72 @@ async def test_switch_world_is_rejected_during_historical_rewrite(web_api) -> No
     assert result["ok"] is False
     assert result["error_code"] == "REWRITE_IN_PROGRESS"
     assert instance.to_dict() == before
+
+
+# ---- switch_world titles use the game's language ---------------------------
+
+_BUILTIN_WORLDS = Path(__file__).resolve().parents[1] / "templates" / "worlds"
+_LOCALIZED_WORLDS = ("default_fantasy", "jp_isekai", "coc_horror")
+
+
+def _install_builtin_worlds(worlds_dir: Path) -> None:
+    """Copy built-in v2 templates and their English overlays into the test root."""
+
+    (worlds_dir / "locales" / "en").mkdir(parents=True, exist_ok=True)
+    for world_id in _LOCALIZED_WORLDS:
+        shutil.copy(_BUILTIN_WORLDS / f"{world_id}.json", worlds_dir / f"{world_id}.json")
+        shutil.copy(
+            _BUILTIN_WORLDS / "locales" / "en" / f"{world_id}.json",
+            worlds_dir / "locales" / "en" / f"{world_id}.json",
+        )
+
+
+def _template_name(api, world_id: str, language: str) -> str:
+    # Same source as the create form: the localized world-templates listing.
+    listing = api.list_world_templates(language)
+    rows = listing.get("templates", listing) if isinstance(listing, dict) else listing
+    row = next(item for item in rows if (item.get("world_id") or item.get("id")) == world_id)
+    return str(row.get("world_name") or row.get("name"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language", ["en", "zh-CN"])
+async def test_switch_world_title_follows_in_the_game_language(web_api, language) -> None:
+    api, _lorebook, registry, _llm, worlds_dir = web_api
+    _install_builtin_worlds(worlds_dir)
+    names = {world_id: _template_name(api, world_id, language) for world_id in _LOCALIZED_WORLDS}
+    if language == "en":
+        # The English overlay really differs from the canonical (Chinese) name.
+        assert names["default_fantasy"] != _template_name(api, "default_fantasy", "zh-CN")
+    # Blank name in the create form: the localized display name becomes the title.
+    created = await api.create_game(
+        "default_fantasy", names["default_fantasy"], language=language,
+        players=[{"character_name": "Hero", "attributes": {"str": 10}}],
+    )
+    assert created["ok"] is True, created
+
+    first = await api.switch_world(created["game_key"], "jp_isekai")
+    second = await api.switch_world(created["game_key"], "coc_horror")
+    instance = registry.get(api._parse_key(created["game_key"]))
+
+    assert first["ok"] is True, first
+    assert first["world_name"] == first["world_display_name"] == names["jp_isekai"]
+    assert second["ok"] is True, second
+    assert second["world_name"] == second["world_display_name"] == names["coc_horror"]
+    assert instance.world_name == names["coc_horror"]
+
+
+@pytest.mark.asyncio
+async def test_switch_world_keeps_a_user_title_in_an_english_game(web_api) -> None:
+    api, _lorebook, registry, _llm, worlds_dir = web_api
+    _install_builtin_worlds(worlds_dir)
+    created = await api.create_game(
+        "default_fantasy", "Friday Table", language="en",
+        players=[{"character_name": "Hero", "attributes": {"str": 10}}],
+    )
+
+    result = await api.switch_world(created["game_key"], "jp_isekai")
+
+    assert result["ok"] is True, result
+    assert result["world_display_name"] == _template_name(api, "jp_isekai", "en")
+    assert registry.get(api._parse_key(created["game_key"])).world_name == "Friday Table"
