@@ -20,13 +20,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.engine.modules import narrative_notes, progression_state
 from src.commands.state_update_applier import StateUpdateApplier
 from src.commands.swipe_generator import SwipeGenerator
 from src.engine.game_instance import GameInstance
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.retrieval import LoreRetriever
 from src.lorebook.store import LorebookStore
-from src.engine.modules import lorebook_runtime, progression_state
+from src.engine.modules import lorebook_runtime
 
 WORLD = "w1"
 
@@ -40,13 +41,16 @@ def _store(tmp_path: Path) -> LorebookStore:
 
 def _instance(store: LorebookStore, **overrides):
     base = dict(
-        world_id=WORLD, language="zh-CN", scene="", npcs={}, players={},
-        world_state={}, round_number=1,
+        world_id=WORLD, language="zh-CN", npcs={}, players={}, world_state={},
         lorebook_store=store, game_id="", game_key="", action_actor_uids=[],
     )
     timers = overrides.pop("lorebook_timed_state", {})
     base.update(overrides)
-    base["modules"] = {"lorebook_runtime": {**lorebook_runtime.fresh(), "timers": timers}, "progression": {**progression_state.fresh(), "round": 1}}
+    base["modules"] = {
+        "narrative_notes": narrative_notes.fresh(),
+        "lorebook_runtime": {**lorebook_runtime.fresh(), "timers": timers},
+        "progression": {**progression_state.fresh(), "round": 1},
+    }
     return SimpleNamespace(**base)
 
 

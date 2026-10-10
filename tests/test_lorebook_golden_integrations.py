@@ -17,12 +17,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.engine.modules import narrative_notes, progression_state
 from src.engine.game_instance import GameInstance
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.resolver import resolve_active_books
 from src.lorebook.retrieval import LoreRetriever
 from src.lorebook.store import LorebookStore
-from src.engine.modules import lorebook_runtime, progression_state
+from src.engine.modules import lorebook_runtime
 
 WORLD = "w"
 GAME_KEY = "web|room|gm"
@@ -75,14 +76,17 @@ def _add(store: LorebookStore, book_id: str, entry: dict) -> None:
 
 def _instance(store: LorebookStore, **overrides):
     base = dict(
-        world_id=WORLD, language="zh-CN", scene="", npcs={}, players={},
-        world_state={}, round_number=1,
+        world_id=WORLD, language="zh-CN", npcs={}, players={}, world_state={},
         lorebook_store=store, game_id=GAME_KEY, game_key=GAME_KEY,
         action_actor_uids=[],
     )
     timers = overrides.pop("lorebook_timed_state", {})
     base.update(overrides)
-    base["modules"] = {"lorebook_runtime": {**lorebook_runtime.fresh(), "timers": timers}, "progression": {**progression_state.fresh(), "round": 1}}
+    base["modules"] = {
+        "narrative_notes": narrative_notes.fresh(),
+        "lorebook_runtime": {**lorebook_runtime.fresh(), "timers": timers},
+        "progression": {**progression_state.fresh(), "round": 1},
+    }
     return SimpleNamespace(**base)
 
 

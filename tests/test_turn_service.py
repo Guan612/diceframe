@@ -7,7 +7,7 @@ import pytest
 
 from src.commands.round_processor import RoundNotProcessed
 from src.engine.game_instance import GameState
-from src.engine.modules import economy_state
+from src.engine.modules import economy_state, table_settings
 from src.rulesets.registry import RulesetRuntimeRegistry
 from src.webui.services.turns import (
     TurnDependencies,
@@ -32,7 +32,7 @@ class FakeInstance:
         self.run_id = "run-test"
         round_presentation.replace_quick_actions(self, ["观察"])
         round_presentation.replace_last_state_update(self, {"scene": "门厅"})
-        self.solo_mode = False
+        table_settings.replace_solo_mode(self, False)
         self.dead: set[str] = set()
         self.pending_luck: list[dict] = []
         self.pending_dice = False
