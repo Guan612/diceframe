@@ -87,19 +87,30 @@ def commit_import(
         return _failure(exc)
 
 
-def export_content(
-    dependencies: ContentSyncDependencies, body: dict[str, Any], *, server_instance_id: str,
-) -> dict[str, Any]:
+def _requested(body: dict[str, Any]) -> list[tuple[str, str]]:
     raw_items = body.get("items")
     if not isinstance(raw_items, list) or not raw_items:
-        return {"ok": False, "error_code": sync.REQUEST_INVALID, "error": "items must be a non-empty list"}
+        raise sync.SyncItemError(sync.REQUEST_INVALID, "items must be a non-empty list")
     requested: list[tuple[str, str]] = []
     for raw in raw_items:
         if not isinstance(raw, dict) or not isinstance(raw.get("canonical_id"), str):
-            return {"ok": False, "error_code": sync.REQUEST_INVALID, "error": "every item needs kind and canonical_id"}
+            raise sync.SyncItemError(sync.REQUEST_INVALID, "every item needs kind and canonical_id")
         requested.append((str(raw.get("kind") or ""), raw["canonical_id"]))
+    return requested
+
+
+def export_content(
+    dependencies: ContentSyncDependencies, body: dict[str, Any], *, server_instance_id: str,
+) -> dict[str, Any]:
     try:
-        return sync.export(dependencies.exporters(), requested, server_instance_id=server_instance_id)
+        return sync.export(dependencies.exporters(), _requested(body), server_instance_id=server_instance_id)
+    except sync.SyncItemError as exc:
+        return _failure(exc)
+
+
+def content_status(dependencies: ContentSyncDependencies, body: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return sync.status(dependencies.exporters(), _requested(body))
     except sync.SyncItemError as exc:
         return _failure(exc)
 
@@ -107,6 +118,7 @@ def export_content(
 __all__ = [
     "ContentSyncDependencies",
     "commit_import",
+    "content_status",
     "export_content",
     "parse_import_request",
     "preview_import",

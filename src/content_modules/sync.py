@@ -105,6 +105,10 @@ class KindExporter(Protocol):
         """``{format, document, state_token, provenance, warnings}`` or ``None``."""
         ...
 
+    def status(self, canonical_id: str) -> dict[str, Any] | None:
+        """``{state_token, provenance}`` without building the document, or ``None``."""
+        ...
+
 
 def check_book_limits(entries: Sequence[Any], *, client_ref: str) -> None:
     """Refuse a parsed book above the per-book entry count or entry size."""
@@ -306,6 +310,29 @@ def export(
     return {"ok": True, "items": rows}
 
 
+def status(exporters: Mapping[str, KindExporter], requested: list[tuple[str, str]]) -> dict[str, Any]:
+    """Cheap change detection: state token and provenance per object.
+
+    A missing object is reported (``exists: false``), not an error, so a
+    client can learn that the server copy was deleted.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for kind, canonical_id in requested:
+        exporter = exporters.get(_schema(kind))
+        if exporter is None:
+            raise SyncItemError(KIND_NOT_SUPPORTED, f"content kind has no status here: {kind!r}")
+        found = exporter.status(canonical_id)
+        rows.append({
+            "kind": kind,
+            "canonical_id": canonical_id,
+            "exists": found is not None,
+            "state_token": (found or {}).get("state_token", ""),
+            "provenance": (found or {}).get("provenance"),
+        })
+    return {"ok": True, "items": rows}
+
+
 __all__ = [
     "CLIENT_REF_INVALID",
     "DUPLICATE_CLIENT_REF",
@@ -322,4 +349,5 @@ __all__ = [
     "commit",
     "export",
     "preview",
+    "status",
 ]
