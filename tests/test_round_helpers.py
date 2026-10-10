@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.engine.modules import narrative_notes
 from src.commands.round_helpers import should_multi_step
 from src.commands.round_llm import append_multistep_analysis
 from src.engine.game_instance import GameInstance
@@ -26,7 +27,7 @@ def _make_instance(
     instance = GameInstance(game_key=("web", "test", "bot"))
     instance.entry_point = entry_point
     instance.npcs = npcs or {}
-    instance.scene = scene
+    narrative_notes.replace_scene(instance, scene)
     if puzzles:
         manager = PuzzleManager()
         for puzzle_id in puzzles:

@@ -11,6 +11,7 @@ from src.engine.game_state_contracts import (
     PlayerContextView,
 )
 from src.engine.language import normalize_language
+from src.engine.modules import narrative_notes
 
 if TYPE_CHECKING:
     from src.engine.game_instance import GameInstance
@@ -72,8 +73,8 @@ class GameContextProjector:
         state: GameContextView = {
             "world_name": instance.world_name,
             "round_number": progression_state.round_value(instance),
-            "scene": instance.scene,
-            "game_time": instance.game_time,
+            "scene": narrative_notes.scene(instance),
+            "game_time": narrative_notes.game_time(instance),
             "difficulty": instance.difficulty,
             "language": normalize_language(instance.language),
             "players": players_view,
