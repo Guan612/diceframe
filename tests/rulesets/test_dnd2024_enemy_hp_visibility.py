@@ -21,6 +21,7 @@ from test_dnd2024_encounter_preset_visibility import assert_no_stat_blocks
 from test_dnd2024_m5_http import (
     _EnabledRuntime, _app, _character, _enemy, _ready_story_encounter,
 )
+from src.engine.modules import ruleset_runtime
 
 _PATH = "/api/games/web%7Cenemy-hp%7Cweb_bot/available-actions"
 _STAT_BLOCK_FIELDS = {"attacks", "abilities", "saving_throws", "attack_bonus"}
@@ -49,7 +50,7 @@ def _active_combat(registry: GameRegistry) -> tuple[GameInstance, str, _EnabledR
     }, random.Random(7))
     assert resolved["ok"] is True
     runtime.apply_event_batch(instance, resolved["event_batch"])
-    enemies = instance.ruleset_state["combat"]["enemies"]
+    enemies = ruleset_runtime.state(instance)["combat"]["enemies"]
     assert enemies, "story encounter must put at least one enemy into combat"
     enemy_id = next(iter(enemies))
     # A wounded enemy: the authoritative HP must reach players verbatim,
@@ -63,7 +64,7 @@ def _active_combat(registry: GameRegistry) -> tuple[GameInstance, str, _EnabledR
 async def test_seated_player_and_gm_see_exact_enemy_hp(tmp_path) -> None:
     registry = GameRegistry(tmp_path / "saves")
     instance, enemy_id, runtime = _active_combat(registry)
-    max_hp = int(instance.ruleset_state["combat"]["enemies"][enemy_id]["max_hp"])
+    max_hp = int(ruleset_runtime.state(instance)["combat"]["enemies"][enemy_id]["max_hp"])
     assert max_hp > 3
 
     async with TestClient(TestServer(_app(registry, runtime))) as client:

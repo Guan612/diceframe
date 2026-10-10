@@ -9,6 +9,7 @@ from src.engine.character_utils import reset_character_for_restart
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import health_payload, mark_health_event, record_health_event
 from src.commands.progression_resolver import ProgressionResolver
+from src.engine.modules import ruleset_runtime
 
 
 def test_round_entity_snapshot_round_trips_and_defaults_empty() -> None:
@@ -42,18 +43,18 @@ def test_versioned_ruleset_state_is_optional_and_round_trips() -> None:
         "content_version": "srd-5.2.1+r1",
         "state_schema_version": 1,
     })
-    instance.event_ledger.append({"batch_id": "test-batch"})
+    ruleset_runtime.event_ledger(instance).append({"batch_id": "test-batch"})
 
     restored = GameInstance.from_dict(instance.to_dict())
 
-    assert restored.ruleset_runtime == {
+    assert ruleset_runtime.binding(restored) == {
         "id": "core:dnd2024",
         "version": 1,
         "content_version": "srd-5.2.1+r1",
         "state_schema_version": 1,
     }
-    assert restored.ruleset_state == {"state_schema_version": 1}
-    assert restored.event_ledger == [{"batch_id": "test-batch"}]
+    assert ruleset_runtime.state(restored) == {"state_schema_version": 1}
+    assert ruleset_runtime.event_ledger(restored) == [{"batch_id": "test-batch"}]
     assert not restored.bind_ruleset_runtime({
         "runtime_id": "core:dnd2024",
         "runtime_version": 2,
@@ -94,10 +95,10 @@ def test_persisted_boundary_preserves_opaque_state_and_filters_transient_entries
     assert restored.rule_id == ""
     assert restored.ready_players == {"active"}
     assert restored.away_players == {"away"}
-    assert restored.ruleset_runtime == payload["ruleset_runtime"]
-    assert restored.ruleset_state == payload["ruleset_state"]
+    assert ruleset_runtime.binding(restored) == payload["ruleset_runtime"]
+    assert ruleset_runtime.state(restored) == payload["ruleset_state"]
     assert restored.adventure_binding == payload["adventure_binding"]
-    assert restored.event_ledger == payload["event_ledger"]
+    assert ruleset_runtime.event_ledger(restored) == payload["event_ledger"]
     assert [item["id"] for item in restored.table_talk] == ["party"]
 
 
@@ -297,21 +298,21 @@ async def test_reset_preserves_exact_ruleset_and_adventure_bindings() -> None:
     }
     assert instance.bind_ruleset_runtime(ruleset)
     assert instance.bind_adventure(adventure)
-    instance.ruleset_state["version"] = 42
-    instance.event_ledger.append({"batch_id": "old-run"})
+    ruleset_runtime.state(instance)["version"] = 42
+    ruleset_runtime.event_ledger(instance).append({"batch_id": "old-run"})
 
     await instance.reset()
 
     assert instance.rule_id == "dnd2024_srd"
-    assert instance.ruleset_runtime == {
+    assert ruleset_runtime.binding(instance) == {
         "id": "core:dnd2024",
         "version": 1,
         "content_version": "srd-5.2.1+r5",
         "state_schema_version": 1,
     }
     assert instance.adventure_binding == adventure
-    assert instance.ruleset_state == {"state_schema_version": 1}
-    assert instance.event_ledger == []
+    assert ruleset_runtime.state(instance) == {"state_schema_version": 1}
+    assert ruleset_runtime.event_ledger(instance) == []
 
 
 @pytest.mark.asyncio

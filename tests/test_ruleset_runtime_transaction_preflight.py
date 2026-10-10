@@ -196,7 +196,7 @@ def test_dnd_engines_reject_before_defaults_or_reduction(engine_name, operation,
 
     runtime = Dnd2024Runtime()
     instance = _make_populated_instance()
-    instance.ruleset_state = {}
+    ruleset_runtime.replace_state(instance, {})
     instance.adventure_binding = {}
     if engine_name == "campaign":
         engine = runtime._campaign_engine(instance, "en")
@@ -308,7 +308,7 @@ def test_replayed_combat_batch_rejects_before_default_repair():
     engine, instance = _instance()
     batch = _start(engine, instance)
     assert engine.apply_batch(instance, batch)["duplicate"] is True
-    del instance.ruleset_state["combat_history"]
+    del ruleset_runtime.state(instance)["combat_history"]
     instance.modules["ruleset_runtime"]["schema_version"] = 99
     before = deepcopy(live_state(instance))
     with pytest.raises(ModuleStateError, match="unsupported ruleset_runtime module schema"):

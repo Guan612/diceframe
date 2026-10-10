@@ -15,6 +15,7 @@ from src.engine.module_state import ModuleStateError
 from src.engine.modules import session_stats
 from src.webui.services.manual_rolls import ManualRollDependencies, ManualRollService
 from tests.test_game_instance_reset_characterization import _make_populated_instance
+from src.engine.modules import ruleset_runtime
 
 
 def live_state(instance):
@@ -258,7 +259,7 @@ async def test_ruleset_transactions_reject_before_binding_or_reducer(tmp_path, m
     save = AsyncMock()
     dependencies = replace(_M5Api(registry, runtime)._gameplay_dependencies, save_instance=save)
     if operation == "resume":
-        instance.ruleset_state["combat"] = {"status": "active"}
+        ruleset_runtime.state(instance)["combat"] = {"status": "active"}
     instance.modules["session_stats"] = {"schema_version": 99, "opaque": [1]}
     before = deepcopy(live_state(instance))
     binding = AsyncMock(side_effect=AssertionError("must not migrate binding"))
@@ -268,7 +269,7 @@ async def test_ruleset_transactions_reject_before_binding_or_reducer(tmp_path, m
     with pytest.raises(ModuleStateError):
         if operation == "intent":
             await ruleset_gameplay.submit_intent(dependencies, "web|intent|bot", "gm", True, {
-                **action, "intent_id": "start", "expected_version": instance.ruleset_state["version"],
+                **action, "intent_id": "start", "expected_version": ruleset_runtime.state(instance)["version"],
             })
         else:
             await ruleset_gameplay.resume_authoritative_combat(dependencies, "web|intent|bot", "gm")

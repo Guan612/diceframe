@@ -18,6 +18,7 @@ from src.lorebook.store import LorebookStore
 from src.webui.api import WebAPI, can_modify_character
 from src.webui.game_lifecycle_context import CreationTransaction
 from src.webui.session import SessionManager
+from src.engine.modules import ruleset_runtime
 
 
 class FakeLLMClient:
@@ -276,7 +277,7 @@ async def test_professional_character_is_rederived_bound_and_saved_without_field
     assert sheet["attributes"]["str"] == canonical["abilities"]["str"] != 99
     assert isinstance(sheet["equipment"], list)
     assert isinstance(canonical["equipment"], dict)
-    assert instance.ruleset_runtime["id"] == "core:dnd2024"
+    assert ruleset_runtime.binding(instance)["id"] == "core:dnd2024"
     cards = api.list_character_cards()["cards"]
     assert cards[-1]["ruleset_character"]["rule_binding"]["content_version"] == (
         "srd-5.2.1+r5"
@@ -334,7 +335,7 @@ async def test_professional_seed_restart_keeps_rule_and_prevalidates_before_muta
     assert restarted["ok"] is True
     instance = registry.get(api._parse_key(restarted["game_key"]))
     assert instance.rule_id == "dnd2024_srd"
-    assert instance.ruleset_runtime["id"] == "core:dnd2024"
+    assert ruleset_runtime.binding(instance)["id"] == "core:dnd2024"
     assert instance.get_character_sheet("seed_gm")["hp"] != 999
 
 

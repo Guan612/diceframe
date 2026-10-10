@@ -230,30 +230,6 @@ class GameInstance:
         adventure_runtime_state.replace_play_mode(self, value)
 
     @property
-    def ruleset_runtime(self) -> dict[str, Any]:
-        return ruleset_runtime.binding(self)
-
-    @ruleset_runtime.setter
-    def ruleset_runtime(self, value: dict[str, Any]) -> None:
-        ruleset_runtime.replace_binding(self, value)
-
-    @property
-    def ruleset_state(self) -> dict[str, Any]:
-        return ruleset_runtime.state(self)
-
-    @ruleset_state.setter
-    def ruleset_state(self, value: dict[str, Any]) -> None:
-        ruleset_runtime.replace_state(self, value)
-
-    @property
-    def event_ledger(self) -> list[dict[str, Any]]:
-        return ruleset_runtime.event_ledger(self)
-
-    @event_ledger.setter
-    def event_ledger(self, value: list[dict[str, Any]]) -> None:
-        ruleset_runtime.replace_event_ledger(self, value)
-
-    @property
     def combat_active(self) -> bool:
         return legacy_combat.combat_active(self)
 
@@ -911,7 +887,8 @@ class GameInstance:
         """
 
         normalized = self._normalized_ruleset_binding(binding)
-        return bool(normalized and self.ruleset_runtime and self.ruleset_runtime == normalized)
+        current = ruleset_runtime.binding(self)
+        return bool(normalized and current and current == normalized)
 
     def bind_ruleset_runtime(self, binding: dict[str, Any]) -> bool:
         """Bind versioned ruleset state once; reject mixed-runtime characters.
@@ -923,7 +900,8 @@ class GameInstance:
         if normalized is None:
             return False
         ruleset_runtime.require_writable(self)
-        if self.ruleset_runtime and self.ruleset_runtime != normalized:
+        current = ruleset_runtime.binding(self)
+        if current and current != normalized:
             return False
         ruleset_runtime.bind(self, normalized)
         return True

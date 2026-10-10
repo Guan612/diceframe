@@ -12,6 +12,7 @@ from src.engine.player_control import set_control
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 
 from tests.test_dnd2024_temporary_encounter import _character
+from src.engine.modules import ruleset_runtime
 
 
 def _instance_with_players(runtime: Dnd2024Runtime, seats: list[str]) -> GameInstance:
@@ -46,7 +47,7 @@ def test_ai_hosted_seat_is_not_required_for_encounter_ready() -> None:
     instance = _instance_with_players(runtime, ["gm", "ally", "ai_seat"])
     set_control(instance, "ai_seat", "ai")
 
-    instance.ruleset_state["encounter_request"] = {
+    ruleset_runtime.state(instance)["encounter_request"] = {
         "status": "pending",
         "ready_player_ids": ["ally"],
     }
@@ -62,7 +63,7 @@ def test_human_seat_still_blocks_until_ready() -> None:
     instance = _instance_with_players(runtime, ["gm", "ally", "ai_seat"])
     set_control(instance, "ai_seat", "ai")
 
-    instance.ruleset_state["encounter_request"] = {
+    ruleset_runtime.state(instance)["encounter_request"] = {
         "status": "pending",
         "ready_player_ids": [],
     }
@@ -76,7 +77,7 @@ def test_default_control_mode_keeps_human_requirement() -> None:
     runtime = Dnd2024Runtime()
     instance = _instance_with_players(runtime, ["gm", "ally"])
 
-    instance.ruleset_state["encounter_request"] = {
+    ruleset_runtime.state(instance)["encounter_request"] = {
         "status": "pending",
         "ready_player_ids": [],
     }
@@ -92,7 +93,7 @@ def test_all_ai_party_ready_with_gm_alone() -> None:
     set_control(instance, "ai_seat", "ai")
     set_control(instance, "ai_seat2", "ai")
 
-    instance.ruleset_state["encounter_request"] = {
+    ruleset_runtime.state(instance)["encounter_request"] = {
         "status": "pending",
         "ready_player_ids": [],
     }

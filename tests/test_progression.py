@@ -10,6 +10,7 @@ from src.engine.economy import era_key
 from src.engine.game_instance import GameInstance
 from src.engine.game_state import GameState
 from src.rulesets.automation import append_public_timeline_entry
+from src.engine.modules import ruleset_runtime
 
 
 @pytest.mark.parametrize("value, expected", [(0, 1), (7, 8), (2.5, 3.5)])
@@ -161,8 +162,8 @@ def test_public_timeline_transaction_rollback_restores_round_and_history():
     )
     instance.round_number = 3
     before = deepcopy({
-        "ruleset_state": instance.ruleset_state,
-        "event_ledger": instance.event_ledger,
+        "ruleset_state": ruleset_runtime.state(instance),
+        "event_ledger": ruleset_runtime.event_ledger(instance),
         "players": instance.players,
         "combat_state": instance.combat_state,
         "combat_active": instance.combat_active,
