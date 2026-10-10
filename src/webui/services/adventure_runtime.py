@@ -39,7 +39,7 @@ from src.adventures.progress import (
     complete_objective,
     new_progress,
 )
-from src.engine.modules import adventure_runtime_state
+from src.engine.modules import adventure_runtime_state, economy_state
 
 logger = logging.getLogger("trpg")
 
@@ -257,14 +257,14 @@ def complete_adventure_node(
         if before_world is not None:
             instance.world_state = before_world
         if before_economy is not None:
-            instance.economy = before_economy
+            economy_state.replace_state(instance, before_economy)
         raise
     except Exception:
         adventure_runtime_state.replace_progress(instance, before_progress)
         if before_world is not None:
             instance.world_state = before_world
         if before_economy is not None:
-            instance.economy = before_economy
+            economy_state.replace_state(instance, before_economy)
         raise
 
     return {
