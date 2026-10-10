@@ -12,6 +12,7 @@ from aiohttp import web
 
 from src.engine.economy import has_blocking_economy_decision, pending_economy_proposals
 from src.engine.game_instance import GameState
+from src.engine.modules import checks
 from src.engine.visibility_rules import proposal_visible_to
 from src.llm.parser import sanitize_narration
 from src.webui.connection_pool import ConnectionPool
@@ -302,9 +303,9 @@ def _play_public_signature(inst, user_id: str) -> str:
             )
         ],
         "multiplayer": inst.multiplayer_status(),
-        "round_checks_prepared": bool(getattr(inst, "round_checks_prepared", False)),
+        "round_checks_prepared": bool(checks.round_checks_prepared(inst)),
         "round_check_results": (
-            getattr(inst, "last_checks", [])
+            checks.last_checks(inst)
             if inst.state == GameState.ACTIVE_JUDGMENT else []
         ),
         "character_sheet": inst.get_character_sheet(user_id),

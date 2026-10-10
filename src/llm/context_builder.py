@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
+from src.engine.modules import checks
 from src.engine.visibility_rules import manual_roll_visible_to
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.llm.parser import sanitize_narration
@@ -381,7 +382,7 @@ def format_manual_roll_context(
         return ""
     language = normalize_language(getattr(instance, "language", "zh-CN"))
     records: list[str] = []
-    for req in getattr(instance, "manual_roll_requests", None) or []:
+    for req in checks.manual_roll_requests(instance):
         if not isinstance(req, dict):
             continue
         if req.get("status") != "resolved" or str(req.get("run_id") or "") != run_id:

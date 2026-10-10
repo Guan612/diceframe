@@ -132,10 +132,10 @@ async def test_manual_roll_rejection_preserves_requests_and_status(operation, at
     instance = _make_populated_instance()
     instance.manual_roll_requests.clear()
     if attribute_double:
-        # Existing callers also use attribute-based doubles. Here getters
-        # cannot reject early, so these cases exercise service preflight itself.
+        # Non-aggregate doubles carry only module state; the service reads the
+        # checks slot directly, so rejection must not depend on GameInstance.
         instance = SimpleNamespace(
-            modules={}, manual_roll_requests=[], gm_uid=instance.gm_uid,
+            modules={}, gm_uid=instance.gm_uid,
             game_key=instance.game_key, run_id=instance.run_id,
             round_number=instance.round_number, players=instance.players, last_activity="",
         )

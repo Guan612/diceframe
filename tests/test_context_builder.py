@@ -3,6 +3,7 @@
 import logging
 
 import pytest
+from src.engine.modules import checks
 from src.llm.context_builder import (
     _INVENTORY_STATE_LIMIT,
     _KEY_ITEMS_STATE_LIMIT,
@@ -515,7 +516,8 @@ def _manual_roll_instance(requests):
     instance.difficulty = "normal"
     instance.combat_state = {}
     instance.private_log = {}
-    instance.manual_roll_requests = list(requests)
+    instance.modules = {}
+    checks.replace_manual_roll_requests(instance, list(requests))
     return instance
 
 
