@@ -22,7 +22,7 @@ from src.engine import game_instance
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import record_health_event
 from src.engine.module_state import ModuleStateError
-from src.engine.modules import media, room_access
+from src.engine.modules import checks, media, room_access
 from src.compat.saves import normalize_save_payload
 from src.compat.save_paths import save_path
 
@@ -307,7 +307,7 @@ async def recover_all(registry: GameRegistry) -> list[GameInstance]:
             if instance and instance.state != GameState.ENDED:
                 kept_luck_pending = (
                     instance.state == GameState.ACTIVE_JUDGMENT
-                    and instance.round_checks_prepared
+                    and checks.round_checks_prepared(instance)
                     and instance.pending_luck_checks()
                 )
                 if not kept_luck_pending:

@@ -15,6 +15,7 @@ from src.engine.constants import WEAPON_DAMAGE, canonical_item_key
 from src.engine.dice import roll_initiative
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.engine.modules import checks
 
 logger = logging.getLogger("trpg")
 
@@ -41,7 +42,7 @@ class CombatResolver:
             return None
         matches = [
             check
-            for check in instance.last_checks
+            for check in checks.last_checks(instance)
             if str(check.get("check_id") or "") == check_id
             and str(check.get("actor_uid") or "") == actor_uid
             and str(check.get("kind") or "") == "attack"
