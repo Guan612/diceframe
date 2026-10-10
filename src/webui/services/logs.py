@@ -6,7 +6,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
-from src.engine.modules import check_reveals, table_settings
+from src.engine.modules import check_reveals, progression_state, table_settings
 from src.llm.parser import sanitize_narration
 
 GameKey = tuple[str, ...]
@@ -139,7 +139,7 @@ def get_statistics(dependencies: LogDependencies, game_key: str) -> dict[str, An
                 player_stats[name]["actions"] = player_stats[name].get("actions", 0) + 1
 
     return {
-        "total_rounds": inst.round_number,
+        "total_rounds": progression_state.round_value(inst),
         "total_battles": battles,
         "total_llm_calls": inst.total_llm_calls,
         "total_tokens": inst.total_tokens,

@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Any
 
+from src.engine import progression
 from src.engine.checks import build_check_request, roll_check_request
 from src.engine.character_utils import is_conscious
 from src.engine.game_instance import GameInstance
@@ -53,7 +54,7 @@ def collect_actions_text(instance: GameInstance) -> str:
 
 def collect_gm_directives_text(instance: GameInstance) -> tuple[str, list[str]]:
     """返回本轮可用的 GM 私密指令文本及其 ID，供成功结算后消费。"""
-    current_round = int(instance.round_number or 0)
+    current_round = progression.current_round(instance)
     entries = [
         entry for entry in instance.gm_directives
         if int(entry.get("target_round", current_round) or current_round) <= current_round

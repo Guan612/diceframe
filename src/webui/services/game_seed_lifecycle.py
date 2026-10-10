@@ -8,7 +8,7 @@ from typing import Any
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.module_state import ModuleStateError
-from src.engine.modules import adventure_runtime_state, content_binding
+from src.engine.modules import adventure_runtime_state, content_binding, progression_state
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.migrations import migrate_instance
 from src.rulesets.contracts import LiveAdvancementPolicyRuntime
@@ -274,7 +274,7 @@ async def create_from_seed(
         "narration": narration,
         "players": created_players,
         "seed_code": seed_code,
-        "round_number": instance.round_number,
+        "round_number": progression_state.round_value(instance),
         "state": instance.state.value,
         "adventure_binding": dict(instance.adventure_binding),
     }

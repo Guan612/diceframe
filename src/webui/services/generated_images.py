@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Protocol
 
+from src.engine import progression
 from src.engine.language import normalize_language
 from src.engine.modules.media import replace_scene_image
 from src.imagegen import (
@@ -342,9 +343,9 @@ class GeneratedImageService:
         if not user_id or user_id != instance.gm_uid:
             return {"ok": False, "error": "仅 GM 可生成当前轮场景图"}
         try:
-            requested_round = int(round_number) if round_number is not None else int(getattr(instance, "round_number", 0) or 0)
+            requested_round = int(round_number) if round_number is not None else progression.current_round(instance)
         except (TypeError, ValueError):
-            requested_round = int(getattr(instance, "round_number", 0) or 0)
+            requested_round = progression.current_round(instance)
         prompt = str(prompt or "").strip()
         if not prompt:
             return {"ok": False, "error": "请填写画面描述"}

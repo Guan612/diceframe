@@ -12,7 +12,7 @@ from typing import Any
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
 from src.engine import progression
-from src.engine.modules import adventure_runtime_state, economy_state, ruleset_runtime, seat_activity, session_stats
+from src.engine.modules import adventure_runtime_state, economy_state, progression_state, ruleset_runtime, seat_activity, session_stats
 from src.engine.action_gate import (
     GateRequest, ROUND_PROCESSING, SOURCE_INTENT, STRUCTURED_INTENT_POLICY,
     check_not_judging, check_seat_exists, evaluate,
@@ -139,7 +139,7 @@ async def _project_batch_memory(
         try:
             await dependencies.apply_memory_delta(
                 instance.memory_namespace, {"add": [memory]},
-                int(getattr(instance, "round_number", 0) or 0),
+                progression.current_round(instance),
             )
         except Exception:
             # Long-term memory is a derived projection of the persisted
@@ -519,7 +519,7 @@ async def submit_intent(
             "initiative_current": instance.initiative_current,
             "last_activity": instance.last_activity,
             "log": deepcopy(instance.log),
-            "round_number": instance.round_number,
+            "round_number": progression_state.round_value(instance),
         }
         # Only a first mark is undone if the transaction rolls back.
         marks_seat = (
@@ -657,7 +657,7 @@ async def resume_authoritative_combat(
             "initiative_current": instance.initiative_current,
             "last_activity": instance.last_activity,
             "log": deepcopy(instance.log),
-            "round_number": instance.round_number,
+            "round_number": progression_state.round_value(instance),
         }
         try:
             rng = random.SystemRandom()

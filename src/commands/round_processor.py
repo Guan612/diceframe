@@ -69,8 +69,8 @@ from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.module_state import ModuleStateError
 from src.engine.modules.media import replace_scene_image
 from src.engine.modules import (
-    adventure_runtime_state, checks, legacy_combat, narrative_notes, round_safety, ruleset_runtime,
-    session_stats, world_reports,
+    adventure_runtime_state, checks, legacy_combat, narrative_notes, progression_state, round_safety,
+    ruleset_runtime, session_stats, world_reports,
 )
 from src.engine.language import localized_text
 from src.engine.world_events import advance_world_time
@@ -397,7 +397,7 @@ class RoundProcessor:
                 return []
             logger.info(
                 "检定规划: 完成 (round=%d, 耗时=%dms)",
-                instance.round_number,
+                progression_state.round_value(instance),
                 int((time.perf_counter() - plan_started) * 1000),
             )
             # AI 报价落库必须在过时检查之后：创建提案会推进 revision，
@@ -409,7 +409,7 @@ class RoundProcessor:
                     ):
                         logger.info(
                             "同商品购买已待确认，跳过重复 AI 报价: payer=%s target=%s round=%d",
-                            offer["payer_uid"], offer["target"], instance.round_number,
+                            offer["payer_uid"], offer["target"], progression_state.round_value(instance),
                         )
                         continue
                     quantity = max(1, min(8, int(offer.get("quantity", 1) or 1)))
@@ -421,7 +421,7 @@ class RoundProcessor:
                         reason=str(offer.get("note") or ""),
                         source="table_offer",
                         source_ref=(
-                            f"ai:{instance.run_id}:{instance.round_number}:"
+                            f"ai:{instance.run_id}:{progression_state.round_value(instance)}:"
                             f"{offer['payer_uid']}:{offer['target']}:{quantity}:"
                             f"{offer.get('amount_scope') or 'total'}:{offer['amount']}"
                         ),
@@ -468,7 +468,7 @@ class RoundProcessor:
                 try:
                     outcome = advance_world_time(
                         instance, int(time_advance["minutes"]),
-                        source_round=instance.round_number,
+                        source_round=progression_state.round_value(instance),
                     )
                     if self._advance_adventure_world is not None:
                         self._advance_adventure_world(instance)
@@ -493,7 +493,7 @@ class RoundProcessor:
                     # world 类）；只读 receipts、只写 memory 侧，不触碰世界真相。
                     queue_world_memory(
                         instance, outcome.get("events") or [],
-                        round_number=instance.round_number,
+                        round_number=progression_state.round_value(instance),
                     )
             build_dice_constraint_block(
                 instance,
@@ -672,7 +672,7 @@ class RoundProcessor:
         """若到摘要周期（每 10 回合），调度后台摘要任务并返回；否则返回 None。"""
         if not needs_summary(instance):
             return None
-        task = asyncio.create_task(self._summarize_background(instance, gm_prompt, instance.round_number))
+        task = asyncio.create_task(self._summarize_background(instance, gm_prompt, progression_state.round_value(instance)))
         self._pending_summary_tasks.add(task)
         task.add_done_callback(self._pending_summary_tasks.discard)
         return task
@@ -683,7 +683,7 @@ class RoundProcessor:
         if service is None or not service.available or not service.auto_scene:
             return None
         prompt = str(data.get("scene_image_prompt") or "").strip()
-        completed_round = int(instance.round_number) - 1
+        completed_round = int(progression_state.round_value(instance)) - 1
         if completed_round < 0:
             return None
         _, panels, compressed_count = _scene_storyboard_payload(data)
@@ -1163,7 +1163,7 @@ class RoundProcessor:
                 logger.warning(
                     "经济提案未能建立叙事效果决策屏障，已 fail closed: game=%s round=%d proposals=%d",
                     instance.game_key,
-                    instance.round_number,
+                    progression_state.round_value(instance),
                     len(queued_proposals),
                 )
         instance.set_state_update_recap(response.state_update)
@@ -1194,7 +1194,7 @@ class RoundProcessor:
             try:
                 await self.memory_store.flush_pending_embeddings()
             except Exception:
-                logger.warning("flush_pending_embeddings 失败 (round=%d)", instance.round_number, exc_info=True)
+                logger.warning("flush_pending_embeddings 失败 (round=%d)", progression_state.round_value(instance), exc_info=True)
         apply_plot_update(instance, response)
         store_private_messages(instance, response)
         state_msgs = append_state_change_messages(instance, response, public_state_before, data)
@@ -1230,7 +1230,7 @@ class RoundProcessor:
         # manual generation and later restores use the same source.
         if bool(getattr(self._image_generation, "auto_storyboard", False)):
             completed = next((item for item in reversed(instance.log)
-                              if _log_round(item, -1) == int(instance.round_number) - 1), None)
+                              if _log_round(item, -1) == int(progression_state.round_value(instance)) - 1), None)
             if isinstance(completed, dict):
                 completed["scene_panels"] = normalize_scene_panels(
                     data.get("scene_panels"), merge_same_location=False,
@@ -1259,7 +1259,7 @@ class RoundProcessor:
             instance.record_save_success()
         except Exception:
             count = instance.record_save_failure()
-            logger.exception("存档失败(连续%d次) (round=%d)", count, instance.round_number)
+            logger.exception("存档失败(连续%d次) (round=%d)", count, progression_state.round_value(instance))
 
         return response.narration, response.info_asymmetry
 
@@ -1319,5 +1319,5 @@ class RoundProcessor:
             await self.memory_store.apply_delta(
                 instance.memory_namespace,
                 response.memory_delta,
-                instance.round_number,
+                progression_state.round_value(instance),
             )

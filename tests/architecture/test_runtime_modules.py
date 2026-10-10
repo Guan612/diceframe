@@ -593,17 +593,33 @@ def test_gate_dependency_guard_resolves_import_forms(source, prefix) -> None:
     assert any(_under(name, prefix) for _, name in _imports(path, ast.parse(source)))
 
 
+# The GameInstance round_number setter forwards to the same module writer.
+ROUND_COUNTER_MODULE_WRITERS = {SRC / "engine" / "progression.py", SRC / "engine" / "game_instance.py"}
+
+
 def _round_counter_writes(path: Path, tree: ast.AST) -> list[int]:
     # Field declarations and constructor keywords (e.g. DecisionEntry's independent
     # round_number) are not runtime attribute writes. No file-wide exceptions.
     # Like the other ownership guards, this does not track aliases or setattr.
+    # The module write path ``progression_state.set_round_value(...)`` is
+    # reserved for progression (plus the compatibility setter).
     if path == SRC / "engine" / "progression.py":
         return []
-    return [
+    attribute_writes = [
         node.lineno for node in ast.walk(tree)
         if isinstance(node, ast.Attribute)
         and isinstance(node.ctx, (ast.Store, ast.Del))
         and node.attr == "round_number"
+    ]
+    if path in ROUND_COUNTER_MODULE_WRITERS:
+        return attribute_writes
+    return attribute_writes + [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "progression_state"
+        and node.func.attr == "set_round_value"
     ]
 
 
@@ -628,6 +644,14 @@ def test_round_counter_guard_rejects_attribute_writes(source) -> None:
     for path in ("engine/game_instance.py", "engine/plot_tracker.py", "rulesets/automation.py"):
         assert _round_counter_writes(SRC / path, tree)
     assert not _round_counter_writes(SRC / "engine/progression.py", tree)
+
+
+def test_round_counter_guard_rejects_module_writes_outside_progression() -> None:
+    tree = ast.parse("progression_state.set_round_value(instance, 3)")
+    for path in ("engine/plot_tracker.py", "rulesets/automation.py", "webui/services/turns.py"):
+        assert _round_counter_writes(SRC / path, tree)
+    for owner in ROUND_COUNTER_MODULE_WRITERS:
+        assert not _round_counter_writes(owner, tree)
 
 
 def test_round_counter_guard_allows_independent_fields_and_construction() -> None:

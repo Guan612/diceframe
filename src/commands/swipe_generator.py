@@ -23,7 +23,7 @@ from src.commands.round_actions import format_check_results_constraint
 from src.commands.state_update_applier import StateUpdateApplier, discard_unresolved_player_damage
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
-from src.engine.modules import adventure_runtime_state, narrative_notes, session_stats
+from src.engine.modules import adventure_runtime_state, narrative_notes, progression_state, session_stats
 from src.engine.modules import combat_extension_state
 from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
@@ -152,7 +152,7 @@ class SwipeGenerator:
                 if int(entry.get("round", 0) or 0) <= round_num
             ]
             current_combat_snapshot = combat_extension_state.round_snapshots(instance).get(
-                str(instance.round_number),
+                str(progression_state.round_value(instance)),
             )
             if isinstance(current_combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(current_combat_snapshot):
@@ -270,7 +270,7 @@ class SwipeGenerator:
         if data.get("plot_update") and instance.plot_tracker:
             try:
                 instance.plot_tracker.apply_update(
-                    data.get("plot_update", {}), instance.round_number)
+                    data.get("plot_update", {}), progression_state.round_value(instance))
             except Exception:
                 logger.exception("Swipe 剧情更新异常，已跳过 (round=%d)", round_num)
 

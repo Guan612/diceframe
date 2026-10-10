@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.engine import progression
 from src.engine.game_state import GameState
+from src.engine.modules import progression_state
 from src.engine.round_snapshots import restore_players, snapshot_players
 from src.engine.world_state import ensure_world_state
 
@@ -59,12 +60,12 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     last = instance.log.pop()
     from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
 
-    rolled_back_round = int(last.get("round", instance.round_number) or instance.round_number)
+    rolled_back_round = int(last.get("round", progression_state.round_value(instance)) or progression_state.round_value(instance))
     current_combat_snapshot = combat_extension_state.round_snapshots(instance).get(
-        str(instance.round_number),
+        str(progression_state.round_value(instance)),
     )
     if (
-        instance.round_number >= rolled_back_round
+        progression_state.round_value(instance) >= rolled_back_round
         and isinstance(current_combat_snapshot, dict)
     ):
         if not instance.restore_combat_extension_snapshot(current_combat_snapshot):
@@ -109,7 +110,7 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     round_safety.discard_round(instance)
     instance.state = GameState.ACTIVE_ACTION
     session_stats.touch(instance)
-    return instance.round_number
+    return progression_state.round_value(instance)
 
 
 # ---------- 判定失败恢复（未提交回合）-----------------------
@@ -139,7 +140,7 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
         restore_players(instance, instance.round_start_snapshot)
         restored = True
     combat_snapshot = combat_extension_state.round_snapshots(instance).get(
-        str(instance.round_number),
+        str(progression_state.round_value(instance)),
     )
     if isinstance(combat_snapshot, dict):
         if not instance.restore_combat_extension_snapshot(combat_snapshot):
@@ -202,7 +203,7 @@ def finish_judgment_locked(
         if item not in combined_state_changes:
             combined_state_changes.append(item)
     instance.log.append({
-        "round": instance.round_number,
+        "round": progression_state.round_value(instance),
         "actions": list(instance.action_queue),
         "gm_response": gm_response,
         "state_changes": combined_state_changes,
@@ -213,7 +214,7 @@ def finish_judgment_locked(
         ),
         "combat_extension_round_start": copy.deepcopy(
             combat_extension_state.round_snapshots(instance).get(
-                str(instance.round_number),
+                str(progression_state.round_value(instance)),
                 combat_extension_state.current(instance) if isinstance(combat_extension_state.current(instance), dict) else {},
             )
         ),
@@ -239,7 +240,7 @@ def finish_judgment_locked(
         ),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
-    combat_extension_state.round_snapshots(instance).pop(str(instance.round_number), None)
+    combat_extension_state.round_snapshots(instance).pop(str(progression_state.round_value(instance)), None)
     session_stats.record_llm_usage(instance, 0, calls=1)
     session_stats.touch(instance)
 

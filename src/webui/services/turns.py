@@ -40,6 +40,7 @@ from src.engine.economy import (
 from src.engine.game_instance import GameState
 from src.engine.language import localized_text
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
+from src.engine.modules import progression_state
 from src.engine.player_control import SUBMISSION_BLOCK_CODES
 from src.engine.visibility_rules import proposal_visible_to
 from src.webui.services._common import MAX_ACTIONS_PER_TURN
@@ -796,7 +797,7 @@ async def submit_action(
         # their original call shape. Aggregate checks run after its state lock.
         run_options = {"expected_run_id": expected_run_id} if expected_run_id else {}
         if instance.state == GameState.PAUSED:
-            if instance.round_number <= 0:
+            if progression_state.round_value(instance) <= 0:
                 await instance.start_round(**run_options)
             else:
                 await instance.resume(**run_options)

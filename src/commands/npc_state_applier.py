@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 
 from src.engine.game_instance import GameInstance
+from src.engine.modules import progression_state
 
 logger = logging.getLogger("trpg")
 
@@ -32,7 +33,7 @@ class NpcStateApplier:
                 instance.npcs[npc_name] = {
                     "name": npc_name,
                     "character_name": npc_name,
-                    "first_seen_round": instance.round_number,
+                    "first_seen_round": progression_state.round_value(instance),
                     "hp": base_hp,
                     "max_hp": base_hp,
                     "armor": base_armor,

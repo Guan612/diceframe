@@ -33,7 +33,7 @@ from src.engine.combat_scheduler import (
     scheduler_from_config,
 )
 from src.engine.game_instance import GameInstance, GameState
-from src.engine.modules import combat_extension_state
+from src.engine.modules import combat_extension_state, progression_state
 
 _COMBAT_EXTENSION_SCHEMA = 1
 
@@ -432,7 +432,7 @@ def _append_public_summary(
     })
     raw_log = instance.log if isinstance(instance.log, list) else []
     try:
-        current_round = int(instance.round_number)
+        current_round = int(progression_state.round_value(instance))
     except (TypeError, ValueError):
         current_round = 0
     for entry in reversed(raw_log):

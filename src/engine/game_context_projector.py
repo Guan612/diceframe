@@ -51,6 +51,8 @@ class GameContextProjector:
         *,
         character_sheet_projector: CharacterSheetProjector | None = None,
     ) -> GameContextView:
+        from src.engine.modules import progression_state
+
         project_sheet = character_sheet_projector or _project_generic_character_sheet
         players_view: dict[str, PlayerContextView] = {}
         for uid, player_data in instance.players.items():
@@ -69,7 +71,7 @@ class GameContextProjector:
         ]
         state: GameContextView = {
             "world_name": instance.world_name,
-            "round_number": instance.round_number,
+            "round_number": progression_state.round_value(instance),
             "scene": instance.scene,
             "game_time": instance.game_time,
             "difficulty": instance.difficulty,

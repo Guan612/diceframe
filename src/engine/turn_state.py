@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 from src.engine.contracts import ActionRecord
 from src.engine import progression
 from src.engine.game_state import GameState
+from src.engine.modules import progression_state
 from src.engine.player_control import (
     ai_controlled_players,
     away_control_policy,
@@ -95,7 +96,7 @@ def multiplayer_status(instance: GameInstance) -> dict:
 
     return {
         "state": instance.state.value,
-        "round_number": instance.round_number,
+        "round_number": progression_state.round_value(instance),
         "solo_mode": instance.solo_mode,
         "player_count": len(instance.players),
         "max_players": instance.max_players,
@@ -322,7 +323,7 @@ def start_round_locked(instance: GameInstance) -> None:
     checks.require_writable(instance)
     round_safety.require_writable(instance)
     progression.open_next_round(instance)
-    current = str(instance.round_number)
+    current = str(progression_state.round_value(instance))
     round_safety.keep_death_saves_for(instance, current)
     instance.state = GameState.ACTIVE_ACTION
     checks.invalidate_prepared(instance)
@@ -333,7 +334,7 @@ def start_round_locked(instance: GameInstance) -> None:
         instance.action_queue.extend(instance.pending_actions)
         instance.pending_actions.clear()
     session_stats.touch(instance)
-    logger.info("Round %d 开始 - game_key=%s", instance.round_number, instance.game_key)
+    logger.info("Round %d 开始 - game_key=%s", progression_state.round_value(instance), instance.game_key)
 
 
 def apply_action_roll_locked(

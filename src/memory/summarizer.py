@@ -9,6 +9,7 @@ import logging
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.engine.modules import progression_state
 from src.llm.parser import sanitize_narration
 
 logger = logging.getLogger("trpg")
@@ -194,7 +195,7 @@ def build_summary_input(instance: GameInstance, last_n_rounds: int = 10) -> str:
 
 def needs_summary(instance: GameInstance, interval: int = 10) -> bool:
     """判断是否需要触发摘要压缩。"""
-    return instance.round_number > 0 and instance.round_number % interval == 0
+    return progression_state.round_value(instance) > 0 and progression_state.round_value(instance) % interval == 0
 
 
 async def summarize(instance: GameInstance, llm_client, system_prompt: str,
@@ -248,7 +249,7 @@ async def summarize(instance: GameInstance, llm_client, system_prompt: str,
                 response.narration or response.content
             ))
             instance.set_key_facts([])
-        logger.info("摘要生成完成: round=%d", instance.round_number)
+        logger.info("摘要生成完成: round=%d", progression_state.round_value(instance))
     except Exception:
         logger.exception("摘要生成失败")
         # 降级：保留旧摘要，不覆盖（旧摘要可能仍然有效）

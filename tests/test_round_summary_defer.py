@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.commands.round_processor import RoundProcessor
+from src.engine.modules import progression_state
 
 
 class _FakeLLM:
@@ -30,7 +31,7 @@ def _make_processor(content: str = '{"narrative":"摘要内容","key_facts":[]}'
 def _make_instance(round_number: int) -> SimpleNamespace:
     instance = SimpleNamespace(
         game_key=("web", "test"),
-        round_number=round_number,
+        modules={"progression": {**progression_state.fresh(), "round": round_number}},
         language="zh",
         log=[{"round": 1, "actions": [{"user_id": "p1", "text": "环顾四周"}], "gm_response": "一个房间"}],
         summary={},
