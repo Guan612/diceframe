@@ -1,0 +1,112 @@
+"""Lorebook importer/exporter for the multi-kind content sync contract."""
+
+from __future__ import annotations
+
+from contextlib import AbstractContextManager, nullcontext
+from typing import Any
+
+from src.content_modules.plan import Decision, DeclaredSource
+from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource, check_book_limits
+from src.engine.world.contracts import canonical_id
+from src.lorebook.importer import draft_lorebook_import
+from src.lorebook.import_plan import (
+    execute_lorebook_plan,
+    plan_lorebook_import,
+    portable_lorebook_document,
+)
+
+LOREBOOK_FORMAT = "lorebook_v3"
+FORMAT_UNSUPPORTED = "FORMAT_UNSUPPORTED"
+CANONICAL_HINT_UNSUPPORTED = "CANONICAL_HINT_UNSUPPORTED"
+
+
+def lorebook_state_token(store: Any, book_id: str) -> str:
+    book = store.get_lorebook(book_id) or {}
+    return str(int(book.get("revision") or 0))
+
+
+def lorebook_result(store: Any, client_ref: str, result: dict[str, Any]) -> dict[str, Any]:
+    """One sync result row for an executed Lorebook plan."""
+
+    row: dict[str, Any] = {
+        "client_ref": client_ref,
+        "kind": "lorebook",
+        "status": result["status"],
+        "canonical_id": result["book_id"],
+        "state_token": lorebook_state_token(store, result["book_id"]),
+        "entries_removed": int(result.get("entries_removed") or 0),
+    }
+    if result.get("detached_book_id"):
+        row["detached_id"] = result["detached_book_id"]
+    return row
+
+
+def book_provenance(book: dict[str, Any]) -> dict[str, str] | None:
+    if not str(book.get("source_id") or ""):
+        return None
+    return {
+        "source_kind": str(book.get("source_kind") or ""),
+        "source_id": str(book.get("source_id") or ""),
+        "external_id": str(book.get("external_id") or ""),
+        "link": str(book.get("import_link") or ""),
+        "source_digest": str(book.get("source_digest") or ""),
+    }
+
+
+class LorebookSyncImporter:
+    """Plans one pushed ``lorebook_v3`` document; the Book is left unbound."""
+
+    def __init__(self, store: Any) -> None:
+        self.store = store
+
+    def lock(self) -> AbstractContextManager[Any]:
+        # The canonical store is SQLite on the event-loop thread and each
+        # item commits in its own transaction; no library-level lock needed.
+        return nullcontext()
+
+    def plan(self, source: SyncSource, item: SyncItem) -> KindPlan:
+        if item.canonical_hint:
+            raise SyncItemError(CANONICAL_HINT_UNSUPPORTED, "lorebooks are matched by identity only")
+        document = item.document
+        if item.format not in ("", LOREBOOK_FORMAT) or not isinstance(document, dict) or (
+            document.get("spec") != LOREBOOK_FORMAT
+        ):
+            raise SyncItemError(FORMAT_UNSUPPORTED, "a lorebook item must be a lorebook_v3 document")
+        declared = DeclaredSource(source.kind, source.id, canonical_id(item.client_ref, field="client_ref"))
+        # Limits apply to what the adapter actually parsed, before planning.
+        check_book_limits(draft_lorebook_import(document).entries, client_ref=item.client_ref)
+        plan = plan_lorebook_import(self.store, document, declared=declared)
+        store = self.store
+
+        def execute(resolved: Any) -> list[dict[str, Any]]:
+            decision: Decision | None = resolved.get(item.client_ref)
+            result = execute_lorebook_plan(store, plan, decision)
+            return [lorebook_result(store, item.client_ref, result)]
+
+        warnings = [{"code": "LOREBOOK_ADAPTER", "message": str(text)} for text in plan.draft.warnings]
+        return KindPlan(entries=[(item.client_ref, plan.item)], execute=execute, warnings=warnings)
+
+
+class LorebookSyncExporter:
+    def __init__(self, store: Any) -> None:
+        self.store = store
+
+    def export(self, canonical_id: str) -> dict[str, Any] | None:
+        book = self.store.get_lorebook(canonical_id)
+        if not book:
+            return None
+        return {
+            "format": LOREBOOK_FORMAT,
+            "document": portable_lorebook_document(self.store, canonical_id),
+            "state_token": lorebook_state_token(self.store, canonical_id),
+            "provenance": book_provenance(book),
+        }
+
+
+__all__ = [
+    "LorebookSyncExporter",
+    "LorebookSyncImporter",
+    "book_provenance",
+    "lorebook_result",
+    "lorebook_state_token",
+]

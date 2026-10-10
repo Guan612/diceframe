@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from src.content_modules.adapters.character_card_v3 import CardV3FormatError, read_card_v3
+from src.content_modules.adapters.character_card_v3 import CardV3FormatError, read_card_v3, write_card_v3
 from src.content_modules.plan import (
     PLAN_STALE,
     Decision,
@@ -46,12 +46,16 @@ from src.content_modules.plan import (
     resolve_decision,
 )
 from src.content_modules.refs import ContentDraft
+from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource, check_book_limits
+from src.lorebook.importer import draft_lorebook_import
 from src.engine.world.contracts import canonical_id
 from src.lorebook.import_plan import (
     LorebookImportPlan,
     execute_lorebook_plan,
     plan_lorebook_import,
+    portable_lorebook_document,
 )
+from src.lorebook.sync import lorebook_result
 from src.lorebook.store import LorebookIdentityConflict
 from src.webui.character_card_projection import (
     CARD_PROVENANCE_KEY,
@@ -473,8 +477,122 @@ def commit_card_import(
     }
 
 
+# ---- Multi-kind sync contract (/api/content/*) -----------------------------------
+
+CARD_FORMAT = "chara_card_v3"
+
+
+def _sync_card_row(client_ref: str, result: dict[str, Any], card: dict[str, Any] | None) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "client_ref": client_ref,
+        "kind": CARD_KIND,
+        "status": result["status"],
+        "canonical_id": result["card_id"],
+        "state_token": result.get("state_token") or (_state_token(card) if card else ""),
+    }
+    if result.get("detached_card_id"):
+        row["detached_id"] = result["detached_card_id"]
+    return row
+
+
+class CardSyncImporter:
+    """Plans one pushed card (and its embedded book) for the sync contract."""
+
+    def __init__(self, dependencies: CardImportDependencies, *, pushed_by_device: str = "") -> None:
+        self.dependencies = dependencies
+        self.pushed_by_device = pushed_by_device
+
+    def lock(self) -> AbstractContextManager[Any]:
+        return self.dependencies.lock()
+
+    def plan(self, source: SyncSource, item: SyncItem) -> KindPlan:
+        if item.format not in ("", CARD_FORMAT):
+            raise SyncItemError("FORMAT_UNSUPPORTED", "a card item must be a chara_card_v3 document")
+        try:
+            embedded = read_card_v3(item.document).character_book
+        except CardV3FormatError as exc:
+            raise SyncItemError(exc.code, str(exc)) from exc
+        if embedded is not None:
+            # Same parse the book plan uses: limits count what is imported.
+            check_book_limits(
+                draft_lorebook_import({"spec": "lorebook_v3", "data": {"lorebook": embedded}}).entries,
+                client_ref=f"{item.client_ref}.book",
+            )
+        body = {
+            "source": {"kind": source.kind, "id": source.id},
+            "external_id": item.client_ref,
+            "document": item.document,
+            "canonical_hint": item.canonical_hint or None,
+        }
+        try:
+            plan = plan_card_import(self.dependencies, body)
+        except _ImportRequestError as exc:
+            raise SyncItemError(exc.code, str(exc)) from exc
+        book_ref = f"{item.client_ref}.book"
+        entries = [(item.client_ref, plan.item)]
+        if plan.book is not None:
+            entries.append((book_ref, plan.book.item))
+        dependencies = self.dependencies
+        pushed_by_device = self.pushed_by_device
+
+        def execute(resolved: Any) -> list[dict[str, Any]]:
+            rows: list[dict[str, Any]] = []
+            book_id = ""
+            if plan.book is not None:
+                result = execute_lorebook_plan(dependencies.lorebook, plan.book, resolved.get(book_ref))
+                book_id = str(result["book_id"])
+                rows.append(lorebook_result(dependencies.lorebook, book_ref, result))
+            card_result = _execute_card(
+                dependencies, plan, resolved.get(item.client_ref),
+                book_id=book_id, pushed_by_device=pushed_by_device,
+            )
+            stored = next(
+                (card for card in dependencies.read_cards() if str(card.get("id") or "") == card_result["card_id"]),
+                None,
+            )
+            rows.insert(0, _sync_card_row(item.client_ref, card_result, stored))
+            return rows
+
+        return KindPlan(entries=entries, execute=execute, warnings=list(plan.warnings))
+
+
+class CardSyncExporter:
+    """Library card -> portable ``chara_card_v3`` (with its linked book)."""
+
+    def __init__(self, dependencies: CardImportDependencies) -> None:
+        self.dependencies = dependencies
+
+    def export(self, canonical_id: str) -> dict[str, Any] | None:
+        with self.dependencies.lock():
+            card = next(
+                (row for row in self.dependencies.read_cards() if str(row.get("id") or "") == canonical_id),
+                None,
+            )
+        if card is None:
+            return None
+        warnings: list[dict[str, str]] = []
+        body = {key: copy.deepcopy(value) for key, value in card.items() if key not in _SERVER_ONLY_FIELDS}
+        portrait = _portable_portrait(body.get("portrait"), warnings)
+        body["portrait"] = portrait or {}
+        provenance = card_provenance(card)
+        book = None
+        book_id = (provenance or {}).get("book_id", "")
+        lorebook = self.dependencies.lorebook
+        if book_id and lorebook is not None and lorebook.get_lorebook(book_id):
+            book = portable_lorebook_document(lorebook, book_id)["data"]["lorebook"]
+        return {
+            "format": CARD_FORMAT,
+            "document": write_card_v3(body, character_book=book),
+            "state_token": _state_token(card),
+            "provenance": provenance,
+            "warnings": warnings,
+        }
+
+
 __all__ = [
     "CardImportDependencies",
+    "CardSyncExporter",
+    "CardSyncImporter",
     "CardImportPlan",
     "commit_card_import",
     "plan_card_import",

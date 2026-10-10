@@ -26,6 +26,7 @@ from typing import Any
 from src.content_modules.plan import Decision, ExistingMatch, PlanItem, content_digest
 from src.content_modules.refs import ContentDraft
 from src.lorebook.domain import LorebookDraft
+from src.lorebook.exporter import export_lorebook_v3
 from src.lorebook.importer import (
     DeclaredSource,
     book_settings,
@@ -33,6 +34,7 @@ from src.lorebook.importer import (
     import_entry_id,
     in_import_transaction,
     legacy_book_id,
+    lorebook_draft_digest,
     lorebook_content_draft,
     write_import_entries,
 )
@@ -61,6 +63,24 @@ def book_state_digest(store: Any, book_id: str) -> str:
         "book": {key: book.get(key) for key in _STATE_BOOK_FIELDS},
         "entries": entries,
     })
+
+
+def portable_lorebook_document(store: Any, book_id: str) -> dict[str, Any]:
+    """``lorebook_v3`` export whose entry ids are the ids the source used.
+
+    An imported entry is exported under the external id it was pushed with,
+    so pushing the document back addresses the same canonical entries instead
+    of replacing them. Entries created on the server keep their canonical id.
+    """
+
+    document = export_lorebook_v3(store, book_id)
+    rows = {str(row.get("id") or ""): row for row in store.list_book_entries(book_id)}
+    for entry in document["data"]["lorebook"]["entries"]:
+        provenance = (rows.get(str(entry.get("id") or "")) or {}).get("provenance")
+        external = provenance.get("external_id") if isinstance(provenance, dict) else None
+        if external:
+            entry["id"] = str(external)
+    return document
 
 
 @dataclass(frozen=True)
@@ -145,9 +165,12 @@ def plan_lorebook_import(
                 "other_matches": [str(other["id"]) for other in matches[1:]],
             },
         )
-        unchanged = (
-            server_modified is False
-            and str(book.get("source_digest") or "") == content_draft.digest
+        unchanged = server_modified is False and (
+            str(book.get("source_digest") or "") == content_draft.digest
+            # A client that pulled this Book pushes back our own export of it.
+            or lorebook_draft_digest(
+                draft_lorebook_import(portable_lorebook_document(store, book_id))
+            ) == content_draft.digest
         )
     item = PlanItem(
         client_ref=content_draft.ref.canonical(),
@@ -269,6 +292,7 @@ __all__ = [
     "book_state_digest",
     "execute_lorebook_plan",
     "plan_lorebook_import",
+    "portable_lorebook_document",
     "tracked_book",
     "tracked_books",
 ]
