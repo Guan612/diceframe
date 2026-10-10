@@ -12,8 +12,13 @@ from copy import deepcopy
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
-from src.engine.modules import room_access
+from src.engine.game_instance import GameInstance
+from src.engine.game_state import GameState
+from src.engine.modules import room_access, seat_activity
+from src.engine.player_control import set_control
 from src.webui.character_sheet_authority import (
+    ADOPT_REQUIRES_GM,
+    DELETE_REQUIRES_GM,
     FIELD_REQUIRES_GM,
     level_up_allocation,
     player_field_violations,
@@ -225,6 +230,214 @@ async def test_player_adopts_a_library_card_by_id_only(table):
     assert table.instance.players["p1"]["character_name"] == "Plugin Hero"
     assert sheet["attributes"] == {"str": 14}
     assert sheet["hp"] != 999 and sheet["gold"] != 99999
+
+
+# ---- once a seat has acted, card adoption and deletion are GM-only ----------
+# Adopting replaces stats, gold and equipment, and delete + rejoin is the same
+# reset: after the seat played, either is a free refill / re-roll.  The table
+# is a running web game (ACTIVE_ACTION), as every web-created game is.
+
+ADOPT_CARD = {
+    # Plugin-shipped, so seated players may see (and so adopt) it.
+    "character_name": "Refill Hero", "source_plugin": "starter-pack", "attributes": {"str": 18},
+    "hp": 99, "max_hp": 99, "gold": 9999,
+    "equipment": [{"name": "神剑", "type": "weapon", "slot": "main_hand"}],
+}
+
+
+def _adopt_card_id(env) -> str:
+    assert env.api.save_character_card(dict(ADOPT_CARD))["ok"]
+    return next(
+        c["id"] for c in env.api.list_character_cards()["cards"]
+        if c.get("character_name") == "Refill Hero"
+    )
+
+
+def _adopt_url(env, uid="p1", query="share=1"):
+    return _url(env, uid, query).replace(f"/character/{uid}", f"/character/{uid}/adopt-card")
+
+
+async def _adopt(env, card_id, *, headers, url=None):
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
+        response = await client.post(
+            url or _adopt_url(env), headers=headers, json={"card_id": card_id},
+        )
+        return response.status, await response.json()
+
+
+async def _delete(env, *, headers, url=None):
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
+        response = await client.delete(url or _url(env), headers=headers)
+        return response.status, await response.json()
+
+
+async def _act(env, uid="p1"):
+    """The seat declares an action through the engine's action boundary."""
+    assert await env.instance.add_action(uid, "我拔剑冲向哨兵") is True
+    assert seat_activity.has_acted(env.instance, uid)
+
+
+@pytest.mark.asyncio
+async def test_fresh_seat_in_a_running_game_self_adopts(table):
+    """Claiming a GM-prepared seat, then switching to one's own card, still works."""
+    assert table.instance.state == GameState.ACTIVE_ACTION
+    card_id = _adopt_card_id(table)
+    status, body = await _adopt(table, card_id, headers=_seat(table))
+    assert status == 200, body
+    assert _sheet(table)["gold"] == 9999
+    assert table.instance.players["p1"]["character_name"] == "Refill Hero"
+
+
+@pytest.mark.asyncio
+async def test_seat_cannot_self_adopt_after_it_acted(table):
+    card_id = _adopt_card_id(table)
+    await _act(table)
+    before = deepcopy(table.instance.players["p1"])
+    status, body = await _adopt(table, card_id, headers=_seat(table))
+    assert status == 403, body
+    assert body["error_code"] == ADOPT_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+
+@pytest.mark.asyncio
+async def test_ai_hosted_actions_do_not_lock_the_seat(table):
+    """A seat the AI played is still the claimer's to switch to their own card."""
+    set_control(table.instance, "p1", "ai")
+    assert await table.instance.add_action("p1", "AI 替这个席位行动") is True
+    assert not seat_activity.has_acted(table.instance, "p1")
+
+
+@pytest.mark.asyncio
+async def test_gm_and_owner_always_adopt(table, monkeypatch):
+    import web_server
+
+    card_id = _adopt_card_id(table)
+    await _act(table, "p1")
+    await _act(table, "p2")
+    status, body = await _adopt(
+        table, card_id, headers={**_owner(), **CONFIRM}, url=_adopt_url(table, query=""),
+    )
+    assert status == 200, body
+    assert _sheet(table)["gold"] == 9999
+
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    as_gm = {"X-Bot-Token": "bot-secret", "X-Bot-Actor": GM_UID, **CONFIRM}
+    status, body = await _adopt(table, card_id, headers=as_gm, url=_adopt_url(table, "p2", ""))
+    assert status == 200, body
+    assert _sheet(table, "p2")["gold"] == 9999
+
+
+@pytest.mark.asyncio
+async def test_bot_for_a_player_seat_follows_the_seat_rule(table, monkeypatch):
+    import web_server
+
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    card_id = _adopt_card_id(table)
+    as_player = {"X-Bot-Token": "bot-secret", "X-Bot-Actor": "p1", **CONFIRM}
+    await _act(table)
+    before = deepcopy(table.instance.players["p1"])
+    status, body = await _adopt(table, card_id, headers=as_player, url=_adopt_url(table, query=""))
+    assert status == 403, body
+    assert body["error_code"] == ADOPT_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+
+@pytest.mark.asyncio
+async def test_p2p_guest_relayed_by_host_follows_the_seat_rule(table):
+    card_id = _adopt_card_id(table)
+    relayed = {**_owner(), **CONFIRM}
+    url = _adopt_url(table, query="user=p1&share=1&delegate=1")
+    await _act(table)
+    before = deepcopy(table.instance.players["p1"])
+    status, body = await _adopt(table, card_id, headers=relayed, url=url)
+    assert status == 403, body
+    assert body["error_code"] == ADOPT_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+
+# Share links (seat tokens) cannot DELETE a character at all (access policy)
+# and the P2P bridge has no delete operation; the player-side caller that
+# reaches the delete route is a bot acting for the seat.
+
+def _bot_for(uid):
+    return {"X-Bot-Token": "bot-secret", "X-Bot-Actor": uid, **CONFIRM}
+
+
+@pytest.mark.asyncio
+async def test_seat_that_never_acted_may_still_delete_itself(table, monkeypatch):
+    import web_server
+
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    status, body = await _delete(table, headers=_bot_for("p1"), url=_url(table, query=""))
+    assert status == 200, body
+    assert "p1" not in table.instance.players
+
+
+@pytest.mark.asyncio
+async def test_acted_seat_cannot_delete_itself_and_rejoin(table, monkeypatch):
+    import web_server
+
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    await _act(table)
+    before = deepcopy(table.instance.players["p1"])
+    status, body = await _delete(table, headers=_bot_for("p1"), url=_url(table, query=""))
+    assert status == 403, body
+    assert body["error_code"] == DELETE_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+    status, body = await _delete(table, headers={**_owner(), **CONFIRM}, url=_url(table, query=""))
+    assert status == 200, body
+    assert "p1" not in table.instance.players
+    assert not seat_activity.has_acted(table.instance, "p1")
+
+
+@pytest.mark.asyncio
+async def test_bot_for_the_gm_seat_deletes_an_acted_seat(table, monkeypatch):
+    import web_server
+
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    await _act(table)
+    status, body = await _delete(table, headers=_bot_for(GM_UID), url=_url(table, query=""))
+    assert status == 200, body
+    assert "p1" not in table.instance.players
+
+
+@pytest.mark.asyncio
+async def test_new_player_still_joins_mid_game_from_a_card(table):
+    """Joining creates a fresh seat (JoinView copies a card into the form)."""
+    from test_share_gm_seat_guard import _cookie
+
+    fresh, _ = table.sessions.get_or_create(None)
+    async with TestClient(TestServer(table.app), headers=ROOM_HEADER) as client:
+        response = await client.post(
+            f"/api/games/{table.key}/players?share=1", headers=_cookie(fresh),
+            json={"character_name": "Refill Hero", "attributes": {"str": 12},
+                  "race": "人类", "class": "游侠", "join_as_new": True},
+        )
+        body = await response.json()
+    assert response.status == 200, body
+    assert table.instance.players[body["user_id"]]["character_name"] == "Refill Hero"
+    assert not seat_activity.has_acted(table.instance, body["user_id"])
+
+
+@pytest.mark.asyncio
+async def test_roster_projects_has_acted_per_seat(table):
+    await _act(table)
+    async with TestClient(TestServer(table.app), headers=ROOM_HEADER) as client:
+        roster = await (await client.get(
+            f"/api/games/{table.key}/characters?share=1", headers=_seat(table),
+        )).json()
+    flags = {p["user_id"]: p["has_acted"] for p in roster["players"]}
+    assert flags["p1"] is True and flags["p2"] is False
+
+
+@pytest.mark.asyncio
+async def test_acted_flag_survives_save_and_clears_with_the_run(table):
+    await _act(table)
+    restored = GameInstance.from_dict(table.instance.to_dict())
+    assert seat_activity.has_acted(restored, "p1")
+    await restored.reset()
+    assert not seat_activity.has_acted(restored, "p1")
 
 
 def test_policy_denies_rule_special_stats_and_unknown_mechanics():

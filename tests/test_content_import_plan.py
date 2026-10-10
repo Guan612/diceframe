@@ -352,3 +352,43 @@ def test_v11_moves_uniqueness_to_tracked_books_and_is_idempotent() -> None:
     conn.execute("UPDATE lorebooks SET import_link = 'detached' WHERE id = 'a'")
     conn.execute(insert, ("b", "B", "tracked"))
     conn.execute(insert, ("c", "C", "detached"))
+
+
+# ---- #487 review follow-ups ----------------------------------------------------
+
+
+@pytest.mark.parametrize("decision", ["skip", "update"])
+def test_a_binding_is_never_silently_dropped_by_an_answer_that_writes_nothing(web_api, decision) -> None:
+    api, lorebook, *_ = web_api
+    body = _push(_book("Atlas", {"town": "Town"}))
+    created = _commit(api, body)
+    binding = {"id": "bind:new", "scope_kind": "global", "scope_id": ""}
+
+    preview = _preview(api, body)
+    assert _item(preview)["action"] == "unchanged"
+    result = api.commit_lorebook_plan({
+        **body, "plan_digest": preview["plan"]["plan_digest"],
+        "decision": decision, "binding": binding,
+    })
+
+    assert result["ok"] is False and result["error_code"] == "BINDING_REQUIRES_WRITE"
+    assert [b for b in lorebook.list_bindings() if b["book_id"] == created["book_id"]] == []
+
+
+def test_several_legacy_books_sharing_a_source_resolve_deterministically(web_api) -> None:
+    api, lorebook, *_ = web_api
+    document = _book("Atlas", {"town": "Town"})
+    first = api.commit_lorebook_import(document)["book_id"]
+    source = lorebook.get_lorebook(first)
+    # A second legacy Book with the same source (e.g. an older explicit book_id import).
+    lorebook.create_lorebook({
+        "id": "aaa-older-id", "name": "Atlas copy",
+        "source_kind": source["source_kind"], "source_id": source["source_id"],
+    })
+
+    items = [_item(_preview(api, document)) for _ in range(3)]
+
+    assert len({item["existing"]["canonical_id"] for item in items}) == 1
+    target = items[0]["existing"]["canonical_id"]
+    others = items[0]["existing"]["other_matches"]
+    assert sorted([target, *others]) == sorted([first, "aaa-older-id"])

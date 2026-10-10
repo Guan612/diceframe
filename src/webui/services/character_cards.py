@@ -8,9 +8,11 @@ import io
 import json
 import logging
 import tempfile
+import threading
 import time
 import uuid
 import zipfile
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,7 @@ from src.webui.character_card_projection import (
     card_signature,
     dedupe_cards,
     has_card_provenance,
+    is_plugin_card,
 )
 
 logger = logging.getLogger("trpg")
@@ -64,6 +67,41 @@ class CharacterCardDependencies:
     rebuild_lorebook_index: Callable[[str], None] | None = None
 
 
+_LIBRARY_LOCKS: dict[str, threading.RLock] = {}
+_LIBRARY_LOCKS_GUARD = threading.Lock()
+
+
+def library_lock(dependencies: CharacterCardDependencies) -> threading.RLock:
+    """The one lock every read-modify-write of a card library file holds.
+
+    ``cards.json`` has no storage-level invariant, so anything that checks the
+    library and then writes it (signature merge, import identity uniqueness)
+    must do both under this lock. It is re-entrant so a locked operation can
+    call another one.
+
+    It is a thread lock: it does not separate coroutines on the event loop
+    thread (re-entrancy lets them all in). A locked section must therefore
+    never ``await``; it stays atomic for coroutines only by running to
+    completion without yielding.
+    """
+
+    key = str(Path(dependencies.cards_path).resolve())
+    with _LIBRARY_LOCKS_GUARD:
+        lock = _LIBRARY_LOCKS.get(key)
+        if lock is None:
+            lock = _LIBRARY_LOCKS[key] = threading.RLock()
+        return lock
+
+
+def _locked(function: Callable[..., Any]) -> Callable[..., Any]:
+    @functools.wraps(function)
+    def wrapper(dependencies: CharacterCardDependencies, *args: Any, **kwargs: Any) -> Any:
+        with library_lock(dependencies):
+            return function(dependencies, *args, **kwargs)
+
+    return wrapper
+
+
 def _read_cards(dependencies: CharacterCardDependencies) -> list[dict[str, Any]]:
     path = dependencies.cards_path
     if not path.exists():
@@ -85,6 +123,26 @@ def _write_cards(
     tmp_path = path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(cards, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp_path.replace(path)
+
+
+def read_library(dependencies: CharacterCardDependencies) -> list[dict[str, Any]]:
+    """Raw library rows; callers that write back must hold :func:`library_lock`."""
+
+    return _read_cards(dependencies)
+
+
+def write_library(dependencies: CharacterCardDependencies, cards: list[dict[str, Any]]) -> None:
+    _write_cards(dependencies, cards)
+
+
+def new_card_id(prefix: str = "card") -> str:
+    return _new_card_id(prefix)
+
+
+def to_library_card(character: dict, source: str = "") -> dict[str, Any]:
+    """Re-shape any character/card dict into the library card shape."""
+
+    return _to_character_card(character, source=source)
 
 
 def _new_card_id(prefix: str) -> str:
@@ -147,6 +205,7 @@ def _to_character_card(character: dict, source: str = "") -> dict[str, Any]:
     return card
 
 
+@_locked
 def list_character_cards(
     dependencies: CharacterCardDependencies,
 ) -> dict[str, Any]:
@@ -176,7 +235,7 @@ def is_shareable_card(card: dict[str, Any]) -> bool:
     automatically when someone joined some game (neither records a game, a
     session or an author), so every other card is owner-only.
     """
-    return bool(str(card.get("source_plugin") or "").strip())
+    return is_plugin_card(card)
 
 
 def list_shareable_character_cards(
@@ -219,6 +278,7 @@ def strip_card_provenance(character: dict) -> dict:
     return _strip_keys(character, (CARD_PROVENANCE_KEY,))
 
 
+@_locked
 def save_character_card(
     dependencies: CharacterCardDependencies,
     character: dict,
@@ -288,6 +348,7 @@ def save_character_card(
     return {"ok": True, "card": card}
 
 
+@_locked
 def update_character_card(
     dependencies: CharacterCardDependencies,
     card_id: str,
@@ -332,6 +393,7 @@ def update_character_card(
     return {"ok": False, "error": f"角色卡不存在: {card_id}"}
 
 
+@_locked
 def delete_character_card(
     dependencies: CharacterCardDependencies,
     card_id: str,
@@ -607,9 +669,10 @@ async def import_character_card(
     if target == "npc":
         return _import_tavern_as_npc(dependencies, tavern, world_id, document=document)
     card = _tavern_to_character_card(tavern, safe_name)
-    cards = _read_cards(dependencies)
-    cards.append(card)
-    _write_cards(dependencies, cards)
+    with library_lock(dependencies):
+        cards = _read_cards(dependencies)
+        cards.append(card)
+        _write_cards(dependencies, cards)
     result: dict[str, Any] = {"ok": True, "card": card, "imported_as": "character_card", "format": "tavern",
                               "content_draft": character_content_draft(card, source_id=safe_name).to_portable_dict()}
     # A Character Card's embedded character_book is real lore, not a footnote:

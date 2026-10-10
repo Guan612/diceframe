@@ -39,7 +39,7 @@ from src.engine.memory_outbox import (
     queue_memory_delivery,
 )
 from src.engine.game_instance import GameInstance
-from src.engine.modules import progression_state, room_access, ruleset_runtime
+from src.engine.modules import progression_state, room_access, ruleset_runtime, seat_activity
 from src.engine.player_control import claim_seat, is_human_controlled
 from src.content_modules.projection import ContentProjectionService
 from src.commands.economy_effects import pending_decision_notice
@@ -48,6 +48,8 @@ from src.rulesets.contracts import GameDetailProjectionRuntime, PlayerJoinRuntim
 from src.webui.character_contracts import MAX_BIO_CHARS
 from src.webui.character_sheet_authority import (
     EDITABLE_SHEET_FIELDS,
+    adopt_requires_gm_failure,
+    delete_requires_gm_failure,
     field_requires_gm_failure,
     player_field_violations,
 )
@@ -494,7 +496,11 @@ def list_characters(
     )
     if not inst:
         return {"players": [], "npcs": [], "rule_attrs": []}
-    players = [{"user_id": uid, **p} for uid, p in inst.players.items()]
+    players = [
+        # ``has_acted``: after its first action a seat's card / deletion is GM-only.
+        {"user_id": uid, **p, "has_acted": seat_activity.has_acted(inst, uid)}
+        for uid, p in inst.players.items()
+    ]
     rule_attrs = _get_rule_attrs_for_game(dependencies, inst)
     rule = dependencies.rules.load_rule_for_game(inst)
     for player in players:
@@ -675,17 +681,54 @@ async def adopt_library_card(
     game_key: str,
     user_id: str,
     card: dict[str, Any],
+    *,
+    gm_authority: bool,
 ) -> dict[str, Any]:
     """Replace a classic character from a server-owned library card.
 
     The card comes from the library, not from the request, so it is applied
-    with full sheet authority.  A rules-aware game answers
-    ``RULESET_CHARACTER_OPERATION_REQUIRED`` and the caller uses the ruleset
-    adoption instead.
+    with full sheet authority.  Who may adopt is still the caller's
+    ``gm_authority``: once the seat has acted (``seat_activity``) a
+    player-side caller may not swap its sheet (a free refill / re-roll); only
+    the GM may.  Before that -- a fresh seat, or one just claimed from the GM
+    or the AI -- the player may still switch to a card.  The check runs inside
+    the authoritative write so it cannot race the seat's first action.
+    A rules-aware game answers ``RULESET_CHARACTER_OPERATION_REQUIRED`` and
+    the caller uses the ruleset adoption instead.
     """
-    return await update_character(
-        dependencies, game_key, user_id, deepcopy(card), gm_authority=True,
+    inst = dependencies.games.get_instance(
+        dependencies.games.parse_game_key(game_key),
     )
+    if not inst:
+        return {"ok": False, "error": "角色不存在"}
+    instance: GameInstance = inst
+    async with instance.authoritative_write() as write_entered:
+        if not write_entered:
+            return {
+                "ok": False, "error_code": "REWRITE_IN_PROGRESS",
+                "error": "GM 正在重写历史回合，请等待完成后重试",
+            }
+        player_side_after_acting = (
+            not gm_authority
+            and user_id in instance.players
+            and not _is_rules_aware_game(dependencies, instance)
+            and seat_activity.has_acted(instance, user_id)
+        )
+        if dependencies.games.get_instance(instance.game_key) is not instance:
+            return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+        if player_side_after_acting:
+            return adopt_requires_gm_failure()
+        return await _update_character_authority(
+            dependencies, instance, user_id, deepcopy(card), gm_authority=True,
+        )
+
+
+def _is_rules_aware_game(dependencies: CharacterDependencies, inst: GameInstance) -> bool:
+    rule = dependencies.rules.load_rule_for_game(inst)
+    if rule is None:
+        return False
+    runtime = dependencies.rules.ruleset_registry.resolve(rule.template)
+    return getattr(runtime.capabilities, "character_lifecycle", "legacy") == "rules_aware"
 
 
 def _special_stat_fields(dependencies: CharacterDependencies, inst: GameInstance) -> set[str]:
@@ -710,15 +753,12 @@ async def _update_character_authority(
     inst = instance
     if not inst or user_id not in inst.players:
         return {"ok": False, "error": "角色不存在"}
-    rule = dependencies.rules.load_rule_for_game(inst)
-    if rule is not None:
-        runtime = dependencies.rules.ruleset_registry.resolve(rule.template)
-        if getattr(runtime.capabilities, "character_lifecycle", "legacy") == "rules_aware":
-            return {
-                "ok": False,
-                "error_code": "RULESET_CHARACTER_OPERATION_REQUIRED",
-                "error": "专业规则角色不能使用旧版通用编辑接口",
-            }
+    if _is_rules_aware_game(dependencies, inst):
+        return {
+            "ok": False,
+            "error_code": "RULESET_CHARACTER_OPERATION_REQUIRED",
+            "error": "专业规则角色不能使用旧版通用编辑接口",
+        }
     # Only player-editable sheet fields; anything else (card metadata, plugin
     # provenance, server-owned state) is dropped instead of mass-assigned.
     updates = {
@@ -1182,7 +1222,11 @@ async def delete_character(
     dependencies: CharacterDependencies,
     game_key: str,
     user_id: str,
+    *,
+    gm_authority: bool,
 ) -> dict[str, Any]:
+    """Remove a seat.  Once it has acted only the GM may (no delete-and-rejoin
+    reset); checked inside the authoritative write."""
     inst = dependencies.games.get_instance(
         dependencies.games.parse_game_key(game_key),
     )
@@ -1194,9 +1238,16 @@ async def delete_character(
                 "ok": False, "error_code": "REWRITE_IN_PROGRESS",
                 "error": "GM 正在重写历史回合，请等待完成后重试",
             }
+        player_side_after_acting = (
+            not gm_authority
+            and user_id in inst.players
+            and seat_activity.has_acted(inst, user_id)
+        )
         current = dependencies.games.get_instance(inst.game_key)
         if current is not inst:
             return {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"}
+        if player_side_after_acting:
+            return delete_requires_gm_failure()
         return await _delete_character_authority(dependencies, inst, user_id)
 
 

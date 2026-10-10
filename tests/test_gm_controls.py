@@ -208,6 +208,7 @@ async def test_delete_character_cleans_player_runtime_state(tmp_path):
     api = DummyAPI(registry)
     result = await characters.delete_character(
         api._character_dependencies, _GAME_KEY_SEP.join(key), "p1",
+        gm_authority=True,
     )
 
     assert result["ok"] is True
