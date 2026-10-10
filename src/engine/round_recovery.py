@@ -50,6 +50,7 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     if not instance.log:
         return None
     from src.engine.modules import adventure_runtime_state, checks, round_safety, session_stats
+    from src.engine.modules import combat_extension_state
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
@@ -59,7 +60,7 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     from src.engine.economy import reconcile_rollback_snapshot, reverse_round_economy
 
     rolled_back_round = int(last.get("round", instance.round_number) or instance.round_number)
-    current_combat_snapshot = instance.combat_extension_round_snapshots.get(
+    current_combat_snapshot = combat_extension_state.round_snapshots(instance).get(
         str(instance.round_number),
     )
     if (
@@ -67,12 +68,12 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
         and isinstance(current_combat_snapshot, dict)
     ):
         if not instance.restore_combat_extension_snapshot(current_combat_snapshot):
-            instance.combat_extension = {}
+            combat_extension_state.replace_current(instance, {})
     reverse_round_economy(instance, rolled_back_round)
     missing = object()
     combat_snapshot: Any = last.get("combat_extension_round_start", missing)
     if combat_snapshot is missing:
-        combat_snapshot = instance.combat_extension_round_snapshots.get(
+        combat_snapshot = combat_extension_state.round_snapshots(instance).get(
             str(rolled_back_round), missing,
         )
     snapshot = last.get("round_start_snapshot") or last.get("pre_state_snapshot", {})
@@ -84,7 +85,7 @@ def rollback_last_round_locked(instance: GameInstance) -> int | None:
     # overwritten by the later round_start_snapshot.
     if combat_snapshot is not missing:
         if not instance.restore_combat_extension_snapshot(combat_snapshot):
-            instance.combat_extension = {}
+            combat_extension_state.replace_current(instance, {})
     instance.discard_combat_extension_snapshots_from(rolled_back_round)
     # 世界真相同样是"这一轮结算出来的东西"：回滚到第 N 轮时，第 N 轮及
     # 之后写入的 world ops 必须一起撤销，否则世界会记住一个被丢弃的分支。
@@ -125,6 +126,7 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     from src.engine.modules import (
         adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats,
     )
+    from src.engine.modules import combat_extension_state
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
@@ -136,12 +138,12 @@ def abort_round_processing_locked(instance: GameInstance) -> bool:
     if instance.round_start_snapshot:
         restore_players(instance, instance.round_start_snapshot)
         restored = True
-    combat_snapshot = instance.combat_extension_round_snapshots.get(
+    combat_snapshot = combat_extension_state.round_snapshots(instance).get(
         str(instance.round_number),
     )
     if isinstance(combat_snapshot, dict):
         if not instance.restore_combat_extension_snapshot(combat_snapshot):
-            instance.combat_extension = {}
+            combat_extension_state.replace_current(instance, {})
         restored = True
     # 旧版战斗路径直接改写的实体（npcs/combat_enemies/战斗状态）。
     entities_restored = instance.restore_round_entity_snapshot()
@@ -173,6 +175,7 @@ def finish_judgment_locked(
     调用本函数和 ``start_round_locked``，使日志提交与下一轮开启不可交错。
     """
     from src.engine.modules import adventure_runtime_state, checks, round_safety, session_stats
+    from src.engine.modules import combat_extension_state
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
@@ -180,16 +183,16 @@ def finish_judgment_locked(
     adventure_runtime_state.require_writable(instance)
     pending_combat_summaries: list[str] = []
     raw_schema = (
-        instance.combat_extension.get("schema_version")
-        if isinstance(instance.combat_extension, dict)
+        combat_extension_state.current(instance).get("schema_version")
+        if isinstance(combat_extension_state.current(instance), dict)
         else None
     )
-    if isinstance(instance.combat_extension, dict) and (
+    if isinstance(combat_extension_state.current(instance), dict) and (
         raw_schema is None
         or (isinstance(raw_schema, int) and not isinstance(raw_schema, bool)
             and raw_schema == 1)
     ):
-        raw_pending = instance.combat_extension.pop("pending_summaries", [])
+        raw_pending = combat_extension_state.current(instance).pop("pending_summaries", [])
         if isinstance(raw_pending, list):
             pending_combat_summaries = [
                 str(item) for item in raw_pending if str(item).strip()
@@ -209,9 +212,9 @@ def finish_judgment_locked(
             if instance.round_start_snapshot else snapshot_players(instance)
         ),
         "combat_extension_round_start": copy.deepcopy(
-            instance.combat_extension_round_snapshots.get(
+            combat_extension_state.round_snapshots(instance).get(
                 str(instance.round_number),
-                instance.combat_extension if isinstance(instance.combat_extension, dict) else {},
+                combat_extension_state.current(instance) if isinstance(combat_extension_state.current(instance), dict) else {},
             )
         ),
         "swipes": [],
@@ -236,7 +239,7 @@ def finish_judgment_locked(
         ),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
-    instance.combat_extension_round_snapshots.pop(str(instance.round_number), None)
+    combat_extension_state.round_snapshots(instance).pop(str(instance.round_number), None)
     session_stats.record_llm_usage(instance, 0, calls=1)
     session_stats.touch(instance)
 
