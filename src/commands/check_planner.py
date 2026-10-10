@@ -27,7 +27,7 @@ from src.engine.dice import d20_dc_cap
 from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
-from src.engine.modules import economy_state
+from src.engine.modules import economy_state, progression_state
 from src.engine.world_events import MAX_ADVANCE_MINUTES
 from src.engine.world_legality import (
     MAX_ROUTE_HOPS,
@@ -455,7 +455,7 @@ def _planner_context(instance: GameInstance, rule: RuleSystem | None) -> str:
     if dice_system == "d20":
         ruleset["max_check_dc"] = d20_dc_cap(rule)
     payload = {
-        "round": instance.round_number,
+        "round": progression_state.round_value(instance),
         "scene": str(instance.scene or "")[:500],
         "recent_narration": [
             sanitize_narration(str(entry.get("gm_response") or ""))[:1000]
@@ -1214,7 +1214,7 @@ async def plan_round_checks(
             if isinstance(economy, list):
                 raw_economy_actions.extend(economy)
         except Exception:
-            logger.warning("economy_actions 解析失败，已忽略 (round=%d)", instance.round_number, exc_info=True)
+            logger.warning("economy_actions 解析失败，已忽略 (round=%d)", progression_state.round_value(instance), exc_info=True)
         # overreach 与 checks 独立解析：畸形/缺失只影响标注本身，绝不波及检定规划。
         try:
             over = arguments.get("overreach")
@@ -1227,7 +1227,7 @@ async def plan_round_checks(
                     if uid and reason:
                         overreach_notes.append({"player": uid, "reason": reason})
         except Exception:
-            logger.warning("overreach 标注解析失败，已忽略 (round=%d)", instance.round_number, exc_info=True)
+            logger.warning("overreach 标注解析失败，已忽略 (round=%d)", progression_state.round_value(instance), exc_info=True)
         # world_requirements 与 checks/overreach 独立解析：畸形/缺失只影响世界
         # 合法性判定本身，绝不波及检定规划。这里只做形状与花名册校验；「是否真的
         # 与世界真相矛盾」由 server 侧 world_legality 判定。
@@ -1260,7 +1260,7 @@ async def plan_round_checks(
         except Exception:
             logger.warning(
                 "world_requirements 解析失败，已忽略 (round=%d)",
-                instance.round_number, exc_info=True,
+                progression_state.round_value(instance), exc_info=True,
             )
         # world_time_advance 与 checks 独立解析：只报告本轮确实经过的逻辑时间，
         # 由 server 推进世界时钟并结算到期事件。
@@ -1280,7 +1280,7 @@ async def plan_round_checks(
         except Exception:
             logger.warning(
                 "world_time_advance 解析失败，已忽略 (round=%d)",
-                instance.round_number, exc_info=True,
+                progression_state.round_value(instance), exc_info=True,
             )
     planned, errors = normalize_check_specs(instance, rule, raw_checks)
     planned = _merge_safety_net_checks(instance, rule, planned)

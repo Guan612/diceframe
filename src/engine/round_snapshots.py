@@ -21,6 +21,7 @@ import copy
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from src.engine import progression
 from src.engine.game_state_contracts import PlayerRollbackSnapshot
 from src.engine.world_state import ensure_world_state
 
@@ -82,7 +83,7 @@ def capture_combat_extension_snapshot(
     from src.engine.modules import combat_extension_state
 
     try:
-        key = str(int(instance.round_number or 0))
+        key = str(progression.current_round(instance))
     except (TypeError, ValueError):
         key = "0"
     if not isinstance(combat_extension_state.round_snapshots(instance), dict):
@@ -192,7 +193,7 @@ def current_combat_extension_snapshot(instance: GameInstance) -> dict[str, Any]:
     from src.engine.modules import combat_extension_state
 
     try:
-        key = str(int(instance.round_number or 0))
+        key = str(progression.current_round(instance))
     except (TypeError, ValueError):
         key = "0"
     if not isinstance(combat_extension_state.round_snapshots(instance), dict):

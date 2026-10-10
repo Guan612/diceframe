@@ -39,7 +39,7 @@ from src.engine.memory_outbox import (
     queue_memory_delivery,
 )
 from src.engine.game_instance import GameInstance
-from src.engine.modules import room_access, ruleset_runtime
+from src.engine.modules import progression_state, room_access, ruleset_runtime
 from src.engine.player_control import claim_seat, is_human_controlled
 from src.content_modules.projection import ContentProjectionService
 from src.commands.economy_effects import pending_decision_notice
@@ -1022,7 +1022,7 @@ async def resolve_payment(
                     staged,
                     effect_group_id=str(effect_group.get("id") or ""),
                     memory_delta=memory_delta,
-                    round_number=int(effect_group.get("round", staged.round_number) or 0),
+                    round_number=int(effect_group.get("round", progression_state.round_value(staged)) or 0),
                 )
             result["effects_committed"] = complete_effect_group(
                 staged, str(effect_group.get("id") or ""),
@@ -1143,7 +1143,7 @@ async def _deliver_memory_outbox_locked(
                     instance.memory_namespace,
                     str(delivery.get("id") or ""),
                     dict(delivery.get("payload") or {}),
-                    int(delivery.get("round", instance.round_number) or 0),
+                    int(delivery.get("round", progression_state.round_value(instance)) or 0),
                 )
             except Exception:
                 logger.exception(

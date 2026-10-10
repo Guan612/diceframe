@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Any
+from src.engine import progression
 
 
 XP_THRESHOLDS = (
@@ -89,11 +90,11 @@ def grant(instance: Any, user_id: str, *, source: str) -> bool:
     entitlements[user_id] = {
         "target_level": level + 1,
         "source": str(source or "gm"),
-        "granted_round": int(getattr(instance, "round_number", 0) or 0),
+        "granted_round": progression.current_round(instance),
     }
     _history(state, {
         "type": "granted", "user_id": user_id, "target_level": level + 1,
-        "source": str(source or "gm"), "round": int(getattr(instance, "round_number", 0) or 0),
+        "source": str(source or "gm"), "round": progression.current_round(instance),
     })
     return True
 
@@ -113,7 +114,7 @@ def award_xp(instance: Any, user_id: str, amount: int, *, source: str) -> dict[s
     _history(state, {
         "type": "xp_awarded", "user_id": user_id, "amount": int(amount),
         "total": xp[user_id], "source": str(source or "gm"),
-        "round": int(getattr(instance, "round_number", 0) or 0),
+        "round": progression.current_round(instance),
     })
     return {"total": xp[user_id], "granted": granted}
 
@@ -132,7 +133,7 @@ def consume(instance: Any, user_id: str, target_level: int) -> None:
     _history(state, {
         "type": "consumed", "user_id": user_id, "target_level": int(target_level),
         "source": str(entitlement.get("source") or ""),
-        "round": int(getattr(instance, "round_number", 0) or 0),
+        "round": progression.current_round(instance),
     })
 
 

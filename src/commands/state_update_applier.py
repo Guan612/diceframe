@@ -28,7 +28,7 @@ from src.rulesets.contracts import (
     CharacterStateReconciliationRuntime,
 )
 from src.engine.economy import queue_proposal
-from src.engine.modules import checks
+from src.engine.modules import checks, progression_state
 
 logger = logging.getLogger("trpg")
 
@@ -66,7 +66,7 @@ def discard_unresolved_player_damage(instance: GameInstance, update: dict) -> No
             player_update.pop("hp_change", None)
             logger.warning(
                 "模型伤害缺少失败检定依据，已丢弃: uid=%s change=%s round=%d",
-                uid, hp_change, instance.round_number,
+                uid, hp_change, progression_state.round_value(instance),
             )
         if not player_update:
             players_update.pop(uid, None)
@@ -204,7 +204,7 @@ class StateUpdateApplier:
             if kind in {"payment", "purchase"}:
                 logger.warning(
                     "忽略模型经济扣款提案: kind=%s uid=%s round=%d",
-                    kind, uid, instance.round_number,
+                    kind, uid, progression_state.round_value(instance),
                 )
                 continue
             if uid not in instance.players or kind != "reward":
@@ -234,7 +234,7 @@ class StateUpdateApplier:
                 # retried, while a later round may legitimately grant the same
                 # amount for the same recurring cause.
                 source_ref = (
-                    f"round:{instance.run_id}:{instance.round_number}:reward:"
+                    f"round:{instance.run_id}:{progression_state.round_value(instance)}:reward:"
                     f"{proposal_index}:{uid}:{amount}:{reason.casefold()}"
                 )
             queued_proposals.append(queue_proposal(
@@ -366,7 +366,7 @@ class StateUpdateApplier:
                 logger.error(
                     "角色状态 reconciliation 失败，已回滚该角色本轮物品变化: "
                     "uid=%s domains=%s round=%d",
-                    uid, sorted(domains), instance.round_number, exc_info=True,
+                    uid, sorted(domains), progression_state.round_value(instance), exc_info=True,
                 )
                 self._rollback_live_items(instance, uid, snapshots.get(uid))
 

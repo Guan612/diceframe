@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
+from src.engine.modules import progression_state
 from src.engine.visibility_rules import manual_roll_visible_to
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.llm.parser import sanitize_narration
@@ -971,7 +972,7 @@ def _player_safe_state(
     ]
     return {
         "world_name": instance.world_name,
-        "round_number": instance.round_number,
+        "round_number": progression_state.round_value(instance),
         "scene": instance.scene,
         "game_time": instance.game_time,
         "difficulty": instance.difficulty,

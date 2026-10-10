@@ -12,6 +12,7 @@ from aiohttp import web
 
 from src.engine.economy import has_blocking_economy_decision, pending_economy_proposals
 from src.engine.game_instance import GameState
+from src.engine.modules import progression_state
 from src.engine.visibility_rules import proposal_visible_to
 from src.llm.parser import sanitize_narration
 from src.webui.connection_pool import ConnectionPool
@@ -52,7 +53,7 @@ async def sse_stream(request: web.Request) -> web.StreamResponse:
     response.headers["Connection"] = "keep-alive"
     await response.prepare(request)
 
-    seen_rounds = inst.round_number
+    seen_rounds = progression_state.round_value(inst)
     max_idle = 60
     try:
         for _ in range(max_idle * 2):
@@ -60,8 +61,8 @@ async def sse_stream(request: web.Request) -> web.StreamResponse:
             if not current:
                 await response.write(b"event: end\ndata: game_ended\n\n")
                 break
-            if current.round_number > seen_rounds:
-                seen_rounds = current.round_number
+            if progression_state.round_value(current) > seen_rounds:
+                seen_rounds = progression_state.round_value(current)
                 last_log = current.log[-1] if current.log else {}
                 gm_text = sanitize_narration(last_log.get("gm_response", ""))
                 if gm_text:
@@ -199,7 +200,7 @@ async def sse_play(request: web.Request) -> web.StreamResponse:
     if fresh_connection:
         # 页面已先通过 HTTP 获取完整快照。首次 SSE 连接只建立当前基线，
         # 不把既有回合、行动和私聊误报成新事件，再触发一整组重复 GET。
-        last_round = inst.round_number
+        last_round = progression_state.round_value(inst)
         last_private_count = len(inst.private_log.get(user_id, []))
         last_action_digest = _signature_digest(action_signature)
         last_public_digest = _signature_digest(public_signature)
@@ -227,8 +228,8 @@ async def sse_play(request: web.Request) -> web.StreamResponse:
             public_signature = _play_public_signature(inst, user_id)
             public_digest = _signature_digest(public_signature)
             public_event_sent = False
-            if inst.round_number > last_round:
-                last_round = inst.round_number
+            if progression_state.round_value(inst) > last_round:
+                last_round = progression_state.round_value(inst)
                 log_last = inst.log[-1] if inst.log else {}
                 await _write_play_event(
                     resp,
@@ -246,9 +247,9 @@ async def sse_play(request: web.Request) -> web.StreamResponse:
                 cs = inst.get_character_sheet(user_id)
                 await _write_play_event(resp, last_round, last_private_count, action_signature, public_signature, {'type':'state','hp':cs.get('hp'),'max_hp':cs.get('max_hp'),'gold':cs.get('gold'),'deceased':cs.get('deceased'),'status':cs.get('status'),'death_saves':cs.get('death_saves')})
                 public_event_sent = True
-            elif inst.round_number < last_round:
+            elif progression_state.round_value(inst) < last_round:
                 # 回滚后回合号会倒退；同步游标，避免后续重新推进到旧回合号时漏报。
-                last_round = inst.round_number
+                last_round = progression_state.round_value(inst)
                 await _write_play_event(resp, last_round, last_private_count, action_signature, public_signature, {'type':'rollback'})
                 public_event_sent = True
             if action_digest != last_action_digest:
@@ -286,7 +287,7 @@ async def sse_play(request: web.Request) -> web.StreamResponse:
 def _play_public_signature(inst, user_id: str) -> str:
     """返回会影响玩家游戏页的公开状态签名。"""
     payload = {
-        "round_number": inst.round_number,
+        "round_number": progression_state.round_value(inst),
         "state": inst.state.value,
         "last_activity": inst.last_activity,
         "log_count": len(inst.log),

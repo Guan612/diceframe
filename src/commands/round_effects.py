@@ -10,6 +10,7 @@ from src.commands.state_recap import build_state_change_messages
 from src.engine.character_utils import revive_character
 from src.engine.game_instance import GameInstance
 from src.engine.health import record_health_event
+from src.engine.modules import progression_state
 from src.engine.puzzle import PuzzleState
 from src.rulesets.contracts import (
     CharacterRevivalRuntime,
@@ -48,7 +49,7 @@ def apply_combat_command(instance: GameInstance, data: dict) -> None:
     combat_cmd = data.get("combat_command", "")
     if combat_cmd == "end" and instance.combat_state == "active":
         instance.end_combat()
-        logger.info("战斗结束 (round=%d)", instance.round_number)
+        logger.info("战斗结束 (round=%d)", progression_state.round_value(instance))
 
 
 def apply_ruleset_combat_signal(
@@ -139,10 +140,10 @@ async def apply_memory_delta(instance: GameInstance, response: Any, memory_store
     if response.memory_delta and memory_store:
         try:
             await memory_store.apply_delta(
-                instance.memory_namespace, response.memory_delta, instance.round_number,
+                instance.memory_namespace, response.memory_delta, progression_state.round_value(instance),
             )
         except Exception:
-            logger.exception("记忆写入失败 (round=%d)", instance.round_number)
+            logger.exception("记忆写入失败 (round=%d)", progression_state.round_value(instance))
             record_health_event(
                 instance,
                 component="memory",
@@ -160,19 +161,19 @@ def apply_plot_update(instance: GameInstance, response: Any) -> None:
     if response.plot_update and instance.plot_tracker:
         try:
             changes = instance.plot_tracker.apply_update(
-                response.plot_update, instance.round_number,
+                response.plot_update, progression_state.round_value(instance),
             )
             if changes:
-                logger.info("剧情更新: round=%d, changes=%s", instance.round_number, changes)
+                logger.info("剧情更新: round=%d, changes=%s", progression_state.round_value(instance), changes)
         except Exception:
-            logger.exception("剧情更新异常，已跳过 (round=%d)", instance.round_number)
+            logger.exception("剧情更新异常，已跳过 (round=%d)", progression_state.round_value(instance))
 
 
 def store_private_messages(instance: GameInstance, response: Any) -> None:
     info_asym = response.info_asymmetry or {}
     for uid, msg in info_asym.items():
         instance.append_private_message(uid, {
-            "round": instance.round_number,
+            "round": progression_state.round_value(instance),
             "text": msg,
         })
 

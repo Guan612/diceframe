@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from uuid import uuid4
+from src.engine import progression
 
 _MAX_HEALTH_EVENTS = 100
 _SEVERITIES = {"info", "warning", "error", "critical"}
@@ -30,7 +31,7 @@ def record_health_event(
     event = {
         "id": "evt_" + uuid4().hex[:12],
         "time": _now_iso(),
-        "round": int(getattr(instance, "round_number", 0) or 0),
+        "round": progression.current_round(instance),
         "severity": severity,
         "component": component,
         "code": code,

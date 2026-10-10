@@ -15,7 +15,7 @@ from src.engine.constants import WEAPON_DAMAGE, canonical_item_key
 from src.engine.dice import roll_initiative
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
-from src.engine.modules import checks
+from src.engine.modules import checks, progression_state
 
 logger = logging.getLogger("trpg")
 
@@ -158,7 +158,7 @@ class CombatResolver:
             "target_hp_before": result.target_hp_before,
             "target_hp_after": result.target_hp_after,
             "description": result.description,
-            "round": instance.round_number,
+            "round": progression_state.round_value(instance),
         })
 
     def resolve_combat(self, instance: GameInstance, actions_text: str, combat_model: str, rule: Any | None = None) -> str:
@@ -245,7 +245,7 @@ class CombatResolver:
                     and rule is not None
                     and rule.death_mechanic["hp_zero"] == "downed_death_saves"
                 ):
-                    sync_death_from_hp(target, instance.round_number, rule)
+                    sync_death_from_hp(target, progression_state.round_value(instance), rule)
                 # 5e：昏迷中受击累加死亡豁免失败（任何伤害 1 次、暴击 2 次）。
                 if (
                     was_unconscious
@@ -256,7 +256,7 @@ class CombatResolver:
                 ):
                     failures = 2 if result.is_critical else 1
                     outcome = record_death_save_failures(
-                        target, failures, instance.round_number
+                        target, failures, progression_state.round_value(instance)
                     )
                     result.description += localized_text(instance.language, {
                         "zh-CN": (

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 from src.engine.dice_rng import parse_dice_formula, roll
-from src.engine.modules import checks, session_stats
+from src.engine.modules import checks, progression_state, session_stats
 from src.engine.visibility_rules import manual_roll_visible_to
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ class ManualRollService:
                 return {"ok":True,"request":old,"idempotent":True}
         session_stats.require_writable(inst)
         checks.require_writable(inst)
-        req={"id":f"mr_{uuid4().hex}","operation_id":op,"run_id":inst.run_id,"round_number":inst.round_number,"created_by":uid,"created_at":_now(),"label":str(body.get("label") or "")[:200],"formula":formula,"purpose":purpose,"target":target,"comparison":comparison,"include_in_ai_context":self._include_in_ai_context(purpose,body.get("include_in_ai_context")),"visibility":"private" if body.get("visibility")=="private" else "party","target_uids":targets,"target_names":{u:inst.players[u].get("character_name") or u for u in targets},"status":"pending","results":{}}
+        req={"id":f"mr_{uuid4().hex}","operation_id":op,"run_id":inst.run_id,"round_number":progression_state.round_value(inst),"created_by":uid,"created_at":_now(),"label":str(body.get("label") or "")[:200],"formula":formula,"purpose":purpose,"target":target,"comparison":comparison,"include_in_ai_context":self._include_in_ai_context(purpose,body.get("include_in_ai_context")),"visibility":"private" if body.get("visibility")=="private" else "party","target_uids":targets,"target_names":{u:inst.players[u].get("character_name") or u for u in targets},"status":"pending","results":{}}
         checks.add_manual_roll_request(inst, req); session_stats.touch(inst); await self.d.save_instance(inst)
         return {"ok":True,"request":req}
     async def resolve(self,key,uid,rid,body):

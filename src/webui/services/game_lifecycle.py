@@ -11,7 +11,7 @@ from typing import Any
 
 from src.commands.game_lifecycle import RunInitializationError
 from src.engine.game_instance import GameState
-from src.engine.modules import adventure_runtime_state, content_binding, room_access
+from src.engine.modules import adventure_runtime_state, content_binding, progression_state, room_access
 from src.content_modules.refs import ContentRef, ContentRefError, parse_content_ref
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
@@ -478,7 +478,7 @@ async def create_game(
         "language": normalize_language(instance.language),
         "narration": narration,
         "players": created_players,
-        "round_number": instance.round_number,
+        "round_number": progression_state.round_value(instance),
         "state": instance.state.value,
         "seed_code": instance.seed_code,
         "adventure_binding": dict(instance.adventure_binding),

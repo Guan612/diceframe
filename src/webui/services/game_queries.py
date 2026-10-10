@@ -9,7 +9,7 @@ from typing import Any, Callable
 from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
-from src.engine.modules import checks, ruleset_runtime
+from src.engine.modules import checks, progression_state, ruleset_runtime
 from src.engine.player_control import away_control_policy
 from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
 from src.llm.parser import sanitize_narration
@@ -69,7 +69,7 @@ def list_games(dependencies: GameQueryDependencies) -> dict[str, Any]:
             "map_background": dict(getattr(instance, "map_background", {}) or {}),
             "group_name": instance.group_name,
             "state": instance.state.value,
-            "round_number": instance.round_number,
+            "round_number": progression_state.round_value(instance),
             "player_count": len(instance.players),
             "max_players": max(1, int(getattr(instance, "max_players", 6) or 6)),
             "combat_active": instance.combat_active,
@@ -193,7 +193,7 @@ def game_detail(
         "world_name": instance.world_name,
         "group_name": instance.group_name,
         "state": instance.state.value,
-        "round_number": instance.round_number,
+        "round_number": progression_state.round_value(instance),
         "player_count": len(instance.players),
         "scene": instance.scene,
         "total_llm_calls": instance.total_llm_calls,
@@ -382,7 +382,7 @@ def _public_recap(instance: Any) -> dict[str, Any]:
         "recent_rounds": recent_rounds,
         "pending_actions": pending_actions,
         "current_scene": instance.scene,
-        "round_number": instance.round_number,
+        "round_number": progression_state.round_value(instance),
     }
 
 

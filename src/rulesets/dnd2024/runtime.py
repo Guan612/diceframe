@@ -19,6 +19,7 @@ from src.adventures.graph_v2 import (
     AdventureGraphV2Error,
     validate_graph_v2,
 )
+from src.engine import progression
 from src.engine.legacy_game_projection import project_legacy_game_context
 from src.engine.modules import ruleset_runtime
 from src.rulesets.dnd2024.adventure_migrations import (
@@ -1158,7 +1159,7 @@ class Dnd2024Runtime:
         request = {
             "status": "pending",
             "source": "narrative",
-            "round": int(getattr(instance, "round_number", 0) or 0),
+            "round": progression.current_round(instance),
             "ready_player_ids": [],
         }
         preset_id = str((proposal or {}).get("encounter_preset_id") or "")

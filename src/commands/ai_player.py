@@ -43,6 +43,7 @@ import logging
 import re
 from typing import Any
 
+from src.engine import progression
 from src.engine.action_gate import (
     AI_SEAT_POLICY, GateRequest, SOURCE_AI_SEAT, StructuredIntentRequirement, evaluate,
 )
@@ -334,7 +335,7 @@ async def _fill_one(
     if not instance.is_alive(uid):
         # 死亡席位不能行动（add_action 也会拒绝），不必浪费一次模型调用。
         return _outcome(uid, "skipped", "deceased")
-    round_number = int(instance.round_number or 0)
+    round_number = progression.current_round(instance)
     if _existing_ai_action(instance, uid, round_number) is not None:
         # 幂等：同一 (run, round, uid) 至多一条 AI 行动。重复服务调用、SSE 重连
         # 或重试都会走到这里，而不是产生第二条行动。

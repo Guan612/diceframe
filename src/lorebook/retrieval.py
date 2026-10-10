@@ -25,6 +25,7 @@ import math
 from collections.abc import Callable, Sequence
 from typing import Any
 
+from src.engine import progression
 from src.engine.language import DEFAULT_LANGUAGE
 from src.engine.world_legality import actor_location_fact_key
 from src.engine.world_state import project_visible_state
@@ -561,7 +562,7 @@ class LoreRetriever:
             is_visible=_visible,
             is_candidate=lambda entry: self._vector_mode(entry) != "vector_only",
             extra_candidates=semantic_ids,
-            current_tick=int(getattr(instance, "round_number", 0) or 0),
+            current_tick=progression.current_round(instance),
             max_activated=self._candidate_cap(overall_budget),
         )
         hits = []
