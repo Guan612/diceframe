@@ -89,7 +89,8 @@ def test_disabled_book_leaves_the_runtime_and_comes_back(tmp_path):
 
 
 def test_book_settings_mutation_bumps_the_monotonic_revision(tmp_path):
-    """影响检索的 Book 字段必须 bump revision；纯展示字段不必。"""
+    """每次 Book 修改都 bump revision：检索字段让缓存失效，展示字段也会改变
+    Book 的内容状态（revision 同时是导入预览的 state token）。"""
 
     store = _store(tmp_path)
     try:
@@ -97,16 +98,13 @@ def test_book_settings_mutation_bumps_the_monotonic_revision(tmp_path):
             ("enabled", False), ("enabled", True),
             ("scan_depth", 9), ("token_budget", 4321), ("recursive_scanning", True),
             ("settings_json", {"fuzzy_enabled": True}),
+            ("name", "Renamed"), ("description", "Edited"),
         ):
             before = store.get_lorebook("gb")["revision"]
             assert store.update_lorebook("gb", {field: value}) is True
             after = store.get_lorebook("gb")["revision"]
             assert after == before + 1, f"{field} 未 bump revision"
 
-        # name 只影响显示，不改变检索结果，因此不 bump。
-        before = store.get_lorebook("gb")["revision"]
-        store.update_lorebook("gb", {"name": "Renamed"})
-        assert store.get_lorebook("gb")["revision"] == before
     finally:
         store.close()
 

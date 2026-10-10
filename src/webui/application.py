@@ -20,6 +20,7 @@ from src.webui.errors import error_code_middleware
 from src.webui.device_tokens import DEVICE_TOKENS_KEY, DeviceTokenStore
 from src.webui.login_audit import LOGIN_AUDIT_KEY, LoginAuditStore
 from src.webui.pairing import PairingService
+from src.webui.server_identity import SERVER_IDENTITY_KEY, ServerIdentityStore
 from src.webui.routes.adventures import register_adventures
 from src.webui.routes.announcements import register_announcements
 from src.webui.routes.asr import register_asr
@@ -97,6 +98,7 @@ def create_app(dependencies: ApplicationDependencies) -> web.Application:
     application[ABUSE_GUARD_KEY] = AbuseGuard()
     application[LOGIN_AUDIT_KEY] = LoginAuditStore(dependencies.data_dir)
     application[DEVICE_TOKENS_KEY] = DeviceTokenStore(dependencies.data_dir)
+    application[SERVER_IDENTITY_KEY] = ServerIdentityStore(dependencies.data_dir)
     application[PAIRING_SERVICE_KEY] = PairingService(
         application[DEVICE_TOKENS_KEY],
         audit=application[LOGIN_AUDIT_KEY],

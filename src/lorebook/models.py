@@ -54,6 +54,8 @@ class Lorebook(Model):
     source_id = CharField(default="")
     source_version = CharField(default="")
     source_digest = CharField(default="")
+    # The source's own id for this Book; '' for legacy one-Book-per-source rows.
+    external_id = CharField(default="")
     # Bumped by every entry mutation so Retriever cache fingerprints never go
     # stale (updated_at alone is second-precision).
     revision = IntegerField(default=0)

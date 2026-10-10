@@ -31,15 +31,15 @@ def test_legacy_adapter_sync_is_explicit_for_startup_compatibility() -> None:
 
 def test_import_receipt_round_trips_and_merges_objects(tmp_path) -> None:
     store = ImportReceiptStore(tmp_path)
-    store.record("pack", source_version="1.0.0", object_type="lorebook_entry", object_id="entry-1")
-    store.record("pack", source_version="1.0.0", object_type="character_card", object_id="card-1")
+    store.record("pack", source_kind="plugin", source_version="1.0.0", object_type="lorebook_entry", object_id="entry-1")
+    store.record("pack", source_kind="plugin", source_version="1.0.0", object_type="character_card", object_id="card-1")
     store.record(
-        "pack", source_version="1.1.0", object_type="lorebook_entry", object_id="entry-1", updated=True,
+        "pack", source_kind="plugin", source_version="1.1.0", object_type="lorebook_entry", object_id="entry-1", updated=True,
     )
 
-    receipt = store.load("pack")
+    receipt = store.load("pack", source_kind="plugin")
     assert receipt is not None
-    assert receipt.source_kind == "module"
+    assert receipt.source_kind == "plugin"
     assert receipt.source_version == "1.0.0"
     assert receipt.created_objects == [
         {"type": "lorebook_entry", "id": "entry-1"},
@@ -88,8 +88,8 @@ def test_receipt_cleanup_does_not_guess_unreceipted_objects(tmp_path) -> None:
         ),
     )
     receipts = ImportReceiptStore(tmp_path)
-    receipts.record("pack", object_type="lorebook_entry", object_id="owned")
-    receipts.record("pack", object_type="lorebook_entry", object_id="preexisting", updated=True)
+    receipts.record("pack", source_kind="plugin", object_type="lorebook_entry", object_id="owned")
+    receipts.record("pack", source_kind="plugin", object_type="lorebook_entry", object_id="preexisting", updated=True)
     lore.entries["preexisting"] = {"id": "preexisting", "source_plugin": "pack"}
 
     result = plugins.cleanup_plugin_lorebook(deps, "pack")
@@ -98,4 +98,4 @@ def test_receipt_cleanup_does_not_guess_unreceipted_objects(tmp_path) -> None:
     assert "owned" not in lore.entries
     assert "not-receipted" in lore.entries
     assert "preexisting" in lore.entries
-    assert receipts.load("pack") is None
+    assert receipts.load("pack", source_kind="plugin") is None

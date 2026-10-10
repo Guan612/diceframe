@@ -484,9 +484,29 @@ def _v9(conn: sqlite3.Connection) -> None:
     ensure_column(conn, "lorebook_entries", "regex_executable", "INTEGER NOT NULL DEFAULT 1")
 
 
+def _v10(conn: sqlite3.Connection) -> None:
+    """Separate a Book's external identity from its source.
+
+    A source such as one client install pushes many Books, so ``source_id``
+    alone cannot identify a Book any more: ``external_id`` is that source's own
+    id for it. Existing rows keep ``external_id = ''`` and with it their current
+    meaning (one Book per ``source_id``); they are never rewritten or guessed.
+
+    The partial unique index makes "at most one Book tracks a given external
+    identity" a storage invariant, while legacy rows (empty external id) stay
+    outside it.
+    """
+
+    ensure_column(conn, "lorebooks", "external_id", "TEXT NOT NULL DEFAULT ''")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_lorebooks_external_identity "
+        "ON lorebooks(source_kind, source_id, external_id) WHERE external_id <> ''"
+    )
+
+
 MIGRATIONS: tuple[tuple[int, object], ...] = (
     (1, _v1), (2, _v2), (3, _v3), (4, _v4), (5, _v5), (6, _v6), (7, _v7), (8, _v8),
-    (9, _v9),
+    (9, _v9), (10, _v10),
 )
 CURRENT_LOREBOOK_SCHEMA_VERSION = MIGRATIONS[-1][0]
 
