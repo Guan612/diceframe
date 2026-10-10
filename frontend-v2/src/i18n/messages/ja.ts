@@ -835,6 +835,8 @@ export const ja = {
   mapRecenter: '現在のシーンへ戻る',
   mapRecenterTitle: 'ホイールでズーム、ドラッグで移動；このボタンで現在のシーンへ戻る（★）',
   noMapData: 'マップデータがありません。',
+  mapNoVisibleLocations: '公開された場所はまだありません。GM が場所を表示可能に設定できます。',
+  mapPlayersSeeNoLocations: 'プレイヤーにはどの場所も見えていません。ワールドブックで公開範囲を設定してください。',
   mapAssetsLoaded: 'コンテンツパックのマップ素材を {count} 個読み込みました。',
   diceRolling: 'ダイスを振っています...',
   criticalSuccess: '大成功！',

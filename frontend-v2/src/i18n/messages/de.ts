@@ -835,6 +835,8 @@ export const de = {
   mapRecenter: 'Zurück zur aktuellen Szene',
   mapRecenterTitle: 'Scrollen zum Zoomen, Ziehen zum Verschieben; klicken, um zur aktuellen Szene (★) zurückzukehren',
   noMapData: 'Noch keine Kartendaten.',
+  mapNoVisibleLocations: 'Noch keine öffentlichen Orte. Die Spielleitung kann Orte sichtbar machen.',
+  mapPlayersSeeNoLocations: 'Spieler sehen keine Orte; lege die Sichtbarkeit im Lorebook fest.',
   mapAssetsLoaded: '{count} Karten-Assets aus Inhaltspaketen geladen.',
   diceRolling: 'Würfelt...',
   criticalSuccess: 'Kritischer Erfolg!',

@@ -838,6 +838,8 @@ export const zhCN = {
   mapRecenter: '回到当前场景',
   mapRecenterTitle: '滚轮缩放、拖拽平移；点击此按钮回到当前场景（★）',
   noMapData: '暂无地图数据。',
+  mapNoVisibleLocations: '暂无公开地点，GM 可以将地点设为可见。',
+  mapPlayersSeeNoLocations: '玩家看不到任何地点，请在世界书中设置可见范围。',
   mapAssetsLoaded: '已加载 {count} 个内容包地图素材。',
   diceRolling: '掷骰中...',
   criticalSuccess: '大成功！',

@@ -53,11 +53,27 @@ def get_map_locations(
     if not instance or not instance.world_id:
         return {"locations": [], "current_scene": "", "current_location_id": ""}
 
-    locations = lore_locations(_location_entries(dependencies, instance, viewer))
+    gm_viewer = Viewer("gm", str(getattr(instance, "gm_uid", "") or ""))
+    gm_entries = _location_entries(dependencies, instance, gm_viewer)
+    entries = gm_entries if viewer.is_gm else _location_entries(dependencies, instance, viewer)
+    locations = lore_locations(entries)
     assets = _content_map_assets(dependencies, instance.world_id)
-    merge_contributed_locations(locations, assets.get("locations", []))
-    if not viewer.is_gm:
+    contributed = list(assets.get("locations", []) or [])
+    if viewer.is_gm:
+        merge_contributed_locations(locations, contributed)
+        visibility_hint = _gm_visibility_hint(
+            dependencies, instance, gm_entries, contributed,
+        )
+    else:
+        # A plugin location must not stand in for a lore location hidden
+        # from this viewer: its id/name would reveal the hidden place.
+        hidden = _location_tokens(gm_entries) - _location_tokens(entries)
+        merge_contributed_locations(locations, [
+            location for location in contributed
+            if not (_location_tokens([location]) & hidden)
+        ])
         _prune_hidden_connections(locations)
+        visibility_hint = "" if locations else "no_visible_locations"
 
     selection = _saved_background_selection(dependencies, instance)
     definitions = assets.get("maps", [])
@@ -90,6 +106,7 @@ def get_map_locations(
     return {
         "schema_version": 1,
         "map_mode": "graph",
+        "visibility_hint": visibility_hint,
         "locations": locations,
         "current_scene": current_scene,
         "current_location_id": current_location_id,
@@ -192,6 +209,36 @@ def _location_entries(
         entry for entry in entries
         if entry_visible_to_viewer(entry, kind, viewer.uid, name)
     ]
+
+
+def _location_tokens(entries: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(token)
+        for entry in entries
+        for token in (entry.get("id"), entry.get("name"))
+        if isinstance(entry, dict) and token
+    }
+
+
+def _gm_visibility_hint(
+    dependencies: MapDependencies,
+    instance: Any,
+    gm_entries: list[dict[str, Any]],
+    contributed: list[dict[str, Any]],
+) -> str:
+    """Tell the GM when lore locations exist but no seat can see any of them."""
+
+    if not gm_entries:
+        return ""
+    gm_tokens = _location_tokens(gm_entries)
+    if any(not (_location_tokens([location]) & gm_tokens) for location in contributed):
+        return ""  # an independent plugin location reaches every seat
+    players = getattr(instance, "players", {}) or {}
+    audiences = [Viewer("outsider", "")] + [Viewer("seat", str(uid)) for uid in players]
+    for audience in audiences:
+        if _location_entries(dependencies, instance, audience):
+            return ""
+    return "players_see_no_locations"
 
 
 def _prune_hidden_connections(locations: list[dict[str, Any]]) -> None:

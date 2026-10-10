@@ -360,3 +360,118 @@ def test_builtin_template_secret_locations_stay_off_seat_map(
     assert secret_id not in seat
     if public_parent is not None:
         assert public_parent in seat
+
+
+# ---- Map: visibility hints and plugin stand-ins -----------------------------
+
+
+def _plugin_map_dependencies(store, instance, plugin_locations):
+    deps = _map_dependencies(store, instance, projection=True)
+    return dataclasses.replace(
+        deps,
+        list_map_assets=lambda _world_id: {
+            "maps": [], "locations": plugin_locations, "icons": [], "scenes": [],
+        },
+    )
+
+
+def test_plugin_location_cannot_stand_in_for_hidden_lore_location(lore_store) -> None:
+    instance = _instance(lore_store)
+    deps = _plugin_map_dependencies(lore_store, instance, [
+        {"id": "vault", "name": "Vault (plugin)", "content": "plugin art"},
+        {"id": "x", "name": "Hidden Vault", "content": "same name"},
+        {"id": "harbor", "name": "Harbor", "content": "plugin harbor"},
+    ])
+
+    seat = {loc["id"] for loc in map_service.get_map_locations(
+        deps, "g", viewer=Viewer("seat", "p1"))["locations"]}
+    gm = map_service.get_map_locations(deps, "g", viewer=Viewer("gm", "gm_user"))["locations"]
+
+    assert "vault" not in seat and "x" not in seat
+    assert "harbor" in seat
+    vault = next(loc for loc in gm if loc["id"] == "vault")
+    assert vault["source"] == "lorebook"
+
+
+def test_map_visibility_hints_for_empty_player_view(tmp_path) -> None:
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        store.create_world(WORLD, WORLD)
+        store.add_book_entry(f"world:{WORLD}", {
+            "id": "keep", "name": "Keep", "type": "location", "content": "GM only",
+        })
+        instance = _instance(store)
+        deps = _map_dependencies(store, instance, projection=True)
+
+        seat = map_service.get_map_locations(deps, "g", viewer=Viewer("seat", "p1"))
+        gm = map_service.get_map_locations(deps, "g", viewer=Viewer("gm", "gm_user"))
+        assert seat["locations"] == []
+        assert seat["visibility_hint"] == "no_visible_locations"
+        assert {loc["id"] for loc in gm["locations"]} == {"keep"}
+        assert gm["visibility_hint"] == "players_see_no_locations"
+
+        store.add_book_entry(f"world:{WORLD}", {
+            "id": "square", "name": "Square", "type": "location", "visible_to": ["*"],
+            "content": "Public",
+        })
+        assert map_service.get_map_locations(
+            deps, "g", viewer=Viewer("gm", "gm_user"))["visibility_hint"] == ""
+        assert map_service.get_map_locations(
+            deps, "g", viewer=Viewer("seat", "p1"))["visibility_hint"] == ""
+    finally:
+        store.close()
+
+
+# ---- Projection on a store without any binding (legacy) --------------------
+
+
+class _UnboundStore:
+    """A store exposing Book CRUD but holding no binding at all (legacy)."""
+
+    def __init__(self, entries: list[dict[str, Any]]) -> None:
+        self.entries = entries
+
+    def list_bindings(self, **_filters) -> list[dict[str, Any]]:
+        return []
+
+    def primary_world_book_id(self, world_id: str) -> str:
+        return f"world:{world_id}"
+
+    def list_book_entries(self, book_id: str) -> list[dict[str, Any]]:
+        return [dict(entry) for entry in self.entries] if book_id == f"world:{WORLD}" else []
+
+
+_UNBOUND_ENTRIES = [
+    {"id": "pub", "name": "Square", "type": "location", "visible_to": ["*"]},
+    {"id": "mine", "name": "Den", "type": "location", "visible_to": ["p1"]},
+    {"id": "theirs", "name": "Lair", "type": "location", "visible_to": ["p2"]},
+    {"id": "secret", "name": "Vault", "type": "location"},
+]
+
+
+def test_projection_falls_back_to_world_entries_on_unbound_store() -> None:
+    service = ContentProjectionService(_UnboundStore(_UNBOUND_ENTRIES))
+    instance = _instance(None)  # type: ignore[arg-type]
+
+    assert _ids(service.for_game(instance)) == {"pub", "mine", "theirs", "secret"}
+    assert _ids(service.for_character(instance, "p1", viewer_name="甲")) == {"pub", "mine"}
+    assert _ids(service.for_party(instance)) == {"pub"}
+
+
+@pytest.mark.asyncio
+async def test_kp_keeps_visible_lore_on_unbound_store() -> None:
+    composer = _Composer()
+    responder = KPQuestionResponder(
+        _Llm(), matcher=None, prompt_composer=composer,
+        load_world_template=lambda *_a: None,
+        ensure_matcher_for_world=lambda *_a: None,
+        lore_retriever=_GmScopedRetriever(_UNBOUND_ENTRIES),
+        content_projection=ContentProjectionService(_UnboundStore(_UNBOUND_ENTRIES)),
+    )
+    instance = _instance(None)  # type: ignore[arg-type]
+
+    await responder.answer(instance, "p1", "where?", visibility="private")
+    assert _ids(composer.lore) == {"pub", "mine"}
+    await responder.answer(instance, "p1", "where?", visibility="party")
+    assert _ids(composer.lore) == {"pub"}

@@ -120,9 +120,16 @@ class ContentProjectionService:
             store=self.store,
         ) if hasattr(self.store, "list_bindings") else []
         if not refs:
-            return self.for_world_authoring(
-                str(getattr(instance, "world_id", "") or ""), entry_type=entry_type,
-            ) if not hasattr(self.store, "list_bindings") else []
+            # Same rule as LoreRetriever.ensure_lore_context: a store with no
+            # bindings at all is a legacy store whose only content path is the
+            # world facade; a store that has bindings but resolved none for
+            # this context means "nothing is active" (e.g. a disabled Book).
+            # Viewer filtering stays with the callers (for_character/for_party).
+            if not hasattr(self.store, "list_bindings") or not self.store.list_bindings():
+                return self.for_world_authoring(
+                    str(getattr(instance, "world_id", "") or ""), entry_type=entry_type,
+                )
+            return []
         result: list[dict[str, Any]] = []
         for ref in refs:
             for entry in self.for_book(ref.book_id, entry_type=entry_type):
