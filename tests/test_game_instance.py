@@ -10,13 +10,14 @@ from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import health_payload, mark_health_event, record_health_event
 from src.commands.progression_resolver import ProgressionResolver
 from src.engine.modules import checks, economy_state, ruleset_runtime
+from src.engine.modules import legacy_combat
 
 
 def test_round_entity_snapshot_round_trips_and_defaults_empty() -> None:
     """实体快照必须能持久化往返；旧存档缺键时默认为空（自动退化为按目标核对）。"""
     instance = GameInstance(game_key=("web", "entity-snapshot-codec", "bot"))
     instance.npcs = {"goblin": {"hp": 12}}
-    instance.combat_state = "active"
+    legacy_combat.replace_combat_state(instance, "active")
     instance.capture_round_entity_snapshot()
 
     restored = GameInstance.from_dict(instance.to_dict())

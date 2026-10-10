@@ -19,6 +19,7 @@ import pytest
 
 from src.engine.game_instance import GameInstance, GameState
 from src.engine.modules import economy_state
+from src.engine.modules import legacy_combat
 from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
 from src.engine.modules import checks, combat_extension_state, ruleset_runtime
@@ -76,11 +77,11 @@ def _make_populated_instance() -> GameInstance:
     instance.pending_actions = [{"user_id": "u2", "text": "pending"}]
     instance.ready_players = {"u1"}
     instance.away_players = {"u2"}
-    instance.combat_active = True
-    instance.combat_enemies = [{"hp": 3}]
-    instance.combat_state = "active"
-    instance.initiative_order = ["u1"]
-    instance.initiative_current = 1
+    legacy_combat.replace_combat_active(instance, True)
+    legacy_combat.replace_combat_enemies(instance, [{"hp": 3}])
+    legacy_combat.replace_combat_state(instance, "active")
+    legacy_combat.replace_initiative_order(instance, ["u1"])
+    legacy_combat.replace_initiative_current(instance, 1)
     instance.max_players = 9
     instance.gm_uid = "gm1"
     instance.player_access_open = False
@@ -245,11 +246,11 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.action_queue == []
     assert instance.pending_actions == []
     assert instance.ready_players == set()
-    assert instance.combat_active is False
-    assert instance.combat_enemies == []
-    assert instance.combat_state == "none"
-    assert instance.initiative_order == []
-    assert instance.initiative_current == 0
+    assert legacy_combat.combat_active(instance) is False
+    assert legacy_combat.combat_enemies(instance) == []
+    assert legacy_combat.combat_state(instance) == "none"
+    assert legacy_combat.initiative_order(instance) == []
+    assert legacy_combat.initiative_current(instance) == 0
     assert instance.scene == ""
     assert instance.game_time == ""
     assert instance.world_state == fresh_world_state()

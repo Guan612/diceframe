@@ -11,6 +11,7 @@ from src.engine.game_state_contracts import (
     PlayerContextView,
 )
 from src.engine.language import normalize_language
+from src.engine.modules import legacy_combat
 
 if TYPE_CHECKING:
     from src.engine.game_instance import GameInstance
@@ -79,10 +80,10 @@ class GameContextProjector:
             "players": players_view,
             "away_players": away_names,
             "npcs": instance.npcs,
-            "combat_state": instance.combat_state,
-            "combat_enemies": instance.combat_enemies,
-            "initiative_order": instance.initiative_order,
-            "initiative_current": instance.initiative_current,
+            "combat_state": legacy_combat.combat_state(instance),
+            "combat_enemies": legacy_combat.combat_enemies(instance),
+            "initiative_order": legacy_combat.initiative_order(instance),
+            "initiative_current": legacy_combat.initiative_current(instance),
             "quick_actions": instance.quick_actions,
         }
         if away_names:
@@ -90,7 +91,7 @@ class GameContextProjector:
                 "暂离角色默认跟随队伍，不主动做重大决定，不承担关键风险；"
                 "除非玩家回来或 GM 明确点名。"
             )
-        if instance.combat_state == "active":
+        if legacy_combat.combat_state(instance) == "active":
             state["combat_active"] = True
         if instance.solo_mode:
             state["solo_mode"] = True

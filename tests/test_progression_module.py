@@ -27,7 +27,7 @@ from src.migrations.instance import (
     migrate_game_state_payload,
     rebind_imported_game_state_payload,
 )
-from src.engine.modules import checks, ruleset_runtime
+from src.engine.modules import checks, legacy_combat, ruleset_runtime
 
 
 UNKNOWN_SLOTS = [
@@ -70,10 +70,12 @@ def transaction_snapshot(instance, **extra):
         "ruleset_state": ruleset_runtime.state(instance),
         "event_ledger": ruleset_runtime.event_ledger(instance),
     } | {
-        key: getattr(instance, key) for key in (
-            "players", "combat_state", "combat_active",
-            "initiative_order", "initiative_current", "scene", "last_activity", "log",
-        )
+        "combat_state": legacy_combat.combat_state(instance),
+        "combat_active": legacy_combat.combat_active(instance),
+        "initiative_order": legacy_combat.initiative_order(instance),
+        "initiative_current": legacy_combat.initiative_current(instance),
+    } | {
+        key: getattr(instance, key) for key in ("players", "scene", "last_activity", "log")
     } | extra)
 
 

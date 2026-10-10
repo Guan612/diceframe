@@ -4,6 +4,7 @@ import logging
 
 import pytest
 from src.engine.modules import checks, economy_state, progression_state
+from src.engine.modules import legacy_combat
 from src.llm.context_builder import (
     _INVENTORY_STATE_LIMIT,
     _KEY_ITEMS_STATE_LIMIT,
@@ -517,7 +518,7 @@ def _manual_roll_instance(requests):
     instance.scene = "测试场景"
     instance.game_time = ""
     instance.difficulty = "normal"
-    instance.combat_state = {}
+    legacy_combat.replace_combat_state(instance, {})
     instance.private_log = {}
     instance.modules = {}
     checks.replace_manual_roll_requests(instance, list(requests))

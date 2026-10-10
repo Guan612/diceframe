@@ -9,7 +9,7 @@ from typing import Any, Callable
 from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
-from src.engine.modules import checks, economy_state, progression_state, ruleset_runtime
+from src.engine.modules import checks, economy_state, legacy_combat, progression_state, ruleset_runtime
 from src.engine.player_control import away_control_policy
 from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
 from src.llm.parser import sanitize_narration
@@ -72,7 +72,7 @@ def list_games(dependencies: GameQueryDependencies) -> dict[str, Any]:
             "round_number": progression_state.round_value(instance),
             "player_count": len(instance.players),
             "max_players": max(1, int(getattr(instance, "max_players", 6) or 6)),
-            "combat_active": instance.combat_active,
+            "combat_active": legacy_combat.combat_active(instance),
             "scene": instance.scene,
             "total_llm_calls": instance.total_llm_calls,
             "total_tokens": instance.total_tokens,

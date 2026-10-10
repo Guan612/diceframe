@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
-from src.engine.modules import checks, economy_state, progression_state
+from src.engine.modules import checks, economy_state, legacy_combat, progression_state
 from src.engine.visibility_rules import manual_roll_visible_to
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.llm.parser import sanitize_narration
@@ -979,7 +979,7 @@ def _player_safe_state(
         "language": instance.language,
         "questioning_character": actor_view,
         "public_party_roster": party,
-        "combat_state": instance.combat_state,
+        "combat_state": legacy_combat.combat_state(instance),
     }
 
 
