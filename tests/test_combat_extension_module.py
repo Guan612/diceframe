@@ -10,6 +10,7 @@ import pytest
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import combat_extension_state as combat
+from src.engine.modules import economy_state
 from src.migrations.instance import (
     CURRENT_INSTANCE_SCHEMA_VERSION,
     _migrate_v19_to_v20,
@@ -158,7 +159,7 @@ def test_full_prior_migration_chain_loads_combat(version):
     assert restored.combat_extension == {"opaque": [1]}
     assert restored.combat_extension_round_snapshots == {"2": {"opaque": [3]}}
     assert restored.away_control_policy == "pause"
-    assert restored.economy["run_id"] == restored.run_id
+    assert economy_state.state(restored)["run_id"] == restored.run_id
     assert restored.lorebook_timed_state == {}
 
 
@@ -236,7 +237,7 @@ def lifecycle_instance():
     }]
     instance.last_checks = [{"id": "check"}]
     instance.death_save_outcomes = {"2": {"p": {"outcome": "stable"}}}
-    instance.economy["next_sequence"] = 7
+    economy_state.state(instance)["next_sequence"] = 7
     instance.lorebook_timed_state = {"entry": {"sticky": 2}}
     return instance
 

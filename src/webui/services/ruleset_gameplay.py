@@ -241,6 +241,8 @@ def _restore_adventure_node_before_image(instance: Any, before: dict[str, Any]) 
             continue
         if field == "adventure_progress":
             adventure_runtime_state.replace_progress(instance, value)
+        elif field == "economy":
+            economy_state.replace_state(instance, value)
         else:
             setattr(instance, field, value)
 

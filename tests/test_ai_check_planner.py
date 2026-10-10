@@ -10,6 +10,7 @@ import pytest
 from src.commands.check_planner import _planner_context, normalize_check_specs, plan_round_checks
 from src.engine.checks import resolve_check_request
 from src.engine.game_instance import GameInstance
+from src.engine.modules import economy_state
 from src.rules.rule_system import RuleSystem
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -520,7 +521,7 @@ async def test_economy_offers_queue_payer_confirmed_proposals_idempotently() -> 
         reason="矮人摊主报价", source="table_offer", source_ref=source_ref,
     )
     assert first["id"] == second["id"]
-    assert [p["status"] for p in instance.economy["proposals"]] == ["pending"]
+    assert [p["status"] for p in economy_state.state(instance)["proposals"]] == ["pending"]
     assert first["approval_policy"] == "payer"
     assert first["source"] == "table_offer"
     assert [reward["name"] for reward in first["rewards"]] == ["长剑"]
