@@ -31,7 +31,7 @@ MODULES_DIR = "src/engine/modules/"
 REFLECTIVE_ACCESSORS = frozenset({"getattr", "setattr", "hasattr"})
 
 # Module-backed properties currently on GameInstance. Do not raise.
-MAX_MODULE_FACADES = 59
+MAX_MODULE_FACADES = 57
 
 # Keys are source file + property name, so edits inside a caller do not make
 # the baseline brittle. Do not add entries or raise counts.

@@ -18,6 +18,7 @@ from src.engine import progression
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import progression_state
+from src.engine.modules import combat_extension_state
 from webapi_harness import web_api  # noqa: F401  # pytest fixture
 from tests.test_round_failure_recovery import _new_game
 from src.migrations.instance import (
@@ -48,7 +49,7 @@ def instance_with_state(slot=None):
     instance.log = [{"round": 6, "gm_response": "Before", "pre_state_snapshot": {"gm": {"hp": 15}}}]
     instance.round_start_snapshot = {"gm": {"hp": 15}}
     instance.round_entity_snapshot = {"npcs": {"guide": {"hp": 10}}}
-    instance.combat_extension_round_snapshots["7"] = {"opaque": [1]}
+    combat_extension_state.round_snapshots(instance)["7"] = {"opaque": [1]}
     instance.adventure_progress = {"active_nodes": ["gate"]}
     instance.ruleset_state = {"version": 4}
     instance.event_ledger = [{"id": "old"}]

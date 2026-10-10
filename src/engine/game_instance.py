@@ -681,24 +681,6 @@ class GameInstance:
     def economy(self, value: Any) -> None:
         economy_state.replace_state(self, value)
 
-    @property
-    def combat_extension(self) -> dict[str, Any]:
-        """Live opaque combat state; an empty dict means disabled."""
-        return combat_extension_state.current(self)
-
-    @combat_extension.setter
-    def combat_extension(self, value: Any) -> None:
-        combat_extension_state.replace_current(self, value)
-
-    @property
-    def combat_extension_round_snapshots(self) -> dict[str, Any]:
-        """Live snapshots captured before each round's first combat write."""
-        return combat_extension_state.round_snapshots(self)
-
-    @combat_extension_round_snapshots.setter
-    def combat_extension_round_snapshots(self, value: Any) -> None:
-        combat_extension_state.replace_round_snapshots(self, value)
-
     @asynccontextmanager
     async def authoritative_write(self) -> AsyncIterator[bool]:
         """Enter the atomic live-aggregate writer gate.
