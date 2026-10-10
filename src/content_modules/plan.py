@@ -57,14 +57,22 @@ def declared_import_source(source: Any, external_id: Any) -> DeclaredSource | No
 
     if source is None and external_id is None:
         return None
+    kind, source_id = declared_source_ref(source)
+    external = canonical_id(external_id, field="external id")
+    return DeclaredSource(kind, source_id, external)
+
+
+def declared_source_ref(source: Any) -> tuple[str, str]:
+    """Validate a declared ``{kind, id}`` source on its own (``ValueError``)."""
+
+    from src.engine.world.contracts import canonical_id
+
     if not isinstance(source, dict):
         raise ValueError("source must be an object with kind and id")
     kind = source.get("kind")
     if kind not in DECLARABLE_SOURCE_KINDS:
         raise ValueError(f"source kind cannot be declared by a client: {kind!r}")
-    source_id = canonical_id(source.get("id"), field="source id")
-    external = canonical_id(external_id, field="external id")
-    return DeclaredSource(str(kind), source_id, external)
+    return str(kind), canonical_id(source.get("id"), field="source id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +190,7 @@ __all__ = [
     "DeclaredSource",
     "ITEM_UNSUPPORTED",
     "declared_import_source",
+    "declared_source_ref",
     "DECISION_NOT_ALLOWED",
     "DECISION_REQUIRED",
     "Decision",
