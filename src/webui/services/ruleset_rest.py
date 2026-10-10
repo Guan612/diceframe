@@ -72,7 +72,7 @@ def _set_rest_session(instance: Any, session: dict[str, Any]) -> None:
     state = getattr(instance, "ruleset_state", None)
     if not isinstance(state, dict):
         state = {}
-        instance.ruleset_state = state
+        ruleset_runtime.replace_state(instance, state)
     state["rest_session"] = session
 
 

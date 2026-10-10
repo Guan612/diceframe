@@ -12,6 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.engine.modules import ruleset_runtime
 from src.webui.character_card_projection import dedupe_cards
 from src.webui.character_contracts import MAX_BIO_CHARS
 
@@ -446,7 +447,7 @@ async def _adopt_character_card_authority(
     canonical = normalized.get("ruleset_character")
     binding = canonical.get("rule_binding") if isinstance(canonical, dict) else None
     # 绑定由游戏在创建时决定；采用角色卡只能匹配，不能反向建立绑定。
-    if not instance.ruleset_runtime:
+    if not ruleset_runtime.binding(instance):
         return _failure(
             "RULESET_BINDING_MISSING",
             "这个存档没有绑定专业规则版本（旧版存档），无法采用专业角色卡，请新建一局游戏。",

@@ -20,6 +20,7 @@ from src.adventures.graph_v2 import (
     validate_graph_v2,
 )
 from src.engine.legacy_game_projection import project_legacy_game_context
+from src.engine.modules import ruleset_runtime
 from src.rulesets.dnd2024.adventure_migrations import (
     apply_unreleased_adventure_binding_migration,
 )
@@ -91,10 +92,8 @@ class Dnd2024Runtime:
     ) -> None:
         """Materialize a clean campaign projection for reset/restart."""
 
-        from src.engine.modules import ruleset_runtime
-
         ruleset_runtime.require_writable(instance)
-        instance.ruleset_state = {"state_schema_version": 1}
+        ruleset_runtime.replace_state(instance, {"state_schema_version": 1})
         self._campaign_engine(
             instance, str(getattr(instance, "language", "") or ""),
         ).initialize_state(instance)
@@ -957,7 +956,7 @@ class Dnd2024Runtime:
         else:
             result = self._combat_engine(instance, locale=locale).apply_batch(instance, batch)
             if result.get("applied") and str(batch.get("intent_type") or "") == "combat.start":
-                instance.ruleset_state.pop("encounter_request", None)
+                ruleset_runtime.state(instance).pop("encounter_request", None)
         revisions: dict[str, int] = {}
         if result.get("applied"):
             for uid in getattr(instance, "players", {}):
@@ -1143,8 +1142,6 @@ class Dnd2024Runtime:
 
         if str(signal or "").strip().casefold() not in {"start", "begin"}:
             return False
-        from src.engine.modules import ruleset_runtime
-
         try:
             ruleset_runtime.require_binding(instance, self.runtime_id)
         except ruleset_runtime.RulesetBindingError as exc:
@@ -1230,7 +1227,7 @@ class Dnd2024Runtime:
             "combat": gameplay["combat"],
             "campaign": gameplay["campaign"],
             "latest_event_batch": (
-                deepcopy(instance.event_ledger[-1]) if instance.event_ledger else None
+                deepcopy(ruleset_runtime.event_ledger(instance)[-1]) if ruleset_runtime.event_ledger(instance) else None
             ),
             "director": director,
             "policy": "Narrate resolved events only; never invent or mutate mechanics.",
@@ -1264,7 +1261,7 @@ class Dnd2024Runtime:
 
         if not isinstance(proposal, dict) or proposal.get("mode") != "auto":
             return None
-        version = int(instance.ruleset_state.get("version", 0) or 0)
+        version = int(ruleset_runtime.state(instance).get("version", 0) or 0)
         if proposal.get("kind") == "adventure_choice":
             choice_id = str(proposal.get("choice_id") or "")
             if not choice_id:
