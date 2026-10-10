@@ -132,6 +132,22 @@ def _same_adventure_binding(current: Any, candidate: Any) -> bool:
     )
 
 
+# Compatibility properties deleted after their state moved into module slots.
+# Writing one of these names must fail instead of creating a shadow attribute.
+RETIRED_MODULE_FACADES = frozenset({
+    "combat_extension",
+    "combat_extension_round_snapshots",
+    "economy",
+    "event_ledger",
+    "last_check",
+    "last_checks",
+    "manual_roll_requests",
+    "round_checks_prepared",
+    "ruleset_runtime",
+    "ruleset_state",
+})
+
+
 @dataclass
 class GameInstance:
     """单个跑团游戏的全部运行时状态。
@@ -210,6 +226,15 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # A plain dataclass would silently grow a shadow attribute here, leaving
+        # the module slot untouched; fail loudly instead.
+        if name in RETIRED_MODULE_FACADES:
+            raise AttributeError(
+                f"GameInstance.{name} was removed; use its src.engine.modules owner"
+            )
+        super().__setattr__(name, value)
 
     @property
     def adventure_progress(self) -> dict[str, Any]:
