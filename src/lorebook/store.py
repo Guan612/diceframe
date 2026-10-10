@@ -301,6 +301,7 @@ class LorebookStore:
                     (Lorebook.source_kind == source_kind)
                     & (Lorebook.source_id == source_id)
                     & (Lorebook.external_id == external_id)
+                    & (Lorebook.import_link != "detached")
                 )
                 if holder is not None and holder.id != book["id"]:
                     raise LorebookIdentityConflict(
@@ -317,8 +318,63 @@ class LorebookStore:
                 source_kind=source_kind, source_id=source_id,
                 source_version=book.get("source_version", ""), source_digest=book.get("source_digest", ""),
                 external_id=external_id,
+                import_link=str(book.get("import_link") or ""),
+                import_state_digest=str(book.get("import_state_digest") or ""),
             ).on_conflict_ignore().execute()
             self._commit_locked()
+
+    def record_lorebook_import(
+        self,
+        book_id: str,
+        *,
+        source_kind: str,
+        source_id: str,
+        external_id: str,
+        source_digest: str,
+        import_link: str,
+        import_state_digest: str,
+        source_version: str = "",
+    ) -> None:
+        """Server-side import bookkeeping for one Book.
+
+        Only import plans call this; the generic update use case never
+        accepts these fields. It is bookkeeping, not content, so it does not
+        move the Book's revision.
+        """
+
+        if import_link not in {"tracked", "detached"}:
+            raise ValueError("import_link must be tracked or detached")
+        with self._lock:
+            if external_id and import_link == "tracked":
+                holder = Lorebook.get_or_none(
+                    (Lorebook.source_kind == source_kind)
+                    & (Lorebook.source_id == source_id)
+                    & (Lorebook.external_id == external_id)
+                    & (Lorebook.import_link != "detached")
+                    & (Lorebook.id != book_id)
+                )
+                if holder is not None:
+                    raise LorebookIdentityConflict(
+                        "external identity is already tracked by another lorebook"
+                    )
+            changed = Lorebook.update(
+                source_kind=source_kind, source_id=source_id, external_id=external_id,
+                source_version=source_version, source_digest=source_digest,
+                import_link=import_link, import_state_digest=import_state_digest,
+            ).where(Lorebook.id == book_id).execute()
+            if not changed:
+                raise ValueError("lorebook not found")
+            self._commit_locked()
+
+    def detach_lorebook(self, book_id: str) -> bool:
+        """Stop a Book from following its import source; provenance is kept."""
+
+        with self._lock:
+            changed = Lorebook.update(import_link="detached").where(
+                Lorebook.id == book_id
+            ).execute()
+            self._commit_locked()
+        return bool(changed)
 
     def update_lorebook(self, book_id: str, updates: dict) -> bool:
         """Update editable book metadata; unknown fields are ignored."""

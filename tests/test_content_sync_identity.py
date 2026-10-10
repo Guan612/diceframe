@@ -67,7 +67,7 @@ def _v9_database() -> sqlite3.Connection:
 def test_v10_adds_external_id_and_leaves_legacy_rows_untouched():
     conn = _v9_database()
 
-    assert lorebook_migrations.migrate(conn) == 10
+    assert lorebook_migrations.migrate(conn, upto=10) == 10
 
     row = conn.execute(
         "SELECT source_kind, source_id, external_id FROM lorebooks WHERE id = 'legacy'"
@@ -81,9 +81,9 @@ def test_v10_adds_external_id_and_leaves_legacy_rows_untouched():
 
 def test_v10_is_idempotent():
     conn = _v9_database()
-    assert lorebook_migrations.migrate(conn) == 10
+    assert lorebook_migrations.migrate(conn, upto=10) == 10
     # A second startup is a no-op, and replaying the step itself is harmless.
-    assert lorebook_migrations.migrate(conn) == 10
+    assert lorebook_migrations.migrate(conn, upto=10) == 10
     lorebook_migrations._v10(conn)
     columns = [row[1] for row in conn.execute("PRAGMA table_info(lorebooks)")]
     assert columns.count("external_id") == 1
@@ -91,7 +91,7 @@ def test_v10_is_idempotent():
 
 def test_unknown_future_schema_fails_closed():
     conn = _v9_database()
-    conn.execute("PRAGMA user_version = 11")
+    conn.execute(f"PRAGMA user_version = {lorebook_migrations.CURRENT_LOREBOOK_SCHEMA_VERSION + 1}")
 
     with pytest.raises(MigrationError):
         lorebook_migrations.migrate(conn)

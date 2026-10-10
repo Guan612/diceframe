@@ -1905,6 +1905,9 @@ class WebAPI:
     def commit_lorebook_import(self, payload: dict[str, Any], binding: dict[str, Any] | None = None, book_id: str | None = None) -> dict[str, Any]:
         return lorebooks.commit_lorebook_import(self._lorebook_dependencies(), payload, binding, book_id)
 
+    def commit_lorebook_plan(self, body: dict[str, Any]) -> dict[str, Any]:
+        return lorebooks.commit_lorebook_plan(self._lorebook_dependencies(), body)
+
     async def generate_lorebook_entries(self, world_id: str, prompt: str, language: str = "") -> dict[str, Any]:
         return await worlds.generate_lorebook_entries(
             self._world_dependencies, world_id, prompt, language,

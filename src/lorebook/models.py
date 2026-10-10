@@ -56,6 +56,10 @@ class Lorebook(Model):
     source_digest = CharField(default="")
     # The source's own id for this Book; '' for legacy one-Book-per-source rows.
     external_id = CharField(default="")
+    # '' (legacy row) | tracked | detached; see migration v11.
+    import_link = CharField(default="")
+    # Content digest of the Book right after its last import.
+    import_state_digest = CharField(default="")
     # Bumped by every entry mutation so Retriever cache fingerprints never go
     # stale (updated_at alone is second-precision).
     revision = IntegerField(default=0)
