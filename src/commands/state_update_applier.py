@@ -28,6 +28,7 @@ from src.rulesets.contracts import (
     CharacterStateReconciliationRuntime,
 )
 from src.engine.economy import queue_proposal
+from src.engine.modules import checks
 
 logger = logging.getLogger("trpg")
 
@@ -51,7 +52,7 @@ def discard_unresolved_player_damage(instance: GameInstance, update: dict) -> No
         return
     failed_uids = {
         str(check.get("actor_uid") or "")
-        for check in (instance.last_checks or [])
+        for check in (checks.last_checks(instance) or [])
         if str(check.get("verdict") or "") in {"失败", "大失败", "failure", "fumble"}
     }
     players_update = update.get("players")

@@ -203,7 +203,7 @@ def finish_judgment_locked(
         "actions": list(instance.action_queue),
         "gm_response": gm_response,
         "state_changes": combined_state_changes,
-        "check_results": [dict(item) for item in instance.last_checks],
+        "check_results": [dict(item) for item in checks.last_checks(instance)],
         "round_start_snapshot": (
             copy.deepcopy(instance.round_start_snapshot)
             if instance.round_start_snapshot else snapshot_players(instance)

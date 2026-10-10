@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
-from src.engine.modules import check_reveals
+from src.engine.modules import check_reveals, checks
 
 GameKey = tuple[str, ...]
 
@@ -25,7 +25,7 @@ class CheckRevealDependencies:
 
 def _find_check(instance: Any, check_id: str) -> dict[str, Any] | None:
     """Locate one resolved check by id in current-round or timeline records."""
-    for check in instance.last_checks or []:
+    for check in checks.last_checks(instance) or []:
         if isinstance(check, dict) and str(check.get("check_id") or "") == check_id:
             return check
     for entry in reversed(instance.log or []):
