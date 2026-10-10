@@ -41,6 +41,7 @@ from src.migrations.instance import CURRENT_INSTANCE_SCHEMA_VERSION, migrate_gam
 from src.webui.services import characters
 
 from webapi_harness import web_api  # noqa: F401
+from src.engine.modules import checks as checks_module
 
 
 def _instance() -> GameInstance:
@@ -2025,7 +2026,7 @@ async def test_in_flight_check_plan_is_discarded_after_economy_decision(
 
     # 结算既有提案不使规划过期：检定计划与经济提案（economy_offers）都保留。
     assert len(checks) == 1
-    assert instance.round_checks_prepared is True
+    assert checks_module.round_checks_prepared(instance) is True
     assert "check_request" in instance.action_queue[0]
     assert instance.total_llm_calls > calls_before
 

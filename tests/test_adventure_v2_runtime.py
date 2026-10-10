@@ -36,6 +36,7 @@ from src.engine.game_instance import GameInstance
 from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.world_state import apply_world_ops, world_facts, world_processes
 from src.webui.services import adventure_runtime
+from src.engine.modules import ruleset_runtime
 
 PACKAGE_ID = "v2_quest"
 ADVENTURE_ID = "user:v2_quest"
@@ -540,7 +541,7 @@ def test_v2_adventure_drives_the_dnd_campaign_and_story_encounter(tmp_path) -> N
     resolved = runtime.resolve_intent(instance, {
         "intent_id": "intent-v2-encounter",
         "type": "combat.start",
-        "expected_version": int(instance.ruleset_state.get("version", 0) or 0),
+        "expected_version": int(ruleset_runtime.state(instance).get("version", 0) or 0),
         "submitted_by": "gm",
         "encounter_preset_id": "cellar_pack",
         "encounter_instance_id": access.encounter_instance_id,

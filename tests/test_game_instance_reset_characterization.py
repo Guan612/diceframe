@@ -21,7 +21,7 @@ from src.engine.game_instance import GameInstance, GameState
 from src.engine.modules import economy_state
 from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
-from src.engine.modules import combat_extension_state
+from src.engine.modules import checks, combat_extension_state, ruleset_runtime
 
 
 def _make_populated_instance() -> GameInstance:
@@ -43,13 +43,13 @@ def _make_populated_instance() -> GameInstance:
     instance.world_id = "world-1"
     instance.world_name = "Test World"
     instance.rule_id = "coc7"
-    instance.ruleset_runtime = {
+    ruleset_runtime.replace_binding(instance, {
         "id": "core:dnd2024",
         "version": 1,
         "content_version": "2024-01",
         "state_schema_version": 3,
-    }
-    instance.ruleset_state = {"state_schema_version": 3, "campaign": {"party": []}}
+    })
+    ruleset_runtime.replace_state(instance, {"state_schema_version": 3, "campaign": {"party": []}})
     instance.adventure_binding = {
         "adventure_id": "adv-1",
         "version": "1",
@@ -58,7 +58,7 @@ def _make_populated_instance() -> GameInstance:
         "world_id": "world-1",
     }
     instance.play_mode = "adventure"
-    instance.event_ledger = [{"event": "e1"}]
+    ruleset_runtime.replace_event_ledger(instance, [{"event": "e1"}])
     instance.scene_image = {"asset_id": "img-1"}
     instance.map_background = {"asset_id": "map-1"}
     instance.group_name = "Group"
@@ -110,11 +110,11 @@ def _make_populated_instance() -> GameInstance:
     instance.total_tokens = 2222
     instance.started_at = "2026-01-01T00:00:00+00:00"
     instance.last_activity = "2026-01-01T01:00:00+00:00"
-    instance.last_check = {"check_id": "c1"}
-    instance.last_checks = [{"check_id": "c1"}]
-    instance.manual_roll_requests = [{"request_id": "r1"}]
+    checks.replace_last_check(instance, {"check_id": "c1"})
+    checks.replace_last_checks(instance, [{"check_id": "c1"}])
+    checks.replace_manual_roll_requests(instance, [{"request_id": "r1"}])
     instance.round_unpriced_purchase_intents = [{"item": "potion"}]
-    instance.round_checks_prepared = True
+    checks.replace_round_checks_prepared(instance, True)
     instance.round_start_snapshot = {"u1": {"hp": 10}}
     instance.round_entity_snapshot = {"npcs": {"goblin": {"hp": 7}}}
     instance.death_save_outcomes = {"3": {"u1": {"roll": 18}}}
@@ -160,12 +160,14 @@ EXPECTED_PRESERVED = {
         "content_digest": "deadbeef",
         "world_id": "world-1",
     },
-    "ruleset_runtime": {
-        "id": "core:dnd2024",
-        "version": 1,
-        "content_version": "2024-01",
-        "state_schema_version": 3,
-    },
+}
+
+# The ruleset runtime binding is module state (no GameInstance attribute).
+EXPECTED_PRESERVED_RULESET_BINDING = {
+    "id": "core:dnd2024",
+    "version": 1,
+    "content_version": "2024-01",
+    "state_schema_version": 3,
 }
 
 # 基线 reset() 明确清空/归零的字段（值 = 字段自己的空形态）。
@@ -183,7 +185,6 @@ EXPECTED_CLEARED = {
     "private_log": {},
     "table_talk": [],
     "gm_directives": [],
-    "event_ledger": [],
 }
 
 # 基线 reset() 根本不触碰的字段 —— "隐式保留"。这里冻结的是基线行为本身。
@@ -204,7 +205,6 @@ EXPECTED_IMPLICIT_PRESERVED = {
     "economy_reward_policy": {"mode": "auto_small_cash", "auto_reward_cap": 10},
     "last_saved_log_count": 3,
     "pending_luck_after_recovery": True,
-    "manual_roll_requests": [{"request_id": "r1"}],
     "round_unpriced_purchase_intents": [{"item": "potion"}],
     "death_save_outcomes": {"3": {"u1": {"roll": 18}}},
     "last_overreach": [{"player": "u1"}],
@@ -223,6 +223,7 @@ async def test_reset_keeps_seed_and_preserves_configuration_fields() -> None:
     for field, expected in EXPECTED_PRESERVED.items():
         actual = getattr(instance, field)
         assert actual == expected, f"reset 必须保留 {field}"
+    assert ruleset_runtime.binding(instance) == EXPECTED_PRESERVED_RULESET_BINDING, "reset 必须保留 ruleset_runtime"
     # 保留字段应是深拷贝，reset 后修改不影响旧对象引用。
     assert instance.gm_style_override is not EXPECTED_PRESERVED["gm_style_override"]
 
@@ -263,15 +264,16 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.plot_tracker is None
     assert combat_extension_state.current(instance) == {}
     assert combat_extension_state.round_snapshots(instance) == {}
-    assert instance.last_check is None
-    assert instance.last_checks == []
-    assert instance.round_checks_prepared is False
+    assert checks.last_check(instance) is None
+    assert checks.last_checks(instance) == []
+    assert checks.round_checks_prepared(instance) is False
     assert instance.round_start_snapshot == {}
     assert instance.round_entity_snapshot == {}
     assert instance.last_state_update is None
     assert instance.last_token_budget_bump is None
     for key, expected_empty in EXPECTED_CLEARED.items():
         assert getattr(instance, key) == expected_empty, f"reset 必须清空 {key}"
+    assert ruleset_runtime.event_ledger(instance) == [], "reset 必须清空 event_ledger"
 
 
 @pytest.mark.asyncio
@@ -305,6 +307,7 @@ async def test_reset_does_not_touch_implicit_preserve_fields() -> None:
         assert actual == expected, (
             f"基线 reset() 不触碰 {field}；extraction 不得改变这一行为"
         )
+    assert checks.manual_roll_requests(instance) == [{"request_id": "r1"}]
 
 
 @pytest.mark.asyncio
@@ -325,4 +328,4 @@ async def test_reset_rebuilds_ruleset_state_from_preserved_runtime() -> None:
     instance = _make_populated_instance()
     await instance.reset(keep_seed=True)
 
-    assert instance.ruleset_state == {"state_schema_version": 3}
+    assert ruleset_runtime.state(instance) == {"state_schema_version": 3}

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import pytest
+from src.engine.modules import checks
 
 
 async def _play_one_round(env, game_key, gm_uid, player_uid, narration: str) -> None:
@@ -62,8 +63,8 @@ async def test_d20_and_d100_games_use_their_own_dice_systems_without_crossing(
     d20_inst = registry.get(api._parse_key(d20_key))
     d100_inst = registry.get(api._parse_key(d100_key))
 
-    d20_checks = [dict(c) for c in d20_inst.last_checks if c.get("actor_uid") == d20_player]
-    d100_checks = [dict(c) for c in d100_inst.last_checks if c.get("actor_uid") == d100_player]
+    d20_checks = [dict(c) for c in checks.last_checks(d20_inst) if c.get("actor_uid") == d20_player]
+    d100_checks = [dict(c) for c in checks.last_checks(d100_inst) if c.get("actor_uid") == d100_player]
     assert d20_checks and all(c["dice"] == "d20" for c in d20_checks)
     assert d100_checks and all(c["dice"] == "d100" for c in d100_checks)
 

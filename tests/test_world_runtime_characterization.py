@@ -39,6 +39,7 @@ from src.engine.world_state import (
     world_revision,
     world_scheduled_events,
 )
+from src.engine.modules import ruleset_runtime
 
 
 def make_instance(**kwargs) -> GameInstance:
@@ -211,7 +212,7 @@ def test_rollback_restores_world_but_not_bindings() -> None:
     assert fact_value(instance.world_state, "torch.lit") is None
     # binding 与规则选择不是"这一轮结算出来的东西"：rollback 不触碰。
     assert instance.adventure_binding["adventure_id"] == "adv-1"
-    assert instance.ruleset_runtime["id"] == "core:dnd2024"
+    assert ruleset_runtime.binding(instance)["id"] == "core:dnd2024"
     assert instance.rule_id == "coc7"
 
 

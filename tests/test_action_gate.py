@@ -16,6 +16,7 @@ from src.engine.memory_outbox import queue_memory_delivery
 from src.engine.modules import economy_state
 from src.engine.player_control import get_control, set_control
 from src.webui.services import characters, ruleset_gameplay, turns
+from src.engine.modules import ruleset_runtime
 
 
 def instance_with_seats() -> GameInstance:
@@ -511,7 +512,7 @@ def test_economy_mapping_retains_viewer_filtering_and_pending_count() -> None:
 def test_structured_context_preserves_auth_gm_and_effective_requester(uid, gm, gm_uid, expected) -> None:
     instance = instance_with_seats()
     instance.gm_uid = gm_uid
-    instance.ruleset_runtime = {"id": "runtime"}
+    ruleset_runtime.replace_binding(instance, {"id": "runtime"})
     runtime = SimpleNamespace(runtime_id="runtime", capabilities=SimpleNamespace(authoritative_intents=True))
     load = Mock(return_value=SimpleNamespace(template={}))
     deps = SimpleNamespace(get_instance=lambda _: instance, parse_game_key=lambda _: instance.game_key,

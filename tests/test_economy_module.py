@@ -17,6 +17,7 @@ from src.migrations.instance import (
     migrate_game_state_payload,
     rebind_imported_game_state_payload,
 )
+from src.engine.modules import checks
 
 
 def _ledger(run_id="run_source"):
@@ -228,7 +229,7 @@ def _unsupported_economy_instance(version):
         "round": 1, "gm_response": "previous round", "swipes": [],
         "round_start_snapshot": deepcopy(instance.round_start_snapshot),
     }]
-    instance.last_checks = [{"id": "check"}]
+    checks.replace_last_checks(instance, [{"id": "check"}])
     instance.death_save_outcomes = {"2": {"p": {"outcome": "stable"}}}
     economy_state.replace_state(instance, _ledger(instance.run_id))
     payload = instance.to_dict()

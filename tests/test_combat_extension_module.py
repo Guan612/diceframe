@@ -16,6 +16,7 @@ from src.migrations.instance import (
     _migrate_v19_to_v20,
     migrate_game_state_payload,
 )
+from src.engine.modules import checks
 
 
 ATTRS = [
@@ -250,7 +251,7 @@ def lifecycle_instance():
         "round": 1, "gm_response": "previous round", "swipes": [],
         "round_start_snapshot": deepcopy(instance.round_start_snapshot),
     }]
-    instance.last_checks = [{"id": "check"}]
+    checks.replace_last_checks(instance, [{"id": "check"}])
     instance.death_save_outcomes = {"2": {"p": {"outcome": "stable"}}}
     economy_state.state(instance)["next_sequence"] = 7
     instance.lorebook_timed_state = {"entry": {"sticky": 2}}
@@ -403,8 +404,8 @@ async def test_disk_startup_recovery_preserves_both_combat_children(tmp_path, pe
     populate(instance)
     instance.state = GameState.ACTIVE_JUDGMENT
     if pending_luck:
-        instance.round_checks_prepared = True
-        instance.last_checks = [{"check_id": "c1", "actor_uid": "p", "luck_decision": "pending"}]
+        checks.replace_round_checks_prepared(instance, True)
+        checks.replace_last_checks(instance, [{"check_id": "c1", "actor_uid": "p", "luck_decision": "pending"}])
     registry.register(instance)
     await registry.save(instance)
     restored, = await GameRegistry(tmp_path / "saves").recover_all()

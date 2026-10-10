@@ -29,8 +29,6 @@ class FakeInstance:
         self.round_number = 1
         self.action_queue: list[dict] = []
         self.run_id = "run-test"
-        self.last_check = None
-        self.last_checks: list[dict] = []
         self.quick_actions = ["观察"]
         self.last_state_update = {"scene": "门厅"}
         self.solo_mode = False

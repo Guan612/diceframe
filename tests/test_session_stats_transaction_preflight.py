@@ -16,6 +16,7 @@ from src.engine.modules import session_stats
 from src.webui.services.manual_rolls import ManualRollDependencies, ManualRollService
 from src.engine.modules import combat_extension_state
 from tests.test_game_instance_reset_characterization import _make_populated_instance
+from src.engine.modules import checks as checks_module, ruleset_runtime
 
 
 def live_state(instance):
@@ -111,7 +112,7 @@ async def test_transaction_rejection_preserves_all_live_state(operation, direct)
 @pytest.mark.asyncio
 async def test_manual_roll_rejection_preserves_requests_and_status(operation):
     instance = _make_populated_instance()
-    instance.manual_roll_requests.clear()
+    checks_module.manual_roll_requests(instance).clear()
     save = AsyncMock()
     service = ManualRollService(ManualRollDependencies(
         parse_game_key=lambda key: instance.game_key,
@@ -150,8 +151,8 @@ async def test_luck_rejection_preserves_resources_checks_and_timers(operation):
         "threshold": 50, "verdict": "失败", "luck_decision": "pending",
         "luck_spend_available": True,
     }
-    instance.last_checks = [check]
-    instance.last_check = dict(check)
+    checks_module.replace_last_checks(instance, [check])
+    checks_module.replace_last_check(instance, dict(check))
     timer = Mock()
     instance._luck_timers["luck"] = timer
     before = deepcopy({**live_state(instance), "_luck_timers": {}})
@@ -259,7 +260,7 @@ async def test_ruleset_transactions_reject_before_binding_or_reducer(tmp_path, m
     save = AsyncMock()
     dependencies = replace(_M5Api(registry, runtime)._gameplay_dependencies, save_instance=save)
     if operation == "resume":
-        instance.ruleset_state["combat"] = {"status": "active"}
+        ruleset_runtime.state(instance)["combat"] = {"status": "active"}
     instance.modules["session_stats"] = {"schema_version": 99, "opaque": [1]}
     before = deepcopy(live_state(instance))
     binding = AsyncMock(side_effect=AssertionError("must not migrate binding"))
@@ -269,7 +270,7 @@ async def test_ruleset_transactions_reject_before_binding_or_reducer(tmp_path, m
     with pytest.raises(ModuleStateError):
         if operation == "intent":
             await ruleset_gameplay.submit_intent(dependencies, "web|intent|bot", "gm", True, {
-                **action, "intent_id": "start", "expected_version": instance.ruleset_state["version"],
+                **action, "intent_id": "start", "expected_version": ruleset_runtime.state(instance)["version"],
             })
         else:
             await ruleset_gameplay.resume_authoritative_combat(dependencies, "web|intent|bot", "gm")

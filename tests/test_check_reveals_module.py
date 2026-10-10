@@ -24,6 +24,7 @@ from src.migrations.instance import (
 )
 from src.webui.services import check_reveals as service
 from src.webui.services.logs import get_log, LogDependencies
+from src.engine.modules import checks
 
 
 def _instance() -> GameInstance:
@@ -86,7 +87,7 @@ def _service(inst: GameInstance) -> tuple[service.CheckRevealService, _Registry]
 @pytest.mark.asyncio
 async def test_actor_or_gm_can_reveal_and_repeats_are_idempotent() -> None:
     inst = _instance()
-    inst.last_checks = [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}]
+    checks.replace_last_checks(inst, [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}])
     svc, registry = _service(inst)
 
     by_actor = await svc.reveal("test|reveal|web", "chk-1", "ally")
@@ -120,7 +121,7 @@ async def test_third_party_and_unknown_checks_are_refused() -> None:
 @pytest.mark.asyncio
 async def test_reveal_is_rejected_during_historical_rewrite() -> None:
     inst = _instance()
-    inst.last_checks = [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}]
+    checks.replace_last_checks(inst, [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}])
     svc, registry = _service(inst)
     async with inst.historical_rewrite():
         # A different task cannot enter the rewrite owner's reentrant gate.
@@ -135,10 +136,10 @@ async def test_reveal_is_rejected_during_historical_rewrite() -> None:
 @pytest.mark.asyncio
 async def test_queued_reveal_does_not_write_a_replaced_instance() -> None:
     inst = _instance()
-    inst.last_checks = [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}]
+    checks.replace_last_checks(inst, [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}])
     svc, registry = _service(inst)
     replacement = _instance()
-    replacement.last_checks = deepcopy(inst.last_checks)
+    checks.replace_last_checks(replacement, deepcopy(checks.last_checks(inst)))
     async with inst.authoritative_write():
         pending = asyncio.create_task(svc.reveal("test|reveal|web", "chk-1", "ally"))
         await asyncio.sleep(0)
@@ -156,7 +157,7 @@ async def test_queued_reveal_does_not_write_a_replaced_instance() -> None:
 @pytest.mark.asyncio
 async def test_queued_reveal_proceeds_on_the_same_instance() -> None:
     inst = _instance()
-    inst.last_checks = [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}]
+    checks.replace_last_checks(inst, [{"check_id": "chk-1", "actor_uid": "ally", "roll": 15}])
     svc, registry = _service(inst)
     async with inst.authoritative_write():
         pending = asyncio.create_task(svc.reveal("test|reveal|web", "chk-1", "gm"))

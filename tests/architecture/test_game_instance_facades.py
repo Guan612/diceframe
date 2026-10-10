@@ -31,7 +31,7 @@ MODULES_DIR = "src/engine/modules/"
 REFLECTIVE_ACCESSORS = frozenset({"getattr", "setattr", "hasattr"})
 
 # Module-backed properties currently on GameInstance. Do not raise.
-MAX_MODULE_FACADES = 56
+MAX_MODULE_FACADES = 49
 
 # Keys are source file + property name, so edits inside a caller do not make
 # the baseline brittle. Do not add entries or raise counts.
@@ -397,3 +397,19 @@ def test_method_call_with_facade_name_is_not_facade_usage(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     assert not scan_facade_usage(tmp_path, frozenset({"manual_roll_requests"}))
+
+
+def test_retired_facades_are_not_redefined() -> None:
+    from src.engine.game_instance import RETIRED_MODULE_FACADES
+
+    assert not RETIRED_MODULE_FACADES & module_facades(ROOT)
+
+
+def test_retired_facade_write_fails_instead_of_shadowing() -> None:
+    from src.engine.game_instance import RETIRED_MODULE_FACADES, GameInstance
+
+    instance = GameInstance(game_key=("web", "retired", "u"))
+    for name in sorted(RETIRED_MODULE_FACADES):
+        with pytest.raises(AttributeError, match="was removed"):
+            setattr(instance, name, {})
+        assert name not in vars(instance)
