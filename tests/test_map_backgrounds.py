@@ -76,8 +76,10 @@ class GameMapApi(MapBackgroundApi):
         self.instance = SimpleNamespace(
             world_id="default_fantasy",
             rule_id="freeform_dnd",
-            modules={"narrative_notes": narrative_notes.fresh()},
-            modules={"media": {**media.fresh(), "map_background": selection}},
+            modules={
+                "narrative_notes": narrative_notes.fresh(),
+                "media": {**media.fresh(), "map_background": selection},
+            },
         )
         self._plugins = None
         self._reg = SimpleNamespace(get=lambda _key: self.instance)
