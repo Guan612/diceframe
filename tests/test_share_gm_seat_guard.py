@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
 from src.engine.game_state import GameState
+from src.engine.modules import economy_state
 from src.engine.modules import room_access
 from src.webui.session import SessionManager, session_middleware
 from test_game_query_routes_http import (
@@ -541,7 +542,7 @@ async def test_unbound_or_gm_session_cannot_claim(share_env):
 
 
 def _private_proposal_for_p1(env):
-    env.instance.economy.setdefault("proposals", []).append({
+    economy_state.state(env.instance).setdefault("proposals", []).append({
         "id": "prop-p1", "status": "pending", "kind": "payment",
         "payer_uid": "p1", "visibility": "private", "amount": 5,
     })

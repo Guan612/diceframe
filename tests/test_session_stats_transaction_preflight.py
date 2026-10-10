@@ -14,8 +14,9 @@ from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import session_stats
 from src.webui.services.manual_rolls import ManualRollDependencies, ManualRollService
+from src.engine.modules import combat_extension_state
 from tests.test_game_instance_reset_characterization import _make_populated_instance
-from src.engine.modules import ruleset_runtime
+from src.engine.modules import checks as checks_module, ruleset_runtime
 
 
 def live_state(instance):
@@ -83,7 +84,7 @@ async def test_transaction_rejection_preserves_all_live_state(operation, direct)
         instance.state = GameState.ACTIVE_ACTION
     instance.away_players.add("u1")
     instance.action_queue[0]["dice_pending"] = True
-    instance.combat_extension["pending_summaries"] = ["must remain pending"]
+    combat_extension_state.current(instance)["pending_summaries"] = ["must remain pending"]
     args = {
         "activate": (), "reset": (), "add_action": ("u1", "replacement"),
         "start_round": (), "apply_action_roll": ("u1", "d20", 12),
@@ -111,7 +112,7 @@ async def test_transaction_rejection_preserves_all_live_state(operation, direct)
 @pytest.mark.asyncio
 async def test_manual_roll_rejection_preserves_requests_and_status(operation):
     instance = _make_populated_instance()
-    instance.manual_roll_requests.clear()
+    checks_module.manual_roll_requests(instance).clear()
     save = AsyncMock()
     service = ManualRollService(ManualRollDependencies(
         parse_game_key=lambda key: instance.game_key,
@@ -150,8 +151,8 @@ async def test_luck_rejection_preserves_resources_checks_and_timers(operation):
         "threshold": 50, "verdict": "失败", "luck_decision": "pending",
         "luck_spend_available": True,
     }
-    instance.last_checks = [check]
-    instance.last_check = dict(check)
+    checks_module.replace_last_checks(instance, [check])
+    checks_module.replace_last_check(instance, dict(check))
     timer = Mock()
     instance._luck_timers["luck"] = timer
     before = deepcopy({**live_state(instance), "_luck_timers": {}})

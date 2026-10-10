@@ -9,9 +9,11 @@ import pytest
 
 from src.engine.game_instance import GameInstance, GameState
 from src.engine.module_state import ModuleStateError
+from src.engine.modules import combat_extension_state
 from tests.test_progression_module import UNKNOWN_SLOTS, instance_with_state
 from tests.test_round_failure_recovery import _new_game
 from webapi_harness import web_api  # noqa: F401
+from src.engine.modules import checks
 
 
 async def _drain(*tasks):
@@ -88,11 +90,11 @@ async def test_completion_preserves_log_snapshots_checks_and_timer_semantics(pen
     actions = deepcopy(instance.action_queue)
     next_actions = deepcopy(instance.pending_actions)
     snapshot = deepcopy(instance.round_start_snapshot)
-    instance.round_checks_prepared = True
-    instance.last_checks = [{"id": "check", "result": "success"}]
+    checks.replace_round_checks_prepared(instance, True)
+    checks.replace_last_checks(instance, [{"id": "check", "result": "success"}])
     instance.death_save_outcomes = {"7": {"gm": "stable"}, "8": {"gm": "next"}}
-    instance.combat_extension = {"schema_version": 1, "pending_summaries": ["hit", "hit"]}
-    instance.combat_extension_round_snapshots["7"] = {"schema_version": 1, "phase": "before"}
+    combat_extension_state.replace_current(instance, {"schema_version": 1, "pending_summaries": ["hit", "hit"]})
+    combat_extension_state.round_snapshots(instance)["7"] = {"schema_version": 1, "phase": "before"}
     timer = asyncio.create_task(asyncio.Event().wait())
     instance._luck_timers["check"] = timer
     calls_before = instance.total_llm_calls
@@ -106,7 +108,7 @@ async def test_completion_preserves_log_snapshots_checks_and_timer_semantics(pen
         assert entry["actions"] == actions
         assert entry["gm_response"] == "finished"
         assert entry["state_changes"] == ["visible", "hit"]
-        assert entry["check_results"] == instance.last_checks
+        assert entry["check_results"] == checks.last_checks(instance)
         assert entry["round_start_snapshot"] == snapshot
         assert entry["combat_extension_round_start"] == {"schema_version": 1, "phase": "before"}
         assert entry["pre_state_snapshot"] == pre_state
@@ -116,11 +118,11 @@ async def test_completion_preserves_log_snapshots_checks_and_timer_semantics(pen
         assert entry["swipes"] == [] and entry["current_swipe"] == 0
         assert entry["timestamp"] <= instance.last_activity
         assert instance.total_llm_calls == calls_before + 1
-        assert "pending_summaries" not in instance.combat_extension
-        assert "7" not in instance.combat_extension_round_snapshots
+        assert "pending_summaries" not in combat_extension_state.current(instance)
+        assert "7" not in combat_extension_state.round_snapshots(instance)
         assert instance.state == GameState.ACTIVE_ACTION
         assert instance.round_number == 8
-        assert not instance.round_checks_prepared
+        assert not checks.round_checks_prepared(instance)
         assert instance.round_start_snapshot == instance.round_entity_snapshot == {}
         assert instance.action_queue == next_actions
         assert instance.pending_actions == [] and instance.ready_players == set()

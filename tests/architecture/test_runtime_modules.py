@@ -20,8 +20,10 @@ CONTROL_WRITERS = {
 }
 
 
-# Direct property assignment ownership only: this does not police aliases,
-# subscript mutation, clear/pop, or generic setattr/aggregate replacement.
+# The GameInstance combat facades are gone, so any ``x.combat_extension`` /
+# ``x.combat_extension_round_snapshots`` store outside these owners would be a
+# silent shadow attribute on the dataclass. Direct attribute writes only: this
+# does not police aliases, subscript mutation, clear/pop, or generic setattr.
 COMBAT_WRITERS = {
     SRC / "webui" / "services" / "combat_extension.py",
     SRC / "engine" / "round_snapshots.py",
@@ -47,12 +49,12 @@ def _combat_property_writes(path: Path, tree: ast.AST) -> list[int]:
     ]
 
 
-def test_only_combat_owners_assign_compatibility_properties() -> None:
+def test_no_combat_shadow_attribute_writes_outside_owners() -> None:
     violations: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
         for line in _combat_property_writes(path, tree):
-            violations.append(f"{path.relative_to(ROOT)}:{line}: combat property write outside owner")
+            violations.append(f"{path.relative_to(ROOT)}:{line}: combat attribute write outside owner")
     assert not violations, "\n".join(violations)
 
 
@@ -71,10 +73,10 @@ def test_combat_guard_rejects_direct_writes_including_game_instance(source) -> N
         assert not _combat_property_writes(owner, tree)
 
 
-# Callers migrated off the facade write through the module API; keep those
-# calls in the same owner files (plus the GameInstance compatibility setters).
+# Writes go through the module API; keep those calls in the same owner files.
+# GameInstance no longer has compatibility setters, so it is not an owner.
 # Matches ``combat_extension_state.replace_*(...)`` only, not import aliases.
-COMBAT_REPLACE_CALLERS = COMBAT_WRITERS | {SRC / "engine" / "game_instance.py"}
+COMBAT_REPLACE_CALLERS = COMBAT_WRITERS
 
 
 def _combat_replace_calls(path: Path, tree: ast.AST) -> list[int]:
@@ -103,6 +105,7 @@ def test_combat_replace_guard_rejects_non_owner_calls() -> None:
     tree = ast.parse("combat_extension_state.replace_current(x, {})\n"
                      "combat_extension_state.replace_round_snapshots(x, {})")
     assert len(_combat_replace_calls(SRC / "webui" / "routes" / "outsider.py", tree)) == 2
+    assert len(_combat_replace_calls(SRC / "engine" / "game_instance.py", tree)) == 2
     for owner in COMBAT_REPLACE_CALLERS:
         assert not _combat_replace_calls(owner, tree)
 

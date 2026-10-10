@@ -18,9 +18,10 @@ from __future__ import annotations
 import pytest
 
 from src.engine.game_instance import GameInstance, GameState
+from src.engine.modules import economy_state
 from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
-from src.engine.modules import ruleset_runtime
+from src.engine.modules import checks, combat_extension_state, ruleset_runtime
 
 
 def _make_populated_instance() -> GameInstance:
@@ -28,7 +29,7 @@ def _make_populated_instance() -> GameInstance:
     instance = GameInstance(game_key=("web", "reset-characterization", "bot"))
     instance.run_id = "run_before"
     instance.memory_namespace = "('web', 'reset-characterization', 'bot')::run:run_before"
-    instance.economy = {
+    economy_state.replace_state(instance, {
         "schema_version": 2,
         "run_id": "run_before",
         "next_sequence": 7,
@@ -38,7 +39,7 @@ def _make_populated_instance() -> GameInstance:
         "effect_groups": [{"id": "g1"}],
         "external_effects_outbox": [{"id": "o1"}],
         "outcomes": [{"id": "x1"}],
-    }
+    })
     instance.world_id = "world-1"
     instance.world_name = "Test World"
     instance.rule_id = "coc7"
@@ -109,11 +110,11 @@ def _make_populated_instance() -> GameInstance:
     instance.total_tokens = 2222
     instance.started_at = "2026-01-01T00:00:00+00:00"
     instance.last_activity = "2026-01-01T01:00:00+00:00"
-    instance.last_check = {"check_id": "c1"}
-    instance.last_checks = [{"check_id": "c1"}]
-    instance.manual_roll_requests = [{"request_id": "r1"}]
+    checks.replace_last_check(instance, {"check_id": "c1"})
+    checks.replace_last_checks(instance, [{"check_id": "c1"}])
+    checks.replace_manual_roll_requests(instance, [{"request_id": "r1"}])
     instance.round_unpriced_purchase_intents = [{"item": "potion"}]
-    instance.round_checks_prepared = True
+    checks.replace_round_checks_prepared(instance, True)
     instance.round_start_snapshot = {"u1": {"hp": 10}}
     instance.round_entity_snapshot = {"npcs": {"goblin": {"hp": 7}}}
     instance.death_save_outcomes = {"3": {"u1": {"roll": 18}}}
@@ -137,8 +138,8 @@ def _make_populated_instance() -> GameInstance:
     instance.health_status = {"degraded": True}
     instance.luck_timeout_seconds = 90
     instance.economy_reward_policy = {"mode": "auto_small_cash", "auto_reward_cap": 10}
-    instance.combat_extension = {"schema_version": 1, "pools": {"p1": {}}}
-    instance.combat_extension_round_snapshots = {"4": {"schema_version": 1}}
+    combat_extension_state.replace_current(instance, {"schema_version": 1, "pools": {"p1": {}}})
+    combat_extension_state.replace_round_snapshots(instance, {"4": {"schema_version": 1}})
     instance.pending_luck_after_recovery = True
     instance.confirmed_items = ["sword"]
     return instance
@@ -176,7 +177,6 @@ EXPECTED_CLEARED = {
     "summary": {},
     "key_facts": [],
     "pending_combat_results": [],
-    "combat_extension_round_snapshots": {},
     "lorebook_timed_state": {},
     "health_events": [],
     "health_status": {},
@@ -205,7 +205,6 @@ EXPECTED_IMPLICIT_PRESERVED = {
     "economy_reward_policy": {"mode": "auto_small_cash", "auto_reward_cap": 10},
     "last_saved_log_count": 3,
     "pending_luck_after_recovery": True,
-    "manual_roll_requests": [{"request_id": "r1"}],
     "round_unpriced_purchase_intents": [{"item": "potion"}],
     "death_save_outcomes": {"3": {"u1": {"roll": 18}}},
     "last_overreach": [{"player": "u1"}],
@@ -263,10 +262,11 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.last_activity == ""
     assert instance.puzzle_manager is None
     assert instance.plot_tracker is None
-    assert instance.combat_extension == {}
-    assert instance.last_check is None
-    assert instance.last_checks == []
-    assert instance.round_checks_prepared is False
+    assert combat_extension_state.current(instance) == {}
+    assert combat_extension_state.round_snapshots(instance) == {}
+    assert checks.last_check(instance) is None
+    assert checks.last_checks(instance) == []
+    assert checks.round_checks_prepared(instance) is False
     assert instance.round_start_snapshot == {}
     assert instance.round_entity_snapshot == {}
     assert instance.last_state_update is None
@@ -289,12 +289,12 @@ async def test_reset_rotates_run_identity_and_economy() -> None:
     assert instance.memory_namespace.endswith(f"::run:{instance.run_id}")
     assert instance.memory_namespace.startswith(str(instance.game_key))
     # economy 整体重建为全新 run 的初始形态，不残留旧 proposals/transactions。
-    assert instance.economy["schema_version"] == 2
-    assert instance.economy["run_id"] == instance.run_id
-    assert instance.economy["next_sequence"] == 1
-    assert instance.economy["proposals"] == []
-    assert instance.economy["transactions"] == []
-    assert instance.economy["external_effects_outbox"] == []
+    assert economy_state.state(instance)["schema_version"] == 2
+    assert economy_state.state(instance)["run_id"] == instance.run_id
+    assert economy_state.state(instance)["next_sequence"] == 1
+    assert economy_state.state(instance)["proposals"] == []
+    assert economy_state.state(instance)["transactions"] == []
+    assert economy_state.state(instance)["external_effects_outbox"] == []
 
 
 @pytest.mark.asyncio
@@ -307,6 +307,7 @@ async def test_reset_does_not_touch_implicit_preserve_fields() -> None:
         assert actual == expected, (
             f"基线 reset() 不触碰 {field}；extraction 不得改变这一行为"
         )
+    assert checks.manual_roll_requests(instance) == [{"request_id": "r1"}]
 
 
 @pytest.mark.asyncio

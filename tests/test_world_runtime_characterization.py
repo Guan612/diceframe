@@ -26,6 +26,7 @@ import pytest
 
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.engine.memory_outbox import pending_memory_deliveries, queue_memory_delivery
+from src.engine.modules import economy_state
 from src.engine.world_events import advance_world_time
 from src.engine.world_state import (
     WORLD_STATE_SCHEMA_VERSION,
@@ -163,7 +164,7 @@ def test_world_writes_produce_no_memory_deltas() -> None:
     instance = make_instance()
     populate_world(instance)
     assert pending_memory_deliveries(instance) == []
-    assert instance.economy.get("external_effects_outbox", []) == []
+    assert economy_state.state(instance).get("external_effects_outbox", []) == []
 
     summary = advance_world_time(instance, 1200)
     assert summary["applied"]

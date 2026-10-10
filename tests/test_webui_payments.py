@@ -14,6 +14,7 @@ from src.commands.tag_parser import parse_tag_state
 from src.engine.economy import pending_proposals, queue_effect_group, queue_proposal
 from src.engine.game_instance import GameRegistry
 from src.engine.health import record_health_event
+from src.engine.modules import economy_state
 from src.llm.client import LLMResponse
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
@@ -264,7 +265,7 @@ async def test_same_reward_emission_retry_is_idempotent(web_api):
     api._handler._apply_state_update(inst, deepcopy(update))
     api._handler._apply_state_update(inst, deepcopy(update))
 
-    rewards = [item for item in inst.economy["proposals"] if item["kind"] == "reward"]
+    rewards = [item for item in economy_state.state(inst)["proposals"] if item["kind"] == "reward"]
     assert len(rewards) == 1
     assert rewards[0]["reason"] == "完成黑石镇悬赏"
 
@@ -287,7 +288,7 @@ async def test_same_reward_reason_in_later_round_creates_new_proposal(web_api):
     inst.round_number += 1
     api._handler._apply_state_update(inst, deepcopy(update))
 
-    rewards = [item for item in inst.economy["proposals"] if item["kind"] == "reward"]
+    rewards = [item for item in economy_state.state(inst)["proposals"] if item["kind"] == "reward"]
     assert len(rewards) == 2
     assert rewards[0]["source_ref"] != rewards[1]["source_ref"]
 

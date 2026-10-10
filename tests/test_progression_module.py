@@ -18,6 +18,7 @@ from src.engine import progression
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import progression_state
+from src.engine.modules import combat_extension_state
 from webapi_harness import web_api  # noqa: F401  # pytest fixture
 from tests.test_round_failure_recovery import _new_game
 from src.migrations.instance import (
@@ -26,7 +27,7 @@ from src.migrations.instance import (
     migrate_game_state_payload,
     rebind_imported_game_state_payload,
 )
-from src.engine.modules import ruleset_runtime
+from src.engine.modules import checks, ruleset_runtime
 
 
 UNKNOWN_SLOTS = [
@@ -49,7 +50,7 @@ def instance_with_state(slot=None):
     instance.log = [{"round": 6, "gm_response": "Before", "pre_state_snapshot": {"gm": {"hp": 15}}}]
     instance.round_start_snapshot = {"gm": {"hp": 15}}
     instance.round_entity_snapshot = {"npcs": {"guide": {"hp": 10}}}
-    instance.combat_extension_round_snapshots["7"] = {"opaque": [1]}
+    combat_extension_state.round_snapshots(instance)["7"] = {"opaque": [1]}
     instance.adventure_progress = {"active_nodes": ["gate"]}
     ruleset_runtime.replace_state(instance, {"version": 4})
     ruleset_runtime.replace_event_ledger(instance, [{"id": "old"}])
@@ -279,12 +280,12 @@ async def test_saved_pending_luck_rejects_before_mutation(web_api, monkeypatch, 
     sheet.setdefault("resources", {})["luck"] = {"current": 50, "max": 50}
     await instance.add_action(uid, "Look around")
     await instance.try_advance()
-    instance.round_checks_prepared = True
-    instance.last_checks = [{
+    checks.replace_round_checks_prepared(instance, True)
+    checks.replace_last_checks(instance, [{
         "check_id": "progression-luck", "actor_uid": uid, "dice": "d100",
         "roll": 55, "threshold": 50, "verdict": "失败",
         "luck_decision": "pending", "luck_spend_available": True,
-    }]
+    }])
     instance.modules["progression"] = deepcopy(slot)
     await registry.save(instance)
     instance = await registry.load(instance.game_key)
@@ -316,8 +317,8 @@ async def test_saved_pending_luck_rejects_before_mutation(web_api, monkeypatch, 
 async def test_luck_noops_keep_existing_result_for_unknown_progression(slot):
     instance = instance_with_state(slot)
     instance.state = GameState.ACTIVE_JUDGMENT
-    instance.round_checks_prepared = True
-    instance.last_checks = [{"check_id": "done", "actor_uid": "gm", "luck_decision": "declined"}]
+    checks.replace_round_checks_prepared(instance, True)
+    checks.replace_last_checks(instance, [{"check_id": "done", "actor_uid": "gm", "luck_decision": "declined"}])
     before = frozen(instance)
     assert (await instance.resolve_luck_decision("missing", "gm", False))["code"] == "CHECK_NOT_FOUND"
     assert (await instance.resolve_luck_decision("done", "gm", False))["already_resolved"] is True

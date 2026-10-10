@@ -29,8 +29,6 @@ class FakeInstance:
         self.round_number = 1
         self.action_queue: list[dict] = []
         self.run_id = "run-test"
-        self.last_check = None
-        self.last_checks: list[dict] = []
         self.quick_actions = ["观察"]
         self.last_state_update = {"scene": "门厅"}
         self.solo_mode = False
@@ -219,7 +217,7 @@ async def test_pending_economy_blocks_next_round_before_recording_action() -> No
         "payer_uid": "gm",
         "visibility": "private",
     }
-    instance.economy["proposals"].append(proposal)
+    economy_state.state(instance)["proposals"].append(proposal)
 
     blocked = await submit_action(api.dependencies, "game", "gm", "继续赶路")
 
@@ -250,7 +248,7 @@ async def test_personal_purchase_can_remain_pending_without_blocking_other_playe
         "contributors": [],
         "visibility": "private",
     }
-    instance.economy["proposals"].append(purchase)
+    economy_state.state(instance)["proposals"].append(purchase)
 
     result = await submit_action(api.dependencies, "game", "p2", "调查房门")
 
@@ -506,7 +504,7 @@ def _reward_proposal(instance, *, proposal_id: str, amount: int, uid: str = "gm"
         "contributors": [],
         "visibility": "private",
     }
-    instance.economy["proposals"].append(proposal)
+    economy_state.state(instance)["proposals"].append(proposal)
     return proposal
 
 
@@ -565,14 +563,14 @@ async def test_auto_settle_skips_purchases_and_team_rewards() -> None:
     instance = FakeInstance()
     instance.try_advance_result = True
     api = FakeApi(instance)
-    instance.economy["proposals"].append({
+    economy_state.state(instance)["proposals"].append({
         "id": "purchase-1", "run_id": instance.run_id, "status": "pending",
         "kind": "purchase", "approval_policy": "payer", "payer_uid": "gm",
         "recipient_uid": "gm", "amount": 30, "contributors": [],
         "rewards": [{"name": "药水", "category": "consumable"}],
     })
     _reward_proposal(instance, proposal_id="team-reward", amount=10)
-    instance.economy["proposals"][-1]["contributors"] = [
+    economy_state.state(instance)["proposals"][-1]["contributors"] = [
         {"uid": "gm", "amount": 5}, {"uid": "p2", "amount": 5},
     ]
 
@@ -598,7 +596,7 @@ async def test_auto_reward_duplicate_settlement_is_idempotent() -> None:
     assert api.resolved_rewards == [("game", "reward-once", "gm")]
 
     # 真实服务结算后提案变 committed；再次推进不得重复结算。
-    instance.economy["proposals"][0]["status"] = "committed"
+    economy_state.state(instance)["proposals"][0]["status"] = "committed"
     second = await submit_action(api.dependencies, "game", "gm", "继续前进")
     assert second["status"] == 200
     assert api.resolved_rewards == [("game", "reward-once", "gm")]
@@ -625,5 +623,5 @@ async def test_multiple_rewards_settle_independently() -> None:
 
     assert result["status"] == 200
     assert [r[1] for r in api.resolved_rewards] == ["reward-a", "reward-b"]
-    by_id = {p["id"]: p for p in instance.economy["proposals"]}
+    by_id = {p["id"]: p for p in economy_state.state(instance)["proposals"]}
     assert by_id["reward-b"]["status"] == "pending"

@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from src.commands.combat_resolver import CombatResolver  # noqa: E402
 from src.engine.checks import resolve_check_request  # noqa: E402
 from src.engine.game_instance import GameInstance  # noqa: E402
+from src.engine.modules import checks as checks_module  # noqa: E402
 from src.rules.rule_system import RuleSystem  # noqa: E402
 
 
@@ -129,7 +130,7 @@ def _scenario(round_index: int, *, percentile: bool, players: int) -> tuple[Game
                     f"round={round_index} player={uid}: D&D AC/verdict mismatch"
                 )
         instance.action_queue.append(action)
-        instance.last_checks.append(result)
+        checks_module.last_checks(instance).append(result)
     return instance, rule
 
 

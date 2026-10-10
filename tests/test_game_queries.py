@@ -13,7 +13,7 @@ from src.webui.services.game_queries import (
     list_games,
     player_context,
 )
-from src.engine.modules import ruleset_runtime
+from src.engine.modules import checks, ruleset_runtime
 
 
 def _query_dependencies(
@@ -127,7 +127,7 @@ def test_game_detail_projects_manual_roll_results_with_private_visibility(tmp_pa
         game_key=("web", "rolls", "bot"), gm_uid="gm",
     )
     instance.round_number = 3
-    instance.manual_roll_requests = [
+    checks.replace_manual_roll_requests(instance, [
         {
             "id": "party-roll", "round_number": 2, "label": "察觉鉴定",
             "formula": "d20", "visibility": "party", "target_uids": ["ally"],
@@ -142,7 +142,7 @@ def test_game_detail_projects_manual_roll_results_with_private_visibility(tmp_pa
             "created_at": "2026-09-13T01:01:00+00:00",
             "results": {"ally": {"total": 17, "rolls": [15], "modifier": 2, "natural": 15}},
         },
-    ]
+    ])
     registry.register(instance)
     dependencies = _query_dependencies(registry)
 
