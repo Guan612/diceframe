@@ -24,6 +24,7 @@ from src.commands.state_update_applier import StateUpdateApplier, discard_unreso
 from src.commands.tag_parser import parse_tag_state
 from src.engine.game_instance import GameInstance, restore_players
 from src.engine.modules import adventure_runtime_state, narrative_notes, session_stats
+from src.engine.modules import combat_extension_state
 from src.engine.world_state import ensure_world_state
 from src.engine.economy import queue_effect_group, reconcile_rollback_snapshot, reverse_round_economy
 from src.imagegen.storyboards import normalize_scene_panels, storyboard_panel_metadata, storyboard_source_revision
@@ -150,19 +151,19 @@ class SwipeGenerator:
                 entry for entry in instance.log
                 if int(entry.get("round", 0) or 0) <= round_num
             ]
-            current_combat_snapshot = instance.combat_extension_round_snapshots.get(
+            current_combat_snapshot = combat_extension_state.round_snapshots(instance).get(
                 str(instance.round_number),
             )
             if isinstance(current_combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(current_combat_snapshot):
-                    instance.combat_extension = {}
+                    combat_extension_state.replace_current(instance, {})
             progression.rewind_for_replay(instance, round_num)
             reverse_round_economy(instance, round_num)
             restore_players(instance, reconcile_rollback_snapshot(instance, snapshot, round_num))
             combat_snapshot = target_entry.get("pre_combat_extension_snapshot")
             if isinstance(combat_snapshot, dict):
                 if not instance.restore_combat_extension_snapshot(combat_snapshot):
-                    instance.combat_extension = {}
+                    combat_extension_state.replace_current(instance, {})
             # 世界真相同属被丢弃的分支：swipe 切回目标轮时，本轮之后写入的
             # world ops 一起撤销（ADR 0003 整轮语义）。
             world_snapshot = target_entry.get("pre_world_state")
