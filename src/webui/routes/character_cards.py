@@ -5,6 +5,7 @@ from __future__ import annotations
 from aiohttp import web
 
 from src.webui.routes._common import _get_api, _require_confirmed_request
+from src.webui.access_control import PAIRED_DEVICE_ID_KEY
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 
 
@@ -119,8 +120,33 @@ def _as_bool(value: object, default: bool = True) -> bool:
     return str(value).strip().lower() not in {"", "0", "false", "no", "off"}
 
 
+_PLAN_CONFLICT_CODES = frozenset({
+    "PLAN_STALE", "CARD_IDENTITY_CONFLICT", "LOREBOOK_IDENTITY_CONFLICT",
+})
+
+
+async def api_character_card_import_preview(request: web.Request) -> web.Response:
+    body = await request.json()
+    if not isinstance(body, dict):
+        return web.json_response({"ok": False, "error": "request must be an object"}, status=400)
+    result = _get_api(request).preview_character_card_import(body)
+    return web.json_response(result, status=200 if result.get("ok") else 400)
+
+
+async def _api_character_card_plan_commit(request: web.Request, body: dict) -> web.Response:
+    result = _get_api(request).commit_character_card_plan(
+        body, pushed_by_device=str(request.get(PAIRED_DEVICE_ID_KEY, "") or ""),
+    )
+    if result.get("ok"):
+        return web.json_response(result)
+    status = 409 if result.get("error_code") in _PLAN_CONFLICT_CODES else 400
+    return web.json_response(result, status=status)
+
+
 async def api_character_card_import(request: web.Request) -> web.Response:
     body = await request.json()
+    if isinstance(body, dict) and "plan_digest" in body:
+        return await _api_character_card_plan_commit(request, body)
     result = await _get_api(request).import_character_card(
         file_data=body.get("file_data", ""),
         file_name=body.get("file_name", "card.json"),
@@ -163,4 +189,5 @@ def register_character_cards(app: web.Application) -> None:
     )
     app.router.add_route("DELETE", "/api/character-cards/{card_id}", api_character_card_delete)
     app.router.add_post("/api/character-cards/import", api_character_card_import)
+    app.router.add_post("/api/character-cards/import/preview", api_character_card_import_preview)
     app.router.add_post("/api/character-cards/export", api_character_card_export)

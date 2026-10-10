@@ -325,7 +325,7 @@ def _import_request(body: dict[str, Any]) -> tuple[dict[str, Any], Any]:
     explicit document; any other body *is* the document (legacy preview).
     """
 
-    from src.lorebook.importer import declared_import_source
+    from src.content_modules.plan import declared_import_source
 
     if isinstance(body.get("payload"), dict):
         return body["payload"], declared_import_source(body.get("source"), body.get("external_id"))
@@ -398,6 +398,7 @@ def commit_lorebook_import(deps: LorebookDependencies, payload: dict[str, Any], 
 
 
 IMPORT_SOURCE_INVALID = "IMPORT_SOURCE_INVALID"
+BINDING_REQUIRES_WRITE = "BINDING_REQUIRES_WRITE"
 BOOK_ID_NOT_ALLOWED = "BOOK_ID_NOT_ALLOWED"
 
 
@@ -439,6 +440,14 @@ def commit_lorebook_plan(deps: LorebookDependencies, body: dict[str, Any]) -> di
         }
     try:
         decision = resolve_decision(plan.item, body.get("decision"))
+        writes_nothing = decision == "skip" or (
+            decision == "update" and plan.item.action == "unchanged"
+        )
+        if binding and writes_nothing:
+            # A binding is applied with the Book it belongs to; an answer
+            # that writes nothing must not silently drop it.
+            return {"ok": False, "error_code": BINDING_REQUIRES_WRITE,
+                    "error": "a binding can only be applied with update, duplicate or create"}
         result = execute_lorebook_plan(deps.lorebook, plan, decision, binding=binding)
     except PlanDecisionError as exc:
         return {"ok": False, "error": str(exc), "error_code": exc.code}

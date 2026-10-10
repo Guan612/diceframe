@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Any, TypeVar
 
 from src.lorebook.adapters import from_legacy_entries, from_lorebook_v3, from_sillytavern
@@ -16,8 +16,13 @@ from src.content_modules.refs import (
     build_commit_plan,
     collect_content_refs,
 )
-from src.content_modules.plan import content_digest
-from src.engine.world.contracts import SOURCE_REF_KINDS, canonical_id
+from src.content_modules.plan import (  # noqa: F401 - re-exported for import callers
+    DECLARABLE_SOURCE_KINDS,
+    DeclaredSource,
+    content_digest,
+    declared_import_source,
+)
+from src.engine.world.contracts import SOURCE_REF_KINDS
 
 T = TypeVar("T")
 
@@ -94,40 +99,6 @@ def lorebook_import_identity(draft: LorebookDraft) -> tuple[str, str]:
         return source_kind, world_canonical_id(raw_source_id)
     except ValueError:
         return source_kind, f"import-{hashlib.sha256(raw_source_id.encode('utf-8')).hexdigest()[:12]}"
-
-
-#: Source kinds a client may declare for its own content. Every other kind
-#: (plugin, module, builtin, ...) is assigned by server-side import code.
-DECLARABLE_SOURCE_KINDS = frozenset({"device"})
-
-
-@dataclass(frozen=True)
-class DeclaredSource:
-    """A client's declared identity for one pushed Book."""
-
-    source_kind: str
-    source_id: str
-    external_id: str
-
-
-def declared_import_source(source: Any, external_id: Any) -> DeclaredSource | None:
-    """Validate the identity a client declares; ``None`` when it declares none.
-
-    Fails closed (``ValueError``) on anything but a canonical device identity:
-    a client may name its own install and its own content id, never another
-    source's.
-    """
-
-    if source is None and external_id is None:
-        return None
-    if not isinstance(source, dict):
-        raise ValueError("source must be an object with kind and id")
-    kind = source.get("kind")
-    if kind not in DECLARABLE_SOURCE_KINDS:
-        raise ValueError(f"source kind cannot be declared by a client: {kind!r}")
-    source_id = canonical_id(source.get("id"), field="source id")
-    external = canonical_id(external_id, field="external id")
-    return DeclaredSource(str(kind), source_id, external)
 
 
 def lorebook_draft_digest(draft: LorebookDraft) -> str:
