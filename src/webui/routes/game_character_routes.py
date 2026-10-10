@@ -6,6 +6,7 @@ import logging
 
 from aiohttp import web
 
+from src.engine.modules import ruleset_runtime
 from src.webui.api import can_modify_character
 from src.webui.routes.character_cards import sees_full_card_library
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
@@ -158,7 +159,7 @@ async def _api_live_character_advancement(
     if not inst:
         return web.json_response({"ok": False, "error": "游戏不存在"}, status=404)
     session_uid = request.get("user_id", "")
-    runtime_id = str((getattr(inst, "ruleset_runtime", {}) or {}).get("id") or "")
+    runtime_id = str((ruleset_runtime.binding(inst) or {}).get("id") or "")
     can_advance = (
         session_uid == uid
         if runtime_id == "core:dnd2024"

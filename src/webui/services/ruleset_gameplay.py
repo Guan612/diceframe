@@ -91,7 +91,7 @@ def _seat_actor_id(uid: str) -> str:
 
 
 def _active_combat(instance: Any) -> dict[str, Any] | None:
-    state = getattr(instance, "ruleset_state", None)
+    state = ruleset_runtime.state(instance)
     combat = state.get("combat") if isinstance(state, dict) else None
     if isinstance(combat, dict) and combat.get("status") == "active":
         return combat
@@ -188,7 +188,7 @@ def _context(
         return instance, rule, runtime, effective_requester, _error(
             "RULESET_INTENTS_UNAVAILABLE", "该规则继续使用自由文本回合流程",
         )
-    binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+    binding = dict(ruleset_runtime.binding(instance) or {})
     if binding.get("id") != runtime.runtime_id:
         return instance, rule, runtime, effective_requester, _error(
             "RULESET_BINDING_MISMATCH", "存档未绑定当前权威规则运行时",

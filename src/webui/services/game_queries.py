@@ -251,7 +251,7 @@ def game_detail(
         "play_mode": str(getattr(instance, "play_mode", "free") or "free"),
         "manual_rolls": _public_manual_rolls(instance, viewer_uid),
     }
-    if getattr(instance, "ruleset_runtime", None):
+    if ruleset_runtime.binding(instance):
         binding = dict(ruleset_runtime.binding(instance))
         rule = dependencies.load_rule_for_game(instance)
         runtime = None

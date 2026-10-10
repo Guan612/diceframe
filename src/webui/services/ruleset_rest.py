@@ -69,7 +69,7 @@ def _failure(code: str, message: str, **extra: Any) -> dict[str, Any]:
 
 def _set_rest_session(instance: Any, session: dict[str, Any]) -> None:
     ruleset_runtime.require_writable(instance)
-    state = getattr(instance, "ruleset_state", None)
+    state = ruleset_runtime.state(instance)
     if not isinstance(state, dict):
         state = {}
         ruleset_runtime.replace_state(instance, state)

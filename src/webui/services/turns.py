@@ -718,7 +718,7 @@ async def submit_action(
                 "error_code": "RULESET_RUNTIME_UNAVAILABLE",
                 "error": str(exc),
             }, 409)
-        state = getattr(instance, "ruleset_state", {})
+        state = ruleset_runtime.state(instance)
         combat = state.get("combat") if isinstance(state, dict) else None
         combat_active = isinstance(combat, dict) and combat.get("status") == "active"
         requires_structured = runtime.capabilities.authoritative_intents and (

@@ -102,35 +102,35 @@ def persisted_state(instance: Any) -> dict[str, Any]:
 
 def bind(instance: Any, normalized: dict[str, Any]) -> None:
     require_writable(instance)
-    instance.ruleset_runtime = normalized
-    if not instance.ruleset_state:
-        instance.ruleset_state = {"state_schema_version": normalized["state_schema_version"]}
+    replace_binding(instance, normalized)
+    if not state(instance):
+        replace_state(instance, {"state_schema_version": normalized["state_schema_version"]})
 
 
 def copy_binding_for_new_run(candidate: Any, source: Any) -> None:
     require_writable(source)
     require_writable(candidate)
-    candidate.ruleset_runtime = deepcopy(source.ruleset_runtime)
-    candidate.ruleset_state = (
-        {"state_schema_version": int(source.ruleset_runtime.get("state_schema_version", 1) or 1)}
-        if source.ruleset_runtime else {}
-    )
+    replace_binding(candidate, deepcopy(binding(source)))
+    replace_state(candidate, (
+        {"state_schema_version": int(binding(source).get("state_schema_version", 1) or 1)}
+        if binding(source) else {}
+    ))
 
 
 def reset(instance: Any, saved_binding: dict[str, Any]) -> None:
     require_writable(instance)
-    instance.ruleset_runtime = saved_binding
-    instance.ruleset_state = (
+    replace_binding(instance, saved_binding)
+    replace_state(instance, (
         {"state_schema_version": int(saved_binding.get("state_schema_version", 1) or 1)}
         if saved_binding else {}
-    )
-    instance.event_ledger.clear()
+    ))
+    event_ledger(instance).clear()
 
 
 def restore_from_transaction(instance: Any, snapshot: dict[str, Any]) -> None:
     require_writable(instance)
-    instance.ruleset_state = deepcopy(snapshot["ruleset_state"])
-    instance.event_ledger = deepcopy(snapshot["event_ledger"])
+    replace_state(instance, deepcopy(snapshot["ruleset_state"]))
+    replace_event_ledger(instance, deepcopy(snapshot["event_ledger"]))
 
 
 SPEC = ModuleStateSpec(name=MODULE_NAME, schema_version=SCHEMA_VERSION, fresh=fresh, ensure=ensure)
