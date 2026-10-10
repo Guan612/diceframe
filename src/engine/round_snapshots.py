@@ -79,13 +79,15 @@ def capture_combat_extension_snapshot(
     the same pre-mutation snapshot when first touched.
     """
 
+    from src.engine.modules import combat_extension_state
+
     try:
         key = str(int(instance.round_number or 0))
     except (TypeError, ValueError):
         key = "0"
-    if not isinstance(instance.combat_extension_round_snapshots, dict):
-        instance.combat_extension_round_snapshots = {}
-    snapshot = instance.combat_extension_round_snapshots.get(key)
+    if not isinstance(combat_extension_state.round_snapshots(instance), dict):
+        combat_extension_state.replace_round_snapshots(instance, {})
+    snapshot = combat_extension_state.round_snapshots(instance).get(key)
     if not isinstance(snapshot, dict):
         snapshot = None
     elif "combat_extension" not in snapshot:
@@ -97,7 +99,7 @@ def capture_combat_extension_snapshot(
             "combat_extension": copy.deepcopy(snapshot),
             "entity_fields": {},
         }
-        instance.combat_extension_round_snapshots[key] = snapshot
+        combat_extension_state.round_snapshots(instance)[key] = snapshot
     elif (
         isinstance(snapshot.get("schema_version"), bool)
         or snapshot.get("schema_version") != 1
@@ -108,12 +110,12 @@ def capture_combat_extension_snapshot(
         snapshot = {
             "schema_version": 1,
             "combat_extension": copy.deepcopy(
-                instance.combat_extension if isinstance(instance.combat_extension, dict) else {}
+                combat_extension_state.current(instance) if isinstance(combat_extension_state.current(instance), dict) else {}
             ),
             "entity_fields": {},
         }
-        instance.combat_extension_round_snapshots[key] = snapshot
-    snapshot = instance.combat_extension_round_snapshots[key]
+        combat_extension_state.round_snapshots(instance)[key] = snapshot
+    snapshot = combat_extension_state.round_snapshots(instance)[key]
     if isinstance(entity_fields, Mapping) and isinstance(snapshot, dict):
         captured = snapshot.setdefault("entity_fields", {})
         if not isinstance(captured, dict):
@@ -174,26 +176,28 @@ def capture_combat_extension_snapshot(
                     missing.append(field_name)
     # Save size stays bounded even in very long sessions. Finished-round
     # logs carry their own copy, so only recent/current snapshots are needed.
-    if len(instance.combat_extension_round_snapshots) > 100:
+    if len(combat_extension_state.round_snapshots(instance)) > 100:
         def _sort_key(value: str) -> tuple[int, str]:
             try:
                 return int(value), value
             except (TypeError, ValueError):
                 return -1, value
-        for old_key in sorted(instance.combat_extension_round_snapshots, key=_sort_key)[:-100]:
-            instance.combat_extension_round_snapshots.pop(old_key, None)
+        for old_key in sorted(combat_extension_state.round_snapshots(instance), key=_sort_key)[:-100]:
+            combat_extension_state.round_snapshots(instance).pop(old_key, None)
 
 
 def current_combat_extension_snapshot(instance: GameInstance) -> dict[str, Any]:
     """Return the current combat state using this round's tracked fields."""
 
+    from src.engine.modules import combat_extension_state
+
     try:
         key = str(int(instance.round_number or 0))
     except (TypeError, ValueError):
         key = "0"
-    if not isinstance(instance.combat_extension_round_snapshots, dict):
-        instance.combat_extension_round_snapshots = {}
-    tracked = instance.combat_extension_round_snapshots.get(key, {})
+    if not isinstance(combat_extension_state.round_snapshots(instance), dict):
+        combat_extension_state.replace_round_snapshots(instance, {})
+    tracked = combat_extension_state.round_snapshots(instance).get(key, {})
     raw_fields = tracked.get("entity_fields") if isinstance(tracked, dict) else {}
     entity_fields: dict[str, tuple[str, ...]] = {}
     if isinstance(raw_fields, dict):
@@ -216,7 +220,7 @@ def current_combat_extension_snapshot(instance: GameInstance) -> dict[str, Any]:
             entity_fields[entity_id] = tuple((*values.keys(), *absent))
 
     extension_state = copy.deepcopy(
-        instance.combat_extension if isinstance(instance.combat_extension, dict) else {}
+        combat_extension_state.current(instance) if isinstance(combat_extension_state.current(instance), dict) else {}
     )
     extension_state.pop("pending_summaries", None)
     snapshot: dict[str, Any] = {
@@ -252,6 +256,8 @@ def current_combat_extension_snapshot(instance: GameInstance) -> dict[str, Any]:
 def restore_combat_extension_snapshot(instance: GameInstance, snapshot: Any) -> bool:
     """Restore a snapshot produced by the combat-extension snapshot API."""
 
+    from src.engine.modules import combat_extension_state
+
     if not isinstance(snapshot, dict):
         return False
     if "combat_extension" not in snapshot:
@@ -260,7 +266,7 @@ def restore_combat_extension_snapshot(instance: GameInstance, snapshot: Any) -> 
             restored_extension = copy.deepcopy(snapshot)
         except (TypeError, ValueError, RecursionError):
             return False
-        instance.combat_extension = restored_extension
+        combat_extension_state.replace_current(instance, restored_extension)
         return True
     version = snapshot.get("schema_version")
     if (
@@ -317,7 +323,7 @@ def restore_combat_extension_snapshot(instance: GameInstance, snapshot: Any) -> 
         restored_extension = copy.deepcopy(snapshot["combat_extension"])
     except (TypeError, ValueError, RecursionError):
         return False
-    instance.combat_extension = restored_extension
+    combat_extension_state.replace_current(instance, restored_extension)
     for target, values, absent in staged:
         target.update(values)
         for field_name in absent:
@@ -328,18 +334,20 @@ def restore_combat_extension_snapshot(instance: GameInstance, snapshot: Any) -> 
 def discard_combat_extension_snapshots_from(instance: GameInstance, round_number: int) -> None:
     """Drop live snapshots belonging to a discarded history branch."""
 
-    if not isinstance(instance.combat_extension_round_snapshots, dict):
-        instance.combat_extension_round_snapshots = {}
+    from src.engine.modules import combat_extension_state
+
+    if not isinstance(combat_extension_state.round_snapshots(instance), dict):
+        combat_extension_state.replace_round_snapshots(instance, {})
         return
-    for key in list(instance.combat_extension_round_snapshots):
+    for key in list(combat_extension_state.round_snapshots(instance)):
         try:
             snapshot_round = int(key)
         except (TypeError, ValueError):
             # Malformed keys cannot be associated with the retained branch.
-            instance.combat_extension_round_snapshots.pop(key, None)
+            combat_extension_state.round_snapshots(instance).pop(key, None)
             continue
         if snapshot_round >= round_number:
-            instance.combat_extension_round_snapshots.pop(key, None)
+            combat_extension_state.round_snapshots(instance).pop(key, None)
 
 
 # ---------- 判定入口旧版实体快照 ----------------------------
