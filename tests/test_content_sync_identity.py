@@ -454,3 +454,127 @@ async def test_middleware_records_the_paired_device_for_audit(tmp_path: Path, mo
     assert by_device["paired_device_id"] == device["id"]
     assert by_password["paired_device_id"] == ""
     assert anonymous.status == 401
+
+
+# ---- Review fixes: identity is server-only; robust instance id ---------------
+
+
+def _lorebook_service(tmp_path: Path):
+    from src.webui.services import lorebooks as lorebook_service
+
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    deps = lorebook_service.LorebookDependencies(
+        lorebook=store, get_instance=lambda _key: None, get_lore_retriever=lambda: None,
+    )
+    return lorebook_service, store, deps
+
+
+_CLIENT_IDENTITY = {
+    "source_kind": "device", "source_id": "install-1", "external_id": "book-1",
+    "source_version": "9", "source_digest": "sha256:forged",
+}
+
+
+def test_generic_create_ignores_client_supplied_identity(tmp_path: Path):
+    service, store, deps = _lorebook_service(tmp_path)
+    try:
+        result = service.create_lorebook(deps, {"id": "b1", "name": "B1", **_CLIENT_IDENTITY})
+
+        assert result["ok"]
+        book = store.get_lorebook("b1")
+        assert (book["source_kind"], book["source_id"], book["external_id"]) == ("native", "", "")
+        assert (book["source_version"], book["source_digest"]) == ("", "")
+    finally:
+        store.close()
+
+
+def test_generic_update_ignores_client_supplied_identity(tmp_path: Path):
+    service, store, deps = _lorebook_service(tmp_path)
+    try:
+        store.create_lorebook({
+            "id": "b1", "name": "B1", "source_kind": "device", "source_id": "install-1",
+            "external_id": "book-1", "source_version": "1", "source_digest": "sha256:real",
+        })
+        result = service.update_lorebook(deps, "b1", {
+            "name": "Renamed", "source_kind": "plugin", "source_id": "other",
+            "external_id": "squat", "source_version": "9", "source_digest": "sha256:forged",
+        })
+
+        assert result["ok"]
+        book = store.get_lorebook("b1")
+        assert book["name"] == "Renamed"
+        assert (book["source_kind"], book["source_id"], book["external_id"]) == (
+            "device", "install-1", "book-1",
+        )
+        assert (book["source_version"], book["source_digest"]) == ("1", "sha256:real")
+    finally:
+        store.close()
+
+
+def test_identity_collision_is_a_structured_conflict(tmp_path: Path):
+    from src.lorebook.store import LorebookIdentityConflict
+    from src.webui.routes.lorebooks import _result_response
+
+    service, store, deps = _lorebook_service(tmp_path)
+    try:
+        store.create_lorebook({
+            "id": "first", "name": "First", "source_kind": "device",
+            "source_id": "install-1", "external_id": "book-1",
+        })
+        with pytest.raises(LorebookIdentityConflict):
+            store.create_lorebook({
+                "id": "second", "name": "Second", "source_kind": "device",
+                "source_id": "install-1", "external_id": "book-1",
+            })
+
+        class ConflictingStore:
+            def get_lorebook(self, _book_id):
+                return None
+
+            def create_lorebook(self, _book):
+                raise LorebookIdentityConflict("external identity is already tracked")
+
+        result = service.create_lorebook(
+            service.LorebookDependencies(
+                lorebook=ConflictingStore(), get_instance=lambda _key: None,
+                get_lore_retriever=lambda: None,
+            ),
+            {"id": "x", "name": "X"},
+        )
+
+        assert result["ok"] is False
+        assert result["error_code"] == "LOREBOOK_IDENTITY_CONFLICT"
+        assert _result_response(result).status == 409
+    finally:
+        store.close()
+
+
+def test_damaged_identity_is_read_and_logged_once(tmp_path: Path, caplog):
+    from src.webui.server_identity import server_instance_id
+
+    path = tmp_path / "server_identity.json"
+    path.write_text("not json", encoding="utf-8")
+    app = web.Application()
+    app[SERVER_IDENTITY_KEY] = ServerIdentityStore(tmp_path)
+
+    with caplog.at_level("ERROR", logger="trpg"):
+        results = [server_instance_id(app) for _ in range(3)]
+        # The failure is remembered: a later repair needs a restart, not a re-read.
+        path.write_text(json.dumps({"version": 1, "instance_id": "srv-" + "0" * 32}), encoding="utf-8")
+        results.append(server_instance_id(app))
+
+    assert results == [None, None, None, None]
+    assert len([r for r in caplog.records if r.levelname == "ERROR"]) == 1
+
+
+def test_concurrent_first_start_keeps_the_first_published_id(tmp_path: Path, monkeypatch):
+    winner = ServerIdentityStore(tmp_path).instance_id()
+    late = ServerIdentityStore(tmp_path)
+    # The late process checked for the file before the winner published it.
+    monkeypatch.setattr(type(late.path), "exists", lambda _self: False)
+
+    assert late.instance_id() == winner
+    monkeypatch.undo()
+    assert json.loads((tmp_path / "server_identity.json").read_text(encoding="utf-8"))["instance_id"] == winner
+    assert [p.name for p in tmp_path.iterdir() if p.name.endswith(".tmp")] == []

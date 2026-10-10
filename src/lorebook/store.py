@@ -121,6 +121,12 @@ _CURRENT_INDEXES = (
 )
 
 
+class LorebookIdentityConflict(ValueError):
+    """An external identity is already tracked by another Book (fail closed)."""
+
+    code = "LOREBOOK_IDENTITY_CONFLICT"
+
+
 class LorebookStore:
     """世界书 SQLite 存储管理器。
 
@@ -297,7 +303,7 @@ class LorebookStore:
                     & (Lorebook.external_id == external_id)
                 )
                 if holder is not None and holder.id != book["id"]:
-                    raise ValueError(
+                    raise LorebookIdentityConflict(
                         "external identity is already tracked by another lorebook"
                     )
             Lorebook.insert(

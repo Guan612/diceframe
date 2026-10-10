@@ -17,6 +17,8 @@ def _result_response(result: dict) -> web.Response:
     if result.get("ok"):
         return web.json_response(result)
     error = str(result.get("error") or "Request failed")
+    if result.get("error_code") == "LOREBOOK_IDENTITY_CONFLICT":
+        return web.json_response(result, status=409)
     status = 409 if "primary" in error.lower() or "already exists" in error.lower() else (
         404 if "not found" in error.lower() else 400
     )
@@ -103,6 +105,8 @@ async def api_lorebook_import_commit(request: web.Request) -> web.Response:
     result = _get_api(request).commit_lorebook_import(
         body["payload"], body.get("binding"), body.get("book_id"),
     )
+    if result.get("error_code") == "LOREBOOK_IDENTITY_CONFLICT":
+        return web.json_response(result, status=409)
     return web.json_response(result, status=200 if result.get("ok") else 400)
 
 

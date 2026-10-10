@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
@@ -31,6 +32,10 @@ class ServerIdentityStore:
     def __init__(self, data_dir: Path) -> None:
         self.path = Path(data_dir) / SERVER_IDENTITY_FILE
         self._instance_id: str | None = None
+        # A damaged file stays damaged until an operator repairs it: remember
+        # the failure instead of re-reading (and re-logging) on every request.
+        self._failure: ServerIdentityError | None = None
+        self.failure_logged = False
 
     def instance_id(self) -> str:
         """Return the persisted id, generating it on first use.
@@ -41,17 +46,38 @@ class ServerIdentityStore:
 
         if self._instance_id is not None:
             return self._instance_id
-        if self.path.exists():
-            self._instance_id = self._read()
-            return self._instance_id
+        if self._failure is not None:
+            raise self._failure
+        try:
+            self._instance_id = self._read() if self.path.exists() else self._create()
+        except ServerIdentityError as exc:
+            self._failure = exc
+            raise
+        return self._instance_id
+
+    def _create(self) -> str:
+        """Publish a new id atomically; whoever publishes first wins.
+
+        The content is written to a private temporary file and then hard-linked
+        to the final name. The link fails if the name already exists, so two
+        processes starting together can never both win, and a reader never
+        sees a half-written file.
+        """
+
         instance_id = f"srv-{uuid.uuid4().hex}"
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps({"version": 1, "instance_id": instance_id}), encoding="utf-8",
-        )
-        temporary.replace(self.path)
-        self._instance_id = instance_id
+        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with open(temporary, "x", encoding="utf-8") as handle:
+                handle.write(json.dumps({"version": 1, "instance_id": instance_id}))
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(temporary, self.path)
+            except FileExistsError:
+                return self._read()
+        finally:
+            temporary.unlink(missing_ok=True)
         return instance_id
 
     def _read(self) -> str:
@@ -79,5 +105,7 @@ def server_instance_id(app: web.Application) -> str | None:
     try:
         return store.instance_id()
     except (ServerIdentityError, OSError):
-        logger.error("服务器实例标识不可用，已从响应中省略", exc_info=True)
+        if not store.failure_logged:
+            store.failure_logged = True
+            logger.error("服务器实例标识不可用，已从响应中省略", exc_info=True)
         return None
