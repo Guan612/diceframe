@@ -551,3 +551,164 @@ async def test_an_unexpected_item_failure_reports_exactly_what_was_written(sync_
     assert rows["book-2"]["status"] == "not_attempted"
     assert [book["external_id"] for book in lorebook.list_lorebooks()] == ["book-1"]
     assert api.list_character_cards()["cards"] == []
+
+
+# ---- Mobile contract gaps ----------------------------------------------------------
+
+
+def _server_book(lorebook, book_id: str, *, entries: dict[str, str], **fields) -> None:
+    lorebook.create_lorebook({"id": book_id, "name": "Server book", **fields})
+    for key, content in entries.items():
+        lorebook.add_book_entry(book_id, {"id": f"{book_id}:{key}", "name": key, "content": content,
+                                          "keywords": [key], **({} if key != "plugin" else {"source_plugin": "pack"})})
+
+
+def _hinted_book(hint: str, *, client_ref: str = "book-1", entries: dict[str, str] | None = None) -> dict:
+    return {"client_ref": client_ref, "kind": "lorebook",
+            "document": _lorebook("Pulled", entries or {"town": "Town"}), "canonical_hint": hint}
+
+
+@pytest.mark.asyncio
+async def test_canonical_hint_adopts_a_server_book(sync_app) -> None:
+    app, _api, lorebook = sync_app
+    _server_book(lorebook, "server-book", entries={"town": "Old town"})
+    async with TestClient(TestServer(app)) as client:
+        _s, preview = await _preview(client, [_hinted_book("server-book")])
+        item = preview["items"][0]
+        assert item["existing"]["canonical_id"] == "server-book"
+        assert item["existing"]["matched_by"] == "hint" and item["existing"]["server_modified"] is None
+        assert item["allowed"] == ["update", "duplicate", "skip"]
+        _s, adopted, _ = await _push(client, [_hinted_book("server-book")], decisions={"book-1": "update"})
+        plain = {k: v for k, v in _hinted_book("server-book").items() if k != "canonical_hint"}
+        _s, followed = await _preview(client, [plain])
+
+    assert adopted["items"][0]["canonical_id"] == "server-book"
+    book = lorebook.get_lorebook("server-book")
+    assert (book["source_id"], book["external_id"], book["import_link"]) == ("install-a", "book-1", "tracked")
+    assert followed["items"][0]["existing"]["matched_by"] == "identity"
+    assert followed["items"][0]["action"] == "unchanged"
+
+
+@pytest.mark.asyncio
+async def test_a_hinted_book_of_someone_else_offers_duplicate_or_skip(sync_app) -> None:
+    app, _api, lorebook = sync_app
+    _server_book(lorebook, "plugin-book", entries={"plugin": "From a pack"})
+    async with TestClient(TestServer(app)) as client:
+        _s, other, _ = await _push(client, [_hinted_book("x", client_ref="theirs")], source=TABLET)
+        theirs = other["items"][0]["canonical_id"]
+        _s, kept, _ = await _push(client, [_hinted_book("x", client_ref="theirs", entries={"town": "v2"})],
+                                  source=TABLET, decisions={"theirs": "duplicate"})
+        detached = kept["items"][0]["detached_id"]
+        plugin = await _preview(client, [_hinted_book("plugin-book")])
+        tracked = await _preview(client, [_hinted_book(kept["items"][0]["canonical_id"])])
+        detached_hint = await _preview(client, [_hinted_book(detached)])
+        _s, copied, _ = await _push(client, [_hinted_book("plugin-book")], decisions={"book-1": "duplicate"})
+
+    assert detached == theirs
+    for (_status, body), reason in (
+        (plugin, "PLUGIN_BOOK"), (tracked, "TRACKED_BY_OTHER_SOURCE"), (detached_hint, "DETACHED_FROM_OTHER_SOURCE"),
+    ):
+        assert body["items"][0]["allowed"] == ["duplicate", "skip"]
+        assert body["items"][0]["reason"] == reason
+    # Keeping both never detaches someone else's book.
+    assert copied["items"][0]["status"] == "duplicated" and "detached_id" not in copied["items"][0]
+    assert lorebook.get_lorebook("plugin-book")["import_link"] == ""
+
+
+@pytest.mark.asyncio
+async def test_a_hint_never_overrides_an_identity_match(sync_app) -> None:
+    app, _api, lorebook = sync_app
+    _server_book(lorebook, "server-book", entries={"town": "Old town"})
+    async with TestClient(TestServer(app)) as client:
+        _s, created, _ = await _push(client, [_hinted_book("nope")])
+        _s, preview = await _preview(client, [_hinted_book("server-book", entries={"town": "v2"})])
+
+    existing = preview["items"][0]["existing"]
+    assert existing["matched_by"] == "identity"
+    assert existing["canonical_id"] == created["items"][0]["canonical_id"] != "server-book"
+
+
+@pytest.mark.asyncio
+async def test_status_reports_state_tokens_and_provenance(sync_app) -> None:
+    app, api, _lorebook = sync_app
+    async with TestClient(TestServer(app)) as client:
+        _s, created, _ = await _push(client, _items())
+        rows = _by_ref(created["items"])
+        query = {"items": [
+            {"kind": "character_template", "canonical_id": rows["card-1"]["canonical_id"]},
+            {"kind": "lorebook", "canonical_id": rows["book-1"]["canonical_id"]},
+            {"kind": "lorebook", "canonical_id": "gone"},
+        ]}
+        status, before = await _post(client, "/api/content/status", query)
+        api.update_character_card(rows["card-1"]["canonical_id"], {"gold": 1})
+        _s, after = await _post(client, "/api/content/status", query)
+        anonymous, _ = await _post(client, "/api/content/status", query, CONFIRM)
+        unconfirmed = await client.post("/api/content/status", json=query, headers={"Authorization": f"Bearer {PASSWORD}"})
+        too_many, _ = await _post(client, "/api/content/status",
+                                  {"items": [{"kind": "lorebook", "canonical_id": "x"}] * 501})
+
+    card, book, gone = before["items"]
+    assert status == 200 and before["server_instance_id"].startswith("srv-")
+    assert card["state_token"] == rows["card-1"]["state_token"]
+    assert book["state_token"] == rows["book-1"]["state_token"]
+    assert card["provenance"]["external_id"] == "card-1" and book["provenance"]["external_id"] == "book-1"
+    assert gone == {"kind": "lorebook", "canonical_id": "gone", "exists": False, "state_token": "", "provenance": None}
+    assert after["items"][0]["state_token"] != card["state_token"]
+    assert anonymous == 401 and unconfirmed.status == 403 and too_many == 413
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_server_identity_is_an_explicit_error(sync_app, tmp_path) -> None:
+    app, *_ = sync_app
+    (tmp_path / "server_identity.json").write_text("not json", encoding="utf-8")
+    app.router.add_get("/api/config", web_server.api_config_get)
+    async with TestClient(TestServer(app)) as client:
+        preview = await _preview(client, _items())
+        status = await _post(client, "/api/content/status", {"items": [{"kind": "lorebook", "canonical_id": "x"}]})
+        config = await (await client.get("/api/config", headers=OWNER)).json()
+
+    assert preview[0] == 503 and preview[1]["error_code"] == "SERVER_IDENTITY_UNAVAILABLE"
+    assert status[0] == 503 and status[1]["error_code"] == "SERVER_IDENTITY_UNAVAILABLE"
+    assert "server_instance_id" not in config
+    assert config["server_identity_error"] == "SERVER_IDENTITY_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_status_reads_the_card_library_once_per_request(sync_app, monkeypatch) -> None:
+    app, *_ = sync_app
+    reads: list[int] = []
+    real_read = character_cards.read_library
+
+    def counting_read(dependencies):
+        reads.append(1)
+        return real_read(dependencies)
+
+    async with TestClient(TestServer(app)) as client:
+        _s, first, _ = await _push(client, [_items()[0]])
+        _s, second, _ = await _push(client, [_items()[0] | {"client_ref": "card-2"}])
+        ids = [first["items"][0]["canonical_id"], second["items"][0]["canonical_id"], "missing"]
+        monkeypatch.setattr(character_cards, "read_library", counting_read)
+        status, body = await _post(client, "/api/content/status", {"items": [
+            {"kind": "character_template", "canonical_id": card_id} for card_id in ids
+        ]})
+
+    assert status == 200 and [row["exists"] for row in body["items"]] == [True, True, False]
+    assert len(reads) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_hinted_book_reports_where_it_is_bound(sync_app) -> None:
+    app, _api, lorebook = sync_app
+    _server_book(lorebook, "server-book", entries={"town": "Old town"})
+    lorebook.bind_lorebook({"id": "b:game", "book_id": "server-book", "scope_kind": "game", "scope_id": "web|room|gm"})
+    lorebook.bind_lorebook({"id": "b:char", "book_id": "server-book", "scope_kind": "character", "scope_id": "u1"})
+    _server_book(lorebook, "free-book", entries={"town": "Town"})
+    async with TestClient(TestServer(app)) as client:
+        _s, bound = await _preview(client, [_hinted_book("server-book")])
+        _s, unbound = await _preview(client, [_hinted_book("free-book")])
+
+    bindings = bound["items"][0]["existing"]["bindings"]
+    assert sorted((b["scope_kind"], b["scope_id"]) for b in bindings) == [
+        ("character", "u1"), ("game", "web|room|gm"),
+    ]
+    assert unbound["items"][0]["existing"]["bindings"] == []
