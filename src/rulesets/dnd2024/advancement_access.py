@@ -34,10 +34,10 @@ def _state(instance: Any, *, for_write: bool = False) -> dict[str, Any]:
     ruleset_runtime.require_writable(instance)
     if for_write:
         ruleset_runtime.require_binding(instance, "core:dnd2024")
-    ruleset_state = instance.ruleset_state
+    ruleset_state = ruleset_runtime.state(instance)
     if not isinstance(ruleset_state, dict):
         ruleset_state = {}
-        instance.ruleset_state = ruleset_state
+        ruleset_runtime.replace_state(instance, ruleset_state)
     raw = ruleset_state.get("advancement")
     state = raw if isinstance(raw, dict) else {}
     mode = str(state.get("mode") or "milestone")
@@ -279,10 +279,10 @@ def restore(instance: Any, saved: Any) -> None:
 
     ruleset_runtime.require_writable(instance)
     ruleset_runtime.require_binding(instance, "core:dnd2024")
-    ruleset_state = instance.ruleset_state
+    ruleset_state = ruleset_runtime.state(instance)
     if not isinstance(ruleset_state, dict):
         ruleset_state = {}
-        instance.ruleset_state = ruleset_state
+        ruleset_runtime.replace_state(instance, ruleset_state)
     ruleset_state["advancement"] = deepcopy(saved) if isinstance(saved, dict) else {}
 
 

@@ -492,7 +492,7 @@ class Dnd2024CombatEngine(
         state = self.initialize_state(instance)
         intent_id = str(intent.get("intent_id") or "")
         prior = next(
-            (item for item in instance.event_ledger if item.get("intent_id") == intent_id),
+            (item for item in ruleset_runtime.event_ledger(instance) if item.get("intent_id") == intent_id),
             None,
         )
         if prior is not None:
@@ -710,27 +710,27 @@ class Dnd2024CombatEngine(
             },
         }
         updated, ledger, duplicate = apply_event_batch(
-            snapshot, instance.event_ledger, batch, self._reduce_event,
+            snapshot, ruleset_runtime.event_ledger(instance), batch, self._reduce_event,
         )
         if not duplicate:
             ruleset_state = updated["ruleset_state"]
             ruleset_state["version"] = updated["version"]
-            instance.ruleset_state = ruleset_state
+            ruleset_runtime.replace_state(instance, ruleset_state)
             for uid, canonical in updated["characters"].items():
                 existing = deepcopy(instance.get_character_sheet(uid))
                 projection = self._project_character(canonical)
                 existing.update(projection)
                 instance.set_character_sheet(uid, existing)
-            instance.event_ledger = ledger
+            ruleset_runtime.replace_event_ledger(instance, ledger)
             combat = ruleset_state["combat"]
             legacy_combat.project_from_ruleset(instance, combat)
         return {
             "ok": True,
             "applied": not duplicate,
             "duplicate": duplicate,
-            "state_version": int(instance.ruleset_state.get("version", 0) or 0),
+            "state_version": int(ruleset_runtime.state(instance).get("version", 0) or 0),
             "event_batch": deepcopy(batch),
-            "combat": deepcopy(instance.ruleset_state.get("combat") or {}),
+            "combat": deepcopy(ruleset_runtime.state(instance).get("combat") or {}),
         }
 
     def gameplay_view(self, instance: Any) -> dict[str, Any]:

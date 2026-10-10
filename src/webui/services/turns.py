@@ -303,12 +303,12 @@ async def _fill_ai_player_actions(
         rule = dependencies.load_rule_for_game(instance)
         if rule is None:
             # No rule is legacy narrative behavior only for an unbound instance.
-            return bool(instance.ruleset_runtime)
+            return bool(ruleset_runtime.binding(instance))
         try:
             runtime = dependencies.ruleset_registry.resolve(rule.template)
         except ValueError:
             return True  # Unknown/incompatible runtimes must not admit free text.
-        state = instance.ruleset_state
+        state = ruleset_runtime.state(instance)
         combat = state.get("combat") if isinstance(state, dict) else None
         combat_active = isinstance(combat, dict) and combat.get("status") == "active"
         return runtime.capabilities.authoritative_intents and (

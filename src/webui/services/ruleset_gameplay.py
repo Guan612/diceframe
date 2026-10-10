@@ -12,7 +12,7 @@ from typing import Any
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
 from src.engine import progression
-from src.engine.modules import adventure_runtime_state, session_stats
+from src.engine.modules import adventure_runtime_state, ruleset_runtime, session_stats
 from src.engine.action_gate import (
     GateRequest, ROUND_PROCESSING, SOURCE_INTENT, STRUCTURED_INTENT_POLICY,
     check_not_judging, check_seat_exists, evaluate,
@@ -509,8 +509,8 @@ async def submit_intent(
         if binding_error:
             return binding_error
         before = {
-            "ruleset_state": deepcopy(instance.ruleset_state),
-            "event_ledger": deepcopy(instance.event_ledger),
+            "ruleset_state": deepcopy(ruleset_runtime.state(instance)),
+            "event_ledger": deepcopy(ruleset_runtime.event_ledger(instance)),
             "players": deepcopy(instance.players),
             "combat_state": instance.combat_state,
             "combat_active": instance.combat_active,
@@ -633,8 +633,8 @@ async def resume_authoritative_combat(
                 "reason": "not_this_seat",
             }
         before = {
-            "ruleset_state": deepcopy(instance.ruleset_state),
-            "event_ledger": deepcopy(instance.event_ledger),
+            "ruleset_state": deepcopy(ruleset_runtime.state(instance)),
+            "event_ledger": deepcopy(ruleset_runtime.event_ledger(instance)),
             "players": deepcopy(instance.players),
             "combat_state": instance.combat_state,
             "combat_active": instance.combat_active,

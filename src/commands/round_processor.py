@@ -1200,7 +1200,7 @@ class RoundProcessor:
         state_msgs = append_state_change_messages(instance, response, public_state_before, data)
         state_msgs.extend(system_changes)
         request = (
-            instance.ruleset_state.get("encounter_request")
+            ruleset_runtime.state(instance).get("encounter_request")
             if isinstance(getattr(instance, "ruleset_state", None), dict)
             else None
         )

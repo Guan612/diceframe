@@ -90,7 +90,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     saved_narrative_perspective = instance.narrative_perspective
     saved_gm_style_override = copy.deepcopy(instance.gm_style_override)
     saved_language = normalize_language(instance.language)
-    saved_ruleset_runtime = copy.deepcopy(instance.ruleset_runtime)
+    saved_ruleset_runtime = copy.deepcopy(ruleset_runtime.binding(instance))
     saved_adventure_binding = copy.deepcopy(instance.adventure_binding)
     instance.rotate_run_identity()
     instance.players.clear()
