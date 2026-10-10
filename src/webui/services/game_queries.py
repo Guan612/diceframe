@@ -10,8 +10,8 @@ from src.engine.game_instance import GameState
 from src.engine.health import health_payload
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.modules import (
-    checks, economy_state, media, private_channels, progression_state, room_access, ruleset_runtime,
-    session_stats,
+    checks, economy_state, media, narrative_notes, private_channels, progression_state, room_access,
+    ruleset_runtime, session_stats, table_settings,
 )
 from src.engine.player_control import away_control_policy
 from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
@@ -76,19 +76,17 @@ def list_games(dependencies: GameQueryDependencies) -> dict[str, Any]:
             "player_count": len(instance.players),
             "max_players": max(1, int(room_access.max_players(instance) or 6)),
             "combat_active": instance.combat_active,
-            "scene": instance.scene,
+            "scene": narrative_notes.scene(instance),
             "total_llm_calls": session_stats.total_llm_calls(instance),
             "total_tokens": session_stats.total_tokens(instance),
             "started_at": session_stats.started_at(instance),
             "last_activity": session_stats.last_activity(instance),
-            "seed_code": instance.seed_code,
+            "seed_code": table_settings.seed_code(instance),
             "language": normalize_language(
                 getattr(instance, "language", DEFAULT_LANGUAGE)
             ),
-            "solo_mode": instance.solo_mode,
-            "narrative_perspective": getattr(
-                instance, "narrative_perspective", "auto"
-            ),
+            "solo_mode": table_settings.solo_mode(instance),
+            "narrative_perspective": table_settings.narrative_perspective(instance),
             "gm_uid": instance.gm_uid or "",
             "ready_count": multiplayer["ready_count"],
             "alive_count": multiplayer["alive_count"],
@@ -198,12 +196,12 @@ def game_detail(
         "state": instance.state.value,
         "round_number": progression_state.round_value(instance),
         "player_count": len(instance.players),
-        "scene": instance.scene,
+        "scene": narrative_notes.scene(instance),
         "total_llm_calls": session_stats.total_llm_calls(instance),
         "total_tokens": session_stats.total_tokens(instance),
         "started_at": session_stats.started_at(instance),
         "last_activity": session_stats.last_activity(instance),
-        "seed_code": instance.seed_code,
+        "seed_code": table_settings.seed_code(instance),
         "language": normalize_language(
             getattr(instance, "language", DEFAULT_LANGUAGE)
         ),
@@ -213,7 +211,7 @@ def game_detail(
         "away_control_policy": away_control_policy(instance),
         "has_room_password": bool(room_access.has_room_password(instance)),
         "economy_reward_policy": dict(
-            getattr(instance, "economy_reward_policy", {}) or {}
+            table_settings.economy_reward_policy(instance) or {}
         ),
         "combat_extension": _combat_extension_projection(instance, dependencies, viewer_uid),
         "quick_actions": getattr(instance, "quick_actions", []),
@@ -227,14 +225,12 @@ def game_detail(
             )
             else []
         ),
-        "difficulty": instance.difficulty,
-        "solo_mode": instance.solo_mode,
-        "narrative_perspective": getattr(
-            instance, "narrative_perspective", "auto"
-        ),
+        "difficulty": table_settings.difficulty(instance),
+        "solo_mode": table_settings.solo_mode(instance),
+        "narrative_perspective": table_settings.narrative_perspective(instance),
         # custom_instructions 可能包含剧透级 GM 笔记：gm_style_override 只下发给 GM。
         "gm_style_override": (
-            getattr(instance, "gm_style_override", None)
+            table_settings.gm_style_override(instance)
             if viewer_is_gm or (viewer_uid and viewer_uid == (instance.gm_uid or ""))
             else None
         ),
@@ -377,12 +373,12 @@ def _public_recap(instance: Any) -> dict[str, Any]:
     ]
     return {
         "narrative": clean_public_narration(
-            (getattr(instance, "summary", {}) or {}).get("narrative") or ""
+            (narrative_notes.summary(instance) or {}).get("narrative") or ""
         ),
-        "key_facts": list(getattr(instance, "key_facts", []) or [])[-8:],
+        "key_facts": list(narrative_notes.key_facts(instance) or [])[-8:],
         "recent_rounds": recent_rounds,
         "pending_actions": pending_actions,
-        "current_scene": instance.scene,
+        "current_scene": narrative_notes.scene(instance),
         "round_number": progression_state.round_value(instance),
     }
 
