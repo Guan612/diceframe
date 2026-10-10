@@ -227,7 +227,7 @@ def complete_adventure_node(
     # ``item_reward`` is queued by the Economy authority.  It is still part of
     # this aggregate transaction: a failed queue must not leave a pending
     # proposal behind after the graph/world changes have been compensated.
-    before_economy = deepcopy(getattr(instance, "economy", None))
+    before_economy = deepcopy(economy_state.state(instance))
     activated: list[str] = []
     try:
         # ② 节点完成的后果先落世界（§6.4/§6.7）：gate 评估必须看到本次完成的

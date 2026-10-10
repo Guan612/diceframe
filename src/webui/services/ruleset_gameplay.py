@@ -12,7 +12,7 @@ from typing import Any
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
 from src.engine import progression
-from src.engine.modules import adventure_runtime_state, progression_state, ruleset_runtime, session_stats
+from src.engine.modules import adventure_runtime_state, economy_state, progression_state, ruleset_runtime, session_stats
 from src.engine.action_gate import (
     GateRequest, ROUND_PROCESSING, SOURCE_INTENT, STRUCTURED_INTENT_POLICY,
     check_not_judging, check_seat_exists, evaluate,
@@ -91,7 +91,7 @@ def _seat_actor_id(uid: str) -> str:
 
 
 def _active_combat(instance: Any) -> dict[str, Any] | None:
-    state = getattr(instance, "ruleset_state", None)
+    state = ruleset_runtime.state(instance)
     combat = state.get("combat") if isinstance(state, dict) else None
     if isinstance(combat, dict) and combat.get("status") == "active":
         return combat
@@ -188,7 +188,7 @@ def _context(
         return instance, rule, runtime, effective_requester, _error(
             "RULESET_INTENTS_UNAVAILABLE", "该规则继续使用自由文本回合流程",
         )
-    binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+    binding = dict(ruleset_runtime.binding(instance) or {})
     if binding.get("id") != runtime.runtime_id:
         return instance, rule, runtime, effective_requester, _error(
             "RULESET_BINDING_MISMATCH", "存档未绑定当前权威规则运行时",
@@ -460,7 +460,7 @@ async def submit_intent(
             before = {
                 "world_state": deepcopy(getattr(instance, "world_state", None)),
                 "adventure_progress": deepcopy(getattr(instance, "adventure_progress", None)),
-                "economy": deepcopy(getattr(instance, "economy", None)),
+                "economy": deepcopy(economy_state.state(instance)),
             }
             try:
                 completed = dependencies.complete_adventure_node(

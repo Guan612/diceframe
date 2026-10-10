@@ -27,7 +27,7 @@ from src.engine.dice import d20_dc_cap
 from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
-from src.engine.modules import economy_state, progression_state
+from src.engine.modules import economy_state, progression_state, ruleset_runtime
 from src.engine.world_events import MAX_ADVANCE_MINUTES
 from src.engine.world_legality import (
     MAX_ROUTE_HOPS,
@@ -152,7 +152,7 @@ def _companion_roster(instance: GameInstance) -> dict[str, dict[str, Any]]:
     只返回活跃且有 canonical 角色卡的队友；generic planner 不感知规则集差异，
     没有该状态时（CoC 等）自然为空。
     """
-    state = getattr(instance, "ruleset_state", None)
+    state = ruleset_runtime.state(instance)
     party = state.get("party") if isinstance(state, dict) else None
     companions = party.get("companions") if isinstance(party, dict) else None
     if not isinstance(companions, dict):

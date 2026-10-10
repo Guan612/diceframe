@@ -85,7 +85,7 @@ def queue_memory_delivery(
 
 
 def pending_memory_deliveries(instance: Any) -> list[dict[str, Any]]:
-    economy = getattr(instance, "economy", {})
+    economy = economy_state.state(instance)
     deliveries = (
         economy.get("external_effects_outbox", [])
         if isinstance(economy, dict) else []
@@ -104,7 +104,7 @@ def pending_memory_deliveries(instance: Any) -> list[dict[str, Any]]:
 def pending_memory_reversals(instance: Any) -> list[dict[str, Any]]:
     """Return delivered economy memories that must be undone after rollback."""
 
-    economy = getattr(instance, "economy", {})
+    economy = economy_state.state(instance)
     deliveries = (
         economy.get("external_effects_outbox", [])
         if isinstance(economy, dict) else []

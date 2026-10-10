@@ -162,7 +162,9 @@ def view(instance: Any) -> dict[str, Any]:
 def project(instance: Any) -> dict[str, Any]:
     """Return the public advancement view without normalizing stored state in place."""
 
-    ruleset_state = getattr(instance, "ruleset_state", None)
+    from src.engine.modules import ruleset_runtime
+
+    ruleset_state = ruleset_runtime.state(instance)
     raw = ruleset_state.get("advancement") if isinstance(ruleset_state, dict) else None
     saved = raw if isinstance(raw, dict) else {}
     mode = str(saved.get("mode") or "milestone")
