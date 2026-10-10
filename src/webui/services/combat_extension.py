@@ -33,6 +33,7 @@ from src.engine.combat_scheduler import (
     scheduler_from_config,
 )
 from src.engine.game_instance import GameInstance, GameState
+from src.engine.modules import combat_extension_state
 
 _COMBAT_EXTENSION_SCHEMA = 1
 
@@ -449,7 +450,7 @@ def _append_public_summary(
             if summary not in changes:
                 changes.append(summary)
             return
-    payload = instance.combat_extension
+    payload = combat_extension_state.current(instance)
     if isinstance(payload, dict):
         pending = payload.setdefault("pending_summaries", [])
         if isinstance(pending, list) and summary not in pending:
@@ -656,7 +657,7 @@ def scheduler_advance(
     capture = getattr(instance, "capture_combat_extension_snapshot", None)
     if callable(capture):
         capture()
-    instance.combat_extension = payload
+    combat_extension_state.replace_current(instance, payload)
     events = [*events, *result.events]
     return {
         "ok": True,
@@ -1055,7 +1056,7 @@ def resolve_combat_action(
     capture = getattr(instance, "capture_combat_extension_snapshot", None)
     if callable(capture):
         capture(entity_fields)
-    instance.combat_extension = payload
+    combat_extension_state.replace_current(instance, payload)
     for entity_id, record in staged_records.items():
         if entity_id.startswith("player:"):
             instance.set_character_sheet(entity_id.removeprefix("player:"), record)
