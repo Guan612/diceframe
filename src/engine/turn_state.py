@@ -32,7 +32,7 @@ from src.engine.game_state import GameState
 from src.engine.player_control import (
     ai_controlled_players,
     away_control_policy,
-    is_human_controlled,
+    get_control,
     unclaimed_players,
 )
 from src.engine.round_snapshots import snapshot_players
@@ -251,10 +251,10 @@ def add_action_locked(
         if cs.get("deceased"):
             return False  # 死亡玩家不能行动
         instance.away_players.discard(user_id)
-        # 真人控制的席位声明行动（入队或延后到下一轮）即视为已行动：之后只有 GM
-        # 能为它套用角色卡或删除它（见 seat_activity）。AI 托管的行动不算，
-        # 玩家认领 AI / GM 预备的席位后仍可换成自己的卡。
-        if is_human_controlled(instance, user_id):
+        # 真人控制（或玩家暂离、AI 临时托管）的席位声明行动（入队或延后到下一轮）
+        # 即视为已行动：之后只有 GM 能为它套用角色卡或删除它（见 seat_activity）。
+        # 永久交给 AI / 未认领的席位不算，玩家认领后仍可换成自己的卡。
+        if seat_activity.plays_for_its_player(get_control(instance, user_id)):
             seat_activity.mark_acted(instance, user_id)
     action_entry: ActionRecord = {
         "user_id": user_id, "text": action_text,

@@ -1,7 +1,10 @@
 """Which seats have acted in the current run (persisted module slot).
 
 A seat "has acted" once it declared an action for a round (queued or
-deferred) or had a rules-aware intent applied for it.  The flag gates
+deferred) while played for its player (see ``plays_for_its_player``), had a
+player-side rules-aware intent applied for it, or spent luck on its own check.
+Saves from before this slot existed are seeded by the v40 -> v41 instance
+migration.  The flag gates
 player-side sheet resets: after a seat acted, only the GM may apply a library
 card to it or delete it, so a player cannot refill / re-roll a character that
 is already in play (directly, or by deleting it and joining again).
@@ -16,6 +19,7 @@ rewrite does not clear it), which errs on the side of the GM.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from src.engine.module_state import (
@@ -56,6 +60,26 @@ def require_writable(instance: Any) -> None:
         raise ModuleStateError(
             f"unsupported seat_activity module schema: {slot.get('schema_version')!r}"
         )
+
+
+def plays_for_its_player(control: Mapping[str, Any]) -> bool:
+    """Does an action under this (normalized) control record count as the
+    seat's own play?
+
+    A human-controlled seat, and the server AI hosting it while its player is
+    away (``temporary`` with ``resume_mode == "human"``), both play the
+    player's character.  A seat the GM or the room handed to the AI for good,
+    or one still unclaimed, does not: a player who later claims it may still
+    switch it to their own card.
+    """
+    mode = control.get("mode")
+    if mode == "human":
+        return True
+    return (
+        mode == "ai"
+        and bool(control.get("temporary"))
+        and control.get("resume_mode") == "human"
+    )
 
 
 def has_acted(instance: Any, user_id: str) -> bool:
