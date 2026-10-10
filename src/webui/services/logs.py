@@ -17,6 +17,10 @@ PUBLIC_LOG_FIELDS = frozenset({
     "story_recaps", "scene_image",
 })
 
+# The image prompts are written by the GM model from GM context and may name
+# unrevealed lore; players only get the picture and its public panels.
+GM_ONLY_SCENE_IMAGE_FIELDS = frozenset({"prompt", "revised_prompt"})
+
 # Historical action renderers use the actor identity and display text only.
 # Live-action revision/dice status and internal adjudication are separate contracts.
 PUBLIC_ACTION_FIELDS = frozenset({"user_id", "text"})
@@ -83,6 +87,13 @@ def get_log(
             {key: value for key, value in entry.items() if key in PUBLIC_LOG_FIELDS}
             for entry in page_items
         ]
+        for entry in page_items:
+            scene_image = entry.get("scene_image")
+            if isinstance(scene_image, dict):
+                entry["scene_image"] = {
+                    key: value for key, value in scene_image.items()
+                    if key not in GM_ONLY_SCENE_IMAGE_FIELDS
+                }
     # 揭示标记与揭示方式是展示层信息：与日志同页返回，供时间线恢复
     # 已揭示/未揭示卡片状态。records 上限有界（模块内裁剪），整包返回。
     page_ids: set[str] = set()

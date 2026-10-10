@@ -187,3 +187,27 @@ def test_missing_game_log_is_unchanged(log_context):
     assert logs.get_log(dependencies, "web|missing|bot", page=3) == {
         "log": [], "total": 0, "page": 3,
     }
+
+
+def test_public_log_strips_gm_written_scene_image_prompts(log_context):
+    dependencies, instance = log_context
+    for entry in instance.log:
+        entry["scene_image"] = {
+            "reference": {"kind": "generated", "asset_id": "img-1"},
+            "status": "ready",
+            "prompt": "the hidden lich lair beneath the vault",
+            "revised_prompt": "a lich asleep in a secret vault",
+            "panels": [{"description": "the party at the gate"}],
+        }
+
+    public = logs.get_log(dependencies, "web|room|bot", include_internal=False)
+    gm = logs.get_log(dependencies, "web|room|bot", include_internal=True)
+
+    for entry in public["log"]:
+        assert "prompt" not in entry["scene_image"]
+        assert "revised_prompt" not in entry["scene_image"]
+        assert entry["scene_image"]["reference"] == {"kind": "generated", "asset_id": "img-1"}
+        assert entry["scene_image"]["panels"] == [{"description": "the party at the gate"}]
+    assert "lich" not in json.dumps(public)
+    assert all("lich" in entry["scene_image"]["prompt"] for entry in gm["log"])
+    assert instance.log[0]["scene_image"]["prompt"] == "the hidden lich lair beneath the vault"

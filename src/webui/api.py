@@ -16,6 +16,7 @@ from src.engine.game_instance import GameRegistry
 from src.engine import persistence
 from src.webui.services.adventure_materialization import materialize_world_seed
 from src.engine.memory_outbox import pending_memory_deliveries, pending_memory_reversals
+from src.engine.participant_view import Viewer
 from src.lorebook.store import LorebookStore
 from src.adventures import AdventureBundleLoader, AdventureResolver
 from src.adventures.registry import AdventureSource, AdventureSourceRegistry
@@ -2216,10 +2217,10 @@ class WebAPI:
         )
 
     def list_game_generated_images(
-        self, game_key: str, user_id: str, *, purpose: str = "",
+        self, game_key: str, user_id: str, *, purpose: str = "", viewer_is_gm: bool = False,
     ) -> list[dict[str, Any]]:
         return self._generated_images.list_game_images(
-            game_key, user_id, purpose=purpose,
+            game_key, user_id, purpose=purpose, viewer_is_gm=viewer_is_gm,
         )
 
     async def use_generated_image_as_map_background(
@@ -2773,8 +2774,8 @@ class WebAPI:
 
     # ----
 
-    def get_map_locations(self, game_key: str) -> dict[str, Any]:
-        return maps.get_map_locations(self._map_dependencies, game_key)
+    def get_map_locations(self, game_key: str, *, viewer: Viewer) -> dict[str, Any]:
+        return maps.get_map_locations(self._map_dependencies, game_key, viewer=viewer)
 
     def map_background_asset(self, game_key: str, asset_id: str) -> Path | None:
         return maps.map_background_asset(

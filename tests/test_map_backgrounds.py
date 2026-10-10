@@ -9,6 +9,9 @@ from PIL import Image
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.webui.services import map_backgrounds
 from src.webui.services import maps as map_service
+from src.engine.participant_view import Viewer
+
+GM_VIEWER = Viewer("gm", "gm")
 
 
 class MapBackgroundApi:
@@ -105,7 +108,7 @@ def _map_dependencies(api) -> map_service.MapDependencies:
 def test_existing_game_can_disable_or_replace_automatic_background(tmp_path):
     disabled_api = GameMapApi(tmp_path, {"kind": "none"})
     disabled = map_service.get_map_locations(
-        _map_dependencies(disabled_api), "save-1",
+        _map_dependencies(disabled_api), "save-1", viewer=GM_VIEWER,
     )
     occult_api = GameMapApi(
         tmp_path, {"kind": "builtin", "id": "occult-town-v1"},
@@ -113,6 +116,7 @@ def test_existing_game_can_disable_or_replace_automatic_background(tmp_path):
     occult = map_service.get_map_locations(
         _map_dependencies(occult_api),
         "save-1",
+        viewer=GM_VIEWER,
     )
 
     assert disabled["active_map"]["background"] is None
@@ -125,7 +129,7 @@ def test_uploaded_background_uses_game_scoped_asset_url(tmp_path):
     uploaded = api.map_backgrounds.save_upload(png_payload(), "map.png")
     api.instance.map_background = uploaded["map_background"]
 
-    result = map_service.get_map_locations(_map_dependencies(api), "save-1")
+    result = map_service.get_map_locations(_map_dependencies(api), "save-1", viewer=GM_VIEWER)
     asset_id = uploaded["map_background"]["asset_id"]
 
     assert result["active_map"]["background"]["url"] == (

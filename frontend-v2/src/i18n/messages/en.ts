@@ -838,6 +838,8 @@ export const en = {
   mapRecenter: 'Back to current scene',
   mapRecenterTitle: 'Scroll to zoom, drag to pan; click to return to the current scene (★)',
   noMapData: 'No map data yet.',
+  mapNoVisibleLocations: 'No public locations yet. The GM can mark locations as visible.',
+  mapPlayersSeeNoLocations: "Players can't see any locations; set visibility in the lorebook.",
   mapAssetsLoaded: 'Loaded {count} content-pack map assets.',
   diceRolling: 'Rolling...',
   criticalSuccess: 'Critical success!',
