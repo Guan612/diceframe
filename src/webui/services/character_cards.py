@@ -78,6 +78,11 @@ def library_lock(dependencies: CharacterCardDependencies) -> threading.RLock:
     library and then writes it (signature merge, import identity uniqueness)
     must do both under this lock. It is re-entrant so a locked operation can
     call another one.
+
+    It is a thread lock: it does not separate coroutines on the event loop
+    thread (re-entrancy lets them all in). A locked section must therefore
+    never ``await``; it stays atomic for coroutines only by running to
+    completion without yielding.
     """
 
     key = str(Path(dependencies.cards_path).resolve())

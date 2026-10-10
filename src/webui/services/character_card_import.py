@@ -71,6 +71,7 @@ BOOK_NOT_IMPORTED = "BOOK_NOT_IMPORTED"
 #: Why a matched card cannot be updated by this push.
 LOCKED_PLUGIN_CARD = "PLUGIN_CARD"
 LOCKED_TRACKED_BY_OTHER_SOURCE = "TRACKED_BY_OTHER_SOURCE"
+LOCKED_DETACHED_FROM_OTHER_SOURCE = "DETACHED_FROM_OTHER_SOURCE"
 LOCKED_RULESET_CARD = "RULESET_CARD"
 
 #: Never taken from a pushed body: server ids, plugin ownership and the rules
@@ -79,9 +80,12 @@ _SERVER_ONLY_FIELDS = (
     "id", "card_id", CARD_PROVENANCE_KEY, "source_plugin", "plugin_content_id",
     "raw_sillytavern", "ruleset_revision", "ruleset_operation_log", "ruleset_runtime",
 )
-#: Kept from the server copy when a push updates it.
+#: Kept from the server copy when a push updates it. ``raw_sillytavern`` is
+#: the lossless Tavern original of a Tavern-imported card: a push never
+#: carries it, so an update must not drop it.
 _PRESERVED_ON_UPDATE = (
-    "id", "source_plugin", "plugin_content_id", "ruleset_revision", "ruleset_operation_log",
+    "id", "source_plugin", "plugin_content_id", "raw_sillytavern",
+    "ruleset_revision", "ruleset_operation_log",
 )
 #: A body carrying rules-runtime authority is a rules-aware card.
 _RULESET_FIELDS = ("ruleset_character", "rule_binding")
@@ -289,10 +293,18 @@ def plan_card_import(dependencies: CardImportDependencies, body: dict[str, Any])
         content_digest(_without_provenance(matched)) != recorded if recorded else None
     )
     lock_reason = ""
+    origin = card_provenance(matched)
+    from_other_source = origin is not None and (
+        origin["source_kind"], origin["source_id"], origin["external_id"]
+    ) != (declared.source_kind, declared.source_id, declared.external_id)
     if is_plugin_card(matched):
         lock_reason = LOCKED_PLUGIN_CARD
-    elif is_tracked_card(matched) and not _tracks(matched, declared):
+    elif from_other_source and is_tracked_card(matched):
         lock_reason = LOCKED_TRACKED_BY_OTHER_SOURCE
+    elif from_other_source:
+        # A card another source pushed stays that source's lineage even after
+        # it was detached; a hint must not quietly re-track it here.
+        lock_reason = LOCKED_DETACHED_FROM_OTHER_SOURCE
     elif _is_rules_aware(dependencies, matched):
         lock_reason = LOCKED_RULESET_CARD
     unchanged = (

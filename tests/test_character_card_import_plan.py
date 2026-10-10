@@ -359,3 +359,37 @@ async def test_card_plan_routes(code, status) -> None:
     assert preview.status == 200
     assert commit.status == status
     assert api.calls == [({"plan_digest": "sha256:x"}, "")]
+
+
+# ---- #488 review fixes ------------------------------------------------------------
+
+
+def test_hint_update_keeps_the_raw_tavern_original(web_api) -> None:
+    api, *_ = web_api
+    raw = {"name": "Mira", "description": "Tavern original", "first_mes": "Hello."}
+    tavern_card = {**FREEFORM, "id": "st_mira", "raw_sillytavern": raw}
+    api._character_cards_path.write_text(json.dumps([tavern_card]), encoding="utf-8")
+    request = _push({**FREEFORM, "gold": 12}, canonical_hint="st_mira")
+
+    result = _commit(api, request, decision="update")
+
+    assert result["items"][0]["status"] == "updated"
+    stored = _card(api, "st_mira")
+    assert stored["gold"] == 12
+    assert stored["raw_sillytavern"] == raw
+
+
+def test_a_card_detached_from_another_source_cannot_be_retracked_by_hint(web_api) -> None:
+    api, *_ = web_api
+    first = _commit(api, _push(FREEFORM, source=DEVICE_B))
+    _commit(api, _push({**FREEFORM, "gold": 1}, source=DEVICE_B), decision="duplicate")
+    assert _card(api, first["card_id"])["provenance"]["link"] == "detached"
+    request = _push(FREEFORM, canonical_hint=first["card_id"])
+
+    item = _card_item(_preview(api, request))
+    refused = _commit(api, request, decision="update")
+
+    assert item["allowed"] == ["duplicate", "skip"]
+    assert item["reason"] == "DETACHED_FROM_OTHER_SOURCE"
+    assert refused["error_code"] == "DECISION_NOT_ALLOWED"
+    assert _card(api, first["card_id"])["provenance"]["source_id"] == "install-b"
