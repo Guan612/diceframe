@@ -27,6 +27,7 @@ from src.engine.dice import d20_dc_cap
 from src.engine.economy import MAX_ECONOMY_AMOUNT
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text
+from src.engine.modules import economy_state
 from src.engine.world_events import MAX_ADVANCE_MINUTES
 from src.engine.world_legality import (
     MAX_ROUTE_HOPS,
@@ -120,7 +121,7 @@ def _recent_purchases(instance: GameInstance) -> list[dict[str, Any]]:
     每回合重复弹窗（实际事故：round3 重复报价 round2 已成交的药水）。
     """
     rows: list[dict[str, Any]] = []
-    for proposal in reversed(instance.economy.get("proposals", [])):
+    for proposal in reversed(economy_state.state(instance).get("proposals", [])):
         if len(rows) >= 5:
             break
         if not isinstance(proposal, dict) or str(proposal.get("kind") or "") != "purchase":
