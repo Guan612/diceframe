@@ -95,13 +95,31 @@ async def api_lorebook_import_preview(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body, dict):
         return web.json_response({"ok": False, "error": "Lorebook payload must be an object"}, status=400)
-    return web.json_response(_json_safe(_get_api(request).preview_lorebook_import(body)))
+    result = _json_safe(_get_api(request).preview_lorebook_import(body))
+    return web.json_response(result, status=400 if result.get("ok") is False else 200)
+
+
+#: Plan-only request fields: without a confirmed plan they must not reach the
+#: legacy commit, which would silently ignore them.
+_PLAN_FIELDS = ("source", "external_id", "decision")
+_CONFLICT_CODES = frozenset({"PLAN_STALE", "LOREBOOK_IDENTITY_CONFLICT"})
 
 
 async def api_lorebook_import_commit(request: web.Request) -> web.Response:
     body = await request.json()
     if not isinstance(body, dict) or not isinstance(body.get("payload"), dict):
         return web.json_response({"ok": False, "error": "payload must be an object"}, status=400)
+    if "plan_digest" in body:
+        planned = _json_safe(_get_api(request).commit_lorebook_plan(body))
+        if planned.get("ok"):
+            return web.json_response(planned)
+        status = 409 if planned.get("error_code") in _CONFLICT_CODES else 400
+        return web.json_response(planned, status=status)
+    if any(field in body for field in _PLAN_FIELDS):
+        return web.json_response({
+            "ok": False, "error_code": "PLAN_DIGEST_REQUIRED",
+            "error": "source, external_id and decision need a previewed plan_digest",
+        }, status=400)
     result = _get_api(request).commit_lorebook_import(
         body["payload"], body.get("binding"), body.get("book_id"),
     )

@@ -122,6 +122,7 @@ def _book_scope(bindings: list[dict[str, Any]]) -> str:
 #: otherwise a caller could claim (or squat) another source's identity.
 BOOK_IDENTITY_FIELDS = frozenset({
     "source_kind", "source_id", "external_id", "source_version", "source_digest",
+    "import_link", "import_state_digest",
 })
 
 
@@ -288,16 +289,18 @@ async def lorebook_activation_preview(deps: LorebookDependencies, payload: dict[
     trace = list(getattr(instance, "lorebook_activation_trace", []) or [])
     return {"ok": True, "entries": matches if viewer_is_gm else [row for row in matches if row.get("id")], "trace": trace}
 
-def preview_lorebook_import(deps: LorebookDependencies, payload: dict[str, Any]) -> dict[str, Any]:
-    from dataclasses import asdict
+def _legacy_existing_refs(deps: LorebookDependencies) -> list[Any]:
     from src.content_modules.refs import ContentRef
-    from src.lorebook.importer import preview_lorebook_import
 
     existing_refs: list[ContentRef] = []
     for book in deps.lorebook.list_lorebooks():
         source_kind = str(book.get("source_kind") or "").strip()
         source_id = str(book.get("source_id") or "").strip()
         if not source_kind or not source_id:
+            continue
+        # The legacy plan identifies a Book by its source alone: Books that
+        # name an external id, or no longer follow their source, are not it.
+        if str(book.get("external_id") or "") or str(book.get("import_link") or "") == "detached":
             continue
         try:
             existing_refs.append(ContentRef(
@@ -312,34 +315,78 @@ def preview_lorebook_import(deps: LorebookDependencies, payload: dict[str, Any])
             # Historical books without portable provenance are not silently
             # matched to an external draft; they remain explicit legacy data.
             continue
+    return existing_refs
 
+
+def _import_request(body: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+    """Split a preview/commit body into the Lorebook document and its identity.
+
+    ``{"payload": {...}, "source": ..., "external_id": ...}`` carries an
+    explicit document; any other body *is* the document (legacy preview).
+    """
+
+    from src.lorebook.importer import declared_import_source
+
+    if isinstance(body.get("payload"), dict):
+        return body["payload"], declared_import_source(body.get("source"), body.get("external_id"))
+    return body, None
+
+
+def _import_plan_view(plan: Any) -> dict[str, Any]:
+    from src.content_modules.plan import plan_digest
+
+    return {"plan_digest": plan_digest([plan.item]), "items": [plan.item.to_portable_dict()]}
+
+
+def preview_lorebook_import(deps: LorebookDependencies, payload: dict[str, Any]) -> dict[str, Any]:
+    from dataclasses import asdict
+    from src.lorebook.import_plan import plan_lorebook_import
+    from src.lorebook.importer import preview_lorebook_import
+
+    try:
+        document, declared = _import_request(payload)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "error_code": IMPORT_SOURCE_INVALID}
     result = preview_lorebook_import(
-        payload,
-        existing_refs=existing_refs,
+        document,
+        existing_refs=_legacy_existing_refs(deps),
         duplicate_policy=str(payload.get("duplicate_policy") or "update"),
     )
     result["book"] = asdict(result["book"])
     for key in ("content_draft", "commit_plan"):
         if key in result:
             result[key] = result[key].to_portable_dict()
+    result["plan"] = _import_plan_view(
+        plan_lorebook_import(deps.lorebook, document, declared=declared)
+    )
     return result
+
+
+def _binding_error(binding: Any) -> dict[str, Any] | None:
+    from src.lorebook.store import normalize_scope_kind
+
+    if binding is None:
+        return None
+    if not isinstance(binding, dict):
+        return {"ok": False, "error": "binding must be an object"}
+    if "scope_kind" not in binding:
+        return {"ok": False, "error": "binding requires a canonical scope_kind"}
+    try:
+        normalize_scope_kind(binding.get("scope_kind"))
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return None
+
 
 def commit_lorebook_import(deps: LorebookDependencies, payload: dict[str, Any], binding: dict[str, Any] | None = None, book_id: str | None = None) -> dict[str, Any]:
     from src.lorebook.importer import commit_lorebook_import, draft_lorebook_import
-    from src.lorebook.store import normalize_scope_kind
 
     draft = draft_lorebook_import(payload)
     # Validate the requested binding before any canonical write so a bad
     # scope cannot leave a half-imported book behind.
-    if binding is not None:
-        if not isinstance(binding, dict):
-            return {"ok": False, "error": "binding must be an object"}
-        if "scope_kind" not in binding:
-            return {"ok": False, "error": "binding requires a canonical scope_kind"}
-        try:
-            normalize_scope_kind(binding.get("scope_kind"))
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
+    invalid = _binding_error(binding)
+    if invalid is not None:
+        return invalid
     try:
         imported_book_id = commit_lorebook_import(deps.lorebook, draft, binding, book_id=book_id)
     except LorebookIdentityConflict as exc:
@@ -348,3 +395,61 @@ def commit_lorebook_import(deps: LorebookDependencies, payload: dict[str, Any], 
         # The store boundary is the authority for scope validity.
         return {"ok": False, "error": str(exc)}
     return {"ok": True, "book_id": imported_book_id, "entries": len(draft.entries), "warnings": draft.warnings}
+
+
+IMPORT_SOURCE_INVALID = "IMPORT_SOURCE_INVALID"
+BOOK_ID_NOT_ALLOWED = "BOOK_ID_NOT_ALLOWED"
+
+
+def commit_lorebook_plan(deps: LorebookDependencies, body: dict[str, Any]) -> dict[str, Any]:
+    """Commit a previewed plan: revalidate it, then apply the user's decision.
+
+    The server recomputes the plan from the re-sent document and the current
+    store. If it no longer matches the ``plan_digest`` the user confirmed, the
+    commit is refused with ``PLAN_STALE`` and a fresh preview, so a decision is
+    never applied to a state the user did not see.
+    """
+
+    from src.content_modules.plan import PLAN_STALE, PlanDecisionError, plan_digest, resolve_decision
+    from src.lorebook.import_plan import execute_lorebook_plan, plan_lorebook_import
+
+    if not isinstance(body.get("payload"), dict):
+        return {"ok": False, "error": "payload must be an object"}
+    if body.get("book_id"):
+        # A plan targets the Book its identity resolves to; importing into an
+        # arbitrary Book stays on the legacy route.
+        return {"ok": False, "error": "book_id cannot be combined with a plan",
+                "error_code": BOOK_ID_NOT_ALLOWED}
+    binding = body.get("binding")
+    invalid = _binding_error(binding)
+    if invalid is not None:
+        return invalid
+    try:
+        document, declared = _import_request(body)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "error_code": IMPORT_SOURCE_INVALID}
+
+    plan = plan_lorebook_import(deps.lorebook, document, declared=declared)
+    current_digest = plan_digest([plan.item])
+    if str(body.get("plan_digest") or "") != current_digest:
+        return {
+            "ok": False, "error_code": PLAN_STALE,
+            "error": "the server state changed since the preview; review the new plan",
+            "preview": preview_lorebook_import(deps, body),
+        }
+    try:
+        decision = resolve_decision(plan.item, body.get("decision"))
+        result = execute_lorebook_plan(deps.lorebook, plan, decision, binding=binding)
+    except PlanDecisionError as exc:
+        return {"ok": False, "error": str(exc), "error_code": exc.code}
+    except LorebookIdentityConflict as exc:
+        return _identity_conflict(exc)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    book = deps.lorebook.get_lorebook(result["book_id"]) or {}
+    return {
+        "ok": True, **result,
+        "state_token": str(int(book.get("revision") or 0)),
+        "entries": len(plan.draft.entries),
+        "warnings": plan.draft.warnings,
+    }
