@@ -57,6 +57,7 @@ from src.adventures.graph_v2 import ADVENTURE_GRAPH_FORMAT_V2
 from src.commands.game_handler import GameHandler
 from src.engine import persistence
 from src.engine.game_instance import GameInstance, GameRegistry
+from src.engine.modules import economy_state
 from src.engine.world.read import fact_value, world_facts, world_processes
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.store import LorebookStore
@@ -641,7 +642,7 @@ async def test_golden_step12_item_reward_goes_through_the_reward_authority(
     # ② 权威出口只排队了一条 pending 提案，物品**还没有**进 inventory。
     proposal_id = result["queued_rewards"][0]["proposal_id"]
     proposal = next(
-        item for item in instance.economy["proposals"] if item["id"] == proposal_id
+        item for item in economy_state.state(instance)["proposals"] if item["id"] == proposal_id
     )
     assert proposal["kind"] == "reward"
     assert proposal["amount"] == 0
@@ -657,7 +658,7 @@ async def test_golden_step12_item_reward_goes_through_the_reward_authority(
     sheet = instance.get_character_sheet(gm_uid) or {}
     assert "Brass Key" in json.dumps(sheet, ensure_ascii=False)
     transaction = next(
-        item for item in instance.economy["transactions"]
+        item for item in economy_state.state(instance)["transactions"]
         if item.get("proposal_id") == proposal_id
     )
     assert transaction["status"] == "committed"
@@ -668,7 +669,7 @@ async def test_golden_step12_item_reward_goes_through_the_reward_authority(
         instance, result["reward_intents"],
     )
     assert queued_again[0]["proposal_id"] == proposal_id
-    assert len([item for item in instance.economy["proposals"]]) == 1
+    assert len([item for item in economy_state.state(instance)["proposals"]]) == 1
 
 
 @pytest.mark.asyncio
@@ -681,7 +682,7 @@ async def test_golden_node_save_failure_restores_world_progress_and_economy(gold
     before = {
         "world_state": json.loads(json.dumps(instance.world_state)),
         "adventure_progress": json.loads(json.dumps(instance.adventure_progress)),
-        "economy": json.loads(json.dumps(instance.economy)),
+        "economy": json.loads(json.dumps(economy_state.state(instance))),
     }
     original = golden.api._ruleset_gameplay_dependencies
 
@@ -702,7 +703,7 @@ async def test_golden_node_save_failure_restores_world_progress_and_economy(gold
     assert result["code"] == "ADVENTURE_NODE_FAILED"
     assert instance.world_state == before["world_state"]
     assert instance.adventure_progress == before["adventure_progress"]
-    assert instance.economy == before["economy"]
+    assert economy_state.state(instance) == before["economy"]
 
 
 @pytest.mark.asyncio
@@ -839,7 +840,7 @@ async def test_golden_steps_22_to_23_rollback_restores_world_and_progress(golden
     # 权威世界记忆：回滚同步撤销已投递的投递记录，记忆回到本轮之前的条数。
     assert pending_memory_reversals(instance) == []
     assert [
-        row.get("status") for row in instance.economy.get("external_effects_outbox", [])
+        row.get("status") for row in economy_state.state(instance).get("external_effects_outbox", [])
     ] == ["reversed"]
     assert golden.api.list_memories(game_key, viewer_is_gm=True)["total"] == memories_before
 
