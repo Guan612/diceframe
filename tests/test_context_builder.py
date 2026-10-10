@@ -3,7 +3,7 @@
 import logging
 
 import pytest
-from src.engine.modules import checks
+from src.engine.modules import checks, economy_state
 from src.llm.context_builder import (
     _INVENTORY_STATE_LIMIT,
     _KEY_ITEMS_STATE_LIMIT,
@@ -177,6 +177,17 @@ class DummyInstance:
     key_facts = []
     confirmed_items = []
     log = []
+
+    def __init__(self):
+        self.modules = {}
+
+    @property
+    def economy(self):
+        return economy_state.state(self)
+
+    @economy.setter
+    def economy(self, value):
+        economy_state.replace_state(self, value)
 
     def to_llm_view(self):
         return {

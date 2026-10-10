@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
-from src.engine.modules import checks
+from src.engine.modules import checks, economy_state
 from src.engine.visibility_rules import manual_roll_visible_to
 from src.knowledge.visibility import entry_visible_to_viewer
 from src.llm.parser import sanitize_narration
@@ -711,7 +711,7 @@ async def build_context(
         parts.append(f"{heading}\n{confirmed_text}")
         sec_idx["confirmed"] = len(parts) - 1
 
-    economy = getattr(instance, "economy", {})
+    economy = economy_state.state(instance)
     outcomes = economy.get("outcomes", []) if isinstance(economy, dict) else []
     proposals = economy.get("proposals", []) if isinstance(economy, dict) else []
     pending_personal_purchase = any(
