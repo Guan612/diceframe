@@ -14,6 +14,7 @@ from src.migrations.instance import (
 )
 
 FIELDS = ("summary", "key_facts", "confirmed_items", "game_time")
+V1_FRESH = {"schema_version": 1, "summary": {}, "key_facts": [], "confirmed_items": [], "game_time": ""}
 
 
 def test_migration_moves_notes_without_mutation_and_is_idempotent():
@@ -24,7 +25,8 @@ def test_migration_moves_notes_without_mutation_and_is_idempotent():
     migrated = migrate_game_state_payload(payload)
     assert payload == before
     assert all(field not in migrated for field in FIELDS)
-    assert migrated["modules"]["narrative_notes"] == {"schema_version": 1, **{field: payload[field] for field in FIELDS}}
+    notes = migrated["modules"]["narrative_notes"]
+    assert {field: notes[field] for field in FIELDS} == {field: payload[field] for field in FIELDS}
     assert migrated["modules"]["extension"] == payload["modules"]["extension"]
     assert migrate_game_state_payload(migrated) == migrated
 
@@ -42,15 +44,15 @@ def test_single_step_keeps_existing_slot_and_is_idempotent(slot):
 @pytest.mark.parametrize("value", [None, False, 1, 2.5])
 def test_invalid_values_default_without_guessing(value):
     payload = {field: value for field in FIELDS}
-    assert _migrate_v24_to_v25(payload)["modules"]["narrative_notes"] == module.fresh()
-    assert module.ensure({"schema_version": 1, **{field: value for field in FIELDS}}) == module.fresh()
+    assert _migrate_v24_to_v25(payload)["modules"]["narrative_notes"] == V1_FRESH
+    assert module.ensure({"schema_version": 2, **{field: value for field in FIELDS}}) == module.fresh()
     assert module.ensure(value) == module.fresh()
 
 
 def test_wrong_container_types_default():
     payload = {"summary": [], "key_facts": {}, "confirmed_items": "sword", "game_time": ["dusk"]}
-    assert _migrate_v24_to_v25(payload)["modules"]["narrative_notes"] == module.fresh()
-    assert module.ensure({"schema_version": 1, "summary": [], "key_facts": {},
+    assert _migrate_v24_to_v25(payload)["modules"]["narrative_notes"] == V1_FRESH
+    assert module.ensure({"schema_version": 2, "summary": [], "key_facts": {},
                           "confirmed_items": "sword", "game_time": ["dusk"]}) == module.fresh()
 
 

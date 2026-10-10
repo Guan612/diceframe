@@ -230,12 +230,13 @@ class GameLifecycle:
         persist: bool = True,
     ) -> str:
         """激活游戏，生成开场叙事，进入第一轮。"""
-        from src.engine.modules import checks, round_safety, session_stats
+        from src.engine.modules import checks, narrative_notes, round_safety, session_stats
 
         progression.require_writable(instance)
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
+        narrative_notes.require_writable(instance)
         await instance.activate()
         await instance.start_round()
         if publish:
@@ -607,7 +608,10 @@ class GameLifecycle:
 
     async def _start_reset_instance(self, instance: GameInstance) -> str:
         """Resume the gameplay stack already bound to this save."""
+        from src.engine.modules import adventure_runtime_state, narrative_notes
 
+        adventure_runtime_state.require_writable(instance)
+        narrative_notes.require_writable(instance)
         runtime_id = str((instance.ruleset_runtime or {}).get("id") or "")
         if not runtime_id or runtime_id == "core:legacy":
             return await self.start_game(instance, publish=False, persist=False)

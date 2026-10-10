@@ -119,7 +119,6 @@ class GamePersistedState(TypedDict, total=False):
     pending_actions: list[ActionRecord]
     ready_players: list[str]
     away_players: list[str]
-    scene: str
     log: list[RoundLogEntry]
     world_state: OpaqueState
     language: str

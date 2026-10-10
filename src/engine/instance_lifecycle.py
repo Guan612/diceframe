@@ -70,7 +70,8 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     ``tests/test_game_instance_reset_characterization.py`` 冻结。
     """
     from src.engine.modules import (
-        adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats,
+        adventure_runtime_state, checks, legacy_combat, narrative_notes, round_safety, ruleset_runtime,
+        session_stats,
     )
 
     session_stats.require_writable(instance)
@@ -79,6 +80,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
     adventure_runtime_state.require_writable(instance)
+    narrative_notes.require_writable(instance)
     saved_seed = instance.seed_code if keep_seed else ""
     saved_world_id = instance.world_id
     saved_world_name = instance.world_name
@@ -97,7 +99,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     instance.pending_actions.clear()
     instance.ready_players.clear()
     legacy_combat.reset(instance)
-    instance.scene = ""
+    narrative_notes.replace_scene(instance, "")
     instance.game_time = ""
     instance.log.clear()
     instance.summary.clear()

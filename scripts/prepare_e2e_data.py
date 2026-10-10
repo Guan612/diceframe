@@ -273,8 +273,8 @@ def prepare_e2e_data(data_dir: Path) -> Path:
         group_name="Browser Tests",
         state=GameState.ACTIVE_ACTION,
         gm_uid="e2e-gm",
-        scene="Town Gate",
     )
+    instance.set_scene("Town Gate")
     instance.round_number = 2
     instance.players = _e2e_players()
     instance.log = [{
@@ -296,8 +296,8 @@ def prepare_e2e_data(data_dir: Path) -> Path:
         group_name="Adventure Browser Tests",
         state=GameState.ACTIVE_ACTION,
         gm_uid="e2e-gm",
-        scene="Town Gate",
     )
+    adventure_instance.set_scene("Town Gate")
     adventure_instance.round_number = 1
     adventure_instance.players = _e2e_players()
     if not adventure_instance.bind_adventure(_write_e2e_adventure(data_dir)):
@@ -323,10 +323,10 @@ def prepare_e2e_data(data_dir: Path) -> Path:
         group_name="Professional Ruleset Browser Tests",
         state=GameState.ACTIVE_ACTION,
         gm_uid="e2e-gm",
-        scene="灰沼村议事厅",
         rule_id="dnd2024_srd",
         language="zh-CN",
     )
+    dnd_instance.set_scene("灰沼村议事厅")
     dnd_instance.max_players = 2
     dnd_instance.players = {
         "e2e-gm": {
@@ -349,9 +349,9 @@ def prepare_e2e_data(data_dir: Path) -> Path:
         group_name="Lorebook Golden",
         state=GameState.ACTIVE_ACTION,
         gm_uid="e2e-gm",
-        scene="旧城门前",
         language="zh-CN",
     )
+    lore_instance.set_scene("旧城门前")
     lore_instance.round_number = 2
     lore_instance.players = _e2e_players()
     _write_save(data_dir, lore_instance)

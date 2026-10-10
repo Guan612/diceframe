@@ -69,7 +69,8 @@ from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.module_state import ModuleStateError
 from src.engine.modules.media import replace_scene_image
 from src.engine.modules import (
-    adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats, world_reports,
+    adventure_runtime_state, checks, legacy_combat, narrative_notes, round_safety, ruleset_runtime,
+    session_stats, world_reports,
 )
 from src.engine.language import localized_text
 from src.engine.world_events import advance_world_time
@@ -535,6 +536,7 @@ class RoundProcessor:
         adventure_runtime_state.require_writable(instance)
         legacy_combat.require_writable(instance)
         ruleset_runtime.require_writable(instance)
+        narrative_notes.require_writable(instance)
         if has_blocking_economy_decision(instance):
             logger.info("等待经济提案结算，暂不生成叙事: %s", instance.game_key)
             raise RoundNotProcessed("economy_pending")
@@ -939,6 +941,7 @@ class RoundProcessor:
         adventure_runtime_state.require_writable(instance)
         legacy_combat.require_writable(instance)
         ruleset_runtime.require_writable(instance)
+        narrative_notes.require_writable(instance)
         expected_run_id = instance.run_id
         if not instance.round_checks_prepared:
             await self.prepare_round_checks_ai(instance)

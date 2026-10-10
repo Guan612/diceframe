@@ -42,7 +42,6 @@ class GameStateCodec:
             "pending_actions": instance.pending_actions,
             "ready_players": sorted(instance.ready_players),
             "away_players": sorted(instance.away_players),
-            "scene": instance.scene,
             "log": instance.log[-100:],
             "world_state": instance.world_state,
             "language": normalize_language(instance.language),
@@ -84,7 +83,6 @@ class GameStateCodec:
             npcs=data.get("npcs", {}),
             action_queue=data.get("action_queue", []),
             pending_actions=data.get("pending_actions", []),
-            scene=data.get("scene", ""),
             log=data.get("log", []),
             # 旧存档没有这个键：空世界（不是"猜测世界事实"）。
             world_state=(
