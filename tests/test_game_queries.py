@@ -13,7 +13,7 @@ from src.webui.services.game_queries import (
     list_games,
     player_context,
 )
-from src.engine.modules import checks
+from src.engine.modules import checks, ruleset_runtime
 
 
 def _query_dependencies(
@@ -71,12 +71,12 @@ def test_dnd_detail_projection_is_runtime_owned_and_read_only(
             },
         },
     }
-    instance.ruleset_runtime = {
+    ruleset_runtime.replace_binding(instance, {
         "id": "core:dnd2024",
         "version": 1,
         "requested_minimum_version": 1,
-    }
-    instance.ruleset_state = {"legacy": {"kept": True}}
+    })
+    ruleset_runtime.replace_state(instance, {"legacy": {"kept": True}})
     registry.register(instance)
     rule = SimpleNamespace(template={
         "runtime": {"id": "core:dnd2024", "minimum_version": 1},
@@ -86,7 +86,7 @@ def test_dnd_detail_projection_is_runtime_owned_and_read_only(
         load_rule_for_game=lambda _instance: rule,
         ruleset_registry=RulesetRuntimeRegistry([Dnd2024Runtime()]),
     )
-    before = deepcopy(instance.ruleset_state)
+    before = deepcopy(ruleset_runtime.state(instance))
 
     detail = game_detail(dependencies, "web|dnd|bot")
 
@@ -106,7 +106,7 @@ def test_dnd_detail_projection_is_runtime_owned_and_read_only(
             "source": "",
         }],
     }
-    assert instance.ruleset_state == before
+    assert ruleset_runtime.state(instance) == before
 
 
 def test_generic_game_queries_do_not_import_dnd() -> None:

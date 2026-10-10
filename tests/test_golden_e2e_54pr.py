@@ -73,6 +73,7 @@ from src.webui.services import modules
 from src.webui.services.module_validation import ModulePackageError
 
 from webapi_harness import FakeLLMClient
+from src.engine.modules import ruleset_runtime
 
 MODULE_ID = "golden-module"
 MODULE_LABEL = f"module:{MODULE_ID}"
@@ -533,11 +534,11 @@ async def test_golden_steps_8_to_11_encounter_uses_module_monsters(golden) -> No
     resolved = await golden.api.ruleset_submit_intent(created["game_key"], gm_uid, True, {
         "intent_id": "golden-combat-1",
         "type": "combat.start",
-        "expected_version": int(instance.ruleset_state.get("version", 0) or 0),
+        "expected_version": int(ruleset_runtime.state(instance).get("version", 0) or 0),
         "encounter_preset_id": ENCOUNTER_ID,
     })
     assert resolved["ok"] is True, resolved
-    combat = instance.ruleset_state["combat"]
+    combat = ruleset_runtime.state(instance)["combat"]
     assert combat["status"] == "active"
     assert combat["encounter_preset_id"] == ENCOUNTER_ID
     assert set(combat["enemies"]) == {f"{MONSTER_ID}_1", f"{MONSTER_ID}_2"}

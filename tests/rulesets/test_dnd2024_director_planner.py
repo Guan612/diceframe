@@ -8,6 +8,7 @@ from src.rulesets.dnd2024.director.planner import (
     plan_adventure_choice,
     plan_encounter_preset,
 )
+from src.engine.modules import ruleset_runtime
 
 
 class _AdventureChoiceClient:
@@ -124,10 +125,10 @@ async def test_multiplayer_auto_planner_waits_when_one_action_is_ambiguous():
         {"player_id": "ally", "choice_id": "inspect_cold_ash", "confidence": 0.60, "reason": "uncertain"},
     ])
 
-    before_version = instance.ruleset_state["version"]
+    before_version = ruleset_runtime.state(instance)["version"]
     proposal = await runtime.plan_director_turn(instance, client)
     assert proposal is None
-    assert instance.ruleset_state["version"] == before_version
+    assert ruleset_runtime.state(instance)["version"] == before_version
 
 
 @pytest.mark.asyncio

@@ -129,5 +129,5 @@ async def test_real_unreleased_save_copy_migrates_and_persists(tmp_path: Path) -
     recovered = await GameRegistry(save_dir).load(game_key)
     assert recovered is not None
     assert recovered.adventure_binding == expected
-    projected = recovered.ruleset_state["campaign"]["adventure_binding"]
+    projected = ruleset_runtime.state(recovered)["campaign"]["adventure_binding"]
     assert projected["content_digest"] == expected["content_digest"]

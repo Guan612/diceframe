@@ -21,7 +21,7 @@ from src.engine.game_instance import GameInstance, GameState
 from src.engine.modules import economy_state
 from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
-from src.engine.modules import checks, combat_extension_state
+from src.engine.modules import checks, combat_extension_state, ruleset_runtime
 
 
 def _make_populated_instance() -> GameInstance:
@@ -43,13 +43,13 @@ def _make_populated_instance() -> GameInstance:
     instance.world_id = "world-1"
     instance.world_name = "Test World"
     instance.rule_id = "coc7"
-    instance.ruleset_runtime = {
+    ruleset_runtime.replace_binding(instance, {
         "id": "core:dnd2024",
         "version": 1,
         "content_version": "2024-01",
         "state_schema_version": 3,
-    }
-    instance.ruleset_state = {"state_schema_version": 3, "campaign": {"party": []}}
+    })
+    ruleset_runtime.replace_state(instance, {"state_schema_version": 3, "campaign": {"party": []}})
     instance.adventure_binding = {
         "adventure_id": "adv-1",
         "version": "1",
@@ -58,7 +58,7 @@ def _make_populated_instance() -> GameInstance:
         "world_id": "world-1",
     }
     instance.play_mode = "adventure"
-    instance.event_ledger = [{"event": "e1"}]
+    ruleset_runtime.replace_event_ledger(instance, [{"event": "e1"}])
     instance.scene_image = {"asset_id": "img-1"}
     instance.map_background = {"asset_id": "map-1"}
     instance.group_name = "Group"
@@ -160,12 +160,14 @@ EXPECTED_PRESERVED = {
         "content_digest": "deadbeef",
         "world_id": "world-1",
     },
-    "ruleset_runtime": {
-        "id": "core:dnd2024",
-        "version": 1,
-        "content_version": "2024-01",
-        "state_schema_version": 3,
-    },
+}
+
+# The ruleset runtime binding is module state (no GameInstance attribute).
+EXPECTED_PRESERVED_RULESET_BINDING = {
+    "id": "core:dnd2024",
+    "version": 1,
+    "content_version": "2024-01",
+    "state_schema_version": 3,
 }
 
 # 基线 reset() 明确清空/归零的字段（值 = 字段自己的空形态）。
@@ -183,7 +185,6 @@ EXPECTED_CLEARED = {
     "private_log": {},
     "table_talk": [],
     "gm_directives": [],
-    "event_ledger": [],
 }
 
 # 基线 reset() 根本不触碰的字段 —— "隐式保留"。这里冻结的是基线行为本身。
@@ -222,6 +223,7 @@ async def test_reset_keeps_seed_and_preserves_configuration_fields() -> None:
     for field, expected in EXPECTED_PRESERVED.items():
         actual = getattr(instance, field)
         assert actual == expected, f"reset 必须保留 {field}"
+    assert ruleset_runtime.binding(instance) == EXPECTED_PRESERVED_RULESET_BINDING, "reset 必须保留 ruleset_runtime"
     # 保留字段应是深拷贝，reset 后修改不影响旧对象引用。
     assert instance.gm_style_override is not EXPECTED_PRESERVED["gm_style_override"]
 
@@ -271,6 +273,7 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.last_token_budget_bump is None
     for key, expected_empty in EXPECTED_CLEARED.items():
         assert getattr(instance, key) == expected_empty, f"reset 必须清空 {key}"
+    assert ruleset_runtime.event_ledger(instance) == [], "reset 必须清空 event_ledger"
 
 
 @pytest.mark.asyncio
@@ -325,4 +328,4 @@ async def test_reset_rebuilds_ruleset_state_from_preserved_runtime() -> None:
     instance = _make_populated_instance()
     await instance.reset(keep_seed=True)
 
-    assert instance.ruleset_state == {"state_schema_version": 3}
+    assert ruleset_runtime.state(instance) == {"state_schema_version": 3}

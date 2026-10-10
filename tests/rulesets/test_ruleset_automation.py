@@ -4,6 +4,7 @@ import pytest
 
 from src.engine.game_instance import GameInstance
 from src.rulesets.automation import apply_director_automation, summarize_automation_batches
+from src.engine.modules import ruleset_runtime
 
 
 class _FailingRuntime:
@@ -14,7 +15,7 @@ class _FailingRuntime:
         return {"ok": True, "event_batch": {"intent_type": intent["type"]}}
 
     def apply_event_batch(self, instance, batch):
-        instance.ruleset_state["changed"] = True
+        ruleset_runtime.state(instance)["changed"] = True
         instance.players["p"]["hp"] = 0
         instance.scene = "mutated scene"
         raise ValueError("failed after mutation")
@@ -26,11 +27,11 @@ def test_director_automation_rolls_back_partial_runtime_mutation():
         players={"p": {"hp": 10}},
     )
     instance.scene = "original scene"
-    instance.ruleset_state = {"version": 1}
-    before = deepcopy((instance.ruleset_state, instance.players, instance.scene))
+    ruleset_runtime.replace_state(instance, {"version": 1})
+    before = deepcopy((ruleset_runtime.state(instance), instance.players, instance.scene))
     with pytest.raises(ValueError, match="failed after mutation"):
         apply_director_automation(_FailingRuntime(), instance, {"kind": "combat"}, object())
-    assert (instance.ruleset_state, instance.players, instance.scene) == before
+    assert (ruleset_runtime.state(instance), instance.players, instance.scene) == before
 
 
 def test_automation_batches_have_a_public_narration_summary():

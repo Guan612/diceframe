@@ -132,6 +132,22 @@ def _same_adventure_binding(current: Any, candidate: Any) -> bool:
     )
 
 
+# Compatibility properties deleted after their state moved into module slots.
+# Writing one of these names must fail instead of creating a shadow attribute.
+RETIRED_MODULE_FACADES = frozenset({
+    "combat_extension",
+    "combat_extension_round_snapshots",
+    "economy",
+    "event_ledger",
+    "last_check",
+    "last_checks",
+    "manual_roll_requests",
+    "round_checks_prepared",
+    "ruleset_runtime",
+    "ruleset_state",
+})
+
+
 @dataclass
 class GameInstance:
     """单个跑团游戏的全部运行时状态。
@@ -211,6 +227,15 @@ class GameInstance:
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # A plain dataclass would silently grow a shadow attribute here, leaving
+        # the module slot untouched; fail loudly instead.
+        if name in RETIRED_MODULE_FACADES:
+            raise AttributeError(
+                f"GameInstance.{name} was removed; use its src.engine.modules owner"
+            )
+        super().__setattr__(name, value)
+
     @property
     def adventure_progress(self) -> dict[str, Any]:
         """Adventure v2 progress (FIX-04 §6.2); v1 campaign progress stays in ruleset_state."""
@@ -228,30 +253,6 @@ class GameInstance:
     @play_mode.setter
     def play_mode(self, value: Any) -> None:
         adventure_runtime_state.replace_play_mode(self, value)
-
-    @property
-    def ruleset_runtime(self) -> dict[str, Any]:
-        return ruleset_runtime.binding(self)
-
-    @ruleset_runtime.setter
-    def ruleset_runtime(self, value: dict[str, Any]) -> None:
-        ruleset_runtime.replace_binding(self, value)
-
-    @property
-    def ruleset_state(self) -> dict[str, Any]:
-        return ruleset_runtime.state(self)
-
-    @ruleset_state.setter
-    def ruleset_state(self, value: dict[str, Any]) -> None:
-        ruleset_runtime.replace_state(self, value)
-
-    @property
-    def event_ledger(self) -> list[dict[str, Any]]:
-        return ruleset_runtime.event_ledger(self)
-
-    @event_ledger.setter
-    def event_ledger(self, value: list[dict[str, Any]]) -> None:
-        ruleset_runtime.replace_event_ledger(self, value)
 
     @property
     def combat_active(self) -> bool:
@@ -851,7 +852,8 @@ class GameInstance:
         """
 
         normalized = self._normalized_ruleset_binding(binding)
-        return bool(normalized and self.ruleset_runtime and self.ruleset_runtime == normalized)
+        current = ruleset_runtime.binding(self)
+        return bool(normalized and current and current == normalized)
 
     def bind_ruleset_runtime(self, binding: dict[str, Any]) -> bool:
         """Bind versioned ruleset state once; reject mixed-runtime characters.
@@ -863,7 +865,8 @@ class GameInstance:
         if normalized is None:
             return False
         ruleset_runtime.require_writable(self)
-        if self.ruleset_runtime and self.ruleset_runtime != normalized:
+        current = ruleset_runtime.binding(self)
+        if current and current != normalized:
             return False
         ruleset_runtime.bind(self, normalized)
         return True

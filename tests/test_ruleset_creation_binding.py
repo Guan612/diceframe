@@ -12,6 +12,7 @@ from src.rulesets.contracts import RulesetCapabilities
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
 from src.webui.services import game_creation_phases
 from tests.test_webui_create_flow import web_api  # noqa: F401
+from src.engine.modules import ruleset_runtime
 
 
 @pytest.fixture
@@ -57,9 +58,9 @@ async def test_creation_policy_survives_save_before_and_after_character_join(pro
 
     def assert_policy(instance):
         restored = GameInstance.from_dict(instance.to_dict())
-        assert restored.ruleset_runtime == instance.ruleset_runtime
-        assert restored.ruleset_runtime["id"] == "core:dnd2024"
-        assert restored.ruleset_state == instance.ruleset_state
+        assert ruleset_runtime.binding(restored) == ruleset_runtime.binding(instance)
+        assert ruleset_runtime.binding(restored)["id"] == "core:dnd2024"
+        assert ruleset_runtime.state(restored) == ruleset_runtime.state(instance)
         policy = runtime.live_advancement_policy(restored)
         assert (policy["mode"], policy["authority"]) == ("xp", "gm")
 
@@ -125,7 +126,7 @@ async def test_character_join_keeps_existing_incompatible_binding_error(professi
     result = await api.create_game("template_world", rule_id="dnd2024_srd", players=[character])
     assert result["ok"], result
     instance = registry.get(api._parse_key(result["game_key"]))
-    instance.ruleset_runtime["version"] = 999
+    ruleset_runtime.binding(instance)["version"] = 999
     before = deepcopy(instance.to_dict())
     rejected = await api.create_player(result["game_key"], character, assign_new_id=True)
     assert rejected["ok"] is False
@@ -155,7 +156,7 @@ def test_creation_binding_uses_generic_contract_and_preserves_matching_state():
     )
     assert game_creation_phases.bind_ruleset_runtime(transaction, instance, runtime, rule, "en") is None
     runtime.game_binding.assert_called_once_with(rule, "en")
-    instance.ruleset_state["custom_state"] = {"value": 7}
+    ruleset_runtime.state(instance)["custom_state"] = {"value": 7}
     before = deepcopy(instance.to_dict())
     assert instance.bind_ruleset_runtime(binding)
     assert instance.to_dict() == before
@@ -186,8 +187,8 @@ async def _legacy_unbound_game(api, registry, character):
     result = await api.create_game("template_world", rule_id="dnd2024_srd", players=[character])
     assert result["ok"], result
     instance = registry.get(api._parse_key(result["game_key"]))
-    instance.ruleset_runtime.clear()
-    assert not instance.ruleset_runtime
+    ruleset_runtime.binding(instance).clear()
+    assert not ruleset_runtime.binding(instance)
     return result["game_key"], instance
 
 
@@ -201,7 +202,7 @@ async def test_character_join_cannot_bind_a_legacy_unbound_game(professional_gam
 
     assert rejected["ok"] is False
     assert rejected["error_code"] == "RULESET_BINDING_MISSING"
-    assert not instance.ruleset_runtime
+    assert not ruleset_runtime.binding(instance)
     assert instance.to_dict() == before
 
 
@@ -215,7 +216,7 @@ async def test_card_adoption_cannot_bind_a_legacy_unbound_game(professional_game
     assert joined["ok"], joined
     user_id = joined["user_id"]
     instance = registry.get(api._parse_key(game_key))
-    instance.ruleset_runtime.clear()
+    ruleset_runtime.binding(instance).clear()
     card = api.save_character_card(character)["card"]
     before = deepcopy(instance.to_dict())
 
@@ -225,7 +226,7 @@ async def test_card_adoption_cannot_bind_a_legacy_unbound_game(professional_game
 
     assert rejected["ok"] is False
     assert rejected["error_code"] == "RULESET_BINDING_MISSING"
-    assert not instance.ruleset_runtime
+    assert not ruleset_runtime.binding(instance)
     assert instance.to_dict() == before
 
 
@@ -233,7 +234,7 @@ def test_binding_match_is_read_only():
     instance = GameInstance(game_key=("web", "legacy", "bot"))
     binding = {"rule_id": "r", "runtime_id": "test:x", "runtime_version": 1, "content_version": "v1", "state_schema_version": 1}
     assert not instance.ruleset_binding_matches(binding)
-    assert not instance.ruleset_runtime
+    assert not ruleset_runtime.binding(instance)
     assert instance.bind_ruleset_runtime(binding)
     assert instance.ruleset_binding_matches(binding)
     assert not instance.ruleset_binding_matches({**binding, "runtime_version": 2})

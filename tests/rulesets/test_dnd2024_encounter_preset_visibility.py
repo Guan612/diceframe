@@ -24,6 +24,7 @@ from src.webui.routes.games import register_games
 from test_dnd2024_m5_http import (
     _EnabledRuntime, _M5Api, _character, _enemy, _ready_story_encounter,
 )
+from src.engine.modules import ruleset_runtime
 
 _GAME = "/api/games/web%7Cpreset-gm%7Cweb_bot"
 FORBIDDEN_STAT_BLOCK_KEYS = frozenset({"attacks", "abilities", "saving_throws", "attack_bonus"})
@@ -171,7 +172,7 @@ async def test_intent_responses_carry_no_stat_blocks_for_players(tmp_path) -> No
             "encounter_instance_id": encounter["encounter_instance_id"],
         })
         started_body = await started.json()
-        version = int(instance.ruleset_state["version"])
+        version = int(ruleset_runtime.state(instance)["version"])
         messages = {}
         for name, headers in (("seat", _SEAT), ("p2p", _P2P_GUEST)):
             response = await client.post(f"{_GAME}/intents", headers=headers, json={
@@ -180,7 +181,7 @@ async def test_intent_responses_carry_no_stat_blocks_for_players(tmp_path) -> No
             })
             assert response.status == 200, (name, await response.text())
             messages[name] = await response.json()
-            version = int(instance.ruleset_state["version"])
+            version = int(ruleset_runtime.state(instance)["version"])
 
     assert started.status == 200
     # The GM's own response keeps the authoritative stat blocks.
@@ -240,11 +241,11 @@ async def test_player_intent_response_with_enemy_automation_has_no_stat_blocks(
             "encounter_instance_id": encounter["encounter_instance_id"],
         })
         assert started.status == 200
-        initiative = instance.ruleset_state["combat"]["initiative"]
+        initiative = ruleset_runtime.state(instance)["combat"]["initiative"]
         assert initiative[:2] == ["player:p1", "enemy:goblin-minion-1"], initiative
         ended = await client.post(f"{_GAME}/intents", headers=headers, json={
             "intent_id": f"auto-end-{viewer}", "type": "end_turn",
-            "expected_version": int(instance.ruleset_state["version"]),
+            "expected_version": int(ruleset_runtime.state(instance)["version"]),
         })
         body = await ended.json()
 
@@ -254,4 +255,4 @@ async def test_player_intent_response_with_enemy_automation_has_no_stat_blocks(
     assert result["automatic_results"]
     assert_no_stat_blocks(body, viewer)
     # The authoritative enemy record behind it still has its stat block.
-    assert forbidden_key_paths(instance.ruleset_state["combat"]["enemies"])
+    assert forbidden_key_paths(ruleset_runtime.state(instance)["combat"]["enemies"])

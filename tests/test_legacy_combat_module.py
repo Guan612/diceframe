@@ -11,6 +11,7 @@ from src.engine.modules import legacy_combat as module
 from src.migrations.instance import (
     CURRENT_INSTANCE_SCHEMA_VERSION, _migrate_v32_to_v33, migrate_game_state_payload,
 )
+from src.engine.modules import ruleset_runtime
 
 VALUES = {
     "combat_active": True,
@@ -165,8 +166,8 @@ def test_begin_copies_order_and_end_preserves_enemies_and_order_identity():
 def test_ruleset_projection_preserves_authority_and_enemies(status):
     instance = populated_instance()
     combat = {"status": status, "initiative": ["player:u1"], "turn_index": "2"}
-    instance.ruleset_state = {"combat": combat}
-    before = deepcopy(instance.ruleset_state)
+    ruleset_runtime.replace_state(instance, {"combat": combat})
+    before = deepcopy(ruleset_runtime.state(instance))
     enemies = instance.combat_enemies
     module.project_from_ruleset(instance, combat)
     assert instance.combat_state == ("active" if status == "active" else "none")
@@ -175,8 +176,8 @@ def test_ruleset_projection_preserves_authority_and_enemies(status):
     assert instance.initiative_order is not combat["initiative"]
     assert instance.initiative_current == 2
     assert instance.combat_enemies is enemies
-    assert instance.ruleset_state == before
-    assert instance.ruleset_state["combat"] is combat
+    assert ruleset_runtime.state(instance) == before
+    assert ruleset_runtime.state(instance)["combat"] is combat
 
 
 @pytest.mark.parametrize("kind", ["entity", "transaction"])

@@ -28,6 +28,7 @@ from src.webui.services import (
     ruleset_rest,
 )
 from src.webui.services._common import _parse_game_key
+from src.engine.modules import ruleset_runtime
 
 
 class _Api:
@@ -516,7 +517,7 @@ async def test_live_advancement_is_rejected_during_swipe(professional_context) -
     api, instance, _character = professional_context
     advancement_access.grant(instance, "gm", source="gm")
     before_sheet = deepcopy(instance.get_character_sheet("gm"))
-    before_state = deepcopy(instance.ruleset_state)
+    before_state = deepcopy(ruleset_runtime.state(instance))
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def hold_rewrite() -> None:
@@ -542,7 +543,7 @@ async def test_live_advancement_is_rejected_during_swipe(professional_context) -
     )
     assert result["code"] == "REWRITE_IN_PROGRESS"
     assert instance.get_character_sheet("gm") == before_sheet
-    assert instance.ruleset_state == before_state
+    assert ruleset_runtime.state(instance) == before_state
     release.set()
     await asyncio.wait_for(rewrite, 1)
 

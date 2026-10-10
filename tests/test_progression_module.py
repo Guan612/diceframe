@@ -27,7 +27,7 @@ from src.migrations.instance import (
     migrate_game_state_payload,
     rebind_imported_game_state_payload,
 )
-from src.engine.modules import checks
+from src.engine.modules import checks, ruleset_runtime
 
 
 UNKNOWN_SLOTS = [
@@ -52,8 +52,8 @@ def instance_with_state(slot=None):
     instance.round_entity_snapshot = {"npcs": {"guide": {"hp": 10}}}
     combat_extension_state.round_snapshots(instance)["7"] = {"opaque": [1]}
     instance.adventure_progress = {"active_nodes": ["gate"]}
-    instance.ruleset_state = {"version": 4}
-    instance.event_ledger = [{"id": "old"}]
+    ruleset_runtime.replace_state(instance, {"version": 4})
+    ruleset_runtime.replace_event_ledger(instance, [{"id": "old"}])
     instance.game_time = "Third Age, dusk"
     if slot is not None:
         instance.modules["progression"] = deepcopy(slot)
@@ -67,8 +67,11 @@ def frozen(instance):
 
 def transaction_snapshot(instance, **extra):
     return deepcopy({
+        "ruleset_state": ruleset_runtime.state(instance),
+        "event_ledger": ruleset_runtime.event_ledger(instance),
+    } | {
         key: getattr(instance, key) for key in (
-            "ruleset_state", "event_ledger", "players", "combat_state", "combat_active",
+            "players", "combat_state", "combat_active",
             "initiative_order", "initiative_current", "scene", "last_activity", "log",
         )
     } | extra)
@@ -351,9 +354,9 @@ def test_transaction_counter_conversion_precedes_other_assignments(round_number)
 def test_bounded_director_restore_without_round_remains_supported(slot):
     instance = instance_with_state(slot)
     snapshot = transaction_snapshot(instance)
-    instance.ruleset_state = {"changed": True}
+    ruleset_runtime.replace_state(instance, {"changed": True})
     instance.restore_ruleset_transaction(snapshot)
-    assert instance.ruleset_state == snapshot["ruleset_state"]
+    assert ruleset_runtime.state(instance) == snapshot["ruleset_state"]
     assert instance.modules["progression"] == slot
 
 
@@ -474,7 +477,7 @@ async def test_real_ruleset_transactions_reject_before_binding_reducer_or_save(t
     save = AsyncMock()
     dependencies = replace(dependencies, save_instance=save)
     if operation == "resume":
-        instance.ruleset_state["combat"] = {"status": "active"}
+        ruleset_runtime.state(instance)["combat"] = {"status": "active"}
     instance.modules["progression"] = deepcopy(slot)
     before = frozen(instance)
     binding = AsyncMock(side_effect=AssertionError("must not migrate binding"))
@@ -484,7 +487,7 @@ async def test_real_ruleset_transactions_reject_before_binding_reducer_or_save(t
     with pytest.raises(ModuleStateError):
         if operation == "intent":
             await ruleset_gameplay.submit_intent(dependencies, "web|intent|bot", "gm", True, {
-                **action, "intent_id": "start", "expected_version": instance.ruleset_state["version"],
+                **action, "intent_id": "start", "expected_version": ruleset_runtime.state(instance)["version"],
             })
         else:
             await ruleset_gameplay.resume_authoritative_combat(dependencies, "web|intent|bot", "gm")

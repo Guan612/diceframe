@@ -12,6 +12,7 @@ from src.webui.services import (
     game_queries,
 )
 from src.webui.services._common import _GAME_KEY_SEP
+from src.engine.modules import ruleset_runtime
 
 
 class DummyAPI:
@@ -113,7 +114,7 @@ async def test_narrative_perspective_is_ruleset_neutral_and_persisted(tmp_path):
         game_key=key,
         rule_id="dnd2024_srd",
     )
-    inst.ruleset_runtime = {"id": "core:dnd2024"}
+    ruleset_runtime.replace_binding(inst, {"id": "core:dnd2024"})
     registry.register(inst)
 
     result = await _game_controls(registry).set_narrative_perspective(

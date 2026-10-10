@@ -30,7 +30,7 @@ def context(monkeypatch):
     preset = next(item for item in choices["quick_presets"] if item["id"] == "stalwart_guardian")
     character = runtime.finalize_character(None, {**preset["draft"], "locale": "en", "name": "Hero"})
     instance = GameInstance(game_key=("web", "binding", "web_bot"), world_id="test", rule_id="dnd2024_srd")
-    instance.ruleset_runtime = {"id": RUNTIME_ID, "state_schema_version": 1}
+    ruleset_runtime.replace_binding(instance, {"id": RUNTIME_ID, "state_schema_version": 1})
     for uid in ("hero", "ally"):
         instance.players[uid] = {"character_name": uid, "character_sheet": deepcopy(character)}
     rule = RuleSystem({"rule_id": "dnd2024_srd", "runtime": {"id": RUNTIME_ID, "minimum_version": 1}})
@@ -69,11 +69,11 @@ async def service_write(context, operation):
 def seed_state(instance):
     advancement_access.configure(instance, "xp", "gm")
     advancement_access.grant(instance, "hero", source="gm")
-    instance.ruleset_state["rest_session"] = {
+    ruleset_runtime.state(instance)["rest_session"] = {
         "status": "collecting", "rest": "long", "required_uids": ["hero", "ally", "gone"],
         "participants": {}, "started_at": "existing",
     }
-    instance.event_ledger.append({"batch_id": "existing", "events": []})
+    ruleset_runtime.event_ledger(instance).append({"batch_id": "existing", "events": []})
 
 
 @pytest.mark.parametrize("binding", BAD_BINDINGS, ids=["empty", "mismatch"])
@@ -83,7 +83,7 @@ def seed_state(instance):
 async def test_service_writes_reject_without_mutation_or_save(context, binding, populated, operation):
     if populated:
         seed_state(context.instance)
-    context.instance.ruleset_runtime = deepcopy(binding)
+    ruleset_runtime.replace_binding(context.instance, deepcopy(binding))
     before = deepcopy(live_state(context.instance))
 
     result = await service_write(context, operation)
@@ -115,7 +115,7 @@ def test_batch_backstops_reject_before_defaults_reduction_or_save(context, bindi
         engine = runtime._combat_engine(instance, locale="en")
     else:
         engine = runtime._exploration_engine("en")
-    instance.ruleset_runtime = deepcopy(binding)
+    ruleset_runtime.replace_binding(instance, deepcopy(binding))
     before = deepcopy(live_state(instance))
     batch = {
         "batch_id": "unbound", "intent_id": "unbound", "expected_version": 0,
@@ -148,7 +148,7 @@ ADVANCEMENT_WRITES = {
 def test_advancement_backstops_reject_before_defaults_or_save(context, binding, operation, populated):
     if populated:
         seed_state(context.instance)
-    context.instance.ruleset_runtime = deepcopy(binding)
+    ruleset_runtime.replace_binding(context.instance, deepcopy(binding))
     before = deepcopy(live_state(context.instance))
 
     with pytest.raises(ruleset_runtime.RulesetBindingError, match=MESSAGE) as error:
@@ -162,7 +162,7 @@ def test_advancement_backstops_reject_before_defaults_or_save(context, binding, 
 @pytest.mark.parametrize("binding", BAD_BINDINGS, ids=["empty", "mismatch"])
 @pytest.mark.parametrize("signal", ["start", "begin"])
 def test_narrative_signal_returns_false_without_mutation_and_warns_once(context, binding, signal, caplog):
-    context.instance.ruleset_runtime = deepcopy(binding)
+    ruleset_runtime.replace_binding(context.instance, deepcopy(binding))
     before = deepcopy(live_state(context.instance))
     with caplog.at_level(logging.WARNING, logger="src.rulesets.dnd2024.runtime"):
         assert context.runtime.apply_narrative_combat_signal(context.instance, signal) is False
@@ -175,13 +175,13 @@ def test_narrative_signal_returns_false_without_mutation_and_warns_once(context,
 
 def test_bound_narrative_signal_still_creates_request(context):
     assert context.runtime.apply_narrative_combat_signal(context.instance, "start") is True
-    assert context.instance.ruleset_state["encounter_request"]["status"] == "pending"
+    assert ruleset_runtime.state(context.instance)["encounter_request"]["status"] == "pending"
 
 
 @pytest.mark.parametrize("binding", BAD_BINDINGS, ids=["empty", "mismatch"])
 def test_read_entries_do_not_require_binding(context, binding):
     seed_state(context.instance)
-    context.instance.ruleset_runtime = deepcopy(binding)
+    ruleset_runtime.replace_binding(context.instance, deepcopy(binding))
     status = ruleset_advancement.live_status(context.advancement, "game")
     preview = ruleset_advancement.preview_live(context.advancement, "game", "hero", {"choices": {"hp_method": "fixed"}})
     assert status["ok"] is True
@@ -191,10 +191,10 @@ def test_read_entries_do_not_require_binding(context, binding):
 
 
 def test_unbound_read_defaults_still_materialize(context):
-    context.instance.ruleset_runtime = {}
-    assert context.instance.ruleset_state == {}
+    ruleset_runtime.replace_binding(context.instance, {})
+    assert ruleset_runtime.state(context.instance) == {}
     assert ruleset_advancement.live_status(context.advancement, "game")["ok"] is True
-    assert context.instance.ruleset_state["advancement"]["mode"] == "milestone"
+    assert ruleset_runtime.state(context.instance)["advancement"]["mode"] == "milestone"
     assert context.instance.to_dict()["modules"]["ruleset_runtime"] == ruleset_runtime.fresh()
     context.save.assert_not_called()
 

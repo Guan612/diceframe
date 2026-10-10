@@ -12,6 +12,7 @@ from src.engine.game_instance import GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import legacy_combat
 from tests.test_game_instance_reset_characterization import _make_populated_instance
+from src.engine.modules import ruleset_runtime
 
 
 def live_state(instance):
@@ -220,7 +221,7 @@ def test_dnd_combat_batch_rejects_before_initialization_or_reducer(initialized, 
     runtime = Dnd2024Runtime()
     engine = Dnd2024CombatEngine(runtime.load_bundle("en"))
     instance = unsupported_instance()
-    instance.ruleset_state = {}
+    ruleset_runtime.replace_state(instance, {})
     if initialized:
         engine.initialize_state(instance)
     before = deepcopy(live_state(instance))
@@ -243,16 +244,16 @@ def test_dnd_projection_and_duplicate_batch_preserve_authority():
 
     engine, instance = _instance()
     batch = _start(engine, instance)
-    authority = deepcopy(instance.ruleset_state)
+    authority = deepcopy(ruleset_runtime.state(instance))
     assert instance.combat_state == "active"
     assert instance.combat_active is True
-    assert instance.initiative_order == instance.ruleset_state["combat"]["initiative"]
-    assert instance.initiative_order is not instance.ruleset_state["combat"]["initiative"]
+    assert instance.initiative_order == ruleset_runtime.state(instance)["combat"]["initiative"]
+    assert instance.initiative_order is not ruleset_runtime.state(instance)["combat"]["initiative"]
     before = deepcopy(live_state(instance))
     result = engine.apply_batch(instance, batch)
     assert result["duplicate"] is True
     assert live_state(instance) == before
-    assert instance.ruleset_state == authority
+    assert ruleset_runtime.state(instance) == authority
 
     # A replay may still write ruleset defaults, so it fails closed too.
     instance.modules["legacy_combat"]["schema_version"] = 99
@@ -268,7 +269,7 @@ def test_duplicate_needing_defaults_preserves_repair_semantics(future_projection
 
     engine, instance = _instance()
     batch = _start(engine, instance)
-    del instance.ruleset_state["combat_history"]
+    del ruleset_runtime.state(instance)["combat_history"]
     if future_projection:
         instance.modules["legacy_combat"]["schema_version"] = 99
     before = deepcopy(live_state(instance))
@@ -277,10 +278,10 @@ def test_duplicate_needing_defaults_preserves_repair_semantics(future_projection
             engine.apply_batch(instance, batch)
         assert live_state(instance) == before
     else:
-        authority = instance.ruleset_state
+        authority = ruleset_runtime.state(instance)
         assert engine.apply_batch(instance, batch)["duplicate"] is True
-        assert instance.ruleset_state is authority
-        assert instance.ruleset_state["combat_history"] == []
+        assert ruleset_runtime.state(instance) is authority
+        assert ruleset_runtime.state(instance)["combat_history"] == []
 
 
 def test_duplicate_keeps_ruleset_schema_validation():
@@ -289,7 +290,7 @@ def test_duplicate_keeps_ruleset_schema_validation():
 
     engine, instance = _instance()
     batch = _start(engine, instance)
-    instance.ruleset_state["state_schema_version"] = 99
+    ruleset_runtime.state(instance)["state_schema_version"] = 99
     before = deepcopy(live_state(instance))
     with pytest.raises(CombatIntentError, match="unsupported D&D 2024 combat state schema"):
         engine.apply_batch(instance, batch)

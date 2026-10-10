@@ -19,6 +19,7 @@ from src.webui.services import character_cards
 from src.webui.session import SessionManager
 
 from webapi_harness import FakeLLMClient, web_api, write_world
+from src.engine.modules import ruleset_runtime
 
 def test_session_rebind_persists_restored_player_identity(tmp_path):
     manager = SessionManager(tmp_path)
@@ -79,7 +80,7 @@ async def test_professional_character_is_rederived_bound_and_saved_without_field
     assert sheet["attributes"]["str"] == canonical["abilities"]["str"] != 99
     assert isinstance(sheet["equipment"], list)
     assert isinstance(canonical["equipment"], dict)
-    assert instance.ruleset_runtime["id"] == "core:dnd2024"
+    assert ruleset_runtime.binding(instance)["id"] == "core:dnd2024"
     cards = api.list_character_cards()["cards"]
     assert cards[-1]["ruleset_character"]["rule_binding"]["content_version"] == (
         "srd-5.2.1+r5"
@@ -137,7 +138,7 @@ async def test_professional_seed_restart_keeps_rule_and_prevalidates_before_muta
     assert restarted["ok"] is True
     instance = registry.get(api._parse_key(restarted["game_key"]))
     assert instance.rule_id == "dnd2024_srd"
-    assert instance.ruleset_runtime["id"] == "core:dnd2024"
+    assert ruleset_runtime.binding(instance)["id"] == "core:dnd2024"
     assert instance.get_character_sheet("seed_gm")["hp"] != 999
 
 
