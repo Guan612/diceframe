@@ -34,6 +34,7 @@ from src.webui.services import adventures, asr, avatars, bot_access, bot_extensi
 from src.webui.services import combat_extension as combat_extension_service
 from src.webui.services import adventure_runtime
 from src.webui.services import ruleset_characters
+from src.webui.services import character_card_import
 from src.webui.services import memory as memory_service
 from src.webui.services._common import _parse_game_key, _is_safe_world_id
 
@@ -1773,6 +1774,28 @@ class WebAPI:
     def export_character_cards(self, card_ids: list[str]) -> dict[str, Any]:
         return character_cards.export_character_cards(
             self._character_card_dependencies, card_ids,
+        )
+
+    def _card_import_dependencies(self) -> character_card_import.CardImportDependencies:
+        deps = self._character_card_dependencies
+        return character_card_import.CardImportDependencies(
+            read_cards=lambda: character_cards.read_library(deps),
+            write_cards=lambda cards: character_cards.write_library(deps, cards),
+            lock=lambda: character_cards.library_lock(deps),
+            to_card=character_cards.to_library_card,
+            new_card_id=character_cards.new_card_id,
+            is_ruleset_card=deps.is_ruleset_card,
+            lorebook=deps.lorebook,
+        )
+
+    def preview_character_card_import(self, body: dict[str, Any]) -> dict[str, Any]:
+        return character_card_import.preview_card_import(self._card_import_dependencies(), body)
+
+    def commit_character_card_plan(
+        self, body: dict[str, Any], *, pushed_by_device: str = "",
+    ) -> dict[str, Any]:
+        return character_card_import.commit_card_import(
+            self._card_import_dependencies(), body, pushed_by_device=pushed_by_device,
         )
 
     def update_ruleset_character_card_profile(
