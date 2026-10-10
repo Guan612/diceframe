@@ -14,6 +14,7 @@ from typing import Any
 from src.content_modules.projection import ContentProjection
 from src.lorebook.activation import DEFAULT_VECTOR_ACTIVATION
 from src.lorebook.exporter import export_lorebook_native, export_lorebook_v3
+from src.lorebook.store import LorebookIdentityConflict
 
 #: Canonical defaults for a *newly created* entry. Legacy adapter drafts and the
 #: world-copy / NPC compatibility paths keep their own historical defaults; these
@@ -116,19 +117,38 @@ def _book_scope(bindings: list[dict[str, Any]]) -> str:
             return kind
     return ""
 
+#: Provenance and import identity of a Book. Only server-side import code sets
+#: them; the generic create/update use cases never accept them from a client,
+#: otherwise a caller could claim (or squat) another source's identity.
+BOOK_IDENTITY_FIELDS = frozenset({
+    "source_kind", "source_id", "external_id", "source_version", "source_digest",
+})
+
+
+def _without_identity(fields: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in fields.items() if key not in BOOK_IDENTITY_FIELDS}
+
+
+def _identity_conflict(exc: LorebookIdentityConflict) -> dict[str, Any]:
+    return {"ok": False, "error": str(exc), "error_code": exc.code}
+
+
 def create_lorebook(deps: LorebookDependencies, book: dict[str, Any]) -> dict[str, Any]:
-    book = dict(book)
+    book = _without_identity(dict(book))
     if not str(book.get("id") or "").strip() or not str(book.get("name") or "").strip():
         return {"ok": False, "error": "id and name are required"}
     if deps.lorebook.get_lorebook(book["id"]):
         return {"ok": False, "error": "Lorebook already exists"}
-    deps.lorebook.create_lorebook(book)
+    try:
+        deps.lorebook.create_lorebook(book)
+    except LorebookIdentityConflict as exc:
+        return _identity_conflict(exc)
     return {"ok": True, "book": deps.lorebook.get_lorebook(book["id"])}
 
 def update_lorebook(deps: LorebookDependencies, book_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     if deps.lorebook.get_lorebook(book_id) is None:
         return {"ok": False, "error": "Lorebook not found"}
-    deps.lorebook.update_lorebook(book_id, updates)
+    deps.lorebook.update_lorebook(book_id, _without_identity(dict(updates)))
     return {"ok": True, "book": deps.lorebook.get_lorebook(book_id)}
 
 def delete_lorebook(deps: LorebookDependencies, book_id: str) -> dict[str, Any]:
@@ -322,6 +342,8 @@ def commit_lorebook_import(deps: LorebookDependencies, payload: dict[str, Any], 
             return {"ok": False, "error": str(exc)}
     try:
         imported_book_id = commit_lorebook_import(deps.lorebook, draft, binding, book_id=book_id)
+    except LorebookIdentityConflict as exc:
+        return _identity_conflict(exc)
     except ValueError as exc:
         # The store boundary is the authority for scope validity.
         return {"ok": False, "error": str(exc)}

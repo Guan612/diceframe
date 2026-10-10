@@ -22,6 +22,10 @@ SEAT_TOKEN_HEADER = "X-Seat-Token"
 # access logs. (SSE needs no room token; it authenticates with a ticket.)
 ROOM_TOKEN_HEADER = "X-Room-Token"
 
+#: Id of the paired device whose token authenticated the request ('' for the
+#: access password or no owner credential). Audit only, never authorization.
+PAIRED_DEVICE_ID_KEY = web.RequestKey("paired_device_id", str)
+
 # Share endpoints a visitor needs before holding a seat (join flow).  Every
 # other share endpoint acts as a seat and requires that seat's token.
 _LOBBY_GET_TAILS = frozenset({"characters", "character-cards"})
@@ -70,12 +74,19 @@ class WebAccessControl:
         owner_authenticated = bool(
             access_password_configured and verify_access_password(bearer, token)
         )
+        paired_device_id = ""
         if not owner_authenticated and bearer:
             # 设备令牌与访问密码平级：扫码配对过的设备不需要知道主密码，
             # 丢失时也能单独吊销而不牵连其它设备（见 device_tokens.py）。
             devices = request.app.get(DEVICE_TOKENS_KEY)
-            owner_authenticated = bool(devices and devices.verify(bearer))
+            device = devices.verify(bearer) if devices else None
+            owner_authenticated = device is not None
+            if device is not None:
+                paired_device_id = str(device.get("id") or "")
         request["owner_authenticated"] = owner_authenticated
+        # Which paired device made the request, for audit/provenance only. It is
+        # never an authorization input: the device is already an owner here.
+        request[PAIRED_DEVICE_ID_KEY] = paired_device_id
         request[ACCESS_PASSWORD_CONFIGURED_KEY] = access_password_configured
         share_uid, denied = self.resolve_share_identity(
             request, owner_authenticated, access_password_configured,
