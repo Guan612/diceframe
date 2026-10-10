@@ -279,7 +279,13 @@ class GeneratedImageService:
         user_id: str,
         *,
         purpose: str = "",
+        viewer_is_gm: bool = False,
     ) -> list[dict[str, Any]]:
+        """List the game's generated images; non-GM viewers get the public view.
+
+        Prompts and the raw narration/action context are written from GM
+        context and may name unrevealed lore, so only the GM receives them.
+        """
         instance = self._dependencies.get_instance(game_key)
         if instance is None:
             raise KeyError("游戏不存在")
@@ -303,7 +309,9 @@ class GeneratedImageService:
             )
             if context.get("round") is not None:
                 record["round"] = int(context.get("round") or 0)
-        return records
+        if viewer_is_gm:
+            return records
+        return [_public_image_record(record) for record in records]
 
     async def use_as_map_background(
         self,
@@ -492,3 +500,28 @@ class GeneratedImageService:
                 seen_assets.add(asset_id)
                 references.append(ImageReference(character_id=uid, content=content, content_type="image/webp", file_name=f"{uid[:48] or 'character'}.webp"))
         return tuple(references)
+
+
+# Fields of a generation record a non-GM viewer may receive.  Everything else
+# (prompt, revised_prompt, provider internals, future fields) stays GM-only.
+PUBLIC_IMAGE_RECORD_FIELDS = frozenset({
+    "generation_id", "asset_id", "purpose", "created_at", "owner_type", "round",
+})
+# Public storyboard context; raw narration/actions are pre-sanitization GM data.
+PUBLIC_IMAGE_CONTEXT_FIELDS = frozenset({
+    "round", "scene", "panels", "storyboard", "avatar_reference_names",
+})
+
+
+def _public_image_record(record: dict[str, Any]) -> dict[str, Any]:
+    public = {
+        key: deepcopy(value) for key, value in record.items()
+        if key in PUBLIC_IMAGE_RECORD_FIELDS
+    }
+    context = record.get("context")
+    if isinstance(context, dict):
+        public["context"] = {
+            key: deepcopy(value) for key, value in context.items()
+            if key in PUBLIC_IMAGE_CONTEXT_FIELDS
+        }
+    return public

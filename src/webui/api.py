@@ -2217,10 +2217,10 @@ class WebAPI:
         )
 
     def list_game_generated_images(
-        self, game_key: str, user_id: str, *, purpose: str = "",
+        self, game_key: str, user_id: str, *, purpose: str = "", viewer_is_gm: bool = False,
     ) -> list[dict[str, Any]]:
         return self._generated_images.list_game_images(
-            game_key, user_id, purpose=purpose,
+            game_key, user_id, purpose=purpose, viewer_is_gm=viewer_is_gm,
         )
 
     async def use_generated_image_as_map_background(
