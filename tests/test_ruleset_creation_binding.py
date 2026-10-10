@@ -219,7 +219,9 @@ async def test_card_adoption_cannot_bind_a_legacy_unbound_game(professional_game
     card = api.save_character_card(character)["card"]
     before = deepcopy(instance.to_dict())
 
-    rejected = await api.adopt_ruleset_character_card(game_key, user_id, card["id"])
+    rejected = await api.adopt_ruleset_character_card(
+        game_key, user_id, card["id"], gm_authority=True,
+    )
 
     assert rejected["ok"] is False
     assert rejected["error_code"] == "RULESET_BINDING_MISSING"

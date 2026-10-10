@@ -71,16 +71,20 @@ class LorebookImportPlan:
     item: PlanItem
 
 
-def tracked_book(
+def tracked_books(
     store: Any, content_draft: ContentDraft, declared: DeclaredSource | None,
-) -> dict[str, Any] | None:
-    """The one Book currently following this draft's identity, if any.
+) -> list[dict[str, Any]]:
+    """Books currently following this draft's identity, oldest first.
 
-    A declared (device) draft follows a Book by its external id. A legacy
-    draft is identified by its source alone and matches only Books written
-    without an external id. Detached Books never match.
+    A declared (device) draft follows a Book by its external id; the tracked
+    identity index allows at most one. A legacy draft is identified by its
+    source alone and matches only Books written without an external id, and
+    nothing prevents several legacy Books from sharing a source, so the order
+    is fixed (creation time, then id) instead of depending on list order.
+    Detached Books never match.
     """
 
+    matches = []
     for book in store.list_lorebooks():
         if str(book.get("import_link") or "") == "detached":
             continue
@@ -89,11 +93,20 @@ def tracked_book(
         if str(book.get("source_id") or "") != content_draft.source_id:
             continue
         external = str(book.get("external_id") or "")
-        if declared is not None and external == content_draft.external_id:
-            return book
-        if declared is None and not external:
-            return book
-    return None
+        if (declared is not None and external == content_draft.external_id) or (
+            declared is None and not external
+        ):
+            matches.append(book)
+    return sorted(matches, key=lambda book: (str(book.get("created_at") or ""), str(book.get("id") or "")))
+
+
+def tracked_book(
+    store: Any, content_draft: ContentDraft, declared: DeclaredSource | None,
+) -> dict[str, Any] | None:
+    """The Book a plan targets: the oldest of :func:`tracked_books`."""
+
+    matches = tracked_books(store, content_draft, declared)
+    return matches[0] if matches else None
 
 
 def plan_lorebook_import(
@@ -103,7 +116,8 @@ def plan_lorebook_import(
 
     draft = draft_lorebook_import(payload)
     content_draft = lorebook_content_draft(payload, declared=declared)
-    book = tracked_book(store, content_draft, declared)
+    matches = tracked_books(store, content_draft, declared)
+    book = matches[0] if matches else None
     existing: ExistingMatch | None = None
     unchanged = False
     if book is not None:
@@ -126,6 +140,9 @@ def plan_lorebook_import(
                 "entries_add": len(planned - current),
                 "entries_update": len(planned & current),
                 "entries_remove": len(current - planned),
+                # Other legacy Books sharing this source; the plan never
+                # touches them, but the user should know they exist.
+                "other_matches": [str(other["id"]) for other in matches[1:]],
             },
         )
         unchanged = (
@@ -253,4 +270,5 @@ __all__ = [
     "execute_lorebook_plan",
     "plan_lorebook_import",
     "tracked_book",
+    "tracked_books",
 ]

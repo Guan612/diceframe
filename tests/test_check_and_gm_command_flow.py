@@ -775,3 +775,25 @@ def test_public_log_filters_legacy_gm_instruction():
     assert public["log"][0]["swipes"] == ["警报声响起。"]
     assert internal["log"][0]["gm_response"] == "门锁生锈了。"
     assert instance.log[0]["gm_response"].startswith("**SANCheck:")
+
+
+@pytest.mark.asyncio
+async def test_spending_own_luck_marks_the_seat_as_having_acted():
+    """Card adoption / deletion become GM-only once the seat is in play."""
+    from src.engine.modules import seat_activity
+
+    instance, rule = _coc_instance()
+    instance.state = GameState.ACTIVE_JUDGMENT
+    instance.round_checks_prepared = True
+    check = {
+        "check_id": "check-own-luck", "actor_uid": "p1", "dice": "d100",
+        "roll": 22, "threshold": 20, "verdict": "失败",
+        "luck_spend_available": True, "luck_decision": "pending",
+    }
+    instance.last_checks = [check]
+    assert not seat_activity.has_acted(instance, "p1")
+
+    result = await instance.resolve_luck_decision("check-own-luck", "p1", True, rule=rule)
+
+    assert result["ok"] is True, result
+    assert seat_activity.has_acted(instance, "p1")
