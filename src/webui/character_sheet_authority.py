@@ -10,8 +10,9 @@ spending level-up points the engine granted, which is validated here.
 
 Rules-aware rulesets (``character_lifecycle == "rules_aware"``) never reach
 this policy: their generic PUT is refused and they use their own profile /
-advancement / rest endpoints.  The one rule both share is card adoption on
-an existing seat after play has begun (``ADOPT_REQUIRES_GM``).
+advancement / rest endpoints.  What both share is the seat-reset rule: once
+a seat has acted (``seat_activity``), applying a library card to it
+(``ADOPT_REQUIRES_GM``) or deleting it (``DELETE_REQUIRES_GM``) is GM-only.
 """
 
 from __future__ import annotations
@@ -21,9 +22,11 @@ from typing import Any
 
 FIELD_REQUIRES_GM = "FIELD_REQUIRES_GM"
 # Adopting a library card replaces the whole sheet (stats, gold, equipment).
-# Once play has begun that is a free refill / re-roll, so on an existing seat
-# only the GM may do it -- for classic and rules-aware rulesets alike.
+# Once the seat has acted that is a free refill / re-roll, so only the GM may
+# do it -- for classic and rules-aware rulesets alike.  Deleting the seat and
+# joining again would be the same reset, so it is GM-only at the same point.
 ADOPT_REQUIRES_GM = "ADOPT_REQUIRES_GM"
+DELETE_REQUIRES_GM = "DELETE_REQUIRES_GM"
 
 # Presentation only: no engine path reads these as numbers or rule identity.
 PLAYER_PROFILE_FIELDS = frozenset({
@@ -142,5 +145,13 @@ def adopt_requires_gm_failure() -> dict[str, Any]:
     return {
         "ok": False,
         "error_code": ADOPT_REQUIRES_GM,
-        "error": "开局后只能由 GM 为角色套用卡片",
+        "error": "角色行动后只能由 GM 为其套用卡片",
+    }
+
+
+def delete_requires_gm_failure() -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error_code": DELETE_REQUIRES_GM,
+        "error": "角色行动后只能由 GM 删除",
     }

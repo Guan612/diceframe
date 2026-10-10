@@ -734,7 +734,7 @@ export const zhCN = {
   characterSortName: '排序：名称 A–Z',
   characterSortRule: '排序：规则系统',
   characterLibraryNoMatches: '没有匹配当前搜索条件的角色卡。',
-  adoptRequiresGmHint: '开局后只能由 GM 为角色套用卡片。',
+  adoptRequiresGmHint: '角色行动后只能由 GM 为其套用卡片。',
   replaceCharacterHint: '选择后替换当前角色卡，行动席位保持不变。',
   emptyCharacterLibrary: '共享卡库为空。',
   switchWorldTitle: '切换当前局世界书',
@@ -2516,7 +2516,8 @@ export const zhCN = {
   encounterSaveChanges: '保存修改',
 
   apiErrors: {
-    ADOPT_REQUIRES_GM: '开局后只能由 GM 为角色套用卡片',
+    ADOPT_REQUIRES_GM: '角色行动后只能由 GM 为其套用卡片',
+    DELETE_REQUIRES_GM: '角色行动后只能由 GM 删除',
     FIELD_REQUIRES_GM: '这些角色卡字段（HP、等级、金币、属性、物品等）只能由 GM 修改。',
     SEAT_TOKEN_REQUIRED: '需要席位凭证，请使用 GM 发出的链接重新加入',
     SEAT_TOKEN_INVALID: '席位凭证无效或已失效，请向 GM 重新获取链接',

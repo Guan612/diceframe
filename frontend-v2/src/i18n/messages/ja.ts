@@ -731,7 +731,7 @@ export const ja = {
   characterSortName: '並び順：名前 A–Z',
   characterSortRule: '並び順：ルールシステム',
   characterLibraryNoMatches: '現在の検索条件に一致するキャラクターカードがありません。',
-  adoptRequiresGmHint: 'ゲーム開始後は、GM だけがキャラクターにカードを適用できます。',
+  adoptRequiresGmHint: 'このキャラクターが行動した後は、GM だけがカードを適用できます。',
   replaceCharacterHint: '選択すると現在のキャラクターカードを置き換えます。行動枠は変わりません。',
   emptyCharacterLibrary: '共有ライブラリは空です。',
   switchWorldTitle: '現在の卓のワールドブックを切り替え',
@@ -2514,7 +2514,8 @@ export const ja = {
   encounterSaveChanges: '変更を保存',
 
   apiErrors: {
-    ADOPT_REQUIRES_GM: 'ゲーム開始後は、GM だけがキャラクターにカードを適用できます。',
+    ADOPT_REQUIRES_GM: 'このキャラクターが行動した後は、GM だけがカードを適用できます。',
+    DELETE_REQUIRES_GM: 'このキャラクターが行動した後は、GM だけが削除できます。',
     FIELD_REQUIRES_GM: 'これらのキャラクター項目（HP・レベル・所持金・能力値・アイテムなど）は GM だけが変更できます。',
     SEAT_TOKEN_REQUIRED: '席の認証情報が必要です。GM のリンクから参加し直してください',
     SEAT_TOKEN_INVALID: '席の認証情報が無効か、更新されています。GM に新しいリンクをもらってください',

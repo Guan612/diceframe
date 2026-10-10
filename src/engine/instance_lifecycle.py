@@ -3,7 +3,7 @@
 本模块只放 GameInstance 生命周期状态的**持锁 mutation detail**：
 
 ``activate_locked`` / ``pause_locked`` / ``resume_locked`` / ``end_locked`` /
-``reset_locked``；外加一个只读判定 ``has_play_started``（"开局后"的唯一定义）。
+``reset_locked``。
 
 边界：
 
@@ -34,30 +34,6 @@ if TYPE_CHECKING:
     from src.engine.game_instance import GameInstance
 
 logger = logging.getLogger("trpg")
-
-
-_PRE_START_STATES = frozenset({GameState.CREATED, GameState.WAITING})
-_IN_PLAY_STATES = frozenset({
-    GameState.ACTIVE_ACTION, GameState.ACTIVE_JUDGMENT, GameState.PUZZLE, GameState.ENDED,
-})
-
-
-def has_play_started(instance: GameInstance) -> bool:
-    """Has this run begun play (opening activated), as opposed to a lobby?
-
-    ``CREATED`` / ``WAITING`` are the lobby: characters are still being set
-    up.  ``activate_locked`` is the only way into play and stamps
-    ``started_at``; ``reset_locked`` returns to ``CREATED`` and clears it and
-    the log.  ``PAUSED`` alone is ambiguous -- save recovery pauses every
-    non-ended game, a never-started lobby included -- so a paused run counts
-    as started only if it was activated (``started_at``) or has narration in
-    its log (older saves without ``started_at``).
-    """
-    if instance.state in _PRE_START_STATES:
-        return False
-    if instance.state in _IN_PLAY_STATES:
-        return True
-    return bool(instance.started_at or instance.log)
 
 
 def activate_locked(instance: GameInstance) -> None:
@@ -95,7 +71,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     """
     from src.engine.modules import (
         adventure_runtime_state, checks, legacy_combat, narrative_notes, round_safety, ruleset_runtime,
-        session_stats,
+        seat_activity, session_stats,
     )
 
     session_stats.require_writable(instance)
@@ -105,6 +81,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     ruleset_runtime.require_writable(instance)
     adventure_runtime_state.require_writable(instance)
     narrative_notes.require_writable(instance)
+    seat_activity.require_writable(instance)
     saved_seed = instance.seed_code if keep_seed else ""
     saved_world_id = instance.world_id
     saved_world_name = instance.world_name
@@ -117,6 +94,8 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     saved_adventure_binding = copy.deepcopy(instance.adventure_binding)
     instance.rotate_run_identity()
     instance.players.clear()
+    # 例外（同 adventure_progress）：席位"已行动"标记属于这一轮 run，随名册与日志一起清空。
+    seat_activity.reset(instance)
     instance.npcs.clear()
     progression.reset(instance)
     instance.action_queue.clear()

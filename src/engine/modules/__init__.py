@@ -20,6 +20,7 @@ from src.engine.modules import (  # noqa: F401
     round_presentation,
     round_safety,
     ruleset_runtime,
+    seat_activity,
     table_settings,
     world_reports,
 )

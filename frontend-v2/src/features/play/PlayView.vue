@@ -63,7 +63,6 @@ const isPlayer = computed(() => !!(route.query.user || route.query.share))
 function goBack() { router.push({ name: 'overview' }) }
 
 const game = useGame()
-const adoptLocked = computed(() => cardAdoptionLocked(game.detail.value, { isGm: game.isGm.value, delegate: delegate.value }))
 const settings = useSettingsStore()
 const toast = useToast()
 const { confirm } = useConfirm()
@@ -158,6 +157,10 @@ function joinNames(names: string[]) { return names.filter(Boolean).join(t('listS
 function onLocaleChange(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
 
 const actorId = computed(() => game.actorId.value || game.player.value?.user_id || '')
+const adoptLocked = computed(() => cardAdoptionLocked(
+  game.players.value.find(player => player.user_id === actorId.value),
+  { isGm: game.isGm.value, delegate: delegate.value },
+))
 const canAskKp = computed(() => Boolean(
   game.actorId.value
   && game.players.value.some(player => player.user_id === game.actorId.value)

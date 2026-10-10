@@ -12,6 +12,7 @@ import pytest
 
 from src.engine.game_instance import GameInstance, GameRegistry
 from src.engine.game_state import GameState
+from src.engine.modules import seat_activity
 from src.rules.rule_system import RuleSystem
 from src.rulesets.builtin import build_default_ruleset_registry
 from src.rulesets.dnd2024.runtime import Dnd2024Runtime
@@ -742,10 +743,10 @@ async def test_live_character_adopts_server_owned_professional_blueprint(
 
 
 @pytest.mark.asyncio
-async def test_player_side_adoption_is_gm_only_once_play_has_started(
+async def test_player_side_adoption_is_gm_only_once_the_seat_acted(
     professional_context,
 ) -> None:
-    """Adoption resets HP / resources / equipment: mid-game it is a free re-roll."""
+    """Adoption resets HP / resources / equipment: after acting it is a re-roll."""
     api, instance, _character = professional_context
     replacement = _professional_character(api._runtime)
     replacement["ruleset_character"]["identity"]["name"] = "Refill Hero"
@@ -754,22 +755,24 @@ async def test_player_side_adoption_is_gm_only_once_play_has_started(
         api._character_card_dependencies, replacement,
     )["card"]
     game_key = "web|character-lifecycle|web_bot"
+    instance.state = GameState.ACTIVE_ACTION  # a running game, as on the web
+    original = deepcopy(instance.players["gm"])
 
-    instance.state = GameState.ACTIVE_ACTION
-    before = deepcopy(instance.players["gm"])
-    rejected = await ruleset_characters.adopt_character_card(
+    fresh_seat = await ruleset_characters.adopt_character_card(
         api._ruleset_character_dependencies, game_key, "gm", saved["id"],
         gm_authority=False,
     )
-    assert rejected["ok"] is False
-    assert rejected["error_code"] == ADOPT_REQUIRES_GM
-    assert instance.players["gm"] == before
+    assert fresh_seat["ok"] is True
+    assert instance.players["gm"]["character_name"] == "Refill Hero"
 
-    # The same dispatch the route uses (classic library path first).
-    dispatched = await api.adopt_ruleset_character_card(
+    instance.players["gm"] = deepcopy(original)
+    seat_activity.mark_acted(instance, "gm")
+    before = deepcopy(instance.players["gm"])
+    rejected = await api.adopt_ruleset_character_card(
         game_key, "gm", saved["id"], gm_authority=False,
     )
-    assert dispatched["error_code"] == ADOPT_REQUIRES_GM
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == ADOPT_REQUIRES_GM
     assert instance.players["gm"] == before
 
     by_gm = await ruleset_characters.adopt_character_card(
@@ -777,15 +780,6 @@ async def test_player_side_adoption_is_gm_only_once_play_has_started(
         gm_authority=True,
     )
     assert by_gm["ok"] is True
-    assert instance.players["gm"]["character_name"] == "Refill Hero"
-
-    instance.players["gm"] = before
-    instance.state = GameState.CREATED
-    in_lobby = await ruleset_characters.adopt_character_card(
-        api._ruleset_character_dependencies, game_key, "gm", saved["id"],
-        gm_authority=False,
-    )
-    assert in_lobby["ok"] is True
     assert instance.players["gm"]["character_name"] == "Refill Hero"
 
 

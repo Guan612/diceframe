@@ -94,20 +94,25 @@ function adoptCalls() {
   return (mocks.api as unknown as Mock).mock.calls.filter(([path]) => path === ADOPT_PATH)
 }
 
-function detailWith(playStarted: boolean): GameDetail {
-  return {
-    game_key: GAME_KEY,
-    state: playStarted ? 'active_action' : 'created',
-    play_started: playStarted,
-    gm_uid: 'gm',
-    multiplayer: { ready_players: [{ user_id: 'ally' }], waiting_players: [], away_players: [] },
-  } as unknown as GameDetail
+// Every web game is already running; the lock follows the viewer's own seat.
+const RUNNING_GAME = {
+  game_key: GAME_KEY,
+  state: 'active_action',
+  gm_uid: 'gm',
+  multiplayer: { ready_players: [{ user_id: 'ally' }], waiting_players: [], away_players: [] },
+} as unknown as GameDetail
+
+function seatActed(hasActed: boolean) {
+  gameState.players.value = [
+    { user_id: 'ally', character_name: 'Ally', has_acted: hasActed } as Player,
+    { user_id: 'other', character_name: 'Other', has_acted: !hasActed } as Player,
+  ]
 }
 
 describe('PlayView card adoption', () => {
   beforeEach(() => {
     i18n.global.locale.value = 'zh-CN'
-    gameState.players.value = [{ user_id: 'ally', character_name: 'Ally' } as Player]
+    gameState.detail.value = RUNNING_GAME
     gameState.userId.value = 'ally'
     gameState.currentGame.value = GAME_KEY
     storeSeatToken(GAME_KEY, 'tok-ally')
@@ -124,8 +129,8 @@ describe('PlayView card adoption', () => {
     document.body.innerHTML = ''
   })
 
-  it('disables adoption for a player once the game has started and explains why', async () => {
-    gameState.detail.value = detailWith(true)
+  it('disables adoption once the player seat has acted and explains why', async () => {
+    seatActed(true)
     gameState.isGm.value = false
     const wrapper = await mountPlayView({ game: GAME_KEY, user: 'ally', share: '1' })
 
@@ -133,7 +138,7 @@ describe('PlayView card adoption', () => {
 
     const hint = wrapper.find('.adopt-locked-hint')
     expect(hint.exists()).toBe(true)
-    expect(hint.text()).toContain('开局后只能由 GM 为角色套用卡片')
+    expect(hint.text()).toContain('角色行动后只能由 GM 为其套用卡片')
     const choice = wrapper.find('button.card-choice')
     expect(choice.attributes('disabled')).toBeDefined()
     await choice.trigger('click')
@@ -142,8 +147,8 @@ describe('PlayView card adoption', () => {
     wrapper.unmount()
   })
 
-  it('lets a player adopt in the lobby before the game starts', async () => {
-    gameState.detail.value = detailWith(false)
+  it('lets a player whose seat has not acted adopt in a running game', async () => {
+    seatActed(false)
     gameState.isGm.value = false
     const wrapper = await mountPlayView({ game: GAME_KEY, user: 'ally', share: '1' })
 
@@ -156,8 +161,8 @@ describe('PlayView card adoption', () => {
     wrapper.unmount()
   })
 
-  it('keeps adoption for the GM after start and localizes a server refusal', async () => {
-    gameState.detail.value = detailWith(true)
+  it('keeps adoption for the GM after the seat acted and localizes a server refusal', async () => {
+    seatActed(true)
     gameState.isGm.value = true
     ;(mocks.api as unknown as Mock).mockImplementation(async (path: string) => {
       if (path === CARDS_PATH) return { cards: [{ id: 'card-1', character_name: 'Refill Hero' }] }
@@ -174,29 +179,31 @@ describe('PlayView card adoption', () => {
     await choice.trigger('click')
     await flushPromises()
     expect(adoptCalls()).toHaveLength(1)
-    expect(mocks.toastError).toHaveBeenCalledWith('开局后只能由 GM 为角色套用卡片')
+    expect(mocks.toastError).toHaveBeenCalledWith('角色行动后只能由 GM 为其套用卡片')
     wrapper.unmount()
   })
 })
 
 describe('card adoption rule', () => {
-  it('locks only player-side callers after start', () => {
-    expect(cardAdoptionLocked({ play_started: false }, { isGm: false })).toBe(false)
-    expect(cardAdoptionLocked({ play_started: true }, { isGm: false })).toBe(true)
-    expect(cardAdoptionLocked({ play_started: true }, { isGm: true })).toBe(false)
+  it('locks only player-side callers once the seat has acted', () => {
+    expect(cardAdoptionLocked({ has_acted: false }, { isGm: false })).toBe(false)
+    expect(cardAdoptionLocked({ has_acted: true }, { isGm: false })).toBe(true)
+    expect(cardAdoptionLocked({ has_acted: true }, { isGm: true })).toBe(false)
     // The owner previewing a seat with delegate on speaks for that player.
-    expect(cardAdoptionLocked({ play_started: true }, { isGm: true, delegate: true })).toBe(true)
-    expect(cardAdoptionLocked(null, { isGm: false })).toBe(false)
+    expect(cardAdoptionLocked({ has_acted: true }, { isGm: true, delegate: true })).toBe(true)
+    expect(cardAdoptionLocked(undefined, { isGm: false })).toBe(false)
   })
 
-  it('has a localized ADOPT_REQUIRES_GM message in every locale', () => {
+  it('has localized ADOPT_REQUIRES_GM / DELETE_REQUIRES_GM messages in every locale', () => {
     const previous = i18n.global.locale.value
     try {
       for (const locale of ['zh-CN', 'en', 'ja', 'de'] as const) {
         i18n.global.locale.value = locale
-        const message = errorMessage(new ApiError('server text', 403, 'ADOPT_REQUIRES_GM'))
-        expect(message).not.toBe('server text')
-        expect(message).not.toContain('apiErrors.')
+        for (const code of ['ADOPT_REQUIRES_GM', 'DELETE_REQUIRES_GM']) {
+          const message = errorMessage(new ApiError('server text', 403, code))
+          expect(message).not.toBe('server text')
+          expect(message).not.toContain('apiErrors.')
+        }
         expect(i18n.global.t('adoptRequiresGmHint')).not.toBe('adoptRequiresGmHint')
       }
     } finally {

@@ -1971,8 +1971,8 @@ class WebAPI:
     ) -> dict[str, Any]:
         """Adopt a library card by id; classic games apply it server-side.
 
-        ``gm_authority`` is the caller's: after play has begun a player-side
-        caller gets ``ADOPT_REQUIRES_GM`` on either path.
+        ``gm_authority`` is the caller's: once the seat has acted a
+        player-side caller gets ``ADOPT_REQUIRES_GM`` on either path.
         """
         card = next(
             (
@@ -2174,9 +2174,12 @@ class WebAPI:
                 recovered += 1
         return recovered
 
-    async def delete_character(self, game_key: str, user_id: str) -> dict[str, Any]:
+    async def delete_character(
+        self, game_key: str, user_id: str, *, gm_authority: bool,
+    ) -> dict[str, Any]:
         return await characters.delete_character(
             self._character_dependencies, game_key, user_id,
+            gm_authority=gm_authority,
         )
 
     async def create_player(self, game_key: str, character: dict,

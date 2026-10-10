@@ -1623,13 +1623,15 @@ class GameInstance:
 
     async def remove_player(self, user_id: str) -> bool:
         """移除玩家，清理关联状态（含该席位的分享凭证）。"""
-        from src.engine.modules import room_access
+        from src.engine.modules import room_access, seat_activity
 
         async with self._lock:
             if user_id not in self.players:
                 return False
             room_access.require_writable(self)
+            seat_activity.require_writable(self)
             del self.players[user_id]
+            seat_activity.forget_seat(self, user_id)
             room_access.revoke_seat_token(self, user_id)
             self.ready_players.discard(user_id)
             self.away_players.discard(user_id)

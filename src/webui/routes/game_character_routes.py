@@ -10,7 +10,11 @@ from src.webui.api import can_modify_character
 from src.webui.routes.character_cards import sees_full_card_library
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 from src.webui.services._common import canonical_game_key, is_game_gm
-from src.webui.character_sheet_authority import ADOPT_REQUIRES_GM, FIELD_REQUIRES_GM
+from src.webui.character_sheet_authority import (
+    ADOPT_REQUIRES_GM,
+    DELETE_REQUIRES_GM,
+    FIELD_REQUIRES_GM,
+)
 from src.webui.routes._common import (
     _get_api,
     _require_confirmed_request,
@@ -125,8 +129,8 @@ async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response
                 status=404,
             )
     # Visibility above covers both the classic and the rules-aware dispatch.
-    # After the game has started a player-side caller (seat, bot for a player
-    # seat, P2P delegate) may not adopt onto its seat; the service checks this
+    # Once the seat has acted a player-side caller (seat, bot for a player
+    # seat, P2P delegate) may not adopt onto it; the service checks this
     # inside the authoritative write.
     result = await api.adopt_ruleset_character_card(
         gk, uid, card_id, gm_authority=_has_sheet_authority(request, inst),
@@ -279,14 +283,18 @@ async def api_char_delete(request: web.Request) -> web.Response:
         owner=bool(request.get("owner_authenticated", False)),
     ):
         return web.json_response({"error": "无权删除他人角色"}, status=403)
-    result = await api.delete_character(gk, uid)
+    # A player-side caller may delete its seat only before the seat acted.
+    result = await api.delete_character(
+        gk, uid, gm_authority=_has_sheet_authority(request, inst),
+    )
     if result.get("ok") and uid != str(inst.gm_uid or ""):
         # A removed seat's devices must not keep speaking for it here. The GM
         # identity outlives its character, so the GM's own session is kept.
         mgr = request.app.get("session_manager")
         if mgr is not None:
             mgr.revoke_game_binding(uid, canonical_game_key(gk))
-    status = 409 if result.get("error_code") == "REWRITE_IN_PROGRESS" else 200
+    code = result.get("error_code")
+    status = 409 if code == "REWRITE_IN_PROGRESS" else 403 if code == DELETE_REQUIRES_GM else 200
     return web.json_response(result, status=status)
 
 
