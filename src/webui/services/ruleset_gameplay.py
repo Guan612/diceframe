@@ -12,7 +12,7 @@ from typing import Any
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
 from src.engine import progression
-from src.engine.modules import adventure_runtime_state, ruleset_runtime, session_stats
+from src.engine.modules import adventure_runtime_state, economy_state, ruleset_runtime, session_stats
 from src.engine.action_gate import (
     GateRequest, ROUND_PROCESSING, SOURCE_INTENT, STRUCTURED_INTENT_POLICY,
     check_not_judging, check_seat_exists, evaluate,
@@ -460,7 +460,7 @@ async def submit_intent(
             before = {
                 "world_state": deepcopy(getattr(instance, "world_state", None)),
                 "adventure_progress": deepcopy(getattr(instance, "adventure_progress", None)),
-                "economy": deepcopy(getattr(instance, "economy", None)),
+                "economy": deepcopy(economy_state.state(instance)),
             }
             try:
                 completed = dependencies.complete_adventure_node(
