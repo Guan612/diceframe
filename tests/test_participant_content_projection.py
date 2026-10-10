@@ -298,3 +298,65 @@ async def test_kp_without_projection_still_applies_shared_predicate(lore_store) 
     await responder.answer(_instance(lore_store), "p1", "where?", visibility="private")
     lore = _ids(composer.lore)
     assert not lore & {"vault", "gm-lore", "p2-den"}
+
+
+# ---- Built-in templates: reviewed GM-only locations stay off a seat's map ---
+#
+# Each of these entries is the secret half of a split (or a deliberately
+# sealed site); the common knowledge about the place lives in a public parent
+# location that a seat does see.  ``None`` = no public parent location.
+
+_TEMPLATE_SECRET_LOCATIONS = [
+    ("coc_horror.json", "loc_howard_house_oddities", "loc_howard_house"),
+    ("coc_horror_en.json", "loc_howard_residence_oddities", "loc_howard_residence"),
+    ("default_fantasy.json", "loc_ancient_tower", "loc_blackpine_forest"),
+    ("greymoor.json", "loc_old_shrine", None),
+    ("scifi_cyberpunk.json", "loc_shibuya_market_entrance", "loc_shibuya_market"),
+    ("scifi_cyberpunk.json", "loc_mkg_datacenter", "loc_cloud_tower"),
+    ("scifi_cyberpunk_en.json", "loc_shibuya_market_entrance", "loc_shibuya_market"),
+    ("scifi_cyberpunk_en.json", "loc_mkg_datacenter", "loc_cloudspire"),
+    ("zhongshi_fantasy.json", "loc_ancient_cave", "loc_kumu_cliff"),
+    ("zhongshi_fantasy_en.json", "loc_deadwood_cliff_caves", "loc_deadwood_cliff"),
+]
+
+
+@pytest.mark.parametrize(("filename", "secret_id", "public_parent"), _TEMPLATE_SECRET_LOCATIONS)
+def test_builtin_template_secret_locations_stay_off_seat_map(
+    tmp_path, filename, secret_id, public_parent,
+) -> None:
+    import json
+    from pathlib import Path
+
+    from src.lorebook.bootstrap import ensure_world_from_template
+
+    template = json.loads(
+        (Path(__file__).resolve().parents[1] / "templates" / "worlds" / filename)
+        .read_text(encoding="utf-8")
+    )
+    world_id = str(template["world_id"])
+    store = LorebookStore(tmp_path / "lore.db")
+    store.open()
+    try:
+        ensure_world_from_template(store, world_id, template)
+        instance = GameInstance(game_key=("web", "tpl", "web"), world_id=world_id)
+        instance.gm_uid = "gm_user"
+        instance.players = {"p1": {"character_name": "甲", "character_sheet": {}}}
+        deps = _map_dependencies(store, instance, projection=True)
+
+        seat = {
+            loc["id"] for loc in map_service.get_map_locations(
+                deps, "g", viewer=Viewer("seat", "p1"),
+            )["locations"]
+        }
+        gm = {
+            loc["id"] for loc in map_service.get_map_locations(
+                deps, "g", viewer=Viewer("gm", "gm_user"),
+            )["locations"]
+        }
+    finally:
+        store.close()
+
+    assert secret_id in gm
+    assert secret_id not in seat
+    if public_parent is not None:
+        assert public_parent in seat
