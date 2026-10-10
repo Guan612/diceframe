@@ -18,7 +18,6 @@ from src.lorebook.import_plan import (
 
 LOREBOOK_FORMAT = "lorebook_v3"
 FORMAT_UNSUPPORTED = "FORMAT_UNSUPPORTED"
-CANONICAL_HINT_UNSUPPORTED = "CANONICAL_HINT_UNSUPPORTED"
 
 
 def lorebook_state_token(store: Any, book_id: str) -> str:
@@ -66,8 +65,6 @@ class LorebookSyncImporter:
         return nullcontext()
 
     def prepare(self, source: SyncSource, item: SyncItem) -> PreparedLorebook:
-        if item.canonical_hint:
-            raise SyncItemError(CANONICAL_HINT_UNSUPPORTED, "lorebooks are matched by identity only")
         document = item.document
         if item.format not in ("", LOREBOOK_FORMAT) or not isinstance(document, dict) or (
             document.get("spec") != LOREBOOK_FORMAT
@@ -81,7 +78,9 @@ class LorebookSyncImporter:
 
     def plan(self, source: SyncSource, item: SyncItem, prepared: PreparedLorebook) -> KindPlan:
         declared = DeclaredSource(source.kind, source.id, item.client_ref)
-        plan = plan_lorebook_import(self.store, item.document, declared=declared, prepared=prepared)
+        plan = plan_lorebook_import(
+            self.store, item.document, declared=declared, prepared=prepared, hint=item.canonical_hint,
+        )
         store = self.store
 
         def execute(resolved: Any) -> list[dict[str, Any]]:
@@ -96,6 +95,12 @@ class LorebookSyncImporter:
 class LorebookSyncExporter:
     def __init__(self, store: Any) -> None:
         self.store = store
+
+    def status(self, canonical_id: str) -> dict[str, Any] | None:
+        book = self.store.get_lorebook(canonical_id)
+        if not book:
+            return None
+        return {"state_token": lorebook_state_token(self.store, canonical_id), "provenance": book_provenance(book)}
 
     def export(self, canonical_id: str) -> dict[str, Any] | None:
         book = self.store.get_lorebook(canonical_id)
