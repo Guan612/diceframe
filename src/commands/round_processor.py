@@ -333,8 +333,8 @@ class RoundProcessor:
         """离线兼容路径：模型工具不可用时按旧规则意图结算检定。"""
         progression.require_writable(instance)
         checks.require_writable(instance)
-        if instance.round_checks_prepared:
-            return list(instance.last_checks)
+        if checks.round_checks_prepared(instance):
+            return list(checks.last_checks(instance))
         if instance.state != GameState.ACTIVE_JUDGMENT:
             return []
         actions_text = collect_actions_text(instance)
@@ -349,21 +349,21 @@ class RoundProcessor:
             self._dice,
             skip_action_indexes=deferred_indexes,
         )
-        for check in instance.last_checks:
+        for check in checks.last_checks(instance):
             if not check.get("check_id"):
                 check["check_id"] = uuid.uuid4().hex
             if check.get("luck_spend_available"):
                 check["luck_decision"] = "pending"
         instance.complete_round_check_preparation()
-        return list(instance.last_checks)
+        return list(checks.last_checks(instance))
 
     async def prepare_round_checks_ai(self, instance: GameInstance) -> list[dict]:
         """阶段 1：由 GM 模型统一规划检定，再由服务端一次性掷骰结算。"""
         progression.require_writable(instance)
         session_stats.require_writable(instance)
         checks.require_writable(instance)
-        if instance.round_checks_prepared:
-            return list(instance.last_checks)
+        if checks.round_checks_prepared(instance):
+            return list(checks.last_checks(instance))
         if instance.state != GameState.ACTIVE_JUDGMENT:
             return []
         actions_text = collect_actions_text(instance)
@@ -510,13 +510,13 @@ class RoundProcessor:
                 instance.reset_round_checks()
                 return []
             return self.prepare_round_checks(instance)
-        for check in instance.last_checks:
+        for check in checks.last_checks(instance):
             if not check.get("check_id"):
                 check["check_id"] = uuid.uuid4().hex
             if check.get("luck_spend_available"):
                 check["luck_decision"] = "pending"
         instance.complete_round_check_preparation()
-        return list(instance.last_checks)
+        return list(checks.last_checks(instance))
 
     async def process_round(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """执行一轮判定与叙事。
@@ -943,7 +943,7 @@ class RoundProcessor:
         ruleset_runtime.require_writable(instance)
         narrative_notes.require_writable(instance)
         expected_run_id = instance.run_id
-        if not instance.round_checks_prepared:
+        if not checks.round_checks_prepared(instance):
             await self.prepare_round_checks_ai(instance)
         # The planning phase may create an explicitly-authorized table offer.
         # Capture the narrative-start snapshot only after planning completes;
@@ -995,7 +995,7 @@ class RoundProcessor:
         if death_text:
             actions_text = death_text + "\n" + actions_text
 
-        dice_block = format_check_results_constraint(instance, list(instance.last_checks))
+        dice_block = format_check_results_constraint(instance, list(checks.last_checks(instance)))
         if dice_block:
             actions_text += dice_block
 
@@ -1200,7 +1200,7 @@ class RoundProcessor:
         state_msgs = append_state_change_messages(instance, response, public_state_before, data)
         state_msgs.extend(system_changes)
         request = (
-            instance.ruleset_state.get("encounter_request")
+            ruleset_runtime.state(instance).get("encounter_request")
             if isinstance(getattr(instance, "ruleset_state", None), dict)
             else None
         )

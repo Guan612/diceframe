@@ -26,13 +26,6 @@ from src.migrations.lorebook import migrate as migrate_lorebook
 
 logger = logging.getLogger("trpg")
 
-#: Book fields that change what retrieval actually produces. Mutating any of
-#: them must advance the Book's monotonic ``revision`` so the resolver/retriever
-#: cache cannot keep serving the previous annotation.
-_RUNTIME_BOOK_FIELDS = frozenset({
-    "enabled", "scan_depth", "token_budget", "recursive_scanning", "settings_json",
-})
-
 # 单次 IN(...) 查询的 entry 数量上限，避免撞 SQLite 的参数个数限制。
 _CACHE_CHUNK = 400
 
@@ -126,6 +119,12 @@ _CURRENT_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_lorebook_tier ON lorebook_entries(world_id, tier)",
     "CREATE INDEX IF NOT EXISTS idx_lorebook_source ON lorebook_entries(source_plugin)",
 )
+
+
+class LorebookIdentityConflict(ValueError):
+    """An external identity is already tracked by another Book (fail closed)."""
+
+    code = "LOREBOOK_IDENTITY_CONFLICT"
 
 
 class LorebookStore:
@@ -291,7 +290,23 @@ class LorebookStore:
         ).execute()
 
     def create_lorebook(self, book: dict) -> None:
+        source_kind = book.get("source_kind", "native")
+        source_id = book.get("source_id", "")
+        external_id = str(book.get("external_id") or "")
         with self._lock:
+            if external_id:
+                # INSERT OR IGNORE would also swallow the external-identity
+                # unique index and silently drop the Book: fail closed instead.
+                holder = Lorebook.get_or_none(
+                    (Lorebook.source_kind == source_kind)
+                    & (Lorebook.source_id == source_id)
+                    & (Lorebook.external_id == external_id)
+                    & (Lorebook.import_link != "detached")
+                )
+                if holder is not None and holder.id != book["id"]:
+                    raise LorebookIdentityConflict(
+                        "external identity is already tracked by another lorebook"
+                    )
             Lorebook.insert(
                 id=book["id"], name=book.get("name", book["id"]),
                 description=book.get("description", ""), language=book.get("language", "zh-CN"),
@@ -300,10 +315,66 @@ class LorebookStore:
                 recursive_scanning=int(book.get("recursive_scanning", False)),
                 settings_json=json.dumps(book.get("settings", book.get("settings_json", {})), ensure_ascii=False)
                 if not isinstance(book.get("settings_json"), str) else book["settings_json"],
-                source_kind=book.get("source_kind", "native"), source_id=book.get("source_id", ""),
+                source_kind=source_kind, source_id=source_id,
                 source_version=book.get("source_version", ""), source_digest=book.get("source_digest", ""),
+                external_id=external_id,
+                import_link=str(book.get("import_link") or ""),
+                import_state_digest=str(book.get("import_state_digest") or ""),
             ).on_conflict_ignore().execute()
             self._commit_locked()
+
+    def record_lorebook_import(
+        self,
+        book_id: str,
+        *,
+        source_kind: str,
+        source_id: str,
+        external_id: str,
+        source_digest: str,
+        import_link: str,
+        import_state_digest: str,
+        source_version: str = "",
+    ) -> None:
+        """Server-side import bookkeeping for one Book.
+
+        Only import plans call this; the generic update use case never
+        accepts these fields. It is bookkeeping, not content, so it does not
+        move the Book's revision.
+        """
+
+        if import_link not in {"tracked", "detached"}:
+            raise ValueError("import_link must be tracked or detached")
+        with self._lock:
+            if external_id and import_link == "tracked":
+                holder = Lorebook.get_or_none(
+                    (Lorebook.source_kind == source_kind)
+                    & (Lorebook.source_id == source_id)
+                    & (Lorebook.external_id == external_id)
+                    & (Lorebook.import_link != "detached")
+                    & (Lorebook.id != book_id)
+                )
+                if holder is not None:
+                    raise LorebookIdentityConflict(
+                        "external identity is already tracked by another lorebook"
+                    )
+            changed = Lorebook.update(
+                source_kind=source_kind, source_id=source_id, external_id=external_id,
+                source_version=source_version, source_digest=source_digest,
+                import_link=import_link, import_state_digest=import_state_digest,
+            ).where(Lorebook.id == book_id).execute()
+            if not changed:
+                raise ValueError("lorebook not found")
+            self._commit_locked()
+
+    def detach_lorebook(self, book_id: str) -> bool:
+        """Stop a Book from following its import source; provenance is kept."""
+
+        with self._lock:
+            changed = Lorebook.update(import_link="detached").where(
+                Lorebook.id == book_id
+            ).execute()
+            self._commit_locked()
+        return bool(changed)
 
     def update_lorebook(self, book_id: str, updates: dict) -> bool:
         """Update editable book metadata; unknown fields are ignored."""
@@ -324,11 +395,12 @@ class LorebookStore:
         with self._lock:
             changed = Lorebook.update(**fields, updated_at=SQL("datetime('now')")).where(
                 Lorebook.id == book_id).execute()
-            # A Book's own retrieval settings change what the matcher produces just
-            # as much as its entries do, so they must move the monotonic revision
-            # too. ``updated_at`` alone is second-resolution and would let a
-            # same-second settings edit keep serving the previous annotation.
-            if changed and _RUNTIME_BOOK_FIELDS & set(fields):
+            # Every Book mutation moves the monotonic revision. Retrieval
+            # settings change what the matcher produces (``updated_at`` alone is
+            # second-resolution and would keep serving a stale annotation), and
+            # the revision is also the Book's content state token, so a
+            # metadata-only edit (name, description) must move it as well.
+            if changed:
                 self._bump_book_revision_locked(book_id)
             self._commit_locked()
         return bool(changed)

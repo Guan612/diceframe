@@ -19,7 +19,13 @@ from typing import Any
 from src.engine.character_utils import parse_character_card_document, parse_tavern_card
 from src.content_modules.refs import ContentDraft, collect_content_refs
 from src.lorebook.importer import commit_lorebook_import, draft_lorebook_import
-from src.webui.character_card_projection import card_signature, dedupe_cards
+from src.webui.character_card_projection import (
+    CARD_PROVENANCE_KEY,
+    card_provenance,
+    card_signature,
+    dedupe_cards,
+    has_card_provenance,
+)
 
 logger = logging.getLogger("trpg")
 
@@ -132,6 +138,12 @@ def _to_character_card(character: dict, source: str = "") -> dict[str, Any]:
         value = character.get(key, cs.get(key))
         if value not in (None, ""):
             card[key] = copy.deepcopy(value)
+    # Import provenance is server bookkeeping: it survives every re-shaping of
+    # a card, but only in its validated form. Whether a caller may *supply* it
+    # is decided at the write boundary (see save_character_card), not here.
+    provenance = card_provenance(character) or card_provenance(cs)
+    if provenance is not None:
+        card[CARD_PROVENANCE_KEY] = provenance
     return card
 
 
@@ -184,15 +196,27 @@ PLUGIN_CARD_MARKERS = ("source_plugin", "plugin_content_id", "raw_sillytavern")
 _CARD_IDENTITY_KEYS = ("id", "card_id")
 
 
-def _strip_untrusted_card_fields(character: dict) -> dict:
+def _strip_keys(character: dict, keys: tuple[str, ...]) -> dict:
     cleaned = copy.deepcopy(character)
     sheets = [cleaned]
     if isinstance(cleaned.get("character_sheet"), dict):
         sheets.append(cleaned["character_sheet"])
     for target in sheets:
-        for key in (*PLUGIN_CARD_MARKERS, *_CARD_IDENTITY_KEYS):
+        for key in keys:
             target.pop(key, None)
     return cleaned
+
+
+def _strip_untrusted_card_fields(character: dict) -> dict:
+    return _strip_keys(
+        character, (*PLUGIN_CARD_MARKERS, *_CARD_IDENTITY_KEYS, CARD_PROVENANCE_KEY),
+    )
+
+
+def strip_card_provenance(character: dict) -> dict:
+    """Drop caller-supplied provenance: only server-side import code sets it."""
+
+    return _strip_keys(character, (CARD_PROVENANCE_KEY,))
 
 
 def save_character_card(
@@ -205,8 +229,14 @@ def save_character_card(
 
     ``from_game``: the auto-save of a table character (join, sheet edit).
     Such a save never carries plugin provenance or a card id and never
-    replaces a plugin card; it is kept as a separate card instead.
+    replaces a plugin card or an imported (provenance) card; it is kept as a
+    separate card instead.
+
+    Import provenance is never taken from the caller. A save that replaces an
+    imported card by its id keeps that card's recorded provenance; signature
+    matching never merges into an imported card.
     """
+    character = strip_card_provenance(character)
     if from_game:
         character = _strip_untrusted_card_fields(character)
     source = str(character.get("source") or "角色卡库")
@@ -231,19 +261,27 @@ def save_character_card(
     sig = card_signature(card)
 
     def replaceable(existing: dict[str, Any]) -> bool:
-        return not (from_game and is_shareable_card(existing))
+        return not (
+            from_game and (is_shareable_card(existing) or has_card_provenance(existing))
+        )
+
+    def mergeable(existing: dict[str, Any]) -> bool:
+        # Same-looking is not same-identity for an imported card.
+        return replaceable(existing) and not has_card_provenance(existing)
+
+    def same_card(existing: dict[str, Any]) -> bool:
+        if existing.get("id") == card["id"]:
+            return replaceable(existing)
+        return mergeable(existing) and card_signature(existing) == sig
 
     for existing in cards:
-        if not replaceable(existing):
-            continue
-        if existing.get("id") == card["id"] or card_signature(existing) == sig:
+        if same_card(existing):
             card["id"] = existing.get("id") or card["id"]
+            provenance = card_provenance(existing)
+            if provenance is not None:
+                card[CARD_PROVENANCE_KEY] = provenance
             break
-    cards = [
-        c for c in cards
-        if not replaceable(c)
-        or (c.get("id") != card["id"] and card_signature(c) != sig)
-    ]
+    cards = [c for c in cards if not same_card(c)]
     cards.append(card)
     cards = dedupe_cards(cards)
     _write_cards(dependencies, cards)
@@ -631,9 +669,10 @@ def export_character_cards(
 
     # 仅去掉运行期插件来源标记；source（人类可读来源）和 raw_sillytavern（酒馆原始数据）
     # 是业务字段，保留以保证导出→导入无损往返（否则酒馆卡丢 raw_sillytavern 后无法还原）。
+    # 导入 provenance 是本服务器的同步记账，不属于可移植卡体。
     skip = {
         "source_plugin", "plugin_content_id",
-        "ruleset_revision", "ruleset_operation_log",
+        "ruleset_revision", "ruleset_operation_log", CARD_PROVENANCE_KEY,
     }
     payloads: list[tuple[str, str]] = []
     used_names: dict[str, int] = {}

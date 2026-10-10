@@ -489,6 +489,8 @@ Frontend / Bot / Plugin Client
 
 这是当前最重要的“硬架构边界”之一。
 
+`tests/architecture/test_game_instance_facades.py` 记录模块状态的门面债：R7–R9 把字段搬进 `src/engine/modules` 后，`GameInstance` 上仍为每个字段保留兼容 property，`src/` 中经 `instance.<field>` 读写它们的调用按“文件 + property”计入只减不增的基线。门面集合由 AST 自动识别（body 引用 `src.engine.modules` 的 property），数量也只减不增；调用方改走模块 API 时，同一 PR 下调或删除对应基线条目。
+
 ---
 
 ## 2.3 Authority Model：谁有权决定什么

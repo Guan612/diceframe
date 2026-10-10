@@ -209,8 +209,8 @@ def _pending_luck_payload(
         "phase": "luck",
         "advanced": False,
         "message": "检定已完成，请选择是否消耗幸运后再继续叙事",
-        "check_result": instance.last_check,
-        "check_results": list(instance.last_checks),
+        "check_result": checks.last_check(instance),
+        "check_results": list(checks.last_checks(instance)),
         "pending_luck_decisions": instance.pending_luck_checks(),
         "multiplayer": instance.multiplayer_status(),
     }
@@ -232,8 +232,8 @@ def _round_payload(
         "narration": narration,
         "quick_actions": list(instance.quick_actions),
         "economy_proposals": _visible_economy_proposals(instance, viewer_uid),
-        "check_result": instance.last_check,
-        "check_results": list(instance.last_checks),
+        "check_result": checks.last_check(instance),
+        "check_results": list(checks.last_checks(instance)),
     }
     if phase is not None:
         payload["phase"] = phase
@@ -303,12 +303,12 @@ async def _fill_ai_player_actions(
         rule = dependencies.load_rule_for_game(instance)
         if rule is None:
             # No rule is legacy narrative behavior only for an unbound instance.
-            return bool(instance.ruleset_runtime)
+            return bool(ruleset_runtime.binding(instance))
         try:
             runtime = dependencies.ruleset_registry.resolve(rule.template)
         except ValueError:
             return True  # Unknown/incompatible runtimes must not admit free text.
-        state = instance.ruleset_state
+        state = ruleset_runtime.state(instance)
         combat = state.get("combat") if isinstance(state, dict) else None
         combat_active = isinstance(combat, dict) and combat.get("status") == "active"
         return runtime.capabilities.authoritative_intents and (

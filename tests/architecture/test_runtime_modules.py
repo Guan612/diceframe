@@ -71,6 +71,42 @@ def test_combat_guard_rejects_direct_writes_including_game_instance(source) -> N
         assert not _combat_property_writes(owner, tree)
 
 
+# Callers migrated off the facade write through the module API; keep those
+# calls in the same owner files (plus the GameInstance compatibility setters).
+# Matches ``combat_extension_state.replace_*(...)`` only, not import aliases.
+COMBAT_REPLACE_CALLERS = COMBAT_WRITERS | {SRC / "engine" / "game_instance.py"}
+
+
+def _combat_replace_calls(path: Path, tree: ast.AST) -> list[int]:
+    if path in COMBAT_REPLACE_CALLERS:
+        return []
+    return [
+        node.lineno for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "combat_extension_state"
+        and node.func.attr in {"replace_current", "replace_round_snapshots"}
+    ]
+
+
+def test_only_combat_owners_call_replace_api() -> None:
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for line in _combat_replace_calls(path, tree):
+            violations.append(f"{path.relative_to(ROOT)}:{line}: combat replace call outside owner")
+    assert not violations, "\n".join(violations)
+
+
+def test_combat_replace_guard_rejects_non_owner_calls() -> None:
+    tree = ast.parse("combat_extension_state.replace_current(x, {})\n"
+                     "combat_extension_state.replace_round_snapshots(x, {})")
+    assert len(_combat_replace_calls(SRC / "webui" / "routes" / "outsider.py", tree)) == 2
+    for owner in COMBAT_REPLACE_CALLERS:
+        assert not _combat_replace_calls(owner, tree)
+
+
 def test_only_ruleset_runtime_owners_assign_binding() -> None:
     owners = {
         SRC / "engine" / "game_instance.py",
@@ -488,7 +524,14 @@ def test_only_economy_owners_write_ledger_keys() -> None:
             value = node.value
             while isinstance(value, ast.Subscript):
                 value = value.value
-            if isinstance(value, ast.Attribute) and value.attr == "economy":
+            # Facade receiver (``x.economy[...]``) or module API
+            # (``economy_state.state(x)[...]``) — both reach the live ledger.
+            if isinstance(value, ast.Call):
+                value = value.func
+            if isinstance(value, ast.Attribute) and (
+                value.attr == "economy"
+                or (value.attr == "state" and isinstance(value.value, ast.Name) and value.value.id == "economy_state")
+            ):
                 violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: economy key write outside owner")
     assert not violations, "\n".join(violations)
 

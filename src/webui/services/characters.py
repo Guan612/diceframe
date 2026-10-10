@@ -39,8 +39,7 @@ from src.engine.memory_outbox import (
     queue_memory_delivery,
 )
 from src.engine.game_instance import GameInstance
-from src.engine.modules import seat_activity
-from src.engine.modules import room_access
+from src.engine.modules import room_access, ruleset_runtime, seat_activity
 from src.engine.player_control import claim_seat, is_human_controlled
 from src.content_modules.projection import ContentProjectionService
 from src.commands.economy_effects import pending_decision_notice
@@ -1413,7 +1412,7 @@ async def _create_player_authority(dependencies: CharacterDependencies, inst: Ga
             canonical = character.get("ruleset_character")
             binding = canonical.get("rule_binding") if isinstance(canonical, dict) else None
             # 绑定由游戏在创建时决定；加入的角色只能匹配，不能反向建立绑定。
-            if not inst.ruleset_runtime:
+            if not ruleset_runtime.binding(inst):
                 return {
                     "ok": False,
                     "error_code": "RULESET_BINDING_MISSING",

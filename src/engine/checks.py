@@ -21,6 +21,7 @@ from src.engine.dice import (
 )
 from src.engine.game_instance import GameInstance
 from src.engine.language import localized_text, normalize_language
+from src.engine.modules import ruleset_runtime
 from src.rules.rule_system import RuleSystem
 
 logger = logging.getLogger("trpg")
@@ -654,7 +655,7 @@ def resolve_check_request(
     actor_ref = str(request.get("actor_ref") or "")
     actor_is_companion = actor_ref.startswith("companion:")
     if actor_is_companion:
-        companions = (instance.ruleset_state.get("party", {}) or {}).get("companions", {})
+        companions = (ruleset_runtime.state(instance).get("party", {}) or {}).get("companions", {})
         companion = companions.get(actor_ref.removeprefix("companion:")) or {}
         character_sheet = (
             companion.get("ruleset_character")

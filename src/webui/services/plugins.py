@@ -86,6 +86,10 @@ class PluginExportDependencies:
     media: PluginExportMediaDependencies
 
 
+#: Receipts of plugin-delivered content are keyed under the plugin source kind.
+PLUGIN_RECEIPT_SOURCE_KIND = "plugin"
+
+
 def _import_receipts(dependencies: PluginContentDependencies) -> ImportReceiptStore | None:
     """Resolve the host-scoped receipt store without creating another authority."""
 
@@ -128,6 +132,7 @@ def _record_import_receipt(
     try:
         receipts.record(
             str(plugin_id),
+            source_kind=PLUGIN_RECEIPT_SOURCE_KIND,
             source_version=str(manifest.get("version") or ""),
             source_digest=str(manifest.get("source_digest") or ""),
             object_type=object_type,
@@ -219,7 +224,10 @@ def cleanup_plugin_lorebook(
     lorebook = dependencies.store.lorebook
     if dependencies.plugin_host and lorebook:
         receipts = _import_receipts(dependencies)
-        receipt = receipts.load(plugin_id) if receipts is not None else None
+        receipt = (
+            receipts.load(plugin_id, source_kind=PLUGIN_RECEIPT_SOURCE_KIND)
+            if receipts is not None else None
+        )
         detached = {
             (str(item.get("type") or ""), str(item.get("id") or ""))
             for item in (receipt.user_detached_objects if receipt else [])
@@ -280,7 +288,7 @@ def cleanup_plugin_lorebook(
     except Exception:
         logger.warning("插件卡库清理失败，已跳过: %s", plugin_id, exc_info=True)
     if receipts is not None and receipt is not None:
-        receipts.discard(plugin_id)
+        receipts.discard(plugin_id, source_kind=PLUGIN_RECEIPT_SOURCE_KIND)
     return result
 
 def _autoimport_plugin_content(

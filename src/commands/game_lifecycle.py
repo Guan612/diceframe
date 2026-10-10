@@ -208,7 +208,9 @@ class GameLifecycle:
         *,
         preserve_characters: bool,
     ) -> None:
-        binding = dict(candidate.ruleset_runtime or {})
+        from src.engine.modules import ruleset_runtime
+
+        binding = dict(ruleset_runtime.binding(candidate) or {})
         runtime_id = str(binding.get("id") or "")
         ruleset_registry = getattr(self.prompt, "ruleset_registry", None)
         if runtime_id and runtime_id != "core:legacy" and ruleset_registry is not None:
@@ -608,11 +610,11 @@ class GameLifecycle:
 
     async def _start_reset_instance(self, instance: GameInstance) -> str:
         """Resume the gameplay stack already bound to this save."""
-        from src.engine.modules import adventure_runtime_state, narrative_notes
+        from src.engine.modules import adventure_runtime_state, narrative_notes, ruleset_runtime
 
         adventure_runtime_state.require_writable(instance)
         narrative_notes.require_writable(instance)
-        runtime_id = str((instance.ruleset_runtime or {}).get("id") or "")
+        runtime_id = str((ruleset_runtime.binding(instance) or {}).get("id") or "")
         if not runtime_id or runtime_id == "core:legacy":
             return await self.start_game(instance, publish=False, persist=False)
         await instance.activate()
