@@ -27,7 +27,7 @@ from src.migrations.instance import (
     migrate_game_state_payload,
     rebind_imported_game_state_payload,
 )
-from src.engine.modules import checks, ruleset_runtime
+from src.engine.modules import checks, ruleset_runtime, session_stats
 
 
 UNKNOWN_SLOTS = [
@@ -69,10 +69,11 @@ def transaction_snapshot(instance, **extra):
     return deepcopy({
         "ruleset_state": ruleset_runtime.state(instance),
         "event_ledger": ruleset_runtime.event_ledger(instance),
+        "last_activity": session_stats.last_activity(instance),
     } | {
         key: getattr(instance, key) for key in (
             "players", "combat_state", "combat_active",
-            "initiative_order", "initiative_current", "scene", "last_activity", "log",
+            "initiative_order", "initiative_current", "scene", "log",
         )
     } | extra)
 

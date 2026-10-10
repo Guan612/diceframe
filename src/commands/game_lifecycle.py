@@ -155,10 +155,10 @@ class GameLifecycle:
         )
         from src.engine.modules import room_access, table_settings
 
-        room_access.replace_max_players(candidate, source.max_players)
-        room_access.replace_player_access_open(candidate, source.player_access_open)
+        room_access.replace_max_players(candidate, room_access.max_players(source))
+        room_access.replace_player_access_open(candidate, room_access.player_access_open(source))
         table_settings.replace_gm_style_override(candidate, copy.deepcopy(source.gm_style_override))
-        room_access.replace_bot_bind_token(candidate, source.bot_bind_token)
+        room_access.replace_bot_bind_token(candidate, room_access.bot_bind_token(source))
         room_access.copy_room_password(candidate, source)
         ruleset_runtime.copy_binding_for_new_run(candidate, source)
         candidate.adventure_binding = copy.deepcopy(source.adventure_binding)
