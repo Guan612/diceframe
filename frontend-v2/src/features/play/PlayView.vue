@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { BookOutline, ChatbubbleEllipsesOutline, ChevronBack, ChevronForward, MapOutline, PlayForwardOutline, ShieldOutline, StatsChartOutline, TerminalOutline } from '@vicons/ionicons5'
 import { useRoute, useRouter } from 'vue-router'
-import { api, apiBlob, hasAccessToken, isNotFoundError, retryOnRateLimit } from '@/api/client'
+import { api, apiBlob, errorMessage as apiErrorMessage, hasAccessToken, isNotFoundError, retryOnRateLimit } from '@/api/client'
 import type { BotBindTokenResponse, CharacterCard, CharacterCardsResponse, CharacterListResponse, CharacterPortrait, CharacterSheet, CheckResult, CommandResponse, GameDetail, GmStyle, HealthResponse, JsonObject, LuckDecisionResponse, PendingPayment, Player, PlayerContextResponse, PublicAction, RuleMeta, RulesetDirectorProposal, RulesetGameplayView, WorldCandidate, WorldListResponse, WorldTemplatesResponse } from '@/api/types'
 import { queryString } from '@/stores/gameContext'
 import { isStoredPlayerMember } from '@/utils/joinIdentity'
@@ -17,7 +17,7 @@ import { useSettingsStore } from '@/stores/useSettingsStore'
 import InviteQrModal from '@/features/play/InviteQrModal.vue'
 import { copyToClipboard } from '@/utils/clipboard'
 import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
-import { characterCardNeedsConversion, characterCardRuleName } from '@/utils/characterCards'
+import { cardAdoptionLocked, characterCardNeedsConversion, characterCardRuleName } from '@/utils/characterCards'
 import GameTimeline from '@/components/GameTimeline.vue'
 import ActionComposer from '@/components/ActionComposer.vue'
 import DirectorProposalCard from '@/components/play/DirectorProposalCard.vue'
@@ -157,6 +157,10 @@ function joinNames(names: string[]) { return names.filter(Boolean).join(t('listS
 function onLocaleChange(event: Event) { setLocale((event.target as HTMLSelectElement).value as Locale) }
 
 const actorId = computed(() => game.actorId.value || game.player.value?.user_id || '')
+const adoptLocked = computed(() => cardAdoptionLocked(
+  game.players.value.find(player => player.user_id === actorId.value),
+  { isGm: game.isGm.value, delegate: delegate.value },
+))
 const canAskKp = computed(() => Boolean(
   game.actorId.value
   && game.players.value.some(player => player.user_id === game.actorId.value)
@@ -731,6 +735,10 @@ function createCharacterForCurrentGame() {
 }
 
 async function selectCard(card: CharacterCard) {
+  if (adoptLocked.value) {
+    toast.error(t('adoptRequiresGmHint'))
+    return
+  }
   if (characterCardNeedsConversion(card, ruleMeta.value.rule_id)) {
     toast.error(t('cardRuleMismatchManage'))
     return
@@ -744,7 +752,7 @@ async function selectCard(card: CharacterCard) {
     })
     showCards.value = false
     await game.refresh()
-  } catch (e: unknown) { toast.error(errorMessage(e)) }
+  } catch (e: unknown) { toast.error(apiErrorMessage(e)) }
 }
 
 async function allocateLevelUp(attrs: Record<string, number>) {
@@ -1614,8 +1622,9 @@ onBeforeUnmount(() => {
     <div v-if="showCards" class="modal" @click.self="showCards = false">
       <section class="dialog">
         <header><h2>{{ t('sharedCharacterLibrary') }}</h2><button @click="showCards = false">×</button></header>
-        <p>{{ t('replaceCharacterHint') }}</p>
-        <button v-for="c in cards" :key="c.character_name" class="card-choice" @click="selectCard(c)">
+        <p v-if="adoptLocked" class="muted adopt-locked-hint">{{ t('adoptRequiresGmHint') }}</p>
+        <p v-else>{{ t('replaceCharacterHint') }}</p>
+        <button v-for="c in cards" :key="c.character_name" class="card-choice" :disabled="adoptLocked" @click="selectCard(c)">
           <strong>{{ c.character_name }}</strong><span>{{ characterCardRuleName(c, t('unboundRule')) }} · {{ c.race }} · {{ c.class }}</span>
         </button>
         <p v-if="!cards.length" class="muted">{{ t('emptyCharacterLibrary') }}</p>

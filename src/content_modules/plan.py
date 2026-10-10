@@ -21,7 +21,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-PlanAction = Literal["create", "update", "unchanged"]
+PlanAction = Literal["create", "update", "unchanged", "unsupported"]
 Decision = Literal["update", "duplicate", "skip"]
 
 DECISIONS: tuple[Decision, ...] = ("update", "duplicate", "skip")
@@ -29,6 +29,42 @@ DECISIONS: tuple[Decision, ...] = ("update", "duplicate", "skip")
 PLAN_STALE = "PLAN_STALE"
 DECISION_REQUIRED = "DECISION_REQUIRED"
 DECISION_NOT_ALLOWED = "DECISION_NOT_ALLOWED"
+ITEM_UNSUPPORTED = "ITEM_UNSUPPORTED"
+
+#: Source kinds a client may declare for its own content. Every other kind
+#: (plugin, module, builtin, ...) is assigned by server-side import code.
+DECLARABLE_SOURCE_KINDS = frozenset({"device"})
+
+
+@dataclass(frozen=True, slots=True)
+class DeclaredSource:
+    """A client's declared identity for one pushed item."""
+
+    source_kind: str
+    source_id: str
+    external_id: str
+
+
+def declared_import_source(source: Any, external_id: Any) -> DeclaredSource | None:
+    """Validate the identity a client declares; ``None`` when it declares none.
+
+    Fails closed (``ValueError``) on anything but a canonical device identity:
+    a client may name its own install and its own content id, never another
+    source's.
+    """
+
+    from src.engine.world.contracts import canonical_id
+
+    if source is None and external_id is None:
+        return None
+    if not isinstance(source, dict):
+        raise ValueError("source must be an object with kind and id")
+    kind = source.get("kind")
+    if kind not in DECLARABLE_SOURCE_KINDS:
+        raise ValueError(f"source kind cannot be declared by a client: {kind!r}")
+    source_id = canonical_id(source.get("id"), field="source id")
+    external = canonical_id(external_id, field="external id")
+    return DeclaredSource(str(kind), source_id, external)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,12 +86,20 @@ class PlanItem:
     draft_digest: str
     action: PlanAction
     existing: ExistingMatch | None = None
+    #: Narrower answers for this match (e.g. no "update" of a plugin card).
+    restricted_to: tuple[Decision, ...] | None = None
+    #: Machine-readable reason for ``unsupported`` or a restriction.
+    reason: str = ""
 
     @property
     def allowed(self) -> tuple[Decision, ...]:
+        if self.action == "unsupported" or self.existing is None:
+            return ()
+        if self.restricted_to is not None:
+            return self.restricted_to
         # "update" on an unchanged item is accepted and writes nothing, so a
         # client can answer every match the same way.
-        return () if self.existing is None else DECISIONS
+        return DECISIONS
 
     def digest_basis(self) -> dict[str, str]:
         return {
@@ -64,6 +108,8 @@ class PlanItem:
             "draft_digest": self.draft_digest,
             "canonical_id": self.existing.canonical_id if self.existing else "",
             "state_token": self.existing.state_token if self.existing else "",
+            "action": self.action,
+            "allowed": ",".join(self.allowed),
         }
 
     def to_portable_dict(self) -> dict[str, Any]:
@@ -82,6 +128,7 @@ class PlanItem:
             "action": self.action,
             "existing": existing,
             "allowed": list(self.allowed),
+            "reason": self.reason,
         }
 
 
@@ -107,6 +154,9 @@ def resolve_decision(item: PlanItem, raw: Any) -> Decision | None:
     "overwrite my server copy" the default.
     """
 
+    if item.action == "unsupported":
+        # The item's own reason is the clearer code (e.g. RULESET_CARD_UNSUPPORTED).
+        raise PlanDecisionError(item.reason or ITEM_UNSUPPORTED, "this item cannot be imported")
     if item.existing is None:
         if raw not in (None, "", "create"):
             raise PlanDecisionError(DECISION_NOT_ALLOWED, "nothing to update, duplicate or skip")
@@ -127,7 +177,11 @@ def content_digest(value: Any) -> str:
 
 
 __all__ = [
+    "DECLARABLE_SOURCE_KINDS",
     "DECISIONS",
+    "DeclaredSource",
+    "ITEM_UNSUPPORTED",
+    "declared_import_source",
     "DECISION_NOT_ALLOWED",
     "DECISION_REQUIRED",
     "Decision",

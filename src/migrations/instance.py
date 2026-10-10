@@ -18,7 +18,7 @@ from src.compat.dnd2024_adventure_bindings import apply_unreleased_adventure_bin
 from src.content_modules.refs import ContentRefError, parse_content_ref
 from src.engine.currency.migration import scale_game_state_payload_for_base_unit_change
 from src.engine.module_state import ModuleStateError
-from src.engine.modules import room_access
+from src.engine.modules import room_access, seat_activity
 from src.engine.modules.lorebook_runtime import fresh as fresh_lorebook_runtime, normalize_timers
 from src.engine.player_control import CONTROL_KEY, normalize_control
 from src.engine.player_control import normalize_away_control_policy
@@ -28,7 +28,7 @@ from src.password_hashing import hash_password
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 40
+CURRENT_INSTANCE_SCHEMA_VERSION = 41
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -925,6 +925,57 @@ def _migrate_v39_to_v40(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _logged_action_actors(log: Any) -> set[str]:
+    actors: set[str] = set()
+    for entry in log if isinstance(log, list) else []:
+        actions = entry.get("actions") if isinstance(entry, dict) else None
+        for action in actions if isinstance(actions, list) else []:
+            uid = action.get("user_id") if isinstance(action, dict) else None
+            if isinstance(uid, str) and uid:
+                actors.add(uid)
+    return actors
+
+
+def _migrate_v40_to_v41(payload: dict[str, Any]) -> dict[str, Any]:
+    """Create the seat_activity slot, seeding it for runs already in play.
+
+    Without seeding, every seat of an ongoing campaign would read as "never
+    acted" right after the upgrade and could re-roll itself from a card.  A
+    run counts as in play when session_stats has ``started_at`` or the log is
+    non-empty; then every current seat played for its player
+    (``plays_for_its_player``) and every seat that appears as an action actor
+    in the persisted log is marked.  A fresh lobby stays empty.  An existing
+    slot (any schema) is left untouched.
+    """
+    modules = payload.get("modules")
+    if not isinstance(modules, dict):
+        modules = {}
+    if not isinstance(modules.get(seat_activity.MODULE_NAME), dict):
+        stats = modules.get("session_stats")
+        started_at = stats.get("started_at") if isinstance(stats, dict) else ""
+        log = payload.get("log")
+        acted: list[str] = []
+        if (isinstance(started_at, str) and started_at) or (isinstance(log, list) and log):
+            players = payload.get("players")
+            players = players if isinstance(players, dict) else {}
+            logged = _logged_action_actors(log)
+            for uid, player in players.items():
+                if not isinstance(uid, str) or not uid:
+                    continue
+                control = normalize_control(
+                    player.get(CONTROL_KEY) if isinstance(player, dict) else None
+                )
+                if seat_activity.plays_for_its_player(control) or uid in logged:
+                    acted.append(uid)
+        modules[seat_activity.MODULE_NAME] = {
+            "schema_version": seat_activity.SCHEMA_VERSION,
+            "acted_seats": acted,
+        }
+    payload["modules"] = modules
+    payload["instance_schema_version"] = 41
+    return payload
+
+
 def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     """Apply sequential, idempotent migrations to one persisted save payload."""
 
@@ -1049,6 +1100,9 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
     if version == 39:
         payload = _migrate_v39_to_v40(payload)
         version = 40
+    if version == 40:
+        payload = _migrate_v40_to_v41(payload)
+        version = 41
     payload["instance_schema_version"] = version
     return payload
 

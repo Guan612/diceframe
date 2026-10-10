@@ -12,7 +12,7 @@ from typing import Any
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
 from src.engine import progression
-from src.engine.modules import adventure_runtime_state, ruleset_runtime, session_stats
+from src.engine.modules import adventure_runtime_state, ruleset_runtime, seat_activity, session_stats
 from src.engine.action_gate import (
     GateRequest, ROUND_PROCESSING, SOURCE_INTENT, STRUCTURED_INTENT_POLICY,
     check_not_judging, check_seat_exists, evaluate,
@@ -503,6 +503,7 @@ async def submit_intent(
             return admission_error
         progression.require_writable(instance)
         session_stats.require_writable(instance)
+        seat_activity.require_writable(instance)
         binding_error = await _ensure_compatible_adventure_binding(
             dependencies, runtime, instance,
         )
@@ -520,6 +521,12 @@ async def submit_intent(
             "log": deepcopy(instance.log),
             "round_number": instance.round_number,
         }
+        # Only a first mark is undone if the transaction rolls back.
+        marks_seat = (
+            not requester_is_gm
+            and effective_requester in instance.players
+            and not seat_activity.has_acted(instance, effective_requester)
+        )
         try:
             rng = random.SystemRandom()
             resolved = runtime.resolve_intent(instance, intent, rng)
@@ -529,6 +536,10 @@ async def submit_intent(
             if not isinstance(batch, dict):
                 return _error("INVALID_EVENT_BATCH", "规则运行时没有返回有效事件批次")
             applied = runtime.apply_event_batch(instance, batch)
+            if marks_seat:
+                # A player-side intent applied for its own seat: the seat has
+                # acted, so card adoption / deletion become GM-only for it.
+                seat_activity.mark_acted(instance, effective_requester)
             _project_public_batch(runtime, instance, batch, applied)
             automatic_batches, automatic_results = _automatic_segment(
                 runtime, instance, rng,
@@ -537,9 +548,13 @@ async def submit_intent(
             await dependencies.save_instance(instance)
         except (ValueError, KeyError, TypeError) as exc:
             instance.restore_ruleset_transaction(before)
+            if marks_seat:
+                seat_activity.forget_seat(instance, effective_requester)
             return _error("INTENT_REJECTED", str(exc))
         except Exception:
             instance.restore_ruleset_transaction(before)
+            if marks_seat:
+                seat_activity.forget_seat(instance, effective_requester)
             raise
         await _project_batch_memory(
             dependencies, runtime, instance, [batch, *automatic_batches],
