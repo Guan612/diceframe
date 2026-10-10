@@ -12,7 +12,7 @@ from typing import Any
 from src.webui.ruleset_draft_validation import validate_draft_shape
 from src.adventures import binding_matches
 from src.engine import progression
-from src.engine.modules import session_stats
+from src.engine.modules import adventure_runtime_state, session_stats
 from src.engine.action_gate import (
     GateRequest, ROUND_PROCESSING, SOURCE_INTENT, STRUCTURED_INTENT_POLICY,
     check_not_judging, check_seat_exists, evaluate,
@@ -234,6 +234,17 @@ def _viewer_result(
     return result
 
 
+def _restore_adventure_node_before_image(instance: Any, before: dict[str, Any]) -> None:
+    """Put back world truth, Adventure progress and economy in capture order."""
+    for field, value in before.items():
+        if value is None:
+            continue
+        if field == "adventure_progress":
+            adventure_runtime_state.replace_progress(instance, value)
+        else:
+            setattr(instance, field, value)
+
+
 async def _ensure_compatible_adventure_binding(
     dependencies: RulesetGameplayDependencies,
     runtime: Any,
@@ -438,6 +449,9 @@ async def submit_intent(
             admission_error = _intent_write_error(instance, requester_id, requester_is_gm)
             if admission_error:
                 return admission_error
+            # Reject an unsupported progress slot before the binding check can
+            # migrate the binding or the node transaction can touch the world.
+            adventure_runtime_state.require_writable(instance)
             binding_error = await _ensure_compatible_adventure_binding(
                 dependencies, runtime, instance,
             )
@@ -454,14 +468,10 @@ async def submit_intent(
                 )
                 await dependencies.save_instance(instance)
             except (ValueError, KeyError, TypeError) as exc:
-                for field, value in before.items():
-                    if value is not None:
-                        setattr(instance, field, value)
+                _restore_adventure_node_before_image(instance, before)
                 return _error("ADVENTURE_NODE_REJECTED", str(exc))
             except Exception:
-                for field, value in before.items():
-                    if value is not None:
-                        setattr(instance, field, value)
+                _restore_adventure_node_before_image(instance, before)
                 logger.exception("Adventure node transaction failed and was restored")
                 return _error(
                     "ADVENTURE_NODE_FAILED",

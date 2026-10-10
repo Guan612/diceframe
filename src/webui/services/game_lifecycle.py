@@ -11,7 +11,7 @@ from typing import Any
 
 from src.commands.game_lifecycle import RunInitializationError
 from src.engine.game_instance import GameState
-from src.engine.modules import content_binding, room_access
+from src.engine.modules import adventure_runtime_state, content_binding, room_access
 from src.content_modules.refs import ContentRef, ContentRefError, parse_content_ref
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.narrative_perspective import validate_narrative_perspective
@@ -319,7 +319,7 @@ async def create_game(
     )
     if content_error is not None:
         return content_error
-    instance.play_mode = normalized_play_mode
+    adventure_runtime_state.replace_play_mode(instance, normalized_play_mode)
     # FIX-04 §6.5/§6.6：v2 冒险在同一创建事务里初始化进度并原子物化世界种子；
     # 失败即整体回滚（不留下 partial save / partial world）。
     if callable(getattr(dependencies, "initialize_adventure_run", None)):

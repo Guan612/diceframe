@@ -37,6 +37,7 @@ from src.engine.game_state_contracts import (
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.module_state import ensure_module_states
 from src.engine.modules import (
+    adventure_runtime_state,
     checks,
     combat_extension_state,
     economy_state,
@@ -147,14 +148,6 @@ class GameInstance:
     world_id: str | None = None
     rule_id: str = "freeform_fantasy"
     adventure_binding: dict[str, Any] = field(default_factory=dict)
-    # FIX-04 §6.2：Adventure v2 进度（active/completed nodes/objectives/milestones +
-    # history）的权威持久化位置。v1 的 campaign 进度仍在 ruleset_state，两者并存
-    # 互不迁移（母方案 §71/§122）。
-    adventure_progress: dict[str, Any] = field(default_factory=dict)
-    # Explicitly separates standard free play from an adventure story flow.
-    # Empty means legacy/in-memory construction; runtime derives from the
-    # bound adventure until creation/migration writes an explicit mode.
-    play_mode: str = ""
     world_name: str = ""
     group_name: str = ""
     state: GameState = GameState.CREATED
@@ -220,6 +213,24 @@ class GameInstance:
     # 恢复后是否仍有待幸运决定的检定（recover_all 设置，供前端提示；定时器不跨重启）
     pending_luck_after_recovery: bool = False
     _tag_fail_streak: int = field(default=0, repr=False)
+
+    @property
+    def adventure_progress(self) -> dict[str, Any]:
+        """Adventure v2 progress (FIX-04 §6.2); v1 campaign progress stays in ruleset_state."""
+        return adventure_runtime_state.progress(self)
+
+    @adventure_progress.setter
+    def adventure_progress(self, value: Any) -> None:
+        adventure_runtime_state.replace_progress(self, value)
+
+    @property
+    def play_mode(self) -> str:
+        """``free`` or ``adventure``; empty only for in-memory construction."""
+        return adventure_runtime_state.play_mode(self)
+
+    @play_mode.setter
+    def play_mode(self, value: Any) -> None:
+        adventure_runtime_state.replace_play_mode(self, value)
 
     @property
     def ruleset_runtime(self) -> dict[str, Any]:
@@ -1219,6 +1230,7 @@ class GameInstance:
                 session_stats.require_writable(self)
                 checks.require_writable(self)
                 round_safety.require_writable(self)
+                adventure_runtime_state.require_writable(self)
                 economy_state.state(self)
                 combat_extension_state.current(self)
             return round_recovery.rollback_last_round_locked(self)
@@ -1244,6 +1256,7 @@ class GameInstance:
                 session_stats.require_writable(self)
                 checks.require_writable(self)
                 round_safety.require_writable(self)
+                adventure_runtime_state.require_writable(self)
                 legacy_combat.require_writable(self)
                 ruleset_runtime.require_writable(self)
                 economy_state.state(self)
@@ -1693,6 +1706,7 @@ class GameInstance:
             progression.require_writable(self)
             checks.require_writable(self)
             round_safety.require_writable(self)
+            adventure_runtime_state.require_writable(self)
             legacy_combat.require_writable(self)
             ruleset_runtime.require_writable(self)
             if has_blocking_economy_decision(self):
@@ -1707,6 +1721,7 @@ class GameInstance:
             progression.require_writable(self)
             checks.require_writable(self)
             round_safety.require_writable(self)
+            adventure_runtime_state.require_writable(self)
             legacy_combat.require_writable(self)
             ruleset_runtime.require_writable(self)
             if has_blocking_economy_decision(self):
@@ -1722,6 +1737,7 @@ class GameInstance:
         progression.require_writable(self)
         checks.require_writable(self)
         round_safety.require_writable(self)
+        adventure_runtime_state.require_writable(self)
         legacy_combat.require_writable(self)
         ruleset_runtime.require_writable(self)
         return turn_state.do_advance_locked(self)
@@ -1753,6 +1769,7 @@ class GameInstance:
             session_stats.require_writable(self)
             checks.require_writable(self)
             round_safety.require_writable(self)
+            adventure_runtime_state.require_writable(self)
             economy_state.state(self)
             round_recovery.finish_judgment_locked(
                 self,
@@ -1821,6 +1838,7 @@ class GameInstance:
             round_safety.require_writable(self)
             legacy_combat.require_writable(self)
             ruleset_runtime.require_writable(self)
+            adventure_runtime_state.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             from src.engine.modules import room_access

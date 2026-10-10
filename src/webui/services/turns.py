@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from src.commands.round_processor import RoundNotProcessed, RoundProcessingFailure
 from src.engine import progression
-from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats
+from src.engine.modules import adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats
 from src.engine.action_gate import (
     ACTOR_DECEASED,
     ECONOMY_DECISION_PENDING,
@@ -584,6 +584,7 @@ async def _advance_progression(
     session_stats.require_writable(instance)
     checks.require_writable(instance)
     round_safety.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
     wrote_ai_actions = await _fill_ai_player_actions(
@@ -764,6 +765,7 @@ async def submit_action(
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
+        adventure_runtime_state.require_writable(instance)
         legacy_combat.require_writable(instance)
         ruleset_runtime.require_writable(instance)
         # Retry stays after the pre-retry guards, outside the pure gate.
@@ -957,6 +959,7 @@ async def advance_round(
     session_stats.require_writable(instance)
     checks.require_writable(instance)
     round_safety.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
     if force and _allow_preempt and instance.round_processing_in_flight():

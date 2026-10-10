@@ -39,6 +39,7 @@ from src.adventures.progress import (
     complete_objective,
     new_progress,
 )
+from src.engine.modules import adventure_runtime_state
 
 logger = logging.getLogger("trpg")
 
@@ -105,9 +106,10 @@ def initialize_adventure_run(
     if graph is None:
         # v1：走既有 campaign/ruleset 路径，行为不变。
         return {"ok": True, "initialized": False, "reason": "v1"}
+    adventure_runtime_state.require_writable(instance)
     progress = new_progress(graph)
     receipt = dependencies.materialize_world_seed(instance, resolution.bundle)
-    instance.adventure_progress = progress
+    adventure_runtime_state.replace_progress(instance, progress)
     return {
         "ok": True,
         "initialized": True,
@@ -181,6 +183,7 @@ def complete_adventure_node(
     if node is None:
         raise AdventureRuntimeError(f"node does not exist: {wanted!r}")
 
+    adventure_runtime_state.require_writable(instance)
     progress = getattr(instance, "adventure_progress", None)
     if not isinstance(progress, dict) or not progress.get("active_nodes"):
         if not isinstance(progress, dict) or not progress:
@@ -248,16 +251,16 @@ def complete_adventure_node(
             if intents["reward_intents"] and dependencies.queue_reward_intents
             else []
         )
-        instance.adventure_progress = progress
+        adventure_runtime_state.replace_progress(instance, progress)
     except (ProgressError, OutcomeError, AdventureRuntimeError):
-        instance.adventure_progress = before_progress
+        adventure_runtime_state.replace_progress(instance, before_progress)
         if before_world is not None:
             instance.world_state = before_world
         if before_economy is not None:
             instance.economy = before_economy
         raise
     except Exception:
-        instance.adventure_progress = before_progress
+        adventure_runtime_state.replace_progress(instance, before_progress)
         if before_world is not None:
             instance.world_state = before_world
         if before_economy is not None:
@@ -296,6 +299,7 @@ def advance_adventure_world(
     graph = adventure_graph(resolution)
     if graph is None:
         return {"ok": True, "advanced": False, "reason": "v1"}
+    adventure_runtime_state.require_writable(instance)
     progress = getattr(instance, "adventure_progress", None)
     if not isinstance(progress, dict) or not progress:
         raise AdventureRuntimeError("adventure progress is not initialized")

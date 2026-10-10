@@ -121,10 +121,13 @@ class GameLifecycle:
         *,
         preserve_players: bool,
     ) -> GameInstance:
-        from src.engine.modules import content_binding, ruleset_runtime
+        from src.engine.modules import adventure_runtime_state, content_binding, ruleset_runtime
 
         ruleset_runtime.require_writable(source)
+        adventure_runtime_state.require_writable(source)
         content_binding.require_writable(source)
+        # Read only after the slot preflight above.
+        source_play_mode = adventure_runtime_state.play_mode(source)
         # Read the source run's content identity before creating anything, so
         # an unreadable slot cannot leave a half-built candidate.
         source_world_ref = content_binding.world_ref(source)
@@ -141,6 +144,7 @@ class GameLifecycle:
             fresh_instance=True,
         )
         ruleset_runtime.require_writable(candidate)
+        adventure_runtime_state.require_writable(candidate)
         candidate.configure_session(
             solo_mode=source.solo_mode,
             entry_point=source.entry_point,
@@ -161,7 +165,7 @@ class GameLifecycle:
         # A new run of the same game keeps its identity: play mode and the
         # source-aware World/Book refs selected at creation.  Lorebook binding
         # rows are game-scoped (same game_key), so the refs stay valid.
-        candidate.play_mode = source.play_mode
+        adventure_runtime_state.replace_play_mode(candidate, source_play_mode)
         content_binding.require_writable(candidate)
         if source_world_ref:
             content_binding.set_world_ref(candidate, source_world_ref)

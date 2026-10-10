@@ -1,6 +1,7 @@
 """Built-in module state slots. Importing this package registers them."""
 
 from src.engine.modules import (  # noqa: F401
+    adventure_runtime_state,
     check_reveals,
     checks,
     content_binding,

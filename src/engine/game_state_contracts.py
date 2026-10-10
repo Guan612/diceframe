@@ -110,8 +110,6 @@ class GamePersistedState(TypedDict, total=False):
     world_id: str | None
     rule_id: str
     adventure_binding: OpaqueState
-    adventure_progress: dict[str, Any]
-    play_mode: str
     world_name: str
     group_name: str
     state: str

@@ -66,8 +66,10 @@ async def test_new_run_keeps_identity_and_reinitializes_v2_progress(golden, tran
     assert world_facts(after.world_state)["location:cellar.door"]["value"] == "locked"
     # Survives a save/load round trip.
     payload = after.to_dict()
-    assert payload["play_mode"] == "adventure"
-    assert payload["adventure_progress"]["active_nodes"] == ["gate"]
+    # Shape-aware: both values live in modules["adventure_runtime"] since R9-a.
+    runtime = (payload.get("modules") or {}).get("adventure_runtime") or {}
+    assert runtime.get("play_mode", payload.get("play_mode")) == "adventure"
+    assert runtime.get("progress", payload.get("adventure_progress"))["active_nodes"] == ["gate"]
 
 
 @pytest.mark.asyncio
