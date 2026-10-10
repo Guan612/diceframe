@@ -181,14 +181,6 @@ class DummyInstance:
     def __init__(self):
         self.modules = {}
 
-    @property
-    def economy(self):
-        return economy_state.state(self)
-
-    @economy.setter
-    def economy(self, value):
-        economy_state.replace_state(self, value)
-
     def to_llm_view(self):
         return {
             "world_name": "测试世界",
@@ -411,7 +403,7 @@ async def test_build_context_includes_authoritative_combat_events_after_player_b
 async def test_build_context_exposes_authoritative_economy_decisions():
     instance = DummyInstance()
     instance.language = "zh-CN"
-    instance.economy = {
+    economy_state.replace_state(instance, {
         "outcomes": [{
             "proposal_id": "pay_declined",
             "kind": "payment",
@@ -445,7 +437,7 @@ async def test_build_context_exposes_authoritative_economy_decisions():
             "visibility": "private",
             "round": 4,
         }],
-    }
+    })
 
     context = await build_context(
         instance,

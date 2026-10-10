@@ -24,6 +24,7 @@ from src.engine.economy import (
     resolve_proposal,
     set_proposal_status,
 )
+from src.engine.modules import economy_state
 from src.commands.economy_effects import (
     guard_unbacked_payment_narration,
     defer_narrative_effects,
@@ -173,7 +174,7 @@ def test_unconfirmed_purchase_grants_are_stripped() -> None:
     assert filter_unconfirmed_purchase_grants(instance, {"state_update": {
         "loot": [{"player": "gm", "item": "另一把长剑"}],
     }}) == 1
-    instance.economy["proposals"][0]["status"] = "committed"
+    economy_state.state(instance)["proposals"][0]["status"] = "committed"
     assert filter_unconfirmed_purchase_grants(instance, {"state_update": {
         "loot": [{"player": "gm", "item": "长剑"}],
     }}) == 0
@@ -316,7 +317,7 @@ def test_narrative_reward_requires_gm_and_commits_once() -> None:
     assert forbidden["code"] == "FORBIDDEN"
     assert accepted["ok"] is True
     assert instance.get_character_sheet("p2")["currency"]["amount"] == 25
-    assert len(instance.economy["transactions"]) == 1
+    assert len(economy_state.state(instance)["transactions"]) == 1
     assert sum(
         entry["delta"] for entry in accepted["transaction"]["entries"]
     ) == 0
@@ -464,11 +465,11 @@ def test_late_personal_purchase_reopens_when_settlement_round_is_rolled_back() -
     assert purchase["status"] == "pending"
     assert purchase in pending_proposals(instance)
     assert not has_blocking_economy_decision(instance)
-    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert all(tx["status"] == "reversed" for tx in economy_state.state(instance)["transactions"])
     assert not any(
         outcome.get("status") == "committed"
         and outcome.get("proposal_id") == purchase["id"]
-        for outcome in instance.economy["outcomes"]
+        for outcome in economy_state.state(instance)["outcomes"]
     )
 
     # Reconcile the post-settlement snapshot before restoring it, as the real
@@ -487,8 +488,8 @@ def test_late_personal_purchase_reopens_when_settlement_round_is_rolled_back() -
     )
     assert retry["ok"] is True
     assert instance.get_character_sheet("gm")["currency"]["amount"] == 25
-    assert len(instance.economy["transactions"]) == 2
-    assert sum(tx["status"] == "committed" for tx in instance.economy["transactions"]) == 1
+    assert len(economy_state.state(instance)["transactions"]) == 2
+    assert sum(tx["status"] == "committed" for tx in economy_state.state(instance)["transactions"]) == 1
 
 
 def test_whole_round_rollback_withdraws_later_round_settlements() -> None:
@@ -528,7 +529,7 @@ def test_whole_round_rollback_withdraws_later_round_settlements() -> None:
     restore_players(instance, era_snapshot)
 
     transactions = {
-        item["id"]: item for item in instance.economy["transactions"]
+        item["id"]: item for item in economy_state.state(instance)["transactions"]
     }
     assert all(item["status"] == "reversed" for item in transactions.values())
     # 早于回滚点创建的报价：结算被撤、提案重新待付款人决定。
@@ -562,12 +563,12 @@ def test_origin_round_rollback_invalidates_purchase_paid_in_later_round() -> Non
 
     reverse_round_economy(instance, 5)
     assert purchase["status"] == "reversed"
-    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert all(tx["status"] == "reversed" for tx in economy_state.state(instance)["transactions"])
     assert purchase not in pending_proposals(instance)
     assert not any(
         outcome.get("proposal_id") == purchase["id"]
         and outcome.get("status") == "committed"
-        for outcome in instance.economy["outcomes"]
+        for outcome in economy_state.state(instance)["outcomes"]
     )
 
 
@@ -610,7 +611,7 @@ async def test_gm_rollback_restores_late_purchase_character_and_ledger_consisten
     assert purchase["status"] == "pending"
     assert instance.get_character_sheet("gm")["currency"]["amount"] == pre_payment["currency"]["amount"]
     assert instance.get_character_sheet("gm")["inventory"] == pre_payment.get("inventory", [])
-    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert all(tx["status"] == "reversed" for tx in economy_state.state(instance)["transactions"])
     assert purchase in pending_proposals(instance)
 
     registry = GameRegistry(tmp_path / "saves")
@@ -699,7 +700,7 @@ async def test_real_swipe_reconciles_purchase_settled_after_target_round(
     assert instance.get_character_sheet(uid)["currency"]["amount"] == before[uid]["currency"]["amount"]
     assert instance.get_character_sheet(uid)["key_items"] == before[uid]["key_items"]
     assert proposal["status"] == "pending"
-    assert any(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert any(tx["status"] == "reversed" for tx in economy_state.state(instance)["transactions"])
     assert instance.log[-1]["current_swipe"] == 1
 
     registry._instances.clear()
@@ -777,11 +778,11 @@ async def test_swipe_branch_cuts_later_rounds_and_withdraws_their_economy(
     # 分支截断：round 2 的日志与其经济一起被撤，早于目标轮的条目保留，游戏从第 1 轮重放。
     assert [entry.get("round") for entry in instance.log] == [0, 1]
     assert instance.round_number == 1
-    assert instance.economy["transactions"]
-    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert economy_state.state(instance)["transactions"]
+    assert all(tx["status"] == "reversed" for tx in economy_state.state(instance)["transactions"])
     # 该购买提案创建于回滚目标轮之前：结算被撤后恢复为待付款人决定。
     live_offer = next(
-        item for item in instance.economy["proposals"]
+        item for item in economy_state.state(instance)["proposals"]
         if item["id"] == offer_round2["id"]
     )
     assert live_offer["status"] == "pending"
@@ -933,15 +934,15 @@ async def test_origin_round_swipe_does_not_project_later_settlement_before_state
     assert instance.get_character_sheet(uid)["gold"] == 30
     assert instance.get_character_sheet(uid)["key_items"] == []
     current_proposal = next(
-        item for item in instance.economy["proposals"] if item["id"] == proposal["id"]
+        item for item in economy_state.state(instance)["proposals"] if item["id"] == proposal["id"]
     )
     assert current_proposal["status"] == "reversed"
     assert all(item["id"] != proposal["id"] for item in pending_proposals(instance))
-    assert instance.economy["transactions"][0]["status"] == "reversed"
+    assert economy_state.state(instance)["transactions"][0]["status"] == "reversed"
     assert not any(
         outcome.get("proposal_id") == proposal["id"]
         and outcome.get("status") == "committed"
-        for outcome in instance.economy["outcomes"]
+        for outcome in economy_state.state(instance)["outcomes"]
     )
 
 
@@ -974,7 +975,7 @@ def test_retired_economy_kinds_and_policies_are_rejected() -> None:
             amount=7,
             approval_policy="all_contributors",
         )
-    assert instance.economy["proposals"] == []
+    assert economy_state.state(instance)["proposals"] == []
 
 
 def test_migrate_v7_to_v8_supersedes_retired_proposals() -> None:
@@ -1070,7 +1071,7 @@ async def test_rollback_reconciles_multiple_late_settlements_in_reverse_commit_o
     assert instance.get_character_sheet(uid)["inventory"] == []
     assert first["status"] == second["status"] == "pending"
     assert {item["id"] for item in pending_proposals(instance)} == {first["id"], second["id"]}
-    assert all(tx["status"] == "reversed" for tx in instance.economy["transactions"])
+    assert all(tx["status"] == "reversed" for tx in economy_state.state(instance)["transactions"])
 
     registry = GameRegistry(tmp_path / "saves")
     registry.register(instance)
@@ -1087,7 +1088,7 @@ async def test_rollback_reconciles_multiple_late_settlements_in_reverse_commit_o
     resolve_proposal(recovered, second["id"], actor_uid=uid, accepted=True, grant_reward=_grant_inventory_reward)
     assert recovered.get_character_sheet(uid)["currency"]["amount"] == 20
     assert [item["name"] for item in recovered.get_character_sheet(uid)["inventory"]] == ["药水", "绳索"]
-    assert sum(tx["status"] == "committed" for tx in recovered.economy["transactions"]) == 2
+    assert sum(tx["status"] == "committed" for tx in economy_state.state(recovered)["transactions"]) == 2
 
 
 def test_removing_party_member_cancels_their_unresolved_proposal() -> None:
@@ -1114,7 +1115,7 @@ def test_removing_party_member_cancels_their_unresolved_proposal() -> None:
     assert effect_group is not None
     assert effect_group["status"] == "discarded"
     assert "effects" not in effect_group
-    assert instance.economy["outcomes"][-1]["status"] == "cancelled"
+    assert economy_state.state(instance)["outcomes"][-1]["status"] == "cancelled"
 
 
 def test_declining_payment_discards_deferred_narrative_effects() -> None:
@@ -1334,7 +1335,7 @@ async def test_payment_decision_commits_or_discards_linked_effects(web_api) -> N
     assert instance.get_character_sheet(uid)["xp"] == 7
     assert accepted_group is not None
     assert next(
-        item for item in instance.economy["effect_groups"]
+        item for item in economy_state.state(instance)["effect_groups"]
         if item["id"] == accepted_group["id"]
     )["status"] == "committed"
     assert instance.log[-1]["economy_resolutions"][-1]["status"] == "committed"
@@ -1364,7 +1365,7 @@ async def test_payment_decision_commits_or_discards_linked_effects(web_api) -> N
     assert instance.scene == "城门内"
     assert declined_group is not None
     discarded_group = next(
-        item for item in instance.economy["effect_groups"]
+        item for item in economy_state.state(instance)["effect_groups"]
         if item["id"] == declined_group["id"]
     )
     assert discarded_group["status"] == "discarded"
@@ -1420,8 +1421,8 @@ async def test_effect_failure_rolls_back_the_whole_economy_decision(
     assert instance.get_character_sheet(uid)["currency"]["amount"] == 20
     assert instance.scene != "不应提交的半成品场景"
     assert proposal["status"] == "pending"
-    assert instance.economy["transactions"] == []
-    assert instance.economy["outcomes"] == []
+    assert economy_state.state(instance)["transactions"] == []
+    assert economy_state.state(instance)["outcomes"] == []
     assert group is not None and group["status"] == "pending"
 
     api._character_dependencies = replace(
@@ -1435,9 +1436,9 @@ async def test_effect_failure_rolls_back_the_whole_economy_decision(
     assert retried["ok"] is True
     assert instance.get_character_sheet(uid)["currency"]["amount"] == 15
     assert instance.scene == "收费区内"
-    assert len(instance.economy["transactions"]) == 1
+    assert len(economy_state.state(instance)["transactions"]) == 1
     assert next(
-        item for item in instance.economy["effect_groups"]
+        item for item in economy_state.state(instance)["effect_groups"]
         if item["id"] == group["id"]
     )["status"] == "committed"
 
@@ -1584,7 +1585,7 @@ async def test_economy_memory_outbox_closes_save_crash_window(
             )
 
         live_proposal = next(
-            item for item in instance.economy["proposals"]
+            item for item in economy_state.state(instance)["proposals"]
             if item["id"] == proposal["id"]
         )
         assert live_proposal["status"] == "pending"
@@ -1731,7 +1732,7 @@ async def test_delivered_economy_memory_is_reversed_with_round(
 
         assert committed["external_effects_committed"] is True
         assert memory.list_entries(instance.memory_namespace, viewer_is_gm=True)[0]["value"] == "已经取得"
-        delivery = instance.economy["external_effects_outbox"][0]
+        delivery = economy_state.state(instance)["external_effects_outbox"][0]
         assert delivery["status"] == "delivered"
 
         async def fail_reversal_receipt_save(_instance):
@@ -1768,7 +1769,7 @@ async def test_delivered_economy_memory_is_reversed_with_round(
         assert await characters.drain_economy_outbox(
             recovery_dependencies, recovered,
         ) is True
-        recovered_delivery = recovered.economy["external_effects_outbox"][0]
+        recovered_delivery = economy_state.state(recovered)["external_effects_outbox"][0]
         assert recovered_delivery["status"] == "reversed"
         assert pending_memory_deliveries(recovered) == []
         assert pending_memory_reversals(recovered) == []
@@ -2195,9 +2196,9 @@ async def test_restart_rotates_run_and_memory_but_preserves_character_assets(web
     assert restarted.get_character_sheet(uid).get("deceased") is False
     assert "death_saves" not in restarted.get_character_sheet(uid)
     assert pending_proposals(restarted) == []
-    assert restarted.economy["transactions"] == []
-    assert restarted.economy["effect_groups"] == []
-    assert restarted.economy["outcomes"] == []
+    assert economy_state.state(restarted)["transactions"] == []
+    assert economy_state.state(restarted)["effect_groups"] == []
+    assert economy_state.state(restarted)["outcomes"] == []
     recovered = await GameRegistry(registry.save_dir).load(restarted.game_key)
     assert recovered is not None
     assert recovered.run_id == restarted.run_id
@@ -2227,10 +2228,10 @@ async def test_restart_rotates_run_and_memory_but_preserves_character_assets(web
     assert reset_instance.run_id != reset_run
     assert reset_instance.players == {}
     assert pending_proposals(reset_instance) == []
-    assert reset_instance.economy["proposals"] == []
-    assert reset_instance.economy["transactions"] == []
-    assert reset_instance.economy["effect_groups"] == []
-    assert reset_instance.economy["outcomes"] == []
+    assert economy_state.state(reset_instance)["proposals"] == []
+    assert economy_state.state(reset_instance)["transactions"] == []
+    assert economy_state.state(reset_instance)["effect_groups"] == []
+    assert economy_state.state(reset_instance)["outcomes"] == []
 
 
 async def _hold_historical_rewrite(instance, entered, release) -> None:
@@ -2257,13 +2258,13 @@ async def _gated_game(web_api, name: str, *, gold: int = 20):
 async def test_payment_cannot_interleave_with_swipe_rewrite(web_api) -> None:
     api, _registry, created, instance, uid = await _gated_game(web_api, "Payment Gate")
     proposal = queue_proposal(instance, source="gm_manual", kind="payment", payer_uid=uid, recipient_uid=uid, amount=5)
-    before = deepcopy(instance.economy)
+    before = deepcopy(economy_state.state(instance))
     entered, release = asyncio.Event(), asyncio.Event()
     rewrite = asyncio.create_task(_hold_historical_rewrite(instance, entered, release))
     await entered.wait()
     result = await asyncio.wait_for(api.resolve_payment(created["game_key"], proposal["id"], True, uid), 1)
     assert result["code"] == "REWRITE_IN_PROGRESS"
-    assert instance.economy == before
+    assert economy_state.state(instance) == before
     assert instance.get_character_sheet(uid)["currency"]["amount"] == 20
     release.set()
     await asyncio.wait_for(rewrite, 1)

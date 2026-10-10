@@ -25,6 +25,7 @@ from src.engine.memory_outbox import (
     pending_memory_deliveries,
     pending_memory_reversals,
 )
+from src.engine.modules import economy_state
 from src.engine.world.memory_projection import queue_world_memory
 from src.engine.world_state import apply_world_ops, fact_value
 from src.memory.delta import MemoryStore
@@ -161,7 +162,7 @@ def test_requeued_superseded_delivery_is_resurrected_after_replay() -> None:
     queue_world_memory(instance, receipts, round_number=2)
     # abort+重放前世界被回滚：rollback era 将 pending 投递 superseded。
     reverse_round_economy(instance, 2)
-    deliveries = instance.economy["external_effects_outbox"]
+    deliveries = economy_state.state(instance)["external_effects_outbox"]
     assert deliveries[0]["status"] == "superseded"
     assert "payload" not in deliveries[0]
 

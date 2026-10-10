@@ -18,9 +18,10 @@ from __future__ import annotations
 import pytest
 
 from src.engine.game_instance import GameInstance, GameState
+from src.engine.modules import economy_state
 from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
-from src.engine.modules import checks
+from src.engine.modules import checks, combat_extension_state
 
 
 def _make_populated_instance() -> GameInstance:
@@ -28,7 +29,7 @@ def _make_populated_instance() -> GameInstance:
     instance = GameInstance(game_key=("web", "reset-characterization", "bot"))
     instance.run_id = "run_before"
     instance.memory_namespace = "('web', 'reset-characterization', 'bot')::run:run_before"
-    instance.economy = {
+    economy_state.replace_state(instance, {
         "schema_version": 2,
         "run_id": "run_before",
         "next_sequence": 7,
@@ -38,7 +39,7 @@ def _make_populated_instance() -> GameInstance:
         "effect_groups": [{"id": "g1"}],
         "external_effects_outbox": [{"id": "o1"}],
         "outcomes": [{"id": "x1"}],
-    }
+    })
     instance.world_id = "world-1"
     instance.world_name = "Test World"
     instance.rule_id = "coc7"
@@ -137,8 +138,8 @@ def _make_populated_instance() -> GameInstance:
     instance.health_status = {"degraded": True}
     instance.luck_timeout_seconds = 90
     instance.economy_reward_policy = {"mode": "auto_small_cash", "auto_reward_cap": 10}
-    instance.combat_extension = {"schema_version": 1, "pools": {"p1": {}}}
-    instance.combat_extension_round_snapshots = {"4": {"schema_version": 1}}
+    combat_extension_state.replace_current(instance, {"schema_version": 1, "pools": {"p1": {}}})
+    combat_extension_state.replace_round_snapshots(instance, {"4": {"schema_version": 1}})
     instance.pending_luck_after_recovery = True
     instance.confirmed_items = ["sword"]
     return instance
@@ -174,7 +175,6 @@ EXPECTED_CLEARED = {
     "summary": {},
     "key_facts": [],
     "pending_combat_results": [],
-    "combat_extension_round_snapshots": {},
     "lorebook_timed_state": {},
     "health_events": [],
     "health_status": {},
@@ -260,7 +260,8 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.last_activity == ""
     assert instance.puzzle_manager is None
     assert instance.plot_tracker is None
-    assert instance.combat_extension == {}
+    assert combat_extension_state.current(instance) == {}
+    assert combat_extension_state.round_snapshots(instance) == {}
     assert checks.last_check(instance) is None
     assert checks.last_checks(instance) == []
     assert checks.round_checks_prepared(instance) is False
@@ -285,12 +286,12 @@ async def test_reset_rotates_run_identity_and_economy() -> None:
     assert instance.memory_namespace.endswith(f"::run:{instance.run_id}")
     assert instance.memory_namespace.startswith(str(instance.game_key))
     # economy 整体重建为全新 run 的初始形态，不残留旧 proposals/transactions。
-    assert instance.economy["schema_version"] == 2
-    assert instance.economy["run_id"] == instance.run_id
-    assert instance.economy["next_sequence"] == 1
-    assert instance.economy["proposals"] == []
-    assert instance.economy["transactions"] == []
-    assert instance.economy["external_effects_outbox"] == []
+    assert economy_state.state(instance)["schema_version"] == 2
+    assert economy_state.state(instance)["run_id"] == instance.run_id
+    assert economy_state.state(instance)["next_sequence"] == 1
+    assert economy_state.state(instance)["proposals"] == []
+    assert economy_state.state(instance)["transactions"] == []
+    assert economy_state.state(instance)["external_effects_outbox"] == []
 
 
 @pytest.mark.asyncio

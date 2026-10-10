@@ -7,6 +7,7 @@ import json
 import pytest
 
 from src.engine.game_instance import GameInstance, GameState
+from src.engine.modules import economy_state
 from src.engine.player_control import set_away_control_policy
 from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
 from src.llm.context_builder import _manual_roll_visible_to_viewer
@@ -71,7 +72,7 @@ def _turns(inst: GameInstance) -> TurnDependencies:
 async def test_l8_away_takeover_resume_hides_other_seat_private_proposal() -> None:
     inst = _instance()
     set_away_control_policy(inst, "ai_takeover")
-    inst.economy["proposals"].append(_proposal(
+    economy_state.state(inst)["proposals"].append(_proposal(
         inst, "b-only", kind="purchase", approval_policy="payer", recipient_uid="b",
         rewards=[{"kind": "item", "item_id": "test-item"}],
     ))
@@ -127,14 +128,14 @@ def test_manual_roll_visibility_truth_table(viewer, gm, overrides, expected) -> 
 @pytest.mark.parametrize("viewer", ["gm", "a", "b", "legacy", "contributor", "outsider", ""])
 def test_e1_e2_e3_e4_proposal_ids_agree(viewer: str) -> None:
     inst = _instance()
-    inst.economy["proposals"] = [
+    economy_state.state(inst)["proposals"] = [
         _proposal(inst, "payer"),
         _proposal(inst, "recipient", recipient_uid="a"),
         _proposal(inst, "legacy", uid="legacy"),
         _proposal(inst, "contributor", contributors=[{"uid": "contributor"}]),
         _proposal(inst, "party", visibility="party"),
     ]
-    expected = {p["id"] for p in inst.economy["proposals"] if proposal_visible_to(
+    expected = {p["id"] for p in economy_state.state(inst)["proposals"] if proposal_visible_to(
         p, viewer_uid=viewer, viewer_is_gm=viewer == "gm",
     )}
     ids = lambda proposals: {p["id"] for p in proposals}
@@ -174,7 +175,7 @@ def test_m1_m2_m3_manual_roll_ids_agree(viewer: str) -> None:
 def test_empty_viewer_does_not_match_unset_gm_uid() -> None:
     inst = _instance()
     inst.gm_uid = ""
-    inst.economy["proposals"] = [_proposal(inst, "private"), _proposal(inst, "party", visibility="party")]
+    economy_state.state(inst)["proposals"] = [_proposal(inst, "private"), _proposal(inst, "party", visibility="party")]
     assert {p["id"] for p in _detail(inst, "")["economy_proposals"]} == {"party"}
     assert {p["id"] for p in _round_payload(inst, "")["economy_proposals"]} == {"party"}
     assert {p["id"] for p in economy_decision_pending_payload(inst)["economy_proposals"]} == {"party"}
@@ -192,6 +193,6 @@ def test_empty_viewer_does_not_match_unset_gm_uid() -> None:
 
 def test_recipient_sees_private_payment_in_round_and_barrier() -> None:
     inst = _instance()
-    inst.economy["proposals"].append(_proposal(inst, "to-a", recipient_uid="a"))
+    economy_state.state(inst)["proposals"].append(_proposal(inst, "to-a", recipient_uid="a"))
     assert [p["id"] for p in _round_payload(inst, "", viewer_uid="a")["economy_proposals"]] == ["to-a"]
     assert [p["id"] for p in economy_decision_pending_payload(inst, "a")["economy_proposals"]] == ["to-a"]

@@ -14,6 +14,7 @@ from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.module_state import ModuleStateError
 from src.engine.modules import session_stats
 from src.webui.services.manual_rolls import ManualRollDependencies, ManualRollService
+from src.engine.modules import combat_extension_state
 from tests.test_game_instance_reset_characterization import _make_populated_instance
 from src.engine.modules import checks as checks_module
 
@@ -83,7 +84,7 @@ async def test_transaction_rejection_preserves_all_live_state(operation, direct)
         instance.state = GameState.ACTIVE_ACTION
     instance.away_players.add("u1")
     instance.action_queue[0]["dice_pending"] = True
-    instance.combat_extension["pending_summaries"] = ["must remain pending"]
+    combat_extension_state.current(instance)["pending_summaries"] = ["must remain pending"]
     args = {
         "activate": (), "reset": (), "add_action": ("u1", "replacement"),
         "start_round": (), "apply_action_roll": ("u1", "d20", 12),

@@ -639,32 +639,6 @@ class GameInstance:
     def round_number(self, value: int) -> None:
         progression_state.set_round_value(self, value)
 
-    @property
-    def economy(self) -> dict[str, Any]:
-        return economy_state.state(self)
-
-    @economy.setter
-    def economy(self, value: Any) -> None:
-        economy_state.replace_state(self, value)
-
-    @property
-    def combat_extension(self) -> dict[str, Any]:
-        """Live opaque combat state; an empty dict means disabled."""
-        return combat_extension_state.current(self)
-
-    @combat_extension.setter
-    def combat_extension(self, value: Any) -> None:
-        combat_extension_state.replace_current(self, value)
-
-    @property
-    def combat_extension_round_snapshots(self) -> dict[str, Any]:
-        """Live snapshots captured before each round's first combat write."""
-        return combat_extension_state.round_snapshots(self)
-
-    @combat_extension_round_snapshots.setter
-    def combat_extension_round_snapshots(self, value: Any) -> None:
-        combat_extension_state.replace_round_snapshots(self, value)
-
     @asynccontextmanager
     async def authoritative_write(self) -> AsyncIterator[bool]:
         """Enter the atomic live-aggregate writer gate.
@@ -724,7 +698,7 @@ class GameInstance:
         old = self.run_id
         self.run_id = f"run_{uuid4().hex}"
         self.memory_namespace = f"{self.game_key!s}::run:{self.run_id}"
-        self.economy = economy_state.fresh_economy_state(self.run_id)
+        economy_state.replace_state(self, economy_state.fresh_economy_state(self.run_id))
         return old, self.run_id
 
     # ---------- 状态查询 ------------------------------------
