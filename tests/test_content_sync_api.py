@@ -445,23 +445,89 @@ async def test_sync_routes_require_the_confirm_header(sync_app, monkeypatch, pat
 
 
 @pytest.mark.asyncio
-async def test_one_install_id_belongs_to_one_paired_device(sync_app) -> None:
+async def test_re_pairing_the_same_install_takes_over_its_binding(sync_app, caplog) -> None:
     app, *_ = sync_app
     async with TestClient(TestServer(app)) as client:
-        await _pair(client, "install-a")
+        old_token, old_id = await _pair(client, "install-a")
         issued = await client.post("/api/pairing", headers=OWNER)
         code = (await issued.json())["code"]
-        taken = await client.post("/api/pairing/claim", json={"code": code, "install_id": "install-a"},
-                                  headers=CONFIRM)
-        taken_body = await taken.json()
-        # The code was not consumed: pairing without the taken id still works.
-        retry = await client.post("/api/pairing/claim", json={"code": code}, headers=CONFIRM)
-        unbound_token = (await retry.json())["device_token"]
-        first_use = await _preview(client, _items(), source=PHONE, headers=_as(unbound_token))
+        with caplog.at_level("WARNING", logger="trpg"):
+            claimed = await client.post(
+                "/api/pairing/claim", json={"code": code, "install_id": "install-a"}, headers=CONFIRM,
+            )
+            claimed_body = await claimed.json()
+        new_token = claimed_body["device_token"]
+        old_push = await client.post(
+            "/api/content/import/preview", json={"source": PHONE, "items": _items()}, headers=_as(old_token),
+        )
+        new_push = await _preview(client, _items(), source=PHONE, headers=_as(new_token))
 
-    assert taken.status == 409 and taken_body["error_code"] == "INSTALL_ID_IN_USE"
-    assert retry.status == 200
+    assert claimed.status == 200
+    assert claimed_body["install_id"] == "install-a"
+    assert claimed_body["replaced_device_id"] == old_id
+    # The old token belonged to the same install: it is revoked, not kept.
+    assert old_push.status == 401
+    assert new_push[0] == 200
+    devices = app[DEVICE_TOKENS_KEY].entries()
+    assert [(d["id"], d["install_id"]) for d in devices] == [(claimed_body["device_id"], "install-a")]
+    assert any("install_id=install-a" in r.getMessage() and old_id in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_content_push_never_takes_over_another_devices_install_id(sync_app) -> None:
+    app, *_ = sync_app
+    async with TestClient(TestServer(app)) as client:
+        holder_token, _holder_id = await _pair(client, "install-a")
+        other_token, _other_id = await _pair(client)  # no install id at pairing
+        first_use = await _preview(client, _items(), source=PHONE, headers=_as(other_token))
+        holder = await _preview(client, _items(), source=PHONE, headers=_as(holder_token))
+
     assert first_use[0] == 403 and first_use[1]["error_code"] == "INSTALL_ID_IN_USE"
+    assert holder[0] == 200
+
+
+@pytest.mark.asyncio
+async def test_documents_are_parsed_once_and_outside_the_library_lock(sync_app, monkeypatch) -> None:
+    from contextlib import contextmanager
+
+    from src.lorebook import importer as lorebook_importer
+    from src.webui.services import character_cards as card_service
+
+    app, *_ = sync_app
+    state = {"locked": 0}
+    parses: list[int] = []
+    real_lock = card_service.library_lock
+    real_parse = lorebook_importer.from_lorebook_v3
+
+    @contextmanager
+    def tracking_lock(dependencies):
+        with real_lock(dependencies):
+            state["locked"] += 1
+            try:
+                yield
+            finally:
+                state["locked"] -= 1
+
+    def tracking_parse(payload):
+        parses.append(state["locked"])
+        return real_parse(payload)
+
+    monkeypatch.setattr(card_service, "library_lock", tracking_lock)
+    monkeypatch.setattr(lorebook_importer, "from_lorebook_v3", tracking_parse)
+    embedded = {"name": "Mira lore", "entries": [{"id": "w", "content": "Woods", "keys": ["w"]}]}
+    items = _items(card=_card_doc(book=embedded))
+    body = {"source": PHONE, "items": items}
+    async with TestClient(TestServer(app)) as client:
+        _status, preview = await _post(client, "/api/content/import/preview", body)
+        parses.clear()
+        status, result = await _post(client, "/api/content/import/commit", {
+            **body, "plan_digest": preview["plan_digest"],
+        })
+
+    assert status == 200, result
+    # Two books (the card's embedded one and the standalone one), one parse
+    # each, and none of them while the card library lock is held.
+    assert parses == [0, 0]
 
 
 @pytest.mark.asyncio
