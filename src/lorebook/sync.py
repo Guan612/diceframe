@@ -6,8 +6,9 @@ from contextlib import AbstractContextManager, nullcontext
 from typing import Any
 
 from src.content_modules.plan import Decision, DeclaredSource
-from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource
+from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource, check_book_limits
 from src.engine.world.contracts import canonical_id
+from src.lorebook.importer import draft_lorebook_import
 from src.lorebook.import_plan import (
     execute_lorebook_plan,
     plan_lorebook_import,
@@ -72,6 +73,8 @@ class LorebookSyncImporter:
         ):
             raise SyncItemError(FORMAT_UNSUPPORTED, "a lorebook item must be a lorebook_v3 document")
         declared = DeclaredSource(source.kind, source.id, canonical_id(item.client_ref, field="client_ref"))
+        # Limits apply to what the adapter actually parsed, before planning.
+        check_book_limits(draft_lorebook_import(document).entries, client_ref=item.client_ref)
         plan = plan_lorebook_import(self.store, document, declared=declared)
         store = self.store
 

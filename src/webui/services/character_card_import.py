@@ -46,7 +46,8 @@ from src.content_modules.plan import (
     resolve_decision,
 )
 from src.content_modules.refs import ContentDraft
-from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource
+from src.content_modules.sync import KindPlan, SyncItem, SyncItemError, SyncSource, check_book_limits
+from src.lorebook.importer import draft_lorebook_import
 from src.engine.world.contracts import canonical_id
 from src.lorebook.import_plan import (
     LorebookImportPlan,
@@ -507,6 +508,16 @@ class CardSyncImporter:
     def plan(self, source: SyncSource, item: SyncItem) -> KindPlan:
         if item.format not in ("", CARD_FORMAT):
             raise SyncItemError("FORMAT_UNSUPPORTED", "a card item must be a chara_card_v3 document")
+        try:
+            embedded = read_card_v3(item.document).character_book
+        except CardV3FormatError as exc:
+            raise SyncItemError(exc.code, str(exc)) from exc
+        if embedded is not None:
+            # Same parse the book plan uses: limits count what is imported.
+            check_book_limits(
+                draft_lorebook_import({"spec": "lorebook_v3", "data": {"lorebook": embedded}}).entries,
+                client_ref=f"{item.client_ref}.book",
+            )
         body = {
             "source": {"kind": source.kind, "id": source.id},
             "external_id": item.client_ref,

@@ -391,3 +391,97 @@ async def test_export_then_import_is_unchanged(sync_app) -> None:
     assert book_export["origin"]["provenance"]["external_id"] == "book-1"
     assert [row["action"] for row in again["items"]] == ["unchanged", "unchanged", "unchanged"]
     assert missing[0] == 404 and missing[1]["error_code"] == "NOT_FOUND"
+
+
+# ---- #494 review fixes -------------------------------------------------------------
+
+
+def _bare_book(entries: list[dict], *, nested: bool) -> dict:
+    """A lorebook_v3 document in the shapes the adapter also accepts."""
+
+    if nested:
+        return {"spec": "lorebook_v3", "data": {"entries": entries}}
+    return {"spec": "lorebook_v3", "entries": entries}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [True, False], ids=["data.entries", "top-level entries"])
+async def test_entry_limits_count_what_the_adapter_parses(sync_app, nested) -> None:
+    app, _api, lorebook = sync_app
+    many = [{"id": f"e{i}", "content": "x", "keys": ["k"]} for i in range(2001)]
+    huge = [{"id": "big", "content": "x" * (33 * 1024), "keys": ["k"]}]
+    async with TestClient(TestServer(app)) as client:
+        count = await _preview(client, [{"client_ref": "b", "kind": "lorebook", "document": _bare_book(many, nested=nested)}])
+        size = await _preview(client, [{"client_ref": "b", "kind": "lorebook", "document": _bare_book(huge, nested=nested)}])
+
+    assert count[0] == 413 and count[1]["error_code"] == "TOO_MANY_ENTRIES"
+    assert size[0] == 413 and size[1]["error_code"] == "ENTRY_TOO_LARGE"
+    assert lorebook.list_lorebooks() == []
+
+
+@pytest.mark.asyncio
+async def test_a_deeply_nested_body_is_a_clean_400(sync_app) -> None:
+    app, *_ = sync_app
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(
+            "/api/content/import/preview", data=b"[" * 200_000 + b"]" * 200_000,
+            headers={**OWNER, "Content-Type": "application/json"},
+        )
+        body = await response.json()
+    assert response.status == 400 and body["error_code"] == "REQUEST_INVALID"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["/api/content/import/preview", "/api/content/import/commit", "/api/content/export"])
+async def test_sync_routes_require_the_confirm_header(sync_app, monkeypatch, path) -> None:
+    app, api, _lorebook = sync_app
+    # No access password: the only cross-site barrier is the confirm header.
+    monkeypatch.setitem(web_server.STATE, "access_token", "")
+    body = {"source": PHONE, "items": [_items()[0]], "plan_digest": "sha256:x"}
+    async with TestClient(TestServer(app)) as client:
+        response = await client.post(path, data=json.dumps(body), headers={"Content-Type": "text/plain"})
+    assert response.status == 403
+    assert api.list_character_cards()["cards"] == []
+
+
+@pytest.mark.asyncio
+async def test_one_install_id_belongs_to_one_paired_device(sync_app) -> None:
+    app, *_ = sync_app
+    async with TestClient(TestServer(app)) as client:
+        await _pair(client, "install-a")
+        issued = await client.post("/api/pairing", headers=OWNER)
+        code = (await issued.json())["code"]
+        taken = await client.post("/api/pairing/claim", json={"code": code, "install_id": "install-a"},
+                                  headers=CONFIRM)
+        taken_body = await taken.json()
+        # The code was not consumed: pairing without the taken id still works.
+        retry = await client.post("/api/pairing/claim", json={"code": code}, headers=CONFIRM)
+        unbound_token = (await retry.json())["device_token"]
+        first_use = await _preview(client, _items(), source=PHONE, headers=_as(unbound_token))
+
+    assert taken.status == 409 and taken_body["error_code"] == "INSTALL_ID_IN_USE"
+    assert retry.status == 200
+    assert first_use[0] == 403 and first_use[1]["error_code"] == "INSTALL_ID_IN_USE"
+
+
+@pytest.mark.asyncio
+async def test_an_unexpected_item_failure_reports_exactly_what_was_written(sync_app, monkeypatch) -> None:
+    from src.webui.services import character_card_import
+
+    app, api, lorebook = sync_app
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(character_card_import, "_execute_card", broken)
+    items = [_items()[1], _items()[0], _items()[1] | {"client_ref": "book-2"}]
+    async with TestClient(TestServer(app)) as client:
+        status, result, _ = await _push(client, items)
+
+    rows = _by_ref(result["items"])
+    assert status == 500 and result["ok"] is False
+    assert rows["book-1"]["status"] == "created"
+    assert rows["card-1"]["status"] == "error" and rows["card-1"]["error_code"] == "IMPORT_FAILED"
+    assert rows["book-2"]["status"] == "not_attempted"
+    assert [book["external_id"] for book in lorebook.list_lorebooks()] == ["book-1"]
+    assert api.list_character_cards()["cards"] == []

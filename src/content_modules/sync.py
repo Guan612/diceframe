@@ -13,9 +13,11 @@ This module knows no concrete kind. Importers and exporters are injected.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+import json
+import logging
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, ExitStack
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Protocol
 
 from src.content_modules.plan import (
@@ -29,7 +31,18 @@ from src.content_modules.plan import (
 from src.content_modules.refs import CONTENT_KIND_REGISTRY, ContentRefError
 from src.engine.world.contracts import canonical_id
 
+logger = logging.getLogger("trpg")
+
 KIND_NOT_SUPPORTED = "KIND_NOT_SUPPORTED"
+TOO_MANY_ENTRIES = "TOO_MANY_ENTRIES"
+ENTRY_TOO_LARGE = "ENTRY_TOO_LARGE"
+IMPORT_FAILED = "IMPORT_FAILED"
+NOT_ATTEMPTED = "not_attempted"
+
+#: Per-book limits, enforced on the adapter's parsed draft so that every
+#: document shape the adapter accepts is counted the same way.
+MAX_ENTRIES_PER_BOOK = 2000
+MAX_ENTRY_BYTES = 32 * 1024
 CLIENT_REF_INVALID = "CLIENT_REF_INVALID"
 DUPLICATE_CLIENT_REF = "DUPLICATE_CLIENT_REF"
 REQUEST_INVALID = "REQUEST_INVALID"
@@ -82,6 +95,22 @@ class KindExporter(Protocol):
     def export(self, canonical_id: str) -> dict[str, Any] | None:
         """``{format, document, state_token, provenance, warnings}`` or ``None``."""
         ...
+
+
+def check_book_limits(entries: Sequence[Any], *, client_ref: str) -> None:
+    """Refuse a parsed book above the per-book entry count or entry size."""
+
+    if len(entries) > MAX_ENTRIES_PER_BOOK:
+        raise SyncItemError(
+            TOO_MANY_ENTRIES, f"at most {MAX_ENTRIES_PER_BOOK} entries per book", client_ref=client_ref,
+        )
+    for entry in entries:
+        row = asdict(entry) if is_dataclass(entry) and not isinstance(entry, type) else entry
+        size = len(json.dumps(row, ensure_ascii=False, default=str).encode("utf-8"))
+        if size > MAX_ENTRY_BYTES:
+            raise SyncItemError(
+                ENTRY_TOO_LARGE, f"an entry exceeds {MAX_ENTRY_BYTES} bytes", client_ref=client_ref,
+            )
 
 
 def _schema(kind: str) -> str:
@@ -189,16 +218,32 @@ def commit(
                 return {"ok": False, "error_code": exc.code, "error": str(exc), "client_ref": client_ref}
         results: list[dict[str, Any]] = []
         failed = False
-        for plan in plans:
+        for index, plan in enumerate(plans):
             try:
                 results.extend(plan.execute(resolved))
             except ValueError as exc:
+                # An expected refusal (e.g. an identity conflict) for this
+                # item only; it wrote nothing, the next items still run.
                 failed = True
                 results.append({
                     "client_ref": plan.entries[0][0], "status": "error",
-                    "error_code": str(getattr(exc, "code", "") or "IMPORT_FAILED"),
+                    "error_code": str(getattr(exc, "code", "") or IMPORT_FAILED),
                     "error": str(exc),
                 })
+            except Exception:
+                # Unexpected: report exactly what was written so far and stop,
+                # rather than keep writing on top of an unknown failure.
+                logger.exception("content import item failed: %s", plan.entries[0][0])
+                failed = True
+                results.append({
+                    "client_ref": plan.entries[0][0], "status": "error",
+                    "error_code": IMPORT_FAILED, "error": "the server could not import this item",
+                })
+                for later in plans[index + 1:]:
+                    results.extend(
+                        {"client_ref": client_ref, "status": NOT_ATTEMPTED} for client_ref, _ in later.entries
+                    )
+                break
     return {"ok": not failed, "items": results}
 
 
@@ -245,6 +290,7 @@ __all__ = [
     "SyncItem",
     "SyncItemError",
     "SyncSource",
+    "check_book_limits",
     "commit",
     "export",
     "preview",

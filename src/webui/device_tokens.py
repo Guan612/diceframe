@@ -49,6 +49,10 @@ def sanitize_label(value: object) -> str:
     return text
 
 
+class InstallIdInUse(ValueError):
+    """Another paired device is already bound to this install id."""
+
+
 def normalize_install_id(value: object) -> str:
     """A client install id (canonical id) or ``""``; never a guess."""
     from src.engine.world.contracts import CANONICAL_ID_PATTERN
@@ -100,6 +104,8 @@ class DeviceTokenStore:
     # ---- 变更 ----
 
     def issue(self, label: str = "", install_id: str = "") -> tuple[str, dict]:
+        if self.install_id_holder(install_id):
+            raise InstallIdInUse(install_id)
         token = secrets.token_urlsafe(32)
         device = {
             "id": secrets.token_hex(8),
@@ -136,9 +142,21 @@ class DeviceTokenStore:
             if device["id"] != target:
                 continue
             if not device.get("install_id") and wanted:
+                if self.install_id_holder(wanted, excluding=target):
+                    raise InstallIdInUse(wanted)
                 device["install_id"] = wanted
                 self._save()
             return str(device.get("install_id") or "")
+        return ""
+
+    def install_id_holder(self, install_id: str, *, excluding: str = "") -> str:
+        """The paired device already bound to ``install_id`` (``""`` if none)."""
+        wanted = normalize_install_id(install_id)
+        if not wanted:
+            return ""
+        for device in self._devices:
+            if device["id"] != excluding and device.get("install_id") == wanted:
+                return str(device["id"])
         return ""
 
     def clear_install_id(self, device_id: str) -> bool:
