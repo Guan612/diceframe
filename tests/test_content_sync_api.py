@@ -1,0 +1,393 @@
+"""Unified content sync API (PR G2d): ``/api/content/import|export``.
+
+Protected contracts:
+- owner-only: master password or paired-device token; anonymous, bot/plugin
+  tokens and share callers are refused;
+- a paired device may declare only its own install id (registered at pairing
+  or bound on first use; the owner can clear it); the master-password owner
+  may declare any device;
+- limits are enforced before any planning with 413 and an error code;
+- push -> re-push (unchanged) -> modify -> update, across kinds in one plan;
+- two installs keep two copies; canonical_hint adopts an owner card;
+- export returns portable documents with an origin envelope, and importing
+  that export back is ``unchanged``.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+import web_server
+from src.content_modules.adapters.character_card_v3 import write_card_v3
+from src.webui.access_password import hash_access_password
+from src.webui.device_tokens import DEVICE_TOKENS_KEY, DeviceTokenStore
+from src.webui.login_audit import LOGIN_AUDIT_KEY, LoginAuditStore
+from src.webui.pairing import PairingService
+from src.webui.routes.content import register_content
+from src.webui.routes.pairing import PAIRING_SERVICE_KEY, register_pairing
+from src.webui.server_identity import SERVER_IDENTITY_KEY, ServerIdentityStore
+from src.webui.services import character_cards
+
+pytest_plugins = ["tests.webapi_harness"]
+
+PASSWORD = "correct-password"
+CONFIRM = {"X-TRPG-Confirm": "true"}
+OWNER = {"Authorization": f"Bearer {PASSWORD}", **CONFIRM}
+PHONE = {"kind": "device", "id": "install-a"}
+TABLET = {"kind": "device", "id": "install-b"}
+
+CARD = {
+    "schema_version": 2, "character_name": "Mira", "race": "Elf", "class": "Ranger",
+    "background": "Border woods.", "attributes": {"str": 12}, "skills": [], "gold": 30,
+    "rule_id": "freeform_fantasy", "language": "en",
+}
+BOOK_ENTRIES = {"town": "Town lore", "keep": "Keep lore"}
+
+
+def _lorebook(name: str, entries: dict[str, str]) -> dict:
+    return {"spec": "lorebook_v3", "data": {"lorebook": {"name": name, "entries": [
+        {"id": key, "name": key, "content": content, "keys": [key]} for key, content in entries.items()
+    ]}}}
+
+
+def _card_doc(body: dict = CARD, *, book: dict | None = None) -> dict:
+    return write_card_v3(body, character_book=book)
+
+
+def _items(card: dict | None = None, book: dict | None = None) -> list[dict]:
+    return [
+        {"client_ref": "card-1", "kind": "character_template", "format": "chara_card_v3",
+         "document": card or _card_doc()},
+        {"client_ref": "book-1", "kind": "lorebook", "format": "lorebook_v3",
+         "document": book or _lorebook("Atlas", BOOK_ENTRIES)},
+    ]
+
+
+@pytest.fixture
+def sync_app(web_api, tmp_path, monkeypatch):
+    api, lorebook, *_ = web_api
+    monkeypatch.setitem(web_server.STATE, "access_token", hash_access_password(PASSWORD))
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    app = web.Application(middlewares=[web_server.auth_middleware])
+    app["api"] = api
+    app[LOGIN_AUDIT_KEY] = LoginAuditStore(tmp_path)
+    app[DEVICE_TOKENS_KEY] = DeviceTokenStore(tmp_path)
+    app[SERVER_IDENTITY_KEY] = ServerIdentityStore(tmp_path)
+    app[PAIRING_SERVICE_KEY] = PairingService(app[DEVICE_TOKENS_KEY], audit=app[LOGIN_AUDIT_KEY])
+    register_content(app)
+    register_pairing(app)
+    return app, api, lorebook
+
+
+async def _post(client, path: str, body: dict, headers: dict | None = None):
+    response = await client.post(path, json=body, headers=headers if headers is not None else OWNER)
+    return response.status, await response.json()
+
+
+async def _preview(client, items: list[dict], *, source: dict = PHONE, headers: dict | None = None):
+    return await _post(client, "/api/content/import/preview", {"source": source, "items": items}, headers)
+
+
+async def _push(client, items: list[dict], *, source: dict = PHONE, decisions: dict | None = None,
+                headers: dict | None = None):
+    status, preview = await _preview(client, items, source=source, headers=headers)
+    assert status == 200, preview
+    body = {"source": source, "items": items, "plan_digest": preview["plan_digest"],
+            "decisions": decisions or {}}
+    status, result = await _post(client, "/api/content/import/commit", body, headers)
+    return status, result, preview
+
+
+def _by_ref(rows: list[dict]) -> dict[str, dict]:
+    return {row["client_ref"]: row for row in rows}
+
+
+# ---- Auth ------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auth_matrix(sync_app) -> None:
+    app, *_ = sync_app
+    token, _device = app[DEVICE_TOKENS_KEY].issue("phone", "install-a")
+    body = {"source": PHONE, "items": _items()}
+    async with TestClient(TestServer(app)) as client:
+        anonymous, _ = await _post(client, "/api/content/import/preview", body, CONFIRM)
+        wrong, _ = await _post(client, "/api/content/import/preview", body,
+                               {"Authorization": "Bearer nope", **CONFIRM})
+        bot, _ = await _post(client, "/api/content/import/preview", body,
+                             {"X-Bot-Token": "bot-secret", **CONFIRM})
+        seat, _ = await _post(client, "/api/content/export", {"items": []},
+                              {"X-Seat-Token": "seat-token", **CONFIRM})
+        owner, _ = await _post(client, "/api/content/import/preview", body)
+        device, _ = await _post(client, "/api/content/import/preview", body,
+                                {"Authorization": f"Bearer {token}", **CONFIRM})
+
+    assert anonymous == 401 and wrong == 401 and seat == 401
+    assert bot == 403
+    assert owner == 200 and device == 200
+
+
+# ---- Limits ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_limits_are_413_with_codes(sync_app, monkeypatch) -> None:
+    from src.webui.routes import content as content_routes
+
+    app, *_ = sync_app
+    huge_entry = {"town": "x" * (33 * 1024)}
+    many_entries = {f"e{i}": "lore" for i in range(2001)}
+    async with TestClient(TestServer(app)) as client:
+        # The real 8 MB limit, checked on a body that is just over it.
+        assert content_routes.MAX_BODY_BYTES == 8 * 1024 * 1024
+        monkeypatch.setattr(content_routes, "MAX_BODY_BYTES", 1024)
+        big = await client.post(
+            "/api/content/import/preview", data=b"{" + b" " * 2048 + b"}",
+            headers={**OWNER, "Content-Type": "application/json"},
+        )
+        big_body = await big.json()
+        monkeypatch.setattr(content_routes, "MAX_BODY_BYTES", 8 * 1024 * 1024)
+        too_many_items = await _preview(client, [_items()[1] | {"client_ref": f"b{i}"} for i in range(51)])
+        too_many_entries = await _preview(client, [_items(book=_lorebook("Big", many_entries))[1]])
+        entry_too_large = await _preview(client, [_items(book=_lorebook("Big", huge_entry))[1]])
+        card_book_entries = await _preview(
+            client, [_items(card=_card_doc(book={"entries": [{"id": f"e{i}", "content": "x"} for i in range(2001)]}))[0]],
+        )
+        export_items = await _post(client, "/api/content/export",
+                                   {"items": [{"kind": "lorebook", "canonical_id": "x"}] * 51})
+
+    assert big.status == 413 and big_body["error_code"] == "BODY_TOO_LARGE"
+    assert too_many_items == (413, too_many_items[1]) and too_many_items[1]["error_code"] == "TOO_MANY_ITEMS"
+    assert too_many_entries[0] == 413 and too_many_entries[1]["error_code"] == "TOO_MANY_ENTRIES"
+    assert entry_too_large[0] == 413 and entry_too_large[1]["error_code"] == "ENTRY_TOO_LARGE"
+    assert card_book_entries[0] == 413 and card_book_entries[1]["error_code"] == "TOO_MANY_ENTRIES"
+    assert export_items[0] == 413 and export_items[1]["error_code"] == "TOO_MANY_ITEMS"
+
+
+# ---- Push lifecycle ----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_push_repush_unchanged_modify_update(sync_app) -> None:
+    app, api, lorebook = sync_app
+    async with TestClient(TestServer(app)) as client:
+        status, created, preview = await _push(client, _items())
+        assert status == 200, created
+        assert [row["action"] for row in preview["items"]] == ["create", "create"]
+        rows = _by_ref(created["items"])
+        card_id, book_id = rows["card-1"]["canonical_id"], rows["book-1"]["canonical_id"]
+        assert rows["card-1"]["status"] == rows["book-1"]["status"] == "created"
+        assert rows["card-1"]["state_token"] and rows["book-1"]["state_token"]
+
+        status, again = await _preview(client, _items())
+        assert [row["action"] for row in again["items"]] == ["unchanged", "unchanged"]
+
+        edited = _items(card=_card_doc({**CARD, "gold": 99}), book=_lorebook("Atlas", {"town": "Town v2"}))
+        status, preview_edit = await _preview(client, edited)
+        assert [row["action"] for row in preview_edit["items"]] == ["update", "update"]
+        assert _by_ref(preview_edit["items"])["book-1"]["existing"]["entries_remove"] == 1
+        missing = await _post(client, "/api/content/import/commit", {
+            "source": PHONE, "items": edited, "plan_digest": preview_edit["plan_digest"],
+        })
+        assert missing[0] == 400 and missing[1]["error_code"] == "DECISION_REQUIRED"
+
+        status, updated, _ = await _push(client, edited, decisions={"card-1": "update", "book-1": "update"})
+
+    assert status == 200, updated
+    rows = _by_ref(updated["items"])
+    assert rows["card-1"]["canonical_id"] == card_id and rows["card-1"]["status"] == "updated"
+    assert rows["book-1"]["canonical_id"] == book_id and rows["book-1"]["entries_removed"] == 1
+    assert next(c for c in api.list_character_cards()["cards"] if c["id"] == card_id)["gold"] == 99
+    assert [row["content"] for row in lorebook.list_book_entries(book_id)] == ["Town v2"]
+
+
+@pytest.mark.asyncio
+async def test_a_stale_plan_is_409_with_a_fresh_preview(sync_app) -> None:
+    app, api, _lorebook = sync_app
+    async with TestClient(TestServer(app)) as client:
+        _status, created, _ = await _push(client, _items())
+        card_id = _by_ref(created["items"])["card-1"]["canonical_id"]
+        edited = _items(card=_card_doc({**CARD, "gold": 5}))
+        _status, seen = await _preview(client, edited)
+        api.update_character_card(card_id, {"background": "Edited on the server"})
+        status, stale = await _post(client, "/api/content/import/commit", {
+            "source": PHONE, "items": edited, "plan_digest": seen["plan_digest"],
+            "decisions": {"card-1": "update", "book-1": "update"},
+        })
+
+    assert status == 409 and stale["error_code"] == "PLAN_STALE"
+    assert stale["preview"]["plan_digest"] != seen["plan_digest"]
+    assert _by_ref(stale["preview"]["items"])["card-1"]["existing"]["server_modified"] is True
+
+
+@pytest.mark.asyncio
+async def test_two_installs_keep_two_copies(sync_app) -> None:
+    app, api, lorebook = sync_app
+    async with TestClient(TestServer(app)) as client:
+        _s, first, _ = await _push(client, _items(), source=PHONE)
+        _s, second, _ = await _push(client, _items(), source=TABLET)
+
+    first_rows, second_rows = _by_ref(first["items"]), _by_ref(second["items"])
+    assert second_rows["card-1"]["status"] == second_rows["book-1"]["status"] == "created"
+    assert first_rows["card-1"]["canonical_id"] != second_rows["card-1"]["canonical_id"]
+    assert len(api.list_character_cards()["cards"]) == 2
+    assert len(lorebook.list_lorebooks()) == 2
+
+
+@pytest.mark.asyncio
+async def test_canonical_hint_adopts_an_owner_card(sync_app) -> None:
+    app, api, _lorebook = sync_app
+    saved = character_cards.save_character_card(api._character_card_dependencies, dict(CARD))
+    owner_card = saved["card"]["id"]
+    item = {"client_ref": "card-1", "kind": "character_template",
+            "document": _card_doc({**CARD, "gold": 12}), "canonical_hint": owner_card}
+    async with TestClient(TestServer(app)) as client:
+        _s, preview = await _preview(client, [item])
+        assert preview["items"][0]["existing"]["matched_by"] == "hint"
+        assert preview["items"][0]["allowed"] == ["update", "duplicate", "skip"]
+        _s, adopted, _ = await _push(client, [item], decisions={"card-1": "update"})
+        plain = {k: v for k, v in item.items() if k != "canonical_hint"}
+        _s, followed = await _preview(client, [plain])
+
+    assert adopted["items"][0]["canonical_id"] == owner_card
+    card = next(c for c in api.list_character_cards()["cards"] if c["id"] == owner_card)
+    assert card["gold"] == 12 and card["provenance"]["link"] == "tracked"
+    assert followed["items"][0]["existing"]["matched_by"] == "identity"
+    assert followed["items"][0]["action"] == "unchanged"
+
+
+@pytest.mark.asyncio
+async def test_request_level_errors_fail_closed(sync_app) -> None:
+    app, *_ = sync_app
+    world = {"client_ref": "w1", "kind": "world", "document": {}}
+    duplicate = [_items()[1], _items()[1]]
+    clash = [_items(card=_card_doc(book={"entries": []}))[0], _items()[1] | {"client_ref": "card-1.book"}]
+    async with TestClient(TestServer(app)) as client:
+        kind = await _preview(client, [world])
+        twice = await _preview(client, duplicate)
+        book_ref = await _preview(client, clash)
+        bad_ref = await _preview(client, [_items()[1] | {"client_ref": "has space"}])
+        bad_source = await _preview(client, _items(), source={"kind": "plugin", "id": "x"})
+
+    assert kind[0] == 400 and kind[1]["error_code"] == "KIND_NOT_SUPPORTED"
+    assert twice[1]["error_code"] == "DUPLICATE_CLIENT_REF"
+    assert book_ref[1]["error_code"] == "DUPLICATE_CLIENT_REF"
+    assert bad_ref[1]["error_code"] == "CLIENT_REF_INVALID"
+    assert bad_source[1]["error_code"] == "IMPORT_SOURCE_INVALID"
+
+
+# ---- Paired-device identity ------------------------------------------------------
+
+
+async def _pair(client, install_id: str | None = None) -> tuple[str, str]:
+    issued = await client.post("/api/pairing", headers=OWNER)
+    code = (await issued.json())["code"]
+    body = {"code": code, **({"install_id": install_id} if install_id is not None else {})}
+    claimed = await client.post("/api/pairing/claim", json=body, headers=CONFIRM)
+    payload = await claimed.json()
+    return payload["device_token"], payload["device_id"]
+
+
+def _as(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}", **CONFIRM}
+
+
+@pytest.mark.asyncio
+async def test_pairing_registers_the_install_id(sync_app) -> None:
+    app, *_ = sync_app
+    async with TestClient(TestServer(app)) as client:
+        token, device_id = await _pair(client, "install-a")
+        own = await _preview(client, _items(), source=PHONE, headers=_as(token))
+        other = await _preview(client, _items(), source=TABLET, headers=_as(token))
+        invalid = await client.post("/api/pairing/claim", json={"code": "x", "install_id": "has space"},
+                                    headers=CONFIRM)
+        invalid_body = await invalid.json()
+
+    assert own[0] == 200
+    assert other[0] == 403 and other[1]["error_code"] == "SOURCE_NOT_THIS_DEVICE"
+    assert invalid.status == 400 and invalid_body["error_code"] == "INSTALL_ID_INVALID"
+    assert app[DEVICE_TOKENS_KEY].entries()[0]["install_id"] == "install-a"
+
+
+@pytest.mark.asyncio
+async def test_a_device_paired_earlier_binds_on_first_use(sync_app) -> None:
+    app, *_ = sync_app
+    async with TestClient(TestServer(app)) as client:
+        token, _device_id = await _pair(client)  # no install id at pairing
+        assert app[DEVICE_TOKENS_KEY].entries()[0]["install_id"] == ""
+        first = await _preview(client, _items(), source=TABLET, headers=_as(token))
+        mismatch = await _preview(client, _items(), source=PHONE, headers=_as(token))
+
+    assert first[0] == 200
+    assert app[DEVICE_TOKENS_KEY].entries()[0]["install_id"] == "install-b"
+    assert mismatch[0] == 403 and mismatch[1]["error_code"] == "SOURCE_NOT_THIS_DEVICE"
+
+
+@pytest.mark.asyncio
+async def test_the_password_owner_may_declare_any_device(sync_app) -> None:
+    app, *_ = sync_app
+    app[DEVICE_TOKENS_KEY].issue("phone", "install-a")
+    async with TestClient(TestServer(app)) as client:
+        phone = await _preview(client, _items(), source=PHONE)
+        tablet = await _preview(client, _items(), source=TABLET)
+    assert phone[0] == 200 and tablet[0] == 200
+
+
+@pytest.mark.asyncio
+async def test_the_owner_can_clear_a_binding_and_the_device_rebinds(sync_app) -> None:
+    app, *_ = sync_app
+    async with TestClient(TestServer(app)) as client:
+        token, device_id = await _pair(client, "install-a")
+        cleared = await client.delete(f"/api/devices/{device_id}/install-id", headers=OWNER)
+        rebound = await _preview(client, _items(), source=TABLET, headers=_as(token))
+        old = await _preview(client, _items(), source=PHONE, headers=_as(token))
+        unknown = await client.delete("/api/devices/nope/install-id", headers=OWNER)
+        anonymous = await client.delete(f"/api/devices/{device_id}/install-id", headers=CONFIRM)
+
+    assert cleared.status == 200
+    assert rebound[0] == 200 and app[DEVICE_TOKENS_KEY].entries()[0]["install_id"] == "install-b"
+    assert old[0] == 403
+    assert unknown.status == 404
+    assert anonymous.status == 401
+
+
+# ---- Export ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_export_then_import_is_unchanged(sync_app) -> None:
+    app, api, _lorebook = sync_app
+    embedded = {"name": "Mira lore", "entries": [{"id": "woods", "name": "woods", "content": "Woods", "keys": ["woods"]}]}
+    pushed = _items(card=_card_doc(book=embedded))
+    async with TestClient(TestServer(app)) as client:
+        _s, created, _ = await _push(client, pushed)
+        rows = _by_ref(created["items"])
+        status, exported = await _post(client, "/api/content/export", {"items": [
+            {"kind": "character_template", "canonical_id": rows["card-1"]["canonical_id"]},
+            {"kind": "lorebook", "canonical_id": rows["book-1"]["canonical_id"]},
+        ]})
+        assert status == 200, exported
+        card_export, book_export = exported["items"]
+        again_items = [
+            {"client_ref": "card-1", "kind": "character_template", "document": card_export["document"]},
+            {"client_ref": "book-1", "kind": "lorebook", "document": book_export["document"]},
+        ]
+        _s, again = await _preview(client, again_items)
+        missing = await _post(client, "/api/content/export",
+                              {"items": [{"kind": "lorebook", "canonical_id": "nope"}]})
+
+    origin = card_export["origin"]
+    assert origin["server_instance_id"].startswith("srv-")
+    assert origin["canonical_id"] == rows["card-1"]["canonical_id"]
+    assert origin["state_token"] == rows["card-1"]["state_token"]
+    assert origin["provenance"]["external_id"] == "card-1"
+    assert card_export["document"]["spec"] == "chara_card_v3"
+    assert card_export["document"]["data"]["character_book"]["entries"][0]["id"] == "woods"
+    assert book_export["format"] == "lorebook_v3"
+    assert book_export["origin"]["provenance"]["external_id"] == "book-1"
+    assert [row["action"] for row in again["items"]] == ["unchanged", "unchanged", "unchanged"]
+    assert missing[0] == 404 and missing[1]["error_code"] == "NOT_FOUND"
