@@ -26,6 +26,7 @@ from src.migrations.instance import (
     migrate_game_state_payload,
     rebind_imported_game_state_payload,
 )
+from src.engine.modules import checks
 
 
 UNKNOWN_SLOTS = [
@@ -275,12 +276,12 @@ async def test_saved_pending_luck_rejects_before_mutation(web_api, monkeypatch, 
     sheet.setdefault("resources", {})["luck"] = {"current": 50, "max": 50}
     await instance.add_action(uid, "Look around")
     await instance.try_advance()
-    instance.round_checks_prepared = True
-    instance.last_checks = [{
+    checks.replace_round_checks_prepared(instance, True)
+    checks.replace_last_checks(instance, [{
         "check_id": "progression-luck", "actor_uid": uid, "dice": "d100",
         "roll": 55, "threshold": 50, "verdict": "失败",
         "luck_decision": "pending", "luck_spend_available": True,
-    }]
+    }])
     instance.modules["progression"] = deepcopy(slot)
     await registry.save(instance)
     instance = await registry.load(instance.game_key)
@@ -312,8 +313,8 @@ async def test_saved_pending_luck_rejects_before_mutation(web_api, monkeypatch, 
 async def test_luck_noops_keep_existing_result_for_unknown_progression(slot):
     instance = instance_with_state(slot)
     instance.state = GameState.ACTIVE_JUDGMENT
-    instance.round_checks_prepared = True
-    instance.last_checks = [{"check_id": "done", "actor_uid": "gm", "luck_decision": "declined"}]
+    checks.replace_round_checks_prepared(instance, True)
+    checks.replace_last_checks(instance, [{"check_id": "done", "actor_uid": "gm", "luck_decision": "declined"}])
     before = frozen(instance)
     assert (await instance.resolve_luck_decision("missing", "gm", False))["code"] == "CHECK_NOT_FOUND"
     assert (await instance.resolve_luck_decision("done", "gm", False))["already_resolved"] is True

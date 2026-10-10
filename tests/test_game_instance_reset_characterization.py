@@ -20,6 +20,7 @@ import pytest
 from src.engine.game_instance import GameInstance, GameState
 from src.engine.modules import room_access
 from src.engine.world_state import fresh_world_state
+from src.engine.modules import checks
 
 
 def _make_populated_instance() -> GameInstance:
@@ -108,11 +109,11 @@ def _make_populated_instance() -> GameInstance:
     instance.total_tokens = 2222
     instance.started_at = "2026-01-01T00:00:00+00:00"
     instance.last_activity = "2026-01-01T01:00:00+00:00"
-    instance.last_check = {"check_id": "c1"}
-    instance.last_checks = [{"check_id": "c1"}]
-    instance.manual_roll_requests = [{"request_id": "r1"}]
+    checks.replace_last_check(instance, {"check_id": "c1"})
+    checks.replace_last_checks(instance, [{"check_id": "c1"}])
+    checks.replace_manual_roll_requests(instance, [{"request_id": "r1"}])
     instance.round_unpriced_purchase_intents = [{"item": "potion"}]
-    instance.round_checks_prepared = True
+    checks.replace_round_checks_prepared(instance, True)
     instance.round_start_snapshot = {"u1": {"hp": 10}}
     instance.round_entity_snapshot = {"npcs": {"goblin": {"hp": 7}}}
     instance.death_save_outcomes = {"3": {"u1": {"roll": 18}}}
@@ -203,7 +204,6 @@ EXPECTED_IMPLICIT_PRESERVED = {
     "economy_reward_policy": {"mode": "auto_small_cash", "auto_reward_cap": 10},
     "last_saved_log_count": 3,
     "pending_luck_after_recovery": True,
-    "manual_roll_requests": [{"request_id": "r1"}],
     "round_unpriced_purchase_intents": [{"item": "potion"}],
     "death_save_outcomes": {"3": {"u1": {"roll": 18}}},
     "last_overreach": [{"player": "u1"}],
@@ -261,9 +261,9 @@ async def test_reset_clears_runtime_and_narrative_state() -> None:
     assert instance.puzzle_manager is None
     assert instance.plot_tracker is None
     assert instance.combat_extension == {}
-    assert instance.last_check is None
-    assert instance.last_checks == []
-    assert instance.round_checks_prepared is False
+    assert checks.last_check(instance) is None
+    assert checks.last_checks(instance) == []
+    assert checks.round_checks_prepared(instance) is False
     assert instance.round_start_snapshot == {}
     assert instance.round_entity_snapshot == {}
     assert instance.last_state_update is None
@@ -303,6 +303,7 @@ async def test_reset_does_not_touch_implicit_preserve_fields() -> None:
         assert actual == expected, (
             f"基线 reset() 不触碰 {field}；extraction 不得改变这一行为"
         )
+    assert checks.manual_roll_requests(instance) == [{"request_id": "r1"}]
 
 
 @pytest.mark.asyncio

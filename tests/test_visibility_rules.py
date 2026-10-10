@@ -19,6 +19,7 @@ from src.webui.services.turns import (
     TurnDependencies, _round_payload, economy_decision_pending_payload,
     resume_after_control_change,
 )
+from src.engine.modules import checks
 
 KEY = "web|visibility|bot"
 
@@ -146,26 +147,26 @@ def test_e1_e2_e3_e4_proposal_ids_agree(viewer: str) -> None:
 @pytest.mark.parametrize("viewer", ["gm", "a", "b", "outsider", ""])
 def test_m1_m2_m3_manual_roll_ids_agree(viewer: str) -> None:
     inst = _instance()
-    inst.manual_roll_requests = [
+    checks.replace_manual_roll_requests(inst, [
         {"id": "party", "visibility": "party"},
         {"id": "default"},
         {"id": "creator", "visibility": "private", "created_by": "a"},
         {"id": "target", "visibility": "private", "created_by": "b", "target_uids": ["a"]},
         {"id": "other", "visibility": "private", "created_by": "b"},
-    ]
-    for req in inst.manual_roll_requests:
+    ])
+    for req in checks.manual_roll_requests(inst):
         req.update({"run_id": inst.run_id, "status": "resolved", "results": {"a": {"total": 4}}})
         req.setdefault("target_uids", ["a"])
     service = ManualRollService(ManualRollDependencies(
         parse_game_key=lambda _: inst.game_key, get_instance=lambda _: inst,
         save_instance=_turns(inst).save_instance,
     ))
-    expected = {r["id"] for r in inst.manual_roll_requests if manual_roll_visible_to(
+    expected = {r["id"] for r in checks.manual_roll_requests(inst) if manual_roll_visible_to(
         r, viewer_uid=viewer, viewer_is_gm=viewer == "gm",
     )}
     assert {r["id"] for r in service.list(KEY, viewer)} == expected
     assert {r["id"] for r in _detail(inst, viewer)["manual_rolls"]} == expected
-    assert {r["id"] for r in inst.manual_roll_requests if _manual_roll_visible_to_viewer(
+    assert {r["id"] for r in checks.manual_roll_requests(inst) if _manual_roll_visible_to_viewer(
         r, viewer == "gm", viewer,
     )} == expected
 
@@ -178,10 +179,10 @@ def test_empty_viewer_does_not_match_unset_gm_uid() -> None:
     assert {p["id"] for p in _round_payload(inst, "")["economy_proposals"]} == {"party"}
     assert {p["id"] for p in economy_decision_pending_payload(inst)["economy_proposals"]} == {"party"}
     assert {p["id"] for p in json.loads(_play_public_signature(inst, ""))["economy_proposals"]} == {"party"}
-    inst.manual_roll_requests = [
+    checks.replace_manual_roll_requests(inst, [
         {"id": "private", "visibility": "private", "created_by": "b", "target_uids": ["a"]},
         {"id": "party", "visibility": "party"},
-    ]
+    ])
     service = ManualRollService(ManualRollDependencies(
         parse_game_key=lambda _: inst.game_key, get_instance=lambda _: inst,
         save_instance=_turns(inst).save_instance,

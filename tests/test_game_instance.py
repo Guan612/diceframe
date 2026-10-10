@@ -9,6 +9,7 @@ from src.engine.character_utils import reset_character_for_restart
 from src.engine.game_instance import GameInstance, GameRegistry, GameState
 from src.engine.health import health_payload, mark_health_event, record_health_event
 from src.commands.progression_resolver import ProgressionResolver
+from src.engine.modules import checks
 
 
 def test_round_entity_snapshot_round_trips_and_defaults_empty() -> None:
@@ -141,9 +142,9 @@ async def test_abort_round_processing_restores_action_phase_without_touching_que
 
     assert instance.state == GameState.ACTIVE_ACTION
     assert instance.get_character_sheet("p1")["hp"] == 10
-    assert instance.last_checks == []
-    assert instance.last_check is None
-    assert instance.round_checks_prepared is False
+    assert checks.last_checks(instance) == []
+    assert checks.last_check(instance) is None
+    assert checks.round_checks_prepared(instance) is False
     assert instance.death_save_outcomes == {}
     assert instance.round_start_snapshot == {}
     assert instance._luck_timers == {}
@@ -1140,12 +1141,12 @@ def test_level_up_syncs_legacy_hp_and_resource_hp(tmp_path):
 async def test_recovery_keeps_pending_luck_decision_actionable(tmp_path):
     registry = GameRegistry(tmp_path / "saves")
     inst = GameInstance(("web", "luck", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
-    inst.last_checks = [{
+    checks.replace_round_checks_prepared(inst, True)
+    checks.replace_last_checks(inst, [{
         "check_id": "check-1",
         "actor_uid": "p1",
         "luck_decision": "pending",
-    }]
+    }])
     registry.register(inst)
     await registry.save(inst)
 
@@ -1163,12 +1164,12 @@ async def test_recovery_pauses_game_without_pending_luck(tmp_path):
     """无待幸运决定的局恢复后进入 PAUSED，且不标记待决定。"""
     registry = GameRegistry(tmp_path / "saves")
     inst = GameInstance(("web", "luck_paused", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
-    inst.last_checks = [{
+    checks.replace_round_checks_prepared(inst, True)
+    checks.replace_last_checks(inst, [{
         "check_id": "check-1",
         "actor_uid": "p1",
         "luck_decision": "spent",
-    }]
+    }])
     registry.register(inst)
     await registry.save(inst)
 
@@ -1183,19 +1184,19 @@ async def test_recovery_pauses_game_without_pending_luck(tmp_path):
 async def test_system_decline_luck_times_out_single_check():
     """超时只 decline 触发的那条检定，并正确报告是否清空。"""
     inst = GameInstance(("web", "luck_timeout", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
-    inst.last_checks = [
+    checks.replace_round_checks_prepared(inst, True)
+    checks.replace_last_checks(inst, [
         {"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"},
         {"check_id": "b", "actor_uid": "p2", "luck_decision": "pending"},
-    ]
+    ])
 
     # 超时第一条：还有 b 待决，declined_all 应为 False
     res = await inst.system_decline_luck("a")
     assert res["ok"] is True
     assert res["declined_all"] is False
-    assert inst.last_checks[0]["luck_decision"] == "declined"
-    assert inst.last_checks[0]["luck_timeout"] is True
-    assert inst.last_checks[1]["luck_decision"] == "pending"
+    assert checks.last_checks(inst)[0]["luck_decision"] == "declined"
+    assert checks.last_checks(inst)[0]["luck_timeout"] is True
+    assert checks.last_checks(inst)[1]["luck_decision"] == "pending"
 
     # 超时最后一条：declined_all 应为 True
     res2 = await inst.system_decline_luck("b")
@@ -1208,21 +1209,21 @@ async def test_system_decline_luck_times_out_single_check():
 async def test_system_decline_luck_skips_already_resolved():
     """玩家已手动决定时，超时回调不重复改判。"""
     inst = GameInstance(("web", "luck_resolved", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
-    inst.last_checks = [
+    checks.replace_round_checks_prepared(inst, True)
+    checks.replace_last_checks(inst, [
         {"check_id": "a", "actor_uid": "p1", "luck_decision": "spent"},
-    ]
+    ])
     res = await inst.system_decline_luck("a")
     assert res["ok"] is False
     assert res["code"] == "LUCK_ALREADY_RESOLVED"
-    assert inst.last_checks[0]["luck_decision"] == "spent"
+    assert checks.last_checks(inst)[0]["luck_decision"] == "spent"
 
 
 @pytest.mark.asyncio
 async def test_system_decline_luck_missing_check():
     inst = GameInstance(("web", "luck_missing", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
-    inst.last_checks = []
+    checks.replace_round_checks_prepared(inst, True)
+    checks.replace_last_checks(inst, [])
     res = await inst.system_decline_luck("ghost")
     assert res["ok"] is False
     assert res["code"] == "CHECK_NOT_FOUND"
@@ -1250,12 +1251,12 @@ def test_multiplayer_luck_timeout_uses_a_longer_default_without_overriding_custo
 async def test_concurrent_luck_decisions_leave_both_results_resolved_once():
     """并发处理不同玩家的幸运选择时，逐条原子落地且不丢 pending。"""
     inst = GameInstance(("web", "luck-concurrent", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
+    checks.replace_round_checks_prepared(inst, True)
     inst.players = {
         "p1": {"character_sheet": {"luck": 30}},
         "p2": {"character_sheet": {"luck": 30}},
     }
-    inst.last_checks = [
+    checks.replace_last_checks(inst, [
         {
             "check_id": "a", "actor_uid": "p1", "dice": "d100", "roll": 22,
             "threshold": 20, "verdict": "失败", "luck_spend_available": True,
@@ -1266,7 +1267,7 @@ async def test_concurrent_luck_decisions_leave_both_results_resolved_once():
             "threshold": 20, "verdict": "失败", "luck_spend_available": True,
             "luck_decision": "pending",
         },
-    ]
+    ])
 
     first, second = await asyncio.gather(
         inst.resolve_luck_decision("a", "p1", True),
@@ -1276,18 +1277,18 @@ async def test_concurrent_luck_decisions_leave_both_results_resolved_once():
     assert first["ok"] is True
     assert second["ok"] is True
     assert inst.pending_luck_checks() == []
-    assert [check["luck_decision"] for check in inst.last_checks] == ["spent", "declined"]
+    assert [check["luck_decision"] for check in checks.last_checks(inst)] == ["spent", "declined"]
     assert inst.get_character_sheet("p1")["luck"] == 28
 
 
 @pytest.mark.asyncio
 async def test_concurrent_luck_timeouts_decline_each_check_without_overwriting():
     inst = GameInstance(("web", "luck-timeouts-race", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
-    inst.last_checks = [
+    checks.replace_round_checks_prepared(inst, True)
+    checks.replace_last_checks(inst, [
         {"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"},
         {"check_id": "b", "actor_uid": "p2", "luck_decision": "pending"},
-    ]
+    ])
 
     first, second = await asyncio.gather(
         inst.system_decline_luck("a"),
@@ -1297,19 +1298,19 @@ async def test_concurrent_luck_timeouts_decline_each_check_without_overwriting()
     assert first["ok"] is True
     assert second["ok"] is True
     assert inst.pending_luck_checks() == []
-    assert all(check["luck_decision"] == "declined" for check in inst.last_checks)
-    assert all(check["luck_timeout"] is True for check in inst.last_checks)
+    assert all(check["luck_decision"] == "declined" for check in checks.last_checks(inst))
+    assert all(check["luck_timeout"] is True for check in checks.last_checks(inst))
 
 
 def _luck_race_instance(check_id: str) -> GameInstance:
     inst = GameInstance(("web", f"luck-race-{check_id}", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
+    checks.replace_round_checks_prepared(inst, True)
     inst.players["p1"] = {"character_sheet": {"luck": 30}}
-    inst.last_checks = [{
+    checks.replace_last_checks(inst, [{
         "check_id": check_id, "actor_uid": "p1", "dice": "d100", "roll": 22,
         "threshold": 20, "verdict": "失败", "luck_spend_available": True,
         "luck_decision": "pending",
-    }]
+    }])
     return inst
 
 
@@ -1322,8 +1323,8 @@ async def test_manual_luck_wins_timeout_race():
     assert manual["ok"] is True
     assert timeout["ok"] is False
     assert timeout["code"] == "LUCK_ALREADY_RESOLVED"
-    assert inst.last_checks[0]["luck_decision"] == "spent"
-    assert "luck_timeout" not in inst.last_checks[0]
+    assert checks.last_checks(inst)[0]["luck_decision"] == "spent"
+    assert "luck_timeout" not in checks.last_checks(inst)[0]
     assert inst.get_character_sheet("p1")["luck"] == 28
 
 
@@ -1336,8 +1337,8 @@ async def test_timeout_wins_manual_luck_race():
     assert timeout["ok"] is True
     assert manual["ok"] is False
     assert manual["code"] == "LUCK_ALREADY_RESOLVED"
-    assert inst.last_checks[0]["luck_decision"] == "declined"
-    assert inst.last_checks[0]["luck_timeout"] is True
+    assert checks.last_checks(inst)[0]["luck_decision"] == "declined"
+    assert checks.last_checks(inst)[0]["luck_timeout"] is True
     assert inst.get_character_sheet("p1")["luck"] == 30
 
 
@@ -1346,13 +1347,13 @@ async def test_resolve_luck_decision_cancels_timer():
     """手动决议先于超时到达时，对应定时器被取消。"""
     inst = GameInstance(("web", "luck_cancel", "bot"), state=GameState.ACTIVE_JUDGMENT)
     inst.gm_uid = "gm"
-    inst.round_checks_prepared = True
+    checks.replace_round_checks_prepared(inst, True)
     inst.players["p1"] = {"character_name": "调查员", "character_sheet": {"luck": 50}}
-    inst.last_checks = [{
+    checks.replace_last_checks(inst, [{
         "check_id": "a", "actor_uid": "p1", "dice": "d100",
         "verdict": "失败", "roll": 45, "threshold": 40,
         "luck_decision": "pending", "luck_spend_available": True,
-    }]
+    }])
     # 模拟已挂起的超时定时器
     fake_task = asyncio.ensure_future(asyncio.sleep(100))
     inst._luck_timers["a"] = fake_task
@@ -1362,7 +1363,7 @@ async def test_resolve_luck_decision_cancels_timer():
 
     assert fake_task.cancelled() is True
     assert "a" not in inst._luck_timers
-    assert inst.last_checks[0]["luck_decision"] == "spent"
+    assert checks.last_checks(inst)[0]["luck_decision"] == "spent"
 
 
 @pytest.mark.asyncio
@@ -1371,9 +1372,9 @@ async def test_luck_timeout_schedules_and_resumes_round():
     from src.commands.round_processor import RoundProcessor
 
     inst = GameInstance(("web", "luck_timer", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
+    checks.replace_round_checks_prepared(inst, True)
     inst.luck_timeout_seconds = 1
-    inst.last_checks = [{"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"}]
+    checks.replace_last_checks(inst, [{"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"}])
 
     class FakeRegistry:
         def get(self, key):
@@ -1405,8 +1406,8 @@ async def test_luck_timeout_schedules_and_resumes_round():
 
     # 2) 触发：timeout=0 使 sleep(0) 立即返回，验证 decline + 重新推进
     await processor._luck_timeout(inst.game_key, "a", 0)
-    assert inst.last_checks[0]["luck_decision"] == "declined"
-    assert inst.last_checks[0]["luck_timeout"] is True
+    assert checks.last_checks(inst)[0]["luck_decision"] == "declined"
+    assert checks.last_checks(inst)[0]["luck_timeout"] is True
     assert resumed == [inst.game_key]
 
 
@@ -1416,9 +1417,9 @@ async def test_luck_timeout_disabled_when_zero():
     from src.commands.round_processor import RoundProcessor
 
     inst = GameInstance(("web", "luck_disabled", "bot"), state=GameState.ACTIVE_JUDGMENT)
-    inst.round_checks_prepared = True
+    checks.replace_round_checks_prepared(inst, True)
     inst.luck_timeout_seconds = 0
-    inst.last_checks = [{"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"}]
+    checks.replace_last_checks(inst, [{"check_id": "a", "actor_uid": "p1", "luck_decision": "pending"}])
 
     class FakeRegistry:
         def get(self, key):
