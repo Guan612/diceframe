@@ -69,13 +69,16 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     集合与基线逐句一致。reset 的真实契约由
     ``tests/test_game_instance_reset_characterization.py`` 冻结。
     """
-    from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats
+    from src.engine.modules import (
+        adventure_runtime_state, checks, legacy_combat, round_safety, ruleset_runtime, session_stats,
+    )
 
     session_stats.require_writable(instance)
     checks.require_writable(instance)
     round_safety.require_writable(instance)
     legacy_combat.require_writable(instance)
     ruleset_runtime.require_writable(instance)
+    adventure_runtime_state.require_writable(instance)
     saved_seed = instance.seed_code if keep_seed else ""
     saved_world_id = instance.world_id
     saved_world_name = instance.world_name
@@ -105,7 +108,7 @@ def reset_locked(instance: GameInstance, *, keep_seed: bool = True) -> None:
     # 里）：只清世界却保留进度会出现"节点已完成、世界没变"的矛盾。原地 reset
     # 不能解析冒险包，因此清空为"未初始化"（节点推进 fail closed）；生产的
     # reset/restart 走新 run 候选并由 initialize_adventure_run 重新初始化。
-    instance.adventure_progress = {}
+    adventure_runtime_state.replace_progress(instance, {})
     session_stats.reset(instance)
     instance.puzzle_manager = None
     instance.plot_tracker = None

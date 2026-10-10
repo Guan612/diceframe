@@ -13,7 +13,9 @@ has done with that binding:
   unknown value is derived from the binding when a save is decoded, exactly as
   the codec did when the field lived at the top level.
 
-Reset semantics are unchanged: the in-place reset keeps both values.
+Run transitions: the in-place reset clears ``progress`` together with world
+truth and keeps ``play_mode``; a new run (reset/restart/seed) keeps the play
+mode and re-initializes v2 progress through the Adventure runtime.
 """
 
 from __future__ import annotations

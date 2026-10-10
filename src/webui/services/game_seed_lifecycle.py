@@ -8,7 +8,7 @@ from typing import Any
 
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.module_state import ModuleStateError
-from src.engine.modules import content_binding
+from src.engine.modules import adventure_runtime_state, content_binding
 from src.engine.narrative_perspective import validate_narrative_perspective
 from src.migrations import migrate_instance
 from src.rulesets.contracts import LiveAdvancementPolicyRuntime
@@ -147,6 +147,10 @@ async def create_from_seed(
         }
     except ModuleStateError as exc:
         return {"ok": False, "error_code": "INVALID_WORLD_REF", "error": str(exc)}
+    # Same for the original save's play mode: an unsupported adventure_runtime
+    # slot is rejected before anything is registered.
+    adventure_runtime_state.require_writable(target_inst)
+    source_play_mode = str(adventure_runtime_state.play_mode(target_inst) or "")
 
     unique_id = f"{world_id}_{time.time_ns()}"
     game_key = ("web", unique_id, "web_bot")
@@ -205,10 +209,9 @@ async def create_from_seed(
     # A seed restart is the same kind of game: keep its play mode (old saves
     # without one derive it from the binding, as the save migration does) and
     # run the same Adventure v2 initialization step as normal creation.
-    source_play_mode = str(getattr(target_inst, "play_mode", "") or "")
-    instance.play_mode = source_play_mode or (
+    adventure_runtime_state.replace_play_mode(instance, source_play_mode or (
         "adventure" if target_adventure_binding.get("adventure_id") else "free"
-    )
+    ))
     if callable(getattr(dependencies, "initialize_adventure_run", None)):
         try:
             dependencies.initialize_adventure_run(instance)

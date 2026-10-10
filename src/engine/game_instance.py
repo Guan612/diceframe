@@ -1838,6 +1838,7 @@ class GameInstance:
             round_safety.require_writable(self)
             legacy_combat.require_writable(self)
             ruleset_runtime.require_writable(self)
+            adventure_runtime_state.require_writable(self)
             combat_extension_state.current(self)
             lorebook_runtime.timers(self)
             from src.engine.modules import room_access
