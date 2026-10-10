@@ -2547,6 +2547,13 @@ export const ja = {
     world_not_found: 'ワールドが存在しません',
     economy_decision_pending: '保留中の経済提案を処理してから物語を続けてください。',
     MODULE_IN_USE: 'セーブがこのモジュールを使用中のため、サーバーが操作を拒否しました',
+    REWRITE_IN_PROGRESS: 'GM が過去のラウンドを書き直し中です。完了後に再試行してください。',
+    STALE_RUN: 'この卓はリスタートまたはリセットされました。再読み込みしてから再試行してください。',
+    ROUND_PROCESSING: 'ラウンドを処理中です。少し待ってから再試行してください。',
+    ADVENTURE_RUNTIME_INIT_FAILED: '冒険を初期化できませんでした。卓は変更されていません。',
+    RULESET_RUNTIME_INIT_FAILED: '新しいランのルールセットを初期化できませんでした。卓は変更されていません。',
+    ADVENTURE_WORLD_LOCKED: 'このセーブは固定ワールドの冒険に紐づいています。ワールドブックを切り替えるにはサンドボックス卓を新規作成してください。',
+    WORLD_NOT_FOUND: 'そのワールドは存在しません。',
   },
   imagegenAutoStoryboard: '自動ストーリーボード', imagegenAutoStoryboardHelp: 'オフ：自動・手動のシーン画像を1枚で生成。オン：GMが公開ナレーションからシーン分割を出力し、複数シーンを1枚にまとめます。',
 } as const

@@ -332,6 +332,7 @@ async def test_node_complete_is_rejected_during_historical_rewrite(web_api) -> N
         ))
 
     assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert result["error_code"] == "REWRITE_IN_PROGRESS"  # the field the frontend localizes
     assert instance.to_dict() == before
     complete.assert_not_called()
     save.assert_not_awaited()
@@ -356,5 +357,6 @@ async def test_node_complete_waiting_on_replaced_run_is_rejected(web_api) -> Non
     result = await asyncio.wait_for(submission, 5)
 
     assert result["code"] == "STALE_RUN"
+    assert result["error_code"] == "STALE_RUN"  # the field the frontend localizes
     complete.assert_not_called()
     save.assert_not_awaited()

@@ -38,6 +38,18 @@ from src.rulesets.contracts import RunLifecycleRuntime
 logger = logging.getLogger("trpg")
 
 
+class RunInitializationError(RuntimeError):
+    """Initializing the new-run candidate failed (adventure or ruleset step).
+
+    Raised before the registry swap, so the previous run is still current and
+    untouched.  ``code`` is the stable application error code to report.
+    """
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class GameLifecycle:
     """负责游戏生命周期操作，避免 GameHandler 承担所有流程细节。"""
 
@@ -164,15 +176,26 @@ class GameLifecycle:
             candidate.replace_players(players)
             # Same seats, same share links: carry their credentials over.
             room_access.copy_seat_credentials(candidate, source)
-        self._initialize_ruleset_run(
-            candidate,
-            preserve_characters=preserve_players,
-        )
         # Same step as game creation: v2 progress + atomic world seed on the
-        # unpublished candidate.  Failure aborts before the registry swap, so
-        # the previous run stays current and untouched.
+        # unpublished candidate.  It runs before the ruleset projection so an
+        # unresolvable adventure is reported as such.  Any failure here aborts
+        # before the registry swap: the previous run stays current, untouched.
         if self._initialize_adventure_run is not None:
-            self._initialize_adventure_run(candidate)
+            try:
+                self._initialize_adventure_run(candidate)
+            except Exception as exc:
+                raise RunInitializationError(
+                    "ADVENTURE_RUNTIME_INIT_FAILED", str(exc),
+                ) from exc
+        try:
+            self._initialize_ruleset_run(
+                candidate,
+                preserve_characters=preserve_players,
+            )
+        except Exception as exc:
+            raise RunInitializationError(
+                "RULESET_RUNTIME_INIT_FAILED", str(exc),
+            ) from exc
         return candidate
 
     def _initialize_ruleset_run(

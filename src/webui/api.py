@@ -476,9 +476,10 @@ class WebAPI:
             )
         if self._handler is not None and hasattr(self._handler, "set_adventure_run_initializer"):
             # Reset/restart build a new run of the same game: initialize v2
-            # progress + world seed exactly like the creation transaction.
+            # progress + world seed like the creation transaction (v1 bindings
+            # are not re-resolved, preserving their previous restart path).
             self._handler.set_adventure_run_initializer(
-                lambda instance: adventure_runtime.initialize_adventure_run(
+                lambda instance: adventure_runtime.initialize_adventure_new_run(
                     self._adventure_runtime_dependencies, instance,
                 )
             )

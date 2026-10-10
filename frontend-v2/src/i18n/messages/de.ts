@@ -2544,6 +2544,13 @@ export const de = {
     world_not_found: 'Welt nicht gefunden',
     economy_decision_pending: 'Löse die ausstehende Wirtschaftsentscheidung, bevor die Geschichte fortgesetzt wird.',
     MODULE_IN_USE: 'Spielstände nutzen dieses Modul; der Server hat die Aktion blockiert',
+    REWRITE_IN_PROGRESS: 'Der GM schreibt gerade eine vergangene Runde neu. Versuche es danach erneut.',
+    STALE_RUN: 'Dieses Spiel wurde neu gestartet oder zurückgesetzt. Lade neu und versuche es erneut.',
+    ROUND_PROCESSING: 'Die Runde wird gerade verarbeitet. Versuche es gleich erneut.',
+    ADVENTURE_RUNTIME_INIT_FAILED: 'Das Abenteuer konnte nicht initialisiert werden; nichts wurde geändert.',
+    RULESET_RUNTIME_INIT_FAILED: 'Das Regelsystem konnte für den neuen Durchlauf nicht initialisiert werden; nichts wurde geändert.',
+    ADVENTURE_WORLD_LOCKED: 'Dieser Spielstand ist an ein Abenteuer mit fester Welt gebunden; starte ein Sandbox-Spiel, um das Weltenbuch zu wechseln.',
+    WORLD_NOT_FOUND: 'Diese Welt existiert nicht.',
   },
   imagegenAutoStoryboard: 'Automatisches Storyboard', imagegenAutoStoryboardHelp: 'Aus: automatische und manuelle Szenenbilder werden als Einzelbild erzeugt. An: Der GM erstellt aus der öffentlichen Runde Szenenfelder für ein gemeinsames Mehrszenenbild.',
 } as const

@@ -117,6 +117,25 @@ def initialize_adventure_run(
     }
 
 
+def initialize_adventure_new_run(
+    dependencies: AdventureRuntimeDependencies, instance: Any,
+) -> dict[str, Any]:
+    """Initialization for a new run of an existing game (reset / restart).
+
+    The persisted binding already records the package format.  A v1 binding
+    never had graph progress, so it is not re-resolved here: restarting a v1
+    game keeps working exactly as before even if its source is unavailable.
+    v2 bindings go through the same step as game creation.
+    """
+
+    binding = getattr(instance, "adventure_binding", None)
+    if not isinstance(binding, dict) or not binding.get("adventure_id"):
+        return {"ok": True, "initialized": False, "reason": "unbound"}
+    if str(binding.get("format") or "") != ADVENTURE_GRAPH_FORMAT_V2:
+        return {"ok": True, "initialized": False, "reason": "v1"}
+    return initialize_adventure_run(dependencies, instance)
+
+
 def _apply_progress_events(
     progress: dict[str, Any], graph: dict[str, Any], events: list[dict[str, Any]],
 ) -> list[str]:
@@ -325,6 +344,7 @@ __all__ = [
     "advance_adventure_world",
     "adventure_graph",
     "complete_adventure_node",
+    "initialize_adventure_new_run",
     "initialize_adventure_run",
     "resolve_instance_adventure",
 ]
