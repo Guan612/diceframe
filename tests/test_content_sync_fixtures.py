@@ -12,7 +12,9 @@ JSON Schemas. This module checks that:
 
 The schema check is a small subset validator (type, const, required,
 properties, items, $ref, minLength, maxItems) so the server does not need a
-JSON Schema dependency; the schemas only use that subset.
+JSON Schema dependency. Any other validation keyword fails the test: a
+published schema must never promise a rule this check (and the server)
+silently ignores.
 """
 
 from __future__ import annotations
@@ -51,7 +53,16 @@ def _resolve(ref: str, schema_file: Path) -> tuple[dict, Path]:
     return node, path
 
 
+_VALIDATION_KEYWORDS = frozenset({
+    "type", "const", "required", "properties", "items", "$ref", "minLength", "maxItems",
+})
+_ANNOTATION_KEYWORDS = frozenset({"$schema", "$id", "$defs", "title", "description"})
+
+
 def _validate(value: Any, schema: dict, schema_file: Path, where: str = "$") -> list[str]:
+    unknown = set(schema) - _VALIDATION_KEYWORDS - _ANNOTATION_KEYWORDS
+    if unknown:
+        raise AssertionError(f"{schema_file.name} {where}: unsupported schema keyword(s) {sorted(unknown)}")
     if "$ref" in schema:
         resolved, path = _resolve(schema["$ref"], schema_file)
         return _validate(value, resolved, path, where)
@@ -114,6 +125,11 @@ def test_the_validator_rejects_a_broken_document() -> None:
     del broken["data"]["lorebook"]["entries"][0]["id"]
     schema_file = SCHEMAS / "lorebook-v3.schema.json"
     assert _validate(broken, _load(schema_file), schema_file) == ["$.data.lorebook.entries[0]: missing id"]
+
+
+def test_the_validator_refuses_keywords_it_does_not_enforce() -> None:
+    with pytest.raises(AssertionError, match="maxLength"):
+        _validate("text", {"type": "string", "maxLength": 3}, SCHEMAS / "card-body.schema.json")
 
 
 def _item(client_ref: str, path: Path) -> dict:

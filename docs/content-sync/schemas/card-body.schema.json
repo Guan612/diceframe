@@ -21,7 +21,7 @@
         "properties": {
           "name": {"type": "string"},
           "value": {"type": "number"},
-          "effect": {"type": "string", "maxLength": 500}
+          "effect": {"type": "string", "description": "Stored as sent; only the first 500 characters are used in play."}
         }
       }
     },

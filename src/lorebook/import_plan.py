@@ -138,6 +138,17 @@ LOCKED_TRACKED_BY_OTHER_SOURCE = "TRACKED_BY_OTHER_SOURCE"
 LOCKED_DETACHED_FROM_OTHER_SOURCE = "DETACHED_FROM_OTHER_SOURCE"
 
 
+def _book_bindings(store: Any, book_id: str) -> list[dict[str, str]]:
+    """Where a hinted Book is bound, so a client can warn before a mirror
+    update rewrites a Book that games or characters use."""
+
+    return [
+        {"scope_kind": str(binding.get("scope_kind") or ""), "scope_id": str(binding.get("scope_id") or "")}
+        for binding in store.list_bindings()
+        if str(binding.get("book_id") or "") == book_id
+    ]
+
+
 def _hint_lock_reason(store: Any, book: dict[str, Any], declared: DeclaredSource) -> str:
     """Duplicate/skip only for a hinted Book that belongs to someone else.
 
@@ -206,6 +217,7 @@ def plan_lorebook_import(
             details={
                 "name": str(book.get("name") or ""),
                 "matched_by": matched_by,
+                **({"bindings": _book_bindings(store, book_id)} if matched_by == "hint" else {}),
                 "entries_add": len(planned - current),
                 "entries_update": len(planned & current),
                 "entries_remove": len(current - planned),

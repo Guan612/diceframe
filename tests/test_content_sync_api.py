@@ -605,3 +605,44 @@ async def test_an_unavailable_server_identity_is_an_explicit_error(sync_app, tmp
     assert status[0] == 503 and status[1]["error_code"] == "SERVER_IDENTITY_UNAVAILABLE"
     assert "server_instance_id" not in config
     assert config["server_identity_error"] == "SERVER_IDENTITY_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_status_reads_the_card_library_once_per_request(sync_app, monkeypatch) -> None:
+    app, *_ = sync_app
+    reads: list[int] = []
+    real_read = character_cards.read_library
+
+    def counting_read(dependencies):
+        reads.append(1)
+        return real_read(dependencies)
+
+    async with TestClient(TestServer(app)) as client:
+        _s, first, _ = await _push(client, [_items()[0]])
+        _s, second, _ = await _push(client, [_items()[0] | {"client_ref": "card-2"}])
+        ids = [first["items"][0]["canonical_id"], second["items"][0]["canonical_id"], "missing"]
+        monkeypatch.setattr(character_cards, "read_library", counting_read)
+        status, body = await _post(client, "/api/content/status", {"items": [
+            {"kind": "character_template", "canonical_id": card_id} for card_id in ids
+        ]})
+
+    assert status == 200 and [row["exists"] for row in body["items"]] == [True, True, False]
+    assert len(reads) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_hinted_book_reports_where_it_is_bound(sync_app) -> None:
+    app, _api, lorebook = sync_app
+    _server_book(lorebook, "server-book", entries={"town": "Old town"})
+    lorebook.bind_lorebook({"id": "b:game", "book_id": "server-book", "scope_kind": "game", "scope_id": "web|room|gm"})
+    lorebook.bind_lorebook({"id": "b:char", "book_id": "server-book", "scope_kind": "character", "scope_id": "u1"})
+    _server_book(lorebook, "free-book", entries={"town": "Town"})
+    async with TestClient(TestServer(app)) as client:
+        _s, bound = await _preview(client, [_hinted_book("server-book")])
+        _s, unbound = await _preview(client, [_hinted_book("free-book")])
+
+    bindings = bound["items"][0]["existing"]["bindings"]
+    assert sorted((b["scope_kind"], b["scope_id"]) for b in bindings) == [
+        ("character", "u1"), ("game", "web|room|gm"),
+    ]
+    assert unbound["items"][0]["existing"]["bindings"] == []
