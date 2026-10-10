@@ -731,6 +731,7 @@ export const de = {
   characterSortName: 'Sortierung: Name A–Z',
   characterSortRule: 'Sortierung: Regelwerk',
   characterLibraryNoMatches: 'Keine Charakterkarten passen zur aktuellen Suche.',
+  adoptRequiresGmHint: 'Nach Spielbeginn kann nur die SL einer Figur eine Karte zuweisen.',
   replaceCharacterHint: 'Die Wahl einer Karte ersetzt den aktuellen Charakterbogen, der Aktionsplatz bleibt erhalten.',
   emptyCharacterLibrary: 'Die gemeinsame Kartenbibliothek ist leer.',
   switchWorldTitle: 'Spiel-Weltenbuch wechseln',
@@ -2510,6 +2511,7 @@ export const de = {
   encounterSaveChanges: 'Änderungen speichern',
 
   apiErrors: {
+    ADOPT_REQUIRES_GM: 'Nach Spielbeginn kann nur die SL einer Figur eine Karte zuweisen.',
     FIELD_REQUIRES_GM: 'Diese Charakterwerte (TP, Stufe, Gold, Attribute, Gegenstände …) kann nur die SL ändern.',
     SEAT_TOKEN_REQUIRED: 'Ein Platz-Schlüssel ist nötig. Tritt über den Link deiner SL erneut bei.',
     SEAT_TOKEN_INVALID: 'Der Platz-Schlüssel ist ungültig oder wurde ersetzt. Bitte die SL um einen neuen Link.',

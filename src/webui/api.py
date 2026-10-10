@@ -1967,9 +1967,13 @@ class WebAPI:
         )
 
     async def adopt_ruleset_character_card(
-        self, game_key: str, user_id: str, card_id: str,
+        self, game_key: str, user_id: str, card_id: str, *, gm_authority: bool,
     ) -> dict[str, Any]:
-        """Adopt a library card by id; classic games apply it server-side."""
+        """Adopt a library card by id; classic games apply it server-side.
+
+        ``gm_authority`` is the caller's: after play has begun a player-side
+        caller gets ``ADOPT_REQUIRES_GM`` on either path.
+        """
         card = next(
             (
                 item for item in self.list_character_cards()["cards"]
@@ -1980,11 +1984,13 @@ class WebAPI:
         if card is not None:
             result = await characters.adopt_library_card(
                 self._character_dependencies, game_key, user_id, card,
+                gm_authority=gm_authority,
             )
             if result.get("error_code") != "RULESET_CHARACTER_OPERATION_REQUIRED":
                 return result
         return await ruleset_characters.adopt_character_card(
             self._ruleset_character_dependencies, game_key, user_id, card_id,
+            gm_authority=gm_authority,
         )
 
     def preview_live_character_advancement(

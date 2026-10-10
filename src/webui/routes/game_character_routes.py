@@ -10,7 +10,7 @@ from src.webui.api import can_modify_character
 from src.webui.routes.character_cards import sees_full_card_library
 from src.webui.routes.auth import ACCESS_PASSWORD_CONFIGURED_KEY
 from src.webui.services._common import canonical_game_key, is_game_gm
-from src.webui.character_sheet_authority import FIELD_REQUIRES_GM
+from src.webui.character_sheet_authority import ADOPT_REQUIRES_GM, FIELD_REQUIRES_GM
 from src.webui.routes._common import (
     _get_api,
     _require_confirmed_request,
@@ -124,11 +124,22 @@ async def api_ruleset_character_adopt_card(request: web.Request) -> web.Response
                 {"ok": False, "error_code": "CARD_NOT_AVAILABLE", "error": "这张角色卡不可用"},
                 status=404,
             )
-    result = await api.adopt_ruleset_character_card(gk, uid, card_id)
+    # Visibility above covers both the classic and the rules-aware dispatch.
+    # After the game has started a player-side caller (seat, bot for a player
+    # seat, P2P delegate) may not adopt onto its seat; the service checks this
+    # inside the authoritative write.
+    result = await api.adopt_ruleset_character_card(
+        gk, uid, card_id, gm_authority=_has_sheet_authority(request, inst),
+    )
     if result.get("ok"):
         return web.json_response(result)
     code = str(result.get("error_code") or "")
-    status = 409 if code == "REWRITE_IN_PROGRESS" else 404 if code == "CHARACTER_NOT_FOUND" else 422
+    status = (
+        409 if code == "REWRITE_IN_PROGRESS"
+        else 404 if code == "CHARACTER_NOT_FOUND"
+        else 403 if code == ADOPT_REQUIRES_GM
+        else 422
+    )
     return web.json_response(result, status=status)
 
 

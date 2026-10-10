@@ -12,6 +12,20 @@ export function characterCardNeedsConversion(card: CharacterCard, targetRuleId?:
   return Boolean(source && target && source !== target)
 }
 
+/**
+ * Adopting a library card replaces the seat's whole sheet.  Once play has
+ * begun (server ``play_started``) only the GM may do it; a player, or the
+ * owner previewing a seat with ``delegate`` on, is refused with
+ * ``ADOPT_REQUIRES_GM``.  Joining with a card (a new seat) is unaffected.
+ */
+export function cardAdoptionLocked(
+  detail: { play_started?: boolean } | null | undefined,
+  options: { isGm: boolean, delegate?: boolean },
+): boolean {
+  if (!detail?.play_started) return false
+  return !options.isGm || Boolean(options.delegate)
+}
+
 export function characterCardRuleName(card: CharacterCard, unboundLabel: string): string {
   return String(card.rule_name || card.rule_id || unboundLabel)
 }

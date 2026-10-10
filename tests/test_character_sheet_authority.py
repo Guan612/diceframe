@@ -12,8 +12,10 @@ from copy import deepcopy
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
 
+from src.engine.game_state import GameState
 from src.engine.modules import room_access
 from src.webui.character_sheet_authority import (
+    ADOPT_REQUIRES_GM,
     FIELD_REQUIRES_GM,
     level_up_allocation,
     player_field_violations,
@@ -205,6 +207,7 @@ async def test_bot_for_a_player_seat_is_restricted_but_gm_seat_is_not(table, mon
 @pytest.mark.asyncio
 async def test_player_adopts_a_library_card_by_id_only(table):
     """Classic adoption reads the card server-side; the request carries only its id."""
+    table.instance.state = GameState.CREATED  # lobby: players still adopt freely
     assert table.api.save_character_card({
         "character_name": "Plugin Hero", "source_plugin": "starter-pack",
         "attributes": {"str": 14}, "hp": 25, "max_hp": 25,
@@ -225,6 +228,144 @@ async def test_player_adopts_a_library_card_by_id_only(table):
     assert table.instance.players["p1"]["character_name"] == "Plugin Hero"
     assert sheet["attributes"] == {"str": 14}
     assert sheet["hp"] != 999 and sheet["gold"] != 99999
+
+
+# ---- card adoption after the game has started is GM-only --------------------
+# Adopting replaces stats, gold and equipment: mid-game it is a free re-roll.
+
+ADOPT_CARD = {
+    # Plugin-shipped, so seated players may see (and so adopt) it.
+    "character_name": "Refill Hero", "source_plugin": "starter-pack", "attributes": {"str": 18},
+    "hp": 99, "max_hp": 99, "gold": 9999,
+    "equipment": [{"name": "神剑", "type": "weapon", "slot": "main_hand"}],
+}
+
+
+def _adopt_card_id(env) -> str:
+    assert env.api.save_character_card(dict(ADOPT_CARD))["ok"]
+    return next(
+        c["id"] for c in env.api.list_character_cards()["cards"]
+        if c.get("character_name") == "Refill Hero"
+    )
+
+
+def _adopt_url(env, uid="p1", query="share=1"):
+    return _url(env, uid, query).replace(f"/character/{uid}", f"/character/{uid}/adopt-card")
+
+
+async def _adopt(env, card_id, *, headers, url=None):
+    async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
+        response = await client.post(
+            url or _adopt_url(env), headers=headers, json={"card_id": card_id},
+        )
+        return response.status, await response.json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [GameState.CREATED, GameState.WAITING])
+async def test_player_adopts_before_the_game_starts(table, state):
+    card_id = _adopt_card_id(table)
+    table.instance.state = state
+    status, body = await _adopt(table, card_id, headers=_seat(table))
+    assert status == 200, body
+    assert _sheet(table)["gold"] == 9999
+    assert table.instance.players["p1"]["character_name"] == "Refill Hero"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [
+    GameState.ACTIVE_ACTION, GameState.ACTIVE_JUDGMENT, GameState.ENDED,
+])
+async def test_seated_player_cannot_adopt_onto_its_seat_after_start(table, state):
+    card_id = _adopt_card_id(table)
+    table.instance.state = state
+    before = deepcopy(table.instance.players["p1"])
+    status, body = await _adopt(table, card_id, headers=_seat(table))
+    assert status == 403, body
+    assert body["error_code"] == ADOPT_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+
+@pytest.mark.asyncio
+async def test_paused_run_counts_as_started_only_once_activated(table):
+    """Save recovery pauses every game, a never-started lobby included."""
+    card_id = _adopt_card_id(table)
+    table.instance.state = GameState.PAUSED
+    table.instance.started_at = "2026-01-01T00:00:00+00:00"
+    before = deepcopy(table.instance.players["p1"])
+    status, body = await _adopt(table, card_id, headers=_seat(table))
+    assert status == 403, body
+    assert body["error_code"] == ADOPT_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+    table.instance.started_at = ""
+    table.instance.log.clear()
+    status, body = await _adopt(table, card_id, headers=_seat(table))
+    assert status == 200, body
+
+
+@pytest.mark.asyncio
+async def test_gm_and_owner_still_adopt_after_start(table, monkeypatch):
+    import web_server
+
+    card_id = _adopt_card_id(table)
+    assert table.instance.state == GameState.ACTIVE_ACTION
+    status, body = await _adopt(
+        table, card_id, headers={**_owner(), **CONFIRM}, url=_adopt_url(table, query=""),
+    )
+    assert status == 200, body
+    assert _sheet(table)["gold"] == 9999
+
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    as_gm = {"X-Bot-Token": "bot-secret", "X-Bot-Actor": GM_UID, **CONFIRM}
+    status, body = await _adopt(table, card_id, headers=as_gm, url=_adopt_url(table, "p2", ""))
+    assert status == 200, body
+    assert _sheet(table, "p2")["gold"] == 9999
+
+
+@pytest.mark.asyncio
+async def test_bot_for_a_player_seat_cannot_adopt_after_start(table, monkeypatch):
+    import web_server
+
+    monkeypatch.setitem(web_server.STATE, "bot_token", "bot-secret")
+    card_id = _adopt_card_id(table)
+    before = deepcopy(table.instance.players["p1"])
+    as_player = {"X-Bot-Token": "bot-secret", "X-Bot-Actor": "p1", **CONFIRM}
+    status, body = await _adopt(table, card_id, headers=as_player, url=_adopt_url(table, query=""))
+    assert status == 403, body
+    assert body["error_code"] == ADOPT_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+
+@pytest.mark.asyncio
+async def test_p2p_guest_relayed_by_host_cannot_adopt_after_start(table):
+    card_id = _adopt_card_id(table)
+    before = deepcopy(table.instance.players["p1"])
+    status, body = await _adopt(
+        table, card_id, headers={**_owner(), **CONFIRM},
+        url=_adopt_url(table, query="user=p1&share=1&delegate=1"),
+    )
+    assert status == 403, body
+    assert body["error_code"] == ADOPT_REQUIRES_GM
+    assert table.instance.players["p1"] == before
+
+
+@pytest.mark.asyncio
+async def test_new_player_still_joins_mid_game_from_a_card(table):
+    """Joining creates a fresh seat (JoinView copies a card into the form)."""
+    from test_share_gm_seat_guard import _cookie
+
+    assert table.instance.state == GameState.ACTIVE_ACTION
+    fresh, _ = table.sessions.get_or_create(None)
+    async with TestClient(TestServer(table.app), headers=ROOM_HEADER) as client:
+        response = await client.post(
+            f"/api/games/{table.key}/players?share=1", headers=_cookie(fresh),
+            json={"character_name": "Refill Hero", "attributes": {"str": 12},
+                  "race": "人类", "class": "游侠", "join_as_new": True},
+        )
+        body = await response.json()
+    assert response.status == 200, body
+    assert table.instance.players[body["user_id"]]["character_name"] == "Refill Hero"
 
 
 def test_policy_denies_rule_special_stats_and_unknown_mechanics():
@@ -277,3 +418,18 @@ async def test_gm_attribute_edit_does_not_revive_a_downed_character(table):
     )
     assert status == 200, body
     assert _sheet(table)["hp"] == 0
+
+
+@pytest.mark.asyncio
+async def test_game_detail_projects_play_started(table):
+    """The play UI hides player adoption from the same server definition."""
+    async with TestClient(TestServer(table.app), headers=ROOM_HEADER) as client:
+        started = await (await client.get(
+            f"/api/games/{table.key}?share=1", headers=_seat(table),
+        )).json()
+        table.instance.state = GameState.CREATED
+        lobby = await (await client.get(
+            f"/api/games/{table.key}?share=1", headers=_seat(table),
+        )).json()
+    assert started["play_started"] is True
+    assert lobby["play_started"] is False

@@ -322,6 +322,8 @@ export interface GameDetail {
   scene?: string
   round_number?: number
   state?: string
+  /** Lobby vs in play; after start only the GM may apply a card to a seat. */
+  play_started?: boolean
   language?: string
   solo_mode?: boolean
   narrative_perspective?: 'auto' | 'immersive' | 'third_person' | string

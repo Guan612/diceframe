@@ -7,6 +7,7 @@ from aiohttp.test_utils import TestClient, TestServer
 import pytest
 import pytest_asyncio
 
+from src.engine.game_state import GameState
 from src.engine.modules import room_access
 from src.webui.routes.character_cards import register_character_cards as register_character_cards
 from test_game_query_routes_http import (
@@ -201,6 +202,7 @@ async def test_table_save_cannot_overwrite_a_plugin_card(cards_env):
 async def test_plugin_card_survives_a_player_adopting_it(cards_env):
     """A classic-ruleset player adopts a library card by id; the server applies it."""
     env = cards_env
+    env.instance.state = GameState.CREATED  # before start a player adopts freely
     plugin_card = next(c for c in _library(env) if c.get("character_name") == "Plugin Hero")
     async with TestClient(TestServer(env.app), headers=ROOM_HEADER) as client:
         adopted = await client.post(

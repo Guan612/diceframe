@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from src.webui.character_card_projection import dedupe_cards
+from src.engine.instance_lifecycle import has_play_started
 from src.webui.character_contracts import MAX_BIO_CHARS
+from src.webui.character_sheet_authority import adopt_requires_gm_failure
 
 if TYPE_CHECKING:
     from src.rulesets.registry import RulesetRuntimeRegistry
@@ -393,14 +395,23 @@ async def adopt_character_card(
     game_key: str,
     user_id: str,
     card_id: str,
+    *,
+    gm_authority: bool,
 ) -> dict[str, Any]:
-    """Replace one live professional character from a server-owned blueprint."""
+    """Replace one live professional character from a server-owned blueprint.
+
+    Once play has begun only the GM may replace an existing seat's sheet
+    (adoption resets HP, resources and equipment: a free refill / re-roll).
+    Checked inside the authoritative write so it cannot race game start.
+    """
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None or user_id not in instance.players:
         return _failure("CHARACTER_NOT_FOUND", "角色不存在")
     async with instance.authoritative_write() as write_entered:
         if not write_entered:
             return _failure("REWRITE_IN_PROGRESS", "GM 正在重写历史回合，请等待完成后重试")
+        if not gm_authority and has_play_started(instance):
+            return adopt_requires_gm_failure()
         return await _adopt_character_card_authority(
             dependencies, instance, game_key, user_id, card_id,
         )

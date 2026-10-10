@@ -734,6 +734,7 @@ export const en = {
   characterSortName: 'Sort: Name A–Z',
   characterSortRule: 'Sort: Rule system',
   characterLibraryNoMatches: 'No character cards match the current search.',
+  adoptRequiresGmHint: 'Once the game has started, only the GM can apply a card to a character.',
   replaceCharacterHint: 'Selecting a card replaces the current character sheet while keeping the action slot.',
   emptyCharacterLibrary: 'The shared card library is empty.',
   switchWorldTitle: 'Switch Game Lorebook',
@@ -2515,6 +2516,7 @@ export const en = {
   encounterSaveChanges: 'Save changes',
 
   apiErrors: {
+    ADOPT_REQUIRES_GM: 'Once the game has started, only the GM can apply a card to a character.',
     FIELD_REQUIRES_GM: 'Only the GM can change these character fields (HP, level, gold, attributes, items…).',
     SEAT_TOKEN_REQUIRED: 'A seat credential is required. Rejoin with the link from your GM.',
     SEAT_TOKEN_INVALID: 'This seat credential is invalid or was replaced. Ask your GM for a new link.',

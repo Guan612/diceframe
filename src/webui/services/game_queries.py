@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from src.engine.game_instance import GameState
 from src.engine.health import health_payload
+from src.engine.instance_lifecycle import has_play_started
 from src.engine.language import DEFAULT_LANGUAGE, normalize_language
 from src.engine.player_control import away_control_policy
 from src.engine.visibility_rules import manual_roll_visible_to, proposal_visible_to
@@ -192,6 +193,9 @@ def game_detail(
         "world_name": instance.world_name,
         "group_name": instance.group_name,
         "state": instance.state.value,
+        # Lobby vs in play (see ``has_play_started``): after start only the GM
+        # may apply a library card to an existing seat.
+        "play_started": has_play_started(instance),
         "round_number": instance.round_number,
         "player_count": len(instance.players),
         "scene": instance.scene,
