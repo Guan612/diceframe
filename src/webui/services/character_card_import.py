@@ -562,6 +562,16 @@ class CardSyncExporter:
     def __init__(self, dependencies: CardImportDependencies) -> None:
         self.dependencies = dependencies
 
+    def status(self, canonical_id: str) -> dict[str, Any] | None:
+        with self.dependencies.lock():
+            card = next(
+                (row for row in self.dependencies.read_cards() if str(row.get("id") or "") == canonical_id),
+                None,
+            )
+        if card is None:
+            return None
+        return {"state_token": _state_token(card), "provenance": card_provenance(card)}
+
     def export(self, canonical_id: str) -> dict[str, Any] | None:
         with self.dependencies.lock():
             card = next(

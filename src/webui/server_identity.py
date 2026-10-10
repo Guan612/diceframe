@@ -21,6 +21,8 @@ from aiohttp import web
 logger = logging.getLogger("trpg")
 
 SERVER_IDENTITY_FILE = "server_identity.json"
+#: Error code for clients when the id cannot be produced.
+SERVER_IDENTITY_UNAVAILABLE = "SERVER_IDENTITY_UNAVAILABLE"
 _INSTANCE_ID_PATTERN = re.compile(r"^srv-[0-9a-f]{32}$")
 
 

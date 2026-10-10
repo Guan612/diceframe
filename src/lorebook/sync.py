@@ -17,7 +17,6 @@ from src.lorebook.import_plan import (
 
 LOREBOOK_FORMAT = "lorebook_v3"
 FORMAT_UNSUPPORTED = "FORMAT_UNSUPPORTED"
-CANONICAL_HINT_UNSUPPORTED = "CANONICAL_HINT_UNSUPPORTED"
 
 
 def lorebook_state_token(store: Any, book_id: str) -> str:
@@ -65,8 +64,6 @@ class LorebookSyncImporter:
         return nullcontext()
 
     def plan(self, source: SyncSource, item: SyncItem) -> KindPlan:
-        if item.canonical_hint:
-            raise SyncItemError(CANONICAL_HINT_UNSUPPORTED, "lorebooks are matched by identity only")
         document = item.document
         if item.format not in ("", LOREBOOK_FORMAT) or not isinstance(document, dict) or (
             document.get("spec") != LOREBOOK_FORMAT
@@ -75,7 +72,7 @@ class LorebookSyncImporter:
         declared = DeclaredSource(source.kind, source.id, canonical_id(item.client_ref, field="client_ref"))
         # Limits apply to what the adapter actually parsed, before planning.
         check_book_limits(draft_lorebook_import(document).entries, client_ref=item.client_ref)
-        plan = plan_lorebook_import(self.store, document, declared=declared)
+        plan = plan_lorebook_import(self.store, document, declared=declared, hint=item.canonical_hint)
         store = self.store
 
         def execute(resolved: Any) -> list[dict[str, Any]]:
@@ -90,6 +87,12 @@ class LorebookSyncImporter:
 class LorebookSyncExporter:
     def __init__(self, store: Any) -> None:
         self.store = store
+
+    def status(self, canonical_id: str) -> dict[str, Any] | None:
+        book = self.store.get_lorebook(canonical_id)
+        if not book:
+            return None
+        return {"state_token": lorebook_state_token(self.store, canonical_id), "provenance": book_provenance(book)}
 
     def export(self, canonical_id: str) -> dict[str, Any] | None:
         book = self.store.get_lorebook(canonical_id)

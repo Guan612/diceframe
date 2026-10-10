@@ -89,6 +89,9 @@ class LorebookImportPlan:
     content_draft: ContentDraft
     declared: DeclaredSource | None
     item: PlanItem
+    #: "identity" (the Book follows this source), "hint" (a server Book the
+    #: client named via canonical_hint) or "" (no match).
+    matched_by: str = ""
 
 
 def tracked_books(
@@ -129,22 +132,67 @@ def tracked_book(
     return matches[0] if matches else None
 
 
+#: Why a hinted Book cannot be updated by this push.
+LOCKED_PLUGIN_BOOK = "PLUGIN_BOOK"
+LOCKED_TRACKED_BY_OTHER_SOURCE = "TRACKED_BY_OTHER_SOURCE"
+LOCKED_DETACHED_FROM_OTHER_SOURCE = "DETACHED_FROM_OTHER_SOURCE"
+
+
+def _hint_lock_reason(store: Any, book: dict[str, Any], declared: DeclaredSource) -> str:
+    """Duplicate/skip only for a hinted Book that belongs to someone else.
+
+    Plugin content, and any Book carrying another source's provenance
+    (tracked, legacy-linked or detached), stays that source's lineage.
+    """
+
+    if any(str(row.get("source_plugin") or "") for row in store.list_book_entries(str(book["id"]))):
+        return LOCKED_PLUGIN_BOOK
+    if not str(book.get("source_id") or ""):
+        return ""  # created on this server: free to adopt
+    origin = (
+        str(book.get("source_kind") or ""), str(book.get("source_id") or ""),
+        str(book.get("external_id") or ""),
+    )
+    if origin == (declared.source_kind, declared.source_id, declared.external_id):
+        return ""
+    if str(book.get("import_link") or "") == "detached":
+        return LOCKED_DETACHED_FROM_OTHER_SOURCE
+    return LOCKED_TRACKED_BY_OTHER_SOURCE
+
+
 def plan_lorebook_import(
-    store: Any, payload: dict[str, Any], *, declared: DeclaredSource | None = None,
+    store: Any,
+    payload: dict[str, Any],
+    *,
+    declared: DeclaredSource | None = None,
+    hint: str = "",
 ) -> LorebookImportPlan:
-    """What a commit of ``payload`` would do against the current store."""
+    """What a commit of ``payload`` would do against the current store.
+
+    ``hint`` names a server Book the client pulled earlier. It is only
+    consulted when nothing follows the declared identity: a hint never
+    overrides an identity match.
+    """
 
     draft = draft_lorebook_import(payload)
     content_draft = lorebook_content_draft(payload, declared=declared)
     matches = tracked_books(store, content_draft, declared)
     book = matches[0] if matches else None
+    matched_by = "identity" if book is not None else ""
+    lock_reason = ""
+    if book is None and hint and declared is not None:
+        book = store.get_lorebook(hint)
+        if book is not None:
+            matched_by = "hint"
+            matches = [book]
+            lock_reason = _hint_lock_reason(store, book, declared)
     existing: ExistingMatch | None = None
     unchanged = False
     if book is not None:
         book_id = str(book["id"])
-        recorded = str(book.get("import_state_digest") or "")
-        # Books imported before plans existed carry no recorded state, so
-        # whether they were edited since is unknown rather than "no".
+        recorded = str(book.get("import_state_digest") or "") if matched_by == "identity" else ""
+        # Books imported before plans existed (and hinted Books, which never
+        # followed this source) carry no recorded state: unknown, not "no".
         server_modified = (book_state_digest(store, book_id) != recorded) if recorded else None
         planned = {
             import_entry_id(store, draft, book_id, index, entry)
@@ -157,6 +205,7 @@ def plan_lorebook_import(
             server_modified=server_modified,
             details={
                 "name": str(book.get("name") or ""),
+                "matched_by": matched_by,
                 "entries_add": len(planned - current),
                 "entries_update": len(planned & current),
                 "entries_remove": len(current - planned),
@@ -178,8 +227,12 @@ def plan_lorebook_import(
         draft_digest=content_draft.digest,
         action="create" if existing is None else ("unchanged" if unchanged else "update"),
         existing=existing,
+        restricted_to=("duplicate", "skip") if lock_reason else None,
+        reason=lock_reason,
     )
-    return LorebookImportPlan(draft=draft, content_draft=content_draft, declared=declared, item=item)
+    return LorebookImportPlan(
+        draft=draft, content_draft=content_draft, declared=declared, item=item, matched_by=matched_by,
+    )
 
 
 def _new_book_id(store: Any, plan: LorebookImportPlan) -> str:
@@ -263,7 +316,9 @@ def execute_lorebook_plan(
         return {"status": "updated", "book_id": book_id, "entries_removed": len(removed)}
 
     book_id = _new_book_id(store, plan)
-    detached = existing.canonical_id if existing is not None else ""
+    # Only a Book that followed this source is detached by "keep both"; a
+    # hinted Book is someone else's and stays exactly as it is.
+    detached = existing.canonical_id if existing is not None and plan.matched_by == "identity" else ""
 
     def _create() -> None:
         if detached:
@@ -280,7 +335,7 @@ def execute_lorebook_plan(
 
     in_import_transaction(store, _create)
     result: dict[str, Any] = {
-        "status": "duplicated" if detached else "created", "book_id": book_id, "entries_removed": 0,
+        "status": "duplicated" if existing is not None else "created", "book_id": book_id, "entries_removed": 0,
     }
     if detached:
         result["detached_book_id"] = detached

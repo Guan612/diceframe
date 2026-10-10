@@ -1821,6 +1821,9 @@ class WebAPI:
             self._content_sync_dependencies(), body, pushed_by_device=pushed_by_device,
         )
 
+    def content_status(self, body: dict[str, Any]) -> dict[str, Any]:
+        return content_sync.content_status(self._content_sync_dependencies(), body)
+
     def export_content(self, body: dict[str, Any], *, server_instance_id: str) -> dict[str, Any]:
         return content_sync.export_content(
             self._content_sync_dependencies(), body, server_instance_id=server_instance_id,
