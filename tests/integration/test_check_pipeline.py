@@ -8,6 +8,7 @@ LLM 是脚本替身；骰子与结算管线真实执行。核心断言：骰值�
 from __future__ import annotations
 
 import pytest
+from src.engine.modules import checks as checks_module
 
 
 VALID_D20_VERDICTS = {"大成功", "成功", "失败", "大失败"}
@@ -29,7 +30,7 @@ async def test_player_action_flows_through_server_side_check_pipeline(
     assert await inst.try_advance() is True
     await api._handler.process_round(inst)
 
-    checks = [dict(c) for c in inst.last_checks]
+    checks = [dict(c) for c in checks_module.last_checks(inst)]
     assert checks, "玩家行动应产生服务端检定"
     mine = [c for c in checks if c.get("actor_uid") == player_uid]
     assert mine, "检定应归属到行动玩家（actor 不串）"

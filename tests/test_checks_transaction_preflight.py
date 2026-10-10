@@ -131,7 +131,7 @@ def test_ruleset_restore_preflights_check_snapshot_keys_before_other_restoration
 @pytest.mark.asyncio
 async def test_manual_roll_rejection_preserves_requests_and_status(operation, attribute_double):
     instance = _make_populated_instance()
-    instance.manual_roll_requests.clear()
+    checks.manual_roll_requests(instance).clear()
     if attribute_double:
         # Non-aggregate doubles carry only module state; the service reads the
         # checks slot directly, so rejection must not depend on GameInstance.
@@ -179,8 +179,8 @@ async def test_luck_rejection_preserves_resources_checks_and_timers(operation):
         "threshold": 50, "verdict": "失败", "luck_decision": "pending",
         "luck_spend_available": True,
     }
-    instance.last_checks = [check]
-    instance.last_check = dict(check)
+    checks.replace_last_checks(instance, [check])
+    checks.replace_last_check(instance, dict(check))
     # Retain the data inside the unsupported slot to detect accidental writes.
     instance.modules["checks"]["schema_version"] = 99
     timer = Mock()

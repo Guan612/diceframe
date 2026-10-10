@@ -12,6 +12,7 @@ from src.migrations.instance import (
     _migrate_v26_to_v27,
     migrate_game_state_payload,
 )
+from src.engine.modules import checks
 
 VALUES = {
     "last_overreach": [{"player": "u1", "reason": "claimed NPC action"}],
@@ -104,7 +105,7 @@ async def test_reset_retains_reports_and_reset_round_checks_clears_in_place():
     for field, value in values.items():
         assert getattr(instance, field) is value
         assert value == []
-    assert instance.round_checks_prepared is True
+    assert checks.round_checks_prepared(instance) is True
 
 
 def test_unknown_versions_are_preserved_but_runtime_access_is_rejected():

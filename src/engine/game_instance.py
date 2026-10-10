@@ -321,40 +321,6 @@ class GameInstance:
         round_safety.replace_death_save_outcomes(self, value)
 
     @property
-    def last_check(self) -> CheckResult | None:
-        """最近一次结构化检定（前端判定卡片）。"""
-        return checks.last_check(self)
-
-    @last_check.setter
-    def last_check(self, value: CheckResult | None) -> None:
-        checks.replace_last_check(self, value)
-
-    @property
-    def last_checks(self) -> list[CheckResult]:
-        return checks.last_checks(self)
-
-    @last_checks.setter
-    def last_checks(self, value: list[CheckResult]) -> None:
-        checks.replace_last_checks(self, value)
-
-    @property
-    def round_checks_prepared(self) -> bool:
-        """检定已准备；幸运选择必须发生在 LLM 叙事之前。"""
-        return checks.round_checks_prepared(self)
-
-    @round_checks_prepared.setter
-    def round_checks_prepared(self, value: bool) -> None:
-        checks.replace_round_checks_prepared(self, value)
-
-    @property
-    def manual_roll_requests(self) -> list[dict[str, Any]]:
-        return checks.manual_roll_requests(self)
-
-    @manual_roll_requests.setter
-    def manual_roll_requests(self, value: list[dict[str, Any]]) -> None:
-        checks.replace_manual_roll_requests(self, value)
-
-    @property
     def total_llm_calls(self) -> int:
         return session_stats.total_llm_calls(self)
 
@@ -1099,13 +1065,13 @@ class GameInstance:
 
     def reset_round_checks(self, *, prepared: bool = False) -> None:
         checks.require_writable(self)
-        self.last_check = None
-        self.last_checks.clear()
+        checks.replace_last_check(self, None)
+        checks.last_checks(self).clear()
         self.last_overreach.clear()
         self.last_world_legality.clear()
         self.last_world_events.clear()
         self.round_unpriced_purchase_intents.clear()
-        self.round_checks_prepared = prepared
+        checks.replace_round_checks_prepared(self, prepared)
 
     def mark_log_persisted(self) -> None:
         """记录当前日志已经完整写入增量聊天日志。"""
@@ -1329,7 +1295,7 @@ class GameInstance:
         """返回当前等待玩家决定是否消耗幸运的检定。"""
         return [
             dict(check)
-            for check in self.last_checks
+            for check in checks.last_checks(self)
             if check.get("luck_decision") == "pending"
             and (not user_id or str(check.get("actor_uid") or "") == user_id)
         ]

@@ -15,6 +15,7 @@ from src.commands.progression_resolver import ProgressionResolver
 from src.engine.game_instance import GameInstance
 from src.engine.checks import build_check_request, resolve_check_request, roll_check_request
 from src.rules.rule_system import RuleSystem
+from src.engine.modules import checks
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -115,7 +116,7 @@ def test_only_named_attacker_hits_named_target() -> None:
             },
         },
     ]
-    instance.last_checks = [{
+    checks.replace_last_checks(instance, [{
         "check_id": "b-attacks-a",
         "actor_uid": "b",
         "actor_name": "星墨",
@@ -127,7 +128,7 @@ def test_only_named_attacker_hits_named_target() -> None:
         "verdict": "成功",
         "is_critical": False,
         "is_fumble": False,
-    }]
+    }])
 
     text = CombatResolver().resolve_combat(instance, "ignored", "hp_based")
 
@@ -219,8 +220,8 @@ def test_coc_bonus_die_in_round_pipeline_shares_units(monkeypatch) -> None:
     action["dice_value"] = result["value"]
     action["dice_rolls"] = result["rolls"]
     DiceResolver().resolve_action_check(instance, action, rule)
-    assert instance.last_check["roll"] == 30
-    assert instance.last_check["advantage_mode"] == "advantage"
+    assert checks.last_check(instance)["roll"] == 30
+    assert checks.last_check(instance)["advantage_mode"] == "advantage"
 
 
 def test_explicit_coc_penalty_die_overrides_percent_modifier() -> None:
@@ -375,7 +376,7 @@ def test_core_resolution_is_the_same_result_recorded_by_command_adapter() -> Non
     DiceResolver().resolve_action_check(instance, action, rule)
 
     assert expected is not None
-    assert instance.last_check == expected
+    assert checks.last_check(instance) == expected
     assert expected["total"] == 15
     assert expected["verdict"] == "成功"
 
