@@ -1068,6 +1068,23 @@ class PluginHost:
                     return {"plugin_id": plugin_id, "permissions": self._plugin_permissions(runtime)}
         return None
 
+    def api_token_active(self, plugin_id: str, token: str) -> bool:
+        """Whether ``token`` still speaks for ``plugin_id`` on a long-lived request.
+
+        Same check as :meth:`authenticate_api_token`, and the plugin has not
+        been turned off (disabled with no process left). An enabled plugin
+        between restarts, or one started from the UI switch without being
+        enabled, stays active.
+        """
+        identity = self.authenticate_api_token(token)
+        if not identity or identity.get("plugin_id") != plugin_id:
+            return False
+        runtime = self.plugins.get(plugin_id)
+        if runtime is None:
+            return False
+        process_running = bool(runtime.process and runtime.process.returncode is None)
+        return bool(runtime.config.get("enabled") or process_running)
+
     async def stop(self, plugin_id: str, *, keep_enabled: bool = False) -> None:
         runtime = self._require(plugin_id)
         # 用户主动关闭插件时，把 enabled 置 false 并保存，重启后不再自动拉起。
