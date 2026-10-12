@@ -10,6 +10,8 @@ would keep receiving the seat's narration and private messages.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import hashlib
 from types import SimpleNamespace
 
 from aiohttp.test_utils import TestClient, TestServer
@@ -18,7 +20,9 @@ import pytest
 import web_server
 from src.engine.modules import room_access
 from src.plugin_host import PluginHost
+from src.webui.access_control import WebAccessControl
 from src.webui.access_password import hash_access_password
+from src.webui.sse_ticket import SseTicketStore
 from test_game_query_routes_http import ROOM_HEADER, _owner, _owner_password  # noqa: F401
 from test_game_query_routes_http import play_env  # noqa: F401
 from test_share_gm_seat_guard import share_env  # noqa: F401
@@ -208,16 +212,76 @@ async def test_gm_bot_stream_survives_closed_player_access(bot_env):
         await _assert_stays_open(stream)
 
 
+def _digest(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_plugin_stream_survives_restart_with_persisted_token(bot_env):
+    """A restart stops the process and spawns a new one; the API token is
+    persisted in the plugin's auth.json and reloaded unchanged."""
+    env = bot_env
+    host = env.plugin_host
+    auth_file = host.data_dir / PLUGIN_ID / "auth.json"
+    auth_file.parent.mkdir(parents=True, exist_ok=True)
+    auth_file.write_text('{"api_token": "%s"}' % PLUGIN_TOKEN, encoding="utf-8")
+    async with TestClient(TestServer(_sse_app(env))) as client:
+        stream = await _open_bot_stream(client, env, _bot(PLUGIN_TOKEN))
+        runtime = host.plugins[PLUGIN_ID]
+        runtime.process = None  # stop(keep_enabled=True): enabled stays on
+        await _assert_stays_open(stream)
+        # start() hands the new process the same token (TRPG_BOT_TOKEN).
+        assert host._plugin_api_token(PLUGIN_ID) == PLUGIN_TOKEN
+        runtime.process = SimpleNamespace(returncode=None)
+        await _assert_stays_open(stream)
+
+
+@pytest.mark.asyncio
+async def test_bot_grant_never_holds_the_plaintext_token(bot_env):
+    env = bot_env
+    captured = []
+    access = WebAccessControl({"bot_token": GLOBAL_TOKEN})
+
+    async def handler(request):
+        from src.webui.access_control import BOT_GRANT_KEY
+        captured.append(request[BOT_GRANT_KEY])
+        from aiohttp import web
+        return web.json_response({"ok": True})
+
+    from aiohttp import web
+    app = web.Application(middlewares=[access.middleware])
+    app["plugin_host"] = env.plugin_host
+    app.router.add_get("/api/bot/ping", handler)
+    async with TestClient(TestServer(app)) as client:
+        for token in (GLOBAL_TOKEN, PLUGIN_TOKEN):
+            response = await client.get("/api/bot/ping", headers={"X-Bot-Token": token})
+            assert response.status == 200
+    store = SseTicketStore()
+    for grant, token in zip(captured, (GLOBAL_TOKEN, PLUGIN_TOKEN)):
+        store.issue("k", "p1", grant)
+        ticket = next(iter(store._tickets.values()))
+        store._tickets.clear()
+        for obj in (grant, ticket):
+            for view in (repr(obj), str(dataclasses.asdict(obj)), str(vars(obj))):
+                assert token not in view
+        assert grant.token_digest == _digest(token)
+
+
 def test_plugin_api_token_active_tracks_authentication_and_shutdown(tmp_path):
     host = PluginHost(tmp_path / "plugins", tmp_path / "plugin-data")
     host.plugins = {PLUGIN_ID: _plugin_runtime()}
     host._api_tokens[PLUGIN_ID] = PLUGIN_TOKEN
-    assert host.api_token_active(PLUGIN_ID, PLUGIN_TOKEN) is True
-    assert host.api_token_active(PLUGIN_ID, "wrong") is False
-    assert host.api_token_active("other-plugin", PLUGIN_TOKEN) is False
+    digest = _digest(PLUGIN_TOKEN)
+    assert host.api_token_active(PLUGIN_ID, digest) is True
+    assert host.api_token_active(PLUGIN_ID, PLUGIN_TOKEN) is False  # plaintext is not a digest
+    assert host.api_token_active(PLUGIN_ID, _digest("wrong")) is False
+    assert host.api_token_active(PLUGIN_ID, "") is False
+    assert host.api_token_active("other-plugin", digest) is False
+    host.plugins[PLUGIN_ID] = _plugin_runtime(permissions=())
+    assert host.api_token_active(PLUGIN_ID, digest) is False
     host.plugins[PLUGIN_ID] = _plugin_runtime(enabled=True, running=False)
-    assert host.api_token_active(PLUGIN_ID, PLUGIN_TOKEN) is True
+    assert host.api_token_active(PLUGIN_ID, digest) is True
     host.plugins[PLUGIN_ID] = _plugin_runtime(enabled=False, running=True)
-    assert host.api_token_active(PLUGIN_ID, PLUGIN_TOKEN) is True
+    assert host.api_token_active(PLUGIN_ID, digest) is True
     host.plugins[PLUGIN_ID] = _plugin_runtime(enabled=False, running=False)
-    assert host.api_token_active(PLUGIN_ID, PLUGIN_TOKEN) is False
+    assert host.api_token_active(PLUGIN_ID, digest) is False
