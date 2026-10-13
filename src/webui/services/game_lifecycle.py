@@ -174,7 +174,7 @@ async def create_game(
     normalized_play_mode = str(play_mode or "").strip().casefold()
     if not normalized_play_mode:
         normalized_play_mode = "adventure" if str(adventure_id or "").strip() else "free"
-    if normalized_play_mode not in {"free", "adventure"}:
+    if normalized_play_mode not in adventure_runtime_state.PLAY_MODES:
         return {"ok": False, "error": "玩法模式无效"}
     if normalized_play_mode == "adventure" and not str(adventure_id or "").strip():
         return {"ok": False, "error": "冒险包剧情模式必须选择冒险包"}
