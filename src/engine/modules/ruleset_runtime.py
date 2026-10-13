@@ -42,6 +42,28 @@ def require_writable(instance: Any) -> None:
         raise ModuleStateError(f"unsupported ruleset_runtime module schema: {slot.get('schema_version')!r}")
 
 
+class RulesetBindingError(ValueError):
+    code = "RULESET_BINDING_MISMATCH"
+
+    def __init__(self) -> None:
+        super().__init__("存档未绑定当前权威规则运行时")
+
+
+def bound_runtime_id(instance: Any) -> str:
+    """Read the binding without repairing or materializing module state."""
+    modules = getattr(instance, "modules", None)
+    slot = modules.get(MODULE_NAME) if isinstance(modules, dict) else None
+    raw = slot.get("binding") if isinstance(slot, dict) else None
+    runtime_id = raw.get("id") if isinstance(raw, dict) else None
+    return runtime_id if isinstance(runtime_id, str) else ""
+
+
+def require_binding(instance: Any, runtime_id: str) -> None:
+    """Reject writes whose runtime does not own the saved binding."""
+    if not runtime_id or bound_runtime_id(instance) != runtime_id:
+        raise RulesetBindingError()
+
+
 def binding(instance: Any) -> dict[str, Any]:
     return get_module_state(instance, MODULE_NAME)["binding"]
 
@@ -80,35 +102,80 @@ def persisted_state(instance: Any) -> dict[str, Any]:
 
 def bind(instance: Any, normalized: dict[str, Any]) -> None:
     require_writable(instance)
-    instance.ruleset_runtime = normalized
-    if not instance.ruleset_state:
-        instance.ruleset_state = {"state_schema_version": normalized["state_schema_version"]}
+    replace_binding(instance, normalized)
+    if not state(instance):
+        replace_state(instance, {"state_schema_version": normalized["state_schema_version"]})
 
 
 def copy_binding_for_new_run(candidate: Any, source: Any) -> None:
     require_writable(source)
     require_writable(candidate)
-    candidate.ruleset_runtime = deepcopy(source.ruleset_runtime)
-    candidate.ruleset_state = (
-        {"state_schema_version": int(source.ruleset_runtime.get("state_schema_version", 1) or 1)}
-        if source.ruleset_runtime else {}
-    )
+    replace_binding(candidate, deepcopy(binding(source)))
+    replace_state(candidate, (
+        {"state_schema_version": int(binding(source).get("state_schema_version", 1) or 1)}
+        if binding(source) else {}
+    ))
 
 
 def reset(instance: Any, saved_binding: dict[str, Any]) -> None:
     require_writable(instance)
-    instance.ruleset_runtime = saved_binding
-    instance.ruleset_state = (
+    replace_binding(instance, saved_binding)
+    replace_state(instance, (
         {"state_schema_version": int(saved_binding.get("state_schema_version", 1) or 1)}
         if saved_binding else {}
-    )
-    instance.event_ledger.clear()
+    ))
+    event_ledger(instance).clear()
 
 
 def restore_from_transaction(instance: Any, snapshot: dict[str, Any]) -> None:
     require_writable(instance)
-    instance.ruleset_state = deepcopy(snapshot["ruleset_state"])
-    instance.event_ledger = deepcopy(snapshot["event_ledger"])
+    replace_state(instance, deepcopy(snapshot["ruleset_state"]))
+    replace_event_ledger(instance, deepcopy(snapshot["event_ledger"]))
+
+
+def round_entry_snapshot(instance: Any) -> dict[str, Any]:
+    """Judgment-entry record: full state copy, ledger as an append-only mark.
+
+    The ledger only grows inside a round, so its length plus the last batch id
+    identify the entry point without persisting a second copy of the ledger.
+    """
+    ledger = event_ledger(instance)
+    last = ledger[-1] if ledger and isinstance(ledger[-1], dict) else {}
+    return {
+        "state": deepcopy(state(instance)),
+        "ledger_length": len(ledger),
+        "ledger_last_batch_id": str(last.get("batch_id") or ""),
+    }
+
+
+def restore_round_entry(instance: Any, entry: Any) -> bool:
+    """Roll state and ledger back to a ``round_entry_snapshot``.
+
+    The ledger is truncated only when it still extends the recorded entry;
+    if it was replaced meanwhile it is left alone. Returns whether the ledger
+    was rewound (state is always restored for a well-formed entry).
+    """
+    if not isinstance(entry, dict) or not isinstance(entry.get("state"), dict):
+        return False
+    require_writable(instance)
+    replace_state(instance, deepcopy(entry["state"]))
+    length = entry.get("ledger_length")
+    ledger = event_ledger(instance)
+    if type(length) is not int or length < 0 or length > len(ledger):
+        return False
+    # With an empty entry ledger there is no marker to distinguish an
+    # append-only extension from a ledger that was replaced wholesale.  Keep
+    # the current ledger rather than clearing unrelated events; the caller
+    # still restores the ruleset state and logs the ambiguous ledger.
+    if length == 0 and ledger:
+        return False
+    if length:
+        last = ledger[length - 1]
+        last_id = str(last.get("batch_id") or "") if isinstance(last, dict) else ""
+        if last_id != str(entry.get("ledger_last_batch_id") or ""):
+            return False
+    del ledger[length:]
+    return True
 
 
 SPEC = ModuleStateSpec(name=MODULE_NAME, schema_version=SCHEMA_VERSION, fresh=fresh, ensure=ensure)

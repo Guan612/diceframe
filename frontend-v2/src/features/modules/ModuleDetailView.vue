@@ -132,6 +132,14 @@ async function run(action: 'update' | 'disable' | 'enable' | 'uninstall') {
         <ul v-else><li v-for="adventure in module.adventures" :key="adventure.adventure_id">{{ adventure.adventure_id }} · {{ adventure.version }}</li></ul>
       </section>
 
+      <section class="module-detail-section" data-testid="module-lorebooks">
+        <h2>{{ t('modulesLorebooks') }}</h2>
+        <p v-if="!(module.lorebooks || []).length" class="muted">{{ t('modulesNoLorebooks') }}</p>
+        <ul v-else>
+          <li v-for="book in (module.lorebooks || [])" :key="book.id">{{ book.name }} · {{ book.language }}</li>
+        </ul>
+      </section>
+
       <section class="module-detail-section" data-testid="module-content">
         <h2>{{ t('modulesContentCount') }}</h2>
         <ul><li v-for="(items, kind) in module.content" :key="kind">{{ kind }} · {{ items.length }}</li></ul>
@@ -181,15 +189,15 @@ async function run(action: 'update' | 'disable' | 'enable' | 'uninstall') {
 
 <style scoped>
 .back-link { display: inline-block; margin-bottom: 1rem; }
-.module-detail-section { margin-top: 1.5rem; padding: 1rem 0; border-top: 1px solid var(--border-color, #d6d0c4); }
+.module-detail-section { margin-top: 1.5rem; padding: 1rem 0; border-top: 1px solid var(--df-border-soft); }
 .module-detail-section h2 { margin: 0 0 .5rem; }
 .module-facts { display: grid; gap: .35rem; margin: 0; }
-.module-facts dt { color: var(--text-muted, #69707d); font-size: .8rem; }
+.module-facts dt { color: var(--df-text-muted); font-size: .8rem; }
 .module-facts dd { margin: 0; overflow-wrap: anywhere; }
 .module-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
 .module-actions button { min-height: 34px; }
-.module-actions .danger { color: var(--error, #c0392b); }
-.module-status { color: var(--primary); }
+.module-actions .danger { color: var(--df-danger); }
+.module-status { color: var(--df-success); }
 @media (max-width: 480px) {
   .module-actions { flex-direction: column; }
   .module-actions button { width: 100%; }

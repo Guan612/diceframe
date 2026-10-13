@@ -10,6 +10,7 @@ export type ModuleSummary = {
   status: string
   adventure_count: number
   content_counts: Record<string, number>
+  lorebook_count: number
 }
 
 export type ModulesResponse = {
@@ -33,6 +34,7 @@ export type ModuleActionGuard = {
 export type ModuleDetail = ModuleSummary & {
   content: Record<string, Array<{ key: string; title: string; description: string }>>
   adventures: Array<{ adventure_id: string; version: string; format: string; directory_id: string }>
+  lorebooks: Array<{ id: string; name: string; description: string; language: string; enabled: boolean; source_kind: string; source_id: string }>
   bound_games?: ModuleBoundGame[]
   actions?: Record<string, ModuleActionGuard>
 }
@@ -51,6 +53,18 @@ export type ModuleUsageResponse = {
   total_games?: number
 }
 export type ModulePreviewResponse = { ok: boolean; blockers: string[]; warnings: string[] }
+export type ExternalModulePreviewResponse = {
+  ok: boolean
+  adapter?: string
+  format?: string
+  source_name?: string
+  manifest?: Record<string, unknown>
+  warnings?: string[]
+  blockers?: string[]
+  review_required?: boolean
+  auto_installable?: boolean
+  error?: string
+}
 
 /** 在线模组（复用插件市场索引，只保留 content-pack；FIX-06 §8）。 */
 export type ModuleMarketplaceItem = {
@@ -94,9 +108,13 @@ export const moduleApi = {
   usages: (moduleId: string) => api<ModuleUsageResponse>(`/modules/${encodeURIComponent(moduleId)}/usages`),
   previewImport: (body: FormData) => api<ModulePreviewResponse>('/modules/import/preview', { method: 'POST', body }),
   import: (body: FormData) => api<{ ok: boolean; id?: string }>('/modules/import', { method: 'POST', body }),
-  marketplace: (keyword = '') => api<ModuleMarketplaceResponse>(
-    `/modules/marketplace${keyword ? `?keyword=${encodeURIComponent(keyword)}` : ''}`,
-  ),
+  marketplace: (keyword = '', ruleset = 'all') => {
+    const query = new URLSearchParams({
+      ...(keyword ? { keyword } : {}),
+      ...(ruleset && ruleset !== 'all' ? { ruleset } : {}),
+    }).toString()
+    return api<ModuleMarketplaceResponse>(`/modules/marketplace${query ? `?${query}` : ''}`)
+  },
   installFromMarketplace: (moduleId: string, overwrite = false) => api<{ ok: boolean; id?: string }>(
     `/modules/${encodeURIComponent(moduleId)}/install`,
     { method: 'POST', body: JSON.stringify({ overwrite }) },

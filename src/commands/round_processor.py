@@ -25,7 +25,6 @@ from src.commands.economy_effects import (
 )
 from src.commands.round_effects import (
     append_state_change_messages,
-    apply_combat_command,
     apply_confirmed_items,
     apply_growth_rewards,
     apply_memory_delta,
@@ -64,11 +63,14 @@ from src.engine.economy import (
     queue_effect_group,
 )
 from src.engine.economy import filter_unconfirmed_purchase_grants, has_pending_identical_purchase
-from src.engine import combat_narrative, progression
+from src.engine import combat_narrative, module_hooks, progression
 from src.engine.game_instance import GameInstance, GameState, _snapshot_players
 from src.engine.module_state import ModuleStateError
 from src.engine.modules.media import replace_scene_image
-from src.engine.modules import checks, legacy_combat, round_safety, ruleset_runtime, session_stats, world_reports
+from src.engine.modules import (
+    adventure_runtime_state, checks, legacy_combat, media, narrative_notes, progression_state, round_safety,
+    ruleset_runtime, session_stats, table_settings,
+)
 from src.engine.language import localized_text
 from src.engine.world_events import advance_world_time
 from src.engine.world.memory_projection import queue_world_memory
@@ -85,6 +87,7 @@ from src.lorebook.retrieval import LoreRetriever
 from src.imagegen import (
     ImageGenerationError,
     ImageGenerationRequest,
+    StoryboardInferenceError,
     game_image_owner_id,
     infer_scene_panels,
     normalize_scene_panels,
@@ -176,7 +179,7 @@ def _build_recent_public_narration_context(
 
 def format_overreach_block(instance: GameInstance) -> str:
     """把本轮裁判的越权标注组装为可信裁定块（服务端组装，玩家不可注入）。"""
-    notes = list(getattr(instance, "last_overreach", []) or [])
+    notes = list(module_hooks.read(instance, module_hooks.OVERREACH))
     if not notes:
         return ""
     lines = []
@@ -261,6 +264,7 @@ class RoundProcessor:
         summary_max_tokens: int,
         analysis_max_tokens: int,
         lore_retriever: Any | None = None,
+        content_projection: Any | None = None,
         advance_adventure_world: Callable[[GameInstance], dict[str, Any]] | None = None,
     ):
         self.registry = registry
@@ -268,6 +272,7 @@ class RoundProcessor:
         self.matcher = matcher
         self.lore_retriever = lore_retriever or LoreRetriever(matcher)
         self.lorebook_store = lorebook_store
+        self.content_projection = content_projection
         self.memory_store = memory_store
         self._prompt = prompt
         self._dice = dice
@@ -289,6 +294,10 @@ class RoundProcessor:
         self._image_generation = None
         # 每局同一时间只允许一个生图任务：连续快速推进时跳过新请求
         self._scene_image_tasks: dict[tuple[tuple[str, ...], str], asyncio.Task] = {}
+        # GM 漏掉 SCENE_PANEL 时的后台补分镜任务。只保存公开分镜草稿，不触发生图。
+        self._storyboard_draft_tasks: dict[
+            tuple[tuple[str, ...], str, int, int, str], asyncio.Task
+        ] = {}
 
     def set_image_generation_service(self, service) -> None:
         self._image_generation = service
@@ -301,7 +310,7 @@ class RoundProcessor:
         self._advance_adventure_world = callback
 
     def _ruleset_runtime(self, instance: GameInstance) -> Any | None:
-        binding = dict(getattr(instance, "ruleset_runtime", {}) or {})
+        binding = dict(ruleset_runtime.binding(instance) or {})
         runtime_id = str(binding.get("id") or "")
         ruleset_registry = getattr(self._prompt, "ruleset_registry", None)
         if ruleset_registry is None or not runtime_id:
@@ -328,8 +337,8 @@ class RoundProcessor:
         """离线兼容路径：模型工具不可用时按旧规则意图结算检定。"""
         progression.require_writable(instance)
         checks.require_writable(instance)
-        if instance.round_checks_prepared:
-            return list(instance.last_checks)
+        if checks.round_checks_prepared(instance):
+            return list(checks.last_checks(instance))
         if instance.state != GameState.ACTIVE_JUDGMENT:
             return []
         actions_text = collect_actions_text(instance)
@@ -344,21 +353,21 @@ class RoundProcessor:
             self._dice,
             skip_action_indexes=deferred_indexes,
         )
-        for check in instance.last_checks:
+        for check in checks.last_checks(instance):
             if not check.get("check_id"):
                 check["check_id"] = uuid.uuid4().hex
             if check.get("luck_spend_available"):
                 check["luck_decision"] = "pending"
         instance.complete_round_check_preparation()
-        return list(instance.last_checks)
+        return list(checks.last_checks(instance))
 
     async def prepare_round_checks_ai(self, instance: GameInstance) -> list[dict]:
         """阶段 1：由 GM 模型统一规划检定，再由服务端一次性掷骰结算。"""
         progression.require_writable(instance)
         session_stats.require_writable(instance)
         checks.require_writable(instance)
-        if instance.round_checks_prepared:
-            return list(instance.last_checks)
+        if checks.round_checks_prepared(instance):
+            return list(checks.last_checks(instance))
         if instance.state != GameState.ACTIVE_JUDGMENT:
             return []
         actions_text = collect_actions_text(instance)
@@ -392,7 +401,7 @@ class RoundProcessor:
                 return []
             logger.info(
                 "检定规划: 完成 (round=%d, 耗时=%dms)",
-                instance.round_number,
+                progression_state.round_value(instance),
                 int((time.perf_counter() - plan_started) * 1000),
             )
             # AI 报价落库必须在过时检查之后：创建提案会推进 revision，
@@ -404,7 +413,7 @@ class RoundProcessor:
                     ):
                         logger.info(
                             "同商品购买已待确认，跳过重复 AI 报价: payer=%s target=%s round=%d",
-                            offer["payer_uid"], offer["target"], instance.round_number,
+                            offer["payer_uid"], offer["target"], progression_state.round_value(instance),
                         )
                         continue
                     quantity = max(1, min(8, int(offer.get("quantity", 1) or 1)))
@@ -416,7 +425,7 @@ class RoundProcessor:
                         reason=str(offer.get("note") or ""),
                         source="table_offer",
                         source_ref=(
-                            f"ai:{instance.run_id}:{instance.round_number}:"
+                            f"ai:{instance.run_id}:{progression_state.round_value(instance)}:"
                             f"{offer['payer_uid']}:{offer['target']}:{quantity}:"
                             f"{offer.get('amount_scope') or 'total'}:{offer['amount']}"
                         ),
@@ -447,23 +456,27 @@ class RoundProcessor:
             errors = metadata.get("errors") or []
             if errors:
                 logger.warning("部分 AI 检定参数被拒绝: %s", "; ".join(str(item) for item in errors))
-            world_reports.replace_last_overreach(instance, list(metadata.get("overreach") or []))
+            module_hooks.record(
+                instance, module_hooks.OVERREACH, list(metadata.get("overreach") or []),
+            )
             # 世界合法性：模型只提议结构化地点，server 对照权威世界真相后才阻断或
             # 落库合法移动；空世界/未知地点一律不阻断（旧游戏行为不变）。
             world_result = evaluate_world_requirements(
                 instance, metadata.get("world_requirements") or [],
             )
-            world_reports.replace_last_world_legality(instance, list(world_result.get("notes") or []))
+            module_hooks.record(
+                instance, module_hooks.WORLD_LEGALITY, list(world_result.get("notes") or []),
+            )
             # 逻辑世界时间：模型只报告本轮经过的时间，server 推进时钟并确定性
             # 结算到期事件（无后台 tick、无独立 scheduler）。
             time_advance = metadata.get("world_time_advance")
             if isinstance(time_advance, dict) and time_advance.get("minutes"):
                 before_world = deepcopy(getattr(instance, "world_state", None))
-                before_progress = deepcopy(getattr(instance, "adventure_progress", None))
+                before_progress = deepcopy(adventure_runtime_state.progress(instance))
                 try:
                     outcome = advance_world_time(
                         instance, int(time_advance["minutes"]),
-                        source_round=instance.round_number,
+                        source_round=progression_state.round_value(instance),
                     )
                     if self._advance_adventure_world is not None:
                         self._advance_adventure_world(instance)
@@ -473,10 +486,10 @@ class RoundProcessor:
                     # before-images makes a retry perform the same settlement
                     # exactly once rather than advancing only half the state.
                     instance.world_state = before_world
-                    instance.adventure_progress = before_progress
+                    adventure_runtime_state.replace_progress(instance, before_progress)
                     logger.warning("世界时间推进被拒绝: %s", exc)
                 else:
-                    world_reports.replace_last_world_events(instance, [
+                    module_hooks.record(instance, module_hooks.WORLD_EVENTS, [
                         {**item, "status": "applied"}
                         for item in outcome.get("applied") or []
                     ] + [
@@ -488,7 +501,7 @@ class RoundProcessor:
                     # world 类）；只读 receipts、只写 memory 侧，不触碰世界真相。
                     queue_world_memory(
                         instance, outcome.get("events") or [],
-                        round_number=instance.round_number,
+                        round_number=progression_state.round_value(instance),
                     )
             build_dice_constraint_block(
                 instance,
@@ -505,13 +518,13 @@ class RoundProcessor:
                 instance.reset_round_checks()
                 return []
             return self.prepare_round_checks(instance)
-        for check in instance.last_checks:
+        for check in checks.last_checks(instance):
             if not check.get("check_id"):
                 check["check_id"] = uuid.uuid4().hex
             if check.get("luck_spend_available"):
                 check["luck_decision"] = "pending"
         instance.complete_round_check_preparation()
-        return list(instance.last_checks)
+        return list(checks.last_checks(instance))
 
     async def process_round(self, instance: GameInstance, *, on_delta=None, on_reset=None) -> tuple[str, dict | None]:
         """执行一轮判定与叙事。
@@ -528,8 +541,9 @@ class RoundProcessor:
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
-        legacy_combat.require_writable(instance)
+        adventure_runtime_state.require_writable(instance)
         ruleset_runtime.require_writable(instance)
+        narrative_notes.require_writable(instance)
         if has_blocking_economy_decision(instance):
             logger.info("等待经济提案结算，暂不生成叙事: %s", instance.game_key)
             raise RoundNotProcessed("economy_pending")
@@ -597,7 +611,7 @@ class RoundProcessor:
         effective_timeout = getattr(instance, "effective_luck_timeout_seconds", None)
         timeout = int(
             effective_timeout() if callable(effective_timeout)
-            else getattr(instance, "luck_timeout_seconds", 60) or 0
+            else table_settings.luck_timeout_seconds(instance) or 0
         )
         if timeout <= 0:
             return
@@ -653,7 +667,7 @@ class RoundProcessor:
         """后台执行摘要压缩，不阻塞回合返回。
 
         叙事已在 finish_judgment 推送，用户无需等待摘要。asyncio 单线程下
-        instance.summary 的赋值在 await 间原子，下轮读到旧/新摘要均合法；
+        narrative_notes.summary 的赋值在 await 间原子，下轮读到旧/新摘要均合法；
         关机 save_all_active 会落盘。round_number 在调度时快照，避免日志读到被推进的值。
         """
         try:
@@ -665,7 +679,7 @@ class RoundProcessor:
         """若到摘要周期（每 10 回合），调度后台摘要任务并返回；否则返回 None。"""
         if not needs_summary(instance):
             return None
-        task = asyncio.create_task(self._summarize_background(instance, gm_prompt, instance.round_number))
+        task = asyncio.create_task(self._summarize_background(instance, gm_prompt, progression_state.round_value(instance)))
         self._pending_summary_tasks.add(task)
         task.add_done_callback(self._pending_summary_tasks.discard)
         return task
@@ -676,7 +690,7 @@ class RoundProcessor:
         if service is None or not service.available or not service.auto_scene:
             return None
         prompt = str(data.get("scene_image_prompt") or "").strip()
-        completed_round = int(instance.round_number) - 1
+        completed_round = int(progression_state.round_value(instance)) - 1
         if completed_round < 0:
             return None
         _, panels, compressed_count = _scene_storyboard_payload(data)
@@ -691,6 +705,207 @@ class RoundProcessor:
             panels=panels,
             compressed_count=compressed_count,
         )
+
+    def _maybe_schedule_storyboard_draft(
+        self,
+        instance: GameInstance,
+        data: dict,
+    ) -> asyncio.Task | None:
+        """Fill a missing GM storyboard in the background without generating art.
+
+        ``SCENE_IMAGE`` remains the only automatic image trigger.  Rounds that
+        carry that tag are handled by the image task, which already performs a
+        bounded storyboard inference; this draft-only path therefore skips
+        them to avoid duplicate model calls.
+        """
+        service = self._image_generation
+        if service is None or not bool(getattr(service, "auto_storyboard", False)):
+            return None
+        # Skip only when the real automatic image task will handle the same
+        # inference.  If automatic images are disabled/unavailable, a
+        # SCENE_IMAGE tag must not prevent the manual storyboard draft from
+        # being prepared.
+        if (
+            str(data.get("scene_image_prompt") or "").strip()
+            and bool(getattr(service, "available", False))
+            and bool(getattr(service, "auto_scene", False))
+        ):
+            return None
+        declared, _ = normalize_scene_panels(
+            data.get("scene_panels"), merge_same_location=False,
+        )
+        if declared:
+            return None
+
+        completed_round = int(progression_state.round_value(instance)) - 1
+        if completed_round < 0:
+            return None
+        entry = next(
+            (
+                item for item in reversed(instance.log)
+                if _log_round(item, -1) == completed_round
+                and str(item.get("gm_response") or "").strip()
+            ),
+            None,
+        )
+        if entry is None:
+            return None
+
+        game_key = instance.game_key
+        expected_run_id = instance.run_id
+        expected_swipe = int(entry.get("current_swipe") or 0)
+        source_revision = storyboard_source_revision(entry)
+        task_key = (
+            game_key,
+            expected_run_id,
+            completed_round,
+            expected_swipe,
+            source_revision,
+        )
+        existing = self._storyboard_draft_tasks.get(task_key)
+        if existing is not None and not existing.done():
+            return None
+
+        task = asyncio.create_task(self._infer_storyboard_draft_background(
+            game_key=game_key,
+            expected_run_id=expected_run_id,
+            round_number=completed_round,
+            expected_swipe=expected_swipe,
+            source_revision=source_revision,
+            narration=str(entry.get("gm_response") or ""),
+            actions=deepcopy(entry.get("actions") or []),
+            current_scene=str(getattr(instance, "scene", "") or ""),
+            players=deepcopy(getattr(instance, "players", {}) or {}),
+        ))
+        self._storyboard_draft_tasks[task_key] = task
+        task.add_done_callback(
+            lambda completed, key=task_key: (
+                self._storyboard_draft_tasks.pop(key, None)
+                if self._storyboard_draft_tasks.get(key) is completed
+                else None
+            )
+        )
+        return task
+
+    async def _infer_storyboard_draft_background(
+        self,
+        *,
+        game_key: tuple[str, ...],
+        expected_run_id: str,
+        round_number: int,
+        expected_swipe: int,
+        source_revision: str,
+        narration: str,
+        actions: Any,
+        current_scene: str,
+        players: Any,
+    ) -> None:
+        """Infer and persist one version-bound public storyboard draft."""
+        try:
+            panels, _compressed = await infer_scene_panels(
+                self.llm_client,
+                narration=narration,
+                actions=actions,
+                current_scene=current_scene,
+                players=players,
+                global_prompt="",
+                declared_panels=[],
+                # This is an optional UI prefill.  Unlike automatic image
+                # generation it may safely fall back to a public single-panel
+                # draft when the model is unavailable.
+                strict=False,
+            )
+            panels, _ = normalize_scene_panels(
+                panels, merge_same_location=False,
+            )
+            if not panels:
+                logger.warning(
+                    "GM 漏掉分镜且后台分析未返回草稿 "
+                    "(game=%s round=%d swipe=%d)",
+                    game_key,
+                    round_number,
+                    expected_swipe,
+                )
+                return
+
+            current = self.registry.get(game_key)
+            if current is None or current.run_id != expected_run_id:
+                return
+            entry = next(
+                (
+                    item for item in reversed(current.log)
+                    if _log_round(item, -1) == round_number
+                    and str(item.get("gm_response") or "").strip()
+                ),
+                None,
+            )
+            if (
+                entry is None
+                or int(entry.get("current_swipe") or 0) != expected_swipe
+                or storyboard_source_revision(entry) != source_revision
+            ):
+                return
+            # A GM panel or a user-applied panel may have appeared while the
+            # model call was in flight. Never overwrite that newer draft.
+            existing, _ = normalize_scene_panels(
+                entry.get("scene_panels"), merge_same_location=False,
+            )
+            if existing:
+                return
+
+            old_panels = deepcopy(entry.get("scene_panels"))
+            old_meta = deepcopy(entry.get("scene_panel_meta"))
+            entry["scene_panels"] = deepcopy(panels)
+            draft_revision = storyboard_source_revision(entry)
+            entry["scene_panel_meta"] = storyboard_panel_metadata(
+                panels,
+                narration=narration,
+                actions=actions,
+                current_scene=current_scene,
+                source_revision=draft_revision,
+            )
+            try:
+                await self.registry.save(current)
+            except Exception:
+                # A save may have waited behind another writer.  Only roll
+                # back our own fields when the target entry is still the
+                # exact revision we attempted to persist; otherwise a newer
+                # swipe/round writer owns the current value.
+                if storyboard_source_revision(entry) == draft_revision:
+                    if old_panels is None:
+                        entry.pop("scene_panels", None)
+                    else:
+                        entry["scene_panels"] = old_panels
+                    if old_meta is None:
+                        entry.pop("scene_panel_meta", None)
+                    else:
+                        entry["scene_panel_meta"] = old_meta
+                logger.exception(
+                    "GM 漏掉分镜的后台草稿保存失败 "
+                    "(game=%s round=%d swipe=%d)",
+                    game_key,
+                    round_number,
+                    expected_swipe,
+                )
+                return
+            logger.info(
+                "GM 漏掉分镜，后台草稿已保存 "
+                "(game=%s round=%d swipe=%d panels=%d)",
+                game_key,
+                round_number,
+                expected_swipe,
+                len(panels),
+            )
+        except Exception:
+            # Draft inference is optional and must never fail the completed
+            # narrative turn.
+            logger.exception(
+                "GM 漏掉分镜的后台分析失败 "
+                "(game=%s round=%d swipe=%d)",
+                game_key,
+                round_number,
+                expected_swipe,
+            )
 
     def schedule_opening_scene_image(self, instance: GameInstance) -> asyncio.Task | None:
         """Schedule an opening image only when round zero explicitly requested one."""
@@ -769,7 +984,7 @@ class RoundProcessor:
             self._generate_scene_image_background(
                 game_key, expected_run_id, completed_round, prompt,
                 normalized_panels, compressed_count, character_appearances,
-                str(getattr(instance, "scene", "") or ""),
+                str(narrative_notes.scene(instance) or ""),
             )
         )
         self._scene_image_tasks[task_key] = task
@@ -816,6 +1031,7 @@ class RoundProcessor:
             if entry is None:
                 return
             source_revision = storyboard_source_revision(entry)
+            inferred_from_backend = False
             if panels:
                 inferred_panels, inferred_compressed = normalize_scene_panels(
                     panels, merge_same_location=False,
@@ -824,17 +1040,36 @@ class RoundProcessor:
             # false).  Keep a true compatibility default for lightweight
             # injected test/extension services that predate this attribute.
             elif bool(getattr(self._image_generation, "auto_storyboard", True)):
-                inferred_panels, inferred_compressed = await infer_scene_panels(
-                    self.llm_client,
-                    narration=str(entry.get("gm_response") or ""),
-                    actions=entry.get("actions") or [],
-                    current_scene=current_scene or str(getattr(current, "scene", "") or ""),
-                    players=getattr(current, "players", {}),
-                    global_prompt=prompt,
-                    declared_panels=panels,
-                    strict=(hasattr(self._image_generation, "auto_storyboard")
-                            and bool(getattr(self._image_generation, "auto_storyboard", False))),
-                )
+                try:
+                    inferred_panels, inferred_compressed = await infer_scene_panels(
+                        self.llm_client,
+                        narration=str(entry.get("gm_response") or ""),
+                        actions=entry.get("actions") or [],
+                        current_scene=current_scene or str(narrative_notes.scene(current) or ""),
+                        players=getattr(current, "players", {}),
+                        global_prompt=prompt,
+                        declared_panels=panels,
+                        strict=(hasattr(self._image_generation, "auto_storyboard")
+                                and bool(getattr(self._image_generation, "auto_storyboard", False))),
+                    )
+                    # A backend-generated draft must be available to the
+                    # manual image dialog even when the image request later
+                    # fails.  Only real image services opt into this
+                    # persistence; lightweight compatibility test services
+                    # without the setting retain their old behavior.
+                    inferred_from_backend = bool(
+                        hasattr(self._image_generation, "auto_storyboard")
+                        and getattr(self._image_generation, "auto_storyboard", False)
+                        and inferred_panels
+                    )
+                except StoryboardInferenceError as exc:
+                    logger.warning(
+                        "自动场景图分镜分析失败，跳过本次生图 (game=%s round=%d): %s",
+                        game_key,
+                        round_number,
+                        exc,
+                    )
+                    return
             else:
                 inferred_panels, inferred_compressed = [], 0
             panels = inferred_panels
@@ -842,11 +1077,69 @@ class RoundProcessor:
                 max(0, int(compressed_count or 0))
                 + max(0, int(inferred_compressed or 0))
             )
+
+            if inferred_from_backend:
+                # The inference call yielded while another round/swipe may
+                # have changed the public source.  Re-resolve the live entry
+                # before writing the draft so an old analysis cannot attach
+                # itself to a newer narrative.
+                current = self.registry.get(game_key)
+                if current is None or current.run_id != expected_run_id:
+                    return
+                entry = next(
+                    (
+                        item for item in reversed(current.log)
+                        if _log_round(item, -1) == round_number
+                        and str(item.get("gm_response") or "").strip()
+                    ),
+                    None,
+                )
+                if entry is None or storyboard_source_revision(entry) != source_revision:
+                    return
+                old_panels = deepcopy(entry.get("scene_panels"))
+                old_meta = deepcopy(entry.get("scene_panel_meta"))
+                entry["scene_panels"] = deepcopy(panels)
+                draft_revision = storyboard_source_revision(entry)
+                entry["scene_panel_meta"] = storyboard_panel_metadata(
+                    panels,
+                    narration=str(entry.get("gm_response") or ""),
+                    actions=entry.get("actions") or [],
+                    current_scene=current_scene or str(getattr(current, "scene", "") or ""),
+                    source_revision=draft_revision,
+                )
+                try:
+                    await self.registry.save(current)
+                except Exception:
+                    if old_panels is None:
+                        entry.pop("scene_panels", None)
+                    else:
+                        entry["scene_panels"] = old_panels
+                    if old_meta is None:
+                        entry.pop("scene_panel_meta", None)
+                    else:
+                        entry["scene_panel_meta"] = old_meta
+                    logger.exception(
+                        "自动场景图分镜草稿保存失败，跳过本次生图 (game=%s round=%d)",
+                        game_key,
+                        round_number,
+                    )
+                    return
+                # scene_panels is part of the source revision.  Use the new
+                # revision for the image request and the post-request stale
+                # check, otherwise a successful inference would be rejected
+                # as stale as soon as it was persisted.
+                source_revision = draft_revision
+                logger.info(
+                    "自动场景图分镜草稿已保存 (game=%s round=%d panels=%d)",
+                    game_key,
+                    round_number,
+                    len(panels),
+                )
             context: dict[str, Any] = {
                 "round": round_number,
                 "run_id": expected_run_id,
                 "source_revision": source_revision,
-                "scene": current_scene or str(getattr(current, "scene", "") or ""),
+                "scene": current_scene or str(narrative_notes.scene(current) or ""),
                 "narration": str(entry.get("gm_response") or "")[:1600],
                 "actions": str(entry.get("actions") or "")[:1200],
                 "panels": panels,
@@ -860,14 +1153,24 @@ class RoundProcessor:
                     context["storyboard"]["character_appearances"] = dict(
                         character_appearances,
                     )
-            result = await self._image_generation.generate(ImageGenerationRequest(
-                prompt=prompt,
-                purpose="scene",
-                owner_type="game",
-                owner_id=game_image_owner_id(game_key),
-                aspect_ratio="16:9",
-                context=context,
-            ))
+            try:
+                result = await self._image_generation.generate(ImageGenerationRequest(
+                    prompt=prompt,
+                    purpose="scene",
+                    owner_type="game",
+                    owner_id=game_image_owner_id(game_key),
+                    aspect_ratio="16:9",
+                    context=context,
+                ))
+            except ImageGenerationError as exc:
+                logger.warning(
+                    "自动场景图图像服务失败 (game=%s round=%d panels=%d): %s",
+                    game_key,
+                    round_number,
+                    len(panels),
+                    exc,
+                )
+                return
             # 重开/重置可能发生在生图 await 期间。旧任务不得写入新一局，
             # 同一局的 swipe 也可能已经删除或替换目标回合。
             current = self.registry.get(game_key)
@@ -887,7 +1190,7 @@ class RoundProcessor:
                 return  # 公开剧情已变化，旧任务不得覆盖新版本
             reference = {"kind": "generated", "asset_id": result.asset_id}
             old_scene_image = deepcopy(entry.get("scene_image"))
-            old_top_scene_image = deepcopy(current.scene_image)
+            old_top_scene_image = deepcopy(media.scene_image(current))
             current.set_scene_image(reference)
             entry["scene_image"] = {
                 "reference": reference,
@@ -907,7 +1210,7 @@ class RoundProcessor:
                     panels,
                     narration=str(entry.get("gm_response") or ""),
                     actions=entry.get("actions") or [],
-                    current_scene=current_scene or str(getattr(current, "scene", "") or ""),
+                    current_scene=current_scene or str(narrative_notes.scene(current) or ""),
                     source_revision=source_revision,
                 )
             try:
@@ -931,10 +1234,11 @@ class RoundProcessor:
         session_stats.require_writable(instance)
         checks.require_writable(instance)
         round_safety.require_writable(instance)
-        legacy_combat.require_writable(instance)
+        adventure_runtime_state.require_writable(instance)
         ruleset_runtime.require_writable(instance)
+        narrative_notes.require_writable(instance)
         expected_run_id = instance.run_id
-        if not instance.round_checks_prepared:
+        if not checks.round_checks_prepared(instance):
             await self.prepare_round_checks_ai(instance)
         # The planning phase may create an explicitly-authorized table offer.
         # Capture the narrative-start snapshot only after planning completes;
@@ -978,6 +1282,7 @@ class RoundProcessor:
             instance,
             self.lorebook_store,
             world_data=world_data,
+            content_projection=self.content_projection,
         )
 
         # 昏迷角色的死亡豁免先于战斗/叙事结算，文本并入行动块供 GM 遵循。
@@ -985,7 +1290,7 @@ class RoundProcessor:
         if death_text:
             actions_text = death_text + "\n" + actions_text
 
-        dice_block = format_check_results_constraint(instance, list(instance.last_checks))
+        dice_block = format_check_results_constraint(instance, list(checks.last_checks(instance)))
         if dice_block:
             actions_text += dice_block
 
@@ -996,13 +1301,10 @@ class RoundProcessor:
             if action.get("user_id") in instance.players
         )
         authoritative_combat = combat_model == "authoritative_event_batch"
-        if not authoritative_combat and (instance.combat_state != "none" or explicit_attack):
+        if not authoritative_combat and (legacy_combat.combat_state(instance) != "none" or explicit_attack):
             combat_text = self._combat.resolve_combat(instance, actions_text, combat_model, rule)
             if combat_text:
                 actions_text = combat_text + "\n" + actions_text
-                if instance.combat_state == "none" and instance.combat_enemies:
-                    init_text = self._combat.initiate_combat(instance)
-                    actions_text = init_text + "\n" + actions_text
 
         puzzle_text = self._puzzles.process_puzzles(instance, actions_text)
         if puzzle_text:
@@ -1139,7 +1441,7 @@ class RoundProcessor:
                     for action in instance.action_queue
                     if action.get("user_id") in instance.players
                 }
-                if str(getattr(instance, "combat_state", "none") or "none") != "none":
+                if str(legacy_combat.combat_state(instance) or "none") != "none":
                     allowed_uids |= set(instance.alive_players)
             queued_proposals = self._state_applier.apply_state_update(
                 instance, response.state_update, allowed_player_uids=allowed_uids,
@@ -1153,14 +1455,13 @@ class RoundProcessor:
                 logger.warning(
                     "经济提案未能建立叙事效果决策屏障，已 fail closed: game=%s round=%d proposals=%d",
                     instance.game_key,
-                    instance.round_number,
+                    progression_state.round_value(instance),
                     len(queued_proposals),
                 )
         instance.set_state_update_recap(response.state_update)
 
         apply_confirmed_items(instance, data)
         apply_puzzle_updates(instance, data)
-        apply_combat_command(instance, data)
         combat_requested = apply_ruleset_combat_signal(
             instance, data, runtime, director_proposal_data,
         )
@@ -1184,14 +1485,14 @@ class RoundProcessor:
             try:
                 await self.memory_store.flush_pending_embeddings()
             except Exception:
-                logger.warning("flush_pending_embeddings 失败 (round=%d)", instance.round_number, exc_info=True)
+                logger.warning("flush_pending_embeddings 失败 (round=%d)", progression_state.round_value(instance), exc_info=True)
         apply_plot_update(instance, response)
         store_private_messages(instance, response)
         state_msgs = append_state_change_messages(instance, response, public_state_before, data)
         state_msgs.extend(system_changes)
         request = (
-            instance.ruleset_state.get("encounter_request")
-            if isinstance(getattr(instance, "ruleset_state", None), dict)
+            ruleset_runtime.state(instance).get("encounter_request")
+            if isinstance(ruleset_runtime.state(instance), dict)
             else None
         )
         if combat_requested and isinstance(request, dict) and request.get("status") == "pending":
@@ -1220,7 +1521,7 @@ class RoundProcessor:
         # manual generation and later restores use the same source.
         if bool(getattr(self._image_generation, "auto_storyboard", False)):
             completed = next((item for item in reversed(instance.log)
-                              if _log_round(item, -1) == int(instance.round_number) - 1), None)
+                              if _log_round(item, -1) == int(progression_state.round_value(instance)) - 1), None)
             if isinstance(completed, dict):
                 completed["scene_panels"] = normalize_scene_panels(
                     data.get("scene_panels"), merge_same_location=False,
@@ -1230,7 +1531,7 @@ class RoundProcessor:
                     completed["scene_panels"],
                     narration=str(completed.get("gm_response") or ""),
                     actions=completed.get("actions") or [],
-                    current_scene=str(getattr(instance, "scene", "") or ""),
+                    current_scene=str(narrative_notes.scene(instance) or ""),
                     source_revision=storyboard_source_revision(completed),
                 )
         combat_narrative.consume_pending_events(instance, pending_combat_event_ids)
@@ -1243,13 +1544,16 @@ class RoundProcessor:
         self._maybe_schedule_summary(instance, gm_prompt)
         # 场景图生成慢（生图 API 10-60s），同样延后到后台，完成后再推给前端。
         self._maybe_schedule_scene_image(instance, data)
+        # 如果 GM 漏了 SCENE_PANEL，自动分镜仍可在后台补一份可编辑草稿。
+        # 这不改变 SCENE_IMAGE 触发规则，也不新增图像调用。
+        self._maybe_schedule_storyboard_draft(instance, data)
 
         try:
             await self.registry.save(instance)
             instance.record_save_success()
         except Exception:
             count = instance.record_save_failure()
-            logger.exception("存档失败(连续%d次) (round=%d)", count, instance.round_number)
+            logger.exception("存档失败(连续%d次) (round=%d)", count, progression_state.round_value(instance))
 
         return response.narration, response.info_asymmetry
 
@@ -1309,5 +1613,5 @@ class RoundProcessor:
             await self.memory_store.apply_delta(
                 instance.memory_namespace,
                 response.memory_delta,
-                instance.round_number,
+                progression_state.round_value(instance),
             )

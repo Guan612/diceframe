@@ -36,11 +36,15 @@ export function useGame() {
     loreEntries: ref([]),
     loading: ref(false),
     error: ref(''),
+    accessClosed: ref(false),
     isGm,
     refresh: async () => undefined,
     connect: () => undefined,
+    retryAccess: async () => undefined,
     selectGame: async () => undefined,
     liveNarration: ref(''),
+    checkReveals: ref<Record<string, { by: string; at: string }>>({}),
+    diceRevealMode: ref<'auto' | 'click'>('auto'),
     rulesetStateSignal: shallowRef(0),
   }
 }

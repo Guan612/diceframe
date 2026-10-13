@@ -20,12 +20,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from src.engine.modules import narrative_notes, progression_state
 from src.commands.state_update_applier import StateUpdateApplier
 from src.commands.swipe_generator import SwipeGenerator
 from src.engine.game_instance import GameInstance
 from src.lorebook.matcher import KeywordMatcher
 from src.lorebook.retrieval import LoreRetriever
 from src.lorebook.store import LorebookStore
+from src.engine.modules import lorebook_runtime
 
 WORLD = "w1"
 
@@ -39,11 +41,16 @@ def _store(tmp_path: Path) -> LorebookStore:
 
 def _instance(store: LorebookStore, **overrides):
     base = dict(
-        world_id=WORLD, language="zh-CN", scene="", npcs={}, players={},
-        world_state={}, round_number=1, lorebook_timed_state={},
+        world_id=WORLD, language="zh-CN", npcs={}, players={}, world_state={},
         lorebook_store=store, game_id="", game_key="", action_actor_uids=[],
     )
+    timers = overrides.pop("lorebook_timed_state", {})
     base.update(overrides)
+    base["modules"] = {
+        "narrative_notes": narrative_notes.fresh(),
+        "lorebook_runtime": {**lorebook_runtime.fresh(), "timers": timers},
+        "progression": {**progression_state.fresh(), "round": 1},
+    }
     return SimpleNamespace(**base)
 
 
@@ -219,7 +226,7 @@ def _swipe_setup(tmp_path: Path, replies: list[str]):
     instance.world_id = WORLD
     instance.language = "zh-CN"
     instance.lorebook_store = store
-    instance.lorebook_timed_state = {}
+    lorebook_runtime.replace_timers(instance, {})
     instance.players = {"p1": {"character_name": "Aster"}}
     instance.round_number = 1
     instance.log = [{
@@ -289,7 +296,7 @@ def test_golden_successful_swipe_staged_path_commits_exactly_once(tmp_path):
 def test_golden_successful_swipe_consumes_timers_exactly_once(tmp_path):
     """timed state 不重复消费。
 
-    swipe 是**改写历史轮**，不是新回合：权威 tick 由 `update_lorebook_timed_state()`
+    swipe 是**改写历史轮**，不是新回合：权威 tick 由 `lorebook_runtime.tick()`
     按 round 推进，swipe 自己不推进它。所以同一轮反复生成 swipe 时，计时状态必须
     稳定在「激活一次」的结果上，而不是每生成一次就再扣一次。
     """
@@ -299,7 +306,7 @@ def test_golden_successful_swipe_consumes_timers_exactly_once(tmp_path):
     )
     try:
         assert asyncio.run(generator.generate(instance, 1)) == "First rewrite."
-        first = dict(instance.lorebook_timed_state.get("seed") or {})
+        first = dict(lorebook_runtime.timers(instance).get("seed") or {})
         # 命中一次即把 sticky 武装到配置值；这是激活，不是自减。
         assert first.get("sticky_remaining") == 3, f"sticky 未按配置武装: {first}"
         assert first.get("activated_tick") == 1, f"激活 tick 不对: {first}"
@@ -307,7 +314,7 @@ def test_golden_successful_swipe_consumes_timers_exactly_once(tmp_path):
         def _counters() -> dict:
             """计时计数器的形状会被 save/load repair 边界补齐，只比较数值。"""
 
-            row = instance.lorebook_timed_state.get("seed") or {}
+            row = lorebook_runtime.timers(instance).get("seed") or {}
             return {k: int(row.get(k, 0) or 0) for k in (
                 "sticky_remaining", "cooldown_remaining", "pending_cooldown",
                 "delay_remaining", "activated_tick",
@@ -324,8 +331,8 @@ def test_golden_successful_swipe_consumes_timers_exactly_once(tmp_path):
         assert len(saved) == 3, "每次成功 swipe 恰好提交一次"
 
         # 只有权威 tick 才推进计时：模拟下一回合。
-        instance.update_lorebook_timed_state()
-        assert instance.lorebook_timed_state["seed"]["sticky_remaining"] == 2, (
+        lorebook_runtime.tick(instance)
+        assert lorebook_runtime.timers(instance)["seed"]["sticky_remaining"] == 2, (
             "权威 round tick 应把 sticky 3 → 2"
         )
     finally:

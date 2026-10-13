@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { api, errorMessage } from '@/api/client'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { api, ApiError, errorMessage } from '@/api/client'
 import type { CharacterListResponse, GameSummary, GamesResponse, LorebookResponse, LoreEntry, LoreGenerateResponse, Player, WorldCreateResponse, WorldListResponse, WorldSummary } from '@/api/types'
 import { readCurrentGame } from '@/stores/gameContext'
 import { activePeerGameClient } from '@/peer/game/bridge'
@@ -8,11 +8,10 @@ import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useLocale, type Locale } from '@/composables/useLocale'
 import type { MessageKey } from '@/i18n'
-import { contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
+import { CONTENT_LANGUAGE_OPTIONS, contentLanguageLabelKey, contentLanguageOf, filterByContentLanguage } from '@/utils/contentLanguage'
 import Modal from '@/components/ui/Modal.vue'
 import LorePerspectiveInspector from './LorePerspectiveInspector.vue'
 import LoreVisibilityBadge from './LoreVisibilityBadge.vue'
-import LorebookSidebar, { type LorebookCard } from './LorebookSidebar.vue'
 import LoreImportDialog, { type LoreImportDecision } from './LoreImportDialog.vue'
 import LoreBindingsDialog, { type LoreBinding } from './LoreBindingsDialog.vue'
 import LoreEntryAdvanced from './LoreEntryAdvanced.vue'
@@ -44,6 +43,8 @@ interface LoreEdit extends LoreEntry {
   group?: string
   group_weight: number
   secondary_keys: string[]
+  /** canonical 次级关键词门控开关；与 selective_logic（组合逻辑）是两个概念。 */
+  selective: boolean
   selective_logic: string
   use_regex: boolean
   case_sensitive: boolean
@@ -71,6 +72,9 @@ interface LorebookListResponse {
   books: Array<{ id: string; name: string; primary?: boolean; scope?: string; enabled?: boolean }>
 }
 
+/** Book 选择器 / 管理菜单共用的 canonical Book 视图（原 Sidebar 的 LorebookCard）。 */
+interface LorebookCard { id: string; name: string; scope?: string; primary?: boolean; enabled?: boolean }
+
 const toast = useToast()
 const { confirm } = useConfirm()
 const { locale, t } = useLocale()
@@ -87,6 +91,7 @@ const generatePrompt = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 const importPreview = ref<LorebookImportPreview>()
 const importDialogOpen = ref(false)
+const importBusy = ref(false)
 const pendingImportPayload = ref<unknown>()
 const showNewWorld = ref(false)
 const players = ref<Player[]>([])
@@ -186,7 +191,11 @@ async function loadWorlds() {
   } catch (e: unknown) { error.value = errorMessage(e) }
 }
 
-watch(currentWorldId, () => { if (currentWorldId.value) { loadLore(); loadLorebooks() } })
+watch(currentWorldId, async () => {
+  if (!currentWorldId.value) return
+  await loadLorebooks()
+  await loadLore()
+})
 watch(worldLanguage, () => {
   if (languageWorlds.value.some(w => worldIdOf(w) === currentWorldId.value)) return
   currentWorldId.value = worldIdOf(languageWorlds.value[0])
@@ -194,16 +203,31 @@ watch(worldLanguage, () => {
 })
 watch(locale, next => { if (!game.value) worldLanguage.value = next })
 
+// 只有旧服务端「没有这条 canonical 路由」才回退到 legacy adapter：aiohttp 的
+// 路由缺失是无 JSON 体的 404/405。网络故障、权限错误、资源 404 或写入失败
+// 都必须原样抛出，不能再发第二次 legacy 写入。
+function canonicalRouteMissing(error: unknown, bookId: string): boolean {
+  return bookId === `world:${currentWorldId.value}`
+    && error instanceof ApiError
+    && (error.status === 404 || error.status === 405)
+    && !error.code
+    && error.message === `HTTP ${error.status}`
+}
+
 async function loadLore() {
   if (!currentWorldId.value) { data.value = { entries: [] }; return }
   error.value = ''; data.value = { entries: [] }
   try {
     const bookId = activeBookId.value || `world:${currentWorldId.value}`
-    if (bookId === `world:${currentWorldId.value}`) {
-      data.value = await api<LorebookResponse>(`/lorebook/${encodeURIComponent(currentWorldId.value)}`)
-    } else {
+    try {
       const result = await api<{ entries: LoreEntry[] }>(`/lorebooks/${encodeURIComponent(bookId)}/entries`)
       data.value = { entries: result.entries || [] }
+    } catch (canonicalError) {
+      // Older deployments expose the primary-world adapter only.  Keep this
+      // fallback at the UI boundary while new servers use the canonical Book
+      // route above; the adapter can disappear once all clients migrate.
+      if (!canonicalRouteMissing(canonicalError, bookId)) throw canonicalError
+      data.value = await api<LorebookResponse>(`/lorebook/${encodeURIComponent(currentWorldId.value)}`)
     }
     // 换书/刷新后旧 id 不能再指向任何条目，否则批量操作会打向不存在的目标。
     const loaded = new Set((data.value.entries || []).map(entry => entry.id).filter(Boolean) as string[])
@@ -213,13 +237,24 @@ async function loadLore() {
 
 onMounted(loadWorlds)
 
+// 管理菜单是零依赖的 details/summary：点击菜单外（或打开另一个菜单）时自动收起，
+// 菜单项自身由 runBookMenu 收起。
+function closeOpenLoreMenus(event: Event) {
+  const anchor = (event.target as HTMLElement | null)?.closest('details.lore-menu')
+  document.querySelectorAll('.lore-menu[open]').forEach(menu => {
+    if (menu !== anchor) menu.removeAttribute('open')
+  })
+}
+onMounted(() => document.addEventListener('click', closeOpenLoreMenus))
+onBeforeUnmount(() => document.removeEventListener('click', closeOpenLoreMenus))
+
 function openLore(entry?: LoreEntry) {
   loreEdit.value = entry ? cloneLore(entry) : {
     name: '', type: 'npc', tier: 'background', keywords: [], content: '',
     match_mode: 'any', unreliable: false, sync_on_enter: false, is_constant: false,
     triggers_recursive: [], visible_to: [], connected_to: [], sticky: 0,
     cooldown: 0, delay: 0, order: 100, probability: 100, group: '', group_weight: 1,
-    secondary_keys: [], selective_logic: 'any', use_regex: false, case_sensitive: false,
+    secondary_keys: [], selective: true, selective_logic: 'any', use_regex: false, case_sensitive: false,
     match_whole_words: false, scan_depth: 0, priority: 100, prompt_slot: 'world_background', groups: [],
     // canonical 默认与后端 payload.setdefault 对齐：显式发值必须等于后端默认，否则 UI 与库里不一致。
     vector_activation: 'hybrid',
@@ -386,11 +421,17 @@ async function saveLore() {
   normalizeActivationModel(loreEdit.value)
   const entry: LoreEdit = { ...loreEdit.value, world_id: currentWorldId.value }
   const bookId = activeBookId.value || `world:${currentWorldId.value}`
-  const path = bookId === `world:${currentWorldId.value}`
-    ? (entry.id ? `/lorebook/${encodeURIComponent(entry.id)}` : '/lorebook')
-    : (entry.id ? `/lorebooks/${encodeURIComponent(bookId)}/entries/${encodeURIComponent(entry.id)}` : `/lorebooks/${encodeURIComponent(bookId)}/entries`)
+  const path = entry.id
+    ? `/lorebooks/${encodeURIComponent(bookId)}/entries/${encodeURIComponent(entry.id)}`
+    : `/lorebooks/${encodeURIComponent(bookId)}/entries`
   try {
-    await api<unknown>(path, { method: entry.id ? 'PUT' : 'POST', body: JSON.stringify(entry) })
+    try {
+      await api<unknown>(path, { method: entry.id ? 'PUT' : 'POST', body: JSON.stringify(entry) })
+    } catch (canonicalError) {
+      if (!canonicalRouteMissing(canonicalError, bookId)) throw canonicalError
+      const legacyPath = entry.id ? `/lorebook/${encodeURIComponent(entry.id)}` : '/lorebook'
+      await api<unknown>(legacyPath, { method: entry.id ? 'PUT' : 'POST', body: JSON.stringify(entry) })
+    }
     toast.success(entry.id ? t('updated') : t('created'))
     loreEdit.value = null
     await loadLore()
@@ -405,7 +446,12 @@ async function deleteLore(entry: LoreEntry) {
   if (!ok) return
   try {
     const bookId = activeBookId.value || `world:${currentWorldId.value}`
-    await api<unknown>(bookId === `world:${currentWorldId.value}` ? `/lorebook/${encodeURIComponent(entry.id)}` : `/lorebooks/${encodeURIComponent(bookId)}/entries/${encodeURIComponent(entry.id)}`, { method: 'DELETE' })
+    try {
+      await api<unknown>(`/lorebooks/${encodeURIComponent(bookId)}/entries/${encodeURIComponent(entry.id)}`, { method: 'DELETE' })
+    } catch (canonicalError) {
+      if (!canonicalRouteMissing(canonicalError, bookId)) throw canonicalError
+      await api<unknown>(`/lorebook/${encodeURIComponent(entry.id)}`, { method: 'DELETE' })
+    }
     toast.success(t('deleted'))
     if (selectedEntryId.value === entry.id) selectedEntryId.value = ''
     await loadLore()
@@ -633,19 +679,21 @@ async function loadLorebooks() {
     if (!activeBookId.value || !lorebookBooks.value.some(book => book.id === activeBookId.value)) activeBookId.value = `world:${currentWorldId.value}`
   } catch {
     const world = currentWorld.value
-    lorebookBooks.value = world ? [{ id: currentWorldId.value, name: worldNameOf(world), primary: true, scope: 'world' }] : []
+    const fallbackBookId = `world:${currentWorldId.value}`
+    lorebookBooks.value = world ? [{ id: fallbackBookId, name: worldNameOf(world), primary: true, scope: 'world' }] : []
+    if (world) activeBookId.value = fallbackBookId
   }
 }
 
 function selectLorebook(bookId: string) {
-  if (!lorebookBooks.value.some(item => item.id === bookId)) return
   activeBookId.value = bookId
   void loadLore()
 }
 
 /** 导入目标与 binding 全部来自对话框里用户的显式选择，不再隐式塞主世界书。 */
 async function confirmLoreImport(decision: LoreImportDecision) {
-  if (!importPreview.value || !currentWorldId.value) return
+  if (importBusy.value || !importPreview.value || !currentWorldId.value) return
+  importBusy.value = true
   try {
     if (!pendingImportPayload.value || typeof pendingImportPayload.value !== 'object') throw new Error(t('importFailed'))
     const body: Record<string, unknown> = { payload: pendingImportPayload.value }
@@ -656,14 +704,17 @@ async function confirmLoreImport(decision: LoreImportDecision) {
         : decision.binding
     }
     const result = await api<{ ok: boolean; book_id?: string }>('/lorebooks/import', { method: 'POST', body: JSON.stringify(body) })
+    await loadLorebooks()
+    if (result?.book_id) activeBookId.value = result.book_id
+    await loadLore(); await loadWorlds(); await refreshPreview()
+    // Closing the dialog marks completion: no pending import refresh may
+    // overwrite a book the user selects after it closes.
     importDialogOpen.value = false
     pendingImportPayload.value = undefined
     importPreview.value = undefined
     toast.success(t('importedLorebook'))
-    await loadLorebooks()
-    if (result?.book_id) selectLorebook(result.book_id)
-    await loadLore(); await loadWorlds(); await refreshPreview()
   } catch (err: unknown) { error.value = `${t('importFailed')}: ${errorMessage(err)}` }
+  finally { importBusy.value = false }
 }
 
 // ---- Book 管理（create / rename / delete / enable / bindings）---------------
@@ -672,6 +723,28 @@ const primaryBookId = computed(() => (currentWorldId.value ? `world:${currentWor
 const bindingsDialogOpen = ref(false)
 const bindingsBook = ref<LorebookCard | null>(null)
 const bookBindings = ref<LoreBinding[]>([])
+
+function isPrimaryBook(book: LorebookCard | null | undefined): boolean {
+  return !!book && (book.primary === true || book.id === primaryBookId.value)
+}
+
+/** 当前编辑的 Book：显式选择优先，回落到世界主世界书。 */
+const currentBookId = computed(() => activeBookId.value || primaryBookId.value)
+const currentBook = computed(() => lorebookBooks.value.find(book => book.id === currentBookId.value) || null)
+const SCOPE_LABEL_KEYS: Record<string, MessageKey> = {
+  world: 'loreScopeWorld', game: 'loreScopeGame', character: 'loreScopeCharacter', global: 'loreScopeGlobal',
+}
+const currentBookScopeLabel = computed(() => {
+  const scope = String(currentBook.value?.scope || (currentBook.value?.id === primaryBookId.value ? 'world' : ''))
+  return scope ? t(SCOPE_LABEL_KEYS[scope] ?? 'loreBooksUnbound') : t('loreBooksUnbound')
+})
+
+/** 菜单项点击后先收起菜单，再执行既有 handler；参数由调用处的 closure 显式绑定。 */
+function runBookMenu(event: Event, action: () => void | Promise<void>) {
+  (event.currentTarget as HTMLElement | null)?.closest('details')?.removeAttribute('open')
+  void action()
+}
+function triggerImport() { fileInput.value?.click() }
 
 /** 绑定目标用的角色名单：Lore 视角已经加载过 players，这里不再重复请求。 */
 const bindableCharacters = computed(() =>
@@ -685,7 +758,7 @@ const bindableCharacters = computed(() =>
 
 async function createBook() {
   if (!currentWorldId.value) return
-  const name = window.prompt('新世界书名称')
+  const name = window.prompt(t('loreBookCreatePrompt'))
   if (!name || !name.trim()) return
   busy.value = true
   try {
@@ -693,27 +766,27 @@ async function createBook() {
     await api('/lorebooks', { method: 'POST', body: JSON.stringify({ id, name: name.trim() }) })
     await loadLorebooks()
     selectLorebook(id)
-    toast.success('已创建世界书')
+    toast.success(t('loreBookCreated'))
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 
 async function renameBook(book: LorebookCard) {
-  const name = window.prompt('重命名世界书', book.name)
+  const name = window.prompt(t('loreBookRenamePrompt'), book.name)
   if (!name || !name.trim() || name.trim() === book.name) return
   busy.value = true
   try {
     await api(`/lorebooks/${encodeURIComponent(book.id)}`, { method: 'PUT', body: JSON.stringify({ name: name.trim() }) })
     await loadLorebooks()
-    toast.success('已重命名')
+    toast.success(t('loreBookRenamed'))
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 
 async function removeBook(book: LorebookCard) {
-  if (book.primary) return
+  if (isPrimaryBook(book)) return
   const ok = await confirm({
-    title: '删除世界书',
-    content: `删除世界书「${book.name}」？其中的条目会一并删除。`,
-    positiveText: '删除世界书',
+    title: t('loreBookDeleteTitle'),
+    content: t('loreBookDeleteContent', { name: book.name }),
+    positiveText: t('loreBookDeleteAction'),
     type: 'error',
   })
   if (!ok) return
@@ -722,7 +795,7 @@ async function removeBook(book: LorebookCard) {
     await api(`/lorebooks/${encodeURIComponent(book.id)}`, { method: 'DELETE' })
     if (activeBookId.value === book.id) activeBookId.value = primaryBookId.value
     await loadLorebooks(); await loadLore()
-    toast.success('已删除')
+    toast.success(t('loreBookDeleted'))
   } catch (e: unknown) { error.value = errorMessage(e) } finally { busy.value = false }
 }
 
@@ -774,19 +847,6 @@ async function removeBinding(bindingId: string) {
 <template>
   <section class="view archive-page lorebook-page">
     <div class="lorebook-shell" :class="{ 'inspector-open': inspectorOpen }">
-      <LorebookSidebar
-        :books="lorebookBooks"
-        :active-id="activeBookId"
-        :busy="busy"
-        @select="selectLorebook"
-        @create="createBook"
-        @rename="renameBook"
-        @remove="removeBook"
-        @toggle-enabled="toggleBookEnabled"
-        @bindings="openBindings"
-        @import="fileInput?.click()"
-        @export="exportLore"
-      />
       <main class="lorebook-workspace">
     <header class="view-title archive-hero">
       <div>
@@ -804,20 +864,63 @@ async function removeBinding(bindingId: string) {
 
     <p v-if="error" class="error-banner">{{ error }}</p>
 
-    <div class="lore-world-bar">
-      <label class="lore-language-filter">
-        <span>{{ t('contentLanguage') }}</span>
-        <select v-model="worldLanguage">
-          <option value="zh-CN">{{ t('chinese') }}</option>
-          <option value="en">{{ t('english') }}</option>
+    <!-- World → Book → Entry 的上下文条：World 操作归「管理世界」，Book 操作归「管理」。 -->
+    <div class="lore-context-bar">
+      <div class="lore-context-row">
+        <label class="lore-language-filter">
+          <span>{{ t('contentLanguage') }}</span>
+          <select v-model="worldLanguage">
+            <option v-for="option in CONTENT_LANGUAGE_OPTIONS" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
+          </select>
+        </label>
+      </div>
+      <div class="lore-context-row">
+        <span class="lore-context-label">{{ t('loreWorldLabel') }}</span>
+        <select v-model="currentWorldId" class="lore-context-select" :aria-label="t('loreWorldLabel')">
+          <option value="" disabled>{{ t('chooseWorldEllipsis') }}</option>
+          <option v-for="w in languageWorlds" :key="worldIdOf(w)" :value="worldIdOf(w)">{{ worldNameOf(w) }} ({{ t('entriesCount', { count: w.entry_count || 0 }) }})</option>
         </select>
-      </label>
-      <select v-model="currentWorldId">
-        <option value="" disabled>{{ t('chooseWorldEllipsis') }}</option>
-        <option v-for="w in languageWorlds" :key="worldIdOf(w)" :value="worldIdOf(w)">{{ worldNameOf(w) }} ({{ t('entriesCount', { count: w.entry_count || 0 }) }})</option>
-      </select>
-      <button class="success" @click="toggleNewWorld">+ {{ t('newWorld') }}</button>
-      <button v-if="currentWorldId" class="danger" @click="deleteWorld" :disabled="busy">{{ t('deleteWorldAction') }}</button>
+        <details class="lore-menu">
+          <summary class="lore-menu-trigger">{{ t('loreWorldManage') }}</summary>
+          <div class="lore-menu-list">
+            <button type="button" @click="runBookMenu($event, () => toggleNewWorld())">{{ t('newWorld') }}</button>
+            <button v-if="currentWorldId" type="button" class="danger" :disabled="busy" @click="runBookMenu($event, () => deleteWorld())">{{ t('deleteWorldAction') }}</button>
+          </div>
+        </details>
+      </div>
+      <div class="lore-context-row">
+        <span class="lore-context-label">{{ t('loreBookLabel') }}</span>
+        <select
+          class="lore-context-select"
+          :value="currentBookId"
+          :aria-label="t('loreBookLabel')"
+          @change="selectLorebook(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="book in lorebookBooks" :key="book.id" :value="book.id">
+            {{ book.name }}{{ book.enabled === false ? t('loreBookDisabledSuffix') : '' }}
+          </option>
+        </select>
+        <span v-if="currentBook" class="lore-book-state" :class="{ off: currentBook.enabled === false }">
+          {{ currentBook.enabled === false ? t('loreBooksStateDisabled') : t('loreBooksStateEnabled') }}
+        </span>
+        <button class="success" :disabled="busy || !currentWorldId" @click="createBook">{{ t('loreBooksCreate') }}</button>
+        <details class="lore-menu">
+          <summary class="lore-menu-trigger">{{ t('loreBookManage') }}</summary>
+          <div class="lore-menu-list">
+            <button type="button" :disabled="busy || !currentBook" @click="runBookMenu($event, () => renameBook(currentBook!))">{{ t('loreBooksRename') }}</button>
+            <button type="button" :disabled="busy || !currentBook" @click="runBookMenu($event, () => openBindings(currentBook!))">{{ t('loreBookUsageScope') }}</button>
+            <button type="button" :disabled="busy || !currentBook" @click="runBookMenu($event, () => toggleBookEnabled(currentBook!))">
+              {{ currentBook?.enabled === false ? t('loreBooksEnable') : t('loreBooksDisable') }}
+            </button>
+            <button type="button" :disabled="busy || !data?.entries?.length" @click="runBookMenu($event, () => exportLore())">{{ t('export') }}</button>
+            <button type="button" :disabled="busy || !currentWorldId" @click="runBookMenu($event, () => triggerImport())">{{ t('import') }}</button>
+            <button v-if="currentBook && !isPrimaryBook(currentBook)" type="button" class="danger" :disabled="busy" @click="runBookMenu($event, () => removeBook(currentBook!))">{{ t('loreBooksDelete') }}</button>
+          </div>
+        </details>
+      </div>
+      <p v-if="currentBook" class="lore-book-meta">
+        <template v-if="isPrimaryBook(currentBook)">{{ t('loreBooksPrimaryBadge') }} · </template>{{ t('loreBookContextScope') }}：{{ currentBookScopeLabel }}
+      </p>
     </div>
 
     <details v-if="showNewWorld" class="ai-block" open>
@@ -825,8 +928,7 @@ async function removeBinding(bindingId: string) {
       <label>{{ t('worldName') }}<input v-model="newWorld.name" :placeholder="t('nameNewWorld')"></label>
       <label>{{ t('contentLanguage') }}
         <select v-model="newWorld.language">
-          <option value="zh-CN">{{ t('chinese') }}</option>
-          <option value="en">{{ t('english') }}</option>
+          <option v-for="option in CONTENT_LANGUAGE_OPTIONS" :key="option.value" :value="option.value">{{ t(option.labelKey) }}</option>
         </select>
       </label>
       <label>{{ t('description') }}<textarea rows="2" v-model="newWorld.description"></textarea></label>
@@ -837,13 +939,12 @@ async function removeBinding(bindingId: string) {
       <button class="success" :disabled="!currentWorldId" @click="openLore()">{{ t('addLoreEntry') }}</button>
       <input v-model="generatePrompt" :placeholder="t('generateLorePlaceholder')">
       <button @click="generateLore" :disabled="busy || !currentWorldId">{{ t('aiGenerate') }}</button>
-      <button @click="exportLore" :disabled="!data?.entries?.length">{{ t('export') }}</button>
-      <button @click="fileInput?.click()" :disabled="!currentWorldId">{{ t('import') }}</button>
+      <!-- Import / Export 是 Book 生命周期操作，唯一入口在左侧 Books 区。 -->
       <input ref="fileInput" type="file" accept="application/json" @change="importLore" hidden>
     </div>
 
     <p class="memory-meta" v-if="currentWorldId">
-      {{ worldNameOf(currentWorld) || currentWorldId }} · {{ worldLanguage === 'en' ? t('english') : t('chinese') }} · {{ t('lorebookEntryCount', { count: entries.length }) }}
+      {{ worldNameOf(currentWorld) || currentWorldId }} · {{ t(contentLanguageLabelKey(worldLanguage)) }} · {{ t('lorebookEntryCount', { count: entries.length }) }}
     </p>
 
     <section v-if="entries.length" class="lore-entry-toolbar" :aria-label="t('loreFilterLabel')">
@@ -1064,6 +1165,7 @@ async function removeBinding(bindingId: string) {
     </div>
     <LoreImportDialog
       :open="importDialogOpen"
+      :busy="importBusy"
       :preview="importPreview"
       :books="lorebookBooks"
       :characters="bindableCharacters"
@@ -1071,7 +1173,7 @@ async function removeBinding(bindingId: string) {
       :world-name="worldNameOf(currentWorld)"
       :game-key="game"
       :primary-book-id="primaryBookId"
-      @close="importDialogOpen = false"
+      @close="!importBusy && (importDialogOpen = false)"
       @confirm="confirmLoreImport"
     />
     <LoreBindingsDialog
