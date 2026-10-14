@@ -83,13 +83,13 @@ function close(): void {
       </div>
 
       <div v-show="step === 'connect'" class="peer-connect-step">
-        <header class="peer-modal-toolbar">
+        <header class="peer-modal-toolbar" data-testid="peer-modal-toolbar">
           <button class="peer-modal-back" @click="step = 'intro'">
             <NIcon :component="ArrowBackOutline" />{{ t('peerIntroBack') }}
           </button>
           <div>
             <h2>{{ t('peerLaunchModalTitle') }}</h2>
-            <span class="peer-experimental-badge"><NIcon :component="FlaskOutline" />{{ t('peerExperimentalBadge') }}</span>
+            <span class="peer-experimental-badge" data-testid="peer-experimental-badge"><NIcon :component="FlaskOutline" />{{ t('peerExperimentalBadge') }}</span>
           </div>
         </header>
         <div class="peer-modal-scroll">
@@ -101,11 +101,19 @@ function close(): void {
 </template>
 
 <style scoped>
+/* NModal 会把宿主层 teleport 到 body，scoped 属性够不到，必须 :global()。 */
+:global(.peer-connect-modal-host) {
+  display: flex;
+  align-items: center;
+}
+
 .peer-connect-modal {
   position: relative;
+  box-sizing: border-box;
   width: min(1120px, calc(100vw - 32px));
   max-height: min(900px, calc(100dvh - 32px));
   overflow: hidden;
+  -webkit-overflow-scrolling: touch;
   border: 1px solid color-mix(in srgb, var(--df-accent) 32%, var(--df-border));
   border-radius: 24px;
   background:

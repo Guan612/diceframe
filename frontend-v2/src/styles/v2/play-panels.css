@@ -725,39 +725,7 @@
 }
 
 @media (max-width: 800px) {
-  .characters-page {
-    width: 100%;
-    max-width: 100%;
-    overflow-x: clip;
-  }
-
-  .characters-page .current-character-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .characters-page .current-character-card {
-    grid-template-columns: minmax(0, 1fr);
-    min-width: 0;
-  }
-
-  .characters-page .current-character-identity {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .characters-page .current-character-actions,
-  .characters-page .current-character-actions:has(> button:nth-child(4)) {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .characters-page .current-character-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .characters-page .current-character-actions:has(> button:nth-child(4)) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  /* .characters-page 相关规则已拆分进 CharactersView.vue 的 scoped 样式。 */
 
   .plugin-workspace.plugin-workspace .content-pack-toolbar {
     grid-template-columns: minmax(0, 1fr) max-content max-content;
@@ -775,15 +743,7 @@
     padding-right: max(12px, env(safe-area-inset-right));
   }
 
-  .characters-page .character-library-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .characters-page .current-character-identity {
-    display: grid;
-    grid-template-columns: 76px minmax(0, 1fr);
-    align-items: start;
-  }
+  /* .characters-page 相关规则已拆分进 CharactersView.vue 的 scoped 样式。 */
 
   .plugin-workspace.plugin-workspace .content-pack-toolbar {
     grid-template-columns: minmax(0, 1fr) max-content max-content;

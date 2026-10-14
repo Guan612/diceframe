@@ -348,7 +348,7 @@ async function deleteRule(rule: RuleSummary) {
         </div>
         <label>HP {{ t('formula') }}<input v-model="ruleForm.hp_formula" :placeholder="t('hpFormulaPlaceholder')"></label>
 
-        <div class="rule-editor-section">
+        <div class="rule-editor-section" data-testid="rule-editor-section">
           <div class="section-head"><strong>{{ t('attributes') }}</strong><button type="button" @click="addAttr">+ {{ t('attributes') }}</button></div>
           <div v-for="(a, i) in ruleForm.attributes" :key="i" class="rule-attr-edit">
             <input v-model="a.key" placeholder="key">
@@ -380,3 +380,10 @@ async function deleteRule(rule: RuleSummary) {
     </Modal>
   </section>
 </template>
+
+<style scoped>
+/* 与 CharactersView.vue 等页面共享的页宽约束，拆分自 characters.css。 */
+.rules-page {
+  width: min(1540px, 100%);
+}
+</style>

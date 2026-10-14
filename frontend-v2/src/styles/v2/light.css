@@ -161,13 +161,7 @@ body.light .thinking-message {
     scroll-padding-bottom: calc(90px + env(safe-area-inset-bottom));
   }
 
-  .characters-page,
-  .reference-create-page,
-  .reference-settings-page,
-  .lorebook-page,
-  .reference-logs-page {
-    padding-bottom: calc(92px + env(safe-area-inset-bottom));
-  }
+  /* 5 个页面各自的 padding-bottom 已拆分进对应组件的 scoped 样式。 */
 
   .app-shell:not(.app-shell-play) .game-sidebar,
   .app-shell:not(.app-shell-play) .play-control-rail,

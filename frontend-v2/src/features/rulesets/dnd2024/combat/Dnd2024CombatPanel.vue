@@ -994,7 +994,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
 </script>
 
 <template>
-  <section class="dnd-combat" aria-labelledby="dnd-combat-title">
+  <section class="dnd-combat" data-testid="dnd-combat" aria-labelledby="dnd-combat-title">
     <header class="combat-header">
       <div>
         <p class="eyebrow">5E 2024 SRD · {{ copy.authority }}</p>
@@ -1024,7 +1024,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
     </details>
 
     <template v-if="gameplay">
-      <section v-if="combat?.status !== 'active'" class="encounter-start">
+      <section v-if="combat?.status !== 'active'" class="encounter-start" data-testid="encounter-start">
         <template v-if="combat?.status !== 'ended'">
         <div v-if="narrativeCombatPending && !guidedCombatStep" class="story-bridge">
           <span class="story-bridge-label">{{ copy.storyBridge }}</span>
@@ -1140,7 +1140,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
         <section v-else class="encounter-ended" aria-live="polite">
           <strong>{{ copy.ended }}</strong>
           <p>{{ copy.nextEncounterHint }}</p>
-          <div class="encounter-ended-actions">
+          <div class="encounter-ended-actions" data-testid="encounter-ended-actions">
             <button type="button" @click="emit('navigate', 'campaign')"><NIcon :component="PlayForwardOutline" />{{ copy.returnToAdventure }}</button>
             <button v-if="isGm && action('combat.start')" type="button" class="combat-primary" @click="toggleNextEncounter">
               <NIcon :component="PlayForwardOutline" />{{ nextEncounterOpen ? copy.cancelNextEncounter : copy.nextEncounter }}
@@ -1149,7 +1149,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
               <NIcon :component="SparklesOutline" />{{ aiBusy ? copy.aiPreparing : copy.aiPrepare }}
             </button>
           </div>
-          <div v-if="nextEncounterOpen" class="next-encounter-picker">
+          <div v-if="nextEncounterOpen" class="next-encounter-picker" data-testid="next-encounter-picker">
             <label>
               <span>{{ copy.chooseEncounter }}</span>
               <select v-model="selectedPresetId">
@@ -1250,7 +1250,7 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
       </section>
 
       <template v-else>
-        <section :class="['turn-banner', currentActor?.kind || 'player']" aria-live="polite">
+        <section :class="['turn-banner', currentActor?.kind || 'player']" data-testid="turn-banner" aria-live="polite">
           <div><small>{{ copy.round }} {{ combat.round }}</small><strong>{{ currentTurnLabel }}</strong></div>
           <span>{{ targetName(combat.current_actor_id) }}</span>
         </section>
@@ -1300,8 +1300,8 @@ onBeforeUnmount(() => { if (pollTimer) window.clearInterval(pollTimer) })
           </div>
         </section>
 
-        <div class="actor-grid">
-          <article v-for="actor in combat.actors" :key="actor.actor_id" :class="['actor-card', actor.kind, { current: actor.actor_id === combat.current_actor_id, defeated: actor.hp <= 0 }]">
+        <div class="actor-grid" data-testid="actor-grid">
+          <article v-for="actor in combat.actors" :key="actor.actor_id" :class="['actor-card', actor.kind, { current: actor.actor_id === combat.current_actor_id, defeated: actor.hp <= 0 }]" data-testid="actor-card">
             <header><strong>{{ actor.name }}</strong><span>{{ actor.position }} {{ copy.feet }}</span></header>
             <div
               class="hp-track"

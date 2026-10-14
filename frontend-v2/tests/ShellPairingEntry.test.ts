@@ -15,7 +15,8 @@ function source(path: string): string {
 
 const appSource = source('src/App.vue')
 const settingsSource = source('src/features/admin/SettingsView.vue')
-const navigationStyles = source('src/styles/v2/navigation.css')
+// navigation.css 已拆分进 App.vue 自己的 <style scoped>，直接复用同一份源码。
+const navigationStyles = appSource
 
 const headerActionsStart = appSource.indexOf('<div class="app-header-actions">')
 const headerActions = appSource.slice(headerActionsStart, appSource.indexOf('</header>'))

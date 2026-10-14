@@ -60,7 +60,7 @@ const { t } = useLocale()
   </p>
   <NSpin :show="marketLoading">
     <div class="market-grid">
-      <article v-for="item in paginatedMarketplace" :key="item.id" class="market-card">
+      <article v-for="item in paginatedMarketplace" :key="item.id" class="market-card" data-testid="market-card">
         <div class="market-title">
           <NIcon :component="pluginTypeIcon(item.plugin_type)" :size="26" class="market-title-icon" />
           <div class="market-title-text">

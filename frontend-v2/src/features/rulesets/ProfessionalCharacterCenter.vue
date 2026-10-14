@@ -250,7 +250,7 @@ async function completeRest(): Promise<void> {
 </script>
 
 <template>
-  <section class="professional-character-center">
+  <section class="professional-character-center" data-testid="professional-character-center">
     <header class="center-hero">
       <div>
         <span>5E · 2024 · SRD</span>

@@ -124,7 +124,7 @@ function groupedFields(plugin: PluginInfo): PluginFieldSection[] {
 
 <template>
   <NSpin :show="loading && !plugins.length">
-    <section class="plugin-install">
+    <section class="plugin-install" data-testid="plugin-install">
       <div>
         <h3>{{ t('installPluginTitle') }}</h3>
         <p class="muted">{{ t('installPluginHelp') }}</p>

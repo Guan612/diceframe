@@ -124,7 +124,7 @@ test('classic fantasy recommends the professional 2024 rules as the third card i
   const worldSelect = page.locator('.create-config-surface label').filter({ hasText: /^世界模板/ }).locator('select')
   await worldSelect.selectOption('default_fantasy')
 
-  const cards = page.locator('.create-recommended-rules .rec-card')
+  const cards = page.getByTestId('create-recommended-rules').getByTestId('rec-card')
   await expect(cards).toHaveCount(3)
   await expect(cards.nth(0)).toContainText('经典奇幻自由规则')
   await expect(cards.nth(1)).toContainText('D&D 5e')
@@ -142,7 +142,7 @@ test('professional toolbox remains contained at phone, tablet, and desktop width
     await page.setViewportSize({ width, height: 900 })
     await openDndTable(page)
     await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
-    await expect(page.locator('.campaign-panel')).toBeVisible()
+    await expect(page.getByTestId('campaign-panel')).toBeVisible()
 
     const geometry = await page.evaluate(() => {
       const workspace = document.querySelector<HTMLElement>('.dnd-toolbox-dialog')!
@@ -166,8 +166,8 @@ test('professional toolbox remains contained at phone, tablet, and desktop width
     expect(geometry.workspaceBottom).toBeLessThanOrEqual(geometry.viewportHeight + 1)
     expect(geometry.minControlHeight).toBeGreaterThanOrEqual(28)
     expect(geometry.minCheckboxTargetHeight).toBeGreaterThanOrEqual(43)
-    await page.locator('.dnd-toolbox-dialog .modal-x').click()
-    await expect(page.locator('.dnd-toolbox-dialog')).toHaveCount(0)
+    await page.getByTestId('dnd-toolbox-dialog').getByTestId('modal-close').click()
+    await expect(page.getByTestId('dnd-toolbox-dialog')).toHaveCount(0)
   }
 })
 
@@ -177,11 +177,11 @@ test('professional rules keep one timeline and expose combat as a tool', async (
 
   await expect(page.getByTestId('timeline')).toHaveCount(1)
   await expect(page.locator('.composer')).toHaveCount(1)
-  await expect(page.locator('.campaign-panel')).toHaveCount(0)
-  await expect(page.locator('.dnd-combat')).toHaveCount(0)
+  await expect(page.getByTestId('campaign-panel')).toHaveCount(0)
+  await expect(page.getByTestId('dnd-combat')).toHaveCount(0)
   await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
-  await page.locator('.dnd-toolbox-dialog').getByRole('button', { name: '战斗工具' }).click()
-  await expect(page.locator('.dnd-combat')).toBeVisible()
+  await page.getByTestId('dnd-toolbox-dialog').getByRole('button', { name: '战斗工具' }).click()
+  await expect(page.getByTestId('dnd-combat')).toBeVisible()
   await expect(page.getByTestId('timeline')).toBeVisible()
   await expect(page.locator('.dnd-party-feed')).toHaveCount(0)
 })
@@ -195,17 +195,17 @@ test('professional toolbox keeps long tool panels scrollable inside the dialog',
     await page.setViewportSize(viewport)
     await openDndTable(page)
     await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
-    await expect(page.locator('.campaign-panel .session-card')).toBeVisible()
+    await expect(page.getByTestId('campaign-panel').getByTestId('session-card')).toBeVisible()
 
     const geometry = await page.evaluate(PANEL_GEOMETRY, '.campaign-panel')
     console.log(`[tool-panel] campaign ${viewport.width}x${viewport.height} ${JSON.stringify(geometry)}`)
     // 冒险面板一定比弹窗高：必须有真正可滚动的 owner，否则内容被 overflow:hidden 永久裁掉
     expect(geometry.owner, `campaign panel needs a scrollable owner at ${viewport.width}px: ${JSON.stringify(geometry)}`).toBeTruthy()
     await expectToolPanelReachable(page, '.campaign-panel', `campaign @ ${viewport.width}x${viewport.height}`)
-    await expect(page.locator('.campaign-panel')).toBeVisible()
+    await expect(page.getByTestId('campaign-panel')).toBeVisible()
 
-    await page.locator('.dnd-toolbox-dialog .modal-x').click()
-    await expect(page.locator('.dnd-toolbox-dialog')).toHaveCount(0)
+    await page.getByTestId('dnd-toolbox-dialog').getByTestId('modal-close').click()
+    await expect(page.getByTestId('dnd-toolbox-dialog')).toHaveCount(0)
   }
 })
 
@@ -213,29 +213,29 @@ test('professional combat tool keeps its content reachable at short desktop and 
   await page.setViewportSize({ width: 1280, height: 620 })
   await openDndTable(page)
   await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
-  const dialog = page.locator('.dnd-toolbox-dialog')
-  const panel = page.locator('.dnd-combat')
+  const dialog = page.getByTestId('dnd-toolbox-dialog')
+  const panel = page.getByTestId('dnd-combat')
   await dialog.getByRole('button', { name: '战斗工具' }).click()
   await expect(panel.locator('.encounter-start, .turn-banner').first()).toBeVisible()
 
   // 同一份 e2e 存档会被 desktop/mobile 两个 project 先后使用，战斗可能是
   // “未开始 / 已结束 / 进行中”三种之一；三者都必须能进入可滚动的战斗面板。
-  if (await panel.locator('.turn-banner').count() === 0) {
-    if (await panel.locator('.encounter-ended-actions .combat-primary').count() > 0) {
-      await panel.locator('.encounter-ended-actions .combat-primary').click()
-      const picker = panel.locator('.next-encounter-picker select')
+  if (await panel.getByTestId('turn-banner').count() === 0) {
+    if (await panel.getByTestId('encounter-ended-actions').locator('.combat-primary').count() > 0) {
+      await panel.getByTestId('encounter-ended-actions').locator('.combat-primary').click()
+      const picker = panel.getByTestId('next-encounter-picker').locator('select')
       await expect(picker).toBeVisible()
       // 与手动准备一致：明确选中一条目录遭遇后再开战。
       await picker.selectOption({ index: 0 })
-      await panel.locator('.next-encounter-picker .combat-primary').click()
+      await panel.getByTestId('next-encounter-picker').locator('.combat-primary').click()
     } else {
       await panel.getByRole('button', { name: '手动准备遭遇' }).click()
-      await expect(panel.locator('.encounter-start select')).toBeVisible()
+      await expect(panel.getByTestId('encounter-start').locator('select')).toBeVisible()
       await panel.getByRole('button', { name: '确认进入战斗' }).click()
     }
   }
-  await expect(panel.locator('.turn-banner')).toBeVisible({ timeout: 20_000 })
-  await expect(panel.locator('.actor-card')).not.toHaveCount(0)
+  await expect(panel.getByTestId('turn-banner')).toBeVisible({ timeout: 20_000 })
+  await expect(panel.getByTestId('actor-card')).not.toHaveCount(0)
 
   for (const viewport of [
     { width: 1280, height: 620 },
@@ -243,14 +243,14 @@ test('professional combat tool keeps its content reachable at short desktop and 
     { width: 390, height: 700 },
   ]) {
     await page.setViewportSize(viewport)
-    await expect(panel.locator('.turn-banner')).toBeVisible()
+    await expect(panel.getByTestId('turn-banner')).toBeVisible()
     const geometry = await page.evaluate(PANEL_GEOMETRY, '.dnd-combat')
     console.log(`[tool-panel] combat ${viewport.width}x${viewport.height} ${JSON.stringify(geometry)}`)
     await expectToolPanelReachable(page, '.dnd-combat', `combat @ ${viewport.width}x${viewport.height}`)
   }
 
   // 纵向修复不得破坏移动端的横向滚动（initiative / 行动者卡 / 动作卡）。
-  const lane = page.locator('.dnd-combat .actor-grid').first()
+  const lane = page.getByTestId('dnd-combat').getByTestId('actor-grid').first()
   const laneGeometry = await lane.evaluate(element => ({
     overflowX: getComputedStyle(element).overflowX,
     scrollWidth: element.scrollWidth,
@@ -290,13 +290,13 @@ test('professional surfaces keep explicit labels and readable light-mode colors'
   await expect(page.locator('body')).toHaveClass(/light/)
   await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
 
-  const unlabeled = await page.locator('.campaign-panel input').evaluateAll(inputs => inputs.filter(input => {
+  const unlabeled = await page.getByTestId('campaign-panel').locator('input').evaluateAll(inputs => inputs.filter(input => {
     const element = input as HTMLInputElement
     return !element.closest('label') && !element.getAttribute('aria-label') && !element.getAttribute('aria-labelledby')
   }).length)
   expect(unlabeled).toBe(0)
 
-  const appearance = await page.locator('.session-card').evaluate(element => {
+  const appearance = await page.getByTestId('session-card').evaluate(element => {
     const channels = (value: string) => (value.match(/[\d.]+/g) || []).slice(0, 3).map(Number)
     const luminance = (value: string) => {
       const converted = channels(value).map(channel => {
@@ -329,9 +329,9 @@ test('Chinese professional play area explains the route and localizes campaign e
   await openDndTable(page)
   await page.locator('[data-testid="dnd5e-campaign-tool"]:visible').click()
   await expect(page.getByRole('heading', { name: '快速完成开团设置' })).toBeVisible()
-  await expect(page.locator('.session-card summary')).toContainText('手动设置 / 多人开团')
+  await expect(page.getByTestId('session-card').locator('summary')).toContainText('手动设置 / 多人开团')
 
-  const agreement = page.locator('.agreement-grid')
+  const agreement = page.getByTestId('agreement-grid')
   const tone = agreement.locator('label').filter({ hasText: /^基调/ }).locator('select')
   const difficulty = agreement.locator('label').filter({ hasText: /^难度/ }).locator('select')
   const rating = agreement.locator('label').filter({ hasText: /^内容分级/ }).locator('select')
@@ -387,14 +387,14 @@ test('guided creation enforces proficiency limits and enters the saved game even
   const ruleSelect = page.locator('.create-config-surface label').filter({ hasText: /^规则/ }).locator('select')
   await expect(ruleSelect).toBeVisible()
   await ruleSelect.selectOption('dnd2024_srd')
-  await page.locator('.create-actions .primary').click()
-  await expect(page.locator('.create-game-settings-stage')).toBeVisible()
-  await page.locator('.create-actions .primary').click()
+  await page.getByTestId('create-actions').locator('.primary').click()
+  await expect(page.getByTestId('create-game-settings-stage')).toBeVisible()
+  await page.getByTestId('create-actions').locator('.primary').click()
 
-  await page.locator('.create-character-actions .primary').click()
+  await page.getByTestId('create-character-actions').locator('.primary').click()
   await expect(page.getByRole('heading', { name: '创建你的冒险者' })).toBeVisible()
   await page.getByRole('tab', { name: '引导创建' }).click()
-  const alignment = page.locator('.guided-builder label').filter({ hasText: /^阵营/ }).locator('select')
+  const alignment = page.getByTestId('guided-builder').locator('label').filter({ hasText: /^阵营/ }).locator('select')
   await expect(alignment.locator('option')).toHaveText([
     'LG · 守序善良', 'NG · 中立善良', 'CG · 混乱善良',
     'LN · 守序中立', 'N · 绝对中立', 'CN · 混乱中立',
@@ -404,9 +404,9 @@ test('guided creation enforces proficiency limits and enters the saved game even
   await chooseBuilderCard(page, '职业', '战士', true)
   await chooseBuilderCard(page, '物种', '人类', true)
   await chooseBuilderCard(page, '背景', '士兵', true)
-  await page.locator('.builder-actions .primary').click()
+  await page.getByTestId('builder-actions').locator('.primary').click()
   await expect(page.getByRole('heading', { name: '属性决定你做事时的基础优势' })).toBeVisible()
-  await page.locator('.builder-actions .primary').click()
+  await page.getByTestId('builder-actions').locator('.primary').click()
   await expect(page.getByRole('heading', { name: '完成会影响规则的选择' })).toBeVisible()
 
   const classSkills = fieldset(page, '职业技能')
@@ -431,13 +431,13 @@ test('guided creation enforces proficiency limits and enters the saved game even
   }
   await expect(languages.locator('input:not(:checked):not(:disabled)')).toHaveCount(0)
 
-  const validateCharacter = page.locator('.builder-actions .primary')
+  const validateCharacter = page.getByTestId('builder-actions').locator('.primary')
   await expect(validateCharacter).toBeEnabled()
   await validateCharacter.click()
   await expect(page.getByRole('heading', { name: '角色已通过规则检查' })).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: '完成角色' }).click()
-  await expect(page.locator('.create-character-card').filter({ hasText: '新手验收者' })).toBeVisible()
-  await page.locator('.create-actions .primary').click()
+  await expect(page.getByTestId('create-character-card').filter({ hasText: '新手验收者' })).toBeVisible()
+  await page.getByTestId('create-actions').locator('.primary').click()
   await page.getByRole('button', { name: /创建并进入/ }).click()
 
   await expect(page).toHaveURL(/#\/play\?game=web(?:%7C|\|)/, { timeout: 20_000 })

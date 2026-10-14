@@ -369,7 +369,7 @@ async function enterGame() {
     </header>
 
     <main class="peer-layout">
-      <section class="peer-card peer-setup">
+      <section class="peer-card peer-setup" data-testid="peer-setup">
         <div class="peer-mode-tabs">
           <button :class="{ active: mode === 'host' }" :disabled="sessionActive" @click="selectMode('host')">{{ t('peerHostMode') }}</button>
           <button :class="{ active: mode === 'guest' }" :disabled="sessionActive" @click="selectMode('guest')">{{ t('peerGuestMode') }}</button>
@@ -390,7 +390,7 @@ async function enterGame() {
           </select>
           <small>{{ t(`peerStunPresetHint_${hostStunPreset}`) }}</small>
         </label>
-        <section v-if="mode === 'host' && selectedGame && !playersLoading && hasInviteCapacity" class="peer-room-batch">
+        <section v-if="mode === 'host' && selectedGame && !playersLoading && hasInviteCapacity" class="peer-room-batch" data-testid="peer-room-batch">
           <header>
             <strong>{{ t('peerRoomBatchTitle', { count: automaticInviteTargets.length }) }}</strong>
             <small v-if="capacityHint">{{ capacityHint }}</small>
@@ -416,7 +416,7 @@ async function enterGame() {
         </label>
 
         <template v-if="mode === 'host'">
-          <label class="peer-direct-consent">
+          <label class="peer-direct-consent" data-testid="peer-direct-consent">
             <input v-model="directConsent" type="checkbox">
             <span>{{ t('peerDirectConsent') }} <RouterLink :to="{ name: 'legal-privacy' }" target="_blank" rel="noopener">{{ t('legalPrivacyTitle') }}</RouterLink></span>
           </label>
@@ -451,7 +451,7 @@ async function enterGame() {
             <textarea v-model.trim="guestCustomStunUrl" rows="3" :placeholder="t('peerStunCustomPlaceholder')" />
             <small>{{ t('peerStunHint') }}</small>
           </label>
-          <label class="peer-direct-consent">
+          <label class="peer-direct-consent" data-testid="peer-direct-consent">
             <input v-model="directConsent" type="checkbox">
             <span>{{ t('peerDirectConsent') }} <RouterLink :to="{ name: 'legal-privacy' }" target="_blank" rel="noopener">{{ t('legalPrivacyTitle') }}</RouterLink></span>
           </label>
@@ -461,19 +461,19 @@ async function enterGame() {
         </template>
       </section>
 
-      <section class="peer-card peer-status">
+      <section class="peer-card peer-status" data-testid="peer-status">
         <header>
           <div>
             <span>{{ t('peerConnectionStatus') }}</span>
-            <strong :class="`peer-state-${state}`"><i />{{ stateLabel }}</strong>
+            <strong :class="`peer-state-${state}`" :data-peer-state="state"><i />{{ stateLabel }}</strong>
           </div>
-          <div v-if="roomCode" class="peer-status-room">
+          <div v-if="roomCode" class="peer-status-room" data-testid="peer-status-room">
             <span>{{ t('peerRoomCode') }}</span>
             <code>{{ roomCode }}</code>
           </div>
         </header>
         <p v-if="stateDetail" :class="isFailureState ? 'error-banner' : 'peer-status-detail'">{{ displayDetail }}</p>
-        <section v-if="mode === 'host' && inviteCodes.length" ref="invitePanel" class="peer-invite">
+        <section v-if="mode === 'host' && inviteCodes.length" ref="invitePanel" class="peer-invite" data-testid="peer-invite">
           <header class="peer-invite-header">
             <div class="peer-invite-heading">
               <strong>{{ t('peerInvitesReadyTitle', { count: inviteCodes.length }) }}</strong>
@@ -490,11 +490,13 @@ async function enterGame() {
           >
             <span class="peer-invite-index" aria-hidden="true">{{ index + 1 }}</span>
             <div class="peer-invite-code-wrap">
-              <div class="peer-invite-meta">
+              <div class="peer-invite-meta" data-testid="peer-invite-meta">
                 <strong>{{ invite.actorName || t('peerNewPlayerNumber', { number: index + 1 }) }}</strong>
                 <span
                   class="peer-invite-peer-state"
+                  data-testid="peer-invite-peer-state"
                   :class="`peer-state-${peerStates[invite.peerId] || 'waiting'}`"
+                  :data-peer-state="peerStates[invite.peerId] || 'waiting'"
                 >
                   <i />{{ t(`peerState_${peerStates[invite.peerId] || 'waiting'}`) }}
                 </span>
@@ -518,7 +520,7 @@ async function enterGame() {
           </div>
           <small>{{ t('peerInviteSecurityHint') }}</small>
         </section>
-        <div v-if="Object.keys(peerStates).length && !(mode === 'host' && inviteCodes.length)" class="peer-member-states">
+        <div v-if="Object.keys(peerStates).length && !(mode === 'host' && inviteCodes.length)" class="peer-member-states" data-testid="peer-member-states">
           <strong>{{ t('peerConnectedPeers') }}</strong>
           <code v-for="(peerState, peerId) in peerStates" :key="peerId">{{ peerId }} · {{ t(`peerState_${peerState}`) }}</code>
         </div>
@@ -526,7 +528,7 @@ async function enterGame() {
         <button v-if="connected && peerSession.gameKey" class="success peer-enter-game" @click="enterGame">{{ t('peerEnterGame') }}</button>
         <p class="peer-boundary">{{ t('peerBoundary') }}</p>
 
-        <div class="peer-connection-check" :class="{ active: connected }">
+        <div class="peer-connection-check" :class="{ active: connected }" data-testid="peer-connection-check" :data-active="connected">
           <h2>{{ t('peerConnectionCheckTitle') }}</h2>
           <p>{{ t('peerConnectionCheckHint') }}</p>
           <strong><i />{{ t(connected ? 'peerConnectionCheckActive' : 'peerConnectionCheckWaiting') }}</strong>
@@ -535,3 +537,223 @@ async function enterGame() {
     </main>
   </section>
 </template>
+
+<style scoped>
+.peer-page {
+  display: flex;
+  flex-direction: column;
+  min-height: var(--app-h, 100dvh);
+  padding: clamp(20px, 4vw, 54px);
+  background: var(--df-app-bg);
+  color: var(--df-text);
+}
+
+.peer-page-embedded {
+  min-height: 0;
+  padding: 14px 16px 16px;
+  background: transparent;
+}
+
+.peer-page-embedded .peer-layout {
+  width: 100%;
+  margin-top: 0;
+  gap: 14px;
+}
+
+/* 弹窗内空间有限：卡片/字段/页签间距整体收紧，避免大片留白 */
+.peer-page-embedded .peer-card { padding: 16px; }
+.peer-page-embedded .peer-mode-tabs { margin-bottom: 16px; }
+.peer-page-embedded .peer-field { margin-bottom: 12px; }
+.peer-page-embedded .peer-direct-consent { margin: 2px 0 12px; }
+
+.peer-header,
+.peer-layout {
+  width: min(1080px, 100%);
+  margin-inline: auto;
+}
+
+.peer-header h1 {
+  margin: 8px 0;
+  font: 700 clamp(28px, 5vw, 48px)/1.05 var(--df-font-display);
+}
+
+.peer-header p { max-width: 760px; color: var(--df-text-muted); }
+
+.peer-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 24px;
+  color: var(--df-text-muted);
+  text-decoration: none;
+}
+
+.peer-layout {
+  display: grid;
+  flex: 1;
+  align-items: start;
+  grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr);
+  grid-template-rows: 1fr;
+  gap: 18px;
+  margin-top: 28px;
+}
+.peer-load-level { display: inline-flex; align-items: center; width: fit-content; }
+.peer-load-normal { color: var(--df-success) !important; }
+.peer-load-busy { color: var(--df-warning, #c9913a) !important; }
+.peer-load-nearly_full { color: var(--df-danger) !important; }
+
+.peer-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: clamp(18px, 3vw, 28px);
+  border: 1px solid var(--df-border);
+  border-radius: var(--df-radius-lg);
+  background: var(--df-surface-1);
+  box-shadow: var(--df-shadow);
+}
+
+.peer-mode-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 22px; }
+.peer-mode-tabs button.active { border-color: var(--df-accent); color: var(--df-accent-strong); background: var(--df-accent-soft); }
+
+.peer-field { display: grid; gap: 7px; margin-bottom: 16px; }
+.peer-field > span { font-weight: 700; }
+.peer-field small,
+.peer-invite > small { color: var(--df-text-muted); line-height: 1.5; }
+.peer-field textarea { resize: vertical; overflow-wrap: anywhere; font-family: var(--df-font-mono); font-size: 12px; }
+.peer-room-batch {
+  display: grid;
+  gap: 10px;
+  margin: -2px 0 16px;
+  padding: 12px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-sm);
+  background: var(--df-surface-2);
+}
+.peer-room-batch > header { display: grid; gap: 4px; }
+.peer-room-batch > header > small,
+.peer-room-batch > small { color: var(--df-text-muted); font-size: 12px; line-height: 1.5; }
+.peer-no-capacity { margin: 0 0 16px; color: var(--df-text-muted); font-size: 13px; line-height: 1.55; }
+.peer-room-batch ul { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.peer-room-batch li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.peer-room-batch li > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: var(--df-accent-strong); background: var(--df-accent-soft); font-size: 11px; font-weight: 800; }
+.peer-room-batch li > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-room-batch li > small { color: var(--df-text-muted); font-size: 11px; }
+.peer-room-batch .peer-batch-warning { color: var(--df-warning, #c9913a); }
+.peer-invite-preview { display: grid; gap: 6px; margin: -2px 0 16px; padding: 10px 12px; border: 1px solid var(--df-border-soft); border-radius: var(--df-radius-sm); background: var(--df-surface-2); }
+.peer-invite-preview span { color: var(--df-text-muted); font-size: 12px; }
+.peer-invite-stun-list { display: grid; gap: 4px; }
+.peer-invite-preview code { overflow-wrap: anywhere; color: var(--df-accent-strong); }
+.peer-direct-consent { display: flex; align-items: flex-start; gap: 9px; margin: 4px 0 14px; color: var(--df-text-muted); font-size: 13px; line-height: 1.55; }
+.peer-direct-consent input { width: auto; margin-top: 3px; flex: 0 0 auto; }
+.peer-direct-consent a { color: var(--df-accent-strong); }
+.peer-primary { width: 100%; justify-content: center; }
+
+/* 开房后的邀请操作归入右侧房间控制台，与连接状态保持同一上下文。 */
+.peer-invite {
+  display: grid;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--df-accent) 24%, var(--df-border-soft));
+  border-radius: var(--df-radius-md);
+  background: color-mix(in srgb, var(--df-accent-soft) 34%, var(--df-surface-2));
+}
+.peer-invite-header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.peer-invite-heading { display: grid; min-width: 0; gap: 4px; }
+.peer-invite-heading > strong { color: var(--df-text); }
+.peer-invite-heading > small { color: var(--df-text-muted); font-size: 12px; line-height: 1.5; }
+.peer-invite-item { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+.peer-invite-code-wrap { display: grid; min-width: 0; gap: 4px; }
+.peer-invite-meta { display: flex; align-items: center; justify-content: space-between; min-width: 0; gap: 8px; }
+.peer-invite-meta > strong { overflow: hidden; color: var(--df-text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.peer-invite-peer-state { display: inline-flex; align-items: center; flex: 0 0 auto; gap: 5px; font-size: 11px; white-space: nowrap; }
+.peer-invite-peer-state i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.peer-invite-index {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--df-accent-soft);
+  color: var(--df-accent-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+/* 两行换行预览：base64 无空格需 break-all 才能折行，比单行多露出近一倍内容 */
+.peer-invite-code :deep(textarea) {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  font-family: var(--df-font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.peer-invite-copy { min-height: 30px; padding: 0 9px; white-space: nowrap; font-size: 12px; }
+.peer-invite > small { color: var(--df-text-muted); line-height: 1.5; }
+.peer-copy-all { min-height: 30px; padding: 0 10px; white-space: nowrap; font-size: 12px; }
+
+.peer-status-room { display: grid; justify-items: end; gap: 4px; }
+.peer-status-room > span { color: var(--df-text-muted); font-size: 11px; }
+.peer-status-room code { color: var(--df-accent-strong); font-size: 18px; letter-spacing: .12em; }
+
+.peer-status > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.peer-status > header div { display: grid; gap: 8px; }
+.peer-status > header strong { display: inline-flex; align-items: center; gap: 8px; }
+.peer-status > header strong i { width: 9px; height: 9px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; }
+.peer-state-connected { color: var(--df-success); }
+.peer-state-error { color: var(--df-danger); }
+.peer-state-signaling,
+.peer-state-waiting,
+.peer-state-connecting { color: var(--df-accent-strong); }
+.peer-member-states { display: grid; gap: 6px; margin-top: 16px; padding: 12px; border: 1px solid var(--df-border-soft); border-radius: var(--df-radius-sm); background: var(--df-surface-2); }
+.peer-member-states code { overflow-wrap: anywhere; color: var(--df-text-muted); }
+.peer-disconnect { margin-top: 12px; }
+.peer-enter-game { margin: 12px 0 0 8px; }
+
+.peer-boundary { margin: 20px 0; padding: 12px; border-left: 3px solid var(--df-accent); background: var(--df-surface-2); color: var(--df-text-muted); }
+.peer-connection-check {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: var(--df-radius-md);
+  background: var(--df-surface-2);
+}
+.peer-connection-check h2 { margin: 0; font: 700 20px/1.2 var(--df-font-display); }
+.peer-connection-check p { margin: 0; color: var(--df-text-muted); line-height: 1.65; }
+.peer-connection-check strong { display: inline-flex; align-items: center; gap: 8px; width: fit-content; color: var(--df-text-muted); }
+.peer-connection-check strong i { width: 8px; height: 8px; border-radius: 50%; background: var(--df-text-muted); }
+.peer-connection-check.active { border-color: color-mix(in srgb, var(--df-success) 42%, var(--df-border)); }
+.peer-connection-check.active strong { color: var(--df-success); }
+.peer-connection-check.active strong i { background: var(--df-success); box-shadow: 0 0 10px color-mix(in srgb, var(--df-success) 70%, transparent); }
+
+.peer-status-detail {
+  padding: 8px 10px;
+  border: 1px solid var(--df-border-soft);
+  border-radius: 5px;
+  color: var(--df-text-secondary);
+  background: color-mix(in srgb, var(--df-surface-2) 55%, transparent);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+@media (max-width: 760px) {
+  .peer-page { padding: 16px 12px calc(24px + env(safe-area-inset-bottom)); }
+  .peer-page-embedded { min-height: 0; padding: 12px 10px calc(20px + env(safe-area-inset-bottom)); }
+  .peer-layout { grid-template-columns: 1fr; grid-template-rows: auto; align-items: start; }
+  .peer-card { padding: 16px; }
+  .peer-status > header { align-items: start; flex-direction: column; }
+  .peer-status-room { justify-items: start; }
+  .peer-invite-header { align-items: stretch; flex-direction: column; }
+  .peer-copy-all { width: 100%; justify-content: center; }
+  /* 窄屏下复制按钮收成图标+短文案，避免挤压码区 */
+  .peer-invite-item { grid-template-columns: 22px minmax(0, 1fr) auto; gap: 6px; }
+  .peer-invite-index { width: 22px; height: 22px; }
+  .peer-invite-meta { align-items: start; flex-direction: column; gap: 3px; }
+  .peer-room-batch li { grid-template-columns: 22px minmax(0, 1fr); }
+  .peer-room-batch li > small { grid-column: 2; }
+}
+</style>

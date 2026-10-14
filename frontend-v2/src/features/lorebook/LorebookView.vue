@@ -798,7 +798,7 @@ async function removeBinding(bindingId: string) {
 </script>
 
 <template>
-  <section class="view archive-page lorebook-page">
+  <section class="view archive-page lorebook-page" data-testid="lorebook-page">
     <div class="lorebook-shell" :class="{ 'inspector-open': inspectorOpen }">
       <LorebookSidebar
         :books="lorebookBooks"
@@ -831,7 +831,7 @@ async function removeBinding(bindingId: string) {
     <p v-if="error" class="error-banner">{{ error }}</p>
 
     <div class="lore-world-bar">
-      <label class="lore-language-filter">
+      <label class="lore-language-filter" data-testid="lore-language-filter">
         <span>{{ t('contentLanguage') }}</span>
         <select v-model="worldLanguage">
           <option value="zh-CN">{{ t('chinese') }}</option>
@@ -1115,3 +1115,17 @@ async function removeBinding(bindingId: string) {
     />
   </section>
 </template>
+
+<style scoped>
+/* 与 CharactersView.vue 等页面共享的页宽约束，拆分自 characters.css。 */
+.lorebook-page {
+  width: min(1540px, 100%);
+}
+
+/* 移动端底栏遮挡：拆分自 light.css 的跨页共享规则（原是 5 个页面组合选择器）。 */
+@media (max-width: 800px) {
+  .lorebook-page {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+}
+</style>
