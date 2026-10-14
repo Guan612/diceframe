@@ -39,7 +39,7 @@ interface CreateCharacter extends CharacterSheet { character_name: string }
 type CreateMode = 'template' | 'custom' | 'ai'
 type Step = 1 | 2 | 3 | 4
 type NarrativePerspective = 'immersive' | 'third_person'
-type PlayMode = 'free' | 'adventure'
+type PlayMode = 'free' | 'adventure' | 'gal'
 type AdvancementMode = 'milestone' | 'xp'
 type AdvancementAuthority = 'ai_gm' | 'gm'
 const DIFFICULTY_EASY = '\u8f7b\u677e'
@@ -125,8 +125,18 @@ const availableModuleAdventures = computed(() => moduleId.value
 
 function selectPlayMode(value: PlayMode): void {
   playMode.value = value
-  if (value === 'free') adventureId.value = ''
+  if (value !== 'adventure') adventureId.value = ''
 }
+const galRuleAvailable = computed(() => rules.value.some(item => item.rule_id === 'gal_narrative'))
+const galPreview = computed<boolean>({
+  get: () => playMode.value === 'gal',
+  set(on: boolean) {
+    selectPlayMode(on ? 'gal' : 'free')
+    if (!on) return
+    solo.value = true
+    if (galRuleAvailable.value) rule.value = 'gal_narrative'
+  },
+})
 const activeWorldTemplate = computed(() => worlds.value.find(item => worldIdOf(item) === world.value))
 const defaultSceneImageRef = computed<SceneImageRef | undefined>(() => {
   if (mode.value === 'template' && activeWorldTemplate.value?.scene_image) return activeWorldTemplate.value.scene_image
@@ -279,7 +289,8 @@ watch([activeRule, world, gameLanguage, mode, loreChoice], async ([ruleId, world
   if (!ruleId || !worldId || !showAdventurePackages.value) {
     adventures.value = []
     adventureId.value = ''
-    playMode.value = 'free'
+    // 只回收冒险模式；gal 预览不属于冒险包流程，不被这里重置。
+    if (playMode.value === 'adventure') playMode.value = 'free'
     return
   }
   try {
@@ -296,7 +307,7 @@ watch([activeRule, world, gameLanguage, mode, loreChoice], async ([ruleId, world
     if (sequence !== adventureCatalogSequence) return
     adventures.value = []
     adventureId.value = ''
-    playMode.value = 'free'
+    if (playMode.value === 'adventure') playMode.value = 'free'
   }
 }, { immediate: true })
 watch([aiPrompt, aiRule, aiAutoRule], () => { aiGeneratedRule.value = null })
@@ -574,7 +585,7 @@ async function create() {
     const selectedMapBackground = mapBackgroundFile.value
       ? await uploadMapBackground(mapBackgroundFile.value)
       : mapBackgroundSelection(mapBackgroundChoice.value)
-    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', adventure_source_kind: showAdventurePackages.value && playMode.value === 'adventure' && moduleId.value ? 'plugin' : '', adventure_source_id: showAdventurePackages.value && playMode.value === 'adventure' ? moduleId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
+    const payload: Record<string, unknown> = { solo: solo.value, difficulty: difficulty.value, rule_id: activeRule.value, play_mode: playMode.value === 'gal' ? 'gal' : showAdventurePackages.value ? playMode.value : 'free', adventure_id: showAdventurePackages.value && playMode.value === 'adventure' ? adventureId.value : '', adventure_source_kind: showAdventurePackages.value && playMode.value === 'adventure' && moduleId.value ? 'plugin' : '', adventure_source_id: showAdventurePackages.value && playMode.value === 'adventure' ? moduleId.value : '', description: description.value, room_password: openRoom.value ? '' : (roomPassword.value || null), players, language: gameLanguage.value, scene_image: selectedSceneImage, map_background: selectedMapBackground, narrative_perspective: narrativePerspective.value, gm_style_override: gmStyleFollowWorld.value ? null : { ...gmStyle.value }, advancement_mode: supportsAdvancementPolicy.value ? advancementMode.value : 'milestone', advancement_authority: supportsAdvancementPolicy.value ? advancementAuthority.value : 'ai_gm' }
     let worldId = ''
     if (mode.value === 'template') {
       worldId = world.value; payload.world_id = worldId
@@ -688,6 +699,11 @@ async function create() {
                 <p v-if="aiGeneratedRule?.rule_id" class="notice wide">{{ t('generatedRule') }}{{ aiGeneratedRule.rule_name || aiGeneratedRule.rule_id }}{{ t('generatedRuleHint') }}</p>
               </template>
               <label v-if="mode !== 'ai'"><span>{{ t('rule') }}</span><select v-model="rule"><option v-for="r in rules" :key="r.rule_id" :value="r.rule_id">{{ ruleNameOf(r) }}</option></select></label>
+              <label v-if="mode !== 'ai'" class="wide create-check create-gal-preview">
+                <input type="checkbox" v-model="galPreview" :disabled="!galRuleAvailable">
+                <span>{{ gameDefault('GAL 预览（实验性）', 'GAL preview (experimental)', 'GAL-Vorschau (experimentell)') }}</span>
+                <small>{{ gameDefault('单机视觉小说式对话：无骰子无属性，使用现有聊天界面游玩。实验功能，尚无好感度、路线与结局。', 'Solo visual-novel style play: no dice or stats, played in the existing chat UI. Experimental; no affection, routes or endings yet.', 'Solo-Visual-Novel-Dialog: ohne Würfel und Werte, in der bestehenden Chat-Oberfläche. Experimentell; noch ohne Zuneigung, Routen oder Enden.') }}</small>
+              </label>
               <label><span>{{ t('lorebookSource') }}</span><select v-model="loreChoice"><option value="__builtin__">{{ t('builtinLorebook') }}</option><option value="__blank__">{{ t('blankLorebook') }}</option><option v-for="w in availableLoreWorlds" :key="worldIdOf(w)" :value="'copy:' + worldIdOf(w)">{{ t('copyFrom') }}{{ worldNameOf(w) }} · {{ worldLanguageLabel(w) }}</option></select></label>
               <div v-if="showAdventurePackages" class="wide create-adventure-package-field">
                 <label>
@@ -859,6 +875,7 @@ async function create() {
             <article><span>{{ t('world') }}</span><strong>{{ confirmationWorld }}</strong></article>
             <article><span>{{ t('rule') }}</span><strong>{{ ruleNameOf(rules.find(r => r.rule_id === activeRule) || { rule_id: activeRule }) }}</strong></article>
             <article v-if="supportsAdventurePackages"><span>{{ gameDefault('冒险模式', 'Adventure mode', 'Abenteuermodus') }}</span><strong>{{ selectedAdventure?.name || gameDefault('标准自由对局', 'Standard free play', 'Standard-Freispiel') }}</strong></article>
+            <article v-if="playMode === 'gal'"><span>{{ gameDefault('玩法模式', 'Play mode', 'Spielmodus') }}</span><strong>{{ gameDefault('GAL 预览（实验性）', 'GAL preview (experimental)', 'GAL-Vorschau (experimentell)') }}</strong></article>
             <article><span>{{ t('narrativePerspective') }}</span><strong>{{ narrativePerspective === 'immersive' ? t('narrativeImmersive') : t('narrativeThirdPerson') }}</strong></article>
             <article v-if="supportsAdvancementPolicy && !seed.trim()"><span>{{ t('advancementMode') }}</span><strong>{{ advancementMode === 'milestone' ? t('advancementMilestone') : t('advancementXp') }} · {{ advancementAuthority === 'ai_gm' ? t('advancementAiGm') : t('advancementHumanGm') }}</strong></article>
             <article><span>{{ t('difficulty') }}</span><strong>{{ difficulty === DIFFICULTY_EASY ? t('easy') : difficulty === DIFFICULTY_HARDCORE ? t('hardcore') : t('normal') }}</strong></article>
