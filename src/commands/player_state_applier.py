@@ -27,7 +27,7 @@ from src.commands.state_items import (
     equip_owned_item,
     unequip_item,
 )
-from src.engine.modules import progression_state
+from src.engine.modules import adventure_runtime_state, progression_state, relationships_state
 from src.rulesets import resource_recovery
 
 logger = logging.getLogger("trpg")
@@ -58,6 +58,9 @@ class PlayerStateApplier:
         # policy must not silently restore the unrestricted legacy tag path.
         recovery_policy = resource_recovery.policy(rule)
         managed_resources = resource_recovery.managed_resources(rule)
+        # 发布关系 schema 快照：GM prompt 注入经 module_hooks 读槽，核心流程
+        # 不点名能力模块；每轮刷新以跟随规则/世界切换。
+        relationships_state.publish_schema(instance, rule)
 
         def accepts_narrative_delta(cs: dict, key: str, delta: int | float) -> bool:
             if recovery_policy is None:
@@ -194,6 +197,22 @@ class PlayerStateApplier:
                         self._madness.apply_madness(instance, uid, cs, before - after)
                     logger.info("规则资源变化: %s %s %+d -> %d", uid, stat_key, int(delta), after)
                 check_resource_triggers(instance, uid, rule)
+            # 关系维度变化（REL 标签）：schema 未声明即能力未配置，整批忽略；
+            # 里程碑证据缺席（无冒险/读取失败）= 带里程碑的阶段不可进入。
+            rel_changes = pud.get("relationship_changes")
+            if isinstance(rel_changes, dict) and rel_changes:
+                rel_schema = relationships_state.schema_for(instance, rule)
+                if rel_schema is not None:
+                    try:
+                        milestones = {
+                            str(item)
+                            for item in adventure_runtime_state.progress_snapshot(instance).get(
+                                "completed_milestones", []
+                            )
+                        }
+                    except Exception:  # noqa: BLE001 - 里程碑证据不可得时不猜
+                        milestones = set()
+                    relationships_state.apply_changes(instance, uid, rel_changes, rel_schema, milestones)
             # 死亡检测（治疗先苏醒，HP 归零再按规则落昏迷/死亡）
             wake_character(cs)
             if sync_death_from_hp(cs, progression_state.round_value(instance), rule):

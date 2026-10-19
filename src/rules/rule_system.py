@@ -176,6 +176,14 @@ class RuleSystem:
             if isinstance(item, dict):
                 item.pop("name", None)
                 item.pop("description", None)
+        relationship = value.get("relationship_schema")
+        if isinstance(relationship, dict):
+            for item in relationship.get("dimensions", []):
+                if isinstance(item, dict):
+                    item.pop("label", None)
+            for item in relationship.get("stages", []):
+                if isinstance(item, dict):
+                    item.pop("label", None)
         for item in value.get("skills", {}).values():
             if isinstance(item, dict):
                 for field in ("aliases", "name", "description", "label", "hint"):
@@ -618,6 +626,12 @@ class RuleSystem:
                     resource["aliases"] = stat["aliases"]
                 resources.append(resource)
         return resources
+
+    @property
+    def relationship_schema(self) -> dict | None:
+        """Rule-declared relationship schema (raw); the relationships module owns parsing."""
+        schema = self.template.get("relationship_schema")
+        return schema if isinstance(schema, dict) else None
 
     @property
     def identity_schema(self) -> list[dict]:

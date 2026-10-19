@@ -241,6 +241,34 @@ def _stat(value: str, result: dict, _limits: dict) -> None:
     changes[stat_key] = changes.get(stat_key, 0) + parsed
 
 
+def _rel(value: str, result: dict, _limits: dict) -> None:
+    """关系维度标签：REL:玩家ID:对象ID:维度:变化量。
+
+    对象 ID 允许含冒号（如 npc:lin）：首段是玩家 ID，末两段是维度与变化量，
+    中间各段拼回对象 ID。声明/上限/阶段计算都在 applier 侧的权威路径执行；
+    规则未声明 relationship_schema 时整批忽略。
+    """
+    parts = [part.strip() for part in value.split(":")]
+    if len(parts) < 4:
+        logger.warning("REL 格式无效，已忽略: %s", value)
+        return
+    uid, dim_key, delta_text = parts[0], parts[-2].lower(), parts[-1]
+    target = ":".join(parts[1:-2])
+    if not uid or not target or not dim_key:
+        logger.warning("REL 格式无效，已忽略: %s", value)
+        return
+    parsed = _parse_int(delta_text, tag="REL", uid=uid)
+    if parsed is None:
+        return
+    if not -100 <= parsed <= 100:
+        logger.warning("REL 变更幅度异常，已忽略: %s %s %+d", uid, target, parsed)
+        return
+    update = _player_update(result, uid)
+    changes = update.setdefault("relationship_changes", {})
+    dims = changes.setdefault(target, {})
+    dims[dim_key] = dims.get(dim_key, 0) + parsed
+
+
 PLAYER_TAG_HANDLERS: dict[str, PlayerTagHandler] = {
     "HP": _hp,
     "GOLD": _gold,
@@ -260,6 +288,7 @@ PLAYER_TAG_HANDLERS: dict[str, PlayerTagHandler] = {
     "MANA": _mana,
     "REVIVE": _revive,
     "STAT": _stat,
+    "REL": _rel,
 }
 
 

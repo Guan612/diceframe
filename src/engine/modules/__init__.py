@@ -21,6 +21,7 @@ from src.engine.modules import (  # noqa: F401
     progression_state,
     profile_progression,
     profile_run,
+    relationships_state,
     room_access,
     session_stats,
     storytelling,

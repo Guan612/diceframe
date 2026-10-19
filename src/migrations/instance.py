@@ -28,7 +28,7 @@ from src.password_hashing import hash_password
 
 logger = logging.getLogger("trpg")
 
-CURRENT_INSTANCE_SCHEMA_VERSION = 47
+CURRENT_INSTANCE_SCHEMA_VERSION = 48
 
 # 内置 freeform_coc 在 Currency Model V2 中把 base_unit 从「美元」升级为
 # 「美分」（1 amount = 1 美分），存量 CoC 存档的所有 canonical 金额必须 ×100
@@ -1193,6 +1193,17 @@ def migrate_game_state_payload(data: Mapping[str, Any]) -> dict[str, Any]:
         # cannot preserve consumed qualification identities. Do not materialize
         # historical sources or infer resources/rewards for older saves.
         version = 47
+    if version == 47:
+        from src.engine.modules import relationships_state
+
+        modules = payload.get("modules")
+        if not isinstance(modules, dict):
+            modules = {}
+        # 新槽从空开始：不猜测历史关系数值，也不把未知 schema 改写成 v1。
+        if not isinstance(modules.get(relationships_state.MODULE_NAME), dict):
+            modules[relationships_state.MODULE_NAME] = relationships_state.fresh()
+        payload["modules"] = modules
+        version = 48
     payload["instance_schema_version"] = version
     from src.migrations.run_story import validate_slot_envelopes
     validate_slot_envelopes(payload)

@@ -21,7 +21,9 @@ def test_schema_47_fences_old_readers_without_materializing_historical_recovery(
     old["modules"].pop("resource_recovery", None)
     before = deepcopy(old)
     upgraded = migrate_game_state_payload(old)
-    assert upgraded["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION == 47
+    # 不钉死具体 schema 号：迁移链随新槽演进，本测试守的是"v46 fence
+    # 不物化历史恢复数据"这一契约。
+    assert upgraded["instance_schema_version"] == CURRENT_INSTANCE_SCHEMA_VERSION >= 47
     assert "resource_recovery" not in upgraded["modules"]
     assert upgraded["players"] == old["players"] and old == before
     assert migrate_game_state_payload(upgraded) == upgraded
