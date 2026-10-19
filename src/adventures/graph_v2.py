@@ -253,6 +253,9 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
             "name", "description",
             # ADV2-04 / FIX-04 §6.1：node 完成后的 outcome 声明（唯一归属点）。
             "on_complete",
+            # 完成模式：gm（默认，人类 GM / 单人持有 GM 权威者确认）| auto
+            # （激活即由引擎完成，用于机械检查点）。
+            "completion",
         }
         if schema == 2:
             node_allowed.add("choice_mode")
@@ -303,6 +306,9 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
         choice_mode = raw.get("choice_mode", "parallel")
         if choice_mode not in {"parallel", "exclusive"}:
             raise AdventureGraphV2Error("unsupported node choice_mode")
+        completion = raw.get("completion", "gm")
+        if completion not in ("gm", "auto"):
+            raise AdventureGraphV2Error(f"unsupported node completion mode: {completion!r}")
         validated_transitions = [_validate_transition(transition, f"node {node_id}", exclusive=choice_mode == "exclusive") for transition in transitions]
         if choice_mode == "exclusive":
             identities = [transition["choice_id"] for transition in validated_transitions]
@@ -324,6 +330,9 @@ def validate_graph_v2(adventure: Any) -> dict[str, Any]:
         }
         if choice_mode == "exclusive":
             nodes[node_id]["choice_mode"] = "exclusive"
+        # 缺省 gm 不物化，已验证的存量图保持字节不变。
+        if completion != "gm":
+            nodes[node_id]["completion"] = completion
     if not nodes:
         raise AdventureGraphV2Error("v2 adventure requires at least one node")
 

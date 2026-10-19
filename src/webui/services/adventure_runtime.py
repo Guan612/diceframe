@@ -112,12 +112,15 @@ def initialize_adventure_run(
     progress = new_progress(graph)
     receipt = dependencies.materialize_world_seed(instance, resolution.bundle)
     adventure_runtime_state.replace_progress(instance, progress)
+    # 入口节点即 auto 的（纯机械开局检查点）在初始化事务内直接结算。
+    auto_completed = settle_auto_completions(dependencies, instance)
     return {
         "ok": True,
         "initialized": True,
         "adventure_id": graph.get("id"),
         "active_nodes": list(progress["active_nodes"]),
         "world_seed": dict(receipt),
+        "auto_completed": auto_completed,
     }
 
 
@@ -171,7 +174,29 @@ def complete_adventure_node(
 
     顺序：校验 transition/progress → 准备 outcomes → 应用 world ops → 进度事件
     → 奖励 intent 出口；任一失败恢复进度与世界状态的 before-image（全有或全无）。
+
+    事务成功后结算 ``completion: "auto"`` 的级联：本次激活的后继里若有 auto
+    节点，由引擎在同一命令内继续完成（每个节点仍是独立的全有或全无事务）。
     """
+
+    result = _complete_node_transaction(
+        dependencies, instance, node_id,
+        recipient_uid=recipient_uid, actor_uid=actor_uid, choice_id=choice_id,
+    )
+    result["auto_completed"] = settle_auto_completions(dependencies, instance)
+    return result
+
+
+def _complete_node_transaction(
+    dependencies: AdventureRuntimeDependencies,
+    instance: Any,
+    node_id: str,
+    *,
+    recipient_uid: str = "",
+    actor_uid: str = "",
+    choice_id: str = "",
+) -> dict[str, Any]:
+    """单节点权威完成事务（complete_adventure_node 的核心，不含级联结算）。"""
 
     resolution = resolve_instance_adventure(dependencies, instance)
     if resolution is None:
@@ -285,6 +310,38 @@ def complete_adventure_node(
     }
 
 
+def settle_auto_completions(
+    dependencies: AdventureRuntimeDependencies, instance: Any,
+) -> list[dict[str, Any]]:
+    """完成所有 active 且 ``completion: "auto"`` 的节点，迭代到不动点。
+
+    防环有界：已完成节点永不重激活（progress 契约），级联总数天然 ≤
+    MAX_NODES；外层再以 MAX_NODES+1 道扫描兜底，异常即抛出（fail closed，
+    不静默跳过）。auto 节点仍是完整权威事务：outcome、世界后果、门控推进
+    与人工确认走同一条路径。
+    """
+
+    results: list[dict[str, Any]] = []
+    for _ in range(256 + 1):  # MAX_NODES + 1：每节点至多完成一次，扫描超界即坏图。
+        resolution = resolve_instance_adventure(dependencies, instance)
+        graph = adventure_graph(resolution) if resolution is not None else None
+        if graph is None:
+            break
+        nodes = {str(node.get("id") or ""): node for node in graph.get("nodes", [])}
+        progress = adventure_runtime_state.progress(instance)
+        auto_ids = [
+            str(node_id) for node_id in (progress.get("active_nodes") or [])
+            if nodes.get(str(node_id), {}).get("completion") == "auto"
+        ]
+        if not auto_ids:
+            break
+        for node_id in auto_ids:
+            results.append(
+                _complete_node_transaction(dependencies, instance, node_id, actor_uid="engine:auto"),
+            )
+    return [{"node_id": item["node_id"], "activated_nodes": item["activated_nodes"]} for item in results]
+
+
 def request_adventure_choice(
     dependencies: AdventureRuntimeDependencies, instance: Any,
     node_id: str, choice_id: str, actor_uid: str,
@@ -396,7 +453,9 @@ def advance_adventure_world(
             })
     if opened:
         progress["active_nodes"] = active
-    return {"ok": True, "advanced": True, "activated_nodes": opened}
+    # 门控新开放的节点里若有 auto（机械检查点），由引擎直接完成。
+    auto_completed = settle_auto_completions(dependencies, instance)
+    return {"ok": True, "advanced": True, "activated_nodes": opened, "auto_completed": auto_completed}
 
 
 __all__ = [
@@ -407,6 +466,7 @@ __all__ = [
     "complete_adventure_node",
     "initialize_adventure_new_run",
     "initialize_adventure_run",
-    "resolve_instance_adventure",
     "request_adventure_choice",
+    "resolve_instance_adventure",
+    "settle_auto_completions",
 ]
