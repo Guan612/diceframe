@@ -2,7 +2,7 @@
 
 > 基线：`origin/main` @ 2026-10-13（实例 schema 43；轨道 R 完成 R0–R8 并经 #525–#532 演进为模块 lifecycle hooks；轨道 C 的 A–I 已全部合并；lorebook canonical spec 为 `lorebook_v3`）。本仓库本地 main 若落后 origin/main，先同步再基于本计划开工。
 >
-> 决策来源：[ADR-0010](adr/0010-gal-first-non-trpg-gameplay.md)（GAL 立项与八项边界决策）；[ADR-0012](adr/0012-gameplay-packages.md)（玩法包边界，2026-10-23 修订 P7 / P9 的落点并在 P2 前插入 P0.5a–d）。本文只定义施工顺序、同步点与完成标准；与源码冲突时以源码和 [ENGINEERING_RULES](ENGINEERING_RULES.md) 为准。
+> 决策来源：[ADR-0010](adr/0010-gal-first-non-trpg-gameplay.md)（GAL 立项与八项边界决策）；[ADR-0012](adr/0012-gameplay-packages.md)（玩法包边界，2026-10-23 修订 P7 / P9 的落点并在 P2 前插入 P0.5a–d，其中 P0.5b 推迟）。本文只定义施工顺序、同步点与完成标准；与源码冲突时以源码和 [ENGINEERING_RULES](ENGINEERING_RULES.md) 为准。
 >
 > 轨道代号取 **P**（Playmode）：R / C / M 已被占用，且轨道 C 的步骤代号（PR A–I，上游提交信息使用 G2a–G2d 等）不应与玩法轨道的步骤号混淆。
 
@@ -46,14 +46,14 @@ gal = 组合：freeform 系规则皮 + affection 模块槽 + Adventure 图（补
 
 # 3. PR 序列
 
-**v0 = P0 + P1；玩法包边界 = P0.5a–d（ADR-0012，先于 P2）；v1 = P2–P10。** 一个 PR 只做一件事；schema 各归各。gal 专属代码一律落在 `src/gameplays/gal/` 与 `frontend-v2/src/features/gal/`。
+**v0 = P0 + P1；玩法包边界 = P0.5a / c / d（ADR-0012，先于 P2；P0.5b 推迟）；v1 = P2–P10。** 一个 PR 只做一件事；schema 各归各。gal 专属代码一律落在 `src/gameplays/gal/` 与 `frontend-v2/src/features/gal/`。
 
 | 步骤 | 内容 | 依赖 | 主要落点 |
 |---|---|---|---|
 | P0 | 契约与守卫：`play_mode` 增 `gal`（创建流接受 / 校验，fail-closed）；玩法模式 transport 声明 `bot_surface`；绑定准入单点检查（现有跑团 = full，行为不变）；`tests/architecture/` 守卫：generic path 无具体玩法分支、bot bridge 与插件无玩法词表。纯契约，gal 尚不可玩 | 无 | `services/game_lifecycle.py`、`routes/pairing.py` / bind 命令、`tests/architecture/` |
 | P1 | **v0 gal 预览**：gal 规则皮 JSON（照 tavern_free）；创建流入口（实验性标注）；现有 GameTimeline / 头像 / TTS / swipe 呈现。无好感度、无路线锁、无结局，仅需求验证，不作为正式功能宣传 | P0 | `templates/rules/`、创建流前端 |
 | P0.5a | 玩法注册表外移：`src/gameplays/`（contracts / builtin / trpg / gal 包），bot surface 与创建校验归注册表，`game_lifecycle.py` 不再内联 gal 分支；守卫 `test_gameplay_packages.py`。行为不变 | P1 | `src/gameplays/`、`adventure_runtime_state.py`、`game_lifecycle.py` |
-| P0.5b | 玩法 / 冒险分轴：玩法 id 迁入独立 `gameplay` 模块槽，Adventure 绑定按玩法契约决定（gal 可绑定路线图）；实例 schema +1，旧值映射 fail-closed | P0.5a | `src/gameplays/`、`engine/modules/`、`migrations/instance.py` |
+| P0.5b | **推迟**（ADR-0012 §3）：玩法 id 迁入独立 `gameplay` 模块槽、实例 schema +1。gal 绑定路线图不依赖它（P4 / P6 时只改 gal 创建校验）；出现确实需要的消费方时再做 | P0.5a | `src/gameplays/`、`engine/modules/`、`migrations/instance.py` |
 | P0.5c | 推进驱动接缝：`RoundProcessor` 原样登记为跑团 `narrative_round` 驱动，回合入口按玩法分发；跑团全绿为验收 | P0.5a | `src/gameplays/`、`commands/game_handler.py` |
 | P0.5d | 前端按玩法分发视图：`/play` 入口从注册表选视图，新建 `features/gal/` 骨架；`PlayView.vue` 不加 gal 分支 | P0.5a | `frontend-v2/src/features/game-profiles/`、`features/gal/` |
 | P2 | affection 模块槽：五件套（状态 / codec / 迁移 / 投影 / 测试），按当前模块槽 + lifecycle hooks 模式（#525–#532 之后的模板），实例 schema +1；relation 数值投影供 gates；TRPG 侧 NPC 态度复用同一模块 | P0 | `engine/modules/affection.py`、`migrations/instance.py`、`tests/` |

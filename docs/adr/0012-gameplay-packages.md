@@ -13,6 +13,8 @@
 - 回合管线 `RoundProcessor.process_round_impl` 是跑团形状（检定规划、经济指纹、战斗叙事、死亡豁免）；原 P7 计划把 `scene` 模式作为 progression 内分支，按模式分叉回合状态机、经济纪元键与行动条数上限。
 - 前端 `PlayView.vue`（约 2000 行、73 个 import）是整块跑团界面；原 P9 计划在其数据层上叠 gal 组件。
 
+另有 `src/game_profiles/`（劫案 / 生存两个有界确定性 demo，`/games/{key}/profile` + `ProfileBoard`），自带推进与界面，不经过 `play_mode`。它证明了"非跑团玩法可以走独立推进与视图"，本 ADR 不改动它；日后可作为一种玩法包的驱动接入注册表，届时单独决策。
+
 后续还会有经营等玩法。若每种玩法都以"在跑团模块里加一个分支"的方式接入，跑团模块会成为所有玩法的公共垃圾场，ADR-0005 的三层边界名存实亡。
 
 ## Decision
@@ -32,11 +34,11 @@
 
 替代 ADR-0010 §4 的实施方式：引入推进驱动接缝，现有 `RoundProcessor` 原样登记为跑团的 `narrative_round` 驱动，gal 在自己的包里实现场景驱动，经营以后实现日历驱动。`narrative_round` 的跑团行为与代码路径不因其它玩法改变。`KNOWN_MODES` 可以增加新的推进模式值作为存储标识，但模式专属的状态机逻辑归各自驱动。
 
-### 3. 玩法与"是否绑定冒险包"分轴
+### 3. 玩法与"是否绑定冒险包"分轴（存储拆分推迟）
 
-玩法（trpg / gal / …）与 Adventure 绑定是两个维度。目标形态：玩法 id 存入独立的 `gameplay` 模块槽；Adventure 绑定仍由 `GameInstance.adventure_binding` 单一权威，任何玩法按自身契约决定能否 / 必须绑定。该拆分涉及实例 schema 升级与旧存档映射，单独 PR 完成，映射规则写清楚，无法证明安全的转换 fail closed。
+玩法与 Adventure 绑定是两个维度：Adventure 绑定由 `GameInstance.adventure_binding` 单一权威，每个玩法在自己的创建校验里决定能否 / 必须绑定。`free` / `adventure` 是跑团玩法下的两种绑定形态，不是两种游戏。
 
-过渡期：`play_mode` 字段仍存于 `adventure_runtime` 槽并保留现值（`free` / `adventure` / `gal`），该槽只存 id，模式定义归注册表。
+存储层暂不拆：`play_mode` 仍存于 `adventure_runtime` 槽并保留现值（`free` / `adventure` / `gal`），该槽只存 id，模式定义归注册表。解码时已知值原样保留，所以 `gal` 局绑定冒险图不需要迁移——gal 路线（P4 / P6）落地时只改 `src/gameplays/gal` 的创建校验。把玩法 id 迁入独立 `gameplay` 模块槽需要实例 schema 升级与旧存档映射，在出现确实需要它的消费方（例如第二个需要冒险绑定的非跑团玩法）时单独 PR 完成，映射规则写清楚，无法证明安全的转换 fail closed。
 
 ### 4. 前端按玩法分发视图
 
@@ -61,13 +63,13 @@
 ### Costs / Risks
 
 - 推进驱动接缝与前端分发是两次额外重构，需在 gal v1 功能 PR 之前完成。
-- 玩法 / 冒险分轴需要一次实例 schema 迁移。
+- 玩法 / 冒险存储拆分推迟后，`play_mode` 值域里跑团的绑定形态与其它玩法并列，这是已知的命名债务，由注册表隔离其影响。
 - 共享件的抽取（如叙事应用链）要求行为不变，验收是跑团全量测试全绿。
 
 ### Migration / Compatibility
 
 - 注册表外移（本 ADR 首个 PR）：不改存档、API 与错误响应；`adventure_runtime_state` 删除 `PLAY_MODES` / `MODE_BOT_SURFACES` / `BOT_SURFACE_*` / `bot_surface()`，调用方改用 `src.gameplays`。
-- 分轴迁移、推进驱动、前端分发各自单独 PR，各自声明影响的契约。
+- 推进驱动（P0.5c）、前端分发（P0.5d）各自单独 PR，各自声明影响的契约；存储拆分（P0.5b）推迟，见 §3。
 
 ## Validation
 
