@@ -10,14 +10,17 @@ This module must not import concrete modes, the engine or the web layer.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 BOT_SURFACE_FULL = "full"
 BOT_SURFACE_READ_ONLY = "read_only"
 BOT_SURFACE_NONE = "none"
 BOT_SURFACES = frozenset({BOT_SURFACE_FULL, BOT_SURFACE_READ_ONLY, BOT_SURFACE_NONE})
+
+# The tabletop narrative round pipeline (``RoundProcessor``).
+TURN_DRIVER_NARRATIVE_ROUND = "narrative_round"
 
 
 @dataclass(frozen=True)
@@ -50,12 +53,14 @@ class GameplayMode:
 
     ``bot_surface`` is the transport capability (enforced only at the bind
     admission point); ``validate_create`` rejects creation inputs the mode
-    cannot run with.
+    cannot run with; ``turn_driver`` names the driver that advances its runs
+    (drivers need runtime services, so they are bound by id at the handler).
     """
 
     mode_id: str
     bot_surface: str
     validate_create: CreateValidator
+    turn_driver: str
 
 
 class GameplayRegistry:
@@ -69,6 +74,8 @@ class GameplayRegistry:
             raise ValueError(f"invalid gameplay mode id: {mode.mode_id!r}")
         if mode.bot_surface not in BOT_SURFACES:
             raise ValueError(f"invalid bot surface for {mode.mode_id!r}: {mode.bot_surface!r}")
+        if not mode.turn_driver:
+            raise ValueError(f"gameplay mode {mode.mode_id!r} declares no turn driver")
         if mode.mode_id in self._modes:
             raise ValueError(f"duplicate gameplay mode: {mode.mode_id!r}")
         self._modes[mode.mode_id] = mode
@@ -83,3 +90,28 @@ class GameplayRegistry:
         """Declared surface of a known mode; unknown modes fail closed."""
         mode = self.get(mode_id)
         return mode.bot_surface if mode is not None else BOT_SURFACE_NONE
+
+
+class TurnDriver(Protocol):
+    """Advances one run by one step and returns ``(narration, private messages)``."""
+
+    def process_round(
+        self, instance: Any, *, on_delta: Any = None, on_reset: Any = None,
+    ) -> Awaitable[tuple[str, dict | None]]: ...
+
+
+class TurnDriverRegistry:
+    """Runtime-bound turn drivers, keyed by the id modes declare."""
+
+    def __init__(self) -> None:
+        self._drivers: dict[str, TurnDriver] = {}
+
+    def bind(self, driver_id: str, driver: TurnDriver) -> None:
+        if not driver_id:
+            raise ValueError("turn driver id must not be empty")
+        self._drivers[driver_id] = driver
+
+    def for_mode(self, gameplays: GameplayRegistry, mode_id: Any) -> TurnDriver | None:
+        """Driver of a known mode; unknown modes or unbound drivers fail closed."""
+        mode = gameplays.get(mode_id)
+        return self._drivers.get(mode.turn_driver) if mode is not None else None

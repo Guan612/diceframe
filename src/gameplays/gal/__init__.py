@@ -9,7 +9,7 @@ enforces both directions.
 from __future__ import annotations
 
 from src.gameplays.contracts import (
-    BOT_SURFACE_READ_ONLY, GameplayCreateRejection, GameplayCreateRequest, GameplayMode,
+    BOT_SURFACE_READ_ONLY, TURN_DRIVER_NARRATIVE_ROUND, GameplayCreateRejection, GameplayCreateRequest, GameplayMode,
 )
 
 GAL_RULE_ID = "gal_narrative"
@@ -25,4 +25,11 @@ def _validate_create(request: GameplayCreateRequest) -> GameplayCreateRejection 
     return None
 
 
-GAL = GameplayMode(mode_id="gal", bot_surface=BOT_SURFACE_READ_ONLY, validate_create=_validate_create)
+# v0 preview still runs on the tabletop round pipeline; P7 binds a gal scene
+# driver from this package instead.
+GAL = GameplayMode(
+    mode_id="gal",
+    bot_surface=BOT_SURFACE_READ_ONLY,
+    validate_create=_validate_create,
+    turn_driver=TURN_DRIVER_NARRATIVE_ROUND,
+)
