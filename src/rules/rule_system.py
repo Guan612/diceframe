@@ -26,7 +26,11 @@ from src.engine.language import (
     normalize_language,
 )
 from src.content.rule_locale import materialize_rule
+<<<<<<< HEAD
 from src.rules.adventure_progression_config import AdventureProgressionConfig
+=======
+from src.rules.affection_config import AffectionConfig, parse_affection_config
+>>>>>>> feat/gal-affection-settle
 
 logger = logging.getLogger("trpg")
 SUPPORTED_DICE_SYSTEMS = frozenset({"d20", "d100", "none"})
@@ -151,6 +155,7 @@ class RuleSystem:
         # 显式声明版本的货币 schema（含非法/未支持版本）在构造时 fail-fast；
         # 无版本键的旧规则与显式 legacy（schema_version: 1）继续按 legacy 处理。
         validate_declared_currency_system(template.get("currency_system"))
+        self._affection = parse_affection_config(template.get("affection"))
 
     def mechanics_snapshot(self) -> str:
         """Return a locale-invariant representation of deterministic mechanics."""
@@ -736,6 +741,11 @@ class RuleSystem:
     @property
     def valid_qualities(self) -> list[str]:
         return self.template.get("valid_qualities", ["common"])
+
+    @property
+    def affection(self) -> AffectionConfig | None:
+        """Narrator-proposed affection settings; ``None`` when the rule has none."""
+        return self._affection
 
     # ---- GM Prompt ----
 
