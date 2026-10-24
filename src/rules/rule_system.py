@@ -26,6 +26,7 @@ from src.engine.language import (
     normalize_language,
 )
 from src.content.rule_locale import materialize_rule
+from src.rules.adventure_progression_config import AdventureProgressionConfig
 
 logger = logging.getLogger("trpg")
 SUPPORTED_DICE_SYSTEMS = frozenset({"d20", "d100", "none"})
@@ -358,7 +359,7 @@ class RuleSystem:
         return self.template.get("attr_hint", "")
 
     @property
-    def adventure_progression(self) -> "AdventureProgressionConfig | None":
+    def adventure_progression(self) -> AdventureProgressionConfig | None:
         """规则声明的冒险推进能力（GAL 轨道 P6）；未声明时为 None（功能关闭）。"""
         from src.rules.adventure_progression_config import (
             parse_adventure_progression_config,
