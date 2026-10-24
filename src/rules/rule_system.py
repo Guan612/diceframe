@@ -26,11 +26,8 @@ from src.engine.language import (
     normalize_language,
 )
 from src.content.rule_locale import materialize_rule
-<<<<<<< HEAD
 from src.rules.adventure_progression_config import AdventureProgressionConfig
-=======
 from src.rules.affection_config import AffectionConfig, parse_affection_config
->>>>>>> feat/gal-affection-settle
 
 logger = logging.getLogger("trpg")
 SUPPORTED_DICE_SYSTEMS = frozenset({"d20", "d100", "none"})
