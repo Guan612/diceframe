@@ -107,4 +107,4 @@ async def test_m4_stateless_http_contracts_and_legacy_boundary() -> None:
     assert rest_response.status == 200
     assert rest["rest"] == "short"
     assert legacy_response.status == 422
-    assert legacy["code"] == "RULESET_ADVANCEMENT_UNAVAILABLE"
+    assert legacy["error_code"] == "RULESET_ADVANCEMENT_UNAVAILABLE"

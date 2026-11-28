@@ -667,7 +667,7 @@ def test_a_stale_revision_is_refused() -> None:
     })
 
     assert result["ok"] is False
-    assert result["code"] == "STALE_CHARACTER_REVISION"
+    assert result["error_code"] == "STALE_CHARACTER_REVISION"
     assert cards[0]["ruleset_revision"] == 3
 
 
@@ -765,10 +765,10 @@ def test_a_ruleset_without_the_repair_path_is_refused_instead_of_crashing() -> N
     )
 
     assert pending["ok"] is False
-    assert pending["code"] == "RULESET_ADVANCEMENT_UNAVAILABLE"
+    assert pending["error_code"] == "RULESET_ADVANCEMENT_UNAVAILABLE"
     assert "补齐" in pending["error"]
     assert completed["ok"] is False
-    assert completed["code"] == "RULESET_ADVANCEMENT_UNAVAILABLE"
+    assert completed["error_code"] == "RULESET_ADVANCEMENT_UNAVAILABLE"
     assert cards[0]["ruleset_revision"] == 0
 
 
