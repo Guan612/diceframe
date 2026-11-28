@@ -240,5 +240,6 @@ def test_the_read_service_rejects_an_unknown_character(runtime: Dnd2024Runtime) 
     instance = _live_game(runtime, _sheet(runtime, "class:wizard", 18, free_cast=MASTERY))
     result = ruleset_rest.read_options(_deps(runtime, instance), "restopts", "nobody")
     assert result == {
-        "ok": False, "code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
+        "ok": False, "code": "CHARACTER_NOT_FOUND", "error_code": "CHARACTER_NOT_FOUND",
+        "error": "角色不存在",
     }

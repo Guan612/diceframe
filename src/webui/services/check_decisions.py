@@ -18,33 +18,33 @@ KEEPER_OPERATIONS = frozenset({"offer", "reject"})
 #: the WebUI must never render a bare status line. ``src/webui/errors.py`` maps
 #: the message to an ``error_code`` so the client can localize it.
 _REFUSALS: dict[str, dict] = {
-    "GAME_NOT_FOUND": {"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"},
+    "GAME_NOT_FOUND": {"ok": False, "code": "GAME_NOT_FOUND", "error_code": "GAME_NOT_FOUND", "error": "游戏不存在"},
     "PREVIEW_READ_ONLY": {
         "ok": False,
-        "code": "PREVIEW_READ_ONLY",
+        "code": "PREVIEW_READ_ONLY", "error_code": "PREVIEW_READ_ONLY",
         "error": "当前是房主预览模式，请先开启允许代操作",
     },
     "PUSH_FORBIDDEN": {
         "ok": False,
-        "code": "PUSH_FORBIDDEN",
+        "code": "PUSH_FORBIDDEN", "error_code": "PUSH_FORBIDDEN",
         "error": "只能由该检定的行动者本人处理孤注一掷，主持人只能告知风险或拒绝申请",
     },
     "PUSH_INVALID_REQUEST": {
         "ok": False,
-        "code": "PUSH_INVALID_REQUEST",
+        "code": "PUSH_INVALID_REQUEST", "error_code": "PUSH_INVALID_REQUEST",
         "error": "孤注一掷请求格式无效",
     },
     "PUSH_INVALID_OR_STALE": {
         "ok": False,
-        "code": "PUSH_INVALID_OR_STALE",
+        "code": "PUSH_INVALID_OR_STALE", "error_code": "PUSH_INVALID_OR_STALE",
         "error": "检定选择已变化，请刷新后重试",
     },
     "REWRITE_IN_PROGRESS": {
         "ok": False,
-        "code": "REWRITE_IN_PROGRESS",
+        "code": "REWRITE_IN_PROGRESS", "error_code": "REWRITE_IN_PROGRESS",
         "error": "GM 正在重写历史回合，请等待完成后重试",
     },
-    "STALE_RUN": {"ok": False, "code": "STALE_RUN", "error": "对局已重开，请刷新后重试"},
+    "STALE_RUN": {"ok": False, "code": "STALE_RUN", "error_code": "STALE_RUN", "error": "对局已重开，请刷新后重试"},
 }
 
 

@@ -43,14 +43,14 @@ def _context(
     if rule is None:
         return None, None, draft, {
             "ok": False,
-            "code": "RULE_NOT_FOUND",
+            "code": "RULE_NOT_FOUND", "error_code": "RULE_NOT_FOUND",
             "error": t("webui.services.ruleset_builder.rule_missing", rule_id=rule_id),
         }
     runtime = dependencies.ruleset_registry.resolve(rule.template)
     if runtime.capabilities.character_builder != "professional":
         return rule, runtime, draft, {
             "ok": False,
-            "code": "RULESET_BUILDER_UNAVAILABLE",
+            "code": "RULESET_BUILDER_UNAVAILABLE", "error_code": "RULESET_BUILDER_UNAVAILABLE",
             "error": t("webui.services.ruleset_builder.uses_generic_creation"),
         }
     return rule, runtime, draft, None

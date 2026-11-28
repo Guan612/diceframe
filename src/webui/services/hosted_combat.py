@@ -41,7 +41,7 @@ async def plan_and_commit(
                 return initial
             batch = initial.get("event_batch")
             if not isinstance(batch, dict):
-                return {"ok": False, "code": "INVALID_EVENT_BATCH", "error": "Invalid event batch"}
+                return {"ok": False, "code": "INVALID_EVENT_BATCH", "error_code": "INVALID_EVENT_BATCH", "error": "Invalid event batch"}
             applied = runtime.apply_event_batch(staged, batch)
             project_batch(staged, batch, applied)
         batches, results = await advance_automatic_intents_with_choice(
@@ -51,14 +51,14 @@ async def plan_and_commit(
         session_stats.touch(staged)
     except (ValueError, KeyError, TypeError):
         logger.warning("Hosted combat plan rejected before publication", exc_info=True)
-        return {"ok": False, "code": "AUTOMATIC_TURN_FAILED", "error": "Combat plan rejected; refresh and retry"}
+        return {"ok": False, "code": "AUTOMATIC_TURN_FAILED", "error_code": "AUTOMATIC_TURN_FAILED", "error": "Combat plan rejected; refresh and retry"}
     # Do not hold any live authority, processing or state lock across model I/O.
     async with instance.authoritative_write() as entered:
         if not entered:
-            return {"ok": False, "code": "AUTOMATIC_PLAN_STALE", "error": "Game is being rewritten; retry later"}
+            return {"ok": False, "code": "AUTOMATIC_PLAN_STALE", "error_code": "AUTOMATIC_PLAN_STALE", "error": "Game is being rewritten; retry later"}
         async with instance._lock:
             if not transaction.matches(instance) or chooser.admission_check():
-                return {"ok": False, "code": "AUTOMATIC_PLAN_STALE", "error": "Game or AI configuration changed; refresh and retry"}
+                return {"ok": False, "code": "AUTOMATIC_PLAN_STALE", "error_code": "AUTOMATIC_PLAN_STALE", "error": "Game or AI configuration changed; refresh and retry"}
             error = await preflight()
             if error:
                 return error

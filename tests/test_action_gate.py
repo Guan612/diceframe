@@ -546,7 +546,10 @@ def test_structured_context_preserves_auth_gm_and_effective_requester(uid, gm, g
         assert result[-1]["code"] == expected
         load.assert_not_called()
         if expected == "PLAYER_NOT_IN_GAME":
-            assert result[-1] == {"ok": False, "code": expected, "error": "当前玩家不在本局中"}
+            assert result[-1] == {
+                "ok": False, "code": expected, "error_code": expected,
+                "error": "当前玩家不在本局中",
+            }
     else:
         assert result[-1] is None
         assert result[-2] == (gm_uid if gm else uid)

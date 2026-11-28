@@ -35,7 +35,7 @@ class LiveRulesetRitualDependencies:
 
 
 def _failure(code: str, message: str, **extra: Any) -> dict[str, Any]:
-    return {"ok": False, "error": message, "code": code, **extra}
+    return {"ok": False, "error": message, "error_code": code, "code": code, **extra}
 
 
 def _runtime_for(dependencies: "LiveRulesetRitualDependencies", instance: Any) -> Any:

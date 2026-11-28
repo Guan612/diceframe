@@ -14,7 +14,10 @@ _FORBIDDEN_CODES = frozenset({
 
 
 def _error(code: str, status: int, message: str = "") -> web.Response:
-    return web.json_response({"ok": False, "code": code, "error": message or code}, status=status)
+    return web.json_response(
+        {"ok": False, "error_code": code, "code": code, "error": message or code},
+        status=status,
+    )
 
 
 def _context(request):

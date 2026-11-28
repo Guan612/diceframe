@@ -642,7 +642,7 @@ def test_card_advancement_is_entity_backed_versioned_and_idempotent(
     assert duplicate["duplicate"] is True
     assert duplicate["revision"] == 1
     assert stale["ok"] is False
-    assert stale["code"] == "STALE_CHARACTER_REVISION"
+    assert stale["error_code"] == "STALE_CHARACTER_REVISION"
 
 
 @pytest.mark.asyncio
@@ -688,7 +688,7 @@ async def test_live_advancement_is_entity_backed_versioned_and_idempotent(
     assert applied["revision"] == 1
     assert applied["character"]["ruleset_character"]["build"]["level"] == 2
     assert duplicate["duplicate"] is True
-    assert stale["code"] == "STALE_CHARACTER_REVISION"
+    assert stale["error_code"] == "STALE_CHARACTER_REVISION"
     assert instance.get_character_sheet("gm")["ruleset_revision"] == 1
 
 
@@ -721,7 +721,7 @@ async def test_live_advancement_is_rejected_during_swipe(professional_context) -
         ),
         1,
     )
-    assert result["code"] == "REWRITE_IN_PROGRESS"
+    assert result["error_code"] == "REWRITE_IN_PROGRESS"
     assert instance.get_character_sheet("gm") == before_sheet
     assert ruleset_runtime.state(instance) == before_state
     release.set()
@@ -1076,7 +1076,7 @@ async def test_card_choice_routes_answer_with_status_codes_over_http(
     assert missing_card.status == 404
     assert stale.status == 409
     assert empty.status == 422
-    assert empty_body["code"] == "ADVANCEMENT_NOT_READY"
+    assert empty_body["error_code"] == "ADVANCEMENT_NOT_READY"
 
 
 @pytest.mark.asyncio

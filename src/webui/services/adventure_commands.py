@@ -33,10 +33,10 @@ async def execute(deps: AdventureCommandDependencies, instance: Any, body: dict,
         if not is_gm:
             return {'ok': False, 'code': 'GM_ONLY', 'error': t("webui.services.adventure_commands.dismiss_gm_only"), "error_code": "GM_ONLY"}
         if set(body) != {'type', 'proposal_id'}:
-            return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', 'error': 'unexpected adventure command field'}
+            return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', "error_code": "INVALID_ADVENTURE_COMMAND", 'error': 'unexpected adventure command field'}
         proposal_id = body.get('proposal_id')
         if not isinstance(proposal_id, str) or not proposal_id or len(proposal_id) > 80:
-            return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', 'error': 'proposal_id must be a non-empty string'}
+            return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', "error_code": "INVALID_ADVENTURE_COMMAND", 'error': 'proposal_id must be a non-empty string'}
         async with instance.authoritative_write() as write_entered, instance._lock:
             if not write_entered:
                 return {"ok": False, "error_code": "REWRITE_IN_PROGRESS", "code": "REWRITE_IN_PROGRESS", "error": "historical rewrite is in progress"}
@@ -51,7 +51,7 @@ async def execute(deps: AdventureCommandDependencies, instance: Any, body: dict,
                 return error
             binding = getattr(instance, 'adventure_binding', None)
             if not isinstance(binding, dict) or binding.get('format') != 'diceframe:adventure-graph-v2':
-                return {'ok': False, 'code': 'ADVENTURE_RUNTIME_UNAVAILABLE', 'error': 'Adventure v2 runtime is unavailable'}
+                return {'ok': False, 'code': 'ADVENTURE_RUNTIME_UNAVAILABLE', "error_code": "ADVENTURE_RUNTIME_UNAVAILABLE", 'error': 'Adventure v2 runtime is unavailable'}
             before = deepcopy(adventure_runtime_state.progress(instance))
             try:
                 node_id = adventure_runtime_state.dismiss_completion_suggestion(instance, proposal_id)
@@ -66,15 +66,15 @@ async def execute(deps: AdventureCommandDependencies, instance: Any, body: dict,
                 return {'ok': False, 'code': 'ADVENTURE_NODE_FAILED', 'error': t("webui.services.adventure_commands.save_failed_suggestion_restored"), "error_code": "ADVENTURE_NODE_FAILED"}
         return {'ok': True, 'result': {'completion_suggestion_dismissed': {'proposal_id': proposal_id, 'node_id': node_id}}}
     if kind not in {'adventure.node.complete', 'adventure.choice.request'}:
-        return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', 'error': 'unknown adventure command'}
+        return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', "error_code": "INVALID_ADVENTURE_COMMAND", 'error': 'unknown adventure command'}
     if set(body) - {'type', 'node_id', 'choice_id'}:
-        return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', 'error': 'unexpected adventure command field'}
+        return {'ok': False, 'code': 'INVALID_ADVENTURE_COMMAND', "error_code": "INVALID_ADVENTURE_COMMAND", 'error': 'unexpected adventure command field'}
     node_id, choice_id = body.get('node_id'), body.get('choice_id', '')
     if not isinstance(node_id, str) or not node_id.strip() or not isinstance(choice_id, str):
-        return {'ok': False, 'code': 'INVALID_ADVENTURE_NODE', 'error': 'node_id and choice_id must be strings'}
+        return {'ok': False, 'code': 'INVALID_ADVENTURE_NODE', "error_code": "INVALID_ADVENTURE_NODE", 'error': 'node_id and choice_id must be strings'}
     callback = deps.complete if kind == 'adventure.node.complete' else deps.request_choice
     if callback is None:
-        return {'ok': False, 'code': 'ADVENTURE_RUNTIME_UNAVAILABLE', 'error': 'Adventure runtime is unavailable'}
+        return {'ok': False, 'code': 'ADVENTURE_RUNTIME_UNAVAILABLE', "error_code": "ADVENTURE_RUNTIME_UNAVAILABLE", 'error': 'Adventure runtime is unavailable'}
     async with instance.authoritative_write() as write_entered, instance._lock:
         if not write_entered:
             return {"ok": False, "error_code": "REWRITE_IN_PROGRESS", "code": "REWRITE_IN_PROGRESS", "error": "historical rewrite is in progress"}
@@ -106,7 +106,7 @@ async def execute(deps: AdventureCommandDependencies, instance: Any, body: dict,
             if isinstance(exc, asyncio.CancelledError) or not isinstance(exc, Exception):
                 raise
             if isinstance(exc, (ValueError, KeyError, TypeError)):
-                return {'ok': False, 'code': 'ADVENTURE_NODE_REJECTED', 'error': str(exc)}
+                return {'ok': False, 'code': 'ADVENTURE_NODE_REJECTED', "error_code": "ADVENTURE_NODE_REJECTED", 'error': str(exc)}
             logger.exception('Adventure command failed and was restored')
             return {'ok': False, 'code': 'ADVENTURE_NODE_FAILED', 'error': t("webui.services.adventure_commands.settlement_failed_state_restored"), "error_code": "ADVENTURE_NODE_FAILED"}
     return {'ok': True, 'result': {'adventure_node' if kind == 'adventure.node.complete' else 'adventure_choice_request': result}}

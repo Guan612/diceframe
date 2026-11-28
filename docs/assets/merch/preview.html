@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DiceFrame — merch SVG previews</title>
+<style>
+  :root { --ink:#0a1016; --gold:#c7a362; --gold-2:#f0d8a0; --text:#f0eee5; --muted:#8f9a96; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #101822; color: var(--text);
+         font-family: "Aptos", "Segoe UI", system-ui, sans-serif; padding: 40px clamp(16px, 4vw, 56px) 80px; }
+  header { max-width: 1500px; margin: 0 auto 34px; border-bottom: 1px solid rgba(199,163,98,.35); padding-bottom: 20px; }
+  h1 { font-family: "Palatino Linotype", Palatino, Georgia, serif; font-size: clamp(28px, 3vw, 42px);
+       letter-spacing: .06em; margin: 0 0 8px; font-weight: 400; }
+  header p { margin: 0; color: var(--muted); font-size: 15px; letter-spacing: .04em; }
+  .grid { max-width: 1500px; margin: 0 auto; display: grid; gap: 26px;
+          grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  figure { margin: 0; border: 1px solid rgba(199,163,98,.22); border-radius: 14px; overflow: hidden;
+           background: #0d151e; }
+  .stage { padding: 22px; display: grid; place-items: center; background:
+           radial-gradient(circle at 50% 30%, #16222e 0%, #0c141c 70%); }
+  .stage.paper { background: radial-gradient(circle at 50% 30%, #f4efe2 0%, #e6dfcd 100%); }
+  .stage img { max-width: 100%; max-height: 340px; display: block; }
+  figcaption { padding: 14px 18px 16px; border-top: 1px solid rgba(199,163,98,.18); }
+  figcaption b { display: block; font-weight: 600; font-size: 15px; letter-spacing: .05em; }
+  figcaption span { color: var(--muted); font-size: 13px; }
+  footer { max-width: 1500px; margin: 46px auto 0; color: var(--muted); font-size: 13.5px; line-height: 1.7; }
+  a { color: var(--gold); }
+</style>
+</head>
+<body>
+<header>
+  <h1>DiceFrame · merch previews</h1>
+  <p>Ten vector artworks taken from the product identity: ink #0b1117 · gold #c7a362 · parchment #f0eee5.</p>
+</header>
+<div class="grid">
+  <figure><div class="stage"><img src="01-core-badge.svg" alt="Core badge"></div>
+    <figcaption><b>01 · Core badge</b><span>Coaster, round sticker, pin. Rebuilt brand mark.</span></figcaption></figure>
+  <figure><div class="stage paper"><img src="02-frame-mark-mono.svg" alt="Mono mark"></div>
+    <figcaption><b>02 · Single-colour mark</b><span>One ink on light fabric, mugs, engraving.</span></figcaption></figure>
+  <figure><div class="stage"><img src="03-natural-20.svg" alt="Natural 20"></div>
+    <figcaption><b>03 · Natural 20</b><span>Die-cut sticker, starburst outline.</span></figcaption></figure>
+  <figure><div class="stage"><img src="04-natural-1.svg" alt="Natural 1"></div>
+    <figcaption><b>04 · Natural 1</b><span>Cracked die sticker; the misfire companion.</span></figcaption></figure>
+  <figure><div class="stage"><img src="05-chat-sticker.svg" alt="Chat sticker"></div>
+    <figcaption><b>05 · Table talk</b><span>Laptop sticker with real UI phrasing.</span></figcaption></figure>
+  <figure><div class="stage"><img src="06-dice-set-poster.svg" alt="Dice set poster"></div>
+    <figcaption><b>06 · Dice set poster</b><span>Poster or back print; true projected polyhedra.</span></figcaption></figure>
+  <figure><div class="stage"><img src="07-self-hosted-terminal.svg" alt="Terminal"></div>
+    <figcaption><b>07 · Self-hosted</b><span>Terminal sticker; the actual docker command.</span></figcaption></figure>
+  <figure><div class="stage"><img src="08-party-of-four.svg" alt="Party up"></div>
+    <figcaption><b>08 · Party up</b><span>Table seen from above, one seat open.</span></figcaption></figure>
+  <figure><div class="stage"><img src="09-write-your-own-world.svg" alt="Lorebook"></div>
+    <figcaption><b>09 · Write your own world</b><span>Notebook, journal cover, tote.</span></figcaption></figure>
+  <figure><div class="stage"><img src="10-lockup-wide.svg" alt="Lockup"></div>
+    <figcaption><b>10 · Lockup (1600×500)</b><span>Mousepad, sticker strip, banner, back print.</span></figcaption></figure>
+</div>
+<footer>
+  All files are plain SVG with live text — convert text to outlines in your editor before sending to a printer.<br>
+  02, 06 and 10 have transparent backgrounds; the rest carry their own dark plate.
+</footer>
+</body>
+</html>

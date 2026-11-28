@@ -55,7 +55,7 @@ async def api_embedding_model_install(request: web.Request) -> web.Response:
         await asyncio.to_thread(check_local_embedding_runtime)
     except LocalModelError as exc:
         return web.json_response(
-            {"ok": False, "error": str(exc), "code": "LOCAL_EMBEDDING_RUNTIME_UNAVAILABLE"},
+            {"ok": False, "error": str(exc), "code": "LOCAL_EMBEDDING_RUNTIME_UNAVAILABLE", "error_code": "LOCAL_EMBEDDING_RUNTIME_UNAVAILABLE"},
             status=422,
         )
     try:

@@ -97,13 +97,12 @@ class RulesetGameplayDependencies:
 
 
 def _error(code: str, message: str) -> dict[str, Any]:
-    return {"ok": False, "code": code, "error": message}
+    return {"ok": False, "error_code": code, "code": code, "error": message}
 
 
 def _gate_error(code: str, message: str) -> dict[str, Any]:
-    # Authority-gate rejections also carry ``error_code``, the field the
-    # frontend localizes (``apiErrors.<code>``), like the other gated writers.
-    return {**_error(code, message), "error_code": code}
+    # Authority-gate rejections use the same shape as every other error body.
+    return _error(code, message)
 
 
 def _intent_write_error(

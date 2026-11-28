@@ -262,7 +262,7 @@ async def api_plugin_content(request: web.Request) -> web.Response:
         return web.json_response(result)
     except ValueError as exc:
         return web.json_response(
-            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
+            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error_code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
             status=422,
         )
 

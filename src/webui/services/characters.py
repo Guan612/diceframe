@@ -302,7 +302,7 @@ async def create_payment_proposal(
                     source_ref=f"gm_manual:{inst.run_id}:{uuid4().hex}",
                 )
             except ValueError as exc:
-                return {"ok": False, "code": "ORDER_INVALID", "error": str(exc)}
+                return {"ok": False, "code": "ORDER_INVALID", "error_code": "ORDER_INVALID", "error": str(exc)}
         else:
             proposal = queue_proposal(
                 inst,

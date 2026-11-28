@@ -88,7 +88,11 @@ async def test_service_writes_reject_without_mutation_or_save(context, binding, 
 
     result = await service_write(context, operation)
 
-    assert result == {"ok": False, "code": "RULESET_BINDING_MISMATCH", "error": MESSAGE}
+    # 两条路径：advancement 只给规范键；rest/party_rest 走 ruleset_gameplay
+    # 的 _error，同时保留内部读取用的 `code`。两者都不允许改变文案与状态。
+    assert result.get("error_code") == "RULESET_BINDING_MISMATCH"
+    assert result.get("code", "RULESET_BINDING_MISMATCH") == "RULESET_BINDING_MISMATCH"
+    assert result["ok"] is False and result["error"] == MESSAGE
     assert live_state(context.instance) == before
     context.save.assert_not_called()
 

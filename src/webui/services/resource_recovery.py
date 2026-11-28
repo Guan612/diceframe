@@ -42,7 +42,7 @@ class RecoveryDependencies:
 
 
 def _error(code: str, message: str) -> dict:
-    return {'ok': False, 'code': code, 'error': message}
+    return {'ok': False, 'code': code, "error_code": code, 'error': message}
 
 
 def _identity(value: Any, field: str) -> str:

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 1000" width="1000" height="1000" role="img" aria-label="DiceFrame circular badge">
+  <title>DiceFrame — core badge</title>
+  <defs>
+    <path id="df-arc-top" d="M 150 500 A 350 350 0 0 1 850 500" fill="none"/>
+    <path id="df-arc-bottom" d="M 190 500 A 310 310 0 0 0 810 500" fill="none"/>
+    <radialGradient id="df-badge-glow" cx="0.5" cy="0.40" r="0.68">
+      <stop offset="0" stop-color="#1e2c3b"/>
+      <stop offset="0.60" stop-color="#111a24"/>
+      <stop offset="1" stop-color="#0a1016"/>
+    </radialGradient>
+    <!-- brand mark, drawn in a 100 x 100 box -->
+    <g id="df-mark" fill="none">
+      <rect x="5" y="5" width="90" height="90" rx="16" stroke="#c7a362" stroke-width="2.8"/>
+      <rect x="14" y="14" width="72" height="72" rx="10" stroke="#c7a362" stroke-width="1.3" opacity="0.55"/>
+      <rect x="29" y="29" width="42" height="42" rx="8.5" fill="#251b13" stroke="#f0d8a0" stroke-width="2.4"/>
+      <g fill="#e8cf94">
+        <circle cx="41" cy="41" r="3.9"/>
+        <circle cx="59" cy="41" r="3.9"/>
+        <circle cx="50" cy="50" r="3.9"/>
+        <circle cx="41" cy="59" r="3.9"/>
+        <circle cx="59" cy="59" r="3.9"/>
+      </g>
+    </g>
+  </defs>
+
+  <circle cx="500" cy="500" r="492" fill="#0b1117"/>
+  <circle cx="500" cy="500" r="492" fill="url(#df-badge-glow)"/>
+
+  <circle cx="500" cy="500" r="470" fill="none" stroke="#c7a362" stroke-width="7"/>
+  <circle cx="500" cy="500" r="452" fill="none" stroke="#c7a362" stroke-width="1.5" opacity="0.7"/>
+
+  <g stroke="#c7a362" stroke-width="2.5" opacity="0.75">
+    <path d="M500 30v20M500 950v20M30 500h20M950 500h20"/>
+  </g>
+  <g fill="#c7a362" opacity="0.9">
+    <circle cx="500" cy="122" r="4"/>
+    <circle cx="500" cy="878" r="4"/>
+    <circle cx="122" cy="500" r="4"/>
+    <circle cx="878" cy="500" r="4"/>
+  </g>
+
+  <text font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="88" fill="#f0d8a0" letter-spacing="15">
+    <textPath href="#df-arc-top" xlink:href="#df-arc-top" startOffset="226.3">DICEFRAME</textPath>
+  </text>
+  <text font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="26" fill="#c7a362" letter-spacing="9">
+    <textPath href="#df-arc-bottom" xlink:href="#df-arc-bottom" startOffset="243.1">AI TABLETOP RPG ENGINE</textPath>
+  </text>
+
+  <g transform="translate(500 498) scale(3.3) translate(-50 -50)">
+    <use href="#df-mark" xlink:href="#df-mark"/>
+  </g>
+
+  <g stroke="#c7a362" stroke-width="1.4" opacity="0.5">
+    <path d="M310 498h66M624 498h66"/>
+  </g>
+  <g fill="#c7a362" opacity="0.9">
+    <path d="M292 498l-10 8 10 8 10-8z"/>
+    <path d="M708 498l-10 8 10 8 10-8z"/>
+  </g>
+
+  <text x="500" y="892" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="19" fill="#8fa09c" letter-spacing="6.5">SELF-HOSTED · YOUR TABLE</text>
+</svg>

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 1000" width="1000" height="1000" role="img" aria-label="Natural 1 cracked die sticker">
+  <title>Natural 1 — cracked die sticker</title>
+  <defs>
+    <radialGradient id="nat1-plate" gradientUnits="userSpaceOnUse" cx="470" cy="420" r="560">
+      <stop offset="0" stop-color="#1b2732"/>
+      <stop offset="0.6" stop-color="#121a23"/>
+      <stop offset="1" stop-color="#0a0f14"/>
+    </radialGradient>
+    <clipPath id="nat1-clip"><circle cx="500" cy="500" r="486"/></clipPath>
+    <g id="nat1-d20">
+      <path d="M50.00,23.61L77.68,-61.80 M50.00,23.61L94.79,38.20 M50.00,23.61L-56.60,38.20 M50.00,23.61L11.80,100.00 M50.00,23.61L-15.88,-61.80 M77.68,-61.80L94.79,38.20 M77.68,-61.80L-11.80,-100.00 M77.68,-61.80L-15.88,-61.80 M94.79,38.20L11.80,100.00 M-11.80,-100.00L-15.88,-61.80 M-11.80,-100.00L-94.79,-38.20 M-56.60,38.20L11.80,100.00 M-56.60,38.20L-15.88,-61.80 M-56.60,38.20L-77.68,61.80 M-56.60,38.20L-94.79,-38.20 M11.80,100.00L-77.68,61.80 M-15.88,-61.80L-94.79,-38.20 M-77.68,61.80L-94.79,-38.20"/>
+    </g>
+  </defs>
+
+  <circle cx="500" cy="500" r="486" fill="url(#nat1-plate)"/>
+
+  <g clip-path="url(#nat1-clip)">
+    <!-- broken outer ring -->
+    <g fill="none" stroke="#8d8375" stroke-width="3" opacity="0.8" stroke-linecap="round">
+      <path d="M531.5 49.1A452 452 0 0 1 846.3 209.5"/>
+      <path d="M883.3 260.5A452 452 0 0 1 929.9 639.7"/>
+      <path d="M906.3 698.1A452 452 0 0 1 624.6 934.5"/>
+      <path d="M562.9 947.6A452 452 0 0 1 234.3 865.7"/>
+      <path d="M191.7 830.6A452 452 0 0 1 48.3 515.8"/>
+      <path d="M50.5 452.8A452 452 0 0 1 174.9 186.0"/>
+      <path d="M215.5 148.7A452 452 0 0 1 547.2 50.5"/>
+    </g>
+
+    <!-- cracked die -->
+    <g transform="translate(500 492) scale(1.62)" fill="none" stroke="#a89a83" stroke-width="4.2" stroke-linejoin="round">
+      <use href="#nat1-d20" xlink:href="#nat1-d20"/>
+    </g>
+
+    <!-- crack: erase then cut -->
+    <path d="M352 300 L438 372 L404 434 L492 500 L452 570 L536 664 L512 726"
+          fill="none" stroke="#121a23" stroke-width="22" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M352 300 L438 372 L404 434 L492 500 L452 570 L536 664 L512 726"
+          fill="none" stroke="#c9694f" stroke-width="5.5" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M438 372 L392 404M492 500 L556 486M452 570 L408 606"
+          fill="none" stroke="#c06a56" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+
+    <!-- shards -->
+    <g fill="#28353f" stroke="#8d8375" stroke-width="2.4" stroke-linejoin="round">
+      <path d="M610 372l64-44-6 66z"/>
+      <path d="M318 604l-62 32 50 30z"/>
+      <path d="M700 470l40 22-34 30z"/>
+    </g>
+  </g>
+
+  <circle cx="500" cy="500" r="486" fill="none" stroke="#8d8375" stroke-width="5" opacity="0.9"/>
+
+  <text x="500" y="196" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="52" font-weight="600" letter-spacing="22" fill="#b9a179">NATURAL ONE</text>
+
+  <text x="500" y="800" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-style="italic" font-size="46" fill="#cfd4c9">the story continues</text>
+  <text x="500" y="862" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="19" letter-spacing="8" fill="#7b8783">DICEFRAME · d20</text>
+</svg>

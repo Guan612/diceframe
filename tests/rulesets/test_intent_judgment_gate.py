@@ -88,7 +88,8 @@ async def test_real_narration_and_concurrent_milestone(web_api, monkeypatch, gua
             intent_deps, game_key, "gm", True, body,
         )), 5)
         assert result == {
-            "ok": False, "code": "ROUND_PROCESSING", "error": "回合正在处理中，请稍后重试",
+            "ok": False, "code": "ROUND_PROCESSING", "error_code": "ROUND_PROCESSING",
+            "error": "回合正在处理中，请稍后重试",
         }
         assert instance.to_dict() == before
         save.assert_not_awaited()

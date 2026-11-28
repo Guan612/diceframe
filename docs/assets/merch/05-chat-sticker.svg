@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 1000" width="1000" height="1000" role="img" aria-label="DiceFrame chat sticker">
+  <title>Roll for initiative — chat sticker</title>
+  <defs>
+    <radialGradient id="chat-plate" gradientUnits="userSpaceOnUse" cx="500" cy="340" r="700">
+      <stop offset="0" stop-color="#182634"/>
+      <stop offset="0.65" stop-color="#101923"/>
+      <stop offset="1" stop-color="#0a1016"/>
+    </radialGradient>
+    <clipPath id="chat-clip"><rect x="30" y="30" width="940" height="940" rx="96"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#chat-clip)">
+    <rect x="30" y="30" width="940" height="940" fill="url(#chat-plate)"/>
+    <rect x="30" y="30" width="940" height="940" fill="none" stroke="#c7a362" stroke-width="9"/>
+    <rect x="58" y="58" width="884" height="884" rx="74" fill="none" stroke="#c7a362" stroke-width="1.4" opacity="0.4"/>
+  </g>
+
+  <!-- GM label -->
+  <text x="118" y="208" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="21" letter-spacing="6.5" fill="#7f8f8c">GM · AI HOSTED</text>
+
+  <!-- GM bubble -->
+  <g>
+    <rect x="100" y="230" width="700" height="230" rx="44" fill="#17232f" stroke="#3d5162" stroke-width="2.5"/>
+    <path d="M148 456h44l-30 46z" fill="#17232f" stroke="#3d5162" stroke-width="2.5" stroke-linejoin="round"/>
+    <rect x="146" y="452" width="48" height="6" fill="#17232f"/>
+    <text x="146" y="322" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-style="italic" font-size="52" fill="#f0eee5">The door holds.</text>
+    <text x="146" y="392" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-style="italic" font-size="52" fill="#c7a362">Roll for initiative.</text>
+  </g>
+
+  <!-- player label -->
+  <text x="882" y="512" text-anchor="end" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="21" letter-spacing="6.5" fill="#7f8f8c">YOU · PLAYER 1</text>
+
+  <!-- player bubble -->
+  <g>
+    <rect x="286" y="534" width="596" height="126" rx="40" fill="#c7a362"/>
+    <path d="M812 640h44l-30 44z" fill="#c7a362"/>
+    <text x="838" y="616" text-anchor="end" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="52" fill="#17140e">I kick the door.</text>
+  </g>
+
+  <!-- footer -->
+  <g fill="none" stroke="#c7a362" stroke-width="1.4" opacity="0.35">
+    <path d="M110 706h780"/>
+  </g>
+  <text x="500" y="790" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="64" letter-spacing="13" fill="#f0d8a0">DICEFRAME</text>
+  <text x="500" y="838" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="20" letter-spacing="7.5" fill="#8494a0">AI TABLETOP RPG ENGINE</text>
+</svg>
