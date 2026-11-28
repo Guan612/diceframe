@@ -620,7 +620,7 @@ def scheduler_advance(
             # buff duration or claim that time advanced.
             advanced = bool(result.events)
     except (TypeError, ValueError, AttributeError, KeyError) as exc:
-        return {"ok": False, "code": "SCHEDULER_REJECTED", "error": str(exc)}
+        return {"ok": False, "code": "SCHEDULER_REJECTED", "error_code": "SCHEDULER_REJECTED", "error": str(exc)}
     # buff 时长随推进扣减（仅作用于调度相关 stat 的修正）。
     ticked: list[dict[str, Any]] = []
     for buff in state.buffs:

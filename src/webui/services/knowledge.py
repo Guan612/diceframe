@@ -49,23 +49,23 @@ def preview(
     """
     viewer = str(viewer or "").strip()
     if not viewer:
-        return _result({"ok": False, "code": "INVALID_VIEWER", "error": "视角无效"}, 400)
+        return _result({"ok": False, "code": "INVALID_VIEWER", "error_code": "INVALID_VIEWER", "error": "视角无效"}, 400)
 
     world = dependencies.lorebook.get_world(world_id) if dependencies.lorebook else None
     if not world:
-        return _result({"ok": False, "code": "WORLD_NOT_FOUND", "error": "世界不存在"}, 404)
+        return _result({"ok": False, "code": "WORLD_NOT_FOUND", "error_code": "WORLD_NOT_FOUND", "error": "世界不存在"}, 404)
 
     if viewer in {"gm", "party"}:
         resolved = Viewer(viewer)
     else:
         if not game_key:
-            return _result({"ok": False, "code": "INVALID_VIEWER", "error": "视角无效"}, 400)
+            return _result({"ok": False, "code": "INVALID_VIEWER", "error_code": "INVALID_VIEWER", "error": "视角无效"}, 400)
         instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
         if not instance:
-            return _result({"ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在"}, 404)
+            return _result({"ok": False, "code": "GAME_NOT_FOUND", "error_code": "GAME_NOT_FOUND", "error": "游戏不存在"}, 404)
         player = instance.players.get(viewer)
         if player is None:
-            return _result({"ok": False, "code": "PLAYER_NOT_IN_GAME", "error": "未加入本局"}, 403)
+            return _result({"ok": False, "code": "PLAYER_NOT_IN_GAME", "error_code": "PLAYER_NOT_IN_GAME", "error": "未加入本局"}, 403)
         resolved = Viewer("character", viewer, str(player.get("character_name") or viewer))
 
     assert dependencies.lorebook is not None

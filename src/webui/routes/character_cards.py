@@ -86,7 +86,7 @@ async def _api_character_card_advancement(request: web.Request, action: str) -> 
             )
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error_code": "INVALID_ADVANCEMENT", "error": str(exc)}
     if result.get("ok"):
         status = 200
     elif declared_error_code(result) == "CHARACTER_NOT_FOUND":
@@ -123,7 +123,7 @@ async def api_character_card_choices_pending(request: web.Request) -> web.Respon
             request.match_info["card_id"],
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_CHOICE_REPAIR", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_CHOICE_REPAIR", "error_code": "INVALID_CHOICE_REPAIR", "error": str(exc)}
     return web.json_response(result, status=_choice_status(result))
 
 
@@ -134,7 +134,7 @@ async def api_character_card_choices_complete(request: web.Request) -> web.Respo
             request.match_info["card_id"], body,
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_CHOICE_REPAIR", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_CHOICE_REPAIR", "error_code": "INVALID_CHOICE_REPAIR", "error": str(exc)}
     return web.json_response(result, status=_choice_status(result))
 
 

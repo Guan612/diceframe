@@ -38,7 +38,7 @@ async def api_rules(request: web.Request) -> web.Response:
         return web.json_response(_get_api(request).list_rules(request.query.get("language", "")))
     except ValueError as exc:
         return web.json_response(
-            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
+            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error_code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
             status=422,
         )
 
@@ -65,7 +65,7 @@ async def api_rule_detail(request: web.Request) -> web.Response:
         ))
     except ValueError as exc:
         return web.json_response(
-            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
+            {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error_code": "CONTENT_VALIDATION_FAILED", "error": str(exc)},
             status=422,
         )
 
@@ -84,7 +84,7 @@ async def api_ruleset_experience(request: web.Request) -> web.Response:
             request.match_info["rule_id"], request.query.get("language", ""),
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error": str(exc)}
+        result = {"ok": False, "code": "CONTENT_VALIDATION_FAILED", "error_code": "CONTENT_VALIDATION_FAILED", "error": str(exc)}
     return web.json_response(result, status=200 if result.get("ok") else 404)
 
 
@@ -98,7 +98,7 @@ async def _ruleset_builder_action(request: web.Request, action: str) -> web.Resp
             request.match_info["rule_id"], body, request.query.get("language", ""),
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_DRAFT", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_DRAFT", "error_code": "INVALID_DRAFT", "error": str(exc)}
     if result.get("ok"):
         status = 200
     elif declared_error_code(result) == "RULE_NOT_FOUND":
@@ -136,7 +136,7 @@ async def api_ruleset_progression(request: web.Request) -> web.Response:
             request.query.get("language", ""),
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_PROGRESSION", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_PROGRESSION", "error_code": "INVALID_PROGRESSION", "error": str(exc)}
     status = 200 if result.get("ok") else 404 if declared_error_code(result) == "RULE_NOT_FOUND" else 422
     return web.json_response(result, status=status)
 
@@ -151,7 +151,7 @@ async def _ruleset_advancement_action(request: web.Request, action: str) -> web.
             request.match_info["rule_id"], body, request.query.get("language", ""),
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error_code": "INVALID_ADVANCEMENT", "error": str(exc)}
     status = 200 if result.get("ok") else 404 if declared_error_code(result) == "RULE_NOT_FOUND" else 422
     return web.json_response(result, status=status)
 
@@ -173,7 +173,7 @@ async def api_ruleset_rest_resolve(request: web.Request) -> web.Response:
             request.match_info["rule_id"], body, request.query.get("language", ""),
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_REST", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_REST", "error_code": "INVALID_REST", "error": str(exc)}
     status = 200 if result.get("ok") else 404 if declared_error_code(result) == "RULE_NOT_FOUND" else 422
     return web.json_response(result, status=status)
 

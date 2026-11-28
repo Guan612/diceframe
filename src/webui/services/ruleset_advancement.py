@@ -49,7 +49,7 @@ def _context(
     if rule is None:
         return None, None, {
             "ok": False,
-            "code": "RULE_NOT_FOUND",
+            "error_code": "RULE_NOT_FOUND",
             "error": t("webui.services.ruleset_advancement.rule_missing", rule_id=rule_id),
         }
     runtime = dependencies.ruleset_registry.resolve(rule.template)
@@ -59,7 +59,7 @@ def _context(
     ):
         return rule, runtime, {
             "ok": False,
-            "code": "RULESET_ADVANCEMENT_UNAVAILABLE",
+            "error_code": "RULESET_ADVANCEMENT_UNAVAILABLE",
             "error": t("webui.services.ruleset_advancement.no_professional_advancement"),
         }
     return rule, runtime, None
@@ -155,7 +155,7 @@ def _card_context(
         if rule is None or runtime is None:
             return cards, index, card, None, None, {
                 "ok": False,
-                "code": "RULESET_RUNTIME_UNAVAILABLE",
+                "error_code": "RULESET_RUNTIME_UNAVAILABLE",
                 "error": t("webui.services.ruleset_advancement.card_ruleset_unavailable"),
             }
         if not all(
@@ -163,13 +163,13 @@ def _card_context(
         ):
             return cards, index, card, rule, runtime, {
                 "ok": False,
-                "code": "RULESET_ADVANCEMENT_UNAVAILABLE",
+                "error_code": "RULESET_ADVANCEMENT_UNAVAILABLE",
                 "error": missing_message,
             }
         return cards, index, card, rule, runtime, None
     return cards, -1, None, None, None, {
         "ok": False,
-        "code": "CHARACTER_NOT_FOUND",
+        "error_code": "CHARACTER_NOT_FOUND",
         "error": t("webui.services.ruleset_advancement.card_missing", card_id=card_id),
     }
 
@@ -255,7 +255,7 @@ def apply_card(
     if expected_revision != revision:
         return {
             "ok": False,
-            "code": "STALE_CHARACTER_REVISION",
+            "error_code": "STALE_CHARACTER_REVISION",
             "error": t("webui.services.ruleset_advancement.card_updated_elsewhere"),
             "revision": revision,
         }
@@ -267,13 +267,13 @@ def apply_card(
         readiness = runtime.preview_advancement(rule, card, choices)
     except ValueError as exc:
         return {
-            "ok": False, "code": "ADVANCEMENT_NOT_READY", "error": str(exc),
+            "ok": False, "error_code": "ADVANCEMENT_NOT_READY", "error": str(exc),
             "revision": revision,
         }
     if not readiness.get("ok"):
         return {
             "ok": False,
-            "code": "ADVANCEMENT_NOT_READY",
+            "error_code": "ADVANCEMENT_NOT_READY",
             "error": "; ".join(str(item) for item in readiness.get("errors") or [])
             or "character cannot advance at this time",
             "revision": revision,
@@ -347,14 +347,14 @@ def complete_card_choices(
     if not isinstance(repairs, dict):
         return {
             "ok": False,
-            "code": "INVALID_REPAIRS",
+            "error_code": "INVALID_REPAIRS",
             "error": "choice repairs must be a JSON object",
         }
     operation_id = str(parsed.get("operation_id") or "").strip()
     if not operation_id or len(operation_id) > 160:
         return {
             "ok": False,
-            "code": "INVALID_OPERATION_ID",
+            "error_code": "INVALID_OPERATION_ID",
             "error": "补齐操作必须提供有效的 operation_id",
         }
     revision = int(card.get("ruleset_revision", 0) or 0)
@@ -385,13 +385,13 @@ def complete_card_choices(
     except (TypeError, ValueError):
         return {
             "ok": False,
-            "code": "INVALID_CHARACTER_REVISION",
+            "error_code": "INVALID_CHARACTER_REVISION",
             "error": "补齐操作必须提供有效的 expected_revision",
         }
     if expected_revision != revision:
         return {
             "ok": False,
-            "code": "STALE_CHARACTER_REVISION",
+            "error_code": "STALE_CHARACTER_REVISION",
             "error": "角色卡已在其他位置更新，请刷新后重试",
             "revision": revision,
         }
@@ -401,7 +401,7 @@ def complete_card_choices(
     except ValueError as exc:
         return {
             "ok": False,
-            "code": "ADVANCEMENT_NOT_READY",
+            "error_code": "ADVANCEMENT_NOT_READY",
             "error": str(exc),
             "revision": revision,
         }
@@ -437,22 +437,22 @@ def _live_context(
     instance = dependencies.get_instance(dependencies.parse_game_key(game_key))
     if instance is None:
         return None, None, None, None, {
-            "ok": False, "code": "GAME_NOT_FOUND", "error": "游戏不存在",
+            "ok": False, "error_code": "GAME_NOT_FOUND", "error": "游戏不存在",
         }
     if user_id not in instance.players:
         return instance, None, None, None, {
-            "ok": False, "code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
+            "ok": False, "error_code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
         }
     rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return instance, None, None, None, {
-            "ok": False, "code": "RULE_NOT_FOUND", "error": t("webui.services.ruleset_advancement.game_rule_missing"),
+            "ok": False, "error_code": "RULE_NOT_FOUND", "error": t("webui.services.ruleset_advancement.game_rule_missing"),
         }
     try:
         runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return instance, rule, None, None, {
-            "ok": False, "code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
+            "ok": False, "error_code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
         }
     if not all(
         callable(getattr(runtime, name, None))
@@ -460,7 +460,7 @@ def _live_context(
     ):
         return instance, rule, runtime, None, {
             "ok": False,
-            "code": "RULESET_ADVANCEMENT_UNAVAILABLE",
+            "error_code": "RULESET_ADVANCEMENT_UNAVAILABLE",
             "error": t("webui.services.ruleset_advancement.no_professional_advancement"),
         }
     return instance, rule, runtime, instance.get_character_sheet(user_id), None
@@ -473,22 +473,22 @@ def _live_context_for_instance(
 ):
     if user_id not in instance.players:
         return instance, None, None, None, {
-            "ok": False, "code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
+            "ok": False, "error_code": "CHARACTER_NOT_FOUND", "error": "角色不存在",
         }
     rule = dependencies.load_rule_for_game(instance)
     if rule is None:
         return instance, None, None, None, {
-            "ok": False, "code": "RULE_NOT_FOUND", "error": t("webui.services.ruleset_advancement.game_rule_missing"),
+            "ok": False, "error_code": "RULE_NOT_FOUND", "error": t("webui.services.ruleset_advancement.game_rule_missing"),
         }
     try:
         runtime = dependencies.ruleset_registry.resolve(rule.template)
     except (AttributeError, TypeError, ValueError) as exc:
         return instance, rule, None, None, {
-            "ok": False, "code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
+            "ok": False, "error_code": "RULESET_RUNTIME_UNAVAILABLE", "error": str(exc),
         }
     if not all(callable(getattr(runtime, name, None)) for name in ("preview_advancement", "apply_advancement")):
         return instance, rule, runtime, None, {
-            "ok": False, "code": "RULESET_ADVANCEMENT_UNAVAILABLE", "error": t("webui.services.ruleset_advancement.no_professional_advancement"),
+            "ok": False, "error_code": "RULESET_ADVANCEMENT_UNAVAILABLE", "error": t("webui.services.ruleset_advancement.no_professional_advancement"),
         }
     return instance, rule, runtime, instance.get_character_sheet(user_id), None
 
@@ -513,7 +513,7 @@ def preview_live(
             )
         except ValueError as exc:
             return {
-                "ok": False, "code": "ADVANCEMENT_NOT_GRANTED", "error": str(exc),
+                "ok": False, "error_code": "ADVANCEMENT_NOT_GRANTED", "error": str(exc),
                 "revision": int(character.get("ruleset_revision", 0) or 0),
                 "advancement_status": runtime.live_advancement_status(_instance),
             }
@@ -599,7 +599,7 @@ async def _apply_live_authority(
         }
     if expected_revision != revision:
         return {
-            "ok": False, "code": "STALE_CHARACTER_REVISION",
+            "ok": False, "error_code": "STALE_CHARACTER_REVISION",
             "error": t("webui.services.ruleset_advancement.character_updated_elsewhere"), "revision": revision,
         }
 
@@ -607,13 +607,13 @@ async def _apply_live_authority(
         readiness = runtime.preview_advancement(rule, character, choices)
     except ValueError as exc:
         return {
-            "ok": False, "code": "ADVANCEMENT_NOT_READY", "error": str(exc),
+            "ok": False, "error_code": "ADVANCEMENT_NOT_READY", "error": str(exc),
             "revision": revision,
         }
     if not readiness.get("ok"):
         return {
             "ok": False,
-            "code": "ADVANCEMENT_NOT_READY",
+            "error_code": "ADVANCEMENT_NOT_READY",
             "error": "; ".join(str(item) for item in readiness.get("errors") or [])
             or "character cannot advance at this time",
             "revision": revision,
@@ -622,7 +622,7 @@ async def _apply_live_authority(
     try:
         ruleset_runtime.require_binding(instance, runtime.runtime_id)
     except ruleset_runtime.RulesetBindingError as exc:
-        return {"ok": False, "code": exc.code, "error": str(exc)}
+        return {"ok": False, "error_code": exc.code, "error": str(exc)}
     live_policy = (
         runtime if isinstance(runtime, LiveAdvancementTransactionRuntime) else None
     )
@@ -633,7 +633,7 @@ async def _apply_live_authority(
             )
         except ValueError as exc:
             return {
-                "ok": False, "code": "ADVANCEMENT_NOT_GRANTED", "error": str(exc),
+                "ok": False, "error_code": "ADVANCEMENT_NOT_GRANTED", "error": str(exc),
                 "revision": revision,
             }
     advanced = runtime.apply_advancement(rule, character, choices)
@@ -729,7 +729,7 @@ async def _control_live_authority(
     try:
         ruleset_runtime.require_binding(instance, runtime.runtime_id)
     except ruleset_runtime.RulesetBindingError as exc:
-        return {"ok": False, "code": exc.code, "error": str(exc)}
+        return {"ok": False, "error_code": exc.code, "error": str(exc)}
     result = runtime.apply_live_advancement_control(instance, parsed)
     if not result.get("ok"):
         return result

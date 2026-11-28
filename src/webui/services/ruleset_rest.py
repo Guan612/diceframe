@@ -75,7 +75,7 @@ def resolve(
 
 
 def _failure(code: str, message: str, **extra: Any) -> dict[str, Any]:
-    return {"ok": False, "code": code, "error": message, **extra}
+    return {"ok": False, "error_code": code, "code": code, "error": message, **extra}
 
 
 def _rest_option_names(runtime: Any) -> frozenset[str]:

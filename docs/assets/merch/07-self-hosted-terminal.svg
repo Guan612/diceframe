@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 1000" width="1000" height="1000" role="img" aria-label="Self-hosted terminal sticker">
+  <title>Self-hosted — terminal sticker</title>
+  <defs>
+    <radialGradient id="ssh-plate" gradientUnits="userSpaceOnUse" cx="500" cy="380" r="720">
+      <stop offset="0" stop-color="#182634"/>
+      <stop offset="0.62" stop-color="#101923"/>
+      <stop offset="1" stop-color="#0a1016"/>
+    </radialGradient>
+    <clipPath id="ssh-clip"><rect x="30" y="30" width="940" height="940" rx="96"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#ssh-clip)">
+    <rect x="30" y="30" width="940" height="940" fill="url(#ssh-plate)"/>
+    <rect x="30" y="30" width="940" height="940" fill="none" stroke="#c7a362" stroke-width="9"/>
+    <rect x="58" y="58" width="884" height="884" rx="74" fill="none" stroke="#c7a362" stroke-width="1.4" opacity="0.4"/>
+  </g>
+
+  <text x="500" y="168" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="21" letter-spacing="9" fill="#8f7f5e">SELF-HOSTED · NO CLOUD REQUIRED</text>
+
+  <!-- terminal window -->
+  <g>
+    <rect x="104" y="216" width="792" height="474" rx="26" fill="#080d13" stroke="#3d5162" stroke-width="2.5"/>
+    <path d="M104 242a26 26 0 0 1 26-26h740a26 26 0 0 1 26 26v30H104z" fill="#141f2b"/>
+    <g fill="#c7a362">
+      <circle cx="146" cy="245" r="7" opacity="0.9"/>
+      <circle cx="174" cy="245" r="7" opacity="0.55"/>
+      <circle cx="202" cy="245" r="7" opacity="0.3"/>
+    </g>
+    <text x="500" y="253" text-anchor="middle" font-family="Consolas,'Cascadia Mono','Courier New',monospace" font-size="19" fill="#6f8189" letter-spacing="1">diceframe — bash</text>
+
+    <g font-family="Consolas,'Cascadia Mono','Courier New',monospace" font-size="27">
+      <text x="146" y="344" fill="#c7a362">$<tspan fill="#f0eee5"> docker compose up -d</tspan></text>
+      <text x="146" y="392" fill="#78cda6">▸<tspan fill="#cfd4c9"> image pulled · diceframe:latest</tspan></text>
+      <text x="146" y="440" fill="#78cda6">▸<tspan fill="#cfd4c9"> listening on </tspan><tspan fill="#89cbed">http://localhost:9876</tspan></text>
+      <text x="146" y="488" fill="#78cda6">▸<tspan fill="#cfd4c9"> data stays in </tspan><tspan fill="#f0d8a0">./data</tspan></text>
+      <text x="146" y="536" fill="#78cda6">▸<tspan fill="#cfd4c9"> multiplayer ready · 4 seats</tspan></text>
+      <text x="146" y="610" fill="#c7a362">$<tspan fill="#f0eee5"> roll 1d20</tspan></text>
+      <text x="392" y="610" fill="#f0d8a0">→ 20</text>
+      <rect x="476" y="586" width="15" height="28" fill="#f0d8a0" opacity="0.85"/>
+    </g>
+  </g>
+
+  <text x="500" y="806" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-style="italic" font-size="50" fill="#f0eee5">your table, your data</text>
+  <text x="500" y="866" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="19" letter-spacing="7" fill="#8494a0">DICEFRAME · AI TABLETOP ENGINE</text>
+</svg>

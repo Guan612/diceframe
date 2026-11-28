@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 1240" width="1000" height="1240" role="img" aria-label="DiceFrame dice set poster">
+  <title>One frame, every ruleset — dice set poster</title>
+  <desc>Transparent background: intended for dark garments, posters and banners. All dice are true projected polyhedra.</desc>
+
+  <!-- outer hairline -->
+  <rect x="46" y="46" width="908" height="1148" fill="none" stroke="#c7a362" stroke-width="1.6" opacity="0.5"/>
+  <rect x="62" y="62" width="876" height="1116" fill="none" stroke="#c7a362" stroke-width="0.8" opacity="0.25"/>
+
+  <text x="500" y="182" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="22" letter-spacing="9" fill="#8f7f5e">SELF-HOSTED · AI TABLETOP RPG ENGINE</text>
+
+  <text x="500" y="330" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="104" letter-spacing="4" fill="#f0eee5">ONE FRAME</text>
+  <text x="500" y="446" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="104" letter-spacing="4" fill="#c7a362">EVERY RULESET</text>
+
+  <g stroke="#c7a362" stroke-width="1.4" opacity="0.55">
+    <path d="M420 494h160"/>
+  </g>
+  <path d="M500 484l-8 10 8 10 8-10z" fill="#c7a362"/>
+
+  <!-- dice row -->
+  <g fill="none" stroke="#f0d8a0" stroke-width="4.6" stroke-linejoin="round" stroke-linecap="round">
+    <!-- d4 -->
+    <g transform="translate(130 690) scale(0.86)">
+      <path d="M0,-6.5L0,-84.6 M0,-6.5L-100,84.6 M0,-6.5L100,84.6 M0,-84.6L-100,84.6 M0,-84.6L100,84.6 M-100,84.6L100,84.6"/>
+    </g>
+    <!-- d6 -->
+    <g transform="translate(315 690) scale(0.72)">
+      <path d="M-100.00,7.37L-41.09,84.28 M-100.00,7.37L-50.57,-84.28 M-41.09,84.28L8.35,-7.37 M-41.09,84.28L50.57,84.28 M-50.57,-84.28L8.35,-7.37 M-50.57,-84.28L41.09,-84.28 M8.35,-7.37L100.00,-7.37 M50.57,84.28L100.00,-7.37 M41.09,-84.28L100.00,-7.37"/>
+    </g>
+    <!-- d8 -->
+    <g transform="translate(500 690) scale(0.72)">
+      <path d="M92.16,-0.00L18.20,-100.00 M92.16,-0.00L-18.20,100.00 M92.16,-0.00L50.00,36.40 M-92.16,-0.00L18.20,-100.00 M-92.16,-0.00L-18.20,100.00 M-92.16,-0.00L50.00,36.40 M18.20,-100.00L50.00,36.40 M-18.20,100.00L50.00,36.40"/>
+    </g>
+    <!-- d12 -->
+    <g transform="translate(685 690) scale(0.72)">
+      <path d="M89.08,-35.33L51.19,-1.62 M89.08,-35.33L48.00,-89.88 M89.08,-35.33L100.00,12.50 M68.86,75.77L100.00,12.50 M68.86,75.77L15.28,89.88 M68.86,75.77L38.69,67.05 M-13.31,-35.33L51.19,-1.62 M-13.31,-35.33L-65.67,12.50 M-13.31,-35.33L-15.28,-89.88 M-68.86,-75.77L-15.28,-89.88 M-68.86,-75.77L-100.00,-12.50 M-33.53,75.77L-65.67,12.50 M-33.53,75.77L38.69,67.05 M-33.53,75.77L-48.00,89.88 M-89.08,35.33L-48.00,89.88 M-89.08,35.33L-100.00,-12.50 M51.19,-1.62L38.69,67.05 M48.00,-89.88L-15.28,-89.88 M15.28,89.88L-48.00,89.88 M-65.67,12.50L-100.00,-12.50"/>
+    </g>
+    <!-- d20 -->
+    <g transform="translate(870 690) scale(0.72)" stroke="#c7a362" stroke-width="5.4">
+      <path d="M50.00,23.61L77.68,-61.80 M50.00,23.61L94.79,38.20 M50.00,23.61L-56.60,38.20 M50.00,23.61L11.80,100.00 M50.00,23.61L-15.88,-61.80 M77.68,-61.80L94.79,38.20 M77.68,-61.80L-11.80,-100.00 M77.68,-61.80L-15.88,-61.80 M94.79,38.20L11.80,100.00 M-11.80,-100.00L-15.88,-61.80 M-11.80,-100.00L-94.79,-38.20 M-56.60,38.20L11.80,100.00 M-56.60,38.20L-15.88,-61.80 M-56.60,38.20L-77.68,61.80 M-56.60,38.20L-94.79,-38.20 M11.80,100.00L-77.68,61.80 M-15.88,-61.80L-94.79,-38.20 M-77.68,61.80L-94.79,-38.20"/>
+    </g>
+  </g>
+
+  <g font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="24" letter-spacing="6" fill="#8f7f5e" text-anchor="middle">
+    <text x="130" y="850">d4</text>
+    <text x="315" y="850">d6</text>
+    <text x="500" y="850">d8</text>
+    <text x="685" y="850">d12</text>
+    <text x="870" y="850">d20</text>
+  </g>
+
+  <g stroke="#c7a362" stroke-width="1.2" opacity="0.35">
+    <path d="M120 908h760"/>
+  </g>
+
+  <text x="500" y="986" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="27" letter-spacing="6" fill="#d0d3c9">D&amp;D 2024 · CALL OF CTHULHU · CUSTOM</text>
+  <text x="500" y="1034" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="19" letter-spacing="4" fill="#7f8f8c">BRING YOUR OWN RULES, SHEETS AND WORLDS</text>
+
+  <text x="500" y="1128" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="42" letter-spacing="11" fill="#c7a362">DICEFRAME</text>
+</svg>

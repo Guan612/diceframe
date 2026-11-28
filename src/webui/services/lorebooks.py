@@ -463,7 +463,7 @@ def commit_lorebook_import(
     # content and catalog against the originally reviewed plan first.
     current = preview_lorebook_import(deps, preview_payload)
     if (current.get("commit_plan") or {}).get("unresolved_references"):
-        return {"ok": False, "code": "IMPORT_UNRESOLVED_REFERENCES", "error": "Import has unresolved content references"}
+        return {"ok": False, "code": "IMPORT_UNRESOLVED_REFERENCES", "error_code": "IMPORT_UNRESOLVED_REFERENCES", "error": "Import has unresolved content references"}
     if plan_digest:
         if str(current.get("plan_digest") or "") != str(plan_digest):
             return {"ok": False, "code": "IMPORT_PLAN_STALE", "error": t("webui.services.lorebooks.import_preview_expired"), "error_code": "IMPORT_PLAN_STALE"}

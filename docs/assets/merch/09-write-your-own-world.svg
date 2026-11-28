@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 1000" width="1000" height="1000" role="img" aria-label="Write your own world sticker">
+  <title>Write your own world — lorebook sticker</title>
+  <defs>
+    <radialGradient id="book-plate" gradientUnits="userSpaceOnUse" cx="500" cy="380" r="740">
+      <stop offset="0" stop-color="#182634"/>
+      <stop offset="0.62" stop-color="#101923"/>
+      <stop offset="1" stop-color="#0a1016"/>
+    </radialGradient>
+    <linearGradient id="book-page" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#243545"/>
+      <stop offset="1" stop-color="#182637"/>
+    </linearGradient>
+    <clipPath id="book-clip"><rect x="30" y="30" width="940" height="940" rx="96"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#book-clip)">
+    <rect x="30" y="30" width="940" height="940" fill="url(#book-plate)"/>
+    <rect x="30" y="30" width="940" height="940" fill="none" stroke="#c7a362" stroke-width="9"/>
+    <rect x="58" y="58" width="884" height="884" rx="74" fill="none" stroke="#c7a362" stroke-width="1.4" opacity="0.4"/>
+  </g>
+
+  <text x="500" y="158" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="20" letter-spacing="9" fill="#8f7f5e">WORLDS · LOREBOOKS · ADVENTURES</text>
+
+  <text x="500" y="250" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="76" letter-spacing="4" fill="#f0eee5">WRITE YOUR</text>
+  <text x="500" y="338" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="76" letter-spacing="4" fill="#c7a362">OWN WORLD</text>
+
+  <!-- open book -->
+  <g>
+    <path d="M170 402C260 370 400 382 500 424L500 752C400 710 260 698 170 730Z" fill="url(#book-page)" stroke="#c7a362" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M830 402C740 370 600 382 500 424L500 752C600 710 740 698 830 730Z" fill="url(#book-page)" stroke="#c7a362" stroke-width="3" stroke-linejoin="round"/>
+    <!-- page rules -->
+    <g stroke="#c7a362" stroke-width="1.5" fill="none" opacity="0.4">
+      <path d="M196 456C276 428 386 438 470 476"/>
+      <path d="M196 508C276 480 386 490 470 528"/>
+      <path d="M196 560C276 532 386 542 470 580"/>
+      <path d="M196 612C276 584 386 594 470 632"/>
+      <path d="M804 456C724 428 614 438 530 476"/>
+      <path d="M804 508C724 480 614 490 530 528"/>
+      <path d="M804 560C724 532 614 542 530 580"/>
+      <path d="M804 612C724 584 614 594 530 632"/>
+    </g>
+    <path d="M170 730C260 698 400 710 500 752C600 710 740 698 830 730" fill="none" stroke="#c7a362" stroke-width="1.4" opacity="0.55"/>
+    <path d="M178 742C266 711 402 723 500 764C598 723 734 711 822 742" fill="none" stroke="#c7a362" stroke-width="1.4" opacity="0.3"/>
+    <path d="M500 424V752" stroke="#c7a362" stroke-width="2.5" opacity="0.8"/>
+    <path d="M170 402C260 370 400 382 500 424C600 382 740 370 830 402" fill="none" stroke="#f0d8a0" stroke-width="2" opacity="0.5"/>
+  </g>
+
+  <!-- die resting on the page -->
+  <g>
+    <ellipse cx="672" cy="694" rx="70" ry="14" fill="#0a1016" opacity="0.32"/>
+    <g transform="translate(672 636) scale(0.52)" fill="none" stroke="#f0d8a0" stroke-width="7" stroke-linejoin="round">
+      <path d="M50.00,23.61L77.68,-61.80 M50.00,23.61L94.79,38.20 M50.00,23.61L-56.60,38.20 M50.00,23.61L11.80,100.00 M50.00,23.61L-15.88,-61.80 M77.68,-61.80L94.79,38.20 M77.68,-61.80L-11.80,-100.00 M77.68,-61.80L-15.88,-61.80 M94.79,38.20L11.80,100.00 M-11.80,-100.00L-15.88,-61.80 M-11.80,-100.00L-94.79,-38.20 M-56.60,38.20L11.80,100.00 M-56.60,38.20L-15.88,-61.80 M-56.60,38.20L-77.68,61.80 M-56.60,38.20L-94.79,-38.20 M11.80,100.00L-77.68,61.80 M-15.88,-61.80L-94.79,-38.20 M-77.68,61.80L-94.79,-38.20"/>
+    </g>
+  </g>
+
+  <text x="500" y="868" text-anchor="middle" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="42" letter-spacing="11" fill="#c7a362">DICEFRAME</text>
+  <text x="500" y="912" text-anchor="middle" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="18" letter-spacing="6.5" fill="#7f8f8c">AI TABLETOP RPG ENGINE</text>
+</svg>

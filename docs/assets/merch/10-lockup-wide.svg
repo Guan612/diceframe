@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1600 500" width="1600" height="500" role="img" aria-label="DiceFrame horizontal lockup">
+  <title>DiceFrame — horizontal lockup</title>
+  <desc>Transparent background lockup for mousepads, sticker strips, banners and back prints.</desc>
+  <defs>
+    <g id="lock-mark">
+      <path d="M0 92V0h92M208 0h92v92M300 208v92h-92M92 300H0v-92" fill="none" stroke="#c7a362" stroke-width="7" stroke-linecap="square"/>
+      <g transform="translate(150 150) scale(0.86)" fill="none" stroke="#f0d8a0" stroke-width="5.4" stroke-linejoin="round">
+        <path d="M50.00,23.61L77.68,-61.80 M50.00,23.61L94.79,38.20 M50.00,23.61L-56.60,38.20 M50.00,23.61L11.80,100.00 M50.00,23.61L-15.88,-61.80 M77.68,-61.80L94.79,38.20 M77.68,-61.80L-11.80,-100.00 M77.68,-61.80L-15.88,-61.80 M94.79,38.20L11.80,100.00 M-11.80,-100.00L-15.88,-61.80 M-11.80,-100.00L-94.79,-38.20 M-56.60,38.20L11.80,100.00 M-56.60,38.20L-15.88,-61.80 M-56.60,38.20L-77.68,61.80 M-56.60,38.20L-94.79,-38.20 M11.80,100.00L-77.68,61.80 M-15.88,-61.80L-94.79,-38.20 M-77.68,61.80L-94.79,-38.20"/>
+      </g>
+    </g>
+  </defs>
+
+  <g transform="translate(70 100)">
+    <use href="#lock-mark" xlink:href="#lock-mark"/>
+  </g>
+
+  <path d="M410 100v300" stroke="#c7a362" stroke-width="1.6" opacity="0.45"/>
+
+  <text x="470" y="252" font-family="'Palatino Linotype','Iowan Old Style',Palatino,Georgia,serif" font-size="134" letter-spacing="0" fill="#f0eee5">Dice<tspan fill="#c7a362">Frame</tspan></text>
+  <text x="476" y="326" font-family="'Aptos','Segoe UI',system-ui,sans-serif" font-size="24" letter-spacing="6.5" fill="#a1957a">SELF-HOSTED AI TABLETOP RPG ENGINE</text>
+
+  <g font-family="'Aptos','Segoe UI',system-ui,sans-serif" text-anchor="end">
+    <text x="1556" y="238" font-size="29" letter-spacing="1" fill="#c7a362">diceframe.com</text>
+    <text x="1556" y="290" font-size="21" letter-spacing="2" fill="#7f8f8c">github.com/diceframe</text>
+    <text x="1556" y="330" font-size="21" letter-spacing="2" fill="#7f8f8c">self-host it tonight</text>
+  </g>
+
+
+</svg>

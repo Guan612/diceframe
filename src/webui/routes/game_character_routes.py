@@ -184,7 +184,7 @@ async def _api_live_character_advancement(
             else api.preview_live_character_advancement(gk, uid, body)
         )
     except ValueError as exc:
-        result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error": str(exc)}
+        result = {"ok": False, "code": "INVALID_ADVANCEMENT", "error_code": "INVALID_ADVANCEMENT", "error": str(exc)}
     code = declared_error_code(result)
     status = (
         200

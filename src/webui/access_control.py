@@ -280,7 +280,7 @@ class WebAccessControl:
                 {
                     "ok": False,
                     "error": "Bot 代表玩家无效",
-                    "code": "BOT_ACTOR_INVALID",
+                    "code": "BOT_ACTOR_INVALID", "error_code": "BOT_ACTOR_INVALID",
                 },
                 status=403,
             )
